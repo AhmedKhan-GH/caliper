@@ -182,7 +182,8 @@ void drawMNISTNetwork3D(Camera& camera,
                        const torch::Tensor& conv2_act,
                        const torch::Tensor& fc1_act,
                        const torch::Tensor& fc2_act,
-                       const torch::Tensor& output_act) {
+                       const torch::Tensor& output_act,
+                       const std::shared_ptr<MNISTNet>& net) {
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -230,86 +231,217 @@ void drawMNISTNetwork3D(Camera& camera,
         }
     }
 
-    // 2. Conv1 layer (32 feature maps, show as cube)
-    drawCube(0, 0, z_positions[1], 2.5f, 2.5f, 0.8f, 0.3f, 0.6f, 0.9f, 0.7f);
+    // Store positions for drawing connections
+    std::vector<glm::vec3> conv1_positions;
+    std::vector<glm::vec3> conv2_positions;
+    std::vector<glm::vec3> fc1_positions;
+    std::vector<glm::vec3> fc2_positions;
 
-    // Show some activations
+    // 2. Conv1 layer - 32 channels × 24×24 spatial -> render as 3D volume
+    // After maxpool: 32 × 12 × 12, visualize as a 3D tensor block
     if (conv1_act.defined() && conv1_act.size(0) > 0) {
         auto act = conv1_act[0].to(torch::kCPU);
-        for (int ch = 0; ch < std::min(8, (int)act.size(0)); ch++) {
-            float avg = act[ch].mean().item<float>();
+        int channels = std::min(32, (int)act.size(0));
+        int height = act.size(1); // Should be 24
+        int width = act.size(2);  // Should be 24
+
+        // Visualize as stacked 2D feature maps with depth representing channels
+        float spatial_scale = 0.08f; // Scale down spatial dimensions
+        float channel_spacing = 0.08f; // Space between channels
+
+        // Sample channels and spatial positions
+        for (int c = 0; c < channels; c += 2) { // Sample every 2nd channel
+            float avg = act[c].mean().item<float>();
             float intensity = std::min(1.0f, std::max(0.0f, avg));
-            float angle = (ch / 8.0f) * 2 * M_PI;
-            float radius = 1.5f;
-            float x = radius * cosf(angle);
-            float y = radius * sinf(angle);
-            drawSphere(x, y, z_positions[1], 0.12f, intensity, 0.5f, 1.0f - intensity, 0.8f);
+
+            // Position: stack channels along depth (z), visualize spatial HxW as cube
+            float depth_offset = (c - channels / 2.0f) * channel_spacing;
+            float cube_size = 2.0f * spatial_scale; // Proportional to 24×24
+
+            conv1_positions.push_back({0, 0, z_positions[1] + depth_offset});
+
+            // Draw cube representing one feature map (24×24 spatial)
+            drawCube(0, 0, z_positions[1] + depth_offset,
+                    cube_size, cube_size, 0.06f, // thin in depth
+                    intensity, 0.5f, 1.0f - intensity, 0.6f);
         }
     }
 
-    // 3. Conv2 layer (64 feature maps, show as larger cube)
-    drawCube(0, 0, z_positions[2], 3.0f, 3.0f, 1.2f, 0.2f, 0.7f, 0.8f, 0.7f);
-
+    // 3. Conv2 layer - 64 channels × 8×8 spatial -> render as 3D volume
+    // After maxpool: 64 × 4 × 4
     if (conv2_act.defined() && conv2_act.size(0) > 0) {
         auto act = conv2_act[0].to(torch::kCPU);
-        for (int ch = 0; ch < std::min(12, (int)act.size(0)); ch++) {
-            float avg = act[ch].mean().item<float>();
+        int channels = std::min(64, (int)act.size(0));
+        int height = act.size(1); // Should be 8
+        int width = act.size(2);  // Should be 8
+
+        float spatial_scale = 0.08f;
+        float channel_spacing = 0.06f; // Thinner spacing for more channels
+
+        // Sample channels
+        for (int c = 0; c < channels; c += 2) { // Sample every 2nd channel
+            float avg = act[c].mean().item<float>();
             float intensity = std::min(1.0f, std::max(0.0f, avg));
-            float angle = (ch / 12.0f) * 2 * M_PI;
-            float radius = 1.8f;
-            float x = radius * cosf(angle);
-            float y = radius * sinf(angle);
-            drawSphere(x, y, z_positions[2], 0.1f, intensity, 0.4f, 1.0f - intensity, 0.8f);
+
+            float depth_offset = (c - channels / 2.0f) * channel_spacing;
+            float cube_size = 0.8f * spatial_scale; // Proportional to 8×8 (smaller than conv1)
+
+            conv2_positions.push_back({0, 0, z_positions[2] + depth_offset});
+
+            // Draw cube representing one feature map (8×8 spatial)
+            drawCube(0, 0, z_positions[2] + depth_offset,
+                    cube_size, cube_size, 0.05f, // even thinner slices
+                    intensity, 0.4f, 1.0f - intensity, 0.6f);
         }
     }
 
-    // 4. FC1 layer (128 neurons in a grid)
+    // 4. FC1 layer - 128 neurons as a single 1D vector (128×1×1)
+    // Render as a tall vertical block: 128 height × 1 width × 1 depth
     if (fc1_act.defined() && fc1_act.size(0) > 0) {
         auto act = fc1_act[0].to(torch::kCPU);
-        int grid_size = 8; // 8x8 grid for 64 neurons
-        float spacing = 0.3f;
-        for (int i = 0; i < grid_size && i * grid_size < std::min(64, (int)act.size(0)); i++) {
-            for (int j = 0; j < grid_size && i * grid_size + j < std::min(64, (int)act.size(0)); j++) {
-                float val = act[i * grid_size + j].item<float>();
-                float intensity = std::min(1.0f, std::max(0.0f, val));
-                float x = (j - grid_size / 2.0f) * spacing;
-                float y = (i - grid_size / 2.0f) * spacing;
-                drawSphere(x, y, z_positions[3], 0.1f, intensity, 0.3f, 1.0f - intensity, 0.8f);
+        int num_neurons = std::min(128, (int)act.size(0));
+
+        // Stack neurons vertically as thin horizontal slices
+        float neuron_height = 0.04f; // Each neuron is a thin slice
+
+        for (int i = 0; i < num_neurons; i++) {
+            float val = act[i].item<float>();
+            float intensity = std::min(1.0f, std::max(0.0f, val));
+
+            float y = (i - num_neurons / 2.0f) * neuron_height;
+            fc1_positions.push_back({0, y, z_positions[3]});
+
+            // Draw as thin horizontal slice (representing 1 neuron in the vector)
+            drawCube(0, y, z_positions[3],
+                    0.3f, neuron_height, 0.3f,  // Small width/depth, thin height
+                    intensity, 0.3f, 1.0f - intensity, 0.8f);
+        }
+    }
+
+    // 5. FC2 layer - 64 neurons as a single 1D vector (64×1×1)
+    // Render as a vertical block: 64 height × 1 width × 1 depth
+    if (fc2_act.defined() && fc2_act.size(0) > 0) {
+        auto act = fc2_act[0].to(torch::kCPU);
+        int num_neurons = std::min(64, (int)act.size(0));
+
+        float neuron_height = 0.05f;
+
+        for (int i = 0; i < num_neurons; i++) {
+            float val = act[i].item<float>();
+            float intensity = std::min(1.0f, std::max(0.0f, val));
+
+            float y = (i - num_neurons / 2.0f) * neuron_height;
+            fc2_positions.push_back({0, y, z_positions[4]});
+
+            drawCube(0, y, z_positions[4],
+                    0.35f, neuron_height, 0.35f,
+                    intensity, 0.3f, 1.0f - intensity, 0.9f);
+        }
+    }
+
+    // 6. Output layer - 10 classes as 1D vector (10×1×1)
+    // Render as vertical block: 10 height × 1 width × 1 depth
+    std::vector<glm::vec3> output_positions;
+    if (output_act.defined() && output_act.size(0) > 0) {
+        auto act = output_act[0].to(torch::kCPU);
+        auto probs = torch::softmax(act, 0);
+
+        float neuron_height = 0.15f; // Larger for visibility
+
+        for (int i = 0; i < 10; i++) {
+            float prob = probs[i].item<float>();
+            float y = (i - 4.5f) * neuron_height;
+            output_positions.push_back({0, y, z_positions[5]});
+
+            drawCube(0, y, z_positions[5],
+                    0.4f, neuron_height, 0.4f,
+                    prob, 0.8f * prob, 0.2f, 1.0f);
+        }
+    }
+
+    // Draw connecting lines between layers with weight visualization
+    glLineWidth(3.0f);
+
+    // Get weights from network for visualization
+    auto fc2_weights = net->fc2->weight.to(torch::kCPU).abs(); // Shape: [64, 128]
+    auto fc3_weights = net->fc3->weight.to(torch::kCPU).abs(); // Shape: [10, 64]
+
+    // Normalize weights for better visualization using percentiles for contrast
+    float fc2_mean = fc2_weights.mean().item<float>();
+    float fc3_mean = fc3_weights.mean().item<float>();
+    float fc2_std = fc2_weights.std().item<float>();
+    float fc3_std = fc3_weights.std().item<float>();
+
+    // Conv1 to Conv2 connections (sample)
+    if (!conv1_positions.empty() && !conv2_positions.empty()) {
+        for (size_t i = 0; i < conv1_positions.size(); i += 2) {
+            for (size_t j = 0; j < conv2_positions.size(); j += 4) {
+                float weight_strength = 0.5f; // Approximate since conv weights are complex
+                // Blue for weak, yellow for strong
+                drawLine3D(conv1_positions[i].x, conv1_positions[i].y, conv1_positions[i].z,
+                          conv2_positions[j].x, conv2_positions[j].y, conv2_positions[j].z,
+                          0.2f + weight_strength * 0.7f, 0.2f + weight_strength * 0.7f, 0.8f - weight_strength * 0.7f, 0.4f);
             }
         }
     }
 
-    // 5. FC2 layer (64 neurons in a circle)
-    if (fc2_act.defined() && fc2_act.size(0) > 0) {
-        auto act = fc2_act[0].to(torch::kCPU);
-        int num_show = std::min(32, (int)act.size(0));
-        for (int i = 0; i < num_show; i++) {
-            float val = act[i].item<float>();
-            float intensity = std::min(1.0f, std::max(0.0f, val));
-            float angle = (i / (float)num_show) * 2 * M_PI;
-            float radius = 1.2f;
-            float x = radius * cosf(angle);
-            float y = radius * sinf(angle);
-            drawSphere(x, y, z_positions[4], 0.12f, intensity, 0.3f, 1.0f - intensity, 0.9f);
+    // Conv2 to FC1 connections (sample)
+    if (!conv2_positions.empty() && !fc1_positions.empty()) {
+        for (size_t i = 0; i < conv2_positions.size(); i += 4) {
+            for (size_t j = 0; j < fc1_positions.size(); j += 8) {
+                float weight_strength = 0.5f;
+                drawLine3D(conv2_positions[i].x, conv2_positions[i].y, conv2_positions[i].z,
+                          fc1_positions[j].x, fc1_positions[j].y, fc1_positions[j].z,
+                          0.3f + weight_strength * 0.6f, 0.3f + weight_strength * 0.6f, 0.7f - weight_strength * 0.6f, 0.45f);
+            }
         }
     }
 
-    // 6. Output layer (10 classes in a line)
-    if (output_act.defined() && output_act.size(0) > 0) {
-        auto act = output_act[0].to(torch::kCPU);
-        auto probs = torch::softmax(act, 0);
-        for (int i = 0; i < 10; i++) {
-            float prob = probs[i].item<float>();
-            float y = (i - 4.5f) * 0.3f;
-            drawSphere(0, y, z_positions[5], 0.15f, prob, 0.8f * prob, 0.2f, 1.0f);
+    // FC1 to FC2 connections with weight colors (normalized to show contrast)
+    if (!fc1_positions.empty() && !fc2_positions.empty()) {
+        for (size_t i = 0; i < fc1_positions.size(); i += 4) {
+            for (size_t j = 0; j < fc2_positions.size(); j++) {
+                if (j < fc2_weights.size(0) && i < fc2_weights.size(1)) {
+                    float weight = fc2_weights[j][i].item<float>();
+                    // Normalize using z-score for better contrast
+                    float normalized = (weight - fc2_mean) / (fc2_std + 0.0001f);
+                    normalized = std::min(1.0f, std::max(0.0f, (normalized + 2.0f) / 4.0f)); // Map to 0-1
+
+                    // Strong gradient: dark blue -> bright yellow
+                    float r = normalized;
+                    float g = normalized * 0.9f;
+                    float b = 1.0f - normalized;
+                    drawLine3D(fc1_positions[i].x, fc1_positions[i].y, fc1_positions[i].z,
+                              fc2_positions[j].x, fc2_positions[j].y, fc2_positions[j].z,
+                              r, g, b, 0.5f);
+                }
+            }
         }
     }
 
-    // Draw connecting lines between layers
-    glColor4f(0.3f, 0.3f, 0.4f, 0.2f);
-    for (int i = 0; i < 5; i++) {
-        drawLine3D(0, 0, z_positions[i], 0, 0, z_positions[i + 1], 0.3f, 0.3f, 0.4f, 0.3f);
+    // FC2 to Output connections - FULLY CONNECTED with dramatic weight colors
+    if (!fc2_positions.empty() && !output_positions.empty()) {
+        for (size_t i = 0; i < fc2_positions.size(); i++) {
+            for (size_t j = 0; j < output_positions.size(); j++) {
+                float weight = fc3_weights[j][i].item<float>();
+                // Normalize using z-score for maximum contrast
+                float normalized = (weight - fc3_mean) / (fc3_std + 0.0001f);
+                normalized = std::min(1.0f, std::max(0.0f, (normalized + 2.0f) / 4.0f)); // Map to 0-1
+
+                // Color mapping: weak (blue/dim) -> strong (red/bright)
+                float r = 0.1f + normalized * 0.9f;  // Red increases with weight
+                float g = 0.3f + normalized * 0.5f;  // Some green for yellow tones
+                float b = 0.9f - normalized * 0.8f;  // Blue decreases with weight
+                float alpha = 0.3f + normalized * 0.4f; // Stronger weights more visible
+
+                drawLine3D(fc2_positions[i].x, fc2_positions[i].y, fc2_positions[i].z,
+                          output_positions[j].x, output_positions[j].y, output_positions[j].z,
+                          r, g, b, alpha);
+            }
+        }
     }
+
+    glLineWidth(1.0f);
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
@@ -621,7 +753,8 @@ int main() {
                           net->conv2_out,
                           net->fc1_out,
                           net->fc2_out,
-                          output_for_vis);
+                          output_for_vis,
+                          net);
 
         // Render ImGui on top
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
