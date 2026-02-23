@@ -21,6 +21,11 @@ set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui")
 include_directories("${IMGUI_DIR}/include")
 link_directories("${IMGUI_DIR}/lib")
 
+# ImPlot
+set(IMPLOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/implot")
+include_directories("${IMPLOT_DIR}/include")
+link_directories("${IMPLOT_DIR}/lib")
+
 # ImGui backend sources
 set(IMGUI_BACKENDS
     "${IMGUI_DIR}/include/backends/imgui_impl_glfw.cpp"
@@ -37,6 +42,7 @@ target_link_libraries(caliper
     glfw
     glm::glm
     imgui
+    implot
     OpenGL::GL
     "-framework Cocoa"
     "-framework IOKit"
