@@ -5,6 +5,7 @@
 #include <functional>
 #include <chrono>
 #include <thread>
+#include <fstream>
 #include <GLFW/glfw3.h>
 #include <torch/torch.h>
 #include <glm/glm.hpp>
@@ -14,6 +15,119 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
+
+// Custom CIFAR-10 Dataset
+class CIFAR10Dataset : public torch::data::Dataset<CIFAR10Dataset> {
+public:
+    explicit CIFAR10Dataset(const std::string& root, bool train = true)
+        : root_(root), train_(train) {
+        load_data();
+    }
+
+    torch::data::Example<> get(size_t index) override {
+        auto data = images_[index];
+        auto target = labels_[index];
+        return {data.clone(), target.clone()};
+    }
+
+    torch::optional<size_t> size() const override {
+        return images_.size(0);
+    }
+
+private:
+    void load_data() {
+        std::vector<std::string> file_names;
+
+        if (train_) {
+            // Training files: data_batch_1.bin through data_batch_5.bin
+            for (int i = 1; i <= 5; i++) {
+                file_names.push_back(root_ + "/cifar-10-batches-bin/data_batch_" + std::to_string(i) + ".bin");
+            }
+        } else {
+            // Test file
+            file_names.push_back(root_ + "/cifar-10-batches-bin/test_batch.bin");
+        }
+
+        int total_images = train_ ? 50000 : 10000;
+
+        // Pre-allocate tensors for better performance
+        images_ = torch::zeros({total_images, 3, 32, 32}, torch::kFloat32);
+        labels_ = torch::zeros({total_images}, torch::kLong);
+
+        int image_idx = 0;
+
+        for (const auto& file_name : file_names) {
+            std::ifstream file(file_name, std::ios::binary);
+
+            if (!file.is_open()) {
+                std::cerr << "Warning: Could not open " << file_name << std::endl;
+                std::cerr << "Please download CIFAR-10 binary version from:" << std::endl;
+                std::cerr << "https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz" << std::endl;
+                std::cerr << "Extract to: " << root_ << std::endl;
+                std::cerr << "Generating synthetic data instead..." << std::endl;
+
+                // Generate synthetic data as fallback
+                images_ = torch::randn({total_images, 3, 32, 32});
+                labels_ = torch::randint(0, 10, {total_images}, torch::kLong);
+                return;
+            }
+
+            // Each CIFAR-10 binary file contains 10,000 images
+            // Format: [1 byte label][3072 bytes image (1024 R, 1024 G, 1024 B)]
+            const int num_images_per_file = 10000;
+            const int image_size = 3072; // 32x32x3
+            const int record_size = 1 + image_size; // label + image
+
+            // Read entire file at once for speed
+            std::vector<uint8_t> file_buffer(record_size * num_images_per_file);
+            file.read(reinterpret_cast<char*>(file_buffer.data()), file_buffer.size());
+
+            if (!file) {
+                std::cerr << "Error reading from " << file_name << std::endl;
+                file.close();
+                continue;
+            }
+
+            // Parse the buffer and fill tensors
+            auto images_accessor = images_.accessor<float, 4>();
+            auto labels_accessor = labels_.accessor<int64_t, 1>();
+
+            for (int i = 0; i < num_images_per_file && image_idx < total_images; i++, image_idx++) {
+                int offset = i * record_size;
+
+                // First byte is the label
+                labels_accessor[image_idx] = static_cast<int64_t>(file_buffer[offset]);
+
+                // Next 3072 bytes are the image: R (1024), G (1024), B (1024)
+                for (int c = 0; c < 3; c++) {
+                    for (int h = 0; h < 32; h++) {
+                        for (int w = 0; w < 32; w++) {
+                            int idx = offset + 1 + c * 1024 + h * 32 + w;
+                            images_accessor[image_idx][c][h][w] = static_cast<float>(file_buffer[idx]) / 255.0f;
+                        }
+                    }
+                }
+            }
+
+            file.close();
+            std::cout << "Loaded " << num_images_per_file << " images from " << file_name << std::endl;
+        }
+
+        if (image_idx == 0) {
+            std::cerr << "No images loaded! Using synthetic data." << std::endl;
+            images_ = torch::randn({total_images, 3, 32, 32});
+            labels_ = torch::randint(0, 10, {total_images}, torch::kLong);
+            return;
+        }
+
+        std::cout << "CIFAR-10 dataset loaded: " << image_idx << " images" << std::endl;
+    }
+
+    std::string root_;
+    bool train_;
+    torch::Tensor images_;
+    torch::Tensor labels_;
+};
 
 // Observable Tensor - wraps torch::Tensor with change notification
 class ObservableTensor {
@@ -40,44 +154,113 @@ public:
     }
 };
 
-// MNIST CNN Architecture
-struct MNISTNet : torch::nn::Module {
+// ResNet Basic Block
+struct BasicBlock : torch::nn::Module {
     torch::nn::Conv2d conv1{nullptr}, conv2{nullptr};
-    torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr};
+    torch::nn::BatchNorm2d bn1{nullptr}, bn2{nullptr};
+    torch::nn::Sequential downsample{nullptr};
+    int stride;
 
-    // Store activations for visualization (now observable)
-    ObservableTensor conv1_out, conv2_out, fc1_out, fc2_out;
-    bool auto_visualize = false;
+    BasicBlock(int in_channels, int out_channels, int stride_ = 1, torch::nn::Sequential downsample_ = nullptr)
+        : stride(stride_), downsample(downsample_) {
+        conv1 = register_module("conv1", torch::nn::Conv2d(
+            torch::nn::Conv2dOptions(in_channels, out_channels, 3).stride(stride).padding(1).bias(false)));
+        bn1 = register_module("bn1", torch::nn::BatchNorm2d(out_channels));
 
-    MNISTNet() {
-        // Conv layers: 1x28x28 -> 32x24x24 -> 64x8x8
-        conv1 = register_module("conv1", torch::nn::Conv2d(torch::nn::Conv2dOptions(1, 32, 5)));
-        conv2 = register_module("conv2", torch::nn::Conv2d(torch::nn::Conv2dOptions(32, 64, 5)));
+        conv2 = register_module("conv2", torch::nn::Conv2d(
+            torch::nn::Conv2dOptions(out_channels, out_channels, 3).stride(1).padding(1).bias(false)));
+        bn2 = register_module("bn2", torch::nn::BatchNorm2d(out_channels));
 
-        // FC layers: 64*4*4=1024 -> 128 -> 64 -> 10
-        fc1 = register_module("fc1", torch::nn::Linear(64 * 4 * 4, 128));
-        fc2 = register_module("fc2", torch::nn::Linear(128, 64));
-        fc3 = register_module("fc3", torch::nn::Linear(64, 10));
+        if (downsample_) {
+            downsample = register_module("downsample", downsample_);
+        }
     }
 
     torch::Tensor forward(torch::Tensor x) {
-        // Conv1 -> ReLU -> MaxPool
-        conv1_out = torch::relu(conv1->forward(x));
-        x = torch::max_pool2d(conv1_out, 2);
+        auto identity = x;
 
-        // Conv2 -> ReLU -> MaxPool
-        conv2_out = torch::relu(conv2->forward(x));
-        x = torch::max_pool2d(conv2_out, 2);
+        auto out = torch::relu(bn1->forward(conv1->forward(x)));
+        out = bn2->forward(conv2->forward(out));
 
-        // Flatten
-        x = x.view({x.size(0), -1});
+        if (!downsample.is_empty()) {
+            identity = downsample->forward(x);
+        }
 
-        // FC layers
-        fc1_out = torch::relu(fc1->forward(x));
-        fc2_out = torch::relu(fc2->forward(fc1_out));
-        x = fc3->forward(fc2_out);
+        out += identity;
+        out = torch::relu(out);
 
-        return torch::log_softmax(x, 1);
+        return out;
+    }
+};
+
+// Small ResNet-18 for image classification
+struct ResNet18 : torch::nn::Module {
+    torch::nn::Conv2d conv1{nullptr};
+    torch::nn::BatchNorm2d bn1{nullptr};
+    torch::nn::Sequential layer1{nullptr}, layer2{nullptr}, layer3{nullptr}, layer4{nullptr};
+    torch::nn::AdaptiveAvgPool2d avgpool{nullptr};
+    torch::nn::Linear fc{nullptr};
+
+    // Store activations for visualization
+    ObservableTensor conv1_out, layer1_out, layer2_out, layer3_out, layer4_out, pool_out;
+    bool auto_visualize = false;
+
+    ResNet18(int num_classes = 10) {
+        // Initial conv: 3x32x32 -> 64x32x32
+        conv1 = register_module("conv1", torch::nn::Conv2d(
+            torch::nn::Conv2dOptions(3, 64, 3).stride(1).padding(1).bias(false)));
+        bn1 = register_module("bn1", torch::nn::BatchNorm2d(64));
+
+        // ResNet layers
+        layer1 = register_module("layer1", make_layer(64, 64, 2, 1));   // 64x32x32
+        layer2 = register_module("layer2", make_layer(64, 128, 2, 2));  // 128x16x16
+        layer3 = register_module("layer3", make_layer(128, 256, 2, 2)); // 256x8x8
+        layer4 = register_module("layer4", make_layer(256, 512, 2, 2)); // 512x4x4
+
+        // Global average pooling and classifier
+        avgpool = register_module("avgpool", torch::nn::AdaptiveAvgPool2d(torch::nn::AdaptiveAvgPool2dOptions(1)));
+        fc = register_module("fc", torch::nn::Linear(512, num_classes));
+    }
+
+    torch::nn::Sequential make_layer(int in_channels, int out_channels, int num_blocks, int stride) {
+        torch::nn::Sequential layers;
+
+        // Downsample if needed
+        torch::nn::Sequential downsample{nullptr};
+        if (stride != 1 || in_channels != out_channels) {
+            downsample = torch::nn::Sequential(
+                torch::nn::Conv2d(torch::nn::Conv2dOptions(in_channels, out_channels, 1).stride(stride).bias(false)),
+                torch::nn::BatchNorm2d(out_channels)
+            );
+        }
+
+        // First block (may downsample)
+        layers->push_back(BasicBlock(in_channels, out_channels, stride, downsample));
+
+        // Remaining blocks
+        for (int i = 1; i < num_blocks; i++) {
+            layers->push_back(BasicBlock(out_channels, out_channels));
+        }
+
+        return layers;
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        // Initial conv
+        conv1_out = torch::relu(bn1->forward(conv1->forward(x)));
+
+        // ResNet blocks
+        layer1_out = layer1->forward(conv1_out.get());
+        layer2_out = layer2->forward(layer1_out.get());
+        layer3_out = layer3->forward(layer2_out.get());
+        layer4_out = layer4->forward(layer3_out.get());
+
+        // Global pooling and classification
+        pool_out = avgpool->forward(layer4_out.get());
+        x = pool_out.get().view({pool_out.get().size(0), -1});
+        x = fc->forward(x);
+
+        return x;
     }
 };
 
@@ -223,15 +406,17 @@ void drawCube(float x, float y, float z, float width, float height, float depth,
     glLineWidth(1.0f);
 }
 
-// Draw 3D MNIST network visualization
-void drawMNISTNetwork3D(Camera& camera,
-                       const torch::Tensor& input_img,
-                       const ObservableTensor& conv1_act,
-                       const ObservableTensor& conv2_act,
-                       const ObservableTensor& fc1_act,
-                       const ObservableTensor& fc2_act,
-                       const torch::Tensor& output_act,
-                       const std::shared_ptr<MNISTNet>& net) {
+// Draw 3D ResNet network visualization
+void drawResNetNetwork3D(Camera& camera,
+                        const torch::Tensor& input_img,
+                        const ObservableTensor& conv1_act,
+                        const ObservableTensor& layer1_act,
+                        const ObservableTensor& layer2_act,
+                        const ObservableTensor& layer3_act,
+                        const ObservableTensor& layer4_act,
+                        const ObservableTensor& pool_act,
+                        const torch::Tensor& output_act,
+                        const std::shared_ptr<ResNet18>& net) {
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -263,248 +448,278 @@ void drawMNISTNetwork3D(Camera& camera,
     glm::mat4 view = glm::lookAt(camera.position, lookTarget, camera.up);
     glLoadMatrixf(glm::value_ptr(view));
 
-    // Layer positions (spread out more for clarity)
-    float z_positions[] = {-12.0f, -7.0f, -2.0f, 4.0f, 8.0f, 12.0f};
+    // Layer positions (spread out for ResNet visualization)
+    float z_positions[] = {-24.0f, -18.0f, -12.0f, -6.0f, 0.0f, 6.0f, 12.0f, 18.0f, 22.0f};
 
-    // 1. Input layer (28x28 image as 2D plane) - 1 channel
+    // 0. Raw Image Layer - Show colored pixels as actual RGB image (composite view)
     if (input_img.defined() && input_img.size(0) > 0) {
-        auto img = input_img[0][0].to(torch::kCPU);
-        float pixel_size = 0.12f;  // Size of each pixel cube
-        for (int i = 0; i < 28; i += 2) {
-            for (int j = 0; j < 28; j += 2) {
-                float val = img[i][j].item<float>();
-                float x = (j - 14) * pixel_size;
-                float y = (14 - i) * pixel_size;
-                if (val > 0.1f) {
-                    drawCube(x, y, z_positions[0],
-                            pixel_size * 0.8f, pixel_size * 0.8f, 0.02f,
-                            val, val, val, 0.9f);
-                }
+        auto img = input_img[0].to(torch::kCPU);
+        float pixel_size = 0.10f;
+        int img_size = 32;
+
+        // Normalize the image for display (denormalize from training normalization)
+        auto mean = torch::tensor({0.4914, 0.4822, 0.4465}).view({3, 1, 1});
+        auto std = torch::tensor({0.2023, 0.1994, 0.2010}).view({3, 1, 1});
+        auto denorm_img = img * std + mean;
+        denorm_img = torch::clamp(denorm_img, 0.0, 1.0);
+
+        // Draw each pixel with its true RGB color
+        for (int i = 0; i < img_size; i++) {
+            for (int j = 0; j < img_size; j++) {
+                float r = denorm_img[0][i][j].item<float>();
+                float g = denorm_img[1][i][j].item<float>();
+                float b = denorm_img[2][i][j].item<float>();
+
+                float x = (j - img_size/2.0f) * pixel_size;
+                float y = (img_size/2.0f - i) * pixel_size;
+
+                // Draw colored pixel
+                drawCube(x, y, z_positions[0],
+                        pixel_size * 0.95f, pixel_size * 0.95f, 0.03f,
+                        r, g, b, 1.0f);
             }
         }
     }
 
-    // Store positions for drawing connections
-    std::vector<glm::vec3> conv1_positions;
-    std::vector<glm::vec3> conv2_positions;
-    std::vector<glm::vec3> fc1_positions;
-    std::vector<glm::vec3> fc2_positions;
+    // 1. Input layer (3x32x32 RGB image) - show all 3 channels as separate tensor slices
+    if (input_img.defined() && input_img.size(0) > 0) {
+        auto img = input_img[0].to(torch::kCPU);
+        float pixel_size = 0.08f;
+        int img_size = 32;
 
-    // 2. Conv1 layer - 32 channels × 24×24 spatial
-    // Render as 3D volume: width×height = spatial, depth = channels
-    if (conv1_act.defined() && conv1_act.get().size(0) > 0) {
-        auto act = conv1_act.get()[0].to(torch::kCPU);
-        int channels = act.size(0); // 32
-        int height = act.size(1);   // 24
-        int width = act.size(2);    // 24
+        for (int c = 0; c < 3; c++) {
+            for (int i = 0; i < img_size; i += 2) {
+                for (int j = 0; j < img_size; j += 2) {
+                    float val = img[c][i][j].item<float>();
+                    float x = (j - img_size/2.0f) * pixel_size;
+                    float y = (img_size/2.0f - i) * pixel_size;
+                    float z = z_positions[1] + (c - 1) * 0.1f;
 
-        float pixel_size = 0.10f;  // Smaller than input (24 vs 28)
-        float channel_depth = 0.08f; // Depth per channel
-
-        // Sample spatial positions and show all channels as depth
-        for (int c = 0; c < channels; c += 1) {
-            for (int i = 0; i < height; i += 3) {  // Sample spatial
-                for (int j = 0; j < width; j += 3) {
-                    float val = act[c][i][j].item<float>();
-                    if (val > 0.05f) {
-                        float x = (j - width/2.0f) * pixel_size;
-                        float y = (height/2.0f - i) * pixel_size;
-                        float z = z_positions[1] + (c - channels/2.0f) * channel_depth;
-
-                        float intensity = std::min(1.0f, std::max(0.0f, val));
-                        conv1_positions.push_back({x, y, z});
-
-                        drawCube(x, y, z,
-                                pixel_size * 0.7f, pixel_size * 0.7f, channel_depth * 0.8f,
-                                intensity, 0.5f + intensity * 0.5f, 1.0f - intensity * 0.5f, 0.7f);
+                    if (std::abs(val) > 0.1f) {
+                        float r = (c == 0) ? std::abs(val) : 0.3f;
+                        float g = (c == 1) ? std::abs(val) : 0.3f;
+                        float b = (c == 2) ? std::abs(val) : 0.3f;
+                        drawCube(x, y, z, pixel_size * 0.8f, pixel_size * 0.8f, 0.02f, r, g, b, 0.8f);
                     }
                 }
             }
         }
     }
 
-    // 3. Conv2 layer - 64 channels × 8×8 spatial
-    // Render as 3D volume: width×height = spatial (smaller), depth = channels (more)
-    if (conv2_act.defined() && conv2_act.get().size(0) > 0) {
-        auto act = conv2_act.get()[0].to(torch::kCPU);
+    std::vector<glm::vec3> conv1_positions, layer1_positions, layer2_positions, layer3_positions, layer4_positions, pool_positions;
+
+    // 2. Initial Conv1 layer - 64 channels × 32×32
+    if (conv1_act.defined() && conv1_act.get().size(0) > 0) {
+        auto act = conv1_act.get()[0].to(torch::kCPU);
         int channels = act.size(0); // 64
-        int height = act.size(1);   // 8
-        int width = act.size(2);    // 8
+        int height = act.size(1);   // 32
+        int width = act.size(2);    // 32
 
-        float pixel_size = 0.15f;  // Larger pixels for smaller spatial dim
-        float channel_depth = 0.06f; // Thinner per channel (more channels)
+        float pixel_size = 0.07f;
+        float channel_depth = 0.05f;
 
-        // Sample spatial positions and show all channels as depth
-        for (int c = 0; c < channels; c += 1) {
-            for (int i = 0; i < height; i += 1) {  // Show all spatial (8x8 is small)
-                for (int j = 0; j < width; j += 1) {
+        for (int c = 0; c < channels; c += 2) {
+            for (int i = 0; i < height; i += 4) {
+                for (int j = 0; j < width; j += 4) {
                     float val = act[c][i][j].item<float>();
                     if (val > 0.05f) {
                         float x = (j - width/2.0f) * pixel_size;
                         float y = (height/2.0f - i) * pixel_size;
                         float z = z_positions[2] + (c - channels/2.0f) * channel_depth;
-
-                        float intensity = std::min(1.0f, std::max(0.0f, val));
-                        conv2_positions.push_back({x, y, z});
-
-                        drawCube(x, y, z,
-                                pixel_size * 0.8f, pixel_size * 0.8f, channel_depth * 0.8f,
-                                intensity, 0.4f + intensity * 0.5f, 1.0f - intensity * 0.6f, 0.7f);
+                        float intensity = std::min(1.0f, val);
+                        conv1_positions.push_back({x, y, z});
+                        drawCube(x, y, z, pixel_size * 0.7f, pixel_size * 0.7f, channel_depth * 0.8f,
+                                intensity, 0.5f + intensity * 0.5f, 1.0f - intensity * 0.3f, 0.6f);
                     }
                 }
             }
         }
     }
 
-    // 4. FC1 layer - 1024 flattened -> 128 neurons
-    // Render as a grid that collapses from wide (1024 = 32x32 grid) to narrow (128 = 16x8 grid)
-    if (fc1_act.defined() && fc1_act.get().size(0) > 0) {
-        auto act = fc1_act.get()[0].to(torch::kCPU);
-        int num_neurons = act.size(0); // 128
+    // 3. Layer1 - 64 channels × 32×32
+    if (layer1_act.defined() && layer1_act.get().size(0) > 0) {
+        auto act = layer1_act.get()[0].to(torch::kCPU);
+        int channels = act.size(0);
+        int height = act.size(1);
+        int width = act.size(2);
 
-        // Arrange as a 2D grid to show dimensionality (16 wide × 8 tall)
-        int grid_width = 16;
-        int grid_height = 8;
-        float neuron_size = 0.10f;
+        float pixel_size = 0.07f;
+        float channel_depth = 0.05f;
 
-        for (int i = 0; i < num_neurons; i++) {
-            float val = act[i].item<float>();
-            if (val > 0.05f) {
-                float intensity = std::min(1.0f, std::max(0.0f, val));
-
-                int row = i / grid_width;
-                int col = i % grid_width;
-                float x = (col - grid_width / 2.0f) * neuron_size;
-                float y = (grid_height / 2.0f - row) * neuron_size;
-
-                fc1_positions.push_back({x, y, z_positions[3]});
-
-                drawCube(x, y, z_positions[3],
-                        neuron_size * 0.8f, neuron_size * 0.8f, 0.05f,
-                        intensity, 0.3f + intensity * 0.4f, 1.0f - intensity * 0.5f, 0.85f);
-            }
-        }
-    }
-
-    // 5. FC2 layer - 128 -> 64 neurons
-    // Render as smaller 2D grid (8 wide × 8 tall)
-    if (fc2_act.defined() && fc2_act.get().size(0) > 0) {
-        auto act = fc2_act.get()[0].to(torch::kCPU);
-        int num_neurons = act.size(0); // 64
-
-        // Arrange as a 2D grid (8×8)
-        int grid_width = 8;
-        int grid_height = 8;
-        float neuron_size = 0.12f;
-
-        for (int i = 0; i < num_neurons; i++) {
-            float val = act[i].item<float>();
-            if (val > 0.05f) {
-                float intensity = std::min(1.0f, std::max(0.0f, val));
-
-                int row = i / grid_width;
-                int col = i % grid_width;
-                float x = (col - grid_width / 2.0f) * neuron_size;
-                float y = (grid_height / 2.0f - row) * neuron_size;
-
-                fc2_positions.push_back({x, y, z_positions[4]});
-
-                drawCube(x, y, z_positions[4],
-                        neuron_size * 0.9f, neuron_size * 0.9f, 0.05f,
-                        intensity, 0.3f + intensity * 0.4f, 1.0f - intensity * 0.6f, 0.9f);
-            }
-        }
-    }
-
-    // 6. Output layer - 64 -> 10 classes
-    // Render as very small vertical strip (10×1)
-    std::vector<glm::vec3> output_positions;
-    if (output_act.defined() && output_act.size(0) > 0) {
-        auto act = output_act[0].to(torch::kCPU);
-        auto probs = torch::softmax(act, 0);
-
-        float neuron_size = 0.20f; // Large for visibility
-
-        for (int i = 0; i < 10; i++) {
-            float prob = probs[i].item<float>();
-            float y = (i - 4.5f) * neuron_size;
-            output_positions.push_back({0, y, z_positions[5]});
-
-            drawCube(0, y, z_positions[5],
-                    neuron_size * 1.2f, neuron_size * 0.9f, 0.08f,
-                    prob, 0.8f * prob, 0.2f, 1.0f);
-        }
-    }
-
-    // Draw connecting lines between layers (reduced for clarity)
-    glLineWidth(1.5f);
-
-    // Get weights from network for visualization
-    auto fc2_weights = net->fc2->weight.to(torch::kCPU).abs(); // Shape: [64, 128]
-    auto fc3_weights = net->fc3->weight.to(torch::kCPU).abs(); // Shape: [10, 64]
-
-    // Normalize weights
-    float fc2_mean = fc2_weights.mean().item<float>();
-    float fc3_mean = fc3_weights.mean().item<float>();
-    float fc2_std = fc2_weights.std().item<float>();
-    float fc3_std = fc3_weights.std().item<float>();
-
-    // Conv1 to Conv2 connections (heavily sampled - show shrinking spatial dimensions)
-    if (!conv1_positions.empty() && !conv2_positions.empty()) {
-        for (size_t i = 0; i < std::min(conv1_positions.size(), size_t(50)); i += 10) {
-            for (size_t j = 0; j < std::min(conv2_positions.size(), size_t(50)); j += 10) {
-                drawLine3D(conv1_positions[i].x, conv1_positions[i].y, conv1_positions[i].z,
-                          conv2_positions[j].x, conv2_positions[j].y, conv2_positions[j].z,
-                          0.4f, 0.4f, 0.7f, 0.15f);
-            }
-        }
-    }
-
-    // Conv2 to FC1 connections (show flattening - 3D volume to 2D grid)
-    if (!conv2_positions.empty() && !fc1_positions.empty()) {
-        for (size_t i = 0; i < std::min(conv2_positions.size(), size_t(64)); i += 8) {
-            for (size_t j = 0; j < std::min(fc1_positions.size(), size_t(32)); j += 4) {
-                drawLine3D(conv2_positions[i].x, conv2_positions[i].y, conv2_positions[i].z,
-                          fc1_positions[j].x, fc1_positions[j].y, fc1_positions[j].z,
-                          0.5f, 0.3f, 0.6f, 0.2f);
-            }
-        }
-    }
-
-    // FC1 to FC2 connections (show dimensional collapse: 128 -> 64)
-    if (!fc1_positions.empty() && !fc2_positions.empty()) {
-        for (size_t i = 0; i < fc1_positions.size(); i += 2) {
-            for (size_t j = 0; j < fc2_positions.size(); j += 1) {
-                if (j < fc2_weights.size(0) && i < fc2_weights.size(1)) {
-                    float weight = fc2_weights[j][i].item<float>();
-                    float normalized = (weight - fc2_mean) / (fc2_std + 0.0001f);
-                    normalized = std::min(1.0f, std::max(0.0f, (normalized + 2.0f) / 4.0f));
-
-                    float alpha = 0.15f + normalized * 0.25f;
-                    drawLine3D(fc1_positions[i].x, fc1_positions[i].y, fc1_positions[i].z,
-                              fc2_positions[j].x, fc2_positions[j].y, fc2_positions[j].z,
-                              0.6f + normalized * 0.4f, 0.4f, 1.0f - normalized * 0.3f, alpha);
+        for (int c = 0; c < channels; c += 2) {
+            for (int i = 0; i < height; i += 4) {
+                for (int j = 0; j < width; j += 4) {
+                    float val = act[c][i][j].item<float>();
+                    if (val > 0.05f) {
+                        float x = (j - width/2.0f) * pixel_size;
+                        float y = (height/2.0f - i) * pixel_size;
+                        float z = z_positions[3] + (c - channels/2.0f) * channel_depth;
+                        float intensity = std::min(1.0f, val);
+                        layer1_positions.push_back({x, y, z});
+                        drawCube(x, y, z, pixel_size * 0.7f, pixel_size * 0.7f, channel_depth * 0.8f,
+                                intensity, 0.6f, 1.0f - intensity * 0.4f, 0.65f);
+                    }
                 }
             }
         }
     }
 
-    // FC2 to Output connections (show final collapse: 64 -> 10)
-    if (!fc2_positions.empty() && !output_positions.empty()) {
-        for (size_t i = 0; i < fc2_positions.size(); i++) {
+    // 4. Layer2 - 128 channels × 16×16
+    if (layer2_act.defined() && layer2_act.get().size(0) > 0) {
+        auto act = layer2_act.get()[0].to(torch::kCPU);
+        int channels = act.size(0);
+        int height = act.size(1);
+        int width = act.size(2);
+
+        float pixel_size = 0.09f;
+        float channel_depth = 0.04f;
+
+        for (int c = 0; c < channels; c += 3) {
+            for (int i = 0; i < height; i += 2) {
+                for (int j = 0; j < width; j += 2) {
+                    float val = act[c][i][j].item<float>();
+                    if (val > 0.05f) {
+                        float x = (j - width/2.0f) * pixel_size;
+                        float y = (height/2.0f - i) * pixel_size;
+                        float z = z_positions[4] + (c - channels/2.0f) * channel_depth;
+                        float intensity = std::min(1.0f, val);
+                        layer2_positions.push_back({x, y, z});
+                        drawCube(x, y, z, pixel_size * 0.8f, pixel_size * 0.8f, channel_depth * 0.8f,
+                                intensity, 0.5f, 1.0f - intensity * 0.5f, 0.7f);
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Layer3 - 256 channels × 8×8
+    if (layer3_act.defined() && layer3_act.get().size(0) > 0) {
+        auto act = layer3_act.get()[0].to(torch::kCPU);
+        int channels = act.size(0);
+        int height = act.size(1);
+        int width = act.size(2);
+
+        float pixel_size = 0.12f;
+        float channel_depth = 0.03f;
+
+        for (int c = 0; c < channels; c += 4) {
+            for (int i = 0; i < height; i += 1) {
+                for (int j = 0; j < width; j += 1) {
+                    float val = act[c][i][j].item<float>();
+                    if (val > 0.05f) {
+                        float x = (j - width/2.0f) * pixel_size;
+                        float y = (height/2.0f - i) * pixel_size;
+                        float z = z_positions[5] + (c - channels/2.0f) * channel_depth;
+                        float intensity = std::min(1.0f, val);
+                        layer3_positions.push_back({x, y, z});
+                        drawCube(x, y, z, pixel_size * 0.9f, pixel_size * 0.9f, channel_depth * 0.8f,
+                                intensity, 0.4f, 1.0f - intensity * 0.6f, 0.75f);
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. Layer4 - 512 channels × 4×4
+    if (layer4_act.defined() && layer4_act.get().size(0) > 0) {
+        auto act = layer4_act.get()[0].to(torch::kCPU);
+        int channels = act.size(0);
+        int height = act.size(1);
+        int width = act.size(2);
+
+        float pixel_size = 0.18f;
+        float channel_depth = 0.02f;
+
+        for (int c = 0; c < channels; c += 8) {
+            for (int i = 0; i < height; i += 1) {
+                for (int j = 0; j < width; j += 1) {
+                    float val = act[c][i][j].item<float>();
+                    if (val > 0.05f) {
+                        float x = (j - width/2.0f) * pixel_size;
+                        float y = (height/2.0f - i) * pixel_size;
+                        float z = z_positions[6] + (c - channels/2.0f) * channel_depth;
+                        float intensity = std::min(1.0f, val);
+                        layer4_positions.push_back({x, y, z});
+                        drawCube(x, y, z, pixel_size * 0.95f, pixel_size * 0.95f, channel_depth * 0.8f,
+                                intensity, 0.3f, 1.0f - intensity * 0.7f, 0.8f);
+                    }
+                }
+            }
+        }
+    }
+
+    // 7. Global Average Pool - 512 dimensions
+    if (pool_act.defined() && pool_act.get().size(0) > 0) {
+        auto act = pool_act.get()[0].to(torch::kCPU);
+        act = act.view({-1});
+        int num_features = act.size(0); // 512
+
+        int grid_width = 32;
+        int grid_height = 16;
+        float neuron_size = 0.08f;
+
+        for (int i = 0; i < num_features; i += 2) {
+            float val = act[i].item<float>();
+            if (val > 0.05f) {
+                float intensity = std::min(1.0f, val);
+                int row = i / grid_width;
+                int col = i % grid_width;
+                float x = (col - grid_width / 2.0f) * neuron_size;
+                float y = (grid_height / 2.0f - row) * neuron_size;
+                pool_positions.push_back({x, y, z_positions[7]});
+                drawCube(x, y, z_positions[7], neuron_size * 0.9f, neuron_size * 0.9f, 0.05f,
+                        intensity, 0.2f + intensity * 0.4f, 1.0f - intensity * 0.6f, 0.85f);
+            }
+        }
+    }
+
+    // 8. Output layer - 10 classes
+    std::vector<glm::vec3> output_positions;
+    if (output_act.defined() && output_act.size(0) > 0) {
+        auto act = output_act[0].to(torch::kCPU);
+        auto probs = torch::softmax(act, 0);
+        float neuron_size = 0.20f;
+
+        for (int i = 0; i < 10; i++) {
+            float prob = probs[i].item<float>();
+            float y = (i - 4.5f) * neuron_size;
+            output_positions.push_back({0, y, z_positions[8]});
+            drawCube(0, y, z_positions[8], neuron_size * 1.2f, neuron_size * 0.9f, 0.08f,
+                    prob, 0.8f * prob, 0.2f, 1.0f);
+        }
+    }
+
+    // Draw connections (sampled heavily for performance)
+    glLineWidth(1.0f);
+
+    auto draw_layer_connections = [](const std::vector<glm::vec3>& from, const std::vector<glm::vec3>& to,
+                                     float r, float g, float b, float alpha, int sample_rate = 20) {
+        for (size_t i = 0; i < from.size(); i += sample_rate) {
+            for (size_t j = 0; j < to.size(); j += sample_rate) {
+                drawLine3D(from[i].x, from[i].y, from[i].z, to[j].x, to[j].y, to[j].z, r, g, b, alpha);
+            }
+        }
+    };
+
+    if (!conv1_positions.empty() && !layer1_positions.empty())
+        draw_layer_connections(conv1_positions, layer1_positions, 0.4f, 0.4f, 0.7f, 0.1f, 30);
+    if (!layer1_positions.empty() && !layer2_positions.empty())
+        draw_layer_connections(layer1_positions, layer2_positions, 0.5f, 0.5f, 0.8f, 0.12f, 35);
+    if (!layer2_positions.empty() && !layer3_positions.empty())
+        draw_layer_connections(layer2_positions, layer3_positions, 0.6f, 0.4f, 0.9f, 0.15f, 40);
+    if (!layer3_positions.empty() && !layer4_positions.empty())
+        draw_layer_connections(layer3_positions, layer4_positions, 0.7f, 0.3f, 1.0f, 0.18f, 45);
+    if (!layer4_positions.empty() && !pool_positions.empty())
+        draw_layer_connections(layer4_positions, pool_positions, 0.8f, 0.2f, 0.9f, 0.2f, 20);
+
+    // Pool to output with FC weights if available
+    if (!pool_positions.empty() && !output_positions.empty()) {
+        auto fc_weights = net->fc->weight.to(torch::kCPU).abs();
+        for (size_t i = 0; i < pool_positions.size(); i += 2) {
             for (size_t j = 0; j < output_positions.size(); j++) {
-                float weight = fc3_weights[j][i].item<float>();
-                float normalized = (weight - fc3_mean) / (fc3_std + 0.0001f);
-                normalized = std::min(1.0f, std::max(0.0f, (normalized + 2.0f) / 4.0f));
-
-                float r = 0.2f + normalized * 0.8f;
-                float g = 0.3f + normalized * 0.4f;
-                float b = 0.8f - normalized * 0.6f;
-                float alpha = 0.2f + normalized * 0.5f;
-
-                drawLine3D(fc2_positions[i].x, fc2_positions[i].y, fc2_positions[i].z,
+                drawLine3D(pool_positions[i].x, pool_positions[i].y, pool_positions[i].z,
                           output_positions[j].x, output_positions[j].y, output_positions[j].z,
-                          r, g, b, alpha);
+                          0.9f, 0.4f, 0.3f, 0.25f);
             }
         }
     }
@@ -528,7 +743,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_FALSE);
 
     // Create window
-    GLFWwindow* window = glfwCreateWindow(1600, 900, "Caliper - MNIST 3D Visualizer", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1600, 900, "Caliper - ResNet-18 CIFAR-10 Visualizer", nullptr, nullptr);
     if (!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -623,27 +838,27 @@ int main() {
     bool mps_available = torch::mps::is_available();
     torch::Device device(mps_available ? torch::kMPS : torch::kCPU);
 
-    std::cout << "Loading MNIST dataset..." << std::endl;
+    std::cout << "Loading CIFAR-10 dataset..." << std::endl;
 
-    // Load MNIST dataset
+    // Load CIFAR-10 dataset
     const std::string dataset_path = "/Users/ahmed/CLionProjects/caliper/data";
-    auto train_dataset = torch::data::datasets::MNIST(dataset_path)
-        .map(torch::data::transforms::Normalize<>(0.1307, 0.3081))
+    auto train_dataset = CIFAR10Dataset(dataset_path, true)
+        .map(torch::data::transforms::Normalize<>({0.4914, 0.4822, 0.4465}, {0.2023, 0.1994, 0.2010}))
         .map(torch::data::transforms::Stack<>());
 
     auto train_loader = torch::data::make_data_loader(
         std::move(train_dataset),
-        torch::data::DataLoaderOptions().batch_size(64).workers(2)
+        torch::data::DataLoaderOptions().batch_size(64).workers(0)
     );
 
-    std::cout << "MNIST dataset loaded successfully!" << std::endl;
+    std::cout << "CIFAR-10 dataset loaded successfully!" << std::endl;
 
-    // Create MNIST network
+    // Create ResNet-18 network
     float learning_rate = 0.01f;
-    auto net = std::make_shared<MNISTNet>();
+    auto net = std::make_shared<ResNet18>(10);
     net->to(device);
 
-    torch::optim::SGD optimizer(net->parameters(), torch::optim::SGDOptions(learning_rate).momentum(0.9));
+    torch::optim::SGD optimizer(net->parameters(), torch::optim::SGDOptions(learning_rate).momentum(0.9).weight_decay(5e-4));
 
     // Training state
     bool training = false;
@@ -676,13 +891,19 @@ int main() {
     net->conv1_out.set_callback([&needs_visualization_update, &net]() {
         if (net->auto_visualize) needs_visualization_update = true;
     });
-    net->conv2_out.set_callback([&needs_visualization_update, &net]() {
+    net->layer1_out.set_callback([&needs_visualization_update, &net]() {
         if (net->auto_visualize) needs_visualization_update = true;
     });
-    net->fc1_out.set_callback([&needs_visualization_update, &net]() {
+    net->layer2_out.set_callback([&needs_visualization_update, &net]() {
         if (net->auto_visualize) needs_visualization_update = true;
     });
-    net->fc2_out.set_callback([&needs_visualization_update, &net]() {
+    net->layer3_out.set_callback([&needs_visualization_update, &net]() {
+        if (net->auto_visualize) needs_visualization_update = true;
+    });
+    net->layer4_out.set_callback([&needs_visualization_update, &net]() {
+        if (net->auto_visualize) needs_visualization_update = true;
+    });
+    net->pool_out.set_callback([&needs_visualization_update, &net]() {
         if (net->auto_visualize) needs_visualization_update = true;
     });
 
@@ -733,20 +954,22 @@ int main() {
 
         // Control panel
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(400, 650), ImGuiCond_FirstUseEver);
-        ImGui::Begin("MNIST Training Monitor");
+        ImGui::SetNextWindowSize(ImVec2(450, 720), ImGuiCond_FirstUseEver);
+        ImGui::Begin("ResNet-18 CIFAR-10 Training Monitor");
 
         ImGui::Text("LibTorch: %s", TORCH_VERSION);
         ImGui::Text("Device: %s", mps_available ? "MPS (Apple Silicon)" : "CPU");
         ImGui::Separator();
 
-        ImGui::Text("Network Architecture:");
-        ImGui::BulletText("Input: 1x28x28 (784)");
-        ImGui::BulletText("Conv1: 32 filters, 5x5");
-        ImGui::BulletText("Conv2: 64 filters, 5x5");
-        ImGui::BulletText("FC1: 1024 -> 128");
-        ImGui::BulletText("FC2: 128 -> 64");
-        ImGui::BulletText("Output: 64 -> 10");
+        ImGui::Text("ResNet-18 Architecture:");
+        ImGui::BulletText("Input: 3x32x32 RGB (3,072)");
+        ImGui::BulletText("Conv1: 64 filters, 3x3");
+        ImGui::BulletText("Layer1: 64 channels (2 blocks)");
+        ImGui::BulletText("Layer2: 128 channels (2 blocks)");
+        ImGui::BulletText("Layer3: 256 channels (2 blocks)");
+        ImGui::BulletText("Layer4: 512 channels (2 blocks)");
+        ImGui::BulletText("Global Avg Pool + FC: 512 -> 10");
+        ImGui::Text("Total Parameters: ~11.2M");
 
         ImGui::Separator();
         ImGui::Text("Training Parameters");
@@ -844,7 +1067,7 @@ int main() {
                     net->train();
                     optimizer.zero_grad();
                     auto output = net->forward(data);
-                    auto loss = torch::nll_loss(output, target);
+                    auto loss = torch::nn::functional::cross_entropy(output, target);
 
                     // Backward pass
                     loss.backward();
@@ -893,15 +1116,17 @@ int main() {
         glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Draw 3D MNIST network (use stored activations from forward pass)
-        drawMNISTNetwork3D(camera,
-                          current_input,
-                          net->conv1_out,
-                          net->conv2_out,
-                          net->fc1_out,
-                          net->fc2_out,
-                          output_for_vis,
-                          net);
+        // Draw 3D ResNet network (use stored activations from forward pass)
+        drawResNetNetwork3D(camera,
+                           current_input,
+                           net->conv1_out,
+                           net->layer1_out,
+                           net->layer2_out,
+                           net->layer3_out,
+                           net->layer4_out,
+                           net->pool_out,
+                           output_for_vis,
+                           net);
 
         // Render ImGui on top
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
