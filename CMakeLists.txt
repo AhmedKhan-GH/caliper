@@ -1,55 +1,113 @@
 cmake_minimum_required(VERSION 3.18)
-project(caliper)
+project(caliper CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Set prefix paths for all third-party libraries
-list(APPEND CMAKE_PREFIX_PATH
-    "${CMAKE_CURRENT_SOURCE_DIR}/third-party/libtorch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third-party/glfw"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third-party/glm"
-)
+# Suppress CLion compiler info warnings
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Find packages
-find_package(Torch REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(glm REQUIRED)
-find_package(OpenGL REQUIRED)
+# Use all available cores for building
+include(ProcessorCount)
+ProcessorCount(N)
+if(NOT N EQUAL 0)
+    set(CMAKE_BUILD_PARALLEL_LEVEL ${N})
+endif()
 
-# ImGui
-set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui")
-include_directories("${IMGUI_DIR}/include")
-link_directories("${IMGUI_DIR}/lib")
+# Add CMake module path
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
 
-# ImPlot
-set(IMPLOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/implot")
-include_directories("${IMPLOT_DIR}/include")
-link_directories("${IMPLOT_DIR}/lib")
+# Build configuration
+# Auto-enable CUDA on Windows and Linux by default
+if(WIN32 OR (UNIX AND NOT APPLE))
+    option(USE_CUDA "Build with CUDA support" ON)
+else()
+    option(USE_CUDA "Build with CUDA support" OFF)
+endif()
+# Auto-enable MPS on macOS if Metal compiler is available
+if(APPLE)
+    # Check if Metal compiler is available
+    execute_process(
+        COMMAND xcrun --find metal
+        RESULT_VARIABLE METAL_FOUND
+        OUTPUT_QUIET ERROR_QUIET
+    )
+    if(METAL_FOUND EQUAL 0)
+        option(USE_MPS "Build with MPS (Metal Performance Shaders) support for Apple Silicon" ON)
+    else()
+        option(USE_MPS "Build with MPS (Metal Performance Shaders) support for Apple Silicon" OFF)
+        message(STATUS "Metal compiler not found. MPS support disabled. Install Xcode to enable MPS.")
+    endif()
+else()
+    option(USE_MPS "Build with MPS (Metal Performance Shaders) support for Apple Silicon" OFF)
+endif()
+option(BUILD_TESTS "Build tests" OFF)
 
-# ImGui backend sources
-set(IMGUI_BACKENDS
-    "${IMGUI_DIR}/include/backends/imgui_impl_glfw.cpp"
-    "${IMGUI_DIR}/include/backends/imgui_impl_opengl3.cpp"
-)
+# Include main dependency configuration
+include(cmake/Dependencies.cmake)
 
+# ImGui backend sources - check both new and legacy paths
+if(EXISTS "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp")
+    set(IMGUI_BACKENDS
+        "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+        "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
+    )
+elseif(EXISTS "${IMGUI_DIR}/include/backends/imgui_impl_glfw.cpp")
+    set(IMGUI_BACKENDS
+        "${IMGUI_DIR}/include/backends/imgui_impl_glfw.cpp"
+        "${IMGUI_DIR}/include/backends/imgui_impl_opengl3.cpp"
+    )
+else()
+    message(WARNING "ImGui backends not found, using header-only mode")
+    set(IMGUI_BACKENDS "")
+endif()
+
+# Main executable
 add_executable(caliper
+
     main.cpp
     ${IMGUI_BACKENDS}
 )
 
-target_link_libraries(caliper
-    "${TORCH_LIBRARIES}"
-    glfw
-    glm::glm
-    imgui
-    implot
-    OpenGL::GL
-    "-framework Cocoa"
-    "-framework IOKit"
-    "-framework CoreVideo"
-)
+# Link all dependencies
+if(PYTORCH_BUILDING_FROM_SOURCE)
+    # Use interface library that depends on PyTorch build
+    target_link_libraries(caliper PRIVATE
+        ${TORCH_INTERFACE_LIB}
+        glfw
+        glm::glm
+        imgui
+        implot
+        OpenGL::GL
+        ${PLATFORM_LIBS}
+    )
+else()
+    # Use pre-built PyTorch
+    target_link_libraries(caliper PRIVATE
+        ${TORCH_LIBRARIES}
+        glfw
+        glm::glm
+        imgui
+        implot
+        OpenGL::GL
+        ${PLATFORM_LIBS}
+    )
+    set_target_properties(caliper PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+endif()
 
-# Copy dynamic libraries to build directory
+# Set RPATH for dynamic libraries (macOS)
 set_target_properties(caliper PROPERTIES
     INSTALL_RPATH "@executable_path"
 )
+
+# Copy dynamic libraries to build directory if needed
+if(APPLE)
+    target_link_libraries(caliper PRIVATE
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework CoreVideo"
+    )
+endif()
