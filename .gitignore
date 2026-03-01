@@ -22,6 +22,9 @@ imgui.ini
 # Data directories (comment out if you want to track data)
 data/
 
+# Third-party libraries
+third_party/
+
 # Pre-built third-party libraries (legacy)
 old_builds/
 
