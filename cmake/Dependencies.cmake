@@ -18,29 +18,33 @@ set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # Check if submodules are initialized, auto-init if not
 if(NOT EXISTS "${THIRD_PARTY_DIR}/pytorch/CMakeLists.txt")
-    message(STATUS "Git submodules not initialized. Initializing now...")
-    message(STATUS "This may take 5-10 minutes (downloading ~2GB)...")
+    message(STATUS "========================================")
+    message(STATUS "Git submodules not initialized")
+    message(STATUS "Initializing now (this may take 5-10 minutes)")
+    message(STATUS "Downloading ~2GB from GitHub...")
+    message(STATUS "========================================")
 
     execute_process(
-        COMMAND git submodule update --init --recursive
+        COMMAND git submodule update --init --recursive --progress
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         RESULT_VARIABLE SUBMODULE_RESULT
-        OUTPUT_VARIABLE SUBMODULE_OUTPUT
-        ERROR_VARIABLE SUBMODULE_ERROR
     )
 
     if(NOT SUBMODULE_RESULT EQUAL 0)
         message(FATAL_ERROR
+            "\n========================================\n"
             "Failed to initialize git submodules.\n"
-            "Error: ${SUBMODULE_ERROR}\n"
             "Please run manually:\n"
             "  ./init-submodules.sh\n"
             "Or:\n"
-            "  git submodule update --init --recursive"
+            "  git submodule update --init --recursive\n"
+            "========================================"
         )
     endif()
 
+    message(STATUS "========================================")
     message(STATUS "Submodules initialized successfully!")
+    message(STATUS "========================================")
 endif()
 
 # ============================================================================
