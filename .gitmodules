@@ -1,0 +1,24 @@
+[submodule "third_party/glfw"]
+	path = third_party/glfw
+	url = https://github.com/glfw/glfw.git
+	ignore = dirty
+
+[submodule "third_party/glm"]
+	path = third_party/glm
+	url = https://github.com/g-truc/glm.git
+	ignore = dirty
+
+[submodule "third_party/imgui"]
+	path = third_party/imgui
+	url = https://github.com/ocornut/imgui.git
+	ignore = dirty
+
+[submodule "third_party/implot"]
+	path = third_party/implot
+	url = https://github.com/epezent/implot.git
+	ignore = dirty
+
+[submodule "third_party/pytorch"]
+	path = third_party/pytorch
+	url = https://github.com/pytorch/pytorch.git
+	ignore = dirty

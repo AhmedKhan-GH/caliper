@@ -12,21 +12,22 @@ include(ProcessorCount)
 ProcessorCount(N)
 if(NOT N EQUAL 0)
     set(CMAKE_BUILD_PARALLEL_LEVEL ${N})
+    message(STATUS "Building with ${N} parallel jobs")
 endif()
 
-# Add CMake module path
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
+# ============================================================================
+# Build Options (PyTorch-style)
+# ============================================================================
 
-# Build configuration
 # Auto-enable CUDA on Windows and Linux by default
 if(WIN32 OR (UNIX AND NOT APPLE))
     option(USE_CUDA "Build with CUDA support" ON)
 else()
     option(USE_CUDA "Build with CUDA support" OFF)
 endif()
+
 # Auto-enable MPS on macOS if Metal compiler is available
 if(APPLE)
-    # Check if Metal compiler is available
     execute_process(
         COMMAND xcrun --find metal
         RESULT_VARIABLE METAL_FOUND
@@ -36,78 +37,67 @@ if(APPLE)
         option(USE_MPS "Build with MPS (Metal Performance Shaders) support for Apple Silicon" ON)
     else()
         option(USE_MPS "Build with MPS (Metal Performance Shaders) support for Apple Silicon" OFF)
-        message(STATUS "Metal compiler not found. MPS support disabled. Install Xcode to enable MPS.")
+        message(STATUS "Metal compiler not found. MPS support disabled.")
     endif()
 else()
     option(USE_MPS "Build with MPS (Metal Performance Shaders) support for Apple Silicon" OFF)
 endif()
+
 option(BUILD_TESTS "Build tests" OFF)
 
-# Include main dependency configuration
+# ============================================================================
+# Include Dependencies (PyTorch-style architecture)
+# ============================================================================
+
+# This file handles all third-party dependencies
 include(cmake/Dependencies.cmake)
 
-# ImGui backend sources - check both new and legacy paths
-if(EXISTS "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp")
-    set(IMGUI_BACKENDS
-        "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
-        "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
-    )
-elseif(EXISTS "${IMGUI_DIR}/include/backends/imgui_impl_glfw.cpp")
-    set(IMGUI_BACKENDS
-        "${IMGUI_DIR}/include/backends/imgui_impl_glfw.cpp"
-        "${IMGUI_DIR}/include/backends/imgui_impl_opengl3.cpp"
-    )
-else()
-    message(WARNING "ImGui backends not found, using header-only mode")
-    set(IMGUI_BACKENDS "")
-endif()
+# ============================================================================
+# Main Application
+# ============================================================================
 
-# Main executable
-add_executable(caliper
-
-    main.cpp
-    ${IMGUI_BACKENDS}
-)
+# Application sources
+add_executable(caliper main.cpp)
 
 # Link all dependencies
-if(PYTORCH_BUILDING_FROM_SOURCE)
-    # Use interface library that depends on PyTorch build
-    target_link_libraries(caliper PRIVATE
-        ${TORCH_INTERFACE_LIB}
-        glfw
-        glm::glm
-        imgui
-        implot
-        OpenGL::GL
-        ${PLATFORM_LIBS}
-    )
-else()
-    # Use pre-built PyTorch
-    target_link_libraries(caliper PRIVATE
-        ${TORCH_LIBRARIES}
-        glfw
-        glm::glm
-        imgui
-        implot
-        OpenGL::GL
-        ${PLATFORM_LIBS}
-    )
-    set_target_properties(caliper PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-endif()
+target_link_libraries(caliper PRIVATE ${CALIPER_DEPENDENCY_LIBS})
 
-# Set RPATH for dynamic libraries (macOS)
+# Set C++ standard
 set_target_properties(caliper PROPERTIES
-    INSTALL_RPATH "@executable_path"
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
 )
 
-# Copy dynamic libraries to build directory if needed
+# Set RPATH for dynamic libraries
 if(APPLE)
-    target_link_libraries(caliper PRIVATE
-        "-framework Cocoa"
-        "-framework IOKit"
-        "-framework CoreVideo"
+    set_target_properties(caliper PROPERTIES
+        INSTALL_RPATH "@executable_path;@executable_path/pytorch_install/lib"
+        BUILD_WITH_INSTALL_RPATH TRUE
+    )
+elseif(UNIX)
+    set_target_properties(caliper PROPERTIES
+        INSTALL_RPATH "$ORIGIN:$ORIGIN/pytorch_install/lib"
+        BUILD_WITH_INSTALL_RPATH TRUE
     )
 endif()
+
+# Also set runtime search path for build directory
+set_target_properties(caliper PROPERTIES
+    BUILD_RPATH "${CMAKE_BINARY_DIR}/pytorch_install/lib"
+)
+
+# ============================================================================
+# Summary
+# ============================================================================
+
+message(STATUS "")
+message(STATUS "========================================")
+message(STATUS "Caliper Build Configuration")
+message(STATUS "========================================")
+message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "  CUDA Support: ${USE_CUDA}")
+message(STATUS "  MPS Support: ${USE_MPS}")
+message(STATUS "  Parallel Jobs: ${N}")
+message(STATUS "========================================")
+message(STATUS "")
