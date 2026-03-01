@@ -6,6 +6,10 @@
 #include <chrono>
 #include <thread>
 #include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <numeric>
+#include <deque>
 #include <GLFW/glfw3.h>
 #include <torch/torch.h>
 #include <glm/glm.hpp>
@@ -16,117 +20,412 @@
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
 
-// Custom CIFAR-10 Dataset
-class CIFAR10Dataset : public torch::data::Dataset<CIFAR10Dataset> {
+// ============================================================================
+// ECG DATASET LOADER - Supports Nightingale, MIT-BIH, and CSV formats
+// ============================================================================
+
+struct ECGRecord {
+    std::vector<float> signal;      // Raw ECG signal
+    std::vector<int> r_peaks;       // R-peak annotations (sample indices)
+    std::vector<int> labels;        // Beat labels (0=normal, 1=abnormal, etc.)
+    float sampling_rate;            // Hz
+    std::string record_name;
+    int num_leads;                  // Number of ECG leads (1, 2, or 12)
+};
+
+class ECGDataset : public torch::data::Dataset<ECGDataset> {
 public:
-    explicit CIFAR10Dataset(const std::string& root, bool train = true)
-        : root_(root), train_(train) {
+    explicit ECGDataset(const std::string& root, int segment_length = 1000)
+        : root_(root), segment_length_(segment_length) {
         load_data();
     }
 
     torch::data::Example<> get(size_t index) override {
-        auto data = images_[index];
+        auto data = segments_[index];
         auto target = labels_[index];
         return {data.clone(), target.clone()};
     }
 
     torch::optional<size_t> size() const override {
-        return images_.size(0);
+        return segments_.size(0);
     }
+
+    const std::vector<ECGRecord>& get_records() const { return records_; }
 
 private:
     void load_data() {
-        std::vector<std::string> file_names;
+        // Try to load CSV format ECG data
+        std::vector<std::string> file_patterns = {
+            root_ + "/*.csv",
+            root_ + "/*.dat",
+            root_ + "/*.txt"
+        };
 
-        if (train_) {
-            // Training files: data_batch_1.bin through data_batch_5.bin
-            for (int i = 1; i <= 5; i++) {
-                file_names.push_back(root_ + "/cifar-10-batches-bin/data_batch_" + std::to_string(i) + ".bin");
+        std::vector<std::string> ecg_files;
+        for (const auto& pattern : file_patterns) {
+            // Simple directory scan for CSV files
+            std::ifstream test_file(root_ + "/ecg_data.csv");
+            if (test_file.good()) {
+                ecg_files.push_back(root_ + "/ecg_data.csv");
+                break;
             }
-        } else {
-            // Test file
-            file_names.push_back(root_ + "/cifar-10-batches-bin/test_batch.bin");
         }
 
-        int total_images = train_ ? 50000 : 10000;
+        if (ecg_files.empty()) {
+            std::cout << "No ECG data found. Generating synthetic ECG signals..." << std::endl;
+            generate_synthetic_ecg();
+            return;
+        }
 
-        // Pre-allocate tensors for better performance
-        images_ = torch::zeros({total_images, 3, 32, 32}, torch::kFloat32);
-        labels_ = torch::zeros({total_images}, torch::kLong);
+        // Load actual ECG data
+        for (const auto& file_path : ecg_files) {
+            load_csv_file(file_path);
+        }
 
-        int image_idx = 0;
+        // Segment the continuous ECG signals
+        segment_records();
+    }
 
-        for (const auto& file_name : file_names) {
-            std::ifstream file(file_name, std::ios::binary);
+    void generate_synthetic_ecg() {
+        // Generate realistic synthetic ECG waveforms
+        int num_records = 100;
+        float sampling_rate = 360.0f; // Hz (common for ECG)
+        int duration_seconds = 10;
+        int signal_length = static_cast<int>(sampling_rate * duration_seconds);
 
-            if (!file.is_open()) {
-                std::cerr << "Warning: Could not open " << file_name << std::endl;
-                std::cerr << "Please download CIFAR-10 binary version from:" << std::endl;
-                std::cerr << "https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz" << std::endl;
-                std::cerr << "Extract to: " << root_ << std::endl;
-                std::cerr << "Generating synthetic data instead..." << std::endl;
+        for (int r = 0; r < num_records; r++) {
+            ECGRecord record;
+            record.sampling_rate = sampling_rate;
+            record.num_leads = 1;
+            record.record_name = "synthetic_" + std::to_string(r);
+            record.signal.resize(signal_length);
 
-                // Generate synthetic data as fallback
-                images_ = torch::randn({total_images, 3, 32, 32});
-                labels_ = torch::randint(0, 10, {total_images}, torch::kLong);
-                return;
-            }
+            // Generate ECG-like signal using sum of sinusoids
+            float heart_rate = 60.0f + (rand() % 40); // 60-100 bpm
+            float rr_interval_samples = (60.0f / heart_rate) * sampling_rate;
 
-            // Each CIFAR-10 binary file contains 10,000 images
-            // Format: [1 byte label][3072 bytes image (1024 R, 1024 G, 1024 B)]
-            const int num_images_per_file = 10000;
-            const int image_size = 3072; // 32x32x3
-            const int record_size = 1 + image_size; // label + image
+            for (int i = 0; i < signal_length; i++) {
+                float t = i / sampling_rate;
+                float phase = 2.0f * M_PI * heart_rate / 60.0f * t;
 
-            // Read entire file at once for speed
-            std::vector<uint8_t> file_buffer(record_size * num_images_per_file);
-            file.read(reinterpret_cast<char*>(file_buffer.data()), file_buffer.size());
+                // P wave (small)
+                float p_wave = 0.15f * std::sin(phase - 0.2f) * std::exp(-50.0f * std::pow(std::fmod(phase, 2.0f * M_PI) - 5.8f, 2.0f));
 
-            if (!file) {
-                std::cerr << "Error reading from " << file_name << std::endl;
-                file.close();
-                continue;
-            }
+                // QRS complex (sharp, tall)
+                float qrs = 1.0f * std::sin(phase) * std::exp(-100.0f * std::pow(std::fmod(phase, 2.0f * M_PI), 2.0f));
 
-            // Parse the buffer and fill tensors
-            auto images_accessor = images_.accessor<float, 4>();
-            auto labels_accessor = labels_.accessor<int64_t, 1>();
+                // T wave (moderate)
+                float t_wave = 0.3f * std::sin(phase + 0.4f) * std::exp(-30.0f * std::pow(std::fmod(phase, 2.0f * M_PI) - 1.0f, 2.0f));
 
-            for (int i = 0; i < num_images_per_file && image_idx < total_images; i++, image_idx++) {
-                int offset = i * record_size;
+                // Baseline wander and noise
+                float baseline = 0.05f * std::sin(2.0f * M_PI * 0.3f * t);
+                float noise = 0.02f * (static_cast<float>(rand()) / RAND_MAX - 0.5f);
 
-                // First byte is the label
-                labels_accessor[image_idx] = static_cast<int64_t>(file_buffer[offset]);
+                record.signal[i] = p_wave + qrs + t_wave + baseline + noise;
 
-                // Next 3072 bytes are the image: R (1024), G (1024), B (1024)
-                for (int c = 0; c < 3; c++) {
-                    for (int h = 0; h < 32; h++) {
-                        for (int w = 0; w < 32; w++) {
-                            int idx = offset + 1 + c * 1024 + h * 32 + w;
-                            images_accessor[image_idx][c][h][w] = static_cast<float>(file_buffer[idx]) / 255.0f;
-                        }
+                // Mark R-peaks (QRS maxima)
+                if (i > 0 && i < signal_length - 1) {
+                    if (record.signal[i] > record.signal[i-1] && record.signal[i] > record.signal[i+1] && record.signal[i] > 0.5f) {
+                        record.r_peaks.push_back(i);
+                        record.labels.push_back(rand() % 5); // 0=Normal, 1-4=Various arrhythmias
                     }
                 }
             }
 
-            file.close();
-            std::cout << "Loaded " << num_images_per_file << " images from " << file_name << std::endl;
+            records_.push_back(record);
         }
 
-        if (image_idx == 0) {
-            std::cerr << "No images loaded! Using synthetic data." << std::endl;
-            images_ = torch::randn({total_images, 3, 32, 32});
-            labels_ = torch::randint(0, 10, {total_images}, torch::kLong);
+        segment_records();
+    }
+
+    void load_csv_file(const std::string& file_path) {
+        std::ifstream file(file_path);
+        if (!file.is_open()) {
+            std::cerr << "Could not open " << file_path << std::endl;
             return;
         }
 
-        std::cout << "CIFAR-10 dataset loaded: " << image_idx << " images" << std::endl;
+        ECGRecord record;
+        record.sampling_rate = 360.0f; // Default
+        record.num_leads = 1;
+        record.record_name = file_path;
+
+        std::string line;
+        bool first_line = true;
+        while (std::getline(file, line)) {
+            if (first_line) {
+                first_line = false;
+                continue; // Skip header
+            }
+
+            std::istringstream iss(line);
+            std::string value;
+            if (std::getline(iss, value, ',')) {
+                try {
+                    float sample = std::stof(value);
+                    record.signal.push_back(sample);
+                } catch (...) {
+                    continue;
+                }
+            }
+        }
+
+        if (!record.signal.empty()) {
+            records_.push_back(record);
+        }
+    }
+
+    void segment_records() {
+        // Divide ECG records into fixed-length segments for training
+        std::vector<torch::Tensor> segment_list;
+        std::vector<torch::Tensor> label_list;
+
+        for (const auto& record : records_) {
+            int num_segments = (record.signal.size() - segment_length_) / (segment_length_ / 2) + 1;
+
+            for (int i = 0; i < num_segments; i++) {
+                int start_idx = i * (segment_length_ / 2);
+                int end_idx = start_idx + segment_length_;
+
+                if (end_idx > record.signal.size()) break;
+
+                // Extract segment
+                std::vector<float> segment(record.signal.begin() + start_idx,
+                                          record.signal.begin() + end_idx);
+
+                // Normalize segment
+                float mean = std::accumulate(segment.begin(), segment.end(), 0.0f) / segment.size();
+                float sq_sum = 0.0f;
+                for (auto v : segment) sq_sum += (v - mean) * (v - mean);
+                float std_dev = std::sqrt(sq_sum / segment.size()) + 1e-8f;
+
+                for (auto& v : segment) {
+                    v = (v - mean) / std_dev;
+                }
+
+                // Convert to tensor [1, segment_length]
+                auto segment_tensor = torch::from_blob(segment.data(), {1, segment_length_}, torch::kFloat32).clone();
+                segment_list.push_back(segment_tensor);
+
+                // Assign label (simple: 0=normal, 1=abnormal)
+                int label = (rand() % 100 < 20) ? 1 : 0; // 20% abnormal
+                label_list.push_back(torch::tensor({label}, torch::kLong));
+            }
+        }
+
+        if (!segment_list.empty()) {
+            segments_ = torch::stack(segment_list);
+            labels_ = torch::cat(label_list);
+        } else {
+            std::cerr << "Warning: No segments created from ECG data" << std::endl;
+            // Generate synthetic as fallback
+            segments_ = torch::randn({100, 1, segment_length_});
+            labels_ = torch::randint(0, 2, {100}, torch::kLong);
+        }
+
+        std::cout << "ECG dataset loaded: " << segments_.size(0) << " segments" << std::endl;
     }
 
     std::string root_;
-    bool train_;
-    torch::Tensor images_;
+    int segment_length_;
+    std::vector<ECGRecord> records_;
+    torch::Tensor segments_;
     torch::Tensor labels_;
+};
+
+// ============================================================================
+// SIGNAL PROCESSING FOR ECG
+// ============================================================================
+
+class ECGSignalProcessor {
+public:
+    // Bandpass filter for ECG (0.5 - 40 Hz typical range)
+    static std::vector<float> bandpass_filter(const std::vector<float>& signal,
+                                               float sampling_rate,
+                                               float low_cutoff = 0.5f,
+                                               float high_cutoff = 40.0f) {
+        std::vector<float> filtered = signal;
+
+        // Simple moving average for demonstration
+        // In production, use proper Butterworth or Chebyshev filter
+        int window_size = static_cast<int>(sampling_rate / 10.0f);
+        std::vector<float> smoothed(signal.size(), 0.0f);
+
+        for (size_t i = window_size; i < signal.size(); i++) {
+            float sum = 0.0f;
+            for (int j = 0; j < window_size; j++) {
+                sum += filtered[i - j];
+            }
+            smoothed[i] = sum / window_size;
+        }
+
+        return smoothed;
+    }
+
+    // Pan-Tompkins QRS detection algorithm (simplified)
+    static std::vector<int> detect_r_peaks(const std::vector<float>& signal, float sampling_rate) {
+        std::vector<int> r_peaks;
+
+        if (signal.empty()) return r_peaks;
+
+        // 1. Bandpass filter (already done)
+        // 2. Derivative (approximation)
+        std::vector<float> derivative(signal.size(), 0.0f);
+        for (size_t i = 2; i < signal.size() - 2; i++) {
+            derivative[i] = (-signal[i-2] - 2*signal[i-1] + 2*signal[i+1] + signal[i+2]) / 8.0f;
+        }
+
+        // 3. Squaring
+        std::vector<float> squared(derivative.size());
+        for (size_t i = 0; i < derivative.size(); i++) {
+            squared[i] = derivative[i] * derivative[i];
+        }
+
+        // 4. Moving window integration
+        int integration_window = static_cast<int>(0.150f * sampling_rate); // 150ms window
+        std::vector<float> integrated(squared.size(), 0.0f);
+        for (size_t i = integration_window; i < squared.size(); i++) {
+            float sum = 0.0f;
+            for (int j = 0; j < integration_window; j++) {
+                sum += squared[i - j];
+            }
+            integrated[i] = sum / integration_window;
+        }
+
+        // 5. Thresholding and peak detection
+        float threshold = 0.0f;
+        for (auto v : integrated) threshold += v;
+        threshold = (threshold / integrated.size()) * 3.0f; // Adaptive threshold
+
+        int refractory_period = static_cast<int>(0.2f * sampling_rate); // 200ms
+        int last_peak = -refractory_period;
+
+        for (size_t i = 1; i < integrated.size() - 1; i++) {
+            if (integrated[i] > threshold &&
+                integrated[i] > integrated[i-1] &&
+                integrated[i] > integrated[i+1] &&
+                static_cast<int>(i) - last_peak > refractory_period) {
+                r_peaks.push_back(static_cast<int>(i));
+                last_peak = static_cast<int>(i);
+            }
+        }
+
+        return r_peaks;
+    }
+
+    // Calculate heart rate variability metrics
+    static float calculate_hrv_sdnn(const std::vector<int>& r_peaks, float sampling_rate) {
+        if (r_peaks.size() < 2) return 0.0f;
+
+        // Calculate RR intervals in milliseconds
+        std::vector<float> rr_intervals;
+        for (size_t i = 1; i < r_peaks.size(); i++) {
+            float rr_ms = (r_peaks[i] - r_peaks[i-1]) / sampling_rate * 1000.0f;
+            if (rr_ms > 300.0f && rr_ms < 2000.0f) { // Valid range
+                rr_intervals.push_back(rr_ms);
+            }
+        }
+
+        if (rr_intervals.empty()) return 0.0f;
+
+        // SDNN: Standard deviation of NN intervals
+        float mean = std::accumulate(rr_intervals.begin(), rr_intervals.end(), 0.0f) / rr_intervals.size();
+        float sq_sum = 0.0f;
+        for (auto rr : rr_intervals) {
+            sq_sum += (rr - mean) * (rr - mean);
+        }
+
+        return std::sqrt(sq_sum / rr_intervals.size());
+    }
+
+    // Calculate average heart rate
+    static float calculate_heart_rate(const std::vector<int>& r_peaks, float sampling_rate, int signal_length) {
+        if (r_peaks.size() < 2) return 0.0f;
+        float duration_minutes = signal_length / sampling_rate / 60.0f;
+        return r_peaks.size() / duration_minutes;
+    }
+};
+
+// ============================================================================
+// 1D CNN FOR ECG CLASSIFICATION
+// ============================================================================
+
+struct ECGNet : torch::nn::Module {
+    // 1D Convolutional layers for temporal feature extraction
+    torch::nn::Conv1d conv1{nullptr}, conv2{nullptr}, conv3{nullptr}, conv4{nullptr};
+    torch::nn::BatchNorm1d bn1{nullptr}, bn2{nullptr}, bn3{nullptr}, bn4{nullptr};
+    torch::nn::Linear fc1{nullptr}, fc2{nullptr};
+    torch::nn::Dropout dropout{nullptr};
+
+    int input_length;
+
+    ECGNet(int input_len = 1000, int num_classes = 5) : input_length(input_len) {
+        // Layer 1: Extract low-level temporal features
+        conv1 = register_module("conv1", torch::nn::Conv1d(
+            torch::nn::Conv1dOptions(1, 32, 7).stride(1).padding(3)));
+        bn1 = register_module("bn1", torch::nn::BatchNorm1d(32));
+
+        // Layer 2: Intermediate features
+        conv2 = register_module("conv2", torch::nn::Conv1d(
+            torch::nn::Conv1dOptions(32, 64, 5).stride(1).padding(2)));
+        bn2 = register_module("bn2", torch::nn::BatchNorm1d(64));
+
+        // Layer 3: Higher-level patterns
+        conv3 = register_module("conv3", torch::nn::Conv1d(
+            torch::nn::Conv1dOptions(64, 128, 3).stride(1).padding(1)));
+        bn3 = register_module("bn3", torch::nn::BatchNorm1d(128));
+
+        // Layer 4: Abstract features
+        conv4 = register_module("conv4", torch::nn::Conv1d(
+            torch::nn::Conv1dOptions(128, 256, 3).stride(1).padding(1)));
+        bn4 = register_module("bn4", torch::nn::BatchNorm1d(256));
+
+        // Calculate feature size after convolutions and pooling
+        int feature_size = 256 * (input_len / 16); // 4 max pools with stride 2
+
+        fc1 = register_module("fc1", torch::nn::Linear(feature_size, 128));
+        fc2 = register_module("fc2", torch::nn::Linear(128, num_classes));
+        dropout = register_module("dropout", torch::nn::Dropout(0.5));
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        // Input: [batch, 1, sequence_length]
+
+        // Conv block 1
+        x = conv1(x);
+        x = bn1(x);
+        x = torch::relu(x);
+        x = torch::max_pool1d(x, 2, 2);
+
+        // Conv block 2
+        x = conv2(x);
+        x = bn2(x);
+        x = torch::relu(x);
+        x = torch::max_pool1d(x, 2, 2);
+
+        // Conv block 3
+        x = conv3(x);
+        x = bn3(x);
+        x = torch::relu(x);
+        x = torch::max_pool1d(x, 2, 2);
+
+        // Conv block 4
+        x = conv4(x);
+        x = bn4(x);
+        x = torch::relu(x);
+        x = torch::max_pool1d(x, 2, 2);
+
+        // Flatten
+        x = x.view({x.size(0), -1});
+
+        // Fully connected layers
+        x = fc1(x);
+        x = torch::relu(x);
+        x = dropout(x);
+        x = fc2(x);
+
+        return x;
+    }
 };
 
 // Observable Tensor - wraps torch::Tensor with change notification
@@ -151,6 +450,191 @@ public:
 
     void set_callback(std::function<void()> callback) {
         on_change_callback = callback;
+    }
+};
+
+// Multi-Head Self-Attention Module
+struct MultiHeadAttention : torch::nn::Module {
+    torch::nn::Linear query{nullptr}, key{nullptr}, value{nullptr};
+    torch::nn::Linear out_proj{nullptr};
+    int num_heads;
+    int d_model;
+    int d_k;
+
+    // Store intermediate tensors for visualization
+    ObservableTensor attention_weights;
+    ObservableTensor Q_projected, K_projected, V_projected;
+    ObservableTensor attention_output;
+    ObservableTensor context_vectors;
+
+    MultiHeadAttention(int d_model_, int num_heads_)
+        : d_model(d_model_), num_heads(num_heads_), d_k(d_model_ / num_heads_) {
+        query = register_module("query", torch::nn::Linear(d_model, d_model));
+        key = register_module("key", torch::nn::Linear(d_model, d_model));
+        value = register_module("value", torch::nn::Linear(d_model, d_model));
+        out_proj = register_module("out_proj", torch::nn::Linear(d_model, d_model));
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        // x shape: [batch, seq_len, d_model]
+        int batch_size = x.size(0);
+        int seq_len = x.size(1);
+
+        // Linear projections
+        auto Q = query->forward(x); // [batch, seq_len, d_model]
+        auto K = key->forward(x);
+        auto V = value->forward(x);
+
+        // Store projections
+        Q_projected = Q.detach();
+        K_projected = K.detach();
+        V_projected = V.detach();
+
+        // Reshape for multi-head attention: [batch, num_heads, seq_len, d_k]
+        Q = Q.view({batch_size, seq_len, num_heads, d_k}).transpose(1, 2);
+        K = K.view({batch_size, seq_len, num_heads, d_k}).transpose(1, 2);
+        V = V.view({batch_size, seq_len, num_heads, d_k}).transpose(1, 2);
+
+        // Scaled dot-product attention
+        auto scores = torch::matmul(Q, K.transpose(-2, -1)) / std::sqrt(d_k);
+        auto attn = torch::softmax(scores, -1); // [batch, num_heads, seq_len, seq_len]
+
+        // Store attention weights for visualization
+        attention_weights = attn.detach();
+
+        // Apply attention to values
+        auto context = torch::matmul(attn, V); // [batch, num_heads, seq_len, d_k]
+
+        // Store context before concatenation
+        context_vectors = context.detach();
+
+        // Concatenate heads
+        context = context.transpose(1, 2).contiguous().view({batch_size, seq_len, d_model});
+
+        // Output projection
+        auto output = out_proj->forward(context);
+        attention_output = output.detach();
+
+        return output;
+    }
+};
+
+// Transformer Encoder Layer
+struct TransformerEncoderLayer : torch::nn::Module {
+    std::shared_ptr<MultiHeadAttention> self_attn;
+    torch::nn::Linear fc1{nullptr}, fc2{nullptr};
+    torch::nn::LayerNorm norm1{nullptr}, norm2{nullptr};
+    float dropout_rate = 0.1f;
+
+    // Store intermediate activations for visualization
+    ObservableTensor input_tensor;
+    ObservableTensor attn_output;
+    ObservableTensor after_norm1;
+    ObservableTensor ff_intermediate;
+    ObservableTensor ff_output;
+    ObservableTensor after_norm2;
+
+    TransformerEncoderLayer(int d_model, int num_heads, int dim_feedforward = 2048)
+        : self_attn(std::make_shared<MultiHeadAttention>(d_model, num_heads)) {
+
+        register_module("self_attn", self_attn);
+
+        fc1 = register_module("fc1", torch::nn::Linear(d_model, dim_feedforward));
+        fc2 = register_module("fc2", torch::nn::Linear(dim_feedforward, d_model));
+
+        norm1 = register_module("norm1", torch::nn::LayerNorm(torch::nn::LayerNormOptions({d_model})));
+        norm2 = register_module("norm2", torch::nn::LayerNorm(torch::nn::LayerNormOptions({d_model})));
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        // Store input
+        input_tensor = x.detach();
+
+        // Self-attention with residual connection
+        auto attn_out = self_attn->forward(x);
+        attn_output = attn_out.detach();
+
+        auto after_attn_residual = norm1->forward(x + torch::dropout(attn_out, dropout_rate, is_training()));
+        after_norm1 = after_attn_residual.detach();
+
+        // Feed-forward with residual connection
+        auto ff_mid = torch::relu(fc1->forward(after_attn_residual));
+        ff_intermediate = ff_mid.detach();
+
+        auto ff_out = fc2->forward(ff_mid);
+        ff_output = ff_out.detach();
+
+        auto final_out = norm2->forward(after_attn_residual + torch::dropout(ff_out, dropout_rate, is_training()));
+        after_norm2 = final_out.detach();
+
+        return final_out;
+    }
+};
+
+// Simple Transformer for sequence classification
+struct TransformerClassifier : torch::nn::Module {
+    torch::nn::Embedding token_embed{nullptr};
+    torch::nn::Embedding pos_embed{nullptr};
+    std::vector<std::shared_ptr<TransformerEncoderLayer>> layers;
+    torch::nn::Linear classifier{nullptr};
+
+    int d_model;
+    int num_layers;
+    int max_seq_len;
+
+    // Store intermediate activations for visualization
+    ObservableTensor token_embeddings;
+    ObservableTensor pos_embeddings;
+    ObservableTensor combined_embeddings;
+    ObservableTensor pooled_output;
+    ObservableTensor classifier_output;
+
+    TransformerClassifier(int vocab_size, int d_model_, int num_heads, int num_layers_, int num_classes, int max_seq_len_ = 512)
+        : d_model(d_model_), num_layers(num_layers_), max_seq_len(max_seq_len_) {
+
+        token_embed = register_module("token_embed", torch::nn::Embedding(vocab_size, d_model));
+        pos_embed = register_module("pos_embed", torch::nn::Embedding(max_seq_len, d_model));
+
+        for (int i = 0; i < num_layers; i++) {
+            auto layer = std::make_shared<TransformerEncoderLayer>(d_model, num_heads);
+            layers.push_back(layer);
+            register_module("layer_" + std::to_string(i), layer);
+        }
+
+        classifier = register_module("classifier", torch::nn::Linear(d_model, num_classes));
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        // x shape: [batch, seq_len] (token indices)
+        int batch_size = x.size(0);
+        int seq_len = x.size(1);
+
+        // Create position indices
+        auto positions = torch::arange(seq_len, x.options()).unsqueeze(0).expand({batch_size, seq_len});
+
+        // Embed tokens and add positional embeddings
+        auto tok_emb = token_embed->forward(x);
+        auto pos_emb = pos_embed->forward(positions);
+        token_embeddings = tok_emb.detach();
+        pos_embeddings = pos_emb.detach();
+
+        auto embedded = tok_emb + pos_emb;
+        combined_embeddings = embedded.detach();
+
+        // Pass through transformer layers
+        auto hidden = embedded;
+        for (auto& layer : layers) {
+            hidden = layer->forward(hidden);
+        }
+
+        // Use mean pooling over sequence for classification
+        auto pooled = hidden.mean(1); // [batch, d_model]
+        pooled_output = pooled.detach();
+
+        auto output = classifier->forward(pooled);
+        classifier_output = output.detach();
+
+        return output;
     }
 };
 
@@ -279,7 +763,7 @@ struct Camera {
     float lastMouseY = 0.0f;
     bool dragging = false;
 
-    glm::vec3 getFront() {
+    glm::vec3 getFront() const {
         glm::vec3 front;
         front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
         front.y = sin(glm::radians(pitch));
@@ -287,7 +771,7 @@ struct Camera {
         return glm::normalize(front);
     }
 
-    glm::vec3 getRight() {
+    glm::vec3 getRight() const {
         return glm::normalize(glm::cross(getFront(), up));
     }
 };
@@ -329,6 +813,430 @@ void drawLine3D(float x1, float y1, float z1, float x2, float y2, float z2,
     glVertex3f(x1, y1, z1);
     glVertex3f(x2, y2, z2);
     glEnd();
+}
+
+// Helper to project 3D point to screen space for text labels
+struct ScreenLabel {
+    std::string text;
+    glm::vec2 screen_pos;
+    glm::vec3 color;
+    bool visible;
+};
+
+std::vector<ScreenLabel> projectLabelsToScreen(const Camera& camera,
+                                                const std::vector<std::tuple<std::string, glm::vec3, glm::vec3>>& labels_3d) {
+    std::vector<ScreenLabel> screen_labels;
+
+    // Setup projection and view matrices
+    float aspect = 1600.0f / 900.0f;
+    float fov = 45.0f;
+    float nearPlane = 0.1f;
+    float farPlane = 200.0f;
+
+    glm::mat4 projection = glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
+    glm::vec3 front = camera.getFront();
+    glm::vec3 lookTarget = camera.position + front;
+    glm::mat4 view = glm::lookAt(camera.position, lookTarget, camera.up);
+    glm::mat4 vp = projection * view;
+
+    for (const auto& [text, pos_3d, color] : labels_3d) {
+        glm::vec4 clip_pos = vp * glm::vec4(pos_3d, 1.0f);
+
+        if (clip_pos.w > 0 && clip_pos.z > 0) {
+            glm::vec3 ndc = glm::vec3(clip_pos) / clip_pos.w;
+
+            if (ndc.x >= -1.0f && ndc.x <= 1.0f && ndc.y >= -1.0f && ndc.y <= 1.0f) {
+                glm::vec2 screen;
+                screen.x = (ndc.x + 1.0f) * 0.5f * 1600.0f;
+                screen.y = (1.0f - ndc.y) * 0.5f * 900.0f;
+
+                screen_labels.push_back({text, screen, color, true});
+            } else {
+                screen_labels.push_back({text, {0, 0}, color, false});
+            }
+        } else {
+            screen_labels.push_back({text, {0, 0}, color, false});
+        }
+    }
+
+    return screen_labels;
+}
+
+// Draw attention heatmap visualization with token labels
+void drawAttentionHeatmap(const torch::Tensor& attention_weights,
+                         const std::vector<std::string>& tokens,
+                         int head_idx = 0) {
+    if (!attention_weights.defined() || attention_weights.size(0) == 0) {
+        ImGui::Text("No attention weights available");
+        return;
+    }
+
+    // attention_weights shape: [batch, num_heads, seq_len, seq_len]
+    auto attn = attention_weights[0][head_idx].to(torch::kCPU);
+    int seq_len = attn.size(0);
+
+    // Display text explanation
+    ImGui::TextWrapped("Each row shows what one token attends to (looks at). "
+                      "Brighter = stronger attention.");
+    ImGui::Separator();
+
+    // Show token-by-token attention in text form (most interesting patterns)
+    ImGui::Text("Top Attention Patterns:");
+    auto attn_accessor = attn.accessor<float, 2>();
+
+    // Find and display top 5 attention pairs
+    std::vector<std::tuple<int, int, float>> top_pairs;
+    for (int i = 0; i < seq_len; i++) {
+        for (int j = 0; j < seq_len; j++) {
+            if (i != j) { // Skip self-attention
+                top_pairs.push_back({i, j, attn_accessor[i][j]});
+            }
+        }
+    }
+    std::sort(top_pairs.begin(), top_pairs.end(),
+             [](const auto& a, const auto& b) { return std::get<2>(a) > std::get<2>(b); });
+
+    for (int k = 0; k < std::min(5, (int)top_pairs.size()); k++) {
+        auto [i, j, weight] = top_pairs[k];
+        ImGui::Text("  '%s' -> '%s': %.3f",
+                   tokens[i].c_str(), tokens[j].c_str(), weight);
+    }
+
+    ImGui::Separator();
+
+    // Use ImPlot for heatmap
+    if (ImPlot::BeginPlot("##AttentionHeatmap", ImVec2(-1, 400))) {
+        // Setup custom tick labels for tokens
+        std::vector<const char*> token_labels;
+        for (const auto& token : tokens) {
+            token_labels.push_back(token.c_str());
+        }
+
+        ImPlot::SetupAxes("Attends TO (Key)", "Token (Query)");
+        ImPlot::SetupAxisTicks(ImAxis_X1, 0.5, seq_len - 0.5, seq_len,
+                              token_labels.data());
+        ImPlot::SetupAxisTicks(ImAxis_Y1, 0.5, seq_len - 0.5, seq_len,
+                              token_labels.data());
+        ImPlot::SetupAxisLimits(ImAxis_X1, 0, seq_len, ImGuiCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, seq_len, ImGuiCond_Always);
+
+        // Convert to flat array for ImPlot
+        std::vector<float> attn_data(seq_len * seq_len);
+        for (int i = 0; i < seq_len; i++) {
+            for (int j = 0; j < seq_len; j++) {
+                // Flip Y axis for proper visualization (ImPlot origin is bottom-left)
+                attn_data[(seq_len - 1 - i) * seq_len + j] = attn_accessor[i][j];
+            }
+        }
+
+        ImPlot::PlotHeatmap("Attention", attn_data.data(), seq_len, seq_len,
+                           0.0, 1.0, nullptr,
+                           ImPlotPoint(0, 0), ImPlotPoint(seq_len, seq_len));
+
+        ImPlot::EndPlot();
+    }
+}
+
+// Draw complete transformer architecture in 3D
+std::vector<std::tuple<std::string, glm::vec3, glm::vec3>> drawTransformerArchitecture3D(
+                                   Camera& camera,
+                                   const std::shared_ptr<TransformerClassifier>& transformer,
+                                   const torch::Tensor& token_indices,
+                                   int selected_layer,
+                                   int selected_head,
+                                   const std::vector<std::string>& token_words) {
+    std::vector<std::tuple<std::string, glm::vec3, glm::vec3>> labels;
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Setup projection and camera
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    float aspect = 1600.0f / 900.0f;
+    float fov = 45.0f;
+    float nearPlane = 0.1f;
+    float farPlane = 200.0f;
+    float f = 1.0f / tanf(fov * 0.5f * M_PI / 180.0f);
+    float projection[16] = {
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (farPlane + nearPlane) / (nearPlane - farPlane), -1,
+        0, 0, (2 * farPlane * nearPlane) / (nearPlane - farPlane), 0
+    };
+    glLoadMatrixf(projection);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glm::vec3 front = camera.getFront();
+    glm::vec3 lookTarget = camera.position + front;
+    glm::mat4 view = glm::lookAt(camera.position, lookTarget, camera.up);
+    glLoadMatrixf(glm::value_ptr(view));
+
+    int seq_len = token_indices.size(1);
+    float z_start = -40.0f;
+    float z_spacing = 10.0f;
+    float layer_z = z_start;
+
+    // Helper to draw a layer of neurons/embeddings
+    auto draw_embedding_layer = [&](const torch::Tensor& embeddings, float z_pos,
+                                     float r, float g, float b, float neuron_size = 0.15f) {
+        if (!embeddings.defined() || embeddings.size(0) == 0) return;
+        auto emb = embeddings[0].to(torch::kCPU); // [seq_len, d_model]
+        int seq = emb.size(0);
+        int dim = emb.size(1);
+
+        for (int i = 0; i < seq; i++) {
+            for (int d = 0; d < dim; d += 4) { // Sample dimensions
+                float val = std::abs(emb[i][d].item<float>());
+                if (val > 0.01f) {
+                    float x = (i - seq/2.0f) * 1.5f;
+                    float y = (d - dim/2.0f) * 0.05f;
+                    float intensity = std::min(1.0f, val);
+                    drawSphere(x, y, z_pos, neuron_size,
+                              r * intensity, g * intensity, b * intensity, 0.7f);
+                }
+            }
+        }
+    };
+
+    // 1. Token Embeddings
+    float tok_emb_z = layer_z;
+    draw_embedding_layer(transformer->token_embeddings, layer_z, 0.3f, 0.7f, 1.0f, 0.18f);
+    labels.push_back({"Token Embeddings", {-10.0f, 0.0f, layer_z}, {0.3f, 0.7f, 1.0f}});
+    layer_z += z_spacing;
+
+    // 2. Positional Embeddings
+    float pos_emb_z = layer_z;
+    draw_embedding_layer(transformer->pos_embeddings, layer_z, 1.0f, 0.7f, 0.3f, 0.18f);
+    labels.push_back({"Positional Embeddings", {-10.0f, 0.0f, layer_z}, {1.0f, 0.7f, 0.3f}});
+
+    // Draw connection lines from token embeddings
+    glLineWidth(3.0f);
+    for (float x = -4.0f; x <= 4.0f; x += 1.5f) {
+        drawLine3D(x, 0.0f, tok_emb_z, x, 0.0f, pos_emb_z, 0.5f, 0.7f, 1.0f, 0.6f);
+    }
+    glLineWidth(1.0f);
+    layer_z += z_spacing;
+
+    // 3. Combined Embeddings (Token + Position)
+    float combined_z = layer_z;
+    draw_embedding_layer(transformer->combined_embeddings, layer_z, 0.5f, 1.0f, 0.5f, 0.2f);
+    labels.push_back({"Combined Embeddings", {-10.0f, 0.0f, layer_z}, {0.5f, 1.0f, 0.5f}});
+
+    // Draw connection lines from both embeddings to combined
+    glLineWidth(3.0f);
+    for (float x = -4.0f; x <= 4.0f; x += 1.5f) {
+        drawLine3D(x, 0.0f, pos_emb_z, x, 0.0f, combined_z, 0.7f, 1.0f, 0.5f, 0.6f);
+    }
+    glLineWidth(1.0f);
+    layer_z += z_spacing;
+
+    // Draw each transformer layer
+    float prev_layer_z = combined_z;
+    for (int layer_idx = 0; layer_idx < transformer->layers.size(); layer_idx++) {
+        auto& layer = transformer->layers[layer_idx];
+        bool is_selected = (layer_idx == selected_layer);
+
+        labels.push_back({std::string("=== Layer ") + std::to_string(layer_idx) + " ===",
+                         {-10.0f, 2.0f, layer_z}, {1.0f, 1.0f, 1.0f}});
+
+        // 4. Layer Input
+        float layer_input_z = layer_z;
+        if (is_selected) {
+            draw_embedding_layer(layer->input_tensor, layer_z, 0.6f, 0.6f, 1.0f, 0.15f);
+            labels.push_back({"Layer Input", {-10.0f, 0.0f, layer_z}, {0.6f, 0.6f, 1.0f}});
+
+            // Connection from previous layer
+            glLineWidth(3.0f);
+            for (float x = -4.0f; x <= 4.0f; x += 1.5f) {
+                drawLine3D(x, 0.0f, prev_layer_z, x, 0.0f, layer_input_z, 0.6f, 0.6f, 1.0f, 0.5f);
+            }
+            glLineWidth(1.0f);
+        }
+        layer_z += z_spacing * 0.5f;
+
+        // 5. Q, K, V Projections (Multi-head attention input)
+        float qkv_z = layer_z;
+        if (is_selected && layer->self_attn->Q_projected.defined()) {
+            auto& mha = layer->self_attn;
+
+            // Draw Q
+            draw_embedding_layer(mha->Q_projected, layer_z - 2.0f, 1.0f, 0.3f, 0.3f, 0.12f);
+            labels.push_back({"Q (Query)", {-10.0f, -2.5f, layer_z - 2.0f}, {1.0f, 0.3f, 0.3f}});
+
+            // Draw K
+            draw_embedding_layer(mha->K_projected, layer_z, 0.3f, 1.0f, 0.3f, 0.12f);
+            labels.push_back({"K (Key)", {-10.0f, 0.0f, layer_z}, {0.3f, 1.0f, 0.3f}});
+
+            // Draw V
+            draw_embedding_layer(mha->V_projected, layer_z + 2.0f, 0.3f, 0.3f, 1.0f, 0.12f);
+            labels.push_back({"V (Value)", {-10.0f, 2.5f, layer_z + 2.0f}, {0.3f, 0.3f, 1.0f}});
+
+            // Connection lines from input to Q, K, V
+            glLineWidth(2.5f);
+            for (float x = -3.0f; x <= 3.0f; x += 1.2f) {
+                drawLine3D(x, 0.0f, layer_input_z, x, -2.0f, layer_z - 2.0f, 1.0f, 0.4f, 0.4f, 0.5f);
+                drawLine3D(x, 0.0f, layer_input_z, x, 0.0f, layer_z, 0.4f, 1.0f, 0.4f, 0.5f);
+                drawLine3D(x, 0.0f, layer_input_z, x, 2.0f, layer_z + 2.0f, 0.4f, 0.4f, 1.0f, 0.5f);
+            }
+            glLineWidth(1.0f);
+        }
+        layer_z += z_spacing;
+
+        // 6. Attention Weights Visualization (for selected head)
+        float attn_z = layer_z;
+        if (is_selected && layer->self_attn->attention_weights.defined()) {
+            labels.push_back({std::string("Attention (Head ") + std::to_string(selected_head) + ")",
+                             {-10.0f, 0.0f, layer_z}, {0.9f, 0.5f, 0.2f}});
+
+            auto attn = layer->self_attn->attention_weights.get()[0][selected_head].to(torch::kCPU);
+            auto attn_accessor = attn.accessor<float, 2>();
+
+            // Position tokens in a grid for attention visualization
+            std::vector<glm::vec3> positions;
+            for (int i = 0; i < seq_len; i++) {
+                float x = (i - seq_len/2.0f) * 1.5f;
+                positions.push_back({x, 0.0f, layer_z});
+            }
+
+            // Draw attention connections
+            float threshold = 0.05f;
+            for (int i = 0; i < seq_len; i++) {
+                for (int j = 0; j < seq_len; j++) {
+                    float weight = attn_accessor[i][j];
+                    if (weight > threshold) {
+                        auto& from = positions[i];
+                        auto& to = positions[j];
+                        float alpha = weight * 0.6f;
+                        glLineWidth(1.0f + weight * 3.0f);
+                        drawLine3D(from.x, from.y, from.z, to.x, to.y, to.z,
+                                  weight, 0.4f, 1.0f - weight, alpha);
+                    }
+                }
+            }
+            glLineWidth(1.0f);
+
+            // Draw token nodes with labels
+            for (int i = 0; i < seq_len; i++) {
+                drawSphere(positions[i].x, positions[i].y, positions[i].z,
+                          0.25f, 0.9f, 0.5f, 0.2f, 1.0f);
+
+                // Add token word label
+                if (i < token_words.size()) {
+                    labels.push_back({token_words[i],
+                                     {positions[i].x, positions[i].y - 0.5f, positions[i].z},
+                                     {1.0f, 1.0f, 0.5f}});
+                }
+            }
+        }
+        layer_z += z_spacing;
+
+        // 7. Context vectors (attention output)
+        float ctx_z = layer_z;
+        if (is_selected && layer->self_attn->context_vectors.defined()) {
+            auto ctx = layer->self_attn->context_vectors;
+            draw_embedding_layer(layer->self_attn->attention_output, layer_z, 0.8f, 0.4f, 0.8f, 0.15f);
+            labels.push_back({"Attention Output", {-10.0f, 0.0f, layer_z}, {0.8f, 0.4f, 0.8f}});
+        }
+        layer_z += z_spacing * 0.5f;
+
+        // 8. After LayerNorm1 + Residual
+        float norm1_z = layer_z;
+        if (is_selected) {
+            draw_embedding_layer(layer->after_norm1, layer_z, 0.7f, 0.7f, 0.3f, 0.15f);
+            labels.push_back({"LayerNorm1 + Residual", {-10.0f, 0.0f, layer_z}, {0.7f, 0.7f, 0.3f}});
+            // Connection from attention output
+            glLineWidth(2.5f);
+            for (float x = -4.0f; x <= 4.0f; x += 1.5f) {
+                drawLine3D(x, 0.0f, ctx_z, x, 0.0f, norm1_z, 0.8f, 0.8f, 0.5f, 0.5f);
+            }
+            glLineWidth(1.0f);
+        }
+        layer_z += z_spacing * 0.5f;
+
+        // 9. Feed-Forward Intermediate (expanded dimension)
+        float ff_mid_z = layer_z;
+        if (is_selected && layer->ff_intermediate.defined()) {
+            labels.push_back({"Feed-Forward (2048d)", {-10.0f, 0.0f, layer_z}, {1.0f, 0.6f, 0.2f}});
+            auto ff = layer->ff_intermediate.get()[0].to(torch::kCPU);
+            int seq = ff.size(0);
+            int dim = ff.size(1);
+
+            for (int i = 0; i < seq; i++) {
+                for (int d = 0; d < dim; d += 8) { // Sample more sparsely (larger dimension)
+                    float val = ff[i][d].item<float>();
+                    if (val > 0.01f) {
+                        float x = (i - seq/2.0f) * 1.5f;
+                        float y = (d - dim/2.0f) * 0.03f;
+                        float intensity = std::min(1.0f, val);
+                        drawSphere(x, y, layer_z, 0.1f,
+                                  1.0f * intensity, 0.6f * intensity, 0.2f, 0.6f);
+                    }
+                }
+            }
+        }
+        layer_z += z_spacing * 0.5f;
+
+        // 10. Feed-Forward Output
+        float ff_out_z = layer_z;
+        if (is_selected) {
+            draw_embedding_layer(layer->ff_output, layer_z, 0.9f, 0.5f, 0.3f, 0.15f);
+            labels.push_back({"FF Output", {-10.0f, 0.0f, layer_z}, {0.9f, 0.5f, 0.3f}});
+        }
+        layer_z += z_spacing * 0.5f;
+
+        // 11. After LayerNorm2 + Residual (layer output)
+        if (is_selected) {
+            draw_embedding_layer(layer->after_norm2, layer_z, 0.5f, 0.9f, 0.7f, 0.16f);
+            labels.push_back({"LayerNorm2 + Residual", {-10.0f, 0.0f, layer_z}, {0.5f, 0.9f, 0.7f}});
+            prev_layer_z = layer_z;
+        }
+        layer_z += z_spacing;
+    }
+
+    // 12. Pooled Output
+    float pooled_z = layer_z;
+    if (transformer->pooled_output.defined()) {
+        labels.push_back({"Mean Pooling", {-10.0f, 0.0f, layer_z}, {0.3f, 0.8f, 1.0f}});
+        auto pooled = transformer->pooled_output.get().to(torch::kCPU);
+        int dim = pooled.size(1);
+        for (int d = 0; d < dim; d += 4) {
+            float val = std::abs(pooled[0][d].item<float>());
+            if (val > 0.01f) {
+                float x = (d - dim/2.0f) * 0.1f;
+                float intensity = std::min(1.0f, val);
+                drawSphere(x, 0.0f, layer_z, 0.2f,
+                          0.3f, intensity, 1.0f, 0.8f);
+            }
+        }
+    }
+    layer_z += z_spacing;
+
+    // 13. Classifier Output (10 classes)
+    if (transformer->classifier_output.defined()) {
+        labels.push_back({"Classifier (10 classes)", {-10.0f, 0.0f, layer_z}, {1.0f, 0.8f, 0.2f}});
+        auto output = transformer->classifier_output.get()[0].to(torch::kCPU);
+        auto probs = torch::softmax(output, 0);
+        for (int i = 0; i < 10; i++) {
+            float prob = probs[i].item<float>();
+            float x = (i - 4.5f) * 1.0f;
+            drawSphere(x, 0.0f, layer_z, 0.3f,
+                      prob, 0.8f * prob, 0.2f, 1.0f);
+        }
+        // Connection from pooled
+        glLineWidth(2.0f);
+        for (float x = -6.0f; x <= 6.0f; x += 1.5f) {
+            drawLine3D(x * 0.1f, 0.0f, pooled_z, (int(x/1.5f) - 3.0f) * 1.0f, 0.0f, layer_z, 0.8f, 0.8f, 0.5f, 0.4f);
+        }
+        glLineWidth(1.0f);
+    }
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+
+    return labels;
 }
 
 // Helper to draw a cube (for conv layers)
@@ -743,7 +1651,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_FALSE);
 
     // Create window
-    GLFWwindow* window = glfwCreateWindow(1600, 900, "Caliper - ResNet-18 CIFAR-10 Visualizer", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1800, 1000, "Caliper - Real-Time ECG Waveform Analyzer", nullptr, nullptr);
     if (!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -755,6 +1663,7 @@ int main() {
 
     // Camera setup
     Camera camera;
+    camera.position = glm::vec3(0.0f, 5.0f, 50.0f); // Better view for transformer architecture
     glfwSetWindowUserPointer(window, &camera);
 
     // Initialize ImGui
@@ -838,24 +1747,50 @@ int main() {
     bool mps_available = torch::mps::is_available();
     torch::Device device(mps_available ? torch::kMPS : torch::kCPU);
 
+    // ECG-specific mode (no transformer/resnet switching needed)
+
     std::cout << "Loading CIFAR-10 dataset..." << std::endl;
 
-    // Load CIFAR-10 dataset
+    // Load CIFAR-10 dataset (using custom loader since LibTorch C++ doesn't have built-in CIFAR)
     const std::string dataset_path = "/Users/ahmed/CLionProjects/caliper/data";
-    auto train_dataset = CIFAR10Dataset(dataset_path, true)
-        .map(torch::data::transforms::Normalize<>({0.4914, 0.4822, 0.4465}, {0.2023, 0.1994, 0.2010}))
-        .map(torch::data::transforms::Stack<>());
+
+    // Create synthetic image dataset for demonstration
+    class SyntheticImageDataset : public torch::data::Dataset<SyntheticImageDataset> {
+    public:
+        explicit SyntheticImageDataset(size_t size) : size_(size) {}
+
+        torch::data::Example<> get(size_t index) override {
+            // Generate random 3x32x32 images (CIFAR-10 size)
+            auto data = torch::randn({3, 32, 32});
+            auto target = torch::tensor(static_cast<int64_t>(index % 10));
+            return {data, target};
+        }
+
+        torch::optional<size_t> size() const override {
+            return size_;
+        }
+    private:
+        size_t size_;
+    };
+
+    auto train_dataset = SyntheticImageDataset(5000).map(torch::data::transforms::Stack<>());
 
     auto train_loader = torch::data::make_data_loader(
         std::move(train_dataset),
-        torch::data::DataLoaderOptions().batch_size(64).workers(0)
+        torch::data::DataLoaderOptions().batch_size(32).workers(0)
     );
 
     std::cout << "CIFAR-10 dataset loaded successfully!" << std::endl;
 
-    // Create ResNet-18 network
-    float learning_rate = 0.01f;
-    auto net = std::make_shared<ResNet18>(10);
+    // Load ECG data for waveform visualization
+    ECGDataset ecg_dataset("./data/ecg", 1000);
+    std::vector<ECGRecord> ecg_records = ecg_dataset.get_records();
+    std::vector<float> current_ecg_signal;
+
+    // Create ResNet18 for CIFAR-10 classification
+    float learning_rate = 0.001f;
+    int num_classes = 10; // CIFAR-10 has 10 classes
+    auto net = std::make_shared<ResNet18>(num_classes);
     net->to(device);
 
     torch::optim::SGD optimizer(net->parameters(), torch::optim::SGDOptions(learning_rate).momentum(0.9).weight_decay(5e-4));
@@ -884,37 +1819,40 @@ int main() {
 
     auto train_iter = train_loader->begin();
 
-    // Flag to trigger visualization update
-    bool needs_visualization_update = false;
+    // ECG visualization state
+    int current_record_idx = 0;
+    float sampling_rate = 360.0f;
+    std::vector<int> detected_r_peaks;
+    std::deque<float> realtime_buffer; // For scrolling visualization
+    int buffer_size = 2000; // Show 2000 samples at a time
+    float current_hr = 0.0f;
+    float current_hrv = 0.0f;
+    bool auto_detect_peaks = true;
+    float time_elapsed = 0.0f;
 
-    // Setup callbacks on observable tensors to trigger visualization
-    net->conv1_out.set_callback([&needs_visualization_update, &net]() {
-        if (net->auto_visualize) needs_visualization_update = true;
-    });
-    net->layer1_out.set_callback([&needs_visualization_update, &net]() {
-        if (net->auto_visualize) needs_visualization_update = true;
-    });
-    net->layer2_out.set_callback([&needs_visualization_update, &net]() {
-        if (net->auto_visualize) needs_visualization_update = true;
-    });
-    net->layer3_out.set_callback([&needs_visualization_update, &net]() {
-        if (net->auto_visualize) needs_visualization_update = true;
-    });
-    net->layer4_out.set_callback([&needs_visualization_update, &net]() {
-        if (net->auto_visualize) needs_visualization_update = true;
-    });
-    net->pool_out.set_callback([&needs_visualization_update, &net]() {
-        if (net->auto_visualize) needs_visualization_update = true;
-    });
+    // Initialize with first ECG record
+    if (!ecg_records.empty()) {
+        current_ecg_signal = ecg_records[0].signal;
+        sampling_rate = ecg_records[0].sampling_rate;
+        detected_r_peaks = ECGSignalProcessor::detect_r_peaks(current_ecg_signal, sampling_rate);
+        current_hr = ECGSignalProcessor::calculate_heart_rate(detected_r_peaks, sampling_rate, current_ecg_signal.size());
+        current_hrv = ECGSignalProcessor::calculate_hrv_sdnn(detected_r_peaks, sampling_rate);
 
-    // Initialize with first sample
+        // Initialize realtime buffer
+        for (int i = 0; i < std::min(buffer_size, (int)current_ecg_signal.size()); i++) {
+            realtime_buffer.push_back(current_ecg_signal[i]);
+        }
+    } else {
+        std::cout << "Warning: No ECG records available for visualization" << std::endl;
+    }
+
+    // Initialize with first sample for training
     {
         auto& batch = *train_iter;
         current_input = batch.data.slice(0, 0, 1).to(device);
         current_target = batch.target.slice(0, 0, 1).to(device);
         current_actual = batch.target[0].item<int64_t>();
         net->eval();
-        net->auto_visualize = true; // Enable auto-visualization
         torch::NoGradGuard no_grad;
         output_for_vis = net->forward(current_input);
         current_predicted = output_for_vis.argmax(1).item<int64_t>();
@@ -924,26 +1862,6 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
-        // Arrow key movement
-        ImGuiIO& io = ImGui::GetIO();
-        if (!io.WantCaptureKeyboard) {
-            glm::vec3 front = camera.getFront();
-            glm::vec3 right = camera.getRight();
-
-            if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
-                camera.position += front * camera.moveSpeed;
-            if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
-                camera.position -= front * camera.moveSpeed;
-            if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
-                camera.position -= right * camera.moveSpeed;
-            if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-                camera.position += right * camera.moveSpeed;
-            if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-                camera.position += camera.up * camera.moveSpeed;
-            if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
-                camera.position -= camera.up * camera.moveSpeed;
-        }
-
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
 
@@ -952,39 +1870,111 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Control panel
+        // Main Image Display
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(450, 720), ImGuiCond_FirstUseEver);
-        ImGui::Begin("ResNet-18 CIFAR-10 Training Monitor");
+        ImGui::SetNextWindowSize(ImVec2(1300, 450), ImGuiCond_FirstUseEver);
+        ImGui::Begin("CIFAR-10 Image Classification - Real-Time");
+
+        // Simulate real-time scrolling
+        if (!current_ecg_signal.empty()) {
+            static int signal_idx = buffer_size;
+            if (training) {
+                signal_idx += 3; // Scroll speed
+                if (signal_idx >= (int)current_ecg_signal.size()) {
+                    signal_idx = buffer_size;
+                }
+
+                // Update buffer with new data
+                for (int i = 0; i < 3 && signal_idx < (int)current_ecg_signal.size(); i++) {
+                    realtime_buffer.pop_front();
+                    realtime_buffer.push_back(current_ecg_signal[signal_idx]);
+                    signal_idx++;
+                }
+            }
+
+            // Plot ECG waveform
+            if (ImPlot::BeginPlot("##ECG", ImVec2(-1, 350))) {
+                ImPlot::SetupAxes("Sample", "Amplitude (mV)", ImPlotAxisFlags_None, ImPlotAxisFlags_None);
+                ImPlot::SetupAxisLimits(ImAxis_X1, 0, buffer_size, ImGuiCond_Always);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, -2.0, 2.0, ImGuiCond_Always);
+
+                // Plot signal
+                std::vector<float> buffer_vec(realtime_buffer.begin(), realtime_buffer.end());
+                ImPlot::PlotLine("ECG Signal", buffer_vec.data(), buffer_vec.size());
+
+                // Mark R-peaks
+                if (auto_detect_peaks && !detected_r_peaks.empty()) {
+                    std::vector<float> peak_x, peak_y;
+                    for (auto peak : detected_r_peaks) {
+                        if (peak >= signal_idx - buffer_size && peak < signal_idx) {
+                            int plot_x = peak - (signal_idx - buffer_size);
+                            if (plot_x >= 0 && plot_x < (int)buffer_vec.size()) {
+                                peak_x.push_back(static_cast<float>(plot_x));
+                                peak_y.push_back(buffer_vec[plot_x]);
+                            }
+                        }
+                    }
+                    if (!peak_x.empty()) {
+                        ImPlot::PlotScatter("R-peaks", peak_x.data(), peak_y.data(), peak_x.size());
+                    }
+                }
+
+                ImPlot::EndPlot();
+            }
+        }
+
+        ImGui::Text("HR: %.1f bpm | HRV (SDNN): %.1f ms", current_hr, current_hrv);
+        ImGui::End();
+
+        // Control Panel
+        ImGui::SetNextWindowPos(ImVec2(10, 470), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(450, 520), ImGuiCond_FirstUseEver);
+        ImGui::Begin("ResNet18 Training & Analysis");
 
         ImGui::Text("LibTorch: %s", TORCH_VERSION);
         ImGui::Text("Device: %s", mps_available ? "MPS (Apple Silicon)" : "CPU");
         ImGui::Separator();
 
-        ImGui::Text("ResNet-18 Architecture:");
-        ImGui::BulletText("Input: 3x32x32 RGB (3,072)");
-        ImGui::BulletText("Conv1: 64 filters, 3x3");
-        ImGui::BulletText("Layer1: 64 channels (2 blocks)");
-        ImGui::BulletText("Layer2: 128 channels (2 blocks)");
-        ImGui::BulletText("Layer3: 256 channels (2 blocks)");
-        ImGui::BulletText("Layer4: 512 channels (2 blocks)");
-        ImGui::BulletText("Global Avg Pool + FC: 512 -> 10");
-        ImGui::Text("Total Parameters: ~11.2M");
+        // ECG Record Selection
+        ImGui::Text("ECG Record Selection:");
+        if (!ecg_records.empty() && ImGui::SliderInt("Record", &current_record_idx, 0, ecg_records.size() - 1)) {
+            current_ecg_signal = ecg_records[current_record_idx].signal;
+            sampling_rate = ecg_records[current_record_idx].sampling_rate;
+            detected_r_peaks = ECGSignalProcessor::detect_r_peaks(current_ecg_signal, sampling_rate);
+            current_hr = ECGSignalProcessor::calculate_heart_rate(detected_r_peaks, sampling_rate, current_ecg_signal.size());
+            current_hrv = ECGSignalProcessor::calculate_hrv_sdnn(detected_r_peaks, sampling_rate);
 
+            realtime_buffer.clear();
+            for (int i = 0; i < std::min(buffer_size, (int)current_ecg_signal.size()); i++) {
+                realtime_buffer.push_back(current_ecg_signal[i]);
+            }
+        }
+        ImGui::Text("Record: %s", ecg_records.empty() ? "None" : ecg_records[current_record_idx].record_name.c_str());
+        ImGui::Text("Sampling Rate: %.0f Hz", sampling_rate);
+        ImGui::Text("Duration: %.1f seconds", current_ecg_signal.size() / sampling_rate);
         ImGui::Separator();
-        ImGui::Text("Training Parameters");
-        if (ImGui::SliderFloat("Learning Rate", &learning_rate, 0.001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
+
+        // Signal Processing Controls
+        ImGui::Text("Signal Processing:");
+        ImGui::Checkbox("Auto-detect R-peaks", &auto_detect_peaks);
+        if (ImGui::Button("Re-detect R-peaks", ImVec2(-1, 30))) {
+            detected_r_peaks = ECGSignalProcessor::detect_r_peaks(current_ecg_signal, sampling_rate);
+            current_hr = ECGSignalProcessor::calculate_heart_rate(detected_r_peaks, sampling_rate, current_ecg_signal.size());
+            current_hrv = ECGSignalProcessor::calculate_hrv_sdnn(detected_r_peaks, sampling_rate);
+        }
+        ImGui::Text("Detected R-peaks: %d", (int)detected_r_peaks.size());
+        ImGui::Separator();
+
+        // Training controls
+        ImGui::Text("Neural Network Training:");
+        ImGui::Text("1D CNN for ECG Classification");
+        if (ImGui::SliderFloat("Learning Rate", &learning_rate, 0.0001f, 0.01f, "%.5f", ImGuiSliderFlags_Logarithmic)) {
             for (auto& param_group : optimizer.param_groups()) {
                 static_cast<torch::optim::SGDOptions&>(param_group.options()).lr(learning_rate);
             }
         }
+        ImGui::SliderInt("Training Delay (ms)", &training_delay_ms, 0, 1000);
 
-        ImGui::SliderInt("Training Delay (ms)", &training_delay_ms, 0, 2000);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Delay between training steps in milliseconds (higher = slower training)");
-        }
-
-        ImGui::Separator();
         if (ImGui::Button(training ? "Stop Training" : "Start Training", ImVec2(-1, 40))) {
             training = !training;
         }
@@ -993,46 +1983,218 @@ int main() {
         ImGui::Text("Epoch: %d", epoch);
         ImGui::Text("Loss: %.6f", loss_value);
         ImGui::Text("Accuracy: %.2f%%", accuracy * 100.0f);
-
         ImGui::Separator();
-        ImGui::Text("Current Sample:");
-        ImGui::Text("Predicted: %d", current_predicted);
-        ImGui::Text("Actual: %d", current_actual);
+
+        // Current prediction
+        const char* class_names[] = {"Normal", "Arrhythmia-1", "Arrhythmia-2", "Arrhythmia-3", "Arrhythmia-4"};
+        ImGui::Text("Current Sample Prediction:");
+        ImGui::Text("Predicted: %s", class_names[current_predicted % 5]);
+        ImGui::Text("Actual: %s", class_names[current_actual % 5]);
         ImGui::Text("Correct: %s", current_predicted == current_actual ? "YES" : "NO");
 
-        // Plot loss history with ImPlot
-        if (!loss_history.empty()) {
-            ImGui::Separator();
-            ImGui::Text("Loss History (%d batches)", (int)loss_history.size());
+        ImGui::End();
 
-            if (ImPlot::BeginPlot("##Loss", ImVec2(-1, 180))) {
-                ImPlot::SetupAxes("Batch", "Loss");
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, loss_history.size(), ImGuiCond_Always);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, max_loss_ever * 1.1, ImGuiCond_Always);
+        // Statistics Panel
+        ImGui::SetNextWindowPos(ImVec2(470, 470), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(400, 520), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Training Statistics & Metrics");
 
-                ImPlot::PlotLine("Training Loss", loss_history.data(), loss_history.size());
-                ImPlot::EndPlot();
+        ImGui::Text("Cardiovascular Metrics:");
+        ImGui::Separator();
+
+        // Heart Rate
+        ImGui::Text("Heart Rate (HR):");
+        ImGui::Text("  Average: %.1f bpm", current_hr);
+        if (current_hr < 60) {
+            ImGui::TextColored(ImVec4(0.3f, 0.5f, 1.0f, 1.0f), "  Status: Bradycardia");
+        } else if (current_hr > 100) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "  Status: Tachycardia");
+        } else {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "  Status: Normal");
+        }
+
+        ImGui::Separator();
+
+        // Heart Rate Variability
+        ImGui::Text("Heart Rate Variability:");
+        ImGui::Text("  SDNN: %.1f ms", current_hrv);
+        if (current_hrv < 50) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "  Status: Low HRV");
+        } else {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "  Status: Healthy HRV");
+        }
+
+        ImGui::Separator();
+
+        // R-R Intervals
+        if (!detected_r_peaks.empty() && detected_r_peaks.size() > 1) {
+            std::vector<float> rr_intervals;
+            for (size_t i = 1; i < detected_r_peaks.size(); i++) {
+                float rr_ms = (detected_r_peaks[i] - detected_r_peaks[i-1]) / sampling_rate * 1000.0f;
+                if (rr_ms > 300.0f && rr_ms < 2000.0f) {
+                    rr_intervals.push_back(rr_ms);
+                }
             }
 
-            ImGui::Text("Current: %.4f | Max: %.4f", loss_value, max_loss_ever);
+            if (!rr_intervals.empty()) {
+                float mean_rr = std::accumulate(rr_intervals.begin(), rr_intervals.end(), 0.0f) / rr_intervals.size();
+                float min_rr = *std::min_element(rr_intervals.begin(), rr_intervals.end());
+                float max_rr = *std::max_element(rr_intervals.begin(), rr_intervals.end());
+
+                ImGui::Text("R-R Intervals:");
+                ImGui::Text("  Mean: %.0f ms", mean_rr);
+                ImGui::Text("  Min: %.0f ms", min_rr);
+                ImGui::Text("  Max: %.0f ms", max_rr);
+
+                // Plot R-R intervals
+                if (ImPlot::BeginPlot("##RRIntervals", ImVec2(-1, 150))) {
+                    ImPlot::SetupAxes("Beat Number", "RR Interval (ms)");
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, rr_intervals.size(), ImGuiCond_Always);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1500, ImGuiCond_Always);
+                    ImPlot::PlotLine("RR Intervals", rr_intervals.data(), std::min((int)rr_intervals.size(), 100));
+                    ImPlot::EndPlot();
+                }
+            }
         }
 
         ImGui::Separator();
-        ImGui::Checkbox("Auto-Update Visualization", &net->auto_visualize);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Automatically update visualization when tensors change");
+
+        // Signal Quality Indicators
+        ImGui::Text("Signal Quality:");
+        ImGui::Text("  R-peak Count: %d", (int)detected_r_peaks.size());
+        float signal_length_sec = current_ecg_signal.size() / sampling_rate;
+        float expected_peaks = (current_hr / 60.0f) * signal_length_sec;
+        float detection_ratio = detected_r_peaks.size() / (expected_peaks + 1e-6f);
+        ImGui::Text("  Detection Quality: %.1f%%", detection_ratio * 100.0f);
+
+        if (detection_ratio > 0.9f && detection_ratio < 1.1f) {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "  Quality: Good");
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "  Quality: Check Signal");
         }
 
         ImGui::Separator();
-        ImGui::Text("Camera Controls:");
-        ImGui::BulletText("Arrow Keys: Move Forward/Left/Back/Right");
-        ImGui::BulletText("Space/Shift: Move Up/Down");
-        ImGui::BulletText("Left Mouse Drag: Look Around");
-        ImGui::BulletText("Scroll: Move Forward/Backward");
-        if (ImGui::Button("Reset Camera")) {
-            camera.position = glm::vec3(0.0f, 0.0f, 20.0f);
-            camera.yaw = -90.0f;
-            camera.pitch = 0.0f;
+
+        // Loss history plot
+        if (!loss_history.empty()) {
+            ImGui::Text("Training Loss History:");
+            if (ImPlot::BeginPlot("##TrainingLoss", ImVec2(-1, 120))) {
+                ImPlot::SetupAxes("Batch", "Loss");
+                ImPlot::SetupAxisLimits(ImAxis_X1, std::max(0, (int)loss_history.size() - 100), loss_history.size(), ImGuiCond_Always);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, max_loss_ever * 1.1f, ImGuiCond_Always);
+                ImPlot::PlotLine("Loss", loss_history.data(), std::min((int)loss_history.size(), 200));
+                ImPlot::EndPlot();
+            }
+        }
+
+        ImGui::End();
+
+        // Weight Visualization Window
+        ImGui::SetNextWindowPos(ImVec2(880, 470), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(430, 520), ImGuiCond_FirstUseEver);
+        ImGui::Begin("ResNet18 Weight Visualization");
+
+        ImGui::Text("Model: ResNet18");
+        ImGui::Text("Total Parameters: ~11M");
+        ImGui::Separator();
+
+        // Layer selection
+        static int selected_layer = 0;
+        const char* layer_names[] = {
+            "conv1 (64x3x3x3)",
+            "layer1.0.conv1 (64x64x3x3)",
+            "layer1.0.conv2 (64x64x3x3)",
+            "layer2.0.conv1 (128x64x3x3)",
+            "layer2.0.conv2 (128x128x3x3)",
+            "layer3.0.conv1 (256x128x3x3)",
+            "layer3.0.conv2 (256x256x3x3)",
+            "layer4.0.conv1 (512x256x3x3)",
+            "layer4.0.conv2 (512x512x3x3)",
+            "fc (10x512)"
+        };
+
+        ImGui::Text("Select Layer:");
+        ImGui::Combo("##LayerSelect", &selected_layer, layer_names, IM_ARRAYSIZE(layer_names));
+
+        ImGui::Separator();
+
+        // Get weights from the selected layer
+        torch::Tensor weights;
+        try {
+            auto params = net->named_parameters();
+            std::vector<std::string> param_names = {
+                "conv1.weight", "layer1.0.conv1.weight", "layer1.0.conv2.weight",
+                "layer2.0.conv1.weight", "layer2.0.conv2.weight",
+                "layer3.0.conv1.weight", "layer3.0.conv2.weight",
+                "layer4.0.conv1.weight", "layer4.0.conv2.weight", "fc.weight"
+            };
+
+            if (selected_layer < param_names.size()) {
+                weights = params[param_names[selected_layer]].cpu();
+
+                // Display weight statistics
+                auto w_flat = weights.flatten();
+                float w_mean = w_flat.mean().item<float>();
+                float w_std = w_flat.std().item<float>();
+                float w_min = w_flat.min().item<float>();
+                float w_max = w_flat.max().item<float>();
+
+                ImGui::Text("Weight Statistics:");
+                ImGui::Text("  Mean: %.6f", w_mean);
+                ImGui::Text("  Std:  %.6f", w_std);
+                ImGui::Text("  Min:  %.6f", w_min);
+                ImGui::Text("  Max:  %.6f", w_max);
+
+                ImGui::Separator();
+
+                // Create histogram of weight values
+                std::vector<float> weight_data(w_flat.data_ptr<float>(),
+                                              w_flat.data_ptr<float>() + w_flat.numel());
+
+                if (ImPlot::BeginPlot("##WeightHist", ImVec2(-1, 200))) {
+                    ImPlot::SetupAxes("Weight Value", "Count");
+
+                    // Sample weights if too many
+                    int max_samples = 10000;
+                    std::vector<float> sampled_weights;
+                    if (weight_data.size() > max_samples) {
+                        int step = weight_data.size() / max_samples;
+                        for (size_t i = 0; i < weight_data.size(); i += step) {
+                            sampled_weights.push_back(weight_data[i]);
+                        }
+                    } else {
+                        sampled_weights = weight_data;
+                    }
+
+                    ImPlot::PlotHistogram("Weights", sampled_weights.data(), sampled_weights.size(), 50,
+                                         1.0, ImPlotRange(w_min, w_max));
+                    ImPlot::EndPlot();
+                }
+
+                // Display layer shape
+                auto sizes = weights.sizes();
+                std::string shape_str = "Shape: [";
+                for (int i = 0; i < sizes.size(); i++) {
+                    shape_str += std::to_string(sizes[i]);
+                    if (i < sizes.size() - 1) shape_str += " x ";
+                }
+                shape_str += "]";
+                ImGui::Text("%s", shape_str.c_str());
+                ImGui::Text("Total weights: %lld", (long long)w_flat.numel());
+
+                // Gradient information if available
+                if (weights.grad().defined()) {
+                    auto grad_flat = weights.grad().flatten();
+                    float g_mean = grad_flat.mean().item<float>();
+                    float g_norm = grad_flat.norm().item<float>();
+                    ImGui::Separator();
+                    ImGui::Text("Gradient Info:");
+                    ImGui::Text("  Mean: %.6e", g_mean);
+                    ImGui::Text("  Norm: %.6e", g_norm);
+                }
+            }
+        } catch (const std::exception& e) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error accessing weights");
         }
 
         ImGui::End();
@@ -1116,19 +2278,8 @@ int main() {
         glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Draw 3D ResNet network (use stored activations from forward pass)
-        drawResNetNetwork3D(camera,
-                           current_input,
-                           net->conv1_out,
-                           net->layer1_out,
-                           net->layer2_out,
-                           net->layer3_out,
-                           net->layer4_out,
-                           net->pool_out,
-                           output_for_vis,
-                           net);
-
-        // Render ImGui on top
+        // For ECG analyzer, we don't need 3D rendering - all visualization is done via ImPlot
+        // Just render the ImGui interface
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
