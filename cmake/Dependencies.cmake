@@ -16,35 +16,19 @@ message(STATUS "Configuring Caliper dependencies...")
 # Set third-party root directory
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
-# Check if submodules are initialized, auto-init if not
+# Check if submodules are initialized
 if(NOT EXISTS "${THIRD_PARTY_DIR}/pytorch/CMakeLists.txt")
-    message(STATUS "========================================")
-    message(STATUS "Git submodules not initialized")
-    message(STATUS "Initializing now (this may take 5-10 minutes)")
-    message(STATUS "Downloading ~2GB from GitHub...")
-    message(STATUS "========================================")
-
-    execute_process(
-        COMMAND git submodule update --init --recursive --progress
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        RESULT_VARIABLE SUBMODULE_RESULT
+    message(FATAL_ERROR
+        "\n"
+        "========================================\n"
+        "Git submodules not initialized!\n"
+        "========================================\n"
+        "Please run:\n"
+        "  git submodule update --init --recursive\n"
+        "\n"
+        "This will download ~2GB and may take 5-10 minutes.\n"
+        "========================================"
     )
-
-    if(NOT SUBMODULE_RESULT EQUAL 0)
-        message(FATAL_ERROR
-            "\n========================================\n"
-            "Failed to initialize git submodules.\n"
-            "Please run manually:\n"
-            "  ./init-submodules.sh\n"
-            "Or:\n"
-            "  git submodule update --init --recursive\n"
-            "========================================"
-        )
-    endif()
-
-    message(STATUS "========================================")
-    message(STATUS "Submodules initialized successfully!")
-    message(STATUS "========================================")
 endif()
 
 # ============================================================================

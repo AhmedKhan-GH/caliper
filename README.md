@@ -1,6 +1,6 @@
 # Caliper
 
-A PyTorch-based neural network visualization and training framework with GPU acceleration support for both NVIDIA (CUDA) and Apple Silicon (MPS).
+EEG/ECG waveform analysis toolkit with deep learning capabilities, built on PyTorch with GPU acceleration for NVIDIA (CUDA) and Apple Silicon (MPS).
 
 ---
 
@@ -31,96 +31,57 @@ That's it! 🎉
 
 All options are set during the `cmake ..` step.
 
-### Default (Recommended)
+### Platform-Specific Defaults
 
+**macOS:**
 ```bash
-cmake ..
+cmake ..  # MPS (Metal) enabled by default
 ```
 
-**Defaults**:
-- ✅ MPS enabled (Apple Silicon GPU acceleration)
-- ✅ Release build
-- ✅ All dependencies from source
+**Linux/Windows:**
+```bash
+cmake ..  # CUDA enabled by default if toolkit detected
+```
 
 ### Custom Options
 
-**Change GPU backend**:
-```bash
-cmake .. -DUSE_CUDA=ON          # Use NVIDIA GPU (Linux)
-cmake .. -DUSE_MPS=OFF          # Disable Apple Silicon GPU
-```
+| Option | Default | Description |
+|--------|---------|-------------|
+| `USE_CUDA` | ON (Linux/Win), OFF (macOS) | Enable NVIDIA CUDA support |
+| `USE_MPS` | ON (macOS), OFF (others) | Enable Apple Silicon GPU |
+| `BUILD_TESTS` | OFF | Build test suite |
+| `CMAKE_BUILD_TYPE` | Release | Build type (Release/Debug) |
 
-**Change build type**:
+**Examples:**
 ```bash
-cmake .. -DCMAKE_BUILD_TYPE=Debug     # Debug symbols
-cmake .. -DCMAKE_BUILD_TYPE=Release   # Optimized (default)
-```
-
-**Enable tests**:
-```bash
+cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Debug
 cmake .. -DBUILD_TESTS=ON
 ```
 
-**Combine options**:
-```bash
-cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
-```
-
-### All Available Options
-
-| Option | Values | Default | Description |
-|--------|--------|---------|-------------|
-| `USE_CUDA` | ON/OFF | OFF | Enable NVIDIA CUDA support |
-| `USE_MPS` | ON/OFF | ON (macOS) | Enable Apple Silicon GPU |
-| `BUILD_TESTS` | ON/OFF | OFF | Build test suite |
-| `CMAKE_BUILD_TYPE` | Release/Debug | Release | Optimization level |
-
 ---
 
-## Where to Find Configuration
+## Dataset
 
-### Main Build Configuration
+The project uses the **Nightingale ECG Dataset**:
+- **12-lead ECG** (I, II, III, aVR, aVL, aVF, V1-V6)
+- **3,750 patients**
+- **~5,500 samples** per patient per lead (11 seconds at 500 Hz)
+- **Binary classification**: RWMA (Regional Wall Motion Abnormality)
+  - 341 positive cases (9.1%)
+  - 3,409 negative cases (90.9%)
 
-**File**: `CMakeLists.txt` (project root)
-
-```cmake
-# Build options defined here
-option(USE_CUDA "Build with CUDA support" OFF)
-option(USE_MPS "Build with MPS support for Apple Silicon" ON)
-option(BUILD_TESTS "Build tests" OFF)
-```
-
-### Dependency Configuration
-
-**File**: `cmake/Dependencies.cmake`
-
-Controls:
-- What gets built from source
-- PyTorch build settings
-- Platform-specific options
-- GPU framework selection
-
-### PyTorch Build Settings
-
-**File**: `cmake/External/libtorch.cmake`
-
-PyTorch build options (matching your `build-libtorch-macos.sh`):
-```cmake
--DBUILD_PYTHON=OFF          # C++ only
--DUSE_CUDA=${USE_CUDA}      # CUDA support
--DUSE_MPS=${USE_MPS}        # Apple Silicon GPU
--DUSE_MKLDNN=ON            # Intel CPU optimizations
-```
+Place dataset in `data/Nightingale Dataset/` (gitignored by default).
 
 ---
 
 ## Features
 
-- 🚀 **PyTorch-style build system** - Git submodules for all dependencies
+- 📊 **Waveform Analysis** - Real-time ECG/EEG visualization and statistics
+- 🧠 **Deep Learning Ready** - PyTorch backend for classification models
 - 🎯 **GPU Acceleration** - CUDA (NVIDIA) and MPS (Apple Silicon)
-- 📊 **Real-time visualization** - ImGui/ImPlot interface
-- 🧠 **Neural network training** - Attention mechanisms
-- 📈 **Dataset support** - CIFAR-10, MNIST, ECG signals
+- 📈 **Dataset Support** - Nightingale ECG dataset (12-lead, 3750 patients, RWMA classification)
+- 🚀 **PyTorch-style Build** - All dependencies from source via git submodules
+- 🖥️ **Interactive UI** - ImGui/ImPlot for visualization and analysis
 
 ---
 
@@ -149,12 +110,16 @@ PyTorch build options (matching your `build-libtorch-macos.sh`):
 **Requires**: Xcode Command Line Tools (`xcode-select --install`)
 
 ### Linux
-✅ **x86_64** - CPU or CUDA support
-**Requires**: `sudo apt-get install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev`
+✅ **x86_64** - CUDA support (auto-enabled if toolkit detected)
+**Requires**:
+- `sudo apt-get install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev`
+- CUDA Toolkit 11.8+ (optional, for GPU acceleration)
 
 ### Windows
-⚠️ Experimental
-**Requires**: Visual Studio 2019+
+✅ **x86_64** - CUDA support (auto-enabled if toolkit detected)
+**Requires**:
+- Visual Studio 2019 or later (with C++ desktop development)
+- CUDA Toolkit 11.8+ (optional, for GPU acceleration)
 
 ---
 
@@ -176,23 +141,27 @@ PyTorch build options (matching your `build-libtorch-macos.sh`):
 
 ```
 caliper/
-├── CMakeLists.txt              # ← Main config, set options here
+├── CMakeLists.txt              # Main build configuration
+├── README.md                   # This file
 ├── main.cpp                    # Application source
 ├── cmake/
-│   ├── Dependencies.cmake      # ← Dependency settings
-│   └── External/
-│       ├── libtorch.cmake      # ← PyTorch build config
-│       ├── imgui.cmake
-│       └── implot.cmake
-├── third_party/                # Git submodules
-│   ├── pytorch/                # PyTorch source
+│   └── Dependencies.cmake      # Dependency orchestration
+├── data/                       # Dataset directory (gitignored)
+│   └── Nightingale Dataset/
+│       ├── MDC_ECG_LEAD_I.csv
+│       ├── MDC_ECG_LEAD_II.csv
+│       ├── ... (12 leads total)
+│       └── rwma-outcomes.csv
+├── third_party/                # Git submodules (tracked as references only)
+│   ├── pytorch/
 │   ├── imgui/
 │   ├── implot/
 │   ├── glfw/
 │   └── glm/
 └── build/                      # Generated (don't commit)
-    ├── libtorch/               # Built PyTorch (cached)
-    └── caliper                 # Your executable
+    ├── pytorch_build/          # PyTorch build artifacts
+    ├── pytorch_install/        # Built PyTorch (cached)
+    └── caliper                 # Executable
 ```
 
 ---
@@ -221,43 +190,23 @@ cd ../..
 git add third_party/pytorch
 ```
 
-### Using MPS (Apple Silicon GPU)
+### Using GPU Acceleration
 
-MPS is enabled by default on Apple Silicon Macs. Use it in your code:
-
+**Apple Silicon (MPS):**
 ```cpp
-#ifdef USE_MPS
-    torch::Device device(torch::kMPS);
-#else
-    torch::Device device(torch::kCPU);
-#endif
-
-// Create tensors on MPS device
-auto tensor = torch::randn({100, 100}, device);
-
-// Move model to MPS
+torch::Device device(torch::kMPS);
+auto tensor = torch::randn({1000, 1000}, device);
 model.to(device);
 ```
 
-**Performance**: 7-15x speedup over CPU for neural networks.
-
-### Build System Architecture
-
-The build system follows PyTorch's pattern:
-
-```
-cmake/
-├── Dependencies.cmake           # Main dependency orchestrator
-└── External/
-    ├── libtorch.cmake          # PyTorch build from source
-    ├── imgui.cmake             # ImGui build
-    └── implot.cmake            # ImPlot build
+**NVIDIA (CUDA):**
+```cpp
+torch::Device device(torch::kCUDA);
+auto tensor = torch::randn({1000, 1000}, device);
+model.to(device);
 ```
 
-**Fallback strategy** for each dependency:
-1. Check `third_party/<lib>` (git submodule)
-2. Check `third-party/<lib>` (legacy pre-built)
-3. Try system installation via `find_package()`
+**Performance**: 7-15x speedup over CPU for neural network training.
 
 ---
 
