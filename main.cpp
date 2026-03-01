@@ -30,36 +30,31 @@ public:
     bool load_nightingale_data() {
         std::cout << "Loading Nightingale dataset from: " << data_path_ << std::endl;
 
-        // ECG leads to load
-        std::vector<std::string> lead_names = {
-            "MDC_ECG_LEAD_I", "MDC_ECG_LEAD_II", "MDC_ECG_LEAD_III",
-            "MDC_ECG_LEAD_AVR", "MDC_ECG_LEAD_AVL", "MDC_ECG_LEAD_AVF",
-            "MDC_ECG_LEAD_V1", "MDC_ECG_LEAD_V2", "MDC_ECG_LEAD_V3",
-            "MDC_ECG_LEAD_V4", "MDC_ECG_LEAD_V5", "MDC_ECG_LEAD_V6"
-        };
-
-        // Load first lead to get number of records
-        std::string first_file = data_path_ + "/" + lead_names[0] + ".csv";
-        std::vector<std::vector<float>> all_signals = load_csv_file(first_file);
+        // Load only LEAD_I for basic analysis
+        std::string lead_file = data_path_ + "/MDC_ECG_LEAD_I.csv";
+        std::vector<std::vector<float>> all_signals = load_csv_file(lead_file);
 
         if (all_signals.empty()) {
-            std::cerr << "Failed to load data from: " << first_file << std::endl;
+            std::cerr << "Failed to load data from: " << lead_file << std::endl;
             return false;
         }
 
         size_t num_records = all_signals.size();
-        std::cout << "Found " << num_records << " records" << std::endl;
+        std::cout << "Found " << num_records << " patient records" << std::endl;
 
-        // Initialize records
-        records_.resize(num_records);
+        // Initialize records (each row = one patient)
+        records_.reserve(num_records);
         for (size_t i = 0; i < num_records; i++) {
-            records_[i].record_name = "Patient_" + std::to_string(i);
-            records_[i].sampling_rate = 500.0f; // Nightingale typical sampling rate
-            records_[i].num_channels = lead_names.size();
-            records_[i].signal = all_signals[i]; // Start with first lead
+            EEGRecord record;
+            record.record_name = "Patient_" + std::to_string(i + 1);
+            record.sampling_rate = 500.0f; // Nightingale sampling rate
+            record.num_channels = 1; // Single lead for now
+            record.signal = std::move(all_signals[i]);
+            records_.push_back(record);
         }
 
-        std::cout << "Loaded " << num_records << " records successfully" << std::endl;
+        std::cout << "Loaded " << num_records << " records with "
+                  << records_[0].signal.size() << " samples each" << std::endl;
         return true;
     }
 
@@ -68,12 +63,17 @@ public:
 private:
     std::vector<std::vector<float>> load_csv_file(const std::string& filepath) {
         std::vector<std::vector<float>> data;
+
+        std::cout << "Attempting to open: " << filepath << std::endl;
         std::ifstream file(filepath);
 
         if (!file.is_open()) {
-            std::cerr << "Cannot open file: " << filepath << std::endl;
+            std::cerr << "ERROR: Cannot open file: " << filepath << std::endl;
+            std::cerr << "Make sure the file exists and path is correct." << std::endl;
             return data;
         }
+
+        std::cout << "File opened successfully!" << std::endl;
 
         std::string line;
         bool skip_header = true;
@@ -121,6 +121,11 @@ public:
         loader_ = std::make_unique<EEGDataLoader>(data_path);
         loader_->load_nightingale_data();
         records_ = loader_->get_records();
+
+        // Analyze first record after loading
+        if (!records_.empty()) {
+            analyze_waveform();
+        }
     }
 
     void analyze_waveform() {
@@ -209,8 +214,8 @@ public:
         ImGui_ImplGlfw_InitForOpenGL(window_, true);
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        // Load data
-        analyzer_.load_data("./data/Nightingale Dataset");
+        // Load data - use absolute path
+        analyzer_.load_data("/Users/ahmed/CLionProjects/caliper/data/Nightingale Dataset");
 
         return true;
     }
@@ -283,9 +288,11 @@ private:
 
             // Waveform plot
             if (!record.signal.empty()) {
-                if (ImPlot::BeginPlot("EEG Waveform", ImVec2(-1, 400))) {
-                    ImPlot::SetupAxes("Sample", "Amplitude");
-                    ImPlot::PlotLine("Signal", record.signal.data(), record.signal.size());
+                if (ImPlot::BeginPlot("ECG Waveform - Lead I", ImVec2(-1, 450))) {
+                    ImPlot::SetupAxes("Time (samples)", "Amplitude (mV)",
+                                     ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, record.signal.size());
+                    ImPlot::PlotLine("Lead I", record.signal.data(), record.signal.size());
                     ImPlot::EndPlot();
                 }
             }

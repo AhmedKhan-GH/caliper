@@ -22,8 +22,10 @@ imgui.ini
 # Data directories (comment out if you want to track data)
 data/
 
-# Third-party libraries
-third_party/
+# Third-party libraries (built artifacts only, not submodules)
+# third_party/ is tracked via git submodules
+third_party/*/build/
+third_party/*/.cache/
 
 # Pre-built third-party libraries (legacy)
 old_builds/
