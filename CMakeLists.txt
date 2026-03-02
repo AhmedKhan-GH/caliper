@@ -103,6 +103,29 @@ set_target_properties(caliper PROPERTIES
     CXX_STANDARD_REQUIRED ON
 )
 
+# MSVC-specific settings
+if(MSVC)
+    # Set warning level and enable parallel compilation
+    target_compile_options(caliper PRIVATE /W3 /MP)
+
+    # Suppress specific warnings from PyTorch headers
+    target_compile_options(caliper PRIVATE
+        /wd4251  # class needs to have dll-interface
+        /wd4275  # non dll-interface class used as base
+    )
+
+    # Set runtime library to match PyTorch (Multi-threaded DLL)
+    set_property(TARGET caliper PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
+    # Copy PyTorch DLLs to executable directory after build
+    add_custom_command(TARGET caliper POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE_DIR:caliper>/../pytorch_install/lib/*.dll"
+            "$<TARGET_FILE_DIR:caliper>"
+        COMMENT "Copying PyTorch DLLs to executable directory"
+    )
+endif()
+
 # Set RPATH for dynamic libraries
 if(APPLE)
     set_target_properties(caliper PROPERTIES

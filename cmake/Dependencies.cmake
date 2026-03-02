@@ -186,8 +186,9 @@ if(WIN32)
         SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/libtorch_download"
 
         # Copy files to the expected location after extraction
+        # The zip file extracts to a 'libtorch' subdirectory
         CONFIGURE_COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_BINARY_DIR}/libtorch_download"
+            "${CMAKE_CURRENT_BINARY_DIR}/libtorch_download/libtorch"
             "${PYTORCH_INSTALL_DIR}"
 
         BUILD_COMMAND ""
