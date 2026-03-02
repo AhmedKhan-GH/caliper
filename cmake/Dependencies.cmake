@@ -142,15 +142,8 @@ if(WIN32)
     message(STATUS "  Using pre-built PyTorch 2.10.0 for Windows...")
 
     set(PYTORCH_VERSION "2.10.0")
-
-    # Determine CUDA or CPU version
-    if(USE_CUDA)
-        set(PYTORCH_VARIANT "cu130")
-        set(PYTORCH_VARIANT_NAME "CUDA 13.0")
-    else()
-        set(PYTORCH_VARIANT "cpu")
-        set(PYTORCH_VARIANT_NAME "CPU-only")
-    endif()
+    set(PYTORCH_VARIANT "cpu")
+    set(PYTORCH_VARIANT_NAME "CPU-only")
 
     # Select Debug or Release version based on build type
     if(CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -162,11 +155,19 @@ if(WIN32)
     endif()
 
     set(PYTORCH_DIR "${THIRD_PARTY_DIR}/libtorch")
-    set(PYTORCH_ZIP "${THIRD_PARTY_DIR}/libtorch.zip")
+
+    # Use system temp directory for download
+    if(WIN32)
+        file(TO_CMAKE_PATH "$ENV{TEMP}" SYSTEM_TEMP_DIR)
+    else()
+        set(SYSTEM_TEMP_DIR "/tmp")
+    endif()
+    set(PYTORCH_ZIP "${SYSTEM_TEMP_DIR}/libtorch-${PYTORCH_VARIANT}.zip")
 
     # Download and extract if not already present
     if(NOT EXISTS "${PYTORCH_DIR}/lib/torch.lib")
         message(STATUS "  Downloading PyTorch ${PYTORCH_BUILD_TYPE} (${PYTORCH_VARIANT_NAME})...")
+        message(STATUS "  Download location: ${PYTORCH_ZIP}")
         message(STATUS "  This is a ~2GB download and may take several minutes...")
 
         file(DOWNLOAD
@@ -182,15 +183,15 @@ if(WIN32)
             message(FATAL_ERROR "Failed to download PyTorch: ${DOWNLOAD_ERROR_MSG}")
         endif()
 
-        message(STATUS "  Extracting PyTorch...")
+        message(STATUS "  Extracting PyTorch to ${THIRD_PARTY_DIR}...")
         file(ARCHIVE_EXTRACT
             INPUT ${PYTORCH_ZIP}
             DESTINATION ${THIRD_PARTY_DIR}
         )
 
-        # Clean up zip file
+        # Clean up zip file from temp
         file(REMOVE ${PYTORCH_ZIP})
-        message(STATUS "  ✓ PyTorch extracted successfully")
+        message(STATUS "  ✓ PyTorch extracted successfully (temp file cleaned up)")
     else()
         message(STATUS "  ✓ PyTorch already downloaded (${PYTORCH_VARIANT_NAME})")
     endif()
@@ -368,7 +369,7 @@ if(WIN32)
     )
 endif()
 
-# Add PyTorch libraries to dependency list
+# Add PyTorch libraries to dependency list (CPU/MPS only, no CUDA)
 list(APPEND CALIPER_DEPENDENCY_LIBS torch torch_cpu c10)
 
 message(STATUS "  ✓ PyTorch configured")

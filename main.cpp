@@ -260,16 +260,33 @@ public:
 
 private:
     void detect_compute_device() {
+        std::cout << "=== CUDA Diagnostics ===" << std::endl;
+        std::cout << "CUDA compiled: " << (torch::cuda::is_available() ? "YES" : "NO") << std::endl;
+
         if (torch::cuda::is_available()) {
-            device_name_ = "CUDA GPU";
-            device_color_ = ImVec4(0.2f, 1.0f, 0.2f, 1.0f); // Green
+            std::cout << "CUDA device count: " << torch::cuda::device_count() << std::endl;
+
+            // Try to create a tensor on CUDA
+            try {
+                auto test_tensor = torch::randn({10, 10}, torch::device(torch::kCUDA));
+                std::cout << "Successfully created tensor on CUDA device: " << test_tensor.device() << std::endl;
+                device_name_ = "CUDA GPU";
+                device_color_ = ImVec4(0.2f, 1.0f, 0.2f, 1.0f); // Green
+            } catch (const std::exception& e) {
+                std::cout << "Failed to create CUDA tensor: " << e.what() << std::endl;
+                device_name_ = "CPU (CUDA init failed)";
+                device_color_ = ImVec4(1.0f, 1.0f, 0.2f, 1.0f); // Yellow
+            }
         } else if (torch::mps::is_available()) {
             device_name_ = "MPS (Apple Silicon)";
             device_color_ = ImVec4(0.2f, 0.8f, 1.0f, 1.0f); // Blue
         } else {
+            std::cout << "CUDA not available - using CPU" << std::endl;
             device_name_ = "CPU";
             device_color_ = ImVec4(1.0f, 1.0f, 0.2f, 1.0f); // Yellow
         }
+        std::cout << "Final device: " << device_name_ << std::endl;
+        std::cout << "======================" << std::endl;
     }
 
     void render_ui() {
