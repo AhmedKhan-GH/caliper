@@ -119,8 +119,8 @@ if(MSVC)
 
     # Copy PyTorch DLLs to executable directory after build
     add_custom_command(TARGET caliper POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE_DIR:caliper>/../pytorch_install/lib/*.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib"
             "$<TARGET_FILE_DIR:caliper>"
         COMMENT "Copying PyTorch DLLs to executable directory"
     )

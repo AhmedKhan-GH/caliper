@@ -33,6 +33,9 @@ third_party/implot/CMakeLists.txt
 # Only needed on macOS/Linux for building from source
 third_party/pytorch/
 
+# PyTorch pre-built binaries (Windows downloads these automatically)
+third_party/libtorch/
+
 # Pre-built third-party libraries (legacy)
 old_builds/
 

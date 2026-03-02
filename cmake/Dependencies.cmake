@@ -139,73 +139,61 @@ set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
 # ============================================================================
 
 if(WIN32)
-    message(STATUS "  Using pre-built PyTorch for Windows...")
+    message(STATUS "  Using pre-built PyTorch 2.10.0 for Windows...")
 
-    # Determine which version to download
-    if(USE_CUDA AND DEFINED CUDAToolkit_VERSION)
-        # Extract major version (e.g., 13.1 -> 13, 12.4 -> 12)
-        string(REGEX MATCH "^([0-9]+)" CUDA_MAJOR_VERSION "${CUDAToolkit_VERSION}")
+    set(PYTORCH_VERSION "2.10.0")
 
-        # Map CUDA version to PyTorch supported version
-        # PyTorch 2.5.1 supports: CUDA 11.8, 12.1, 12.4
-        if(CUDA_MAJOR_VERSION EQUAL 13 OR CUDA_MAJOR_VERSION EQUAL 12)
-            # CUDA 12.x or 13.x -> use PyTorch built for CUDA 12.4
-            set(PYTORCH_CUDA_VERSION "124")
-            set(PYTORCH_VARIANT "cu124")
-            message(STATUS "  Detected CUDA ${CUDAToolkit_VERSION}, using PyTorch built for CUDA 12.4")
-        elseif(CUDA_MAJOR_VERSION EQUAL 11)
-            # CUDA 11.x -> use PyTorch built for CUDA 11.8
-            set(PYTORCH_CUDA_VERSION "118")
-            set(PYTORCH_VARIANT "cu118")
-            message(STATUS "  Detected CUDA ${CUDAToolkit_VERSION}, using PyTorch built for CUDA 11.8")
-        else()
-            # Unsupported CUDA version, fall back to CPU
-            set(PYTORCH_VARIANT "cpu")
-            message(WARNING "CUDA ${CUDAToolkit_VERSION} not directly supported by PyTorch. Using CPU version.")
-            message(WARNING "Supported CUDA versions: 11.8, 12.1, 12.4")
-        endif()
-
-        if(NOT PYTORCH_VARIANT STREQUAL "cpu")
-            set(PYTORCH_URL "https://download.pytorch.org/libtorch/${PYTORCH_VARIANT}/libtorch-win-shared-with-deps-2.5.1%2B${PYTORCH_VARIANT}.zip")
-            message(STATUS "  Downloading PyTorch with ${PYTORCH_VARIANT} support...")
-        else()
-            set(PYTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-2.5.1%2Bcpu.zip")
-            message(STATUS "  Downloading PyTorch CPU-only version...")
-        endif()
+    # Determine CUDA or CPU version
+    if(USE_CUDA)
+        set(PYTORCH_VARIANT "cu130")
+        set(PYTORCH_VARIANT_NAME "CUDA 13.0")
     else()
         set(PYTORCH_VARIANT "cpu")
-        set(PYTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-2.5.1%2Bcpu.zip")
-        message(STATUS "  Downloading PyTorch CPU-only version...")
+        set(PYTORCH_VARIANT_NAME "CPU-only")
     endif()
 
-    # Download and extract pre-built libtorch
-    ExternalProject_Add(pytorch_external
-        URL ${PYTORCH_URL}
-        DOWNLOAD_NO_PROGRESS FALSE
-        DOWNLOAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/downloads"
-        SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/libtorch_download"
+    # Select Debug or Release version based on build type
+    if(CMAKE_BUILD_TYPE MATCHES "Debug")
+        set(PYTORCH_URL "https://download.pytorch.org/libtorch/${PYTORCH_VARIANT}/libtorch-win-shared-with-deps-debug-${PYTORCH_VERSION}%2B${PYTORCH_VARIANT}.zip")
+        set(PYTORCH_BUILD_TYPE "Debug")
+    else()
+        set(PYTORCH_URL "https://download.pytorch.org/libtorch/${PYTORCH_VARIANT}/libtorch-win-shared-with-deps-${PYTORCH_VERSION}%2B${PYTORCH_VARIANT}.zip")
+        set(PYTORCH_BUILD_TYPE "Release")
+    endif()
 
-        # Copy files to the expected location after extraction
-        # The zip file extracts to a 'libtorch' subdirectory
-        CONFIGURE_COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_BINARY_DIR}/libtorch_download/libtorch"
-            "${PYTORCH_INSTALL_DIR}"
+    set(PYTORCH_DIR "${THIRD_PARTY_DIR}/libtorch")
+    set(PYTORCH_ZIP "${THIRD_PARTY_DIR}/libtorch.zip")
 
-        BUILD_COMMAND ""
-        INSTALL_COMMAND ""
+    # Download and extract if not already present
+    if(NOT EXISTS "${PYTORCH_DIR}/lib/torch.lib")
+        message(STATUS "  Downloading PyTorch ${PYTORCH_BUILD_TYPE} (${PYTORCH_VARIANT_NAME})...")
+        message(STATUS "  This is a ~2GB download and may take several minutes...")
 
-        # Declare the output files (paths defined below)
-        BUILD_BYPRODUCTS
-            "${PYTORCH_INSTALL_DIR}/lib/torch.lib"
-            "${PYTORCH_INSTALL_DIR}/lib/torch_cpu.lib"
-            "${PYTORCH_INSTALL_DIR}/lib/c10.lib"
-            "${PYTORCH_INSTALL_DIR}/lib/asmjit.lib"
-            "${PYTORCH_INSTALL_DIR}/lib/fbgemm.lib"
+        file(DOWNLOAD
+            ${PYTORCH_URL}
+            ${PYTORCH_ZIP}
+            SHOW_PROGRESS
+            STATUS DOWNLOAD_STATUS
+        )
 
-        LOG_DOWNLOAD TRUE
-    )
+        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_ERROR)
+        if(DOWNLOAD_ERROR)
+            list(GET DOWNLOAD_STATUS 1 DOWNLOAD_ERROR_MSG)
+            message(FATAL_ERROR "Failed to download PyTorch: ${DOWNLOAD_ERROR_MSG}")
+        endif()
 
-    message(STATUS "  PyTorch will be downloaded on first build (~2GB download)")
+        message(STATUS "  Extracting PyTorch...")
+        file(ARCHIVE_EXTRACT
+            INPUT ${PYTORCH_ZIP}
+            DESTINATION ${THIRD_PARTY_DIR}
+        )
+
+        # Clean up zip file
+        file(REMOVE ${PYTORCH_ZIP})
+        message(STATUS "  ✓ PyTorch extracted successfully")
+    else()
+        message(STATUS "  ✓ PyTorch already downloaded (${PYTORCH_VARIANT_NAME})")
+    endif()
 
 else()
     # macOS and Linux: Build from source
@@ -330,10 +318,12 @@ endif()  # WIN32 vs build from source
 # Setup PyTorch libraries (common for both download and build)
 # ============================================================================
 
-# Create placeholder directories for CMake validation
-file(MAKE_DIRECTORY ${PYTORCH_INSTALL_DIR}/include)
-file(MAKE_DIRECTORY ${PYTORCH_INSTALL_DIR}/include/torch/csrc/api/include)
-file(MAKE_DIRECTORY ${PYTORCH_INSTALL_DIR}/lib)
+# Set PyTorch directory based on platform
+if(WIN32)
+    set(PYTORCH_INSTALL_DIR "${THIRD_PARTY_DIR}/libtorch")
+else()
+    set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
+endif()
 
 # Platform-specific library names
 if(WIN32)
@@ -357,7 +347,6 @@ if(WIN32)
         IMPORTED_IMPLIB ${TORCH_LIB}
     )
 endif()
-add_dependencies(torch pytorch_external)
 
 add_library(torch_cpu SHARED IMPORTED GLOBAL)
 set_target_properties(torch_cpu PROPERTIES
@@ -368,7 +357,6 @@ if(WIN32)
         IMPORTED_IMPLIB ${TORCH_CPU_LIB}
     )
 endif()
-add_dependencies(torch_cpu pytorch_external)
 
 add_library(c10 SHARED IMPORTED GLOBAL)
 set_target_properties(c10 PROPERTIES
@@ -379,7 +367,6 @@ if(WIN32)
         IMPORTED_IMPLIB ${C10_LIB}
     )
 endif()
-add_dependencies(c10 pytorch_external)
 
 # Add PyTorch libraries to dependency list
 list(APPEND CALIPER_DEPENDENCY_LIBS torch torch_cpu c10)

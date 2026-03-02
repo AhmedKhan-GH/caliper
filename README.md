@@ -26,7 +26,7 @@ cmake .. && cmake --build . -- -j8        # Build everything
 ./caliper
 ```
 
-That's it! 🎉
+That's it!
 
 ---
 
@@ -79,20 +79,23 @@ Place dataset in `data/Nightingale Dataset/` (gitignored by default).
 
 ## Features
 
-- 📊 **Waveform Analysis** - Real-time ECG/EEG visualization and statistics
-- 🧠 **Deep Learning Ready** - PyTorch backend for classification models
-- 🎯 **GPU Acceleration** - CUDA (NVIDIA) and MPS (Apple Silicon)
-- 📈 **Dataset Support** - Nightingale ECG dataset (12-lead, 3750 patients, RWMA classification)
-- 🚀 **PyTorch-style Build** - All dependencies from source via git submodules
-- 🖥️ **Interactive UI** - ImGui/ImPlot for visualization and analysis
+- **Waveform Analysis** - Real-time ECG/EEG visualization and statistics
+- **Deep Learning Ready** - PyTorch backend for classification models
+- **GPU Acceleration** - CUDA (NVIDIA) and MPS (Apple Silicon)
+- **Dataset Support** - Nightingale ECG dataset (12-lead, 3750 patients, RWMA classification)
+- **PyTorch-style Build** - All dependencies from source via git submodules
+- **Interactive UI** - ImGui/ImPlot for visualization and analysis
 
 ---
 
 ## Dependencies (All Auto-Handled)
 
 ### From Git Submodules
-- **[PyTorch](https://github.com/pytorch/pytorch)** (~2GB)
-  - **Windows**: Pre-built binaries auto-downloaded (CUDA or CPU)
+- **[PyTorch 2.10.0](https://pytorch.org)** (~2GB)
+  - **Windows**: Pre-built binaries auto-downloaded to `third_party/libtorch/`
+    - CUDA 13.0 version (if CUDA detected)
+    - CPU-only version (if no CUDA)
+    - Debug and Release builds supported
   - **macOS/Linux**: Built from source (for MPS support on macOS)
 - **[ImGui](https://github.com/ocornut/imgui)** (8MB) - Immediate mode GUI
 - **[ImPlot](https://github.com/epezent/implot)** (748KB) - Plotting library
@@ -111,8 +114,8 @@ Place dataset in `data/Nightingale Dataset/` (gitignored by default).
 ## Platform Support
 
 ### macOS
-✅ **Apple Silicon (M1/M2/M3)** - MPS GPU acceleration (default ON)
-✅ **Intel** - CPU optimizations
+**Apple Silicon (M1/M2/M3)** - MPS GPU acceleration (default ON)
+**Intel** - CPU optimizations
 
 **Required**: Xcode Command Line Tools
 ```bash
@@ -128,7 +131,7 @@ xcode-select --install
 If Metal is not found, MPS support will be automatically disabled and CPU will be used.
 
 ### Linux
-✅ **x86_64** - CUDA support (auto-enabled if toolkit detected)
+**x86_64** - CUDA support (auto-enabled if toolkit detected)
 
 **Required System Libraries**:
 ```bash
@@ -145,24 +148,27 @@ sudo apt-get install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev lib
 If CUDA is not found, it will be automatically disabled and CPU will be used.
 
 ### Windows
-✅ **x86_64** - CUDA support (auto-enabled if toolkit detected)
+**x86_64** - CUDA 13.0 support (auto-enabled if toolkit detected)
 
 **Required**:
-- MinGW-w64 or Visual Studio 2019+ with C++ desktop development workload
+- **Visual Studio 2019+** with C++ desktop development workload
+  - Download from: https://visualstudio.microsoft.com/downloads/
+  - Required for PyTorch compatibility (MSVC compiler)
+  - MinGW is **not** supported (PyTorch prebuilt binaries are MSVC-only)
 
-**For CUDA GPU Support** (NVIDIA GPUs only):
+**For CUDA GPU Support** (NVIDIA GPUs, optional):
 
-✨ **Good news**: Windows automatically downloads **pre-built PyTorch** binaries with CUDA support! No need to build from source or install Visual Studio just for PyTorch.
+**Good news**: Windows automatically downloads **pre-built PyTorch 2.10.0** binaries with CUDA 13.0 support!
 
-1. **Install CUDA Toolkit**:
+1. **Install CUDA Toolkit** (optional, for GPU acceleration):
    - Check if you have an NVIDIA GPU: `nvidia-smi`
-   - Download CUDA Toolkit from: https://developer.nvidia.com/cuda-downloads
+   - Download CUDA Toolkit 13.0+: https://developer.nvidia.com/cuda-downloads
    - Select: Windows → x86_64 → your Windows version → exe
-   - Download size: 2-3 GB
+   - Download size: ~3 GB
    - Run installer (Express or Custom, 10-20 minutes)
    - Verify: `nvcc --version`
 
-2. **Build the project** (works with MinGW or Visual Studio):
+2. **Build the project** (Visual Studio required):
    ```bash
    mkdir build && cd build
    cmake ..
@@ -170,11 +176,12 @@ If CUDA is not found, it will be automatically disabled and CPU will be used.
    ```
 
 3. **What happens**:
-   - CMake detects your CUDA version
-   - Downloads matching pre-built PyTorch (~2GB, 5-10 min)
-   - Builds your application with CUDA support
+   - If CUDA is installed: Downloads PyTorch 2.10.0 + CUDA 13.0 (~2GB)
+   - If no CUDA: Downloads PyTorch 2.10.0 CPU-only (~2GB)
+   - Both Debug and Release versions are available
+   - PyTorch DLLs automatically copied to executable directory
 
-**CPU-only builds**: If CUDA is not installed, PyTorch CPU version will be downloaded automatically.
+**CPU-only builds**: If CUDA is not installed, PyTorch CPU version will be downloaded automatically. No CUDA toolkit needed!
 
 ---
 
@@ -230,10 +237,12 @@ caliper/
 ### PyTorch Setup
 
 **Windows**:
-- Pre-built binaries are automatically downloaded from pytorch.org
+- Pre-built PyTorch 2.10.0 binaries are automatically downloaded from pytorch.org
+- Installed to: `third_party/libtorch/`
 - First build: ~2GB download, 5-10 minutes
-- CUDA version is auto-detected and matching PyTorch is downloaded
-- To force re-download: `rm -rf build/pytorch_install`
+- CUDA 13.0 or CPU-only version (auto-detected)
+- Debug/Release variants available
+- To force re-download: `rm -rf third_party/libtorch/`
 
 **macOS/Linux**:
 - PyTorch is built from source from the `third_party/pytorch` git submodule
