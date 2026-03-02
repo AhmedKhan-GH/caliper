@@ -19,9 +19,44 @@ endif()
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# Auto-enable CUDA on Windows and Linux by default
+# Check for CUDA and auto-enable only if found
 if(WIN32 OR (UNIX AND NOT APPLE))
-    option(USE_CUDA "Build with CUDA support" ON)
+    # Try to find CUDA toolkit with explicit search on Windows
+    if(WIN32 AND NOT DEFINED CUDAToolkit_ROOT)
+        # Search for CUDA in common Windows locations
+        file(GLOB CUDA_VERSIONS "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v*")
+        if(CUDA_VERSIONS)
+            list(GET CUDA_VERSIONS -1 CUDA_PATH_GUESS)  # Get the latest version
+            set(CUDAToolkit_ROOT "${CUDA_PATH_GUESS}" CACHE PATH "CUDA Toolkit root directory")
+            message(STATUS "Found CUDA installation at: ${CUDA_PATH_GUESS}")
+        endif()
+    endif()
+
+    # Try modern CMake CUDA detection first
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+        option(USE_CUDA "Build with CUDA support" ON)
+        message(STATUS "CUDA Toolkit found: version ${CUDAToolkit_VERSION}")
+        if(WIN32)
+            message(STATUS "Windows will download pre-built PyTorch with CUDA ${CUDAToolkit_VERSION} support")
+        endif()
+    else()
+        # Fallback to older CUDA detection method
+        find_package(CUDA QUIET)
+        if(CUDA_FOUND)
+            option(USE_CUDA "Build with CUDA support" ON)
+            message(STATUS "CUDA found at: ${CUDA_TOOLKIT_ROOT_DIR}")
+            if(WIN32)
+                message(STATUS "Windows will download pre-built PyTorch with CUDA support")
+            endif()
+        else()
+            option(USE_CUDA "Build with CUDA support" OFF)
+            message(STATUS "CUDA not found. Building without CUDA support.")
+            if(WIN32)
+                message(STATUS "Windows will download pre-built PyTorch CPU version")
+            endif()
+        endif()
+    endif()
 else()
     option(USE_CUDA "Build with CUDA support" OFF)
 endif()

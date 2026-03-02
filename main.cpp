@@ -5,6 +5,7 @@
 #include <sstream>
 #include <algorithm>
 #include <numeric>
+#include <memory>
 #include <GLFW/glfw3.h>
 #include <torch/torch.h>
 #include <imgui.h>

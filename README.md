@@ -14,7 +14,10 @@ mkdir build && cd build                    # Create build directory
 cmake .. && cmake --build . -- -j8        # Build everything
 ```
 
-**First build**: 10-30 minutes (PyTorch compilation)
+**First build**:
+- Windows: 5-10 minutes (downloads pre-built PyTorch ~2GB)
+- macOS/Linux: 10-30 minutes (builds PyTorch from source)
+
 **Subsequent builds**: ~10 seconds (PyTorch cached)
 
 ### Run
@@ -85,10 +88,12 @@ Place dataset in `data/Nightingale Dataset/` (gitignored by default).
 
 ---
 
-## Dependencies (All Auto-Built)
+## Dependencies (All Auto-Handled)
 
 ### From Git Submodules
-- **[PyTorch](https://github.com/pytorch/pytorch)** (~2GB) - Built from source, 10-30 min first time
+- **[PyTorch](https://github.com/pytorch/pytorch)** (~2GB)
+  - **Windows**: Pre-built binaries auto-downloaded (CUDA or CPU)
+  - **macOS/Linux**: Built from source (for MPS support on macOS)
 - **[ImGui](https://github.com/ocornut/imgui)** (8MB) - Immediate mode GUI
 - **[ImPlot](https://github.com/epezent/implot)** (748KB) - Plotting library
 - **[GLFW](https://github.com/glfw/glfw)** (5MB) - Window/input management
@@ -96,6 +101,7 @@ Place dataset in `data/Nightingale Dataset/` (gitignored by default).
 
 ### System Libraries (Auto-Detected)
 - OpenGL - Graphics API
+- CUDA Toolkit (Windows/Linux) - Optional, for GPU acceleration
 - Metal/MetalPerformanceShaders (macOS) - GPU acceleration
 
 **No manual downloads required!** Everything is handled by git submodules and CMake.
@@ -107,26 +113,77 @@ Place dataset in `data/Nightingale Dataset/` (gitignored by default).
 ### macOS
 ✅ **Apple Silicon (M1/M2/M3)** - MPS GPU acceleration (default ON)
 ✅ **Intel** - CPU optimizations
-**Requires**: Xcode Command Line Tools (`xcode-select --install`)
+
+**Required**: Xcode Command Line Tools
+```bash
+xcode-select --install
+```
+
+**For MPS GPU Support** (Apple Silicon only):
+1. Install **Xcode** from the App Store (not just Command Line Tools)
+2. Open Xcode at least once to complete installation
+3. Accept license agreement: `sudo xcodebuild -license accept`
+4. Verify Metal compiler: `xcrun --find metal`
+
+If Metal is not found, MPS support will be automatically disabled and CPU will be used.
 
 ### Linux
 ✅ **x86_64** - CUDA support (auto-enabled if toolkit detected)
-**Requires**:
-- `sudo apt-get install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev`
-- CUDA Toolkit 11.8+ (optional, for GPU acceleration)
+
+**Required System Libraries**:
+```bash
+sudo apt-get install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev build-essential cmake
+```
+
+**For CUDA GPU Support** (NVIDIA GPUs only):
+1. Check if you have an NVIDIA GPU: `nvidia-smi`
+2. Download CUDA Toolkit from: https://developer.nvidia.com/cuda-downloads
+3. Follow installer instructions for your Linux distribution
+4. Verify installation: `nvcc --version`
+5. Ensure `CUDA_HOME` environment variable is set (usually automatic)
+
+If CUDA is not found, it will be automatically disabled and CPU will be used.
 
 ### Windows
 ✅ **x86_64** - CUDA support (auto-enabled if toolkit detected)
-**Requires**:
-- Visual Studio 2019 or later (with C++ desktop development)
-- CUDA Toolkit 11.8+ (optional, for GPU acceleration)
+
+**Required**:
+- MinGW-w64 or Visual Studio 2019+ with C++ desktop development workload
+
+**For CUDA GPU Support** (NVIDIA GPUs only):
+
+✨ **Good news**: Windows automatically downloads **pre-built PyTorch** binaries with CUDA support! No need to build from source or install Visual Studio just for PyTorch.
+
+1. **Install CUDA Toolkit**:
+   - Check if you have an NVIDIA GPU: `nvidia-smi`
+   - Download CUDA Toolkit from: https://developer.nvidia.com/cuda-downloads
+   - Select: Windows → x86_64 → your Windows version → exe
+   - Download size: 2-3 GB
+   - Run installer (Express or Custom, 10-20 minutes)
+   - Verify: `nvcc --version`
+
+2. **Build the project** (works with MinGW or Visual Studio):
+   ```bash
+   mkdir build && cd build
+   cmake ..
+   cmake --build . -- -j8
+   ```
+
+3. **What happens**:
+   - CMake detects your CUDA version
+   - Downloads matching pre-built PyTorch (~2GB, 5-10 min)
+   - Builds your application with CUDA support
+
+**CPU-only builds**: If CUDA is not installed, PyTorch CPU version will be downloaded automatically.
 
 ---
 
 ## Performance
 
-### Build Times (Apple Silicon M1 Pro)
-- **First build**: 10-30 minutes (PyTorch compilation)
+### Build Times
+- **First build**:
+  - Windows: 5-10 minutes (PyTorch download ~2GB)
+  - macOS/Linux: 10-30 minutes (PyTorch compilation)
 - **Subsequent builds**: ~10 seconds (only your code)
 - **CMake configure**: ~1 second
 
@@ -170,25 +227,26 @@ caliper/
 
 ## Advanced Topics
 
-### Building PyTorch from Source
+### PyTorch Setup
 
-PyTorch is built automatically from the `third_party/pytorch` git submodule. The build is cached after the first run.
+**Windows**:
+- Pre-built binaries are automatically downloaded from pytorch.org
+- First build: ~2GB download, 5-10 minutes
+- CUDA version is auto-detected and matching PyTorch is downloaded
+- To force re-download: `rm -rf build/pytorch_install`
 
-**First build**: 10-30 minutes (compiles PyTorch)
-**Subsequent builds**: Cached (0 seconds)
-
-To force rebuild:
-```bash
-rm -rf build/libtorch build/pytorch-build
-```
-
-To pin a specific PyTorch version:
-```bash
-cd third_party/pytorch
-git checkout v2.3.1  # or any tag/commit
-cd ../..
-git add third_party/pytorch
-```
+**macOS/Linux**:
+- PyTorch is built from source from the `third_party/pytorch` git submodule
+- First build: 10-30 minutes (compilation)
+- Subsequent builds: Cached (0 seconds)
+- To force rebuild: `rm -rf build/pytorch_build build/pytorch_install`
+- To pin a specific version:
+  ```bash
+  cd third_party/pytorch
+  git checkout v2.3.1  # or any tag/commit
+  cd ../..
+  git add third_party/pytorch
+  ```
 
 ### Using GPU Acceleration
 
