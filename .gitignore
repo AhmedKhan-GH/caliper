@@ -28,6 +28,7 @@ data/
 # The wrapper templates are stored in cmake/wrappers/ and copied during build
 third_party/imgui/CMakeLists.txt
 third_party/implot/CMakeLists.txt
+third_party/pytorch/**
 
 # Pre-built third-party libraries (legacy)
 old_builds/
