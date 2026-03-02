@@ -260,7 +260,7 @@ public:
 private:
     void detect_compute_device() {
         if (torch::cuda::is_available()) {
-            device_name_ = "CUDA - " + std::string(torch::cuda::get_device_name(0));
+            device_name_ = "CUDA GPU";
             device_color_ = ImVec4(0.2f, 1.0f, 0.2f, 1.0f); // Green
         } else if (torch::mps::is_available()) {
             device_name_ = "MPS (Apple Silicon)";
