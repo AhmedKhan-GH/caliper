@@ -18,10 +18,17 @@
 // ============================================================================
 
 struct EEGRecord {
-    std::vector<float> signal;
+    std::vector<std::vector<float>> leads; // 12 leads: I, II, III, aVR, aVL, aVF, V1-V6
     float sampling_rate;
     std::string record_name;
     int num_channels;
+
+    static const std::vector<std::string> lead_names;
+};
+
+const std::vector<std::string> EEGRecord::lead_names = {
+    "Lead I", "Lead II", "Lead III", "aVR", "aVL", "aVF",
+    "V1", "V2", "V3", "V4", "V5", "V6"
 };
 
 class EEGDataLoader {
@@ -32,31 +39,67 @@ public:
     bool load_nightingale_data() {
         std::cout << "Loading Nightingale dataset from: " << data_path_ << std::endl;
 
-        // Load only LEAD_I for basic analysis
-        std::string lead_file = data_path_ + "/MDC_ECG_LEAD_I.csv";
-        std::vector<std::vector<float>> all_signals = load_csv_file(lead_file);
+        // Load all 12 leads
+        std::vector<std::string> lead_files = {
+            "/MDC_ECG_LEAD_I.csv",
+            "/MDC_ECG_LEAD_II.csv",
+            "/MDC_ECG_LEAD_III.csv",
+            "/MDC_ECG_LEAD_AVR.csv",
+            "/MDC_ECG_LEAD_AVL.csv",
+            "/MDC_ECG_LEAD_AVF.csv",
+            "/MDC_ECG_LEAD_V1.csv",
+            "/MDC_ECG_LEAD_V2.csv",
+            "/MDC_ECG_LEAD_V3.csv",
+            "/MDC_ECG_LEAD_V4.csv",
+            "/MDC_ECG_LEAD_V5.csv",
+            "/MDC_ECG_LEAD_V6.csv"
+        };
 
-        if (all_signals.empty()) {
-            std::cerr << "Failed to load data from: " << lead_file << std::endl;
-            return false;
+        std::vector<std::vector<std::vector<float>>> all_leads_data;
+        size_t num_records = 0;
+
+        // Load each lead file
+        for (size_t lead_idx = 0; lead_idx < lead_files.size(); lead_idx++) {
+            std::string lead_file = data_path_ + lead_files[lead_idx];
+            std::vector<std::vector<float>> lead_signals = load_csv_file(lead_file);
+
+            if (lead_signals.empty()) {
+                std::cerr << "Failed to load data from: " << lead_file << std::endl;
+                return false;
+            }
+
+            if (lead_idx == 0) {
+                num_records = lead_signals.size();
+                all_leads_data.resize(lead_files.size());
+            } else if (lead_signals.size() != num_records) {
+                std::cerr << "Mismatch in number of records across leads!" << std::endl;
+                return false;
+            }
+
+            all_leads_data[lead_idx] = std::move(lead_signals);
+            std::cout << "Loaded " << EEGRecord::lead_names[lead_idx] << std::endl;
         }
 
-        size_t num_records = all_signals.size();
         std::cout << "Found " << num_records << " patient records" << std::endl;
 
-        // Initialize records (each row = one patient)
+        // Initialize records (each record has all 12 leads)
         records_.reserve(num_records);
         for (size_t i = 0; i < num_records; i++) {
             EEGRecord record;
             record.record_name = "Patient_" + std::to_string(i + 1);
             record.sampling_rate = 500.0f; // Nightingale sampling rate
-            record.num_channels = 1; // Single lead for now
-            record.signal = std::move(all_signals[i]);
+            record.num_channels = 12; // All 12 leads
+            record.leads.resize(12);
+
+            for (size_t lead_idx = 0; lead_idx < 12; lead_idx++) {
+                record.leads[lead_idx] = std::move(all_leads_data[lead_idx][i]);
+            }
+
             records_.push_back(record);
         }
 
         std::cout << "Loaded " << num_records << " records with "
-                  << records_[0].signal.size() << " samples each" << std::endl;
+                  << records_[0].leads[0].size() << " samples each" << std::endl;
         return true;
     }
 
@@ -117,7 +160,12 @@ private:
 
 class EEGAnalyzer {
 public:
-    EEGAnalyzer() : current_record_idx_(0) {}
+    EEGAnalyzer() : current_record_idx_(0) {
+        // Initialize all leads as visible by default
+        for (int i = 0; i < 12; i++) {
+            lead_visible_[i] = true;
+        }
+    }
 
     void load_data(const std::string& data_path) {
         loader_ = std::make_unique<EEGDataLoader>(data_path);
@@ -136,19 +184,22 @@ public:
         }
 
         const auto& record = records_[current_record_idx_];
-        const auto& signal = record.signal;
 
-        // Basic statistics
-        if (!signal.empty()) {
-            float sum = std::accumulate(signal.begin(), signal.end(), 0.0f);
-            mean_ = sum / signal.size();
+        // Calculate statistics for first visible lead
+        for (size_t lead_idx = 0; lead_idx < 12; lead_idx++) {
+            if (lead_visible_[lead_idx] && !record.leads[lead_idx].empty()) {
+                const auto& signal = record.leads[lead_idx];
+                float sum = std::accumulate(signal.begin(), signal.end(), 0.0f);
+                mean_ = sum / signal.size();
 
-            float sq_sum = std::inner_product(signal.begin(), signal.end(),
-                                             signal.begin(), 0.0f);
-            std_dev_ = std::sqrt(sq_sum / signal.size() - mean_ * mean_);
+                float sq_sum = std::inner_product(signal.begin(), signal.end(),
+                                                 signal.begin(), 0.0f);
+                std_dev_ = std::sqrt(sq_sum / signal.size() - mean_ * mean_);
 
-            min_val_ = *std::min_element(signal.begin(), signal.end());
-            max_val_ = *std::max_element(signal.begin(), signal.end());
+                min_val_ = *std::min_element(signal.begin(), signal.end());
+                max_val_ = *std::max_element(signal.begin(), signal.end());
+                break; // Just calculate for first visible lead
+            }
         }
     }
 
@@ -161,10 +212,13 @@ public:
     float get_min() const { return min_val_; }
     float get_max() const { return max_val_; }
 
+    bool* get_lead_visibility() { return lead_visible_; }
+
 private:
     std::unique_ptr<EEGDataLoader> loader_;
     std::vector<EEGRecord> records_;
     size_t current_record_idx_;
+    bool lead_visible_[12]; // Per-user visibility for each lead
 
     // Analysis results
     float mean_ = 0.0f;
@@ -311,12 +365,28 @@ private:
             ImGui::Text("Record: %s", record.record_name.c_str());
             ImGui::Text("Sampling Rate: %.1f Hz", record.sampling_rate);
             ImGui::Text("Channels: %d", record.num_channels);
-            ImGui::Text("Samples: %zu", record.signal.size());
+            ImGui::Text("Samples: %zu", record.leads.empty() ? 0 : record.leads[0].size());
+
+            ImGui::Separator();
+
+            // Lead selection (per-user)
+            ImGui::Text("Select Leads to Display:");
+            auto& lead_visibility = analyzer_.get_lead_visibility();
+
+            // Create 3 columns for the checkboxes
+            ImGui::Columns(3, "lead_columns", false);
+            for (size_t i = 0; i < 12; i++) {
+                ImGui::Checkbox(EEGRecord::lead_names[i].c_str(), &lead_visibility[i]);
+                if ((i + 1) % 4 == 0) {
+                    ImGui::NextColumn();
+                }
+            }
+            ImGui::Columns(1);
 
             ImGui::Separator();
 
             // Statistics
-            ImGui::Text("Statistics:");
+            ImGui::Text("Statistics (first visible lead):");
             ImGui::Text("  Mean: %.4f", analyzer_.get_mean());
             ImGui::Text("  Std Dev: %.4f", analyzer_.get_std_dev());
             ImGui::Text("  Min: %.4f", analyzer_.get_min());
@@ -324,13 +394,22 @@ private:
 
             ImGui::Separator();
 
-            // Waveform plot
-            if (!record.signal.empty()) {
-                if (ImPlot::BeginPlot("ECG Waveform - Lead I", ImVec2(-1, 450))) {
+            // Waveform plot - render all selected leads
+            if (!record.leads.empty() && !record.leads[0].empty()) {
+                if (ImPlot::BeginPlot("ECG Waveform - All Leads", ImVec2(-1, 450))) {
                     ImPlot::SetupAxes("Time (samples)", "Amplitude (mV)",
                                      ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, record.signal.size());
-                    ImPlot::PlotLine("Lead I", record.signal.data(), record.signal.size());
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, record.leads[0].size());
+
+                    // Plot each visible lead
+                    for (size_t lead_idx = 0; lead_idx < 12; lead_idx++) {
+                        if (lead_visibility[lead_idx]) {
+                            ImPlot::PlotLine(EEGRecord::lead_names[lead_idx].c_str(),
+                                           record.leads[lead_idx].data(),
+                                           record.leads[lead_idx].size());
+                        }
+                    }
+
                     ImPlot::EndPlot();
                 }
             }
