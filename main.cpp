@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <GLFW/glfw3.h>
+#include <torch/torch.h>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
@@ -177,7 +178,9 @@ private:
 
 class EEGVisualizerApp {
 public:
-    EEGVisualizerApp() : window_(nullptr), analyzer_() {}
+    EEGVisualizerApp() : window_(nullptr), analyzer_() {
+        detect_compute_device();
+    }
 
     bool initialize() {
         if (!glfwInit()) {
@@ -255,8 +258,25 @@ public:
     }
 
 private:
+    void detect_compute_device() {
+        if (torch::cuda::is_available()) {
+            device_name_ = "CUDA - " + std::string(torch::cuda::get_device_name(0));
+            device_color_ = ImVec4(0.2f, 1.0f, 0.2f, 1.0f); // Green
+        } else if (torch::mps::is_available()) {
+            device_name_ = "MPS (Apple Silicon)";
+            device_color_ = ImVec4(0.2f, 0.8f, 1.0f, 1.0f); // Blue
+        } else {
+            device_name_ = "CPU";
+            device_color_ = ImVec4(1.0f, 1.0f, 0.2f, 1.0f); // Yellow
+        }
+    }
+
     void render_ui() {
         ImGui::Begin("EEG Waveform Analysis", nullptr, ImGuiWindowFlags_NoCollapse);
+
+        // Show compute device
+        ImGui::TextColored(device_color_, "Compute Device: %s", device_name_.c_str());
+        ImGui::Separator();
 
         const auto& records = analyzer_.get_records();
 
@@ -303,6 +323,8 @@ private:
 
     GLFWwindow* window_;
     EEGAnalyzer analyzer_;
+    std::string device_name_;
+    ImVec4 device_color_;
 };
 
 // ============================================================================
