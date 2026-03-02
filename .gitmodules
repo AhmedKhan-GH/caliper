@@ -18,7 +18,3 @@
 	url = https://github.com/epezent/implot.git
 	ignore = dirty
 
-[submodule "third_party/pytorch"]
-	path = third_party/pytorch
-	url = https://github.com/pytorch/pytorch.git
-	ignore = dirty
