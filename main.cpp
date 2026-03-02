@@ -371,7 +371,7 @@ private:
 
             // Lead selection (per-user)
             ImGui::Text("Select Leads to Display:");
-            auto& lead_visibility = analyzer_.get_lead_visibility();
+            bool* lead_visibility = analyzer_.get_lead_visibility();
 
             // Create 3 columns for the checkboxes
             ImGui::Columns(3, "lead_columns", false);
