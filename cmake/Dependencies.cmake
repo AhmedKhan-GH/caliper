@@ -161,25 +161,16 @@ if(WIN32)
         set(PYTORCH_BUILD_TYPE "Release")
     endif()
 
-    set(PYTORCH_DIR "${THIRD_PARTY_DIR}/libtorch")
-
-    # Use system temp directory for download
-    if(WIN32)
-        file(TO_CMAKE_PATH "$ENV{TEMP}" SYSTEM_TEMP_DIR)
-    else()
-        set(SYSTEM_TEMP_DIR "/tmp")
-    endif()
-    set(PYTORCH_ZIP "${SYSTEM_TEMP_DIR}/libtorch-${PYTORCH_VARIANT}.zip")
+    set(LIBTORCH_DIR "${THIRD_PARTY_DIR}/libtorch")
 
     # Download and extract if not already present
-    if(NOT EXISTS "${PYTORCH_DIR}/lib/torch.lib")
+    if(NOT EXISTS "${LIBTORCH_DIR}")
         message(STATUS "  Downloading PyTorch ${PYTORCH_BUILD_TYPE} (${PYTORCH_VARIANT_NAME})...")
-        message(STATUS "  Download location: ${PYTORCH_ZIP}")
         message(STATUS "  This is a ~2GB download and may take several minutes...")
 
         file(DOWNLOAD
             ${PYTORCH_URL}
-            ${PYTORCH_ZIP}
+            "${CMAKE_BINARY_DIR}/libtorch.zip"
             SHOW_PROGRESS
             STATUS DOWNLOAD_STATUS
         )
@@ -191,17 +182,34 @@ if(WIN32)
         endif()
 
         message(STATUS "  Extracting PyTorch to ${THIRD_PARTY_DIR}...")
-        file(ARCHIVE_EXTRACT
-            INPUT ${PYTORCH_ZIP}
-            DESTINATION ${THIRD_PARTY_DIR}
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/libtorch.zip"
+            WORKING_DIRECTORY ${THIRD_PARTY_DIR}
         )
 
-        # Clean up zip file from temp
-        file(REMOVE ${PYTORCH_ZIP})
-        message(STATUS "  ✓ PyTorch extracted successfully (temp file cleaned up)")
+        # Clean up zip file
+        file(REMOVE "${CMAKE_BINARY_DIR}/libtorch.zip")
+        message(STATUS "  ✓ PyTorch extracted successfully")
     else()
         message(STATUS "  ✓ PyTorch already downloaded (${PYTORCH_VARIANT_NAME})")
     endif()
+
+    # Add LibTorch to CMAKE_PREFIX_PATH
+    list(APPEND CMAKE_PREFIX_PATH ${LIBTORCH_DIR})
+
+    # Workaround for missing CUDA::nvToolsExt in CUDA 12+
+    if(USE_CUDA AND NOT TARGET CUDA::nvToolsExt)
+        add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+    endif()
+
+    # Find Torch package (standard approach)
+    find_package(Torch REQUIRED)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+
+    # Use Torch's provided libraries
+    list(APPEND CALIPER_DEPENDENCY_LIBS "${TORCH_LIBRARIES}")
+
+    message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
 else()
     # macOS and Linux: Build from source
@@ -323,84 +331,40 @@ else()
 endif()  # WIN32 vs build from source
 
 # ============================================================================
-# Setup PyTorch libraries (common for both download and build)
+# Setup PyTorch libraries for macOS/Linux (build from source)
 # ============================================================================
 
-# Set PyTorch directory based on platform
-if(WIN32)
-    set(PYTORCH_INSTALL_DIR "${THIRD_PARTY_DIR}/libtorch")
-else()
+if(NOT WIN32)
+    # Set PyTorch directory for non-Windows platforms
     set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
-endif()
 
-# Platform-specific library names
-if(WIN32)
-    set(TORCH_LIB "${PYTORCH_INSTALL_DIR}/lib/torch.lib")
-    set(TORCH_CPU_LIB "${PYTORCH_INSTALL_DIR}/lib/torch_cpu.lib")
-    set(C10_LIB "${PYTORCH_INSTALL_DIR}/lib/c10.lib")
-else()
+    # Platform-specific library names
     set(TORCH_LIB "${PYTORCH_INSTALL_DIR}/lib/libtorch${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(TORCH_CPU_LIB "${PYTORCH_INSTALL_DIR}/lib/libtorch_cpu${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(C10_LIB "${PYTORCH_INSTALL_DIR}/lib/libc10${CMAKE_SHARED_LIBRARY_SUFFIX}")
-endif()
 
-# Create interface libraries for PyTorch components
-add_library(torch SHARED IMPORTED GLOBAL)
-set_target_properties(torch PROPERTIES
-    IMPORTED_LOCATION ${TORCH_LIB}
-    INTERFACE_INCLUDE_DIRECTORIES "${PYTORCH_INSTALL_DIR}/include;${PYTORCH_INSTALL_DIR}/include/torch/csrc/api/include"
-)
-if(WIN32)
+    # Create interface libraries for PyTorch components
+    add_library(torch SHARED IMPORTED GLOBAL)
     set_target_properties(torch PROPERTIES
-        IMPORTED_IMPLIB ${TORCH_LIB}
+        IMPORTED_LOCATION ${TORCH_LIB}
+        INTERFACE_INCLUDE_DIRECTORIES "${PYTORCH_INSTALL_DIR}/include;${PYTORCH_INSTALL_DIR}/include/torch/csrc/api/include"
     )
-endif()
 
-add_library(torch_cpu SHARED IMPORTED GLOBAL)
-set_target_properties(torch_cpu PROPERTIES
-    IMPORTED_LOCATION ${TORCH_CPU_LIB}
-)
-if(WIN32)
+    add_library(torch_cpu SHARED IMPORTED GLOBAL)
     set_target_properties(torch_cpu PROPERTIES
-        IMPORTED_IMPLIB ${TORCH_CPU_LIB}
+        IMPORTED_LOCATION ${TORCH_CPU_LIB}
     )
-endif()
 
-add_library(c10 SHARED IMPORTED GLOBAL)
-set_target_properties(c10 PROPERTIES
-    IMPORTED_LOCATION ${C10_LIB}
-)
-if(WIN32)
+    add_library(c10 SHARED IMPORTED GLOBAL)
     set_target_properties(c10 PROPERTIES
-        IMPORTED_IMPLIB ${C10_LIB}
+        IMPORTED_LOCATION ${C10_LIB}
     )
+
+    # Add PyTorch libraries to dependency list
+    list(APPEND CALIPER_DEPENDENCY_LIBS torch torch_cpu c10)
+
+    message(STATUS "  ✓ PyTorch configured (built from source)")
 endif()
-
-# Add PyTorch libraries to dependency list
-list(APPEND CALIPER_DEPENDENCY_LIBS torch torch_cpu c10)
-
-# Add CUDA libraries if enabled
-if(USE_CUDA AND WIN32)
-    set(TORCH_CUDA_LIB "${PYTORCH_INSTALL_DIR}/lib/torch_cuda.lib")
-    set(C10_CUDA_LIB "${PYTORCH_INSTALL_DIR}/lib/c10_cuda.lib")
-
-    add_library(torch_cuda SHARED IMPORTED GLOBAL)
-    set_target_properties(torch_cuda PROPERTIES
-        IMPORTED_LOCATION ${TORCH_CUDA_LIB}
-        IMPORTED_IMPLIB ${TORCH_CUDA_LIB}
-    )
-
-    add_library(c10_cuda SHARED IMPORTED GLOBAL)
-    set_target_properties(c10_cuda PROPERTIES
-        IMPORTED_LOCATION ${C10_CUDA_LIB}
-        IMPORTED_IMPLIB ${C10_CUDA_LIB}
-    )
-
-    list(APPEND CALIPER_DEPENDENCY_LIBS torch_cuda c10_cuda)
-    message(STATUS "  ✓ CUDA libraries added to dependency list")
-endif()
-
-message(STATUS "  ✓ PyTorch configured")
 
 # ============================================================================
 # Export dependency list

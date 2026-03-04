@@ -103,10 +103,11 @@ if(MSVC)
     set_property(TARGET caliper PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
     # Copy PyTorch DLLs to executable directory after build
+    file(GLOB TORCH_DLLS "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib/*.dll")
     add_custom_command(TARGET caliper POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib"
-            "$<TARGET_FILE_DIR:caliper>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${TORCH_DLLS}
+            $<TARGET_FILE_DIR:caliper>
         COMMENT "Copying PyTorch DLLs to executable directory"
     )
 endif()
