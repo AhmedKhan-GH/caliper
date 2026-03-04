@@ -95,7 +95,7 @@ message(STATUS "    ✓ GLFW configured")
 
 # --- ImGui (UI library) ---
 message(STATUS "  Configuring ImGui...")
-# Copy our CMakeLists.txt wrapper if it doesn't exist
+# Copy our othercmake.txt wrapper if it doesn't exist
 if(NOT EXISTS "${THIRD_PARTY_DIR}/imgui/CMakeLists.txt")
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui_CMakeLists.txt"
@@ -109,7 +109,7 @@ message(STATUS "    ✓ ImGui configured")
 
 # --- ImPlot (Plotting library) ---
 message(STATUS "  Configuring ImPlot...")
-# Copy our CMakeLists.txt wrapper if it doesn't exist
+# Copy our othercmake.txt wrapper if it doesn't exist
 if(NOT EXISTS "${THIRD_PARTY_DIR}/implot/CMakeLists.txt")
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot_CMakeLists.txt"
@@ -139,11 +139,18 @@ set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
 # ============================================================================
 
 if(WIN32)
-    message(STATUS "  Using pre-built PyTorch 2.10.0 for Windows...")
+    message(STATUS "  Using pre-built PyTorch 2.5.1 for Windows...")
 
-    set(PYTORCH_VERSION "2.10.0")
-    set(PYTORCH_VARIANT "cpu")
-    set(PYTORCH_VARIANT_NAME "CPU-only")
+    set(PYTORCH_VERSION "2.5.1")
+
+    # Select CUDA or CPU variant based on USE_CUDA option
+    if(USE_CUDA)
+        set(PYTORCH_VARIANT "cu121")
+        set(PYTORCH_VARIANT_NAME "CUDA 12.1")
+    else()
+        set(PYTORCH_VARIANT "cpu")
+        set(PYTORCH_VARIANT_NAME "CPU-only")
+    endif()
 
     # Select Debug or Release version based on build type
     if(CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -369,8 +376,29 @@ if(WIN32)
     )
 endif()
 
-# Add PyTorch libraries to dependency list (CPU/MPS only, no CUDA)
+# Add PyTorch libraries to dependency list
 list(APPEND CALIPER_DEPENDENCY_LIBS torch torch_cpu c10)
+
+# Add CUDA libraries if enabled
+if(USE_CUDA AND WIN32)
+    set(TORCH_CUDA_LIB "${PYTORCH_INSTALL_DIR}/lib/torch_cuda.lib")
+    set(C10_CUDA_LIB "${PYTORCH_INSTALL_DIR}/lib/c10_cuda.lib")
+
+    add_library(torch_cuda SHARED IMPORTED GLOBAL)
+    set_target_properties(torch_cuda PROPERTIES
+        IMPORTED_LOCATION ${TORCH_CUDA_LIB}
+        IMPORTED_IMPLIB ${TORCH_CUDA_LIB}
+    )
+
+    add_library(c10_cuda SHARED IMPORTED GLOBAL)
+    set_target_properties(c10_cuda PROPERTIES
+        IMPORTED_LOCATION ${C10_CUDA_LIB}
+        IMPORTED_IMPLIB ${C10_CUDA_LIB}
+    )
+
+    list(APPEND CALIPER_DEPENDENCY_LIBS torch_cuda c10_cuda)
+    message(STATUS "  ✓ CUDA libraries added to dependency list")
+endif()
 
 message(STATUS "  ✓ PyTorch configured")
 

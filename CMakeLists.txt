@@ -19,9 +19,25 @@ endif()
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# CUDA disabled - CPU/MPS only build
-set(USE_CUDA OFF CACHE BOOL "Build with CUDA support (disabled)" FORCE)
-message(STATUS "CUDA support: DISABLED (CPU/MPS only)")
+# CUDA enabled
+option(USE_CUDA "Build with CUDA support" ON)
+
+# Set CUDA paths and configuration
+if(USE_CUDA)
+    set(ENV{CUDA_PATH} "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8")
+    set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8")
+    list(APPEND CMAKE_PREFIX_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler")
+
+    # Workaround for missing CUDA::nvToolsExt in CUDA 12+
+    if(NOT TARGET CUDA::nvToolsExt)
+        add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+    endif()
+
+    message(STATUS "CUDA support: ENABLED (CUDA 12.8)")
+else()
+    message(STATUS "CUDA support: DISABLED (CPU/MPS only)")
+endif()
 
 # Auto-enable MPS on macOS if Metal compiler is available
 if(APPLE)
@@ -60,6 +76,11 @@ add_executable(caliper main.cpp)
 
 # Link all dependencies
 target_link_libraries(caliper PRIVATE ${CALIPER_DEPENDENCY_LIBS})
+
+# Define USE_CUDA preprocessor macro if CUDA is enabled
+if(USE_CUDA)
+    target_compile_definitions(caliper PRIVATE USE_CUDA)
+endif()
 
 # Set C++ standard
 set_target_properties(caliper PROPERTIES

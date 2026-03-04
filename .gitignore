@@ -24,7 +24,7 @@ data/
 
 # Third-party libraries
 # Git submodules are tracked as pointers only
-# All submodule content is gitignored (including auto-copied CMakeLists.txt wrappers)
+# All submodule content is gitignored (including auto-copied othercmake.txt wrappers)
 # The wrapper templates are stored in cmake/wrappers/ and copied during build
 third_party/imgui/CMakeLists.txt
 third_party/implot/CMakeLists.txt
