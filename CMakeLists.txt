@@ -115,20 +115,17 @@ endif()
 # Set RPATH for dynamic libraries
 if(APPLE)
     set_target_properties(caliper PROPERTIES
-        INSTALL_RPATH "@executable_path;@executable_path/pytorch_install/lib"
+        INSTALL_RPATH "@executable_path;@executable_path/../third_party/libtorch/lib"
         BUILD_WITH_INSTALL_RPATH TRUE
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib"
     )
 elseif(UNIX)
     set_target_properties(caliper PROPERTIES
-        INSTALL_RPATH "$ORIGIN:$ORIGIN/pytorch_install/lib"
+        INSTALL_RPATH "$ORIGIN:$ORIGIN/../third_party/libtorch/lib"
         BUILD_WITH_INSTALL_RPATH TRUE
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib"
     )
 endif()
-
-# Also set runtime search path for build directory
-set_target_properties(caliper PROPERTIES
-    BUILD_RPATH "${CMAKE_BINARY_DIR}/pytorch_install/lib"
-)
 
 # ============================================================================
 # Summary

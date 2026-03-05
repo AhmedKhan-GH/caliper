@@ -40,6 +40,9 @@ add_library(imgui STATIC
     ${IMGUI_BACKEND_HEADERS}
 )
 
+# Define GLEW as the OpenGL loader for ImGui
+target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
+
 # Include directories
 target_include_directories(imgui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -51,6 +54,7 @@ find_package(OpenGL REQUIRED)
 
 # Link dependencies
 target_link_libraries(imgui PUBLIC
+    libglew_static
     glfw
     OpenGL::GL
 )

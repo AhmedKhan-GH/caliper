@@ -23,9 +23,8 @@ imgui.ini
 data/
 
 # Third-party libraries
-# All contents of third_party are gitignored
-# Git submodules are tracked as pointers only
-third_party/
+# Pre-built binaries only (submodules are tracked normally)
+third_party/libtorch/
 
 # Pre-built third-party libraries (legacy)
 old_builds/

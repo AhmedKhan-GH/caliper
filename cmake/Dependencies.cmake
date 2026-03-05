@@ -17,7 +17,7 @@ message(STATUS "Configuring Caliper dependencies...")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # Check if submodules are initialized, and auto-initialize if needed
-if(NOT EXISTS "${THIRD_PARTY_DIR}/pytorch/CMakeLists.txt")
+if(NOT EXISTS "${THIRD_PARTY_DIR}/glfw/CMakeLists.txt")
     message(STATUS
         "========================================\n"
         "Git submodules not initialized!\n"
@@ -32,6 +32,15 @@ if(NOT EXISTS "${THIRD_PARTY_DIR}/pytorch/CMakeLists.txt")
         OUTPUT_VARIABLE SUBMODULE_INIT_OUTPUT
         ERROR_VARIABLE SUBMODULE_INIT_ERROR
     )
+
+    # Always show output for debugging
+    if(SUBMODULE_INIT_OUTPUT)
+        message(STATUS "Git output: ${SUBMODULE_INIT_OUTPUT}")
+    endif()
+    if(SUBMODULE_INIT_ERROR)
+        message(STATUS "Git stderr: ${SUBMODULE_INIT_ERROR}")
+    endif()
+
     if(NOT SUBMODULE_INIT_RESULT EQUAL 0)
         message(FATAL_ERROR
             "Failed to initialize git submodules!\n"
@@ -39,6 +48,18 @@ if(NOT EXISTS "${THIRD_PARTY_DIR}/pytorch/CMakeLists.txt")
             "Please manually run: git submodule update --init --recursive"
         )
     endif()
+
+    # Verify submodules actually exist after init
+    if(NOT EXISTS "${THIRD_PARTY_DIR}/glfw/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Git submodule command succeeded but glfw is still missing!\n"
+            "This likely means submodules are not properly registered.\n"
+            "Please manually run:\n"
+            "  git submodule sync\n"
+            "  git submodule update --init --recursive"
+        )
+    endif()
+
     message(STATUS "✓ Submodules initialized successfully")
 endif()
 
@@ -82,6 +103,20 @@ message(STATUS "  ✓ GLM configured")
 # ============================================================================
 
 message(STATUS "Configuring CMake-based dependencies...")
+
+# --- GLEW (OpenGL Extension Wrangler) ---
+message(STATUS "  Configuring GLEW...")
+# Copy our CMake wrapper if it doesn't exist
+if(NOT EXISTS "${THIRD_PARTY_DIR}/glew/CMakeLists.txt")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/glew_CMakeLists.txt"
+        "${THIRD_PARTY_DIR}/glew/CMakeLists.txt"
+        COPYONLY
+    )
+endif()
+add_subdirectory(${THIRD_PARTY_DIR}/glew EXCLUDE_FROM_ALL)
+list(APPEND CALIPER_DEPENDENCY_LIBS libglew_static)
+message(STATUS "    ✓ GLEW configured")
 
 # --- GLFW (Window management) ---
 message(STATUS "  Configuring GLFW...")
@@ -212,159 +247,72 @@ if(WIN32)
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
 else()
-    # macOS and Linux: Build from source
-    message(STATUS "  Building PyTorch from source...")
+    # macOS and Linux: Download pre-built libtorch
+    message(STATUS "  Using pre-built PyTorch (libtorch) for macOS/Linux...")
 
-    set(PYTORCH_SOURCE_DIR "${THIRD_PARTY_DIR}/pytorch")
-    set(PYTORCH_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_build")
+    set(PYTORCH_VERSION "2.5.1")
+    set(LIBTORCH_DIR "${THIRD_PARTY_DIR}/libtorch")
 
-    # Check if PyTorch's own submodules are initialized
-    if(NOT EXISTS "${PYTORCH_SOURCE_DIR}/third_party/pybind11/CMakeLists.txt")
-        message(STATUS "  Initializing PyTorch submodules (this may take a while)...")
-        execute_process(
-            COMMAND git submodule update --init --recursive
-            WORKING_DIRECTORY ${PYTORCH_SOURCE_DIR}
-            RESULT_VARIABLE PYTORCH_SUBMODULE_RESULT
-            OUTPUT_QUIET
-        )
-        if(NOT PYTORCH_SUBMODULE_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to initialize PyTorch submodules")
-        endif()
-        message(STATUS "    ✓ PyTorch submodules initialized")
-    endif()
-    # Configure PyTorch CMake arguments
-    set(PYTORCH_CMAKE_ARGS
-        -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_INSTALL_PREFIX=${PYTORCH_INSTALL_DIR}
-        -DCMAKE_PREFIX_PATH=${PYTORCH_INSTALL_DIR}
-
-        # Build configuration
-        -DBUILD_SHARED_LIBS=ON
-        -DBUILD_PYTHON=OFF
-        -DBUILD_TEST=OFF
-        -DUSE_NUMPY=OFF
-
-        # Disable unnecessary components
-        -DUSE_GLOG=OFF
-        -DUSE_GFLAGS=OFF
-
-        # Distributed training (usually not needed for inference)
-        -DUSE_DISTRIBUTED=OFF
-        -DUSE_MPI=OFF
-        -DUSE_GLOO=OFF
-        -DUSE_NCCL=OFF
-
-        # Disable some accelerators to speed up build
-        -DUSE_NNPACK=OFF
-        -DUSE_PYTORCH_QNNPACK=ON
-        -DUSE_XNNPACK=OFF
-    )
-
-    # CUDA configuration
-    if(USE_CUDA)
-        message(STATUS "  CUDA support: ENABLED")
-
-        # Pass CUDA paths to PyTorch if available
-        if(DEFINED CUDAToolkit_ROOT)
-            list(APPEND PYTORCH_CMAKE_ARGS
-                -DCUDA_TOOLKIT_ROOT_DIR=${CUDAToolkit_ROOT}
-                -DCMAKE_CUDA_COMPILER=${CUDAToolkit_ROOT}/bin/nvcc
-            )
-            message(STATUS "  Passing CUDA path to PyTorch: ${CUDAToolkit_ROOT}")
-        endif()
-
-        list(APPEND PYTORCH_CMAKE_ARGS
-            -DUSE_CUDA=ON
-            -DUSE_CUDNN=ON
-        )
+    # Determine platform and architecture
+    if(APPLE)
+        # macOS - CPU only (MPS support included)
+        set(PYTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-${PYTORCH_VERSION}.zip")
+        set(PYTORCH_PLATFORM "macOS ARM64")
     else()
-        message(STATUS "  CUDA support: DISABLED")
-        list(APPEND PYTORCH_CMAKE_ARGS
-            -DUSE_CUDA=OFF
-            -DUSE_CUDNN=OFF
-        )
-    endif()
-
-    # MPS configuration (Apple Silicon)
-    if(USE_MPS)
-        message(STATUS "  MPS support: ENABLED")
-        list(APPEND PYTORCH_CMAKE_ARGS -DUSE_MPS=ON)
-    else()
-        message(STATUS "  MPS support: DISABLED")
-        list(APPEND PYTORCH_CMAKE_ARGS -DUSE_MPS=OFF)
-    endif()
-
-    # Determine number of build jobs
-    if(DEFINED ENV{MAX_JOBS})
-        set(PYTORCH_BUILD_JOBS "$ENV{MAX_JOBS}")
-    else()
-        include(ProcessorCount)
-        ProcessorCount(NUM_CORES)
-        if(NUM_CORES EQUAL 0)
-            set(PYTORCH_BUILD_JOBS 4)
+        # Linux
+        if(USE_CUDA)
+            set(PYTORCH_URL "https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-${PYTORCH_VERSION}%2Bcu121.zip")
+            set(PYTORCH_PLATFORM "Linux CUDA 12.1")
         else()
-            math(EXPR PYTORCH_BUILD_JOBS "${NUM_CORES}")
+            set(PYTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${PYTORCH_VERSION}%2Bcpu.zip")
+            set(PYTORCH_PLATFORM "Linux CPU")
         endif()
     endif()
 
-    message(STATUS "  Building PyTorch with ${PYTORCH_BUILD_JOBS} parallel jobs...")
+    # Download and extract if not already present
+    if(NOT EXISTS "${LIBTORCH_DIR}")
+        message(STATUS "  Downloading PyTorch for ${PYTORCH_PLATFORM}...")
+        message(STATUS "  This is a ~200MB download and may take several minutes...")
 
-    # Build PyTorch as an external project
-    ExternalProject_Add(pytorch_external
-        SOURCE_DIR ${PYTORCH_SOURCE_DIR}
-        BINARY_DIR ${PYTORCH_BUILD_DIR}
+        file(DOWNLOAD
+            ${PYTORCH_URL}
+            "${CMAKE_BINARY_DIR}/libtorch.zip"
+            SHOW_PROGRESS
+            STATUS DOWNLOAD_STATUS
+        )
 
-        CMAKE_ARGS ${PYTORCH_CMAKE_ARGS}
+        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_ERROR)
+        if(DOWNLOAD_ERROR)
+            list(GET DOWNLOAD_STATUS 1 DOWNLOAD_ERROR_MSG)
+            message(FATAL_ERROR "Failed to download PyTorch: ${DOWNLOAD_ERROR_MSG}")
+        endif()
 
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target install -- -j${PYTORCH_BUILD_JOBS}
+        message(STATUS "  Extracting PyTorch to ${THIRD_PARTY_DIR}...")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/libtorch.zip"
+            WORKING_DIRECTORY ${THIRD_PARTY_DIR}
+        )
 
-        INSTALL_COMMAND ""
+        # Clean up zip file
+        file(REMOVE "${CMAKE_BINARY_DIR}/libtorch.zip")
+        message(STATUS "  ✓ PyTorch extracted successfully")
+    else()
+        message(STATUS "  ✓ PyTorch already downloaded (${PYTORCH_PLATFORM})")
+    endif()
 
-        # Build in source to avoid path issues
-        BUILD_IN_SOURCE 0
+    # Add LibTorch to CMAKE_PREFIX_PATH
+    list(APPEND CMAKE_PREFIX_PATH ${LIBTORCH_DIR})
 
-        # Show build progress in terminal
-        USES_TERMINAL_BUILD TRUE
-        USES_TERMINAL_CONFIGURE TRUE
-    )
+    # Find Torch package (standard approach)
+    find_package(Torch REQUIRED)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
-endif()  # WIN32 vs build from source
+    # Use Torch's provided libraries
+    list(APPEND CALIPER_DEPENDENCY_LIBS "${TORCH_LIBRARIES}")
 
-# ============================================================================
-# Setup PyTorch libraries for macOS/Linux (build from source)
-# ============================================================================
+    message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
-if(NOT WIN32)
-    # Set PyTorch directory for non-Windows platforms
-    set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
-
-    # Platform-specific library names
-    set(TORCH_LIB "${PYTORCH_INSTALL_DIR}/lib/libtorch${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    set(TORCH_CPU_LIB "${PYTORCH_INSTALL_DIR}/lib/libtorch_cpu${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    set(C10_LIB "${PYTORCH_INSTALL_DIR}/lib/libc10${CMAKE_SHARED_LIBRARY_SUFFIX}")
-
-    # Create interface libraries for PyTorch components
-    add_library(torch SHARED IMPORTED GLOBAL)
-    set_target_properties(torch PROPERTIES
-        IMPORTED_LOCATION ${TORCH_LIB}
-        INTERFACE_INCLUDE_DIRECTORIES "${PYTORCH_INSTALL_DIR}/include;${PYTORCH_INSTALL_DIR}/include/torch/csrc/api/include"
-    )
-
-    add_library(torch_cpu SHARED IMPORTED GLOBAL)
-    set_target_properties(torch_cpu PROPERTIES
-        IMPORTED_LOCATION ${TORCH_CPU_LIB}
-    )
-
-    add_library(c10 SHARED IMPORTED GLOBAL)
-    set_target_properties(c10 PROPERTIES
-        IMPORTED_LOCATION ${C10_LIB}
-    )
-
-    # Add PyTorch libraries to dependency list
-    list(APPEND CALIPER_DEPENDENCY_LIBS torch torch_cpu c10)
-
-    message(STATUS "  ✓ PyTorch configured (built from source)")
-endif()
+endif()  # WIN32 vs macOS/Linux
 
 # ============================================================================
 # Export dependency list

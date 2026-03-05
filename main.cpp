@@ -8,6 +8,7 @@
 #include <memory>
 #include <chrono>
 #include <random>
+#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <torch/torch.h>
 #include <imgui.h>
@@ -586,6 +587,15 @@ public:
         glfwMakeContextCurrent(window_);
         glfwSwapInterval(1);
 
+        // Initialize GLEW
+        glewExperimental = GL_TRUE;
+        GLenum err = glewInit();
+        if (err != GLEW_OK) {
+            std::cerr << "Failed to initialize GLEW: " << glewGetErrorString(err) << std::endl;
+            glfwTerminate();
+            return false;
+        }
+
         // Setup ImGui
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -603,7 +613,7 @@ public:
         apply_ui_scale();
 
         // Load data
-        std::string data_path = "C:/Users/ahmed/CLionProjects/caliper/data/Nightingale Dataset/Nightingale Dataset";
+        std::string data_path = "../data/Nightingale Dataset";
         loader_ = std::make_unique<EEGDataLoader>(data_path);
         if (!loader_->load_nightingale_data()) {
             return false;
