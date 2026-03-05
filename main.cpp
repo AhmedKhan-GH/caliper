@@ -77,7 +77,7 @@ private:
 TORCH_MODULE(ECGAutoencoder);
 
 // ============================================================================
-// ECG DATASET LOADER - Nightingale Dataset
+// ECG DATASET LOADER - temp
 // ============================================================================
 
 struct EEGRecord {
@@ -116,13 +116,6 @@ public:
         : data_path_(data_path) {}
 
     bool load_nightingale_data() {
-        // Try to load from cache first
-        std::string cache_file = data_path_ + "/nightingale_cache.bin";
-        if (load_from_cache(cache_file)) {
-            std::cout << "Loaded from cache: " << records_.size() << " records" << std::endl;
-            return true;
-        }
-
         std::cout << "Loading Nightingale dataset from: " << data_path_ << std::endl;
 
         // Load all 12 leads
@@ -187,10 +180,6 @@ public:
 
         std::cout << "Loaded " << num_records << " records with "
                   << records_[0].leads[0].size() << " samples each" << std::endl;
-
-        // Save to cache for next time
-        save_to_cache(cache_file);
-        std::cout << "Saved cache to: " << cache_file << std::endl;
 
         return true;
     }

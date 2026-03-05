@@ -45,19 +45,23 @@ git submodule sync --recursive
 echo "Initializing submodules..."
 git submodule update --init --recursive --force
 
-# Generate GLEW sources (required before CMake can build)
-echo "Generating GLEW sources..."
-if [ -d "third_party/glew" ]; then
-    cd third_party/glew
-    make extensions > /dev/null 2>&1
-    if [ -f "src/glew.c" ]; then
-        echo "  ✓ GLEW sources generated successfully"
+# Generate GLEW sources (only needed on macOS/Linux, Windows uses pre-built binaries)
+if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "win32" && "$OSTYPE" != "cygwin" ]]; then
+    echo "Generating GLEW sources..."
+    if [ -d "third_party/glew" ]; then
+        cd third_party/glew
+        make extensions > /dev/null 2>&1
+        if [ -f "src/glew.c" ]; then
+            echo "  ✓ GLEW sources generated successfully"
+        else
+            echo "  ✗ GLEW source generation failed"
+        fi
+        cd ../..
     else
-        echo "  ✗ GLEW source generation failed"
+        echo "  ✗ GLEW submodule not found"
     fi
-    cd ../..
 else
-    echo "  ✗ GLEW submodule not found"
+    echo "Skipping GLEW source generation on Windows (using pre-built binaries)"
 fi
 
 echo ""

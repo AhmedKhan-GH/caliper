@@ -106,15 +106,74 @@ message(STATUS "Configuring CMake-based dependencies...")
 
 # --- GLEW (OpenGL Extension Wrangler) ---
 message(STATUS "  Configuring GLEW...")
-# Copy our CMake wrapper if it doesn't exist
-if(NOT EXISTS "${THIRD_PARTY_DIR}/glew/CMakeLists.txt")
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/glew_CMakeLists.txt"
-        "${THIRD_PARTY_DIR}/glew/CMakeLists.txt"
-        COPYONLY
+
+if(WIN32)
+    # Windows: Download pre-built GLEW binaries
+    set(GLEW_VERSION "2.3.1")
+    set(GLEW_PREBUILT_DIR "${THIRD_PARTY_DIR}/glew-prebuilt")
+
+    # Download and extract if not already present
+    if(NOT EXISTS "${GLEW_PREBUILT_DIR}")
+        message(STATUS "    Downloading pre-built GLEW ${GLEW_VERSION} for Windows...")
+
+        file(DOWNLOAD
+            "https://github.com/nigels-com/glew/releases/download/glew-${GLEW_VERSION}/glew-${GLEW_VERSION}-win32.zip"
+            "${CMAKE_BINARY_DIR}/glew-win32.zip"
+            SHOW_PROGRESS
+            STATUS DOWNLOAD_STATUS
+        )
+
+        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_ERROR)
+        if(DOWNLOAD_ERROR)
+            list(GET DOWNLOAD_STATUS 1 DOWNLOAD_ERROR_MSG)
+            message(FATAL_ERROR "Failed to download GLEW: ${DOWNLOAD_ERROR_MSG}")
+        endif()
+
+        message(STATUS "    Extracting GLEW to ${THIRD_PARTY_DIR}...")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/glew-win32.zip"
+            WORKING_DIRECTORY ${THIRD_PARTY_DIR}
+        )
+
+        # Rename to glew-prebuilt for consistency
+        file(RENAME "${THIRD_PARTY_DIR}/glew-${GLEW_VERSION}" "${GLEW_PREBUILT_DIR}")
+
+        # Clean up zip file
+        file(REMOVE "${CMAKE_BINARY_DIR}/glew-win32.zip")
+        message(STATUS "    ✓ GLEW extracted successfully")
+    else()
+        message(STATUS "    ✓ GLEW already downloaded")
+    endif()
+
+    # Create imported target for GLEW
+    add_library(libglew_static STATIC IMPORTED)
+
+    # Determine architecture-specific paths
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(GLEW_LIB_DIR "${GLEW_PREBUILT_DIR}/lib/Release/x64")
+    else()
+        set(GLEW_LIB_DIR "${GLEW_PREBUILT_DIR}/lib/Release/Win32")
+    endif()
+
+    set_target_properties(libglew_static PROPERTIES
+        IMPORTED_LOCATION "${GLEW_LIB_DIR}/glew32s.lib"
+        INTERFACE_INCLUDE_DIRECTORIES "${GLEW_PREBUILT_DIR}/include"
+        INTERFACE_COMPILE_DEFINITIONS "GLEW_STATIC"
     )
+
+else()
+    # macOS/Linux: Build from source using CMake wrapper
+    # Copy our CMake wrapper if it doesn't exist
+    if(NOT EXISTS "${THIRD_PARTY_DIR}/glew/CMakeLists.txt")
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/glew_CMakeLists.txt"
+            "${THIRD_PARTY_DIR}/glew/CMakeLists.txt"
+            COPYONLY
+        )
+    endif()
+    add_subdirectory(${THIRD_PARTY_DIR}/glew EXCLUDE_FROM_ALL)
 endif()
-add_subdirectory(${THIRD_PARTY_DIR}/glew EXCLUDE_FROM_ALL)
+
 list(APPEND CALIPER_DEPENDENCY_LIBS libglew_static)
 message(STATUS "    ✓ GLEW configured")
 
