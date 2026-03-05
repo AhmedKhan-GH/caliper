@@ -39,6 +39,7 @@ third_party/OpenGL-Registry/extensions/
 
 # Pre-built third-party libraries (legacy)
 old_builds/
+third_party/glew-prebuilt/
 
 # macOS
 .DS_Store
