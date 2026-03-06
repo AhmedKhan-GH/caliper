@@ -70,7 +70,7 @@ include(cmake/Dependencies.cmake)
 # ============================================================================
 
 # Application sources
-add_executable(caliper main.cpp)
+add_executable(caliper src/main.cpp)
 
 # No CUDA test executables - CPU/MPS only build
 

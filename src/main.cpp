@@ -760,7 +760,7 @@ private:
             current_record_idx_ = idx;
         }
 
-        ImGui::Text("Viewing: Patient %d of %zu", current_record_idx_ + 1, records_.size());
+        ImGui::Text("Viewing: Patient %zu of %zu", current_record_idx_ + 1, records_.size());
 
         ImGui::Separator();
         ImGui::Text("UI Scale");
