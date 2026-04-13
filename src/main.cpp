@@ -564,7 +564,18 @@ public:
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
         #endif
 
-        window_ = glfwCreateWindow(1920, 1080,
+        // Size window to fit the monitor's usable work area
+        // On macOS Retina, content scale is 2x — work area is in screen points
+        // but we still clamp to avoid oversized windows
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        int area_x, area_y, area_w, area_h;
+        glfwGetMonitorWorkarea(monitor, &area_x, &area_y, &area_w, &area_h);
+        float x_scale = 1.0f, y_scale = 1.0f;
+        glfwGetMonitorContentScale(monitor, &x_scale, &y_scale);
+        int win_w = static_cast<int>((area_w / x_scale) * 0.95f);
+        int win_h = static_cast<int>((area_h / y_scale) * 0.95f);
+
+        window_ = glfwCreateWindow(win_w, win_h,
                                    "Caliper - CUDA-Accelerated ECG ML Demo",
                                    nullptr, nullptr);
         if (!window_) {
@@ -732,34 +743,43 @@ private:
     }
 
     void render_ui() {
-        // Main control panel
-        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Control Panel", nullptr, ImGuiWindowFlags_NoCollapse);
+        // Fullscreen host window — acts as the layout container
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(viewport->WorkSize);
+        ImGui::Begin("##MainLayout", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
+
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        float avail_h = ImGui::GetContentRegionAvail().y;
+        float spacing = ImGui::GetStyle().ItemSpacing.x;
+
+        float panel_w = avail_w * 0.20f;
+        float right_w = avail_w - panel_w - spacing;
+        float row_h = (avail_h - 2 * spacing) / 3.0f;
+
+        // ── Left column: Control Panel ──
+        ImGui::BeginChild("ControlPanel", ImVec2(panel_w, avail_h), true);
 
         ImGui::TextColored(device_color_, "Compute: %s", device_name_.c_str());
         ImGui::Separator();
 
-        // Patient Navigation
         ImGui::Text("Patient Navigation");
         int idx = current_record_idx_;
 
         if (ImGui::Button("<<< Previous")) {
-            if (current_record_idx_ > 0) {
-                current_record_idx_--;
-            }
+            if (current_record_idx_ > 0) current_record_idx_--;
         }
         ImGui::SameLine();
         if (ImGui::Button("Next >>>")) {
-            if (current_record_idx_ < records_.size() - 1) {
-                current_record_idx_++;
-            }
+            if (current_record_idx_ < records_.size() - 1) current_record_idx_++;
         }
 
         if (ImGui::SliderInt("Patient", &idx, 0, records_.size() - 1)) {
             current_record_idx_ = idx;
         }
-
         ImGui::Text("Viewing: Patient %zu of %zu", current_record_idx_ + 1, records_.size());
 
         ImGui::Separator();
@@ -778,19 +798,17 @@ private:
         ImGui::Separator();
         ImGui::Text("ML Controls");
 
-        if (ImGui::Button("Run Inference", ImVec2(180, 30))) {
+        if (ImGui::Button("Run Inference", ImVec2(-1, 30))) {
             update_inference();
         }
-
-        if (ImGui::Button("Train Model (1 batch)", ImVec2(180, 30))) {
+        if (ImGui::Button("Train Model (1 batch)", ImVec2(-1, 30))) {
             const auto& record = records_[current_record_idx_];
             std::vector<float> segment = record.leads[1];
             segment.resize(5000, 0.0f);
             ml_engine_->train_on_batch({segment});
             update_inference();
         }
-
-        if (ImGui::Button("Reset Model", ImVec2(180, 30))) {
+        if (ImGui::Button("Reset Model", ImVec2(-1, 30))) {
             ml_engine_ = std::make_unique<MLEngine>(device_);
             ml_engine_->initialize_training(0.001f);
             update_inference();
@@ -798,9 +816,7 @@ private:
 
         ImGui::Checkbox("Show Reconstruction", &show_reconstruction_);
         if (ImGui::Checkbox("Auto-train on view", &training_enabled_)) {
-            if (training_enabled_) {
-                update_inference();
-            }
+            if (training_enabled_) update_inference();
         }
 
         ImGui::Separator();
@@ -817,17 +833,20 @@ private:
         ImGui::Text("Loss: %.6f", ml_engine_->get_last_loss());
         ImGui::Text("Batches: %d", ml_engine_->get_total_batches());
 
-        ImGui::End();
+        ImGui::EndChild();
 
+        // ── Right column ──
+        ImGui::SameLine();
+        ImGui::BeginGroup();
 
-        // Main waveform display - Lead II only
-        ImGui::SetNextWindowPos(ImVec2(420, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(1490, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("1. ECG Waveform - Lead II", nullptr, ImGuiWindowFlags_NoCollapse);
+        // ── Row 1: ECG Waveform ──
+        ImGui::BeginChild("ECGWaveform", ImVec2(right_w, row_h), true);
+        ImGui::Text("1. ECG Waveform - Lead II");
+        ImGui::Separator();
 
         if (!records_.empty()) {
             const auto& record = records_[current_record_idx_];
-            auto& lead_data = record.leads[1]; // Lead II
+            auto& lead_data = record.leads[1];
             int total_samples = lead_data.size();
 
             ImGui::Text("Patient: %s | Samples: %d | Duration: %.1f sec",
@@ -838,7 +857,7 @@ private:
                              "Anomaly Score: %.6f %s", current_anomaly_score_,
                              current_anomaly_score_ > 0.001f ? "(HIGH)" : "(LOW)");
 
-            if (ImPlot::BeginPlot("##lead2", ImVec2(-1, 280))) {
+            if (ImPlot::BeginPlot("##lead2", ImVec2(-1, -1))) {
                 ImPlot::SetupAxes("Time (samples)", "Amplitude (mV)");
                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, total_samples, ImGuiCond_Always);
 
@@ -849,13 +868,11 @@ private:
 
                 ImPlot::PlotLine("Original Signal", lead_data.data(), total_samples);
 
-                // Show reconstruction if available
                 if (show_reconstruction_ && !current_reconstruction_.empty()) {
                     int recon_size = std::min(static_cast<int>(current_reconstruction_.size()), total_samples);
                     ImPlot::PlotLine("ML Reconstruction", current_reconstruction_.data(), recon_size);
                 }
 
-                // Mark R-peaks (QRS complexes)
                 if (!current_features_.r_peaks.empty()) {
                     std::vector<double> peak_x(current_features_.r_peaks.size());
                     std::vector<double> peak_y(current_features_.r_peaks.size());
@@ -870,13 +887,12 @@ private:
                 ImPlot::EndPlot();
             }
         }
+        ImGui::EndChild();
 
-        ImGui::End();
-
-        // ML Reconstruction Error Heatmap
-        ImGui::SetNextWindowPos(ImVec2(420, 370), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(1490, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("2. ML Analysis - Anomaly Detection (Reconstruction Error)", nullptr, ImGuiWindowFlags_NoCollapse);
+        // ── Row 2: ML Analysis ──
+        ImGui::BeginChild("MLAnalysis", ImVec2(right_w, row_h), true);
+        ImGui::Text("2. ML Analysis - Anomaly Detection (Reconstruction Error)");
+        ImGui::Separator();
 
         if (!records_.empty() && !current_reconstruction_.empty()) {
             const auto& record = records_[current_record_idx_];
@@ -884,19 +900,17 @@ private:
             int display_samples = std::min(static_cast<int>(lead_data.size()),
                                           static_cast<int>(current_reconstruction_.size()));
 
-            // Calculate point-wise reconstruction error
             std::vector<float> reconstruction_error(display_samples);
             for (int i = 0; i < display_samples; i++) {
                 float diff = lead_data[i] - current_reconstruction_[i];
-                reconstruction_error[i] = diff * diff; // Squared error
+                reconstruction_error[i] = diff * diff;
             }
 
-            ImGui::Text("Point-wise Reconstruction Error - Spikes indicate where the model fails (potential anomalies)");
             ImGui::Text("Overall MSE: %.6f | Max Local Error: %.6f",
                        current_anomaly_score_,
                        *std::max_element(reconstruction_error.begin(), reconstruction_error.end()));
 
-            if (ImPlot::BeginPlot("##error", ImVec2(-1, 280))) {
+            if (ImPlot::BeginPlot("##error", ImVec2(-1, -1))) {
                 ImPlot::SetupAxes("Time (samples)", "Squared Error");
                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, display_samples, ImGuiCond_Always);
 
@@ -916,44 +930,41 @@ private:
             ImGui::TextWrapped("- Trained model: Low error on normal patterns, high error on anomalies");
             ImGui::TextWrapped("- Click 'Train Model' multiple times to see error decrease");
         }
+        ImGui::EndChild();
 
-        ImGui::End();
+        // ── Row 3: two side-by-side panels ──
+        float half_w = (right_w - spacing) * 0.5f;
+        float bottom_h = ImGui::GetContentRegionAvail().y;
 
-        // Anomaly & Latent Space
-        ImGui::SetNextWindowPos(ImVec2(420, 720), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(740, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("3. Neural Network Latent Space", nullptr, ImGuiWindowFlags_NoCollapse);
+        ImGui::BeginChild("LatentSpace", ImVec2(half_w, bottom_h), true);
+        ImGui::Text("3. Neural Network Latent Space");
+        ImGui::Separator();
 
         ImGui::Text("64-Dimensional Compressed Representation");
         ImGui::Text("Anomaly Score: %.6f", current_anomaly_score_);
 
-        // Visual anomaly meter
         float normalized_score = std::min(current_anomaly_score_ * 1000.0f, 1.0f);
-        ImVec4 meter_color = ImVec4(
-            normalized_score,
-            1.0f - normalized_score,
-            0.2f, 1.0f
-        );
+        ImVec4 meter_color = ImVec4(normalized_score, 1.0f - normalized_score, 0.2f, 1.0f);
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, meter_color);
         ImGui::ProgressBar(normalized_score, ImVec2(-1, 40), "Anomaly Level");
         ImGui::PopStyleColor();
 
         if (!current_latent_.empty()) {
             ImGui::Text("These 64 values represent the compressed ECG pattern");
-            if (ImPlot::BeginPlot("##latent", ImVec2(-1, 220))) {
+            if (ImPlot::BeginPlot("##latent", ImVec2(-1, -1))) {
                 ImPlot::SetupAxes("Feature Dimension", "Activation Value");
                 ImPlot::PlotBars("Latent Features", current_latent_.data(),
                                std::min(64, static_cast<int>(current_latent_.size())));
                 ImPlot::EndPlot();
             }
         }
+        ImGui::EndChild();
 
-        ImGui::End();
+        ImGui::SameLine();
 
-        // Clinical Features Panel
-        ImGui::SetNextWindowPos(ImVec2(1170, 720), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(740, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("4. Clinical ECG Features", nullptr, ImGuiWindowFlags_NoCollapse);
+        ImGui::BeginChild("ClinicalFeatures", ImVec2(-1, bottom_h), true);
+        ImGui::Text("4. Clinical ECG Features");
+        ImGui::Separator();
 
         if (!records_.empty()) {
             const auto& record = records_[current_record_idx_];
@@ -965,12 +976,11 @@ private:
             ImGui::Text("CLINICAL MEASUREMENTS (Pan-Tompkins Algorithm)");
             ImGui::Separator();
 
-            // Heart Rate
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Heart Rate:");
             if (current_features_.heart_rate_bpm > 0) {
-                ImVec4 hr_color = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); // Green = normal
-                if (current_features_.heart_rate_bpm < 60) hr_color = ImVec4(0.2f, 0.6f, 1.0f, 1.0f); // Blue = bradycardia
-                if (current_features_.heart_rate_bpm > 100) hr_color = ImVec4(1.0f, 0.2f, 0.2f, 1.0f); // Red = tachycardia
+                ImVec4 hr_color = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
+                if (current_features_.heart_rate_bpm < 60) hr_color = ImVec4(0.2f, 0.6f, 1.0f, 1.0f);
+                if (current_features_.heart_rate_bpm > 100) hr_color = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
 
                 ImGui::TextColored(hr_color, "  %.1f BPM", current_features_.heart_rate_bpm);
                 if (current_features_.heart_rate_bpm < 60) ImGui::Text("  (Bradycardia - slow)");
@@ -982,13 +992,11 @@ private:
 
             ImGui::Separator();
 
-            // QRS Complexes
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "QRS Complexes Detected:");
             ImGui::Text("  %d beats", current_features_.num_beats);
 
             ImGui::Separator();
 
-            // RR Intervals
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "RR Interval:");
             if (!current_features_.rr_intervals.empty()) {
                 float avg_rr = std::accumulate(current_features_.rr_intervals.begin(),
@@ -1001,7 +1009,6 @@ private:
 
             ImGui::Separator();
 
-            // Heart Rate Variability
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Heart Rate Variability (SDNN):");
             if (current_features_.hrv_sdnn > 0) {
                 ImGui::Text("  %.2f ms", current_features_.hrv_sdnn);
@@ -1012,7 +1019,6 @@ private:
 
             ImGui::Separator();
 
-            // QT Interval
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "QT Interval (estimated):");
             if (current_features_.qt_interval_avg > 0) {
                 ImGui::Text("  %.1f ms", current_features_.qt_interval_avg);
@@ -1024,6 +1030,9 @@ private:
                 ImGui::Text("  N/A");
             }
         }
+        ImGui::EndChild();
+
+        ImGui::EndGroup();
 
         ImGui::End();
     }
