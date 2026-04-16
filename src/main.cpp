@@ -7,596 +7,361 @@
 #include <numeric>
 #include <memory>
 #include <chrono>
-#include <random>
+#include <string>
+#include <filesystem>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <queue>
+#include <functional>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
-#include <torch/torch.h>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
 
-// ============================================================================
-// CUDA-Accelerated ECG Autoencoder for Anomaly Detection
-// ============================================================================
-
-class ECGAutoencoderImpl : public torch::nn::Module {
-public:
-    ECGAutoencoderImpl(int input_size = 5000, int latent_dim = 64) {
-        this->input_size = input_size;
-        this->latent_dim = latent_dim;
-
-        // Simple fully connected autoencoder
-        encoder = register_module("encoder", torch::nn::Sequential(
-            torch::nn::Linear(input_size, 512),
-            torch::nn::ReLU(),
-            torch::nn::Linear(512, 256),
-            torch::nn::ReLU(),
-            torch::nn::Linear(256, latent_dim)
-        ));
-
-        decoder = register_module("decoder", torch::nn::Sequential(
-            torch::nn::Linear(latent_dim, 256),
-            torch::nn::ReLU(),
-            torch::nn::Linear(256, 512),
-            torch::nn::ReLU(),
-            torch::nn::Linear(512, input_size)
-        ));
-    }
-
-    torch::Tensor forward(torch::Tensor x) {
-        // x shape: [batch, 1, signal_length]
-        auto batch_size = x.size(0);
-        auto seq_len = x.size(2);
-
-        // Flatten to [batch, signal_length]
-        auto flat_input = x.view({batch_size, seq_len});
-
-        // Encode and decode
-        auto latent = encoder->forward(flat_input);
-        auto reconstructed = decoder->forward(latent);
-
-        // Reshape back to [batch, 1, signal_length]
-        return reconstructed.view({batch_size, 1, seq_len});
-    }
-
-    torch::Tensor encode(torch::Tensor x) {
-        auto batch_size = x.size(0);
-        auto seq_len = x.size(2);
-        auto flat_input = x.view({batch_size, seq_len});
-        return encoder->forward(flat_input);
-    }
-
-private:
-    torch::nn::Sequential encoder{nullptr};
-    torch::nn::Sequential decoder{nullptr};
-    int input_size;
-    int latent_dim;
-};
-
-TORCH_MODULE(ECGAutoencoder);
+namespace fs = std::filesystem;
 
 // ============================================================================
-// ECG DATASET LOADER - temp
+// DATA STRUCTURES
 // ============================================================================
 
-struct EEGRecord {
-    std::vector<std::vector<float>> leads; // 12 leads: I, II, III, aVR, aVL, aVF, V1-V6
-    float sampling_rate;
-    std::string record_name;
-    int num_channels;
-
-    static const std::vector<std::string> lead_names;
-    static const std::vector<ImVec4> lead_colors;
-};
-
-const std::vector<std::string> EEGRecord::lead_names = {
-    "Lead I", "Lead II", "Lead III", "aVR", "aVL", "aVF",
+static constexpr int NUM_LEADS = 12;
+static const char* LEAD_NAMES[NUM_LEADS] = {
+    "I", "II", "III", "aVR", "aVL", "aVF",
     "V1", "V2", "V3", "V4", "V5", "V6"
 };
 
-const std::vector<ImVec4> EEGRecord::lead_colors = {
-    ImVec4(1.0f, 0.2f, 0.2f, 1.0f),  // Red
-    ImVec4(0.2f, 1.0f, 0.2f, 1.0f),  // Green
-    ImVec4(0.2f, 0.5f, 1.0f, 1.0f),  // Blue
-    ImVec4(1.0f, 1.0f, 0.2f, 1.0f),  // Yellow
-    ImVec4(1.0f, 0.5f, 0.2f, 1.0f),  // Orange
-    ImVec4(0.8f, 0.2f, 1.0f, 1.0f),  // Purple
-    ImVec4(0.2f, 1.0f, 1.0f, 1.0f),  // Cyan
-    ImVec4(1.0f, 0.2f, 0.6f, 1.0f),  // Pink
-    ImVec4(0.5f, 1.0f, 0.2f, 1.0f),  // Lime
-    ImVec4(1.0f, 0.7f, 0.2f, 1.0f),  // Gold
-    ImVec4(0.6f, 0.3f, 1.0f, 1.0f),  // Violet
-    ImVec4(0.2f, 0.8f, 0.6f, 1.0f)   // Teal
+static const ImVec4 LEAD_COLORS[NUM_LEADS] = {
+    {1.0f, 0.30f, 0.30f, 1.0f},  // I    - Red
+    {0.2f, 1.00f, 0.30f, 1.0f},  // II   - Green
+    {0.3f, 0.55f, 1.00f, 1.0f},  // III  - Blue
+    {1.0f, 0.85f, 0.20f, 1.0f},  // aVR  - Yellow
+    {1.0f, 0.50f, 0.20f, 1.0f},  // aVL  - Orange
+    {0.8f, 0.25f, 1.00f, 1.0f},  // aVF  - Purple
+    {0.2f, 0.90f, 0.90f, 1.0f},  // V1   - Cyan
+    {1.0f, 0.25f, 0.60f, 1.0f},  // V2   - Pink
+    {0.5f, 1.00f, 0.25f, 1.0f},  // V3   - Lime
+    {1.0f, 0.70f, 0.30f, 1.0f},  // V4   - Gold
+    {0.6f, 0.35f, 1.00f, 1.0f},  // V5   - Violet
+    {0.2f, 0.80f, 0.60f, 1.0f},  // V6   - Teal
 };
 
-class EEGDataLoader {
-public:
-    explicit EEGDataLoader(const std::string& data_path)
-        : data_path_(data_path) {}
+struct ECGSample {
+    std::string file_id;                        // e.g. "1014507"
+    std::string filepath;
+    std::vector<std::vector<float>> raw;        // [lead][sample]
+    std::vector<std::vector<float>> processed;  // [lead][sample] after transforms
+    float sampling_rate = 0.0f;
+    int num_samples = 0;
+    bool loaded = false;
+    bool processed_valid = false;               // true when processed matches current params
 
-    bool load_nightingale_data() {
-        std::cout << "Loading Nightingale dataset from: " << data_path_ << std::endl;
+    // Per-lead stats (computed on processed data)
+    struct LeadStats {
+        float mean = 0, stddev = 0, min_val = 0, max_val = 0;
+    };
+    std::vector<LeadStats> stats; // [lead]
+};
 
-        // Load all 12 leads
-        std::vector<std::string> lead_files = {
-            "/MDC_ECG_LEAD_I.csv",
-            "/MDC_ECG_LEAD_II.csv",
-            "/MDC_ECG_LEAD_III.csv",
-            "/MDC_ECG_LEAD_AVR.csv",
-            "/MDC_ECG_LEAD_AVL.csv",
-            "/MDC_ECG_LEAD_AVF.csv",
-            "/MDC_ECG_LEAD_V1.csv",
-            "/MDC_ECG_LEAD_V2.csv",
-            "/MDC_ECG_LEAD_V3.csv",
-            "/MDC_ECG_LEAD_V4.csv",
-            "/MDC_ECG_LEAD_V5.csv",
-            "/MDC_ECG_LEAD_V6.csv"
-        };
+struct ProcessingParams {
+    bool zscore = true;
+    bool baseline_wander_correction = false;
+    float baseline_strength = 0.0f;     // 0 = none, 1 = max correction
+    uint32_t version = 1;               // bumped on any param change
+};
 
-        std::vector<std::vector<std::vector<float>>> all_leads_data;
-        size_t num_records = 0;
+// ============================================================================
+// SIGNAL PROCESSING
+// ============================================================================
 
-        // Load each lead file
-        for (size_t lead_idx = 0; lead_idx < lead_files.size(); lead_idx++) {
-            std::string lead_file = data_path_ + lead_files[lead_idx];
-            std::vector<std::vector<float>> lead_signals = load_csv_file(lead_file);
+namespace dsp {
 
-            if (lead_signals.empty()) {
-                std::cerr << "Failed to load data from: " << lead_file << std::endl;
-                return false;
-            }
-
-            if (lead_idx == 0) {
-                num_records = lead_signals.size();
-                all_leads_data.resize(lead_files.size());
-            } else if (lead_signals.size() != num_records) {
-                std::cerr << "Mismatch in number of records across leads!" << std::endl;
-                return false;
-            }
-
-            all_leads_data[lead_idx] = std::move(lead_signals);
-            std::cout << "Loaded " << EEGRecord::lead_names[lead_idx]
-                     << " (" << all_leads_data[lead_idx].size() << " records)" << std::endl;
+    void compute_stats(const std::vector<float>& data, ECGSample::LeadStats& out) {
+        if (data.empty()) return;
+        float sum = 0;
+        float mn = data[0], mx = data[0];
+        for (float v : data) {
+            sum += v;
+            mn = std::min(mn, v);
+            mx = std::max(mx, v);
         }
+        out.mean = sum / (float)data.size();
+        out.min_val = mn;
+        out.max_val = mx;
 
-        std::cout << "Found " << num_records << " patient records" << std::endl;
-
-        // Initialize records (each record has all 12 leads)
-        records_.reserve(num_records);
-        for (size_t i = 0; i < num_records; i++) {
-            EEGRecord record;
-            record.record_name = "Patient_" + std::to_string(i + 1);
-            record.sampling_rate = 500.0f; // Nightingale sampling rate
-            record.num_channels = 12; // All 12 leads
-            record.leads.resize(12);
-
-            for (size_t lead_idx = 0; lead_idx < 12; lead_idx++) {
-                record.leads[lead_idx] = std::move(all_leads_data[lead_idx][i]);
-            }
-
-            records_.push_back(record);
+        float var = 0;
+        for (float v : data) {
+            float d = v - out.mean;
+            var += d * d;
         }
-
-        std::cout << "Loaded " << num_records << " records with "
-                  << records_[0].leads[0].size() << " samples each" << std::endl;
-
-        return true;
+        out.stddev = std::sqrt(var / (float)data.size());
     }
 
-    const std::vector<EEGRecord>& get_records() const { return records_; }
+    // Z-score normalization: (x - mean) / std
+    void zscore(std::vector<float>& data) {
+        if (data.size() < 2) return;
+        float sum = 0;
+        for (float v : data) sum += v;
+        float mean = sum / (float)data.size();
 
-private:
-    bool load_from_cache(const std::string& cache_file) {
-        std::ifstream file(cache_file, std::ios::binary);
+        float var = 0;
+        for (float v : data) { float d = v - mean; var += d * d; }
+        float sd = std::sqrt(var / (float)data.size());
+        if (sd < 1e-8f) sd = 1.0f;
+
+        for (float& v : data) v = (v - mean) / sd;
+    }
+
+    // Baseline wander removal via moving-average subtraction
+    void remove_baseline_wander(std::vector<float>& data, int window) {
+        if (data.empty() || window < 1) return;
+        int n = (int)data.size();
+        int half = window / 2;
+
+        // Compute moving average
+        std::vector<float> baseline(n);
+        double running = 0;
+        int count = 0;
+        // Fill initial window
+        for (int i = 0; i < std::min(half + 1, n); i++) { running += data[i]; count++; }
+        baseline[0] = (float)(running / count);
+
+        for (int i = 1; i < n; i++) {
+            int add_idx = i + half;
+            int rem_idx = i - half - 1;
+            if (add_idx < n) { running += data[add_idx]; count++; }
+            if (rem_idx >= 0) { running -= data[rem_idx]; count--; }
+            baseline[i] = (float)(running / count);
+        }
+
+        for (int i = 0; i < n; i++) data[i] -= baseline[i];
+    }
+
+    // Apply full processing pipeline to a sample
+    void process(ECGSample& sample, const ProcessingParams& params) {
+        sample.processed.resize(NUM_LEADS);
+        sample.stats.resize(NUM_LEADS);
+
+        for (int lead = 0; lead < NUM_LEADS; lead++) {
+            // Start from raw
+            sample.processed[lead] = sample.raw[lead];
+            auto& sig = sample.processed[lead];
+
+            if (params.baseline_wander_correction && params.baseline_strength > 0 && sample.sampling_rate > 0) {
+                // strength 0→none, 1→max correction
+                // map: small strength → large window (gentle), large strength → small window (aggressive)
+                float window_sec = 2.0f * (1.0f - params.baseline_strength) + 0.01f;
+                int window = std::max(1, (int)(window_sec * sample.sampling_rate));
+                remove_baseline_wander(sig, window);
+            }
+
+            if (params.zscore) {
+                zscore(sig);
+            }
+
+            compute_stats(sig, sample.stats[lead]);
+        }
+        sample.processed_valid = true;
+    }
+
+} // namespace dsp
+
+// ============================================================================
+// DATA LOADING
+// ============================================================================
+
+namespace loader {
+
+    bool load_csv(ECGSample& sample) {
+        std::ifstream file(sample.filepath);
         if (!file.is_open()) {
+            std::cerr << "Cannot open: " << sample.filepath << std::endl;
             return false;
-        }
-
-        try {
-            // Read number of records
-            size_t num_records;
-            file.read(reinterpret_cast<char*>(&num_records), sizeof(num_records));
-
-            records_.clear();
-            records_.reserve(num_records);
-
-            for (size_t i = 0; i < num_records; i++) {
-                EEGRecord record;
-
-                // Read sampling rate
-                file.read(reinterpret_cast<char*>(&record.sampling_rate), sizeof(record.sampling_rate));
-
-                // Read record name length and data
-                size_t name_len;
-                file.read(reinterpret_cast<char*>(&name_len), sizeof(name_len));
-                record.record_name.resize(name_len);
-                file.read(&record.record_name[0], name_len);
-
-                // Read num channels
-                file.read(reinterpret_cast<char*>(&record.num_channels), sizeof(record.num_channels));
-
-                // Read all 12 leads
-                record.leads.resize(12);
-                for (int lead_idx = 0; lead_idx < 12; lead_idx++) {
-                    size_t lead_size;
-                    file.read(reinterpret_cast<char*>(&lead_size), sizeof(lead_size));
-                    record.leads[lead_idx].resize(lead_size);
-                    file.read(reinterpret_cast<char*>(record.leads[lead_idx].data()),
-                             lead_size * sizeof(float));
-                }
-
-                records_.push_back(std::move(record));
-            }
-
-            file.close();
-            return true;
-        } catch (...) {
-            std::cerr << "Error reading cache file" << std::endl;
-            records_.clear();
-            return false;
-        }
-    }
-
-    void save_to_cache(const std::string& cache_file) {
-        std::ofstream file(cache_file, std::ios::binary);
-        if (!file.is_open()) {
-            std::cerr << "Could not create cache file" << std::endl;
-            return;
-        }
-
-        // Write number of records
-        size_t num_records = records_.size();
-        file.write(reinterpret_cast<const char*>(&num_records), sizeof(num_records));
-
-        for (const auto& record : records_) {
-            // Write sampling rate
-            file.write(reinterpret_cast<const char*>(&record.sampling_rate), sizeof(record.sampling_rate));
-
-            // Write record name
-            size_t name_len = record.record_name.size();
-            file.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-            file.write(record.record_name.data(), name_len);
-
-            // Write num channels
-            file.write(reinterpret_cast<const char*>(&record.num_channels), sizeof(record.num_channels));
-
-            // Write all 12 leads
-            for (int lead_idx = 0; lead_idx < 12; lead_idx++) {
-                size_t lead_size = record.leads[lead_idx].size();
-                file.write(reinterpret_cast<const char*>(&lead_size), sizeof(lead_size));
-                file.write(reinterpret_cast<const char*>(record.leads[lead_idx].data()),
-                          lead_size * sizeof(float));
-            }
-        }
-
-        file.close();
-    }
-
-private:
-    std::vector<std::vector<float>> load_csv_file(const std::string& filepath) {
-        std::vector<std::vector<float>> data;
-
-        std::ifstream file(filepath);
-
-        if (!file.is_open()) {
-            std::cerr << "ERROR: Cannot open file: " << filepath << std::endl;
-            return data;
         }
 
         std::string line;
-        bool skip_header = true;
+        // Skip header
+        if (!std::getline(file, line)) return false;
+
+        sample.raw.resize(NUM_LEADS);
+        for (auto& lead : sample.raw) lead.clear();
 
         while (std::getline(file, line)) {
-            if (skip_header) {
-                skip_header = false;
-                continue; // Skip the first row (sample indices)
-            }
-
-            std::vector<float> row;
+            if (line.empty()) continue;
             std::stringstream ss(line);
-            std::string value;
-
-            while (std::getline(ss, value, ',')) {
+            std::string val;
+            int col = 0;
+            while (std::getline(ss, val, ',') && col < NUM_LEADS) {
+                // Trim whitespace
+                size_t start = val.find_first_not_of(" \t\r\n");
+                if (start == std::string::npos) { col++; continue; }
+                val = val.substr(start);
                 try {
-                    row.push_back(std::stof(value));
-                } catch (...) {
-                    // Skip invalid values
-                }
-            }
-
-            if (!row.empty()) {
-                data.push_back(row);
+                    sample.raw[col].push_back(std::stof(val));
+                } catch (...) {}
+                col++;
             }
         }
 
-        file.close();
-        return data;
+        if (sample.raw[0].empty()) return false;
+
+        sample.num_samples = (int)sample.raw[0].size();
+        // Infer sampling rate from sample count: 2500 -> 250Hz, 5000 -> 500Hz
+        if (sample.num_samples <= 2500) sample.sampling_rate = 250.0f;
+        else sample.sampling_rate = 500.0f;
+
+        sample.loaded = true;
+        sample.processed_valid = false;
+        return true;
     }
 
-    std::string data_path_;
-    std::vector<EEGRecord> records_;
-};
+    std::vector<ECGSample> scan_directory(const std::string& dir) {
+        std::vector<ECGSample> samples;
+        if (!fs::exists(dir)) {
+            std::cerr << "Directory not found: " << dir << std::endl;
+            return samples;
+        }
+
+        for (const auto& entry : fs::directory_iterator(dir)) {
+            if (entry.path().extension() == ".csv") {
+                ECGSample s;
+                s.filepath = entry.path().string();
+                s.file_id = entry.path().stem().string();
+                samples.push_back(std::move(s));
+            }
+        }
+
+        // Sort by file ID
+        std::sort(samples.begin(), samples.end(),
+            [](const ECGSample& a, const ECGSample& b) { return a.file_id < b.file_id; });
+
+        return samples;
+    }
+
+} // namespace loader
 
 // ============================================================================
-// CLINICAL ECG FEATURE EXTRACTION
+// BACKGROUND PROCESSOR
 // ============================================================================
 
-struct ECGFeatures {
-    std::vector<int> r_peaks;           // R-peak locations (QRS complex)
-    std::vector<float> rr_intervals;    // RR intervals in ms
-    float heart_rate_bpm = 0.0f;        // Average heart rate
-    float hrv_sdnn = 0.0f;              // Heart rate variability (SDNN)
-    float qt_interval_avg = 0.0f;       // Average QT interval
-    int num_beats = 0;
-};
-
-class ECGAnalyzer {
+class BackgroundProcessor {
 public:
-    // Simple Pan-Tompkins inspired QRS detection
-    static ECGFeatures extract_features(const std::vector<float>& signal, float sampling_rate) {
-        ECGFeatures features;
-
-        if (signal.size() < 100) return features;
-
-        // Step 1: Differentiation (approximate derivative)
-        std::vector<float> diff_signal(signal.size() - 1);
-        for (size_t i = 0; i < signal.size() - 1; i++) {
-            diff_signal[i] = signal[i + 1] - signal[i];
-        }
-
-        // Step 2: Squaring
-        std::vector<float> squared_signal(diff_signal.size());
-        for (size_t i = 0; i < diff_signal.size(); i++) {
-            squared_signal[i] = diff_signal[i] * diff_signal[i];
-        }
-
-        // Step 3: Moving average filter
-        int window_size = static_cast<int>(sampling_rate * 0.15f); // 150ms window
-        std::vector<float> filtered_signal(squared_signal.size());
-        for (size_t i = 0; i < squared_signal.size(); i++) {
-            float sum = 0.0f;
-            int count = 0;
-            for (int j = std::max(0, static_cast<int>(i) - window_size / 2);
-                 j < std::min(static_cast<int>(squared_signal.size()), static_cast<int>(i) + window_size / 2);
-                 j++) {
-                sum += squared_signal[j];
-                count++;
-            }
-            filtered_signal[i] = sum / count;
-        }
-
-        // Step 4: Adaptive thresholding for peak detection
-        float threshold = 0.0f;
-        for (float val : filtered_signal) {
-            threshold += val;
-        }
-        threshold = (threshold / filtered_signal.size()) * 1.5f; // 1.5x mean
-
-        // Step 5: Find peaks above threshold
-        int min_distance = static_cast<int>(sampling_rate * 0.2f); // Min 200ms between peaks
-        int last_peak = -min_distance;
-
-        for (size_t i = 1; i < filtered_signal.size() - 1; i++) {
-            if (filtered_signal[i] > threshold &&
-                filtered_signal[i] > filtered_signal[i - 1] &&
-                filtered_signal[i] > filtered_signal[i + 1] &&
-                static_cast<int>(i) - last_peak > min_distance) {
-
-                features.r_peaks.push_back(static_cast<int>(i));
-                last_peak = static_cast<int>(i);
-            }
-        }
-
-        features.num_beats = features.r_peaks.size();
-
-        // Calculate RR intervals and heart rate
-        if (features.r_peaks.size() > 1) {
-            for (size_t i = 1; i < features.r_peaks.size(); i++) {
-                float rr_ms = (features.r_peaks[i] - features.r_peaks[i - 1]) * 1000.0f / sampling_rate;
-                features.rr_intervals.push_back(rr_ms);
-            }
-
-            // Heart rate (BPM)
-            float avg_rr_ms = std::accumulate(features.rr_intervals.begin(),
-                                             features.rr_intervals.end(), 0.0f) / features.rr_intervals.size();
-            features.heart_rate_bpm = 60000.0f / avg_rr_ms;
-
-            // HRV - SDNN (standard deviation of RR intervals)
-            float mean_rr = avg_rr_ms;
-            float variance = 0.0f;
-            for (float rr : features.rr_intervals) {
-                variance += (rr - mean_rr) * (rr - mean_rr);
-            }
-            features.hrv_sdnn = std::sqrt(variance / features.rr_intervals.size());
-
-            // Estimate QT interval (simplified: ~40% of RR interval)
-            features.qt_interval_avg = avg_rr_ms * 0.4f;
-        }
-
-        return features;
-    }
-};
-
-// ============================================================================
-// REAL-TIME ML ENGINE
-// ============================================================================
-
-class MLEngine {
-public:
-    MLEngine(torch::Device device) : device_(device) {
-        model_ = ECGAutoencoder(5000, 64);
-        model_->to(device_);
-
-        std::cout << "Neural Network initialized on " << device_ << std::endl;
-        std::cout << "   Architecture: Fully Connected Autoencoder" << std::endl;
-        std::cout << "   Input: 5000 samples -> Latent: 64 dims" << std::endl;
+    BackgroundProcessor() : stop_(false) {
+        worker_ = std::thread(&BackgroundProcessor::run, this);
     }
 
-    void train_on_batch(const std::vector<std::vector<float>>& batch) {
-        if (batch.empty()) return;
-
-        auto start = std::chrono::high_resolution_clock::now();
-
-        // Convert to tensor
-        std::vector<float> flat_batch;
-        for (const auto& signal : batch) {
-            flat_batch.insert(flat_batch.end(), signal.begin(), signal.end());
+    ~BackgroundProcessor() {
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            stop_ = true;
         }
-
-        auto input = torch::from_blob(flat_batch.data(),
-                                     {static_cast<long>(batch.size()), 1,
-                                      static_cast<long>(batch[0].size())},
-                                     torch::kFloat32).to(device_);
-
-        // Forward pass
-        model_->train();
-        auto output = model_->forward(input);
-
-        // Compute reconstruction loss
-        auto loss = torch::mse_loss(output, input);
-
-        // Backward pass
-        optimizer_->zero_grad();
-        loss.backward();
-        optimizer_->step();
-
-        auto end = std::chrono::high_resolution_clock::now();
-        last_training_time_ = std::chrono::duration<float, std::milli>(end - start).count();
-        last_loss_ = loss.item<float>();
-        total_batches_++;
+        cv_.notify_one();
+        if (worker_.joinable()) worker_.join();
     }
 
-    std::pair<std::vector<float>, float> infer(const std::vector<float>& signal) {
-        if (signal.empty()) return {{}, 0.0f};
-
-        auto start = std::chrono::high_resolution_clock::now();
-
-        // Convert to tensor
-        auto input = torch::from_blob(const_cast<float*>(signal.data()),
-                                     {1, 1, static_cast<long>(signal.size())},
-                                     torch::kFloat32).to(device_);
-
-        // Inference
-        model_->eval();
-        torch::NoGradGuard no_grad;
-        auto output = model_->forward(input);
-
-        // Compute anomaly score (reconstruction error)
-        auto mse = torch::mse_loss(output, input);
-        float anomaly_score = mse.item<float>();
-
-        // Get reconstruction
-        auto output_cpu = output.to(torch::kCPU);
-        std::vector<float> reconstruction(signal.size());
-        std::memcpy(reconstruction.data(), output_cpu.data_ptr<float>(),
-                   signal.size() * sizeof(float));
-
-        auto end = std::chrono::high_resolution_clock::now();
-        last_inference_time_ = std::chrono::duration<float, std::milli>(end - start).count();
-
-        return {reconstruction, anomaly_score};
+    // Queue a batch of sample indices for processing
+    void enqueue(std::vector<ECGSample>* samples, const ProcessingParams& params,
+                 const std::vector<int>& indices) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        // Clear previous work - new params invalidate old queue
+        std::queue<int>().swap(queue_);
+        samples_ = samples;
+        params_ = params;
+        for (int idx : indices) queue_.push(idx);
+        processed_count_.store(0);
+        total_queued_.store((int)indices.size());
+        cv_.notify_one();
     }
 
-    std::vector<float> get_latent_representation(const std::vector<float>& signal) {
-        if (signal.empty()) return {};
-
-        auto input = torch::from_blob(const_cast<float*>(signal.data()),
-                                     {1, 1, static_cast<long>(signal.size())},
-                                     torch::kFloat32).to(device_);
-
-        model_->eval();
-        torch::NoGradGuard no_grad;
-        auto latent = model_->encode(input);
-
-        auto latent_cpu = latent.to(torch::kCPU);
-        std::vector<float> latent_vec(latent_cpu.size(1));
-        std::memcpy(latent_vec.data(), latent_cpu.data_ptr<float>(),
-                   latent_vec.size() * sizeof(float));
-
-        return latent_vec;
-    }
-
-    void initialize_training(float learning_rate = 0.001f) {
-        optimizer_ = std::make_shared<torch::optim::Adam>(
-            model_->parameters(), torch::optim::AdamOptions(learning_rate));
-        std::cout << "Optimizer initialized (Adam, lr=" << learning_rate << ")" << std::endl;
-    }
-
-    float get_last_loss() const { return last_loss_; }
-    float get_last_training_time() const { return last_training_time_; }
-    float get_last_inference_time() const { return last_inference_time_; }
-    int get_total_batches() const { return total_batches_; }
+    int processed_count() const { return processed_count_.load(); }
+    int total_queued() const { return total_queued_.load(); }
+    bool busy() const { return total_queued_.load() > processed_count_.load(); }
 
 private:
-    ECGAutoencoder model_{nullptr};
-    std::shared_ptr<torch::optim::Adam> optimizer_;
-    torch::Device device_;
+    void run() {
+        while (true) {
+            int idx = -1;
+            ProcessingParams params;
+            ECGSample* sample = nullptr;
 
-    float last_loss_ = 0.0f;
-    float last_training_time_ = 0.0f;
-    float last_inference_time_ = 0.0f;
-    int total_batches_ = 0;
+            {
+                std::unique_lock<std::mutex> lk(mtx_);
+                cv_.wait(lk, [&] { return stop_ || !queue_.empty(); });
+                if (stop_ && queue_.empty()) return;
+                if (queue_.empty()) continue;
+
+                idx = queue_.front();
+                queue_.pop();
+                params = params_;
+                sample = &(*samples_)[idx];
+            }
+
+            // Load if needed
+            if (!sample->loaded) {
+                loader::load_csv(*sample);
+            }
+
+            // Process
+            if (sample->loaded) {
+                dsp::process(*sample, params);
+            }
+
+            processed_count_.fetch_add(1);
+        }
+    }
+
+    std::thread worker_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    bool stop_;
+    std::queue<int> queue_;
+    std::vector<ECGSample>* samples_ = nullptr;
+    ProcessingParams params_;
+    std::atomic<int> processed_count_{0};
+    std::atomic<int> total_queued_{0};
 };
 
 // ============================================================================
-// MAIN APPLICATION
+// APPLICATION
 // ============================================================================
 
-class ECGMLDemo {
+class CaliperApp {
 public:
-    ECGMLDemo() : window_(nullptr), current_record_idx_(0),
-                  show_reconstruction_(false), training_enabled_(false),
-                  ui_scale_(1.0f) {
-        detect_device();
-    }
+    CaliperApp() = default;
 
     bool initialize() {
         if (!glfwInit()) {
-            std::cerr << "Failed to initialize GLFW" << std::endl;
+            std::cerr << "GLFW init failed" << std::endl;
             return false;
         }
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        #ifdef __APPLE__
+#ifdef __APPLE__
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        #endif
+#endif
 
-        // Size window to fit the monitor's usable work area
-        // On macOS Retina, content scale is 2x — work area is in screen points
-        // but we still clamp to avoid oversized windows
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-        int area_x, area_y, area_w, area_h;
-        glfwGetMonitorWorkarea(monitor, &area_x, &area_y, &area_w, &area_h);
-        float x_scale = 1.0f, y_scale = 1.0f;
-        glfwGetMonitorContentScale(monitor, &x_scale, &y_scale);
-        int win_w = static_cast<int>((area_w / x_scale) * 0.95f);
-        int win_h = static_cast<int>((area_h / y_scale) * 0.95f);
+        int ax, ay, aw, ah;
+        glfwGetMonitorWorkarea(monitor, &ax, &ay, &aw, &ah);
+        float sx = 1.0f, sy = 1.0f;
+        glfwGetMonitorContentScale(monitor, &sx, &sy);
+        int ww = (int)((aw / sx) * 0.95f);
+        int wh = (int)((ah / sy) * 0.95f);
 
-        window_ = glfwCreateWindow(win_w, win_h,
-                                   "Caliper - CUDA-Accelerated ECG ML Demo",
-                                   nullptr, nullptr);
-        if (!window_) {
-            std::cerr << "Failed to create GLFW window" << std::endl;
-            glfwTerminate();
-            return false;
-        }
+        window_ = glfwCreateWindow(ww, wh, "Caliper - ECG Explorer", nullptr, nullptr);
+        if (!window_) { glfwTerminate(); return false; }
 
         glfwMakeContextCurrent(window_);
         glfwSwapInterval(1);
 
-        // Initialize GLEW
         glewExperimental = GL_TRUE;
-        GLenum err = glewInit();
-        if (err != GLEW_OK) {
-            std::cerr << "Failed to initialize GLEW: " << glewGetErrorString(err) << std::endl;
-            glfwTerminate();
-            return false;
-        }
+        if (glewInit() != GLEW_OK) { glfwTerminate(); return false; }
 
-        // Setup ImGui
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -604,30 +369,26 @@ public:
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
         ImGui::StyleColorsDark();
-        customize_style();
+        style_ui();
 
         ImGui_ImplGlfw_InitForOpenGL(window_, true);
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        // Set initial UI scale
-        apply_ui_scale();
-
-        // Load data
-        std::string data_path = "../data/Nightingale Dataset";
-        loader_ = std::make_unique<EEGDataLoader>(data_path);
-        if (!loader_->load_nightingale_data()) {
+        // Scan dataset
+        std::string data_dir = "../data/ekg_data";
+        samples_ = loader::scan_directory(data_dir);
+        if (samples_.empty()) {
+            std::cerr << "No CSV files found in " << data_dir << std::endl;
             return false;
         }
-        records_ = loader_->get_records();
+        std::cout << "Found " << samples_.size() << " ECG samples" << std::endl;
 
-        // Initialize ML engine
-        ml_engine_ = std::make_unique<MLEngine>(device_);
-        ml_engine_->initialize_training(0.001f);
+        // Load and process first sample immediately
+        select_sample(0);
 
-        // Run initial inference to show results immediately
-        update_inference();
+        // Start background processor
+        bg_ = std::make_unique<BackgroundProcessor>();
 
-        std::cout << "Demo initialized successfully!" << std::endl;
         return true;
     }
 
@@ -635,20 +396,17 @@ public:
         while (!glfwWindowShouldClose(window_)) {
             glfwPollEvents();
 
-            // Update simulation
-            update();
-
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            render_ui();
+            draw_ui();
 
             ImGui::Render();
-            int display_w, display_h;
-            glfwGetFramebufferSize(window_, &display_w, &display_h);
-            glViewport(0, 0, display_w, display_h);
-            glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
+            int dw, dh;
+            glfwGetFramebufferSize(window_, &dw, &dh);
+            glViewport(0, 0, dw, dh);
+            glClearColor(0.06f, 0.06f, 0.09f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -657,404 +415,328 @@ public:
     }
 
     void cleanup() {
+        bg_.reset(); // join background thread
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImPlot::DestroyContext();
         ImGui::DestroyContext();
-
-        if (window_) {
-            glfwDestroyWindow(window_);
-        }
+        if (window_) glfwDestroyWindow(window_);
         glfwTerminate();
     }
 
 private:
-    void detect_device() {
-        if (torch::cuda::is_available()) {
-            device_ = torch::kCUDA;
-            device_name_ = "CUDA GPU";
-            device_color_ = ImVec4(0.2f, 1.0f, 0.2f, 1.0f);
-            std::cout << "CUDA device detected!" << std::endl;
-            std::cout << "   GPU: " << torch::cuda::device_count() << " device(s) available" << std::endl;
-        } else if (torch::mps::is_available()) {
-            device_ = torch::kMPS;
-            device_name_ = "MPS (Apple Silicon)";
-            device_color_ = ImVec4(0.2f, 0.8f, 1.0f, 1.0f);
-        } else {
-            device_ = torch::kCPU;
-            device_name_ = "CPU";
-            device_color_ = ImVec4(1.0f, 1.0f, 0.2f, 1.0f);
+
+    // ── Selection & Processing ──
+
+    void select_sample(int idx) {
+        if (idx < 0 || idx >= (int)samples_.size()) return;
+        selected_ = idx;
+        auto& s = samples_[selected_];
+
+        if (!s.loaded) loader::load_csv(s);
+        if (s.loaded && !s.processed_valid) {
+            dsp::process(s, params_);
         }
     }
 
-    void customize_style() {
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding = 8.0f;
-        style.FrameRounding = 4.0f;
-        style.GrabRounding = 4.0f;
-        style.ScrollbarRounding = 4.0f;
+    void on_params_changed() {
+        params_.version++;
 
-        ImVec4* colors = style.Colors;
-        colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.10f, 0.14f, 0.95f);
-        colors[ImGuiCol_Header] = ImVec4(0.20f, 0.25f, 0.35f, 1.00f);
-        colors[ImGuiCol_HeaderHovered] = ImVec4(0.30f, 0.35f, 0.45f, 1.00f);
-        colors[ImGuiCol_HeaderActive] = ImVec4(0.25f, 0.30f, 0.40f, 1.00f);
-        colors[ImGuiCol_Button] = ImVec4(0.20f, 0.25f, 0.35f, 1.00f);
-        colors[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.35f, 0.45f, 1.00f);
-        colors[ImGuiCol_ButtonActive] = ImVec4(0.15f, 0.20f, 0.30f, 1.00f);
-    }
+        // Invalidate all
+        for (auto& s : samples_) s.processed_valid = false;
 
-    void apply_ui_scale() {
-        ImGuiIO& io = ImGui::GetIO();
-        io.FontGlobalScale = ui_scale_;
-    }
+        // Reprocess current immediately
+        auto& cur = samples_[selected_];
+        if (cur.loaded) dsp::process(cur, params_);
 
-    void update() {
-        if (!records_.empty() && training_enabled_) {
-            // Perform ML inference on first lead
-            update_inference();
+        // Queue the rest in background
+        std::vector<int> others;
+        others.reserve(samples_.size());
+        for (int i = 0; i < (int)samples_.size(); i++) {
+            if (i != selected_) others.push_back(i);
         }
+        bg_->enqueue(&samples_, params_, others);
     }
 
-    void update_inference() {
-        if (records_.empty()) return;
+    // ── UI ──
 
-        const auto& record = records_[current_record_idx_];
+    void style_ui() {
+        ImGuiStyle& st = ImGui::GetStyle();
+        st.WindowRounding = 6.0f;
+        st.FrameRounding = 4.0f;
+        st.GrabRounding = 3.0f;
+        st.ScrollbarRounding = 4.0f;
+        st.ItemSpacing = ImVec2(8, 5);
 
-        // Use Lead II (index 1) for ML analysis
-        auto& lead_data = record.leads[1];
-
-        // Extract clinical features
-        current_features_ = ECGAnalyzer::extract_features(lead_data, record.sampling_rate);
-
-        // Pad or truncate to model input size
-        std::vector<float> segment = lead_data;
-        segment.resize(5000, 0.0f);
-
-        auto [recon, anomaly] = ml_engine_->infer(segment);
-        current_reconstruction_ = recon;
-        current_anomaly_score_ = anomaly;
-        current_latent_ = ml_engine_->get_latent_representation(segment);
-
-        // Training step
-        if (training_enabled_ && ml_engine_->get_total_batches() < 1000) {
-            ml_engine_->train_on_batch({segment});
-        }
+        auto* c = st.Colors;
+        c[ImGuiCol_WindowBg]       = {0.09f, 0.09f, 0.12f, 0.97f};
+        c[ImGuiCol_ChildBg]        = {0.11f, 0.11f, 0.15f, 1.00f};
+        c[ImGuiCol_Header]         = {0.18f, 0.22f, 0.32f, 1.00f};
+        c[ImGuiCol_HeaderHovered]   = {0.26f, 0.30f, 0.42f, 1.00f};
+        c[ImGuiCol_HeaderActive]    = {0.22f, 0.26f, 0.38f, 1.00f};
+        c[ImGuiCol_Button]          = {0.18f, 0.22f, 0.32f, 1.00f};
+        c[ImGuiCol_ButtonHovered]   = {0.28f, 0.32f, 0.44f, 1.00f};
+        c[ImGuiCol_ButtonActive]    = {0.14f, 0.18f, 0.28f, 1.00f};
+        c[ImGuiCol_FrameBg]         = {0.14f, 0.14f, 0.20f, 1.00f};
+        c[ImGuiCol_FrameBgHovered]  = {0.20f, 0.20f, 0.28f, 1.00f};
+        c[ImGuiCol_SliderGrab]      = {0.40f, 0.55f, 0.80f, 1.00f};
+        c[ImGuiCol_SliderGrabActive]= {0.50f, 0.65f, 0.90f, 1.00f};
+        c[ImGuiCol_ScrollbarBg]     = {0.08f, 0.08f, 0.10f, 1.00f};
+        c[ImGuiCol_ScrollbarGrab]   = {0.25f, 0.25f, 0.35f, 1.00f};
     }
 
-    void render_ui() {
-        // Fullscreen host window — acts as the layout container
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::Begin("##MainLayout", nullptr,
+    void draw_ui() {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->WorkPos);
+        ImGui::SetNextWindowSize(vp->WorkSize);
+        ImGui::Begin("##Root", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
 
         float avail_w = ImGui::GetContentRegionAvail().x;
         float avail_h = ImGui::GetContentRegionAvail().y;
-        float spacing = ImGui::GetStyle().ItemSpacing.x;
+        float sp = ImGui::GetStyle().ItemSpacing.x;
+        float panel_w = 240.0f;
+        float plot_w = avail_w - panel_w - sp;
 
-        float panel_w = avail_w * 0.20f;
-        float right_w = avail_w - panel_w - spacing;
-        float row_h = (avail_h - 2 * spacing) / 3.0f;
-
-        // ── Left column: Control Panel ──
-        ImGui::BeginChild("ControlPanel", ImVec2(panel_w, avail_h), true);
-
-        ImGui::TextColored(device_color_, "Compute: %s", device_name_.c_str());
-        ImGui::Separator();
-
-        ImGui::Text("Patient Navigation");
-        int idx = current_record_idx_;
-
-        if (ImGui::Button("<<< Previous")) {
-            if (current_record_idx_ > 0) current_record_idx_--;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Next >>>")) {
-            if (current_record_idx_ < records_.size() - 1) current_record_idx_++;
-        }
-
-        if (ImGui::SliderInt("Patient", &idx, 0, records_.size() - 1)) {
-            current_record_idx_ = idx;
-        }
-        ImGui::Text("Viewing: Patient %zu of %zu", current_record_idx_ + 1, records_.size());
-
-        ImGui::Separator();
-        ImGui::Text("UI Scale");
-        if (ImGui::Button("Zoom In (+)", ImVec2(85, 0))) {
-            ui_scale_ = std::min(ui_scale_ + 0.25f, 3.0f);
-            apply_ui_scale();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Zoom Out (-)", ImVec2(85, 0))) {
-            ui_scale_ = std::max(ui_scale_ - 0.25f, 0.5f);
-            apply_ui_scale();
-        }
-        ImGui::Text("Current Scale: %.2fx", ui_scale_);
-
-        ImGui::Separator();
-        ImGui::Text("ML Controls");
-
-        if (ImGui::Button("Run Inference", ImVec2(-1, 30))) {
-            update_inference();
-        }
-        if (ImGui::Button("Train Model (1 batch)", ImVec2(-1, 30))) {
-            const auto& record = records_[current_record_idx_];
-            std::vector<float> segment = record.leads[1];
-            segment.resize(5000, 0.0f);
-            ml_engine_->train_on_batch({segment});
-            update_inference();
-        }
-        if (ImGui::Button("Reset Model", ImVec2(-1, 30))) {
-            ml_engine_ = std::make_unique<MLEngine>(device_);
-            ml_engine_->initialize_training(0.001f);
-            update_inference();
-        }
-
-        ImGui::Checkbox("Show Reconstruction", &show_reconstruction_);
-        if (ImGui::Checkbox("Auto-train on view", &training_enabled_)) {
-            if (training_enabled_) update_inference();
-        }
-
-        ImGui::Separator();
-        ImGui::Text("What You're Seeing:");
-        ImGui::TextWrapped("Top: Original ECG vs ML reconstruction");
-        ImGui::TextWrapped("Middle: Error map - spikes show where ML struggles (anomalies)");
-        ImGui::TextWrapped("Bottom: Neural network activations");
-
-        ImGui::Separator();
-        ImGui::Text("ML Stats");
-        ImGui::Text("Anomaly Score: %.6f", current_anomaly_score_);
-        ImGui::Text("Training: %.2f ms", ml_engine_->get_last_training_time());
-        ImGui::Text("Inference: %.2f ms", ml_engine_->get_last_inference_time());
-        ImGui::Text("Loss: %.6f", ml_engine_->get_last_loss());
-        ImGui::Text("Batches: %d", ml_engine_->get_total_batches());
-
-        ImGui::EndChild();
-
-        // ── Right column ──
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-
-        // ── Row 1: ECG Waveform ──
-        ImGui::BeginChild("ECGWaveform", ImVec2(right_w, row_h), true);
-        ImGui::Text("1. ECG Waveform - Lead II");
-        ImGui::Separator();
-
-        if (!records_.empty()) {
-            const auto& record = records_[current_record_idx_];
-            auto& lead_data = record.leads[1];
-            int total_samples = lead_data.size();
-
-            ImGui::Text("Patient: %s | Samples: %d | Duration: %.1f sec",
-                       record.record_name.c_str(), total_samples,
-                       total_samples / record.sampling_rate);
-            ImGui::SameLine();
-            ImGui::TextColored(current_anomaly_score_ > 0.001f ? ImVec4(1,0,0,1) : ImVec4(0,1,0,1),
-                             "Anomaly Score: %.6f %s", current_anomaly_score_,
-                             current_anomaly_score_ > 0.001f ? "(HIGH)" : "(LOW)");
-
-            if (ImPlot::BeginPlot("##lead2", ImVec2(-1, -1))) {
-                ImPlot::SetupAxes("Time (samples)", "Amplitude (mV)");
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, total_samples, ImGuiCond_Always);
-
-                float min_val = *std::min_element(lead_data.begin(), lead_data.end());
-                float max_val = *std::max_element(lead_data.begin(), lead_data.end());
-                float margin = (max_val - min_val) * 0.1f;
-                ImPlot::SetupAxisLimits(ImAxis_Y1, min_val - margin, max_val + margin, ImGuiCond_Always);
-
-                ImPlot::PlotLine("Original Signal", lead_data.data(), total_samples);
-
-                if (show_reconstruction_ && !current_reconstruction_.empty()) {
-                    int recon_size = std::min(static_cast<int>(current_reconstruction_.size()), total_samples);
-                    ImPlot::PlotLine("ML Reconstruction", current_reconstruction_.data(), recon_size);
-                }
-
-                if (!current_features_.r_peaks.empty()) {
-                    std::vector<double> peak_x(current_features_.r_peaks.size());
-                    std::vector<double> peak_y(current_features_.r_peaks.size());
-                    for (size_t i = 0; i < current_features_.r_peaks.size(); i++) {
-                        peak_x[i] = current_features_.r_peaks[i];
-                        peak_y[i] = lead_data[current_features_.r_peaks[i]];
-                    }
-                    ImPlot::PlotScatter("R-peaks (QRS)", peak_x.data(), peak_y.data(),
-                                       static_cast<int>(peak_x.size()));
-                }
-
-                ImPlot::EndPlot();
-            }
-        }
-        ImGui::EndChild();
-
-        // ── Row 2: ML Analysis ──
-        ImGui::BeginChild("MLAnalysis", ImVec2(right_w, row_h), true);
-        ImGui::Text("2. ML Analysis - Anomaly Detection (Reconstruction Error)");
-        ImGui::Separator();
-
-        if (!records_.empty() && !current_reconstruction_.empty()) {
-            const auto& record = records_[current_record_idx_];
-            auto& lead_data = record.leads[1];
-            int display_samples = std::min(static_cast<int>(lead_data.size()),
-                                          static_cast<int>(current_reconstruction_.size()));
-
-            std::vector<float> reconstruction_error(display_samples);
-            for (int i = 0; i < display_samples; i++) {
-                float diff = lead_data[i] - current_reconstruction_[i];
-                reconstruction_error[i] = diff * diff;
-            }
-
-            ImGui::Text("Overall MSE: %.6f | Max Local Error: %.6f",
-                       current_anomaly_score_,
-                       *std::max_element(reconstruction_error.begin(), reconstruction_error.end()));
-
-            if (ImPlot::BeginPlot("##error", ImVec2(-1, -1))) {
-                ImPlot::SetupAxes("Time (samples)", "Squared Error");
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, display_samples, ImGuiCond_Always);
-
-                float max_error = *std::max_element(reconstruction_error.begin(), reconstruction_error.end());
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, max_error * 1.1f, ImGuiCond_Always);
-
-                ImPlot::PlotLine("Reconstruction Error", reconstruction_error.data(), display_samples);
-                ImPlot::PlotShaded("Error Magnitude", reconstruction_error.data(), display_samples, 0.0);
-
-                ImPlot::EndPlot();
-            }
-        } else {
-            ImGui::TextWrapped("Click 'Run Inference' to analyze this ECG.");
-            ImGui::Separator();
-            ImGui::Text("How it works:");
-            ImGui::TextWrapped("- Untrained model: Random reconstruction = high error everywhere");
-            ImGui::TextWrapped("- Trained model: Low error on normal patterns, high error on anomalies");
-            ImGui::TextWrapped("- Click 'Train Model' multiple times to see error decrease");
-        }
-        ImGui::EndChild();
-
-        // ── Row 3: two side-by-side panels ──
-        float half_w = (right_w - spacing) * 0.5f;
-        float bottom_h = ImGui::GetContentRegionAvail().y;
-
-        ImGui::BeginChild("LatentSpace", ImVec2(half_w, bottom_h), true);
-        ImGui::Text("3. Neural Network Latent Space");
-        ImGui::Separator();
-
-        ImGui::Text("64-Dimensional Compressed Representation");
-        ImGui::Text("Anomaly Score: %.6f", current_anomaly_score_);
-
-        float normalized_score = std::min(current_anomaly_score_ * 1000.0f, 1.0f);
-        ImVec4 meter_color = ImVec4(normalized_score, 1.0f - normalized_score, 0.2f, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, meter_color);
-        ImGui::ProgressBar(normalized_score, ImVec2(-1, 40), "Anomaly Level");
-        ImGui::PopStyleColor();
-
-        if (!current_latent_.empty()) {
-            ImGui::Text("These 64 values represent the compressed ECG pattern");
-            if (ImPlot::BeginPlot("##latent", ImVec2(-1, -1))) {
-                ImPlot::SetupAxes("Feature Dimension", "Activation Value");
-                ImPlot::PlotBars("Latent Features", current_latent_.data(),
-                               std::min(64, static_cast<int>(current_latent_.size())));
-                ImPlot::EndPlot();
-            }
-        }
+        // ── Left panel ──
+        ImGui::BeginChild("##Panel", ImVec2(panel_w, avail_h), true);
+        draw_panel();
         ImGui::EndChild();
 
         ImGui::SameLine();
 
-        ImGui::BeginChild("ClinicalFeatures", ImVec2(-1, bottom_h), true);
-        ImGui::Text("4. Clinical ECG Features");
-        ImGui::Separator();
-
-        if (!records_.empty()) {
-            const auto& record = records_[current_record_idx_];
-            ImGui::Text("Patient: %s", record.record_name.c_str());
-            ImGui::Text("Duration: %.1f sec | Sample Rate: %.0f Hz",
-                       record.leads[0].size() / record.sampling_rate, record.sampling_rate);
-
-            ImGui::Separator();
-            ImGui::Text("CLINICAL MEASUREMENTS (Pan-Tompkins Algorithm)");
-            ImGui::Separator();
-
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Heart Rate:");
-            if (current_features_.heart_rate_bpm > 0) {
-                ImVec4 hr_color = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
-                if (current_features_.heart_rate_bpm < 60) hr_color = ImVec4(0.2f, 0.6f, 1.0f, 1.0f);
-                if (current_features_.heart_rate_bpm > 100) hr_color = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
-
-                ImGui::TextColored(hr_color, "  %.1f BPM", current_features_.heart_rate_bpm);
-                if (current_features_.heart_rate_bpm < 60) ImGui::Text("  (Bradycardia - slow)");
-                else if (current_features_.heart_rate_bpm > 100) ImGui::Text("  (Tachycardia - fast)");
-                else ImGui::Text("  (Normal)");
-            } else {
-                ImGui::Text("  N/A");
-            }
-
-            ImGui::Separator();
-
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "QRS Complexes Detected:");
-            ImGui::Text("  %d beats", current_features_.num_beats);
-
-            ImGui::Separator();
-
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "RR Interval:");
-            if (!current_features_.rr_intervals.empty()) {
-                float avg_rr = std::accumulate(current_features_.rr_intervals.begin(),
-                                               current_features_.rr_intervals.end(), 0.0f)
-                              / current_features_.rr_intervals.size();
-                ImGui::Text("  Avg: %.1f ms", avg_rr);
-            } else {
-                ImGui::Text("  N/A");
-            }
-
-            ImGui::Separator();
-
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Heart Rate Variability (SDNN):");
-            if (current_features_.hrv_sdnn > 0) {
-                ImGui::Text("  %.2f ms", current_features_.hrv_sdnn);
-                ImGui::TextWrapped("  (Higher = healthier autonomic function)");
-            } else {
-                ImGui::Text("  N/A");
-            }
-
-            ImGui::Separator();
-
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "QT Interval (estimated):");
-            if (current_features_.qt_interval_avg > 0) {
-                ImGui::Text("  %.1f ms", current_features_.qt_interval_avg);
-                if (current_features_.qt_interval_avg > 440)
-                    ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "  (Prolonged - risk marker)");
-                else
-                    ImGui::Text("  (Normal)");
-            } else {
-                ImGui::Text("  N/A");
-            }
-        }
+        // ── Right: plots ──
+        ImGui::BeginChild("##Plots", ImVec2(plot_w, avail_h), false);
+        draw_plots();
         ImGui::EndChild();
-
-        ImGui::EndGroup();
 
         ImGui::End();
     }
 
-    GLFWwindow* window_;
-    std::unique_ptr<EEGDataLoader> loader_;
-    std::unique_ptr<MLEngine> ml_engine_;
-    std::vector<EEGRecord> records_;
+    void draw_panel() {
+        // ── Sample picker ──
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "SAMPLE PICKER");
+        ImGui::Separator();
 
-    torch::Device device_ = torch::kCPU;
-    std::string device_name_;
-    ImVec4 device_color_;
+        ImGui::Text("Samples: %d", (int)samples_.size());
 
-    size_t current_record_idx_;
-    bool show_reconstruction_;
-    bool training_enabled_;
-    float ui_scale_;
+        // Filter box
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputTextWithHint("##filter", "Filter by ID...", filter_buf_, sizeof(filter_buf_))) {
+            // filter changed
+        }
 
-    std::vector<float> current_reconstruction_;
-    std::vector<float> current_latent_;
-    float current_anomaly_score_ = 0.0f;
-    ECGFeatures current_features_;
+        // Sample list
+        float list_h = std::min(200.0f, ImGui::GetContentRegionAvail().y * 0.35f);
+        if (ImGui::BeginListBox("##samples", ImVec2(-1, list_h))) {
+            std::string filter(filter_buf_);
+            for (int i = 0; i < (int)samples_.size(); i++) {
+                if (!filter.empty() && samples_[i].file_id.find(filter) == std::string::npos)
+                    continue;
+
+                bool is_selected = (i == selected_);
+                std::string label = samples_[i].file_id;
+                if (samples_[i].loaded) {
+                    label += " (" + std::to_string(samples_[i].num_samples) + ")";
+                }
+                if (!samples_[i].processed_valid && samples_[i].loaded) {
+                    label += " *";
+                }
+
+                if (ImGui::Selectable(label.c_str(), is_selected)) {
+                    select_sample(i);
+                }
+            }
+            ImGui::EndListBox();
+        }
+
+        // Navigation
+        if (ImGui::Button("<< Prev", ImVec2(110, 0)) && selected_ > 0) {
+            select_sample(selected_ - 1);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Next >>", ImVec2(110, 0)) && selected_ < (int)samples_.size() - 1) {
+            select_sample(selected_ + 1);
+        }
+
+        // ID scroller
+        int sel = selected_;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("##id_scroll", &sel, 0, (int)samples_.size() - 1)) {
+            select_sample(sel);
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // ── Processing controls ──
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "PROCESSING");
+        ImGui::Separator();
+
+        bool changed = false;
+
+        if (ImGui::Checkbox("Z-Score Normalize", &params_.zscore)) changed = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Standardize each lead to zero mean, unit variance");
+
+        if (ImGui::Checkbox("Baseline Wander Correction", &params_.baseline_wander_correction))
+            changed = true;
+
+        if (params_.baseline_wander_correction) {
+            ImGui::Indent(12);
+            ImGui::SetNextItemWidth(-12);
+            if (ImGui::DragFloat("Strength", &params_.baseline_strength, 0.001f, 0.0f, 1.0f, "%.3f"))
+                changed = true;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = no correction, 1 = maximum correction");
+            ImGui::Unindent(12);
+        }
+
+        if (changed) on_params_changed();
+
+        // Background progress
+        if (bg_ && bg_->busy()) {
+            ImGui::Spacing();
+            int done = bg_->processed_count();
+            int total = bg_->total_queued();
+            float frac = total > 0 ? (float)done / (float)total : 0.0f;
+            char buf[64];
+            snprintf(buf, sizeof(buf), "BG: %d/%d", done, total);
+            ImGui::ProgressBar(frac, ImVec2(-1, 18), buf);
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // ── Current sample info ──
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "CURRENT SAMPLE");
+        ImGui::Separator();
+
+        if (selected_ >= 0 && selected_ < (int)samples_.size()) {
+            auto& s = samples_[selected_];
+            ImGui::Text("ID: %s", s.file_id.c_str());
+            ImGui::Text("Samples: %d", s.num_samples);
+            ImGui::Text("Rate: %.0f Hz", s.sampling_rate);
+            ImGui::Text("Duration: %.1f sec", s.num_samples / std::max(1.0f, s.sampling_rate));
+
+            if (s.processed_valid && !s.stats.empty()) {
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "LEAD STATS");
+                ImGui::Separator();
+
+                // Lead visibility toggles
+                for (int i = 0; i < NUM_LEADS; i++) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, LEAD_COLORS[i]);
+                    ImGui::Checkbox(LEAD_NAMES[i], &lead_visible_[i]);
+                    ImGui::PopStyleColor();
+                    if (i < NUM_LEADS - 1 && (i % 3 != 2)) ImGui::SameLine(0, 15);
+                }
+
+                ImGui::Spacing();
+
+                if (ImGui::BeginTable("##stats", 4,
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn("Lead", ImGuiTableColumnFlags_WidthFixed, 40);
+                    ImGui::TableSetupColumn("Mean", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Std", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Range", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    for (int i = 0; i < NUM_LEADS; i++) {
+                        if (!lead_visible_[i]) continue;
+                        auto& st = s.stats[i];
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextColored(LEAD_COLORS[i], "%s", LEAD_NAMES[i]);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.1f", st.mean);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%.1f", st.stddev);
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%.0f", st.max_val - st.min_val);
+                    }
+                    ImGui::EndTable();
+                }
+            }
+        }
+    }
+
+    void draw_plots() {
+        if (selected_ < 0 || selected_ >= (int)samples_.size()) return;
+        auto& s = samples_[selected_];
+        if (!s.loaded || !s.processed_valid) return;
+
+        float avail_h = ImGui::GetContentRegionAvail().y;
+        float avail_w = ImGui::GetContentRegionAvail().x;
+
+        // Count visible leads
+        int visible_count = 0;
+        for (int i = 0; i < NUM_LEADS; i++) if (lead_visible_[i]) visible_count++;
+        if (visible_count == 0) {
+            ImGui::Text("No leads selected.");
+            return;
+        }
+
+        float sp = ImGui::GetStyle().ItemSpacing.y;
+        float plot_h = (avail_h - sp * (visible_count - 1)) / (float)visible_count;
+        plot_h = std::max(plot_h, 60.0f);
+
+        float duration = s.num_samples / std::max(1.0f, s.sampling_rate);
+
+        // Generate time axis once
+        if ((int)time_axis_.size() != s.num_samples) {
+            time_axis_.resize(s.num_samples);
+            for (int i = 0; i < s.num_samples; i++) {
+                time_axis_[i] = (float)i / s.sampling_rate;
+            }
+        }
+
+        // Link x-axes so panning/zooming is synchronized across leads
+        ImPlot::GetInputMap().ZoomRate = 0.15f;
+
+        for (int lead = 0; lead < NUM_LEADS; lead++) {
+            if (!lead_visible_[lead]) continue;
+
+            auto& sig = s.processed[lead];
+            if (sig.empty()) continue;
+
+            char plot_id[64];
+            snprintf(plot_id, sizeof(plot_id), "##lead_%d", lead);
+
+            if (ImPlot::BeginPlot(plot_id, ImVec2(avail_w, plot_h),
+                    ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoInputs)) {
+
+                ImPlot::SetupAxes("Time (s)", LEAD_NAMES[lead],
+                    ImPlotAxisFlags_NoLabel,
+                    ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_NoLabel);
+                ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Once);
+
+                // Lead label in top-left of plot
+                ImPlot::Annotation(0.0, s.stats[lead].max_val, LEAD_COLORS[lead],
+                    ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
+
+                ImPlot::PlotLine("##sig", time_axis_.data(), sig.data(), s.num_samples,
+                    ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead], ImPlotProp_LineWeight, 1.2f));
+
+                ImPlot::EndPlot();
+            }
+        }
+    }
+
+    // ── Members ──
+    GLFWwindow* window_ = nullptr;
+    std::vector<ECGSample> samples_;
+    int selected_ = 0;
+
+    ProcessingParams params_;
+    std::unique_ptr<BackgroundProcessor> bg_;
+
+    bool lead_visible_[NUM_LEADS] = {true,true,true,true,true,true,true,true,true,true,true,true};
+    char filter_buf_[128] = {};
+    std::vector<float> time_axis_;
 };
 
 // ============================================================================
@@ -1062,20 +744,15 @@ private:
 // ============================================================================
 
 int main() {
-    std::cout << "========================================================" << std::endl;
-    std::cout << "    CALIPER - CUDA ECG ML DEMO                         " << std::endl;
-    std::cout << "    Real-time Deep Learning + Visualization            " << std::endl;
-    std::cout << "========================================================" << std::endl;
+    std::cout << "=== Caliper - ECG Explorer ===" << std::endl;
 
-    ECGMLDemo app;
-
+    CaliperApp app;
     if (!app.initialize()) {
-        std::cerr << "Failed to initialize application" << std::endl;
-        return -1;
+        std::cerr << "Initialization failed" << std::endl;
+        return 1;
     }
 
     app.run();
     app.cleanup();
-
     return 0;
 }
