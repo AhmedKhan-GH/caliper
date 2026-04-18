@@ -21,6 +21,9 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 namespace fs = std::filesystem;
 
@@ -69,7 +72,7 @@ struct ECGSample {
 struct ProcessingParams {
     bool zscore = true;
     bool baseline_wander_correction = false;
-    float baseline_strength = 0.0f;     // 0 = none, 1 = max correction
+    float baseline_cutoff_hz = 0.0f;    // high-pass cutoff in Hz, 0 = off
     uint32_t version = 1;               // bumped on any param change
 };
 
@@ -115,29 +118,81 @@ namespace dsp {
         for (float& v : data) v = (v - mean) / sd;
     }
 
-    // Baseline wander removal via moving-average subtraction
-    void remove_baseline_wander(std::vector<float>& data, int window) {
-        if (data.empty() || window < 1) return;
+    // 4th-order zero-phase Butterworth high-pass (equivalent to scipy sosfiltfilt)
+    void butterworth_highpass(std::vector<float>& data, float cutoff_hz, float sample_rate) {
+        if (data.empty() || cutoff_hz <= 0 || sample_rate <= 0) return;
+        if (cutoff_hz >= sample_rate * 0.5f) return; // above Nyquist
         int n = (int)data.size();
-        int half = window / 2;
 
-        // Compute moving average
-        std::vector<float> baseline(n);
-        double running = 0;
-        int count = 0;
-        // Fill initial window
-        for (int i = 0; i < std::min(half + 1, n); i++) { running += data[i]; count++; }
-        baseline[0] = (float)(running / count);
+        // Pre-warp cutoff for bilinear transform
+        double wc = std::tan(M_PI * (double)cutoff_hz / (double)sample_rate);
+        double wc2 = wc * wc;
 
-        for (int i = 1; i < n; i++) {
-            int add_idx = i + half;
-            int rem_idx = i - half - 1;
-            if (add_idx < n) { running += data[add_idx]; count++; }
-            if (rem_idx >= 0) { running -= data[rem_idx]; count--; }
-            baseline[i] = (float)(running / count);
+        // 4th-order Butterworth Q factors for two cascaded biquad sections
+        // Poles at angles pi*(2k+5)/8 for k=0..3; paired into conjugate pairs
+        // Q1 = 1/(2*cos(pi/8)) = 0.54120, Q2 = 1/(2*cos(3*pi/8)) = 1.30656
+        const double Q[2] = { 0.54119610014620, 1.30656296487638 };
+
+        // Second-order section coefficients (high-pass via bilinear transform)
+        struct SOS { double b0, b1, b2, a1, a2; };
+        SOS sos[2];
+
+        for (int s = 0; s < 2; s++) {
+            double alpha = wc / Q[s];
+            double denom = 1.0 + alpha + wc2;
+            sos[s].b0 =  1.0 / denom;
+            sos[s].b1 = -2.0 / denom;
+            sos[s].b2 =  1.0 / denom;
+            sos[s].a1 =  2.0 * (wc2 - 1.0) / denom;
+            sos[s].a2 =  (1.0 - alpha + wc2) / denom;
         }
 
-        for (int i = 0; i < n; i++) data[i] -= baseline[i];
+        // Reflect-pad signal at both ends (like scipy's sosfiltfilt)
+        // Pad length = 3 * number of sections * section_order = 3 * 2 * 2 = 12
+        int pad = std::min(12, n - 1);
+        int pn = n + 2 * pad;
+        std::vector<double> buf(pn);
+
+        // Left reflection: 2*x[0] - x[pad], ..., 2*x[0] - x[1]
+        for (int i = 0; i < pad; i++)
+            buf[i] = 2.0 * data[0] - data[pad - i];
+        // Original signal
+        for (int i = 0; i < n; i++)
+            buf[pad + i] = data[i];
+        // Right reflection: 2*x[n-1] - x[n-2], ..., 2*x[n-1] - x[n-1-pad]
+        for (int i = 0; i < pad; i++)
+            buf[pad + n + i] = 2.0 * data[n - 1] - data[n - 2 - i];
+
+        // Apply each SOS as filtfilt (forward + reverse)
+        // For high-pass, DC gain = 0, so initial conditions are zero.
+        // The reflection padding handles edge transients.
+        for (int s = 0; s < 2; s++) {
+            auto& bq = sos[s];
+
+            // Forward pass (transposed direct form II)
+            double w1 = 0, w2 = 0;
+            for (int i = 0; i < pn; i++) {
+                double xi = buf[i];
+                double yi = bq.b0 * xi + w1;
+                w1 = bq.b1 * xi - bq.a1 * yi + w2;
+                w2 = bq.b2 * xi - bq.a2 * yi;
+                buf[i] = yi;
+            }
+
+            // Reverse pass
+            w1 = 0; w2 = 0;
+            for (int i = pn - 1; i >= 0; i--) {
+                double xi = buf[i];
+                double yi = bq.b0 * xi + w1;
+                w1 = bq.b1 * xi - bq.a1 * yi + w2;
+                w2 = bq.b2 * xi - bq.a2 * yi;
+                buf[i] = yi;
+            }
+        }
+
+        // Extract the original-length portion
+        for (int i = 0; i < n; i++)
+            data[i] = (float)buf[pad + i];
     }
 
     // Apply full processing pipeline to a sample
@@ -150,12 +205,8 @@ namespace dsp {
             sample.processed[lead] = sample.raw[lead];
             auto& sig = sample.processed[lead];
 
-            if (params.baseline_wander_correction && params.baseline_strength > 0 && sample.sampling_rate > 0) {
-                // strength 0→none, 1→max correction
-                // map: small strength → large window (gentle), large strength → small window (aggressive)
-                float window_sec = 2.0f * (1.0f - params.baseline_strength) + 0.01f;
-                int window = std::max(1, (int)(window_sec * sample.sampling_rate));
-                remove_baseline_wander(sig, window);
+            if (params.baseline_wander_correction && params.baseline_cutoff_hz > 0 && sample.sampling_rate > 0) {
+                butterworth_highpass(sig, params.baseline_cutoff_hz, sample.sampling_rate);
             }
 
             if (params.zscore) {
@@ -325,8 +376,338 @@ private:
 };
 
 // ============================================================================
+// 3D LANDING PAGE VISUALIZATION
+// ============================================================================
+
+static float hashf(int seed) {
+    seed = (seed ^ 61) ^ (seed >> 16);
+    seed *= 9;
+    seed = seed ^ (seed >> 4);
+    seed *= 0x27d4eb2d;
+    seed = seed ^ (seed >> 15);
+    return (float)(seed & 0x7FFFFFFF) / 2147483647.0f;
+}
+
+class LandingPage {
+public:
+    bool initialize() {
+        // -- Compile shaders --
+        const char* vertSrc = R"(
+            #version 330 core
+            layout(location = 0) in vec3 aPos;
+            layout(location = 1) in vec4 aColorPhase;
+
+            uniform mat4 uMVP;
+            uniform float uTime;
+            uniform float uPointScale;
+            uniform float uOscAmp;
+
+            out vec4 vColor;
+
+            void main() {
+                float phase = aColorPhase.a;
+                vec3 pos = aPos;
+                float t = uTime * 0.7 + phase * 6.2832;
+                pos.x += uOscAmp * sin(t);
+                pos.y += uOscAmp * cos(t * 1.3);
+                pos.z += uOscAmp * sin(t * 0.7);
+
+                gl_Position = uMVP * vec4(pos, 1.0);
+                gl_PointSize = uPointScale * (1.0 + 0.3 * sin(uTime * 2.0 + phase * 6.2832));
+
+                float pulse = 0.75 + 0.25 * sin(uTime * 1.5 + phase * 6.2832);
+                vColor = vec4(aColorPhase.rgb * pulse, 1.0);
+            }
+        )";
+
+        const char* fragSrc = R"(
+            #version 330 core
+            in vec4 vColor;
+            out vec4 FragColor;
+            uniform int uMode;
+
+            void main() {
+                if (uMode == 1) {
+                    vec2 c = gl_PointCoord - vec2(0.5);
+                    float d = length(c);
+                    float glow = exp(-d * d * 10.0);
+                    FragColor = vec4(vColor.rgb, glow);
+                } else {
+                    FragColor = vec4(vColor.rgb, 0.22);
+                }
+            }
+        )";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, vertSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragSrc);
+        if (!vs || !fs) return false;
+
+        prog_ = glCreateProgram();
+        glAttachShader(prog_, vs);
+        glAttachShader(prog_, fs);
+        glLinkProgram(prog_);
+
+        int ok;
+        glGetProgramiv(prog_, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            char log[512];
+            glGetProgramInfoLog(prog_, 512, nullptr, log);
+            std::cerr << "Shader link error: " << log << std::endl;
+            return false;
+        }
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+
+        locMVP_ = glGetUniformLocation(prog_, "uMVP");
+        locTime_ = glGetUniformLocation(prog_, "uTime");
+        locPointScale_ = glGetUniformLocation(prog_, "uPointScale");
+        locOscAmp_ = glGetUniformLocation(prog_, "uOscAmp");
+        locMode_ = glGetUniformLocation(prog_, "uMode");
+
+        // -- Generate neural network geometry --
+        struct Layer { int count; float radius; float z; glm::vec3 color; };
+        Layer layers[] = {
+            { 8,  1.0f, -3.0f, {0.2f, 0.85f, 1.0f}},
+            {12,  1.6f, -1.5f, {0.3f, 0.65f, 1.0f}},
+            {16,  2.0f,  0.0f, {0.5f, 0.45f, 1.0f}},
+            {12,  1.6f,  1.5f, {0.7f, 0.35f, 0.9f}},
+            { 6,  0.8f,  3.0f, {1.0f, 0.35f, 0.7f}},
+        };
+        int numLayers = 5;
+
+        struct Vert { float x, y, z, r, g, b, phase; };
+        std::vector<Vert> nodeVerts;
+        std::vector<Vert> edgeVerts;
+
+        // Track node indices per layer for edge generation
+        std::vector<std::vector<int>> layerNodeIndices(numLayers);
+
+        int nodeIdx = 0;
+        for (int li = 0; li < numLayers; li++) {
+            auto& L = layers[li];
+            for (int i = 0; i < L.count; i++) {
+                float angle = 2.0f * (float)M_PI * (float)i / (float)L.count;
+                // Add slight vertical scatter for organic look
+                float yoff = 0.15f * std::sin(angle * 3.0f + (float)li);
+                Vert v;
+                v.x = L.radius * std::cos(angle);
+                v.y = L.radius * std::sin(angle) + yoff;
+                v.z = L.z;
+                v.r = L.color.r;
+                v.g = L.color.g;
+                v.b = L.color.b;
+                v.phase = hashf(nodeIdx * 7 + 13);
+                nodeVerts.push_back(v);
+                layerNodeIndices[li].push_back(nodeIdx);
+                nodeIdx++;
+            }
+        }
+        numNodes_ = (int)nodeVerts.size();
+
+        // Generate edges between adjacent layers
+        int globalOffset = 0;
+        for (int li = 0; li < numLayers - 1; li++) {
+            auto& curLayer = layers[li];
+            auto& nextLayer = layers[li + 1];
+            auto& curIndices = layerNodeIndices[li];
+            auto& nextIndices = layerNodeIndices[li + 1];
+
+            for (int i = 0; i < curLayer.count; i++) {
+                // Connect to 2-3 nodes in next layer
+                int connections = 2 + (int)(hashf(i * 31 + li * 97) * 2.0f);
+                float baseAngle = 2.0f * (float)M_PI * (float)i / (float)curLayer.count;
+
+                for (int c = 0; c < connections; c++) {
+                    // Pick target in next layer by angle proximity + offset
+                    float targetAngle = baseAngle + (hashf(i * 17 + c * 53 + li * 71) - 0.5f) * 1.5f;
+                    // Find nearest node in next layer
+                    int bestJ = 0;
+                    float bestDist = 999.0f;
+                    for (int j = 0; j < nextLayer.count; j++) {
+                        float a = 2.0f * (float)M_PI * (float)j / (float)nextLayer.count;
+                        float d = std::abs(a - targetAngle);
+                        if (d > (float)M_PI) d = 2.0f * (float)M_PI - d;
+                        if (d < bestDist) { bestDist = d; bestJ = j; }
+                    }
+
+                    auto& n1 = nodeVerts[curIndices[i]];
+                    auto& n2 = nodeVerts[nextIndices[bestJ]];
+
+                    // Blend colors for the edge
+                    float blend = 0.5f;
+                    Vert e1, e2;
+                    e1.x = n1.x; e1.y = n1.y; e1.z = n1.z;
+                    e1.r = n1.r * blend + n2.r * (1 - blend);
+                    e1.g = n1.g * blend + n2.g * (1 - blend);
+                    e1.b = n1.b * blend + n2.b * (1 - blend);
+                    e1.phase = n1.phase;
+
+                    e2.x = n2.x; e2.y = n2.y; e2.z = n2.z;
+                    e2.r = e1.r; e2.g = e1.g; e2.b = e1.b;
+                    e2.phase = n2.phase;
+
+                    edgeVerts.push_back(e1);
+                    edgeVerts.push_back(e2);
+                }
+            }
+        }
+        numEdgeVerts_ = (int)edgeVerts.size();
+
+        // -- Generate floating particles --
+        std::vector<Vert> particleVerts;
+        for (int i = 0; i < 180; i++) {
+            float theta = hashf(i * 3 + 1000) * 2.0f * (float)M_PI;
+            float phi = std::acos(2.0f * hashf(i * 3 + 2000) - 1.0f);
+            float r = 3.8f * std::cbrt(hashf(i * 3 + 3000));
+
+            Vert v;
+            v.x = r * std::sin(phi) * std::cos(theta);
+            v.y = r * std::sin(phi) * std::sin(theta);
+            v.z = r * std::cos(phi);
+
+            float brightness = 0.25f + 0.35f * hashf(i * 3 + 4000);
+            float hue = hashf(i * 3 + 5000);
+            v.r = brightness * (0.4f + 0.6f * hue);
+            v.g = brightness * (0.5f + 0.5f * (1.0f - hue));
+            v.b = brightness * (0.8f + 0.2f * hue);
+            v.phase = hashf(i * 3 + 6000);
+            particleVerts.push_back(v);
+        }
+        numParticles_ = (int)particleVerts.size();
+
+        // -- Upload node geometry --
+        glGenVertexArrays(1, &nodeVAO_);
+        glGenBuffers(1, &nodeVBO_);
+        glBindVertexArray(nodeVAO_);
+        glBindBuffer(GL_ARRAY_BUFFER, nodeVBO_);
+        glBufferData(GL_ARRAY_BUFFER, nodeVerts.size() * sizeof(Vert), nodeVerts.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vert), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vert), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        // -- Upload edge geometry --
+        glGenVertexArrays(1, &edgeVAO_);
+        glGenBuffers(1, &edgeVBO_);
+        glBindVertexArray(edgeVAO_);
+        glBindBuffer(GL_ARRAY_BUFFER, edgeVBO_);
+        glBufferData(GL_ARRAY_BUFFER, edgeVerts.size() * sizeof(Vert), edgeVerts.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vert), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vert), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        // -- Upload particle geometry --
+        glGenVertexArrays(1, &particleVAO_);
+        glGenBuffers(1, &particleVBO_);
+        glBindVertexArray(particleVAO_);
+        glBindBuffer(GL_ARRAY_BUFFER, particleVBO_);
+        glBufferData(GL_ARRAY_BUFFER, particleVerts.size() * sizeof(Vert), particleVerts.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vert), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vert), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        glBindVertexArray(0);
+
+        startTime_ = (float)glfwGetTime();
+        return true;
+    }
+
+    void render(int fb_w, int fb_h) {
+        float time = (float)glfwGetTime() - startTime_;
+        float aspect = (float)fb_w / std::max(1.0f, (float)fb_h);
+
+        // Build MVP: perspective + camera + rotation
+        glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 50.0f);
+        glm::mat4 view = glm::lookAt(
+            glm::vec3(0.0f, 0.0f, 10.0f),
+            glm::vec3(0.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f)
+        );
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::rotate(model, time * 0.3f, glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::rotate(model, 0.3f * std::sin(time * 0.15f), glm::vec3(1.0f, 0.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 mvp = proj * view * model;
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_PROGRAM_POINT_SIZE);
+
+        glUseProgram(prog_);
+        glUniformMatrix4fv(locMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
+        glUniform1f(locTime_, time);
+
+        // Draw edges (lines)
+        glUniform1i(locMode_, 0);
+        glUniform1f(locPointScale_, 1.0f);
+        glUniform1f(locOscAmp_, 0.06f);
+        glBindVertexArray(edgeVAO_);
+        glDrawArrays(GL_LINES, 0, numEdgeVerts_);
+
+        // Draw nodes (points)
+        glUniform1i(locMode_, 1);
+        glUniform1f(locPointScale_, 8.0f);
+        glUniform1f(locOscAmp_, 0.06f);
+        glBindVertexArray(nodeVAO_);
+        glDrawArrays(GL_POINTS, 0, numNodes_);
+
+        // Draw particles (small points)
+        glUniform1f(locPointScale_, 2.5f);
+        glUniform1f(locOscAmp_, 0.25f);
+        glBindVertexArray(particleVAO_);
+        glDrawArrays(GL_POINTS, 0, numParticles_);
+
+        glBindVertexArray(0);
+        glUseProgram(0);
+        glDisable(GL_PROGRAM_POINT_SIZE);
+    }
+
+    void cleanup() {
+        if (prog_) glDeleteProgram(prog_);
+        if (nodeVAO_) glDeleteVertexArrays(1, &nodeVAO_);
+        if (nodeVBO_) glDeleteBuffers(1, &nodeVBO_);
+        if (edgeVAO_) glDeleteVertexArrays(1, &edgeVAO_);
+        if (edgeVBO_) glDeleteBuffers(1, &edgeVBO_);
+        if (particleVAO_) glDeleteVertexArrays(1, &particleVAO_);
+        if (particleVBO_) glDeleteBuffers(1, &particleVBO_);
+    }
+
+private:
+    GLuint compileShader(GLenum type, const char* src) {
+        GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        int ok;
+        glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[512];
+            glGetShaderInfoLog(s, 512, nullptr, log);
+            std::cerr << "Shader compile error: " << log << std::endl;
+            glDeleteShader(s);
+            return 0;
+        }
+        return s;
+    }
+
+    GLuint prog_ = 0;
+    GLuint nodeVAO_ = 0, nodeVBO_ = 0;
+    GLuint edgeVAO_ = 0, edgeVBO_ = 0;
+    GLuint particleVAO_ = 0, particleVBO_ = 0;
+    int numNodes_ = 0, numEdgeVerts_ = 0, numParticles_ = 0;
+    GLint locMVP_ = -1, locTime_ = -1, locPointScale_ = -1, locOscAmp_ = -1, locMode_ = -1;
+    float startTime_ = 0;
+};
+
+// ============================================================================
 // APPLICATION
 // ============================================================================
+
+enum class AppPage {
+    Landing,
+    ECGApp
+};
 
 class CaliperApp {
 public:
@@ -353,7 +734,7 @@ public:
         int ww = (int)((aw / sx) * 0.95f);
         int wh = (int)((ah / sy) * 0.95f);
 
-        window_ = glfwCreateWindow(ww, wh, "Caliper - ECG Explorer", nullptr, nullptr);
+        window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
         if (!window_) { glfwTerminate(); return false; }
 
         glfwMakeContextCurrent(window_);
@@ -374,20 +755,22 @@ public:
         ImGui_ImplGlfw_InitForOpenGL(window_, true);
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        // Scan dataset
-        std::string data_dir = "../data/ekg_data";
-        samples_ = loader::scan_directory(data_dir);
-        if (samples_.empty()) {
-            std::cerr << "No CSV files found in " << data_dir << std::endl;
+        // Initialize 3D landing page
+        if (!landing_.initialize()) {
+            std::cerr << "Landing page 3D init failed" << std::endl;
             return false;
         }
-        std::cout << "Found " << samples_.size() << " ECG samples" << std::endl;
 
-        // Load and process first sample immediately
-        select_sample(0);
-
-        // Start background processor
-        bg_ = std::make_unique<BackgroundProcessor>();
+        // Scan dataset (non-fatal if empty)
+        std::string data_dir = "../data/seniordesign_upload_balanced/ekg_data";
+        samples_ = loader::scan_directory(data_dir);
+        if (!samples_.empty()) {
+            std::cout << "Found " << samples_.size() << " ECG samples" << std::endl;
+            select_sample(0);
+            bg_ = std::make_unique<BackgroundProcessor>();
+        } else {
+            std::cout << "No ECG data found in " << data_dir << " (load data to use the ECG explorer)" << std::endl;
+        }
 
         return true;
     }
@@ -396,18 +779,28 @@ public:
         while (!glfwWindowShouldClose(window_)) {
             glfwPollEvents();
 
+            int dw, dh;
+            glfwGetFramebufferSize(window_, &dw, &dh);
+            glViewport(0, 0, dw, dh);
+            glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            // Render 3D scene behind ImGui on landing page
+            if (page_ == AppPage::Landing) {
+                landing_.render(dw, dh);
+            }
+
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            draw_ui();
+            if (page_ == AppPage::Landing) {
+                draw_landing_ui();
+            } else {
+                draw_ecg_ui();
+            }
 
             ImGui::Render();
-            int dw, dh;
-            glfwGetFramebufferSize(window_, &dw, &dh);
-            glViewport(0, 0, dw, dh);
-            glClearColor(0.06f, 0.06f, 0.09f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
             glfwSwapBuffers(window_);
@@ -416,6 +809,7 @@ public:
 
     void cleanup() {
         bg_.reset(); // join background thread
+        landing_.cleanup();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImPlot::DestroyContext();
@@ -428,6 +822,20 @@ private:
 
     // ── Selection & Processing ──
 
+    // Build indices expanding outward from center: center-1, center+1, center-2, center+2, ...
+    std::vector<int> outward_indices(int center, int count) {
+        std::vector<int> out;
+        out.reserve(count);
+        for (int d = 1; out.size() < (size_t)count; d++) {
+            bool added = false;
+            int lo = center - d, hi = center + d;
+            if (lo >= 0 && lo < (int)samples_.size()) { out.push_back(lo); added = true; }
+            if (hi >= 0 && hi < (int)samples_.size()) { out.push_back(hi); added = true; }
+            if (!added) break;
+        }
+        return out;
+    }
+
     void select_sample(int idx) {
         if (idx < 0 || idx >= (int)samples_.size()) return;
         selected_ = idx;
@@ -436,6 +844,12 @@ private:
         if (!s.loaded) loader::load_csv(s);
         if (s.loaded && !s.processed_valid) {
             dsp::process(s, params_);
+        }
+
+        // Prefetch neighbors outward from current selection
+        if (bg_) {
+            auto neighbors = outward_indices(idx, (int)samples_.size() - 1);
+            bg_->enqueue(&samples_, params_, neighbors);
         }
     }
 
@@ -446,16 +860,16 @@ private:
         for (auto& s : samples_) s.processed_valid = false;
 
         // Reprocess current immediately
-        auto& cur = samples_[selected_];
-        if (cur.loaded) dsp::process(cur, params_);
-
-        // Queue the rest in background
-        std::vector<int> others;
-        others.reserve(samples_.size());
-        for (int i = 0; i < (int)samples_.size(); i++) {
-            if (i != selected_) others.push_back(i);
+        if (selected_ >= 0 && selected_ < (int)samples_.size()) {
+            auto& cur = samples_[selected_];
+            if (cur.loaded) dsp::process(cur, params_);
         }
-        bg_->enqueue(&samples_, params_, others);
+
+        // Queue the rest in background, expanding outward from current selection
+        if (bg_) {
+            auto others = outward_indices(selected_, (int)samples_.size() - 1);
+            bg_->enqueue(&samples_, params_, others);
+        }
     }
 
     // ── UI ──
@@ -485,7 +899,129 @@ private:
         c[ImGuiCol_ScrollbarGrab]   = {0.25f, 0.25f, 0.35f, 1.00f};
     }
 
-    void draw_ui() {
+    // ── Landing Page UI (ImGui overlay on 3D scene) ──
+
+    void draw_landing_ui() {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        float w = vp->WorkSize.x;
+        float h = vp->WorkSize.y;
+
+        // Full-screen transparent window
+        ImGui::SetNextWindowPos(vp->WorkPos);
+        ImGui::SetNextWindowSize(vp->WorkSize);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+        ImGui::Begin("##Landing", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleColor();
+
+        // -- Title --
+        {
+            const char* title = "C A L I P E R";
+            ImGui::SetWindowFontScale(3.0f);
+            float tw = ImGui::CalcTextSize(title).x;
+            ImGui::SetCursorPosX((w - tw) * 0.5f);
+            ImGui::SetCursorPosY(h * 0.10f);
+            ImGui::TextColored(ImVec4(0.75f, 0.88f, 1.0f, 1.0f), "%s", title);
+            ImGui::SetWindowFontScale(1.0f);
+        }
+
+        // -- Subtitle --
+        {
+            const char* sub = "Machine Learning Signal Processing";
+            ImGui::SetWindowFontScale(1.3f);
+            float sw = ImGui::CalcTextSize(sub).x;
+            ImGui::SetCursorPosX((w - sw) * 0.5f);
+            ImGui::SetCursorPosY(h * 0.10f + 60.0f);
+            ImGui::TextColored(ImVec4(0.45f, 0.55f, 0.75f, 0.85f), "%s", sub);
+            ImGui::SetWindowFontScale(1.0f);
+        }
+
+        // -- Applet section --
+        float card_w = std::min(520.0f, w * 0.55f);
+        float card_x = (w - card_w) * 0.5f;
+
+        // Section header
+        {
+            const char* hdr = "Tools";
+            ImGui::SetWindowFontScale(1.1f);
+            ImGui::SetCursorPosX(card_x);
+            ImGui::SetCursorPosY(h * 0.32f);
+            ImGui::TextColored(ImVec4(0.5f, 0.6f, 0.8f, 0.7f), "%s", hdr);
+            ImGui::SetWindowFontScale(1.0f);
+        }
+
+        // Thin separator
+        ImGui::SetCursorPosX(card_x);
+        ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.3f, 0.4f, 0.6f, 0.4f));
+        ImGui::Separator();
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+
+        // -- Applet Card: Baseline Wander Correction --
+        ImGui::SetCursorPosX(card_x);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.09f, 0.16f, 0.88f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.35f, 0.55f, 0.5f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 16));
+
+        ImGui::BeginChild("##applet_bwc", ImVec2(card_w, 150), ImGuiChildFlags_Borders);
+
+        ImGui::SetWindowFontScale(1.35f);
+        ImGui::TextColored(ImVec4(0.4f, 0.78f, 1.0f, 1.0f), "Baseline Wander Correction");
+        ImGui::SetWindowFontScale(1.0f);
+
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.65f, 0.75f, 0.9f));
+        ImGui::TextWrapped(
+            "Remove low-frequency baseline drift from 12-lead ECG signals "
+            "using adaptive 4th-order Butterworth high-pass filtering with "
+            "zero-phase distortion. Real-time visualization and parameter tuning.");
+        ImGui::PopStyleColor();
+
+        ImGui::Spacing();
+
+        // Launch button - right aligned
+        float btnW = 110.0f;
+        float avail = ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - btnW);
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.32f, 0.58f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.42f, 0.70f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.25f, 0.48f, 1.0f));
+        if (ImGui::Button("Launch  >>", ImVec2(btnW, 32))) {
+            page_ = AppPage::ECGApp;
+            params_.baseline_wander_correction = true;
+            if (params_.baseline_cutoff_hz <= 0) params_.baseline_cutoff_hz = 0.5f;
+            if (!samples_.empty()) on_params_changed();
+            glfwSetWindowTitle(window_, "Caliper - Baseline Wander Correction");
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::EndChild();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
+
+        // -- Footer --
+        {
+            const char* footer = "OpenGL 3.3  |  ImGui  |  ImPlot  |  LibTorch";
+            ImGui::SetWindowFontScale(0.85f);
+            float fw = ImGui::CalcTextSize(footer).x;
+            ImGui::SetCursorPosX((w - fw) * 0.5f);
+            ImGui::SetCursorPosY(h - 40.0f);
+            ImGui::TextColored(ImVec4(0.35f, 0.40f, 0.50f, 0.5f), "%s", footer);
+            ImGui::SetWindowFontScale(1.0f);
+        }
+
+        ImGui::End();
+    }
+
+    // ── ECG App UI ──
+
+    void draw_ecg_ui() {
         ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
@@ -500,14 +1036,14 @@ private:
         float panel_w = 240.0f;
         float plot_w = avail_w - panel_w - sp;
 
-        // ── Left panel ──
+        // -- Left panel --
         ImGui::BeginChild("##Panel", ImVec2(panel_w, avail_h), true);
         draw_panel();
         ImGui::EndChild();
 
         ImGui::SameLine();
 
-        // ── Right: plots ──
+        // -- Right: plots --
         ImGui::BeginChild("##Plots", ImVec2(plot_w, avail_h), false);
         draw_plots();
         ImGui::EndChild();
@@ -516,6 +1052,24 @@ private:
     }
 
     void draw_panel() {
+        // ── Back button ──
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.14f, 0.14f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.20f, 0.20f, 1.0f));
+        if (ImGui::Button("<< Back to Menu", ImVec2(-1, 28))) {
+            page_ = AppPage::Landing;
+            glfwSetWindowTitle(window_, "Caliper");
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (samples_.empty()) {
+            ImGui::TextColored({1.0f, 0.7f, 0.3f, 1.0f}, "No ECG data loaded.");
+            ImGui::TextWrapped("Place .csv files in the data directory and restart.");
+            return;
+        }
+
         // ── Sample picker ──
         ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "SAMPLE PICKER");
         ImGui::Separator();
@@ -587,10 +1141,10 @@ private:
         if (params_.baseline_wander_correction) {
             ImGui::Indent(12);
             ImGui::SetNextItemWidth(-12);
-            if (ImGui::DragFloat("Strength", &params_.baseline_strength, 0.001f, 0.0f, 1.0f, "%.3f"))
+            if (ImGui::DragFloat("Cutoff (Hz)", &params_.baseline_cutoff_hz, 0.01f, 0.0f, 125.0f, "%.2f Hz"))
                 changed = true;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("0 = no correction, 1 = maximum correction");
+                ImGui::SetTooltip("High-pass cutoff frequency");
             ImGui::Unindent(12);
         }
 
@@ -728,6 +1282,9 @@ private:
 
     // ── Members ──
     GLFWwindow* window_ = nullptr;
+    AppPage page_ = AppPage::Landing;
+    LandingPage landing_;
+
     std::vector<ECGSample> samples_;
     int selected_ = 0;
 
@@ -744,7 +1301,7 @@ private:
 // ============================================================================
 
 int main() {
-    std::cout << "=== Caliper - ECG Explorer ===" << std::endl;
+    std::cout << "=== Caliper ===" << std::endl;
 
     CaliperApp app;
     if (!app.initialize()) {
