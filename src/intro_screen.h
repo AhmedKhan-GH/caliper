@@ -11,8 +11,9 @@ enum class AppletKind {
 // ============================================================================
 // Caliper intro / landing screen.
 //
-//   OpenGL visualizer (radial ECG-ribbon field, procedural grid, FBO bloom
-//   post-processing) rendered behind an ImGui applet selector overlay.
+//   OpenGL visualizer (stereographically projected Hopf fibration with
+//   HSV-colored fibers, FBO bloom post-processing) rendered behind an
+//   ImGui applet selector overlay.
 //
 // Frame lifecycle driven by main.cpp:
 //   initialize()      one-time GL setup (shaders, FBOs, geometry)

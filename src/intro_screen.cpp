@@ -121,63 +121,50 @@ void main() {
 }
 )";
 
-// Globe: shared vertex shader for nodes (GL_POINTS) and edges (GL_LINES).
-// Transforms by model*viewProj and passes rotated-world z for front/back fade.
-const char* VS_GLOBE = R"(
+// Hopf fiber: per-vertex colored line segments stored as 4D points on S³
+// plus RGB. The VS applies a time-varying 4D rotation inside S³, then
+// stereographic-projects to R³. This gives the classic "fibers flow through
+// each other" animation since a generic SO(4) element is not a Hopf
+// symmetry — it genuinely permutes fibers.
+const char* VS_HOPF = R"(
 #version 330 core
-layout(location = 0) in vec3 a_pos;
+layout(location = 0) in vec4 a_s3;
+layout(location = 1) in vec3 a_color;
 
 uniform mat4  u_model;
 uniform mat4  u_viewProj;
-uniform float u_pxScale;
-uniform float u_pointSize;
-uniform int   u_isPoint;
+uniform mat4  u_s3_rot;                         // rotation applied in S³
+uniform float u_scale;                          // post-projection scale
 
+out vec3  v_color;
 out float v_facing;
+out float v_safe;                               // 1 = far from singularity, 0 = at it
 
 void main() {
-    vec4 world = u_model * vec4(a_pos, 1.0);
-    vec4 cp    = u_viewProj * world;
-    gl_Position = cp;
-    v_facing = world.z;                         // camera sits at +Z → +z faces cam
-    if (u_isPoint == 1) {
-        gl_PointSize = clamp(u_pxScale * u_pointSize / max(cp.w, 0.1),
-                             2.0, 14.0);
-    }
+    vec4 p = u_s3_rot * a_s3;                   // rotate on S³
+    float denom = 1.0 - p.w;                    // stereographic pole at w=+1
+    float sd = sign(denom) * max(abs(denom), 0.035);
+    vec3  r3 = p.xyz / sd * u_scale;
+
+    vec4 world = u_model * vec4(r3, 1.0);
+    gl_Position = u_viewProj * world;
+    v_color  = a_color;
+    v_facing = world.z;                         // camera at +Z ⇒ +z faces cam
+    v_safe   = smoothstep(0.04, 0.22, abs(denom));
 }
 )";
 
-const char* FS_NODE = R"(
+const char* FS_HOPF = R"(
 #version 330 core
+in vec3  v_color;
 in float v_facing;
+in float v_safe;
 out vec4 frag;
 
 void main() {
-    vec2 uv = gl_PointCoord * 2.0 - 1.0;
-    float d2 = dot(uv, uv);
-    if (d2 > 1.0) discard;
-    float halo = pow(1.0 - d2, 2.0);
-    float core = pow(1.0 - d2, 8.0);
-
-    float f = smoothstep(-0.9, 0.5, v_facing);   // fade back-facing
-    f = mix(0.22, 1.0, f);
-
-    vec3 col = vec3(0.55, 0.80, 1.00) * (halo * 0.6 + core * 2.0);
-    float a  = (halo * 0.7 + core * 1.0) * f;
-    frag = vec4(col * f, a);
-}
-)";
-
-const char* FS_EDGE = R"(
-#version 330 core
-in float v_facing;
-out vec4 frag;
-
-void main() {
-    float f = smoothstep(-0.9, 0.5, v_facing);
-    float a = mix(0.06, 0.55, f);
-    vec3 col = vec3(0.28, 0.55, 0.95);
-    frag = vec4(col * a, a);
+    float f = smoothstep(-1.4, 0.9, v_facing);
+    float intensity = mix(0.18, 1.45, f) * v_safe;
+    frag = vec4(v_color * intensity, intensity);
 }
 )";
 
@@ -315,17 +302,14 @@ void destroy_fbo(FBO& f) {
 
 struct IntroScreen::State {
     // Programs
-    GLuint prog_node      = 0;   // shared VS_GLOBE + FS_NODE
-    GLuint prog_edge      = 0;   // shared VS_GLOBE + FS_EDGE
+    GLuint prog_fiber     = 0;   // VS_HOPF + FS_HOPF
     GLuint prog_bright    = 0;
     GLuint prog_blur      = 0;
     GLuint prog_composite = 0;
 
     // Geometry
-    GLuint node_vao = 0, node_vbo = 0;
-    int    num_nodes = 0;
-    GLuint edge_vao = 0, edge_vbo = 0;
-    int    num_edge_verts = 0;
+    GLuint fiber_vao = 0, fiber_vbo = 0;
+    int    num_fiber_verts = 0;
     GLuint fs_vao = 0, fs_vbo = 0;
 
     // FBOs
@@ -369,99 +353,94 @@ void build_fs_quad(GLuint& vao, GLuint& vbo) {
     glBindVertexArray(0);
 }
 
-// Build a unit-radius UV-sphere globe.
-//   seg_lat = number of latitude segments (pole-to-pole).
-//   seg_lon = number of longitude segments around the equator.
+void hsv_to_rgb(float h, float s, float v, float& r, float& g, float& b) {
+    float hp = h * 6.0f;
+    float c  = v * s;
+    float x  = c * (1.0f - std::fabs(std::fmod(hp, 2.0f) - 1.0f));
+    float m  = v - c;
+    float rp = 0, gp = 0, bp = 0;
+    if      (hp < 1.0f) { rp = c; gp = x; bp = 0; }
+    else if (hp < 2.0f) { rp = x; gp = c; bp = 0; }
+    else if (hp < 3.0f) { rp = 0; gp = c; bp = x; }
+    else if (hp < 4.0f) { rp = 0; gp = x; bp = c; }
+    else if (hp < 5.0f) { rp = x; gp = 0; bp = c; }
+    else                { rp = c; gp = 0; bp = x; }
+    r = rp + m; g = gp + m; b = bp + m;
+}
+
+// Build a Hopf fibration as raw S³ points — projection is deferred to the
+// vertex shader so we can rotate in 4D per frame.
 //
-// Nodes sit at every (lat, lon) grid intersection plus a single pole node at
-// each end. Edges are strictly meridians (constant lon, connecting adjacent
-// latitudes including through the poles) and parallels (constant lat,
-// wrapping around), so the pattern is fully regular.
-void build_globe(GLuint& node_vao, GLuint& node_vbo,
-                 GLuint& edge_vao, GLuint& edge_vbo,
-                 int& out_num_nodes, int& out_num_edge_verts,
-                 int seg_lat, int seg_lon) {
-    std::vector<float> pos;
-    auto add_node = [&](float phi, float theta) {
-        float sp = std::sin(phi);
-        pos.push_back(sp * std::cos(theta));
-        pos.push_back(std::cos(phi));
-        pos.push_back(sp * std::sin(theta));
-    };
+// Each (θ, φ) on S² lifts to a great circle in S³ parameterized by ψ:
+//   (x, y, z, w) = (cos(θ/2) cosψ, cos(θ/2) sinψ,
+//                   sin(θ/2) cos(ψ+φ), sin(θ/2) sin(ψ+φ))
+//
+// Color is HSV with hue = φ/2π, value modulated by sin(θ) so equatorial
+// rings glow brighter than polar ones.
+void build_hopf(GLuint& vao, GLuint& vbo, int& out_num_verts) {
+    struct V { float x, y, z, w, r, g, b; };
+    std::vector<V> verts;
 
-    // North pole
-    const int north = 0;
-    add_node(0.0f, 0.0f);
+    const int N_RINGS = 11;           // concentric tori (θ layers)
+    const int N_PHI   = 28;           // fibers per torus (φ spokes)
+    const int N_SEG   = 128;          // per-fiber sample density
 
-    // Interior rings 1..seg_lat-1
-    std::vector<int> ring_start(seg_lat + 1);
-    ring_start[0] = north;
-    for (int i = 1; i < seg_lat; i++) {
-        ring_start[i] = (int)(pos.size() / 3);
-        float phi = (float)i * (float)M_PI / (float)seg_lat;
-        for (int j = 0; j < seg_lon; j++) {
-            float theta = (float)j * 2.0f * (float)M_PI / (float)seg_lon;
-            add_node(phi, theta);
+    // θ sampled across the upper hemisphere; the singularity at θ=π is
+    // handled by the shader, but keeping θ moderate avoids excessive
+    // stretching under rotation.
+    const float theta_min = 0.08f * (float)M_PI;
+    const float theta_max = 0.72f * (float)M_PI;
+
+    verts.reserve((size_t)N_RINGS * N_PHI * N_SEG * 2);
+    std::vector<V> fiber(N_SEG);
+
+    for (int ri = 0; ri < N_RINGS; ri++) {
+        float t     = (N_RINGS == 1) ? 0.5f
+                                     : (float)ri / (float)(N_RINGS - 1);
+        float theta = theta_min + t * (theta_max - theta_min);
+        float ct2   = std::cos(theta * 0.5f);
+        float st2   = std::sin(theta * 0.5f);
+
+        for (int pi = 0; pi < N_PHI; pi++) {
+            float phi = (float)pi * 2.0f * (float)M_PI / (float)N_PHI;
+
+            float h = phi / (2.0f * (float)M_PI);
+            float v = 0.62f + 0.38f * std::sin(theta);
+            float r, g, b;
+            hsv_to_rgb(h, 0.92f, v, r, g, b);
+
+            for (int si = 0; si < N_SEG; si++) {
+                float psi = (float)si * 2.0f * (float)M_PI / (float)N_SEG;
+                fiber[si] = {
+                    ct2 * std::cos(psi),
+                    ct2 * std::sin(psi),
+                    st2 * std::cos(psi + phi),
+                    st2 * std::sin(psi + phi),
+                    r, g, b
+                };
+            }
+
+            for (int si = 0; si < N_SEG; si++) {
+                verts.push_back(fiber[si]);
+                verts.push_back(fiber[(si + 1) % N_SEG]);
+            }
         }
     }
 
-    // South pole
-    const int south = (int)(pos.size() / 3);
-    ring_start[seg_lat] = south;
-    add_node((float)M_PI, 0.0f);
+    out_num_verts = (int)verts.size();
 
-    out_num_nodes = (int)(pos.size() / 3);
-
-    // --- Node VBO ---
-    glGenVertexArrays(1, &node_vao);
-    glBindVertexArray(node_vao);
-    glGenBuffers(1, &node_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, node_vbo);
-    glBufferData(GL_ARRAY_BUFFER, pos.size() * sizeof(float),
-                 pos.data(), GL_STATIC_DRAW);
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(V),
+                 verts.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(V),
                           (void*)0);
-
-    // --- Edge VBO (GL_LINES pairs) ---
-    std::vector<float> edges;
-    auto push_edge = [&](int a, int b) {
-        edges.push_back(pos[a * 3 + 0]);
-        edges.push_back(pos[a * 3 + 1]);
-        edges.push_back(pos[a * 3 + 2]);
-        edges.push_back(pos[b * 3 + 0]);
-        edges.push_back(pos[b * 3 + 1]);
-        edges.push_back(pos[b * 3 + 2]);
-    };
-
-    // Meridians: north pole → ring 1 → ring 2 → … → south pole, one per lon.
-    for (int j = 0; j < seg_lon; j++) {
-        push_edge(north, ring_start[1] + j);
-        for (int i = 1; i < seg_lat - 1; i++) {
-            push_edge(ring_start[i] + j, ring_start[i + 1] + j);
-        }
-        push_edge(ring_start[seg_lat - 1] + j, south);
-    }
-    // Parallels: wrap around each interior ring.
-    for (int i = 1; i < seg_lat; i++) {
-        for (int j = 0; j < seg_lon; j++) {
-            int a = ring_start[i] + j;
-            int b = ring_start[i] + (j + 1) % seg_lon;
-            push_edge(a, b);
-        }
-    }
-
-    out_num_edge_verts = (int)edges.size() / 3;
-
-    glGenVertexArrays(1, &edge_vao);
-    glBindVertexArray(edge_vao);
-    glGenBuffers(1, &edge_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, edge_vbo);
-    glBufferData(GL_ARRAY_BUFFER, edges.size() * sizeof(float),
-                 edges.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
-                          (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(V),
+                          (void*)(4 * sizeof(float)));
     glBindVertexArray(0);
 }
 
@@ -474,23 +453,19 @@ void build_globe(GLuint& node_vao, GLuint& node_vbo,
 bool IntroScreen::initialize() {
     s_ = new State();
 
-    s_->prog_node      = link_program(VS_GLOBE,  FS_NODE);
-    s_->prog_edge      = link_program(VS_GLOBE,  FS_EDGE);
+    s_->prog_fiber     = link_program(VS_HOPF,   FS_HOPF);
     s_->prog_bright    = link_program(VS_FSQUAD, FS_BRIGHT);
     s_->prog_blur      = link_program(VS_FSQUAD, FS_BLUR);
     s_->prog_composite = link_program(VS_FSQUAD, FS_COMPOSITE);
 
-    if (!s_->prog_node || !s_->prog_edge ||
+    if (!s_->prog_fiber ||
         !s_->prog_bright || !s_->prog_blur || !s_->prog_composite) {
         std::fprintf(stderr, "[intro] Shader program creation failed\n");
         return false;
     }
 
     build_fs_quad(s_->fs_vao, s_->fs_vbo);
-    build_globe(s_->node_vao, s_->node_vbo,
-                s_->edge_vao, s_->edge_vbo,
-                s_->num_nodes, s_->num_edge_verts,
-                /*seg_lat=*/14, /*seg_lon=*/24);
+    build_hopf(s_->fiber_vao, s_->fiber_vbo, s_->num_fiber_verts);
 
     s_->fbo_w = s_->fbo_h = 0;
     s_->prev_time = glfwGetTime();
@@ -542,12 +517,24 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
                                  glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     glm::mat4 vp = proj * view;
 
+    // Outer rigid spin (slower now that the internal rotation carries motion).
     glm::mat4 model(1.0f);
-    model = glm::rotate(model, (float)s_->t_sim * 0.28f,
+    model = glm::rotate(model, (float)s_->t_sim * 0.12f,
                         glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::rotate(model, 0.35f * std::sin((float)s_->t_sim * 0.18f),
-                        glm::vec3(1.0f, 0.0f, 0.0f));
-    model = glm::rotate(model, 0.35f, glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, 0.42f, glm::vec3(1.0f, 0.0f, 0.0f));
+
+    // Internal S³ rotation. We compose two different plane-rotations
+    // (y–w and x–z) at incommensurate rates so the fibration never
+    // retraces a closed orbit — the visual is a perpetual flow.
+    float a1 = (float)s_->t_sim * 0.30f;   // rotation in the (y, w) plane
+    float a2 = (float)s_->t_sim * 0.17f;   // rotation in the (x, z) plane
+    glm::mat4 r_yw(1.0f);
+    r_yw[1][1] =  std::cos(a1); r_yw[3][1] =  std::sin(a1);
+    r_yw[1][3] = -std::sin(a1); r_yw[3][3] =  std::cos(a1);
+    glm::mat4 r_xz(1.0f);
+    r_xz[0][0] =  std::cos(a2); r_xz[2][0] =  std::sin(a2);
+    r_xz[0][2] = -std::sin(a2); r_xz[2][2] =  std::cos(a2);
+    glm::mat4 s3_rot = r_yw * r_xz;
 
     // --- Scene pass ---
     glBindFramebuffer(GL_FRAMEBUFFER, s_->scene.fb);
@@ -558,31 +545,18 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glEnable(GL_PROGRAM_POINT_SIZE);
 
-    auto set_common = [&](GLuint prog) {
-        glUseProgram(prog);
-        glUniformMatrix4fv(glGetUniformLocation(prog, "u_model"),
-                           1, GL_FALSE, glm::value_ptr(model));
-        glUniformMatrix4fv(glGetUniformLocation(prog, "u_viewProj"),
-                           1, GL_FALSE, glm::value_ptr(vp));
-        glUniform1f(glGetUniformLocation(prog, "u_pxScale"),
-                    (float)fb_h * 0.5f);
-    };
-
-    // 1) Edges
-    set_common(s_->prog_edge);
-    glUniform1i(glGetUniformLocation(s_->prog_edge, "u_isPoint"), 0);
-    glLineWidth(1.2f);
-    glBindVertexArray(s_->edge_vao);
-    glDrawArrays(GL_LINES, 0, s_->num_edge_verts);
-
-    // 2) Nodes
-    set_common(s_->prog_node);
-    glUniform1i(glGetUniformLocation(s_->prog_node, "u_isPoint"), 1);
-    glUniform1f(glGetUniformLocation(s_->prog_node, "u_pointSize"), 7.0f);
-    glBindVertexArray(s_->node_vao);
-    glDrawArrays(GL_POINTS, 0, s_->num_nodes);
+    glUseProgram(s_->prog_fiber);
+    glUniformMatrix4fv(glGetUniformLocation(s_->prog_fiber, "u_model"),
+                       1, GL_FALSE, glm::value_ptr(model));
+    glUniformMatrix4fv(glGetUniformLocation(s_->prog_fiber, "u_viewProj"),
+                       1, GL_FALSE, glm::value_ptr(vp));
+    glUniformMatrix4fv(glGetUniformLocation(s_->prog_fiber, "u_s3_rot"),
+                       1, GL_FALSE, glm::value_ptr(s3_rot));
+    glUniform1f(glGetUniformLocation(s_->prog_fiber, "u_scale"), 0.22f);
+    glLineWidth(1.4f);
+    glBindVertexArray(s_->fiber_vao);
+    glDrawArrays(GL_LINES, 0, s_->num_fiber_verts);
 
     // --- Bloom: bright pass ---
     glDisable(GL_BLEND);
@@ -733,21 +707,32 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
     ImVec2 wp = ImGui::GetWindowPos();
     ImVec2 ws = ImGui::GetWindowSize();
 
-    // ── Centered CALIPER title (default font, scaled) ──
-    ImGui::SetWindowFontScale(7.0f);
+    // ── Top-banner CALIPER title (drawn via draw list so we can drop a
+    //    shadow that stays readable against the colored fibration) ──
     const char* title = "C A L I P E R";
-    ImVec2 t_sz = ImGui::CalcTextSize(title);
-    float title_y = (ws.y - t_sz.y) * 0.5f - t_sz.y * 0.35f;
-    ImGui::SetCursorPos(ImVec2((ws.x - t_sz.x) * 0.5f, title_y));
-    ImGui::TextColored(ImVec4(0.80f, 0.90f, 1.00f, 1.00f), "%s", title);
 
-    ImGui::SetWindowFontScale(1.6f);
-    const char* sub = "precision signal instrumentation";
-    ImVec2 s_sz = ImGui::CalcTextSize(sub);
-    ImGui::SetCursorPos(ImVec2((ws.x - s_sz.x) * 0.5f,
-                               title_y + t_sz.y + 18.0f));
-    ImGui::TextColored(ImVec4(0.55f, 0.68f, 0.88f, 0.85f), "%s", sub);
+    ImGui::SetWindowFontScale(5.0f);
+    ImVec2 t_sz     = ImGui::CalcTextSize(title);
+    float  title_fsz = ImGui::GetFontSize();
     ImGui::SetWindowFontScale(1.0f);
+
+    float  title_x = wp.x + (ws.x - t_sz.x) * 0.5f;
+    float  title_y = wp.y + ws.y * 0.055f;
+
+    // Soft dark backdrop bar: gives text a consistent reading surface while
+    // still letting the fibration breathe through.
+    float band_pad_x = 36.0f;
+    float band_pad_y = 12.0f;
+    ImVec2 band_p0(title_x - band_pad_x,          title_y - band_pad_y);
+    ImVec2 band_p1(title_x + t_sz.x + band_pad_x, title_y + t_sz.y + band_pad_y);
+    dl->AddRectFilled(band_p0, band_p1, IM_COL32(4, 6, 14, 130), 10.0f);
+
+    // Drop shadow then glyphs.
+    ImFont* font = ImGui::GetFont();
+    dl->AddText(font, title_fsz, ImVec2(title_x + 2.0f, title_y + 3.0f),
+                IM_COL32(0, 0, 0, 200), title);
+    dl->AddText(font, title_fsz, ImVec2(title_x, title_y),
+                IM_COL32(210, 230, 255, 255), title);
 
     // ── Left applet scroller ──
     float col_x = 24.0f;
@@ -795,18 +780,15 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
 void IntroScreen::cleanup() {
     if (!s_) return;
 
-    if (s_->prog_node)      glDeleteProgram(s_->prog_node);
-    if (s_->prog_edge)      glDeleteProgram(s_->prog_edge);
+    if (s_->prog_fiber)     glDeleteProgram(s_->prog_fiber);
     if (s_->prog_bright)    glDeleteProgram(s_->prog_bright);
     if (s_->prog_blur)      glDeleteProgram(s_->prog_blur);
     if (s_->prog_composite) glDeleteProgram(s_->prog_composite);
 
-    if (s_->node_vbo) glDeleteBuffers(1, &s_->node_vbo);
-    if (s_->node_vao) glDeleteVertexArrays(1, &s_->node_vao);
-    if (s_->edge_vbo) glDeleteBuffers(1, &s_->edge_vbo);
-    if (s_->edge_vao) glDeleteVertexArrays(1, &s_->edge_vao);
-    if (s_->fs_vbo)   glDeleteBuffers(1, &s_->fs_vbo);
-    if (s_->fs_vao)   glDeleteVertexArrays(1, &s_->fs_vao);
+    if (s_->fiber_vbo) glDeleteBuffers(1, &s_->fiber_vbo);
+    if (s_->fiber_vao) glDeleteVertexArrays(1, &s_->fiber_vao);
+    if (s_->fs_vbo)    glDeleteBuffers(1, &s_->fs_vbo);
+    if (s_->fs_vao)    glDeleteVertexArrays(1, &s_->fs_vao);
 
     destroy_fbo(s_->scene);
     destroy_fbo(s_->bloom_a);
