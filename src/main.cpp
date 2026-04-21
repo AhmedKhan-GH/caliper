@@ -21,6 +21,7 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
+#include <implot3d.h>
 #include <ImGuiFileDialog.h>
 
 #include "intro_screen.h"
@@ -200,6 +201,53 @@ namespace dsp {
         sample.processed_valid = true;
     }
 
+    // Derive orthogonal XYZ heart-vector leads from the processed 12-lead
+    // signal via the Kors regression transform. Result is the vectorcardiogram
+    // (VCG) loop — the 3D trajectory of the heart's dipole moment in space.
+    //
+    // Axis convention (Kors, Frank-like):
+    //   +X = left,  +Y = inferior (foot-ward),  +Z = posterior
+    //
+    // Uses leads I, II, V1..V6 (the 8 independent 12-lead channels).
+    // Lead index mapping (see LEAD_NAMES): I=0, II=1, V1..V6 = 6..11.
+    void derive_xyz(const ECGSample& s,
+                    std::vector<float>& vx,
+                    std::vector<float>& vy,
+                    std::vector<float>& vz) {
+        const int N = s.num_samples;
+        vx.assign(N, 0.0f);
+        vy.assign(N, 0.0f);
+        vz.assign(N, 0.0f);
+        if (N <= 0 || (int)s.processed.size() < NUM_LEADS) return;
+
+        const auto& I  = s.processed[0];
+        const auto& II = s.processed[1];
+        const auto& V1 = s.processed[6];
+        const auto& V2 = s.processed[7];
+        const auto& V3 = s.processed[8];
+        const auto& V4 = s.processed[9];
+        const auto& V5 = s.processed[10];
+        const auto& V6 = s.processed[11];
+
+        for (int i = 0; i < N; i++) {
+            float i_  = (int)I.size()  > i ? I[i]  : 0.0f;
+            float ii_ = (int)II.size() > i ? II[i] : 0.0f;
+            float v1 = (int)V1.size()  > i ? V1[i] : 0.0f;
+            float v2 = (int)V2.size()  > i ? V2[i] : 0.0f;
+            float v3 = (int)V3.size()  > i ? V3[i] : 0.0f;
+            float v4 = (int)V4.size()  > i ? V4[i] : 0.0f;
+            float v5 = (int)V5.size()  > i ? V5[i] : 0.0f;
+            float v6 = (int)V6.size()  > i ? V6[i] : 0.0f;
+
+            vx[i] =  0.38f*i_  - 0.07f*ii_ - 0.13f*v1 + 0.05f*v2
+                   - 0.01f*v3 + 0.14f*v4 + 0.06f*v5 + 0.54f*v6;
+            vy[i] = -0.07f*i_  + 0.93f*ii_ + 0.06f*v1 - 0.02f*v2
+                   - 0.05f*v3 + 0.06f*v4 - 0.17f*v5 + 0.13f*v6;
+            vz[i] =  0.11f*i_  - 0.23f*ii_ - 0.43f*v1 - 0.06f*v2
+                   - 0.14f*v3 - 0.20f*v4 - 0.11f*v5 + 0.31f*v6;
+        }
+    }
+
 } // namespace dsp
 
 // Dataset loading lives in dataset.{h,cpp}. See IDatasetLoader.
@@ -339,6 +387,7 @@ public:
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
+        ImPlot3D::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
@@ -410,6 +459,7 @@ public:
         intro_.cleanup();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
+        ImPlot3D::DestroyContext();
         ImPlot::DestroyContext();
         ImGui::DestroyContext();
         if (window_) glfwDestroyWindow(window_);
@@ -614,7 +664,17 @@ private:
 
         // -- Right: plots --
         ImGui::BeginChild("##Plots", ImVec2(plot_w, avail_h), false);
-        draw_plots();
+        if (ImGui::BeginTabBar("##view_tabs")) {
+            if (ImGui::BeginTabItem("Leads")) {
+                draw_plots();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("3D Vector")) {
+                draw_vcg_3d();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
         ImGui::EndChild();
 
         ImGui::End();
@@ -941,6 +1001,136 @@ private:
         }
     }
 
+    // Refresh cached VCG (vx_, vy_, vz_) if the selection or processing
+    // version has changed. Cheap — a single pass of 8 weighted sums per sample.
+    void ensure_vcg_cached() {
+        if (selected_ < 0 || selected_ >= (int)samples_.size()) {
+            vcg_sample_idx_ = -1;
+            vx_.clear(); vy_.clear(); vz_.clear();
+            return;
+        }
+        auto& s = samples_[selected_];
+        if (!s.processed_valid) {
+            vcg_sample_idx_ = -1;
+            return;
+        }
+        if (vcg_sample_idx_ == selected_ && vcg_params_version_ == params_.version
+            && (int)vx_.size() == s.num_samples) {
+            return;
+        }
+        dsp::derive_xyz(s, vx_, vy_, vz_);
+        vcg_sample_idx_ = selected_;
+        vcg_params_version_ = params_.version;
+    }
+
+    void draw_vcg_3d() {
+        if (selected_ < 0 || selected_ >= (int)samples_.size()) {
+            ImGui::TextColored({0.7f, 0.7f, 0.8f, 1.0f}, "Select a sample from the panel.");
+            return;
+        }
+        auto& s = samples_[selected_];
+        if (!s.loaded || !s.processed_valid) {
+            ImGui::Spacing();
+            ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f},
+                "Loading sample %s ...", s.file_id.c_str());
+            return;
+        }
+
+        ensure_vcg_cached();
+        const int N = (int)vx_.size();
+        if (N <= 0) {
+            ImGui::Text("No VCG data.");
+            return;
+        }
+
+        const float sr = std::max(1.0f, s.sampling_rate);
+        const float duration = N / sr;
+
+        // ── Advance animation clock ──
+        double now = ImGui::GetTime();
+        if (last_anim_tick_ <= 0.0) last_anim_tick_ = now;
+        double dt = now - last_anim_tick_;
+        last_anim_tick_ = now;
+        if (anim_playing_) {
+            anim_time_ += (float)dt * anim_speed_;
+            if (anim_time_ >= duration) anim_time_ = std::fmod(anim_time_, duration);
+            if (anim_time_ < 0) anim_time_ = 0;
+        }
+
+        // ── Controls row ──
+        if (ImGui::Button(anim_playing_ ? "Pause" : "Play", ImVec2(70, 0))) {
+            anim_playing_ = !anim_playing_;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Restart", ImVec2(70, 0))) anim_time_ = 0;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        ImGui::SliderFloat("speed", &anim_speed_, 0.05f, 4.0f, "%.2fx");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        ImGui::SliderInt("trail", &trail_samples_, 10, std::max(50, N / 2), "%d smp");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("t (s)", &anim_time_, 0.0f, duration, "%.3f");
+
+        int cur = (int)(anim_time_ * sr);
+        if (cur < 0) cur = 0;
+        if (cur >= N) cur = N - 1;
+
+        // ── Plot bounds (symmetric around origin) ──
+        float rmax = 1e-3f;
+        for (int i = 0; i < N; i++) {
+            rmax = std::max(rmax, std::fabs(vx_[i]));
+            rmax = std::max(rmax, std::fabs(vy_[i]));
+            rmax = std::max(rmax, std::fabs(vz_[i]));
+        }
+        rmax *= 1.1f;
+
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        if (ImPlot3D::BeginPlot("##vcg", avail)) {
+            ImPlot3D::SetupAxes("X  (L +, R -)", "Y  (Inf +, Sup -)", "Z  (Post +, Ant -)");
+            ImPlot3D::SetupAxesLimits(-rmax, rmax, -rmax, rmax, -rmax, rmax, ImPlot3DCond_Always);
+
+            // Full loop (faint)
+            ImU32 col_loop = IM_COL32(110, 150, 230, 90);
+            ImPlot3D::PlotLine("loop", vx_.data(), vy_.data(), vz_.data(), N,
+                ImPlot3DSpec(ImPlot3DProp_LineColor, col_loop,
+                             ImPlot3DProp_LineWeight, 1.0f));
+
+            // Recent trail (bright)
+            int t0 = std::max(0, cur - trail_samples_);
+            int tn = cur - t0 + 1;
+            if (tn > 1) {
+                ImU32 col_trail = IM_COL32(255, 210, 90, 235);
+                ImPlot3D::PlotLine("trail", vx_.data() + t0, vy_.data() + t0,
+                    vz_.data() + t0, tn,
+                    ImPlot3DSpec(ImPlot3DProp_LineColor, col_trail,
+                                 ImPlot3DProp_LineWeight, 2.5f));
+            }
+
+            // Current heart-vector arrow (from origin to current point)
+            float origin[3] = {0, 0, 0};
+            float head_x[2] = {0, vx_[cur]};
+            float head_y[2] = {0, vy_[cur]};
+            float head_z[2] = {0, vz_[cur]};
+            (void)origin;
+            ImU32 col_vec = IM_COL32(255, 255, 255, 200);
+            ImPlot3D::PlotLine("##vec", head_x, head_y, head_z, 2,
+                ImPlot3DSpec(ImPlot3DProp_LineColor, col_vec,
+                             ImPlot3DProp_LineWeight, 1.5f));
+
+            // Current position marker
+            ImU32 col_pt = IM_COL32(255, 80, 80, 255);
+            float px = vx_[cur], py = vy_[cur], pz = vz_[cur];
+            ImPlot3D::PlotScatter("##pt", &px, &py, &pz, 1,
+                ImPlot3DSpec(ImPlot3DProp_MarkerFillColor, col_pt,
+                             ImPlot3DProp_MarkerLineColor, col_pt,
+                             ImPlot3DProp_MarkerSize, 6.0f));
+
+            ImPlot3D::EndPlot();
+        }
+    }
+
     // ── Members ──
     GLFWwindow* window_ = nullptr;
     AppPage page_ = AppPage::Landing;
@@ -973,6 +1163,16 @@ private:
     bool lead_visible_[NUM_LEADS] = {true,true,true,true,true,true,true,true,true,true,true,true};
     char filter_buf_[128] = {};
     std::vector<float> time_axis_;
+
+    // VCG (3D heart vector) cache + animation state for the "3D Vector" tab.
+    std::vector<float> vx_, vy_, vz_;
+    int vcg_sample_idx_ = -1;
+    uint32_t vcg_params_version_ = 0;
+    float anim_time_ = 0.0f;
+    float anim_speed_ = 1.0f;
+    int trail_samples_ = 200;
+    bool anim_playing_ = true;
+    double last_anim_tick_ = 0.0;
 };
 
 // ============================================================================

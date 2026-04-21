@@ -24,3 +24,6 @@
 [submodule "third_party/ImGuiFileDialog"]
 	path = third_party/ImGuiFileDialog
 	url = https://github.com/aiekick/ImGuiFileDialog.git
+[submodule "third_party/implot3d"]
+	path = third_party/implot3d
+	url = https://github.com/brenocq/implot3d.git

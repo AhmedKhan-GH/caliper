@@ -215,6 +215,19 @@ add_subdirectory(${THIRD_PARTY_DIR}/implot EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS implot)
 message(STATUS "    ✓ ImPlot configured")
 
+# --- ImPlot3D (3D Plotting library) ---
+message(STATUS "  Configuring ImPlot3D...")
+if(NOT EXISTS "${THIRD_PARTY_DIR}/implot3d/CMakeLists.txt")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot3d_CMakeLists.txt"
+        "${THIRD_PARTY_DIR}/implot3d/CMakeLists.txt"
+        COPYONLY
+    )
+endif()
+add_subdirectory(${THIRD_PARTY_DIR}/implot3d EXCLUDE_FROM_ALL)
+list(APPEND CALIPER_DEPENDENCY_LIBS implot3d)
+message(STATUS "    ✓ ImPlot3D configured")
+
 # --- ImGuiFileDialog (File open/save dialog for ImGui) ---
 message(STATUS "  Configuring ImGuiFileDialog...")
 # Upstream ships a CMakeLists.txt that tries find_package(imgui) QUIET and skips
