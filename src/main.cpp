@@ -21,8 +21,10 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
+#include <ImGuiFileDialog.h>
 
 #include "intro_screen.h"
+#include "dataset.h"
 
 namespace fs = std::filesystem;
 
@@ -30,11 +32,7 @@ namespace fs = std::filesystem;
 // DATA STRUCTURES
 // ============================================================================
 
-static constexpr int NUM_LEADS = 12;
-static const char* LEAD_NAMES[NUM_LEADS] = {
-    "I", "II", "III", "aVR", "aVL", "aVF",
-    "V1", "V2", "V3", "V4", "V5", "V6"
-};
+// NUM_LEADS and LEAD_NAMES are defined in dataset.h/.cpp
 
 static const ImVec4 LEAD_COLORS[NUM_LEADS] = {
     {1.0f, 0.30f, 0.30f, 1.0f},  // I    - Red
@@ -51,22 +49,7 @@ static const ImVec4 LEAD_COLORS[NUM_LEADS] = {
     {0.2f, 0.80f, 0.60f, 1.0f},  // V6   - Teal
 };
 
-struct ECGSample {
-    std::string file_id;                        // e.g. "1014507"
-    std::string filepath;
-    std::vector<std::vector<float>> raw;        // [lead][sample]
-    std::vector<std::vector<float>> processed;  // [lead][sample] after transforms
-    float sampling_rate = 0.0f;
-    int num_samples = 0;
-    bool loaded = false;
-    bool processed_valid = false;               // true when processed matches current params
-
-    // Per-lead stats (computed on processed data)
-    struct LeadStats {
-        float mean = 0, stddev = 0, min_val = 0, max_val = 0;
-    };
-    std::vector<LeadStats> stats; // [lead]
-};
+// ECGSample is defined in dataset.h
 
 struct ProcessingParams {
     bool zscore = true;
@@ -219,79 +202,7 @@ namespace dsp {
 
 } // namespace dsp
 
-// ============================================================================
-// DATA LOADING
-// ============================================================================
-
-namespace loader {
-
-    bool load_csv(ECGSample& sample) {
-        std::ifstream file(sample.filepath);
-        if (!file.is_open()) {
-            std::cerr << "Cannot open: " << sample.filepath << std::endl;
-            return false;
-        }
-
-        std::string line;
-        // Skip header
-        if (!std::getline(file, line)) return false;
-
-        sample.raw.resize(NUM_LEADS);
-        for (auto& lead : sample.raw) lead.clear();
-
-        while (std::getline(file, line)) {
-            if (line.empty()) continue;
-            std::stringstream ss(line);
-            std::string val;
-            int col = 0;
-            while (std::getline(ss, val, ',') && col < NUM_LEADS) {
-                // Trim whitespace
-                size_t start = val.find_first_not_of(" \t\r\n");
-                if (start == std::string::npos) { col++; continue; }
-                val = val.substr(start);
-                try {
-                    sample.raw[col].push_back(std::stof(val));
-                } catch (...) {}
-                col++;
-            }
-        }
-
-        if (sample.raw[0].empty()) return false;
-
-        sample.num_samples = (int)sample.raw[0].size();
-        // Infer sampling rate from sample count: 2500 -> 250Hz, 5000 -> 500Hz
-        if (sample.num_samples <= 2500) sample.sampling_rate = 250.0f;
-        else sample.sampling_rate = 500.0f;
-
-        sample.loaded = true;
-        sample.processed_valid = false;
-        return true;
-    }
-
-    std::vector<ECGSample> scan_directory(const std::string& dir) {
-        std::vector<ECGSample> samples;
-        if (!fs::exists(dir)) {
-            std::cerr << "Directory not found: " << dir << std::endl;
-            return samples;
-        }
-
-        for (const auto& entry : fs::directory_iterator(dir)) {
-            if (entry.path().extension() == ".csv") {
-                ECGSample s;
-                s.filepath = entry.path().string();
-                s.file_id = entry.path().stem().string();
-                samples.push_back(std::move(s));
-            }
-        }
-
-        // Sort by file ID
-        std::sort(samples.begin(), samples.end(),
-            [](const ECGSample& a, const ECGSample& b) { return a.file_id < b.file_id; });
-
-        return samples;
-    }
-
-} // namespace loader
+// Dataset loading lives in dataset.{h,cpp}. See IDatasetLoader.
 
 // ============================================================================
 // BACKGROUND PROCESSOR
@@ -312,13 +223,15 @@ public:
         if (worker_.joinable()) worker_.join();
     }
 
-    // Queue a batch of sample indices for processing
-    void enqueue(std::vector<ECGSample>* samples, const ProcessingParams& params,
-                 const std::vector<int>& indices) {
+    // Queue a batch of sample indices for processing. `loader` is borrowed —
+    // caller must keep it alive until the queue drains (enqueue again with a
+    // new loader to hand off cleanly).
+    void enqueue(std::vector<ECGSample>* samples, IDatasetLoader* loader,
+                 const ProcessingParams& params, const std::vector<int>& indices) {
         std::lock_guard<std::mutex> lk(mtx_);
-        // Clear previous work - new params invalidate old queue
         std::queue<int>().swap(queue_);
         samples_ = samples;
+        loader_ = loader;
         params_ = params;
         for (int idx : indices) queue_.push(idx);
         processed_count_.store(0);
@@ -336,6 +249,7 @@ private:
             int idx = -1;
             ProcessingParams params;
             ECGSample* sample = nullptr;
+            IDatasetLoader* loader = nullptr;
 
             {
                 std::unique_lock<std::mutex> lk(mtx_);
@@ -347,14 +261,13 @@ private:
                 queue_.pop();
                 params = params_;
                 sample = &(*samples_)[idx];
+                loader = loader_;
             }
 
-            // Load if needed
-            if (!sample->loaded) {
-                loader::load_csv(*sample);
+            if (!sample->loaded && loader) {
+                loader->load(*sample);
             }
 
-            // Process
             if (sample->loaded) {
                 dsp::process(*sample, params);
             }
@@ -369,6 +282,7 @@ private:
     bool stop_;
     std::queue<int> queue_;
     std::vector<ECGSample>* samples_ = nullptr;
+    IDatasetLoader* loader_ = nullptr;
     ProcessingParams params_;
     std::atomic<int> processed_count_{0};
     std::atomic<int> total_queued_{0};
@@ -440,17 +354,8 @@ public:
             return false;
         }
 
-        // Scan dataset (non-fatal if empty)
-        std::string data_dir = "../data/seniordesign_upload_balanced/ekg_data";
-        samples_ = loader::scan_directory(data_dir);
-        if (!samples_.empty()) {
-            std::cout << "Found " << samples_.size() << " ECG samples" << std::endl;
-            select_sample(0);
-            bg_ = std::make_unique<BackgroundProcessor>();
-        } else {
-            std::cout << "No ECG data found in " << data_dir << " (load data to use the ECG explorer)" << std::endl;
-        }
-
+        // Dataset is opened via the UI ("Open Dataset..." button). No
+        // hardcoded defaults — paths are user-supplied at runtime.
         return true;
     }
 
@@ -474,6 +379,8 @@ public:
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
+            commit_scan_if_ready();
+
             if (page_ == AppPage::Landing) {
                 intro_.draw_ui(dw, dh);
                 if (intro_.should_launch()) {
@@ -483,7 +390,6 @@ public:
                         page_ = AppPage::ECGApp;
                         params_.baseline_wander_correction = true;
                         if (params_.baseline_cutoff_hz <= 0) params_.baseline_cutoff_hz = 0.5f;
-                        if (!samples_.empty()) on_params_changed();
                         glfwSetWindowTitle(window_, "Caliper - ECG Explorer");
                     }
                 }
@@ -499,7 +405,8 @@ public:
     }
 
     void cleanup() {
-        bg_.reset(); // join background thread
+        bg_.reset(); // join background load thread
+        if (scan_thread_.joinable()) scan_thread_.join();
         intro_.cleanup();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -527,40 +434,131 @@ private:
         return out;
     }
 
+    // Non-blocking selection. Two cases:
+    //   - sample already loaded  → main thread processes it (no race; bg
+    //                              only gets outward neighbors). draws this frame.
+    //   - sample not yet loaded  → bg handles load+process with selected at
+    //                              the front of the queue. draw_plots shows
+    //                              a "loading..." placeholder until ready.
+    //
+    // Main thread never touches a sample the bg could be writing to.
     void select_sample(int idx) {
         if (idx < 0 || idx >= (int)samples_.size()) return;
         selected_ = idx;
+        if (!bg_ || !loader_) return;
+
         auto& s = samples_[selected_];
+        auto neighbors = outward_indices(idx, (int)samples_.size() - 1);
 
-        if (!s.loaded) loader::load_csv(s);
-        if (s.loaded && !s.processed_valid) {
-            dsp::process(s, params_);
-        }
-
-        // Prefetch neighbors outward from current selection
-        if (bg_) {
-            auto neighbors = outward_indices(idx, (int)samples_.size() - 1);
-            bg_->enqueue(&samples_, params_, neighbors);
+        if (s.loaded) {
+            if (!s.processed_valid) dsp::process(s, params_);
+            // BG handles neighbors only; current is already done.
+            bg_->enqueue(&samples_, loader_.get(), params_, neighbors);
+        } else {
+            // BG handles current AND neighbors; current first.
+            neighbors.insert(neighbors.begin(), idx);
+            bg_->enqueue(&samples_, loader_.get(), params_, neighbors);
         }
     }
 
     void on_params_changed() {
         params_.version++;
 
-        // Invalidate all
+        // Invalidate processed state for all samples.
         for (auto& s : samples_) s.processed_valid = false;
 
-        // Reprocess current immediately
-        if (selected_ >= 0 && selected_ < (int)samples_.size()) {
-            auto& cur = samples_[selected_];
-            if (cur.loaded) dsp::process(cur, params_);
+        if (!bg_ || !loader_ || samples_.empty()) return;
+
+        // Main thread reprocesses current (if loaded); bg re-processes the rest.
+        int center = std::max(0, selected_);
+        if (selected_ >= 0 && selected_ < (int)samples_.size()
+            && samples_[selected_].loaded) {
+            dsp::process(samples_[selected_], params_);
+            auto neighbors = outward_indices(center, (int)samples_.size() - 1);
+            bg_->enqueue(&samples_, loader_.get(), params_, neighbors);
+        } else {
+            auto idxs = outward_indices(center, (int)samples_.size() - 1);
+            idxs.insert(idxs.begin(), center);
+            bg_->enqueue(&samples_, loader_.get(), params_, idxs);
+        }
+    }
+
+    // ── Async dataset open ──
+    //
+    // open_dataset() kicks off a background scan. Main thread polls
+    // commit_scan_if_ready() each frame; when the scan completes, the results
+    // are swapped in under a mutex and the load worker is (re)created. The UI
+    // shows a "Scanning..." spinner while the scan is in flight.
+
+    enum class ScanStatus { Idle, Scanning, Ready, Failed };
+
+    void open_dataset(const std::string& dir, DatasetFormat fmt_override) {
+        // Join any previous scan thread before starting a new one.
+        if (scan_thread_.joinable()) scan_thread_.join();
+
+        scan_status_.store(ScanStatus::Scanning);
+        scan_error_.clear();
+        scan_dir_ = dir;
+
+        scan_thread_ = std::thread([this, dir, fmt_override]() {
+            DatasetFormat fmt = (fmt_override == DatasetFormat::Auto)
+                ? detect_format(dir) : fmt_override;
+
+            auto loader = make_dataset_loader(fmt);
+            if (!loader) {
+                std::lock_guard<std::mutex> lk(scan_result_mtx_);
+                scan_error_ = "Could not create loader for format";
+                scan_status_.store(ScanStatus::Failed);
+                return;
+            }
+
+            std::vector<ECGSample> samples;
+            bool ok = loader->scan(dir, samples);
+            if (!ok) {
+                std::lock_guard<std::mutex> lk(scan_result_mtx_);
+                scan_error_ = std::string("No matching files in: ") + dir;
+                scan_status_.store(ScanStatus::Failed);
+                return;
+            }
+
+            std::lock_guard<std::mutex> lk(scan_result_mtx_);
+            pending_loader_ = std::move(loader);
+            pending_samples_ = std::move(samples);
+            pending_format_ = fmt;
+            scan_status_.store(ScanStatus::Ready);
+        });
+    }
+
+    // Called each frame on the main thread. If the scan worker has staged new
+    // results, swap them in and kick off background loading. Safe to call
+    // every frame — no-op when nothing is ready.
+    void commit_scan_if_ready() {
+        ScanStatus st = scan_status_.load();
+        if (st != ScanStatus::Ready) return;
+
+        // Join the scan thread — it has already staged results.
+        if (scan_thread_.joinable()) scan_thread_.join();
+
+        // Tear down the load worker before swapping its inputs.
+        bg_.reset();
+
+        {
+            std::lock_guard<std::mutex> lk(scan_result_mtx_);
+            loader_ = std::move(pending_loader_);
+            samples_ = std::move(pending_samples_);
+            current_format_ = pending_format_;
+            current_dir_ = scan_dir_;
         }
 
-        // Queue the rest in background, expanding outward from current selection
-        if (bg_) {
-            auto others = outward_indices(selected_, (int)samples_.size() - 1);
-            bg_->enqueue(&samples_, params_, others);
-        }
+        selected_ = -1;
+        bg_ = std::make_unique<BackgroundProcessor>();
+        scan_status_.store(ScanStatus::Idle);
+
+        std::cout << "[dataset] Opened " << current_dir_ << " ("
+                  << format_display_name(current_format_) << "): "
+                  << samples_.size() << " samples" << std::endl;
+
+        if (!samples_.empty()) select_sample(0);
     }
 
     // ── UI ──
@@ -635,9 +633,85 @@ private:
         ImGui::Separator();
         ImGui::Spacing();
 
+        // ── Dataset ──
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "DATASET");
+        ImGui::Separator();
+
+        // Current path + format
+        if (current_dir_.empty()) {
+            ImGui::TextColored({0.8f, 0.8f, 0.8f, 1.0f}, "(none — click Open Dataset...)");
+        } else {
+            ImGui::TextWrapped("%s", current_dir_.c_str());
+            ImGui::TextColored({0.7f, 0.85f, 1.0f, 1.0f}, "Format: %s",
+                format_display_name(current_format_));
+        }
+
+        // Format override combo (applies to the NEXT open; current format is
+        // shown above and reflects what's loaded).
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Open as:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        const DatasetFormat fmts[] = {
+            DatasetFormat::Auto,
+            DatasetFormat::SingleFilePerSample,
+            DatasetFormat::LeadFilesRowPerSample,
+        };
+        if (ImGui::BeginCombo("##fmt_override", format_display_name(pending_fmt_override_))) {
+            for (DatasetFormat f : fmts) {
+                bool sel = (f == pending_fmt_override_);
+                if (ImGui::Selectable(format_display_name(f), sel)) pending_fmt_override_ = f;
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::Spacing();
+
+        ScanStatus st = scan_status_.load();
+        bool scanning = (st == ScanStatus::Scanning);
+
+        if (scanning) ImGui::BeginDisabled();
+        if (ImGui::Button("Open Dataset...", ImVec2(-1, 28))) {
+            IGFD::FileDialogConfig cfg;
+            cfg.path = current_dir_.empty() ? "." : current_dir_;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            // Empty filter → directory selection mode in ImGuiFileDialog.
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "OpenDatasetDlg", "Choose dataset directory", nullptr, cfg);
+        }
+        if (scanning) ImGui::EndDisabled();
+
+        if (scanning) {
+            ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f}, "Scanning...");
+        } else if (st == ScanStatus::Failed) {
+            std::string err;
+            { std::lock_guard<std::mutex> lk(scan_result_mtx_); err = scan_error_; }
+            ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Scan failed:");
+            ImGui::TextWrapped("%s", err.c_str());
+        }
+
+        // Render the file dialog itself (modal). Min size keeps it usable.
+        ImVec2 min_sz(600, 400);
+        ImVec2 max_sz(FLT_MAX, FLT_MAX);
+        if (ImGuiFileDialog::Instance()->Display("OpenDatasetDlg",
+                ImGuiWindowFlags_NoCollapse, min_sz, max_sz)) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                open_dataset(dir, pending_fmt_override_);
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         if (samples_.empty()) {
-            ImGui::TextColored({1.0f, 0.7f, 0.3f, 1.0f}, "No ECG data loaded.");
-            ImGui::TextWrapped("Place .csv files in the data directory and restart.");
+            if (!scanning && st != ScanStatus::Failed) {
+                ImGui::TextColored({1.0f, 0.7f, 0.3f, 1.0f}, "No dataset loaded.");
+                ImGui::TextWrapped("Click Open Dataset... and pick the directory containing your CSVs.");
+            }
             return;
         }
 
@@ -790,9 +864,25 @@ private:
     }
 
     void draw_plots() {
-        if (selected_ < 0 || selected_ >= (int)samples_.size()) return;
+        if (selected_ < 0 || selected_ >= (int)samples_.size()) {
+            ImGui::TextColored({0.7f, 0.7f, 0.8f, 1.0f}, "Select a sample from the panel.");
+            return;
+        }
         auto& s = samples_[selected_];
-        if (!s.loaded || !s.processed_valid) return;
+        if (!s.loaded || !s.processed_valid) {
+            ImGui::Spacing();
+            ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f},
+                "Loading sample %s ...", s.file_id.c_str());
+            if (bg_) {
+                int done = bg_->processed_count();
+                int total = bg_->total_queued();
+                float frac = total > 0 ? (float)done / (float)total : 0.0f;
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%d/%d", done, total);
+                ImGui::ProgressBar(frac, ImVec2(-1, 18), buf);
+            }
+            return;
+        }
 
         float avail_h = ImGui::GetContentRegionAvail().y;
         float avail_w = ImGui::GetContentRegionAvail().x;
@@ -857,7 +947,25 @@ private:
     IntroScreen intro_;
 
     std::vector<ECGSample> samples_;
-    int selected_ = 0;
+    int selected_ = -1;
+    std::unique_ptr<IDatasetLoader> loader_;
+    std::string current_dir_;
+    DatasetFormat current_format_ = DatasetFormat::Auto;
+
+    // Async scan state. The scan runs on `scan_thread_`; results are staged
+    // in `pending_*` under `scan_result_mtx_` and committed on the main
+    // thread in commit_scan_if_ready(). Main thread polls `scan_status_`.
+    std::atomic<ScanStatus> scan_status_{ScanStatus::Idle};
+    std::thread scan_thread_;
+    std::mutex scan_result_mtx_;
+    std::unique_ptr<IDatasetLoader> pending_loader_;
+    std::vector<ECGSample> pending_samples_;
+    DatasetFormat pending_format_ = DatasetFormat::Auto;
+    std::string scan_dir_;
+    std::string scan_error_;
+
+    // UI state for the format-override combo in the Open dialog.
+    DatasetFormat pending_fmt_override_ = DatasetFormat::Auto;
 
     ProcessingParams params_;
     std::unique_ptr<BackgroundProcessor> bg_;

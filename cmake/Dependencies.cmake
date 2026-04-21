@@ -215,6 +215,16 @@ add_subdirectory(${THIRD_PARTY_DIR}/implot EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS implot)
 message(STATUS "    ✓ ImPlot configured")
 
+# --- ImGuiFileDialog (File open/save dialog for ImGui) ---
+message(STATUS "  Configuring ImGuiFileDialog...")
+# Upstream ships a CMakeLists.txt that tries find_package(imgui) QUIET and skips
+# linking when not found. We use our own imgui submodule target instead.
+set(IGFD_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${THIRD_PARTY_DIR}/ImGuiFileDialog EXCLUDE_FROM_ALL)
+target_link_libraries(ImGuiFileDialog PUBLIC imgui)
+list(APPEND CALIPER_DEPENDENCY_LIBS ImGuiFileDialog)
+message(STATUS "    ✓ ImGuiFileDialog configured")
+
 # ============================================================================
 # Category 4: PyTorch (Large dependency)
 # ============================================================================

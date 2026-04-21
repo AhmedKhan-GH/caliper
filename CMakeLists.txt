@@ -73,6 +73,7 @@ include(cmake/Dependencies.cmake)
 add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
+    src/dataset.cpp
 )
 
 # No CUDA test executables - CPU/MPS only build
