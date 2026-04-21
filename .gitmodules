@@ -21,9 +21,11 @@
 [submodule "third_party/glew"]
 	path = third_party/glew
 	url = https://github.com/nigels-com/glew.git
+	ignore = all
 [submodule "third_party/ImGuiFileDialog"]
 	path = third_party/ImGuiFileDialog
 	url = https://github.com/aiekick/ImGuiFileDialog.git
 [submodule "third_party/implot3d"]
 	path = third_party/implot3d
 	url = https://github.com/brenocq/implot3d.git
+	ignore = all
