@@ -209,6 +209,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui-node-editor EX
 list(APPEND CALIPER_DEPENDENCY_LIBS imgui-node-editor)
 message(STATUS "    ✓ imgui-node-editor configured")
 
+# --- ImGuiColorTextEdit (Syntax-highlighted text editor widget) ---
+message(STATUS "  Configuring ImGuiColorTextEdit...")
+set(IMGUI_COLOR_TEXT_EDIT_SRC_DIR "${THIRD_PARTY_DIR}/ImGuiColorTextEdit")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui-color-text-edit EXCLUDE_FROM_ALL)
+list(APPEND CALIPER_DEPENDENCY_LIBS imgui-color-text-edit)
+message(STATUS "    ✓ ImGuiColorTextEdit configured")
+
 # --- ImTerm (Header-only ImGui terminal/console widget) ---
 message(STATUS "  Configuring ImTerm...")
 set(IMTERM_SRC_DIR "${THIRD_PARTY_DIR}/ImTerm")
