@@ -57,6 +57,12 @@ const AppletCard kApplets[] = {
       "label histograms, and quick-filter tools.",
       "SET", false, AppletKind::None,
       ImVec4(0.55f, 0.75f, 0.95f, 1.0f) },      // silver-blue
+
+    { "Node Sandbox", "Pipeline-graph experiment",
+      "Blueprints-style canvas for prototyping signal-processing "
+      "pipelines. Drag pins to wire nodes; toolbar to add or fit.",
+      "GFX", true,  AppletKind::NodeEditor,
+      ImVec4(0.55f, 0.95f, 0.75f, 1.0f) },      // mint
 };
 constexpr int kNumApplets = (int)(sizeof(kApplets) / sizeof(kApplets[0]));
 

@@ -6,6 +6,7 @@ struct GLFWwindow;
 enum class AppletKind {
     None,
     ECGExplorer,
+    NodeEditor,
 };
 
 // ============================================================================
