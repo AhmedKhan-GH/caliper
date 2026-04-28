@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <random>
 
 // ============================================================================
 // Applet registry
@@ -213,11 +214,12 @@ in vec2 v_uv;
 out vec4 frag;
 uniform sampler2D u_scene;
 uniform sampler2D u_bloom;
+uniform float     u_bloom_mix;
 void main() {
     vec3 scene = texture(u_scene, v_uv).rgb;
     vec3 bloom = texture(u_bloom, v_uv).rgb;
 
-    vec3 col = scene + bloom * 1.1;
+    vec3 col = scene + bloom * u_bloom_mix;
 
     // Filmic tonemap + approximate gamma
     col = col / (col + vec3(1.0));
@@ -300,6 +302,34 @@ void destroy_fbo(FBO& f) {
 // Scene state
 // ============================================================================
 
+// Live parameters. Anything in `render` is cheap (uniforms only);
+// changes to anything in `geom` require rebuilding the VBO.
+struct HopfParams {
+    // --- render (cheap / per-frame uniforms) ---
+    float speed            = 1.35f;  // global time multiplier (0 = pause)
+    float rate_s3_yw       = -0.059f; // rot rate in (y,w) plane, rad/sec
+    float rate_s3_xz       = 0.033f; // rot rate in (x,z) plane, rad/sec
+    float rate_outer_spin  = -0.001f; // outer Y-axis spin rate, rad/sec
+    float static_tilt      = -0.89012f; // fixed X-axis tilt (rad) ≈ -51°
+    float scale            = 0.266f; // post-stereographic scale
+    float fov_deg          = 30.6f;
+    float cam_dist         = 3.39f;
+    float line_width       = 1.40f;
+    float bloom_threshold  = 0.66f;
+    float bloom_mix        = 0.71f;
+
+    // --- geometry (rebuild on change) ---
+    int   n_rings       = 5;
+    int   n_phi         = 32;
+    int   n_seg         = 128;
+    float theta_min_frac = 0.11f;   // fraction of π
+    float theta_max_frac = 0.83f;
+    float saturation    = 0.83f;
+    float hue_offset    = 0.30f;    // palette rotation, [0,1)
+    float value_base    = 0.59f;    // HSV-V base before sin(θ) modulation
+    float value_swing   = 0.49f;    // HSV-V sin(θ) amplitude
+};
+
 struct IntroScreen::State {
     // Programs
     GLuint prog_fiber     = 0;   // VS_HOPF + FS_HOPF
@@ -319,9 +349,21 @@ struct IntroScreen::State {
     int fbo_w = 0, fbo_h = 0;
 
     // Time / camera
-    double t_sim         = 0.0;
     double prev_time     = 0.0;
     float  camera_angle  = 0.0f;
+
+    // Angle accumulators (so changing rate sliders doesn't jump — each
+    // integrates independently from its current rate).
+    float ang_outer = 0.0f;
+    float ang_s3_yw = 0.0f;
+    float ang_s3_xz = 0.0f;
+
+    // Live params + geometry-rebuild flag
+    HopfParams p;
+    bool geom_dirty = false;
+
+    // Last non-zero speed, restored when un-pausing via the toggle button.
+    float saved_speed = 1.0f;
 
     // UI
     AppletKind chosen_kind = AppletKind::None;
@@ -377,19 +419,22 @@ void hsv_to_rgb(float h, float s, float v, float& r, float& g, float& b) {
 //
 // Color is HSV with hue = φ/2π, value modulated by sin(θ) so equatorial
 // rings glow brighter than polar ones.
-void build_hopf(GLuint& vao, GLuint& vbo, int& out_num_verts) {
+void build_hopf(const HopfParams& p,
+                GLuint& vao, GLuint& vbo, int& out_num_verts) {
     struct V { float x, y, z, w, r, g, b; };
     std::vector<V> verts;
 
-    const int N_RINGS = 11;           // concentric tori (θ layers)
-    const int N_PHI   = 28;           // fibers per torus (φ spokes)
-    const int N_SEG   = 128;          // per-fiber sample density
+    const int N_RINGS = std::max(1, p.n_rings);
+    const int N_PHI   = std::max(3, p.n_phi);
+    const int N_SEG   = std::max(8, p.n_seg);
 
     // θ sampled across the upper hemisphere; the singularity at θ=π is
     // handled by the shader, but keeping θ moderate avoids excessive
     // stretching under rotation.
-    const float theta_min = 0.08f * (float)M_PI;
-    const float theta_max = 0.72f * (float)M_PI;
+    float tmin = std::min(p.theta_min_frac, p.theta_max_frac);
+    float tmax = std::max(p.theta_min_frac, p.theta_max_frac);
+    const float theta_min = tmin * (float)M_PI;
+    const float theta_max = tmax * (float)M_PI;
 
     verts.reserve((size_t)N_RINGS * N_PHI * N_SEG * 2);
     std::vector<V> fiber(N_SEG);
@@ -404,10 +449,12 @@ void build_hopf(GLuint& vao, GLuint& vbo, int& out_num_verts) {
         for (int pi = 0; pi < N_PHI; pi++) {
             float phi = (float)pi * 2.0f * (float)M_PI / (float)N_PHI;
 
-            float h = phi / (2.0f * (float)M_PI);
-            float v = 0.62f + 0.38f * std::sin(theta);
+            float h = phi / (2.0f * (float)M_PI) + p.hue_offset;
+            h -= std::floor(h);
+            float v = p.value_base + p.value_swing * std::sin(theta);
+            v = std::max(0.0f, std::min(1.0f, v));
             float r, g, b;
-            hsv_to_rgb(h, 0.92f, v, r, g, b);
+            hsv_to_rgb(h, p.saturation, v, r, g, b);
 
             for (int si = 0; si < N_SEG; si++) {
                 float psi = (float)si * 2.0f * (float)M_PI / (float)N_SEG;
@@ -444,6 +491,40 @@ void build_hopf(GLuint& vao, GLuint& vbo, int& out_num_verts) {
     glBindVertexArray(0);
 }
 
+// Roll a fresh aesthetically-biased configuration. Ranges are tighter than the
+// full slider extents so the output stays within visually pleasing territory.
+void randomize_params(HopfParams& p) {
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+    auto rnd  = [&](float lo, float hi) { return lo + u01(rng) * (hi - lo); };
+    auto rndi = [&](int lo, int hi)     { return lo + (int)(u01(rng) * (float)(hi - lo + 1)); };
+
+    // Animation
+    p.speed           = rnd(0.5f, 2.0f);
+    p.rate_s3_yw      = rnd(-0.6f, 0.6f);
+    p.rate_s3_xz      = rnd(-0.6f, 0.6f);
+    p.rate_outer_spin = rnd(-0.3f, 0.3f);
+    p.static_tilt     = rnd(-1.0f, 1.0f);
+
+    // Projection / style
+    p.scale      = rnd(0.12f, 0.35f);
+    p.line_width = rnd(1.0f, 2.2f);
+
+    // Bloom
+    p.bloom_threshold = rnd(0.3f, 0.9f);
+    p.bloom_mix       = rnd(0.6f, 1.6f);
+
+    // Geometry
+    p.n_rings        = rndi(5, 18);
+    p.n_phi          = rndi(12, 36);
+    p.theta_min_frac = rnd(0.04f, 0.15f);
+    p.theta_max_frac = rnd(0.55f, 0.85f);
+    p.hue_offset     = u01(rng);
+    p.saturation     = rnd(0.7f, 1.0f);
+    p.value_base     = rnd(0.5f, 0.75f);
+    p.value_swing    = rnd(0.25f, 0.5f);
+}
+
 } // namespace
 
 // ============================================================================
@@ -465,7 +546,7 @@ bool IntroScreen::initialize() {
     }
 
     build_fs_quad(s_->fs_vao, s_->fs_vbo);
-    build_hopf(s_->fiber_vao, s_->fiber_vbo, s_->num_fiber_verts);
+    build_hopf(s_->p, s_->fiber_vao, s_->fiber_vbo, s_->num_fiber_verts);
 
     s_->fbo_w = s_->fbo_h = 0;
     s_->prev_time = glfwGetTime();
@@ -480,12 +561,31 @@ void IntroScreen::update(GLFWwindow* /*window*/) {
     double dt  = now - s_->prev_time;
     s_->prev_time = now;
 
-    s_->t_sim        += dt;
+    // Speed-scaled advance. Each rotation has its own angle accumulator so
+    // that changing a rate slider mid-flight just changes the slope — the
+    // fibration never jumps.
+    const auto& p = s_->p;
+    float sdt = (float)dt * p.speed;
+    s_->ang_outer += sdt * p.rate_outer_spin;
+    s_->ang_s3_yw += sdt * p.rate_s3_yw;
+    s_->ang_s3_xz += sdt * p.rate_s3_xz;
     s_->camera_angle += (float)dt * 0.06f;
 }
 
 void IntroScreen::render_3d(int fb_w, int fb_h) {
     if (!s_ || !s_->ok || fb_w <= 0 || fb_h <= 0) return;
+
+    // Rebuild the fibration geometry if a geometry slider changed since
+    // last frame. Cheap enough (~1ms for default sizes) to do inline.
+    if (s_->geom_dirty) {
+        if (s_->fiber_vbo) glDeleteBuffers(1, &s_->fiber_vbo);
+        if (s_->fiber_vao) glDeleteVertexArrays(1, &s_->fiber_vao);
+        s_->fiber_vbo = s_->fiber_vao = 0;
+        build_hopf(s_->p, s_->fiber_vao, s_->fiber_vbo, s_->num_fiber_verts);
+        s_->geom_dirty = false;
+    }
+
+    const auto& p = s_->p;
 
     // Cap internal render resolution. On 4K/5K retina the scene FBO would
     // otherwise consume 60–120+ MB before we even draw anything; the starfield
@@ -512,22 +612,22 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
 
     // Camera + rotating model
     float aspect = (float)fb_w / (float)fb_h;
-    glm::mat4 proj = glm::perspective(glm::radians(42.0f), aspect, 0.1f, 50.0f);
-    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 3.2f),
+    glm::mat4 proj = glm::perspective(glm::radians(p.fov_deg), aspect, 0.1f, 50.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, p.cam_dist),
                                  glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     glm::mat4 vp = proj * view;
 
-    // Outer rigid spin (slower now that the internal rotation carries motion).
+    // Outer rigid spin + fixed tilt.
     glm::mat4 model(1.0f);
-    model = glm::rotate(model, (float)s_->t_sim * 0.12f,
+    model = glm::rotate(model, s_->ang_outer,
                         glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::rotate(model, 0.42f, glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, p.static_tilt, glm::vec3(1.0f, 0.0f, 0.0f));
 
     // Internal S³ rotation. We compose two different plane-rotations
     // (y–w and x–z) at incommensurate rates so the fibration never
     // retraces a closed orbit — the visual is a perpetual flow.
-    float a1 = (float)s_->t_sim * 0.30f;   // rotation in the (y, w) plane
-    float a2 = (float)s_->t_sim * 0.17f;   // rotation in the (x, z) plane
+    float a1 = s_->ang_s3_yw;  // (y, w) plane
+    float a2 = s_->ang_s3_xz;  // (x, z) plane
     glm::mat4 r_yw(1.0f);
     r_yw[1][1] =  std::cos(a1); r_yw[3][1] =  std::sin(a1);
     r_yw[1][3] = -std::sin(a1); r_yw[3][3] =  std::cos(a1);
@@ -553,8 +653,8 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
                        1, GL_FALSE, glm::value_ptr(vp));
     glUniformMatrix4fv(glGetUniformLocation(s_->prog_fiber, "u_s3_rot"),
                        1, GL_FALSE, glm::value_ptr(s3_rot));
-    glUniform1f(glGetUniformLocation(s_->prog_fiber, "u_scale"), 0.22f);
-    glLineWidth(1.4f);
+    glUniform1f(glGetUniformLocation(s_->prog_fiber, "u_scale"), p.scale);
+    glLineWidth(p.line_width);
     glBindVertexArray(s_->fiber_vao);
     glDrawArrays(GL_LINES, 0, s_->num_fiber_verts);
 
@@ -567,7 +667,7 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_->scene.color);
     glUniform1i(glGetUniformLocation(s_->prog_bright, "u_scene"), 0);
-    glUniform1f(glGetUniformLocation(s_->prog_bright, "u_threshold"), 0.55f);
+    glUniform1f(glGetUniformLocation(s_->prog_bright, "u_threshold"), p.bloom_threshold);
     glBindVertexArray(s_->fs_vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -602,6 +702,7 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, s_->bloom_a.color);
     glUniform1i(glGetUniformLocation(s_->prog_composite, "u_bloom"), 1);
+    glUniform1f(glGetUniformLocation(s_->prog_composite, "u_bloom_mix"), p.bloom_mix);
     glBindVertexArray(s_->fs_vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -738,7 +839,13 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
     float col_x = 24.0f;
     float col_y = 28.0f;
     float col_w = 320.0f;
-    float col_h = ws.y - 56.0f;
+
+    // Applet-list height — only as tall as the actual applet rows.
+    const float applet_row_h = 60.0f;
+    const float applet_list_h =
+        (float)kNumApplets * applet_row_h
+        + (float)(kNumApplets - 1) * 8.0f    // ItemSpacing.y, pushed below
+        + 12.0f;                             // small visual padding
 
     // Header + divider (drawn via draw list so we don't disturb cursor flow)
     dl->AddText(nullptr, 12.0f,
@@ -756,13 +863,12 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 8.0f));
 
     ImGui::BeginChild("##applet_scroll",
-                      ImVec2(col_w, col_h - 28.0f),
+                      ImVec2(col_w, applet_list_h),
                       false,
                       ImGuiWindowFlags_NoBackground);
 
-    const float row_h = 60.0f;
     for (int i = 0; i < kNumApplets; i++) {
-        if (draw_applet_row(i, kApplets[i], row_h)) {
+        if (draw_applet_row(i, kApplets[i], applet_row_h)) {
             s_->chosen_kind = kApplets[i].kind;
             launch_requested_ = true;
         }
@@ -775,6 +881,173 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
     ImGui::End();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+
+    // ── Fibration parameters panel (anchored below applets, collapsible) ──
+    // Sized to the tallest tab (Geometry, 2 cols × 5 rows). ImGui's title-bar
+    // chevron gives us collapse-to-title-bar for free; NoMove/NoResize keep
+    // it anchored as a fixed panel rather than a loose window.
+    const float panel_w = col_w;
+    const float panel_h = 360.0f;
+    ImGui::SetNextWindowPos(
+        ImVec2(vp->WorkPos.x + col_x,
+               vp->WorkPos.y + col_y + 28.0f + applet_list_h + 14.0f),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.82f);
+
+    bool panel_open = ImGui::Begin("Parameters", nullptr,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+
+    if (panel_open) {
+        HopfParams& p = s_->p;
+        bool geom_changed = false;
+
+        // Tighten the gap between a label and its slider.
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  ImVec2(6.0f, 2.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,  ImVec2(4.0f, 6.0f));
+
+        auto lbl = [](const char* t) {
+            ImGui::TextDisabled("%s", t);
+            ImGui::SetNextItemWidth(-1);
+        };
+
+        if (ImGui::BeginTabBar("##fib_tabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
+            if (ImGui::BeginTabItem("Animation")) {
+                if (ImGui::BeginTable("##anim_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
+                    ImGui::TableNextColumn();
+                    lbl("speed");
+                    ImGui::SliderFloat("##speed", &p.speed, 0.0f, 3.0f, "%.2fx");
+                    ImGui::TableNextColumn();
+                    lbl("outer spin");
+                    ImGui::SliderFloat("##outer_spin", &p.rate_outer_spin, -1.0f, 1.0f, "%.3f");
+
+                    ImGui::TableNextColumn();
+                    lbl("y-w rate");
+                    ImGui::SliderFloat("##yw_rate", &p.rate_s3_yw, -1.5f, 1.5f, "%.3f");
+                    ImGui::TableNextColumn();
+                    lbl("tilt");
+                    ImGui::SliderAngle("##tilt", &p.static_tilt, -180.0f, 180.0f);
+
+                    ImGui::TableNextColumn();
+                    lbl("x-z rate");
+                    ImGui::SliderFloat("##xz_rate", &p.rate_s3_xz, -1.5f, 1.5f, "%.3f");
+                    ImGui::TableNextColumn();
+                    ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Camera")) {
+                if (ImGui::BeginTable("##cam_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
+                    ImGui::TableNextColumn();
+                    lbl("FOV");
+                    ImGui::SliderFloat("##fov", &p.fov_deg, 15.0f, 90.0f, "%.1f deg");
+                    ImGui::TableNextColumn();
+                    lbl("cam dist");
+                    ImGui::SliderFloat("##cam_dist", &p.cam_dist, 1.5f, 10.0f, "%.2f");
+
+                    ImGui::TableNextColumn();
+                    lbl("scale");
+                    ImGui::SliderFloat("##scale", &p.scale, 0.02f, 1.0f, "%.3f");
+                    ImGui::TableNextColumn();
+                    lbl("line width");
+                    ImGui::SliderFloat("##line_w", &p.line_width, 0.5f, 4.0f, "%.2f");
+                    ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Bloom")) {
+                if (ImGui::BeginTable("##bloom_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
+                    ImGui::TableNextColumn();
+                    lbl("threshold");
+                    ImGui::SliderFloat("##bthresh", &p.bloom_threshold, 0.0f, 2.0f, "%.2f");
+                    ImGui::TableNextColumn();
+                    lbl("mix");
+                    ImGui::SliderFloat("##bmix", &p.bloom_mix, 0.0f, 3.0f, "%.2f");
+                    ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Geometry")) {
+                if (ImGui::BeginTable("##geom_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
+                    ImGui::TableNextColumn();
+                    lbl("rings");
+                    if (ImGui::SliderInt("##rings", &p.n_rings, 1, 40))  geom_changed = true;
+                    ImGui::TableNextColumn();
+                    lbl("hue offset");
+                    if (ImGui::SliderFloat("##hue", &p.hue_offset, 0.0f, 1.0f, "%.2f"))  geom_changed = true;
+
+                    ImGui::TableNextColumn();
+                    lbl("fibers");
+                    if (ImGui::SliderInt("##fibers", &p.n_phi, 3, 120))  geom_changed = true;
+                    ImGui::TableNextColumn();
+                    lbl("saturation");
+                    if (ImGui::SliderFloat("##sat", &p.saturation, 0.0f, 1.0f, "%.2f"))  geom_changed = true;
+
+                    ImGui::TableNextColumn();
+                    lbl("segments");
+                    if (ImGui::SliderInt("##segs", &p.n_seg, 8, 512))  geom_changed = true;
+                    ImGui::TableNextColumn();
+                    lbl("value base");
+                    if (ImGui::SliderFloat("##vbase", &p.value_base, 0.0f, 1.0f, "%.2f"))  geom_changed = true;
+
+                    ImGui::TableNextColumn();
+                    lbl("theta min / pi");
+                    if (ImGui::SliderFloat("##tmin", &p.theta_min_frac, 0.0f, 1.0f, "%.2f"))  geom_changed = true;
+                    ImGui::TableNextColumn();
+                    lbl("value swing");
+                    if (ImGui::SliderFloat("##vswing", &p.value_swing, 0.0f, 1.0f, "%.2f"))  geom_changed = true;
+
+                    ImGui::TableNextColumn();
+                    lbl("theta max / pi");
+                    if (ImGui::SliderFloat("##tmax", &p.theta_max_frac, 0.0f, 1.0f, "%.2f"))  geom_changed = true;
+                    ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+
+        ImGui::PopStyleVar(2);
+
+        // Persistent action rows — full-width playback toggle on top,
+        // Default / Randomize split underneath. Anchored to bottom of panel,
+        // visible from any tab.
+        const float btn_h    = ImGui::GetFrameHeight();
+        const float pad      = ImGui::GetStyle().WindowPadding.y;
+        const float gap_y    = ImGui::GetStyle().ItemSpacing.y;
+        const float gap_x    = ImGui::GetStyle().ItemSpacing.x;
+        const float half     = (ImGui::GetContentRegionAvail().x - gap_x) * 0.5f;
+        const float rows_h   = btn_h * 2.0f + gap_y;
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - rows_h - pad);
+
+        const bool paused = (p.speed == 0.0f);
+        const char* lbl_pp = paused ? "Play" : "Pause";
+        if (ImGui::Button(lbl_pp, ImVec2(-1, btn_h))) {
+            if (paused) {
+                p.speed = (s_->saved_speed > 0.0f) ? s_->saved_speed : 1.0f;
+            } else {
+                s_->saved_speed = p.speed;
+                p.speed = 0.0f;
+            }
+        }
+        if (ImGui::Button("Default", ImVec2(half, btn_h))) {
+            p = HopfParams{};
+            s_->saved_speed = 1.0f;
+            geom_changed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Randomize", ImVec2(half, btn_h))) {
+            randomize_params(p);
+            geom_changed = true;
+        }
+
+        if (geom_changed) s_->geom_dirty = true;
+    }
+    ImGui::End();
 }
 
 void IntroScreen::cleanup() {
