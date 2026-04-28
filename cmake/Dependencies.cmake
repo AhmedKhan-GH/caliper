@@ -209,6 +209,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui-node-editor EX
 list(APPEND CALIPER_DEPENDENCY_LIBS imgui-node-editor)
 message(STATUS "    ✓ imgui-node-editor configured")
 
+# --- ImTerm (Header-only ImGui terminal/console widget) ---
+message(STATUS "  Configuring ImTerm...")
+set(IMTERM_SRC_DIR "${THIRD_PARTY_DIR}/ImTerm")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imterm EXCLUDE_FROM_ALL)
+list(APPEND CALIPER_DEPENDENCY_LIBS imterm)
+message(STATUS "    ✓ ImTerm configured")
+
 # --- ImGuiFileDialog (File open/save dialog for ImGui) ---
 message(STATUS "  Configuring ImGuiFileDialog...")
 # Upstream ships a CMakeLists.txt that tries find_package(imgui) QUIET and skips
