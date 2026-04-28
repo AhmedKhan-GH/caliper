@@ -29,3 +29,6 @@
 	path = third_party/implot3d
 	url = https://github.com/brenocq/implot3d.git
 	ignore = all
+[submodule "third_party/imgui-node-editor"]
+	path = third_party/imgui-node-editor
+	url = https://github.com/thedmd/imgui-node-editor.git

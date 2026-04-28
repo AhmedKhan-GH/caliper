@@ -202,6 +202,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot3d EXCLUDE_FRO
 list(APPEND CALIPER_DEPENDENCY_LIBS implot3d)
 message(STATUS "    ✓ ImPlot3D configured")
 
+# --- imgui-node-editor (Blueprints-style node graph editor) ---
+message(STATUS "  Configuring imgui-node-editor...")
+set(IMGUI_NODE_EDITOR_SRC_DIR "${THIRD_PARTY_DIR}/imgui-node-editor")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui-node-editor EXCLUDE_FROM_ALL)
+list(APPEND CALIPER_DEPENDENCY_LIBS imgui-node-editor)
+message(STATUS "    ✓ imgui-node-editor configured")
+
 # --- ImGuiFileDialog (File open/save dialog for ImGui) ---
 message(STATUS "  Configuring ImGuiFileDialog...")
 # Upstream ships a CMakeLists.txt that tries find_package(imgui) QUIET and skips
