@@ -162,16 +162,10 @@ if(WIN32)
     )
 
 else()
-    # macOS/Linux: Build from source using CMake wrapper
-    # Copy our CMake wrapper if it doesn't exist
-    if(NOT EXISTS "${THIRD_PARTY_DIR}/glew/CMakeLists.txt")
-        configure_file(
-            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/glew_CMakeLists.txt"
-            "${THIRD_PARTY_DIR}/glew/CMakeLists.txt"
-            COPYONLY
-        )
-    endif()
-    add_subdirectory(${THIRD_PARTY_DIR}/glew EXCLUDE_FROM_ALL)
+    # macOS/Linux: Build from source via our out-of-tree wrapper so the
+    # submodule stays pristine (no CMakeLists gets copied inside it).
+    set(GLEW_SRC_DIR "${THIRD_PARTY_DIR}/glew")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/glew EXCLUDE_FROM_ALL)
 endif()
 
 list(APPEND CALIPER_DEPENDENCY_LIBS libglew_static)
@@ -189,42 +183,22 @@ message(STATUS "    ✓ GLFW configured")
 
 # --- ImGui (UI library) ---
 message(STATUS "  Configuring ImGui...")
-# Copy our othercmake.txt wrapper if it doesn't exist
-if(NOT EXISTS "${THIRD_PARTY_DIR}/imgui/CMakeLists.txt")
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui_CMakeLists.txt"
-        "${THIRD_PARTY_DIR}/imgui/CMakeLists.txt"
-        COPYONLY
-    )
-endif()
-add_subdirectory(${THIRD_PARTY_DIR}/imgui EXCLUDE_FROM_ALL)
+set(IMGUI_SRC_DIR "${THIRD_PARTY_DIR}/imgui")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS imgui)
 message(STATUS "    ✓ ImGui configured")
 
 # --- ImPlot (Plotting library) ---
 message(STATUS "  Configuring ImPlot...")
-# Copy our othercmake.txt wrapper if it doesn't exist
-if(NOT EXISTS "${THIRD_PARTY_DIR}/implot/CMakeLists.txt")
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot_CMakeLists.txt"
-        "${THIRD_PARTY_DIR}/implot/CMakeLists.txt"
-        COPYONLY
-    )
-endif()
-add_subdirectory(${THIRD_PARTY_DIR}/implot EXCLUDE_FROM_ALL)
+set(IMPLOT_SRC_DIR "${THIRD_PARTY_DIR}/implot")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS implot)
 message(STATUS "    ✓ ImPlot configured")
 
 # --- ImPlot3D (3D Plotting library) ---
 message(STATUS "  Configuring ImPlot3D...")
-if(NOT EXISTS "${THIRD_PARTY_DIR}/implot3d/CMakeLists.txt")
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot3d_CMakeLists.txt"
-        "${THIRD_PARTY_DIR}/implot3d/CMakeLists.txt"
-        COPYONLY
-    )
-endif()
-add_subdirectory(${THIRD_PARTY_DIR}/implot3d EXCLUDE_FROM_ALL)
+set(IMPLOT3D_SRC_DIR "${THIRD_PARTY_DIR}/implot3d")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot3d EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS implot3d)
 message(STATUS "    ✓ ImPlot3D configured")
 
