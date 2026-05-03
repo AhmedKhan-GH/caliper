@@ -19,6 +19,10 @@ endif()
 # Build Options (PyTorch-style)
 # ============================================================================
 
+# Force static runtime library for all targets to match DuckDB
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(BUILD_SHARED_LIBS OFF)
+
 # CUDA enabled
 option(USE_CUDA "Build with CUDA support" ON)
 
@@ -106,8 +110,7 @@ if(MSVC)
         /wd4275  # non dll-interface class used as base
     )
 
-    # Set runtime library to match PyTorch (Multi-threaded DLL)
-    set_property(TARGET caliper PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    # Runtime library is set globally to match DuckDB (static runtime)
 
     # Copy PyTorch DLLs to executable directory after build
     file(GLOB TORCH_DLLS "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib/*.dll")

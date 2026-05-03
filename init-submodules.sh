@@ -46,11 +46,15 @@ echo "Initializing submodules..."
 git submodule update --init --recursive --force
 
 # Generate GLEW sources (only needed on macOS/Linux, Windows uses pre-built binaries)
-if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "win32" && "$OSTYPE" != "cygwin" ]]; then
+# Detect Windows more reliably
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" || -n "$WINDIR" ]]; then
+    echo "Skipping GLEW source generation on Windows (using pre-built binaries)"
+else
     echo "Generating GLEW sources..."
     if [ -d "third_party/glew" ]; then
         cd third_party/glew
-        make extensions > /dev/null 2>&1
+        # Suppress output to avoid creating NUL files on Windows
+        make extensions >/dev/null 2>&1
         if [ -f "src/glew.c" ]; then
             echo "  ✓ GLEW sources generated successfully"
         else
@@ -60,8 +64,6 @@ if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "win32" && "$OSTYPE" != "cygwin" ]]; t
     else
         echo "  ✗ GLEW submodule not found"
     fi
-else
-    echo "Skipping GLEW source generation on Windows (using pre-built binaries)"
 fi
 
 echo ""

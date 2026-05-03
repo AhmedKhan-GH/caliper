@@ -224,6 +224,14 @@ set(ENABLE_SANITIZER         OFF CACHE BOOL "" FORCE)
 set(ENABLE_UBSAN             OFF CACHE BOOL "" FORCE)
 set(ENABLE_THREAD_SANITIZER  OFF CACHE BOOL "" FORCE)
 set(DUCKDB_EXPLICIT_VERSION "v1.5.2" CACHE STRING "" FORCE)
+# Set explicit platform to avoid running duckdb_platform_binary which can create NUL files on Windows
+if(WIN32)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(DUCKDB_EXPLICIT_PLATFORM "windows_amd64" CACHE STRING "" FORCE)
+    else()
+        set(DUCKDB_EXPLICIT_PLATFORM "windows_x86" CACHE STRING "" FORCE)
+    endif()
+endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
 # DuckDB doesn't set target_include_directories on duckdb_static — it relies
 # on global include_directories() inside its own subdirectory. Re-attach the
@@ -231,6 +239,9 @@ add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
 target_include_directories(duckdb_static INTERFACE
     $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/duckdb/src/include>
 )
+# Define DUCKDB_BUILD_LIBRARY to tell DuckDB headers we're linking statically
+# This prevents __declspec(dllimport) decorations on Windows
+target_compile_definitions(duckdb_static INTERFACE DUCKDB_BUILD_LIBRARY)
 # DuckDB's extension/ subdirectory tries to append its loader objects to
 # ALL_OBJECT_FILES *after* src/ has already created duckdb_static, so the
 # extension-loader symbols (ExtensionHelper::LoadAllExtensions etc.) end up

@@ -1,3 +1,6 @@
+#define _USE_MATH_DEFINES
+#include <cmath>
+
 #include "intro_screen.h"
 
 #include <GL/glew.h>
@@ -10,7 +13,6 @@
 
 #include <vector>
 #include <string>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
