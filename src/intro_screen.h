@@ -7,6 +7,7 @@ enum class AppletKind {
     None,
     ECGExplorer,
     NodeEditor,
+    UCDHPreE,
 };
 
 // ============================================================================

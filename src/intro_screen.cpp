@@ -63,6 +63,13 @@ const AppletCard kApplets[] = {
       "pipelines. Drag pins to wire nodes; toolbar to add or fit.",
       "GFX", true,  AppletKind::NodeEditor,
       ImVec4(0.55f, 0.95f, 0.75f, 1.0f) },      // mint
+
+    { "UCDH PreE", "Preliminary exploration",
+      "DuckDB-backed dataset explorer. Pick a folder, browse the "
+      "supported files (csv, parquet, json), and inspect schema "
+      "and a row preview for any selected file.",
+      "EDA", true,  AppletKind::UCDHPreE,
+      ImVec4(1.00f, 0.78f, 0.55f, 1.0f) },      // amber
 };
 constexpr int kNumApplets = (int)(sizeof(kApplets) / sizeof(kApplets[0]));
 
