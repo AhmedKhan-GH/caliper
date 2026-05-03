@@ -75,6 +75,8 @@ add_executable(caliper
     src/intro_screen.cpp
     src/dataset.cpp
     src/node_editor_applet.cpp
+    src/ucdh_pree_applet.cpp
+    src/app_paths.cpp
 )
 
 # No CUDA test executables - CPU/MPS only build

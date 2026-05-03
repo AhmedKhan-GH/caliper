@@ -209,6 +209,41 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui-node-editor EX
 list(APPEND CALIPER_DEPENDENCY_LIBS imgui-node-editor)
 message(STATUS "    ✓ imgui-node-editor configured")
 
+# --- DuckDB (Embedded analytical database) ---
+# Heavy dep. We disable the shell, unit tests, benchmarks, and python module so
+# only the core static library gets built. First configure takes a few minutes;
+# subsequent incremental builds are fine.
+message(STATUS "  Configuring DuckDB...")
+set(BUILD_UNITTESTS  OFF CACHE BOOL "" FORCE)
+set(BUILD_SHELL      OFF CACHE BOOL "" FORCE)
+set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(BUILD_PYTHON     OFF CACHE BOOL "" FORCE)
+# DuckDB enables sanitizers by default in debug builds, which requires the
+# UBSan/ASan runtime at final link. We don't want that for our shipping binary.
+set(ENABLE_SANITIZER         OFF CACHE BOOL "" FORCE)
+set(ENABLE_UBSAN             OFF CACHE BOOL "" FORCE)
+set(ENABLE_THREAD_SANITIZER  OFF CACHE BOOL "" FORCE)
+set(DUCKDB_EXPLICIT_VERSION "v1.5.2" CACHE STRING "" FORCE)
+add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
+# DuckDB doesn't set target_include_directories on duckdb_static — it relies
+# on global include_directories() inside its own subdirectory. Re-attach the
+# include path so our targets can `#include <duckdb.hpp>`.
+target_include_directories(duckdb_static INTERFACE
+    $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/duckdb/src/include>
+)
+# DuckDB's extension/ subdirectory tries to append its loader objects to
+# ALL_OBJECT_FILES *after* src/ has already created duckdb_static, so the
+# extension-loader symbols (ExtensionHelper::LoadAllExtensions etc.) end up
+# in a sibling target instead of inside duckdb_static. Link that sibling
+# explicitly here.
+list(APPEND CALIPER_DEPENDENCY_LIBS
+    duckdb_static
+    duckdb_generated_extension_loader
+    parquet_extension
+    core_functions_extension
+)
+message(STATUS "    ✓ DuckDB configured (target: duckdb_static)")
+
 # --- ImGuiColorTextEdit (Syntax-highlighted text editor widget) ---
 message(STATUS "  Configuring ImGuiColorTextEdit...")
 set(IMGUI_COLOR_TEXT_EDIT_SRC_DIR "${THIRD_PARTY_DIR}/ImGuiColorTextEdit")
