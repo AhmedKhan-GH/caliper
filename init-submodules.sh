@@ -53,8 +53,19 @@ else
     echo "Generating GLEW sources..."
     if [ -d "third_party/glew" ]; then
         cd third_party/glew
-        # Suppress output to avoid creating NUL files on Windows
+        # GLEW's make scripts invoke "python" — create a temporary shim
+        # so it works whether the system has "python", "python3", or both.
+        if ! command -v python &>/dev/null && command -v python3 &>/dev/null; then
+            _glew_shim_dir=$(mktemp -d)
+            ln -s "$(command -v python3)" "$_glew_shim_dir/python"
+            export PATH="$_glew_shim_dir:$PATH"
+        fi
         make extensions >/dev/null 2>&1
+        # Clean up shim if we created one
+        if [ -n "$_glew_shim_dir" ]; then
+            rm -rf "$_glew_shim_dir"
+            unset _glew_shim_dir
+        fi
         if [ -f "src/glew.c" ]; then
             echo "  ✓ GLEW sources generated successfully"
         else
