@@ -35,43 +35,12 @@ struct AppletCard {
 };
 
 const AppletCard kApplets[] = {
-    { "ECG Explorer",    "12-lead waveform viewer",
-      "Stream 12-lead ECG recordings, run baseline-wander "
-      "correction and z-score normalization, and inspect per-lead "
-      "statistics in a linked multi-plot view.",
+    { "UCDH Workbench",  "ECG analysis + inference",
+      "Load and visualize the UCDH Senior Design dataset, run "
+      "signal preprocessing, inspect raw data via DuckDB, and "
+      "run model inference on ECG recordings.",
       "ECG", true,  AppletKind::ECGExplorer,
       ImVec4(0.45f, 0.72f, 1.00f, 1.0f) },      // soft blue
-
-    { "Spectral Analyzer", "Frequency-domain view",
-      "FFT and spectrogram surface for windowed segments of the "
-      "signal. Compare spectral power across leads.",
-      "FFT", false, AppletKind::None,
-      ImVec4(0.70f, 0.62f, 1.00f, 1.0f) },      // periwinkle
-
-    { "Rhythm Classifier", "Arrhythmia inference",
-      "Run a convolutional model over ECG segments to classify "
-      "rhythm. Overlays per-beat attribution.",
-      "CNN", false, AppletKind::None,
-      ImVec4(0.88f, 0.55f, 0.92f, 1.0f) },      // light violet
-
-    { "Dataset Inspector", "Corpus-level overview",
-      "Browse the full recording corpus with distribution plots, "
-      "label histograms, and quick-filter tools.",
-      "SET", false, AppletKind::None,
-      ImVec4(0.55f, 0.75f, 0.95f, 1.0f) },      // silver-blue
-
-    { "Node Sandbox", "Pipeline-graph experiment",
-      "Blueprints-style canvas for prototyping signal-processing "
-      "pipelines. Drag pins to wire nodes; toolbar to add or fit.",
-      "GFX", true,  AppletKind::NodeEditor,
-      ImVec4(0.55f, 0.95f, 0.75f, 1.0f) },      // mint
-
-    { "UCDH PreE", "Preliminary exploration",
-      "DuckDB-backed dataset explorer. Pick a folder, browse the "
-      "supported files (csv, parquet, json), and inspect schema "
-      "and a row preview for any selected file.",
-      "EDA", true,  AppletKind::UCDHPreE,
-      ImVec4(1.00f, 0.78f, 0.55f, 1.0f) },      // amber
 };
 constexpr int kNumApplets = (int)(sizeof(kApplets) / sizeof(kApplets[0]));
 
