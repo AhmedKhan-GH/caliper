@@ -434,6 +434,7 @@ struct UCDHWorkbenchApplet::State {
     std::unique_ptr<BackgroundProcessor> bg;
 
     bool lead_visible[NUM_LEADS] = {true,true,true,true,true,true,true,true,true,true,true,true};
+    int last_plot_sample = -1;
     char filter_buf[128] = {};
     std::vector<float> time_axis;
 
@@ -872,10 +873,13 @@ void UCDHWorkbenchApplet::draw_panel() {
             if (!filter.empty() && s.samples[i].file_id.find(filter) == std::string::npos)
                 continue;
             bool is_selected = (i == s.selected);
-            std::string label = s.samples[i].file_id;
-            if (s.samples[i].loaded)
-                label += " (" + std::to_string(s.samples[i].num_samples) + ")";
-            if (!s.samples[i].processed_valid && s.samples[i].loaded)
+            auto& si = s.samples[i];
+            std::string label = si.file_id;
+            if (si.loaded) {
+                label += " (" + std::to_string(si.num_samples) + ")";
+                if (si.downsampled) label += " [ds]";
+            }
+            if (!si.processed_valid && si.loaded)
                 label += " *";
             if (ImGui::Selectable(label.c_str(), is_selected))
                 select_sample(i);
@@ -936,7 +940,10 @@ void UCDHWorkbenchApplet::draw_panel() {
     if (s.selected >= 0 && s.selected < (int)s.samples.size()) {
         auto& samp = s.samples[s.selected];
         ImGui::Text("ID: %s", samp.file_id.c_str());
-        ImGui::Text("Samples: %d", samp.num_samples);
+        if (samp.downsampled)
+            ImGui::Text("Samples: %d (ds from %d)", samp.num_samples, samp.original_num_samples);
+        else
+            ImGui::Text("Samples: %d", samp.num_samples);
         ImGui::Text("Rate: %.0f Hz", samp.sampling_rate);
         ImGui::Text("Duration: %.1f sec", samp.num_samples / std::max(1.0f, samp.sampling_rate));
 
@@ -1027,6 +1034,10 @@ void UCDHWorkbenchApplet::draw_leads() {
             s.time_axis[i] = (float)i / samp.sampling_rate;
     }
 
+    // Reset axis limits when the displayed sample changes
+    bool sample_changed = (s.selected != s.last_plot_sample);
+    s.last_plot_sample = s.selected;
+
     ImPlot::GetInputMap().ZoomRate = 0.15f;
 
     for (int lead = 0; lead < NUM_LEADS; lead++) {
@@ -1038,11 +1049,14 @@ void UCDHWorkbenchApplet::draw_leads() {
         snprintf(plot_id, sizeof(plot_id), "##lead_%d", lead);
 
         if (ImPlot::BeginPlot(plot_id, ImVec2(avail_w, plot_h),
-                ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoInputs)) {
+                ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
             ImPlot::SetupAxes("Time (s)", LEAD_NAMES[lead],
-                ImPlotAxisFlags_NoLabel,
-                ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_NoLabel);
+                ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
             ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Once);
+            auto& st = samp.stats[lead];
+            float margin = (st.max_val - st.min_val) * 0.1f;
+            ImPlot::SetupAxisLimits(ImAxis_Y1, st.min_val - margin, st.max_val + margin,
+                sample_changed ? ImGuiCond_Always : ImGuiCond_Once);
 
             ImPlot::Annotation(0.0, samp.stats[lead].max_val, LEAD_COLORS[lead],
                 ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
