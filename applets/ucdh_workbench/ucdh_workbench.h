@@ -23,7 +23,7 @@ private:
     void draw_raw_browser();
     void draw_model_tab();
 
-    void open_dataset(const std::string& dir, int fmt_override);
+    void open_dataset(const std::string& dir);
     void select_sample(int idx);
     void on_params_changed();
     void ensure_vcg_cached();
