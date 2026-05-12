@@ -163,13 +163,27 @@ model.to(device);
 
 ---
 
+## Third-Party Licenses
+
+Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/`.
+
+| Library | License | Copyright | Permits |
+|---|---|---|---|
+| [GLFW](https://github.com/glfw/glfw) | Zlib | 2002-2006 Marcus Geelnard, 2006-2019 Camilla Löwy | Use, modify, and distribute freely with no attribution required in binaries. |
+| [GLM](https://github.com/g-truc/glm) | MIT | 2005 G-Truc Creation | Use, modify, and distribute freely provided the license notice is included. |
+| [ImGui](https://github.com/ocornut/imgui) | MIT | 2014-2026 Omar Cornut | Use, modify, and distribute freely provided the license notice is included. |
+| [ImPlot](https://github.com/epezent/implot) | MIT | 2020 Evan Pezent | Use, modify, and distribute freely provided the license notice is included. |
+| [ImPlot3D](https://github.com/brenocq/implot3d) | MIT | 2024-2026 Breno Cunha Queiroz | Use, modify, and distribute freely provided the license notice is included. |
+| [imgui-node-editor](https://github.com/thedmd/imgui-node-editor) | MIT | 2019 Michał Cichoń | Use, modify, and distribute freely provided the license notice is included. |
+| [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) | MIT | 2017 BalazsJako | Use, modify, and distribute freely provided the license notice is included. |
+| [ImTerm](https://github.com/Organic-Code/ImTerm) | MIT | 2018 Lucas Lazare | Use, modify, and distribute freely provided the license notice is included. |
+| [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) | MIT | 2018-2025 Stephane Cuillerdier (Aiekick) | Use, modify, and distribute freely provided the license notice is included. |
+| [GLEW](https://github.com/nigels-com/glew) | BSD 3-Clause / MIT | 2002-2007 Milan Ikits, Marcelo E. Magallon, Lev Povalahev | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
+| [DuckDB](https://github.com/duckdb/duckdb) | MIT | 2018-2026 Stichting DuckDB Foundation | Use, modify, and distribute freely provided the license notice is included. |
+| [LibTorch](https://pytorch.org) | BSD 3-Clause | 2016 Facebook Inc. | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
+
+---
+
 ## Acknowledgments
 
 Build system inspired by [PyTorch](https://github.com/pytorch/pytorch).
-
-**Dependencies:**
-- PyTorch by Meta AI
-- ImGui by Omar Cornut
-- ImPlot by Evan Pezent
-- GLFW by Marcus Geelnard and Camilla Löwy
-- GLM by Christophe Riccio
