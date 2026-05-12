@@ -124,7 +124,9 @@ void butterworth_highpass(std::vector<float>& data, float cutoff_hz, float sampl
         sos[s].a2 =  (1.0 - alpha + wc2) / denom;
     }
 
-    int pad = std::min(12, n - 1);
+    // Pad length must cover the filter's transient (mirrors scipy filtfilt padlen=3*order).
+    // For 2 cascaded SOS sections (order 4), use 3*order * samples_per_cycle.
+    int pad = std::min((int)(3.0 * 4.0 * sample_rate / cutoff_hz), n - 1);
     int pn = n + 2 * pad;
     std::vector<double> buf(pn);
 
@@ -244,13 +246,21 @@ public:
     void enqueue(std::vector<ECGSample>* samples, IDatasetLoader* loader,
                  const ProcessingParams& params, const std::vector<int>& indices) {
         std::lock_guard<std::mutex> lk(mtx_);
-        std::queue<int>().swap(queue_);
+        queue_.clear();
         samples_ = samples;
         loader_ = loader;
         params_ = params;
-        for (int idx : indices) queue_.push(idx);
+        for (int idx : indices) queue_.push_back(idx);
         processed_count_.store(0);
         total_queued_.store((int)indices.size());
+        cv_.notify_one();
+    }
+
+    void prioritize(const std::vector<int>& indices) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (int i = (int)indices.size() - 1; i >= 0; i--)
+            queue_.push_front(indices[i]);
+        total_queued_.fetch_add((int)indices.size());
         cv_.notify_one();
     }
 
@@ -273,7 +283,7 @@ private:
                 if (queue_.empty()) continue;
 
                 idx = queue_.front();
-                queue_.pop();
+                queue_.pop_front();
                 params = params_;
                 sample = &(*samples_)[idx];
                 loader = loader_;
@@ -295,7 +305,7 @@ private:
     std::mutex mtx_;
     std::condition_variable cv_;
     bool stop_;
-    std::queue<int> queue_;
+    std::deque<int> queue_;
     std::vector<ECGSample>* samples_ = nullptr;
     IDatasetLoader* loader_ = nullptr;
     ProcessingParams params_;
@@ -512,6 +522,15 @@ bool UCDHWorkbenchApplet::initialize() {
         std::cerr << "[workbench] DuckDB init failed: " << e.what() << std::endl;
     }
 
+    // Restore last dataset if saved
+    {
+        std::ifstream f(caliper::app_data_path("last_dataset.txt"));
+        std::string last_dir;
+        if (f.is_open() && std::getline(f, last_dir) && fs::is_directory(last_dir)) {
+            open_dataset(last_dir, static_cast<int>(DatasetFormat::Auto));
+        }
+    }
+
     return true;
 }
 
@@ -570,6 +589,12 @@ void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
         std::cout << "[workbench] Opened " << s_->current_dir << " ("
                   << format_display_name(s_->current_format) << "): "
                   << s_->samples.size() << " samples" << std::endl;
+
+        // Persist last dataset path
+        {
+            std::ofstream f(caliper::app_data_path("last_dataset.txt"));
+            if (f.is_open()) f << s_->current_dir;
+        }
 
         // Also scan folder for DuckDB raw file browser
         scan_folder(s_->current_dir, s_->duck_files);
@@ -686,15 +711,21 @@ void UCDHWorkbenchApplet::select_sample(int idx) {
     if (!s.bg || !s.loader) return;
 
     auto& samp = s.samples[idx];
-    auto neighbors = outward_indices(idx, (int)s.samples.size() - 1, (int)s.samples.size());
+
+    if (samp.loaded && samp.processed_valid) return;
 
     if (samp.loaded) {
-        if (!samp.processed_valid) dsp::process(samp, s.params);
-        s.bg->enqueue(&s.samples, s.loader.get(), s.params, neighbors);
-    } else {
-        neighbors.insert(neighbors.begin(), idx);
-        s.bg->enqueue(&s.samples, s.loader.get(), s.params, neighbors);
+        dsp::process(samp, s.params);
+        return;
     }
+
+    // Need to load from disk — prioritize without clearing existing queue
+    std::vector<int> to_load;
+    to_load.push_back(idx);
+    for (int i : outward_indices(idx, 20, (int)s.samples.size())) {
+        if (!s.samples[i].loaded) to_load.push_back(i);
+    }
+    s.bg->prioritize(to_load);
 }
 
 void UCDHWorkbenchApplet::on_params_changed() {
