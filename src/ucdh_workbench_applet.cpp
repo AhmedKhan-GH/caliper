@@ -26,6 +26,7 @@
 #include <implot3d.h>
 #include <ImGuiFileDialog.h>
 #include <duckdb.hpp>
+#include <torch/script.h>
 
 namespace fs = std::filesystem;
 
@@ -445,6 +446,13 @@ struct UCDHWorkbenchApplet::State {
     int preview_limit = 100;
     int col_offset = 0;
     int col_page = 50;
+
+    // ── Model inference ──
+    torch::jit::Module model;
+    bool model_loaded = false;
+    std::string model_path;
+    std::string model_error;
+    std::string model_output;
 
     void run_preview(const DiscoveredFile& f) {
         preview = PreviewSnapshot{};
@@ -1264,20 +1272,94 @@ void UCDHWorkbenchApplet::draw_raw_browser() {
 // ============================================================================
 
 void UCDHWorkbenchApplet::draw_model_tab() {
+    auto& s = *s_;
     ImGui::Spacing();
     ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "MODEL INFERENCE");
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::TextDisabled("No model loaded.");
+
+    if (ImGui::Button("Load Model...", ImVec2(160, 28))) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = s.current_dir.empty() ? "." : s.current_dir;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "LoadModelDlg", "Select TorchScript Model", ".pt,.pth", cfg);
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("LoadModelDlg",
+            ImGuiWindowFlags_NoCollapse, ImVec2(600, 400))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+            s.model_error.clear();
+            s.model_output.clear();
+            try {
+                s.model = torch::jit::load(path);
+                s.model.eval();
+                s.model_loaded = true;
+                s.model_path = path;
+            } catch (const c10::Error& e) {
+                s.model_loaded = false;
+                s.model_error = e.what();
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
     ImGui::Spacing();
-    ImGui::TextWrapped(
-        "This tab will load a TorchScript (.pt) model trained on the UCDH "
-        "dataset and run inference on the selected ECG sample. "
-        "Use torch.jit.script() or torch.jit.trace() in Python to export "
-        "your trained model, then load it here.");
+
+    if (!s.model_loaded) {
+        if (!s.model_error.empty()) {
+            ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Load failed:");
+            ImGui::TextWrapped("%s", s.model_error.c_str());
+        } else {
+            ImGui::TextDisabled("No model loaded.");
+            ImGui::Spacing();
+            ImGui::TextWrapped(
+                "Load a TorchScript (.pt) model trained on the UCDH dataset. "
+                "Use torch.jit.script() or torch.jit.trace() in Python to "
+                "export your trained model.");
+        }
+        return;
+    }
+
+    ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "Model loaded");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", fs::path(s.model_path).filename().string().c_str());
+
     ImGui::Spacing();
-    ImGui::Button("Load Model...", ImVec2(160, 28));
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Not yet implemented");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    bool has_sample = s.selected >= 0 && s.selected < (int)s.samples.size()
+                      && s.samples[s.selected].processed_valid;
+
+    if (!has_sample) {
+        ImGui::TextDisabled("Select a processed ECG sample to run inference.");
+        return;
+    }
+
+    if (ImGui::Button("Run Inference", ImVec2(160, 28))) {
+        auto& samp = s.samples[s.selected];
+        s.model_output.clear();
+        try {
+            const int nl = (int)samp.processed.size();
+            const int n = samp.num_samples;
+            auto input = torch::zeros({1, nl, n});
+            auto acc = input.accessor<float, 3>();
+            for (int l = 0; l < nl; l++)
+                for (int i = 0; i < n; i++)
+                    acc[0][l][i] = samp.processed[l][i];
+            auto out = s.model.forward({input}).toTensor();
+            std::ostringstream oss;
+            oss << out.sizes() << "\n" << out.slice(1, 0, std::min((int64_t)10, out.size(1)));
+            s.model_output = oss.str();
+        } catch (const c10::Error& e) {
+            s.model_output = std::string("Inference error: ") + e.what();
+        }
+    }
+
+    if (!s.model_output.empty()) {
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", s.model_output.c_str());
+    }
 }
 
