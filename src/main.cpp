@@ -27,8 +27,6 @@
 
 #include "intro_screen.h"
 #include "dataset.h"
-#include "node_editor_applet.h"
-#include "ucdh_pree_applet.h"
 
 namespace fs = std::filesystem;
 
@@ -351,8 +349,6 @@ private:
 enum class AppPage {
     Landing,
     ECGApp,
-    NodeEditor,
-    UCDHPreE,
 };
 
 class CaliperApp {
@@ -408,16 +404,6 @@ public:
             return false;
         }
 
-        if (!node_editor_.initialize()) {
-            std::cerr << "Node editor applet init failed" << std::endl;
-            return false;
-        }
-
-        if (!ucdh_pree_.initialize()) {
-            std::cerr << "UCDH PreE applet init failed" << std::endl;
-            return false;
-        }
-
         // Dataset is opened via the UI ("Open Dataset..." button). No
         // hardcoded defaults — paths are user-supplied at runtime.
         return true;
@@ -454,31 +440,11 @@ public:
                         page_ = AppPage::ECGApp;
                         params_.baseline_wander_correction = true;
                         if (params_.baseline_cutoff_hz <= 0) params_.baseline_cutoff_hz = 0.5f;
-                        glfwSetWindowTitle(window_, "Caliper - ECG Explorer");
-                    } else if (k == AppletKind::NodeEditor) {
-                        page_ = AppPage::NodeEditor;
-                        glfwSetWindowTitle(window_, "Caliper - Node Sandbox");
-                    } else if (k == AppletKind::UCDHPreE) {
-                        page_ = AppPage::UCDHPreE;
-                        glfwSetWindowTitle(window_, "Caliper - UCDH PreE");
+                        glfwSetWindowTitle(window_, "Caliper - UCDH Workbench");
                     }
                 }
             } else if (page_ == AppPage::ECGApp) {
                 draw_ecg_ui();
-            } else if (page_ == AppPage::NodeEditor) {
-                node_editor_.draw_ui(dw, dh);
-                if (node_editor_.should_exit()) {
-                    node_editor_.reset_exit_flag();
-                    page_ = AppPage::Landing;
-                    glfwSetWindowTitle(window_, "Caliper");
-                }
-            } else if (page_ == AppPage::UCDHPreE) {
-                ucdh_pree_.draw_ui(dw, dh);
-                if (ucdh_pree_.should_exit()) {
-                    ucdh_pree_.reset_exit_flag();
-                    page_ = AppPage::Landing;
-                    glfwSetWindowTitle(window_, "Caliper");
-                }
             }
 
             ImGui::Render();
@@ -491,8 +457,6 @@ public:
     void cleanup() {
         bg_.reset(); // join background load thread
         if (scan_thread_.joinable()) scan_thread_.join();
-        ucdh_pree_.cleanup();
-        node_editor_.cleanup();
         intro_.cleanup();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -1172,8 +1136,6 @@ private:
     GLFWwindow* window_ = nullptr;
     AppPage page_ = AppPage::Landing;
     IntroScreen intro_;
-    NodeEditorApplet node_editor_;
-    UCDHPreEApplet   ucdh_pree_;
 
     std::vector<ECGSample> samples_;
     int selected_ = -1;
