@@ -362,7 +362,7 @@ void scan_folder(const std::string& dir, std::vector<DiscoveredFile>& out) {
     out.clear();
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return;
-    for (auto& entry : fs::directory_iterator(dir, ec)) {
+    for (auto& entry : fs::recursive_directory_iterator(dir, ec)) {
         if (ec) break;
         if (!entry.is_regular_file(ec)) continue;
         const auto p = entry.path().string();
@@ -370,7 +370,7 @@ void scan_folder(const std::string& dir, std::vector<DiscoveredFile>& out) {
         if (!fmt) continue;
         DiscoveredFile f;
         f.path = p;
-        f.display_name = entry.path().filename().string();
+        f.display_name = fs::relative(entry.path(), dir, ec).string();
         f.fmt = fmt;
         std::error_code se;
         f.size_bytes = fs::file_size(entry.path(), se);
