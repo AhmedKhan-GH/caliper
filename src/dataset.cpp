@@ -7,6 +7,7 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -79,6 +80,70 @@ DatasetFormat detect_format(const std::string& dir) {
 
 namespace {
 
+void load_metadata(const std::string& dir, std::vector<ECGSample>& samples) {
+    static const char* kCandidates[] = {
+        "metadata_with_ekg.csv", "metadata.csv", "labels.csv",
+    };
+    for (const char* name : kCandidates) {
+        fs::path p = fs::path(dir) / name;
+        std::ifstream f(p);
+        if (!f.is_open()) continue;
+
+        std::string header;
+        if (!std::getline(f, header)) continue;
+
+        // Find column indices for ECGTestID and PatLabel
+        std::stringstream hss(header);
+        std::string col;
+        int id_col = -1, label_col = -1, ci = 0;
+        while (std::getline(hss, col, ',')) {
+            size_t s = col.find_first_not_of(" \t\r\n");
+            if (s != std::string::npos) col = col.substr(s);
+            size_t e = col.find_last_not_of(" \t\r\n");
+            if (e != std::string::npos) col = col.substr(0, e + 1);
+            if (col == "ECGTestID") id_col = ci;
+            else if (col == "PatLabel") label_col = ci;
+            ci++;
+        }
+        if (id_col < 0 || label_col < 0) continue;
+
+        // Build lookup: file_id → label
+        std::unordered_map<std::string, std::string> labels;
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            std::stringstream ss(line);
+            std::string val;
+            int c = 0;
+            std::string id, lbl;
+            while (std::getline(ss, val, ',')) {
+                if (c == id_col) {
+                    // Strip ".0" suffix (e.g. "960040.0" → "960040")
+                    auto dot = val.find('.');
+                    id = (dot != std::string::npos) ? val.substr(0, dot) : val;
+                    size_t s = id.find_first_not_of(" \t");
+                    if (s != std::string::npos) id = id.substr(s);
+                }
+                if (c == label_col) {
+                    lbl = val;
+                    size_t s = lbl.find_first_not_of(" \t\r\n");
+                    if (s != std::string::npos) lbl = lbl.substr(s);
+                    size_t e = lbl.find_last_not_of(" \t\r\n");
+                    if (e != std::string::npos) lbl = lbl.substr(0, e + 1);
+                }
+                c++;
+            }
+            if (!id.empty() && !lbl.empty()) labels[id] = lbl;
+        }
+
+        for (auto& samp : samples) {
+            auto it = labels.find(samp.file_id);
+            if (it != labels.end()) samp.label = it->second;
+        }
+        return;
+    }
+}
+
 class SingleFilePerSampleLoader : public IDatasetLoader {
 public:
     DatasetFormat format() const override { return DatasetFormat::SingleFilePerSample; }
@@ -100,6 +165,8 @@ public:
         }
         std::sort(out.begin(), out.end(),
             [](const ECGSample& a, const ECGSample& b) { return a.file_id < b.file_id; });
+
+        load_metadata(dir, out);
         return !out.empty();
     }
 
