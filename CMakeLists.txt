@@ -70,48 +70,52 @@ option(BUILD_TESTS "Build tests" OFF)
 include(cmake/Dependencies.cmake)
 
 # ============================================================================
-# Main Application
+# Applet SDK (interface target for shared library applets)
 # ============================================================================
 
-# Application sources
+add_library(caliper_applet_sdk INTERFACE)
+target_include_directories(caliper_applet_sdk INTERFACE
+    ${CMAKE_SOURCE_DIR}/src
+    ${THIRD_PARTY_DIR}/imgui
+    ${THIRD_PARTY_DIR}/imgui/backends
+    ${THIRD_PARTY_DIR}/implot
+    ${THIRD_PARTY_DIR}/implot3d
+    ${THIRD_PARTY_DIR}/ImGuiFileDialog
+    ${THIRD_PARTY_DIR}/duckdb/src/include
+)
+target_link_libraries(caliper_applet_sdk INTERFACE
+    imgui implot implot3d ImGuiFileDialog
+)
+target_compile_definitions(caliper_applet_sdk INTERFACE
+    DUCKDB_BUILD_LIBRARY
+    IMGUI_IMPL_OPENGL_LOADER_GLEW
+)
+
+# ============================================================================
+# Main Application (host)
+# ============================================================================
+
 add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
-    src/dataset.cpp
-    src/ucdh_workbench_applet.cpp
+    src/applet_host.cpp
     src/app_paths.cpp
 )
 
-# No CUDA test executables - CPU/MPS only build
-
-# Link all dependencies
+# Host links UI libs + platform libs (no DuckDB, no LibTorch)
 target_link_libraries(caliper PRIVATE ${CALIPER_DEPENDENCY_LIBS})
 
-# Define USE_CUDA preprocessor macro if CUDA is enabled
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
 endif()
 
-# Set C++ standard
 set_target_properties(caliper PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
 
-# MSVC-specific settings
 if(MSVC)
-    # Set warning level and enable parallel compilation
-    target_compile_options(caliper PRIVATE /W3 /MP)
-
-    # Suppress specific warnings from PyTorch headers
-    target_compile_options(caliper PRIVATE
-        /wd4251  # class needs to have dll-interface
-        /wd4275  # non dll-interface class used as base
-    )
-
-    # Runtime library is set globally to match DuckDB (static runtime)
-
-    # Copy PyTorch DLLs to executable directory after build
+    target_compile_options(caliper PRIVATE /W3 /MP /wd4251 /wd4275)
     file(GLOB TORCH_DLLS "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib/*.dll")
     add_custom_command(TARGET caliper POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -121,7 +125,6 @@ if(MSVC)
     )
 endif()
 
-# Set RPATH for dynamic libraries
 if(APPLE)
     set_target_properties(caliper PROPERTIES
         INSTALL_RPATH "@executable_path;@executable_path/../third_party/libtorch/lib"
@@ -135,6 +138,12 @@ elseif(UNIX)
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib"
     )
 endif()
+
+# ============================================================================
+# Applets (each builds a shared library)
+# ============================================================================
+
+add_subdirectory(applets/ucdh_workbench)
 
 # ============================================================================
 # Summary

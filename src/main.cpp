@@ -8,11 +8,20 @@
 #include <implot3d.h>
 
 #include "intro_screen.h"
-#include "ucdh_workbench_applet.h"
+#include "applet_host.h"
+#include "app_paths.h"
+
+#include <filesystem>
+#ifdef __APPLE__
+  #include <mach-o/dyld.h>
+#elif defined(_WIN32)
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+#endif
 
 enum class AppPage {
     Landing,
-    Workbench,
+    Applet,
 };
 
 class CaliperApp {
@@ -67,10 +76,43 @@ public:
             return false;
         }
 
-        if (!workbench_.initialize()) {
-            std::cerr << "Workbench init failed" << std::endl;
-            return false;
+        // Scan for applet shared libraries
+        std::string applets_dir = caliper::app_data_path("applets");
+        host_.scan(applets_dir);
+
+        // Also scan applets next to the executable (dev + prod)
+        {
+            namespace fs = std::filesystem;
+            std::string exe_dir;
+#ifdef __APPLE__
+            char path_buf[1024];
+            uint32_t path_size = sizeof(path_buf);
+            if (_NSGetExecutablePath(path_buf, &path_size) == 0)
+                exe_dir = fs::path(path_buf).parent_path().string();
+#elif defined(_WIN32)
+            char path_buf[MAX_PATH];
+            GetModuleFileNameA(nullptr, path_buf, MAX_PATH);
+            exe_dir = fs::path(path_buf).parent_path().string();
+#else
+            exe_dir = fs::read_symlink("/proc/self/exe", std::error_code{})
+                          .parent_path().string();
+#endif
+            if (!exe_dir.empty())
+                host_.scan((fs::path(exe_dir) / "applets").string());
         }
+
+        // Populate intro screen cards from loaded applets
+        std::vector<AppletCard> cards;
+        for (int i = 0; i < host_.count(); i++) {
+            auto& info = host_[i].info;
+            cards.push_back({
+                info.name ? info.name : "",
+                info.description ? info.description : "",
+                info.description ? info.description : "",
+                info.tag ? info.tag : "",
+            });
+        }
+        intro_.set_applets(std::move(cards));
 
         return true;
     }
@@ -98,16 +140,29 @@ public:
                 intro_.draw_ui(dw, dh);
                 if (intro_.should_launch()) {
                     intro_.reset_launch_flag();
-                    AppletKind k = intro_.selected_applet();
-                    if (k == AppletKind::ECGExplorer) {
-                        page_ = AppPage::Workbench;
-                        glfwSetWindowTitle(window_, "Caliper - UCDH Workbench");
+                    int idx = intro_.selected_index();
+                    if (idx >= 0 && idx < host_.count()) {
+                        CaliperHostContext ctx{};
+                        ctx.imgui    = ImGui::GetCurrentContext();
+                        ctx.implot   = ImPlot::GetCurrentContext();
+                        ctx.implot3d = ImPlot3D::GetCurrentContext();
+                        ctx.data_dir = caliper::app_data_dir().c_str();
+
+                        if (host_.launch(idx, ctx)) {
+                            active_applet_ = idx;
+                            page_ = AppPage::Applet;
+                            glfwSetWindowTitle(window_,
+                                ("Caliper - " + std::string(host_[idx].info.name)).c_str());
+                        }
                     }
                 }
-            } else if (page_ == AppPage::Workbench) {
-                workbench_.draw_ui(dw, dh);
-                if (workbench_.should_exit()) {
-                    workbench_.reset_exit_flag();
+            } else if (page_ == AppPage::Applet) {
+                host_.draw(active_applet_, dw, dh);
+
+                // Check for back-to-landing (Escape key for now)
+                if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                    host_.teardown(active_applet_);
+                    active_applet_ = -1;
                     page_ = AppPage::Landing;
                     glfwSetWindowTitle(window_, "Caliper");
                 }
@@ -121,7 +176,7 @@ public:
     }
 
     void cleanup() {
-        workbench_.cleanup();
+        host_.close_all();
         intro_.cleanup();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -161,7 +216,8 @@ private:
     GLFWwindow* window_ = nullptr;
     AppPage page_ = AppPage::Landing;
     IntroScreen intro_;
-    UCDHWorkbenchApplet workbench_;
+    AppletHost host_;
+    int active_applet_ = -1;
 };
 
 int main() {

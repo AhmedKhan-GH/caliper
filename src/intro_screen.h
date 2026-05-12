@@ -1,27 +1,16 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 struct GLFWwindow;
 
-// Registered applets that the landing screen can launch.
-enum class AppletKind {
-    None,
-    ECGExplorer,
+struct AppletCard {
+    std::string name;
+    std::string tagline;
+    std::string description;
+    std::string tag;
 };
-
-// ============================================================================
-// Caliper intro / landing screen.
-//
-//   OpenGL visualizer (stereographically projected Hopf fibration with
-//   HSV-colored fibers, FBO bloom post-processing) rendered behind an
-//   ImGui applet selector overlay.
-//
-// Frame lifecycle driven by main.cpp:
-//   initialize()      one-time GL setup (shaders, FBOs, geometry)
-//   update(win)       per-frame simulation, input
-//   render_3d(w,h)    3D scene + post-processing (renders into default FB)
-//   draw_ui(w,h)      ImGui overlay; sets launch_requested_ on confirm
-//   cleanup()         releases all owned GL resources
-// ============================================================================
 
 class IntroScreen {
 public:
@@ -31,9 +20,11 @@ public:
     void draw_ui(int win_w, int win_h);
     void cleanup();
 
-    bool       should_launch()     const { return launch_requested_; }
-    void       reset_launch_flag()       { launch_requested_ = false; }
-    AppletKind selected_applet()   const;
+    void set_applets(std::vector<AppletCard> cards);
+
+    bool should_launch()     const { return launch_requested_; }
+    void reset_launch_flag()       { launch_requested_ = false; }
+    int  selected_index()    const;
 
 private:
     struct State;
