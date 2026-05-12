@@ -874,7 +874,12 @@ void UCDHWorkbenchApplet::draw_panel() {
                 continue;
             bool is_selected = (i == s.selected);
             auto& si = s.samples[i];
-            std::string label = si.file_id;
+            std::string label;
+            if (!si.label.empty()) {
+                bool pos = si.label.find("Normal") == std::string::npos;
+                label = pos ? "[+] " : "[-] ";
+            }
+            label += si.file_id;
             if (si.loaded) {
                 label += " (" + std::to_string(si.num_samples) + ")";
                 if (si.downsampled) label += " [ds]";
@@ -940,6 +945,14 @@ void UCDHWorkbenchApplet::draw_panel() {
     if (s.selected >= 0 && s.selected < (int)s.samples.size()) {
         auto& samp = s.samples[s.selected];
         ImGui::Text("ID: %s", samp.file_id.c_str());
+        if (!samp.label.empty()) {
+            bool positive = samp.label.find("Normal") == std::string::npos;
+            ImVec4 col = positive ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+                                  : ImVec4(0.4f, 1.0f, 0.6f, 1.0f);
+            ImGui::TextColored(col, "%s", positive ? "Positive" : "Negative");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", samp.label.c_str());
+        }
         if (samp.downsampled)
             ImGui::Text("Samples: %d (ds from %d)", samp.num_samples, samp.original_num_samples);
         else
@@ -1032,7 +1045,7 @@ void UCDHWorkbenchApplet::draw_leads() {
         snprintf(plot_id, sizeof(plot_id), "##lead_%d", lead);
 
         if (ImPlot::BeginPlot(plot_id, ImVec2(avail_w, plot_h),
-                ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
+                ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoInputs)) {
             ImPlot::SetupAxes("Time (s)", LEAD_NAMES[lead],
                 ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
             ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Once);

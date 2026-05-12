@@ -33,6 +33,7 @@ extern const char* LEAD_NAMES[NUM_LEADS];
 struct ECGSample {
     std::string file_id;
     std::string filepath;   // opaque to the UI; loaders encode whatever they need
+    std::string label;
     std::vector<std::vector<float>> raw;
     std::vector<std::vector<float>> processed;
     float sampling_rate = 0.0f;
