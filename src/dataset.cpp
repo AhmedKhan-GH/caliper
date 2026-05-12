@@ -130,8 +130,11 @@ public:
 
         if (sample.raw[0].empty()) return false;
 
+        sample.original_num_samples = (int)sample.raw[0].size();
+
         // 500 Hz recordings (5000 samples) → downsample 2:1 to 250 Hz
-        if (sample.raw[0].size() > 2500) {
+        if (sample.original_num_samples > 2500) {
+            sample.downsampled = true;
             for (auto& lead : sample.raw) {
                 std::vector<float> ds;
                 ds.reserve(lead.size() / 2);

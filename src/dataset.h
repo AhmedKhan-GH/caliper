@@ -37,6 +37,8 @@ struct ECGSample {
     std::vector<std::vector<float>> processed;
     float sampling_rate = 0.0f;
     int num_samples = 0;
+    int original_num_samples = 0;
+    bool downsampled = false;
     bool loaded = false;
     bool processed_valid = false;
 
