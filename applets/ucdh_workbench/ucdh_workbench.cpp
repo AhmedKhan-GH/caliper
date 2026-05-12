@@ -416,7 +416,6 @@ struct UCDHWorkbenchApplet::State {
     int selected = -1;
     std::unique_ptr<IDatasetLoader> loader;
     std::string current_dir;
-    DatasetFormat current_format = DatasetFormat::Auto;
 
     enum class ScanStatus { Idle, Scanning, Ready, Failed };
     std::atomic<ScanStatus> scan_status{ScanStatus::Idle};
@@ -424,11 +423,8 @@ struct UCDHWorkbenchApplet::State {
     std::mutex scan_result_mtx;
     std::unique_ptr<IDatasetLoader> pending_loader;
     std::vector<ECGSample> pending_samples;
-    DatasetFormat pending_format = DatasetFormat::Auto;
     std::string scan_dir;
     std::string scan_error;
-
-    DatasetFormat pending_fmt_override = DatasetFormat::Auto;
 
     ProcessingParams params;
     std::unique_ptr<BackgroundProcessor> bg;
@@ -528,7 +524,7 @@ bool UCDHWorkbenchApplet::initialize() {
         std::ifstream f(caliper::app_data_path("last_dataset.txt"));
         std::string last_dir;
         if (f.is_open() && std::getline(f, last_dir) && fs::is_directory(last_dir)) {
-            open_dataset(last_dir, static_cast<int>(DatasetFormat::Auto));
+            open_dataset(last_dir);
         }
     }
 
@@ -580,15 +576,13 @@ void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
             std::lock_guard<std::mutex> lk(s_->scan_result_mtx);
             s_->loader = std::move(s_->pending_loader);
             s_->samples = std::move(s_->pending_samples);
-            s_->current_format = s_->pending_format;
             s_->current_dir = s_->scan_dir;
         }
         s_->selected = -1;
         s_->bg = std::make_unique<BackgroundProcessor>();
         s_->scan_status.store(State::ScanStatus::Idle);
 
-        std::cout << "[workbench] Opened " << s_->current_dir << " ("
-                  << format_display_name(s_->current_format) << "): "
+        std::cout << "[workbench] Opened " << s_->current_dir << ": "
                   << s_->samples.size() << " samples" << std::endl;
 
         // Persist last dataset path
@@ -668,25 +662,15 @@ void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
 // PANEL (left sidebar)
 // ============================================================================
 
-void UCDHWorkbenchApplet::open_dataset(const std::string& dir, int fmt_override_int) {
-    DatasetFormat fmt_override = static_cast<DatasetFormat>(fmt_override_int);
+void UCDHWorkbenchApplet::open_dataset(const std::string& dir) {
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->scan_status.store(State::ScanStatus::Scanning);
     s_->scan_error.clear();
     s_->scan_dir = dir;
 
     auto* sp = s_.get();
-    s_->scan_thread = std::thread([sp, dir, fmt_override]() {
-        DatasetFormat fmt = (fmt_override == DatasetFormat::Auto)
-            ? detect_format(dir) : fmt_override;
-
-        auto loader = make_dataset_loader(fmt);
-        if (!loader) {
-            std::lock_guard<std::mutex> lk(sp->scan_result_mtx);
-            sp->scan_error = "Could not create loader for format";
-            sp->scan_status.store(UCDHWorkbenchApplet::State::ScanStatus::Failed);
-            return;
-        }
+    s_->scan_thread = std::thread([sp, dir]() {
+        auto loader = make_dataset_loader();
 
         std::vector<ECGSample> samples;
         bool ok = loader->scan(dir, samples);
@@ -700,7 +684,6 @@ void UCDHWorkbenchApplet::open_dataset(const std::string& dir, int fmt_override_
         std::lock_guard<std::mutex> lk(sp->scan_result_mtx);
         sp->pending_loader = std::move(loader);
         sp->pending_samples = std::move(samples);
-        sp->pending_format = fmt;
         sp->scan_status.store(UCDHWorkbenchApplet::State::ScanStatus::Ready);
     });
 }
@@ -789,26 +772,6 @@ void UCDHWorkbenchApplet::draw_panel() {
         ImGui::TextColored({0.8f, 0.8f, 0.8f, 1.0f}, "(none)");
     } else {
         ImGui::TextWrapped("%s", s.current_dir.c_str());
-        ImGui::TextColored({0.7f, 0.85f, 1.0f, 1.0f}, "Format: %s",
-            format_display_name(s.current_format));
-    }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Open as:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-1);
-    const DatasetFormat fmts[] = {
-        DatasetFormat::Auto,
-        DatasetFormat::SingleFilePerSample,
-        DatasetFormat::LeadFilesRowPerSample,
-    };
-    if (ImGui::BeginCombo("##fmt_override", format_display_name(s.pending_fmt_override))) {
-        for (DatasetFormat f : fmts) {
-            bool sel = (f == s.pending_fmt_override);
-            if (ImGui::Selectable(format_display_name(f), sel)) s.pending_fmt_override = f;
-            if (sel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
     }
 
     ImGui::Spacing();
@@ -841,7 +804,7 @@ void UCDHWorkbenchApplet::draw_panel() {
             ImGuiWindowFlags_NoCollapse, min_sz, max_sz)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-            open_dataset(dir, static_cast<int>(s.pending_fmt_override));
+            open_dataset(dir);
         }
         ImGuiFileDialog::Instance()->Close();
     }
