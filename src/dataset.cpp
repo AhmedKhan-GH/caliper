@@ -87,12 +87,15 @@ public:
         out.clear();
         if (!fs::exists(dir) || !fs::is_directory(dir)) return false;
 
-        for (const auto& entry : fs::directory_iterator(dir)) {
+        for (const auto& entry : fs::recursive_directory_iterator(dir)) {
             if (!entry.is_regular_file()) continue;
             if (entry.path().extension() != ".csv") continue;
+            // Skip metadata/sidecar files — ECG data files have numeric stems
+            const auto stem = entry.path().stem().string();
+            if (stem.empty() || !std::isdigit((unsigned char)stem[0])) continue;
             ECGSample s;
             s.filepath = entry.path().string();
-            s.file_id = entry.path().stem().string();
+            s.file_id = stem;
             out.push_back(std::move(s));
         }
         std::sort(out.begin(), out.end(),
@@ -127,9 +130,19 @@ public:
 
         if (sample.raw[0].empty()) return false;
 
+        // 500 Hz recordings (5000 samples) → downsample 2:1 to 250 Hz
+        if (sample.raw[0].size() > 2500) {
+            for (auto& lead : sample.raw) {
+                std::vector<float> ds;
+                ds.reserve(lead.size() / 2);
+                for (size_t i = 0; i < lead.size(); i += 2)
+                    ds.push_back(lead[i]);
+                lead = std::move(ds);
+            }
+        }
+
         sample.num_samples = (int)sample.raw[0].size();
-        // Infer sampling rate: 2500 → 250 Hz, 5000 → 500 Hz
-        sample.sampling_rate = (sample.num_samples <= 2500) ? 250.0f : 500.0f;
+        sample.sampling_rate = 250.0f;
         sample.loaded = true;
         sample.processed_valid = false;
         return true;
