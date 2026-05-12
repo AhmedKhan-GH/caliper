@@ -19,30 +19,16 @@
 #include <random>
 
 // ============================================================================
-// Applet registry
+// Applet registry (populated dynamically by the host)
 // ============================================================================
 
 namespace {
 
-struct AppletCard {
-    const char* name;
-    const char* tagline;
-    const char* description;
-    const char* tag;
-    bool        available;
-    AppletKind  kind;
-    ImVec4      accent;
-};
-
-const AppletCard kApplets[] = {
-    { "UCDH Workbench",  "ECG analysis + inference",
-      "Load and visualize the UCDH Senior Design dataset, run "
-      "signal preprocessing, inspect raw data via DuckDB, and "
-      "run model inference on ECG recordings.",
-      "ECG", true,  AppletKind::ECGExplorer,
-      ImVec4(0.45f, 0.72f, 1.00f, 1.0f) },      // soft blue
-};
-constexpr int kNumApplets = (int)(sizeof(kApplets) / sizeof(kApplets[0]));
+ImVec4 tag_accent(const std::string& tag) {
+    if (tag == "ECG") return {0.45f, 0.72f, 1.00f, 1.0f};
+    if (tag == "ML")  return {0.90f, 0.55f, 1.00f, 1.0f};
+    return {0.60f, 0.70f, 0.80f, 1.0f};
+}
 
 // ============================================================================
 // Shader utilities
@@ -350,7 +336,8 @@ struct IntroScreen::State {
     float saved_speed = 1.0f;
 
     // UI
-    AppletKind chosen_kind = AppletKind::None;
+    std::vector<AppletCard> cards;
+    int chosen_index = -1;
 
     bool ok = false;
 };
@@ -701,72 +688,48 @@ void IntroScreen::render_3d(int fb_w, int fb_h) {
 
 namespace {
 
-// --- Applet row -------------------------------------------------------------
-// Returns true iff clicked AND the applet is launchable.
 bool draw_applet_row(int idx, const AppletCard& a, float row_h) {
     ImVec2 pos = ImGui::GetCursorScreenPos();
-    float w = ImGui::GetContentRegionAvail().x - 6.0f; // room for scrollbar
+    float w = ImGui::GetContentRegionAvail().x - 6.0f;
 
     ImGui::PushID(idx);
     ImGui::InvisibleButton("##row", ImVec2(w, row_h));
     bool hov = ImGui::IsItemHovered();
-    bool clicked = a.available && ImGui::IsItemClicked();
+    bool clicked = ImGui::IsItemClicked();
     ImGui::PopID();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p0 = pos;
     ImVec2 p1 = ImVec2(pos.x + w, pos.y + row_h);
 
-    ImU32 bg_base = IM_COL32( 8, 12, 24, 140);
-    ImU32 bg_hov  = IM_COL32(22, 28, 48, 220);
-    ImU32 bg = hov ? bg_hov : bg_base;
+    ImU32 bg = hov ? IM_COL32(22, 28, 48, 220) : IM_COL32(8, 12, 24, 140);
     dl->AddRectFilled(p0, p1, bg, 6.0f);
 
+    ImVec4 accent = tag_accent(a.tag);
     ImU32 accent_u = IM_COL32(
-        (int)(a.accent.x * 255), (int)(a.accent.y * 255),
-        (int)(a.accent.z * 255),
-        a.available ? 255 : 110);
+        (int)(accent.x * 255), (int)(accent.y * 255),
+        (int)(accent.z * 255), 255);
 
-    // Left accent stripe
     dl->AddRectFilled(ImVec2(p0.x, p0.y + 4.0f),
                       ImVec2(p0.x + 3.0f, p1.y - 4.0f),
                       accent_u, 2.0f);
 
-    // Border on hover
-    if (hov) {
-        dl->AddRect(p0, p1,
-                    IM_COL32((int)(a.accent.x * 255),
-                             (int)(a.accent.y * 255),
-                             (int)(a.accent.z * 255),
-                             a.available ? 220 : 140),
-                    6.0f, 0, 1.5f);
-    }
+    if (hov)
+        dl->AddRect(p0, p1, accent_u, 6.0f, 0, 1.5f);
 
-    // Tag glyph (left)
     dl->AddText(nullptr, 19.0f, ImVec2(p0.x + 14.0f, p0.y + 12.0f),
-                a.available ? accent_u : IM_COL32(130, 140, 160, 200),
-                a.tag);
-
-    // Name
+                accent_u, a.tag.c_str());
     dl->AddText(nullptr, 15.0f, ImVec2(p0.x + 64.0f, p0.y + 10.0f),
-                a.available ? IM_COL32(240, 248, 255, 255)
-                            : IM_COL32(170, 180, 200, 220),
-                a.name);
-
-    // Tagline
+                IM_COL32(240, 248, 255, 255), a.name.c_str());
     dl->AddText(nullptr, 11.0f, ImVec2(p0.x + 64.0f, p0.y + 31.0f),
-                IM_COL32(140, 160, 195, 220), a.tagline);
+                IM_COL32(140, 160, 195, 220), a.tagline.c_str());
 
-    // Status chip on the right
-    const char* chip = a.available ? "READY" : "SOON";
-    ImU32 chip_col = a.available ? IM_COL32(120, 180, 255, 255)
-                                 : IM_COL32(210, 170, 110, 255);
-    float chip_w = a.available ? 44.0f : 38.0f;
-    ImVec2 cp0(p1.x - chip_w - 10.0f, p0.y + 12.0f);
-    ImVec2 cp1(p1.x - 10.0f,           p0.y + 27.0f);
+    ImU32 chip_col = IM_COL32(120, 180, 255, 255);
+    ImVec2 cp0(p1.x - 44.0f - 10.0f, p0.y + 12.0f);
+    ImVec2 cp1(p1.x - 10.0f,          p0.y + 27.0f);
     dl->AddRect(cp0, cp1, chip_col, 3.0f);
     dl->AddText(nullptr, 10.0f,
-                ImVec2(cp0.x + 6.0f, cp0.y + 2.0f), chip_col, chip);
+                ImVec2(cp0.x + 6.0f, cp0.y + 2.0f), chip_col, "READY");
 
     return clicked;
 }
@@ -824,12 +787,13 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
     float col_y = 28.0f;
     float col_w = 320.0f;
 
-    // Applet-list height — only as tall as the actual applet rows.
+    const int num_applets = (int)s_->cards.size();
+
     const float applet_row_h = 60.0f;
     const float applet_list_h =
-        (float)kNumApplets * applet_row_h
-        + (float)(kNumApplets - 1) * 8.0f    // ItemSpacing.y, pushed below
-        + 12.0f;                             // small visual padding
+        (float)num_applets * applet_row_h
+        + (float)std::max(0, num_applets - 1) * 8.0f
+        + 12.0f;
 
     // Header + divider (drawn via draw list so we don't disturb cursor flow)
     dl->AddText(nullptr, 12.0f,
@@ -851,9 +815,9 @@ void IntroScreen::draw_ui(int /*win_w*/, int /*win_h*/) {
                       false,
                       ImGuiWindowFlags_NoBackground);
 
-    for (int i = 0; i < kNumApplets; i++) {
-        if (draw_applet_row(i, kApplets[i], applet_row_h)) {
-            s_->chosen_kind = kApplets[i].kind;
+    for (int i = 0; i < num_applets; i++) {
+        if (draw_applet_row(i, s_->cards[i], applet_row_h)) {
+            s_->chosen_index = i;
             launch_requested_ = true;
         }
     }
@@ -1055,6 +1019,10 @@ void IntroScreen::cleanup() {
     s_ = nullptr;
 }
 
-AppletKind IntroScreen::selected_applet() const {
-    return s_ ? s_->chosen_kind : AppletKind::None;
+void IntroScreen::set_applets(std::vector<AppletCard> cards) {
+    if (s_) s_->cards = std::move(cards);
+}
+
+int IntroScreen::selected_index() const {
+    return s_ ? s_->chosen_index : -1;
 }
