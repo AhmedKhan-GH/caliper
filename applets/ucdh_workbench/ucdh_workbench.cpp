@@ -431,6 +431,7 @@ struct UCDHWorkbenchApplet::State {
 
     bool lead_visible[NUM_LEADS] = {true,true,true,true,true,true,true,true,true,true,true,true};
     int last_plot_sample = -1;
+    bool last_plot_had_data = false;
     char filter_buf[128] = {};
     std::vector<float> time_axis;
 
@@ -996,8 +997,10 @@ void UCDHWorkbenchApplet::draw_leads() {
             s.time_axis[i] = (float)i / samp->sampling_rate;
     }
 
-    bool sample_changed = (s.selected != s.last_plot_sample);
+    bool sample_changed = (s.selected != s.last_plot_sample)
+                        || (has_data && !s.last_plot_had_data);
     s.last_plot_sample = s.selected;
+    s.last_plot_had_data = has_data;
 
     ImPlot::GetInputMap().ZoomRate = 0.15f;
 
