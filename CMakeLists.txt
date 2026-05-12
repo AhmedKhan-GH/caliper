@@ -78,6 +78,7 @@ add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
     src/dataset.cpp
+    src/ucdh_workbench_applet.cpp
     src/app_paths.cpp
 )
 
