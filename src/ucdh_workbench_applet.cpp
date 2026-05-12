@@ -995,46 +995,31 @@ void UCDHWorkbenchApplet::draw_panel() {
 
 void UCDHWorkbenchApplet::draw_leads() {
     auto& s = *s_;
-    if (s.selected < 0 || s.selected >= (int)s.samples.size()) {
-        ImGui::TextColored({0.7f, 0.7f, 0.8f, 1.0f}, "Select a sample from the panel.");
-        return;
-    }
-    auto& samp = s.samples[s.selected];
-    if (!samp.loaded || !samp.processed_valid) {
-        ImGui::Spacing();
-        ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f},
-            "Loading sample %s ...", samp.file_id.c_str());
-        if (s.bg) {
-            int done = s.bg->processed_count();
-            int total = s.bg->total_queued();
-            float frac = total > 0 ? (float)done / (float)total : 0.0f;
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%d/%d", done, total);
-            ImGui::ProgressBar(frac, ImVec2(-1, 18), buf);
-        }
-        return;
-    }
+
+    bool has_data = s.selected >= 0 && s.selected < (int)s.samples.size()
+                    && s.samples[s.selected].loaded && s.samples[s.selected].processed_valid;
+
+    ECGSample* samp = has_data ? &s.samples[s.selected] : nullptr;
 
     float avail_h = ImGui::GetContentRegionAvail().y;
     float avail_w = ImGui::GetContentRegionAvail().x;
 
     int visible_count = 0;
     for (int i = 0; i < NUM_LEADS; i++) if (s.lead_visible[i]) visible_count++;
-    if (visible_count == 0) { ImGui::Text("No leads selected."); return; }
+    if (visible_count == 0) visible_count = NUM_LEADS;
 
     float sp = ImGui::GetStyle().ItemSpacing.y;
     float plot_h = (avail_h - sp * (visible_count - 1)) / (float)visible_count;
     plot_h = std::max(plot_h, 60.0f);
 
-    float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
+    float duration = samp ? samp->num_samples / std::max(1.0f, samp->sampling_rate) : 10.0f;
 
-    if ((int)s.time_axis.size() != samp.num_samples) {
-        s.time_axis.resize(samp.num_samples);
-        for (int i = 0; i < samp.num_samples; i++)
-            s.time_axis[i] = (float)i / samp.sampling_rate;
+    if (samp && (int)s.time_axis.size() != samp->num_samples) {
+        s.time_axis.resize(samp->num_samples);
+        for (int i = 0; i < samp->num_samples; i++)
+            s.time_axis[i] = (float)i / samp->sampling_rate;
     }
 
-    // Reset axis limits when the displayed sample changes
     bool sample_changed = (s.selected != s.last_plot_sample);
     s.last_plot_sample = s.selected;
 
@@ -1042,8 +1027,6 @@ void UCDHWorkbenchApplet::draw_leads() {
 
     for (int lead = 0; lead < NUM_LEADS; lead++) {
         if (!s.lead_visible[lead]) continue;
-        auto& sig = samp.processed[lead];
-        if (sig.empty()) continue;
 
         char plot_id[64];
         snprintf(plot_id, sizeof(plot_id), "##lead_%d", lead);
@@ -1053,16 +1036,24 @@ void UCDHWorkbenchApplet::draw_leads() {
             ImPlot::SetupAxes("Time (s)", LEAD_NAMES[lead],
                 ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
             ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Once);
-            auto& st = samp.stats[lead];
-            float margin = (st.max_val - st.min_val) * 0.1f;
-            ImPlot::SetupAxisLimits(ImAxis_Y1, st.min_val - margin, st.max_val + margin,
-                sample_changed ? ImGuiCond_Always : ImGuiCond_Once);
 
-            ImPlot::Annotation(0.0, samp.stats[lead].max_val, LEAD_COLORS[lead],
-                ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
+            if (samp && lead < (int)samp->processed.size() && !samp->processed[lead].empty()) {
+                auto& st = samp->stats[lead];
+                float margin = (st.max_val - st.min_val) * 0.1f;
+                ImPlot::SetupAxisLimits(ImAxis_Y1, st.min_val - margin, st.max_val + margin,
+                    sample_changed ? ImGuiCond_Always : ImGuiCond_Once);
 
-            ImPlot::PlotLine("##sig", s.time_axis.data(), sig.data(), samp.num_samples,
-                ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead], ImPlotProp_LineWeight, 1.2f));
+                ImPlot::Annotation(0.0, st.max_val, LEAD_COLORS[lead],
+                    ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
+
+                ImPlot::PlotLine("##sig", s.time_axis.data(), samp->processed[lead].data(),
+                    samp->num_samples,
+                    ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead], ImPlotProp_LineWeight, 1.2f));
+            } else {
+                ImPlot::SetupAxisLimits(ImAxis_Y1, -1, 1, ImGuiCond_Once);
+                ImPlot::Annotation(0.0, 0.8, LEAD_COLORS[lead],
+                    ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
+            }
 
             ImPlot::EndPlot();
         }
