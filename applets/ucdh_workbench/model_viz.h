@@ -10,7 +10,8 @@
 struct ModelNode {
     std::string name;
     std::string type;     // conv, attention, fusion, pool, linear, dropout, input
-    std::string detail;
+    std::vector<std::string> lines;
+    std::string shape_out;
     float x, y, w, h;
     ImVec4 color;
     ImVec4 border;
@@ -19,6 +20,7 @@ struct ModelNode {
 
 struct ModelEdge {
     int from, to;
+    std::string label;
 };
 
 struct StageGroup {

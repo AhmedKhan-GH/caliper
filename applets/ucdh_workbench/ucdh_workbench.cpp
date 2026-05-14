@@ -1362,8 +1362,11 @@ void UCDHWorkbenchApplet::draw_model_architecture() {
         if (node) {
             ImGui::BeginTooltip();
             ImGui::TextColored(node->border, "%s", node->name.c_str());
-            if (!node->detail.empty())
-                ImGui::TextDisabled("%s", node->detail.c_str());
+            for (const auto& line : node->lines)
+                ImGui::TextDisabled("%s", line.c_str());
+            if (!node->shape_out.empty())
+                ImGui::TextColored({0.55f, 0.86f, 0.70f, 1.0f},
+                                   "Output: %s", node->shape_out.c_str());
             if (node->param_count > 0) {
                 if (node->param_count >= 1000)
                     ImGui::Text("Parameters: %.1fK",
@@ -1418,6 +1421,17 @@ void UCDHWorkbenchApplet::draw_model_inference() {
         if (!s.model_error.empty()) {
             ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Load failed:");
             ImGui::TextWrapped("%s", s.model_error.c_str());
+            if (s.model_error.find("constants.pkl") != std::string::npos ||
+                s.model_error.find("PytorchStreamReader") != std::string::npos) {
+                ImGui::Spacing();
+                ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f},
+                    "This file appears to be a raw state_dict, not a "
+                    "TorchScript model.");
+                ImGui::TextWrapped(
+                    "Use scripts/export_torchscript.py to convert it:\n"
+                    "  python scripts/export_torchscript.py data/best_model.pt "
+                    "-o data/model_scripted.pt");
+            }
         } else {
             ImGui::TextDisabled("No model loaded.");
             ImGui::Spacing();

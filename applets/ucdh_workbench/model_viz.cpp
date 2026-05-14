@@ -147,16 +147,19 @@ static GLuint link_program(const char* vs_src, const char* fs_src) {
 // LAYOUT CONSTANTS
 // ============================================================================
 
-static constexpr float NODE_W       = 340.0f;
-static constexpr float NODE_H       = 56.0f;
-static constexpr float NODE_GAP     = 28.0f;
+static constexpr float NODE_W       = 460.0f;
+static constexpr float NODE_GAP     = 20.0f;
 static constexpr float GRAPH_PAD    = 60.0f;
 static constexpr float NODE_RADIUS  = 10.0f;
 static constexpr float BORDER_W     = 2.0f;
-static constexpr float STAGE_GAP    = 20.0f;
+static constexpr float STAGE_GAP    = 24.0f;
 static constexpr float STAGE_MARGIN = 16.0f;
-static constexpr float ARROW_W      = 5.0f;
-static constexpr float ARROW_H      = 9.0f;
+static constexpr float ARROW_W      = 6.0f;
+static constexpr float ARROW_H      = 10.0f;
+static constexpr float HEADER_H     = 24.0f;
+static constexpr float LINE_H       = 15.0f;
+static constexpr float PAD_BOT      = 12.0f;
+static constexpr float MIN_NODE_H   = 40.0f;
 
 // ============================================================================
 // NODE COLORS
@@ -290,73 +293,160 @@ void ModelVisualizer::build_repnet_graph() {
     float cx = GRAPH_PAD + NODE_W * 0.5f;
     float y  = GRAPH_PAD;
 
-    auto add = [&](const char* name, const char* type, const char* detail,
-                   int64_t params, float pre_gap = 0.0f) -> int {
+    auto add = [&](const char* name, const char* type,
+                   std::initializer_list<const char*> detail_lines,
+                   const char* shape, int64_t params,
+                   float pre_gap = 0.0f) -> int {
         y += pre_gap;
+        float h = HEADER_H + (float)detail_lines.size() * LINE_H + PAD_BOT;
+        h = std::max(h, MIN_NODE_H);
         int idx = (int)nodes_.size();
-        nodes_.push_back({name, type, detail,
-                          cx - NODE_W * 0.5f, y, NODE_W, NODE_H,
-                          fill_for(type), border_for(type), params});
-        y += NODE_H + NODE_GAP;
+        ModelNode n;
+        n.name = name;
+        n.type = type;
+        n.lines.assign(detail_lines.begin(), detail_lines.end());
+        n.shape_out = shape;
+        n.x = cx - NODE_W * 0.5f;
+        n.y = y;
+        n.w = NODE_W;
+        n.h = h;
+        n.color = fill_for(type);
+        n.border = border_for(type);
+        n.param_count = params;
+        nodes_.push_back(std::move(n));
+        y += h + NODE_GAP;
         return idx;
     };
 
-    int n_input = add("Input", "input", "(B, 12, T)  12-lead ECG", 0);
+    auto edge = [&](int a, int b, const char* lbl = "") {
+        edges_.push_back({a, b, lbl});
+    };
+
+    // ── Input ──
+    int n_in = add("Input", "input",
+        {"12-lead ECG signal  (I, II, III, aVR, aVL, aVF, V1-V6)",
+         "Sampling rate 250 Hz, up to 2500 samples per lead"},
+        "(B, 12, T)", 0);
 
     // ── Stage 0 ──
     float s0_top = y;
-    int n_c0 = add("PerLeadConvBlock", "conv",
-                   "12x Conv1d(1->32, k=7) + BN + ReLU + Skip + Pool/2",
-                   7744, STAGE_GAP);
+    int n_c0 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
+        {"  main path:",
+         "    Conv1d(1 -> 32, kernel=7, pad=3) + BatchNorm(32) + ReLU",
+         "    Conv1d(32 -> 32, kernel=7, pad=3) + BatchNorm(32)",
+         "  residual skip:",
+         "    Conv1d(1 -> 32, kernel=1) + BatchNorm(32)",
+         "  merge: Add(main, skip) -> ReLU",
+         "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
+        "(B, 12, 32, T/2)", 7744, STAGE_GAP);
+
     int n_a0 = add("CrossLeadAttention", "attention",
-                   "MHA(dim=32, heads=4) + LayerNorm + Gate", 5344);
+        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 32",
+         "  attn:  MultiheadAttention(embed=32, heads=4, batch_first=True)",
+         "  norm:  residual + LayerNorm(32)",
+         "  gate:  Linear(32 -> 32) + Sigmoid",
+         "  out:   x * gate  (element-wise, broadcast back to T/2)"},
+        "(B, 12, 32, T/2)", 5344);
     float s0_bot = y - NODE_GAP;
 
     // ── Stage 1 ──
     float s1_top = y;
-    int n_c1 = add("PerLeadConvBlock", "conv",
-                   "12x Conv1d(32->64, k=5) + BN + ReLU + Skip + Pool/2",
-                   33344, STAGE_GAP);
+    int n_c1 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
+        {"  main path:",
+         "    Conv1d(32 -> 64, kernel=5, pad=2) + BatchNorm(64) + ReLU",
+         "    Conv1d(64 -> 64, kernel=5, pad=2) + BatchNorm(64)",
+         "  residual skip:",
+         "    Conv1d(32 -> 64, kernel=1) + BatchNorm(64)",
+         "  merge: Add(main, skip) -> ReLU",
+         "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
+        "(B, 12, 64, T/4)", 33344, STAGE_GAP);
+
     int n_a1 = add("CrossLeadAttention", "attention",
-                   "MHA(dim=64, heads=4) + LayerNorm + Gate", 20928);
+        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 64",
+         "  attn:  MultiheadAttention(embed=64, heads=4, batch_first=True)",
+         "  norm:  residual + LayerNorm(64)",
+         "  gate:  Linear(64 -> 64) + Sigmoid",
+         "  out:   x * gate  (element-wise, broadcast back to T/4)"},
+        "(B, 12, 64, T/4)", 20928);
     float s1_bot = y - NODE_GAP;
 
     // ── Stage 2 ──
     float s2_top = y;
-    int n_c2 = add("PerLeadConvBlock", "conv",
-                   "12x Conv1d(64->128, k=3) + BN + ReLU + Skip + Pool/2",
-                   83072, STAGE_GAP);
+    int n_c2 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
+        {"  main path:",
+         "    Conv1d(64 -> 128, kernel=3, pad=1) + BatchNorm(128) + ReLU",
+         "    Conv1d(128 -> 128, kernel=3, pad=1) + BatchNorm(128)",
+         "  residual skip:",
+         "    Conv1d(64 -> 128, kernel=1) + BatchNorm(128)",
+         "  merge: Add(main, skip) -> ReLU",
+         "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
+        "(B, 12, 128, T/8)", 83072, STAGE_GAP);
+
     int n_a2 = add("CrossLeadAttention", "attention",
-                   "MHA(dim=128, heads=4) + LayerNorm + Gate", 82816);
+        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 128",
+         "  attn:  MultiheadAttention(embed=128, heads=4, batch_first=True)",
+         "  norm:  residual + LayerNorm(128)",
+         "  gate:  Linear(128 -> 128) + Sigmoid",
+         "  out:   x * gate  (element-wise, broadcast back to T/8)"},
+        "(B, 12, 128, T/8)", 82816);
     float s2_bot = y - NODE_GAP;
 
-    // ── Head ──
-    int n_fuse = add("Fusion", "fusion",
-                     "Conv1d(1536->128, k=1) + BN + ReLU", 196992, STAGE_GAP);
-    int n_gap  = add("Global Avg Pool", "pool", "AdaptiveAvgPool1d(1)", 0);
-    int n_drop = add("Dropout", "dropout", "p = 0.064", 0);
-    int n_fc   = add("Linear", "linear", "128 -> 2  (PE vs Normal)", 258);
-    int n_out  = add("Output", "input", "Logits (B, 2)", 0);
+    // ── Fusion + Head ──
+    int n_reshape = add("Reshape  (lead concatenation)", "fusion",
+        {"  (B, 12, 128, T/8) -> (B, 12*128, T/8) = (B, 1536, T/8)",
+         "  Concatenate all lead feature maps along channel dimension"},
+        "(B, 1536, T/8)", 0, STAGE_GAP);
 
-    // ── Edges ──
-    auto edge = [&](int a, int b) { edges_.push_back({a, b}); };
-    edge(n_input, n_c0);
-    edge(n_c0, n_a0); edge(n_a0, n_c1);
-    edge(n_c1, n_a1); edge(n_a1, n_c2);
-    edge(n_c2, n_a2); edge(n_a2, n_fuse);
-    edge(n_fuse, n_gap); edge(n_gap, n_drop);
-    edge(n_drop, n_fc);  edge(n_fc, n_out);
+    int n_fuse = add("Fusion Convolution", "fusion",
+        {"  Conv1d(1536 -> 128, kernel=1)   pointwise channel reduction",
+         "  BatchNorm1d(128) + ReLU"},
+        "(B, 128, T/8)", 196992);
+
+    int n_gap = add("Global Average Pooling", "pool",
+        {"  AdaptiveAvgPool1d(1)  collapse temporal dim",
+         "  (B, 128, T/8) -> (B, 128)"},
+        "(B, 128)", 0);
+
+    int n_drop = add("Dropout", "dropout",
+        {"  p = 0.064  (regularization)"},
+        "(B, 128)", 0);
+
+    int n_fc = add("Classifier  (fully connected)", "linear",
+        {"  Linear(128 -> 2)",
+         "  Output: PE (Pulmonary Embolism) vs Normal"},
+        "(B, 2)", 258);
+
+    int n_out = add("Output", "input",
+        {"  Raw logits  ->  softmax for class probabilities"},
+        "(B, 2)", 0);
+
+    // ── Edges with shape flow labels ──
+    edge(n_in,      n_c0,      "unsqueeze -> (B, 12, 1, T)");
+    edge(n_c0,      n_a0,      "(B, 12, 32, T/2)");
+    edge(n_a0,      n_c1,      "(B, 12, 32, T/2)");
+    edge(n_c1,      n_a1,      "(B, 12, 64, T/4)");
+    edge(n_a1,      n_c2,      "(B, 12, 64, T/4)");
+    edge(n_c2,      n_a2,      "(B, 12, 128, T/8)");
+    edge(n_a2,      n_reshape, "(B, 12, 128, T/8)");
+    edge(n_reshape, n_fuse,    "(B, 1536, T/8)");
+    edge(n_fuse,    n_gap,     "(B, 128, T/8)");
+    edge(n_gap,     n_drop,    "(B, 128)");
+    edge(n_drop,    n_fc,      "(B, 128)");
+    edge(n_fc,      n_out,     "(B, 2)");
 
     // ── Stage groups ──
     float sg_x = GRAPH_PAD - STAGE_MARGIN;
     float sg_w = NODE_W + STAGE_MARGIN * 2;
-    ImVec4 sg_col = {0.25f, 0.35f, 0.55f, 0.12f};
+    ImVec4 sg_col = {0.25f, 0.35f, 0.55f, 0.10f};
     stages_.push_back({sg_x, s0_top - STAGE_MARGIN, sg_w,
-                       s0_bot - s0_top + STAGE_MARGIN * 2, "Stage 0", sg_col});
+                       s0_bot - s0_top + STAGE_MARGIN * 2,
+                       "Stage 0  (QRS-level features, RF=32 samples)", sg_col});
     stages_.push_back({sg_x, s1_top - STAGE_MARGIN, sg_w,
-                       s1_bot - s1_top + STAGE_MARGIN * 2, "Stage 1", sg_col});
+                       s1_bot - s1_top + STAGE_MARGIN * 2,
+                       "Stage 1  (ST-level features, RF=40 samples)", sg_col});
     stages_.push_back({sg_x, s2_top - STAGE_MARGIN, sg_w,
-                       s2_bot - s2_top + STAGE_MARGIN * 2, "Stage 2", sg_col});
+                       s2_bot - s2_top + STAGE_MARGIN * 2,
+                       "Stage 2  (morphology-level features, RF=49 samples)", sg_col});
 
     cam_x_ = cx;
     cam_y_ = y * 0.5f;
@@ -537,9 +627,21 @@ void ModelVisualizer::render_labels(ImVec2 cp, ImVec2 cs) {
         dl->AddText(ImVec2(tl.x + pad, tl.y + 6.0f),
                     IM_COL32(255, 255, 255, 230), n.name.c_str());
 
-        if (sh >= 38.0f && !n.detail.empty()) {
-            dl->AddText(ImVec2(tl.x + pad, tl.y + 22.0f),
-                        IM_COL32(200, 205, 215, 150), n.detail.c_str());
+        if (sh >= 38.0f) {
+            float ly = tl.y + HEADER_H * zoom_;
+            for (const auto& line : n.lines) {
+                if (ly > cp.y + cs.y) break;
+                dl->AddText(ImVec2(tl.x + pad, ly),
+                            IM_COL32(200, 205, 215, 150), line.c_str());
+                ly += LINE_H * zoom_;
+            }
+
+            if (!n.shape_out.empty()) {
+                ImVec2 ts = ImGui::CalcTextSize(n.shape_out.c_str());
+                dl->AddText(ImVec2(tl.x + sw - ts.x - pad,
+                                   tl.y + sh - PAD_BOT * zoom_),
+                            IM_COL32(140, 220, 180, 180), n.shape_out.c_str());
+            }
         }
 
         if (sh >= 50.0f && n.param_count > 0) {
@@ -554,6 +656,26 @@ void ModelVisualizer::render_labels(ImVec2 cp, ImVec2 cs) {
             ImVec2 ts = ImGui::CalcTextSize(buf);
             dl->AddText(ImVec2(tl.x + sw - ts.x - pad, tl.y + 6.0f),
                         IM_COL32(180, 190, 210, 120), buf);
+        }
+    }
+
+    // Edge labels (tensor shape annotations at midpoints)
+    for (const auto& e : edges_) {
+        if (e.label.empty()) continue;
+        const auto& src = nodes_[e.from];
+        const auto& dst = nodes_[e.to];
+        float mx = (src.x + src.w * 0.5f + dst.x + dst.w * 0.5f) * 0.5f;
+        float my = (src.y + src.h + dst.y) * 0.5f;
+        ImVec2 sp = to_screen(mx, my);
+        ImVec2 ts = ImGui::CalcTextSize(e.label.c_str());
+        sp.x -= ts.x * 0.5f;
+        sp.y -= ts.y * 0.5f;
+        if (sp.x + ts.x >= cp.x && sp.x <= cp.x + cs.x &&
+            sp.y + ts.y >= cp.y && sp.y <= cp.y + cs.y) {
+            dl->AddRectFilled(ImVec2(sp.x - 3, sp.y - 1),
+                              ImVec2(sp.x + ts.x + 3, sp.y + ts.y + 1),
+                              IM_COL32(20, 20, 30, 180), 3.0f);
+            dl->AddText(sp, IM_COL32(160, 200, 160, 200), e.label.c_str());
         }
     }
 
