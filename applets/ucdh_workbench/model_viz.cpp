@@ -192,6 +192,14 @@ ModelVisualizer::~ModelVisualizer() { cleanup(); }
 void ModelVisualizer::init() {
     if (initialized_) return;
 
+    glewExperimental = GL_TRUE;
+    GLenum err = glewInit();
+    if (err != GLEW_OK) {
+        std::fprintf(stderr, "[model_viz] glewInit failed: %s\n",
+                     glewGetErrorString(err));
+        return;
+    }
+
     node_prog_ = link_program(VS_NODE, FS_NODE);
     edge_prog_ = link_program(VS_EDGE, FS_EDGE);
     if (!node_prog_ || !edge_prog_) {
