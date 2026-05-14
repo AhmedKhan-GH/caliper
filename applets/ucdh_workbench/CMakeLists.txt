@@ -3,6 +3,7 @@ add_library(ucdh_workbench SHARED
     ucdh_workbench.cpp
     dataset.cpp
     app_paths.cpp
+    model_viz.cpp
 )
 
 target_include_directories(ucdh_workbench PRIVATE

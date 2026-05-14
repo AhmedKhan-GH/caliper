@@ -22,6 +22,8 @@ private:
     void draw_vcg_3d();
     void draw_raw_browser();
     void draw_model_tab();
+    void draw_model_architecture();
+    void draw_model_inference();
 
     void open_dataset(const std::string& dir);
     void select_sample(int idx);
