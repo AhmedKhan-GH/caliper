@@ -49,9 +49,9 @@ float roundedBoxSDF(vec2 p, vec2 b, float r) {
 }
 
 void main() {
-    vec2  p    = (v_uv - 0.5) * v_size;
-    vec2  half = v_size * 0.5;
-    float d    = roundedBoxSDF(p, half, u_radius);
+    vec2  p      = (v_uv - 0.5) * v_size;
+    vec2  extent = v_size * 0.5;
+    float d      = roundedBoxSDF(p, extent, u_radius);
 
     float aa    = 1.5;
     float alpha = 1.0 - smoothstep(-aa, aa, d);
