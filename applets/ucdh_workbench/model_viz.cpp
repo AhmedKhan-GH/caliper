@@ -328,93 +328,93 @@ void ModelVisualizer::build_repnet_graph() {
          "Sampling rate 250 Hz, up to 2500 samples per lead"},
         "(B, 12, T)", 0);
 
-    // ── Stage 0 ──
+    // ── Stage 0  (filters=48, kernel=7) ──
     float s0_top = y;
     int n_c0 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
         {"  main path:",
-         "    Conv1d(1 -> 32, kernel=7, pad=3) + BatchNorm(32) + ReLU",
-         "    Conv1d(32 -> 32, kernel=7, pad=3) + BatchNorm(32)",
+         "    Conv1d(1 -> 48, kernel=7, pad=3) + BatchNorm(48) + ReLU",
+         "    Conv1d(48 -> 48, kernel=7, pad=3) + BatchNorm(48)",
          "  residual skip:",
-         "    Conv1d(1 -> 32, kernel=1) + BatchNorm(32)",
+         "    Conv1d(1 -> 48, kernel=1) + BatchNorm(48)",
          "  merge: Add(main, skip) -> ReLU",
          "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
-        "(B, 12, 32, T/2)", 7744, STAGE_GAP);
+        "(B, 12, 48, T/2)", 16944, STAGE_GAP);
 
     int n_a0 = add("CrossLeadAttention", "attention",
-        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 32",
-         "  attn:  MultiheadAttention(embed=32, heads=4, batch_first=True)",
-         "  norm:  residual + LayerNorm(32)",
-         "  gate:  Linear(32 -> 32) + Sigmoid",
+        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 48",
+         "  attn:  MultiheadAttention(embed=48, heads=4, batch_first=True)",
+         "  norm:  residual + LayerNorm(48)",
+         "  gate:  Linear(48 -> 48) + Sigmoid",
          "  out:   x * gate  (element-wise, broadcast back to T/2)"},
-        "(B, 12, 32, T/2)", 5344);
+        "(B, 12, 48, T/2)", 11856);
     float s0_bot = y - NODE_GAP;
 
-    // ── Stage 1 ──
+    // ── Stage 1  (filters=96, kernel=5) ──
     float s1_top = y;
     int n_c1 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
         {"  main path:",
-         "    Conv1d(32 -> 64, kernel=5, pad=2) + BatchNorm(64) + ReLU",
-         "    Conv1d(64 -> 64, kernel=5, pad=2) + BatchNorm(64)",
+         "    Conv1d(48 -> 96, kernel=5, pad=2) + BatchNorm(96) + ReLU",
+         "    Conv1d(96 -> 96, kernel=5, pad=2) + BatchNorm(96)",
          "  residual skip:",
-         "    Conv1d(32 -> 64, kernel=1) + BatchNorm(64)",
+         "    Conv1d(48 -> 96, kernel=1) + BatchNorm(96)",
          "  merge: Add(main, skip) -> ReLU",
          "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
-        "(B, 12, 64, T/4)", 33344, STAGE_GAP);
+        "(B, 12, 96, T/4)", 74592, STAGE_GAP);
 
     int n_a1 = add("CrossLeadAttention", "attention",
-        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 64",
-         "  attn:  MultiheadAttention(embed=64, heads=4, batch_first=True)",
-         "  norm:  residual + LayerNorm(64)",
-         "  gate:  Linear(64 -> 64) + Sigmoid",
+        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 96",
+         "  attn:  MultiheadAttention(embed=96, heads=4, batch_first=True)",
+         "  norm:  residual + LayerNorm(96)",
+         "  gate:  Linear(96 -> 96) + Sigmoid",
          "  out:   x * gate  (element-wise, broadcast back to T/4)"},
-        "(B, 12, 64, T/4)", 20928);
+        "(B, 12, 96, T/4)", 46752);
     float s1_bot = y - NODE_GAP;
 
-    // ── Stage 2 ──
+    // ── Stage 2  (filters=192, kernel=3) ──
     float s2_top = y;
     int n_c2 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
         {"  main path:",
-         "    Conv1d(64 -> 128, kernel=3, pad=1) + BatchNorm(128) + ReLU",
-         "    Conv1d(128 -> 128, kernel=3, pad=1) + BatchNorm(128)",
+         "    Conv1d(96 -> 192, kernel=3, pad=1) + BatchNorm(192) + ReLU",
+         "    Conv1d(192 -> 192, kernel=3, pad=1) + BatchNorm(192)",
          "  residual skip:",
-         "    Conv1d(64 -> 128, kernel=1) + BatchNorm(128)",
+         "    Conv1d(96 -> 192, kernel=1) + BatchNorm(192)",
          "  merge: Add(main, skip) -> ReLU",
          "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
-        "(B, 12, 128, T/8)", 83072, STAGE_GAP);
+        "(B, 12, 192, T/8)", 186048, STAGE_GAP);
 
     int n_a2 = add("CrossLeadAttention", "attention",
-        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 128",
-         "  attn:  MultiheadAttention(embed=128, heads=4, batch_first=True)",
-         "  norm:  residual + LayerNorm(128)",
-         "  gate:  Linear(128 -> 128) + Sigmoid",
+        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 192",
+         "  attn:  MultiheadAttention(embed=192, heads=4, batch_first=True)",
+         "  norm:  residual + LayerNorm(192)",
+         "  gate:  Linear(192 -> 192) + Sigmoid",
          "  out:   x * gate  (element-wise, broadcast back to T/8)"},
-        "(B, 12, 128, T/8)", 82816);
+        "(B, 12, 192, T/8)", 185664);
     float s2_bot = y - NODE_GAP;
 
     // ── Fusion + Head ──
     int n_reshape = add("Reshape  (lead concatenation)", "fusion",
-        {"  (B, 12, 128, T/8) -> (B, 12*128, T/8) = (B, 1536, T/8)",
+        {"  (B, 12, 192, T/8) -> (B, 12*192, T/8) = (B, 2304, T/8)",
          "  Concatenate all lead feature maps along channel dimension"},
-        "(B, 1536, T/8)", 0, STAGE_GAP);
+        "(B, 2304, T/8)", 0, STAGE_GAP);
 
     int n_fuse = add("Fusion Convolution", "fusion",
-        {"  Conv1d(1536 -> 128, kernel=1)   pointwise channel reduction",
-         "  BatchNorm1d(128) + ReLU"},
-        "(B, 128, T/8)", 196992);
+        {"  Conv1d(2304 -> 192, kernel=1)   pointwise channel reduction",
+         "  BatchNorm1d(192) + ReLU"},
+        "(B, 192, T/8)", 442944);
 
     int n_gap = add("Global Average Pooling", "pool",
         {"  AdaptiveAvgPool1d(1)  collapse temporal dim",
-         "  (B, 128, T/8) -> (B, 128)"},
-        "(B, 128)", 0);
+         "  (B, 192, T/8) -> (B, 192)"},
+        "(B, 192)", 0);
 
     int n_drop = add("Dropout", "dropout",
         {"  p = 0.064  (regularization)"},
-        "(B, 128)", 0);
+        "(B, 192)", 0);
 
     int n_fc = add("Classifier  (fully connected)", "linear",
-        {"  Linear(128 -> 2)",
+        {"  Linear(192 -> 2)",
          "  Output: PE (Pulmonary Embolism) vs Normal"},
-        "(B, 2)", 258);
+        "(B, 2)", 386);
 
     int n_out = add("Output", "input",
         {"  Raw logits  ->  softmax for class probabilities"},
@@ -422,16 +422,16 @@ void ModelVisualizer::build_repnet_graph() {
 
     // ── Edges with shape flow labels ──
     edge(n_in,      n_c0,      "unsqueeze -> (B, 12, 1, T)");
-    edge(n_c0,      n_a0,      "(B, 12, 32, T/2)");
-    edge(n_a0,      n_c1,      "(B, 12, 32, T/2)");
-    edge(n_c1,      n_a1,      "(B, 12, 64, T/4)");
-    edge(n_a1,      n_c2,      "(B, 12, 64, T/4)");
-    edge(n_c2,      n_a2,      "(B, 12, 128, T/8)");
-    edge(n_a2,      n_reshape, "(B, 12, 128, T/8)");
-    edge(n_reshape, n_fuse,    "(B, 1536, T/8)");
-    edge(n_fuse,    n_gap,     "(B, 128, T/8)");
-    edge(n_gap,     n_drop,    "(B, 128)");
-    edge(n_drop,    n_fc,      "(B, 128)");
+    edge(n_c0,      n_a0,      "(B, 12, 48, T/2)");
+    edge(n_a0,      n_c1,      "(B, 12, 48, T/2)");
+    edge(n_c1,      n_a1,      "(B, 12, 96, T/4)");
+    edge(n_a1,      n_c2,      "(B, 12, 96, T/4)");
+    edge(n_c2,      n_a2,      "(B, 12, 192, T/8)");
+    edge(n_a2,      n_reshape, "(B, 12, 192, T/8)");
+    edge(n_reshape, n_fuse,    "(B, 2304, T/8)");
+    edge(n_fuse,    n_gap,     "(B, 192, T/8)");
+    edge(n_gap,     n_drop,    "(B, 192)");
+    edge(n_drop,    n_fc,      "(B, 192)");
     edge(n_fc,      n_out,     "(B, 2)");
 
     // ── Stage groups ──

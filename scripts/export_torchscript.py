@@ -12,6 +12,7 @@ Usage:
 import argparse
 import os
 import sys
+import types
 
 
 def main():
@@ -26,6 +27,11 @@ def main():
     args = parser.parse_args()
 
     import torch
+
+    # Stub out optional training-only deps so the model modules can import
+    for mod_name in ("optuna", "numpy", "np"):
+        if mod_name not in sys.modules:
+            sys.modules[mod_name] = types.ModuleType(mod_name)
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = os.path.join(project_root, "data")
