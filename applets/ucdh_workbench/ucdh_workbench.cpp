@@ -27,6 +27,7 @@
 #include <ImGuiFileDialog.h>
 #include <duckdb.hpp>
 #include <torch/script.h>
+#include "model_viz.h"
 
 namespace fs = std::filesystem;
 
@@ -429,6 +430,7 @@ struct UCDHWorkbenchApplet::State {
     ProcessingParams params;
     std::unique_ptr<BackgroundProcessor> bg;
 
+    float panel_w = 280.0f;
     bool lead_visible[NUM_LEADS] = {true,true,true,true,true,true,true,true,true,true,true,true};
     int last_plot_sample = -1;
     bool last_plot_had_data = false;
@@ -461,6 +463,9 @@ struct UCDHWorkbenchApplet::State {
     std::string model_path;
     std::string model_error;
     std::string model_output;
+
+    // ── Architecture visualizer ──
+    std::unique_ptr<ModelVisualizer> viz;
 
     void run_preview(const DiscoveredFile& f) {
         preview = PreviewSnapshot{};
@@ -534,6 +539,7 @@ bool UCDHWorkbenchApplet::initialize() {
 
 void UCDHWorkbenchApplet::cleanup() {
     if (!s_) return;
+    if (s_->viz) s_->viz->cleanup();
     s_->bg.reset();
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->con.reset();
@@ -623,13 +629,23 @@ void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
     float avail_w = ImGui::GetContentRegionAvail().x;
     float avail_h = ImGui::GetContentRegionAvail().y;
     float sp = ImGui::GetStyle().ItemSpacing.x;
-    float panel_w = 240.0f;
-    float plot_w = avail_w - panel_w - sp;
+    float splitter_thick = 6.0f;
+
+    s_->panel_w = std::clamp(s_->panel_w, 200.0f, avail_w - 300.0f);
+    float plot_w = avail_w - s_->panel_w - sp - splitter_thick;
 
     // -- Left panel --
-    ImGui::BeginChild("##Panel", ImVec2(panel_w, avail_h), true);
+    ImGui::BeginChild("##Panel", ImVec2(s_->panel_w, avail_h), true);
     draw_panel();
     ImGui::EndChild();
+
+    // -- Splitter handle --
+    ImGui::SameLine();
+    ImGui::InvisibleButton("##splitter", ImVec2(splitter_thick, avail_h));
+    if (ImGui::IsItemActive())
+        s_->panel_w += ImGui::GetIO().MouseDelta.x;
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
     ImGui::SameLine();
 
@@ -716,6 +732,7 @@ void UCDHWorkbenchApplet::select_sample(int idx) {
 void UCDHWorkbenchApplet::on_params_changed() {
     auto& s = *s_;
     s.params.version++;
+    s.last_plot_sample = -1;
     for (auto& samp : s.samples) samp.processed_valid = false;
     if (!s.bg || !s.loader || s.samples.empty()) return;
 
@@ -856,10 +873,11 @@ void UCDHWorkbenchApplet::draw_panel() {
         ImGui::EndListBox();
     }
 
-    if (ImGui::Button("<< Prev", ImVec2(110, 0)) && s.selected > 0)
+    float btn_w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    if (ImGui::Button("<< Prev", ImVec2(btn_w, 0)) && s.selected > 0)
         select_sample(s.selected - 1);
     ImGui::SameLine();
-    if (ImGui::Button("Next >>", ImVec2(110, 0)) && s.selected < (int)s.samples.size() - 1)
+    if (ImGui::Button("Next >>", ImVec2(btn_w, 0)) && s.selected < (int)s.samples.size() - 1)
         select_sample(s.selected + 1);
 
     int sel = s.selected;
@@ -882,7 +900,7 @@ void UCDHWorkbenchApplet::draw_panel() {
     if (s.params.baseline_wander_correction) {
         ImGui::Indent(12);
         ImGui::SetNextItemWidth(-12);
-        if (ImGui::DragFloat("Cutoff (Hz)", &s.params.baseline_cutoff_hz, 0.01f, 0.0f, 125.0f, "%.2f Hz"))
+        if (ImGui::DragFloat("##cutoff", &s.params.baseline_cutoff_hz, 0.01f, 0.0f, 125.0f, "%.2f Hz"))
             changed = true;
         ImGui::Unindent(12);
     }
@@ -1007,6 +1025,9 @@ void UCDHWorkbenchApplet::draw_leads() {
     for (int lead = 0; lead < NUM_LEADS; lead++) {
         if (!s.lead_visible[lead]) continue;
 
+        if (has_data)
+            ImPlot::SetNextAxisToFit(ImAxis_Y1);
+
         char plot_id[64];
         snprintf(plot_id, sizeof(plot_id), "##lead_%d", lead);
 
@@ -1020,7 +1041,7 @@ void UCDHWorkbenchApplet::draw_leads() {
                 auto& st = samp->stats[lead];
                 float margin = (st.max_val - st.min_val) * 0.1f;
                 ImPlot::SetupAxisLimits(ImAxis_Y1, st.min_val - margin, st.max_val + margin,
-                    sample_changed ? ImGuiCond_Always : ImGuiCond_Once);
+                    ImGuiCond_Always);
 
                 ImPlot::Annotation(0.0, st.max_val, LEAD_COLORS[lead],
                     ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
@@ -1283,10 +1304,82 @@ void UCDHWorkbenchApplet::draw_raw_browser() {
 }
 
 // ============================================================================
-// MODEL TAB (scaffold)
+// MODEL TAB
 // ============================================================================
 
 void UCDHWorkbenchApplet::draw_model_tab() {
+    if (ImGui::BeginTabBar("##ModelSubTabs")) {
+        if (ImGui::BeginTabItem("Architecture")) {
+            draw_model_architecture();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Inference")) {
+            draw_model_inference();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+// ── Architecture sub-tab ──
+
+void UCDHWorkbenchApplet::draw_model_architecture() {
+    auto& s = *s_;
+
+    if (!s.viz)
+        s.viz = std::make_unique<ModelVisualizer>();
+    if (!s.viz->is_initialized())
+        s.viz->init();
+
+    if (ImGui::Button("Fit View")) {
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        s.viz->fit_view((int)avail.x, (int)avail.y);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Scroll=zoom  Mid-click=pan  Click=select");
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (avail.x < 10 || avail.y < 10) return;
+
+    int w = (int)avail.x;
+    int h = (int)avail.y;
+
+    s.viz->render(w, h);
+
+    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+    ImVec2 canvas_sz  = avail;
+
+    ImGui::Image((ImTextureID)(intptr_t)s.viz->texture(), canvas_sz,
+                 ImVec2(0, 1), ImVec2(1, 0));
+
+    if (ImGui::IsItemHovered())
+        s.viz->handle_input(canvas_pos, canvas_sz);
+
+    s.viz->render_labels(canvas_pos, canvas_sz);
+
+    if (s.viz->hovered_node() >= 0) {
+        auto* node = s.viz->get_node(s.viz->hovered_node());
+        if (node) {
+            ImGui::BeginTooltip();
+            ImGui::TextColored(node->border, "%s", node->name.c_str());
+            if (!node->detail.empty())
+                ImGui::TextDisabled("%s", node->detail.c_str());
+            if (node->param_count > 0) {
+                if (node->param_count >= 1000)
+                    ImGui::Text("Parameters: %.1fK",
+                                node->param_count / 1e3);
+                else
+                    ImGui::Text("Parameters: %lld",
+                                (long long)node->param_count);
+            }
+            ImGui::EndTooltip();
+        }
+    }
+}
+
+// ── Inference sub-tab ──
+
+void UCDHWorkbenchApplet::draw_model_inference() {
     auto& s = *s_;
     ImGui::Spacing();
     ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "MODEL INFERENCE");
