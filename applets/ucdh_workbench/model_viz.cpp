@@ -1,288 +1,61 @@
 #include "model_viz.h"
 
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
 
 // ============================================================================
-// SHADERS
+// LAYOUT
 // ============================================================================
 
-static const char* VS_NODE = R"(
-#version 330 core
-layout(location=0) in vec2 a_pos;
-
-uniform vec4  u_rect;
-uniform mat4  u_proj;
-
-out vec2 v_uv;
-out vec2 v_size;
-
-void main() {
-    v_uv   = a_pos;
-    v_size = u_rect.zw;
-    vec2 world = u_rect.xy + a_pos * u_rect.zw;
-    gl_Position = u_proj * vec4(world, 0.0, 1.0);
-}
-)";
-
-static const char* FS_NODE = R"(
-#version 330 core
-in vec2 v_uv;
-in vec2 v_size;
-
-uniform vec4  u_fill;
-uniform vec4  u_border_color;
-uniform float u_radius;
-uniform float u_border_width;
-uniform float u_hovered;
-uniform float u_selected;
-
-out vec4 frag;
-
-float roundedBoxSDF(vec2 p, vec2 b, float r) {
-    vec2 q = abs(p) - b + r;
-    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
-}
-
-void main() {
-    vec2  p      = (v_uv - 0.5) * v_size;
-    vec2  extent = v_size * 0.5;
-    float d      = roundedBoxSDF(p, extent, u_radius);
-
-    float aa    = 1.5;
-    float alpha = 1.0 - smoothstep(-aa, aa, d);
-
-    float border_inner = -u_border_width;
-    float is_border    = smoothstep(border_inner - aa, border_inner + aa, d);
-
-    vec4 fill = u_fill;
-    if (u_hovered > 0.5)
-        fill = mix(fill, vec4(1.0), 0.12);
-
-    vec4 border = u_border_color;
-    if (u_selected > 0.5)
-        border = vec4(1.0, 0.85, 0.3, 1.0);
-
-    vec4 color = mix(fill, border, is_border);
-    color.a *= alpha;
-    if (color.a < 0.01) discard;
-    frag = color;
-}
-)";
-
-static const char* VS_EDGE = R"(
-#version 330 core
-layout(location=0) in vec2 a_pos;
-layout(location=1) in vec4 a_color;
-
-uniform mat4 u_proj;
-out vec4 v_color;
-
-void main() {
-    gl_Position = u_proj * vec4(a_pos, 0.0, 1.0);
-    v_color = a_color;
-}
-)";
-
-static const char* FS_EDGE = R"(
-#version 330 core
-in vec4 v_color;
-out vec4 frag;
-
-void main() { frag = v_color; }
-)";
-
-// ============================================================================
-// GL HELPERS
-// ============================================================================
-
-static GLuint compile_shader(GLenum type, const char* src) {
-    GLuint sh = glCreateShader(type);
-    glShaderSource(sh, 1, &src, nullptr);
-    glCompileShader(sh);
-    GLint ok = 0;
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[2048];
-        glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
-        std::fprintf(stderr, "[model_viz] Shader compile error (%s):\n%s\n",
-                     type == GL_VERTEX_SHADER ? "VS" : "FS", log);
-        glDeleteShader(sh);
-        return 0;
-    }
-    return sh;
-}
-
-static GLuint link_program(const char* vs_src, const char* fs_src) {
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, vs_src);
-    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, fs_src);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return 0;
-    }
-    GLuint p = glCreateProgram();
-    glAttachShader(p, vs);
-    glAttachShader(p, fs);
-    glLinkProgram(p);
-    GLint ok = 0;
-    glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[2048];
-        glGetProgramInfoLog(p, sizeof(log), nullptr, log);
-        std::fprintf(stderr, "[model_viz] Link error:\n%s\n", log);
-        glDeleteProgram(p);
-        p = 0;
-    }
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    return p;
-}
-
-// ============================================================================
-// LAYOUT CONSTANTS
-// ============================================================================
-
-static constexpr float NODE_W       = 460.0f;
-static constexpr float NODE_GAP     = 20.0f;
-static constexpr float GRAPH_PAD    = 60.0f;
-static constexpr float NODE_RADIUS  = 10.0f;
-static constexpr float BORDER_W     = 2.0f;
-static constexpr float STAGE_GAP    = 24.0f;
-static constexpr float STAGE_MARGIN = 16.0f;
-static constexpr float ARROW_W      = 6.0f;
-static constexpr float ARROW_H      = 10.0f;
-static constexpr float HEADER_H     = 24.0f;
-static constexpr float LINE_H       = 15.0f;
-static constexpr float PAD_BOT      = 12.0f;
+static constexpr float NODE_W       = 520.0f;
+static constexpr float NODE_GAP     = 14.0f;
+static constexpr float ARROW_GAP    = 28.0f;
+static constexpr float HEADER_H     = 26.0f;
+static constexpr float LINE_H       = 16.0f;
+static constexpr float PAD_BOT      = 10.0f;
+static constexpr float PAD_X        = 12.0f;
 static constexpr float MIN_NODE_H   = 40.0f;
+static constexpr float ROUNDING     = 8.0f;
+static constexpr float STAGE_PAD    = 10.0f;
+static constexpr float STAGE_GAP    = 18.0f;
 
 // ============================================================================
-// NODE COLORS
+// COLORS
 // ============================================================================
 
-static ImVec4 fill_for(const std::string& t) {
-    if (t == "conv")      return {0.15f, 0.36f, 0.82f, 1.0f};
-    if (t == "attention")  return {0.78f, 0.44f, 0.02f, 1.0f};
-    if (t == "fusion")     return {0.02f, 0.52f, 0.38f, 1.0f};
-    if (t == "pool")       return {0.44f, 0.20f, 0.80f, 1.0f};
-    if (t == "linear")     return {0.28f, 0.25f, 0.78f, 1.0f};
-    if (t == "dropout")    return {0.26f, 0.30f, 0.36f, 1.0f};
-    return {0.22f, 0.27f, 0.34f, 1.0f};
+static ImU32 fill_for(const std::string& t) {
+    if (t == "conv")       return IM_COL32(25, 55, 130, 255);
+    if (t == "attention")  return IM_COL32(140, 75, 5, 255);
+    if (t == "fusion")     return IM_COL32(10, 90, 65, 255);
+    if (t == "pool")       return IM_COL32(75, 35, 140, 255);
+    if (t == "linear")     return IM_COL32(50, 45, 140, 255);
+    if (t == "dropout")    return IM_COL32(50, 55, 65, 255);
+    return IM_COL32(40, 50, 60, 255);
 }
 
-static ImVec4 border_for(const std::string& t) {
-    if (t == "conv")      return {0.23f, 0.51f, 0.96f, 1.0f};
-    if (t == "attention")  return {0.96f, 0.62f, 0.07f, 1.0f};
-    if (t == "fusion")     return {0.06f, 0.73f, 0.51f, 1.0f};
-    if (t == "pool")       return {0.55f, 0.36f, 0.96f, 1.0f};
-    if (t == "linear")     return {0.39f, 0.40f, 0.95f, 1.0f};
-    if (t == "dropout")    return {0.42f, 0.48f, 0.55f, 1.0f};
-    return {0.45f, 0.52f, 0.60f, 1.0f};
+static ImU32 border_for(const std::string& t) {
+    if (t == "conv")       return IM_COL32(60, 130, 245, 255);
+    if (t == "attention")  return IM_COL32(245, 160, 20, 255);
+    if (t == "fusion")     return IM_COL32(20, 190, 130, 255);
+    if (t == "pool")       return IM_COL32(140, 90, 245, 255);
+    if (t == "linear")     return IM_COL32(100, 100, 245, 255);
+    if (t == "dropout")    return IM_COL32(110, 120, 140, 255);
+    return IM_COL32(115, 130, 150, 255);
 }
 
-// ============================================================================
-// LIFECYCLE
-// ============================================================================
-
-ModelVisualizer::ModelVisualizer()  = default;
-ModelVisualizer::~ModelVisualizer() { cleanup(); }
-
-void ModelVisualizer::init() {
-    if (initialized_) return;
-
-    glewExperimental = GL_TRUE;
-    GLenum err = glewInit();
-    if (err != GLEW_OK) {
-        std::fprintf(stderr, "[model_viz] glewInit failed: %s\n",
-                     glewGetErrorString(err));
-        return;
-    }
-
-    node_prog_ = link_program(VS_NODE, FS_NODE);
-    edge_prog_ = link_program(VS_EDGE, FS_EDGE);
-    if (!node_prog_ || !edge_prog_) {
-        std::fprintf(stderr, "[model_viz] Failed to compile shaders\n");
-        return;
-    }
-
-    float quad[] = {0,0, 1,0, 1,1, 0,0, 1,1, 0,1};
-    glGenVertexArrays(1, &quad_vao_);
-    glGenBuffers(1, &quad_vbo_);
-    glBindVertexArray(quad_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-    glBindVertexArray(0);
-
-    glGenVertexArrays(1, &line_vao_);
-    glGenBuffers(1, &line_vbo_);
-    glBindVertexArray(line_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, line_vbo_);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          (void*)(2 * sizeof(float)));
-    glBindVertexArray(0);
-
-    initialized_ = true;
-    build_repnet_graph();
-}
-
-void ModelVisualizer::cleanup() {
-    if (node_prog_) { glDeleteProgram(node_prog_); node_prog_ = 0; }
-    if (edge_prog_) { glDeleteProgram(edge_prog_); edge_prog_ = 0; }
-    if (quad_vao_)  { glDeleteVertexArrays(1, &quad_vao_); quad_vao_ = 0; }
-    if (quad_vbo_)  { glDeleteBuffers(1, &quad_vbo_);      quad_vbo_ = 0; }
-    if (line_vao_)  { glDeleteVertexArrays(1, &line_vao_); line_vao_ = 0; }
-    if (line_vbo_)  { glDeleteBuffers(1, &line_vbo_);      line_vbo_ = 0; }
-    if (fbo_) {
-        glDeleteFramebuffers(1, &fbo_);
-        glDeleteTextures(1, &fbo_color_);
-        fbo_ = 0; fbo_color_ = 0;
-    }
-    initialized_ = false;
+static ImU32 header_for(const std::string& t) {
+    if (t == "conv")       return IM_COL32(35, 75, 170, 255);
+    if (t == "attention")  return IM_COL32(170, 95, 10, 255);
+    if (t == "fusion")     return IM_COL32(15, 115, 85, 255);
+    if (t == "pool")       return IM_COL32(95, 50, 170, 255);
+    if (t == "linear")     return IM_COL32(65, 60, 170, 255);
+    if (t == "dropout")    return IM_COL32(65, 70, 80, 255);
+    return IM_COL32(55, 65, 80, 255);
 }
 
 // ============================================================================
-// FBO
-// ============================================================================
-
-void ModelVisualizer::ensure_fbo(int w, int h) {
-    if (fbo_ && fbo_w_ == w && fbo_h_ == h) return;
-
-    if (fbo_) {
-        glDeleteFramebuffers(1, &fbo_);
-        glDeleteTextures(1, &fbo_color_);
-    }
-    fbo_w_ = w;
-    fbo_h_ = h;
-
-    glGenFramebuffers(1, &fbo_);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-
-    glGenTextures(1, &fbo_color_);
-    glBindTexture(GL_TEXTURE_2D, fbo_color_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, fbo_color_, 0);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-// ============================================================================
-// GRAPH CONSTRUCTION
+// GRAPH
 // ============================================================================
 
 void ModelVisualizer::build_repnet_graph() {
@@ -290,8 +63,7 @@ void ModelVisualizer::build_repnet_graph() {
     edges_.clear();
     stages_.clear();
 
-    float cx = GRAPH_PAD + NODE_W * 0.5f;
-    float y  = GRAPH_PAD;
+    float y = 20.0f;
 
     auto add = [&](const char* name, const char* type,
                    std::initializer_list<const char*> detail_lines,
@@ -306,15 +78,16 @@ void ModelVisualizer::build_repnet_graph() {
         n.type = type;
         n.lines.assign(detail_lines.begin(), detail_lines.end());
         n.shape_out = shape;
-        n.x = cx - NODE_W * 0.5f;
+        n.x = 0;
         n.y = y;
         n.w = NODE_W;
         n.h = h;
-        n.color = fill_for(type);
+        n.fill = fill_for(type);
         n.border = border_for(type);
+        n.header_fill = header_for(type);
         n.param_count = params;
         nodes_.push_back(std::move(n));
-        y += h + NODE_GAP;
+        y += h + ARROW_GAP + NODE_GAP;
         return idx;
     };
 
@@ -323,447 +96,242 @@ void ModelVisualizer::build_repnet_graph() {
     };
 
     // ── Input ──
-    int n_in = add("Input", "input",
-        {"12-lead ECG signal  (I, II, III, aVR, aVL, aVF, V1-V6)",
-         "Sampling rate 250 Hz, up to 2500 samples per lead"},
+    int n_in = add("Input: 12-Lead ECG", "input",
+        {"12 leads: I, II, III, aVR, aVL, aVF, V1-V6",
+         "250 Hz sampling, up to 2500 samples/lead"},
         "(B, 12, T)", 0);
 
-    // ── Stage 0  (filters=48, kernel=7) ──
+    // ── Stage 0 ──
     float s0_top = y;
-    int n_c0 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
-        {"  main path:",
-         "    Conv1d(1 -> 48, kernel=7, pad=3) + BatchNorm(48) + ReLU",
-         "    Conv1d(48 -> 48, kernel=7, pad=3) + BatchNorm(48)",
-         "  residual skip:",
-         "    Conv1d(1 -> 48, kernel=1) + BatchNorm(48)",
-         "  merge: Add(main, skip) -> ReLU",
-         "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
-        "(B, 12, 48, T/2)", 16944, STAGE_GAP);
-
+    int n_c0 = add("PerLeadConvBlock  [x12 leads]", "conv",
+        {"main:  Conv1d(1->48, k=7) + BN + ReLU -> Conv1d(48->48, k=7) + BN",
+         "skip:  Conv1d(1->48, k=1) + BN",
+         "merge: Add(main, skip) -> ReLU -> Dropout(0.064) -> MaxPool(2)"},
+        "(B,12,48,T/2)", 16944, STAGE_GAP);
     int n_a0 = add("CrossLeadAttention", "attention",
-        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 48",
-         "  attn:  MultiheadAttention(embed=48, heads=4, batch_first=True)",
-         "  norm:  residual + LayerNorm(48)",
-         "  gate:  Linear(48 -> 48) + Sigmoid",
-         "  out:   x * gate  (element-wise, broadcast back to T/2)"},
-        "(B, 12, 48, T/2)", 11856);
-    float s0_bot = y - NODE_GAP;
+        {"pool:  AdaptiveAvgPool1d(1) -> 12 tokens of dim 48",
+         "attn:  MultiheadAttention(embed=48, heads=4)",
+         "gate:  residual + LayerNorm -> Linear(48->48) + Sigmoid -> x*gate"},
+        "(B,12,48,T/2)", 11856);
+    float s0_bot = nodes_.back().y + nodes_.back().h;
 
-    // ── Stage 1  (filters=96, kernel=5) ──
+    // ── Stage 1 ──
     float s1_top = y;
-    int n_c1 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
-        {"  main path:",
-         "    Conv1d(48 -> 96, kernel=5, pad=2) + BatchNorm(96) + ReLU",
-         "    Conv1d(96 -> 96, kernel=5, pad=2) + BatchNorm(96)",
-         "  residual skip:",
-         "    Conv1d(48 -> 96, kernel=1) + BatchNorm(96)",
-         "  merge: Add(main, skip) -> ReLU",
-         "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
-        "(B, 12, 96, T/4)", 74592, STAGE_GAP);
-
+    int n_c1 = add("PerLeadConvBlock  [x12 leads]", "conv",
+        {"main:  Conv1d(48->96, k=5) + BN + ReLU -> Conv1d(96->96, k=5) + BN",
+         "skip:  Conv1d(48->96, k=1) + BN",
+         "merge: Add(main, skip) -> ReLU -> Dropout(0.064) -> MaxPool(2)"},
+        "(B,12,96,T/4)", 74592, STAGE_GAP);
     int n_a1 = add("CrossLeadAttention", "attention",
-        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 96",
-         "  attn:  MultiheadAttention(embed=96, heads=4, batch_first=True)",
-         "  norm:  residual + LayerNorm(96)",
-         "  gate:  Linear(96 -> 96) + Sigmoid",
-         "  out:   x * gate  (element-wise, broadcast back to T/4)"},
-        "(B, 12, 96, T/4)", 46752);
-    float s1_bot = y - NODE_GAP;
+        {"pool:  AdaptiveAvgPool1d(1) -> 12 tokens of dim 96",
+         "attn:  MultiheadAttention(embed=96, heads=4)",
+         "gate:  residual + LayerNorm -> Linear(96->96) + Sigmoid -> x*gate"},
+        "(B,12,96,T/4)", 46752);
+    float s1_bot = nodes_.back().y + nodes_.back().h;
 
-    // ── Stage 2  (filters=192, kernel=3) ──
+    // ── Stage 2 ──
     float s2_top = y;
-    int n_c2 = add("PerLeadConvBlock   [x12 independent leads]", "conv",
-        {"  main path:",
-         "    Conv1d(96 -> 192, kernel=3, pad=1) + BatchNorm(192) + ReLU",
-         "    Conv1d(192 -> 192, kernel=3, pad=1) + BatchNorm(192)",
-         "  residual skip:",
-         "    Conv1d(96 -> 192, kernel=1) + BatchNorm(192)",
-         "  merge: Add(main, skip) -> ReLU",
-         "  Dropout(p=0.064) -> MaxPool1d(kernel=2, stride=2)"},
-        "(B, 12, 192, T/8)", 186048, STAGE_GAP);
-
+    int n_c2 = add("PerLeadConvBlock  [x12 leads]", "conv",
+        {"main:  Conv1d(96->192, k=3) + BN + ReLU -> Conv1d(192->192, k=3) + BN",
+         "skip:  Conv1d(96->192, k=1) + BN",
+         "merge: Add(main, skip) -> ReLU -> Dropout(0.064) -> MaxPool(2)"},
+        "(B,12,192,T/8)", 186048, STAGE_GAP);
     int n_a2 = add("CrossLeadAttention", "attention",
-        {"  pool:  AdaptiveAvgPool1d(1) per lead -> 12 tokens of dim 192",
-         "  attn:  MultiheadAttention(embed=192, heads=4, batch_first=True)",
-         "  norm:  residual + LayerNorm(192)",
-         "  gate:  Linear(192 -> 192) + Sigmoid",
-         "  out:   x * gate  (element-wise, broadcast back to T/8)"},
-        "(B, 12, 192, T/8)", 185664);
-    float s2_bot = y - NODE_GAP;
+        {"pool:  AdaptiveAvgPool1d(1) -> 12 tokens of dim 192",
+         "attn:  MultiheadAttention(embed=192, heads=4)",
+         "gate:  residual + LayerNorm -> Linear(192->192) + Sigmoid -> x*gate"},
+        "(B,12,192,T/8)", 185664);
+    float s2_bot = nodes_.back().y + nodes_.back().h;
 
     // ── Fusion + Head ──
-    int n_reshape = add("Reshape  (lead concatenation)", "fusion",
-        {"  (B, 12, 192, T/8) -> (B, 12*192, T/8) = (B, 2304, T/8)",
-         "  Concatenate all lead feature maps along channel dimension"},
-        "(B, 2304, T/8)", 0, STAGE_GAP);
-
-    int n_fuse = add("Fusion Convolution", "fusion",
-        {"  Conv1d(2304 -> 192, kernel=1)   pointwise channel reduction",
-         "  BatchNorm1d(192) + ReLU"},
-        "(B, 192, T/8)", 442944);
-
+    int n_reshape = add("Lead Concatenation", "fusion",
+        {"Reshape: (B,12,192,T/8) -> (B, 2304, T/8)"},
+        "(B,2304,T/8)", 0, STAGE_GAP);
+    int n_fuse = add("Fusion Conv1d", "fusion",
+        {"Conv1d(2304->192, k=1) + BatchNorm + ReLU"},
+        "(B,192,T/8)", 442944);
     int n_gap = add("Global Average Pooling", "pool",
-        {"  AdaptiveAvgPool1d(1)  collapse temporal dim",
-         "  (B, 192, T/8) -> (B, 192)"},
-        "(B, 192)", 0);
+        {"AdaptiveAvgPool1d(1): collapse temporal -> single vector"},
+        "(B,192)", 0);
+    int n_drop = add("Dropout (p=0.064)", "dropout", {}, "(B,192)", 0);
+    int n_fc = add("Classifier: Linear(192 -> 2)", "linear",
+        {"Output classes: PE (Pulmonary Embolism) vs Normal"},
+        "(B,2)", 386);
+    int n_out = add("Softmax -> Diagnosis", "input",
+        {"Probability distribution over PE / Normal"},
+        "(B,2)", 0);
 
-    int n_drop = add("Dropout", "dropout",
-        {"  p = 0.064  (regularization)"},
-        "(B, 192)", 0);
+    // ── Edges ──
+    edge(n_in,      n_c0,      "unsqueeze -> (B,12,1,T)");
+    edge(n_c0,      n_a0,      "(B,12,48,T/2)");
+    edge(n_a0,      n_c1,      "(B,12,48,T/2)");
+    edge(n_c1,      n_a1,      "(B,12,96,T/4)");
+    edge(n_a1,      n_c2,      "(B,12,96,T/4)");
+    edge(n_c2,      n_a2,      "(B,12,192,T/8)");
+    edge(n_a2,      n_reshape, "(B,12,192,T/8)");
+    edge(n_reshape, n_fuse,    "(B,2304,T/8)");
+    edge(n_fuse,    n_gap,     "(B,192,T/8)");
+    edge(n_gap,     n_drop,    "(B,192)");
+    edge(n_drop,    n_fc,      "(B,192)");
+    edge(n_fc,      n_out,     "(B,2)");
 
-    int n_fc = add("Classifier  (fully connected)", "linear",
-        {"  Linear(192 -> 2)",
-         "  Output: PE (Pulmonary Embolism) vs Normal"},
-        "(B, 2)", 386);
+    // ── Stages ──
+    stages_.push_back({s0_top, s0_bot, "Stage 0 — QRS-level features (RF = 32 samples)"});
+    stages_.push_back({s1_top, s1_bot, "Stage 1 — ST-level features (RF = 40 samples)"});
+    stages_.push_back({s2_top, s2_bot, "Stage 2 — Morphology-level features (RF = 49 samples)"});
 
-    int n_out = add("Output", "input",
-        {"  Raw logits  ->  softmax for class probabilities"},
-        "(B, 2)", 0);
-
-    // ── Edges with shape flow labels ──
-    edge(n_in,      n_c0,      "unsqueeze -> (B, 12, 1, T)");
-    edge(n_c0,      n_a0,      "(B, 12, 48, T/2)");
-    edge(n_a0,      n_c1,      "(B, 12, 48, T/2)");
-    edge(n_c1,      n_a1,      "(B, 12, 96, T/4)");
-    edge(n_a1,      n_c2,      "(B, 12, 96, T/4)");
-    edge(n_c2,      n_a2,      "(B, 12, 192, T/8)");
-    edge(n_a2,      n_reshape, "(B, 12, 192, T/8)");
-    edge(n_reshape, n_fuse,    "(B, 2304, T/8)");
-    edge(n_fuse,    n_gap,     "(B, 192, T/8)");
-    edge(n_gap,     n_drop,    "(B, 192)");
-    edge(n_drop,    n_fc,      "(B, 192)");
-    edge(n_fc,      n_out,     "(B, 2)");
-
-    // ── Stage groups ──
-    float sg_x = GRAPH_PAD - STAGE_MARGIN;
-    float sg_w = NODE_W + STAGE_MARGIN * 2;
-    ImVec4 sg_col = {0.25f, 0.35f, 0.55f, 0.10f};
-    stages_.push_back({sg_x, s0_top - STAGE_MARGIN, sg_w,
-                       s0_bot - s0_top + STAGE_MARGIN * 2,
-                       "Stage 0  (QRS-level features, RF=32 samples)", sg_col});
-    stages_.push_back({sg_x, s1_top - STAGE_MARGIN, sg_w,
-                       s1_bot - s1_top + STAGE_MARGIN * 2,
-                       "Stage 1  (ST-level features, RF=40 samples)", sg_col});
-    stages_.push_back({sg_x, s2_top - STAGE_MARGIN, sg_w,
-                       s2_bot - s2_top + STAGE_MARGIN * 2,
-                       "Stage 2  (morphology-level features, RF=49 samples)", sg_col});
-
-    cam_x_ = cx;
-    cam_y_ = y * 0.5f;
-    needs_fit_ = true;
+    built_ = true;
 }
 
 // ============================================================================
-// RENDERING
+// DRAW
 // ============================================================================
 
-void ModelVisualizer::render(int width, int height) {
-    if (!initialized_ || width <= 0 || height <= 0) return;
+void ModelVisualizer::draw(ImVec2 avail) {
+    if (!built_) build_repnet_graph();
+    if (nodes_.empty()) return;
 
-    if (needs_fit_) {
-        fit_view(width, height);
-        needs_fit_ = false;
-    }
+    float total_h = nodes_.back().y + nodes_.back().h + 40.0f;
+    float cx = avail.x * 0.5f;
 
-    ensure_fbo(width, height);
+    ImGui::BeginChild("##model_scroll", avail, false,
+                      ImGuiWindowFlags_NoBackground);
 
-    GLint prev_fbo;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    GLint prev_vp[4];
-    glGetIntegerv(GL_VIEWPORT, prev_vp);
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-    glViewport(0, 0, width, height);
-    glClearColor(0.07f, 0.07f, 0.11f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Reserve space so scrollbar works
+    ImGui::Dummy(ImVec2(NODE_W, total_h));
 
-    float hw = (float)width  / (2.0f * zoom_);
-    float hh = (float)height / (2.0f * zoom_);
-    glm::mat4 proj = glm::ortho(cam_x_ - hw, cam_x_ + hw,
-                                cam_y_ + hh, cam_y_ - hh,
-                                -1.0f, 1.0f);
+    float off_x = cx - NODE_W * 0.5f;
 
-    render_stage_groups(proj);
-    render_edges(proj);
-    render_nodes(proj);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
-}
-
-void ModelVisualizer::render_stage_groups(const glm::mat4& proj) {
-    glUseProgram(node_prog_);
-    glBindVertexArray(quad_vao_);
-    glUniformMatrix4fv(glGetUniformLocation(node_prog_, "u_proj"),
-                       1, GL_FALSE, glm::value_ptr(proj));
-    glUniform1f(glGetUniformLocation(node_prog_, "u_radius"), 14.0f);
-    glUniform1f(glGetUniformLocation(node_prog_, "u_border_width"), 1.0f);
-    glUniform1f(glGetUniformLocation(node_prog_, "u_hovered"), 0.0f);
-    glUniform1f(glGetUniformLocation(node_prog_, "u_selected"), 0.0f);
-
+    // ── Stage group backgrounds ──
     for (const auto& sg : stages_) {
-        glUniform4f(glGetUniformLocation(node_prog_, "u_rect"),
-                    sg.x, sg.y, sg.w, sg.h);
-        glUniform4f(glGetUniformLocation(node_prog_, "u_fill"),
-                    sg.color.x, sg.color.y, sg.color.z, sg.color.w);
-        glUniform4f(glGetUniformLocation(node_prog_, "u_border_color"),
-                    sg.color.x * 1.5f, sg.color.y * 1.5f,
-                    sg.color.z * 1.5f, sg.color.w * 1.8f);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+        float sy0 = origin.y + sg.y_top - STAGE_PAD;
+        float sy1 = origin.y + sg.y_bot + STAGE_PAD;
+        float sx0 = origin.x + off_x - STAGE_PAD;
+        float sx1 = origin.x + off_x + NODE_W + STAGE_PAD;
+        dl->AddRectFilled(ImVec2(sx0, sy0), ImVec2(sx1, sy1),
+                          IM_COL32(40, 60, 100, 40), ROUNDING + 4);
+        dl->AddRect(ImVec2(sx0, sy0), ImVec2(sx1, sy1),
+                    IM_COL32(60, 90, 140, 60), ROUNDING + 4, 0, 1.0f);
+        dl->AddText(ImVec2(sx0 + 8, sy0 + 4),
+                    IM_COL32(130, 160, 210, 140), sg.label.c_str());
     }
 
-    glBindVertexArray(0);
-    glUseProgram(0);
-}
-
-void ModelVisualizer::render_edges(const glm::mat4& proj) {
-    if (edges_.empty()) return;
-
-    struct V { float x, y, r, g, b, a; };
-    std::vector<V> lines, tris;
-    lines.reserve(edges_.size() * 2);
-    tris.reserve(edges_.size() * 3);
-
-    const float cr = 0.40f, cg = 0.46f, cb = 0.55f, ca = 0.65f;
+    // ── Edges (arrows between nodes) ──
+    hovered_ = -1;
+    ImVec2 mpos = ImGui::GetIO().MousePos;
 
     for (const auto& e : edges_) {
         const auto& src = nodes_[e.from];
         const auto& dst = nodes_[e.to];
-        float x0 = src.x + src.w * 0.5f, y0 = src.y + src.h;
-        float x1 = dst.x + dst.w * 0.5f, y1 = dst.y;
+        float ax = origin.x + off_x + NODE_W * 0.5f;
+        float ay0 = origin.y + src.y + src.h;
+        float ay1 = origin.y + dst.y;
+        float mid_y = (ay0 + ay1) * 0.5f;
 
-        lines.push_back({x0, y0, cr, cg, cb, ca});
-        lines.push_back({x1, y1 - ARROW_H, cr, cg, cb, ca});
+        dl->AddLine(ImVec2(ax, ay0), ImVec2(ax, ay1),
+                    IM_COL32(90, 110, 140, 180), 2.0f);
 
-        tris.push_back({x1,           y1,           cr, cg, cb, ca});
-        tris.push_back({x1 - ARROW_W, y1 - ARROW_H, cr, cg, cb, ca});
-        tris.push_back({x1 + ARROW_W, y1 - ARROW_H, cr, cg, cb, ca});
+        // Arrowhead
+        float aw = 6.0f, ah = 8.0f;
+        dl->AddTriangleFilled(
+            ImVec2(ax, ay1),
+            ImVec2(ax - aw, ay1 - ah),
+            ImVec2(ax + aw, ay1 - ah),
+            IM_COL32(90, 110, 140, 200));
+
+        // Edge label
+        if (!e.label.empty()) {
+            ImVec2 ts = ImGui::CalcTextSize(e.label.c_str());
+            float lx = ax + 12.0f;
+            float ly = mid_y - ts.y * 0.5f;
+            dl->AddRectFilled(ImVec2(lx - 4, ly - 2),
+                              ImVec2(lx + ts.x + 4, ly + ts.y + 2),
+                              IM_COL32(20, 25, 35, 200), 4.0f);
+            dl->AddText(ImVec2(lx, ly),
+                        IM_COL32(120, 190, 140, 220), e.label.c_str());
+        }
     }
 
-    glUseProgram(edge_prog_);
-    glUniformMatrix4fv(glGetUniformLocation(edge_prog_, "u_proj"),
-                       1, GL_FALSE, glm::value_ptr(proj));
-
-    glBindVertexArray(line_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, line_vbo_);
-
-    if (!lines.empty()) {
-        glBufferData(GL_ARRAY_BUFFER,
-                     (GLsizeiptr)(lines.size() * sizeof(V)),
-                     lines.data(), GL_DYNAMIC_DRAW);
-        glDrawArrays(GL_LINES, 0, (GLsizei)lines.size());
-    }
-    if (!tris.empty()) {
-        glBufferData(GL_ARRAY_BUFFER,
-                     (GLsizeiptr)(tris.size() * sizeof(V)),
-                     tris.data(), GL_DYNAMIC_DRAW);
-        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)tris.size());
-    }
-
-    glBindVertexArray(0);
-    glUseProgram(0);
-}
-
-void ModelVisualizer::render_nodes(const glm::mat4& proj) {
-    glUseProgram(node_prog_);
-    glBindVertexArray(quad_vao_);
-    glUniformMatrix4fv(glGetUniformLocation(node_prog_, "u_proj"),
-                       1, GL_FALSE, glm::value_ptr(proj));
-    glUniform1f(glGetUniformLocation(node_prog_, "u_radius"), NODE_RADIUS);
-    glUniform1f(glGetUniformLocation(node_prog_, "u_border_width"), BORDER_W);
-
+    // ── Nodes ──
     for (int i = 0; i < (int)nodes_.size(); i++) {
         const auto& n = nodes_[i];
-        glUniform4f(glGetUniformLocation(node_prog_, "u_rect"),
-                    n.x, n.y, n.w, n.h);
-        glUniform4f(glGetUniformLocation(node_prog_, "u_fill"),
-                    n.color.x, n.color.y, n.color.z, n.color.w);
-        glUniform4f(glGetUniformLocation(node_prog_, "u_border_color"),
-                    n.border.x, n.border.y, n.border.z, n.border.w);
-        glUniform1f(glGetUniformLocation(node_prog_, "u_hovered"),
-                    i == hovered_ ? 1.0f : 0.0f);
-        glUniform1f(glGetUniformLocation(node_prog_, "u_selected"),
-                    i == selected_ ? 1.0f : 0.0f);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-    }
+        float nx = origin.x + off_x;
+        float ny = origin.y + n.y;
 
-    glBindVertexArray(0);
-    glUseProgram(0);
-}
+        ImVec2 p0(nx, ny);
+        ImVec2 p1(nx + n.w, ny + n.h);
 
-// ============================================================================
-// TEXT LABELS (rendered via ImGui overlay, not in FBO)
-// ============================================================================
-
-void ModelVisualizer::render_labels(ImVec2 cp, ImVec2 cs) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->PushClipRect(cp, ImVec2(cp.x + cs.x, cp.y + cs.y), true);
-
-    auto to_screen = [&](float gx, float gy) -> ImVec2 {
-        return {cp.x + cs.x * 0.5f + (gx - cam_x_) * zoom_,
-                cp.y + cs.y * 0.5f + (gy - cam_y_) * zoom_};
-    };
-
-    // Stage labels
-    for (const auto& sg : stages_) {
-        ImVec2 p = to_screen(sg.x + 6.0f, sg.y + 4.0f);
-        if (zoom_ > 0.35f)
-            dl->AddText(p, IM_COL32(160, 180, 220, 100), sg.label.c_str());
-    }
-
-    // Node labels
-    for (const auto& n : nodes_) {
-        ImVec2 tl = to_screen(n.x, n.y);
-        float sw = n.w * zoom_;
-        float sh = n.h * zoom_;
-
-        if (tl.x + sw < cp.x || tl.x > cp.x + cs.x) continue;
-        if (tl.y + sh < cp.y || tl.y > cp.y + cs.y) continue;
-        if (sh < 18.0f) continue;
-
-        float pad = 10.0f;
-        dl->AddText(ImVec2(tl.x + pad, tl.y + 6.0f),
-                    IM_COL32(255, 255, 255, 230), n.name.c_str());
-
-        if (sh >= 38.0f) {
-            float ly = tl.y + HEADER_H * zoom_;
-            for (const auto& line : n.lines) {
-                if (ly > cp.y + cs.y) break;
-                dl->AddText(ImVec2(tl.x + pad, ly),
-                            IM_COL32(200, 205, 215, 150), line.c_str());
-                ly += LINE_H * zoom_;
-            }
-
-            if (!n.shape_out.empty()) {
-                ImVec2 ts = ImGui::CalcTextSize(n.shape_out.c_str());
-                dl->AddText(ImVec2(tl.x + sw - ts.x - pad,
-                                   tl.y + sh - PAD_BOT * zoom_),
-                            IM_COL32(140, 220, 180, 180), n.shape_out.c_str());
-            }
+        // Hit test
+        if (mpos.x >= p0.x && mpos.x <= p1.x &&
+            mpos.y >= p0.y && mpos.y <= p1.y) {
+            hovered_ = i;
         }
 
-        if (sh >= 50.0f && n.param_count > 0) {
+        bool hov = (i == hovered_);
+        bool sel = (i == selected_);
+
+        // Body
+        dl->AddRectFilled(p0, p1, n.fill, ROUNDING);
+
+        // Header bar
+        ImVec2 hdr_br(p1.x, ny + HEADER_H);
+        dl->AddRectFilled(p0, hdr_br, n.header_fill,
+                          ROUNDING, ImDrawFlags_RoundCornersTop);
+
+        // Border
+        ImU32 bord = sel ? IM_COL32(255, 220, 80, 255) :
+                     hov ? IM_COL32(200, 210, 230, 200) : n.border;
+        float bw = (sel || hov) ? 2.0f : 1.0f;
+        dl->AddRect(p0, p1, bord, ROUNDING, 0, bw);
+
+        // Header separator
+        dl->AddLine(ImVec2(nx, ny + HEADER_H),
+                    ImVec2(nx + n.w, ny + HEADER_H),
+                    IM_COL32(255, 255, 255, 30));
+
+        // Name
+        dl->AddText(ImVec2(nx + PAD_X, ny + 5.0f),
+                    IM_COL32(255, 255, 255, 240), n.name.c_str());
+
+        // Param count in header
+        if (n.param_count > 0) {
             char buf[64];
             if (n.param_count >= 1000000)
-                std::snprintf(buf, sizeof(buf), "%.1fM params", n.param_count / 1e6);
+                std::snprintf(buf, sizeof(buf), "%.1fM", n.param_count / 1e6);
             else if (n.param_count >= 1000)
-                std::snprintf(buf, sizeof(buf), "%.1fK params", n.param_count / 1e3);
+                std::snprintf(buf, sizeof(buf), "%.1fK", n.param_count / 1e3);
             else
-                std::snprintf(buf, sizeof(buf), "%lld params", (long long)n.param_count);
-
+                std::snprintf(buf, sizeof(buf), "%lld", (long long)n.param_count);
             ImVec2 ts = ImGui::CalcTextSize(buf);
-            dl->AddText(ImVec2(tl.x + sw - ts.x - pad, tl.y + 6.0f),
-                        IM_COL32(180, 190, 210, 120), buf);
+            dl->AddText(ImVec2(nx + n.w - ts.x - PAD_X, ny + 5.0f),
+                        IM_COL32(180, 190, 210, 150), buf);
+        }
+
+        // Detail lines
+        float ly = ny + HEADER_H + 4.0f;
+        for (const auto& line : n.lines) {
+            dl->AddText(ImVec2(nx + PAD_X, ly),
+                        IM_COL32(190, 200, 215, 190), line.c_str());
+            ly += LINE_H;
+        }
+
+        // Output shape
+        if (!n.shape_out.empty()) {
+            ImVec2 ts = ImGui::CalcTextSize(n.shape_out.c_str());
+            dl->AddText(ImVec2(nx + n.w - ts.x - PAD_X, ny + n.h - PAD_BOT - 2),
+                        IM_COL32(100, 210, 160, 200), n.shape_out.c_str());
         }
     }
 
-    // Edge labels (tensor shape annotations at midpoints)
-    for (const auto& e : edges_) {
-        if (e.label.empty()) continue;
-        const auto& src = nodes_[e.from];
-        const auto& dst = nodes_[e.to];
-        float mx = (src.x + src.w * 0.5f + dst.x + dst.w * 0.5f) * 0.5f;
-        float my = (src.y + src.h + dst.y) * 0.5f;
-        ImVec2 sp = to_screen(mx, my);
-        ImVec2 ts = ImGui::CalcTextSize(e.label.c_str());
-        sp.x -= ts.x * 0.5f;
-        sp.y -= ts.y * 0.5f;
-        if (sp.x + ts.x >= cp.x && sp.x <= cp.x + cs.x &&
-            sp.y + ts.y >= cp.y && sp.y <= cp.y + cs.y) {
-            dl->AddRectFilled(ImVec2(sp.x - 3, sp.y - 1),
-                              ImVec2(sp.x + ts.x + 3, sp.y + ts.y + 1),
-                              IM_COL32(20, 20, 30, 180), 3.0f);
-            dl->AddText(sp, IM_COL32(160, 200, 160, 200), e.label.c_str());
-        }
-    }
-
-    dl->PopClipRect();
-}
-
-// ============================================================================
-// INPUT
-// ============================================================================
-
-void ModelVisualizer::handle_input(ImVec2 cp, ImVec2 cs) {
-    ImGuiIO& io = ImGui::GetIO();
-    ImVec2 m = io.MousePos;
-
-    bool in = m.x >= cp.x && m.x < cp.x + cs.x &&
-              m.y >= cp.y && m.y < cp.y + cs.y;
-
-    if (!in && !dragging_) { hovered_ = -1; return; }
-
-    float mx = cam_x_ + (m.x - cp.x - cs.x * 0.5f) / zoom_;
-    float my = cam_y_ + (m.y - cp.y - cs.y * 0.5f) / zoom_;
-
-    hovered_ = -1;
-    for (int i = (int)nodes_.size() - 1; i >= 0; i--) {
-        const auto& n = nodes_[i];
-        if (mx >= n.x && mx < n.x + n.w && my >= n.y && my < n.y + n.h) {
-            hovered_ = i;
-            break;
-        }
-    }
-
-    if (in && ImGui::IsMouseClicked(0) && hovered_ < 0)
-        selected_ = -1;
-    else if (in && ImGui::IsMouseClicked(0) && hovered_ >= 0)
+    // Click handling
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
         selected_ = hovered_;
-
-    // Pan: middle mouse or Alt+left
-    bool pan_btn = ImGui::IsMouseDown(2) ||
-                   (ImGui::IsMouseDown(0) && io.KeyAlt);
-    if (pan_btn && !dragging_ && in) {
-        dragging_   = true;
-        drag_start_ = m;
-        drag_cam_x_ = cam_x_;
-        drag_cam_y_ = cam_y_;
-    }
-    if (dragging_) {
-        if (pan_btn) {
-            cam_x_ = drag_cam_x_ - (m.x - drag_start_.x) / zoom_;
-            cam_y_ = drag_cam_y_ - (m.y - drag_start_.y) / zoom_;
-        } else {
-            dragging_ = false;
-        }
     }
 
-    // Zoom with scroll wheel
-    if (in && std::abs(io.MouseWheel) > 0.01f) {
-        float old = zoom_;
-        zoom_ *= (1.0f + io.MouseWheel * 0.12f);
-        zoom_  = std::clamp(zoom_, 0.15f, 5.0f);
-        float f = 1.0f - old / zoom_;
-        cam_x_ += (mx - cam_x_) * f;
-        cam_y_ += (my - cam_y_) * f;
-    }
-}
-
-// ============================================================================
-// FIT VIEW
-// ============================================================================
-
-void ModelVisualizer::fit_view(int vw, int vh) {
-    if (nodes_.empty() || vw <= 0 || vh <= 0) return;
-
-    float min_x = nodes_[0].x, max_x = nodes_[0].x + nodes_[0].w;
-    float min_y = nodes_[0].y, max_y = nodes_[0].y + nodes_[0].h;
-    for (const auto& n : nodes_) {
-        min_x = std::min(min_x, n.x);
-        max_x = std::max(max_x, n.x + n.w);
-        min_y = std::min(min_y, n.y);
-        max_y = std::max(max_y, n.y + n.h);
-    }
-
-    float gw = max_x - min_x + GRAPH_PAD * 2;
-    float gh = max_y - min_y + GRAPH_PAD * 2;
-
-    cam_x_ = (min_x + max_x) * 0.5f;
-    cam_y_ = (min_y + max_y) * 0.5f;
-    zoom_  = std::min((float)vw / gw, (float)vh / gh) * 0.92f;
-    zoom_  = std::clamp(zoom_, 0.15f, 5.0f);
+    ImGui::EndChild();
 }
 
 // ============================================================================

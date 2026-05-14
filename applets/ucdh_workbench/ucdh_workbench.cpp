@@ -463,6 +463,10 @@ struct UCDHWorkbenchApplet::State {
     std::string model_path;
     std::string model_error;
     std::string model_output;
+    std::string inference_result;
+    std::string inference_sample_id;
+    int inference_class = -1;
+    float inference_prob = 0.0f;
 
     // ── Architecture visualizer ──
     std::unique_ptr<ModelVisualizer> viz;
@@ -539,7 +543,6 @@ bool UCDHWorkbenchApplet::initialize() {
 
 void UCDHWorkbenchApplet::cleanup() {
     if (!s_) return;
-    if (s_->viz) s_->viz->cleanup();
     s_->bg.reset();
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->con.reset();
@@ -1308,88 +1311,13 @@ void UCDHWorkbenchApplet::draw_raw_browser() {
 // ============================================================================
 
 void UCDHWorkbenchApplet::draw_model_tab() {
-    if (ImGui::BeginTabBar("##ModelSubTabs")) {
-        if (ImGui::BeginTabItem("Architecture")) {
-            draw_model_architecture();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Inference")) {
-            draw_model_inference();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
-}
-
-// ── Architecture sub-tab ──
-
-void UCDHWorkbenchApplet::draw_model_architecture() {
     auto& s = *s_;
 
     if (!s.viz)
         s.viz = std::make_unique<ModelVisualizer>();
-    if (!s.viz->is_initialized())
-        s.viz->init();
 
-    if (ImGui::Button("Fit View")) {
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        s.viz->fit_view((int)avail.x, (int)avail.y);
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Scroll=zoom  Mid-click=pan  Click=select");
-
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    if (avail.x < 10 || avail.y < 10) return;
-
-    int w = (int)avail.x;
-    int h = (int)avail.y;
-
-    s.viz->render(w, h);
-
-    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
-    ImVec2 canvas_sz  = avail;
-
-    ImGui::Image((ImTextureID)(intptr_t)s.viz->texture(), canvas_sz,
-                 ImVec2(0, 1), ImVec2(1, 0));
-
-    if (ImGui::IsItemHovered())
-        s.viz->handle_input(canvas_pos, canvas_sz);
-
-    s.viz->render_labels(canvas_pos, canvas_sz);
-
-    if (s.viz->hovered_node() >= 0) {
-        auto* node = s.viz->get_node(s.viz->hovered_node());
-        if (node) {
-            ImGui::BeginTooltip();
-            ImGui::TextColored(node->border, "%s", node->name.c_str());
-            for (const auto& line : node->lines)
-                ImGui::TextDisabled("%s", line.c_str());
-            if (!node->shape_out.empty())
-                ImGui::TextColored({0.55f, 0.86f, 0.70f, 1.0f},
-                                   "Output: %s", node->shape_out.c_str());
-            if (node->param_count > 0) {
-                if (node->param_count >= 1000)
-                    ImGui::Text("Parameters: %.1fK",
-                                node->param_count / 1e3);
-                else
-                    ImGui::Text("Parameters: %lld",
-                                (long long)node->param_count);
-            }
-            ImGui::EndTooltip();
-        }
-    }
-}
-
-// ── Inference sub-tab ──
-
-void UCDHWorkbenchApplet::draw_model_inference() {
-    auto& s = *s_;
-    ImGui::Spacing();
-    ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "MODEL INFERENCE");
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    if (ImGui::Button("Load Model...", ImVec2(160, 28))) {
+    // ── Top bar: model loading + inference ──
+    if (ImGui::Button("Load Model...", ImVec2(130, 0))) {
         IGFD::FileDialogConfig cfg;
         cfg.path = s.current_dir.empty() ? "." : s.current_dir;
         ImGuiFileDialog::Instance()->OpenDialog(
@@ -1402,6 +1330,7 @@ void UCDHWorkbenchApplet::draw_model_inference() {
             std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
             s.model_error.clear();
             s.model_output.clear();
+            s.inference_result.clear();
             try {
                 s.model = torch::jit::load(path);
                 s.model.eval();
@@ -1415,73 +1344,75 @@ void UCDHWorkbenchApplet::draw_model_inference() {
         ImGuiFileDialog::Instance()->Close();
     }
 
-    ImGui::Spacing();
+    ImGui::SameLine();
 
-    if (!s.model_loaded) {
+    if (s.model_loaded) {
+        ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "Loaded:");
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", fs::path(s.model_path).filename().string().c_str());
+        ImGui::SameLine();
+
+        bool has_sample = s.selected >= 0 && s.selected < (int)s.samples.size()
+                          && s.samples[s.selected].processed_valid;
+        if (!has_sample) ImGui::BeginDisabled();
+        if (ImGui::Button("Run on Selected Sample", ImVec2(200, 0))) {
+            auto& samp = s.samples[s.selected];
+            s.inference_result.clear();
+            try {
+                const int nl = (int)samp.processed.size();
+                const int n = samp.num_samples;
+                auto input = torch::zeros({1, nl, n});
+                auto acc = input.accessor<float, 3>();
+                for (int l = 0; l < nl; l++)
+                    for (int i = 0; i < n; i++)
+                        acc[0][l][i] = samp.processed[l][i];
+                auto out = s.model.forward({input}).toTensor();
+                auto probs = torch::softmax(out, 1);
+                auto prob_acc = probs.accessor<float, 2>();
+                s.inference_result = "Normal: " +
+                    std::to_string((int)(prob_acc[0][0] * 100 + 0.5f)) + "%    PE: " +
+                    std::to_string((int)(prob_acc[0][1] * 100 + 0.5f)) + "%";
+                s.inference_class = prob_acc[0][1] > prob_acc[0][0] ? 1 : 0;
+                s.inference_prob = prob_acc[0][s.inference_class];
+                s.inference_sample_id = samp.file_id;
+            } catch (const c10::Error& e) {
+                s.inference_result = std::string("Error: ") + e.what();
+                s.inference_class = -1;
+            }
+        }
+        if (!has_sample) ImGui::EndDisabled();
+
+        if (!s.inference_result.empty()) {
+            ImGui::SameLine();
+            ImVec4 col = s.inference_class == 1 ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+                       : s.inference_class == 0 ? ImVec4(0.4f, 1.0f, 0.6f, 1.0f)
+                       : ImVec4(1.0f, 0.85f, 0.3f, 1.0f);
+            ImGui::TextColored(col, "%s", s.inference_result.c_str());
+        }
+    } else {
         if (!s.model_error.empty()) {
-            ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Load failed:");
-            ImGui::TextWrapped("%s", s.model_error.c_str());
-            if (s.model_error.find("constants.pkl") != std::string::npos ||
-                s.model_error.find("PytorchStreamReader") != std::string::npos) {
-                ImGui::Spacing();
-                ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f},
-                    "This file appears to be a raw state_dict, not a "
-                    "TorchScript model.");
-                ImGui::TextWrapped(
-                    "Use scripts/export_torchscript.py to convert it:\n"
-                    "  python scripts/export_torchscript.py data/best_model.pt "
-                    "-o data/model_scripted.pt");
+            ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Load failed.");
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextWrapped("%s", s.model_error.c_str());
+                if (s.model_error.find("constants.pkl") != std::string::npos)
+                    ImGui::TextColored({1.0f, 0.85f, 0.3f, 1.0f},
+                        "File appears to be a state_dict. Use "
+                        "scripts/export_torchscript.py to convert.");
+                ImGui::EndTooltip();
             }
         } else {
-            ImGui::TextDisabled("No model loaded.");
-            ImGui::Spacing();
-            ImGui::TextWrapped(
-                "Load a TorchScript (.pt) model trained on the UCDH dataset. "
-                "Use torch.jit.script() or torch.jit.trace() in Python to "
-                "export your trained model.");
+            ImGui::TextDisabled("No model loaded. Load a TorchScript (.pt) to enable inference.");
         }
-        return;
     }
 
-    ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "Model loaded");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%s)", fs::path(s.model_path).filename().string().c_str());
-
-    ImGui::Spacing();
     ImGui::Separator();
-    ImGui::Spacing();
 
-    bool has_sample = s.selected >= 0 && s.selected < (int)s.samples.size()
-                      && s.samples[s.selected].processed_valid;
-
-    if (!has_sample) {
-        ImGui::TextDisabled("Select a processed ECG sample to run inference.");
-        return;
-    }
-
-    if (ImGui::Button("Run Inference", ImVec2(160, 28))) {
-        auto& samp = s.samples[s.selected];
-        s.model_output.clear();
-        try {
-            const int nl = (int)samp.processed.size();
-            const int n = samp.num_samples;
-            auto input = torch::zeros({1, nl, n});
-            auto acc = input.accessor<float, 3>();
-            for (int l = 0; l < nl; l++)
-                for (int i = 0; i < n; i++)
-                    acc[0][l][i] = samp.processed[l][i];
-            auto out = s.model.forward({input}).toTensor();
-            std::ostringstream oss;
-            oss << out.sizes() << "\n" << out.slice(1, 0, std::min((int64_t)10, out.size(1)));
-            s.model_output = oss.str();
-        } catch (const c10::Error& e) {
-            s.model_output = std::string("Inference error: ") + e.what();
-        }
-    }
-
-    if (!s.model_output.empty()) {
-        ImGui::Spacing();
-        ImGui::TextWrapped("%s", s.model_output.c_str());
-    }
+    // ── Architecture data flow diagram ──
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    s.viz->draw(avail);
 }
+
+void UCDHWorkbenchApplet::draw_model_architecture() {}
+void UCDHWorkbenchApplet::draw_model_inference() {}
 
