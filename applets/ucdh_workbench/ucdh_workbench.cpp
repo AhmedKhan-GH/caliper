@@ -1786,12 +1786,14 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
             auto t = s.detail_acts[i];
             torch::Tensor t2d;
 
-            if (t.dim() == 1) {
+            if (i == 0 && t.dim() == 2 && t.size(0) == 12) {
+                int lead = std::min(s.detail_lead, (int)t.size(0) - 1);
+                t2d = t[lead].unsqueeze(0);
+            } else if (t.dim() == 1) {
                 t2d = t.unsqueeze(0);
             } else if (t.dim() == 2) {
                 t2d = t;
             } else if (t.dim() == 3) {
-                // (leads, channels, time) — show selected lead
                 int lead = std::min(s.detail_lead, (int)t.size(0) - 1);
                 t2d = t[lead];
             } else {
