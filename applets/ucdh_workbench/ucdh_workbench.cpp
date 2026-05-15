@@ -570,6 +570,18 @@ struct UCDHWorkbenchApplet::State {
     std::vector<WeightEntry> weight_entries;
     bool weights_extracted = false;
 
+    // ── Batch statistics ──
+    struct SampleResult {
+        std::string id;
+        int true_class = -1;   // 0=Normal, 1=PE, -1=unknown
+        int pred_class = -1;
+        float prob_pe = 0;
+    };
+    std::vector<SampleResult> batch_results;
+    bool batch_stale = true;
+    bool batch_running = false;
+    int batch_progress = 0;
+
     void run_preview(const DiscoveredFile& f) {
         preview = PreviewSnapshot{};
         if (!con) { preview.error = "DuckDB not initialized"; return; }
@@ -714,6 +726,7 @@ void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
             s_->current_dir = s_->scan_dir;
         }
         s_->selected = -1;
+        s_->batch_stale = true;
         s_->bg = std::make_unique<BackgroundProcessor>();
         s_->scan_status.store(State::ScanStatus::Idle);
 
@@ -1615,6 +1628,7 @@ void UCDHWorkbenchApplet::draw_model_tab() {
                 s.model_path = path;
                 extract_weights(s.model, s.weight_entries);
                 s.weights_extracted = true;
+                s.batch_stale = true;
                 std::ofstream f(caliper::app_data_path("last_model.txt"));
                 if (f.is_open()) f << path;
             } catch (const c10::Error& e) {
@@ -1698,6 +1712,10 @@ void UCDHWorkbenchApplet::draw_model_tab() {
         }
         if (ImGui::BeginTabItem("Weights")) {
             draw_weight_view();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Statistics")) {
+            draw_statistics_tab();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -2041,6 +2059,319 @@ void UCDHWorkbenchApplet::draw_weight_view() {
         ImGui::Spacing();
         ImGui::PopID();
     }
+
+    ImGui::EndChild();
+}
+
+// ============================================================================
+// STATISTICS TAB
+// ============================================================================
+
+void UCDHWorkbenchApplet::draw_statistics_tab() {
+    auto& s = *s_;
+
+    if (!s.model_loaded) {
+        ImGui::TextDisabled("Load a model to compute statistics.");
+        return;
+    }
+    if (s.samples.empty()) {
+        ImGui::TextDisabled("Open a dataset to compute statistics.");
+        return;
+    }
+
+    // Count how many samples are processed
+    int n_ready = 0;
+    for (auto& samp : s.samples)
+        if (samp.processed_valid) n_ready++;
+
+    if (n_ready == 0) {
+        ImGui::TextDisabled("Waiting for samples to load...");
+        return;
+    }
+
+    // Run batch button
+    if (s.batch_stale) {
+        char btn_label[64];
+        std::snprintf(btn_label, sizeof(btn_label), "Run Inference on %d Samples", n_ready);
+        if (ImGui::Button(btn_label)) {
+            s.batch_results.clear();
+            s.batch_results.reserve(n_ready);
+
+            torch::NoGradGuard no_grad;
+            for (auto& samp : s.samples) {
+                if (!samp.processed_valid) continue;
+
+                State::SampleResult r;
+                r.id = samp.file_id;
+
+                if (!samp.label.empty()) {
+                    r.true_class = (samp.label.find("Normal") == std::string::npos) ? 1 : 0;
+                }
+
+                try {
+                    const int nl = (int)samp.processed.size();
+                    const int n = samp.num_samples;
+                    auto input = torch::zeros({1, nl, n});
+                    auto acc = input.accessor<float, 3>();
+                    for (int l = 0; l < nl; l++)
+                        for (int i = 0; i < n; i++)
+                            acc[0][l][i] = samp.processed[l][i];
+
+                    auto out = s.model.forward({input}).toTensor();
+                    auto probs = torch::softmax(out, 1);
+                    auto pa = probs.accessor<float, 2>();
+                    r.prob_pe = pa[0][1];
+                    r.pred_class = pa[0][1] > pa[0][0] ? 1 : 0;
+                } catch (...) {
+                    r.pred_class = -1;
+                }
+
+                s.batch_results.push_back(r);
+            }
+
+            s.batch_stale = false;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%d samples ready)", n_ready);
+        return;
+    }
+
+    if (s.batch_results.empty()) return;
+
+    // ── Compute statistics ──
+    int tp = 0, fp = 0, tn = 0, fn = 0;
+    int pred_pos = 0, pred_neg = 0;
+    int true_pos_count = 0, true_neg_count = 0;
+    int labeled = 0;
+    std::vector<float> probs_all, probs_pos, probs_neg;
+
+    for (auto& r : s.batch_results) {
+        if (r.pred_class < 0) continue;
+        probs_all.push_back(r.prob_pe);
+
+        if (r.pred_class == 1) pred_pos++;
+        else pred_neg++;
+
+        if (r.true_class >= 0) {
+            labeled++;
+            if (r.true_class == 1) {
+                true_pos_count++;
+                probs_pos.push_back(r.prob_pe);
+                if (r.pred_class == 1) tp++; else fn++;
+            } else {
+                true_neg_count++;
+                probs_neg.push_back(r.prob_pe);
+                if (r.pred_class == 0) tn++; else fp++;
+            }
+        }
+    }
+
+    int total = (int)s.batch_results.size();
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::BeginChild("##stats_scroll", avail, false);
+
+    float content_w = ImGui::GetContentRegionAvail().x;
+
+    // ── Summary ──
+    ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Dataset Summary");
+    ImGui::Separator();
+    ImGui::Text("Total samples: %d", total);
+    ImGui::Text("Predictions:   %d PE  /  %d Normal", pred_pos, pred_neg);
+    if (labeled > 0) {
+        ImGui::Text("Ground truth:  %d PE  /  %d Normal  (%d labeled)",
+            true_pos_count, true_neg_count, labeled);
+    } else {
+        ImGui::TextDisabled("No ground truth labels available");
+    }
+    ImGui::Spacing();
+
+    // ── Classification Report ──
+    if (labeled > 0) {
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Classification Report");
+        ImGui::Separator();
+
+        float accuracy = (labeled > 0) ? (float)(tp + tn) / labeled : 0;
+        float precision_pe = (tp + fp > 0) ? (float)tp / (tp + fp) : 0;
+        float recall_pe    = (tp + fn > 0) ? (float)tp / (tp + fn) : 0;
+        float f1_pe = (precision_pe + recall_pe > 0)
+            ? 2 * precision_pe * recall_pe / (precision_pe + recall_pe) : 0;
+        float precision_n = (tn + fn > 0) ? (float)tn / (tn + fn) : 0;
+        float recall_n    = (tn + fp > 0) ? (float)tn / (tn + fp) : 0;
+        float f1_n = (precision_n + recall_n > 0)
+            ? 2 * precision_n * recall_n / (precision_n + recall_n) : 0;
+
+        ImGui::Spacing();
+        if (ImGui::BeginTable("##cls_report", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Precision", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Recall", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("F1-Score", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Support", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableHeadersRow();
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::Text("Normal");
+            ImGui::TableSetColumnIndex(1); ImGui::Text("%.3f", precision_n);
+            ImGui::TableSetColumnIndex(2); ImGui::Text("%.3f", recall_n);
+            ImGui::TableSetColumnIndex(3); ImGui::Text("%.3f", f1_n);
+            ImGui::TableSetColumnIndex(4); ImGui::Text("%d", true_neg_count);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::Text("PE");
+            ImGui::TableSetColumnIndex(1); ImGui::Text("%.3f", precision_pe);
+            ImGui::TableSetColumnIndex(2); ImGui::Text("%.3f", recall_pe);
+            ImGui::TableSetColumnIndex(3); ImGui::Text("%.3f", f1_pe);
+            ImGui::TableSetColumnIndex(4); ImGui::Text("%d", true_pos_count);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::TextColored({0.8f, 0.9f, 1.0f, 1.0f}, "Accuracy");
+            ImGui::TableSetColumnIndex(3); ImGui::TextColored({0.8f, 0.9f, 1.0f, 1.0f}, "%.3f", accuracy);
+            ImGui::TableSetColumnIndex(4); ImGui::TextColored({0.8f, 0.9f, 1.0f, 1.0f}, "%d", labeled);
+
+            ImGui::EndTable();
+        }
+
+        ImGui::Spacing();
+
+        // ── Confusion Matrix ──
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Confusion Matrix");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (ImGui::BeginTable("##conf_mat", 3,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn("Pred Normal", ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn("Pred PE", ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableHeadersRow();
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::Text("True Normal");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "%d", tn);
+            ImGui::TableSetColumnIndex(2);
+            if (fp > 0) ImGui::TextColored({1.0f, 0.6f, 0.3f, 1.0f}, "%d", fp);
+            else ImGui::Text("%d", fp);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::Text("True PE");
+            ImGui::TableSetColumnIndex(1);
+            if (fn > 0) ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "%d", fn);
+            else ImGui::Text("%d", fn);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "%d", tp);
+
+            ImGui::EndTable();
+        }
+
+        ImGui::Spacing();
+    }
+
+    // ── Probability Distribution ──
+    ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "PE Probability Distribution");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    float plot_w = std::max(300.0f, content_w - 24.0f);
+    float plot_h = 200.0f;
+
+    if (labeled > 0 && (!probs_pos.empty() || !probs_neg.empty())) {
+        if (ImPlot::BeginPlot("##prob_dist", ImVec2(plot_w, plot_h))) {
+            ImPlot::SetupAxes("P(PE)", "Count");
+            ImPlot::SetupAxisLimits(ImAxis_X1, 0, 1, ImGuiCond_Always);
+
+            if (!probs_neg.empty()) {
+                ImPlot::PlotHistogram("Normal", probs_neg.data(),
+                    (int)probs_neg.size(), 20, 1.0, ImPlotRange(0, 1),
+                    ImPlotSpec(ImPlotProp_FillColor, ImVec4(0.3f, 0.7f, 1.0f, 1.0f),
+                               ImPlotProp_FillAlpha, 0.5f));
+            }
+            if (!probs_pos.empty()) {
+                ImPlot::PlotHistogram("PE", probs_pos.data(),
+                    (int)probs_pos.size(), 20, 1.0, ImPlotRange(0, 1),
+                    ImPlotSpec(ImPlotProp_FillColor, ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                               ImPlotProp_FillAlpha, 0.5f));
+            }
+            ImPlot::EndPlot();
+        }
+    } else {
+        if (ImPlot::BeginPlot("##prob_dist_all", ImVec2(plot_w, plot_h))) {
+            ImPlot::SetupAxes("P(PE)", "Count");
+            ImPlot::SetupAxisLimits(ImAxis_X1, 0, 1, ImGuiCond_Always);
+            ImPlot::PlotHistogram("All", probs_all.data(),
+                (int)probs_all.size(), 20, 1.0, ImPlotRange(0, 1),
+                ImPlotSpec(ImPlotProp_FillColor, ImVec4(0.5f, 0.7f, 1.0f, 1.0f),
+                           ImPlotProp_FillAlpha, 0.6f));
+            ImPlot::EndPlot();
+        }
+    }
+
+    ImGui::Spacing();
+
+    // ── Per-sample results table ──
+    ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Per-Sample Results");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    int n_cols = labeled > 0 ? 5 : 3;
+    if (ImGui::BeginTable("##sample_results", n_cols,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
+            | ImGuiTableFlags_Sortable,
+            ImVec2(0, std::min(400.0f, (float)(total + 1) * 24.0f)))) {
+        ImGui::TableSetupColumn("Sample", ImGuiTableColumnFlags_WidthStretch);
+        if (labeled > 0)
+            ImGui::TableSetupColumn("True", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("Predicted", ImGuiTableColumnFlags_WidthFixed, 70);
+        ImGui::TableSetupColumn("P(PE)", ImGuiTableColumnFlags_WidthFixed, 70);
+        if (labeled > 0)
+            ImGui::TableSetupColumn("Correct", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableHeadersRow();
+
+        for (auto& r : s.batch_results) {
+            if (r.pred_class < 0) continue;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%s", r.id.c_str());
+
+            int col = 1;
+            if (labeled > 0) {
+                ImGui::TableSetColumnIndex(col++);
+                if (r.true_class == 1)
+                    ImGui::TextColored({1.0f, 0.5f, 0.5f, 1.0f}, "PE");
+                else if (r.true_class == 0)
+                    ImGui::TextColored({0.5f, 1.0f, 0.7f, 1.0f}, "Normal");
+                else
+                    ImGui::TextDisabled("?");
+            }
+
+            ImGui::TableSetColumnIndex(col++);
+            if (r.pred_class == 1)
+                ImGui::TextColored({1.0f, 0.5f, 0.5f, 1.0f}, "PE");
+            else
+                ImGui::TextColored({0.5f, 1.0f, 0.7f, 1.0f}, "Normal");
+
+            ImGui::TableSetColumnIndex(col++);
+            ImGui::Text("%.3f", r.prob_pe);
+
+            if (labeled > 0) {
+                ImGui::TableSetColumnIndex(col++);
+                if (r.true_class >= 0) {
+                    bool correct = (r.true_class == r.pred_class);
+                    if (correct)
+                        ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "Yes");
+                    else
+                        ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "No");
+                }
+            }
+        }
+        ImGui::EndTable();
+    }
+
+    // ── Refresh button ──
+    ImGui::Spacing();
+    if (ImGui::Button("Re-run Inference"))
+        s.batch_stale = true;
 
     ImGui::EndChild();
 }
