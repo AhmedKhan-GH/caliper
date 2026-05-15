@@ -129,19 +129,7 @@ public:
         if (sample.raw[0].empty()) return false;
 
         sample.original_num_samples = (int)sample.raw[0].size();
-
-        if (sample.original_num_samples > 2500) {
-            sample.downsampled = true;
-            for (auto& lead : sample.raw) {
-                std::vector<float> ds;
-                ds.reserve(lead.size() / 2);
-                for (size_t i = 0; i < lead.size(); i += 2)
-                    ds.push_back(lead[i]);
-                lead = std::move(ds);
-            }
-        }
-
-        sample.num_samples = (int)sample.raw[0].size();
+        sample.num_samples = sample.original_num_samples;
         sample.sampling_rate = 250.0f;
         sample.loaded = true;
         sample.processed_valid = false;
