@@ -1820,15 +1820,25 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
                 float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
                 auto& st = samp.stats[lead];
                 float margin = (st.max_val - st.min_val) * 0.1f;
-                float plot_h = 120.0f;
+                float y_lo = st.min_val - margin;
+                float y_hi = st.max_val + margin;
+                float plot_h = 150.0f;
 
                 if (ImPlot::BeginPlot("##act_waveform", ImVec2(hm_w, plot_h),
                         ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
                     ImPlot::SetupAxes("Time (s)", nullptr,
                         ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
                     ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
-                    ImPlot::SetupAxisLimits(ImAxis_Y1,
-                        st.min_val - margin, st.max_val + margin, ImGuiCond_Always);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, y_lo, y_hi, ImGuiCond_Always);
+
+                    if (s.detail_texs[0]) {
+                        ImPlot::PlotImage("##heatmap",
+                            (ImTextureID)(intptr_t)s.detail_texs[0],
+                            ImPlotPoint(0, y_hi), ImPlotPoint(duration, y_lo),
+                            ImVec2(0, 0), ImVec2(1, 1),
+                            ImVec4(1, 1, 1, 0.45f));
+                    }
+
                     ImPlot::PlotLine("##sig", s.time_axis.data(),
                         samp.processed[lead].data(), samp.num_samples,
                         ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
