@@ -277,7 +277,8 @@ static void colormap(float t, uint8_t& r, uint8_t& g, uint8_t& b, bool diverging
     }
 }
 
-static GLuint upload_texture(const torch::Tensor& data_2d, bool diverging = true) {
+static GLuint upload_texture(const torch::Tensor& data_2d, bool diverging = true,
+                             bool log_scale = false) {
     auto data = data_2d.detach().contiguous().to(torch::kCPU, torch::kFloat);
     int rows = (int)data.size(0);
     int cols = (int)data.size(1);
@@ -293,10 +294,27 @@ static GLuint upload_texture(const torch::Tensor& data_2d, bool diverging = true
     float range = vmax - vmin;
     if (range < 1e-8f) range = 1.0f;
 
+    float log_denom = 1.0f;
+    if (log_scale) {
+        float absmax = std::max(std::abs(vmin), std::abs(vmax));
+        log_denom = std::log1p(absmax);
+        if (log_denom < 1e-8f) log_denom = 1.0f;
+    }
+
     std::vector<uint8_t> px(rows * cols * 4);
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
-            float t = (acc[r][c] - vmin) / range;
+            float v = acc[r][c];
+            float t;
+            if (log_scale && diverging) {
+                float sign = v >= 0 ? 1.0f : -1.0f;
+                float lv = std::log1p(std::abs(v)) / log_denom;
+                t = 0.5f + sign * lv * 0.5f;
+            } else if (log_scale) {
+                t = std::log1p(v - vmin) / std::log1p(range);
+            } else {
+                t = (v - vmin) / range;
+            }
             int i = (r * cols + c) * 4;
             colormap(t, px[i], px[i+1], px[i+2], diverging);
             px[i+3] = 255;
@@ -1822,7 +1840,7 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
             }
 
             bool diverging = (i == 0);
-            s.detail_texs[i] = heatmap::upload_texture(t2d, diverging);
+            s.detail_texs[i] = heatmap::upload_texture(t2d, diverging, diverging);
         }
 
         s.detail_texs_dirty = false;
@@ -1890,6 +1908,7 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
     }
 
     for (int i = 0; i < 13; i++) {
+        if (i == 0) continue;  // input shown as waveform overlay
         if (!s.detail_acts[i].defined()) continue;
 
         auto& t = s.detail_acts[i];
