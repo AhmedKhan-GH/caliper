@@ -1806,6 +1806,49 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
     float content_w = ImGui::GetContentRegionAvail().x;
     float hm_w = std::max(200.0f, content_w - 24.0f);
 
+    // ── Waveform plot for selected lead ──
+    {
+        bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
+                        && s.samples[s.selected].processed_valid;
+        if (has_samp) {
+            auto& samp = s.samples[s.selected];
+            int lead = s.detail_lead;
+            if (lead < (int)samp.processed.size() && !samp.processed[lead].empty()) {
+                if ((int)s.time_axis.size() != samp.num_samples) {
+                    s.time_axis.resize(samp.num_samples);
+                    for (int j = 0; j < samp.num_samples; j++)
+                        s.time_axis[j] = (float)j / samp.sampling_rate;
+                }
+
+                ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f},
+                    "Input Waveform — Lead %s", kLeadNames12[lead]);
+
+                float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
+                auto& st = samp.stats[lead];
+                float margin = (st.max_val - st.min_val) * 0.1f;
+                float plot_h = 120.0f;
+
+                if (ImPlot::BeginPlot("##act_waveform", ImVec2(hm_w, plot_h),
+                        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
+                    ImPlot::SetupAxes("Time (s)", nullptr,
+                        ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1,
+                        st.min_val - margin, st.max_val + margin, ImGuiCond_Always);
+                    ImPlot::PlotLine("##sig", s.time_axis.data(),
+                        samp.processed[lead].data(), samp.num_samples,
+                        ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
+                                   ImPlotProp_LineWeight, 1.5f));
+                    ImPlot::EndPlot();
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
+        }
+    }
+
     for (int i = 0; i < 13; i++) {
         if (!s.detail_acts[i].defined()) continue;
 
