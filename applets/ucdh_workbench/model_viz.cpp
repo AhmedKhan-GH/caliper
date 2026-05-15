@@ -8,12 +8,13 @@
 // LAYOUT
 // ============================================================================
 
-static constexpr float NODE_W       = 520.0f;
-static constexpr float NODE_GAP     = 14.0f;
+static constexpr float NODE_W       = 540.0f;
+static constexpr float NODE_GAP     = 12.0f;
 static constexpr float ARROW_GAP    = 28.0f;
 static constexpr float HEADER_H     = 26.0f;
 static constexpr float LINE_H       = 16.0f;
-static constexpr float PAD_BOT      = 10.0f;
+static constexpr float PAD_BOT      = 8.0f;
+static constexpr float ACT_H        = 36.0f;
 static constexpr float PAD_X        = 12.0f;
 static constexpr float MIN_NODE_H   = 40.0f;
 static constexpr float ROUNDING     = 8.0f;
@@ -64,6 +65,7 @@ void ModelVisualizer::build_repnet_graph() {
     stages_.clear();
 
     float y = 20.0f;
+    bool has_act = true;
 
     auto add = [&](const char* name, const char* type,
                    std::initializer_list<const char*> detail_lines,
@@ -71,6 +73,7 @@ void ModelVisualizer::build_repnet_graph() {
                    float pre_gap = 0.0f) -> int {
         y += pre_gap;
         float h = HEADER_H + (float)detail_lines.size() * LINE_H + PAD_BOT;
+        if (has_act) h += ACT_H;
         h = std::max(h, MIN_NODE_H);
         int idx = (int)nodes_.size();
         ModelNode n;
@@ -157,8 +160,8 @@ void ModelVisualizer::build_repnet_graph() {
     int n_fc = add("Classifier: Linear(192 -> 2)", "linear",
         {"Output classes: PE (Pulmonary Embolism) vs Normal"},
         "(B,2)", 386);
-    int n_out = add("Softmax -> Diagnosis", "input",
-        {"Probability distribution over PE / Normal"},
+    int n_out = add("Diagnosis Output", "input",
+        {"Softmax probability: PE vs Normal"},
         "(B,2)", 0);
 
     // ── Edges ──
@@ -184,10 +187,73 @@ void ModelVisualizer::build_repnet_graph() {
 }
 
 // ============================================================================
+// DRAW HELPERS
+// ============================================================================
+
+static void draw_activation_bar(ImDrawList* dl, float x, float y, float w,
+                                const LayerActivation& act) {
+    float bar_h = 10.0f;
+    float bar_w = w - PAD_X * 2;
+
+    // Background
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + bar_w, y + bar_h),
+                      IM_COL32(15, 15, 25, 200), 3.0f);
+
+    // Activation magnitude bar — scale mean to bar width
+    float range = act.max_val - act.min_val;
+    if (range < 1e-6f) range = 1.0f;
+    float fill_frac = std::clamp((act.mean - act.min_val) / range, 0.0f, 1.0f);
+    float fill_w = bar_w * fill_frac;
+
+    // Color based on activation: blue -> green -> yellow
+    int r = (int)(50 + 180 * fill_frac);
+    int g = (int)(180 - 60 * std::abs(fill_frac - 0.5f));
+    int b = (int)(220 * (1.0f - fill_frac));
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + fill_w, y + bar_h),
+                      IM_COL32(r, g, b, 200), 3.0f);
+
+    // +/- 1 std dev marker
+    float mean_x = x + bar_w * fill_frac;
+    float std_px = (act.stddev / range) * bar_w;
+    float lo = std::max(x, mean_x - std_px);
+    float hi = std::min(x + bar_w, mean_x + std_px);
+    dl->AddRectFilled(ImVec2(lo, y + 1), ImVec2(hi, y + bar_h - 1),
+                      IM_COL32(255, 255, 255, 40), 2.0f);
+}
+
+static void draw_prob_bars(ImDrawList* dl, float x, float y, float w,
+                           float prob_normal, float prob_pe) {
+    float bar_w = w - PAD_X * 2;
+    float bar_h = 12.0f;
+
+    // Normal bar
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + bar_w, y + bar_h),
+                      IM_COL32(15, 15, 25, 200), 3.0f);
+    float nw = bar_w * prob_normal;
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + nw, y + bar_h),
+                      IM_COL32(60, 200, 120, 220), 3.0f);
+    char nb[32];
+    std::snprintf(nb, sizeof(nb), "Normal: %.1f%%", prob_normal * 100);
+    dl->AddText(ImVec2(x + 4, y), IM_COL32(255, 255, 255, 230), nb);
+
+    y += bar_h + 3;
+
+    // PE bar
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + bar_w, y + bar_h),
+                      IM_COL32(15, 15, 25, 200), 3.0f);
+    float pw = bar_w * prob_pe;
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + pw, y + bar_h),
+                      IM_COL32(230, 80, 80, 220), 3.0f);
+    char pb[32];
+    std::snprintf(pb, sizeof(pb), "PE: %.1f%%", prob_pe * 100);
+    dl->AddText(ImVec2(x + 4, y), IM_COL32(255, 255, 255, 230), pb);
+}
+
+// ============================================================================
 // DRAW
 // ============================================================================
 
-void ModelVisualizer::draw(ImVec2 avail) {
+void ModelVisualizer::draw(ImVec2 avail, const InferenceOverlay* overlay) {
     if (!built_) build_repnet_graph();
     if (nodes_.empty()) return;
 
@@ -200,7 +266,6 @@ void ModelVisualizer::draw(ImVec2 avail) {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // Reserve space so scrollbar works
     ImGui::Dummy(ImVec2(NODE_W, total_h));
 
     float off_x = cx - NODE_W * 0.5f;
@@ -219,9 +284,10 @@ void ModelVisualizer::draw(ImVec2 avail) {
                     IM_COL32(130, 160, 210, 140), sg.label.c_str());
     }
 
-    // ── Edges (arrows between nodes) ──
+    // ── Edges ──
     hovered_ = -1;
     ImVec2 mpos = ImGui::GetIO().MousePos;
+    bool has_overlay = overlay && overlay->valid;
 
     for (const auto& e : edges_) {
         const auto& src = nodes_[e.from];
@@ -231,18 +297,18 @@ void ModelVisualizer::draw(ImVec2 avail) {
         float ay1 = origin.y + dst.y;
         float mid_y = (ay0 + ay1) * 0.5f;
 
-        dl->AddLine(ImVec2(ax, ay0), ImVec2(ax, ay1),
-                    IM_COL32(90, 110, 140, 180), 2.0f);
+        ImU32 edge_col = has_overlay
+            ? IM_COL32(80, 200, 140, 200) : IM_COL32(90, 110, 140, 180);
+        float edge_w = has_overlay ? 2.5f : 2.0f;
 
-        // Arrowhead
+        dl->AddLine(ImVec2(ax, ay0), ImVec2(ax, ay1), edge_col, edge_w);
+
         float aw = 6.0f, ah = 8.0f;
         dl->AddTriangleFilled(
             ImVec2(ax, ay1),
             ImVec2(ax - aw, ay1 - ah),
-            ImVec2(ax + aw, ay1 - ah),
-            IM_COL32(90, 110, 140, 200));
+            ImVec2(ax + aw, ay1 - ah), edge_col);
 
-        // Edge label
         if (!e.label.empty()) {
             ImVec2 ts = ImGui::CalcTextSize(e.label.c_str());
             float lx = ax + 12.0f;
@@ -264,11 +330,9 @@ void ModelVisualizer::draw(ImVec2 avail) {
         ImVec2 p0(nx, ny);
         ImVec2 p1(nx + n.w, ny + n.h);
 
-        // Hit test
         if (mpos.x >= p0.x && mpos.x <= p1.x &&
-            mpos.y >= p0.y && mpos.y <= p1.y) {
+            mpos.y >= p0.y && mpos.y <= p1.y)
             hovered_ = i;
-        }
 
         bool hov = (i == hovered_);
         bool sel = (i == selected_);
@@ -281,13 +345,13 @@ void ModelVisualizer::draw(ImVec2 avail) {
         dl->AddRectFilled(p0, hdr_br, n.header_fill,
                           ROUNDING, ImDrawFlags_RoundCornersTop);
 
-        // Border
+        // Border — glow when live inference is active
         ImU32 bord = sel ? IM_COL32(255, 220, 80, 255) :
-                     hov ? IM_COL32(200, 210, 230, 200) : n.border;
-        float bw = (sel || hov) ? 2.0f : 1.0f;
+                     hov ? IM_COL32(200, 210, 230, 200) :
+                     has_overlay ? IM_COL32(80, 200, 140, 160) : n.border;
+        float bw = (sel || hov) ? 2.0f : (has_overlay ? 1.5f : 1.0f);
         dl->AddRect(p0, p1, bord, ROUNDING, 0, bw);
 
-        // Header separator
         dl->AddLine(ImVec2(nx, ny + HEADER_H),
                     ImVec2(nx + n.w, ny + HEADER_H),
                     IM_COL32(255, 255, 255, 30));
@@ -296,7 +360,7 @@ void ModelVisualizer::draw(ImVec2 avail) {
         dl->AddText(ImVec2(nx + PAD_X, ny + 5.0f),
                     IM_COL32(255, 255, 255, 240), n.name.c_str());
 
-        // Param count in header
+        // Param count
         if (n.param_count > 0) {
             char buf[64];
             if (n.param_count >= 1000000)
@@ -318,18 +382,59 @@ void ModelVisualizer::draw(ImVec2 avail) {
             ly += LINE_H;
         }
 
-        // Output shape
-        if (!n.shape_out.empty()) {
+        // ── Activation overlay ──
+        float act_y = ny + n.h - ACT_H - PAD_BOT + 4;
+        bool has_act = has_overlay && i < (int)overlay->layers.size()
+                       && overlay->layers[i].valid;
+
+        if (has_act) {
+            const auto& act = overlay->layers[i];
+            bool is_output = (i == (int)nodes_.size() - 1);
+
+            // Separator line
+            dl->AddLine(ImVec2(nx + 4, act_y - 2),
+                        ImVec2(nx + n.w - 4, act_y - 2),
+                        IM_COL32(255, 255, 255, 25));
+
+            if (is_output && overlay->result_class >= 0) {
+                draw_prob_bars(dl, nx + PAD_X, act_y + 2, n.w,
+                               overlay->probs[0], overlay->probs[1]);
+            } else {
+                draw_activation_bar(dl, nx + PAD_X, act_y + 2, n.w, act);
+
+                char stats[128];
+                std::snprintf(stats, sizeof(stats),
+                              "\xce\xbc=%.3f  \xcf\x83=%.3f  [%.2f, %.2f]",
+                              act.mean, act.stddev, act.min_val, act.max_val);
+                dl->AddText(ImVec2(nx + PAD_X, act_y + 15),
+                            IM_COL32(170, 185, 200, 180), stats);
+
+                if (!act.shape.empty()) {
+                    ImVec2 ts = ImGui::CalcTextSize(act.shape.c_str());
+                    dl->AddText(ImVec2(nx + n.w - ts.x - PAD_X, act_y + 15),
+                                IM_COL32(100, 210, 160, 200), act.shape.c_str());
+                }
+            }
+        } else if (!has_overlay) {
+            // No model loaded hint
+            dl->AddText(ImVec2(nx + PAD_X, act_y + 6),
+                        IM_COL32(100, 110, 130, 80),
+                        "Load model for live activations");
+        } else {
+            dl->AddText(ImVec2(nx + PAD_X, act_y + 6),
+                        IM_COL32(100, 110, 130, 100), "...");
+        }
+
+        // Output shape (static)
+        if (!n.shape_out.empty() && !has_act) {
             ImVec2 ts = ImGui::CalcTextSize(n.shape_out.c_str());
             dl->AddText(ImVec2(nx + n.w - ts.x - PAD_X, ny + n.h - PAD_BOT - 2),
                         IM_COL32(100, 210, 160, 200), n.shape_out.c_str());
         }
     }
 
-    // Click handling
-    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0))
         selected_ = hovered_;
-    }
 
     ImGui::EndChild();
 }

@@ -462,11 +462,11 @@ struct UCDHWorkbenchApplet::State {
     bool model_loaded = false;
     std::string model_path;
     std::string model_error;
-    std::string model_output;
-    std::string inference_result;
-    std::string inference_sample_id;
-    int inference_class = -1;
-    float inference_prob = 0.0f;
+
+    // ── Live inference state ──
+    InferenceOverlay inference;
+    int inference_sample_idx = -1;
+    uint32_t inference_params_ver = 0;
 
     // ── Architecture visualizer ──
     std::unique_ptr<ModelVisualizer> viz;
@@ -535,6 +535,22 @@ bool UCDHWorkbenchApplet::initialize() {
         std::string last_dir;
         if (f.is_open() && std::getline(f, last_dir) && fs::is_directory(last_dir)) {
             open_dataset(last_dir);
+        }
+    }
+
+    // Restore last model if saved
+    {
+        std::ifstream f(caliper::app_data_path("last_model.txt"));
+        std::string last_model;
+        if (f.is_open() && std::getline(f, last_model) && fs::exists(last_model)) {
+            try {
+                s_->model = torch::jit::load(last_model);
+                s_->model.eval();
+                s_->model_loaded = true;
+                s_->model_path = last_model;
+            } catch (const std::exception& e) {
+                std::cerr << "[workbench] Model restore failed: " << e.what() << std::endl;
+            }
         }
     }
 
@@ -1310,13 +1326,108 @@ void UCDHWorkbenchApplet::draw_raw_browser() {
 // MODEL TAB
 // ============================================================================
 
+static LayerActivation tensor_stats(const torch::Tensor& t) {
+    LayerActivation a;
+    a.mean = t.mean().item<float>();
+    a.stddev = t.std().item<float>();
+    a.min_val = t.min().item<float>();
+    a.max_val = t.max().item<float>();
+    auto sizes = t.sizes();
+    a.shape = "(";
+    for (int64_t i = 0; i < (int64_t)sizes.size(); i++) {
+        if (i > 0) a.shape += ",";
+        a.shape += std::to_string(sizes[i]);
+    }
+    a.shape += ")";
+    a.valid = true;
+    return a;
+}
+
+static void run_step_inference(torch::jit::Module& model,
+                               ECGSample& samp,
+                               InferenceOverlay& inf) {
+    if (!samp.processed_valid) return;
+
+    torch::NoGradGuard no_grad;
+
+    const int nl = (int)samp.processed.size();
+    const int n = samp.num_samples;
+    auto input = torch::zeros({1, nl, n});
+    {
+        auto acc = input.accessor<float, 3>();
+        for (int l = 0; l < nl; l++)
+            for (int i = 0; i < n; i++)
+                acc[0][l][i] = samp.processed[l][i];
+    }
+
+    inf.valid = false;
+    inf.layers.clear();
+    inf.layers.resize(13);
+    inf.sample_id = samp.file_id;
+
+    inf.layers[0] = tensor_stats(input);
+
+    try {
+        auto x = input.unsqueeze(2);
+        auto stages_mod = model.attr("stages").toModule();
+
+        for (int si = 0; si < 3; si++) {
+            auto stage = stages_mod.attr(std::to_string(si)).toModule();
+            x = stage.attr("conv").toModule().forward({x}).toTensor();
+            inf.layers[1 + si * 2] = tensor_stats(x);
+            x = stage.attr("attn").toModule().forward({x}).toTensor();
+            inf.layers[2 + si * 2] = tensor_stats(x);
+        }
+
+        auto sizes = x.sizes();
+        x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
+        inf.layers[7] = tensor_stats(x);
+
+        x = model.attr("fuse").toModule().forward({x}).toTensor();
+        inf.layers[8] = tensor_stats(x);
+
+        x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
+        inf.layers[9] = tensor_stats(x);
+
+        x = model.attr("head_drop").toModule().forward({x}).toTensor();
+        inf.layers[10] = tensor_stats(x);
+
+        x = model.attr("fc").toModule().forward({x}).toTensor();
+        inf.layers[11] = tensor_stats(x);
+
+        auto probs = torch::softmax(x, 1);
+        inf.layers[12] = tensor_stats(probs);
+        auto pa = probs.accessor<float, 2>();
+        inf.probs[0] = pa[0][0];
+        inf.probs[1] = pa[0][1];
+        inf.result_class = pa[0][1] > pa[0][0] ? 1 : 0;
+        inf.valid = true;
+
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[model] Step-through failed (%s), trying whole-model\n",
+                     e.what());
+        try {
+            auto out = model.forward({input}).toTensor();
+            auto probs = torch::softmax(out, 1);
+            auto pa = probs.accessor<float, 2>();
+            inf.probs[0] = pa[0][0];
+            inf.probs[1] = pa[0][1];
+            inf.result_class = pa[0][1] > pa[0][0] ? 1 : 0;
+            inf.layers[12] = tensor_stats(probs);
+            inf.valid = true;
+        } catch (const std::exception& e2) {
+            std::fprintf(stderr, "[model] Inference failed: %s\n", e2.what());
+        }
+    }
+}
+
 void UCDHWorkbenchApplet::draw_model_tab() {
     auto& s = *s_;
 
     if (!s.viz)
         s.viz = std::make_unique<ModelVisualizer>();
 
-    // ── Top bar: model loading + inference ──
+    // ── Top bar: model loading ──
     if (ImGui::Button("Load Model...", ImVec2(130, 0))) {
         IGFD::FileDialogConfig cfg;
         cfg.path = s.current_dir.empty() ? "." : s.current_dir;
@@ -1329,13 +1440,15 @@ void UCDHWorkbenchApplet::draw_model_tab() {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
             s.model_error.clear();
-            s.model_output.clear();
-            s.inference_result.clear();
+            s.inference = InferenceOverlay{};
+            s.inference_sample_idx = -1;
             try {
                 s.model = torch::jit::load(path);
                 s.model.eval();
                 s.model_loaded = true;
                 s.model_path = path;
+                std::ofstream f(caliper::app_data_path("last_model.txt"));
+                if (f.is_open()) f << path;
             } catch (const c10::Error& e) {
                 s.model_loaded = false;
                 s.model_error = e.what();
@@ -1347,47 +1460,40 @@ void UCDHWorkbenchApplet::draw_model_tab() {
     ImGui::SameLine();
 
     if (s.model_loaded) {
-        ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "Loaded:");
+        ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f}, "Model:");
         ImGui::SameLine();
         ImGui::TextDisabled("%s", fs::path(s.model_path).filename().string().c_str());
-        ImGui::SameLine();
 
+        // Live inference on sample change
         bool has_sample = s.selected >= 0 && s.selected < (int)s.samples.size()
                           && s.samples[s.selected].processed_valid;
-        if (!has_sample) ImGui::BeginDisabled();
-        if (ImGui::Button("Run on Selected Sample", ImVec2(200, 0))) {
-            auto& samp = s.samples[s.selected];
-            s.inference_result.clear();
-            try {
-                const int nl = (int)samp.processed.size();
-                const int n = samp.num_samples;
-                auto input = torch::zeros({1, nl, n});
-                auto acc = input.accessor<float, 3>();
-                for (int l = 0; l < nl; l++)
-                    for (int i = 0; i < n; i++)
-                        acc[0][l][i] = samp.processed[l][i];
-                auto out = s.model.forward({input}).toTensor();
-                auto probs = torch::softmax(out, 1);
-                auto prob_acc = probs.accessor<float, 2>();
-                s.inference_result = "Normal: " +
-                    std::to_string((int)(prob_acc[0][0] * 100 + 0.5f)) + "%    PE: " +
-                    std::to_string((int)(prob_acc[0][1] * 100 + 0.5f)) + "%";
-                s.inference_class = prob_acc[0][1] > prob_acc[0][0] ? 1 : 0;
-                s.inference_prob = prob_acc[0][s.inference_class];
-                s.inference_sample_id = samp.file_id;
-            } catch (const c10::Error& e) {
-                s.inference_result = std::string("Error: ") + e.what();
-                s.inference_class = -1;
-            }
+        if (has_sample && (s.inference_sample_idx != s.selected ||
+                           s.inference_params_ver != s.params.version)) {
+            run_step_inference(s.model, s.samples[s.selected], s.inference);
+            s.inference_sample_idx = s.selected;
+            s.inference_params_ver = s.params.version;
         }
-        if (!has_sample) ImGui::EndDisabled();
 
-        if (!s.inference_result.empty()) {
+        if (s.inference.valid) {
             ImGui::SameLine();
-            ImVec4 col = s.inference_class == 1 ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
-                       : s.inference_class == 0 ? ImVec4(0.4f, 1.0f, 0.6f, 1.0f)
-                       : ImVec4(1.0f, 0.85f, 0.3f, 1.0f);
-            ImGui::TextColored(col, "%s", s.inference_result.c_str());
+            ImGui::Text("|");
+            ImGui::SameLine();
+            ImGui::TextDisabled("Sample: %s", s.inference.sample_id.c_str());
+            ImGui::SameLine();
+            ImGui::Text("->");
+            ImGui::SameLine();
+            if (s.inference.result_class == 1)
+                ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f},
+                    "PE (%.1f%%)", s.inference.probs[1] * 100);
+            else
+                ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f},
+                    "Normal (%.1f%%)", s.inference.probs[0] * 100);
+        } else if (has_sample) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("| Processing...");
+        } else {
+            ImGui::SameLine();
+            ImGui::TextDisabled("| Select a sample for live inference");
         }
     } else {
         if (!s.model_error.empty()) {
@@ -1402,7 +1508,7 @@ void UCDHWorkbenchApplet::draw_model_tab() {
                 ImGui::EndTooltip();
             }
         } else {
-            ImGui::TextDisabled("No model loaded. Load a TorchScript (.pt) to enable inference.");
+            ImGui::TextDisabled("No model loaded — load a TorchScript (.pt) for live inference");
         }
     }
 
@@ -1410,7 +1516,8 @@ void UCDHWorkbenchApplet::draw_model_tab() {
 
     // ── Architecture data flow diagram ──
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    s.viz->draw(avail);
+    const InferenceOverlay* overlay = s.inference.valid ? &s.inference : nullptr;
+    s.viz->draw(avail, overlay);
 }
 
 void UCDHWorkbenchApplet::draw_model_architecture() {}
