@@ -1582,12 +1582,6 @@ static void extract_weights(torch::jit::Module& model,
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[model] Weight extraction: %s\n", e.what());
     }
-
-    for (auto& w : out) {
-        auto t = w.tensor.contiguous().to(torch::kFloat);
-        if (t.dim() == 1) t = t.unsqueeze(0);
-        w.tex = heatmap::upload_texture(t, true);
-    }
 }
 
 void UCDHWorkbenchApplet::draw_model_tab() {
@@ -1955,16 +1949,19 @@ void UCDHWorkbenchApplet::draw_weight_view() {
         auto& w = s.weight_entries[i];
         ImGui::PushID(i);
 
-        auto t = w.tensor;
+        auto t = w.tensor.contiguous().to(torch::kFloat);
+        if (t.dim() == 1) t = t.unsqueeze(0);
         int rows = (int)t.size(0);
         int cols = t.dim() >= 2 ? (int)t.size(1) : 1;
         int64_t numel = t.numel();
 
-        auto ta = t.to(torch::kFloat);
-        float wmin = ta.min().item<float>();
-        float wmax = ta.max().item<float>();
-        float wmean = ta.mean().item<float>();
-        float wstd = ta.std().item<float>();
+        float wmin = t.min().item<float>();
+        float wmax = t.max().item<float>();
+        float wmean = t.mean().item<float>();
+        float wstd = t.std().item<float>();
+
+        if (!w.tex)
+            w.tex = heatmap::upload_texture(t, true);
 
         ImGui::TextColored({0.85f, 0.75f, 1.0f, 1.0f}, "%s", w.label.c_str());
         ImGui::SameLine();
