@@ -560,7 +560,6 @@ struct UCDHWorkbenchApplet::State {
     // ── Activation detail view ──
     std::vector<torch::Tensor> detail_acts;   // per-node (batch squeezed)
     std::vector<GLuint> detail_texs;          // cached heatmap textures
-    GLuint input_lead_texs[12] = {};          // per-lead input heatmaps
     int detail_sample_idx = -1;
     int detail_lead = 0;
     int detail_lead_cached = -1;
@@ -576,8 +575,10 @@ struct UCDHWorkbenchApplet::State {
         int true_class = -1;   // 0=Normal, 1=PE, -1=unknown
         int pred_class = -1;
         float prob_pe = 0;
+        float gap_feat[192] = {};
     };
     std::vector<SampleResult> batch_results;
+    std::vector<float> pca_x, pca_y;
     bool batch_stale = true;
     bool batch_running = false;
     int batch_progress = 0;
@@ -676,8 +677,6 @@ bool UCDHWorkbenchApplet::initialize() {
 void UCDHWorkbenchApplet::cleanup() {
     if (!s_) return;
     heatmap::release_textures(s_->detail_texs);
-    for (auto& t : s_->input_lead_texs)
-        if (t) { glDeleteTextures(1, &t); t = 0; }
     for (auto& w : s_->weight_entries)
         if (w.tex) { glDeleteTextures(1, &w.tex); w.tex = 0; }
     s_->bg.reset();
@@ -1755,20 +1754,13 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
         return;
     }
 
-    // ── Lead selector ──
+    // ── Lead scrubber ──
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Lead:");
+    ImGui::TextColored(LEAD_COLORS[s.detail_lead], "%s", kLeadNames12[s.detail_lead]);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    if (ImGui::BeginCombo("##lead_sel", kLeadNames12[s.detail_lead])) {
-        for (int i = 0; i < 12; i++) {
-            if (ImGui::Selectable(kLeadNames12[i], i == s.detail_lead)) {
-                s.detail_lead = i;
-                s.detail_texs_dirty = true;
-            }
-        }
-        ImGui::EndCombo();
-    }
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
+    if (ImGui::SliderInt("##lead_scrub", &s.detail_lead, 0, 11, kLeadNames12[s.detail_lead]))
+        s.detail_texs_dirty = true;
     ImGui::SameLine();
     ImGui::TextDisabled("Sample: %s", s.inference.sample_id.c_str());
     ImGui::SameLine();
@@ -1810,15 +1802,6 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
             s.detail_texs[i] = heatmap::upload_texture(t2d, diverging);
         }
 
-        for (auto& t : s.input_lead_texs)
-            if (t) { glDeleteTextures(1, &t); t = 0; }
-        if (s.detail_acts.size() > 0 && s.detail_acts[0].defined()
-            && s.detail_acts[0].dim() == 3) {
-            auto& inp = s.detail_acts[0];
-            for (int l = 0; l < std::min(12, (int)inp.size(0)); l++)
-                s.input_lead_texs[l] = heatmap::upload_texture(inp[l], true);
-        }
-
         s.detail_texs_dirty = false;
         s.detail_lead_cached = s.detail_lead;
     }
@@ -1830,45 +1813,36 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
     float content_w = ImGui::GetContentRegionAvail().x;
     float hm_w = std::max(200.0f, content_w - 24.0f);
 
-    // ── Waveform plots for all 12 leads with heatmap overlay ──
+    // ── Waveform plot for selected lead with heatmap overlay ──
     {
         bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
                         && s.samples[s.selected].processed_valid;
         if (has_samp) {
             auto& samp = s.samples[s.selected];
-            if ((int)s.time_axis.size() != samp.num_samples) {
-                s.time_axis.resize(samp.num_samples);
-                for (int j = 0; j < samp.num_samples; j++)
-                    s.time_axis[j] = (float)j / samp.sampling_rate;
-            }
+            int lead = s.detail_lead;
+            if (lead < (int)samp.processed.size() && !samp.processed[lead].empty()) {
+                if ((int)s.time_axis.size() != samp.num_samples) {
+                    s.time_axis.resize(samp.num_samples);
+                    for (int j = 0; j < samp.num_samples; j++)
+                        s.time_axis[j] = (float)j / samp.sampling_rate;
+                }
 
-            float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
-            ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Input Waveforms — 12 Leads");
-            float plot_h = 80.0f;
-
-            for (int lead = 0; lead < 12; lead++) {
-                if (lead >= (int)samp.processed.size() || samp.processed[lead].empty())
-                    continue;
-
+                float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
                 auto& st = samp.stats[lead];
                 float margin = (st.max_val - st.min_val) * 0.1f;
                 float y_lo = st.min_val - margin;
                 float y_hi = st.max_val + margin;
 
-                char plot_id[32];
-                std::snprintf(plot_id, sizeof(plot_id), "##act_wave_%d", lead);
-
-                if (ImPlot::BeginPlot(plot_id, ImVec2(hm_w, plot_h),
-                        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoInputs)) {
-                    ImPlot::SetupAxes("", nullptr,
-                        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels,
-                        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels);
+                if (ImPlot::BeginPlot("##act_waveform", ImVec2(hm_w, 130.0f),
+                        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
+                    ImPlot::SetupAxes("Time (s)", nullptr,
+                        ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
                     ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
                     ImPlot::SetupAxisLimits(ImAxis_Y1, y_lo, y_hi, ImGuiCond_Always);
 
-                    if (s.input_lead_texs[lead]) {
+                    if (s.detail_texs[0]) {
                         ImPlot::PlotImage("##hm",
-                            (ImTextureID)(intptr_t)s.input_lead_texs[lead],
+                            (ImTextureID)(intptr_t)s.detail_texs[0],
                             ImPlotPoint(0, y_hi), ImPlotPoint(duration, y_lo),
                             ImVec2(0, 0), ImVec2(1, 1),
                             ImVec4(1, 1, 1, 0.45f));
@@ -1877,18 +1851,18 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
                     ImPlot::PlotLine("##sig", s.time_axis.data(),
                         samp.processed[lead].data(), samp.num_samples,
                         ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
-                                   ImPlotProp_LineWeight, 1.2f));
+                                   ImPlotProp_LineWeight, 1.5f));
 
                     ImPlot::Annotation(0.0, y_hi, LEAD_COLORS[lead],
                         ImVec2(5, 5), false, "%s", kLeadNames12[lead]);
 
                     ImPlot::EndPlot();
                 }
-            }
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
         }
     }
 
@@ -2117,8 +2091,26 @@ void UCDHWorkbenchApplet::draw_statistics_tab() {
                         for (int i = 0; i < n; i++)
                             acc[0][l][i] = samp.processed[l][i];
 
-                    auto out = s.model.forward({input}).toTensor();
-                    auto probs = torch::softmax(out, 1);
+                    auto x = input.unsqueeze(2);
+                    auto stages_mod = s.model.attr("stages").toModule();
+                    for (int si = 0; si < 3; si++) {
+                        auto stage = stages_mod.attr(std::to_string(si)).toModule();
+                        x = stage.attr("conv").toModule().forward({x}).toTensor();
+                        x = stage.attr("attn").toModule().forward({x}).toTensor();
+                    }
+                    auto sizes = x.sizes();
+                    x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
+                    x = s.model.attr("fuse").toModule().forward({x}).toTensor();
+                    auto gap = s.model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
+
+                    auto gap_acc = gap.accessor<float, 2>();
+                    int feat_dim = std::min(192, (int)gap.size(1));
+                    for (int fi = 0; fi < feat_dim; fi++)
+                        r.gap_feat[fi] = gap_acc[0][fi];
+
+                    x = s.model.attr("head_drop").toModule().forward({gap}).toTensor();
+                    x = s.model.attr("fc").toModule().forward({x}).toTensor();
+                    auto probs = torch::softmax(x, 1);
                     auto pa = probs.accessor<float, 2>();
                     r.prob_pe = pa[0][1];
                     r.pred_class = pa[0][1] > pa[0][0] ? 1 : 0;
@@ -2127,6 +2119,42 @@ void UCDHWorkbenchApplet::draw_statistics_tab() {
                 }
 
                 s.batch_results.push_back(r);
+            }
+
+            // ── PCA on GAP features ──
+            {
+                int n_valid = 0;
+                for (auto& r : s.batch_results)
+                    if (r.pred_class >= 0) n_valid++;
+
+                if (n_valid >= 2) {
+                    auto mat = torch::zeros({n_valid, 192});
+                    auto ma = mat.accessor<float, 2>();
+                    int ri = 0;
+                    for (auto& r : s.batch_results) {
+                        if (r.pred_class < 0) continue;
+                        for (int f = 0; f < 192; f++)
+                            ma[ri][f] = r.gap_feat[f];
+                        ri++;
+                    }
+
+                    auto mean = mat.mean(0, true);
+                    auto centered = mat - mean;
+                    auto cov = centered.t().mm(centered) / (float)(n_valid - 1);
+                    auto eig = torch::linalg_eigh(cov);
+                    auto eigvecs = std::get<1>(eig);
+                    auto pc = eigvecs.index({torch::indexing::Slice(),
+                        torch::indexing::Slice(-2, torch::indexing::None)}).flip(1);
+                    auto proj = centered.mm(pc);
+                    auto pa2 = proj.accessor<float, 2>();
+
+                    s.pca_x.resize(n_valid);
+                    s.pca_y.resize(n_valid);
+                    for (int i = 0; i < n_valid; i++) {
+                        s.pca_x[i] = pa2[i][0];
+                        s.pca_y[i] = pa2[i][1];
+                    }
+                }
             }
 
             s.batch_stale = false;
@@ -2308,6 +2336,103 @@ void UCDHWorkbenchApplet::draw_statistics_tab() {
     }
 
     ImGui::Spacing();
+
+    // ── PCA Scatter ──
+    if ((int)s.pca_x.size() >= 2) {
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f},
+            "PCA — 192-dim Feature Space (GAP Layer)");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        std::vector<float> px_n, py_n, px_p, py_p, px_u, py_u;
+        int vi = 0;
+        for (auto& r : s.batch_results) {
+            if (r.pred_class < 0) continue;
+            if (r.true_class == 0) {
+                px_n.push_back(s.pca_x[vi]); py_n.push_back(s.pca_y[vi]);
+            } else if (r.true_class == 1) {
+                px_p.push_back(s.pca_x[vi]); py_p.push_back(s.pca_y[vi]);
+            } else {
+                px_u.push_back(s.pca_x[vi]); py_u.push_back(s.pca_y[vi]);
+            }
+            vi++;
+        }
+
+        if (ImPlot::BeginPlot("##pca_scatter", ImVec2(plot_w, 300.0f))) {
+            ImPlot::SetupAxes("PC1", "PC2");
+
+            if (!px_n.empty())
+                ImPlot::PlotScatter("Normal", px_n.data(), py_n.data(), (int)px_n.size(),
+                    ImPlotSpec(ImPlotProp_Marker, (double)ImPlotMarker_Circle,
+                               ImPlotProp_MarkerSize, 5.0,
+                               ImPlotProp_MarkerFillColor, ImVec4(0.3f, 0.7f, 1.0f, 0.8f)));
+            if (!px_p.empty())
+                ImPlot::PlotScatter("PE", px_p.data(), py_p.data(), (int)px_p.size(),
+                    ImPlotSpec(ImPlotProp_Marker, (double)ImPlotMarker_Circle,
+                               ImPlotProp_MarkerSize, 5.0,
+                               ImPlotProp_MarkerFillColor, ImVec4(1.0f, 0.3f, 0.3f, 0.8f)));
+            if (!px_u.empty())
+                ImPlot::PlotScatter("Unknown", px_u.data(), py_u.data(), (int)px_u.size(),
+                    ImPlotSpec(ImPlotProp_Marker, (double)ImPlotMarker_Circle,
+                               ImPlotProp_MarkerSize, 4.0,
+                               ImPlotProp_MarkerFillColor, ImVec4(0.6f, 0.6f, 0.6f, 0.6f)));
+
+            ImPlot::EndPlot();
+        }
+        ImGui::Spacing();
+    }
+
+    // ── ROC Curve ──
+    if (labeled > 0 && !probs_pos.empty() && !probs_neg.empty()) {
+        ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "ROC Curve");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        std::vector<float> thresholds;
+        for (int t = 0; t <= 100; t++)
+            thresholds.push_back((float)t / 100.0f);
+
+        std::vector<float> fpr_v, tpr_v;
+        for (float th : thresholds) {
+            int tp_t = 0, fp_t = 0, fn_t = 0, tn_t = 0;
+            for (auto& r : s.batch_results) {
+                if (r.pred_class < 0 || r.true_class < 0) continue;
+                int pred = r.prob_pe >= th ? 1 : 0;
+                if (r.true_class == 1 && pred == 1) tp_t++;
+                else if (r.true_class == 0 && pred == 1) fp_t++;
+                else if (r.true_class == 1 && pred == 0) fn_t++;
+                else tn_t++;
+            }
+            float fpr_val = (fp_t + tn_t > 0) ? (float)fp_t / (fp_t + tn_t) : 0;
+            float tpr_val = (tp_t + fn_t > 0) ? (float)tp_t / (tp_t + fn_t) : 0;
+            fpr_v.push_back(fpr_val);
+            tpr_v.push_back(tpr_val);
+        }
+
+        // AUC via trapezoidal rule
+        float auc = 0;
+        for (int i = 1; i < (int)fpr_v.size(); i++)
+            auc += 0.5f * std::abs(fpr_v[i-1] - fpr_v[i]) * (tpr_v[i-1] + tpr_v[i]);
+
+        if (ImPlot::BeginPlot("##roc", ImVec2(plot_w, 300.0f))) {
+            ImPlot::SetupAxes("False Positive Rate", "True Positive Rate");
+            ImPlot::SetupAxisLimits(ImAxis_X1, 0, 1, ImGuiCond_Always);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImGuiCond_Always);
+
+            float diag_x[] = {0, 1}, diag_y[] = {0, 1};
+            ImPlot::PlotLine("Random", diag_x, diag_y, 2,
+                ImPlotSpec(ImPlotProp_LineColor, ImVec4(0.5f, 0.5f, 0.5f, 0.5f)));
+
+            char roc_label[64];
+            std::snprintf(roc_label, sizeof(roc_label), "ROC (AUC=%.3f)", auc);
+            ImPlot::PlotLine(roc_label, fpr_v.data(), tpr_v.data(), (int)fpr_v.size(),
+                ImPlotSpec(ImPlotProp_LineColor, ImVec4(0.3f, 0.8f, 1.0f, 1.0f),
+                           ImPlotProp_LineWeight, 2.0f));
+
+            ImPlot::EndPlot();
+        }
+        ImGui::Spacing();
+    }
 
     // ── Per-sample results table ──
     ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Per-Sample Results");
