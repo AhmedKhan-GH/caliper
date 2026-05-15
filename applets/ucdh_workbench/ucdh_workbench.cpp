@@ -226,6 +226,86 @@ void derive_xyz(const ECGSample& s,
 } // namespace dsp
 
 // ============================================================================
+// HEATMAP UTILITIES
+// ============================================================================
+
+namespace heatmap {
+
+static void colormap(float t, uint8_t& r, uint8_t& g, uint8_t& b, bool diverging) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    if (diverging) {
+        if (t < 0.5f) {
+            float s = t * 2.0f;
+            r = (uint8_t)(s * 240);
+            g = (uint8_t)(s * 240);
+            b = (uint8_t)(120 + s * 135);
+        } else {
+            float s = (t - 0.5f) * 2.0f;
+            r = (uint8_t)(240 + s * 15);
+            g = (uint8_t)(240 * (1.0f - s));
+            b = (uint8_t)(255 * (1.0f - s * 0.9f));
+        }
+    } else {
+        if (t < 0.33f) {
+            float s = t * 3.0f;
+            r = (uint8_t)(10 + 60 * s); g = (uint8_t)(10 + 80 * s); b = (uint8_t)(40 + 140 * s);
+        } else if (t < 0.66f) {
+            float s = (t - 0.33f) * 3.0f;
+            r = (uint8_t)(70 + 130 * s); g = (uint8_t)(90 + 100 * s); b = (uint8_t)(180 - 100 * s);
+        } else {
+            float s = (t - 0.66f) * 3.0f;
+            r = (uint8_t)(200 + 55 * s); g = (uint8_t)(190 + 65 * s); b = (uint8_t)(80 - 50 * s);
+        }
+    }
+}
+
+static GLuint upload_texture(const torch::Tensor& data_2d, bool diverging = true) {
+    auto data = data_2d.detach().contiguous().to(torch::kCPU, torch::kFloat);
+    int rows = (int)data.size(0);
+    int cols = (int)data.size(1);
+    auto acc = data.accessor<float, 2>();
+
+    float vmin = data.min().item<float>();
+    float vmax = data.max().item<float>();
+    if (diverging) {
+        float absmax = std::max(std::abs(vmin), std::abs(vmax));
+        if (absmax < 1e-8f) absmax = 1.0f;
+        vmin = -absmax; vmax = absmax;
+    }
+    float range = vmax - vmin;
+    if (range < 1e-8f) range = 1.0f;
+
+    std::vector<uint8_t> px(rows * cols * 4);
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            float t = (acc[r][c] - vmin) / range;
+            int i = (r * cols + c) * 4;
+            colormap(t, px[i], px[i+1], px[i+2], diverging);
+            px[i+3] = 255;
+        }
+    }
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, cols, rows, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return tex;
+}
+
+static void release_textures(std::vector<GLuint>& texs) {
+    for (auto& t : texs) {
+        if (t) { glDeleteTextures(1, &t); t = 0; }
+    }
+}
+
+} // namespace heatmap
+
+// ============================================================================
 // BACKGROUND PROCESSOR
 // ============================================================================
 
@@ -471,6 +551,14 @@ struct UCDHWorkbenchApplet::State {
     // ── Architecture visualizer ──
     std::unique_ptr<ModelVisualizer> viz;
 
+    // ── Activation detail view ──
+    std::vector<torch::Tensor> detail_acts;   // per-node (batch squeezed)
+    std::vector<GLuint> detail_texs;          // cached heatmap textures
+    int detail_sample_idx = -1;
+    int detail_lead = 0;
+    int detail_lead_cached = -1;
+    bool detail_texs_dirty = true;
+
     void run_preview(const DiscoveredFile& f) {
         preview = PreviewSnapshot{};
         if (!con) { preview.error = "DuckDB not initialized"; return; }
@@ -559,6 +647,7 @@ bool UCDHWorkbenchApplet::initialize() {
 
 void UCDHWorkbenchApplet::cleanup() {
     if (!s_) return;
+    heatmap::release_textures(s_->detail_texs);
     s_->bg.reset();
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->con.reset();
@@ -1345,7 +1434,8 @@ static LayerActivation tensor_stats(const torch::Tensor& t) {
 
 static void run_step_inference(torch::jit::Module& model,
                                ECGSample& samp,
-                               InferenceOverlay& inf) {
+                               InferenceOverlay& inf,
+                               std::vector<torch::Tensor>& detail) {
     if (!samp.processed_valid) return;
 
     torch::NoGradGuard no_grad;
@@ -1364,8 +1454,11 @@ static void run_step_inference(torch::jit::Module& model,
     inf.layers.clear();
     inf.layers.resize(13);
     inf.sample_id = samp.file_id;
+    detail.clear();
+    detail.resize(13);
 
     inf.layers[0] = tensor_stats(input);
+    detail[0] = input.squeeze(0);
 
     try {
         auto x = input.unsqueeze(2);
@@ -1375,28 +1468,36 @@ static void run_step_inference(torch::jit::Module& model,
             auto stage = stages_mod.attr(std::to_string(si)).toModule();
             x = stage.attr("conv").toModule().forward({x}).toTensor();
             inf.layers[1 + si * 2] = tensor_stats(x);
+            detail[1 + si * 2] = x.squeeze(0);
             x = stage.attr("attn").toModule().forward({x}).toTensor();
             inf.layers[2 + si * 2] = tensor_stats(x);
+            detail[2 + si * 2] = x.squeeze(0);
         }
 
         auto sizes = x.sizes();
         x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
         inf.layers[7] = tensor_stats(x);
+        detail[7] = x.squeeze(0);
 
         x = model.attr("fuse").toModule().forward({x}).toTensor();
         inf.layers[8] = tensor_stats(x);
+        detail[8] = x.squeeze(0);
 
         x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
         inf.layers[9] = tensor_stats(x);
+        detail[9] = x.squeeze(0);
 
         x = model.attr("head_drop").toModule().forward({x}).toTensor();
         inf.layers[10] = tensor_stats(x);
+        detail[10] = x.squeeze(0);
 
         x = model.attr("fc").toModule().forward({x}).toTensor();
         inf.layers[11] = tensor_stats(x);
+        detail[11] = x.squeeze(0);
 
         auto probs = torch::softmax(x, 1);
         inf.layers[12] = tensor_stats(probs);
+        detail[12] = probs.squeeze(0);
         auto pa = probs.accessor<float, 2>();
         inf.probs[0] = pa[0][0];
         inf.probs[1] = pa[0][1];
@@ -1469,9 +1570,11 @@ void UCDHWorkbenchApplet::draw_model_tab() {
                           && s.samples[s.selected].processed_valid;
         if (has_sample && (s.inference_sample_idx != s.selected ||
                            s.inference_params_ver != s.params.version)) {
-            run_step_inference(s.model, s.samples[s.selected], s.inference);
+            run_step_inference(s.model, s.samples[s.selected],
+                               s.inference, s.detail_acts);
             s.inference_sample_idx = s.selected;
             s.inference_params_ver = s.params.version;
+            s.detail_texs_dirty = true;
         }
 
         if (s.inference.valid) {
@@ -1514,12 +1617,202 @@ void UCDHWorkbenchApplet::draw_model_tab() {
 
     ImGui::Separator();
 
-    // ── Architecture data flow diagram ──
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    const InferenceOverlay* overlay = s.inference.valid ? &s.inference : nullptr;
-    s.viz->draw(avail, overlay);
+    if (ImGui::BeginTabBar("##ModelViews")) {
+        if (ImGui::BeginTabItem("Data Flow")) {
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            const InferenceOverlay* overlay =
+                s.inference.valid ? &s.inference : nullptr;
+            s.viz->draw(avail, overlay);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Activations")) {
+            draw_activation_detail();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
 }
 
-void UCDHWorkbenchApplet::draw_model_architecture() {}
-void UCDHWorkbenchApplet::draw_model_inference() {}
+// ============================================================================
+// ACTIVATION DETAIL VIEW
+// ============================================================================
+
+static const char* kLayerLabels[] = {
+    "Input: 12-Lead ECG",
+    "Stage 0 — Conv Features",
+    "Stage 0 — After Attention",
+    "Stage 1 — Conv Features",
+    "Stage 1 — After Attention",
+    "Stage 2 — Conv Features",
+    "Stage 2 — After Attention",
+    "Lead Concatenation",
+    "Fusion Conv",
+    "Global Average Pool",
+    "Dropout",
+    "Classifier (FC)",
+    "Output Probabilities",
+};
+
+static const char* kLeadNames12[] = {
+    "I", "II", "III", "aVR", "aVL", "aVF",
+    "V1", "V2", "V3", "V4", "V5", "V6",
+};
+
+void UCDHWorkbenchApplet::draw_activation_detail() {
+    auto& s = *s_;
+
+    if (!s.inference.valid || s.detail_acts.empty()) {
+        ImGui::TextDisabled("Load a model and select a sample to view activations.");
+        return;
+    }
+
+    // ── Lead selector ──
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Lead:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100);
+    if (ImGui::BeginCombo("##lead_sel", kLeadNames12[s.detail_lead])) {
+        for (int i = 0; i < 12; i++) {
+            if (ImGui::Selectable(kLeadNames12[i], i == s.detail_lead)) {
+                s.detail_lead = i;
+                s.detail_texs_dirty = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Sample: %s", s.inference.sample_id.c_str());
+    ImGui::SameLine();
+    if (s.inference.result_class == 1)
+        ImGui::TextColored({1.0f, 0.4f, 0.4f, 1.0f},
+            "-> PE (%.1f%%)", s.inference.probs[1] * 100);
+    else
+        ImGui::TextColored({0.4f, 1.0f, 0.6f, 1.0f},
+            "-> Normal (%.1f%%)", s.inference.probs[0] * 100);
+
+    ImGui::Separator();
+
+    // ── Regenerate textures if needed ──
+    if (s.detail_texs_dirty || s.detail_lead_cached != s.detail_lead) {
+        heatmap::release_textures(s.detail_texs);
+        s.detail_texs.clear();
+        s.detail_texs.resize(13, 0);
+
+        for (int i = 0; i < 13; i++) {
+            if (!s.detail_acts[i].defined() || s.detail_acts[i].numel() == 0)
+                continue;
+
+            auto t = s.detail_acts[i];
+            torch::Tensor t2d;
+
+            if (t.dim() == 1) {
+                t2d = t.unsqueeze(0);
+            } else if (t.dim() == 2) {
+                t2d = t;
+            } else if (t.dim() == 3) {
+                // (leads, channels, time) — show selected lead
+                int lead = std::min(s.detail_lead, (int)t.size(0) - 1);
+                t2d = t[lead];
+            } else {
+                continue;
+            }
+
+            bool diverging = (i == 0);
+            s.detail_texs[i] = heatmap::upload_texture(t2d, diverging);
+        }
+
+        s.detail_texs_dirty = false;
+        s.detail_lead_cached = s.detail_lead;
+    }
+
+    // ── Scrollable layer view ──
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::BeginChild("##act_scroll", avail, false);
+
+    float content_w = ImGui::GetContentRegionAvail().x;
+    float hm_w = std::max(200.0f, content_w - 24.0f);
+
+    for (int i = 0; i < 13; i++) {
+        if (!s.detail_acts[i].defined()) continue;
+
+        auto& t = s.detail_acts[i];
+        auto& la = s.inference.layers[i];
+
+        ImGui::PushID(i);
+
+        // Section header
+        ImVec4 hdr_col = {0.6f, 0.8f, 1.0f, 1.0f};
+        if (i >= 1 && i <= 2) hdr_col = {0.4f, 0.7f, 1.0f, 1.0f};
+        if (i >= 3 && i <= 4) hdr_col = {0.5f, 0.75f, 0.95f, 1.0f};
+        if (i >= 5 && i <= 6) hdr_col = {0.6f, 0.8f, 0.9f, 1.0f};
+        ImGui::TextColored(hdr_col, "%s", kLayerLabels[i]);
+        ImGui::SameLine();
+        if (la.valid)
+            ImGui::TextDisabled("shape: %s  |  mu=%.4f  sigma=%.4f  [%.3f, %.3f]",
+                la.shape.c_str(), la.mean, la.stddev, la.min_val, la.max_val);
+
+        if (t.dim() == 3) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("  (showing lead %s)", kLeadNames12[s.detail_lead]);
+        }
+
+        // Heatmap
+        if (s.detail_texs[i]) {
+            // Get actual tensor dims for display sizing
+            torch::Tensor t2d;
+            if (t.dim() == 1) t2d = t.unsqueeze(0);
+            else if (t.dim() == 2) t2d = t;
+            else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
+
+            int rows = (int)t2d.size(0);
+            int cols = t2d.dim() >= 2 ? (int)t2d.size(1) : 1;
+
+            float aspect = (float)cols / std::max(1, rows);
+            float hm_h;
+            if (rows <= 2)
+                hm_h = 32.0f;
+            else if (rows <= 16)
+                hm_h = std::max(60.0f, (float)rows * 5.0f);
+            else if (rows <= 64)
+                hm_h = std::max(80.0f, (float)rows * 2.5f);
+            else
+                hm_h = std::min(200.0f, (float)rows * 1.5f);
+
+            ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[i],
+                         ImVec2(hm_w, hm_h));
+
+            // Color scale legend
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 lp = ImGui::GetCursorScreenPos();
+            float leg_w = std::min(200.0f, hm_w * 0.4f);
+            float leg_h = 10.0f;
+            for (int p = 0; p < (int)leg_w; p++) {
+                float ft = (float)p / leg_w;
+                uint8_t cr, cg, cb;
+                heatmap::colormap(ft, cr, cg, cb, i == 0);
+                dl->AddRectFilled(
+                    ImVec2(lp.x + p, lp.y),
+                    ImVec2(lp.x + p + 1, lp.y + leg_h),
+                    IM_COL32(cr, cg, cb, 255));
+            }
+            char lmin[32], lmax[32];
+            std::snprintf(lmin, sizeof(lmin), "%.2f", la.min_val);
+            std::snprintf(lmax, sizeof(lmax), "%.2f", la.max_val);
+            dl->AddText(ImVec2(lp.x, lp.y + leg_h + 1),
+                        IM_COL32(180, 190, 200, 200), lmin);
+            ImVec2 ts = ImGui::CalcTextSize(lmax);
+            dl->AddText(ImVec2(lp.x + leg_w - ts.x, lp.y + leg_h + 1),
+                        IM_COL32(180, 190, 200, 200), lmax);
+            ImGui::Dummy(ImVec2(leg_w, leg_h + 18));
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+}
 
