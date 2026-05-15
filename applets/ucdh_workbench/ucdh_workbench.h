@@ -23,6 +23,7 @@ private:
     void draw_raw_browser();
     void draw_model_tab();
     void draw_activation_detail();
+    void draw_weight_view();
 
     void open_dataset(const std::string& dir);
     void select_sample(int idx);

@@ -491,6 +491,12 @@ struct PreviewSnapshot {
 // STATE
 // ============================================================================
 
+struct WeightEntry {
+    std::string label;
+    torch::Tensor tensor;
+    GLuint tex = 0;
+};
+
 struct UCDHWorkbenchApplet::State {
     // ── ECG dataset ──
     std::vector<ECGSample> samples;
@@ -559,6 +565,10 @@ struct UCDHWorkbenchApplet::State {
     int detail_lead_cached = -1;
     bool detail_texs_dirty = true;
 
+    // ── Weight visualization ──
+    std::vector<WeightEntry> weight_entries;
+    bool weights_extracted = false;
+
     void run_preview(const DiscoveredFile& f) {
         preview = PreviewSnapshot{};
         if (!con) { preview.error = "DuckDB not initialized"; return; }
@@ -604,6 +614,9 @@ struct UCDHWorkbenchApplet::State {
 UCDHWorkbenchApplet::UCDHWorkbenchApplet() = default;
 UCDHWorkbenchApplet::~UCDHWorkbenchApplet() = default;
 
+static void extract_weights(torch::jit::Module& model,
+                            std::vector<WeightEntry>& out);
+
 bool UCDHWorkbenchApplet::initialize() {
     s_ = std::make_unique<State>();
 
@@ -636,6 +649,8 @@ bool UCDHWorkbenchApplet::initialize() {
                 s_->model.eval();
                 s_->model_loaded = true;
                 s_->model_path = last_model;
+                extract_weights(s_->model, s_->weight_entries);
+                s_->weights_extracted = true;
             } catch (const std::exception& e) {
                 std::cerr << "[workbench] Model restore failed: " << e.what() << std::endl;
             }
@@ -648,6 +663,8 @@ bool UCDHWorkbenchApplet::initialize() {
 void UCDHWorkbenchApplet::cleanup() {
     if (!s_) return;
     heatmap::release_textures(s_->detail_texs);
+    for (auto& w : s_->weight_entries)
+        if (w.tex) { glDeleteTextures(1, &w.tex); w.tex = 0; }
     s_->bg.reset();
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->con.reset();
@@ -1522,6 +1539,57 @@ static void run_step_inference(torch::jit::Module& model,
     }
 }
 
+static void extract_weights(torch::jit::Module& model,
+                            std::vector<WeightEntry>& out) {
+    out.clear();
+    try {
+        auto stages = model.attr("stages").toModule();
+        const char* stage_names[] = {"Stage 0", "Stage 1", "Stage 2"};
+        for (int i = 0; i < 3; i++) {
+            auto stage = stages.attr(std::to_string(i)).toModule();
+            auto conv = stage.attr("conv").toModule();
+
+            auto c1w = conv.attr("conv1").toModule().attr("weight").toTensor();
+            out.push_back({std::string(stage_names[i]) + " Conv1 kernels "
+                + std::to_string(c1w.size(0)) + "x" + std::to_string(c1w.size(1))
+                + "x" + std::to_string(c1w.size(2)),
+                c1w.detach().flatten(0, 1), 0});
+
+            auto c2w = conv.attr("conv2").toModule().attr("weight").toTensor();
+            out.push_back({std::string(stage_names[i]) + " Conv2 kernels "
+                + std::to_string(c2w.size(0)) + "x" + std::to_string(c2w.size(1))
+                + "x" + std::to_string(c2w.size(2)),
+                c2w.detach().flatten(0, 1), 0});
+
+            auto attn = stage.attr("attn").toModule();
+            auto gate_w = attn.attr("gate").toModule().attr("0").toModule()
+                              .attr("weight").toTensor();
+            out.push_back({std::string(stage_names[i]) + " Attention gate "
+                + std::to_string(gate_w.size(0)) + "x" + std::to_string(gate_w.size(1)),
+                gate_w.detach(), 0});
+        }
+
+        auto fc_w = model.attr("fc").toModule().attr("weight").toTensor();
+        out.push_back({"FC classifier " + std::to_string(fc_w.size(0))
+            + "x" + std::to_string(fc_w.size(1)), fc_w.detach(), 0});
+
+        auto fuse = model.attr("fuse").toModule().attr("0").toModule();
+        auto fuse_w = fuse.attr("weight").toTensor();
+        out.push_back({"Fusion Conv1d " + std::to_string(fuse_w.size(0))
+            + "x" + std::to_string(fuse_w.size(1)),
+            fuse_w.detach().squeeze(-1), 0});
+
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[model] Weight extraction: %s\n", e.what());
+    }
+
+    for (auto& w : out) {
+        auto t = w.tensor.contiguous().to(torch::kFloat);
+        if (t.dim() == 1) t = t.unsqueeze(0);
+        w.tex = heatmap::upload_texture(t, true);
+    }
+}
+
 void UCDHWorkbenchApplet::draw_model_tab() {
     auto& s = *s_;
 
@@ -1548,6 +1616,8 @@ void UCDHWorkbenchApplet::draw_model_tab() {
                 s.model.eval();
                 s.model_loaded = true;
                 s.model_path = path;
+                extract_weights(s.model, s.weight_entries);
+                s.weights_extracted = true;
                 std::ofstream f(caliper::app_data_path("last_model.txt"));
                 if (f.is_open()) f << path;
             } catch (const c10::Error& e) {
@@ -1627,6 +1697,10 @@ void UCDHWorkbenchApplet::draw_model_tab() {
         }
         if (ImGui::BeginTabItem("Activations")) {
             draw_activation_detail();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Weights")) {
+            draw_weight_view();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -1810,6 +1884,90 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
         ImGui::Separator();
         ImGui::Spacing();
 
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+}
+
+// ============================================================================
+// WEIGHT VISUALIZATION VIEW
+// ============================================================================
+
+void UCDHWorkbenchApplet::draw_weight_view() {
+    auto& s = *s_;
+
+    if (!s.weights_extracted || s.weight_entries.empty()) {
+        ImGui::TextDisabled("Load a model to inspect its weights.");
+        return;
+    }
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::BeginChild("##weight_scroll", avail, false);
+
+    float content_w = ImGui::GetContentRegionAvail().x;
+    float hm_w = std::max(200.0f, content_w - 24.0f);
+
+    for (int i = 0; i < (int)s.weight_entries.size(); i++) {
+        auto& w = s.weight_entries[i];
+        ImGui::PushID(i);
+
+        auto t = w.tensor;
+        int rows = (int)t.size(0);
+        int cols = t.dim() >= 2 ? (int)t.size(1) : 1;
+        int64_t numel = t.numel();
+
+        auto ta = t.to(torch::kFloat);
+        float wmin = ta.min().item<float>();
+        float wmax = ta.max().item<float>();
+        float wmean = ta.mean().item<float>();
+        float wstd = ta.std().item<float>();
+
+        ImGui::TextColored({0.85f, 0.75f, 1.0f, 1.0f}, "%s", w.label.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("%dx%d (%lld params)  mu=%.4f  sigma=%.4f  [%.3f, %.3f]",
+            rows, cols, (long long)numel, wmean, wstd, wmin, wmax);
+
+        if (w.tex) {
+            float hm_h;
+            if (rows <= 2)
+                hm_h = 32.0f;
+            else if (rows <= 16)
+                hm_h = std::max(60.0f, (float)rows * 5.0f);
+            else if (rows <= 64)
+                hm_h = std::max(80.0f, (float)rows * 2.5f);
+            else
+                hm_h = std::min(200.0f, (float)rows * 1.5f);
+
+            ImGui::Image((ImTextureID)(intptr_t)w.tex, ImVec2(hm_w, hm_h));
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 lp = ImGui::GetCursorScreenPos();
+            float leg_w = std::min(200.0f, hm_w * 0.4f);
+            float leg_h = 10.0f;
+            for (int p = 0; p < (int)leg_w; p++) {
+                float ft = (float)p / leg_w;
+                uint8_t cr, cg, cb;
+                heatmap::colormap(ft, cr, cg, cb, true);
+                dl->AddRectFilled(
+                    ImVec2(lp.x + p, lp.y),
+                    ImVec2(lp.x + p + 1, lp.y + leg_h),
+                    IM_COL32(cr, cg, cb, 255));
+            }
+            char lmin[32], lmax[32];
+            std::snprintf(lmin, sizeof(lmin), "%.3f", wmin);
+            std::snprintf(lmax, sizeof(lmax), "%.3f", wmax);
+            dl->AddText(ImVec2(lp.x, lp.y + leg_h + 1),
+                        IM_COL32(180, 190, 200, 200), lmin);
+            ImVec2 ts = ImGui::CalcTextSize(lmax);
+            dl->AddText(ImVec2(lp.x + leg_w - ts.x, lp.y + leg_h + 1),
+                        IM_COL32(180, 190, 200, 200), lmax);
+            ImGui::Dummy(ImVec2(leg_w, leg_h + 18));
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
         ImGui::PopID();
     }
 
