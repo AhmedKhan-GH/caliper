@@ -560,6 +560,7 @@ struct UCDHWorkbenchApplet::State {
     // ── Activation detail view ──
     std::vector<torch::Tensor> detail_acts;   // per-node (batch squeezed)
     std::vector<GLuint> detail_texs;          // cached heatmap textures
+    GLuint input_lead_texs[12] = {};          // per-lead input heatmaps
     int detail_sample_idx = -1;
     int detail_lead = 0;
     int detail_lead_cached = -1;
@@ -663,6 +664,8 @@ bool UCDHWorkbenchApplet::initialize() {
 void UCDHWorkbenchApplet::cleanup() {
     if (!s_) return;
     heatmap::release_textures(s_->detail_texs);
+    for (auto& t : s_->input_lead_texs)
+        if (t) { glDeleteTextures(1, &t); t = 0; }
     for (auto& w : s_->weight_entries)
         if (w.tex) { glDeleteTextures(1, &w.tex); w.tex = 0; }
     s_->bg.reset();
@@ -1789,6 +1792,15 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
             s.detail_texs[i] = heatmap::upload_texture(t2d, diverging);
         }
 
+        for (auto& t : s.input_lead_texs)
+            if (t) { glDeleteTextures(1, &t); t = 0; }
+        if (s.detail_acts.size() > 0 && s.detail_acts[0].defined()
+            && s.detail_acts[0].dim() == 3) {
+            auto& inp = s.detail_acts[0];
+            for (int l = 0; l < std::min(12, (int)inp.size(0)); l++)
+                s.input_lead_texs[l] = heatmap::upload_texture(inp[l], true);
+        }
+
         s.detail_texs_dirty = false;
         s.detail_lead_cached = s.detail_lead;
     }
@@ -1800,40 +1812,45 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
     float content_w = ImGui::GetContentRegionAvail().x;
     float hm_w = std::max(200.0f, content_w - 24.0f);
 
-    // ── Waveform plot for selected lead ──
+    // ── Waveform plots for all 12 leads with heatmap overlay ──
     {
         bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
                         && s.samples[s.selected].processed_valid;
         if (has_samp) {
             auto& samp = s.samples[s.selected];
-            int lead = s.detail_lead;
-            if (lead < (int)samp.processed.size() && !samp.processed[lead].empty()) {
-                if ((int)s.time_axis.size() != samp.num_samples) {
-                    s.time_axis.resize(samp.num_samples);
-                    for (int j = 0; j < samp.num_samples; j++)
-                        s.time_axis[j] = (float)j / samp.sampling_rate;
-                }
+            if ((int)s.time_axis.size() != samp.num_samples) {
+                s.time_axis.resize(samp.num_samples);
+                for (int j = 0; j < samp.num_samples; j++)
+                    s.time_axis[j] = (float)j / samp.sampling_rate;
+            }
 
-                ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f},
-                    "Input Waveform — Lead %s", kLeadNames12[lead]);
+            float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
+            ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "Input Waveforms — 12 Leads");
+            float plot_h = 80.0f;
 
-                float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
+            for (int lead = 0; lead < 12; lead++) {
+                if (lead >= (int)samp.processed.size() || samp.processed[lead].empty())
+                    continue;
+
                 auto& st = samp.stats[lead];
                 float margin = (st.max_val - st.min_val) * 0.1f;
                 float y_lo = st.min_val - margin;
                 float y_hi = st.max_val + margin;
-                float plot_h = 150.0f;
 
-                if (ImPlot::BeginPlot("##act_waveform", ImVec2(hm_w, plot_h),
-                        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
-                    ImPlot::SetupAxes("Time (s)", nullptr,
-                        ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
+                char plot_id[32];
+                std::snprintf(plot_id, sizeof(plot_id), "##act_wave_%d", lead);
+
+                if (ImPlot::BeginPlot(plot_id, ImVec2(hm_w, plot_h),
+                        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoInputs)) {
+                    ImPlot::SetupAxes("", nullptr,
+                        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels,
+                        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels);
                     ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
                     ImPlot::SetupAxisLimits(ImAxis_Y1, y_lo, y_hi, ImGuiCond_Always);
 
-                    if (s.detail_texs[0]) {
-                        ImPlot::PlotImage("##heatmap",
-                            (ImTextureID)(intptr_t)s.detail_texs[0],
+                    if (s.input_lead_texs[lead]) {
+                        ImPlot::PlotImage("##hm",
+                            (ImTextureID)(intptr_t)s.input_lead_texs[lead],
                             ImPlotPoint(0, y_hi), ImPlotPoint(duration, y_lo),
                             ImVec2(0, 0), ImVec2(1, 1),
                             ImVec4(1, 1, 1, 0.45f));
@@ -1842,14 +1859,18 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
                     ImPlot::PlotLine("##sig", s.time_axis.data(),
                         samp.processed[lead].data(), samp.num_samples,
                         ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
-                                   ImPlotProp_LineWeight, 1.5f));
+                                   ImPlotProp_LineWeight, 1.2f));
+
+                    ImPlot::Annotation(0.0, y_hi, LEAD_COLORS[lead],
+                        ImVec2(5, 5), false, "%s", kLeadNames12[lead]);
+
                     ImPlot::EndPlot();
                 }
-
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
             }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
         }
     }
 
