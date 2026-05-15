@@ -24,6 +24,7 @@ private:
     void draw_model_tab();
     void draw_activation_detail();
     void draw_weight_view();
+    void draw_statistics_tab();
 
     void open_dataset(const std::string& dir);
     void select_sample(int idx);
