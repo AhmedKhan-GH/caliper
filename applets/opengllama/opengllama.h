@@ -85,6 +85,11 @@ private:
     bool inference_running_ = false;
     int tokens_generated_ = 0;
 
+    // Deferred model loading (so UI can show progress)
+    std::string pending_load_path_;
+    std::string pending_load_name_;
+    int load_frame_delay_ = 0;
+
     // Activations
     std::vector<LayerActivation> activations_;
     std::vector<unsigned int> layer_textures_;

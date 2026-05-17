@@ -175,7 +175,29 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
-    if (!model_loaded_) {
+    // Deferred model load: wait 2 frames so "Loading..." renders
+    if (!pending_load_path_.empty()) {
+        load_frame_delay_++;
+        if (load_frame_delay_ >= 2) {
+            std::string path = pending_load_path_;
+            std::string name = pending_load_name_;
+            pending_load_path_.clear();
+            pending_load_name_.clear();
+            load_frame_delay_ = 0;
+            inference_running_ = false;
+
+            if (load_model(path)) {
+                if (terminal_) terminal_->add_text("Loaded: " + name);
+            } else {
+                if (terminal_) terminal_->add_text_err("Failed to load: " + name);
+            }
+        } else {
+            // Show loading indicator
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                "Loading %s ...", pending_load_name_.c_str());
+            ImGui::TextDisabled("This may take a moment for large models.");
+        }
+    } else if (!model_loaded_) {
         draw_ollama_models();
     } else {
         draw_inference_view();
@@ -284,14 +306,12 @@ void OpenGllamaApplet::draw_ollama_models() {
 
                 ImGui::TableNextColumn();
                 ImGui::PushID((int)i);
-                if (ImGui::SmallButton("Load")) {
-                    if (load_model(m.blob_path)) {
-                        if (terminal_)
-                            terminal_->add_text("Loaded: " + m.name + ":" + m.tag);
-                    } else {
-                        if (terminal_)
-                            terminal_->add_text_err("Failed to load: " + m.name);
-                    }
+                if (inference_running_) {
+                    ImGui::TextDisabled("...");
+                } else if (ImGui::Button("Load")) {
+                    inference_running_ = true;
+                    pending_load_path_ = m.blob_path;
+                    pending_load_name_ = m.name + ":" + m.tag;
                 }
                 ImGui::PopID();
             }
