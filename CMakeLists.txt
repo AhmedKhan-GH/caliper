@@ -146,6 +146,9 @@ endif()
 add_subdirectory(applets/repnet_demo)
 add_subdirectory(applets/opengllama)
 
+# Ensure applets are rebuilt when the host is built
+add_dependencies(caliper repnet_demo opengllama)
+
 # ============================================================================
 # Summary
 # ============================================================================
