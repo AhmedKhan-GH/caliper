@@ -13,9 +13,19 @@ struct llama_context;
 
 struct LayerActivation {
     int layer_index;
+    float mean;
+    float norm;
+    float max_val;
     std::vector<float> values;
     int rows;
     int cols;
+};
+
+struct TokenLogitInfo {
+    std::string token_text;
+    float probability;
+    float entropy;
+    std::vector<std::pair<std::string, float>> top_k;
 };
 
 class OpenGllamaApplet {
@@ -32,6 +42,8 @@ public:
 
     bool is_model_loaded() const { return model_loaded_; }
     std::string model_path() const { return model_path_; }
+
+    static bool eval_callback(struct ggml_tensor* t, bool ask, void* user_data);
 
 private:
     void draw_ollama_models();
@@ -68,8 +80,10 @@ private:
 
     void load_model_async(const std::string& path, const std::string& display_name);
 
-    // Activations (protected by output_mutex_ during inference)
+    // Activations captured from eval callback (protected by output_mutex_)
     std::vector<LayerActivation> activations_;
+    std::vector<LayerActivation> pending_activations_;
+    std::vector<TokenLogitInfo> token_logits_;
     std::vector<unsigned int> layer_textures_;
     std::atomic<bool> textures_dirty_{false};
 
