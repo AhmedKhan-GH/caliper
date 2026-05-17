@@ -144,6 +144,7 @@ endif()
 # ============================================================================
 
 add_subdirectory(applets/ucdh_workbench)
+add_subdirectory(applets/opengllama)
 
 # ============================================================================
 # Summary

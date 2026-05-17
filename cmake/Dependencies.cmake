@@ -269,6 +269,25 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imterm EXCLUDE_FROM_
 list(APPEND CALIPER_DEPENDENCY_LIBS imterm)
 message(STATUS "    ✓ ImTerm configured")
 
+# --- llama.cpp (LLM inference) ---
+message(STATUS "  Configuring llama.cpp...")
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+if(APPLE)
+    set(GGML_METAL ON CACHE BOOL "" FORCE)
+    set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+    message(STATUS "    Metal backend enabled for llama.cpp")
+elseif(USE_CUDA)
+    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    message(STATUS "    CUDA backend enabled for llama.cpp")
+endif()
+add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
+message(STATUS "    ✓ llama.cpp configured")
+
 # --- ImGuiFileDialog (File open/save dialog for ImGui) ---
 message(STATUS "  Configuring ImGuiFileDialog...")
 # Upstream ships a CMakeLists.txt that tries find_package(imgui) QUIET and skips
