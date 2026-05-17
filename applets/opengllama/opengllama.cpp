@@ -271,6 +271,39 @@ void OpenGllamaApplet::draw_inference_view() {
         inference_finished_ = false;
     }
 
+    // ── Hyperparameters (collapsible) ──
+    if (ImGui::CollapsingHeader("Sampling Parameters")) {
+        ImGui::Columns(4, nullptr, false);
+        ImGui::SetColumnWidth(0, 180);
+        ImGui::SetColumnWidth(1, 180);
+        ImGui::SetColumnWidth(2, 180);
+        ImGui::SetColumnWidth(3, 180);
+
+        ImGui::SliderInt("Max Tokens", &max_tokens_, 16, 2048);
+        ImGui::NextColumn();
+        ImGui::SliderFloat("Temperature", &temperature_, 0.0f, 2.0f, "%.2f");
+        ImGui::NextColumn();
+        ImGui::SliderInt("Top-K", &top_k_, 1, 200);
+        ImGui::NextColumn();
+        ImGui::SliderFloat("Top-P", &top_p_, 0.0f, 1.0f, "%.2f");
+        ImGui::NextColumn();
+
+        ImGui::SliderFloat("Min-P", &min_p_, 0.0f, 0.5f, "%.3f");
+        ImGui::NextColumn();
+        ImGui::SliderFloat("Repeat Penalty", &repeat_penalty_, 1.0f, 2.0f, "%.2f");
+        ImGui::NextColumn();
+        ImGui::SliderInt("Repeat Window", &repeat_last_n_, 0, 256);
+        ImGui::NextColumn();
+        int seed_i = (int)seed_;
+        ImGui::SliderInt("Seed", &seed_i, 0, 9999);
+        seed_ = (uint32_t)seed_i;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(0=random)");
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+    }
+
     ImGui::Separator();
 
     // ── Scrollable content ──
@@ -683,28 +716,44 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         }
 
         int n_vocab = llama_vocab_n_tokens(vocab);
-        const int n_gen = 512;
+        int n_gen = max_tokens_;
+
+        // Build sampler chain with user hyperparams
+        auto sparams = llama_sampler_chain_default_params();
+        llama_sampler* smpl = llama_sampler_chain_init(sparams);
+
+        if (repeat_penalty_ > 1.0f) {
+            llama_sampler_chain_add(smpl,
+                llama_sampler_init_penalties(repeat_last_n_, repeat_penalty_, 0.0f, 0.0f));
+        }
+        if (top_k_ > 0)
+            llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k_));
+        if (top_p_ < 1.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p_, 1));
+        if (min_p_ > 0.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_min_p(min_p_, 1));
+        if (temperature_ > 0.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature_));
+        else
+            llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+
+        uint32_t s = seed_ == 0 ? (uint32_t)time(nullptr) : seed_;
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(s));
 
         for (int i = 0; i < n_gen; ++i) {
             if (!inference_running_) break;
 
             float* logits = llama_get_logits_ith(ctx_, -1);
 
-            // Compute softmax and token info
+            // Compute softmax for visualization (before sampling modifies anything)
             float max_logit = *std::max_element(logits, logits + n_vocab);
             double sum_exp = 0.0;
             for (int t = 0; t < n_vocab; ++t)
                 sum_exp += std::exp((double)(logits[t] - max_logit));
 
-            // Find top-5
-            std::vector<std::pair<float, int>> scored(n_vocab);
-            for (int t = 0; t < n_vocab; ++t)
-                scored[t] = {logits[t], t};
-            std::partial_sort(scored.begin(), scored.begin() + 5, scored.end(),
-                [](auto& a, auto& b) { return a.first > b.first; });
-
-            llama_token best = scored[0].second;
-            float best_prob = (float)(std::exp((double)(scored[0].first - max_logit)) / sum_exp);
+            // Sample using the chain
+            llama_token best = llama_sampler_sample(smpl, ctx_, -1);
+            float best_prob = (float)(std::exp((double)(logits[best] - max_logit)) / sum_exp);
 
             // Entropy
             float entropy = 0.0f;
@@ -712,6 +761,13 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 float p = (float)(std::exp((double)(logits[t] - max_logit)) / sum_exp);
                 if (p > 1e-10f) entropy -= p * std::log2(p);
             }
+
+            // Top-5 for tooltip
+            std::vector<std::pair<float, int>> scored(n_vocab);
+            for (int t = 0; t < n_vocab; ++t)
+                scored[t] = {logits[t], t};
+            std::partial_sort(scored.begin(), scored.begin() + 5, scored.end(),
+                [](auto& a, auto& b) { return a.first > b.first; });
 
             if (llama_vocab_is_eog(vocab, best)) break;
 
@@ -728,6 +784,8 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 float kprob = (float)(std::exp((double)(scored[k].first - max_logit)) / sum_exp);
                 tli.top_k.push_back({kpiece, kprob});
             }
+
+            llama_sampler_accept(smpl, best);
 
             pending_activations_.clear();
 
@@ -749,6 +807,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             }
         }
 
+        llama_sampler_free(smpl);
         llama_batch_free(batch);
         inference_running_ = false;
         inference_finished_ = true;

@@ -59,6 +59,16 @@ private:
     int n_gpu_layers_ = 99;
     int context_size_ = 2048;
 
+    // Inference hyperparameters
+    int max_tokens_ = 256;
+    float temperature_ = 0.8f;
+    int top_k_ = 40;
+    float top_p_ = 0.95f;
+    float min_p_ = 0.05f;
+    float repeat_penalty_ = 1.1f;
+    int repeat_last_n_ = 64;
+    uint32_t seed_ = 0;  // 0 = random
+
     // Inference state
     std::string prompt_buf_;
     std::string output_text_;
