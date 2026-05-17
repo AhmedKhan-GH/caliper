@@ -105,5 +105,12 @@ private:
     std::vector<unsigned int> layer_textures_;
     std::atomic<bool> textures_dirty_{false};
 
+    // Context activation map: [n_layers][n_context_tokens] = activation norm
+    std::vector<std::vector<float>> context_map_;
+    std::vector<std::string> context_tokens_;
+    unsigned int context_map_texture_ = 0;
+    bool context_map_dirty_ = false;
+    void update_context_map_texture();
+
     OllamaModelStore ollama_store_;
 };
