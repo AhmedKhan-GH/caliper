@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #include <imterm/terminal.hpp>
 #include <imterm/terminal_helpers.hpp>
@@ -62,6 +65,7 @@ public:
     int context_size() const { return context_size_; }
     void set_gpu_layers(int n) { n_gpu_layers_ = n; }
     void set_context_size(int n) { context_size_ = n; }
+    void start_inference(const std::string& prompt) { run_inference_async(prompt); }
 
 private:
     void draw_ollama_models();
@@ -82,18 +86,28 @@ private:
     // Inference state
     std::string prompt_buf_;
     std::string output_text_;
-    bool inference_running_ = false;
-    int tokens_generated_ = 0;
+    std::atomic<bool> inference_running_{false};
+    std::atomic<int> tokens_generated_{0};
+    std::atomic<bool> inference_finished_{false};
+    std::thread inference_thread_;
+    std::mutex output_mutex_;
 
-    // Deferred model loading (so UI can show progress)
-    std::string pending_load_path_;
-    std::string pending_load_name_;
-    int load_frame_delay_ = 0;
+    void run_inference_async(const std::string& prompt);
 
-    // Activations
+    // Async model loading
+    std::thread load_thread_;
+    std::atomic<float> load_progress_{0.0f};
+    std::atomic<bool> load_finished_{false};
+    std::atomic<bool> load_success_{false};
+    std::string loading_model_name_;
+    std::string load_error_msg_;
+
+    void load_model_async(const std::string& path, const std::string& display_name);
+
+    // Activations (protected by output_mutex_ during inference)
     std::vector<LayerActivation> activations_;
     std::vector<unsigned int> layer_textures_;
-    bool textures_dirty_ = false;
+    std::atomic<bool> textures_dirty_{false};
 
     OllamaModelStore ollama_store_;
 

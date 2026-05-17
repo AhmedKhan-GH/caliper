@@ -52,8 +52,8 @@ void LlamaTerminalHelper::cmd_infer(argument_type& arg) {
         prompt += arg.command_line[i];
     }
     arg.term.add_text("> " + prompt);
-    std::string result = app->run_inference(prompt);
-    arg.term.add_text(result);
+    app->start_inference(prompt);
+    arg.term.add_text("(generating...)");
 }
 
 void LlamaTerminalHelper::cmd_status(argument_type& arg) {
@@ -154,6 +154,9 @@ bool OpenGllamaApplet::initialize() {
 }
 
 void OpenGllamaApplet::cleanup() {
+    inference_running_ = false;
+    if (inference_thread_.joinable()) inference_thread_.join();
+    if (load_thread_.joinable()) load_thread_.join();
     terminal_.reset();
     unload_model();
 
@@ -175,28 +178,29 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
-    // Deferred model load: wait 2 frames so "Loading..." renders
-    if (!pending_load_path_.empty()) {
-        load_frame_delay_++;
-        if (load_frame_delay_ >= 2) {
-            std::string path = pending_load_path_;
-            std::string name = pending_load_name_;
-            pending_load_path_.clear();
-            pending_load_name_.clear();
-            load_frame_delay_ = 0;
-            inference_running_ = false;
-
-            if (load_model(path)) {
-                if (terminal_) terminal_->add_text("Loaded: " + name);
-            } else {
-                if (terminal_) terminal_->add_text_err("Failed to load: " + name);
-            }
+    // Async model loading — show progress bar while loading
+    if (inference_running_ && !load_finished_) {
+        float progress = load_progress_.load();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+            "Loading %s ...", loading_model_name_.c_str());
+        ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0),
+            (std::to_string((int)(progress * 100)) + "%").c_str());
+        ImGui::TextDisabled("Mapping model to Metal GPU memory...");
+    } else if (load_finished_) {
+        bool ok = load_success_.load();
+        if (load_thread_.joinable()) load_thread_.join();
+        inference_running_ = false;
+        load_finished_ = false;
+        if (ok) {
+            model_loaded_ = true;
+            load_error_msg_.clear();
+            if (terminal_) terminal_->add_text("Loaded: " + loading_model_name_);
         } else {
-            // Show loading indicator
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                "Loading %s ...", pending_load_name_.c_str());
-            ImGui::TextDisabled("This may take a moment for large models.");
+            load_error_msg_ = "Failed to load " + loading_model_name_ +
+                " — architecture may not be supported by llama.cpp";
+            if (terminal_) terminal_->add_text_err(load_error_msg_);
         }
+        loading_model_name_.clear();
     } else if (!model_loaded_) {
         draw_ollama_models();
     } else {
@@ -278,44 +282,30 @@ void OpenGllamaApplet::draw_ollama_models() {
         ImGui::SameLine();
         ImGui::TextDisabled("(%d models)", (int)models.size());
 
-        if (ImGui::BeginTable("OllamaModels", 4,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
-                ImGuiTableFlags_SizingFixedFit,
-                ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        if (!load_error_msg_.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", load_error_msg_.c_str());
+        }
+        ImGui::Spacing();
 
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableHeadersRow();
+        for (size_t i = 0; i < models.size(); ++i) {
+            const auto& m = models[i];
+            double gb = (double)m.size_bytes / (1024.0 * 1024.0 * 1024.0);
 
-            for (size_t i = 0; i < models.size(); ++i) {
-                const auto& m = models[i];
-                ImGui::TableNextRow();
+            ImGui::PushID((int)i);
 
-                ImGui::TableNextColumn();
-                ImGui::Text("%s", m.name.c_str());
-
-                ImGui::TableNextColumn();
-                ImGui::Text("%s", m.tag.c_str());
-
-                ImGui::TableNextColumn();
-                double gb = (double)m.size_bytes / (1024.0 * 1024.0 * 1024.0);
-                ImGui::Text("%.1f GB", gb);
-
-                ImGui::TableNextColumn();
-                ImGui::PushID((int)i);
-                if (inference_running_) {
-                    ImGui::TextDisabled("...");
-                } else if (ImGui::Button("Load")) {
-                    inference_running_ = true;
-                    pending_load_path_ = m.blob_path;
-                    pending_load_name_ = m.name + ":" + m.tag;
-                }
-                ImGui::PopID();
+            if (inference_running_) {
+                ImGui::BeginDisabled();
+                ImGui::Button("Loading...");
+                ImGui::EndDisabled();
+            } else if (ImGui::Button("Load")) {
+                load_error_msg_.clear();
+                load_model_async(m.blob_path, m.name + ":" + m.tag);
             }
-            ImGui::EndTable();
+            ImGui::SameLine();
+            ImGui::Text("%s:%s  (%.1f GB)", m.name.c_str(), m.tag.c_str(), gb);
+
+            ImGui::PopID();
         }
     }
 }
@@ -351,10 +341,21 @@ void OpenGllamaApplet::draw_inference_view() {
     ImGui::SameLine();
     bool run_clicked = ImGui::Button("Run", ImVec2(run_btn_w, 0));
 
+    if (inference_running_) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Stop")) {
+            inference_running_ = false;
+        }
+    }
+
     if ((enter_pressed || run_clicked) && prompt_input[0] != '\0' && !inference_running_) {
         prompt_buf_ = prompt_input;
-        output_text_ = run_inference(prompt_buf_);
-        tokens_generated_ = (int)output_text_.size();
+        run_inference_async(prompt_buf_);
+    }
+
+    if (inference_finished_) {
+        if (inference_thread_.joinable()) inference_thread_.join();
+        inference_finished_ = false;
     }
 
     ImGui::Separator();
@@ -368,9 +369,26 @@ void OpenGllamaApplet::draw_inference_view() {
     // Left panel: output text + terminal
     ImGui::BeginChild("##left_panel", ImVec2(left_w, avail_h), true);
     {
-        if (!output_text_.empty()) {
+        std::string snapshot;
+        int toks;
+        {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            snapshot = output_text_;
+        }
+        toks = tokens_generated_.load();
+
+        if (!snapshot.empty() || inference_running_) {
             ImGui::SeparatorText("Output");
-            ImGui::TextWrapped("%s", output_text_.c_str());
+            if (inference_running_) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
+                    "Generating... (%d tokens)", toks);
+            } else if (toks > 0) {
+                ImGui::TextDisabled("%d tokens", toks);
+            }
+            ImGui::TextWrapped("%s", snapshot.c_str());
+            if (inference_running_) {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
+            }
             ImGui::Spacing();
             ImGui::Separator();
         }
@@ -385,12 +403,24 @@ void OpenGllamaApplet::draw_inference_view() {
     // Right panel: activation flow
     ImGui::BeginChild("##right_panel", ImVec2(right_w, avail_h), true);
     {
-        if (activations_.empty()) {
+        // Snapshot activations under lock
+        std::vector<LayerActivation> act_snap;
+        {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            act_snap = activations_;
+        }
+
+        if (act_snap.empty() && !inference_running_) {
             ImGui::TextDisabled("Enter a prompt and press Run to see activation flow.");
         } else {
             ImGui::SeparatorText("Activation Flow");
-            ImGui::Text("%d layers | %d tokens generated",
-                        (int)activations_.size(), tokens_generated_);
+            int toks = tokens_generated_.load();
+            if (inference_running_) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
+                    "%d layers | token %d (live)", (int)act_snap.size(), toks);
+            } else {
+                ImGui::Text("%d layers | %d tokens", (int)act_snap.size(), toks);
+            }
             ImGui::Spacing();
 
             update_activation_textures();
@@ -398,28 +428,25 @@ void OpenGllamaApplet::draw_inference_view() {
             float tile_w = right_w - 30.0f;
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
-            for (int l = 0; l < (int)activations_.size(); ++l) {
-                const auto& act = activations_[l];
+            for (int l = 0; l < (int)act_snap.size(); ++l) {
+                const auto& act = act_snap[l];
                 if (act.values.empty()) continue;
 
                 ImGui::PushID(l);
 
-                // Layer label
                 ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Layer %d", l);
                 ImGui::SameLine();
                 float vmin = *std::min_element(act.values.begin(), act.values.end());
                 float vmax = *std::max_element(act.values.begin(), act.values.end());
                 ImGui::TextDisabled("[%.3f, %.3f]", vmin, vmax);
 
-                // Heatmap tile
                 if (l < (int)layer_textures_.size() && layer_textures_[l]) {
                     float hm_h = std::clamp((float)act.rows * 2.0f, 16.0f, 80.0f);
                     ImGui::Image((ImTextureID)(intptr_t)layer_textures_[l],
                                  ImVec2(tile_w, hm_h));
                 }
 
-                // Flow arrow to next layer
-                if (l < (int)activations_.size() - 1) {
+                if (l < (int)act_snap.size() - 1) {
                     ImVec2 p = ImGui::GetCursorScreenPos();
                     float cx = p.x + tile_w * 0.5f;
                     dl->AddLine(ImVec2(cx, p.y), ImVec2(cx, p.y + 12.0f),
@@ -511,6 +538,52 @@ void OpenGllamaApplet::update_activation_textures() {
 // Model Management
 // ============================================================================
 
+void OpenGllamaApplet::load_model_async(const std::string& path, const std::string& display_name) {
+    if (load_thread_.joinable()) load_thread_.join();
+
+    inference_running_ = true;
+    load_progress_ = 0.0f;
+    load_finished_ = false;
+    load_success_ = false;
+    loading_model_name_ = display_name;
+
+    load_thread_ = std::thread([this, path]() {
+        unload_model();
+
+        llama_model_params model_params = llama_model_default_params();
+        model_params.n_gpu_layers = n_gpu_layers_;
+        model_params.progress_callback = [](float progress, void* user_data) -> bool {
+            auto* self = static_cast<OpenGllamaApplet*>(user_data);
+            self->load_progress_.store(progress);
+            return true;
+        };
+        model_params.progress_callback_user_data = this;
+
+        model_ = llama_model_load_from_file(path.c_str(), model_params);
+        if (!model_) {
+            load_success_ = false;
+            load_finished_ = true;
+            return;
+        }
+
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx = context_size_;
+
+        ctx_ = llama_init_from_model(model_, ctx_params);
+        if (!ctx_) {
+            llama_model_free(model_);
+            model_ = nullptr;
+            load_success_ = false;
+            load_finished_ = true;
+            return;
+        }
+
+        model_path_ = path;
+        load_success_ = true;
+        load_finished_ = true;
+    });
+}
+
 bool OpenGllamaApplet::load_model(const std::string& path) {
     unload_model();
 
@@ -550,86 +623,112 @@ void OpenGllamaApplet::unload_model() {
     tokens_generated_ = 0;
 }
 
-std::string OpenGllamaApplet::run_inference(const std::string& prompt) {
-    if (!model_ || !ctx_) return "ERROR: no model loaded";
+void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
+    if (inference_thread_.joinable()) inference_thread_.join();
 
+    {
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        output_text_.clear();
+        activations_.clear();
+    }
+    tokens_generated_ = 0;
     inference_running_ = true;
-    const llama_vocab* vocab = llama_model_get_vocab(model_);
+    inference_finished_ = false;
 
-    std::vector<llama_token> tokens(prompt.size() + 8);
-    int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                                  tokens.data(), (int)tokens.size(), true, false);
-    if (n_tokens < 0) {
-        tokens.resize(-n_tokens);
-        n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                                  tokens.data(), (int)tokens.size(), true, false);
-    }
-    tokens.resize(n_tokens);
+    inference_thread_ = std::thread([this, prompt]() {
+        if (!model_ || !ctx_) {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            output_text_ = "ERROR: no model loaded";
+            inference_running_ = false;
+            inference_finished_ = true;
+            return;
+        }
 
-    llama_batch batch = llama_batch_init(std::max(n_tokens, 1), 0, 1);
-    batch.n_tokens = n_tokens;
-    for (int i = 0; i < n_tokens; ++i) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
-    }
+        const llama_vocab* vocab = llama_model_get_vocab(model_);
 
-    if (llama_decode(ctx_, batch) != 0) {
+        std::vector<llama_token> tokens(prompt.size() + 8);
+        int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
+                                      tokens.data(), (int)tokens.size(), true, false);
+        if (n_tokens < 0) {
+            tokens.resize(-n_tokens);
+            n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
+                                      tokens.data(), (int)tokens.size(), true, false);
+        }
+        tokens.resize(n_tokens);
+
+        int n_layers = llama_model_n_layer(model_);
+
+        llama_batch batch = llama_batch_init(std::max(n_tokens, 1), 0, 1);
+        batch.n_tokens = n_tokens;
+        for (int i = 0; i < n_tokens; ++i) {
+            batch.token[i] = tokens[i];
+            batch.pos[i] = i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
+        }
+
+        if (llama_decode(ctx_, batch) != 0) {
+            llama_batch_free(batch);
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            output_text_ = "ERROR: decode failed on prompt";
+            inference_running_ = false;
+            inference_finished_ = true;
+            return;
+        }
+
+        int n_vocab = llama_vocab_n_tokens(vocab);
+        const int n_gen = 512;
+
+        for (int i = 0; i < n_gen; ++i) {
+            if (!inference_running_) break;
+
+            float* logits = llama_get_logits_ith(ctx_, -1);
+
+            llama_token best = 0;
+            float best_logit = logits[0];
+            for (int t = 1; t < n_vocab; ++t) {
+                if (logits[t] > best_logit) {
+                    best_logit = logits[t];
+                    best = t;
+                }
+            }
+
+            if (llama_vocab_is_eog(vocab, best)) break;
+
+            char piece[64] = {};
+            llama_token_to_piece(vocab, best, piece, sizeof(piece), 0, false);
+
+            // Update activations per token (placeholder until ggml hooks)
+            {
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                output_text_ += piece;
+                tokens_generated_.store(i + 1);
+
+                activations_.resize(n_layers);
+                for (int l = 0; l < n_layers; ++l) {
+                    activations_[l].layer_index = l;
+                    activations_[l].rows = 32;
+                    activations_[l].cols = 64;
+                    activations_[l].values.resize(32 * 64);
+                    for (auto& v : activations_[l].values) {
+                        v = (float)(rand() % 1000) / 1000.0f;
+                    }
+                }
+                textures_dirty_ = true;
+            }
+
+            batch.n_tokens = 1;
+            batch.token[0] = best;
+            batch.pos[0] = n_tokens + i;
+            batch.n_seq_id[0] = 1;
+            batch.seq_id[0][0] = 0;
+            batch.logits[0] = 1;
+            if (llama_decode(ctx_, batch) != 0) break;
+        }
+
         llama_batch_free(batch);
         inference_running_ = false;
-        return "ERROR: decode failed on prompt";
-    }
-
-    std::string output;
-    const int n_gen = 256;
-    int n_vocab = llama_vocab_n_tokens(vocab);
-
-    for (int i = 0; i < n_gen; ++i) {
-        float* logits = llama_get_logits_ith(ctx_, -1);
-
-        llama_token best = 0;
-        float best_logit = logits[0];
-        for (int t = 1; t < n_vocab; ++t) {
-            if (logits[t] > best_logit) {
-                best_logit = logits[t];
-                best = t;
-            }
-        }
-
-        if (llama_vocab_is_eog(vocab, best)) break;
-
-        char piece[64] = {};
-        llama_token_to_piece(vocab, best, piece, sizeof(piece), 0, false);
-        output += piece;
-
-        batch.n_tokens = 1;
-        batch.token[0] = best;
-        batch.pos[0] = n_tokens + i;
-        batch.n_seq_id[0] = 1;
-        batch.seq_id[0][0] = 0;
-        batch.logits[0] = 1;
-        if (llama_decode(ctx_, batch) != 0) break;
-    }
-
-    llama_batch_free(batch);
-    tokens_generated_ = (int)output.size();
-
-    // Capture per-layer activations (placeholder — real ggml hook next)
-    int n_layers = llama_model_n_layer(model_);
-    activations_.resize(n_layers);
-    for (int l = 0; l < n_layers; ++l) {
-        activations_[l].layer_index = l;
-        activations_[l].rows = 32;
-        activations_[l].cols = 64;
-        activations_[l].values.resize(32 * 64);
-        for (auto& v : activations_[l].values) {
-            v = (float)(rand() % 1000) / 1000.0f;
-        }
-    }
-    textures_dirty_ = true;
-
-    inference_running_ = false;
-    return output;
+        inference_finished_ = true;
+    });
 }
