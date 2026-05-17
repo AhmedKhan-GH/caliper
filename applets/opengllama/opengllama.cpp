@@ -8,6 +8,7 @@
 #include <ggml-backend.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -20,24 +21,22 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
     auto* self = static_cast<OpenGllamaApplet*>(user_data);
     const char* name = t->name;
 
-    // We want the output of each transformer layer's feed-forward block.
-    // In llama.cpp these are named "l_out-N" (layer output after residual add).
     bool is_layer_out = (strncmp(name, "l_out-", 6) == 0);
+    bool is_attn_out  = (strncmp(name, "attn_out-", 9) == 0);
+    bool want = is_layer_out || is_attn_out;
 
-    if (ask) return is_layer_out;
+    if (ask) return want;
+    if (!want) return true;
 
-    if (!is_layer_out) return true;
-
-    int layer = atoi(name + 6);
+    int layer = atoi(name + (is_layer_out ? 6 : 9));
 
     int64_t n_elem = ggml_nelements(t);
     int rows = (int)t->ne[1];
     int cols = (int)t->ne[0];
     if (rows < 1) rows = 1;
 
-    // Cap the data we copy — take a representative slice
     int vis_cols = std::min(cols, 256);
-    int vis_rows = std::min(rows, 64);
+    int vis_rows = std::min(rows, 1);  // single-token: just first row
     int stride = std::max(1, cols / vis_cols);
 
     std::vector<float> buf(n_elem);
@@ -45,6 +44,7 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
 
     LayerActivation act;
     act.layer_index = layer;
+    act.name = is_layer_out ? "l_out" : "attn_out";
     act.rows = vis_rows;
     act.cols = vis_cols;
     act.values.resize(vis_rows * vis_cols);
@@ -63,6 +63,26 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
     act.mean = sum / (float)n;
     act.norm = std::sqrt(sq_sum / (float)n);
     act.max_val = mx;
+
+    // Cosine similarity with previous l_out
+    act.cosine_prev = 0.0f;
+    if (is_layer_out && !self->pending_activations_.empty()) {
+        for (int k = (int)self->pending_activations_.size() - 1; k >= 0; --k) {
+            if (self->pending_activations_[k].name == "l_out") {
+                auto& prev = self->pending_activations_[k].values;
+                int len = std::min((int)prev.size(), (int)act.values.size());
+                float dot = 0, na = 0, nb = 0;
+                for (int i = 0; i < len; ++i) {
+                    dot += prev[i] * act.values[i];
+                    na += prev[i] * prev[i];
+                    nb += act.values[i] * act.values[i];
+                }
+                float denom = std::sqrt(na) * std::sqrt(nb);
+                act.cosine_prev = denom > 1e-8f ? dot / denom : 0.0f;
+                break;
+            }
+        }
+    }
 
     self->pending_activations_.push_back(std::move(act));
     return true;
@@ -256,12 +276,26 @@ void OpenGllamaApplet::draw_inference_view() {
 
     ImGui::SameLine();
     if (inference_running_) {
-        if (ImGui::Button("Stop", ImVec2(btn_w, 0)))
+        if (ImGui::Button("Stop", ImVec2(70, 0)))
             inference_running_ = false;
+
+        ImGui::SameLine();
+        bool paused = (inference_mode_ == InferenceMode::Paused);
+        if (paused) {
+            if (ImGui::Button("Resume", ImVec2(70, 0)))
+                inference_mode_ = InferenceMode::Continuous;
+            ImGui::SameLine();
+            if (ImGui::Button("Step", ImVec2(50, 0)))
+                step_requested_ = true;
+        } else {
+            if (ImGui::Button("Pause", ImVec2(70, 0)))
+                inference_mode_ = InferenceMode::Paused;
+        }
     } else {
-        bool run = ImGui::Button("Run", ImVec2(btn_w, 0));
+        bool run = ImGui::Button("Run", ImVec2(70, 0));
         if ((enter || run) && prompt_input[0] != '\0') {
             prompt_buf_ = prompt_input;
+            inference_mode_ = InferenceMode::Continuous;
             run_inference_async(prompt_buf_);
         }
     }
@@ -273,35 +307,20 @@ void OpenGllamaApplet::draw_inference_view() {
 
     // ── Hyperparameters (collapsible) ──
     if (ImGui::CollapsingHeader("Sampling Parameters")) {
-        ImGui::Columns(4, nullptr, false);
-        ImGui::SetColumnWidth(0, 180);
-        ImGui::SetColumnWidth(1, 180);
-        ImGui::SetColumnWidth(2, 180);
-        ImGui::SetColumnWidth(3, 180);
-
         ImGui::SliderInt("Max Tokens", &max_tokens_, 16, 2048);
-        ImGui::NextColumn();
         ImGui::SliderFloat("Temperature", &temperature_, 0.0f, 2.0f, "%.2f");
-        ImGui::NextColumn();
         ImGui::SliderInt("Top-K", &top_k_, 1, 200);
-        ImGui::NextColumn();
         ImGui::SliderFloat("Top-P", &top_p_, 0.0f, 1.0f, "%.2f");
-        ImGui::NextColumn();
-
         ImGui::SliderFloat("Min-P", &min_p_, 0.0f, 0.5f, "%.3f");
-        ImGui::NextColumn();
         ImGui::SliderFloat("Repeat Penalty", &repeat_penalty_, 1.0f, 2.0f, "%.2f");
-        ImGui::NextColumn();
         ImGui::SliderInt("Repeat Window", &repeat_last_n_, 0, 256);
-        ImGui::NextColumn();
         int seed_i = (int)seed_;
-        ImGui::SliderInt("Seed", &seed_i, 0, 9999);
-        seed_ = (uint32_t)seed_i;
+        if (ImGui::SliderInt("Seed (0=random)", &seed_i, 0, 9999))
+            seed_ = (uint32_t)seed_i;
+        ImGui::Spacing();
+        ImGui::SliderInt("Token Delay (ms)", &token_delay_ms_, 0, 2000);
         ImGui::SameLine();
-        ImGui::TextDisabled("(0=random)");
-        ImGui::NextColumn();
-
-        ImGui::Columns(1);
+        ImGui::TextDisabled("(0=full speed)");
     }
 
     ImGui::Separator();
@@ -393,54 +412,96 @@ void OpenGllamaApplet::draw_inference_view() {
         // ── Layer activation heatmaps ──
         if (!act_snap.empty()) {
             ImGui::Spacing();
-            ImGui::SeparatorText("Layer Activations");
+            ImGui::SeparatorText("Embedding Flow Through Layers");
             if (inference_running_) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
-                    "%d layers (live)", (int)act_snap.size());
+                    "%d tensors captured (live)", (int)act_snap.size());
             }
             ImGui::Spacing();
 
-            // ── Summary bar: per-layer activation norm ──
-            {
+            // ── Summary: norm bar + cosine similarity bar ──
+            // Filter to just l_out for the summary
+            std::vector<const LayerActivation*> l_outs;
+            for (auto& a : act_snap)
+                if (a.name == "l_out") l_outs.push_back(&a);
+
+            if (!l_outs.empty()) {
                 float bar_w = ImGui::GetContentRegionAvail().x;
-                float bar_h = 24.0f;
-                ImVec2 bar_origin = ImGui::GetCursorScreenPos();
                 ImDrawList* dl = ImGui::GetWindowDrawList();
 
-                float max_norm = 0.0f;
-                for (auto& a : act_snap) max_norm = std::max(max_norm, a.norm);
-                if (max_norm < 1e-7f) max_norm = 1.0f;
+                // Norm bar
+                {
+                    float bar_h = 20.0f;
+                    ImVec2 origin = ImGui::GetCursorScreenPos();
+                    float max_norm = 0.0f;
+                    for (auto* a : l_outs) max_norm = std::max(max_norm, a->norm);
+                    if (max_norm < 1e-7f) max_norm = 1.0f;
 
-                float cell_w = bar_w / (float)act_snap.size();
-                for (int l = 0; l < (int)act_snap.size(); ++l) {
-                    float t = act_snap[l].norm / max_norm;
-                    unsigned char r = (unsigned char)(30 + 225 * t);
-                    unsigned char g = (unsigned char)(120 + 80 * (1.0f - t));
-                    unsigned char b = (unsigned char)(200 * (1.0f - t));
+                    float cell_w = bar_w / (float)l_outs.size();
+                    for (int l = 0; l < (int)l_outs.size(); ++l) {
+                        float t = l_outs[l]->norm / max_norm;
+                        unsigned char r = (unsigned char)(30 + 225 * t);
+                        unsigned char g = (unsigned char)(120 + 80 * (1.0f - t));
+                        unsigned char b = (unsigned char)(200 * (1.0f - t));
 
-                    float x = bar_origin.x + l * cell_w;
-                    float h = bar_h * t;
-                    dl->AddRectFilled(
-                        ImVec2(x, bar_origin.y + bar_h - h),
-                        ImVec2(x + cell_w - 1.0f, bar_origin.y + bar_h),
-                        IM_COL32(r, g, b, 220));
+                        float x = origin.x + l * cell_w;
+                        dl->AddRectFilled(
+                            ImVec2(x, origin.y + bar_h * (1.0f - t)),
+                            ImVec2(x + cell_w - 1.0f, origin.y + bar_h),
+                            IM_COL32(r, g, b, 220));
 
-                    if (ImGui::IsMouseHoveringRect(
-                            ImVec2(x, bar_origin.y),
-                            ImVec2(x + cell_w, bar_origin.y + bar_h))) {
-                        ImGui::BeginTooltip();
-                        ImGui::Text("Layer %d", l);
-                        ImGui::Text("Mean |act|: %.4f", act_snap[l].mean);
-                        ImGui::Text("RMS norm: %.4f", act_snap[l].norm);
-                        ImGui::Text("Max |act|: %.4f", act_snap[l].max_val);
-                        ImGui::EndTooltip();
+                        if (ImGui::IsMouseHoveringRect(
+                                ImVec2(x, origin.y), ImVec2(x + cell_w, origin.y + bar_h))) {
+                            ImGui::BeginTooltip();
+                            ImGui::Text("Layer %d", l_outs[l]->layer_index);
+                            ImGui::Text("RMS norm: %.4f", l_outs[l]->norm);
+                            ImGui::Text("Mean |act|: %.4f", l_outs[l]->mean);
+                            ImGui::EndTooltip();
+                        }
                     }
+                    dl->AddRect(origin, ImVec2(origin.x + bar_w, origin.y + bar_h),
+                        IM_COL32(80, 80, 80, 120));
+                    ImGui::Dummy(ImVec2(bar_w, bar_h + 2.0f));
                 }
-                dl->AddRect(bar_origin,
-                    ImVec2(bar_origin.x + bar_w, bar_origin.y + bar_h),
-                    IM_COL32(80, 80, 80, 120));
-                ImGui::Dummy(ImVec2(bar_w, bar_h + 4.0f));
-                ImGui::TextDisabled("Layer activation norms (hover for details)");
+                ImGui::TextDisabled("Activation norms per layer (brighter = stronger activation)");
+                ImGui::Spacing();
+
+                // Cosine similarity bar — shows semantic drift between layers
+                {
+                    float bar_h = 20.0f;
+                    ImVec2 origin = ImGui::GetCursorScreenPos();
+                    float cell_w = bar_w / (float)l_outs.size();
+
+                    for (int l = 0; l < (int)l_outs.size(); ++l) {
+                        float cos = l_outs[l]->cosine_prev;
+                        // 1.0 = no change (green), 0.0 = orthogonal (red)
+                        float drift = 1.0f - std::clamp(cos, 0.0f, 1.0f);
+                        unsigned char r = (unsigned char)(40 + 215 * drift);
+                        unsigned char g = (unsigned char)(200 * (1.0f - drift));
+                        unsigned char b = 60;
+
+                        float x = origin.x + l * cell_w;
+                        float h = bar_h * std::max(drift, 0.05f);
+                        dl->AddRectFilled(
+                            ImVec2(x, origin.y + bar_h - h),
+                            ImVec2(x + cell_w - 1.0f, origin.y + bar_h),
+                            IM_COL32(r, g, b, 220));
+
+                        if (ImGui::IsMouseHoveringRect(
+                                ImVec2(x, origin.y), ImVec2(x + cell_w, origin.y + bar_h))) {
+                            ImGui::BeginTooltip();
+                            ImGui::Text("Layer %d -> %d", l_outs[l]->layer_index - 1,
+                                l_outs[l]->layer_index);
+                            ImGui::Text("Cosine similarity: %.4f", cos);
+                            ImGui::Text("Semantic drift: %.1f%%", drift * 100.0f);
+                            ImGui::EndTooltip();
+                        }
+                    }
+                    dl->AddRect(origin, ImVec2(origin.x + bar_w, origin.y + bar_h),
+                        IM_COL32(80, 80, 80, 120));
+                    ImGui::Dummy(ImVec2(bar_w, bar_h + 2.0f));
+                }
+                ImGui::TextDisabled("Semantic drift between layers (red = meaning changes most — emotion/sentiment processing)");
             }
 
             ImGui::Spacing();
@@ -456,10 +517,17 @@ void OpenGllamaApplet::draw_inference_view() {
 
                 ImGui::PushID(l);
 
-                ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Layer %d", l);
+                bool is_attn = (act.name == "attn_out");
+                ImVec4 color = is_attn ? ImVec4(1.0f, 0.7f, 0.3f, 1.0f)
+                                       : ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+                ImGui::TextColored(color, "%s %d", is_attn ? "Attn" : "Layer", act.layer_index);
                 ImGui::SameLine();
-                ImGui::TextDisabled("mean=%.3f  norm=%.3f  max=%.3f",
-                    act.mean, act.norm, act.max_val);
+                if (act.cosine_prev > 0.0f && !is_attn) {
+                    ImGui::TextDisabled("cos=%.3f  norm=%.3f",
+                        act.cosine_prev, act.norm);
+                } else {
+                    ImGui::TextDisabled("norm=%.3f  max=%.3f", act.norm, act.max_val);
+                }
 
                 if (l < (int)layer_textures_.size() && layer_textures_[l]) {
                     float hm_h = std::clamp((float)act.rows * 2.0f, 16.0f, 80.0f);
@@ -742,6 +810,19 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
 
         for (int i = 0; i < n_gen; ++i) {
             if (!inference_running_) break;
+
+            // Playback control: pause/step
+            while (inference_running_ &&
+                   inference_mode_ == InferenceMode::Paused &&
+                   !step_requested_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            step_requested_ = false;
+            if (!inference_running_) break;
+
+            // Speed control delay
+            if (token_delay_ms_ > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(token_delay_ms_));
 
             float* logits = llama_get_logits_ith(ctx_, -1);
 
