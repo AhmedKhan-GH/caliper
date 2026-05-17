@@ -58,7 +58,6 @@ struct ProcessingParams {
     bool zscore = true;
     bool baseline_wander_correction = false;
     float baseline_cutoff_hz = 0.0f;
-    bool truncate = false;       // true = truncate to 2500, false = downsample 2x
     uint32_t version = 1;
 };
 
@@ -174,17 +173,12 @@ void process(ECGSample& sample, const ProcessingParams& params) {
         auto& sig = sample.processed[lead];
 
         if (sample.original_num_samples > 2500) {
-            if (params.truncate) {
-                sig.resize(2500);
-                sample.downsampled = false;
-            } else {
-                std::vector<float> ds;
-                ds.reserve(sig.size() / 2);
-                for (size_t i = 0; i < sig.size(); i += 2)
-                    ds.push_back(sig[i]);
-                sig = std::move(ds);
-                sample.downsampled = true;
-            }
+            std::vector<float> ds;
+            ds.reserve(sig.size() / 2);
+            for (size_t i = 0; i < sig.size(); i += 2)
+                ds.push_back(sig[i]);
+            sig = std::move(ds);
+            sample.downsampled = true;
         } else {
             sample.downsampled = false;
         }
@@ -1070,9 +1064,6 @@ void UCDHWorkbenchApplet::draw_panel() {
 
     bool changed = false;
     if (ImGui::Checkbox("Z-Score Normalize", &s.params.zscore)) changed = true;
-    if (ImGui::Checkbox("Truncate (vs Downsample)", &s.params.truncate)) changed = true;
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("ON: take first 2500 samples\nOFF: downsample 2x (take every other sample)");
     if (ImGui::Checkbox("Baseline Wander Correction", &s.params.baseline_wander_correction))
         changed = true;
 
