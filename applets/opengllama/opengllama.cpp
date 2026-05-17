@@ -194,6 +194,10 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
     if (ImGui::BeginTabBar("MainTabs")) {
+        if (ImGui::BeginTabItem("Ollama Models")) {
+            draw_ollama_models();
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Model")) {
             draw_model_loader();
             ImGui::EndTabItem();
@@ -266,6 +270,98 @@ void OpenGllamaApplet::draw_model_loader() {
     ImGui::BulletText("GGUF — GPT-Generated Unified Format");
     ImGui::BulletText("Quantizations: Q4_0, Q4_K_M, Q5_K_M, Q8_0, F16, F32");
     ImGui::BulletText("Source: HuggingFace repos with -GGUF suffix");
+}
+
+void OpenGllamaApplet::draw_ollama_models() {
+    ImGui::SeparatorText("Ollama Path");
+
+    static char path_buf[512];
+    static bool path_buf_init = false;
+    if (!path_buf_init) {
+        std::strncpy(path_buf, ollama_store_.ollama_path().c_str(), sizeof(path_buf) - 1);
+        path_buf[sizeof(path_buf) - 1] = '\0';
+        path_buf_init = true;
+    }
+
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 160.0f);
+    if (ImGui::InputText("##ollama_path", path_buf, sizeof(path_buf),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        ollama_store_.set_ollama_path(path_buf);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Apply & Scan", ImVec2(150, 0))) {
+        ollama_store_.set_ollama_path(path_buf);
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Path to Ollama models directory.\n"
+                          "Default: ~/.ollama/models\n"
+                          "Persisted to: ~/Library/Application Support/Caliper/");
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::Button("Refresh")) {
+        ollama_store_.refresh();
+    }
+
+    ImGui::SeparatorText("Available Models");
+
+    const auto& models = ollama_store_.models();
+
+    if (models.empty()) {
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                           "No models found. Check the Ollama path above.");
+    } else {
+        if (ImGui::BeginTable("OllamaModels", 4,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
+                ImVec2(0, ImGui::GetContentRegionAvail().y - 40))) {
+
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_None, 150.0f);
+            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_None, 80.0f);
+            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_None, 100.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_None, 80.0f);
+            ImGui::TableHeadersRow();
+
+            for (size_t i = 0; i < models.size(); ++i) {
+                const auto& m = models[i];
+                ImGui::TableNextRow();
+
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", m.name.c_str());
+
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", m.tag.c_str());
+
+                ImGui::TableNextColumn();
+                double gb = (double)m.size_bytes / (1024.0 * 1024.0 * 1024.0);
+                ImGui::Text("%.1f GB", gb);
+
+                ImGui::TableNextColumn();
+                ImGui::PushID((int)i);
+                bool is_current = model_loaded_ && (model_path_ == m.blob_path);
+                if (is_current) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Active");
+                } else {
+                    if (ImGui::SmallButton("Load")) {
+                        if (load_model(m.blob_path)) {
+                            if (terminal_)
+                                terminal_->add_text("Loaded: " + m.name + ":" + m.tag);
+                        } else {
+                            if (terminal_)
+                                terminal_->add_text_err("Failed to load: " + m.name + ":" + m.tag);
+                        }
+                    }
+                }
+                ImGui::PopID();
+            }
+
+            ImGui::EndTable();
+        }
+    }
 }
 
 void OpenGllamaApplet::draw_terminal() {

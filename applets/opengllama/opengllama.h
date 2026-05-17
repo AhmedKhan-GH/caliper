@@ -7,6 +7,8 @@
 #include <imterm/terminal.hpp>
 #include <imterm/terminal_helpers.hpp>
 
+#include "ollama_models.h"
+
 struct llama_model;
 struct llama_context;
 
@@ -63,6 +65,7 @@ public:
 
 private:
     void draw_model_loader();
+    void draw_ollama_models();
     void draw_terminal();
     void draw_activation_viewer();
 
@@ -80,6 +83,8 @@ private:
 
     unsigned int activation_texture_ = 0;
     bool texture_needs_update_ = false;
+
+    OllamaModelStore ollama_store_;
 
     LlamaTerminalValue term_value_;
     std::shared_ptr<LlamaTerminalHelper> term_helper_;

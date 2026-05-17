@@ -1,6 +1,8 @@
 add_library(opengllama SHARED
     plugin.cpp
     opengllama.cpp
+    ollama_models.cpp
+    ${CMAKE_SOURCE_DIR}/src/app_paths.cpp
 )
 
 target_include_directories(opengllama PRIVATE
