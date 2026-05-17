@@ -64,7 +64,6 @@ public:
     void set_context_size(int n) { context_size_ = n; }
 
 private:
-    void draw_model_loader();
     void draw_ollama_models();
     void draw_terminal();
     void draw_activation_viewer();
