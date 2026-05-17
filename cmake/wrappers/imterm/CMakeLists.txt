@@ -23,3 +23,9 @@ target_compile_features(imterm INTERFACE cxx_std_17)
 
 # It builds against ImGui — link our existing imgui target.
 target_link_libraries(imterm INTERFACE imgui)
+
+# ImTerm uses the deprecated ImGui::IsKeyPressedMap removed in newer ImGui.
+# Provide a compatibility macro so the header-only library compiles.
+target_compile_definitions(imterm INTERFACE
+    "IsKeyPressedMap=IsKeyPressed"
+)

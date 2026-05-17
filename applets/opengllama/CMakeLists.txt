@@ -13,6 +13,7 @@ target_link_libraries(opengllama PRIVATE
     caliper_applet_sdk
     llama
     libglew_static
+    imterm
 )
 
 target_compile_definitions(opengllama PRIVATE CALIPER_APPLET_EXPORT)
