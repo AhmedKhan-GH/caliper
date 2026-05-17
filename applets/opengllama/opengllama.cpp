@@ -257,8 +257,13 @@ bool OpenGllamaApplet::run_inference(const std::string& prompt) {
     tokens.resize(n_tokens);
 
     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    batch.n_tokens = n_tokens;
     for (int i = 0; i < n_tokens; ++i) {
-        llama_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
+        batch.token[i] = tokens[i];
+        batch.pos[i] = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
     }
 
     if (llama_decode(ctx_, batch) != 0) {
@@ -288,8 +293,12 @@ bool OpenGllamaApplet::run_inference(const std::string& prompt) {
         llama_token_to_piece(vocab, best, piece, sizeof(piece), 0, false);
         output_text_ += piece;
 
-        llama_batch_clear(batch);
-        llama_batch_add(batch, best, n_tokens + i, {0}, true);
+        batch.n_tokens = 1;
+        batch.token[0] = best;
+        batch.pos[0] = n_tokens + i;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = 1;
         if (llama_decode(ctx_, batch) != 0) break;
     }
 
@@ -297,7 +306,7 @@ bool OpenGllamaApplet::run_inference(const std::string& prompt) {
 
     // Capture a placeholder activation for visualization
     // (real hook into ggml graph will come in a follow-up)
-    int n_layers = llama_model_n_layers(model_);
+    int n_layers = llama_model_n_layer(model_);
     activations_.resize(n_layers);
     for (int l = 0; l < n_layers; ++l) {
         activations_[l].layer_index = l;
