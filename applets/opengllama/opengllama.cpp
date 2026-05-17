@@ -317,13 +317,14 @@ void OpenGllamaApplet::draw_ollama_models() {
     } else {
         if (ImGui::BeginTable("OllamaModels", 4,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
+                ImGuiTableFlags_SizingFixedFit,
                 ImVec2(0, ImGui::GetContentRegionAvail().y - 40))) {
 
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_None, 150.0f);
-            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_None, 80.0f);
-            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_None, 100.0f);
-            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_None, 80.0f);
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 80.0f);
             ImGui::TableHeadersRow();
 
             for (size_t i = 0; i < models.size(); ++i) {
