@@ -478,6 +478,8 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             return;
         }
 
+        llama_memory_clear(llama_get_memory(ctx_), true);
+
         const llama_vocab* vocab = llama_model_get_vocab(model_);
 
         std::vector<llama_token> tokens(prompt.size() + 8);
