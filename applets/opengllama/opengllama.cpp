@@ -85,6 +85,24 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
     }
 
     self->pending_activations_.push_back(std::move(act));
+
+    // Context map: per-token norm at this layer (only l_out)
+    if (is_layer_out) {
+        // Ensure context_map_ has enough layers
+        while ((int)self->context_map_.size() <= layer)
+            self->context_map_.push_back({});
+
+        // Compute L2 norm for each token position (row)
+        for (int r = 0; r < rows; ++r) {
+            float sq = 0.0f;
+            for (int c = 0; c < cols; ++c) {
+                float v = buf[r * cols + c];
+                sq += v * v;
+            }
+            self->context_map_[layer].push_back(std::sqrt(sq / (float)cols));
+        }
+    }
+
     return true;
 }
 
@@ -110,6 +128,8 @@ void OpenGllamaApplet::cleanup() {
     for (auto tex : layer_textures_)
         if (tex) glDeleteTextures(1, &tex);
     layer_textures_.clear();
+    if (context_map_texture_) glDeleteTextures(1, &context_map_texture_);
+    context_map_texture_ = 0;
 
     llama_backend_free();
 }
@@ -409,6 +429,70 @@ void OpenGllamaApplet::draw_inference_view() {
             ImGui::Dummy(ImVec2(ribbon_w, ribbon_h + 4.0f));
         }
 
+        // ── Context Activation Map ──
+        {
+            std::vector<std::vector<float>> cmap_snap;
+            std::vector<std::string> ctok_snap;
+            {
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                cmap_snap = context_map_;
+                ctok_snap = context_tokens_;
+            }
+
+            int n_layers = (int)cmap_snap.size();
+            int n_ctx = 0;
+            for (auto& row : cmap_snap)
+                n_ctx = std::max(n_ctx, (int)row.size());
+
+            if (n_layers > 0 && n_ctx > 0) {
+                ImGui::Spacing();
+                ImGui::SeparatorText("Context Activation Map");
+                ImGui::TextDisabled(
+                    "Layers (top=0, bottom=%d) vs context tokens — bright = high activation",
+                    n_layers - 1);
+
+                update_context_map_texture();
+
+                if (context_map_texture_) {
+                    float map_w = ImGui::GetContentRegionAvail().x;
+                    float aspect = (float)n_layers / (float)n_ctx;
+                    float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
+
+                    ImVec2 img_pos = ImGui::GetCursorScreenPos();
+                    ImGui::Image((ImTextureID)(intptr_t)context_map_texture_,
+                                 ImVec2(map_w, map_h));
+
+                    // Hover: show token + layer info
+                    if (ImGui::IsItemHovered()) {
+                        ImVec2 mouse = ImGui::GetMousePos();
+                        int tok_idx = (int)((mouse.x - img_pos.x) / map_w * n_ctx);
+                        int lay_idx = (int)((mouse.y - img_pos.y) / map_h * n_layers);
+                        tok_idx = std::clamp(tok_idx, 0, n_ctx - 1);
+                        lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
+
+                        ImGui::BeginTooltip();
+                        if (tok_idx < (int)ctok_snap.size())
+                            ImGui::Text("Token %d: \"%s\"", tok_idx, ctok_snap[tok_idx].c_str());
+                        ImGui::Text("Layer %d", lay_idx);
+                        if (lay_idx < (int)cmap_snap.size() && tok_idx < (int)cmap_snap[lay_idx].size())
+                            ImGui::Text("Activation norm: %.4f", cmap_snap[lay_idx][tok_idx]);
+                        ImGui::EndTooltip();
+                    }
+
+                    // Token labels along bottom (sampled to fit)
+                    if (!ctok_snap.empty()) {
+                        float cell_w = map_w / (float)n_ctx;
+                        int label_skip = std::max(1, (int)(12.0f / cell_w));
+                        for (int i = 0; i < n_ctx && i < (int)ctok_snap.size(); i += label_skip) {
+                            ImGui::SameLine(i * cell_w);
+                            ImGui::TextDisabled("%s", ctok_snap[i].c_str());
+                        }
+                        ImGui::NewLine();
+                    }
+                }
+            }
+        }
+
         // ── Layer activation heatmaps ──
         if (!act_snap.empty()) {
             ImGui::Spacing();
@@ -620,6 +704,68 @@ void OpenGllamaApplet::update_activation_textures() {
     textures_dirty_ = false;
 }
 
+void OpenGllamaApplet::update_context_map_texture() {
+    if (!context_map_dirty_) return;
+    context_map_dirty_ = false;
+
+    int n_layers = (int)context_map_.size();
+    if (n_layers == 0) return;
+    int n_ctx = 0;
+    for (auto& row : context_map_)
+        n_ctx = std::max(n_ctx, (int)row.size());
+    if (n_ctx == 0) return;
+
+    // Find global min/max for normalization
+    float gmin = 1e30f, gmax = -1e30f;
+    for (auto& row : context_map_) {
+        for (float v : row) {
+            gmin = std::min(gmin, v);
+            gmax = std::max(gmax, v);
+        }
+    }
+    float range = (gmax - gmin) > 1e-7f ? (gmax - gmin) : 1.0f;
+
+    // Build RGB pixels [n_layers rows × n_ctx cols]
+    std::vector<unsigned char> pixels(n_layers * n_ctx * 3, 0);
+    for (int l = 0; l < n_layers; ++l) {
+        for (int c = 0; c < (int)context_map_[l].size(); ++c) {
+            float norm = (context_map_[l][c] - gmin) / range;
+            unsigned char r, g, b;
+            if (norm < 0.5f) {
+                float t = norm / 0.5f;
+                r = (unsigned char)(10 * t);
+                g = (unsigned char)(20 + 100 * t);
+                b = (unsigned char)(80 + 175 * t);
+            } else {
+                float t = (norm - 0.5f) / 0.5f;
+                r = (unsigned char)(10 + 245 * t);
+                g = (unsigned char)(120 + 135 * t);
+                b = (unsigned char)(255 - 200 * t);
+            }
+            int idx = (l * n_ctx + c) * 3;
+            pixels[idx + 0] = r;
+            pixels[idx + 1] = g;
+            pixels[idx + 2] = b;
+        }
+    }
+
+    if (context_map_texture_)
+        glDeleteTextures(1, &context_map_texture_);
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, n_ctx, n_layers, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    context_map_texture_ = tex;
+}
+
 // ============================================================================
 // Model Loading
 // ============================================================================
@@ -745,6 +891,11 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         const llama_vocab* vocab = llama_model_get_vocab(model_);
         int n_layers = llama_model_n_layer(model_);
 
+        // Clear context map for new inference
+        context_map_.clear();
+        context_map_.resize(n_layers);
+        context_tokens_.clear();
+
         std::vector<llama_token> tokens(prompt.size() + 8);
         int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
                                       tokens.data(), (int)tokens.size(), true, false);
@@ -754,6 +905,13 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                                       tokens.data(), (int)tokens.size(), true, false);
         }
         tokens.resize(n_tokens);
+
+        // Store prompt token texts for context map labels
+        for (int i = 0; i < n_tokens; ++i) {
+            char piece[64] = {};
+            llama_token_to_piece(vocab, tokens[i], piece, sizeof(piece), 0, false);
+            context_tokens_.push_back(piece);
+        }
 
         llama_batch batch = llama_batch_init(std::max(n_tokens, 1), 0, 1);
         batch.n_tokens = n_tokens;
@@ -781,6 +939,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             std::lock_guard<std::mutex> lk(output_mutex_);
             activations_ = pending_activations_;
             textures_dirty_ = true;
+            context_map_dirty_ = true;
         }
 
         int n_vocab = llama_vocab_n_tokens(vocab);
@@ -883,8 +1042,10 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 output_text_ += piece;
                 tokens_generated_.store(i + 1);
                 token_logits_.push_back(tli);
+                context_tokens_.push_back(piece);
                 activations_ = pending_activations_;
                 textures_dirty_ = true;
+                context_map_dirty_ = true;
             }
         }
 
