@@ -194,12 +194,8 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
     if (ImGui::BeginTabBar("MainTabs")) {
-        if (ImGui::BeginTabItem("Ollama Models")) {
+        if (ImGui::BeginTabItem("Models")) {
             draw_ollama_models();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Model")) {
-            draw_model_loader();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Terminal")) {
@@ -232,46 +228,6 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
     ImGui::End();
 }
 
-void OpenGllamaApplet::draw_model_loader() {
-    ImGui::SeparatorText("GGUF Model");
-
-    if (model_loaded_) {
-        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Loaded:");
-        ImGui::SameLine();
-        ImGui::TextWrapped("%s", model_path_.c_str());
-    } else {
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No model loaded");
-    }
-
-    ImGui::Spacing();
-
-    if (ImGui::Button("Browse GGUF...", ImVec2(200, 35))) {
-        IGFD::FileDialogConfig cfg;
-        cfg.path = ".";
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "ChooseGGUF", "Select GGUF Model", ".gguf", cfg);
-    }
-
-    if (model_loaded_) {
-        ImGui::SameLine();
-        if (ImGui::Button("Unload", ImVec2(120, 35))) {
-            unload_model();
-        }
-    }
-
-    ImGui::Separator();
-    ImGui::Text("Inference Parameters:");
-    ImGui::SliderInt("GPU Layers", &n_gpu_layers_, 0, 128);
-    ImGui::SliderInt("Context Size", &context_size_, 512, 8192);
-
-    ImGui::Separator();
-    ImGui::SeparatorText("Supported Formats");
-    ImGui::BulletText("GGUF — GPT-Generated Unified Format");
-    ImGui::BulletText("Quantizations: Q4_0, Q4_K_M, Q5_K_M, Q8_0, F16, F32");
-    ImGui::BulletText("Source: HuggingFace repos with -GGUF suffix");
-}
-
 void OpenGllamaApplet::draw_ollama_models() {
     ImGui::SeparatorText("Ollama Path");
 
@@ -301,13 +257,45 @@ void OpenGllamaApplet::draw_ollama_models() {
                           "Persisted to: ~/Library/Application Support/Caliper/");
     }
 
-    ImGui::Spacing();
+    // ── Active model status ──
+    ImGui::SeparatorText("Active Model");
+    if (model_loaded_) {
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Loaded:");
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", model_path_.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Unload")) {
+            unload_model();
+            if (terminal_) terminal_->add_text("Model unloaded.");
+        }
+    } else {
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No model loaded");
+    }
 
+    // ── Inference parameters ──
+    ImGui::SetNextItemWidth(150.0f);
+    ImGui::SliderInt("GPU Layers", &n_gpu_layers_, 0, 128);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150.0f);
+    ImGui::SliderInt("Context Size", &context_size_, 512, 8192);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse GGUF...")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "ChooseGGUF", "Select GGUF Model", ".gguf", cfg);
+    }
+
+    // ── Model list ──
+    ImGui::SeparatorText("Ollama Models");
+
+    ImGui::Spacing();
     if (ImGui::Button("Refresh")) {
         ollama_store_.refresh();
     }
-
-    ImGui::SeparatorText("Available Models");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d models found)", (int)ollama_store_.models().size());
 
     const auto& models = ollama_store_.models();
 
