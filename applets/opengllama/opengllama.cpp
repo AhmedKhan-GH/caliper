@@ -8,132 +8,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <sstream>
 
 // ============================================================================
-// Terminal Helper
-// ============================================================================
-
-LlamaTerminalHelper::LlamaTerminalHelper() {
-    add_command_({"clear ", "clear the terminal", cmd_clear, no_completion});
-    add_command_({"help ", "show available commands", cmd_help, no_completion});
-    add_command_({"infer ", "run inference: infer <prompt text>", cmd_infer, no_completion});
-    add_command_({"load ", "open file dialog to load a model", cmd_load, no_completion});
-    add_command_({"set ", "set parameter: set gpu_layers|context_size <value>", cmd_set, set_completion});
-    add_command_({"status ", "show model status", cmd_status, no_completion});
-    add_command_({"unload ", "unload the current model", cmd_unload, no_completion});
-}
-
-void LlamaTerminalHelper::cmd_clear(argument_type& arg) { arg.term.clear(); }
-
-void LlamaTerminalHelper::cmd_help(argument_type& arg) {
-    arg.term.add_text("Commands:");
-    arg.term.add_text("  infer <prompt>  - run inference on the loaded model");
-    arg.term.add_text("  load [path]     - load model (opens file dialog if no path)");
-    arg.term.add_text("  unload          - unload the current model");
-    arg.term.add_text("  status          - show model and parameter info");
-    arg.term.add_text("  set <key> <val> - set gpu_layers or context_size");
-    arg.term.add_text("  clear           - clear terminal output");
-}
-
-void LlamaTerminalHelper::cmd_infer(argument_type& arg) {
-    auto* app = arg.val.applet;
-    if (!app || !app->is_model_loaded()) {
-        arg.term.add_text_err("No model loaded. Use 'load' first.");
-        return;
-    }
-    if (arg.command_line.size() < 2) {
-        arg.term.add_text_err("Usage: infer <prompt text>");
-        return;
-    }
-    std::string prompt;
-    for (size_t i = 1; i < arg.command_line.size(); ++i) {
-        if (i > 1) prompt += ' ';
-        prompt += arg.command_line[i];
-    }
-    arg.term.add_text("> " + prompt);
-    app->start_inference(prompt);
-    arg.term.add_text("(generating...)");
-}
-
-void LlamaTerminalHelper::cmd_status(argument_type& arg) {
-    auto* app = arg.val.applet;
-    if (!app) return;
-    if (app->is_model_loaded()) {
-        arg.term.add_text("Model: " + app->model_path());
-        arg.term.add_text("GPU Layers: " + std::to_string(app->gpu_layers()));
-        arg.term.add_text("Context Size: " + std::to_string(app->context_size()));
-    } else {
-        arg.term.add_text("No model loaded.");
-    }
-}
-
-void LlamaTerminalHelper::cmd_load(argument_type& arg) {
-    auto* app = arg.val.applet;
-    if (!app) return;
-    if (arg.command_line.size() >= 2) {
-        std::string path;
-        for (size_t i = 1; i < arg.command_line.size(); ++i) {
-            if (i > 1) path += ' ';
-            path += arg.command_line[i];
-        }
-        if (app->load_model(path))
-            arg.term.add_text("Model loaded: " + path);
-        else
-            arg.term.add_text_err("Failed to load model: " + path);
-    } else {
-        IGFD::FileDialogConfig cfg;
-        cfg.path = ".";
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "ChooseGGUF", "Select GGUF Model", ".gguf", cfg);
-        arg.term.add_text("Opening file dialog...");
-    }
-}
-
-void LlamaTerminalHelper::cmd_unload(argument_type& arg) {
-    auto* app = arg.val.applet;
-    if (!app) return;
-    if (!app->is_model_loaded()) {
-        arg.term.add_text_err("No model is loaded.");
-        return;
-    }
-    app->unload_model();
-    arg.term.add_text("Model unloaded.");
-}
-
-void LlamaTerminalHelper::cmd_set(argument_type& arg) {
-    auto* app = arg.val.applet;
-    if (!app) return;
-    if (arg.command_line.size() < 3) {
-        arg.term.add_text_err("Usage: set <gpu_layers|context_size> <value>");
-        return;
-    }
-    const auto& key = arg.command_line[1];
-    int val = 0;
-    try { val = std::stoi(arg.command_line[2]); }
-    catch (...) {
-        arg.term.add_text_err("Invalid integer: " + arg.command_line[2]);
-        return;
-    }
-    if (key == "gpu_layers") {
-        app->set_gpu_layers(val);
-        arg.term.add_text("gpu_layers = " + std::to_string(val));
-    } else if (key == "context_size") {
-        app->set_context_size(val);
-        arg.term.add_text("context_size = " + std::to_string(val));
-    } else {
-        arg.term.add_text_err("Unknown parameter: " + key);
-    }
-}
-
-std::vector<std::string> LlamaTerminalHelper::set_completion(argument_type& arg) {
-    if (arg.command_line.size() <= 2) return {"gpu_layers", "context_size"};
-    return {};
-}
-
-// ============================================================================
-// Applet
+// Applet lifecycle
 // ============================================================================
 
 OpenGllamaApplet::OpenGllamaApplet() = default;
@@ -142,14 +19,6 @@ OpenGllamaApplet::~OpenGllamaApplet() { cleanup(); }
 
 bool OpenGllamaApplet::initialize() {
     llama_backend_init();
-
-    term_value_.applet = this;
-    term_helper_ = std::make_shared<LlamaTerminalHelper>();
-    terminal_ = std::make_unique<LlamaTerminal>(
-        term_value_, "llama>", 900, 400, term_helper_);
-    terminal_->set_autocomplete_pos(ImTerm::position::up);
-    terminal_->add_text("OpenGllama — type 'help' for commands");
-
     return true;
 }
 
@@ -157,7 +26,6 @@ void OpenGllamaApplet::cleanup() {
     inference_running_ = false;
     if (inference_thread_.joinable()) inference_thread_.join();
     if (load_thread_.joinable()) load_thread_.join();
-    terminal_.reset();
     unload_model();
 
     for (auto tex : layer_textures_)
@@ -168,7 +36,7 @@ void OpenGllamaApplet::cleanup() {
 }
 
 // ============================================================================
-// Main UI — streamlined single-page layout
+// Main UI
 // ============================================================================
 
 void OpenGllamaApplet::draw_ui(int width, int height) {
@@ -176,29 +44,27 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
     ImGui::SetNextWindowSize(ImVec2((float)width, (float)height));
     ImGui::Begin("OpenGllama", nullptr,
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+                 ImGuiWindowFlags_NoBackground);
 
-    // Async model loading — show progress bar while loading
-    if (inference_running_ && !load_finished_) {
+    // Async model loading — progress bar
+    if (!loading_model_name_.empty() && !load_finished_) {
         float progress = load_progress_.load();
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
             "Loading %s ...", loading_model_name_.c_str());
         ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0),
-            (std::to_string((int)(progress * 100)) + "%").c_str());
+            (std::to_string((int)(progress * 100)) + "%%").c_str());
         ImGui::TextDisabled("Mapping model to Metal GPU memory...");
     } else if (load_finished_) {
         bool ok = load_success_.load();
         if (load_thread_.joinable()) load_thread_.join();
-        inference_running_ = false;
         load_finished_ = false;
         if (ok) {
             model_loaded_ = true;
             load_error_msg_.clear();
-            if (terminal_) terminal_->add_text("Loaded: " + loading_model_name_);
         } else {
             load_error_msg_ = "Failed to load " + loading_model_name_ +
                 " — architecture may not be supported by llama.cpp";
-            if (terminal_) terminal_->add_text_err(load_error_msg_);
         }
         loading_model_name_.clear();
     } else if (!model_loaded_) {
@@ -207,18 +73,14 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
         draw_inference_view();
     }
 
-    // File dialog (always active)
+    // File dialog
     ImVec2 min_sz(600, 400);
     ImVec2 max_sz(FLT_MAX, FLT_MAX);
     if (ImGuiFileDialog::Instance()->Display("ChooseGGUF",
             ImGuiWindowFlags_NoCollapse, min_sz, max_sz)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
-            if (load_model(path)) {
-                if (terminal_) terminal_->add_text("Model loaded: " + path);
-            } else {
-                if (terminal_) terminal_->add_text_err("Failed to load: " + path);
-            }
+            load_model(path);
         }
         ImGuiFileDialog::Instance()->Close();
     }
@@ -227,11 +89,11 @@ void OpenGllamaApplet::draw_ui(int width, int height) {
 }
 
 // ============================================================================
-// Model Selection (shown when no model loaded)
+// Model Selection
 // ============================================================================
 
 void OpenGllamaApplet::draw_ollama_models() {
-    ImGui::SeparatorText("Ollama Path");
+    ImGui::SeparatorText("Ollama Models");
 
     static char path_buf[512];
     static bool path_buf_init = false;
@@ -251,41 +113,23 @@ void OpenGllamaApplet::draw_ollama_models() {
         ollama_store_.set_ollama_path(path_buf);
     }
 
-    // ── Inference params ──
     ImGui::Spacing();
-    ImGui::SetNextItemWidth(150.0f);
-    ImGui::SliderInt("GPU Layers", &n_gpu_layers_, 0, 128);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(150.0f);
-    ImGui::SliderInt("Context Size", &context_size_, 512, 8192);
-    ImGui::SameLine();
-    if (ImGui::Button("Browse GGUF...")) {
-        IGFD::FileDialogConfig cfg;
-        cfg.path = ".";
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "ChooseGGUF", "Select GGUF Model", ".gguf", cfg);
-    }
 
-    // ── Model list ──
-    ImGui::SeparatorText("Select a Model to Load");
+    if (!load_error_msg_.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", load_error_msg_.c_str());
+        ImGui::Spacing();
+    }
 
     const auto& models = ollama_store_.models();
 
     if (models.empty()) {
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                           "No Ollama models found. Use 'Browse GGUF...' or check path.");
+        ImGui::TextDisabled("No Ollama models found.");
         ImGui::Spacing();
         if (ImGui::Button("Refresh")) ollama_store_.refresh();
     } else {
         if (ImGui::Button("Refresh")) ollama_store_.refresh();
         ImGui::SameLine();
         ImGui::TextDisabled("(%d models)", (int)models.size());
-
-        if (!load_error_msg_.empty()) {
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", load_error_msg_.c_str());
-        }
         ImGui::Spacing();
 
         for (size_t i = 0; i < models.size(); ++i) {
@@ -294,7 +138,7 @@ void OpenGllamaApplet::draw_ollama_models() {
 
             ImGui::PushID((int)i);
 
-            if (inference_running_) {
+            if (!loading_model_name_.empty()) {
                 ImGui::BeginDisabled();
                 ImGui::Button("Loading...");
                 ImGui::EndDisabled();
@@ -308,19 +152,33 @@ void OpenGllamaApplet::draw_ollama_models() {
             ImGui::PopID();
         }
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    IGFD::FileDialogConfig cfg;
+    cfg.path = ".";
+    cfg.flags = ImGuiFileDialogFlags_Modal;
+    if (ImGui::Button("Browse GGUF...")) {
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "ChooseGGUF", "Select GGUF Model", ".gguf", cfg);
+    }
 }
 
 // ============================================================================
-// Inference View (shown when model is loaded)
+// Inference View — prompt on top, output + activations below (vertical)
 // ============================================================================
 
 void OpenGllamaApplet::draw_inference_view() {
-    // ── Top bar: model info + unload ──
-    ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Model:");
+    // ── Top bar: model info ──
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Model:");
     ImGui::SameLine();
     ImGui::Text("%s", model_path_.c_str());
     ImGui::SameLine();
     if (ImGui::SmallButton("Unload")) {
+        inference_running_ = false;
+        if (inference_thread_.joinable()) inference_thread_.join();
         unload_model();
         return;
     }
@@ -330,27 +188,25 @@ void OpenGllamaApplet::draw_inference_view() {
 
     ImGui::Separator();
 
-    // ── Prompt input + Run ──
-    float run_btn_w = 80.0f;
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - run_btn_w - 10.0f);
+    // ── Prompt input ──
+    float btn_w = inference_running_ ? 160.0f : 80.0f;
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btn_w - 8.0f);
 
     static char prompt_input[2048] = {};
-    bool enter_pressed = ImGui::InputText("##prompt", prompt_input, sizeof(prompt_input),
+    bool enter = ImGui::InputText("##prompt", prompt_input, sizeof(prompt_input),
         ImGuiInputTextFlags_EnterReturnsTrue);
 
     ImGui::SameLine();
-    bool run_clicked = ImGui::Button("Run", ImVec2(run_btn_w, 0));
-
     if (inference_running_) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Stop")) {
+        if (ImGui::Button("Stop", ImVec2(btn_w, 0))) {
             inference_running_ = false;
         }
-    }
-
-    if ((enter_pressed || run_clicked) && prompt_input[0] != '\0' && !inference_running_) {
-        prompt_buf_ = prompt_input;
-        run_inference_async(prompt_buf_);
+    } else {
+        bool run = ImGui::Button("Run", ImVec2(btn_w, 0));
+        if ((enter || run) && prompt_input[0] != '\0') {
+            prompt_buf_ = prompt_input;
+            run_inference_async(prompt_buf_);
+        }
     }
 
     if (inference_finished_) {
@@ -360,72 +216,53 @@ void OpenGllamaApplet::draw_inference_view() {
 
     ImGui::Separator();
 
-    // ── Split: output left, activations right ──
-    float avail_w = ImGui::GetContentRegionAvail().x;
-    float avail_h = ImGui::GetContentRegionAvail().y;
-    float left_w = avail_w * 0.35f;
-    float right_w = avail_w - left_w - 8.0f;
-
-    // Left panel: output text + terminal
-    ImGui::BeginChild("##left_panel", ImVec2(left_w, avail_h), true);
+    // ── Content: output text then activation flow, all vertical ──
+    ImGui::BeginChild("##content", ImVec2(0, 0), false);
     {
-        std::string snapshot;
+        // Snapshot shared state
+        std::string text_snap;
+        std::vector<LayerActivation> act_snap;
         int toks;
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
-            snapshot = output_text_;
+            text_snap = output_text_;
+            act_snap = activations_;
         }
         toks = tokens_generated_.load();
 
-        if (!snapshot.empty() || inference_running_) {
-            ImGui::SeparatorText("Output");
+        // ── Output text ──
+        if (!text_snap.empty() || inference_running_) {
             if (inference_running_) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
                     "Generating... (%d tokens)", toks);
             } else if (toks > 0) {
-                ImGui::TextDisabled("%d tokens", toks);
+                ImGui::TextDisabled("Complete — %d tokens", toks);
             }
-            ImGui::TextWrapped("%s", snapshot.c_str());
+            ImGui::TextWrapped("%s", text_snap.c_str());
             if (inference_running_) {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
             }
             ImGui::Spacing();
             ImGui::Separator();
         }
 
-        ImGui::SeparatorText("Console");
-        if (terminal_) terminal_->show();
-    }
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-
-    // Right panel: activation flow
-    ImGui::BeginChild("##right_panel", ImVec2(right_w, avail_h), true);
-    {
-        // Snapshot activations under lock
-        std::vector<LayerActivation> act_snap;
-        {
-            std::lock_guard<std::mutex> lk(output_mutex_);
-            act_snap = activations_;
-        }
-
+        // ── Activation flow (vertical, full width) ──
         if (act_snap.empty() && !inference_running_) {
             ImGui::TextDisabled("Enter a prompt and press Run to see activation flow.");
-        } else {
-            ImGui::SeparatorText("Activation Flow");
-            int toks = tokens_generated_.load();
+        } else if (!act_snap.empty()) {
+            ImGui::Spacing();
             if (inference_running_) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
-                    "%d layers | token %d (live)", (int)act_snap.size(), toks);
+                    "Activation Flow — %d layers (live, token %d)", (int)act_snap.size(), toks);
             } else {
-                ImGui::Text("%d layers | %d tokens", (int)act_snap.size(), toks);
+                ImGui::Text("Activation Flow — %d layers", (int)act_snap.size());
             }
             ImGui::Spacing();
 
             update_activation_textures();
 
-            float tile_w = right_w - 30.0f;
+            float tile_w = ImGui::GetContentRegionAvail().x - 16.0f;
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
             for (int l = 0; l < (int)act_snap.size(); ++l) {
@@ -466,10 +303,6 @@ void OpenGllamaApplet::draw_inference_view() {
     ImGui::EndChild();
 }
 
-void OpenGllamaApplet::draw_terminal() {
-    if (terminal_) terminal_->show();
-}
-
 // ============================================================================
 // Activation Texture Upload
 // ============================================================================
@@ -477,7 +310,6 @@ void OpenGllamaApplet::draw_terminal() {
 void OpenGllamaApplet::update_activation_textures() {
     if (!textures_dirty_) return;
 
-    // Clean old
     for (auto tex : layer_textures_)
         if (tex) glDeleteTextures(1, &tex);
     layer_textures_.clear();
@@ -494,7 +326,6 @@ void OpenGllamaApplet::update_activation_textures() {
         std::vector<unsigned char> pixels(act.values.size() * 3);
         for (size_t i = 0; i < act.values.size(); ++i) {
             float norm = (act.values[i] - vmin) / range;
-            // Blue -> Cyan -> Yellow -> Red
             unsigned char r, g, b;
             if (norm < 0.33f) {
                 float t = norm / 0.33f;
@@ -535,13 +366,12 @@ void OpenGllamaApplet::update_activation_textures() {
 }
 
 // ============================================================================
-// Model Management
+// Model Loading (async)
 // ============================================================================
 
 void OpenGllamaApplet::load_model_async(const std::string& path, const std::string& display_name) {
     if (load_thread_.joinable()) load_thread_.join();
 
-    inference_running_ = true;
     load_progress_ = 0.0f;
     load_finished_ = false;
     load_success_ = false;
@@ -623,6 +453,10 @@ void OpenGllamaApplet::unload_model() {
     tokens_generated_ = 0;
 }
 
+// ============================================================================
+// Inference (async, streaming)
+// ============================================================================
+
 void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
     if (inference_thread_.joinable()) inference_thread_.join();
 
@@ -699,7 +533,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             char piece[64] = {};
             llama_token_to_piece(vocab, best, piece, sizeof(piece), 0, false);
 
-            // Update activations per token (placeholder until ggml hooks)
             {
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
@@ -711,9 +544,8 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                     activations_[l].rows = 32;
                     activations_[l].cols = 64;
                     activations_[l].values.resize(32 * 64);
-                    for (auto& v : activations_[l].values) {
+                    for (auto& v : activations_[l].values)
                         v = (float)(rand() % 1000) / 1000.0f;
-                    }
                 }
                 textures_dirty_ = true;
             }
