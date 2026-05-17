@@ -217,7 +217,8 @@ void OpenGllamaApplet::draw_inference_view() {
     ImGui::Separator();
 
     // ── Content: output text then activation flow, all vertical ──
-    ImGui::BeginChild("##content", ImVec2(0, 0), false);
+    ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_None,
+        ImGuiWindowFlags_HorizontalScrollbar);
     {
         // Snapshot shared state
         std::string text_snap;
@@ -262,7 +263,7 @@ void OpenGllamaApplet::draw_inference_view() {
 
             update_activation_textures();
 
-            float tile_w = ImGui::GetContentRegionAvail().x - 16.0f;
+            float tile_w = ImGui::GetContentRegionAvail().x;
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
             for (int l = 0; l < (int)act_snap.size(); ++l) {
