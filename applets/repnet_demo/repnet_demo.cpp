@@ -1784,14 +1784,7 @@ void RepNetDemoApplet::draw_activation_detail() {
         return;
     }
 
-    // ── Lead scrubber ──
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(LEAD_COLORS[s.detail_lead], "%s", kLeadNames12[s.detail_lead]);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
-    if (ImGui::SliderInt("##lead_scrub", &s.detail_lead, 0, 11, kLeadNames12[s.detail_lead]))
-        s.detail_texs_dirty = true;
-    ImGui::SameLine();
+    // ── Header ──
     ImGui::TextDisabled("Sample: %s", s.inference.sample_id.c_str());
     ImGui::SameLine();
     if (s.inference.result_class == 1)
@@ -1803,11 +1796,14 @@ void RepNetDemoApplet::draw_activation_detail() {
 
     ImGui::Separator();
 
-    // ── Regenerate textures if needed ──
+    // ── Regenerate all-lead textures if needed ──
     if (s.detail_texs_dirty || s.detail_lead_cached != s.detail_lead) {
         heatmap::release_textures(s.detail_texs);
         s.detail_texs.clear();
-        s.detail_texs.resize(13, 0);
+        // Layout: 12 per-lead input saliency + 12 per-lead per conv/attn stage (x6) + remaining layers
+        // Total: 12 input + 6 stages * 12 leads + 7 fusion/pool/etc = 12 + 72 + 7 = 91
+        // Simplified: keep 13 layer textures + 12 per-lead input textures
+        s.detail_texs.resize(13 + 12, 0);
 
         for (int i = 0; i < 13; i++) {
             if (!s.detail_acts[i].defined() || s.detail_acts[i].numel() == 0)
@@ -1817,6 +1813,12 @@ void RepNetDemoApplet::draw_activation_detail() {
             torch::Tensor t2d;
 
             if (i == 0 && t.dim() == 2 && t.size(0) == 12) {
+                // Upload all 12 lead saliencies individually
+                for (int lead = 0; lead < std::min(12, (int)t.size(0)); lead++) {
+                    t2d = t[lead].unsqueeze(0);
+                    s.detail_texs[13 + lead] = heatmap::upload_texture(t2d, true, true);
+                }
+                // Also upload the selected lead for the main slot
                 int lead = std::min(s.detail_lead, (int)t.size(0) - 1);
                 t2d = t[lead].unsqueeze(0);
             } else if (t.dim() == 1) {
@@ -1845,61 +1847,62 @@ void RepNetDemoApplet::draw_activation_detail() {
     float content_w = ImGui::GetContentRegionAvail().x;
     float hm_w = std::max(200.0f, content_w - 24.0f);
 
-    // ── Waveform plot for selected lead with heatmap overlay ──
-    {
-        bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
-                        && s.samples[s.selected].processed_valid;
-        if (has_samp) {
-            auto& samp = s.samples[s.selected];
-            int lead = s.detail_lead;
-            if (lead < (int)samp.processed.size() && !samp.processed[lead].empty()) {
-                if ((int)s.time_axis.size() != samp.num_samples) {
-                    s.time_axis.resize(samp.num_samples);
-                    for (int j = 0; j < samp.num_samples; j++)
-                        s.time_axis[j] = (float)j / samp.sampling_rate;
-                }
+    // ── All 12 Lead Saliency Maps (tiled) ──
+    bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
+                    && s.samples[s.selected].processed_valid;
+    if (has_samp && s.detail_acts[0].defined()) {
+        ImGui::SeparatorText("Input: 12-Lead Saliency Maps");
 
-                float duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
-                auto& st = samp.stats[lead];
-                float margin = (st.max_val - st.min_val) * 0.1f;
-                float y_lo = st.min_val - margin;
-                float y_hi = st.max_val + margin;
+        auto& samp = s.samples[s.selected];
+        float tile_w = (hm_w - 5.0f * 11.0f) / 12.0f;
+        float tile_h = 60.0f;
 
-                if (ImPlot::BeginPlot("##act_waveform", ImVec2(hm_w, 130.0f),
-                        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend)) {
-                    ImPlot::SetupAxes("Time (s)", nullptr,
-                        ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
-                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
-                    ImPlot::SetupAxisLimits(ImAxis_Y1, y_lo, y_hi, ImGuiCond_Always);
+        // Draw 12 lead tiles side by side
+        ImVec2 start_pos = ImGui::GetCursorPos();
+        for (int lead = 0; lead < 12; lead++) {
+            if (lead > 0) ImGui::SameLine(0, 5.0f);
 
-                    if (s.detail_texs[0]) {
-                        ImPlot::PlotImage("##hm",
-                            (ImTextureID)(intptr_t)s.detail_texs[0],
-                            ImPlotPoint(0, y_hi), ImPlotPoint(duration, y_lo),
-                            ImVec2(0, 0), ImVec2(1, 1),
-                            ImVec4(1, 1, 1, 0.45f));
-                    }
-
-                    ImPlot::PlotLine("##sig", s.time_axis.data(),
-                        samp.processed[lead].data(), samp.num_samples,
-                        ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
-                                   ImPlotProp_LineWeight, 1.5f));
-
-                    ImPlot::Annotation(0.0, y_hi, LEAD_COLORS[lead],
-                        ImVec2(5, 5), false, "%s", kLeadNames12[lead]);
-
-                    ImPlot::EndPlot();
-                }
-
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
+            ImGui::BeginGroup();
+            ImGui::TextColored(LEAD_COLORS[lead], "%s", kLeadNames12[lead]);
+            if (s.detail_texs[13 + lead]) {
+                ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[13 + lead],
+                             ImVec2(tile_w, tile_h));
             }
+            ImGui::EndGroup();
         }
+
+        ImGui::Spacing();
+
+        // ── Flow arrows from 12 leads into attention ──
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        float arrow_h = 30.0f;
+
+        for (int lead = 0; lead < 12; lead++) {
+            float lx = cursor.x + lead * (tile_w + 5.0f) + tile_w * 0.5f;
+            float ay0 = cursor.y;
+            float ay1 = cursor.y + arrow_h;
+            float mid_x = cursor.x + hm_w * 0.5f;
+
+            ImU32 col = ImGui::ColorConvertFloat4ToU32(LEAD_COLORS[lead]);
+            // Converging lines from each lead to center (attention)
+            dl->AddLine(ImVec2(lx, ay0), ImVec2(mid_x, ay1), col, 1.5f);
+        }
+        // Attention node indicator
+        float mid_x = cursor.x + hm_w * 0.5f;
+        float ay1 = cursor.y + arrow_h;
+        dl->AddCircleFilled(ImVec2(mid_x, ay1), 8.0f, IM_COL32(245, 160, 20, 220));
+        dl->AddText(ImVec2(mid_x + 12, ay1 - 7),
+                    IM_COL32(245, 160, 20, 255), "CrossLeadAttention");
+
+        ImGui::Dummy(ImVec2(hm_w, arrow_h + 12.0f));
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
     }
 
-    for (int i = 0; i < 13; i++) {
-        if (i == 0) continue;  // input shown as waveform overlay
+    // ── Per-stage activations with all 12 channels shown ──
+    for (int i = 1; i < 13; i++) {
         if (!s.detail_acts[i].defined()) continue;
 
         auto& t = s.detail_acts[i];
@@ -1918,37 +1921,70 @@ void RepNetDemoApplet::draw_activation_detail() {
             ImGui::TextDisabled("shape: %s  |  mu=%.4f  sigma=%.4f  [%.3f, %.3f]",
                 la.shape.c_str(), la.mean, la.stddev, la.min_val, la.max_val);
 
-        if (t.dim() == 3) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("  (showing lead %s)", kLeadNames12[s.detail_lead]);
+        // For 3D tensors (12 leads x channels x time), show all 12 channel tiles
+        if (t.dim() == 3 && t.size(0) == 12) {
+            float tile_w = (hm_w - 5.0f * 11.0f) / 12.0f;
+            int rows = (int)t.size(1);
+            float tile_h;
+            if (rows <= 2) tile_h = 24.0f;
+            else if (rows <= 16) tile_h = std::max(40.0f, (float)rows * 3.0f);
+            else if (rows <= 64) tile_h = std::max(50.0f, (float)rows * 1.5f);
+            else tile_h = std::min(120.0f, (float)rows * 1.0f);
+
+            for (int lead = 0; lead < 12; lead++) {
+                if (lead > 0) ImGui::SameLine(0, 5.0f);
+                ImGui::BeginGroup();
+                ImGui::TextColored(LEAD_COLORS[lead], "%s", kLeadNames12[lead]);
+
+                auto t2d = t[lead];
+                GLuint tex = heatmap::upload_texture(t2d, false);
+                ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(tile_w, tile_h));
+                glDeleteTextures(1, &tex);
+                ImGui::EndGroup();
+            }
+
+            // Draw attention flow arrows for attention layers
+            bool is_attn = (i == 2 || i == 4 || i == 6);
+            if (is_attn) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImVec2 cursor = ImGui::GetCursorScreenPos();
+                float arrow_h = 24.0f;
+                float mid_x = cursor.x + hm_w * 0.5f;
+
+                for (int lead = 0; lead < 12; lead++) {
+                    float lx = cursor.x + lead * (tile_w + 5.0f) + tile_w * 0.5f;
+                    ImU32 col = ImGui::ColorConvertFloat4ToU32(LEAD_COLORS[lead]);
+                    dl->AddLine(ImVec2(lx, cursor.y + 2),
+                                ImVec2(mid_x, cursor.y + arrow_h),
+                                col, 1.2f);
+                }
+                dl->AddCircleFilled(ImVec2(mid_x, cursor.y + arrow_h), 6.0f,
+                                    IM_COL32(245, 160, 20, 200));
+                ImGui::Dummy(ImVec2(hm_w, arrow_h + 8.0f));
+            }
+        } else {
+            // Non-3D tensors: single heatmap at full width (same as saliency)
+            if (s.detail_texs[i]) {
+                torch::Tensor t2d;
+                if (t.dim() == 1) t2d = t.unsqueeze(0);
+                else if (t.dim() == 2) t2d = t;
+                else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
+
+                int rows = (int)t2d.size(0);
+
+                float hm_h;
+                if (rows <= 2) hm_h = 32.0f;
+                else if (rows <= 16) hm_h = std::max(60.0f, (float)rows * 5.0f);
+                else if (rows <= 64) hm_h = std::max(80.0f, (float)rows * 2.5f);
+                else hm_h = std::min(200.0f, (float)rows * 1.5f);
+
+                ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[i],
+                             ImVec2(hm_w, hm_h));
+            }
         }
 
-        // Heatmap
-        if (s.detail_texs[i]) {
-            // Get actual tensor dims for display sizing
-            torch::Tensor t2d;
-            if (t.dim() == 1) t2d = t.unsqueeze(0);
-            else if (t.dim() == 2) t2d = t;
-            else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
-
-            int rows = (int)t2d.size(0);
-            int cols = t2d.dim() >= 2 ? (int)t2d.size(1) : 1;
-
-            float aspect = (float)cols / std::max(1, rows);
-            float hm_h;
-            if (rows <= 2)
-                hm_h = 32.0f;
-            else if (rows <= 16)
-                hm_h = std::max(60.0f, (float)rows * 5.0f);
-            else if (rows <= 64)
-                hm_h = std::max(80.0f, (float)rows * 2.5f);
-            else
-                hm_h = std::min(200.0f, (float)rows * 1.5f);
-
-            ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[i],
-                         ImVec2(hm_w, hm_h));
-
-            // Color scale legend
+        // Color scale legend
+        if (la.valid) {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             ImVec2 lp = ImGui::GetCursorScreenPos();
             float leg_w = std::min(200.0f, hm_w * 0.4f);
@@ -1956,7 +1992,7 @@ void RepNetDemoApplet::draw_activation_detail() {
             for (int p = 0; p < (int)leg_w; p++) {
                 float ft = (float)p / leg_w;
                 uint8_t cr, cg, cb;
-                heatmap::colormap(ft, cr, cg, cb, i == 0);
+                heatmap::colormap(ft, cr, cg, cb, false);
                 dl->AddRectFilled(
                     ImVec2(lp.x + p, lp.y),
                     ImVec2(lp.x + p + 1, lp.y + leg_h),
