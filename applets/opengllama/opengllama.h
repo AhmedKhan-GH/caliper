@@ -16,9 +16,11 @@ struct LayerActivation {
     float mean;
     float norm;
     float max_val;
+    float cosine_prev;  // cosine similarity with previous layer
     std::vector<float> values;
     int rows;
     int cols;
+    std::string name;   // "attn_out" or "l_out"
 };
 
 struct TokenLogitInfo {
@@ -68,6 +70,12 @@ private:
     float repeat_penalty_ = 1.1f;
     int repeat_last_n_ = 64;
     uint32_t seed_ = 0;  // 0 = random
+
+    // Playback control
+    enum class InferenceMode { Continuous, Paused };
+    std::atomic<InferenceMode> inference_mode_{InferenceMode::Continuous};
+    std::atomic<bool> step_requested_{false};
+    int token_delay_ms_ = 0;  // ms delay between tokens (0 = full speed)
 
     // Inference state
     std::string prompt_buf_;
