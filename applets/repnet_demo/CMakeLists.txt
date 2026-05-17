@@ -1,17 +1,17 @@
-add_library(ucdh_workbench SHARED
+add_library(repnet_demo SHARED
     plugin.cpp
-    ucdh_workbench.cpp
+    repnet_demo.cpp
     dataset.cpp
     app_paths.cpp
     model_viz.cpp
 )
 
-target_include_directories(ucdh_workbench PRIVATE
+target_include_directories(repnet_demo PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(ucdh_workbench PRIVATE
+target_link_libraries(repnet_demo PRIVATE
     caliper_applet_sdk
     duckdb_static
     duckdb_generated_extension_loader
@@ -20,9 +20,9 @@ target_link_libraries(ucdh_workbench PRIVATE
     "${TORCH_LIBRARIES}"
 )
 
-target_compile_definitions(ucdh_workbench PRIVATE CALIPER_APPLET_EXPORT)
+target_compile_definitions(repnet_demo PRIVATE CALIPER_APPLET_EXPORT)
 
-set_target_properties(ucdh_workbench PROPERTIES
+set_target_properties(repnet_demo PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
     CXX_STANDARD 17
@@ -30,7 +30,7 @@ set_target_properties(ucdh_workbench PROPERTIES
 )
 
 if(APPLE)
-    set_target_properties(ucdh_workbench PROPERTIES
+    set_target_properties(repnet_demo PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib"
     )
 endif()

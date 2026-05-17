@@ -4,10 +4,10 @@
 
 struct GLFWwindow;
 
-class UCDHWorkbenchApplet {
+class RepNetDemoApplet {
 public:
-    UCDHWorkbenchApplet();
-    ~UCDHWorkbenchApplet();
+    RepNetDemoApplet();
+    ~RepNetDemoApplet();
 
     bool initialize();
     void draw_ui(int win_w, int win_h);
