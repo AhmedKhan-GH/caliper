@@ -1,5 +1,5 @@
 #define _USE_MATH_DEFINES
-#include "ucdh_workbench.h"
+#include "repnet_demo.h"
 #include "dataset.h"
 #include "app_paths.h"
 
@@ -527,7 +527,7 @@ struct WeightEntry {
     GLuint tex = 0;
 };
 
-struct UCDHWorkbenchApplet::State {
+struct RepNetDemoApplet::State {
     // ── ECG dataset ──
     std::vector<ECGSample> samples;
     int selected = -1;
@@ -655,13 +655,13 @@ struct UCDHWorkbenchApplet::State {
 // LIFECYCLE
 // ============================================================================
 
-UCDHWorkbenchApplet::UCDHWorkbenchApplet() = default;
-UCDHWorkbenchApplet::~UCDHWorkbenchApplet() = default;
+RepNetDemoApplet::RepNetDemoApplet() = default;
+RepNetDemoApplet::~RepNetDemoApplet() = default;
 
 static void extract_weights(torch::jit::Module& model,
                             std::vector<WeightEntry>& out);
 
-bool UCDHWorkbenchApplet::initialize() {
+bool RepNetDemoApplet::initialize() {
     s_ = std::make_unique<State>();
 
     s_->params.baseline_wander_correction = true;
@@ -704,7 +704,7 @@ bool UCDHWorkbenchApplet::initialize() {
     return true;
 }
 
-void UCDHWorkbenchApplet::cleanup() {
+void RepNetDemoApplet::cleanup() {
     if (!s_) return;
     heatmap::release_textures(s_->detail_texs);
     for (auto& w : s_->weight_entries)
@@ -741,7 +741,7 @@ std::vector<int> outward_indices(int center, int count, int total) {
 // DRAW
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
+void RepNetDemoApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
     if (!s_) return;
 
     // ── Commit async scan results ──
@@ -849,7 +849,7 @@ void UCDHWorkbenchApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
 // PANEL (left sidebar)
 // ============================================================================
 
-void UCDHWorkbenchApplet::open_dataset(const std::string& dir) {
+void RepNetDemoApplet::open_dataset(const std::string& dir) {
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->scan_status.store(State::ScanStatus::Scanning);
     s_->scan_error.clear();
@@ -864,18 +864,18 @@ void UCDHWorkbenchApplet::open_dataset(const std::string& dir) {
         if (!ok) {
             std::lock_guard<std::mutex> lk(sp->scan_result_mtx);
             sp->scan_error = std::string("No matching files in: ") + dir;
-            sp->scan_status.store(UCDHWorkbenchApplet::State::ScanStatus::Failed);
+            sp->scan_status.store(RepNetDemoApplet::State::ScanStatus::Failed);
             return;
         }
 
         std::lock_guard<std::mutex> lk(sp->scan_result_mtx);
         sp->pending_loader = std::move(loader);
         sp->pending_samples = std::move(samples);
-        sp->scan_status.store(UCDHWorkbenchApplet::State::ScanStatus::Ready);
+        sp->scan_status.store(RepNetDemoApplet::State::ScanStatus::Ready);
     });
 }
 
-void UCDHWorkbenchApplet::select_sample(int idx) {
+void RepNetDemoApplet::select_sample(int idx) {
     auto& s = *s_;
     if (idx < 0 || idx >= (int)s.samples.size()) return;
     s.selected = idx;
@@ -899,7 +899,7 @@ void UCDHWorkbenchApplet::select_sample(int idx) {
     s.bg->prioritize(to_load);
 }
 
-void UCDHWorkbenchApplet::on_params_changed() {
+void RepNetDemoApplet::on_params_changed() {
     auto& s = *s_;
     s.params.version++;
     s.last_plot_sample = -1;
@@ -919,7 +919,7 @@ void UCDHWorkbenchApplet::on_params_changed() {
     }
 }
 
-void UCDHWorkbenchApplet::ensure_vcg_cached() {
+void RepNetDemoApplet::ensure_vcg_cached() {
     auto& s = *s_;
     if (s.selected < 0 || s.selected >= (int)s.samples.size()) {
         s.vcg_sample_idx = -1;
@@ -939,7 +939,7 @@ void UCDHWorkbenchApplet::ensure_vcg_cached() {
 // PANEL (left sidebar)
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_panel() {
+void RepNetDemoApplet::draw_panel() {
     auto& s = *s_;
     // ── Back button ──
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.14f, 0.14f, 1.0f));
@@ -1158,7 +1158,7 @@ void UCDHWorkbenchApplet::draw_panel() {
 // LEADS TAB
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_leads() {
+void RepNetDemoApplet::draw_leads() {
     auto& s = *s_;
 
     bool has_data = s.selected >= 0 && s.selected < (int)s.samples.size()
@@ -1234,7 +1234,7 @@ void UCDHWorkbenchApplet::draw_leads() {
 // VCG 3D TAB
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_vcg_3d() {
+void RepNetDemoApplet::draw_vcg_3d() {
     auto& s = *s_;
     if (s.selected < 0 || s.selected >= (int)s.samples.size()) {
         ImGui::TextColored({0.7f, 0.7f, 0.8f, 1.0f}, "Select a sample from the panel.");
@@ -1331,7 +1331,7 @@ void UCDHWorkbenchApplet::draw_vcg_3d() {
 // RAW DATA BROWSER TAB (DuckDB)
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_raw_browser() {
+void RepNetDemoApplet::draw_raw_browser() {
     auto& s = *s_;
     if (s.current_dir.empty()) {
         ImGui::TextDisabled("Open a dataset to browse raw files.");
@@ -1629,7 +1629,7 @@ static void extract_weights(torch::jit::Module& model,
     }
 }
 
-void UCDHWorkbenchApplet::draw_model_tab() {
+void RepNetDemoApplet::draw_model_tab() {
     auto& s = *s_;
 
     if (!s.viz)
@@ -1776,7 +1776,7 @@ static const char* kLeadNames12[] = {
     "V1", "V2", "V3", "V4", "V5", "V6",
 };
 
-void UCDHWorkbenchApplet::draw_activation_detail() {
+void RepNetDemoApplet::draw_activation_detail() {
     auto& s = *s_;
 
     if (!s.inference.valid || s.detail_acts.empty()) {
@@ -1987,7 +1987,7 @@ void UCDHWorkbenchApplet::draw_activation_detail() {
 // WEIGHT VISUALIZATION VIEW
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_weight_view() {
+void RepNetDemoApplet::draw_weight_view() {
     auto& s = *s_;
 
     if (!s.weights_extracted || s.weight_entries.empty()) {
@@ -2074,7 +2074,7 @@ void UCDHWorkbenchApplet::draw_weight_view() {
 // STATISTICS TAB
 // ============================================================================
 
-void UCDHWorkbenchApplet::draw_statistics_tab() {
+void RepNetDemoApplet::draw_statistics_tab() {
     auto& s = *s_;
 
     if (!s.model_loaded) {

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.18...4.2)
 project(caliper CXX C OBJC)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -143,7 +143,7 @@ endif()
 # Applets (each builds a shared library)
 # ============================================================================
 
-add_subdirectory(applets/ucdh_workbench)
+add_subdirectory(applets/repnet_demo)
 add_subdirectory(applets/opengllama)
 
 # ============================================================================
