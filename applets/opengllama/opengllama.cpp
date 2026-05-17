@@ -98,13 +98,14 @@ void OpenGllamaApplet::cleanup() {
 // Main UI
 // ============================================================================
 
-void OpenGllamaApplet::draw_ui(int width, int height) {
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2((float)width, (float)height));
-    ImGui::Begin("OpenGllama", nullptr,
-                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                 ImGuiWindowFlags_NoBackground);
+void OpenGllamaApplet::draw_ui(int /*width*/, int /*height*/) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin("##OpenGllamaRoot", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
 
     if (!loading_model_name_.empty() && !load_finished_) {
         float progress = load_progress_.load();
