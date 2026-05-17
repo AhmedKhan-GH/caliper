@@ -41,3 +41,6 @@
 [submodule "third_party/duckdb"]
 	path = third_party/duckdb
 	url = https://github.com/duckdb/duckdb.git
+[submodule "third_party/llama.cpp"]
+	path = third_party/llama.cpp
+	url = https://github.com/ggerganov/llama.cpp.git
