@@ -65,8 +65,10 @@ public:
 
 private:
     void draw_ollama_models();
+    void draw_inference_view();
     void draw_terminal();
-    void draw_activation_viewer();
+
+    void update_activation_textures();
 
     llama_model* model_ = nullptr;
     llama_context* ctx_ = nullptr;
@@ -77,11 +79,16 @@ private:
     int n_gpu_layers_ = 99;
     int context_size_ = 2048;
 
-    std::vector<LayerActivation> activations_;
-    int selected_layer_ = 0;
+    // Inference state
+    std::string prompt_buf_;
+    std::string output_text_;
+    bool inference_running_ = false;
+    int tokens_generated_ = 0;
 
-    unsigned int activation_texture_ = 0;
-    bool texture_needs_update_ = false;
+    // Activations
+    std::vector<LayerActivation> activations_;
+    std::vector<unsigned int> layer_textures_;
+    bool textures_dirty_ = false;
 
     OllamaModelStore ollama_store_;
 
