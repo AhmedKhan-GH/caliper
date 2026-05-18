@@ -933,31 +933,48 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
         n_layers - 1);
 
     float avail_w = ImGui::GetContentRegionAvail().x;
-    float cell_w = std::max(3.0f, std::min(12.0f, avail_w / (float)n_tokens));
+    float label_margin = 30.0f;
+    float chart_w = avail_w - label_margin;
+    float cell_w = std::max(3.0f, std::min(12.0f, chart_w / (float)n_tokens));
     float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
     float total_w = cell_w * n_tokens;
     float total_h = cell_h * n_layers;
 
-    // Scrollable region if it grows beyond available width
-    ImGui::BeginChild("##live_attn_scroll", ImVec2(avail_w, total_h + 30.0f),
+    // Layer labels on the left
+    ImVec2 label_origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl_labels = ImGui::GetWindowDrawList();
+    int label_skip = std::max(1, n_layers / 8);
+    for (int l = 0; l < n_layers; l += label_skip) {
+        float y = label_origin.y + l * cell_h + cell_h * 0.5f - 5.0f;
+        char lbl[16];
+        snprintf(lbl, sizeof(lbl), "%d", l);
+        dl_labels->AddText(ImVec2(label_origin.x, y), IM_COL32(160, 160, 160, 200), lbl);
+    }
+
+    // Scrollable chart area (offset by label margin)
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + label_margin);
+    ImGui::BeginChild("##live_attn_scroll", ImVec2(chart_w, total_h + 20.0f),
         ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
 
-    // Auto-scroll to rightmost column
     if (inference_running_)
-        ImGui::SetScrollX(std::max(0.0f, total_w - avail_w));
+        ImGui::SetScrollX(std::max(0.0f, total_w - chart_w));
 
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
+    // Trailing glow: last 4 columns get diminishing flash
+    int trail_len = 4;
+
     for (int t = 0; t < n_tokens; ++t) {
-        bool is_newest = (t == n_tokens - 1);
-        float flash = is_newest ? live_attn_flash_timer_ : 0.0f;
+        int age = n_tokens - 1 - t;
+        float flash = 0.0f;
+        if (age < trail_len)
+            flash = live_attn_flash_timer_ * (1.0f - (float)age / (float)trail_len);
 
         for (int l = 0; l < n_layers; ++l) {
             float val = (t < (int)live_attn_timeline_.size() && l < (int)live_attn_timeline_[t].size())
                 ? live_attn_timeline_[t][l] : 0.0f;
 
-            // Color: dark blue → cyan → yellow → white based on attention intensity
             float norm = std::clamp(val, 0.0f, 1.0f);
             float r, g, b;
             if (norm < 0.25f) {
@@ -982,11 +999,10 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
                 b = 0.2f + 0.8f * s;
             }
 
-            // Flash boost on newest column
             if (flash > 0.0f) {
-                r = std::min(1.0f, r + 0.3f * flash);
-                g = std::min(1.0f, g + 0.3f * flash);
-                b = std::min(1.0f, b + 0.3f * flash);
+                r = std::min(1.0f, r + 0.4f * flash);
+                g = std::min(1.0f, g + 0.4f * flash);
+                b = std::min(1.0f, b + 0.4f * flash);
             }
 
             float x = origin.x + t * cell_w;
@@ -996,19 +1012,17 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
         }
     }
 
-    // Flash border on newest column
+    // Animated leading edge
     if (live_attn_flash_timer_ > 0.0f && n_tokens > 0) {
         float x = origin.x + (n_tokens - 1) * cell_w;
-        ImU32 flash_col = ImGui::ColorConvertFloat4ToU32(
-            ImVec4(1.0f, 1.0f, 1.0f, live_attn_flash_timer_ * 0.8f));
-        dl->AddRect(ImVec2(x, origin.y),
-                    ImVec2(x + cell_w, origin.y + total_h), flash_col, 0.0f, 0, 2.0f);
+        float alpha = live_attn_flash_timer_ * 0.9f;
+        ImU32 edge_col = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, alpha));
+        dl->AddRect(ImVec2(x - 0.5f, origin.y),
+                    ImVec2(x + cell_w + 0.5f, origin.y + total_h), edge_col, 0.0f, 0, 2.0f);
     }
 
-    // Reserve space for the drawing
     ImGui::Dummy(ImVec2(total_w, total_h));
 
-    // Tooltip on hover
     if (ImGui::IsItemHovered()) {
         ImVec2 mouse = ImGui::GetMousePos();
         int tok_idx = (int)((mouse.x - origin.x) / cell_w);
@@ -1021,7 +1035,6 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
             ? live_attn_timeline_[tok_idx][lay_idx] : 0.0f;
 
         ImGui::BeginTooltip();
-        // Token label: offset by prompt tokens (attn_history starts after prompt decode)
         int prompt_len = (int)ctok_snap.size() - n_tokens;
         int ctx_idx = prompt_len + tok_idx;
         if (ctx_idx >= 0 && ctx_idx < (int)ctok_snap.size())
