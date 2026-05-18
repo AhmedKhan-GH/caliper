@@ -1,6 +1,7 @@
 #include "opengllama.h"
 
 #include <imgui.h>
+#include <implot.h>
 #include <ImGuiFileDialog.h>
 #include <GL/glew.h>
 #include <llama.h>
@@ -23,12 +24,52 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
 
     bool is_layer_out = (strncmp(name, "l_out-", 6) == 0);
     bool is_attn_out  = (strncmp(name, "attn_out-", 9) == 0);
-    bool want = is_layer_out || is_attn_out;
+    bool is_kq_soft   = (strncmp(name, "kq_soft_max-", 12) == 0);
+    bool want = is_layer_out || is_attn_out || is_kq_soft;
 
-    if (ask) return want;
+    if (ask) {
+        static int ask_log_count = 0;
+        if (ask_log_count < 200) {
+            std::fprintf(stderr, "[eval_cb] ask tensor: '%s' want=%d\n", name, (int)want);
+            ++ask_log_count;
+        }
+        return want;
+    }
     if (!want) return true;
 
-    int layer = atoi(name + (is_layer_out ? 6 : 9));
+    int layer = atoi(name + (is_layer_out ? 6 : (is_kq_soft ? 12 : 9)));
+
+    // Attention weights: kq_soft_max shape is [n_kv, n_tokens_q, n_heads] or similar
+    // Average across heads, take last query token row → per-KV-position attention
+    if (is_kq_soft) {
+        int64_t n_elem = ggml_nelements(t);
+        int n_kv    = (int)t->ne[0];
+        int n_q     = (int)t->ne[1];
+        int n_heads = (int)t->ne[2];
+
+        std::vector<float> buf(n_elem);
+        ggml_backend_tensor_get(t, buf.data(), 0, n_elem * sizeof(float));
+
+        while ((int)self->pending_attn_weights_.size() <= layer)
+            self->pending_attn_weights_.push_back({});
+
+        // Head-averaged attention for the last query token
+        std::vector<float> avg(n_kv, 0.0f);
+        int last_q = n_q - 1;
+        for (int h = 0; h < n_heads; ++h) {
+            int head_offset = h * n_q * n_kv;
+            for (int k = 0; k < n_kv; ++k)
+                avg[k] += buf[head_offset + last_q * n_kv + k];
+        }
+        float inv_h = 1.0f / (float)n_heads;
+        for (int k = 0; k < n_kv; ++k) avg[k] *= inv_h;
+
+        self->pending_attn_weights_[layer] = std::move(avg);
+        if (layer == 0)
+            std::fprintf(stderr, "[attn] captured kq_soft_max: n_heads=%d n_kv=%d n_q=%d layers_so_far=%d\n",
+                n_heads, n_kv, n_q, (int)self->pending_attn_weights_.size());
+        return true;
+    }
 
     int64_t n_elem = ggml_nelements(t);
     int rows = (int)t->ne[1];
@@ -63,6 +104,15 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
     act.mean = sum / (float)n;
     act.norm = std::sqrt(sq_sum / (float)n);
     act.max_val = mx;
+
+    // Capture full hidden state for logit lens (l_out only, last token row)
+    act.cosine_final = 0.0f;
+    if (is_layer_out) {
+        int last_row = rows - 1;
+        act.full_hidden.resize(cols);
+        for (int c = 0; c < cols; ++c)
+            act.full_hidden[c] = buf[last_row * cols + c];
+    }
 
     // Cosine similarity with previous l_out
     act.cosine_prev = 0.0f;
@@ -130,6 +180,8 @@ void OpenGllamaApplet::cleanup() {
     layer_textures_.clear();
     if (context_map_texture_) glDeleteTextures(1, &context_map_texture_);
     context_map_texture_ = 0;
+    if (attn_map_texture_) glDeleteTextures(1, &attn_map_texture_);
+    attn_map_texture_ = 0;
 
     llama_backend_free();
 }
@@ -287,7 +339,8 @@ void OpenGllamaApplet::draw_inference_view() {
     ImGui::Separator();
 
     // ── Prompt ──
-    float btn_w = inference_running_ ? 160.0f : 80.0f;
+    bool paused = inference_running_ && (inference_mode_ == InferenceMode::Paused);
+    float btn_w = inference_running_ ? (paused ? 210.0f : 155.0f) : 80.0f;
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btn_w - 8.0f);
 
     static char prompt_input[2048] = {};
@@ -345,9 +398,25 @@ void OpenGllamaApplet::draw_inference_view() {
 
     ImGui::Separator();
 
+    // ── Debug: attention capture status ──
+    {
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        int ah = (int)attn_history_.size();
+        int pa = (int)pending_attn_weights_.size();
+        int cm = (int)context_map_.size();
+        if (ah > 0) {
+            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f),
+                "[attn OK] history=%d layers_last=%d ctx_map=%d",
+                ah, (int)attn_history_.back().layer_attn.size(), cm);
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                "[attn EMPTY] history=0 pending=%d ctx_map=%d — kq_soft_max not captured?", pa, cm);
+        }
+    }
+
     // ── Scrollable content ──
     ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_None,
-        ImGuiWindowFlags_HorizontalScrollbar);
+        ImGuiWindowFlags_AlwaysVerticalScrollbar);
     {
         std::string text_snap;
         std::vector<LayerActivation> act_snap;
@@ -376,57 +445,58 @@ void OpenGllamaApplet::draw_inference_view() {
             }
         }
 
-        // ── Token confidence ribbon ──
+        // ── Token Confidence (ImPlot) ──
         if (!logit_snap.empty()) {
             ImGui::Spacing();
             ImGui::SeparatorText("Token Confidence");
 
-            float ribbon_w = ImGui::GetContentRegionAvail().x;
-            float cell_w = std::max(4.0f, ribbon_w / (float)logit_snap.size());
-            ImVec2 origin = ImGui::GetCursorScreenPos();
-            float ribbon_h = 40.0f;
-            ImDrawList* dl = ImGui::GetWindowDrawList();
+            int n = (int)logit_snap.size();
+            float plot_w = ImGui::GetContentRegionAvail().x;
 
-            for (int i = 0; i < (int)logit_snap.size(); ++i) {
-                float prob = logit_snap[i].probability;
-                float ent = std::clamp(logit_snap[i].entropy / 6.0f, 0.0f, 1.0f);
+            if (ImPlot::BeginPlot("##token_conf", ImVec2(plot_w, 120.0f),
+                    ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
+                ImPlot::SetupAxes("Token", "P", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.05, ImPlotCond_Always);
 
-                // Green = confident, Yellow = uncertain, Red = high entropy
-                unsigned char r, g, b;
-                if (prob > 0.5f) {
-                    r = (unsigned char)(40 * (1.0f - prob));
-                    g = (unsigned char)(180 + 75 * prob);
-                    b = 60;
-                } else {
-                    r = (unsigned char)(200 + 55 * ent);
-                    g = (unsigned char)(200 * prob + 80 * (1.0f - ent));
-                    b = 40;
+                for (int i = 0; i < n; ++i) {
+                    float prob = logit_snap[i].probability;
+                    float ent = std::clamp(logit_snap[i].entropy / 6.0f, 0.0f, 1.0f);
+                    float r, g, b;
+                    if (prob > 0.5f) {
+                        r = 0.15f * (1.0f - prob);
+                        g = 0.7f + 0.3f * prob;
+                        b = 0.23f;
+                    } else {
+                        r = 0.78f + 0.22f * ent;
+                        g = 0.78f * prob + 0.31f * (1.0f - ent);
+                        b = 0.15f;
+                    }
+                    ImU32 fill = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.85f));
+                    ImU32 edge = ImGui::ColorConvertFloat4ToU32(ImVec4(r * 0.7f, g * 0.7f, b * 0.7f, 1.0f));
+                    double x = i, y = prob;
+                    char id[16];
+                    snprintf(id, sizeof(id), "##b%d", i);
+                    ImPlot::PlotBars(id, &x, &y, 1, 0.8,
+                        ImPlotSpec(ImPlotProp_FillColor, fill, ImPlotProp_LineColor, edge));
                 }
 
-                float x = origin.x + i * cell_w;
-                float h = ribbon_h * std::clamp(prob, 0.05f, 1.0f);
-                dl->AddRectFilled(
-                    ImVec2(x, origin.y + ribbon_h - h),
-                    ImVec2(x + cell_w - 1.0f, origin.y + ribbon_h),
-                    IM_COL32(r, g, b, 220));
-
-                // Tooltip on hover
-                if (ImGui::IsMouseHoveringRect(
-                        ImVec2(x, origin.y), ImVec2(x + cell_w, origin.y + ribbon_h))) {
+                if (ImPlot::IsPlotHovered()) {
+                    ImPlotPoint mp = ImPlot::GetPlotMousePos();
+                    int idx = std::clamp((int)std::round(mp.x), 0, n - 1);
                     ImGui::BeginTooltip();
-                    ImGui::Text("Token %d: \"%s\"", i, logit_snap[i].token_text.c_str());
-                    ImGui::Text("Probability: %.1f%%", prob * 100.0f);
-                    ImGui::Text("Entropy: %.2f", logit_snap[i].entropy);
-                    if (!logit_snap[i].top_k.empty()) {
+                    ImGui::Text("Token %d: \"%s\"", idx, logit_snap[idx].token_text.c_str());
+                    ImGui::Text("Probability: %.1f%%", logit_snap[idx].probability * 100.0f);
+                    ImGui::Text("Entropy: %.2f bits", logit_snap[idx].entropy);
+                    if (!logit_snap[idx].top_k.empty()) {
                         ImGui::Separator();
-                        ImGui::Text("Top alternatives:");
-                        for (auto& [tok, p] : logit_snap[i].top_k)
+                        for (auto& [tok, p] : logit_snap[idx].top_k)
                             ImGui::Text("  %s: %.1f%%", tok.c_str(), p * 100.0f);
                     }
                     ImGui::EndTooltip();
                 }
+
+                ImPlot::EndPlot();
             }
-            ImGui::Dummy(ImVec2(ribbon_w, ribbon_h + 4.0f));
         }
 
         // ── Context Activation Map ──
@@ -451,7 +521,7 @@ void OpenGllamaApplet::draw_inference_view() {
                     "Layers (top=0, bottom=%d) vs context tokens — bright = high activation",
                     n_layers - 1);
 
-                update_context_map_texture();
+                update_context_map_texture(cmap_snap);
 
                 if (context_map_texture_) {
                     float map_w = ImGui::GetContentRegionAvail().x;
@@ -486,6 +556,171 @@ void OpenGllamaApplet::draw_inference_view() {
                         for (int i = 0; i < n_ctx && i < (int)ctok_snap.size(); i += label_skip) {
                             ImGui::SameLine(i * cell_w);
                             ImGui::TextDisabled("%s", ctok_snap[i].c_str());
+                        }
+                        ImGui::NewLine();
+                    }
+                }
+            }
+        }
+
+        // ── Decision Crystallization (Logit Lens) ──
+        {
+            std::vector<LayerActivation> lens_snap;
+            {
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                lens_snap = activations_;
+            }
+
+            std::vector<const LayerActivation*> l_outs_lens;
+            for (auto& a : lens_snap)
+                if (a.name == "l_out" && !a.full_hidden.empty())
+                    l_outs_lens.push_back(&a);
+
+            if (l_outs_lens.size() > 1) {
+                const auto& final_hidden = l_outs_lens.back()->full_hidden;
+                float final_norm_sq = 0.0f;
+                for (float v : final_hidden) final_norm_sq += v * v;
+                float final_norm = std::sqrt(final_norm_sq);
+
+                int nl = (int)l_outs_lens.size();
+                std::vector<double> xs(nl), ys(nl);
+
+                for (int l = 0; l < nl; ++l) {
+                    auto& h = l_outs_lens[l]->full_hidden;
+                    int len = std::min((int)h.size(), (int)final_hidden.size());
+                    float dot = 0, na = 0;
+                    for (int j = 0; j < len; ++j) {
+                        dot += h[j] * final_hidden[j];
+                        na += h[j] * h[j];
+                    }
+                    float denom = std::sqrt(na) * final_norm;
+                    float cos = denom > 1e-8f ? dot / denom : 0.0f;
+                    xs[l] = l;
+                    ys[l] = cos;
+                }
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Decision Crystallization (Logit Lens)");
+                ImGui::TextDisabled("Cosine similarity to final layer — "
+                    "1.0 = prediction locked in, low = still exploring");
+
+                float plot_w = ImGui::GetContentRegionAvail().x;
+                if (ImPlot::BeginPlot("##logit_lens", ImVec2(plot_w, 100.0f),
+                        ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
+                    ImPlot::SetupAxes("Layer", "cos(final)",
+                        ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, -0.05, 1.05, ImPlotCond_Always);
+
+                    for (int l = 0; l < nl; ++l) {
+                        float cos = (float)ys[l];
+                        float r, g, b;
+                        if (cos < 0.3f) {
+                            r = 0.2f; g = 0.4f; b = 0.9f;
+                        } else if (cos < 0.6f) {
+                            float t = (cos - 0.3f) / 0.3f;
+                            r = 0.2f * (1 - t); g = 0.4f + 0.5f * t; b = 0.9f - 0.3f * t;
+                        } else if (cos < 0.85f) {
+                            float t = (cos - 0.6f) / 0.25f;
+                            r = 0.1f + 0.3f * t; g = 0.9f; b = 0.6f - 0.4f * t;
+                        } else {
+                            float t = (cos - 0.85f) / 0.15f;
+                            r = 0.4f + 0.6f * t; g = 0.9f; b = 0.2f * (1 - t);
+                        }
+                        ImU32 fill = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.85f));
+                        ImU32 edge = ImGui::ColorConvertFloat4ToU32(ImVec4(r * 0.6f, g * 0.6f, b * 0.6f, 1.0f));
+                        ImPlot::PlotBars("##ll", &xs[l], &ys[l], 1, 0.8,
+                            ImPlotSpec(ImPlotProp_FillColor, fill, ImPlotProp_LineColor, edge));
+                    }
+
+                    if (ImPlot::IsPlotHovered()) {
+                        ImPlotPoint mp = ImPlot::GetPlotMousePos();
+                        int idx = std::clamp((int)std::round(mp.x), 0, nl - 1);
+                        float cos = (float)ys[idx];
+                        const char* label =
+                            cos > 0.9f ? "Prediction locked in" :
+                            cos > 0.7f ? "Converging" :
+                            cos > 0.4f ? "Forming" : "Still exploring";
+                        ImGui::BeginTooltip();
+                        ImGui::Text("Layer %d", l_outs_lens[idx]->layer_index);
+                        ImGui::Text("Cosine to final: %.4f", cos);
+                        ImGui::Text("Status: %s", label);
+                        ImGui::EndTooltip();
+                    }
+
+                    ImPlot::EndPlot();
+                }
+            }
+        }
+
+        // ── Live Attention Timeline ──
+        draw_live_attention_timeline();
+
+        // ── Context Attention (Last Token) ──
+        {
+            std::vector<TokenAttn> attn_snap;
+            std::vector<std::string> ctok2;
+            {
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                attn_snap = attn_history_;
+                ctok2 = context_tokens_;
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Context Attention (Last Token)");
+
+            if (attn_snap.empty() || attn_snap.back().layer_attn.empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f),
+                    "Waiting for kq_soft_max data... (attn_history=%d)",
+                    (int)attn_snap.size());
+            } else {
+
+                auto& latest = attn_snap.back();
+                int n_lay = (int)latest.layer_attn.size();
+                int n_kv = 0;
+                for (auto& row : latest.layer_attn)
+                    n_kv = std::max(n_kv, (int)row.size());
+
+                ImGui::TextDisabled(
+                    "Layers (top=0, bottom=%d) vs context tokens — "
+                    "bright = high attention from token \"%s\"",
+                    n_lay - 1,
+                    ctok2.empty() ? "?" : ctok2.back().c_str());
+
+                update_attn_map_texture(attn_snap.back().layer_attn);
+
+                if (attn_map_texture_ && n_kv > 0) {
+                    float map_w = ImGui::GetContentRegionAvail().x;
+                    float aspect = (float)n_lay / (float)n_kv;
+                    float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
+
+                    ImVec2 img_pos = ImGui::GetCursorScreenPos();
+                    ImGui::Image((ImTextureID)(intptr_t)attn_map_texture_,
+                                 ImVec2(map_w, map_h));
+
+                    if (ImGui::IsItemHovered()) {
+                        ImVec2 mouse = ImGui::GetMousePos();
+                        int tok_idx = (int)((mouse.x - img_pos.x) / map_w * n_kv);
+                        int lay_idx = (int)((mouse.y - img_pos.y) / map_h * n_lay);
+                        tok_idx = std::clamp(tok_idx, 0, n_kv - 1);
+                        lay_idx = std::clamp(lay_idx, 0, n_lay - 1);
+
+                        ImGui::BeginTooltip();
+                        if (tok_idx < (int)ctok2.size())
+                            ImGui::Text("Attending to token %d: \"%s\"",
+                                tok_idx, ctok2[tok_idx].c_str());
+                        ImGui::Text("Layer %d", lay_idx);
+                        if (lay_idx < n_lay && tok_idx < (int)latest.layer_attn[lay_idx].size())
+                            ImGui::Text("Attention: %.4f", latest.layer_attn[lay_idx][tok_idx]);
+                        ImGui::EndTooltip();
+                    }
+
+                    // Token labels along bottom
+                    if (!ctok2.empty() && n_kv > 0) {
+                        float cell_w = map_w / (float)n_kv;
+                        int label_skip = std::max(1, (int)(12.0f / cell_w));
+                        for (int i = 0; i < n_kv && i < (int)ctok2.size(); i += label_skip) {
+                            ImGui::SameLine(i * cell_w);
+                            ImGui::TextDisabled("%s", ctok2[i].c_str());
                         }
                         ImGui::NewLine();
                     }
@@ -643,6 +878,165 @@ void OpenGllamaApplet::draw_inference_view() {
 }
 
 // ============================================================================
+// Live Attention Timeline
+// ============================================================================
+
+void OpenGllamaApplet::draw_live_attention_timeline() {
+    std::vector<TokenAttn> attn_snap;
+    std::vector<std::string> ctok_snap;
+    {
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        attn_snap = attn_history_;
+        ctok_snap = context_tokens_;
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Live Attention");
+
+    if (attn_snap.empty()) {
+        ImGui::TextDisabled("Waiting for attention data...");
+        return;
+    }
+
+    int n_tokens = (int)attn_snap.size();
+    int n_layers = 0;
+    for (auto& ta : attn_snap)
+        n_layers = std::max(n_layers, (int)ta.layer_attn.size());
+
+    if (n_layers == 0) {
+        ImGui::TextDisabled("No layer data captured yet.");
+        return;
+    }
+
+    // Build timeline: for each token, for each layer, store max attention value
+    live_attn_timeline_.resize(n_tokens);
+    for (int t = 0; t < n_tokens; ++t) {
+        auto& ta = attn_snap[t];
+        live_attn_timeline_[t].resize(n_layers, 0.0f);
+        for (int l = 0; l < (int)ta.layer_attn.size(); ++l) {
+            float mx = 0.0f;
+            for (float v : ta.layer_attn[l])
+                mx = std::max(mx, v);
+            live_attn_timeline_[t][l] = mx;
+        }
+    }
+
+    // Flash timer: pulse when new tokens arrive
+    if (n_tokens != live_attn_last_count_) {
+        live_attn_last_count_ = n_tokens;
+        live_attn_flash_timer_ = 1.0f;
+    } else {
+        live_attn_flash_timer_ = std::max(0.0f, live_attn_flash_timer_ - ImGui::GetIO().DeltaTime * 3.0f);
+    }
+
+    ImGui::TextDisabled("Rows=layers (0..%d), columns=tokens (growing right) — bright = peaked attention",
+        n_layers - 1);
+
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float cell_w = std::max(3.0f, std::min(12.0f, avail_w / (float)n_tokens));
+    float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
+    float total_w = cell_w * n_tokens;
+    float total_h = cell_h * n_layers;
+
+    // Scrollable region if it grows beyond available width
+    ImGui::BeginChild("##live_attn_scroll", ImVec2(avail_w, total_h + 30.0f),
+        ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+
+    // Auto-scroll to rightmost column
+    if (inference_running_)
+        ImGui::SetScrollX(std::max(0.0f, total_w - avail_w));
+
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (int t = 0; t < n_tokens; ++t) {
+        bool is_newest = (t == n_tokens - 1);
+        float flash = is_newest ? live_attn_flash_timer_ : 0.0f;
+
+        for (int l = 0; l < n_layers; ++l) {
+            float val = (t < (int)live_attn_timeline_.size() && l < (int)live_attn_timeline_[t].size())
+                ? live_attn_timeline_[t][l] : 0.0f;
+
+            // Color: dark blue → cyan → yellow → white based on attention intensity
+            float norm = std::clamp(val, 0.0f, 1.0f);
+            float r, g, b;
+            if (norm < 0.25f) {
+                float s = norm / 0.25f;
+                r = 0.05f + 0.05f * s;
+                g = 0.05f + 0.15f * s;
+                b = 0.2f + 0.4f * s;
+            } else if (norm < 0.5f) {
+                float s = (norm - 0.25f) / 0.25f;
+                r = 0.1f * (1.0f - s);
+                g = 0.2f + 0.6f * s;
+                b = 0.6f + 0.2f * s;
+            } else if (norm < 0.75f) {
+                float s = (norm - 0.5f) / 0.25f;
+                r = 0.8f * s;
+                g = 0.8f + 0.1f * s;
+                b = 0.8f - 0.6f * s;
+            } else {
+                float s = (norm - 0.75f) / 0.25f;
+                r = 0.8f + 0.2f * s;
+                g = 0.9f + 0.1f * s;
+                b = 0.2f + 0.8f * s;
+            }
+
+            // Flash boost on newest column
+            if (flash > 0.0f) {
+                r = std::min(1.0f, r + 0.3f * flash);
+                g = std::min(1.0f, g + 0.3f * flash);
+                b = std::min(1.0f, b + 0.3f * flash);
+            }
+
+            float x = origin.x + t * cell_w;
+            float y = origin.y + l * cell_h;
+            ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.95f));
+            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cell_w - 0.5f, y + cell_h - 0.5f), col);
+        }
+    }
+
+    // Flash border on newest column
+    if (live_attn_flash_timer_ > 0.0f && n_tokens > 0) {
+        float x = origin.x + (n_tokens - 1) * cell_w;
+        ImU32 flash_col = ImGui::ColorConvertFloat4ToU32(
+            ImVec4(1.0f, 1.0f, 1.0f, live_attn_flash_timer_ * 0.8f));
+        dl->AddRect(ImVec2(x, origin.y),
+                    ImVec2(x + cell_w, origin.y + total_h), flash_col, 0.0f, 0, 2.0f);
+    }
+
+    // Reserve space for the drawing
+    ImGui::Dummy(ImVec2(total_w, total_h));
+
+    // Tooltip on hover
+    if (ImGui::IsItemHovered()) {
+        ImVec2 mouse = ImGui::GetMousePos();
+        int tok_idx = (int)((mouse.x - origin.x) / cell_w);
+        int lay_idx = (int)((mouse.y - origin.y) / cell_h);
+        tok_idx = std::clamp(tok_idx, 0, n_tokens - 1);
+        lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
+
+        float val = (tok_idx < (int)live_attn_timeline_.size() &&
+                     lay_idx < (int)live_attn_timeline_[tok_idx].size())
+            ? live_attn_timeline_[tok_idx][lay_idx] : 0.0f;
+
+        ImGui::BeginTooltip();
+        // Token label: offset by prompt tokens (attn_history starts after prompt decode)
+        int prompt_len = (int)ctok_snap.size() - n_tokens;
+        int ctx_idx = prompt_len + tok_idx;
+        if (ctx_idx >= 0 && ctx_idx < (int)ctok_snap.size())
+            ImGui::Text("Token %d: \"%s\"", tok_idx, ctok_snap[ctx_idx].c_str());
+        else
+            ImGui::Text("Token %d", tok_idx);
+        ImGui::Text("Layer %d", lay_idx);
+        ImGui::Text("Max attention: %.4f", val);
+        ImGui::EndTooltip();
+    }
+
+    ImGui::EndChild();
+}
+
+// ============================================================================
 // Activation Texture Upload
 // ============================================================================
 
@@ -704,32 +1098,38 @@ void OpenGllamaApplet::update_activation_textures() {
     textures_dirty_ = false;
 }
 
-void OpenGllamaApplet::update_context_map_texture() {
-    if (!context_map_dirty_) return;
-    context_map_dirty_ = false;
-
-    int n_layers = (int)context_map_.size();
+void OpenGllamaApplet::update_context_map_texture(const std::vector<std::vector<float>>& cmap) {
+    int n_layers = (int)cmap.size();
     if (n_layers == 0) return;
     int n_ctx = 0;
-    for (auto& row : context_map_)
+    for (auto& row : cmap)
         n_ctx = std::max(n_ctx, (int)row.size());
     if (n_ctx == 0) return;
 
-    // Find global min/max for normalization
-    float gmin = 1e30f, gmax = -1e30f;
-    for (auto& row : context_map_) {
-        for (float v : row) {
-            gmin = std::min(gmin, v);
-            gmax = std::max(gmax, v);
-        }
-    }
-    float range = (gmax - gmin) > 1e-7f ? (gmax - gmin) : 1.0f;
+    // BOS exclusion: skip token 0 in normalization
+    // Percentile normalization (2nd–98th) on non-BOS tokens
+    std::vector<float> all_vals;
+    for (auto& row : cmap)
+        for (int c = 1; c < (int)row.size(); ++c)
+            all_vals.push_back(row[c]);
 
-    // Build RGB pixels [n_layers rows × n_ctx cols]
+    float pmin = 0.0f, pmax = 1.0f;
+    if (!all_vals.empty()) {
+        std::sort(all_vals.begin(), all_vals.end());
+        int lo = (int)(all_vals.size() * 0.02f);
+        int hi = (int)(all_vals.size() * 0.98f);
+        hi = std::min(hi, (int)all_vals.size() - 1);
+        pmin = all_vals[lo];
+        pmax = all_vals[hi];
+    }
+    float range = (pmax - pmin) > 1e-7f ? (pmax - pmin) : 1.0f;
+
+    // Build RGB pixels [n_layers rows × n_ctx cols], skip BOS visually (col 0 = black)
     std::vector<unsigned char> pixels(n_layers * n_ctx * 3, 0);
     for (int l = 0; l < n_layers; ++l) {
-        for (int c = 0; c < (int)context_map_[l].size(); ++c) {
-            float norm = (context_map_[l][c] - gmin) / range;
+        for (int c = 0; c < (int)cmap[l].size(); ++c) {
+            if (c == 0) continue;  // BOS excluded
+            float norm = std::clamp((cmap[l][c] - pmin) / range, 0.0f, 1.0f);
             unsigned char r, g, b;
             if (norm < 0.5f) {
                 float t = norm / 0.5f;
@@ -766,6 +1166,106 @@ void OpenGllamaApplet::update_context_map_texture() {
     context_map_texture_ = tex;
 }
 
+void OpenGllamaApplet::update_attn_map_texture(const std::vector<std::vector<float>>& layer_attn) {
+    int n_layers = (int)layer_attn.size();
+    if (n_layers == 0) return;
+    int n_kv = 0;
+    for (auto& row : layer_attn)
+        n_kv = std::max(n_kv, (int)row.size());
+    if (n_kv == 0) return;
+
+    // Per-row normalization: each layer's max maps to 1.0, BOS excluded
+    std::vector<unsigned char> pixels(n_layers * n_kv * 3, 0);
+    for (int l = 0; l < n_layers; ++l) {
+        auto& row = layer_attn[l];
+        float row_max = 0.0f;
+        for (int c = 1; c < (int)row.size(); ++c)
+            row_max = std::max(row_max, row[c]);
+        if (row_max < 1e-8f) row_max = 1.0f;
+
+        for (int c = 0; c < (int)row.size(); ++c) {
+            if (c == 0) continue;  // BOS excluded
+            float norm = std::clamp(row[c] / row_max, 0.0f, 1.0f);
+            // Color ramp: dark purple → blue → cyan → yellow → white
+            unsigned char r, g, b;
+            if (norm < 0.25f) {
+                float t = norm / 0.25f;
+                r = (unsigned char)(30 + 10 * t);
+                g = (unsigned char)(10 + 20 * t);
+                b = (unsigned char)(60 + 140 * t);
+            } else if (norm < 0.5f) {
+                float t = (norm - 0.25f) / 0.25f;
+                r = (unsigned char)(40 * (1 - t));
+                g = (unsigned char)(30 + 200 * t);
+                b = (unsigned char)(200 + 55 * t);
+            } else if (norm < 0.75f) {
+                float t = (norm - 0.5f) / 0.25f;
+                r = (unsigned char)(220 * t);
+                g = (unsigned char)(230 + 25 * t);
+                b = (unsigned char)(255 - 200 * t);
+            } else {
+                float t = (norm - 0.75f) / 0.25f;
+                r = (unsigned char)(220 + 35 * t);
+                g = 255;
+                b = (unsigned char)(55 + 200 * t);
+            }
+            int idx = (l * n_kv + c) * 3;
+            pixels[idx + 0] = r;
+            pixels[idx + 1] = g;
+            pixels[idx + 2] = b;
+        }
+    }
+
+    if (attn_map_texture_)
+        glDeleteTextures(1, &attn_map_texture_);
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, n_kv, n_layers, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    attn_map_texture_ = tex;
+}
+
+// ============================================================================
+// Logit Lens Computation
+// ============================================================================
+
+void OpenGllamaApplet::compute_logit_lens() {
+    layer_predictions_.clear();
+    std::vector<const LayerActivation*> l_outs;
+    for (auto& a : activations_)
+        if (a.name == "l_out" && !a.full_hidden.empty())
+            l_outs.push_back(&a);
+    if (l_outs.size() < 2) return;
+
+    const auto& final_h = l_outs.back()->full_hidden;
+    float fn2 = 0.0f;
+    for (float v : final_h) fn2 += v * v;
+    float fn = std::sqrt(fn2);
+
+    for (auto* la : l_outs) {
+        auto& h = la->full_hidden;
+        int len = std::min((int)h.size(), (int)final_h.size());
+        float dot = 0, n2 = 0;
+        for (int i = 0; i < len; ++i) {
+            dot += h[i] * final_h[i];
+            n2 += h[i] * h[i];
+        }
+        float denom = std::sqrt(n2) * fn;
+        LayerPrediction lp;
+        lp.layer = la->layer_index;
+        lp.cosine_to_final = denom > 1e-8f ? dot / denom : 0.0f;
+        layer_predictions_.push_back(lp);
+    }
+}
+
 // ============================================================================
 // Model Loading
 // ============================================================================
@@ -799,6 +1299,7 @@ void OpenGllamaApplet::load_model_async(const std::string& path, const std::stri
 
         llama_context_params ctx_params = llama_context_default_params();
         ctx_params.n_ctx = context_size_;
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
         ctx_params.cb_eval = eval_callback;
         ctx_params.cb_eval_user_data = this;
 
@@ -828,6 +1329,7 @@ bool OpenGllamaApplet::load_model(const std::string& path) {
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = context_size_;
+    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     ctx_params.cb_eval = eval_callback;
     ctx_params.cb_eval_user_data = this;
 
@@ -855,7 +1357,10 @@ void OpenGllamaApplet::unload_model() {
     model_loaded_ = false;
     activations_.clear();
     pending_activations_.clear();
+    pending_attn_weights_.clear();
     token_logits_.clear();
+    attn_history_.clear();
+    layer_predictions_.clear();
     output_text_.clear();
     tokens_generated_ = 0;
 }
@@ -872,6 +1377,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         output_text_.clear();
         activations_.clear();
         token_logits_.clear();
+        attn_history_.clear();
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -924,6 +1430,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         }
 
         pending_activations_.clear();
+        pending_attn_weights_.clear();
 
         if (llama_decode(ctx_, batch) != 0) {
             llama_batch_free(batch);
@@ -934,12 +1441,16 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             return;
         }
 
-        // Push prompt activations
+        // Push prompt activations + attention
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
             activations_ = pending_activations_;
+            if (!pending_attn_weights_.empty()) {
+                TokenAttn ta;
+                ta.layer_attn = pending_attn_weights_;
+                attn_history_.push_back(std::move(ta));
+            }
             textures_dirty_ = true;
-            context_map_dirty_ = true;
         }
 
         int n_vocab = llama_vocab_n_tokens(vocab);
@@ -1028,6 +1539,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             llama_sampler_accept(smpl, best);
 
             pending_activations_.clear();
+            pending_attn_weights_.clear();
 
             batch.n_tokens = 1;
             batch.token[0] = best;
@@ -1037,6 +1549,9 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             batch.logits[0] = 1;
             if (llama_decode(ctx_, batch) != 0) break;
 
+            std::fprintf(stderr, "[inference] token %d: pending_attn=%d pending_act=%d\n",
+                i, (int)pending_attn_weights_.size(), (int)pending_activations_.size());
+
             {
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
@@ -1044,8 +1559,12 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 token_logits_.push_back(tli);
                 context_tokens_.push_back(piece);
                 activations_ = pending_activations_;
+                if (!pending_attn_weights_.empty()) {
+                    TokenAttn ta;
+                    ta.layer_attn = pending_attn_weights_;
+                    attn_history_.push_back(std::move(ta));
+                }
                 textures_dirty_ = true;
-                context_map_dirty_ = true;
             }
         }
 

@@ -16,8 +16,10 @@ struct LayerActivation {
     float mean;
     float norm;
     float max_val;
-    float cosine_prev;  // cosine similarity with previous layer
+    float cosine_prev;   // cosine similarity with previous layer
+    float cosine_final;  // cosine similarity with final layer (logit lens proxy)
     std::vector<float> values;
+    std::vector<float> full_hidden;  // full hidden state for last token (for logit lens)
     int rows;
     int cols;
     std::string name;   // "attn_out" or "l_out"
@@ -109,8 +111,34 @@ private:
     std::vector<std::vector<float>> context_map_;
     std::vector<std::string> context_tokens_;
     unsigned int context_map_texture_ = 0;
-    bool context_map_dirty_ = false;
-    void update_context_map_texture();
+    void update_context_map_texture(const std::vector<std::vector<float>>& cmap);
+
+    // Per-layer attention weights: [n_layers] = head-averaged attention over KV for latest token
+    std::vector<std::vector<float>> pending_attn_weights_;  // built during eval callback
+    // Accumulated: [n_generated_tokens][n_layers] = head-averaged attention vector
+    struct TokenAttn {
+        std::vector<std::vector<float>> layer_attn;  // [n_layers][n_kv_at_that_point]
+    };
+    std::vector<TokenAttn> attn_history_;
+    unsigned int attn_map_texture_ = 0;
+    int attn_selected_layer_ = -1;  // -1 = aggregated across layers
+    void update_attn_map_texture(const std::vector<std::vector<float>>& layer_attn);
+
+    // Live attention timeline: [n_tokens][n_layers] = max attention value per layer
+    std::vector<std::vector<float>> live_attn_timeline_;  // [token_idx][layer] = max attn
+    int live_attn_last_count_ = 0;  // track when new columns arrive for flash
+    float live_attn_flash_timer_ = 0.0f;  // decays from 1.0 on new token
+    void draw_live_attention_timeline();
+
+    // Logit lens: per-layer predicted token
+    struct LayerPrediction {
+        int layer;
+        float cosine_to_final;
+        std::string top_token;
+        float top_prob;
+    };
+    std::vector<LayerPrediction> layer_predictions_;
+    void compute_logit_lens();
 
     OllamaModelStore ollama_store_;
 };
