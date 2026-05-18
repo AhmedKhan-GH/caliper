@@ -125,9 +125,11 @@ private:
     void update_attn_map_texture(const std::vector<std::vector<float>>& layer_attn);
 
     // Live attention timeline: [n_tokens][n_layers] = max attention value per layer
-    std::vector<std::vector<float>> live_attn_timeline_;  // [token_idx][layer] = max attn
-    int live_attn_last_count_ = 0;  // track when new columns arrive for flash
-    float live_attn_flash_timer_ = 0.0f;  // decays from 1.0 on new token
+    // Built incrementally in inference thread, protected by output_mutex_
+    std::vector<std::vector<float>> live_attn_timeline_;
+    int live_attn_n_layers_ = 0;
+    int live_attn_last_count_ = 0;
+    float live_attn_flash_timer_ = 0.0f;
     void draw_live_attention_timeline();
 
     // Logit lens: per-layer predicted token

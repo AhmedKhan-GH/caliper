@@ -882,43 +882,23 @@ void OpenGllamaApplet::draw_inference_view() {
 // ============================================================================
 
 void OpenGllamaApplet::draw_live_attention_timeline() {
-    std::vector<TokenAttn> attn_snap;
+    std::vector<std::vector<float>> timeline_snap;
     std::vector<std::string> ctok_snap;
+    int n_layers;
     {
         std::lock_guard<std::mutex> lk(output_mutex_);
-        attn_snap = attn_history_;
+        timeline_snap = live_attn_timeline_;
         ctok_snap = context_tokens_;
+        n_layers = live_attn_n_layers_;
     }
 
     ImGui::Spacing();
     ImGui::SeparatorText("Live Attention");
 
-    if (attn_snap.empty()) {
+    int n_tokens = (int)timeline_snap.size();
+    if (n_tokens == 0 || n_layers == 0) {
         ImGui::TextDisabled("Waiting for attention data...");
         return;
-    }
-
-    int n_tokens = (int)attn_snap.size();
-    int n_layers = 0;
-    for (auto& ta : attn_snap)
-        n_layers = std::max(n_layers, (int)ta.layer_attn.size());
-
-    if (n_layers == 0) {
-        ImGui::TextDisabled("No layer data captured yet.");
-        return;
-    }
-
-    // Build timeline: for each token, for each layer, store max attention value
-    live_attn_timeline_.resize(n_tokens);
-    for (int t = 0; t < n_tokens; ++t) {
-        auto& ta = attn_snap[t];
-        live_attn_timeline_[t].resize(n_layers, 0.0f);
-        for (int l = 0; l < (int)ta.layer_attn.size(); ++l) {
-            float mx = 0.0f;
-            for (float v : ta.layer_attn[l])
-                mx = std::max(mx, v);
-            live_attn_timeline_[t][l] = mx;
-        }
     }
 
     // Flash timer: pulse when new tokens arrive
@@ -972,8 +952,8 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
             flash = live_attn_flash_timer_ * (1.0f - (float)age / (float)trail_len);
 
         for (int l = 0; l < n_layers; ++l) {
-            float val = (t < (int)live_attn_timeline_.size() && l < (int)live_attn_timeline_[t].size())
-                ? live_attn_timeline_[t][l] : 0.0f;
+            float val = (t < (int)timeline_snap.size() && l < (int)timeline_snap[t].size())
+                ? timeline_snap[t][l] : 0.0f;
 
             float norm = std::clamp(val, 0.0f, 1.0f);
             float r, g, b;
@@ -1030,9 +1010,9 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
         tok_idx = std::clamp(tok_idx, 0, n_tokens - 1);
         lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
 
-        float val = (tok_idx < (int)live_attn_timeline_.size() &&
-                     lay_idx < (int)live_attn_timeline_[tok_idx].size())
-            ? live_attn_timeline_[tok_idx][lay_idx] : 0.0f;
+        float val = (tok_idx < (int)timeline_snap.size() &&
+                     lay_idx < (int)timeline_snap[tok_idx].size())
+            ? timeline_snap[tok_idx][lay_idx] : 0.0f;
 
         ImGui::BeginTooltip();
         int prompt_len = (int)ctok_snap.size() - n_tokens;
@@ -1373,6 +1353,8 @@ void OpenGllamaApplet::unload_model() {
     pending_attn_weights_.clear();
     token_logits_.clear();
     attn_history_.clear();
+    live_attn_timeline_.clear();
+    live_attn_n_layers_ = 0;
     layer_predictions_.clear();
     output_text_.clear();
     tokens_generated_ = 0;
@@ -1391,6 +1373,8 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         activations_.clear();
         token_logits_.clear();
         attn_history_.clear();
+        live_attn_timeline_.clear();
+        live_attn_n_layers_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1454,13 +1438,21 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             return;
         }
 
-        // Push prompt activations + attention
+        // Push prompt activations + attention + timeline
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
             activations_ = pending_activations_;
             if (!pending_attn_weights_.empty()) {
                 TokenAttn ta;
                 ta.layer_attn = pending_attn_weights_;
+                // Compute timeline column
+                int nl = (int)ta.layer_attn.size();
+                live_attn_n_layers_ = std::max(live_attn_n_layers_, nl);
+                std::vector<float> col(nl, 0.0f);
+                for (int l = 0; l < nl; ++l)
+                    for (float v : ta.layer_attn[l])
+                        col[l] = std::max(col[l], v);
+                live_attn_timeline_.push_back(std::move(col));
                 attn_history_.push_back(std::move(ta));
             }
             textures_dirty_ = true;
@@ -1575,6 +1567,13 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 if (!pending_attn_weights_.empty()) {
                     TokenAttn ta;
                     ta.layer_attn = pending_attn_weights_;
+                    int nl = (int)ta.layer_attn.size();
+                    live_attn_n_layers_ = std::max(live_attn_n_layers_, nl);
+                    std::vector<float> col(nl, 0.0f);
+                    for (int l = 0; l < nl; ++l)
+                        for (float v : ta.layer_attn[l])
+                            col[l] = std::max(col[l], v);
+                    live_attn_timeline_.push_back(std::move(col));
                     attn_history_.push_back(std::move(ta));
                 }
                 textures_dirty_ = true;
