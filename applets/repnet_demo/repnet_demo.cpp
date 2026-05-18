@@ -27,6 +27,7 @@
 #include <ImGuiFileDialog.h>
 #include <duckdb.hpp>
 #include <torch/script.h>
+#include <torch/csrc/autograd/autograd.h>
 #include "model_viz.h"
 
 namespace fs = std::filesystem;
@@ -1494,13 +1495,78 @@ static LayerActivation tensor_stats(const torch::Tensor& t) {
     return a;
 }
 
+static torch::Tensor compute_grad_cam(torch::jit::Module& model,
+                                       const torch::Tensor& input,
+                                       int target_class,
+                                       int input_length) {
+    int nl = (int)input.size(1);
+    torch::Tensor fuse_out;
+
+    {
+        torch::NoGradGuard no_grad;
+        auto x = input.unsqueeze(2);
+        auto stages_mod = model.attr("stages").toModule();
+        for (int si = 0; si < 3; si++) {
+            auto stage = stages_mod.attr(std::to_string(si)).toModule();
+            x = stage.attr("conv").toModule().forward({x}).toTensor();
+            x = stage.attr("attn").toModule().forward({x}).toTensor();
+        }
+        auto sizes = x.sizes();
+        x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
+        fuse_out = model.attr("fuse").toModule().forward({x}).toTensor();
+    }
+
+    auto A = fuse_out.detach().clone();
+    A.requires_grad_(true);
+
+    auto x = model.attr("gap").toModule().forward({A}).toTensor().squeeze(-1);
+    x = model.attr("head_drop").toModule().forward({x}).toTensor();
+    auto logits = model.attr("fc").toModule().forward({x}).toTensor();
+
+    auto target = logits.select(1, target_class).sum();
+    auto grads = torch::autograd::grad(
+        {target}, {A}, /*grad_outputs=*/{}, /*retain_graph=*/c10::nullopt,
+        /*create_graph=*/false, /*allow_unused=*/true);
+
+    if (grads.empty() || !grads[0].defined()) {
+        std::fprintf(stderr, "[grad-cam] No gradient on feature map\n");
+        return {};
+    }
+
+    // Grad-CAM: alpha_k = GAP(dY/dA^k), cam = ReLU(sum_k alpha_k * A^k)
+    auto alpha = grads[0].mean(2, true);           // [1, C, 1]
+    auto cam = (alpha * A).sum(1).squeeze(0);       // [T]
+    cam = torch::relu(cam);
+
+    float cam_max = cam.max().item<float>();
+    if (cam_max > 1e-8f) cam = cam / cam_max;
+
+    int T = (int)cam.size(0);
+    auto cam_a = cam.accessor<float, 1>();
+    auto result = torch::zeros({nl, input_length});
+    auto res_a = result.accessor<float, 2>();
+
+    for (int i = 0; i < input_length; i++) {
+        float src = (float)i * (T - 1) / std::max(input_length - 1, 1);
+        int lo = std::min((int)src, T - 1);
+        int hi = std::min(lo + 1, T - 1);
+        float frac = src - lo;
+        float val = cam_a[lo] * (1.0f - frac) + cam_a[hi] * frac;
+        for (int l = 0; l < nl; l++)
+            res_a[l][i] = val;
+    }
+
+    std::fprintf(stderr, "[grad-cam] OK: T=%d cam_max=%.6f upsampled_max=%.6f\n",
+        T, cam_max, result[0].max().item<float>());
+
+    return result.detach();
+}
+
 static void run_step_inference(torch::jit::Module& model,
                                ECGSample& samp,
                                InferenceOverlay& inf,
                                std::vector<torch::Tensor>& detail) {
     if (!samp.processed_valid) return;
-
-    torch::NoGradGuard no_grad;
 
     const int nl = (int)samp.processed.size();
     const int n = samp.num_samples;
@@ -1520,56 +1586,62 @@ static void run_step_inference(torch::jit::Module& model,
     detail.resize(13);
 
     inf.layers[0] = tensor_stats(input);
-    detail[0] = input.squeeze(0);
 
     try {
-        auto x = input.unsqueeze(2);
-        auto stages_mod = model.attr("stages").toModule();
+        torch::Tensor logits;
 
-        for (int si = 0; si < 3; si++) {
-            auto stage = stages_mod.attr(std::to_string(si)).toModule();
-            x = stage.attr("conv").toModule().forward({x}).toTensor();
-            inf.layers[1 + si * 2] = tensor_stats(x);
-            detail[1 + si * 2] = x.squeeze(0);
-            x = stage.attr("attn").toModule().forward({x}).toTensor();
-            inf.layers[2 + si * 2] = tensor_stats(x);
-            detail[2 + si * 2] = x.squeeze(0);
+        // Forward pass without gradients for layer stats and detail tensors
+        {
+            torch::NoGradGuard no_grad;
+            auto x = input.unsqueeze(2);
+            auto stages_mod = model.attr("stages").toModule();
+
+            for (int si = 0; si < 3; si++) {
+                auto stage = stages_mod.attr(std::to_string(si)).toModule();
+                x = stage.attr("conv").toModule().forward({x}).toTensor();
+                inf.layers[1 + si * 2] = tensor_stats(x);
+                detail[1 + si * 2] = x.squeeze(0);
+                x = stage.attr("attn").toModule().forward({x}).toTensor();
+                inf.layers[2 + si * 2] = tensor_stats(x);
+                detail[2 + si * 2] = x.squeeze(0);
+            }
+
+            auto sizes = x.sizes();
+            x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
+            inf.layers[7] = tensor_stats(x);
+            detail[7] = x.squeeze(0);
+
+            x = model.attr("fuse").toModule().forward({x}).toTensor();
+            inf.layers[8] = tensor_stats(x);
+            detail[8] = x.squeeze(0);
+
+            x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
+            inf.layers[9] = tensor_stats(x);
+            detail[9] = x.squeeze(0);
+
+            x = model.attr("head_drop").toModule().forward({x}).toTensor();
+            inf.layers[10] = tensor_stats(x);
+            detail[10] = x.squeeze(0);
+
+            logits = model.attr("fc").toModule().forward({x}).toTensor();
+            inf.layers[11] = tensor_stats(logits);
+            detail[11] = logits.squeeze(0);
+
+            auto probs = torch::softmax(logits, 1);
+            inf.layers[12] = tensor_stats(probs);
+            detail[12] = probs.squeeze(0);
+            auto pa = probs.accessor<float, 2>();
+            inf.probs[0] = pa[0][0];
+            inf.probs[1] = pa[0][1];
+            inf.result_class = pa[0][1] > pa[0][0] ? 1 : 0;
+            inf.valid = true;
         }
-
-        auto sizes = x.sizes();
-        x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
-        inf.layers[7] = tensor_stats(x);
-        detail[7] = x.squeeze(0);
-
-        x = model.attr("fuse").toModule().forward({x}).toTensor();
-        inf.layers[8] = tensor_stats(x);
-        detail[8] = x.squeeze(0);
-
-        x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
-        inf.layers[9] = tensor_stats(x);
-        detail[9] = x.squeeze(0);
-
-        x = model.attr("head_drop").toModule().forward({x}).toTensor();
-        inf.layers[10] = tensor_stats(x);
-        detail[10] = x.squeeze(0);
-
-        x = model.attr("fc").toModule().forward({x}).toTensor();
-        inf.layers[11] = tensor_stats(x);
-        detail[11] = x.squeeze(0);
-
-        auto probs = torch::softmax(x, 1);
-        inf.layers[12] = tensor_stats(probs);
-        detail[12] = probs.squeeze(0);
-        auto pa = probs.accessor<float, 2>();
-        inf.probs[0] = pa[0][0];
-        inf.probs[1] = pa[0][1];
-        inf.result_class = pa[0][1] > pa[0][0] ? 1 : 0;
-        inf.valid = true;
 
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[model] Step-through failed (%s), trying whole-model\n",
                      e.what());
         try {
+            torch::NoGradGuard no_grad;
             auto out = model.forward({input}).toTensor();
             auto probs = torch::softmax(out, 1);
             auto pa = probs.accessor<float, 2>();
@@ -1580,6 +1652,16 @@ static void run_step_inference(torch::jit::Module& model,
             inf.valid = true;
         } catch (const std::exception& e2) {
             std::fprintf(stderr, "[model] Inference failed: %s\n", e2.what());
+        }
+    }
+
+    // Grad-CAM pass — separate try/catch so failures don't lose the inference results
+    if (inf.valid) {
+        try {
+            auto cam = compute_grad_cam(model, input, inf.result_class, n);
+            detail[0] = cam;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[grad-cam] Failed: %s\n", e.what());
         }
     }
 }
@@ -1784,7 +1866,14 @@ void RepNetDemoApplet::draw_activation_detail() {
         return;
     }
 
-    // ── Header ──
+    // ── Lead scrubber ──
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(LEAD_COLORS[s.detail_lead], "%s", kLeadNames12[s.detail_lead]);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
+    if (ImGui::SliderInt("##lead_scrub", &s.detail_lead, 0, 11, kLeadNames12[s.detail_lead]))
+        s.detail_texs_dirty = true;
+    ImGui::SameLine();
     ImGui::TextDisabled("Sample: %s", s.inference.sample_id.c_str());
     ImGui::SameLine();
     if (s.inference.result_class == 1)
@@ -1796,14 +1885,11 @@ void RepNetDemoApplet::draw_activation_detail() {
 
     ImGui::Separator();
 
-    // ── Regenerate all-lead textures if needed ──
+    // ── Regenerate textures if needed ──
     if (s.detail_texs_dirty || s.detail_lead_cached != s.detail_lead) {
         heatmap::release_textures(s.detail_texs);
         s.detail_texs.clear();
-        // Layout: 12 per-lead input saliency + 12 per-lead per conv/attn stage (x6) + remaining layers
-        // Total: 12 input + 6 stages * 12 leads + 7 fusion/pool/etc = 12 + 72 + 7 = 91
-        // Simplified: keep 13 layer textures + 12 per-lead input textures
-        s.detail_texs.resize(13 + 12, 0);
+        s.detail_texs.resize(13, 0);
 
         for (int i = 0; i < 13; i++) {
             if (!s.detail_acts[i].defined() || s.detail_acts[i].numel() == 0)
@@ -1812,15 +1898,17 @@ void RepNetDemoApplet::draw_activation_detail() {
             auto t = s.detail_acts[i];
             torch::Tensor t2d;
 
-            if (i == 0 && t.dim() == 2 && t.size(0) == 12) {
-                // Upload all 12 lead saliencies individually
-                for (int lead = 0; lead < std::min(12, (int)t.size(0)); lead++) {
+            if (i == 0) {
+                if (t.dim() == 2 && t.size(0) > 1) {
+                    int lead = std::min(s.detail_lead, (int)t.size(0) - 1);
                     t2d = t[lead].unsqueeze(0);
-                    s.detail_texs[13 + lead] = heatmap::upload_texture(t2d, true, true);
+                } else if (t.dim() == 2) {
+                    t2d = t;
+                } else if (t.dim() == 1) {
+                    t2d = t.unsqueeze(0);
+                } else {
+                    continue;
                 }
-                // Also upload the selected lead for the main slot
-                int lead = std::min(s.detail_lead, (int)t.size(0) - 1);
-                t2d = t[lead].unsqueeze(0);
             } else if (t.dim() == 1) {
                 t2d = t.unsqueeze(0);
             } else if (t.dim() == 2) {
@@ -1833,11 +1921,46 @@ void RepNetDemoApplet::draw_activation_detail() {
             }
 
             bool diverging = (i == 0);
-            s.detail_texs[i] = heatmap::upload_texture(t2d, diverging, diverging);
+            bool log_scale = (i == 0);
+            s.detail_texs[i] = heatmap::upload_texture(t2d, diverging, log_scale);
         }
 
         s.detail_texs_dirty = false;
         s.detail_lead_cached = s.detail_lead;
+    }
+
+    // ── Compute time axis and duration once ──
+    float duration = 0.0f;
+    bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
+                    && s.samples[s.selected].processed_valid;
+    if (has_samp) {
+        auto& samp = s.samples[s.selected];
+        duration = samp.num_samples / std::max(1.0f, samp.sampling_rate);
+        if ((int)s.time_axis.size() != samp.num_samples) {
+            s.time_axis.resize(samp.num_samples);
+            for (int j = 0; j < samp.num_samples; j++)
+                s.time_axis[j] = (float)j / samp.sampling_rate;
+        }
+    }
+
+    // Count temporal subplot rows: waveform + each temporal activation layer
+    int n_subplot_rows = 0;
+    std::vector<int> temporal_layers;
+    if (has_samp && duration > 0.0f) {
+        n_subplot_rows = 1; // waveform row
+        for (int i = 1; i < 13; i++) {
+            if (!s.detail_acts[i].defined()) continue;
+            auto& t = s.detail_acts[i];
+            torch::Tensor t2d;
+            if (t.dim() == 1) t2d = t.unsqueeze(0);
+            else if (t.dim() == 2) t2d = t;
+            else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
+            int cols = t2d.dim() >= 2 ? (int)t2d.size(1) : 1;
+            if (cols > 1 && s.detail_texs[i]) {
+                temporal_layers.push_back(i);
+                n_subplot_rows++;
+            }
+        }
     }
 
     // ── Scrollable layer view ──
@@ -1845,168 +1968,140 @@ void RepNetDemoApplet::draw_activation_detail() {
     ImGui::BeginChild("##act_scroll", avail, false);
 
     float content_w = ImGui::GetContentRegionAvail().x;
-    float hm_w = std::max(200.0f, content_w - 24.0f);
+    float hm_w = std::max(200.0f, content_w - 8.0f);
 
-    // ── All 12 Lead Saliency Maps (tiled) ──
-    bool has_samp = s.selected >= 0 && s.selected < (int)s.samples.size()
-                    && s.samples[s.selected].processed_valid;
-    if (has_samp && s.detail_acts[0].defined()) {
-        ImGui::SeparatorText("Input: 12-Lead Saliency Maps");
+    if (n_subplot_rows > 0 && has_samp) {
+        // Compute row heights: waveform gets 130px, each layer gets dynamic height
+        std::vector<float> row_ratios;
+        float total_h = 130.0f;
+        row_ratios.push_back(130.0f);
 
-        auto& samp = s.samples[s.selected];
-        float tile_w = (hm_w - 5.0f * 11.0f) / 12.0f;
-        float tile_h = 60.0f;
+        for (int li : temporal_layers) {
+            auto& t = s.detail_acts[li];
+            torch::Tensor t2d;
+            if (t.dim() == 1) t2d = t.unsqueeze(0);
+            else if (t.dim() == 2) t2d = t;
+            else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
+            int rows = (int)t2d.size(0);
 
-        // Draw 12 lead tiles side by side
-        ImVec2 start_pos = ImGui::GetCursorPos();
-        for (int lead = 0; lead < 12; lead++) {
-            if (lead > 0) ImGui::SameLine(0, 5.0f);
+            float hm_h;
+            if (rows <= 2)       hm_h = 40.0f;
+            else if (rows <= 16) hm_h = std::max(60.0f, (float)rows * 5.0f);
+            else if (rows <= 64) hm_h = std::max(80.0f, (float)rows * 2.5f);
+            else                 hm_h = std::min(200.0f, (float)rows * 1.5f);
 
-            ImGui::BeginGroup();
-            ImGui::TextColored(LEAD_COLORS[lead], "%s", kLeadNames12[lead]);
-            if (s.detail_texs[13 + lead]) {
-                ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[13 + lead],
-                             ImVec2(tile_w, tile_h));
+            row_ratios.push_back(hm_h);
+            total_h += hm_h;
+        }
+
+        // Normalize ratios
+        for (auto& r : row_ratios) r /= total_h;
+
+        float subplot_h = std::max(total_h + n_subplot_rows * 30.0f, 300.0f);
+
+        if (ImPlot::BeginSubplots("##activation_flow", n_subplot_rows, 1,
+                ImVec2(hm_w, subplot_h),
+                ImPlotSubplotFlags_LinkAllX | ImPlotSubplotFlags_NoResize,
+                row_ratios.data())) {
+
+            // Row 0: waveform + saliency overlay
+            if (ImPlot::BeginPlot("##waveform", ImVec2(), ImPlotFlags_NoLegend)) {
+                auto& samp = s.samples[s.selected];
+                int lead = s.detail_lead;
+                auto& st = samp.stats[lead];
+                float margin = (st.max_val - st.min_val) * 0.1f;
+                float y_lo = st.min_val - margin;
+                float y_hi = st.max_val + margin;
+
+                ImPlot::SetupAxes(nullptr, nullptr,
+                    ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels,
+                    ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels);
+                ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, y_lo, y_hi, ImGuiCond_Always);
+
+                if (s.detail_texs[0]) {
+                    ImPlot::PlotImage("##sal",
+                        (ImTextureID)(intptr_t)s.detail_texs[0],
+                        ImPlotPoint(0, y_hi), ImPlotPoint(duration, y_lo),
+                        ImVec2(0, 0), ImVec2(1, 1),
+                        ImVec4(1, 1, 1, 0.45f));
+                }
+
+                ImPlot::PlotLine("##sig", s.time_axis.data(),
+                    samp.processed[lead].data(), samp.num_samples,
+                    ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
+                               ImPlotProp_LineWeight, 1.5f));
+
+                ImPlot::Annotation(0.0, y_hi, LEAD_COLORS[lead],
+                    ImVec2(5, 5), false, "%s  Grad-CAM", kLeadNames12[lead]);
+
+                ImPlot::EndPlot();
             }
-            ImGui::EndGroup();
+
+            // Remaining rows: temporal activation heatmaps
+            for (int li : temporal_layers) {
+                auto& t = s.detail_acts[li];
+                torch::Tensor t2d;
+                if (t.dim() == 1) t2d = t.unsqueeze(0);
+                else if (t.dim() == 2) t2d = t;
+                else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
+                int rows = (int)t2d.size(0);
+
+                char plot_id[32];
+                std::snprintf(plot_id, sizeof(plot_id), "##layer_%d", li);
+                if (ImPlot::BeginPlot(plot_id, ImVec2(), ImPlotFlags_NoLegend)) {
+                    ImPlot::SetupAxes(nullptr, nullptr,
+                        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels,
+                        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, rows, ImGuiCond_Always);
+
+                    ImPlot::PlotImage("##hm",
+                        (ImTextureID)(intptr_t)s.detail_texs[li],
+                        ImPlotPoint(0, rows), ImPlotPoint(duration, 0));
+
+                    ImPlot::Annotation(0.0, (double)rows, ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+                        ImVec2(5, 5), false, "%s", kLayerLabels[li]);
+
+                    ImPlot::EndPlot();
+                }
+            }
+
+            ImPlot::EndSubplots();
         }
-
-        ImGui::Spacing();
-
-        // ── Flow arrows from 12 leads into attention ──
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 cursor = ImGui::GetCursorScreenPos();
-        float arrow_h = 30.0f;
-
-        for (int lead = 0; lead < 12; lead++) {
-            float lx = cursor.x + lead * (tile_w + 5.0f) + tile_w * 0.5f;
-            float ay0 = cursor.y;
-            float ay1 = cursor.y + arrow_h;
-            float mid_x = cursor.x + hm_w * 0.5f;
-
-            ImU32 col = ImGui::ColorConvertFloat4ToU32(LEAD_COLORS[lead]);
-            // Converging lines from each lead to center (attention)
-            dl->AddLine(ImVec2(lx, ay0), ImVec2(mid_x, ay1), col, 1.5f);
-        }
-        // Attention node indicator
-        float mid_x = cursor.x + hm_w * 0.5f;
-        float ay1 = cursor.y + arrow_h;
-        dl->AddCircleFilled(ImVec2(mid_x, ay1), 8.0f, IM_COL32(245, 160, 20, 220));
-        dl->AddText(ImVec2(mid_x + 12, ay1 - 7),
-                    IM_COL32(245, 160, 20, 255), "CrossLeadAttention");
-
-        ImGui::Dummy(ImVec2(hm_w, arrow_h + 12.0f));
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
     }
 
-    // ── Per-stage activations with all 12 channels shown ──
-    for (int i = 1; i < 13; i++) {
+    // ── Non-temporal layers (GAP, Dropout, FC, Probs) ──
+    for (int i = 0; i < 13; i++) {
+        if (i == 0) continue;
         if (!s.detail_acts[i].defined()) continue;
 
         auto& t = s.detail_acts[i];
+        torch::Tensor t2d;
+        if (t.dim() == 1) t2d = t.unsqueeze(0);
+        else if (t.dim() == 2) t2d = t;
+        else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
+        int cols = t2d.dim() >= 2 ? (int)t2d.size(1) : 1;
+
+        bool is_temporal = (cols > 1 && duration > 0.0f);
+        if (is_temporal) continue;
+
         auto& la = s.inference.layers[i];
 
         ImGui::PushID(i);
 
-        // Section header
         ImVec4 hdr_col = {0.6f, 0.8f, 1.0f, 1.0f};
-        if (i >= 1 && i <= 2) hdr_col = {0.4f, 0.7f, 1.0f, 1.0f};
-        if (i >= 3 && i <= 4) hdr_col = {0.5f, 0.75f, 0.95f, 1.0f};
-        if (i >= 5 && i <= 6) hdr_col = {0.6f, 0.8f, 0.9f, 1.0f};
         ImGui::TextColored(hdr_col, "%s", kLayerLabels[i]);
         ImGui::SameLine();
         if (la.valid)
             ImGui::TextDisabled("shape: %s  |  mu=%.4f  sigma=%.4f  [%.3f, %.3f]",
                 la.shape.c_str(), la.mean, la.stddev, la.min_val, la.max_val);
 
-        // For 3D tensors (12 leads x channels x time), show all 12 channel tiles
-        if (t.dim() == 3 && t.size(0) == 12) {
-            float tile_w = (hm_w - 5.0f * 11.0f) / 12.0f;
-            int rows = (int)t.size(1);
-            float tile_h;
-            if (rows <= 2) tile_h = 24.0f;
-            else if (rows <= 16) tile_h = std::max(40.0f, (float)rows * 3.0f);
-            else if (rows <= 64) tile_h = std::max(50.0f, (float)rows * 1.5f);
-            else tile_h = std::min(120.0f, (float)rows * 1.0f);
-
-            for (int lead = 0; lead < 12; lead++) {
-                if (lead > 0) ImGui::SameLine(0, 5.0f);
-                ImGui::BeginGroup();
-                ImGui::TextColored(LEAD_COLORS[lead], "%s", kLeadNames12[lead]);
-
-                auto t2d = t[lead];
-                GLuint tex = heatmap::upload_texture(t2d, false);
-                ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(tile_w, tile_h));
-                glDeleteTextures(1, &tex);
-                ImGui::EndGroup();
-            }
-
-            // Draw attention flow arrows for attention layers
-            bool is_attn = (i == 2 || i == 4 || i == 6);
-            if (is_attn) {
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                ImVec2 cursor = ImGui::GetCursorScreenPos();
-                float arrow_h = 24.0f;
-                float mid_x = cursor.x + hm_w * 0.5f;
-
-                for (int lead = 0; lead < 12; lead++) {
-                    float lx = cursor.x + lead * (tile_w + 5.0f) + tile_w * 0.5f;
-                    ImU32 col = ImGui::ColorConvertFloat4ToU32(LEAD_COLORS[lead]);
-                    dl->AddLine(ImVec2(lx, cursor.y + 2),
-                                ImVec2(mid_x, cursor.y + arrow_h),
-                                col, 1.2f);
-                }
-                dl->AddCircleFilled(ImVec2(mid_x, cursor.y + arrow_h), 6.0f,
-                                    IM_COL32(245, 160, 20, 200));
-                ImGui::Dummy(ImVec2(hm_w, arrow_h + 8.0f));
-            }
-        } else {
-            // Non-3D tensors: single heatmap at full width (same as saliency)
-            if (s.detail_texs[i]) {
-                torch::Tensor t2d;
-                if (t.dim() == 1) t2d = t.unsqueeze(0);
-                else if (t.dim() == 2) t2d = t;
-                else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
-
-                int rows = (int)t2d.size(0);
-
-                float hm_h;
-                if (rows <= 2) hm_h = 32.0f;
-                else if (rows <= 16) hm_h = std::max(60.0f, (float)rows * 5.0f);
-                else if (rows <= 64) hm_h = std::max(80.0f, (float)rows * 2.5f);
-                else hm_h = std::min(200.0f, (float)rows * 1.5f);
-
-                ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[i],
-                             ImVec2(hm_w, hm_h));
-            }
-        }
-
-        // Color scale legend
-        if (la.valid) {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImVec2 lp = ImGui::GetCursorScreenPos();
-            float leg_w = std::min(200.0f, hm_w * 0.4f);
-            float leg_h = 10.0f;
-            for (int p = 0; p < (int)leg_w; p++) {
-                float ft = (float)p / leg_w;
-                uint8_t cr, cg, cb;
-                heatmap::colormap(ft, cr, cg, cb, false);
-                dl->AddRectFilled(
-                    ImVec2(lp.x + p, lp.y),
-                    ImVec2(lp.x + p + 1, lp.y + leg_h),
-                    IM_COL32(cr, cg, cb, 255));
-            }
-            char lmin[32], lmax[32];
-            std::snprintf(lmin, sizeof(lmin), "%.2f", la.min_val);
-            std::snprintf(lmax, sizeof(lmax), "%.2f", la.max_val);
-            dl->AddText(ImVec2(lp.x, lp.y + leg_h + 1),
-                        IM_COL32(180, 190, 200, 200), lmin);
-            ImVec2 ts = ImGui::CalcTextSize(lmax);
-            dl->AddText(ImVec2(lp.x + leg_w - ts.x, lp.y + leg_h + 1),
-                        IM_COL32(180, 190, 200, 200), lmax);
-            ImGui::Dummy(ImVec2(leg_w, leg_h + 18));
+        if (s.detail_texs[i]) {
+            int rows = (int)t2d.size(0);
+            float hm_h = (rows <= 2) ? 32.0f : std::min(100.0f, (float)rows * 4.0f);
+            ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[i],
+                         ImVec2(hm_w, hm_h));
         }
 
         ImGui::Spacing();
