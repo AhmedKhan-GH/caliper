@@ -1500,7 +1500,7 @@ static torch::Tensor compute_grad_cam(torch::jit::Module& model,
                                        int target_class,
                                        int input_length) {
     int nl = (int)input.size(1);
-    torch::Tensor fuse_out;
+    torch::Tensor pre_reshape;
 
     {
         torch::NoGradGuard no_grad;
@@ -1511,15 +1511,17 @@ static torch::Tensor compute_grad_cam(torch::jit::Module& model,
             x = stage.attr("conv").toModule().forward({x}).toTensor();
             x = stage.attr("attn").toModule().forward({x}).toTensor();
         }
-        auto sizes = x.sizes();
-        x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
-        fuse_out = model.attr("fuse").toModule().forward({x}).toTensor();
+        pre_reshape = x;
     }
 
-    auto A = fuse_out.detach().clone();
+    // Anchor gradients at pre-reshape where leads are separate: [1, C, nl, T]
+    auto A = pre_reshape.detach().clone();
     A.requires_grad_(true);
 
-    auto x = model.attr("gap").toModule().forward({A}).toTensor().squeeze(-1);
+    auto sizes = A.sizes();
+    auto x = A.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
+    x = model.attr("fuse").toModule().forward({x}).toTensor();
+    x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
     x = model.attr("head_drop").toModule().forward({x}).toTensor();
     auto logits = model.attr("fc").toModule().forward({x}).toTensor();
 
@@ -1533,31 +1535,31 @@ static torch::Tensor compute_grad_cam(torch::jit::Module& model,
         return {};
     }
 
-    // Grad-CAM: alpha_k = GAP(dY/dA^k), cam = ReLU(sum_k alpha_k * A^k)
-    auto alpha = grads[0].mean(2, true);           // [1, C, 1]
-    auto cam = (alpha * A).sum(1).squeeze(0);       // [T]
-    cam = torch::relu(cam);
-
-    float cam_max = cam.max().item<float>();
-    if (cam_max > 1e-8f) cam = cam / cam_max;
-
-    int T = (int)cam.size(0);
-    auto cam_a = cam.accessor<float, 1>();
+    // A: [1, C, nl, T], grads: [1, C, nl, T]
+    // Per-lead Grad-CAM: for each lead l, alpha = GAP over T of grad[:,:,l,:]
+    int C = (int)sizes[1];
+    int T = (int)sizes[3];
     auto result = torch::zeros({nl, input_length});
     auto res_a = result.accessor<float, 2>();
 
-    for (int i = 0; i < input_length; i++) {
-        float src = (float)i * (T - 1) / std::max(input_length - 1, 1);
-        int lo = std::min((int)src, T - 1);
-        int hi = std::min(lo + 1, T - 1);
-        float frac = src - lo;
-        float val = cam_a[lo] * (1.0f - frac) + cam_a[hi] * frac;
-        for (int l = 0; l < nl; l++)
-            res_a[l][i] = val;
+    for (int l = 0; l < nl; l++) {
+        auto grad_l = grads[0].select(2, l);  // [1, C, T]
+        auto feat_l = A.select(2, l);          // [1, C, T]
+        auto alpha = grad_l.mean(2, true);     // [1, C, 1]
+        auto cam = (alpha * feat_l).sum(1).squeeze(0); // [T]
+        auto cam_a = cam.accessor<float, 1>();
+
+        for (int i = 0; i < input_length; i++) {
+            float src = (float)i * (T - 1) / std::max(input_length - 1, 1);
+            int lo = std::min((int)src, T - 1);
+            int hi = std::min(lo + 1, T - 1);
+            float frac = src - lo;
+            res_a[l][i] = cam_a[lo] * (1.0f - frac) + cam_a[hi] * frac;
+        }
     }
 
-    std::fprintf(stderr, "[grad-cam] OK: T=%d cam_max=%.6f upsampled_max=%.6f\n",
-        T, cam_max, result[0].max().item<float>());
+    std::fprintf(stderr, "[grad-cam] OK: C=%d T=%d range=[%.4f, %.4f]\n",
+        C, T, result.min().item<float>(), result.max().item<float>());
 
     return result.detach();
 }
@@ -1658,7 +1660,7 @@ static void run_step_inference(torch::jit::Module& model,
     // Grad-CAM pass — separate try/catch so failures don't lose the inference results
     if (inf.valid) {
         try {
-            auto cam = compute_grad_cam(model, input, inf.result_class, n);
+            auto cam = compute_grad_cam(model, input, 1, n);
             detail[0] = cam;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "[grad-cam] Failed: %s\n", e.what());
