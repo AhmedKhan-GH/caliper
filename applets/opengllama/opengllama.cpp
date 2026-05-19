@@ -15,6 +15,44 @@
 #include <numeric>
 
 // ============================================================================
+// Vertical text helper — renders text rotated 90° CW, reading bottom to top
+// ============================================================================
+
+static void DrawTextVertical(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* text) {
+    ImFont* font = ImGui::GetFont();
+    float font_size = ImGui::GetFontSize();
+    ImFontBaked* baked = font->GetFontBaked(font_size);
+    float scale = font_size / baked->Size;
+
+    dl->PushTexture(font->OwnerAtlas->TexRef);
+
+    const char* s = text;
+    while (*s) {
+        unsigned int c = (unsigned char)*s++;
+        ImFontGlyph* glyph = baked->FindGlyph((ImWchar)c);
+        if (!glyph) continue;
+
+        if (glyph->Visible) {
+            dl->PrimReserve(6, 4);
+            dl->PrimQuadUV(
+                ImVec2(pos.x + glyph->Y0 * scale, pos.y - glyph->X0 * scale),
+                ImVec2(pos.x + glyph->Y1 * scale, pos.y - glyph->X0 * scale),
+                ImVec2(pos.x + glyph->Y1 * scale, pos.y - glyph->X1 * scale),
+                ImVec2(pos.x + glyph->Y0 * scale, pos.y - glyph->X1 * scale),
+                ImVec2(glyph->U0, glyph->V0),
+                ImVec2(glyph->U0, glyph->V1),
+                ImVec2(glyph->U1, glyph->V1),
+                ImVec2(glyph->U1, glyph->V0),
+                col);
+        }
+
+        pos.y -= glyph->AdvanceX * scale;
+    }
+
+    dl->PopTexture();
+}
+
+// ============================================================================
 // Eval callback — intercepts layer output tensors during graph evaluation
 // ============================================================================
 
@@ -560,12 +598,22 @@ void OpenGllamaApplet::draw_inference_view() {
 
                     if (!ctok_snap.empty()) {
                         float cell_w = map_w / (float)n_ctx;
-                        int label_skip = std::max(1, (int)(12.0f / cell_w));
+                        float font_h = ImGui::GetFontSize();
+                        int label_skip = std::max(1, (int)(font_h / cell_w));
+                        float label_h = 0.0f;
+                        for (int i = 0; i < n_ctx && i < (int)ctok_snap.size(); i += label_skip)
+                            label_h = std::max(label_h, ImGui::CalcTextSize(ctok_snap[i].c_str()).x);
+                        label_h += 4.0f;
+
+                        ImVec2 label_origin = ImGui::GetCursorScreenPos();
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        ImU32 label_col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
                         for (int i = 0; i < n_ctx && i < (int)ctok_snap.size(); i += label_skip) {
-                            ImGui::SameLine(i * cell_w);
-                            ImGui::TextDisabled("%s", ctok_snap[i].c_str());
+                            float x = label_origin.x + i * cell_w + cell_w * 0.5f - font_h * 0.3f;
+                            float y = label_origin.y + label_h;
+                            DrawTextVertical(dl, ImVec2(x, y), label_col, ctok_snap[i].c_str());
                         }
-                        ImGui::NewLine();
+                        ImGui::Dummy(ImVec2(map_w, label_h));
                     }
                 }
                 ImGui::EndChild();
@@ -728,12 +776,22 @@ void OpenGllamaApplet::draw_inference_view() {
 
                     if (!ctok2.empty() && n_kv > 0) {
                         float cell_w = map_w / (float)n_kv;
-                        int label_skip = std::max(1, (int)(12.0f / cell_w));
+                        float font_h = ImGui::GetFontSize();
+                        int label_skip = std::max(1, (int)(font_h / cell_w));
+                        float label_h = 0.0f;
+                        for (int i = 0; i < n_kv && i < (int)ctok2.size(); i += label_skip)
+                            label_h = std::max(label_h, ImGui::CalcTextSize(ctok2[i].c_str()).x);
+                        label_h += 4.0f;
+
+                        ImVec2 label_origin = ImGui::GetCursorScreenPos();
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        ImU32 label_col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
                         for (int i = 0; i < n_kv && i < (int)ctok2.size(); i += label_skip) {
-                            ImGui::SameLine(i * cell_w);
-                            ImGui::TextDisabled("%s", ctok2[i].c_str());
+                            float x = label_origin.x + i * cell_w + cell_w * 0.5f - font_h * 0.3f;
+                            float y = label_origin.y + label_h;
+                            DrawTextVertical(dl, ImVec2(x, y), label_col, ctok2[i].c_str());
                         }
-                        ImGui::NewLine();
+                        ImGui::Dummy(ImVec2(map_w, label_h));
                     }
                 }
                 ImGui::EndChild();
