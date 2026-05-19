@@ -214,8 +214,9 @@ void OpenGllamaApplet::draw_ui(int /*width*/, int /*height*/) {
             model_loaded_ = true;
             load_error_msg_.clear();
         } else {
-            load_error_msg_ = "Failed to load " + loading_model_name_ +
-                " — architecture may not be supported by llama.cpp";
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            if (load_error_msg_.empty())
+                load_error_msg_ = "Failed to load " + loading_model_name_ + " — check terminal for details";
         }
         loading_model_name_.clear();
     } else if (!model_loaded_) {
@@ -438,11 +439,17 @@ void OpenGllamaApplet::draw_inference_view() {
             } else if (toks > 0) {
                 ImGui::TextDisabled("Complete — %d tokens", toks);
             }
+            float text_h = std::min(ImGui::GetContentRegionAvail().y * 0.4f, 200.0f);
+            ImGui::BeginChild("##text_output", ImVec2(0, text_h), ImGuiChildFlags_Borders,
+                ImGuiWindowFlags_AlwaysVerticalScrollbar);
             ImGui::TextWrapped("%s", text_snap.c_str());
             if (inference_running_) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f)
+                    ImGui::SetScrollHereY(1.0f);
             }
+            ImGui::EndChild();
         }
 
         // ── Token Confidence (ImPlot) ──
@@ -521,6 +528,9 @@ void OpenGllamaApplet::draw_inference_view() {
                     "Layers (top=0, bottom=%d) vs context tokens — bright = high activation",
                     n_layers - 1);
 
+                ImGui::BeginChild("##ctx_actmap_port", ImVec2(0, 280), ImGuiChildFlags_Borders,
+                    ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
                 update_context_map_texture(cmap_snap);
 
                 if (context_map_texture_) {
@@ -532,7 +542,6 @@ void OpenGllamaApplet::draw_inference_view() {
                     ImGui::Image((ImTextureID)(intptr_t)context_map_texture_,
                                  ImVec2(map_w, map_h));
 
-                    // Hover: show token + layer info
                     if (ImGui::IsItemHovered()) {
                         ImVec2 mouse = ImGui::GetMousePos();
                         int tok_idx = (int)((mouse.x - img_pos.x) / map_w * n_ctx);
@@ -549,7 +558,6 @@ void OpenGllamaApplet::draw_inference_view() {
                         ImGui::EndTooltip();
                     }
 
-                    // Token labels along bottom (sampled to fit)
                     if (!ctok_snap.empty()) {
                         float cell_w = map_w / (float)n_ctx;
                         int label_skip = std::max(1, (int)(12.0f / cell_w));
@@ -560,6 +568,7 @@ void OpenGllamaApplet::draw_inference_view() {
                         ImGui::NewLine();
                     }
                 }
+                ImGui::EndChild();
             }
         }
 
@@ -686,6 +695,9 @@ void OpenGllamaApplet::draw_inference_view() {
                     n_lay - 1,
                     ctok2.empty() ? "?" : ctok2.back().c_str());
 
+                ImGui::BeginChild("##ctx_attn_port", ImVec2(0, 280), ImGuiChildFlags_Borders,
+                    ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
                 update_attn_map_texture(attn_snap.back().layer_attn);
 
                 if (attn_map_texture_ && n_kv > 0) {
@@ -714,7 +726,6 @@ void OpenGllamaApplet::draw_inference_view() {
                         ImGui::EndTooltip();
                     }
 
-                    // Token labels along bottom
                     if (!ctok2.empty() && n_kv > 0) {
                         float cell_w = map_w / (float)n_kv;
                         int label_skip = std::max(1, (int)(12.0f / cell_w));
@@ -725,6 +736,7 @@ void OpenGllamaApplet::draw_inference_view() {
                         ImGui::NewLine();
                     }
                 }
+                ImGui::EndChild();
             }
         }
 
@@ -920,6 +932,10 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
     float total_w = cell_w * n_tokens;
     float total_h = cell_h * n_layers;
 
+    float port_h = std::min(total_h + 24.0f, 280.0f);
+    ImGui::BeginChild("##live_attn_port", ImVec2(0, port_h), ImGuiChildFlags_Borders,
+        ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
     // Layer labels on the left
     ImVec2 label_origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl_labels = ImGui::GetWindowDrawList();
@@ -933,7 +949,7 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
 
     // Scrollable chart area (offset by label margin)
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + label_margin);
-    ImGui::BeginChild("##live_attn_scroll", ImVec2(chart_w, total_h + 20.0f),
+    ImGui::BeginChild("##live_attn_scroll", ImVec2(chart_w - 16.0f, total_h + 20.0f),
         ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
 
     if (inference_running_)
@@ -1026,6 +1042,7 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
         ImGui::EndTooltip();
     }
 
+    ImGui::EndChild();
     ImGui::EndChild();
 }
 
@@ -1272,42 +1289,69 @@ void OpenGllamaApplet::load_model_async(const std::string& path, const std::stri
     loading_model_name_ = display_name;
 
     load_thread_ = std::thread([this, path]() {
-        unload_model();
+        try {
+            unload_model();
 
-        llama_model_params model_params = llama_model_default_params();
-        model_params.n_gpu_layers = n_gpu_layers_;
-        model_params.progress_callback = [](float progress, void* user_data) -> bool {
-            auto* self = static_cast<OpenGllamaApplet*>(user_data);
-            self->load_progress_.store(progress);
-            return true;
-        };
-        model_params.progress_callback_user_data = this;
+            llama_model_params model_params = llama_model_default_params();
+            model_params.n_gpu_layers = n_gpu_layers_;
+            model_params.progress_callback = [](float progress, void* user_data) -> bool {
+                auto* self = static_cast<OpenGllamaApplet*>(user_data);
+                self->load_progress_.store(progress);
+                return true;
+            };
+            model_params.progress_callback_user_data = this;
 
-        model_ = llama_model_load_from_file(path.c_str(), model_params);
-        if (!model_) {
+            std::fprintf(stderr, "[opengllama] loading model from: %s\n", path.c_str());
+            model_ = llama_model_load_from_file(path.c_str(), model_params);
+            if (!model_) {
+                std::fprintf(stderr, "[opengllama] llama_model_load_from_file failed\n");
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                load_error_msg_ = "Failed to load GGUF file — check stderr for llama.cpp errors";
+                load_success_ = false;
+                load_finished_ = true;
+                return;
+            }
+
+            char model_desc[128] = {};
+            llama_model_desc(model_, model_desc, sizeof(model_desc));
+            int n_layers = llama_model_n_layer(model_);
+            int n_embd = llama_model_n_embd(model_);
+            std::fprintf(stderr, "[opengllama] model loaded: desc='%s' layers=%d embd=%d\n",
+                model_desc, n_layers, n_embd);
+
+            llama_context_params ctx_params = llama_context_default_params();
+            ctx_params.n_ctx = context_size_;
+            ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            ctx_params.cb_eval = eval_callback;
+            ctx_params.cb_eval_user_data = this;
+
+            std::fprintf(stderr, "[opengllama] creating context: n_ctx=%d flash_attn=disabled\n", context_size_);
+            ctx_ = llama_init_from_model(model_, ctx_params);
+            if (!ctx_) {
+                std::fprintf(stderr, "[opengllama] llama_init_from_model failed (context creation)\n");
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                load_error_msg_ = std::string("Context creation failed for '") +
+                    model_desc +
+                    "' — check stderr for details (may need more VRAM or unsupported op)";
+                llama_model_free(model_);
+                model_ = nullptr;
+                load_success_ = false;
+                load_finished_ = true;
+                return;
+            }
+
+            std::fprintf(stderr, "[opengllama] model + context ready\n");
+            model_path_ = path;
+            load_success_ = true;
+            load_finished_ = true;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[opengllama] exception during load: %s\n", e.what());
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            load_error_msg_ = std::string("Exception: ") + e.what();
+            if (model_) { llama_model_free(model_); model_ = nullptr; }
             load_success_ = false;
             load_finished_ = true;
-            return;
         }
-
-        llama_context_params ctx_params = llama_context_default_params();
-        ctx_params.n_ctx = context_size_;
-        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
-        ctx_params.cb_eval = eval_callback;
-        ctx_params.cb_eval_user_data = this;
-
-        ctx_ = llama_init_from_model(model_, ctx_params);
-        if (!ctx_) {
-            llama_model_free(model_);
-            model_ = nullptr;
-            load_success_ = false;
-            load_finished_ = true;
-            return;
-        }
-
-        model_path_ = path;
-        load_success_ = true;
-        load_finished_ = true;
     });
 }
 
