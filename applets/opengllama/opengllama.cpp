@@ -634,10 +634,18 @@ void OpenGllamaApplet::draw_inference_view() {
 
                 if (n_gen > 0 && n_tok > 1) {
                     ImGui::Spacing();
+
+                    static const char* thm_labels[] = {
+                        "EMA (decay)", "Max", "Recent (last 8)", "Final Layer" };
+                    ImGui::SetNextItemWidth(160.0f);
+                    ImGui::Combo("##thm_mode", &ctx_text_heatmap_mode_, thm_labels, 4);
+
                     float wrap_width = ImGui::GetContentRegionAvail().x;
                     float line_h = ImGui::GetFontSize();
 
-                    bool need_rebuild = (n_tok != ctx_text_heatmap_n_ctx_)
+                    bool mode_changed = (ctx_text_heatmap_mode_ != ctx_text_heatmap_prev_mode_);
+                    bool need_rebuild = mode_changed
+                        || (n_tok != ctx_text_heatmap_n_ctx_)
                         || (n_gen != ctx_text_heatmap_n_gen_)
                         || (std::abs(wrap_width - ctx_text_heatmap_last_width_) > 1.0f);
 
@@ -645,22 +653,69 @@ void OpenGllamaApplet::draw_inference_view() {
                         ctx_text_heatmap_n_ctx_ = n_tok;
                         ctx_text_heatmap_n_gen_ = n_gen;
                         ctx_text_heatmap_last_width_ = wrap_width;
+                        ctx_text_heatmap_prev_mode_ = ctx_text_heatmap_mode_;
 
-                        // Mean attention per context position across all generated tokens and layers
                         std::vector<float> tok_attn(n_tok, 0.0f);
-                        int total_contributions = 0;
-                        for (auto& ta : attn_snap) {
-                            for (auto& layer_vec : ta.layer_attn) {
-                                for (int k = 0; k < (int)layer_vec.size() && k < n_tok; ++k)
-                                    tok_attn[k] += layer_vec[k];
-                                ++total_contributions;
+
+                        if (ctx_text_heatmap_mode_ == THM_EMA) {
+                            // Exponential moving average: α=0.3, recent steps dominate
+                            float alpha = 0.3f;
+                            bool first = true;
+                            for (auto& ta : attn_snap) {
+                                std::vector<float> step_avg(n_tok, 0.0f);
+                                int n_lay = (int)ta.layer_attn.size();
+                                if (n_lay == 0) continue;
+                                for (auto& lv : ta.layer_attn)
+                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
+                                        step_avg[k] += lv[k];
+                                for (int k = 0; k < n_tok; ++k)
+                                    step_avg[k] /= (float)n_lay;
+
+                                if (first) {
+                                    tok_attn = step_avg;
+                                    first = false;
+                                } else {
+                                    for (int k = 0; k < n_tok; ++k)
+                                        tok_attn[k] = alpha * step_avg[k] + (1.0f - alpha) * tok_attn[k];
+                                }
+                            }
+                        } else if (ctx_text_heatmap_mode_ == THM_MAX) {
+                            for (auto& ta : attn_snap)
+                                for (auto& lv : ta.layer_attn)
+                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
+                                        tok_attn[k] = std::max(tok_attn[k], lv[k]);
+                        } else if (ctx_text_heatmap_mode_ == THM_RECENT) {
+                            int window = 8;
+                            int start = std::max(0, n_gen - window);
+                            int count = 0;
+                            for (int t = start; t < n_gen; ++t) {
+                                for (auto& lv : attn_snap[t].layer_attn) {
+                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
+                                        tok_attn[k] += lv[k];
+                                    ++count;
+                                }
+                            }
+                            if (count > 0)
+                                for (int k = 0; k < n_tok; ++k)
+                                    tok_attn[k] /= (float)count;
+                        } else if (ctx_text_heatmap_mode_ == THM_FINAL_LAYER) {
+                            // EMA over only the last layer of each generation step
+                            float alpha = 0.3f;
+                            bool first = true;
+                            for (auto& ta : attn_snap) {
+                                if (ta.layer_attn.empty()) continue;
+                                auto& lv = ta.layer_attn.back();
+                                if (first) {
+                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
+                                        tok_attn[k] = lv[k];
+                                    first = false;
+                                } else {
+                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
+                                        tok_attn[k] = alpha * lv[k] + (1.0f - alpha) * tok_attn[k];
+                                }
                             }
                         }
-                        if (total_contributions > 0)
-                            for (int k = 0; k < n_tok; ++k)
-                                tok_attn[k] /= (float)total_contributions;
 
-                        // Percentile normalization, skip BOS
                         std::vector<float> sort_vals;
                         for (int c = 1; c < n_tok; ++c)
                             sort_vals.push_back(tok_attn[c]);
