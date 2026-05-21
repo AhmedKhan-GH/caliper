@@ -113,6 +113,17 @@ private:
     unsigned int context_map_texture_ = 0;
     void update_context_map_texture(const std::vector<std::vector<float>>& cmap);
 
+    // Text heatmap: GL texture baked to match paragraph layout
+    unsigned int ctx_text_heatmap_tex_ = 0;
+    int ctx_text_heatmap_tex_w_ = 0;
+    int ctx_text_heatmap_tex_h_ = 0;
+    int ctx_text_heatmap_n_ctx_ = 0;
+    int ctx_text_heatmap_n_gen_ = 0;
+    float ctx_text_heatmap_last_width_ = 0.0f;
+    struct TokenLayout { int token_idx; float x, y, w; std::string text; };
+    std::vector<TokenLayout> ctx_text_layout_;
+    float ctx_text_total_h_ = 0.0f;
+
     // Per-layer attention weights: [n_layers] = head-averaged attention over KV for latest token
     std::vector<std::vector<float>> pending_attn_weights_;  // built during eval callback
     // Accumulated: [n_generated_tokens][n_layers] = head-averaged attention vector
