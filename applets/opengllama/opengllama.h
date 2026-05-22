@@ -157,12 +157,12 @@ private:
     int cached_attn_n_lay_ = 0;
     int cached_attn_n_kv_ = 0;
 
-    // Per-layer max attention accumulated across all generation steps
-    std::vector<std::vector<float>> attn_max_map_;
-    std::atomic<bool> attn_max_map_dirty_{false};
-    std::vector<std::vector<float>> cached_attn_max_map_;
-    int cached_attn_max_n_lay_ = 0;
-    int cached_attn_max_n_kv_ = 0;
+    // Attention focus timeline: [n_layers][n_gen_tokens] = max attention weight per layer per step
+    std::vector<std::vector<float>> attn_focus_timeline_;
+    std::atomic<bool> attn_focus_dirty_{false};
+    std::vector<std::vector<float>> cached_attn_focus_;
+    int cached_attn_focus_n_lay_ = 0;
+    int cached_attn_focus_n_gen_ = 0;
 
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,

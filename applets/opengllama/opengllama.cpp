@@ -891,21 +891,21 @@ void OpenGllamaApplet::draw_inference_view() {
             }
         }
 
-        // ── Max Attention — accumulated peaks across all generated tokens ──
+        // ── Attention Focus — per-layer certainty across generated tokens ──
         {
-            if (attn_max_map_dirty_.exchange(false)) {
+            if (attn_focus_dirty_.exchange(false)) {
                 std::lock_guard<std::mutex> lk(output_mutex_);
-                cached_attn_max_map_ = attn_max_map_;
-                cached_attn_max_n_lay_ = (int)attn_max_map_.size();
-                cached_attn_max_n_kv_ = 0;
-                for (auto& row : attn_max_map_)
-                    cached_attn_max_n_kv_ = std::max(cached_attn_max_n_kv_, (int)row.size());
+                cached_attn_focus_ = attn_focus_timeline_;
+                cached_attn_focus_n_lay_ = (int)attn_focus_timeline_.size();
+                cached_attn_focus_n_gen_ = 0;
+                for (auto& row : attn_focus_timeline_)
+                    cached_attn_focus_n_gen_ = std::max(cached_attn_focus_n_gen_, (int)row.size());
             }
 
-            if (cached_attn_max_n_lay_ > 0 && cached_attn_max_n_kv_ > 0) {
-                draw_attn_tape("max_attn", "Max Attention",
-                    "Peak attention any token ever paid to each position — grows monotonically",
-                    cached_attn_max_map_, cached_attn_max_n_lay_, cached_attn_max_n_kv_, true);
+            if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
+                draw_attn_tape("attn_focus", "Attention Focus",
+                    "Max attention weight per layer per token — bright = focused, dark = diffuse",
+                    cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
             }
         }
 
@@ -1078,7 +1078,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     float avail_w = ImGui::GetContentRegionAvail().x;
     float label_margin = 30.0f;
     float chart_w = avail_w - label_margin;
-    float cell_w = std::max(3.0f, std::min(12.0f, chart_w / (float)n_kv));
+    float cell_w = 6.0f;
     float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
     float total_w = cell_w * n_kv;
     float total_h = cell_h * n_layers;
@@ -1518,11 +1518,11 @@ void OpenGllamaApplet::unload_model() {
     cached_attn_n_kv_ = 0;
     context_map_dirty_ = false;
     attn_map_dirty_ = false;
-    attn_max_map_.clear();
-    attn_max_map_dirty_ = false;
-    cached_attn_max_map_.clear();
-    cached_attn_max_n_lay_ = 0;
-    cached_attn_max_n_kv_ = 0;
+    attn_focus_timeline_.clear();
+    attn_focus_dirty_ = false;
+    cached_attn_focus_.clear();
+    cached_attn_focus_n_lay_ = 0;
+    cached_attn_focus_n_gen_ = 0;
     output_text_.clear();
     tokens_generated_ = 0;
 }
@@ -1557,11 +1557,11 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         cached_attn_n_kv_ = 0;
         context_map_dirty_ = false;
         attn_map_dirty_ = false;
-        attn_max_map_.clear();
-        attn_max_map_dirty_ = false;
-        cached_attn_max_map_.clear();
-        cached_attn_max_n_lay_ = 0;
-        cached_attn_max_n_kv_ = 0;
+        attn_focus_timeline_.clear();
+        attn_focus_dirty_ = false;
+        cached_attn_focus_.clear();
+        cached_attn_focus_n_lay_ = 0;
+        cached_attn_focus_n_gen_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1661,18 +1661,16 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 attn_map_dirty_ = true;
                 {
                     int nl = (int)pending_attn_weights_.size();
-                    while ((int)attn_max_map_.size() < nl)
-                        attn_max_map_.push_back({});
+                    while ((int)attn_focus_timeline_.size() < nl)
+                        attn_focus_timeline_.push_back({});
                     for (int l = 0; l < nl; ++l) {
-                        auto& src = pending_attn_weights_[l];
-                        auto& dst = attn_max_map_[l];
-                        if ((int)dst.size() < (int)src.size())
-                            dst.resize(src.size(), 0.0f);
-                        for (int k = 0; k < (int)src.size(); ++k)
-                            dst[k] = std::max(dst[k], src[k]);
+                        float mx = 0.0f;
+                        for (float v : pending_attn_weights_[l])
+                            mx = std::max(mx, v);
+                        attn_focus_timeline_[l].push_back(mx);
                     }
                 }
-                attn_max_map_dirty_ = true;
+                attn_focus_dirty_ = true;
             }
             context_map_dirty_ = true;
             textures_dirty_ = true;
@@ -1816,18 +1814,16 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                     attn_map_dirty_ = true;
                     {
                         int nl = (int)pending_attn_weights_.size();
-                        while ((int)attn_max_map_.size() < nl)
-                            attn_max_map_.push_back({});
+                        while ((int)attn_focus_timeline_.size() < nl)
+                            attn_focus_timeline_.push_back({});
                         for (int l = 0; l < nl; ++l) {
-                            auto& src = pending_attn_weights_[l];
-                            auto& dst = attn_max_map_[l];
-                            if ((int)dst.size() < (int)src.size())
-                                dst.resize(src.size(), 0.0f);
-                            for (int k = 0; k < (int)src.size(); ++k)
-                                dst[k] = std::max(dst[k], src[k]);
+                            float mx = 0.0f;
+                            for (float v : pending_attn_weights_[l])
+                                mx = std::max(mx, v);
+                            attn_focus_timeline_[l].push_back(mx);
                         }
                     }
-                    attn_max_map_dirty_ = true;
+                    attn_focus_dirty_ = true;
                 }
                 context_map_dirty_ = true;
                 textures_dirty_ = true;
