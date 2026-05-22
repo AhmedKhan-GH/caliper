@@ -111,6 +111,11 @@ private:
     std::vector<std::vector<float>> context_map_;
     std::vector<std::string> context_tokens_;
     unsigned int context_map_texture_ = 0;
+    std::atomic<bool> context_map_dirty_{false};
+    std::vector<std::vector<float>> cached_cmap_;
+    int cached_cmap_n_layers_ = 0;
+    int cached_cmap_n_ctx_ = 0;
+    std::vector<unsigned char> ctx_map_pixels_;
     void update_context_map_texture(const std::vector<std::vector<float>>& cmap);
 
     // Text heatmap: GL texture baked to match paragraph layout
@@ -123,19 +128,37 @@ private:
     struct TokenLayout { int token_idx; float x, y, w; std::string text; };
     std::vector<TokenLayout> ctx_text_layout_;
     float ctx_text_total_h_ = 0.0f;
+    std::vector<unsigned char> ctx_text_heatmap_pixels_;  // reusable pixel buffer
     enum TextHeatmapMode { THM_EMA = 0, THM_MAX, THM_RECENT, THM_FINAL_LAYER };
     int ctx_text_heatmap_mode_ = THM_EMA;
     int ctx_text_heatmap_prev_mode_ = -1;
 
     // Per-layer attention weights: [n_layers] = head-averaged attention over KV for latest token
     std::vector<std::vector<float>> pending_attn_weights_;  // built during eval callback
-    // Accumulated: [n_generated_tokens][n_layers] = head-averaged attention vector
+    // Only the latest token's attention is kept (previous entries discarded)
     struct TokenAttn {
         std::vector<std::vector<float>> layer_attn;  // [n_layers][n_kv_at_that_point]
     };
-    std::vector<TokenAttn> attn_history_;
+    TokenAttn attn_latest_;
+    bool attn_latest_valid_ = false;
+
+    // Incremental attention aggregates, updated in inference thread, O(n_ctx) each
+    std::vector<float> attn_agg_ema_;        // EMA (α=0.3) across all layers
+    std::vector<float> attn_agg_max_;        // max across all layers and steps
+    std::vector<float> attn_agg_final_ema_;  // EMA over final layer only
+    static constexpr int kAttnRecentWindow = 8;
+    std::vector<std::vector<float>> attn_recent_ring_;  // ring buffer of last N layer-averaged vectors
+    int attn_recent_ring_idx_ = 0;
+    int attn_agg_gen_count_ = 0;             // how many generation steps contributed
+    void update_attn_aggregates(const std::vector<std::vector<float>>& layer_attn);
     unsigned int attn_map_texture_ = 0;
     int attn_selected_layer_ = -1;  // -1 = aggregated across layers
+    std::atomic<bool> attn_map_dirty_{false};
+    TokenAttn cached_attn_;
+    bool cached_attn_valid_ = false;
+    int cached_attn_n_lay_ = 0;
+    int cached_attn_n_kv_ = 0;
+    std::vector<unsigned char> attn_map_pixels_;
     void update_attn_map_texture(const std::vector<std::vector<float>>& layer_attn);
 
     // Live attention timeline: [n_tokens][n_layers] = max attention value per layer
@@ -146,15 +169,12 @@ private:
     float live_attn_flash_timer_ = 0.0f;
     void draw_live_attention_timeline();
 
-    // Logit lens: per-layer predicted token
-    struct LayerPrediction {
+    // Logit lens: pre-computed in inference thread, rendered in draw
+    struct LogitLensEntry {
         int layer;
         float cosine_to_final;
-        std::string top_token;
-        float top_prob;
     };
-    std::vector<LayerPrediction> layer_predictions_;
-    void compute_logit_lens();
+    std::vector<LogitLensEntry> logit_lens_entries_;
 
     OllamaModelStore ollama_store_;
 };

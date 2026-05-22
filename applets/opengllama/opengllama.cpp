@@ -440,16 +440,16 @@ void OpenGllamaApplet::draw_inference_view() {
     // ── Debug: attention capture status ──
     {
         std::lock_guard<std::mutex> lk(output_mutex_);
-        int ah = (int)attn_history_.size();
+        int ag = attn_agg_gen_count_;
         int pa = (int)pending_attn_weights_.size();
         int cm = (int)context_map_.size();
-        if (ah > 0) {
+        if (ag > 0) {
             ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f),
-                "[attn OK] history=%d layers_last=%d ctx_map=%d",
-                ah, (int)attn_history_.back().layer_attn.size(), cm);
+                "[attn OK] gen_steps=%d latest_layers=%d ctx_map=%d",
+                ag, (int)attn_latest_.layer_attn.size(), cm);
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                "[attn EMPTY] history=0 pending=%d ctx_map=%d — kq_soft_max not captured?", pa, cm);
+                "[attn EMPTY] gen_steps=0 pending=%d ctx_map=%d — kq_soft_max not captured?", pa, cm);
         }
     }
 
@@ -546,18 +546,18 @@ void OpenGllamaApplet::draw_inference_view() {
 
         // ── Context Activation Map ──
         {
-            std::vector<std::vector<float>> cmap_snap;
-            std::vector<std::string> ctok_snap;
-            {
+            if (context_map_dirty_.exchange(false)) {
                 std::lock_guard<std::mutex> lk(output_mutex_);
-                cmap_snap = context_map_;
-                ctok_snap = context_tokens_;
+                cached_cmap_ = context_map_;
+                cached_cmap_n_layers_ = (int)context_map_.size();
+                cached_cmap_n_ctx_ = 0;
+                for (auto& row : context_map_)
+                    cached_cmap_n_ctx_ = std::max(cached_cmap_n_ctx_, (int)row.size());
+                update_context_map_texture(cached_cmap_);
             }
 
-            int n_layers = (int)cmap_snap.size();
-            int n_ctx = 0;
-            for (auto& row : cmap_snap)
-                n_ctx = std::max(n_ctx, (int)row.size());
+            int n_layers = cached_cmap_n_layers_;
+            int n_ctx = cached_cmap_n_ctx_;
 
             if (n_layers > 0 && n_ctx > 0) {
                 ImGui::Spacing();
@@ -566,73 +566,77 @@ void OpenGllamaApplet::draw_inference_view() {
                     "Layers (top=0, bottom=%d) vs context tokens — bright = high activation",
                     n_layers - 1);
 
-                ImGui::BeginChild("##ctx_actmap_port", ImVec2(0, 280), ImGuiChildFlags_Borders,
-                    ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                float map_w = ImGui::GetContentRegionAvail().x;
+                float aspect = (float)n_layers / (float)n_ctx;
+                float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
 
-                update_context_map_texture(cmap_snap);
+                ImGui::BeginChild("##ctx_actmap_port", ImVec2(0, map_h + 8.0f), ImGuiChildFlags_Borders);
 
                 if (context_map_texture_) {
-                    float map_w = ImGui::GetContentRegionAvail().x;
-                    float aspect = (float)n_layers / (float)n_ctx;
-                    float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
-
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
+                    float draw_w = ImGui::GetContentRegionAvail().x;
+                    float draw_h = std::clamp(draw_w * aspect, 60.0f, 300.0f);
                     ImGui::Image((ImTextureID)(intptr_t)context_map_texture_,
-                                 ImVec2(map_w, map_h));
+                                 ImVec2(draw_w, draw_h));
 
                     if (ImGui::IsItemHovered()) {
                         ImVec2 mouse = ImGui::GetMousePos();
-                        int tok_idx = (int)((mouse.x - img_pos.x) / map_w * n_ctx);
-                        int lay_idx = (int)((mouse.y - img_pos.y) / map_h * n_layers);
+                        int tok_idx = (int)((mouse.x - img_pos.x) / draw_w * n_ctx);
+                        int lay_idx = (int)((mouse.y - img_pos.y) / draw_h * n_layers);
                         tok_idx = std::clamp(tok_idx, 0, n_ctx - 1);
                         lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
 
                         ImGui::BeginTooltip();
-                        if (tok_idx < (int)ctok_snap.size())
-                            ImGui::Text("Token %d: \"%s\"", tok_idx, ctok_snap[tok_idx].c_str());
-                        ImGui::Text("Layer %d", lay_idx);
-                        if (lay_idx < (int)cmap_snap.size() && tok_idx < (int)cmap_snap[lay_idx].size())
-                            ImGui::Text("Activation norm: %.4f", cmap_snap[lay_idx][tok_idx]);
-                        ImGui::EndTooltip();
-                    }
-
-                    if (!ctok_snap.empty()) {
-                        float cell_w = map_w / (float)n_ctx;
-                        float font_h = ImGui::GetFontSize();
-                        int label_skip = std::max(1, (int)(font_h / cell_w));
-                        float label_h = 0.0f;
-                        for (int i = 0; i < n_ctx && i < (int)ctok_snap.size(); i += label_skip)
-                            label_h = std::max(label_h, ImGui::CalcTextSize(ctok_snap[i].c_str()).x);
-                        label_h += 4.0f;
-
-                        ImVec2 label_origin = ImGui::GetCursorScreenPos();
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        ImU32 label_col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
-                        for (int i = 0; i < n_ctx && i < (int)ctok_snap.size(); i += label_skip) {
-                            float x = label_origin.x + i * cell_w + cell_w * 0.5f - font_h * 0.3f;
-                            float y = label_origin.y + label_h;
-                            DrawTextVertical(dl, ImVec2(x, y), label_col, ctok_snap[i].c_str());
+                        {
+                            std::lock_guard<std::mutex> lk(output_mutex_);
+                            if (tok_idx < (int)context_tokens_.size())
+                                ImGui::Text("Token %d: \"%s\"", tok_idx, context_tokens_[tok_idx].c_str());
+                            ImGui::Text("Layer %d", lay_idx);
+                            if (lay_idx < (int)context_map_.size() && tok_idx < (int)context_map_[lay_idx].size())
+                                ImGui::Text("Activation norm: %.4f", context_map_[lay_idx][tok_idx]);
                         }
-                        ImGui::Dummy(ImVec2(map_w, label_h));
+                        ImGui::EndTooltip();
                     }
                 }
                 ImGui::EndChild();
             }
 
-            // ── Context Text Heatmap (accumulated attention, GL texture behind text) ──
+            // ── Context Text Heatmap (pre-computed attention aggregates) ──
             {
-                std::vector<TokenAttn> attn_snap;
+                std::vector<float> agg_snap;
                 std::vector<std::string> ctok_th;
+                int n_gen;
                 {
                     std::lock_guard<std::mutex> lk(output_mutex_);
-                    attn_snap = attn_history_;
+                    n_gen = attn_agg_gen_count_;
                     ctok_th = context_tokens_;
+                    // Snapshot the selected aggregate — O(n_ctx) copy
+                    if (ctx_text_heatmap_mode_ == THM_EMA)
+                        agg_snap = attn_agg_ema_;
+                    else if (ctx_text_heatmap_mode_ == THM_MAX)
+                        agg_snap = attn_agg_max_;
+                    else if (ctx_text_heatmap_mode_ == THM_FINAL_LAYER)
+                        agg_snap = attn_agg_final_ema_;
+                    else if (ctx_text_heatmap_mode_ == THM_RECENT) {
+                        // Compute mean from ring buffer
+                        int filled = std::min(attn_recent_ring_idx_, kAttnRecentWindow);
+                        if (filled > 0) {
+                            int max_k = 0;
+                            for (int r = 0; r < filled; ++r)
+                                max_k = std::max(max_k, (int)attn_recent_ring_[r].size());
+                            agg_snap.resize(max_k, 0.0f);
+                            for (int r = 0; r < filled; ++r)
+                                for (int k = 0; k < (int)attn_recent_ring_[r].size(); ++k)
+                                    agg_snap[k] += attn_recent_ring_[r][k];
+                            for (int k = 0; k < max_k; ++k)
+                                agg_snap[k] /= (float)filled;
+                        }
+                    }
                 }
 
-                int n_gen = (int)attn_snap.size();
                 int n_tok = (int)ctok_th.size();
 
-                if (n_gen > 0 && n_tok > 1) {
+                if (n_gen > 0 && n_tok > 1 && !agg_snap.empty()) {
                     ImGui::Spacing();
 
                     static const char* thm_labels[] = {
@@ -655,70 +659,13 @@ void OpenGllamaApplet::draw_inference_view() {
                         ctx_text_heatmap_last_width_ = wrap_width;
                         ctx_text_heatmap_prev_mode_ = ctx_text_heatmap_mode_;
 
-                        std::vector<float> tok_attn(n_tok, 0.0f);
+                        int n_agg = (int)agg_snap.size();
 
-                        if (ctx_text_heatmap_mode_ == THM_EMA) {
-                            // Exponential moving average: α=0.3, recent steps dominate
-                            float alpha = 0.3f;
-                            bool first = true;
-                            for (auto& ta : attn_snap) {
-                                std::vector<float> step_avg(n_tok, 0.0f);
-                                int n_lay = (int)ta.layer_attn.size();
-                                if (n_lay == 0) continue;
-                                for (auto& lv : ta.layer_attn)
-                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
-                                        step_avg[k] += lv[k];
-                                for (int k = 0; k < n_tok; ++k)
-                                    step_avg[k] /= (float)n_lay;
-
-                                if (first) {
-                                    tok_attn = step_avg;
-                                    first = false;
-                                } else {
-                                    for (int k = 0; k < n_tok; ++k)
-                                        tok_attn[k] = alpha * step_avg[k] + (1.0f - alpha) * tok_attn[k];
-                                }
-                            }
-                        } else if (ctx_text_heatmap_mode_ == THM_MAX) {
-                            for (auto& ta : attn_snap)
-                                for (auto& lv : ta.layer_attn)
-                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
-                                        tok_attn[k] = std::max(tok_attn[k], lv[k]);
-                        } else if (ctx_text_heatmap_mode_ == THM_RECENT) {
-                            int window = 8;
-                            int start = std::max(0, n_gen - window);
-                            int count = 0;
-                            for (int t = start; t < n_gen; ++t) {
-                                for (auto& lv : attn_snap[t].layer_attn) {
-                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
-                                        tok_attn[k] += lv[k];
-                                    ++count;
-                                }
-                            }
-                            if (count > 0)
-                                for (int k = 0; k < n_tok; ++k)
-                                    tok_attn[k] /= (float)count;
-                        } else if (ctx_text_heatmap_mode_ == THM_FINAL_LAYER) {
-                            // EMA over only the last layer of each generation step
-                            float alpha = 0.3f;
-                            bool first = true;
-                            for (auto& ta : attn_snap) {
-                                if (ta.layer_attn.empty()) continue;
-                                auto& lv = ta.layer_attn.back();
-                                if (first) {
-                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
-                                        tok_attn[k] = lv[k];
-                                    first = false;
-                                } else {
-                                    for (int k = 0; k < (int)lv.size() && k < n_tok; ++k)
-                                        tok_attn[k] = alpha * lv[k] + (1.0f - alpha) * tok_attn[k];
-                                }
-                            }
-                        }
-
+                        // Percentile normalization, skip BOS
                         std::vector<float> sort_vals;
-                        for (int c = 1; c < n_tok; ++c)
-                            sort_vals.push_back(tok_attn[c]);
+                        sort_vals.reserve(n_agg);
+                        for (int c = 1; c < n_agg; ++c)
+                            sort_vals.push_back(agg_snap[c]);
                         float pmin_t = 0.0f, pmax_t = 1.0f;
                         if (!sort_vals.empty()) {
                             std::sort(sort_vals.begin(), sort_vals.end());
@@ -730,8 +677,8 @@ void OpenGllamaApplet::draw_inference_view() {
                         float range_t = (pmax_t - pmin_t) > 1e-7f ? (pmax_t - pmin_t) : 1.0f;
 
                         std::vector<float> tok_norm(n_tok, 0.0f);
-                        for (int c = 1; c < n_tok; ++c)
-                            tok_norm[c] = std::clamp((tok_attn[c] - pmin_t) / range_t, 0.0f, 1.0f);
+                        for (int c = 1; c < n_tok && c < n_agg; ++c)
+                            tok_norm[c] = std::clamp((agg_snap[c] - pmin_t) / range_t, 0.0f, 1.0f);
 
                         // Paragraph layout honoring newlines
                         ctx_text_layout_.clear();
@@ -777,11 +724,14 @@ void OpenGllamaApplet::draw_inference_view() {
                         }
                         ctx_text_total_h_ = cy + line_h;
 
-                        // Bake heatmap texture
+                        // Bake heatmap texture — reuse pixel buffer
                         int tex_w = std::max(1, (int)wrap_width);
                         int tex_h = std::max(1, (int)ctx_text_total_h_);
-                        std::vector<unsigned char> pixels(tex_w * tex_h * 4, 0);
+                        size_t needed = (size_t)tex_w * tex_h * 4;
+                        ctx_text_heatmap_pixels_.resize(needed);
+                        std::memset(ctx_text_heatmap_pixels_.data(), 0, needed);
 
+                        auto& pixels = ctx_text_heatmap_pixels_;
                         for (auto& tl : ctx_text_layout_) {
                             float norm = tok_norm[tl.token_idx];
 
@@ -852,38 +802,18 @@ void OpenGllamaApplet::draw_inference_view() {
 
         // ── Decision Crystallization (Logit Lens) ──
         {
-            std::vector<LayerActivation> lens_snap;
+            std::vector<LogitLensEntry> lens_snap;
             {
                 std::lock_guard<std::mutex> lk(output_mutex_);
-                lens_snap = activations_;
+                lens_snap = logit_lens_entries_;
             }
 
-            std::vector<const LayerActivation*> l_outs_lens;
-            for (auto& a : lens_snap)
-                if (a.name == "l_out" && !a.full_hidden.empty())
-                    l_outs_lens.push_back(&a);
-
-            if (l_outs_lens.size() > 1) {
-                const auto& final_hidden = l_outs_lens.back()->full_hidden;
-                float final_norm_sq = 0.0f;
-                for (float v : final_hidden) final_norm_sq += v * v;
-                float final_norm = std::sqrt(final_norm_sq);
-
-                int nl = (int)l_outs_lens.size();
+            int nl = (int)lens_snap.size();
+            if (nl > 1) {
                 std::vector<double> xs(nl), ys(nl);
-
                 for (int l = 0; l < nl; ++l) {
-                    auto& h = l_outs_lens[l]->full_hidden;
-                    int len = std::min((int)h.size(), (int)final_hidden.size());
-                    float dot = 0, na = 0;
-                    for (int j = 0; j < len; ++j) {
-                        dot += h[j] * final_hidden[j];
-                        na += h[j] * h[j];
-                    }
-                    float denom = std::sqrt(na) * final_norm;
-                    float cos = denom > 1e-8f ? dot / denom : 0.0f;
                     xs[l] = l;
-                    ys[l] = cos;
+                    ys[l] = lens_snap[l].cosine_to_final;
                 }
 
                 ImGui::Spacing();
@@ -928,7 +858,7 @@ void OpenGllamaApplet::draw_inference_view() {
                             cos > 0.7f ? "Converging" :
                             cos > 0.4f ? "Forming" : "Still exploring";
                         ImGui::BeginTooltip();
-                        ImGui::Text("Layer %d", l_outs_lens[idx]->layer_index);
+                        ImGui::Text("Layer %d", lens_snap[idx].layer);
                         ImGui::Text("Cosine to final: %.4f", cos);
                         ImGui::Text("Status: %s", label);
                         ImGui::EndTooltip();
@@ -942,86 +872,70 @@ void OpenGllamaApplet::draw_inference_view() {
         // ── Live Attention Timeline ──
         draw_live_attention_timeline();
 
-        // ── Context Attention (Last Token) ──
+        // ── Live Attention (Current Token) ──
         {
-            std::vector<TokenAttn> attn_snap;
-            std::vector<std::string> ctok2;
-            {
+            if (attn_map_dirty_.exchange(false)) {
                 std::lock_guard<std::mutex> lk(output_mutex_);
-                attn_snap = attn_history_;
-                ctok2 = context_tokens_;
+                cached_attn_ = attn_latest_;
+                cached_attn_valid_ = attn_latest_valid_;
+                cached_attn_n_lay_ = (int)attn_latest_.layer_attn.size();
+                cached_attn_n_kv_ = 0;
+                for (auto& row : attn_latest_.layer_attn)
+                    cached_attn_n_kv_ = std::max(cached_attn_n_kv_, (int)row.size());
+                if (cached_attn_valid_ && !cached_attn_.layer_attn.empty())
+                    update_attn_map_texture(cached_attn_.layer_attn);
             }
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Context Attention (Last Token)");
+            ImGui::SeparatorText("Live Attention (Current Token)");
 
-            if (attn_snap.empty() || attn_snap.back().layer_attn.empty()) {
+            if (!cached_attn_valid_ || cached_attn_.layer_attn.empty()) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f),
-                    "Waiting for kq_soft_max data... (attn_history=%d)",
-                    (int)attn_snap.size());
+                    "Waiting for kq_soft_max data...");
             } else {
+                int n_lay = cached_attn_n_lay_;
+                int n_kv = cached_attn_n_kv_;
 
-                auto& latest = attn_snap.back();
-                int n_lay = (int)latest.layer_attn.size();
-                int n_kv = 0;
-                for (auto& row : latest.layer_attn)
-                    n_kv = std::max(n_kv, (int)row.size());
+                {
+                    std::lock_guard<std::mutex> lk(output_mutex_);
+                    ImGui::TextDisabled(
+                        "Layers (top=0, bottom=%d) vs context tokens — "
+                        "bright = high attention from token \"%s\"",
+                        n_lay - 1,
+                        context_tokens_.empty() ? "?" : context_tokens_.back().c_str());
+                }
 
-                ImGui::TextDisabled(
-                    "Layers (top=0, bottom=%d) vs context tokens — "
-                    "bright = high attention from token \"%s\"",
-                    n_lay - 1,
-                    ctok2.empty() ? "?" : ctok2.back().c_str());
+                float map_w = ImGui::GetContentRegionAvail().x;
+                float aspect = (float)n_lay / (float)n_kv;
+                float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
 
-                ImGui::BeginChild("##ctx_attn_port", ImVec2(0, 280), ImGuiChildFlags_Borders,
-                    ImGuiWindowFlags_AlwaysVerticalScrollbar);
-
-                update_attn_map_texture(attn_snap.back().layer_attn);
+                ImGui::BeginChild("##ctx_attn_port", ImVec2(0, map_h + 8.0f), ImGuiChildFlags_Borders);
 
                 if (attn_map_texture_ && n_kv > 0) {
-                    float map_w = ImGui::GetContentRegionAvail().x;
-                    float aspect = (float)n_lay / (float)n_kv;
-                    float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
-
+                    float draw_w = ImGui::GetContentRegionAvail().x;
+                    float draw_h = std::clamp(draw_w * aspect, 60.0f, 300.0f);
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
                     ImGui::Image((ImTextureID)(intptr_t)attn_map_texture_,
-                                 ImVec2(map_w, map_h));
+                                 ImVec2(draw_w, draw_h));
 
                     if (ImGui::IsItemHovered()) {
                         ImVec2 mouse = ImGui::GetMousePos();
-                        int tok_idx = (int)((mouse.x - img_pos.x) / map_w * n_kv);
-                        int lay_idx = (int)((mouse.y - img_pos.y) / map_h * n_lay);
+                        int tok_idx = (int)((mouse.x - img_pos.x) / draw_w * n_kv);
+                        int lay_idx = (int)((mouse.y - img_pos.y) / draw_h * n_lay);
                         tok_idx = std::clamp(tok_idx, 0, n_kv - 1);
                         lay_idx = std::clamp(lay_idx, 0, n_lay - 1);
 
                         ImGui::BeginTooltip();
-                        if (tok_idx < (int)ctok2.size())
-                            ImGui::Text("Attending to token %d: \"%s\"",
-                                tok_idx, ctok2[tok_idx].c_str());
-                        ImGui::Text("Layer %d", lay_idx);
-                        if (lay_idx < n_lay && tok_idx < (int)latest.layer_attn[lay_idx].size())
-                            ImGui::Text("Attention: %.4f", latest.layer_attn[lay_idx][tok_idx]);
-                        ImGui::EndTooltip();
-                    }
-
-                    if (!ctok2.empty() && n_kv > 0) {
-                        float cell_w = map_w / (float)n_kv;
-                        float font_h = ImGui::GetFontSize();
-                        int label_skip = std::max(1, (int)(font_h / cell_w));
-                        float label_h = 0.0f;
-                        for (int i = 0; i < n_kv && i < (int)ctok2.size(); i += label_skip)
-                            label_h = std::max(label_h, ImGui::CalcTextSize(ctok2[i].c_str()).x);
-                        label_h += 4.0f;
-
-                        ImVec2 label_origin = ImGui::GetCursorScreenPos();
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        ImU32 label_col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
-                        for (int i = 0; i < n_kv && i < (int)ctok2.size(); i += label_skip) {
-                            float x = label_origin.x + i * cell_w + cell_w * 0.5f - font_h * 0.3f;
-                            float y = label_origin.y + label_h;
-                            DrawTextVertical(dl, ImVec2(x, y), label_col, ctok2[i].c_str());
+                        {
+                            std::lock_guard<std::mutex> lk(output_mutex_);
+                            if (tok_idx < (int)context_tokens_.size())
+                                ImGui::Text("Attending to token %d: \"%s\"",
+                                    tok_idx, context_tokens_[tok_idx].c_str());
                         }
-                        ImGui::Dummy(ImVec2(map_w, label_h));
+                        ImGui::Text("Layer %d", lay_idx);
+                        if (lay_idx < n_lay && tok_idx < (int)cached_attn_.layer_attn[lay_idx].size())
+                            ImGui::Text("Attention: %.4f", cached_attn_.layer_attn[lay_idx][tok_idx]);
+                        ImGui::EndTooltip();
                     }
                 }
                 ImGui::EndChild();
@@ -1193,7 +1107,7 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Live Attention");
+    ImGui::SeparatorText("Attention Timeline");
 
     int n_tokens = (int)timeline_snap.size();
     if (n_tokens == 0 || n_layers == 0) {
@@ -1396,6 +1310,60 @@ void OpenGllamaApplet::update_activation_textures() {
     textures_dirty_ = false;
 }
 
+void OpenGllamaApplet::update_attn_aggregates(const std::vector<std::vector<float>>& layer_attn) {
+    int n_layers = (int)layer_attn.size();
+    if (n_layers == 0) return;
+
+    int n_kv = 0;
+    for (auto& lv : layer_attn)
+        n_kv = std::max(n_kv, (int)lv.size());
+    if (n_kv == 0) return;
+
+    // Layer-averaged attention for this step
+    std::vector<float> step_avg(n_kv, 0.0f);
+    for (auto& lv : layer_attn)
+        for (int k = 0; k < (int)lv.size(); ++k)
+            step_avg[k] += lv[k];
+    for (int k = 0; k < n_kv; ++k)
+        step_avg[k] /= (float)n_layers;
+
+    // Grow aggregates if context expanded
+    if ((int)attn_agg_ema_.size() < n_kv) attn_agg_ema_.resize(n_kv, 0.0f);
+    if ((int)attn_agg_max_.size() < n_kv) attn_agg_max_.resize(n_kv, 0.0f);
+    if ((int)attn_agg_final_ema_.size() < n_kv) attn_agg_final_ema_.resize(n_kv, 0.0f);
+
+    // EMA across all layers
+    float alpha = 0.3f;
+    bool first = (attn_agg_gen_count_ == 0);
+    for (int k = 0; k < n_kv; ++k) {
+        if (first)
+            attn_agg_ema_[k] = step_avg[k];
+        else
+            attn_agg_ema_[k] = alpha * step_avg[k] + (1.0f - alpha) * attn_agg_ema_[k];
+    }
+
+    // Max
+    for (auto& lv : layer_attn)
+        for (int k = 0; k < (int)lv.size(); ++k)
+            attn_agg_max_[k] = std::max(attn_agg_max_[k], lv[k]);
+
+    // Final layer EMA
+    auto& final_lv = layer_attn.back();
+    for (int k = 0; k < (int)final_lv.size(); ++k) {
+        if (first)
+            attn_agg_final_ema_[k] = final_lv[k];
+        else
+            attn_agg_final_ema_[k] = alpha * final_lv[k] + (1.0f - alpha) * attn_agg_final_ema_[k];
+    }
+
+    // Recent ring buffer
+    if ((int)attn_recent_ring_.size() < kAttnRecentWindow)
+        attn_recent_ring_.resize(kAttnRecentWindow);
+    attn_recent_ring_[attn_recent_ring_idx_ % kAttnRecentWindow] = std::move(step_avg);
+    ++attn_recent_ring_idx_;
+    ++attn_agg_gen_count_;
+}
+
 void OpenGllamaApplet::update_context_map_texture(const std::vector<std::vector<float>>& cmap) {
     int n_layers = (int)cmap.size();
     if (n_layers == 0) return;
@@ -1423,7 +1391,10 @@ void OpenGllamaApplet::update_context_map_texture(const std::vector<std::vector<
     float range = (pmax - pmin) > 1e-7f ? (pmax - pmin) : 1.0f;
 
     // Build RGB pixels [n_layers rows × n_ctx cols], skip BOS visually (col 0 = black)
-    std::vector<unsigned char> pixels(n_layers * n_ctx * 3, 0);
+    size_t needed = (size_t)n_layers * n_ctx * 3;
+    ctx_map_pixels_.resize(needed);
+    std::memset(ctx_map_pixels_.data(), 0, needed);
+    auto& pixels = ctx_map_pixels_;
     for (int l = 0; l < n_layers; ++l) {
         for (int c = 0; c < (int)cmap[l].size(); ++c) {
             if (c == 0) continue;  // BOS excluded
@@ -1473,7 +1444,10 @@ void OpenGllamaApplet::update_attn_map_texture(const std::vector<std::vector<flo
     if (n_kv == 0) return;
 
     // Per-row normalization: each layer's max maps to 1.0, BOS excluded
-    std::vector<unsigned char> pixels(n_layers * n_kv * 3, 0);
+    size_t needed = (size_t)n_layers * n_kv * 3;
+    attn_map_pixels_.resize(needed);
+    std::memset(attn_map_pixels_.data(), 0, needed);
+    auto& pixels = attn_map_pixels_;
     for (int l = 0; l < n_layers; ++l) {
         auto& row = layer_attn[l];
         float row_max = 0.0f;
@@ -1529,39 +1503,6 @@ void OpenGllamaApplet::update_attn_map_texture(const std::vector<std::vector<flo
     glBindTexture(GL_TEXTURE_2D, 0);
 
     attn_map_texture_ = tex;
-}
-
-// ============================================================================
-// Logit Lens Computation
-// ============================================================================
-
-void OpenGllamaApplet::compute_logit_lens() {
-    layer_predictions_.clear();
-    std::vector<const LayerActivation*> l_outs;
-    for (auto& a : activations_)
-        if (a.name == "l_out" && !a.full_hidden.empty())
-            l_outs.push_back(&a);
-    if (l_outs.size() < 2) return;
-
-    const auto& final_h = l_outs.back()->full_hidden;
-    float fn2 = 0.0f;
-    for (float v : final_h) fn2 += v * v;
-    float fn = std::sqrt(fn2);
-
-    for (auto* la : l_outs) {
-        auto& h = la->full_hidden;
-        int len = std::min((int)h.size(), (int)final_h.size());
-        float dot = 0, n2 = 0;
-        for (int i = 0; i < len; ++i) {
-            dot += h[i] * final_h[i];
-            n2 += h[i] * h[i];
-        }
-        float denom = std::sqrt(n2) * fn;
-        LayerPrediction lp;
-        lp.layer = la->layer_index;
-        lp.cosine_to_final = denom > 1e-8f ? dot / denom : 0.0f;
-        layer_predictions_.push_back(lp);
-    }
 }
 
 // ============================================================================
@@ -1684,10 +1625,26 @@ void OpenGllamaApplet::unload_model() {
     pending_activations_.clear();
     pending_attn_weights_.clear();
     token_logits_.clear();
-    attn_history_.clear();
+    attn_latest_.layer_attn.clear();
+    attn_latest_valid_ = false;
+    attn_agg_ema_.clear();
+    attn_agg_max_.clear();
+    attn_agg_final_ema_.clear();
+    attn_recent_ring_.clear();
+    attn_recent_ring_idx_ = 0;
+    attn_agg_gen_count_ = 0;
     live_attn_timeline_.clear();
     live_attn_n_layers_ = 0;
-    layer_predictions_.clear();
+    logit_lens_entries_.clear();
+    cached_cmap_.clear();
+    cached_cmap_n_layers_ = 0;
+    cached_cmap_n_ctx_ = 0;
+    cached_attn_.layer_attn.clear();
+    cached_attn_valid_ = false;
+    cached_attn_n_lay_ = 0;
+    cached_attn_n_kv_ = 0;
+    context_map_dirty_ = false;
+    attn_map_dirty_ = false;
     output_text_.clear();
     tokens_generated_ = 0;
 }
@@ -1704,9 +1661,26 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         output_text_.clear();
         activations_.clear();
         token_logits_.clear();
-        attn_history_.clear();
+        logit_lens_entries_.clear();
+        attn_latest_.layer_attn.clear();
+        attn_latest_valid_ = false;
+        attn_agg_ema_.clear();
+        attn_agg_max_.clear();
+        attn_agg_final_ema_.clear();
+        attn_recent_ring_.clear();
+        attn_recent_ring_idx_ = 0;
+        attn_agg_gen_count_ = 0;
         live_attn_timeline_.clear();
         live_attn_n_layers_ = 0;
+        cached_cmap_.clear();
+        cached_cmap_n_layers_ = 0;
+        cached_cmap_n_ctx_ = 0;
+        cached_attn_.layer_attn.clear();
+        cached_attn_valid_ = false;
+        cached_attn_n_lay_ = 0;
+        cached_attn_n_kv_ = 0;
+        context_map_dirty_ = false;
+        attn_map_dirty_ = false;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1772,21 +1746,47 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
 
         // Push prompt activations + attention + timeline
         {
+            // Compute logit lens before stripping full_hidden
+            std::vector<LogitLensEntry> lens;
+            {
+                std::vector<const LayerActivation*> l_outs;
+                for (auto& a : pending_activations_)
+                    if (a.name == "l_out" && !a.full_hidden.empty())
+                        l_outs.push_back(&a);
+                if (l_outs.size() > 1) {
+                    auto& fh = l_outs.back()->full_hidden;
+                    float fn2 = 0; for (float v : fh) fn2 += v * v;
+                    float fn = std::sqrt(fn2);
+                    for (auto* la : l_outs) {
+                        auto& h = la->full_hidden;
+                        int len = std::min((int)h.size(), (int)fh.size());
+                        float dot = 0, n2 = 0;
+                        for (int j = 0; j < len; ++j) { dot += h[j] * fh[j]; n2 += h[j] * h[j]; }
+                        float denom = std::sqrt(n2) * fn;
+                        lens.push_back({la->layer_index, denom > 1e-8f ? dot / denom : 0.0f});
+                    }
+                }
+            }
+            for (auto& a : pending_activations_)
+                a.full_hidden.clear();
+
             std::lock_guard<std::mutex> lk(output_mutex_);
-            activations_ = pending_activations_;
+            activations_ = std::move(pending_activations_);
+            logit_lens_entries_ = std::move(lens);
             if (!pending_attn_weights_.empty()) {
-                TokenAttn ta;
-                ta.layer_attn = pending_attn_weights_;
-                // Compute timeline column
-                int nl = (int)ta.layer_attn.size();
+                int nl = (int)pending_attn_weights_.size();
                 live_attn_n_layers_ = std::max(live_attn_n_layers_, nl);
                 std::vector<float> col(nl, 0.0f);
                 for (int l = 0; l < nl; ++l)
-                    for (float v : ta.layer_attn[l])
+                    for (float v : pending_attn_weights_[l])
                         col[l] = std::max(col[l], v);
                 live_attn_timeline_.push_back(std::move(col));
-                attn_history_.push_back(std::move(ta));
+                update_attn_aggregates(pending_attn_weights_);
+                attn_latest_.layer_attn = pending_attn_weights_;
+                attn_latest_valid_ = true;
+                attn_map_dirty_ = true;
             }
+            context_map_dirty_ = true;
             textures_dirty_ = true;
         }
 
@@ -1890,24 +1890,51 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 i, (int)pending_attn_weights_.size(), (int)pending_activations_.size());
 
             {
+                // Compute logit lens before stripping full_hidden
+                std::vector<LogitLensEntry> lens;
+                {
+                    std::vector<const LayerActivation*> l_outs;
+                    for (auto& a : pending_activations_)
+                        if (a.name == "l_out" && !a.full_hidden.empty())
+                            l_outs.push_back(&a);
+                    if (l_outs.size() > 1) {
+                        auto& fh = l_outs.back()->full_hidden;
+                        float fn2 = 0; for (float v : fh) fn2 += v * v;
+                        float fn = std::sqrt(fn2);
+                        for (auto* la : l_outs) {
+                            auto& h = la->full_hidden;
+                            int len = std::min((int)h.size(), (int)fh.size());
+                            float dot = 0, n2 = 0;
+                            for (int j = 0; j < len; ++j) { dot += h[j] * fh[j]; n2 += h[j] * h[j]; }
+                            float denom = std::sqrt(n2) * fn;
+                            lens.push_back({la->layer_index, denom > 1e-8f ? dot / denom : 0.0f});
+                        }
+                    }
+                }
+                for (auto& a : pending_activations_)
+                    a.full_hidden.clear();
+
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
                 tokens_generated_.store(i + 1);
                 token_logits_.push_back(tli);
                 context_tokens_.push_back(piece);
-                activations_ = pending_activations_;
+                activations_ = std::move(pending_activations_);
+                logit_lens_entries_ = std::move(lens);
                 if (!pending_attn_weights_.empty()) {
-                    TokenAttn ta;
-                    ta.layer_attn = pending_attn_weights_;
-                    int nl = (int)ta.layer_attn.size();
+                    int nl = (int)pending_attn_weights_.size();
                     live_attn_n_layers_ = std::max(live_attn_n_layers_, nl);
                     std::vector<float> col(nl, 0.0f);
                     for (int l = 0; l < nl; ++l)
-                        for (float v : ta.layer_attn[l])
+                        for (float v : pending_attn_weights_[l])
                             col[l] = std::max(col[l], v);
                     live_attn_timeline_.push_back(std::move(col));
-                    attn_history_.push_back(std::move(ta));
+                    update_attn_aggregates(pending_attn_weights_);
+                    attn_latest_.layer_attn = pending_attn_weights_;
+                    attn_latest_valid_ = true;
+                    attn_map_dirty_ = true;
                 }
+                context_map_dirty_ = true;
                 textures_dirty_ = true;
             }
         }
