@@ -1249,6 +1249,141 @@ void OpenGllamaApplet::draw_live_attention_timeline() {
 }
 
 // ============================================================================
+// Reusable Attention Tape (layers x KV-positions heatmap)
+// ============================================================================
+
+void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
+                                       const char* description,
+                                       const std::vector<std::vector<float>>& layer_data,
+                                       int n_layers, int n_kv, bool auto_scroll) {
+    ImGui::Spacing();
+    ImGui::SeparatorText(title);
+    ImGui::TextDisabled("%s", description);
+
+    if (n_layers == 0 || n_kv == 0) {
+        ImGui::TextDisabled("Waiting for attention data...");
+        return;
+    }
+
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float label_margin = 30.0f;
+    float chart_w = avail_w - label_margin;
+    float cell_w = std::max(3.0f, std::min(12.0f, chart_w / (float)n_kv));
+    float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
+    float total_w = cell_w * n_kv;
+    float total_h = cell_h * n_layers;
+
+    // Build child window ID strings from imgui_id
+    char port_id[64];
+    char scroll_id[64];
+    snprintf(port_id, sizeof(port_id), "##%s_port", imgui_id);
+    snprintf(scroll_id, sizeof(scroll_id), "##%s_scroll", imgui_id);
+
+    float port_h = std::min(total_h + 24.0f, 280.0f);
+    ImGui::BeginChild(port_id, ImVec2(0, port_h), ImGuiChildFlags_Borders,
+        ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+    // Layer labels on the left
+    ImVec2 label_origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl_labels = ImGui::GetWindowDrawList();
+    int label_skip = std::max(1, n_layers / 8);
+    for (int l = 0; l < n_layers; l += label_skip) {
+        float y = label_origin.y + l * cell_h + cell_h * 0.5f - 5.0f;
+        char lbl[16];
+        snprintf(lbl, sizeof(lbl), "%d", l);
+        dl_labels->AddText(ImVec2(label_origin.x, y), IM_COL32(160, 160, 160, 200), lbl);
+    }
+
+    // Scrollable chart area (offset by label margin)
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + label_margin);
+    ImGui::BeginChild(scroll_id, ImVec2(chart_w - 16.0f, total_h + 20.0f),
+        ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+
+    if (auto_scroll && inference_running_)
+        ImGui::SetScrollX(std::max(0.0f, total_w - chart_w));
+
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Per-row normalization: find max per layer (skip BOS at index 0)
+    std::vector<float> row_max(n_layers, 0.0f);
+    for (int l = 0; l < n_layers; ++l) {
+        if (l >= (int)layer_data.size()) continue;
+        const auto& row = layer_data[l];
+        for (int k = 1; k < n_kv && k < (int)row.size(); ++k) {
+            if (row[k] > row_max[l]) row_max[l] = row[k];
+        }
+    }
+
+    for (int k = 0; k < n_kv; ++k) {
+        for (int l = 0; l < n_layers; ++l) {
+            float val = (l < (int)layer_data.size() && k < (int)layer_data[l].size())
+                ? layer_data[l][k] : 0.0f;
+
+            float norm = (row_max[l] > 1e-9f) ? std::clamp(val / row_max[l], 0.0f, 1.0f) : 0.0f;
+
+            // 4-segment color ramp: dark blue -> cyan -> yellow-green -> white
+            float r, g, b;
+            if (norm < 0.25f) {
+                float s = norm / 0.25f;
+                r = 0.05f + 0.05f * s;
+                g = 0.05f + 0.15f * s;
+                b = 0.2f + 0.4f * s;
+            } else if (norm < 0.5f) {
+                float s = (norm - 0.25f) / 0.25f;
+                r = 0.1f * (1.0f - s);
+                g = 0.2f + 0.6f * s;
+                b = 0.6f + 0.2f * s;
+            } else if (norm < 0.75f) {
+                float s = (norm - 0.5f) / 0.25f;
+                r = 0.8f * s;
+                g = 0.8f + 0.1f * s;
+                b = 0.8f - 0.6f * s;
+            } else {
+                float s = (norm - 0.75f) / 0.25f;
+                r = 0.8f + 0.2f * s;
+                g = 0.9f + 0.1f * s;
+                b = 0.2f + 0.8f * s;
+            }
+
+            float x = origin.x + k * cell_w;
+            float y = origin.y + l * cell_h;
+            ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.95f));
+            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cell_w - 0.5f, y + cell_h - 0.5f), col);
+        }
+    }
+
+    ImGui::Dummy(ImVec2(total_w, total_h));
+
+    if (ImGui::IsItemHovered()) {
+        ImVec2 mouse = ImGui::GetMousePos();
+        int tok_idx = (int)((mouse.x - origin.x) / cell_w);
+        int lay_idx = (int)((mouse.y - origin.y) / cell_h);
+        tok_idx = std::clamp(tok_idx, 0, n_kv - 1);
+        lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
+
+        float raw_val = (lay_idx < (int)layer_data.size() &&
+                         tok_idx < (int)layer_data[lay_idx].size())
+            ? layer_data[lay_idx][tok_idx] : 0.0f;
+
+        ImGui::BeginTooltip();
+        {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            if (tok_idx < (int)context_tokens_.size())
+                ImGui::Text("KV %d: \"%s\"", tok_idx, context_tokens_[tok_idx].c_str());
+            else
+                ImGui::Text("KV %d", tok_idx);
+        }
+        ImGui::Text("Layer %d", lay_idx);
+        ImGui::Text("Attention: %.6f", raw_val);
+        ImGui::EndTooltip();
+    }
+
+    ImGui::EndChild();
+    ImGui::EndChild();
+}
+
+// ============================================================================
 // Activation Texture Upload
 // ============================================================================
 
@@ -1645,6 +1780,11 @@ void OpenGllamaApplet::unload_model() {
     cached_attn_n_kv_ = 0;
     context_map_dirty_ = false;
     attn_map_dirty_ = false;
+    attn_max_map_.clear();
+    attn_max_map_dirty_ = false;
+    cached_attn_max_map_.clear();
+    cached_attn_max_n_lay_ = 0;
+    cached_attn_max_n_kv_ = 0;
     output_text_.clear();
     tokens_generated_ = 0;
 }
@@ -1681,6 +1821,11 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         cached_attn_n_kv_ = 0;
         context_map_dirty_ = false;
         attn_map_dirty_ = false;
+        attn_max_map_.clear();
+        attn_max_map_dirty_ = false;
+        cached_attn_max_map_.clear();
+        cached_attn_max_n_lay_ = 0;
+        cached_attn_max_n_kv_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1785,6 +1930,21 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 attn_latest_.layer_attn = pending_attn_weights_;
                 attn_latest_valid_ = true;
                 attn_map_dirty_ = true;
+                // Accumulate per-layer max attention
+                {
+                    int nl = (int)pending_attn_weights_.size();
+                    while ((int)attn_max_map_.size() < nl)
+                        attn_max_map_.push_back({});
+                    for (int l = 0; l < nl; ++l) {
+                        auto& src = pending_attn_weights_[l];
+                        auto& dst = attn_max_map_[l];
+                        if ((int)dst.size() < (int)src.size())
+                            dst.resize(src.size(), 0.0f);
+                        for (int k = 0; k < (int)src.size(); ++k)
+                            dst[k] = std::max(dst[k], src[k]);
+                    }
+                }
+                attn_max_map_dirty_ = true;
             }
             context_map_dirty_ = true;
             textures_dirty_ = true;
@@ -1933,6 +2093,21 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                     attn_latest_.layer_attn = pending_attn_weights_;
                     attn_latest_valid_ = true;
                     attn_map_dirty_ = true;
+                    // Accumulate per-layer max attention
+                    {
+                        int nl = (int)pending_attn_weights_.size();
+                        while ((int)attn_max_map_.size() < nl)
+                            attn_max_map_.push_back({});
+                        for (int l = 0; l < nl; ++l) {
+                            auto& src = pending_attn_weights_[l];
+                            auto& dst = attn_max_map_[l];
+                            if ((int)dst.size() < (int)src.size())
+                                dst.resize(src.size(), 0.0f);
+                            for (int k = 0; k < (int)src.size(); ++k)
+                                dst[k] = std::max(dst[k], src[k]);
+                        }
+                    }
+                    attn_max_map_dirty_ = true;
                 }
                 context_map_dirty_ = true;
                 textures_dirty_ = true;
