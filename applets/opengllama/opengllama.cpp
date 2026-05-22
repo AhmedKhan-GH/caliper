@@ -1655,6 +1655,9 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             activations_ = std::move(pending_activations_);
             logit_lens_entries_ = std::move(lens);
             if (!pending_attn_weights_.empty()) {
+                int actual_ctx = (int)context_tokens_.size();
+                for (auto& aw : pending_attn_weights_)
+                    if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
                 update_attn_aggregates(pending_attn_weights_);
                 attn_latest_.layer_attn = pending_attn_weights_;
                 attn_latest_valid_ = true;
@@ -1808,6 +1811,9 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 activations_ = std::move(pending_activations_);
                 logit_lens_entries_ = std::move(lens);
                 if (!pending_attn_weights_.empty()) {
+                    int actual_ctx = (int)context_tokens_.size();
+                    for (auto& aw : pending_attn_weights_)
+                        if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
                     update_attn_aggregates(pending_attn_weights_);
                     attn_latest_.layer_attn = pending_attn_weights_;
                     attn_latest_valid_ = true;
