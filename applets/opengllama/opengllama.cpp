@@ -869,10 +869,7 @@ void OpenGllamaApplet::draw_inference_view() {
             }
         }
 
-        // ── Live Attention Timeline ──
-        draw_live_attention_timeline();
-
-        // ── Live Attention (Current Token) ──
+        // ── Live Attention — where the model is looking right now ──
         {
             if (attn_map_dirty_.exchange(false)) {
                 std::lock_guard<std::mutex> lk(output_mutex_);
@@ -882,63 +879,35 @@ void OpenGllamaApplet::draw_inference_view() {
                 cached_attn_n_kv_ = 0;
                 for (auto& row : attn_latest_.layer_attn)
                     cached_attn_n_kv_ = std::max(cached_attn_n_kv_, (int)row.size());
-                if (cached_attn_valid_ && !cached_attn_.layer_attn.empty())
-                    update_attn_map_texture(cached_attn_.layer_attn);
             }
 
-            ImGui::Spacing();
-            ImGui::SeparatorText("Live Attention (Current Token)");
-
             if (!cached_attn_valid_ || cached_attn_.layer_attn.empty()) {
+                ImGui::Spacing();
+                ImGui::SeparatorText("Live Attention");
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f),
                     "Waiting for kq_soft_max data...");
             } else {
-                int n_lay = cached_attn_n_lay_;
-                int n_kv = cached_attn_n_kv_;
+                draw_attn_tape("live_attn", "Live Attention",
+                    "Where the current token attends — bright = high attention weight",
+                    cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true);
+            }
+        }
 
-                {
-                    std::lock_guard<std::mutex> lk(output_mutex_);
-                    ImGui::TextDisabled(
-                        "Layers (top=0, bottom=%d) vs context tokens — "
-                        "bright = high attention from token \"%s\"",
-                        n_lay - 1,
-                        context_tokens_.empty() ? "?" : context_tokens_.back().c_str());
-                }
+        // ── Max Attention — accumulated peaks across all generated tokens ──
+        {
+            if (attn_max_map_dirty_.exchange(false)) {
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                cached_attn_max_map_ = attn_max_map_;
+                cached_attn_max_n_lay_ = (int)attn_max_map_.size();
+                cached_attn_max_n_kv_ = 0;
+                for (auto& row : attn_max_map_)
+                    cached_attn_max_n_kv_ = std::max(cached_attn_max_n_kv_, (int)row.size());
+            }
 
-                float map_w = ImGui::GetContentRegionAvail().x;
-                float aspect = (float)n_lay / (float)n_kv;
-                float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
-
-                ImGui::BeginChild("##ctx_attn_port", ImVec2(0, map_h + 8.0f), ImGuiChildFlags_Borders);
-
-                if (attn_map_texture_ && n_kv > 0) {
-                    float draw_w = ImGui::GetContentRegionAvail().x;
-                    float draw_h = std::clamp(draw_w * aspect, 60.0f, 300.0f);
-                    ImVec2 img_pos = ImGui::GetCursorScreenPos();
-                    ImGui::Image((ImTextureID)(intptr_t)attn_map_texture_,
-                                 ImVec2(draw_w, draw_h));
-
-                    if (ImGui::IsItemHovered()) {
-                        ImVec2 mouse = ImGui::GetMousePos();
-                        int tok_idx = (int)((mouse.x - img_pos.x) / draw_w * n_kv);
-                        int lay_idx = (int)((mouse.y - img_pos.y) / draw_h * n_lay);
-                        tok_idx = std::clamp(tok_idx, 0, n_kv - 1);
-                        lay_idx = std::clamp(lay_idx, 0, n_lay - 1);
-
-                        ImGui::BeginTooltip();
-                        {
-                            std::lock_guard<std::mutex> lk(output_mutex_);
-                            if (tok_idx < (int)context_tokens_.size())
-                                ImGui::Text("Attending to token %d: \"%s\"",
-                                    tok_idx, context_tokens_[tok_idx].c_str());
-                        }
-                        ImGui::Text("Layer %d", lay_idx);
-                        if (lay_idx < n_lay && tok_idx < (int)cached_attn_.layer_attn[lay_idx].size())
-                            ImGui::Text("Attention: %.4f", cached_attn_.layer_attn[lay_idx][tok_idx]);
-                        ImGui::EndTooltip();
-                    }
-                }
-                ImGui::EndChild();
+            if (cached_attn_max_n_lay_ > 0 && cached_attn_max_n_kv_ > 0) {
+                draw_attn_tape("max_attn", "Max Attention",
+                    "Peak attention any token ever paid to each position — grows monotonically",
+                    cached_attn_max_map_, cached_attn_max_n_lay_, cached_attn_max_n_kv_, true);
             }
         }
 
