@@ -218,8 +218,6 @@ void OpenGllamaApplet::cleanup() {
     layer_textures_.clear();
     if (context_map_texture_) glDeleteTextures(1, &context_map_texture_);
     context_map_texture_ = 0;
-    if (attn_map_texture_) glDeleteTextures(1, &attn_map_texture_);
-    attn_map_texture_ = 0;
 
     llama_backend_free();
 }
@@ -1061,163 +1059,6 @@ void OpenGllamaApplet::draw_inference_view() {
 }
 
 // ============================================================================
-// Live Attention Timeline
-// ============================================================================
-
-void OpenGllamaApplet::draw_live_attention_timeline() {
-    std::vector<std::vector<float>> timeline_snap;
-    std::vector<std::string> ctok_snap;
-    int n_layers;
-    {
-        std::lock_guard<std::mutex> lk(output_mutex_);
-        timeline_snap = live_attn_timeline_;
-        ctok_snap = context_tokens_;
-        n_layers = live_attn_n_layers_;
-    }
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Attention Timeline");
-
-    int n_tokens = (int)timeline_snap.size();
-    if (n_tokens == 0 || n_layers == 0) {
-        ImGui::TextDisabled("Waiting for attention data...");
-        return;
-    }
-
-    // Flash timer: pulse when new tokens arrive
-    if (n_tokens != live_attn_last_count_) {
-        live_attn_last_count_ = n_tokens;
-        live_attn_flash_timer_ = 1.0f;
-    } else {
-        live_attn_flash_timer_ = std::max(0.0f, live_attn_flash_timer_ - ImGui::GetIO().DeltaTime * 3.0f);
-    }
-
-    ImGui::TextDisabled("Rows=layers (0..%d), columns=tokens (growing right) — bright = peaked attention",
-        n_layers - 1);
-
-    float avail_w = ImGui::GetContentRegionAvail().x;
-    float label_margin = 30.0f;
-    float chart_w = avail_w - label_margin;
-    float cell_w = std::max(3.0f, std::min(12.0f, chart_w / (float)n_tokens));
-    float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
-    float total_w = cell_w * n_tokens;
-    float total_h = cell_h * n_layers;
-
-    float port_h = std::min(total_h + 24.0f, 280.0f);
-    ImGui::BeginChild("##live_attn_port", ImVec2(0, port_h), ImGuiChildFlags_Borders,
-        ImGuiWindowFlags_AlwaysVerticalScrollbar);
-
-    // Layer labels on the left
-    ImVec2 label_origin = ImGui::GetCursorScreenPos();
-    ImDrawList* dl_labels = ImGui::GetWindowDrawList();
-    int label_skip = std::max(1, n_layers / 8);
-    for (int l = 0; l < n_layers; l += label_skip) {
-        float y = label_origin.y + l * cell_h + cell_h * 0.5f - 5.0f;
-        char lbl[16];
-        snprintf(lbl, sizeof(lbl), "%d", l);
-        dl_labels->AddText(ImVec2(label_origin.x, y), IM_COL32(160, 160, 160, 200), lbl);
-    }
-
-    // Scrollable chart area (offset by label margin)
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + label_margin);
-    ImGui::BeginChild("##live_attn_scroll", ImVec2(chart_w - 16.0f, total_h + 20.0f),
-        ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
-
-    if (inference_running_)
-        ImGui::SetScrollX(std::max(0.0f, total_w - chart_w));
-
-    ImVec2 origin = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    // Trailing glow: last 4 columns get diminishing flash
-    int trail_len = 4;
-
-    for (int t = 0; t < n_tokens; ++t) {
-        int age = n_tokens - 1 - t;
-        float flash = 0.0f;
-        if (age < trail_len)
-            flash = live_attn_flash_timer_ * (1.0f - (float)age / (float)trail_len);
-
-        for (int l = 0; l < n_layers; ++l) {
-            float val = (t < (int)timeline_snap.size() && l < (int)timeline_snap[t].size())
-                ? timeline_snap[t][l] : 0.0f;
-
-            float norm = std::clamp(val, 0.0f, 1.0f);
-            float r, g, b;
-            if (norm < 0.25f) {
-                float s = norm / 0.25f;
-                r = 0.05f + 0.05f * s;
-                g = 0.05f + 0.15f * s;
-                b = 0.2f + 0.4f * s;
-            } else if (norm < 0.5f) {
-                float s = (norm - 0.25f) / 0.25f;
-                r = 0.1f * (1.0f - s);
-                g = 0.2f + 0.6f * s;
-                b = 0.6f + 0.2f * s;
-            } else if (norm < 0.75f) {
-                float s = (norm - 0.5f) / 0.25f;
-                r = 0.8f * s;
-                g = 0.8f + 0.1f * s;
-                b = 0.8f - 0.6f * s;
-            } else {
-                float s = (norm - 0.75f) / 0.25f;
-                r = 0.8f + 0.2f * s;
-                g = 0.9f + 0.1f * s;
-                b = 0.2f + 0.8f * s;
-            }
-
-            if (flash > 0.0f) {
-                r = std::min(1.0f, r + 0.4f * flash);
-                g = std::min(1.0f, g + 0.4f * flash);
-                b = std::min(1.0f, b + 0.4f * flash);
-            }
-
-            float x = origin.x + t * cell_w;
-            float y = origin.y + l * cell_h;
-            ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.95f));
-            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cell_w - 0.5f, y + cell_h - 0.5f), col);
-        }
-    }
-
-    // Animated leading edge
-    if (live_attn_flash_timer_ > 0.0f && n_tokens > 0) {
-        float x = origin.x + (n_tokens - 1) * cell_w;
-        float alpha = live_attn_flash_timer_ * 0.9f;
-        ImU32 edge_col = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, alpha));
-        dl->AddRect(ImVec2(x - 0.5f, origin.y),
-                    ImVec2(x + cell_w + 0.5f, origin.y + total_h), edge_col, 0.0f, 0, 2.0f);
-    }
-
-    ImGui::Dummy(ImVec2(total_w, total_h));
-
-    if (ImGui::IsItemHovered()) {
-        ImVec2 mouse = ImGui::GetMousePos();
-        int tok_idx = (int)((mouse.x - origin.x) / cell_w);
-        int lay_idx = (int)((mouse.y - origin.y) / cell_h);
-        tok_idx = std::clamp(tok_idx, 0, n_tokens - 1);
-        lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
-
-        float val = (tok_idx < (int)timeline_snap.size() &&
-                     lay_idx < (int)timeline_snap[tok_idx].size())
-            ? timeline_snap[tok_idx][lay_idx] : 0.0f;
-
-        ImGui::BeginTooltip();
-        int prompt_len = (int)ctok_snap.size() - n_tokens;
-        int ctx_idx = prompt_len + tok_idx;
-        if (ctx_idx >= 0 && ctx_idx < (int)ctok_snap.size())
-            ImGui::Text("Token %d: \"%s\"", tok_idx, ctok_snap[ctx_idx].c_str());
-        else
-            ImGui::Text("Token %d", tok_idx);
-        ImGui::Text("Layer %d", lay_idx);
-        ImGui::Text("Max attention: %.4f", val);
-        ImGui::EndTooltip();
-    }
-
-    ImGui::EndChild();
-    ImGui::EndChild();
-}
-
-// ============================================================================
 // Reusable Attention Tape (layers x KV-positions heatmap)
 // ============================================================================
 
@@ -1539,76 +1380,6 @@ void OpenGllamaApplet::update_context_map_texture(const std::vector<std::vector<
     context_map_texture_ = tex;
 }
 
-void OpenGllamaApplet::update_attn_map_texture(const std::vector<std::vector<float>>& layer_attn) {
-    int n_layers = (int)layer_attn.size();
-    if (n_layers == 0) return;
-    int n_kv = 0;
-    for (auto& row : layer_attn)
-        n_kv = std::max(n_kv, (int)row.size());
-    if (n_kv == 0) return;
-
-    // Per-row normalization: each layer's max maps to 1.0, BOS excluded
-    size_t needed = (size_t)n_layers * n_kv * 3;
-    attn_map_pixels_.resize(needed);
-    std::memset(attn_map_pixels_.data(), 0, needed);
-    auto& pixels = attn_map_pixels_;
-    for (int l = 0; l < n_layers; ++l) {
-        auto& row = layer_attn[l];
-        float row_max = 0.0f;
-        for (int c = 1; c < (int)row.size(); ++c)
-            row_max = std::max(row_max, row[c]);
-        if (row_max < 1e-8f) row_max = 1.0f;
-
-        for (int c = 0; c < (int)row.size(); ++c) {
-            if (c == 0) continue;  // BOS excluded
-            float norm = std::clamp(row[c] / row_max, 0.0f, 1.0f);
-            // Color ramp: dark purple → blue → cyan → yellow → white
-            unsigned char r, g, b;
-            if (norm < 0.25f) {
-                float t = norm / 0.25f;
-                r = (unsigned char)(30 + 10 * t);
-                g = (unsigned char)(10 + 20 * t);
-                b = (unsigned char)(60 + 140 * t);
-            } else if (norm < 0.5f) {
-                float t = (norm - 0.25f) / 0.25f;
-                r = (unsigned char)(40 * (1 - t));
-                g = (unsigned char)(30 + 200 * t);
-                b = (unsigned char)(200 + 55 * t);
-            } else if (norm < 0.75f) {
-                float t = (norm - 0.5f) / 0.25f;
-                r = (unsigned char)(220 * t);
-                g = (unsigned char)(230 + 25 * t);
-                b = (unsigned char)(255 - 200 * t);
-            } else {
-                float t = (norm - 0.75f) / 0.25f;
-                r = (unsigned char)(220 + 35 * t);
-                g = 255;
-                b = (unsigned char)(55 + 200 * t);
-            }
-            int idx = (l * n_kv + c) * 3;
-            pixels[idx + 0] = r;
-            pixels[idx + 1] = g;
-            pixels[idx + 2] = b;
-        }
-    }
-
-    if (attn_map_texture_)
-        glDeleteTextures(1, &attn_map_texture_);
-
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, n_kv, n_layers, 0,
-                 GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    attn_map_texture_ = tex;
-}
-
 // ============================================================================
 // Model Loading
 // ============================================================================
@@ -1737,8 +1508,6 @@ void OpenGllamaApplet::unload_model() {
     attn_recent_ring_.clear();
     attn_recent_ring_idx_ = 0;
     attn_agg_gen_count_ = 0;
-    live_attn_timeline_.clear();
-    live_attn_n_layers_ = 0;
     logit_lens_entries_.clear();
     cached_cmap_.clear();
     cached_cmap_n_layers_ = 0;
@@ -1779,8 +1548,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         attn_recent_ring_.clear();
         attn_recent_ring_idx_ = 0;
         attn_agg_gen_count_ = 0;
-        live_attn_timeline_.clear();
-        live_attn_n_layers_ = 0;
         cached_cmap_.clear();
         cached_cmap_n_layers_ = 0;
         cached_cmap_n_ctx_ = 0;
@@ -1888,18 +1655,10 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             activations_ = std::move(pending_activations_);
             logit_lens_entries_ = std::move(lens);
             if (!pending_attn_weights_.empty()) {
-                int nl = (int)pending_attn_weights_.size();
-                live_attn_n_layers_ = std::max(live_attn_n_layers_, nl);
-                std::vector<float> col(nl, 0.0f);
-                for (int l = 0; l < nl; ++l)
-                    for (float v : pending_attn_weights_[l])
-                        col[l] = std::max(col[l], v);
-                live_attn_timeline_.push_back(std::move(col));
                 update_attn_aggregates(pending_attn_weights_);
                 attn_latest_.layer_attn = pending_attn_weights_;
                 attn_latest_valid_ = true;
                 attn_map_dirty_ = true;
-                // Accumulate per-layer max attention
                 {
                     int nl = (int)pending_attn_weights_.size();
                     while ((int)attn_max_map_.size() < nl)
@@ -2051,18 +1810,10 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 activations_ = std::move(pending_activations_);
                 logit_lens_entries_ = std::move(lens);
                 if (!pending_attn_weights_.empty()) {
-                    int nl = (int)pending_attn_weights_.size();
-                    live_attn_n_layers_ = std::max(live_attn_n_layers_, nl);
-                    std::vector<float> col(nl, 0.0f);
-                    for (int l = 0; l < nl; ++l)
-                        for (float v : pending_attn_weights_[l])
-                            col[l] = std::max(col[l], v);
-                    live_attn_timeline_.push_back(std::move(col));
                     update_attn_aggregates(pending_attn_weights_);
                     attn_latest_.layer_attn = pending_attn_weights_;
                     attn_latest_valid_ = true;
                     attn_map_dirty_ = true;
-                    // Accumulate per-layer max attention
                     {
                         int nl = (int)pending_attn_weights_.size();
                         while ((int)attn_max_map_.size() < nl)

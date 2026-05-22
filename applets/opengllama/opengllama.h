@@ -151,31 +151,18 @@ private:
     int attn_recent_ring_idx_ = 0;
     int attn_agg_gen_count_ = 0;             // how many generation steps contributed
     void update_attn_aggregates(const std::vector<std::vector<float>>& layer_attn);
-    unsigned int attn_map_texture_ = 0;
-    int attn_selected_layer_ = -1;  // -1 = aggregated across layers
     std::atomic<bool> attn_map_dirty_{false};
     TokenAttn cached_attn_;
     bool cached_attn_valid_ = false;
     int cached_attn_n_lay_ = 0;
     int cached_attn_n_kv_ = 0;
-    std::vector<unsigned char> attn_map_pixels_;
-    void update_attn_map_texture(const std::vector<std::vector<float>>& layer_attn);
 
     // Per-layer max attention accumulated across all generation steps
-    // [n_layers][n_kv] — values only increase during generation
     std::vector<std::vector<float>> attn_max_map_;
     std::atomic<bool> attn_max_map_dirty_{false};
     std::vector<std::vector<float>> cached_attn_max_map_;
     int cached_attn_max_n_lay_ = 0;
     int cached_attn_max_n_kv_ = 0;
-
-    // Live attention timeline: [n_tokens][n_layers] = max attention value per layer
-    // Built incrementally in inference thread, protected by output_mutex_
-    std::vector<std::vector<float>> live_attn_timeline_;
-    int live_attn_n_layers_ = 0;
-    int live_attn_last_count_ = 0;
-    float live_attn_flash_timer_ = 0.0f;
-    void draw_live_attention_timeline();
 
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,
