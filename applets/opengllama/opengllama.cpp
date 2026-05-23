@@ -216,9 +216,6 @@ void OpenGllamaApplet::cleanup() {
     for (auto tex : layer_textures_)
         if (tex) glDeleteTextures(1, &tex);
     layer_textures_.clear();
-    if (context_map_texture_) glDeleteTextures(1, &context_map_texture_);
-    context_map_texture_ = 0;
-
     llama_backend_free();
 }
 
@@ -457,13 +454,11 @@ void OpenGllamaApplet::draw_inference_view() {
     {
         std::string text_snap;
         std::vector<LayerActivation> act_snap;
-        std::vector<TokenLogitInfo> logit_snap;
         int toks;
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
             text_snap = output_text_;
             act_snap = activations_;
-            logit_snap = token_logits_;
         }
         toks = tokens_generated_.load();
 
@@ -488,116 +483,7 @@ void OpenGllamaApplet::draw_inference_view() {
             ImGui::EndChild();
         }
 
-        // ── Token Confidence (ImPlot) ──
-        if (!logit_snap.empty()) {
-            ImGui::Spacing();
-            ImGui::SeparatorText("Token Confidence");
-
-            int n = (int)logit_snap.size();
-            float plot_w = ImGui::GetContentRegionAvail().x;
-
-            if (ImPlot::BeginPlot("##token_conf", ImVec2(plot_w, 120.0f),
-                    ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
-                ImPlot::SetupAxes("Token", "P", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.05, ImPlotCond_Always);
-
-                for (int i = 0; i < n; ++i) {
-                    float prob = logit_snap[i].probability;
-                    float ent = std::clamp(logit_snap[i].entropy / 6.0f, 0.0f, 1.0f);
-                    float r, g, b;
-                    if (prob > 0.5f) {
-                        r = 0.15f * (1.0f - prob);
-                        g = 0.7f + 0.3f * prob;
-                        b = 0.23f;
-                    } else {
-                        r = 0.78f + 0.22f * ent;
-                        g = 0.78f * prob + 0.31f * (1.0f - ent);
-                        b = 0.15f;
-                    }
-                    ImU32 fill = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.85f));
-                    ImU32 edge = ImGui::ColorConvertFloat4ToU32(ImVec4(r * 0.7f, g * 0.7f, b * 0.7f, 1.0f));
-                    double x = i, y = prob;
-                    char id[16];
-                    snprintf(id, sizeof(id), "##b%d", i);
-                    ImPlot::PlotBars(id, &x, &y, 1, 0.8,
-                        ImPlotSpec(ImPlotProp_FillColor, fill, ImPlotProp_LineColor, edge));
-                }
-
-                if (ImPlot::IsPlotHovered()) {
-                    ImPlotPoint mp = ImPlot::GetPlotMousePos();
-                    int idx = std::clamp((int)std::round(mp.x), 0, n - 1);
-                    ImGui::BeginTooltip();
-                    ImGui::Text("Token %d: \"%s\"", idx, logit_snap[idx].token_text.c_str());
-                    ImGui::Text("Probability: %.1f%%", logit_snap[idx].probability * 100.0f);
-                    ImGui::Text("Entropy: %.2f bits", logit_snap[idx].entropy);
-                    if (!logit_snap[idx].top_k.empty()) {
-                        ImGui::Separator();
-                        for (auto& [tok, p] : logit_snap[idx].top_k)
-                            ImGui::Text("  %s: %.1f%%", tok.c_str(), p * 100.0f);
-                    }
-                    ImGui::EndTooltip();
-                }
-
-                ImPlot::EndPlot();
-            }
-        }
-
-        // ── Context Activation Map ──
         {
-            if (context_map_dirty_.exchange(false)) {
-                std::lock_guard<std::mutex> lk(output_mutex_);
-                cached_cmap_ = context_map_;
-                cached_cmap_n_layers_ = (int)context_map_.size();
-                cached_cmap_n_ctx_ = 0;
-                for (auto& row : context_map_)
-                    cached_cmap_n_ctx_ = std::max(cached_cmap_n_ctx_, (int)row.size());
-                update_context_map_texture(cached_cmap_);
-            }
-
-            int n_layers = cached_cmap_n_layers_;
-            int n_ctx = cached_cmap_n_ctx_;
-
-            if (n_layers > 0 && n_ctx > 0) {
-                ImGui::Spacing();
-                ImGui::SeparatorText("Context Activation Map");
-                ImGui::TextDisabled(
-                    "Layers (top=0, bottom=%d) vs context tokens — bright = high activation",
-                    n_layers - 1);
-
-                float map_w = ImGui::GetContentRegionAvail().x;
-                float aspect = (float)n_layers / (float)n_ctx;
-                float map_h = std::clamp(map_w * aspect, 60.0f, 300.0f);
-
-                ImGui::BeginChild("##ctx_actmap_port", ImVec2(0, map_h + 8.0f), ImGuiChildFlags_Borders);
-
-                if (context_map_texture_) {
-                    ImVec2 img_pos = ImGui::GetCursorScreenPos();
-                    float draw_w = ImGui::GetContentRegionAvail().x;
-                    float draw_h = std::clamp(draw_w * aspect, 60.0f, 300.0f);
-                    ImGui::Image((ImTextureID)(intptr_t)context_map_texture_,
-                                 ImVec2(draw_w, draw_h));
-
-                    if (ImGui::IsItemHovered()) {
-                        ImVec2 mouse = ImGui::GetMousePos();
-                        int tok_idx = (int)((mouse.x - img_pos.x) / draw_w * n_ctx);
-                        int lay_idx = (int)((mouse.y - img_pos.y) / draw_h * n_layers);
-                        tok_idx = std::clamp(tok_idx, 0, n_ctx - 1);
-                        lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
-
-                        ImGui::BeginTooltip();
-                        {
-                            std::lock_guard<std::mutex> lk(output_mutex_);
-                            if (tok_idx < (int)context_tokens_.size())
-                                ImGui::Text("Token %d: \"%s\"", tok_idx, context_tokens_[tok_idx].c_str());
-                            ImGui::Text("Layer %d", lay_idx);
-                            if (lay_idx < (int)context_map_.size() && tok_idx < (int)context_map_[lay_idx].size())
-                                ImGui::Text("Activation norm: %.4f", context_map_[lay_idx][tok_idx]);
-                        }
-                        ImGui::EndTooltip();
-                    }
-                }
-                ImGui::EndChild();
-            }
 
             // ── Context Text Heatmap (pre-computed attention aggregates) ──
             {
@@ -1309,77 +1195,6 @@ void OpenGllamaApplet::update_attn_aggregates(const std::vector<std::vector<floa
     ++attn_agg_gen_count_;
 }
 
-void OpenGllamaApplet::update_context_map_texture(const std::vector<std::vector<float>>& cmap) {
-    int n_layers = (int)cmap.size();
-    if (n_layers == 0) return;
-    int n_ctx = 0;
-    for (auto& row : cmap)
-        n_ctx = std::max(n_ctx, (int)row.size());
-    if (n_ctx == 0) return;
-
-    // BOS exclusion: skip token 0 in normalization
-    // Percentile normalization (2nd–98th) on non-BOS tokens
-    std::vector<float> all_vals;
-    for (auto& row : cmap)
-        for (int c = 1; c < (int)row.size(); ++c)
-            all_vals.push_back(row[c]);
-
-    float pmin = 0.0f, pmax = 1.0f;
-    if (!all_vals.empty()) {
-        std::sort(all_vals.begin(), all_vals.end());
-        int lo = (int)(all_vals.size() * 0.02f);
-        int hi = (int)(all_vals.size() * 0.98f);
-        hi = std::min(hi, (int)all_vals.size() - 1);
-        pmin = all_vals[lo];
-        pmax = all_vals[hi];
-    }
-    float range = (pmax - pmin) > 1e-7f ? (pmax - pmin) : 1.0f;
-
-    // Build RGB pixels [n_layers rows × n_ctx cols], skip BOS visually (col 0 = black)
-    size_t needed = (size_t)n_layers * n_ctx * 3;
-    ctx_map_pixels_.resize(needed);
-    std::memset(ctx_map_pixels_.data(), 0, needed);
-    auto& pixels = ctx_map_pixels_;
-    for (int l = 0; l < n_layers; ++l) {
-        for (int c = 0; c < (int)cmap[l].size(); ++c) {
-            if (c == 0) continue;  // BOS excluded
-            float norm = std::clamp((cmap[l][c] - pmin) / range, 0.0f, 1.0f);
-            unsigned char r, g, b;
-            if (norm < 0.5f) {
-                float t = norm / 0.5f;
-                r = (unsigned char)(10 * t);
-                g = (unsigned char)(20 + 100 * t);
-                b = (unsigned char)(80 + 175 * t);
-            } else {
-                float t = (norm - 0.5f) / 0.5f;
-                r = (unsigned char)(10 + 245 * t);
-                g = (unsigned char)(120 + 135 * t);
-                b = (unsigned char)(255 - 200 * t);
-            }
-            int idx = (l * n_ctx + c) * 3;
-            pixels[idx + 0] = r;
-            pixels[idx + 1] = g;
-            pixels[idx + 2] = b;
-        }
-    }
-
-    if (context_map_texture_)
-        glDeleteTextures(1, &context_map_texture_);
-
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, n_ctx, n_layers, 0,
-                 GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    context_map_texture_ = tex;
-}
-
 // ============================================================================
 // Model Loading
 // ============================================================================
@@ -1499,7 +1314,6 @@ void OpenGllamaApplet::unload_model() {
     activations_.clear();
     pending_activations_.clear();
     pending_attn_weights_.clear();
-    token_logits_.clear();
     attn_latest_.layer_attn.clear();
     attn_latest_valid_ = false;
     attn_agg_ema_.clear();
@@ -1509,9 +1323,6 @@ void OpenGllamaApplet::unload_model() {
     attn_recent_ring_idx_ = 0;
     attn_agg_gen_count_ = 0;
     logit_lens_entries_.clear();
-    cached_cmap_.clear();
-    cached_cmap_n_layers_ = 0;
-    cached_cmap_n_ctx_ = 0;
     cached_attn_.layer_attn.clear();
     cached_attn_valid_ = false;
     cached_attn_n_lay_ = 0;
@@ -1538,7 +1349,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         std::lock_guard<std::mutex> lk(output_mutex_);
         output_text_.clear();
         activations_.clear();
-        token_logits_.clear();
         logit_lens_entries_.clear();
         attn_latest_.layer_attn.clear();
         attn_latest_valid_ = false;
@@ -1548,9 +1358,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         attn_recent_ring_.clear();
         attn_recent_ring_idx_ = 0;
         attn_agg_gen_count_ = 0;
-        cached_cmap_.clear();
-        cached_cmap_n_layers_ = 0;
-        cached_cmap_n_ctx_ = 0;
         cached_attn_.layer_attn.clear();
         cached_attn_valid_ = false;
         cached_attn_n_lay_ = 0;
@@ -1720,47 +1527,12 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             if (token_delay_ms_ > 0)
                 std::this_thread::sleep_for(std::chrono::milliseconds(token_delay_ms_));
 
-            float* logits = llama_get_logits_ith(ctx_, -1);
-
-            // Compute softmax for visualization (before sampling modifies anything)
-            float max_logit = *std::max_element(logits, logits + n_vocab);
-            double sum_exp = 0.0;
-            for (int t = 0; t < n_vocab; ++t)
-                sum_exp += std::exp((double)(logits[t] - max_logit));
-
-            // Sample using the chain
             llama_token best = llama_sampler_sample(smpl, ctx_, -1);
-            float best_prob = (float)(std::exp((double)(logits[best] - max_logit)) / sum_exp);
-
-            // Entropy
-            float entropy = 0.0f;
-            for (int t = 0; t < n_vocab; ++t) {
-                float p = (float)(std::exp((double)(logits[t] - max_logit)) / sum_exp);
-                if (p > 1e-10f) entropy -= p * std::log2(p);
-            }
-
-            // Top-5 for tooltip
-            std::vector<std::pair<float, int>> scored(n_vocab);
-            for (int t = 0; t < n_vocab; ++t)
-                scored[t] = {logits[t], t};
-            std::partial_sort(scored.begin(), scored.begin() + 5, scored.end(),
-                [](auto& a, auto& b) { return a.first > b.first; });
 
             if (llama_vocab_is_eog(vocab, best)) break;
 
             char piece[64] = {};
             llama_token_to_piece(vocab, best, piece, sizeof(piece), 0, false);
-
-            TokenLogitInfo tli;
-            tli.token_text = piece;
-            tli.probability = best_prob;
-            tli.entropy = entropy;
-            for (int k = 0; k < 5 && k < n_vocab; ++k) {
-                char kpiece[64] = {};
-                llama_token_to_piece(vocab, scored[k].second, kpiece, sizeof(kpiece), 0, false);
-                float kprob = (float)(std::exp((double)(scored[k].first - max_logit)) / sum_exp);
-                tli.top_k.push_back({kpiece, kprob});
-            }
 
             llama_sampler_accept(smpl, best);
 
@@ -1806,7 +1578,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
                 tokens_generated_.store(i + 1);
-                token_logits_.push_back(tli);
                 context_tokens_.push_back(piece);
                 activations_ = std::move(pending_activations_);
                 logit_lens_entries_ = std::move(lens);

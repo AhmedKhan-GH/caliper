@@ -25,13 +25,6 @@ struct LayerActivation {
     std::string name;   // "attn_out" or "l_out"
 };
 
-struct TokenLogitInfo {
-    std::string token_text;
-    float probability;
-    float entropy;
-    std::vector<std::pair<std::string, float>> top_k;
-};
-
 class OpenGllamaApplet {
 public:
     OpenGllamaApplet();
@@ -103,20 +96,13 @@ private:
     // Activations captured from eval callback (protected by output_mutex_)
     std::vector<LayerActivation> activations_;
     std::vector<LayerActivation> pending_activations_;
-    std::vector<TokenLogitInfo> token_logits_;
     std::vector<unsigned int> layer_textures_;
     std::atomic<bool> textures_dirty_{false};
 
     // Context activation map: [n_layers][n_context_tokens] = activation norm
     std::vector<std::vector<float>> context_map_;
     std::vector<std::string> context_tokens_;
-    unsigned int context_map_texture_ = 0;
     std::atomic<bool> context_map_dirty_{false};
-    std::vector<std::vector<float>> cached_cmap_;
-    int cached_cmap_n_layers_ = 0;
-    int cached_cmap_n_ctx_ = 0;
-    std::vector<unsigned char> ctx_map_pixels_;
-    void update_context_map_texture(const std::vector<std::vector<float>>& cmap);
 
     // Text heatmap: GL texture baked to match paragraph layout
     unsigned int ctx_text_heatmap_tex_ = 0;
