@@ -297,17 +297,15 @@ void OpenGllamaApplet::draw_inference_view() {
         ImGui::TextDisabled("%d layers | %d ctx",
             model_ ? llama_model_n_layer(model_) : 0, context_size_);
         ImGui::SameLine();
-        ImGui::TextDisabled("|");
-        ImGui::SameLine();
         if (ollama_server_.is_running()) {
             ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.6f, 1.0f), "API :%d", ollama_server_.port());
             ImGui::SameLine();
             if (ImGui::SmallButton("Stop Server")) ollama_server_.stop();
         } else {
-            ImGui::SetNextItemWidth(60);
+            ImGui::SetNextItemWidth(50);
             ImGui::InputInt("##port", &server_port_, 0, 0);
             ImGui::SameLine();
-            if (ImGui::SmallButton("Start Server")) ollama_server_.start(server_port_);
+            if (ImGui::SmallButton("Serve")) ollama_server_.start(server_port_);
         }
     }
 
@@ -635,7 +633,7 @@ void OpenGllamaApplet::draw_inference_view() {
             } else {
                 draw_attn_tape("live_attn", "Live Attention",
                     "Where the current token attends — bright = high attention weight",
-                    cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true);
+                    cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true, true);
             }
         }
 
@@ -672,7 +670,8 @@ void OpenGllamaApplet::draw_inference_view() {
 void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
                                        const char* description,
                                        const std::vector<std::vector<float>>& layer_data,
-                                       int n_layers, int n_kv, bool auto_scroll) {
+                                       int n_layers, int n_kv, bool auto_scroll,
+                                       bool relative_scale) {
     ImGui::Spacing();
     ImGui::SeparatorText(title);
     ImGui::TextDisabled("%s", description);
@@ -724,13 +723,14 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // Per-row normalization: find max per layer (skip BOS at index 0)
-    std::vector<float> row_max(n_layers, 0.0f);
-    for (int l = 0; l < n_layers; ++l) {
-        if (l >= (int)layer_data.size()) continue;
-        const auto& row = layer_data[l];
-        for (int k = 1; k < n_kv && k < (int)row.size(); ++k) {
-            if (row[k] > row_max[l]) row_max[l] = row[k];
+    std::vector<float> row_max;
+    if (relative_scale) {
+        row_max.resize(n_layers, 0.0f);
+        for (int l = 0; l < n_layers; ++l) {
+            if (l >= (int)layer_data.size()) continue;
+            const auto& row = layer_data[l];
+            for (int k = 1; k < n_kv && k < (int)row.size(); ++k)
+                if (row[k] > row_max[l]) row_max[l] = row[k];
         }
     }
 
@@ -739,7 +739,9 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
             float val = (l < (int)layer_data.size() && k < (int)layer_data[l].size())
                 ? layer_data[l][k] : 0.0f;
 
-            float norm = (row_max[l] > 1e-9f) ? std::clamp(val / row_max[l], 0.0f, 1.0f) : 0.0f;
+            float norm = relative_scale
+                ? ((row_max[l] > 1e-9f) ? std::clamp(val / row_max[l], 0.0f, 1.0f) : 0.0f)
+                : std::clamp(val, 0.0f, 1.0f);
 
             // 4-segment color ramp: dark blue -> cyan -> yellow-green -> white
             float r, g, b;

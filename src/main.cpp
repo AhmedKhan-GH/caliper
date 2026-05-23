@@ -157,20 +157,16 @@ public:
                     }
                 }
             } else if (page_ == AppPage::Applet) {
-                host_.draw(active_applet_, dw, dh);
-
                 bool go_back = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
 
-                ImGuiViewport* vp = ImGui::GetMainViewport();
-                ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 8, vp->WorkPos.y + 8));
-                ImGui::SetNextWindowBgAlpha(0.7f);
-                ImGui::Begin("##back", nullptr,
-                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
-                    ImGuiWindowFlags_NoSavedSettings);
-                if (ImGui::SmallButton("<- Home")) go_back = true;
-                ImGui::End();
+                if (ImGui::BeginMainMenuBar()) {
+                    if (ImGui::MenuItem("< Home")) go_back = true;
+                    ImGui::Separator();
+                    ImGui::TextDisabled("%s", host_[active_applet_].info.name);
+                    ImGui::EndMainMenuBar();
+                }
+
+                host_.draw(active_applet_, dw, dh);
 
                 if (go_back) {
                     host_.teardown(active_applet_);

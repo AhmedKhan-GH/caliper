@@ -66,8 +66,13 @@ static bool parse_json_bool(const std::string& body, const std::string& key, boo
     return default_val;
 }
 
-static std::string extract_chat_prompt(const std::string& body) {
-    std::string result;
+struct ParsedMessage {
+    std::string role;
+    std::string content;
+};
+
+static std::vector<ParsedMessage> parse_messages(const std::string& body) {
+    std::vector<ParsedMessage> msgs;
     size_t pos = 0;
     while (true) {
         auto role_pos = body.find("\"role\"", pos);
@@ -78,19 +83,41 @@ static std::string extract_chat_prompt(const std::string& body) {
         if (content_pos == std::string::npos) break;
 
         std::string content = parse_json_string(body.substr(content_pos), "content");
-
-        if (!result.empty()) result += "\n";
-        if (role == "system")
-            result += content + "\n";
-        else if (role == "user")
-            result += "User: " + content + "\n";
-        else if (role == "assistant")
-            result += "Assistant: " + content + "\n";
-
+        msgs.push_back({role, content});
         pos = content_pos + 1;
     }
-    if (!result.empty()) result += "Assistant:";
-    return result;
+    return msgs;
+}
+
+static std::string apply_chat_template(const llama_model* model,
+                                       const std::vector<ParsedMessage>& msgs) {
+    std::vector<llama_chat_message> chat(msgs.size());
+    for (size_t i = 0; i < msgs.size(); ++i) {
+        chat[i].role = msgs[i].role.c_str();
+        chat[i].content = msgs[i].content.c_str();
+    }
+
+    const char* tmpl = llama_model_chat_template(model, nullptr);
+
+    std::vector<char> buf(4096);
+    int32_t n = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true,
+                                          buf.data(), (int32_t)buf.size());
+    if (n > (int32_t)buf.size()) {
+        buf.resize(n + 1);
+        n = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true,
+                                      buf.data(), (int32_t)buf.size());
+    }
+    if (n < 0) {
+        std::string result;
+        for (auto& m : msgs) {
+            if (m.role == "system") result += m.content + "\n";
+            else if (m.role == "user") result += "User: " + m.content + "\n";
+            else if (m.role == "assistant") result += "Assistant: " + m.content + "\n";
+        }
+        result += "Assistant:";
+        return result;
+    }
+    return std::string(buf.data(), n);
 }
 
 
@@ -236,15 +263,17 @@ void OllamaServer::setup_routes() {
             return;
         }
 
-        std::string prompt = extract_chat_prompt(req.body);
+        auto msgs = parse_messages(req.body);
         bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
 
-        if (prompt.empty()) {
+        if (msgs.empty()) {
             request_active_ = false;
             res.status = 400;
             res.set_content("{\"error\":\"no messages\"}", "application/json");
             return;
         }
+
+        std::string prompt = apply_chat_template(applet_->model_, msgs);
 
         std::string model_name = "opengllama";
         {
