@@ -462,7 +462,7 @@ void OpenGllamaApplet::draw_inference_view() {
         }
         toks = tokens_generated_.load();
 
-        // ── Output text ──
+        // ── Text output with optional attention heatmap ──
         if (!text_snap.empty() || inference_running_) {
             if (inference_running_) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
@@ -470,218 +470,210 @@ void OpenGllamaApplet::draw_inference_view() {
             } else if (toks > 0) {
                 ImGui::TextDisabled("Complete — %d tokens", toks);
             }
+
+            static const char* thm_labels[] = {
+                "None", "EMA (decay)", "Max", "Recent (last 8)", "Final Layer" };
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::Combo("##thm_mode", &ctx_text_heatmap_mode_, thm_labels, 5);
+
+            std::vector<float> agg_snap;
+            std::vector<std::string> ctok_th;
+            int n_gen;
+            {
+                std::lock_guard<std::mutex> lk(output_mutex_);
+                n_gen = attn_agg_gen_count_;
+                ctok_th = context_tokens_;
+                if (ctx_text_heatmap_mode_ == THM_EMA)
+                    agg_snap = attn_agg_ema_;
+                else if (ctx_text_heatmap_mode_ == THM_MAX)
+                    agg_snap = attn_agg_max_;
+                else if (ctx_text_heatmap_mode_ == THM_FINAL_LAYER)
+                    agg_snap = attn_agg_final_ema_;
+                else if (ctx_text_heatmap_mode_ == THM_RECENT) {
+                    int filled = std::min(attn_recent_ring_idx_, kAttnRecentWindow);
+                    if (filled > 0) {
+                        int max_k = 0;
+                        for (int r = 0; r < filled; ++r)
+                            max_k = std::max(max_k, (int)attn_recent_ring_[r].size());
+                        agg_snap.resize(max_k, 0.0f);
+                        for (int r = 0; r < filled; ++r)
+                            for (int k = 0; k < (int)attn_recent_ring_[r].size(); ++k)
+                                agg_snap[k] += attn_recent_ring_[r][k];
+                        for (int k = 0; k < max_k; ++k)
+                            agg_snap[k] /= (float)filled;
+                    }
+                }
+            }
+
+            int n_tok = (int)ctok_th.size();
+            bool have_heatmap = ctx_text_heatmap_mode_ != THM_NONE
+                && n_gen > 0 && n_tok > 1 && !agg_snap.empty();
+
             float text_h = std::min(ImGui::GetContentRegionAvail().y * 0.4f, 200.0f);
             ImGui::BeginChild("##text_output", ImVec2(0, text_h), ImGuiChildFlags_Borders,
                 ImGuiWindowFlags_AlwaysVerticalScrollbar);
-            ImGui::TextWrapped("%s", text_snap.c_str());
-            if (inference_running_) {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
-                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f)
-                    ImGui::SetScrollHereY(1.0f);
-            }
-            ImGui::EndChild();
-        }
 
-        {
+            if (have_heatmap) {
+                float wrap_width = ImGui::GetContentRegionAvail().x;
+                float line_h = ImGui::GetFontSize();
 
-            // ── Context Text Heatmap (pre-computed attention aggregates) ──
-            {
-                std::vector<float> agg_snap;
-                std::vector<std::string> ctok_th;
-                int n_gen;
-                {
-                    std::lock_guard<std::mutex> lk(output_mutex_);
-                    n_gen = attn_agg_gen_count_;
-                    ctok_th = context_tokens_;
-                    // Snapshot the selected aggregate — O(n_ctx) copy
-                    if (ctx_text_heatmap_mode_ == THM_EMA)
-                        agg_snap = attn_agg_ema_;
-                    else if (ctx_text_heatmap_mode_ == THM_MAX)
-                        agg_snap = attn_agg_max_;
-                    else if (ctx_text_heatmap_mode_ == THM_FINAL_LAYER)
-                        agg_snap = attn_agg_final_ema_;
-                    else if (ctx_text_heatmap_mode_ == THM_RECENT) {
-                        // Compute mean from ring buffer
-                        int filled = std::min(attn_recent_ring_idx_, kAttnRecentWindow);
-                        if (filled > 0) {
-                            int max_k = 0;
-                            for (int r = 0; r < filled; ++r)
-                                max_k = std::max(max_k, (int)attn_recent_ring_[r].size());
-                            agg_snap.resize(max_k, 0.0f);
-                            for (int r = 0; r < filled; ++r)
-                                for (int k = 0; k < (int)attn_recent_ring_[r].size(); ++k)
-                                    agg_snap[k] += attn_recent_ring_[r][k];
-                            for (int k = 0; k < max_k; ++k)
-                                agg_snap[k] /= (float)filled;
-                        }
+                bool mode_changed = (ctx_text_heatmap_mode_ != ctx_text_heatmap_prev_mode_);
+                bool need_rebuild = mode_changed
+                    || (n_tok != ctx_text_heatmap_n_ctx_)
+                    || (n_gen != ctx_text_heatmap_n_gen_)
+                    || (std::abs(wrap_width - ctx_text_heatmap_last_width_) > 1.0f);
+
+                if (need_rebuild) {
+                    ctx_text_heatmap_n_ctx_ = n_tok;
+                    ctx_text_heatmap_n_gen_ = n_gen;
+                    ctx_text_heatmap_last_width_ = wrap_width;
+                    ctx_text_heatmap_prev_mode_ = ctx_text_heatmap_mode_;
+
+                    int n_agg = (int)agg_snap.size();
+
+                    std::vector<float> sort_vals;
+                    sort_vals.reserve(n_agg);
+                    for (int c = 1; c < n_agg; ++c)
+                        sort_vals.push_back(agg_snap[c]);
+                    float pmin_t = 0.0f, pmax_t = 1.0f;
+                    if (!sort_vals.empty()) {
+                        std::sort(sort_vals.begin(), sort_vals.end());
+                        int lo = (int)(sort_vals.size() * 0.02f);
+                        int hi = std::min((int)(sort_vals.size() * 0.98f), (int)sort_vals.size() - 1);
+                        pmin_t = sort_vals[lo];
+                        pmax_t = sort_vals[hi];
                     }
-                }
+                    float range_t = (pmax_t - pmin_t) > 1e-7f ? (pmax_t - pmin_t) : 1.0f;
 
-                int n_tok = (int)ctok_th.size();
+                    std::vector<float> tok_norm(n_tok, 0.0f);
+                    for (int c = 1; c < n_tok && c < n_agg; ++c)
+                        tok_norm[c] = std::clamp((agg_snap[c] - pmin_t) / range_t, 0.0f, 1.0f);
 
-                if (n_gen > 0 && n_tok > 1 && !agg_snap.empty()) {
-                    ImGui::Spacing();
+                    ctx_text_layout_.clear();
+                    float cx = 0.0f, cy = 0.0f;
+                    for (int i = 1; i < n_tok && i < (int)ctok_th.size(); ++i) {
+                        const std::string& tok = ctok_th[i];
 
-                    static const char* thm_labels[] = {
-                        "EMA (decay)", "Max", "Recent (last 8)", "Final Layer" };
-                    ImGui::SetNextItemWidth(160.0f);
-                    ImGui::Combo("##thm_mode", &ctx_text_heatmap_mode_, thm_labels, 4);
-
-                    float wrap_width = ImGui::GetContentRegionAvail().x;
-                    float line_h = ImGui::GetFontSize();
-
-                    bool mode_changed = (ctx_text_heatmap_mode_ != ctx_text_heatmap_prev_mode_);
-                    bool need_rebuild = mode_changed
-                        || (n_tok != ctx_text_heatmap_n_ctx_)
-                        || (n_gen != ctx_text_heatmap_n_gen_)
-                        || (std::abs(wrap_width - ctx_text_heatmap_last_width_) > 1.0f);
-
-                    if (need_rebuild) {
-                        ctx_text_heatmap_n_ctx_ = n_tok;
-                        ctx_text_heatmap_n_gen_ = n_gen;
-                        ctx_text_heatmap_last_width_ = wrap_width;
-                        ctx_text_heatmap_prev_mode_ = ctx_text_heatmap_mode_;
-
-                        int n_agg = (int)agg_snap.size();
-
-                        // Percentile normalization, skip BOS
-                        std::vector<float> sort_vals;
-                        sort_vals.reserve(n_agg);
-                        for (int c = 1; c < n_agg; ++c)
-                            sort_vals.push_back(agg_snap[c]);
-                        float pmin_t = 0.0f, pmax_t = 1.0f;
-                        if (!sort_vals.empty()) {
-                            std::sort(sort_vals.begin(), sort_vals.end());
-                            int lo = (int)(sort_vals.size() * 0.02f);
-                            int hi = std::min((int)(sort_vals.size() * 0.98f), (int)sort_vals.size() - 1);
-                            pmin_t = sort_vals[lo];
-                            pmax_t = sort_vals[hi];
-                        }
-                        float range_t = (pmax_t - pmin_t) > 1e-7f ? (pmax_t - pmin_t) : 1.0f;
-
-                        std::vector<float> tok_norm(n_tok, 0.0f);
-                        for (int c = 1; c < n_tok && c < n_agg; ++c)
-                            tok_norm[c] = std::clamp((agg_snap[c] - pmin_t) / range_t, 0.0f, 1.0f);
-
-                        // Paragraph layout honoring newlines
-                        ctx_text_layout_.clear();
-                        float cx = 0.0f, cy = 0.0f;
-                        for (int i = 1; i < n_tok && i < (int)ctok_th.size(); ++i) {
-                            const std::string& tok = ctok_th[i];
-
-                            if (tok.find('\n') != std::string::npos) {
-                                std::string part;
-                                for (char ch : tok) {
-                                    if (ch == '\n') {
-                                        if (!part.empty()) {
-                                            float tw = ImGui::CalcTextSize(part.c_str()).x;
-                                            if (cx + tw > wrap_width && cx > 0.0f) {
-                                                cx = 0.0f;
-                                                cy += line_h;
-                                            }
-                                            ctx_text_layout_.push_back({i, cx, cy, tw, part});
-                                            cx += tw;
+                        if (tok.find('\n') != std::string::npos) {
+                            std::string part;
+                            for (char ch : tok) {
+                                if (ch == '\n') {
+                                    if (!part.empty()) {
+                                        float tw = ImGui::CalcTextSize(part.c_str()).x;
+                                        if (cx + tw > wrap_width && cx > 0.0f) {
+                                            cx = 0.0f;
+                                            cy += line_h;
                                         }
-                                        cx = 0.0f;
-                                        cy += line_h;
-                                        part.clear();
-                                    } else {
-                                        part += ch;
+                                        ctx_text_layout_.push_back({i, cx, cy, tw, part});
+                                        cx += tw;
                                     }
-                                }
-                                if (!part.empty()) {
-                                    float tw = ImGui::CalcTextSize(part.c_str()).x;
-                                    ctx_text_layout_.push_back({i, cx, cy, tw, part});
-                                    cx += tw;
-                                }
-                                continue;
-                            }
-
-                            float tw = ImGui::CalcTextSize(tok.c_str()).x;
-                            if (cx + tw > wrap_width && cx > 0.0f) {
-                                cx = 0.0f;
-                                cy += line_h;
-                            }
-                            ctx_text_layout_.push_back({i, cx, cy, tw, tok});
-                            cx += tw;
-                        }
-                        ctx_text_total_h_ = cy + line_h;
-
-                        // Bake heatmap texture — reuse pixel buffer
-                        int tex_w = std::max(1, (int)wrap_width);
-                        int tex_h = std::max(1, (int)ctx_text_total_h_);
-                        size_t needed = (size_t)tex_w * tex_h * 4;
-                        ctx_text_heatmap_pixels_.resize(needed);
-                        std::memset(ctx_text_heatmap_pixels_.data(), 0, needed);
-
-                        auto& pixels = ctx_text_heatmap_pixels_;
-                        for (auto& tl : ctx_text_layout_) {
-                            float norm = tok_norm[tl.token_idx];
-
-                            float rf, gf, bf;
-                            if (norm < 0.5f) {
-                                float s = norm / 0.5f;
-                                rf = 0.06f + 0.44f * s;
-                                gf = 0.06f + 0.10f * s;
-                                bf = 0.30f + 0.10f * s;
-                            } else {
-                                float s = (norm - 0.5f) / 0.5f;
-                                rf = 0.50f + 0.45f * s;
-                                gf = 0.16f + 0.24f * s;
-                                bf = 0.40f - 0.35f * s;
-                            }
-                            unsigned char pr = (unsigned char)(rf * 255);
-                            unsigned char pg = (unsigned char)(gf * 255);
-                            unsigned char pb = (unsigned char)(bf * 255);
-
-                            int x0 = std::max(0, (int)tl.x);
-                            int x1 = std::min(tex_w, (int)(tl.x + tl.w));
-                            int y0 = std::max(0, (int)tl.y);
-                            int y1 = std::min(tex_h, (int)(tl.y + line_h));
-                            for (int py = y0; py < y1; ++py) {
-                                for (int px = x0; px < x1; ++px) {
-                                    int idx = (py * tex_w + px) * 4;
-                                    pixels[idx + 0] = pr;
-                                    pixels[idx + 1] = pg;
-                                    pixels[idx + 2] = pb;
-                                    pixels[idx + 3] = 216;
+                                    cx = 0.0f;
+                                    cy += line_h;
+                                    part.clear();
+                                } else {
+                                    part += ch;
                                 }
                             }
+                            if (!part.empty()) {
+                                float tw = ImGui::CalcTextSize(part.c_str()).x;
+                                ctx_text_layout_.push_back({i, cx, cy, tw, part});
+                                cx += tw;
+                            }
+                            continue;
                         }
 
-                        if (ctx_text_heatmap_tex_)
-                            glDeleteTextures(1, &ctx_text_heatmap_tex_);
-                        GLuint tex;
-                        glGenTextures(1, &tex);
-                        glBindTexture(GL_TEXTURE_2D, tex);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_w, tex_h, 0,
-                                     GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-                        glBindTexture(GL_TEXTURE_2D, 0);
-                        ctx_text_heatmap_tex_ = tex;
-                        ctx_text_heatmap_tex_w_ = tex_w;
-                        ctx_text_heatmap_tex_h_ = tex_h;
+                        float tw = ImGui::CalcTextSize(tok.c_str()).x;
+                        if (cx + tw > wrap_width && cx > 0.0f) {
+                            cx = 0.0f;
+                            cy += line_h;
+                        }
+                        ctx_text_layout_.push_back({i, cx, cy, tw, tok});
+                        cx += tw;
+                    }
+                    ctx_text_total_h_ = cy + line_h;
+
+                    int tex_w = std::max(1, (int)wrap_width);
+                    int tex_h = std::max(1, (int)ctx_text_total_h_);
+                    size_t needed = (size_t)tex_w * tex_h * 4;
+                    ctx_text_heatmap_pixels_.resize(needed);
+                    std::memset(ctx_text_heatmap_pixels_.data(), 0, needed);
+
+                    auto& pixels = ctx_text_heatmap_pixels_;
+                    for (auto& tl : ctx_text_layout_) {
+                        float norm = tok_norm[tl.token_idx];
+
+                        float rf, gf, bf;
+                        if (norm < 0.5f) {
+                            float s = norm / 0.5f;
+                            rf = 0.06f + 0.44f * s;
+                            gf = 0.06f + 0.10f * s;
+                            bf = 0.30f + 0.10f * s;
+                        } else {
+                            float s = (norm - 0.5f) / 0.5f;
+                            rf = 0.50f + 0.45f * s;
+                            gf = 0.16f + 0.24f * s;
+                            bf = 0.40f - 0.35f * s;
+                        }
+                        unsigned char pr = (unsigned char)(rf * 255);
+                        unsigned char pg = (unsigned char)(gf * 255);
+                        unsigned char pb = (unsigned char)(bf * 255);
+
+                        int x0 = std::max(0, (int)tl.x);
+                        int x1 = std::min(tex_w, (int)(tl.x + tl.w));
+                        int y0 = std::max(0, (int)tl.y);
+                        int y1 = std::min(tex_h, (int)(tl.y + line_h));
+                        for (int py = y0; py < y1; ++py) {
+                            for (int px = x0; px < x1; ++px) {
+                                int idx = (py * tex_w + px) * 4;
+                                pixels[idx + 0] = pr;
+                                pixels[idx + 1] = pg;
+                                pixels[idx + 2] = pb;
+                                pixels[idx + 3] = 216;
+                            }
+                        }
                     }
 
-                    if (ctx_text_heatmap_tex_ && !ctx_text_layout_.empty()) {
-                        ImVec2 origin = ImGui::GetCursorScreenPos();
-                        ImGui::Image((ImTextureID)(intptr_t)ctx_text_heatmap_tex_,
-                                     ImVec2((float)ctx_text_heatmap_tex_w_, (float)ctx_text_heatmap_tex_h_));
+                    if (ctx_text_heatmap_tex_)
+                        glDeleteTextures(1, &ctx_text_heatmap_tex_);
+                    GLuint tex;
+                    glGenTextures(1, &tex);
+                    glBindTexture(GL_TEXTURE_2D, tex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_w, tex_h, 0,
+                                 GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    ctx_text_heatmap_tex_ = tex;
+                    ctx_text_heatmap_tex_w_ = tex_w;
+                    ctx_text_heatmap_tex_h_ = tex_h;
+                }
 
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        ImU32 txt_col = ImGui::GetColorU32(ImGuiCol_Text);
-                        for (auto& tl : ctx_text_layout_) {
-                            dl->AddText(
-                                ImVec2(origin.x + tl.x, origin.y + tl.y),
-                                txt_col, tl.text.c_str());
-                        }
+                if (ctx_text_heatmap_tex_ && !ctx_text_layout_.empty()) {
+                    ImVec2 origin = ImGui::GetCursorScreenPos();
+                    ImGui::Image((ImTextureID)(intptr_t)ctx_text_heatmap_tex_,
+                                 ImVec2((float)ctx_text_heatmap_tex_w_, (float)ctx_text_heatmap_tex_h_));
+
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    ImU32 txt_col = ImGui::GetColorU32(ImGuiCol_Text);
+                    for (auto& tl : ctx_text_layout_) {
+                        dl->AddText(
+                            ImVec2(origin.x + tl.x, origin.y + tl.y),
+                            txt_col, tl.text.c_str());
                     }
                 }
+            } else {
+                ImGui::TextWrapped("%s", text_snap.c_str());
+                if (inference_running_) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
+                }
             }
+
+            if (inference_running_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f)
+                ImGui::SetScrollHereY(1.0f);
+            ImGui::EndChild();
         }
 
         // ── Decision Crystallization (Logit Lens) ──
