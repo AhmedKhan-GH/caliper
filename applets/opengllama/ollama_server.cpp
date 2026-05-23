@@ -1,0 +1,298 @@
+#include "ollama_server.h"
+#include "opengllama.h"
+
+#include <httplib.h>
+#include <llama.h>
+
+#include <cstdio>
+#include <ctime>
+#include <sstream>
+
+static std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
+static std::string iso8601_now() {
+    time_t t = time(nullptr);
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+
+static std::string parse_json_string(const std::string& body, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    auto pos = body.find(needle);
+    if (pos == std::string::npos) return "";
+    pos = body.find('"', pos + needle.size());
+    if (pos == std::string::npos) return "";
+    pos++;
+    auto end = body.find('"', pos);
+    while (end != std::string::npos && end > 0 && body[end - 1] == '\\')
+        end = body.find('"', end + 1);
+    if (end == std::string::npos) return "";
+    return body.substr(pos, end - pos);
+}
+
+static bool parse_json_bool(const std::string& body, const std::string& key, bool default_val) {
+    std::string needle = "\"" + key + "\"";
+    auto pos = body.find(needle);
+    if (pos == std::string::npos) return default_val;
+    pos += needle.size();
+    while (pos < body.size() && (body[pos] == ' ' || body[pos] == ':' || body[pos] == '\t'))
+        pos++;
+    if (pos + 4 <= body.size() && body.substr(pos, 4) == "true") return true;
+    if (pos + 5 <= body.size() && body.substr(pos, 5) == "false") return false;
+    return default_val;
+}
+
+static std::string extract_chat_prompt(const std::string& body) {
+    std::string result;
+    size_t pos = 0;
+    while (true) {
+        auto role_pos = body.find("\"role\"", pos);
+        if (role_pos == std::string::npos) break;
+
+        std::string role = parse_json_string(body.substr(role_pos), "role");
+        auto content_pos = body.find("\"content\"", role_pos);
+        if (content_pos == std::string::npos) break;
+
+        std::string content = parse_json_string(body.substr(content_pos), "content");
+
+        if (!result.empty()) result += "\n";
+        if (role == "system")
+            result += content + "\n";
+        else if (role == "user")
+            result += "User: " + content + "\n";
+        else if (role == "assistant")
+            result += "Assistant: " + content + "\n";
+
+        pos = content_pos + 1;
+    }
+    if (!result.empty()) result += "Assistant:";
+    return result;
+}
+
+
+OllamaServer::OllamaServer(OpenGllamaApplet* applet) : applet_(applet) {}
+
+OllamaServer::~OllamaServer() {
+    stop();
+}
+
+void OllamaServer::start(int port) {
+    if (running_) return;
+
+    port_ = port;
+    server_ = new httplib::Server();
+    setup_routes();
+
+    running_ = true;
+    server_thread_ = std::thread([this]() {
+        std::fprintf(stderr, "[ollama-server] listening on 0.0.0.0:%d\n", port_);
+        server_->listen("0.0.0.0", port_);
+        running_ = false;
+    });
+}
+
+void OllamaServer::stop() {
+    if (server_) {
+        server_->stop();
+    }
+    if (server_thread_.joinable()) server_thread_.join();
+    delete server_;
+    server_ = nullptr;
+    running_ = false;
+}
+
+void OllamaServer::setup_routes() {
+    server_->Get("/api/tags", [this](const httplib::Request&, httplib::Response& res) {
+        std::string model_name = "opengllama";
+        std::string now = iso8601_now();
+
+        if (!applet_->is_model_loaded()) {
+            res.set_content("{\"models\":[]}", "application/json");
+            return;
+        }
+
+        std::string path = applet_->model_path();
+        size_t slash = path.find_last_of('/');
+        if (slash != std::string::npos) model_name = path.substr(slash + 1);
+        size_t dot = model_name.find_last_of('.');
+        if (dot != std::string::npos) model_name = model_name.substr(0, dot);
+
+        std::string json = "{\"models\":[{"
+            "\"name\":\"" + json_escape(model_name) + ":latest\","
+            "\"model\":\"" + json_escape(model_name) + ":latest\","
+            "\"modified_at\":\"" + now + "\","
+            "\"size\":0,"
+            "\"digest\":\"\","
+            "\"details\":{\"format\":\"gguf\",\"family\":\"llama\"}"
+            "}]}";
+        res.set_content(json, "application/json");
+    });
+
+    server_->Post("/api/generate", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!applet_->is_model_loaded()) {
+            res.status = 503;
+            res.set_content("{\"error\":\"no model loaded\"}", "application/json");
+            return;
+        }
+        if (request_active_.exchange(true)) {
+            res.status = 503;
+            res.set_content("{\"error\":\"inference already in progress\"}", "application/json");
+            return;
+        }
+
+        std::string prompt = parse_json_string(req.body, "prompt");
+        bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
+
+        if (prompt.empty()) {
+            request_active_ = false;
+            res.status = 400;
+            res.set_content("{\"error\":\"empty prompt\"}", "application/json");
+            return;
+        }
+
+        std::string model_name = "opengllama";
+        {
+            std::string p = applet_->model_path();
+            size_t s = p.find_last_of('/');
+            if (s != std::string::npos) model_name = p.substr(s + 1);
+            size_t d = model_name.find_last_of('.');
+            if (d != std::string::npos) model_name = model_name.substr(0, d);
+        }
+
+        if (!stream) {
+            std::string full_response;
+            applet_->run_inference_blocking(prompt, [&](const std::string& piece) {
+                full_response += piece;
+                return true;
+            });
+
+            std::string json = "{\"model\":\"" + json_escape(model_name) + ":latest\","
+                "\"created_at\":\"" + iso8601_now() + "\","
+                "\"response\":\"" + json_escape(full_response) + "\","
+                "\"done\":true}";
+            res.set_content(json, "application/json");
+            request_active_ = false;
+            return;
+        }
+
+        auto* active_flag = &request_active_;
+        auto applet = applet_;
+        std::string mn = model_name;
+
+        res.set_chunked_content_provider("application/x-ndjson",
+            [applet, prompt, mn, active_flag](size_t, httplib::DataSink& sink) -> bool {
+                applet->run_inference_blocking(prompt, [&](const std::string& piece) {
+                    std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
+                        "\"created_at\":\"" + iso8601_now() + "\","
+                        "\"response\":\"" + json_escape(piece) + "\","
+                        "\"done\":false}\n";
+                    return sink.write(line.data(), line.size());
+                });
+
+                std::string done_line = "{\"model\":\"" + json_escape(mn) + ":latest\","
+                    "\"created_at\":\"" + iso8601_now() + "\","
+                    "\"response\":\"\","
+                    "\"done\":true}\n";
+                sink.write(done_line.data(), done_line.size());
+                sink.done();
+                *active_flag = false;
+                return true;
+            });
+    });
+
+    server_->Post("/api/chat", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!applet_->is_model_loaded()) {
+            res.status = 503;
+            res.set_content("{\"error\":\"no model loaded\"}", "application/json");
+            return;
+        }
+        if (request_active_.exchange(true)) {
+            res.status = 503;
+            res.set_content("{\"error\":\"inference already in progress\"}", "application/json");
+            return;
+        }
+
+        std::string prompt = extract_chat_prompt(req.body);
+        bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
+
+        if (prompt.empty()) {
+            request_active_ = false;
+            res.status = 400;
+            res.set_content("{\"error\":\"no messages\"}", "application/json");
+            return;
+        }
+
+        std::string model_name = "opengllama";
+        {
+            std::string p = applet_->model_path();
+            size_t s = p.find_last_of('/');
+            if (s != std::string::npos) model_name = p.substr(s + 1);
+            size_t d = model_name.find_last_of('.');
+            if (d != std::string::npos) model_name = model_name.substr(0, d);
+        }
+
+        if (!stream) {
+            std::string full_response;
+            applet_->run_inference_blocking(prompt, [&](const std::string& piece) {
+                full_response += piece;
+                return true;
+            });
+
+            std::string json = "{\"model\":\"" + json_escape(model_name) + ":latest\","
+                "\"created_at\":\"" + iso8601_now() + "\","
+                "\"message\":{\"role\":\"assistant\",\"content\":\"" + json_escape(full_response) + "\"},"
+                "\"done\":true}";
+            res.set_content(json, "application/json");
+            request_active_ = false;
+            return;
+        }
+
+        auto* active_flag = &request_active_;
+        auto applet = applet_;
+        std::string mn = model_name;
+
+        res.set_chunked_content_provider("application/x-ndjson",
+            [applet, prompt, mn, active_flag](size_t, httplib::DataSink& sink) -> bool {
+                applet->run_inference_blocking(prompt, [&](const std::string& piece) {
+                    std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
+                        "\"created_at\":\"" + iso8601_now() + "\","
+                        "\"message\":{\"role\":\"assistant\",\"content\":\"" + json_escape(piece) + "\"},"
+                        "\"done\":false}\n";
+                    return sink.write(line.data(), line.size());
+                });
+
+                std::string done_line = "{\"model\":\"" + json_escape(mn) + ":latest\","
+                    "\"created_at\":\"" + iso8601_now() + "\","
+                    "\"message\":{\"role\":\"assistant\",\"content\":\"\"},"
+                    "\"done\":true}\n";
+                sink.write(done_line.data(), done_line.size());
+                sink.done();
+                *active_flag = false;
+                return true;
+            });
+    });
+}

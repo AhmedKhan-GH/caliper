@@ -132,6 +132,7 @@ bool OpenGllamaApplet::initialize() {
 }
 
 void OpenGllamaApplet::cleanup() {
+    ollama_server_.stop();
     inference_running_ = false;
     if (inference_thread_.joinable()) inference_thread_.join();
     if (load_thread_.joinable()) load_thread_.join();
@@ -277,19 +278,38 @@ void OpenGllamaApplet::draw_ollama_models() {
 
 void OpenGllamaApplet::draw_inference_view() {
     // ── Top bar ──
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Model:");
-    ImGui::SameLine();
-    ImGui::Text("%s", model_path_.c_str());
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Unload")) {
-        inference_running_ = false;
-        if (inference_thread_.joinable()) inference_thread_.join();
-        unload_model();
-        return;
+    {
+        const char* display_name = model_path_.c_str();
+        size_t slash = model_path_.find_last_of('/');
+        if (slash != std::string::npos) display_name = model_path_.c_str() + slash + 1;
+
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Model:");
+        ImGui::SameLine();
+        ImGui::Text("%s", display_name);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Unload")) {
+            inference_running_ = false;
+            if (inference_thread_.joinable()) inference_thread_.join();
+            unload_model();
+            return;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d layers | %d ctx",
+            model_ ? llama_model_n_layer(model_) : 0, context_size_);
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        if (ollama_server_.is_running()) {
+            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.6f, 1.0f), "API :%d", ollama_server_.port());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Stop Server")) ollama_server_.stop();
+        } else {
+            ImGui::SetNextItemWidth(60);
+            ImGui::InputInt("##port", &server_port_, 0, 0);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Start Server")) ollama_server_.start(server_port_);
+        }
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("| %d layers | %d ctx",
-        model_ ? llama_model_n_layer(model_) : 0, context_size_);
 
     ImGui::Separator();
 
@@ -1195,4 +1215,204 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         inference_running_ = false;
         inference_finished_ = true;
     });
+}
+
+// ============================================================================
+// Blocking inference — called from HTTP server thread
+// ============================================================================
+
+void OpenGllamaApplet::run_inference_blocking(
+        const std::string& prompt,
+        const std::function<bool(const std::string&)>& token_cb) {
+
+    if (inference_thread_.joinable()) inference_thread_.join();
+
+    {
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        output_text_.clear();
+        attn_latest_.layer_attn.clear();
+        attn_latest_valid_ = false;
+        attn_agg_ema_.clear();
+        attn_agg_max_.clear();
+        attn_agg_final_ema_.clear();
+        attn_recent_ring_.clear();
+        attn_recent_ring_idx_ = 0;
+        attn_agg_gen_count_ = 0;
+        cached_attn_.layer_attn.clear();
+        cached_attn_valid_ = false;
+        cached_attn_n_lay_ = 0;
+        cached_attn_n_kv_ = 0;
+        context_map_dirty_ = false;
+        attn_map_dirty_ = false;
+        attn_focus_timeline_.clear();
+        attn_focus_dirty_ = false;
+        cached_attn_focus_.clear();
+        cached_attn_focus_n_lay_ = 0;
+        cached_attn_focus_n_gen_ = 0;
+    }
+    tokens_generated_ = 0;
+    inference_running_ = true;
+    inference_finished_ = false;
+    inference_mode_ = InferenceMode::Continuous;
+
+    if (!model_ || !ctx_) {
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        output_text_ = "ERROR: no model loaded";
+        inference_running_ = false;
+        inference_finished_ = true;
+        return;
+    }
+
+    llama_memory_clear(llama_get_memory(ctx_), true);
+
+    const llama_vocab* vocab = llama_model_get_vocab(model_);
+    int n_layers = llama_model_n_layer(model_);
+
+    context_map_.clear();
+    context_map_.resize(n_layers);
+    context_tokens_.clear();
+
+    std::vector<llama_token> tokens(prompt.size() + 8);
+    int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
+                                  tokens.data(), (int)tokens.size(), true, false);
+    if (n_tokens < 0) {
+        tokens.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
+                                  tokens.data(), (int)tokens.size(), true, false);
+    }
+    tokens.resize(n_tokens);
+
+    for (int i = 0; i < n_tokens; ++i) {
+        char piece[64] = {};
+        llama_token_to_piece(vocab, tokens[i], piece, sizeof(piece), 0, false);
+        context_tokens_.push_back(piece);
+    }
+
+    llama_batch batch = llama_batch_init(std::max(n_tokens, 1), 0, 1);
+    batch.n_tokens = n_tokens;
+    for (int i = 0; i < n_tokens; ++i) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
+    }
+
+    pending_attn_weights_.clear();
+
+    if (llama_decode(ctx_, batch) != 0) {
+        llama_batch_free(batch);
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        output_text_ = "ERROR: decode failed on prompt";
+        inference_running_ = false;
+        inference_finished_ = true;
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        if (!pending_attn_weights_.empty()) {
+            int actual_ctx = (int)context_tokens_.size();
+            for (auto& aw : pending_attn_weights_)
+                if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
+            update_attn_aggregates(pending_attn_weights_);
+            attn_latest_.layer_attn = pending_attn_weights_;
+            attn_latest_valid_ = true;
+            attn_map_dirty_ = true;
+            {
+                int nl = (int)pending_attn_weights_.size();
+                while ((int)attn_focus_timeline_.size() < nl)
+                    attn_focus_timeline_.push_back({});
+                for (int l = 0; l < nl; ++l) {
+                    float mx = 0.0f;
+                    for (float v : pending_attn_weights_[l])
+                        mx = std::max(mx, v);
+                    attn_focus_timeline_[l].push_back(mx);
+                }
+            }
+            attn_focus_dirty_ = true;
+        }
+        context_map_dirty_ = true;
+    }
+
+    auto sparams = llama_sampler_chain_default_params();
+    llama_sampler* smpl = llama_sampler_chain_init(sparams);
+
+    if (repeat_penalty_ > 1.0f)
+        llama_sampler_chain_add(smpl,
+            llama_sampler_init_penalties(repeat_last_n_, repeat_penalty_, 0.0f, 0.0f));
+    if (top_k_ > 0)
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k_));
+    if (top_p_ < 1.0f)
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p_, 1));
+    if (min_p_ > 0.0f)
+        llama_sampler_chain_add(smpl, llama_sampler_init_min_p(min_p_, 1));
+    if (temperature_ > 0.0f)
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature_));
+    else
+        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+
+    uint32_t s = seed_ == 0 ? (uint32_t)time(nullptr) : seed_;
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(s));
+
+    int n_gen = max_tokens_;
+
+    for (int i = 0; i < n_gen; ++i) {
+        if (!inference_running_) break;
+
+        llama_token best = llama_sampler_sample(smpl, ctx_, -1);
+        if (llama_vocab_is_eog(vocab, best)) break;
+
+        char piece[64] = {};
+        llama_token_to_piece(vocab, best, piece, sizeof(piece), 0, false);
+
+        llama_sampler_accept(smpl, best);
+
+        pending_attn_weights_.clear();
+
+        batch.n_tokens = 1;
+        batch.token[0] = best;
+        batch.pos[0] = n_tokens + i;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = 1;
+        if (llama_decode(ctx_, batch) != 0) break;
+
+        {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            std::string piece_str(piece);
+            output_text_ += piece_str;
+            tokens_generated_.store(i + 1);
+            context_tokens_.push_back(piece_str);
+            if (!pending_attn_weights_.empty()) {
+                int actual_ctx = (int)context_tokens_.size();
+                for (auto& aw : pending_attn_weights_)
+                    if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
+                update_attn_aggregates(pending_attn_weights_);
+                attn_latest_.layer_attn = pending_attn_weights_;
+                attn_latest_valid_ = true;
+                attn_map_dirty_ = true;
+                {
+                    int nl = (int)pending_attn_weights_.size();
+                    while ((int)attn_focus_timeline_.size() < nl)
+                        attn_focus_timeline_.push_back({});
+                    for (int l = 0; l < nl; ++l) {
+                        float mx = 0.0f;
+                        for (float v : pending_attn_weights_[l])
+                            mx = std::max(mx, v);
+                        attn_focus_timeline_[l].push_back(mx);
+                    }
+                }
+                attn_focus_dirty_ = true;
+            }
+            context_map_dirty_ = true;
+        }
+
+        if (!token_cb(std::string(piece))) break;
+    }
+
+    llama_sampler_free(smpl);
+    llama_batch_free(batch);
+    inference_running_ = false;
+    inference_finished_ = true;
 }

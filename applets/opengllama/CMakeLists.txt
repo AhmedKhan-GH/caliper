@@ -1,7 +1,13 @@
+if(NOT TARGET cpp-httplib)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/llama.cpp/vendor/cpp-httplib
+                     ${CMAKE_BINARY_DIR}/_deps/cpp-httplib EXCLUDE_FROM_ALL)
+endif()
+
 add_library(opengllama SHARED
     plugin.cpp
     opengllama.cpp
     ollama_models.cpp
+    ollama_server.cpp
     ${CMAKE_SOURCE_DIR}/src/app_paths.cpp
 )
 
@@ -9,12 +15,14 @@ target_include_directories(opengllama PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/include
+    ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/vendor/cpp-httplib
 )
 
 target_link_libraries(opengllama PRIVATE
     caliper_applet_sdk
     llama
     libglew_static
+    cpp-httplib
 )
 
 target_compile_definitions(opengllama PRIVATE CALIPER_APPLET_EXPORT)

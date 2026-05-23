@@ -5,8 +5,10 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <functional>
 
 #include "ollama_models.h"
+#include "ollama_server.h"
 
 struct llama_model;
 struct llama_context;
@@ -66,6 +68,9 @@ private:
     std::mutex output_mutex_;
 
     void run_inference_async(const std::string& prompt);
+    void run_inference_blocking(const std::string& prompt,
+                                const std::function<bool(const std::string&)>& token_cb);
+    friend class OllamaServer;
 
     // Async model loading
     std::thread load_thread_;
@@ -133,4 +138,8 @@ private:
                         int n_layers, int n_kv, bool auto_scroll);
 
     OllamaModelStore ollama_store_;
+
+    // Embedded Ollama-compatible API server
+    OllamaServer ollama_server_{this};
+    int server_port_ = 11435;
 };
