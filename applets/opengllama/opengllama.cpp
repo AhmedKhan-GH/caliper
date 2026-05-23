@@ -61,24 +61,14 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
     const char* name = t->name;
 
     bool is_layer_out = (strncmp(name, "l_out-", 6) == 0);
-    bool is_attn_out  = (strncmp(name, "attn_out-", 9) == 0);
     bool is_kq_soft   = (strncmp(name, "kq_soft_max-", 12) == 0);
-    bool want = is_layer_out || is_attn_out || is_kq_soft;
+    bool want = is_layer_out || is_kq_soft;
 
-    if (ask) {
-        static int ask_log_count = 0;
-        if (ask_log_count < 200) {
-            std::fprintf(stderr, "[eval_cb] ask tensor: '%s' want=%d\n", name, (int)want);
-            ++ask_log_count;
-        }
-        return want;
-    }
+    if (ask) return want;
     if (!want) return true;
 
-    int layer = atoi(name + (is_layer_out ? 6 : (is_kq_soft ? 12 : 9)));
+    int layer = atoi(name + (is_layer_out ? 6 : 12));
 
-    // Attention weights: kq_soft_max shape is [n_kv, n_tokens_q, n_heads] or similar
-    // Average across heads, take last query token row → per-KV-position attention
     if (is_kq_soft) {
         int64_t n_elem = ggml_nelements(t);
         int n_kv    = (int)t->ne[0];
@@ -91,7 +81,6 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
         while ((int)self->pending_attn_weights_.size() <= layer)
             self->pending_attn_weights_.push_back({});
 
-        // Head-averaged attention for the last query token
         std::vector<float> avg(n_kv, 0.0f);
         int last_q = n_q - 1;
         for (int h = 0; h < n_heads; ++h) {
@@ -103,83 +92,27 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
         for (int k = 0; k < n_kv; ++k) avg[k] *= inv_h;
 
         self->pending_attn_weights_[layer] = std::move(avg);
-        if (layer == 0)
-            std::fprintf(stderr, "[attn] captured kq_soft_max: n_heads=%d n_kv=%d n_q=%d layers_so_far=%d\n",
-                n_heads, n_kv, n_q, (int)self->pending_attn_weights_.size());
         return true;
     }
 
-    int64_t n_elem = ggml_nelements(t);
+    // l_out: context map (per-token activation norm per layer)
     int rows = (int)t->ne[1];
     int cols = (int)t->ne[0];
     if (rows < 1) rows = 1;
 
-    int vis_cols = std::min(cols, 256);
-    int vis_rows = std::min(rows, 1);  // single-token: just first row
-    int stride = std::max(1, cols / vis_cols);
+    std::vector<float> buf(ggml_nelements(t));
+    ggml_backend_tensor_get(t, buf.data(), 0, buf.size() * sizeof(float));
 
-    std::vector<float> buf(n_elem);
-    ggml_backend_tensor_get(t, buf.data(), 0, n_elem * sizeof(float));
+    while ((int)self->context_map_.size() <= layer)
+        self->context_map_.push_back({});
 
-    LayerActivation act;
-    act.layer_index = layer;
-    act.name = is_layer_out ? "l_out" : "attn_out";
-    act.rows = vis_rows;
-    act.cols = vis_cols;
-    act.values.resize(vis_rows * vis_cols);
-
-    float sum = 0.0f, sq_sum = 0.0f, mx = -1e30f;
-    for (int r = 0; r < vis_rows; ++r) {
-        for (int c = 0; c < vis_cols; ++c) {
-            float v = buf[r * cols + c * stride];
-            act.values[r * vis_cols + c] = v;
-            sum += std::abs(v);
-            sq_sum += v * v;
-            mx = std::max(mx, std::abs(v));
+    for (int r = 0; r < rows; ++r) {
+        float sq = 0.0f;
+        for (int c = 0; c < cols; ++c) {
+            float v = buf[r * cols + c];
+            sq += v * v;
         }
-    }
-    int n = vis_rows * vis_cols;
-    act.mean = sum / (float)n;
-    act.norm = std::sqrt(sq_sum / (float)n);
-    act.max_val = mx;
-
-    // Cosine similarity with previous l_out
-    act.cosine_prev = 0.0f;
-    if (is_layer_out && !self->pending_activations_.empty()) {
-        for (int k = (int)self->pending_activations_.size() - 1; k >= 0; --k) {
-            if (self->pending_activations_[k].name == "l_out") {
-                auto& prev = self->pending_activations_[k].values;
-                int len = std::min((int)prev.size(), (int)act.values.size());
-                float dot = 0, na = 0, nb = 0;
-                for (int i = 0; i < len; ++i) {
-                    dot += prev[i] * act.values[i];
-                    na += prev[i] * prev[i];
-                    nb += act.values[i] * act.values[i];
-                }
-                float denom = std::sqrt(na) * std::sqrt(nb);
-                act.cosine_prev = denom > 1e-8f ? dot / denom : 0.0f;
-                break;
-            }
-        }
-    }
-
-    self->pending_activations_.push_back(std::move(act));
-
-    // Context map: per-token norm at this layer (only l_out)
-    if (is_layer_out) {
-        // Ensure context_map_ has enough layers
-        while ((int)self->context_map_.size() <= layer)
-            self->context_map_.push_back({});
-
-        // Compute L2 norm for each token position (row)
-        for (int r = 0; r < rows; ++r) {
-            float sq = 0.0f;
-            for (int c = 0; c < cols; ++c) {
-                float v = buf[r * cols + c];
-                sq += v * v;
-            }
-            self->context_map_[layer].push_back(std::sqrt(sq / (float)cols));
-        }
+        self->context_map_[layer].push_back(std::sqrt(sq / (float)cols));
     }
 
     return true;
@@ -204,9 +137,6 @@ void OpenGllamaApplet::cleanup() {
     if (load_thread_.joinable()) load_thread_.join();
     unload_model();
 
-    for (auto tex : layer_textures_)
-        if (tex) glDeleteTextures(1, &tex);
-    layer_textures_.clear();
     llama_backend_free();
 }
 
@@ -444,12 +374,10 @@ void OpenGllamaApplet::draw_inference_view() {
         ImGuiWindowFlags_AlwaysVerticalScrollbar);
     {
         std::string text_snap;
-        std::vector<LayerActivation> act_snap;
         int toks;
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
             text_snap = output_text_;
-            act_snap = activations_;
         }
         toks = tokens_generated_.load();
 
@@ -709,150 +637,9 @@ void OpenGllamaApplet::draw_inference_view() {
             }
         }
 
-        // ── Layer activation heatmaps ──
-        if (!act_snap.empty()) {
+        if (!inference_running_ && text_snap.empty()) {
             ImGui::Spacing();
-            ImGui::SeparatorText("Embedding Flow Through Layers");
-            if (inference_running_) {
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
-                    "%d tensors captured (live)", (int)act_snap.size());
-            }
-            ImGui::Spacing();
-
-            // ── Summary: norm bar + cosine similarity bar ──
-            // Filter to just l_out for the summary
-            std::vector<const LayerActivation*> l_outs;
-            for (auto& a : act_snap)
-                if (a.name == "l_out") l_outs.push_back(&a);
-
-            if (!l_outs.empty()) {
-                float bar_w = ImGui::GetContentRegionAvail().x;
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-
-                // Norm bar
-                {
-                    float bar_h = 20.0f;
-                    ImVec2 origin = ImGui::GetCursorScreenPos();
-                    float max_norm = 0.0f;
-                    for (auto* a : l_outs) max_norm = std::max(max_norm, a->norm);
-                    if (max_norm < 1e-7f) max_norm = 1.0f;
-
-                    float cell_w = bar_w / (float)l_outs.size();
-                    for (int l = 0; l < (int)l_outs.size(); ++l) {
-                        float t = l_outs[l]->norm / max_norm;
-                        unsigned char r = (unsigned char)(30 + 225 * t);
-                        unsigned char g = (unsigned char)(120 + 80 * (1.0f - t));
-                        unsigned char b = (unsigned char)(200 * (1.0f - t));
-
-                        float x = origin.x + l * cell_w;
-                        dl->AddRectFilled(
-                            ImVec2(x, origin.y + bar_h * (1.0f - t)),
-                            ImVec2(x + cell_w - 1.0f, origin.y + bar_h),
-                            IM_COL32(r, g, b, 220));
-
-                        if (ImGui::IsMouseHoveringRect(
-                                ImVec2(x, origin.y), ImVec2(x + cell_w, origin.y + bar_h))) {
-                            ImGui::BeginTooltip();
-                            ImGui::Text("Layer %d", l_outs[l]->layer_index);
-                            ImGui::Text("RMS norm: %.4f", l_outs[l]->norm);
-                            ImGui::Text("Mean |act|: %.4f", l_outs[l]->mean);
-                            ImGui::EndTooltip();
-                        }
-                    }
-                    dl->AddRect(origin, ImVec2(origin.x + bar_w, origin.y + bar_h),
-                        IM_COL32(80, 80, 80, 120));
-                    ImGui::Dummy(ImVec2(bar_w, bar_h + 2.0f));
-                }
-                ImGui::TextDisabled("Activation norms per layer (brighter = stronger activation)");
-                ImGui::Spacing();
-
-                // Cosine similarity bar — shows semantic drift between layers
-                {
-                    float bar_h = 20.0f;
-                    ImVec2 origin = ImGui::GetCursorScreenPos();
-                    float cell_w = bar_w / (float)l_outs.size();
-
-                    for (int l = 0; l < (int)l_outs.size(); ++l) {
-                        float cos = l_outs[l]->cosine_prev;
-                        // 1.0 = no change (green), 0.0 = orthogonal (red)
-                        float drift = 1.0f - std::clamp(cos, 0.0f, 1.0f);
-                        unsigned char r = (unsigned char)(40 + 215 * drift);
-                        unsigned char g = (unsigned char)(200 * (1.0f - drift));
-                        unsigned char b = 60;
-
-                        float x = origin.x + l * cell_w;
-                        float h = bar_h * std::max(drift, 0.05f);
-                        dl->AddRectFilled(
-                            ImVec2(x, origin.y + bar_h - h),
-                            ImVec2(x + cell_w - 1.0f, origin.y + bar_h),
-                            IM_COL32(r, g, b, 220));
-
-                        if (ImGui::IsMouseHoveringRect(
-                                ImVec2(x, origin.y), ImVec2(x + cell_w, origin.y + bar_h))) {
-                            ImGui::BeginTooltip();
-                            ImGui::Text("Layer %d -> %d", l_outs[l]->layer_index - 1,
-                                l_outs[l]->layer_index);
-                            ImGui::Text("Cosine similarity: %.4f", cos);
-                            ImGui::Text("Semantic drift: %.1f%%", drift * 100.0f);
-                            ImGui::EndTooltip();
-                        }
-                    }
-                    dl->AddRect(origin, ImVec2(origin.x + bar_w, origin.y + bar_h),
-                        IM_COL32(80, 80, 80, 120));
-                    ImGui::Dummy(ImVec2(bar_w, bar_h + 2.0f));
-                }
-                ImGui::TextDisabled("Semantic drift between layers (red = meaning changes most — emotion/sentiment processing)");
-            }
-
-            ImGui::Spacing();
-
-            update_activation_textures();
-
-            float tile_w = ImGui::GetContentRegionAvail().x;
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            for (int l = 0; l < (int)act_snap.size(); ++l) {
-                const auto& act = act_snap[l];
-                if (act.values.empty()) continue;
-
-                ImGui::PushID(l);
-
-                bool is_attn = (act.name == "attn_out");
-                ImVec4 color = is_attn ? ImVec4(1.0f, 0.7f, 0.3f, 1.0f)
-                                       : ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
-                ImGui::TextColored(color, "%s %d", is_attn ? "Attn" : "Layer", act.layer_index);
-                ImGui::SameLine();
-                if (act.cosine_prev > 0.0f && !is_attn) {
-                    ImGui::TextDisabled("cos=%.3f  norm=%.3f",
-                        act.cosine_prev, act.norm);
-                } else {
-                    ImGui::TextDisabled("norm=%.3f  max=%.3f", act.norm, act.max_val);
-                }
-
-                if (l < (int)layer_textures_.size() && layer_textures_[l]) {
-                    float hm_h = std::clamp((float)act.rows * 2.0f, 16.0f, 80.0f);
-                    ImGui::Image((ImTextureID)(intptr_t)layer_textures_[l],
-                                 ImVec2(tile_w, hm_h));
-                }
-
-                if (l < (int)act_snap.size() - 1) {
-                    ImVec2 p = ImGui::GetCursorScreenPos();
-                    float cx = p.x + tile_w * 0.5f;
-                    dl->AddLine(ImVec2(cx, p.y), ImVec2(cx, p.y + 10.0f),
-                                IM_COL32(80, 180, 255, 140), 1.5f);
-                    dl->AddTriangleFilled(
-                        ImVec2(cx, p.y + 14.0f),
-                        ImVec2(cx - 3, p.y + 9.0f),
-                        ImVec2(cx + 3, p.y + 9.0f),
-                        IM_COL32(80, 180, 255, 140));
-                    ImGui::Dummy(ImVec2(tile_w, 16.0f));
-                }
-
-                ImGui::PopID();
-            }
-        } else if (!inference_running_) {
-            ImGui::Spacing();
-            ImGui::TextDisabled("Enter a prompt and press Run to see activation flow.");
+            ImGui::TextDisabled("Enter a prompt and press Run.");
         }
     }
     ImGui::EndChild();
@@ -995,67 +782,6 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     ImGui::EndChild();
 }
 
-// ============================================================================
-// Activation Texture Upload
-// ============================================================================
-
-void OpenGllamaApplet::update_activation_textures() {
-    if (!textures_dirty_) return;
-
-    for (auto tex : layer_textures_)
-        if (tex) glDeleteTextures(1, &tex);
-    layer_textures_.clear();
-    layer_textures_.resize(activations_.size(), 0);
-
-    for (int l = 0; l < (int)activations_.size(); ++l) {
-        const auto& act = activations_[l];
-        if (act.values.empty()) continue;
-
-        float vmin = *std::min_element(act.values.begin(), act.values.end());
-        float vmax = *std::max_element(act.values.begin(), act.values.end());
-        float range = (vmax - vmin) > 1e-7f ? (vmax - vmin) : 1.0f;
-
-        std::vector<unsigned char> pixels(act.values.size() * 3);
-        for (size_t i = 0; i < act.values.size(); ++i) {
-            float norm = (act.values[i] - vmin) / range;
-            unsigned char r, g, b;
-            if (norm < 0.33f) {
-                float t = norm / 0.33f;
-                r = (unsigned char)(10 + 50 * t);
-                g = (unsigned char)(20 + 180 * t);
-                b = (unsigned char)(120 + 135 * t);
-            } else if (norm < 0.66f) {
-                float t = (norm - 0.33f) / 0.33f;
-                r = (unsigned char)(60 + 160 * t);
-                g = (unsigned char)(200 + 55 * t);
-                b = (unsigned char)(255 - 180 * t);
-            } else {
-                float t = (norm - 0.66f) / 0.34f;
-                r = (unsigned char)(220 + 35 * t);
-                g = (unsigned char)(255 - 130 * t);
-                b = (unsigned char)(75 - 60 * t);
-            }
-            pixels[i * 3 + 0] = r;
-            pixels[i * 3 + 1] = g;
-            pixels[i * 3 + 2] = b;
-        }
-
-        GLuint tex;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, act.cols, act.rows, 0,
-                     GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        layer_textures_[l] = tex;
-    }
-
-    textures_dirty_ = false;
-}
 
 void OpenGllamaApplet::update_attn_aggregates(const std::vector<std::vector<float>>& layer_attn) {
     int n_layers = (int)layer_attn.size();
@@ -1227,8 +953,6 @@ void OpenGllamaApplet::unload_model() {
         model_ = nullptr;
     }
     model_loaded_ = false;
-    activations_.clear();
-    pending_activations_.clear();
     pending_attn_weights_.clear();
     attn_latest_.layer_attn.clear();
     attn_latest_valid_ = false;
@@ -1264,7 +988,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
     {
         std::lock_guard<std::mutex> lk(output_mutex_);
         output_text_.clear();
-        activations_.clear();
     
         attn_latest_.layer_attn.clear();
         attn_latest_valid_ = false;
@@ -1336,7 +1059,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
         }
 
-        pending_activations_.clear();
         pending_attn_weights_.clear();
 
         if (llama_decode(ctx_, batch) != 0) {
@@ -1351,7 +1073,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         // Push prompt activations + attention + timeline
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
-            activations_ = std::move(pending_activations_);
             if (!pending_attn_weights_.empty()) {
                 int actual_ctx = (int)context_tokens_.size();
                 for (auto& aw : pending_attn_weights_)
@@ -1374,7 +1095,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 attn_focus_dirty_ = true;
             }
             context_map_dirty_ = true;
-            textures_dirty_ = true;
         }
 
         int n_vocab = llama_vocab_n_tokens(vocab);
@@ -1427,8 +1147,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
 
             llama_sampler_accept(smpl, best);
 
-            pending_activations_.clear();
-            pending_attn_weights_.clear();
+                pending_attn_weights_.clear();
 
             batch.n_tokens = 1;
             batch.token[0] = best;
@@ -1439,15 +1158,14 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             if (llama_decode(ctx_, batch) != 0) break;
 
             std::fprintf(stderr, "[inference] token %d: pending_attn=%d pending_act=%d\n",
-                i, (int)pending_attn_weights_.size(), (int)pending_activations_.size());
+                i, (int)pending_attn_weights_.size(), 0);
 
             {
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
                 tokens_generated_.store(i + 1);
                 context_tokens_.push_back(piece);
-                activations_ = std::move(pending_activations_);
-                if (!pending_attn_weights_.empty()) {
+                    if (!pending_attn_weights_.empty()) {
                     int actual_ctx = (int)context_tokens_.size();
                     for (auto& aw : pending_attn_weights_)
                         if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
@@ -1469,7 +1187,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                     attn_focus_dirty_ = true;
                 }
                 context_map_dirty_ = true;
-                textures_dirty_ = true;
             }
         }
 

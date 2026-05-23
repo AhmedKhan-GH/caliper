@@ -11,18 +11,6 @@
 struct llama_model;
 struct llama_context;
 
-struct LayerActivation {
-    int layer_index;
-    float mean;
-    float norm;
-    float max_val;
-    float cosine_prev;   // cosine similarity with previous layer
-    std::vector<float> values;
-    int rows;
-    int cols;
-    std::string name;   // "attn_out" or "l_out"
-};
-
 class OpenGllamaApplet {
 public:
     OpenGllamaApplet();
@@ -43,8 +31,6 @@ public:
 private:
     void draw_ollama_models();
     void draw_inference_view();
-    void update_activation_textures();
-
     llama_model* model_ = nullptr;
     llama_context* ctx_ = nullptr;
 
@@ -90,12 +76,6 @@ private:
     std::string load_error_msg_;
 
     void load_model_async(const std::string& path, const std::string& display_name);
-
-    // Activations captured from eval callback (protected by output_mutex_)
-    std::vector<LayerActivation> activations_;
-    std::vector<LayerActivation> pending_activations_;
-    std::vector<unsigned int> layer_textures_;
-    std::atomic<bool> textures_dirty_{false};
 
     // Context activation map: [n_layers][n_context_tokens] = activation norm
     std::vector<std::vector<float>> context_map_;
