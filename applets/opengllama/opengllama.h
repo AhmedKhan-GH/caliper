@@ -114,7 +114,7 @@ private:
     float ctx_text_total_h_ = 0.0f;
     std::vector<unsigned char> ctx_text_heatmap_pixels_;  // reusable pixel buffer
     enum TextHeatmapMode { THM_NONE = 0, THM_EMA, THM_MAX, THM_RECENT, THM_FINAL_LAYER };
-    int ctx_text_heatmap_mode_ = THM_NONE;
+    int ctx_text_heatmap_mode_ = THM_EMA;
     int ctx_text_heatmap_prev_mode_ = -1;
 
     // Per-layer attention weights: [n_layers] = head-averaged attention over KV for latest token
