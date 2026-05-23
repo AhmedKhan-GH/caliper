@@ -143,15 +143,6 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
     act.norm = std::sqrt(sq_sum / (float)n);
     act.max_val = mx;
 
-    // Capture full hidden state for logit lens (l_out only, last token row)
-    act.cosine_final = 0.0f;
-    if (is_layer_out) {
-        int last_row = rows - 1;
-        act.full_hidden.resize(cols);
-        for (int c = 0; c < cols; ++c)
-            act.full_hidden[c] = buf[last_row * cols + c];
-    }
-
     // Cosine similarity with previous l_out
     act.cosine_prev = 0.0f;
     if (is_layer_out && !self->pending_activations_.empty()) {
@@ -674,75 +665,6 @@ void OpenGllamaApplet::draw_inference_view() {
             if (inference_running_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f)
                 ImGui::SetScrollHereY(1.0f);
             ImGui::EndChild();
-        }
-
-        // ── Decision Crystallization (Logit Lens) ──
-        {
-            std::vector<LogitLensEntry> lens_snap;
-            {
-                std::lock_guard<std::mutex> lk(output_mutex_);
-                lens_snap = logit_lens_entries_;
-            }
-
-            int nl = (int)lens_snap.size();
-            if (nl > 1) {
-                std::vector<double> xs(nl), ys(nl);
-                for (int l = 0; l < nl; ++l) {
-                    xs[l] = l;
-                    ys[l] = lens_snap[l].cosine_to_final;
-                }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Decision Crystallization (Logit Lens)");
-                ImGui::TextDisabled("Cosine similarity to final layer — "
-                    "1.0 = prediction locked in, low = still exploring");
-
-                float plot_w = ImGui::GetContentRegionAvail().x;
-                if (ImPlot::BeginPlot("##logit_lens", ImVec2(plot_w, 100.0f),
-                        ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
-                    ImPlot::SetupAxes("Layer", "cos(final)",
-                        ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-                    ImPlot::SetupAxisLimits(ImAxis_Y1, -0.05, 1.05, ImPlotCond_Always);
-
-                    for (int l = 0; l < nl; ++l) {
-                        float cos = (float)ys[l];
-                        float r, g, b;
-                        if (cos < 0.3f) {
-                            r = 0.2f; g = 0.4f; b = 0.9f;
-                        } else if (cos < 0.6f) {
-                            float t = (cos - 0.3f) / 0.3f;
-                            r = 0.2f * (1 - t); g = 0.4f + 0.5f * t; b = 0.9f - 0.3f * t;
-                        } else if (cos < 0.85f) {
-                            float t = (cos - 0.6f) / 0.25f;
-                            r = 0.1f + 0.3f * t; g = 0.9f; b = 0.6f - 0.4f * t;
-                        } else {
-                            float t = (cos - 0.85f) / 0.15f;
-                            r = 0.4f + 0.6f * t; g = 0.9f; b = 0.2f * (1 - t);
-                        }
-                        ImU32 fill = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.85f));
-                        ImU32 edge = ImGui::ColorConvertFloat4ToU32(ImVec4(r * 0.6f, g * 0.6f, b * 0.6f, 1.0f));
-                        ImPlot::PlotBars("##ll", &xs[l], &ys[l], 1, 0.8,
-                            ImPlotSpec(ImPlotProp_FillColor, fill, ImPlotProp_LineColor, edge));
-                    }
-
-                    if (ImPlot::IsPlotHovered()) {
-                        ImPlotPoint mp = ImPlot::GetPlotMousePos();
-                        int idx = std::clamp((int)std::round(mp.x), 0, nl - 1);
-                        float cos = (float)ys[idx];
-                        const char* label =
-                            cos > 0.9f ? "Prediction locked in" :
-                            cos > 0.7f ? "Converging" :
-                            cos > 0.4f ? "Forming" : "Still exploring";
-                        ImGui::BeginTooltip();
-                        ImGui::Text("Layer %d", lens_snap[idx].layer);
-                        ImGui::Text("Cosine to final: %.4f", cos);
-                        ImGui::Text("Status: %s", label);
-                        ImGui::EndTooltip();
-                    }
-
-                    ImPlot::EndPlot();
-                }
-            }
         }
 
         // ── Live Attention — where the model is looking right now ──
@@ -1315,7 +1237,7 @@ void OpenGllamaApplet::unload_model() {
     attn_recent_ring_.clear();
     attn_recent_ring_idx_ = 0;
     attn_agg_gen_count_ = 0;
-    logit_lens_entries_.clear();
+
     cached_attn_.layer_attn.clear();
     cached_attn_valid_ = false;
     cached_attn_n_lay_ = 0;
@@ -1342,7 +1264,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         std::lock_guard<std::mutex> lk(output_mutex_);
         output_text_.clear();
         activations_.clear();
-        logit_lens_entries_.clear();
+    
         attn_latest_.layer_attn.clear();
         attn_latest_valid_ = false;
         attn_agg_ema_.clear();
@@ -1427,33 +1349,8 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
 
         // Push prompt activations + attention + timeline
         {
-            // Compute logit lens before stripping full_hidden
-            std::vector<LogitLensEntry> lens;
-            {
-                std::vector<const LayerActivation*> l_outs;
-                for (auto& a : pending_activations_)
-                    if (a.name == "l_out" && !a.full_hidden.empty())
-                        l_outs.push_back(&a);
-                if (l_outs.size() > 1) {
-                    auto& fh = l_outs.back()->full_hidden;
-                    float fn2 = 0; for (float v : fh) fn2 += v * v;
-                    float fn = std::sqrt(fn2);
-                    for (auto* la : l_outs) {
-                        auto& h = la->full_hidden;
-                        int len = std::min((int)h.size(), (int)fh.size());
-                        float dot = 0, n2 = 0;
-                        for (int j = 0; j < len; ++j) { dot += h[j] * fh[j]; n2 += h[j] * h[j]; }
-                        float denom = std::sqrt(n2) * fn;
-                        lens.push_back({la->layer_index, denom > 1e-8f ? dot / denom : 0.0f});
-                    }
-                }
-            }
-            for (auto& a : pending_activations_)
-                a.full_hidden.clear();
-
             std::lock_guard<std::mutex> lk(output_mutex_);
             activations_ = std::move(pending_activations_);
-            logit_lens_entries_ = std::move(lens);
             if (!pending_attn_weights_.empty()) {
                 int actual_ctx = (int)context_tokens_.size();
                 for (auto& aw : pending_attn_weights_)
@@ -1544,36 +1441,11 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 i, (int)pending_attn_weights_.size(), (int)pending_activations_.size());
 
             {
-                // Compute logit lens before stripping full_hidden
-                std::vector<LogitLensEntry> lens;
-                {
-                    std::vector<const LayerActivation*> l_outs;
-                    for (auto& a : pending_activations_)
-                        if (a.name == "l_out" && !a.full_hidden.empty())
-                            l_outs.push_back(&a);
-                    if (l_outs.size() > 1) {
-                        auto& fh = l_outs.back()->full_hidden;
-                        float fn2 = 0; for (float v : fh) fn2 += v * v;
-                        float fn = std::sqrt(fn2);
-                        for (auto* la : l_outs) {
-                            auto& h = la->full_hidden;
-                            int len = std::min((int)h.size(), (int)fh.size());
-                            float dot = 0, n2 = 0;
-                            for (int j = 0; j < len; ++j) { dot += h[j] * fh[j]; n2 += h[j] * h[j]; }
-                            float denom = std::sqrt(n2) * fn;
-                            lens.push_back({la->layer_index, denom > 1e-8f ? dot / denom : 0.0f});
-                        }
-                    }
-                }
-                for (auto& a : pending_activations_)
-                    a.full_hidden.clear();
-
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
                 tokens_generated_.store(i + 1);
                 context_tokens_.push_back(piece);
                 activations_ = std::move(pending_activations_);
-                logit_lens_entries_ = std::move(lens);
                 if (!pending_attn_weights_.empty()) {
                     int actual_ctx = (int)context_tokens_.size();
                     for (auto& aw : pending_attn_weights_)

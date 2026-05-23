@@ -17,9 +17,7 @@ struct LayerActivation {
     float norm;
     float max_val;
     float cosine_prev;   // cosine similarity with previous layer
-    float cosine_final;  // cosine similarity with final layer (logit lens proxy)
     std::vector<float> values;
-    std::vector<float> full_hidden;  // full hidden state for last token (for logit lens)
     int rows;
     int cols;
     std::string name;   // "attn_out" or "l_out"
@@ -153,13 +151,6 @@ private:
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,
                         int n_layers, int n_kv, bool auto_scroll);
-
-    // Logit lens: pre-computed in inference thread, rendered in draw
-    struct LogitLensEntry {
-        int layer;
-        float cosine_to_final;
-    };
-    std::vector<LogitLensEntry> logit_lens_entries_;
 
     OllamaModelStore ollama_store_;
 };
