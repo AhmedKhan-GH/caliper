@@ -966,7 +966,8 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     float chart_w = avail_w - label_margin;
     float cell_w = 6.0f;
     float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
-    float total_w = cell_w * n_kv;
+    int k_start = (n_kv > 1) ? 1 : 0;
+    float total_w = cell_w * (n_kv - k_start);
     float total_h = cell_h * n_layers;
 
     // Build child window ID strings from imgui_id
@@ -1011,7 +1012,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
         }
     }
 
-    for (int k = 0; k < n_kv; ++k) {
+    for (int k = k_start; k < n_kv; ++k) {
         for (int l = 0; l < n_layers; ++l) {
             float val = (l < (int)layer_data.size() && k < (int)layer_data[l].size())
                 ? layer_data[l][k] : 0.0f;
@@ -1042,7 +1043,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
                 b = 0.2f + 0.8f * s;
             }
 
-            float x = origin.x + k * cell_w;
+            float x = origin.x + (k - k_start) * cell_w;
             float y = origin.y + l * cell_h;
             ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, 0.95f));
             dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cell_w - 0.5f, y + cell_h - 0.5f), col);
@@ -1053,9 +1054,9 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
 
     if (ImGui::IsItemHovered()) {
         ImVec2 mouse = ImGui::GetMousePos();
-        int tok_idx = (int)((mouse.x - origin.x) / cell_w);
+        int tok_idx = k_start + (int)((mouse.x - origin.x) / cell_w);
         int lay_idx = (int)((mouse.y - origin.y) / cell_h);
-        tok_idx = std::clamp(tok_idx, 0, n_kv - 1);
+        tok_idx = std::clamp(tok_idx, k_start, n_kv - 1);
         lay_idx = std::clamp(lay_idx, 0, n_layers - 1);
 
         float raw_val = (lay_idx < (int)layer_data.size() &&
