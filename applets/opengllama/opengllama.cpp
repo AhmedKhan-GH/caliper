@@ -890,9 +890,9 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     snprintf(port_id, sizeof(port_id), "##%s_port", imgui_id);
     snprintf(scroll_id, sizeof(scroll_id), "##%s_scroll", imgui_id);
 
-    float port_h = std::min(total_h + 24.0f, 280.0f);
+    float port_h = total_h + 4.0f;
     ImGui::BeginChild(port_id, ImVec2(0, port_h), ImGuiChildFlags_Borders,
-        ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        ImGuiWindowFlags_None);
 
     // Layer labels on the left
     ImVec2 label_origin = ImGui::GetCursorScreenPos();
@@ -907,7 +907,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
 
     // Scrollable chart area (offset by label margin)
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + label_margin);
-    ImGui::BeginChild(scroll_id, ImVec2(chart_w - 16.0f, total_h + 20.0f),
+    ImGui::BeginChild(scroll_id, ImVec2(chart_w, total_h),
         ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
 
     if (auto_scroll && inference_running_)
