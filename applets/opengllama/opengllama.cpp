@@ -400,12 +400,14 @@ void OpenGllamaApplet::draw_inference_view() {
         toks = tokens_generated_.load();
 
         // ── Text output with optional attention heatmap ──
-        if (!text_snap.empty() || inference_running_) {
+        {
             if (inference_running_) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f),
                     "Generating... (%d tokens)", toks);
             } else if (toks > 0) {
                 ImGui::TextDisabled("Complete — %d tokens", toks);
+            } else {
+                ImGui::TextDisabled("Output");
             }
 
             static const char* thm_labels[] = {
@@ -625,15 +627,15 @@ void OpenGllamaApplet::draw_inference_view() {
                     cached_attn_n_kv_ = std::max(cached_attn_n_kv_, (int)row.size());
             }
 
-            if (!cached_attn_valid_ || cached_attn_.layer_attn.empty()) {
-                ImGui::Spacing();
-                ImGui::SeparatorText("Live Attention");
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f),
-                    "Waiting for kq_soft_max data...");
-            } else {
+            if (cached_attn_valid_ && !cached_attn_.layer_attn.empty()) {
                 draw_attn_tape("live_attn", "Live Attention",
                     "Where the current token attends — bright = high attention weight",
                     cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true, true);
+            } else {
+                static const std::vector<std::vector<float>> empty_data;
+                draw_attn_tape("live_attn", "Live Attention",
+                    "Where the current token attends — bright = high attention weight",
+                    empty_data, 0, 0, false, true);
             }
         }
 
@@ -652,12 +654,12 @@ void OpenGllamaApplet::draw_inference_view() {
                 draw_attn_tape("attn_focus", "Attention Focus",
                     "Max attention weight per layer per token — bright = focused, dark = diffuse",
                     cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
+            } else {
+                static const std::vector<std::vector<float>> empty_data;
+                draw_attn_tape("attn_focus", "Attention Focus",
+                    "Max attention weight per layer per token — bright = focused, dark = diffuse",
+                    empty_data, 0, 0, false);
             }
-        }
-
-        if (!inference_running_ && text_snap.empty()) {
-            ImGui::Spacing();
-            ImGui::TextDisabled("Enter a prompt and press Run.");
         }
     }
     ImGui::EndChild();
@@ -677,7 +679,16 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     ImGui::TextDisabled("%s", description);
 
     if (n_layers == 0 || n_kv == 0) {
-        ImGui::TextDisabled("Waiting for attention data...");
+        int model_layers = model_ ? llama_model_n_layer(model_) : 16;
+        float cell_h_e = std::max(3.0f, std::min(10.0f, 200.0f / (float)model_layers));
+        float total_h_e = cell_h_e * model_layers;
+        float scrollbar_h_e = ImGui::GetStyle().ScrollbarSize;
+        float port_h_e = total_h_e + scrollbar_h_e + 8.0f;
+        char port_id_e[64];
+        snprintf(port_id_e, sizeof(port_id_e), "##%s_port", imgui_id);
+        ImGui::BeginChild(port_id_e, ImVec2(0, port_h_e), ImGuiChildFlags_Borders,
+            ImGuiWindowFlags_NoScrollbar);
+        ImGui::EndChild();
         return;
     }
 
