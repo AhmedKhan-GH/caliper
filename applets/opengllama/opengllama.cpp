@@ -669,52 +669,68 @@ void OpenGllamaApplet::draw_inference_view() {
         }
 
         // ── Live Attention ──
-        if (ImGui::CollapsingHeader("Live Attention", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (cached_attn_valid_ && !cached_attn_.layer_attn.empty()) {
-                draw_attn_tape("live_attn", "All Layers",
-                    "Where the current token attends — bright = high attention weight",
-                    cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true, true);
-            } else {
-                static const std::vector<std::vector<float>> empty_data;
-                draw_attn_tape("live_attn", "All Layers",
-                    "Where the current token attends — bright = high attention weight",
-                    empty_data, 0, 0, false, true);
+        {
+            bool has_swa = cached_live_swa_n_lay_ > 0;
+            ImGui::Spacing();
+            ImGui::SeparatorText("Live Attention");
+            if (has_swa) {
+                const char* live_items[] = { "All Layers", "Sliding Window (even)", "Full Attention (odd)" };
+                ImGui::SetNextItemWidth(220);
+                ImGui::Combo("##live_view", &live_attn_view_, live_items, 3);
             }
 
-            if (cached_live_swa_n_lay_ > 0 && cached_live_swa_n_kv_ > 0) {
-                draw_attn_tape("live_swa", "Sliding Window Layers (even)",
+            if (live_attn_view_ == 1 && has_swa) {
+                draw_attn_tape("live_swa", "Sliding Window Layers",
                     "SWA layers only — local attention pattern",
                     cached_live_swa_, cached_live_swa_n_lay_, cached_live_swa_n_kv_, true, true);
-            }
-            if (cached_live_full_n_lay_ > 0 && cached_live_full_n_kv_ > 0) {
-                draw_attn_tape("live_full", "Full Attention Layers (odd)",
+            } else if (live_attn_view_ == 2 && has_swa) {
+                draw_attn_tape("live_full", "Full Attention Layers",
                     "Full-context layers only — global attention pattern",
                     cached_live_full_, cached_live_full_n_lay_, cached_live_full_n_kv_, true, true);
+            } else {
+                if (cached_attn_valid_ && !cached_attn_.layer_attn.empty()) {
+                    draw_attn_tape("live_attn", "All Layers",
+                        "Where the current token attends — bright = high attention weight",
+                        cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true, true);
+                } else {
+                    static const std::vector<std::vector<float>> empty_data;
+                    draw_attn_tape("live_attn", "All Layers",
+                        "Where the current token attends — bright = high attention weight",
+                        empty_data, 0, 0, false, true);
+                }
             }
         }
 
         // ── Attention Focus ──
-        if (ImGui::CollapsingHeader("Attention Focus", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
-                draw_attn_tape("attn_focus", "All Layers",
-                    "Max attention weight per layer per token — bright = focused, dark = diffuse",
-                    cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
-            } else {
-                static const std::vector<std::vector<float>> empty_data;
-                draw_attn_tape("attn_focus", "All Layers",
-                    "Max attention weight per layer per token — bright = focused, dark = diffuse",
-                    empty_data, 0, 0, false);
+        {
+            bool has_swa = cached_focus_swa_n_lay_ > 0;
+            ImGui::Spacing();
+            ImGui::SeparatorText("Attention Focus");
+            if (has_swa) {
+                const char* focus_items[] = { "All Layers", "Sliding Window (even)", "Full Attention (odd)" };
+                ImGui::SetNextItemWidth(220);
+                ImGui::Combo("##focus_view", &focus_attn_view_, focus_items, 3);
             }
 
-            if (cached_focus_swa_n_lay_ > 0 && cached_focus_swa_n_gen_ > 0) {
-                draw_attn_tape("focus_swa", "Sliding Window Layers (even)",
+            if (focus_attn_view_ == 1 && has_swa) {
+                draw_attn_tape("focus_swa", "Sliding Window Layers",
                     "SWA layers only — local attention with limited context window",
                     cached_focus_swa_, cached_focus_swa_n_lay_, cached_focus_swa_n_gen_, true);
-            }
-            if (cached_focus_full_n_lay_ > 0 && cached_focus_full_n_gen_ > 0) {
-                draw_attn_tape("focus_full", "Full Attention Layers (odd)",
+            } else if (focus_attn_view_ == 2 && has_swa) {
+                draw_attn_tape("focus_full", "Full Attention Layers",
                     "Full-context attention layers — global dependency tracking",
                     cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true);
+            } else {
+                if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
+                    draw_attn_tape("attn_focus", "All Layers",
+                        "Max attention weight per layer per token — bright = focused, dark = diffuse",
+                        cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
+                } else {
+                    static const std::vector<std::vector<float>> empty_data;
+                    draw_attn_tape("attn_focus", "All Layers",
+                        "Max attention weight per layer per token — bright = focused, dark = diffuse",
+                        empty_data, 0, 0, false);
+                }
             }
         }
     }

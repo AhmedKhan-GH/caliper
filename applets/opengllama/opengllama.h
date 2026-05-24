@@ -153,6 +153,10 @@ private:
     int cached_focus_full_n_lay_ = 0;
     int cached_focus_full_n_gen_ = 0;
 
+    // ISWA layer view selector: 0=All, 1=SWA only, 2=Full only
+    int live_attn_view_ = 0;
+    int focus_attn_view_ = 0;
+
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,
                         int n_layers, int n_kv, bool auto_scroll,
