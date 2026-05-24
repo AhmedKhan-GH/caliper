@@ -100,8 +100,10 @@ private:
     float ctx_text_total_h_ = 0.0f;
     std::vector<unsigned char> ctx_text_heatmap_pixels_;  // reusable pixel buffer
     enum TextHeatmapMode { THM_NONE = 0, THM_EMA, THM_MAX, THM_RECENT, THM_FINAL_LAYER };
-    int ctx_text_heatmap_mode_ = THM_EMA;
+    int ctx_text_heatmap_mode_ = THM_MAX;
     int ctx_text_heatmap_prev_mode_ = -1;
+    float ctx_text_heatmap_contrast_ = 3.0f;
+    float ctx_text_heatmap_prev_contrast_ = 3.0f;
 
     // Per-layer attention weights: [n_layers] = head-averaged attention over KV for latest token
     std::vector<std::vector<float>> pending_attn_weights_;  // built during eval callback
@@ -113,10 +115,12 @@ private:
     bool attn_latest_valid_ = false;
 
     // Incremental attention aggregates, updated in inference thread, O(n_ctx) each
-    std::vector<float> attn_agg_ema_;        // EMA (α=0.3) across all layers
+    float attn_ema_alpha_ = 0.3f;
+    std::vector<float> attn_agg_ema_;        // EMA across all layers
     std::vector<float> attn_agg_max_;        // max across all layers and steps
     std::vector<float> attn_agg_final_ema_;  // EMA over final layer only
-    static constexpr int kAttnRecentWindow = 8;
+    static constexpr int kAttnRecentRingMax = 64;
+    int attn_recent_window_ = 8;
     std::vector<std::vector<float>> attn_recent_ring_;  // ring buffer of last N layer-averaged vectors
     int attn_recent_ring_idx_ = 0;
     int attn_agg_gen_count_ = 0;             // how many generation steps contributed
@@ -156,6 +160,16 @@ private:
     // ISWA layer view selector: 0=All, 1=SWA only, 2=Full only
     int live_attn_view_ = 0;
     int focus_attn_view_ = 0;
+
+    // Hybrid recurrent/attention layer filtering (e.g. Qwen 3.5/3.6)
+    bool has_recurrent_layers_ = false;
+    std::vector<bool> attn_layer_mask_;
+    std::vector<std::vector<float>> cached_live_attn_only_;
+    int cached_live_attn_only_n_lay_ = 0;
+    int cached_live_attn_only_n_kv_ = 0;
+    std::vector<std::vector<float>> cached_focus_attn_only_;
+    int cached_focus_attn_only_n_lay_ = 0;
+    int cached_focus_attn_only_n_gen_ = 0;
 
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,

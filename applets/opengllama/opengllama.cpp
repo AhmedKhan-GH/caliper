@@ -411,10 +411,26 @@ void OpenGllamaApplet::draw_inference_view() {
                 ImGui::TextDisabled("Output");
             }
 
-            static const char* thm_labels[] = {
-                "None", "EMA (decay)", "Max", "Recent (last 8)", "Final Layer" };
+            char recent_label[32];
+            snprintf(recent_label, sizeof(recent_label), "Recent (last %d)", attn_recent_window_);
+            const char* thm_labels[] = {
+                "None", "EMA (decay)", "Max", recent_label, "Final Layer" };
             ImGui::SetNextItemWidth(160.0f);
             ImGui::Combo("##thm_mode", &ctx_text_heatmap_mode_, thm_labels, 5);
+            if (ctx_text_heatmap_mode_ == THM_EMA) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::SliderFloat("Alpha", &attn_ema_alpha_, 0.01f, 1.0f, "%.2f");
+            } else if (ctx_text_heatmap_mode_ == THM_MAX) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::DragFloat("Contrast", &ctx_text_heatmap_contrast_, 0.1f, 1.0f, 0.0f, "%.1f");
+                if (ctx_text_heatmap_contrast_ < 1.0f) ctx_text_heatmap_contrast_ = 1.0f;
+            } else if (ctx_text_heatmap_mode_ == THM_RECENT) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::SliderInt("Window", &attn_recent_window_, 1, kAttnRecentRingMax);
+            }
 
             std::vector<float> agg_snap;
             std::vector<std::string> ctok_th;
@@ -430,15 +446,19 @@ void OpenGllamaApplet::draw_inference_view() {
                 else if (ctx_text_heatmap_mode_ == THM_FINAL_LAYER)
                     agg_snap = attn_agg_final_ema_;
                 else if (ctx_text_heatmap_mode_ == THM_RECENT) {
-                    int filled = std::min(attn_recent_ring_idx_, kAttnRecentWindow);
+                    int filled = std::min(attn_recent_ring_idx_, attn_recent_window_);
                     if (filled > 0) {
                         int max_k = 0;
-                        for (int r = 0; r < filled; ++r)
-                            max_k = std::max(max_k, (int)attn_recent_ring_[r].size());
+                        for (int r = 0; r < filled; ++r) {
+                            int idx = ((attn_recent_ring_idx_ - 1 - r) % kAttnRecentRingMax + kAttnRecentRingMax) % kAttnRecentRingMax;
+                            max_k = std::max(max_k, (int)attn_recent_ring_[idx].size());
+                        }
                         agg_snap.resize(max_k, 0.0f);
-                        for (int r = 0; r < filled; ++r)
-                            for (int k = 0; k < (int)attn_recent_ring_[r].size(); ++k)
-                                agg_snap[k] += attn_recent_ring_[r][k];
+                        for (int r = 0; r < filled; ++r) {
+                            int idx = ((attn_recent_ring_idx_ - 1 - r) % kAttnRecentRingMax + kAttnRecentRingMax) % kAttnRecentRingMax;
+                            for (int k = 0; k < (int)attn_recent_ring_[idx].size(); ++k)
+                                agg_snap[k] += attn_recent_ring_[idx][k];
+                        }
                         for (int k = 0; k < max_k; ++k)
                             agg_snap[k] /= (float)filled;
                     }
@@ -458,7 +478,8 @@ void OpenGllamaApplet::draw_inference_view() {
                 float line_h = ImGui::GetFontSize();
 
                 bool mode_changed = (ctx_text_heatmap_mode_ != ctx_text_heatmap_prev_mode_);
-                bool need_rebuild = mode_changed
+                bool contrast_changed = (ctx_text_heatmap_contrast_ != ctx_text_heatmap_prev_contrast_);
+                bool need_rebuild = mode_changed || contrast_changed
                     || (n_tok != ctx_text_heatmap_n_ctx_)
                     || (n_gen != ctx_text_heatmap_n_gen_)
                     || (std::abs(wrap_width - ctx_text_heatmap_last_width_) > 1.0f);
@@ -468,6 +489,7 @@ void OpenGllamaApplet::draw_inference_view() {
                     ctx_text_heatmap_n_gen_ = n_gen;
                     ctx_text_heatmap_last_width_ = wrap_width;
                     ctx_text_heatmap_prev_mode_ = ctx_text_heatmap_mode_;
+                    ctx_text_heatmap_prev_contrast_ = ctx_text_heatmap_contrast_;
 
                     int n_agg = (int)agg_snap.size();
 
@@ -486,8 +508,13 @@ void OpenGllamaApplet::draw_inference_view() {
                     float range_t = (pmax_t - pmin_t) > 1e-7f ? (pmax_t - pmin_t) : 1.0f;
 
                     std::vector<float> tok_norm(n_tok, 0.0f);
-                    for (int c = 1; c < n_tok && c < n_agg; ++c)
-                        tok_norm[c] = std::clamp((agg_snap[c] - pmin_t) / range_t, 0.0f, 1.0f);
+                    for (int c = 1; c < n_tok && c < n_agg; ++c) {
+                        float linear = std::clamp((agg_snap[c] - pmin_t) / range_t, 0.0f, 1.0f);
+                        if (ctx_text_heatmap_mode_ == THM_MAX)
+                            tok_norm[c] = std::pow(linear, ctx_text_heatmap_contrast_);
+                        else
+                            tok_norm[c] = std::log1p(linear * 49.0f) / std::log1p(49.0f);
+                    }
 
                     ctx_text_layout_.clear();
                     float cx = 0.0f, cy = 0.0f;
@@ -595,6 +622,14 @@ void OpenGllamaApplet::draw_inference_view() {
                     ImGui::Image((ImTextureID)(intptr_t)ctx_text_heatmap_tex_,
                                  ImVec2((float)ctx_text_heatmap_tex_w_, (float)ctx_text_heatmap_tex_h_));
 
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                        ImGui::OpenPopup("##copy_heatmap_text");
+                    if (ImGui::BeginPopup("##copy_heatmap_text")) {
+                        if (ImGui::MenuItem("Copy text"))
+                            ImGui::SetClipboardText(text_snap.c_str());
+                        ImGui::EndPopup();
+                    }
+
                     ImDrawList* dl = ImGui::GetWindowDrawList();
                     ImU32 txt_col = ImGui::GetColorU32(ImGuiCol_Text);
                     for (auto& tl : ctx_text_layout_) {
@@ -645,6 +680,29 @@ void OpenGllamaApplet::draw_inference_view() {
                 for (auto& row : cached_live_full_)
                     cached_live_full_n_kv_ = std::max(cached_live_full_n_kv_, (int)row.size());
             }
+
+            if (!has_recurrent_layers_ && cached_attn_valid_) {
+                for (auto& row : cached_attn_.layer_attn) {
+                    if (row.empty()) { has_recurrent_layers_ = true; break; }
+                }
+                if (has_recurrent_layers_) {
+                    attn_layer_mask_.resize(cached_attn_n_lay_);
+                    for (int l = 0; l < cached_attn_n_lay_; ++l)
+                        attn_layer_mask_[l] = !cached_attn_.layer_attn[l].empty();
+                }
+            }
+            cached_live_attn_only_.clear();
+            cached_live_attn_only_n_lay_ = 0;
+            cached_live_attn_only_n_kv_ = 0;
+            if (has_recurrent_layers_ && cached_attn_valid_) {
+                for (int l = 0; l < cached_attn_n_lay_; ++l) {
+                    if (l < (int)attn_layer_mask_.size() && attn_layer_mask_[l]) {
+                        cached_live_attn_only_.push_back(cached_attn_.layer_attn[l]);
+                        cached_live_attn_only_n_kv_ = std::max(cached_live_attn_only_n_kv_, (int)cached_attn_.layer_attn[l].size());
+                    }
+                }
+                cached_live_attn_only_n_lay_ = (int)cached_live_attn_only_.size();
+            }
         }
 
         // Cache focus timeline data (always runs)
@@ -667,6 +725,20 @@ void OpenGllamaApplet::draw_inference_view() {
             cached_focus_full_n_gen_ = 0;
             for (auto& row : attn_focus_full_)
                 cached_focus_full_n_gen_ = std::max(cached_focus_full_n_gen_, (int)row.size());
+
+            cached_focus_attn_only_.clear();
+            cached_focus_attn_only_n_lay_ = 0;
+            cached_focus_attn_only_n_gen_ = 0;
+            if (has_recurrent_layers_) {
+                int n = std::min((int)cached_attn_focus_.size(), (int)attn_layer_mask_.size());
+                for (int l = 0; l < n; ++l) {
+                    if (attn_layer_mask_[l]) {
+                        cached_focus_attn_only_.push_back(cached_attn_focus_[l]);
+                        cached_focus_attn_only_n_gen_ = std::max(cached_focus_attn_only_n_gen_, (int)cached_attn_focus_[l].size());
+                    }
+                }
+                cached_focus_attn_only_n_lay_ = (int)cached_focus_attn_only_.size();
+            }
         }
 
         // ── Live Attention ──
@@ -678,6 +750,10 @@ void OpenGllamaApplet::draw_inference_view() {
                 const char* live_items[] = { "All Layers", "Sliding Window (even)", "Full Attention (odd)" };
                 ImGui::SetNextItemWidth(220);
                 ImGui::Combo("##live_view", &live_attn_view_, live_items, 3);
+            } else if (has_recurrent_layers_) {
+                const char* live_items[] = { "Attention Only", "All Layers" };
+                ImGui::SetNextItemWidth(220);
+                ImGui::Combo("##live_view", &live_attn_view_, live_items, 2);
             }
 
             if (live_attn_view_ == 1 && has_swa) {
@@ -688,6 +764,10 @@ void OpenGllamaApplet::draw_inference_view() {
                 draw_attn_tape("live_full", "Full Attention Layers",
                     "Full-context layers only — global attention pattern",
                     cached_live_full_, cached_live_full_n_lay_, cached_live_full_n_kv_, true, true);
+            } else if (live_attn_view_ == 0 && has_recurrent_layers_ && cached_live_attn_only_n_lay_ > 0) {
+                draw_attn_tape("live_attn", "Attention Layers",
+                    "Attention layers only — recurrent layers hidden",
+                    cached_live_attn_only_, cached_live_attn_only_n_lay_, cached_live_attn_only_n_kv_, true, true);
             } else {
                 if (cached_attn_valid_ && !cached_attn_.layer_attn.empty()) {
                     draw_attn_tape("live_attn", "All Layers",
@@ -711,6 +791,10 @@ void OpenGllamaApplet::draw_inference_view() {
                 const char* focus_items[] = { "All Layers", "Sliding Window (even)", "Full Attention (odd)" };
                 ImGui::SetNextItemWidth(220);
                 ImGui::Combo("##focus_view", &focus_attn_view_, focus_items, 3);
+            } else if (has_recurrent_layers_) {
+                const char* focus_items[] = { "Attention Only", "All Layers" };
+                ImGui::SetNextItemWidth(220);
+                ImGui::Combo("##focus_view", &focus_attn_view_, focus_items, 2);
             }
 
             if (focus_attn_view_ == 1 && has_swa) {
@@ -721,6 +805,10 @@ void OpenGllamaApplet::draw_inference_view() {
                 draw_attn_tape("focus_full", "Full Attention Layers",
                     "Full-context attention layers — global dependency tracking",
                     cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true);
+            } else if (focus_attn_view_ == 0 && has_recurrent_layers_ && cached_focus_attn_only_n_lay_ > 0) {
+                draw_attn_tape("attn_focus", "Attention Layers",
+                    "Attention layers only — recurrent layers hidden",
+                    cached_focus_attn_only_, cached_focus_attn_only_n_lay_, cached_focus_attn_only_n_gen_, true);
             } else {
                 if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
                     draw_attn_tape("attn_focus", "All Layers",
@@ -916,7 +1004,7 @@ void OpenGllamaApplet::update_attn_aggregates(const std::vector<std::vector<floa
     if ((int)attn_agg_final_ema_.size() < n_kv) attn_agg_final_ema_.resize(n_kv, 0.0f);
 
     // EMA across all layers
-    float alpha = 0.3f;
+    float alpha = attn_ema_alpha_;
     bool first = (attn_agg_gen_count_ == 0);
     for (int k = 0; k < n_kv; ++k) {
         if (first)
@@ -940,9 +1028,9 @@ void OpenGllamaApplet::update_attn_aggregates(const std::vector<std::vector<floa
     }
 
     // Recent ring buffer
-    if ((int)attn_recent_ring_.size() < kAttnRecentWindow)
-        attn_recent_ring_.resize(kAttnRecentWindow);
-    attn_recent_ring_[attn_recent_ring_idx_ % kAttnRecentWindow] = std::move(step_avg);
+    if ((int)attn_recent_ring_.size() < kAttnRecentRingMax)
+        attn_recent_ring_.resize(kAttnRecentRingMax);
+    attn_recent_ring_[attn_recent_ring_idx_ % kAttnRecentRingMax] = std::move(step_avg);
     ++attn_recent_ring_idx_;
     ++attn_agg_gen_count_;
 }
@@ -1124,6 +1212,16 @@ void OpenGllamaApplet::unload_model() {
     cached_focus_swa_n_gen_ = 0;
     cached_focus_full_n_lay_ = 0;
     cached_focus_full_n_gen_ = 0;
+    has_recurrent_layers_ = false;
+    attn_layer_mask_.clear();
+    cached_live_attn_only_.clear();
+    cached_live_attn_only_n_lay_ = 0;
+    cached_live_attn_only_n_kv_ = 0;
+    cached_focus_attn_only_.clear();
+    cached_focus_attn_only_n_lay_ = 0;
+    cached_focus_attn_only_n_gen_ = 0;
+    live_attn_view_ = 0;
+    focus_attn_view_ = 0;
     output_text_.clear();
     tokens_generated_ = 0;
 }
@@ -1202,6 +1300,12 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         cached_focus_swa_n_gen_ = 0;
         cached_focus_full_n_lay_ = 0;
         cached_focus_full_n_gen_ = 0;
+        cached_live_attn_only_.clear();
+        cached_live_attn_only_n_lay_ = 0;
+        cached_live_attn_only_n_kv_ = 0;
+        cached_focus_attn_only_.clear();
+        cached_focus_attn_only_n_lay_ = 0;
+        cached_focus_attn_only_n_gen_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1420,6 +1524,12 @@ void OpenGllamaApplet::run_inference_blocking(
         cached_focus_swa_n_gen_ = 0;
         cached_focus_full_n_lay_ = 0;
         cached_focus_full_n_gen_ = 0;
+        cached_live_attn_only_.clear();
+        cached_live_attn_only_n_lay_ = 0;
+        cached_live_attn_only_n_kv_ = 0;
+        cached_focus_attn_only_.clear();
+        cached_focus_attn_only_n_lay_ = 0;
+        cached_focus_attn_only_n_gen_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
