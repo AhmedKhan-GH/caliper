@@ -121,6 +121,7 @@ private:
     int attn_recent_ring_idx_ = 0;
     int attn_agg_gen_count_ = 0;             // how many generation steps contributed
     void update_attn_aggregates(const std::vector<std::vector<float>>& layer_attn);
+    void append_focus_timelines(const std::vector<std::vector<float>>& layer_attn);
     std::atomic<bool> attn_map_dirty_{false};
     TokenAttn cached_attn_;
     bool cached_attn_valid_ = false;
@@ -133,6 +134,16 @@ private:
     std::vector<std::vector<float>> cached_attn_focus_;
     int cached_attn_focus_n_lay_ = 0;
     int cached_attn_focus_n_gen_ = 0;
+
+    // ISWA de-interleaved focus timelines (SWA-only and full-attention-only)
+    std::vector<std::vector<float>> attn_focus_swa_;
+    std::vector<std::vector<float>> attn_focus_full_;
+    std::vector<std::vector<float>> cached_focus_swa_;
+    std::vector<std::vector<float>> cached_focus_full_;
+    int cached_focus_swa_n_lay_ = 0;
+    int cached_focus_swa_n_gen_ = 0;
+    int cached_focus_full_n_lay_ = 0;
+    int cached_focus_full_n_gen_ = 0;
 
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,

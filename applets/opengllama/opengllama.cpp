@@ -648,6 +648,18 @@ void OpenGllamaApplet::draw_inference_view() {
                 cached_attn_focus_n_gen_ = 0;
                 for (auto& row : attn_focus_timeline_)
                     cached_attn_focus_n_gen_ = std::max(cached_attn_focus_n_gen_, (int)row.size());
+
+                cached_focus_swa_ = attn_focus_swa_;
+                cached_focus_swa_n_lay_ = (int)attn_focus_swa_.size();
+                cached_focus_swa_n_gen_ = 0;
+                for (auto& row : attn_focus_swa_)
+                    cached_focus_swa_n_gen_ = std::max(cached_focus_swa_n_gen_, (int)row.size());
+
+                cached_focus_full_ = attn_focus_full_;
+                cached_focus_full_n_lay_ = (int)attn_focus_full_.size();
+                cached_focus_full_n_gen_ = 0;
+                for (auto& row : attn_focus_full_)
+                    cached_focus_full_n_gen_ = std::max(cached_focus_full_n_gen_, (int)row.size());
             }
 
             if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
@@ -659,6 +671,20 @@ void OpenGllamaApplet::draw_inference_view() {
                 draw_attn_tape("attn_focus", "Attention Focus",
                     "Max attention weight per layer per token — bright = focused, dark = diffuse",
                     empty_data, 0, 0, false);
+            }
+        }
+
+        // ── ISWA de-interleaved focus tapes ──
+        if (cached_focus_swa_n_lay_ > 0 || cached_focus_full_n_lay_ > 0) {
+            if (cached_focus_swa_n_lay_ > 0 && cached_focus_swa_n_gen_ > 0) {
+                draw_attn_tape("focus_swa", "Sliding Window Layers (even)",
+                    "SWA layers only — local attention with limited context window",
+                    cached_focus_swa_, cached_focus_swa_n_lay_, cached_focus_swa_n_gen_, true);
+            }
+            if (cached_focus_full_n_lay_ > 0 && cached_focus_full_n_gen_ > 0) {
+                draw_attn_tape("focus_full", "Full Attention Layers (odd)",
+                    "Full-context attention layers — global dependency tracking",
+                    cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true);
             }
         }
     }
@@ -874,6 +900,32 @@ void OpenGllamaApplet::update_attn_aggregates(const std::vector<std::vector<floa
     ++attn_agg_gen_count_;
 }
 
+void OpenGllamaApplet::append_focus_timelines(const std::vector<std::vector<float>>& layer_attn) {
+    int nl = (int)layer_attn.size();
+    while ((int)attn_focus_timeline_.size() < nl)
+        attn_focus_timeline_.push_back({});
+    for (int l = 0; l < nl; ++l) {
+        float mx = 0.0f;
+        for (float v : layer_attn[l])
+            mx = std::max(mx, v);
+        attn_focus_timeline_[l].push_back(mx);
+    }
+
+    bool has_swa = model_ && llama_model_n_swa(model_) > 0;
+    if (has_swa) {
+        for (int l = 0; l < nl; ++l) {
+            float mx = 0.0f;
+            for (float v : layer_attn[l])
+                mx = std::max(mx, v);
+            auto& dest = (l % 2 == 0) ? attn_focus_swa_ : attn_focus_full_;
+            int row = l / 2;
+            while ((int)dest.size() <= row) dest.push_back({});
+            dest[row].push_back(mx);
+        }
+    }
+    attn_focus_dirty_ = true;
+}
+
 // ============================================================================
 // Model Loading
 // ============================================================================
@@ -1007,10 +1059,18 @@ void OpenGllamaApplet::unload_model() {
     context_map_dirty_ = false;
     attn_map_dirty_ = false;
     attn_focus_timeline_.clear();
+    attn_focus_swa_.clear();
+    attn_focus_full_.clear();
     attn_focus_dirty_ = false;
     cached_attn_focus_.clear();
     cached_attn_focus_n_lay_ = 0;
     cached_attn_focus_n_gen_ = 0;
+    cached_focus_swa_.clear();
+    cached_focus_full_.clear();
+    cached_focus_swa_n_lay_ = 0;
+    cached_focus_swa_n_gen_ = 0;
+    cached_focus_full_n_lay_ = 0;
+    cached_focus_full_n_gen_ = 0;
     output_text_.clear();
     tokens_generated_ = 0;
 }
@@ -1077,10 +1137,18 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         context_map_dirty_ = false;
         attn_map_dirty_ = false;
         attn_focus_timeline_.clear();
+        attn_focus_swa_.clear();
+        attn_focus_full_.clear();
         attn_focus_dirty_ = false;
         cached_attn_focus_.clear();
         cached_attn_focus_n_lay_ = 0;
         cached_attn_focus_n_gen_ = 0;
+        cached_focus_swa_.clear();
+        cached_focus_full_.clear();
+        cached_focus_swa_n_lay_ = 0;
+        cached_focus_swa_n_gen_ = 0;
+        cached_focus_full_n_lay_ = 0;
+        cached_focus_full_n_gen_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1154,18 +1222,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                 attn_latest_.layer_attn = pending_attn_weights_;
                 attn_latest_valid_ = true;
                 attn_map_dirty_ = true;
-                {
-                    int nl = (int)pending_attn_weights_.size();
-                    while ((int)attn_focus_timeline_.size() < nl)
-                        attn_focus_timeline_.push_back({});
-                    for (int l = 0; l < nl; ++l) {
-                        float mx = 0.0f;
-                        for (float v : pending_attn_weights_[l])
-                            mx = std::max(mx, v);
-                        attn_focus_timeline_[l].push_back(mx);
-                    }
-                }
-                attn_focus_dirty_ = true;
+                append_focus_timelines(pending_attn_weights_);
             }
             context_map_dirty_ = true;
         }
@@ -1246,18 +1303,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                     attn_latest_.layer_attn = pending_attn_weights_;
                     attn_latest_valid_ = true;
                     attn_map_dirty_ = true;
-                    {
-                        int nl = (int)pending_attn_weights_.size();
-                        while ((int)attn_focus_timeline_.size() < nl)
-                            attn_focus_timeline_.push_back({});
-                        for (int l = 0; l < nl; ++l) {
-                            float mx = 0.0f;
-                            for (float v : pending_attn_weights_[l])
-                                mx = std::max(mx, v);
-                            attn_focus_timeline_[l].push_back(mx);
-                        }
-                    }
-                    attn_focus_dirty_ = true;
+                    append_focus_timelines(pending_attn_weights_);
                 }
                 context_map_dirty_ = true;
             }
@@ -1298,10 +1344,18 @@ void OpenGllamaApplet::run_inference_blocking(
         context_map_dirty_ = false;
         attn_map_dirty_ = false;
         attn_focus_timeline_.clear();
+        attn_focus_swa_.clear();
+        attn_focus_full_.clear();
         attn_focus_dirty_ = false;
         cached_attn_focus_.clear();
         cached_attn_focus_n_lay_ = 0;
         cached_attn_focus_n_gen_ = 0;
+        cached_focus_swa_.clear();
+        cached_focus_full_.clear();
+        cached_focus_swa_n_lay_ = 0;
+        cached_focus_swa_n_gen_ = 0;
+        cached_focus_full_n_lay_ = 0;
+        cached_focus_full_n_gen_ = 0;
     }
     tokens_generated_ = 0;
     inference_running_ = true;
@@ -1372,18 +1426,7 @@ void OpenGllamaApplet::run_inference_blocking(
             attn_latest_.layer_attn = pending_attn_weights_;
             attn_latest_valid_ = true;
             attn_map_dirty_ = true;
-            {
-                int nl = (int)pending_attn_weights_.size();
-                while ((int)attn_focus_timeline_.size() < nl)
-                    attn_focus_timeline_.push_back({});
-                for (int l = 0; l < nl; ++l) {
-                    float mx = 0.0f;
-                    for (float v : pending_attn_weights_[l])
-                        mx = std::max(mx, v);
-                    attn_focus_timeline_[l].push_back(mx);
-                }
-            }
-            attn_focus_dirty_ = true;
+            append_focus_timelines(pending_attn_weights_);
         }
         context_map_dirty_ = true;
     }
@@ -1445,18 +1488,7 @@ void OpenGllamaApplet::run_inference_blocking(
                 attn_latest_.layer_attn = pending_attn_weights_;
                 attn_latest_valid_ = true;
                 attn_map_dirty_ = true;
-                {
-                    int nl = (int)pending_attn_weights_.size();
-                    while ((int)attn_focus_timeline_.size() < nl)
-                        attn_focus_timeline_.push_back({});
-                    for (int l = 0; l < nl; ++l) {
-                        float mx = 0.0f;
-                        for (float v : pending_attn_weights_[l])
-                            mx = std::max(mx, v);
-                        attn_focus_timeline_[l].push_back(mx);
-                    }
-                }
-                attn_focus_dirty_ = true;
+                append_focus_timelines(pending_attn_weights_);
             }
             context_map_dirty_ = true;
         }
