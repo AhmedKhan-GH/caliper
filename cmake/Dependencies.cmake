@@ -310,6 +310,35 @@ include(ExternalProject)
 # Set PyTorch install directory
 set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
 
+# ── Auto-select CUDA variant from detected toolkit version ──
+# PyTorch publishes pre-built binaries for a fixed set of CUDA versions.
+# Pick the highest variant whose CUDA version <= the installed toolkit.
+# CUDA is forward-compatible within a major version, so cu121 works on 12.8.
+if(USE_CUDA)
+    set(_CUDA_VER "${CUDAToolkit_VERSION_MAJOR}.${CUDAToolkit_VERSION_MINOR}")
+
+    # Available variants for PyTorch 2.5.1 (highest first)
+    set(_CUDA_VARIANTS "12.4;cu124" "12.1;cu121" "11.8;cu118")
+
+    set(PYTORCH_VARIANT "")
+    foreach(_entry ${_CUDA_VARIANTS})
+        list(GET _entry 0 _min_ver)
+        list(GET _entry 1 _tag)
+        if(NOT _CUDA_VER VERSION_LESS _min_ver)
+            set(PYTORCH_VARIANT "${_tag}")
+            break()
+        endif()
+    endforeach()
+
+    if(PYTORCH_VARIANT STREQUAL "")
+        message(WARNING "CUDA ${_CUDA_VER} is too old for any PyTorch 2.5.1 CUDA build — falling back to CPU")
+        set(PYTORCH_VARIANT "cpu")
+        set(USE_CUDA OFF)
+    endif()
+else()
+    set(PYTORCH_VARIANT "cpu")
+endif()
+
 # ============================================================================
 # Windows: Download pre-built libtorch (CUDA or CPU)
 # macOS/Linux: Build from source (for MPS support on macOS)
@@ -320,12 +349,9 @@ if(WIN32)
 
     set(PYTORCH_VERSION "2.5.1")
 
-    # Select CUDA or CPU variant based on USE_CUDA option
     if(USE_CUDA)
-        set(PYTORCH_VARIANT "cu121")
-        set(PYTORCH_VARIANT_NAME "CUDA 12.1")
+        set(PYTORCH_VARIANT_NAME "CUDA (${PYTORCH_VARIANT})")
     else()
-        set(PYTORCH_VARIANT "cpu")
         set(PYTORCH_VARIANT_NAME "CPU-only")
     endif()
 
@@ -403,8 +429,8 @@ else()
     else()
         # Linux
         if(USE_CUDA)
-            set(PYTORCH_URL "https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-${PYTORCH_VERSION}%2Bcu121.zip")
-            set(PYTORCH_PLATFORM "Linux CUDA 12.1")
+            set(PYTORCH_URL "https://download.pytorch.org/libtorch/${PYTORCH_VARIANT}/libtorch-cxx11-abi-shared-with-deps-${PYTORCH_VERSION}%2B${PYTORCH_VARIANT}.zip")
+            set(PYTORCH_PLATFORM "Linux CUDA (${PYTORCH_VARIANT})")
         else()
             set(PYTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${PYTORCH_VERSION}%2Bcpu.zip")
             set(PYTORCH_PLATFORM "Linux CPU")

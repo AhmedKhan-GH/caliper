@@ -26,20 +26,22 @@ set(BUILD_SHARED_LIBS OFF)
 # CUDA enabled
 option(USE_CUDA "Build with CUDA support" ON)
 
-# Set CUDA paths and configuration
 if(USE_CUDA)
-    set(ENV{CUDA_PATH} "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8")
-    set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8")
-    list(APPEND CMAKE_PREFIX_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8")
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler")
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler")
 
-    # Workaround for missing CUDA::nvToolsExt in CUDA 12+
-    if(NOT TARGET CUDA::nvToolsExt)
-        add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+        if(NOT TARGET CUDA::nvToolsExt)
+            add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+        endif()
+
+        message(STATUS "CUDA support: ENABLED (CUDA ${CUDAToolkit_VERSION})")
+    else()
+        message(WARNING "USE_CUDA is ON but no CUDA toolkit found — falling back to CPU")
+        set(USE_CUDA OFF)
     endif()
-
-    message(STATUS "CUDA support: ENABLED (CUDA 12.8)")
-else()
+endif()
+if(NOT USE_CUDA)
     message(STATUS "CUDA support: DISABLED (CPU/MPS only)")
 endif()
 
@@ -143,11 +145,29 @@ endif()
 # Applets (each builds a shared library)
 # ============================================================================
 
-add_subdirectory(applets/repnet_demo)
-add_subdirectory(applets/opengllama)
+file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
 
-# Ensure applets are rebuilt when the host is built
-add_dependencies(caliper repnet_demo opengllama)
+set(_active_applet_libs "")
+foreach(dir ${applet_dirs})
+    if(IS_DIRECTORY "${dir}" AND EXISTS "${dir}/CMakeLists.txt")
+        get_filename_component(applet_name "${dir}" NAME)
+        message(STATUS "  Found applet: ${applet_name}")
+        add_subdirectory("${dir}")
+        add_dependencies(caliper "${applet_name}")
+        list(APPEND _active_applet_libs
+            "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}${applet_name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    endif()
+endforeach()
+
+# Remove stale applet libraries left from previously deleted applets
+file(GLOB _existing_applet_libs "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}*${CMAKE_SHARED_LIBRARY_SUFFIX}")
+foreach(lib ${_existing_applet_libs})
+    if(NOT lib IN_LIST _active_applet_libs)
+        get_filename_component(_stale_name "${lib}" NAME)
+        message(STATUS "  Removing stale applet: ${_stale_name}")
+        file(REMOVE "${lib}")
+    endif()
+endforeach()
 
 # ============================================================================
 # Summary
