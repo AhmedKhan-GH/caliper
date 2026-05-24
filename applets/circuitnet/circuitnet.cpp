@@ -74,10 +74,10 @@ bool CircuitNetApplet::initialize() {
     s_->db.open();
     ned::Config config;
     config.SettingsFile = nullptr;
-    config.NavigateButtonIndex = 2;
+    config.NavigateButtonIndex = 1;
     config.SelectButtonIndex = 0;
     config.DragButtonIndex = 0;
-    config.ContextMenuButtonIndex = 1;
+    config.ContextMenuButtonIndex = 2;
     config.EnableSmoothZoom = true;
     s_->node_editor_ctx = ned::CreateEditor(&config);
 
