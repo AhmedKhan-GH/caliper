@@ -196,17 +196,14 @@ void OllamaServer::setup_routes() {
             res.set_content("{\"error\":\"no model loaded\"}", "application/json");
             return;
         }
-        if (request_active_.exchange(true)) {
-            res.status = 503;
-            res.set_content("{\"error\":\"inference already in progress\"}", "application/json");
-            return;
-        }
+
+        uint64_t my_seq = ++request_seq_;
+        applet_->inference_running_ = false;
 
         std::string prompt = parse_json_string(req.body, "prompt");
         bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
 
         if (prompt.empty()) {
-            request_active_ = false;
             res.status = 400;
             res.set_content("{\"error\":\"empty prompt\"}", "application/json");
             return;
@@ -223,27 +220,34 @@ void OllamaServer::setup_routes() {
 
         if (!stream) {
             std::string full_response;
-            applet_->run_inference_blocking(prompt, [&](const std::string& piece) {
-                full_response += piece;
-                return true;
-            });
+            auto* seq = &request_seq_;
+            {
+                std::lock_guard<std::mutex> lock(inference_mutex_);
+                applet_->run_inference_blocking(prompt, [&](const std::string& piece) {
+                    if (seq->load() != my_seq) return false;
+                    full_response += piece;
+                    return true;
+                });
+            }
 
             std::string json = "{\"model\":\"" + json_escape(model_name) + ":latest\","
                 "\"created_at\":\"" + iso8601_now() + "\","
                 "\"response\":\"" + json_escape(full_response) + "\","
                 "\"done\":true}";
             res.set_content(json, "application/json");
-            request_active_ = false;
             return;
         }
 
-        auto* active_flag = &request_active_;
+        auto* seq = &request_seq_;
+        auto* mtx = &inference_mutex_;
         auto applet = applet_;
         std::string mn = model_name;
 
         res.set_chunked_content_provider("application/x-ndjson",
-            [applet, prompt, mn, active_flag](size_t, httplib::DataSink& sink) -> bool {
+            [applet, prompt, mn, my_seq, seq, mtx](size_t, httplib::DataSink& sink) -> bool {
+                std::lock_guard<std::mutex> lock(*mtx);
                 applet->run_inference_blocking(prompt, [&](const std::string& piece) {
+                    if (seq->load() != my_seq) return false;
                     std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
                         "\"created_at\":\"" + iso8601_now() + "\","
                         "\"response\":\"" + json_escape(piece) + "\","
@@ -251,13 +255,14 @@ void OllamaServer::setup_routes() {
                     return sink.write(line.data(), line.size());
                 });
 
-                std::string done_line = "{\"model\":\"" + json_escape(mn) + ":latest\","
-                    "\"created_at\":\"" + iso8601_now() + "\","
-                    "\"response\":\"\","
-                    "\"done\":true}\n";
-                sink.write(done_line.data(), done_line.size());
+                if (seq->load() == my_seq) {
+                    std::string done_line = "{\"model\":\"" + json_escape(mn) + ":latest\","
+                        "\"created_at\":\"" + iso8601_now() + "\","
+                        "\"response\":\"\","
+                        "\"done\":true}\n";
+                    sink.write(done_line.data(), done_line.size());
+                }
                 sink.done();
-                *active_flag = false;
                 return true;
             });
     });
@@ -268,17 +273,14 @@ void OllamaServer::setup_routes() {
             res.set_content("{\"error\":\"no model loaded\"}", "application/json");
             return;
         }
-        if (request_active_.exchange(true)) {
-            res.status = 503;
-            res.set_content("{\"error\":\"inference already in progress\"}", "application/json");
-            return;
-        }
+
+        uint64_t my_seq = ++request_seq_;
+        applet_->inference_running_ = false;
 
         auto msgs = parse_messages(req.body);
         bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
 
         if (msgs.empty()) {
-            request_active_ = false;
             res.status = 400;
             res.set_content("{\"error\":\"no messages\"}", "application/json");
             return;
@@ -297,27 +299,34 @@ void OllamaServer::setup_routes() {
 
         if (!stream) {
             std::string full_response;
-            applet_->run_inference_blocking(prompt, [&](const std::string& piece) {
-                full_response += piece;
-                return true;
-            });
+            auto* seq = &request_seq_;
+            {
+                std::lock_guard<std::mutex> lock(inference_mutex_);
+                applet_->run_inference_blocking(prompt, [&](const std::string& piece) {
+                    if (seq->load() != my_seq) return false;
+                    full_response += piece;
+                    return true;
+                });
+            }
 
             std::string json = "{\"model\":\"" + json_escape(model_name) + ":latest\","
                 "\"created_at\":\"" + iso8601_now() + "\","
                 "\"message\":{\"role\":\"assistant\",\"content\":\"" + json_escape(full_response) + "\"},"
                 "\"done\":true}";
             res.set_content(json, "application/json");
-            request_active_ = false;
             return;
         }
 
-        auto* active_flag = &request_active_;
+        auto* seq = &request_seq_;
+        auto* mtx = &inference_mutex_;
         auto applet = applet_;
         std::string mn = model_name;
 
         res.set_chunked_content_provider("application/x-ndjson",
-            [applet, prompt, mn, active_flag](size_t, httplib::DataSink& sink) -> bool {
+            [applet, prompt, mn, my_seq, seq, mtx](size_t, httplib::DataSink& sink) -> bool {
+                std::lock_guard<std::mutex> lock(*mtx);
                 applet->run_inference_blocking(prompt, [&](const std::string& piece) {
+                    if (seq->load() != my_seq) return false;
                     std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
                         "\"created_at\":\"" + iso8601_now() + "\","
                         "\"message\":{\"role\":\"assistant\",\"content\":\"" + json_escape(piece) + "\"},"
@@ -325,13 +334,14 @@ void OllamaServer::setup_routes() {
                     return sink.write(line.data(), line.size());
                 });
 
-                std::string done_line = "{\"model\":\"" + json_escape(mn) + ":latest\","
-                    "\"created_at\":\"" + iso8601_now() + "\","
-                    "\"message\":{\"role\":\"assistant\",\"content\":\"\"},"
-                    "\"done\":true}\n";
-                sink.write(done_line.data(), done_line.size());
+                if (seq->load() == my_seq) {
+                    std::string done_line = "{\"model\":\"" + json_escape(mn) + ":latest\","
+                        "\"created_at\":\"" + iso8601_now() + "\","
+                        "\"message\":{\"role\":\"assistant\",\"content\":\"\"},"
+                        "\"done\":true}\n";
+                    sink.write(done_line.data(), done_line.size());
+                }
                 sink.done();
-                *active_flag = false;
                 return true;
             });
     });

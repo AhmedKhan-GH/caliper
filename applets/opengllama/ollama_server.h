@@ -3,6 +3,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <functional>
 
 namespace httplib { class Server; }
@@ -29,5 +30,6 @@ private:
     std::thread server_thread_;
     std::atomic<bool> running_{false};
     int port_ = 11435;
-    std::atomic<bool> request_active_{false};
+    std::atomic<uint64_t> request_seq_{0};
+    std::mutex inference_mutex_;
 };
