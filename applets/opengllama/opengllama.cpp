@@ -653,7 +653,7 @@ void OpenGllamaApplet::draw_inference_view() {
             if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
                 draw_attn_tape("attn_focus", "Attention Focus",
                     "Max attention weight per layer per token — bright = focused, dark = diffuse",
-                    cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true, true);
+                    cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
             } else {
                 static const std::vector<std::vector<float>> empty_data;
                 draw_attn_tape("attn_focus", "Attention Focus",
@@ -750,9 +750,13 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
             float val = (l < (int)layer_data.size() && k < (int)layer_data[l].size())
                 ? layer_data[l][k] : 0.0f;
 
-            float norm = relative_scale
-                ? ((row_max[l] > 1e-9f) ? std::clamp(val / row_max[l], 0.0f, 1.0f) : 0.0f)
-                : std::clamp(val, 0.0f, 1.0f);
+            float norm;
+            if (relative_scale) {
+                norm = (row_max[l] > 1e-9f) ? std::clamp(val / row_max[l], 0.0f, 1.0f) : 0.0f;
+            } else {
+                float clamped = std::clamp(val, 0.0f, 1.0f);
+                norm = std::log1p(clamped * 49.0f) / std::log1p(49.0f);
+            }
 
             // 4-segment color ramp: dark blue -> cyan -> yellow-green -> white
             float r, g, b;
