@@ -58,7 +58,7 @@ struct CircuitNetApplet::State {
 
     // Node editor
     ned::EditorContext* node_editor_ctx = nullptr;
-    bool layout_applied = false;
+    int layout_frames = -1;
 
     // UI state
     int active_tab = 0;
@@ -274,7 +274,7 @@ void CircuitNetApplet::parse_current_netlist() {
     }
 
     s_->selected_gate = -1;
-    s_->layout_applied = false;
+    s_->layout_frames = 0;
 }
 
 // ============================================================================
@@ -380,14 +380,16 @@ void CircuitNetApplet::draw_circuit_graph() {
     ned::SetCurrentEditor(s_->node_editor_ctx);
     ned::Begin("CircuitGraph", ImGui::GetContentRegionAvail());
 
-    // Set initial positions from layout on first frame after design load
-    if (!s_->layout_applied) {
+    // Frame 0: set node positions; Frame 1: fit view after nodes have been measured
+    if (s_->layout_frames == 0) {
         for (int i = 0; i < (int)s_->current_graph.gates.size(); i++) {
             auto& pos = s_->current_layout.positions[i];
             ned::SetNodePosition(ned::NodeId(i + 1), ImVec2(pos.x, pos.y));
         }
-        s_->layout_applied = true;
+        s_->layout_frames = 1;
+    } else if (s_->layout_frames == 1) {
         ned::NavigateToContent();
+        s_->layout_frames = -1;
     }
 
     // Find max values for heatmap normalization
