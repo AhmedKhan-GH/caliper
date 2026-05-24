@@ -4,6 +4,7 @@ add_library(circuitnet SHARED
     verilog_parser.cpp
     circuit_db.cpp
     circuit_viz.cpp
+    ${CMAKE_SOURCE_DIR}/src/app_paths.cpp
 )
 
 target_include_directories(circuitnet PRIVATE

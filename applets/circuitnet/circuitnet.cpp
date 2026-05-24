@@ -2,6 +2,7 @@
 #include "circuit_db.h"
 #include "circuit_viz.h"
 #include "verilog_parser.h"
+#include "app_paths.h"
 
 #include <imgui.h>
 #include <imgui_node_editor.h>
@@ -79,6 +80,13 @@ bool CircuitNetApplet::initialize() {
     config.ContextMenuButtonIndex = 1;
     config.EnableSmoothZoom = true;
     s_->node_editor_ctx = ned::CreateEditor(&config);
+
+    std::ifstream f(caliper::app_data_path("circuitnet_dataset.txt"));
+    std::string last_dir;
+    if (f.is_open() && std::getline(f, last_dir) && fs::is_directory(last_dir)) {
+        open_dataset(last_dir);
+    }
+
     return true;
 }
 
@@ -202,6 +210,9 @@ void CircuitNetApplet::open_dataset(const std::string& dir) {
     s_->dataset_path = dir;
     s_->loading = true;
     s_->load_progress = 0;
+
+    std::ofstream f(caliper::app_data_path("circuitnet_dataset.txt"));
+    if (f.is_open()) f << dir;
 
     std::thread([this]() {
         s_->db.ingest_dataset(s_->dataset_path, [this](int cur, int total) {
