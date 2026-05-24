@@ -255,6 +255,16 @@ list(APPEND CALIPER_DEPENDENCY_LIBS
 )
 message(STATUS "    ✓ DuckDB configured (target: duckdb_static)")
 
+# --- slang (SystemVerilog compiler library) ---
+message(STATUS "  Configuring slang...")
+set(SLANG_INCLUDE_TOOLS OFF CACHE BOOL "" FORCE)
+set(SLANG_INCLUDE_TESTS OFF CACHE BOOL "" FORCE)
+set(SLANG_INCLUDE_DOCS OFF CACHE BOOL "" FORCE)
+set(SLANG_INCLUDE_PYLIB OFF CACHE BOOL "" FORCE)
+set(SLANG_INCLUDE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${THIRD_PARTY_DIR}/slang EXCLUDE_FROM_ALL)
+message(STATUS "    ✓ slang configured (target: slang::slang)")
+
 # --- ImGuiColorTextEdit (Syntax-highlighted text editor widget) ---
 message(STATUS "  Configuring ImGuiColorTextEdit...")
 set(IMGUI_COLOR_TEXT_EDIT_SRC_DIR "${THIRD_PARTY_DIR}/ImGuiColorTextEdit")

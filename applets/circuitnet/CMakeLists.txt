@@ -14,6 +14,7 @@ target_include_directories(circuitnet PRIVATE
 
 target_link_libraries(circuitnet PRIVATE
     caliper_applet_sdk
+    imgui-node-editor
     slang::slang
     duckdb_static
     duckdb_generated_extension_loader

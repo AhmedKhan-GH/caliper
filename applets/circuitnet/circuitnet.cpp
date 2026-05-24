@@ -4,9 +4,12 @@
 #include "verilog_parser.h"
 
 #include <imgui.h>
+#include <imgui_node_editor.h>
 #include <implot.h>
 #include <implot3d.h>
 #include <ImGuiFileDialog.h>
+
+namespace ned = ax::NodeEditor;
 
 #include <filesystem>
 #include <fstream>
@@ -34,9 +37,6 @@ struct CircuitNetApplet::State {
     std::string current_netlist_source;
 
     // Graph view state
-    ImVec2 graph_scroll = {0, 0};
-    float graph_zoom = 1.0f;
-    int hovered_gate = -1;
     int selected_gate = -1;
     enum ColorMode { ByType, ByDelay, ByFanout, BySlew } color_mode = ByType;
 
@@ -55,11 +55,13 @@ struct CircuitNetApplet::State {
     std::string dataset_path;
     bool db_ready = false;
 
+    // Node editor
+    ned::EditorContext* node_editor_ctx = nullptr;
+    bool layout_applied = false;
+
     // UI state
     int active_tab = 0;
     char filter_buf[256] = "";
-    bool show_edges = true;
-    bool show_labels = true;
 };
 
 // ============================================================================
@@ -69,6 +71,9 @@ CircuitNetApplet::~CircuitNetApplet() = default;
 
 bool CircuitNetApplet::initialize() {
     s_->db.open();
+    ned::Config config;
+    config.SettingsFile = nullptr;
+    s_->node_editor_ctx = ned::CreateEditor(&config);
     return true;
 }
 
@@ -91,9 +96,6 @@ void CircuitNetApplet::draw_ui(int win_w, int win_h) {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
-            ImGui::MenuItem("Show Edges", nullptr, &s_->show_edges);
-            ImGui::MenuItem("Show Labels", nullptr, &s_->show_labels);
-            ImGui::Separator();
             if (ImGui::MenuItem("Color: Cell Type", nullptr, s_->color_mode == State::ByType))
                 s_->color_mode = State::ByType;
             if (ImGui::MenuItem("Color: Delay", nullptr, s_->color_mode == State::ByDelay))
@@ -180,6 +182,9 @@ void CircuitNetApplet::draw_ui(int win_w, int win_h) {
 }
 
 void CircuitNetApplet::cleanup() {
+    if (s_->node_editor_ctx) {
+        ned::DestroyEditor(s_->node_editor_ctx);
+    }
     s_.reset();
     s_ = std::make_unique<State>();
 }
@@ -259,7 +264,7 @@ void CircuitNetApplet::parse_current_netlist() {
     }
 
     s_->selected_gate = -1;
-    s_->hovered_gate = -1;
+    s_->layout_applied = false;
 }
 
 // ============================================================================
@@ -351,7 +356,7 @@ void CircuitNetApplet::draw_design_info() {
 
 void CircuitNetApplet::draw_circuit_graph() {
     if (!s_->current_graph.valid) {
-        ImGui::TextWrapped("Select a design from the Browser tab to visualize its circuit graph.");
+        ImGui::TextWrapped("Select a design from the sidebar to visualize its circuit graph.");
         return;
     }
 
@@ -362,48 +367,20 @@ void CircuitNetApplet::draw_circuit_graph() {
         return;
     }
 
-    // Toolbar
-    ImGui::SliderFloat("Zoom", &s_->graph_zoom, 0.2f, 3.0f);
-    ImGui::SameLine();
-    ImGui::Checkbox("Edges", &s_->show_edges);
-    ImGui::SameLine();
-    ImGui::Checkbox("Labels", &s_->show_labels);
+    if (!s_->node_editor_ctx) return;
 
-    // Canvas
-    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
-    ImVec2 canvas_size = ImGui::GetContentRegionAvail();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ned::SetCurrentEditor(s_->node_editor_ctx);
+    ned::Begin("CircuitGraph", ImGui::GetContentRegionAvail());
 
-    ImGui::InvisibleButton("##canvas", canvas_size,
-                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-
-    bool is_hovered = ImGui::IsItemHovered();
-
-    // Handle panning
-    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-        ImVec2 delta = ImGui::GetIO().MouseDelta;
-        s_->graph_scroll.x += delta.x;
-        s_->graph_scroll.y += delta.y;
-    }
-
-    // Handle zoom with scroll
-    if (is_hovered) {
-        float wheel = ImGui::GetIO().MouseWheel;
-        if (wheel != 0) {
-            s_->graph_zoom *= (1.0f + wheel * 0.1f);
-            s_->graph_zoom = std::clamp(s_->graph_zoom, 0.1f, 5.0f);
+    // Set initial positions from layout on first frame after design load
+    if (!s_->layout_applied) {
+        for (int i = 0; i < (int)s_->current_graph.gates.size(); i++) {
+            auto& pos = s_->current_layout.positions[i];
+            ned::SetNodePosition(ned::NodeId(i + 1), ImVec2(pos.x, pos.y));
         }
+        s_->layout_applied = true;
+        ned::NavigateToContent();
     }
-
-    // Clip region
-    draw_list->PushClipRect(canvas_pos, {canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y}, true);
-
-    float z = s_->graph_zoom;
-    float ox = canvas_pos.x + s_->graph_scroll.x + canvas_size.x * 0.1f;
-    float oy = canvas_pos.y + s_->graph_scroll.y + canvas_size.y * 0.5f;
-
-    float node_w = 70 * z;
-    float node_h = 30 * z;
 
     // Find max values for heatmap normalization
     float max_delay = 0, max_fanout = 0, max_slew = 0;
@@ -413,88 +390,78 @@ void CircuitNetApplet::draw_circuit_graph() {
         max_slew = std::max(max_slew, g.output_slew);
     }
 
-    s_->hovered_gate = -1;
-
-    // Draw edges first
-    if (s_->show_edges) {
-        for (auto& e : s_->current_graph.edges) {
-            if (e.from_gate < 0 || e.from_gate >= (int)s_->current_layout.positions.size()) continue;
-            if (e.to_gate < 0 || e.to_gate >= (int)s_->current_layout.positions.size()) continue;
-
-            auto& from_pos = s_->current_layout.positions[e.from_gate];
-            auto& to_pos = s_->current_layout.positions[e.to_gate];
-
-            ImVec2 p1 = {ox + from_pos.x * z + node_w, oy + from_pos.y * z + node_h * 0.5f};
-            ImVec2 p2 = {ox + to_pos.x * z, oy + to_pos.y * z + node_h * 0.5f};
-
-            draw_list->AddLine(p1, p2, IM_COL32(100, 100, 100, 80), 1.0f * z);
-        }
-    }
-
-    // Draw gates
-    ImVec2 mouse = ImGui::GetIO().MousePos;
-
+    // Draw nodes
     for (int i = 0; i < (int)s_->current_graph.gates.size(); i++) {
         auto& gate = s_->current_graph.gates[i];
-        auto& pos = s_->current_layout.positions[i];
 
-        float x = ox + pos.x * z;
-        float y = oy + pos.y * z;
-        ImVec2 p_min = {x, y};
-        ImVec2 p_max = {x + node_w, y + node_h};
-
-        // Color based on mode
-        ImU32 fill;
+        ImU32 color;
         switch (s_->color_mode) {
-            case State::ByType:   fill = cell_type_color(gate.cell_type); break;
-            case State::ByDelay:  fill = power_heatmap_color(max_delay > 0 ? gate.delay / max_delay : 0); break;
-            case State::ByFanout: fill = power_heatmap_color(max_fanout > 0 ? (float)gate.fanout_number / max_fanout : 0); break;
-            case State::BySlew:   fill = power_heatmap_color(max_slew > 0 ? gate.output_slew / max_slew : 0); break;
+            case State::ByType:   color = cell_type_color(gate.cell_type); break;
+            case State::ByDelay:  color = power_heatmap_color(max_delay > 0 ? gate.delay / max_delay : 0); break;
+            case State::ByFanout: color = power_heatmap_color(max_fanout > 0 ? (float)gate.fanout_number / max_fanout : 0); break;
+            case State::BySlew:   color = power_heatmap_color(max_slew > 0 ? gate.output_slew / max_slew : 0); break;
         }
+        ImVec4 col4 = ImGui::ColorConvertU32ToFloat4(color);
+        ned::PushStyleColor(ned::StyleColor_NodeBg, col4);
 
-        // Highlight
-        bool hovered = (mouse.x >= p_min.x && mouse.x <= p_max.x &&
-                        mouse.y >= p_min.y && mouse.y <= p_max.y);
-        if (hovered) {
-            s_->hovered_gate = i;
-            fill = IM_COL32(255, 255, 100, 255);
+        ned::BeginNode(ned::NodeId(i + 1));
+
+        ImGui::TextUnformatted(gate.cell_type.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", gate.inst_name.c_str());
+
+        ImGui::BeginGroup();
+        for (int j = 0; j < (int)gate.input_nets.size(); j++) {
+            ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 100000 + j + 1), ned::PinKind::Input);
+            ImGui::Text("-> %s", gate.input_nets[j].c_str());
+            ned::EndPin();
         }
-        if (i == s_->selected_gate) {
-            draw_list->AddRect(
-                {p_min.x - 2, p_min.y - 2}, {p_max.x + 2, p_max.y + 2},
-                IM_COL32(255, 255, 0, 255), 4.0f, 0, 2.0f);
+        ImGui::EndGroup();
+
+        ImGui::SameLine();
+
+        ImGui::BeginGroup();
+        if (!gate.output_net.empty()) {
+            ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 100000), ned::PinKind::Output);
+            ImGui::Text("%s ->", gate.output_net.c_str());
+            ned::EndPin();
         }
+        ImGui::EndGroup();
 
-        draw_list->AddRectFilled(p_min, p_max, fill, 4.0f * z);
-        draw_list->AddRect(p_min, p_max, IM_COL32(40, 40, 40, 200), 4.0f * z);
+        ned::EndNode();
+        ned::PopStyleColor();
+    }
 
-        // Label
-        if (s_->show_labels && z > 0.5f) {
-            const char* label = gate.cell_type.c_str();
-            ImVec2 text_size = ImGui::CalcTextSize(label);
-            if (text_size.x < node_w - 4) {
-                draw_list->AddText(
-                    {x + (node_w - text_size.x) * 0.5f, y + (node_h - text_size.y) * 0.5f},
-                    IM_COL32(0, 0, 0, 255), label);
+    // Draw links
+    for (int i = 0; i < (int)s_->current_graph.edges.size(); i++) {
+        auto& e = s_->current_graph.edges[i];
+
+        int input_pin_idx = 0;
+        if (e.to_gate >= 0 && e.to_gate < (int)s_->current_graph.gates.size()) {
+            auto& sink_gate = s_->current_graph.gates[e.to_gate];
+            for (int j = 0; j < (int)sink_gate.input_nets.size(); j++) {
+                if (sink_gate.input_nets[j] == e.net_name) {
+                    input_pin_idx = j;
+                    break;
+                }
             }
         }
+
+        ned::PinId from_pin((uintptr_t)(e.from_gate + 1) * 100000);
+        ned::PinId to_pin((uintptr_t)(e.to_gate + 1) * 100000 + input_pin_idx + 1);
+
+        ned::Link(ned::LinkId(i + 1), from_pin, to_pin, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
     }
 
-    // Click to select
-    if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && s_->hovered_gate >= 0) {
-        s_->selected_gate = s_->hovered_gate;
+    // Sync selection back to our state
+    if (ned::HasSelectionChanged()) {
+        ned::NodeId sel[1];
+        int count = ned::GetSelectedNodes(sel, 1);
+        s_->selected_gate = count > 0 ? (int)sel[0].Get() - 1 : -1;
     }
 
-    draw_list->PopClipRect();
-
-    // Tooltip
-    if (s_->hovered_gate >= 0) {
-        auto& g = s_->current_graph.gates[s_->hovered_gate];
-        ImGui::BeginTooltip();
-        ImGui::Text("%s (%s)", g.inst_name.c_str(), g.cell_type.c_str());
-        ImGui::Text("Delay: %.4f  Fanout: %d", g.delay, g.fanout_number);
-        ImGui::EndTooltip();
-    }
+    ned::End();
+    ned::SetCurrentEditor(nullptr);
 }
 
 // ============================================================================
