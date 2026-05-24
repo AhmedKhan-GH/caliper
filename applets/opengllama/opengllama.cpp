@@ -340,7 +340,7 @@ void OpenGllamaApplet::draw_inference_view() {
     } else {
         bool run = ImGui::Button("Run", ImVec2(70, 0));
         if ((enter || run) && prompt_input[0] != '\0') {
-            prompt_buf_ = prompt_input;
+            prompt_buf_ = format_chat_prompt(prompt_input);
             inference_mode_ = InferenceMode::Continuous;
             run_inference_async(prompt_buf_);
         }
@@ -1012,6 +1012,42 @@ void OpenGllamaApplet::unload_model() {
 }
 
 // ============================================================================
+// Chat template formatting
+// ============================================================================
+
+std::string OpenGllamaApplet::format_chat_prompt(const std::string& user_input) const {
+    if (!model_) return user_input;
+
+    const char* tmpl = llama_model_chat_template(model_, nullptr);
+    std::string tmpl_fallback;
+    if (!tmpl) {
+        char desc[256];
+        llama_model_desc(model_, desc, sizeof(desc));
+        std::string d(desc);
+        if (d.find("gptoss") != std::string::npos || d.find("gpt-oss") != std::string::npos)
+            tmpl_fallback = "gptoss";
+        else
+            tmpl_fallback = "chatml";
+        tmpl = tmpl_fallback.c_str();
+    }
+
+    llama_chat_message sys_msg  = {"system", "You are a helpful assistant."};
+    llama_chat_message user_msg = {"user", user_input.c_str()};
+    const llama_chat_message msgs[] = { sys_msg, user_msg };
+
+    std::vector<char> buf(user_input.size() * 2 + 512);
+    int32_t n = llama_chat_apply_template(tmpl, msgs, 2, true,
+                                          buf.data(), (int32_t)buf.size());
+    if (n < 0) return user_input;
+    if ((size_t)n > buf.size()) {
+        buf.resize(n + 1);
+        n = llama_chat_apply_template(tmpl, msgs, 2, true,
+                                      buf.data(), (int32_t)buf.size());
+    }
+    return std::string(buf.data(), n);
+}
+
+// ============================================================================
 // Inference (async, streaming with real activations)
 // ============================================================================
 
@@ -1067,11 +1103,11 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
 
         std::vector<llama_token> tokens(prompt.size() + 8);
         int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                                      tokens.data(), (int)tokens.size(), true, false);
+                                      tokens.data(), (int)tokens.size(), true, true);
         if (n_tokens < 0) {
             tokens.resize(-n_tokens);
             n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                                      tokens.data(), (int)tokens.size(), true, false);
+                                      tokens.data(), (int)tokens.size(), true, true);
         }
         tokens.resize(n_tokens);
 
@@ -1287,11 +1323,11 @@ void OpenGllamaApplet::run_inference_blocking(
 
     std::vector<llama_token> tokens(prompt.size() + 8);
     int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                                  tokens.data(), (int)tokens.size(), true, false);
+                                  tokens.data(), (int)tokens.size(), true, true);
     if (n_tokens < 0) {
         tokens.resize(-n_tokens);
         n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                                  tokens.data(), (int)tokens.size(), true, false);
+                                  tokens.data(), (int)tokens.size(), true, true);
     }
     tokens.resize(n_tokens);
 

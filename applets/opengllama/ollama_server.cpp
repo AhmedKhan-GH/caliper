@@ -98,6 +98,17 @@ static std::string apply_chat_template(const llama_model* model,
     }
 
     const char* tmpl = llama_model_chat_template(model, nullptr);
+    std::string tmpl_fallback;
+    if (!tmpl) {
+        char desc[256];
+        llama_model_desc(model, desc, sizeof(desc));
+        std::string d(desc);
+        if (d.find("gptoss") != std::string::npos || d.find("gpt-oss") != std::string::npos)
+            tmpl_fallback = "gptoss";
+        else
+            tmpl_fallback = "chatml";
+        tmpl = tmpl_fallback.c_str();
+    }
 
     std::vector<char> buf(4096);
     int32_t n = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true,

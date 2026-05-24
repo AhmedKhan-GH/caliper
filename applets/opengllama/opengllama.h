@@ -67,6 +67,7 @@ private:
     std::thread inference_thread_;
     std::mutex output_mutex_;
 
+    std::string format_chat_prompt(const std::string& user_input) const;
     void run_inference_async(const std::string& prompt);
     void run_inference_blocking(const std::string& prompt,
                                 const std::function<bool(const std::string&)>& token_cb);
