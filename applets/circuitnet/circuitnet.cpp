@@ -90,9 +90,10 @@ bool CircuitNetApplet::initialize() {
     return true;
 }
 
-void CircuitNetApplet::draw_ui(int win_w, int win_h) {
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({(float)win_w, (float)win_h});
+void CircuitNetApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
+    auto* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::Begin("CircuitNet 3.0 Explorer", nullptr,
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_MenuBar);
