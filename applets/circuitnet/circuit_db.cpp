@@ -62,33 +62,23 @@ bool CircuitDB::ingest_dataset(const std::string& dataset_dir,
     // Scan for design directories (each has feature.json + final_netlist.v + power_summary.txt)
     std::vector<fs::path> design_dirs;
 
-    auto scan_base = [&](const fs::path& base, const std::string& source) {
-        fs::path final_dir = base / "Final";
-        if (!fs::exists(final_dir)) return;
-
+    auto scan_final = [&](const fs::path& final_dir) {
+        if (!fs::is_directory(final_dir)) return;
         for (auto& entry : fs::directory_iterator(final_dir)) {
-            if (!entry.is_directory()) continue;
-            design_dirs.push_back(entry.path());
+            if (entry.is_directory()) design_dirs.push_back(entry.path());
         }
     };
 
     fs::path root(dataset_dir);
 
-    // Check if this is a dataset/ dir or the parent
-    if (fs::exists(root / "Final")) {
-        for (auto& entry : fs::directory_iterator(root / "Final")) {
-            if (entry.is_directory()) design_dirs.push_back(entry.path());
-        }
-    } else if (fs::exists(root / "dataset" / "Final")) {
-        for (auto& entry : fs::directory_iterator(root / "dataset" / "Final")) {
-            if (entry.is_directory()) design_dirs.push_back(entry.path());
-        }
-        // Also check augmented
-        if (fs::exists(root / "dataset_augment" / "Final")) {
-            for (auto& entry : fs::directory_iterator(root / "dataset_augment" / "Final")) {
-                if (entry.is_directory()) design_dirs.push_back(entry.path());
-            }
-        }
+    if (fs::exists(root / "dataset" / "Final")) {
+        // Root is the top-level dir (e.g. circuitNetv3/)
+        scan_final(root / "dataset" / "Final");
+        scan_final(root / "dataset_augment" / "Final");
+    } else if (fs::exists(root / "Final")) {
+        // Root is dataset/ itself — scan it and check for sibling augmented dir
+        scan_final(root / "Final");
+        scan_final(root.parent_path() / "dataset_augment" / "Final");
     }
 
     int total = (int)design_dirs.size();
