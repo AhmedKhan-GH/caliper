@@ -353,7 +353,8 @@ void OpenGllamaApplet::draw_inference_view() {
 
     // ── Hyperparameters (collapsible) ──
     if (ImGui::CollapsingHeader("Sampling Parameters")) {
-        ImGui::SliderInt("Max Tokens", &max_tokens_, 16, 2048);
+        ImGui::SliderInt("Max Tokens", &max_tokens_, 0, 4096,
+                         max_tokens_ == 0 ? "Unlimited" : "%d");
         ImGui::SliderFloat("Temperature", &temperature_, 0.0f, 2.0f, "%.2f");
         ImGui::SliderInt("Top-K", &top_k_, 1, 200);
         ImGui::SliderFloat("Top-P", &top_p_, 0.0f, 1.0f, "%.2f");
@@ -1015,7 +1016,8 @@ void OpenGllamaApplet::load_model_async(const std::string& path, const std::stri
             std::fprintf(stderr, "[opengllama] model loaded: desc='%s' layers=%d embd=%d\n",
                 model_desc, n_layers, n_embd);
 
-            context_size_ = llama_model_n_ctx_train(model_);
+            int n_ctx_train = llama_model_n_ctx_train(model_);
+            context_size_ = std::min(n_ctx_train, 4096);
 
             llama_context_params ctx_params = llama_context_default_params();
             ctx_params.n_ctx = context_size_;
@@ -1062,7 +1064,8 @@ bool OpenGllamaApplet::load_model(const std::string& path) {
     model_ = llama_model_load_from_file(path.c_str(), model_params);
     if (!model_) return false;
 
-    context_size_ = llama_model_n_ctx_train(model_);
+    int n_ctx_train = llama_model_n_ctx_train(model_);
+    context_size_ = std::min(n_ctx_train, 4096);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = context_size_;
@@ -1277,10 +1280,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             context_map_dirty_ = true;
         }
 
-        int n_vocab = llama_vocab_n_tokens(vocab);
-        int n_gen = max_tokens_;
-
-        // Build sampler chain with user hyperparams
         auto sparams = llama_sampler_chain_default_params();
         llama_sampler* smpl = llama_sampler_chain_init(sparams);
 
@@ -1302,10 +1301,14 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
         uint32_t s = seed_ == 0 ? (uint32_t)time(nullptr) : seed_;
         llama_sampler_chain_add(smpl, llama_sampler_init_dist(s));
 
-        for (int i = 0; i < n_gen; ++i) {
-            if (!inference_running_) break;
+        int n_ctx = (int)llama_n_ctx(ctx_);
+        int n_keep = std::min(n_tokens, n_ctx / 4);
+        int pos = n_tokens;
+        int gen_count = 0;
 
-            // Playback control: pause/step
+        while (inference_running_) {
+            if (max_tokens_ > 0 && gen_count >= max_tokens_) break;
+
             while (inference_running_ &&
                    inference_mode_ == InferenceMode::Paused &&
                    !step_requested_) {
@@ -1314,7 +1317,6 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             step_requested_ = false;
             if (!inference_running_) break;
 
-            // Speed control delay
             if (token_delay_ms_ > 0)
                 std::this_thread::sleep_for(std::chrono::milliseconds(token_delay_ms_));
 
@@ -1327,25 +1329,37 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
 
             llama_sampler_accept(smpl, best);
 
-                pending_attn_weights_.clear();
+            pending_attn_weights_.clear();
 
             batch.n_tokens = 1;
             batch.token[0] = best;
-            batch.pos[0] = n_tokens + i;
+            batch.pos[0] = pos;
             batch.n_seq_id[0] = 1;
             batch.seq_id[0][0] = 0;
             batch.logits[0] = 1;
-            if (llama_decode(ctx_, batch) != 0) break;
 
-            std::fprintf(stderr, "[inference] token %d: pending_attn=%d pending_act=%d\n",
-                i, (int)pending_attn_weights_.size(), 0);
+            int rc = llama_decode(ctx_, batch);
+            if (rc == 1) {
+                int n_discard = (pos - n_keep) / 2;
+                if (n_discard < 1) break;
+                llama_memory_t mem = llama_get_memory(ctx_);
+                llama_memory_seq_rm(mem, 0, n_keep, n_keep + n_discard);
+                llama_memory_seq_add(mem, 0, n_keep + n_discard, -1, -n_discard);
+                pos -= n_discard;
+                batch.pos[0] = pos;
+                rc = llama_decode(ctx_, batch);
+            }
+            if (rc != 0) break;
+
+            pos++;
+            gen_count++;
 
             {
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 output_text_ += piece;
-                tokens_generated_.store(i + 1);
+                tokens_generated_.store(gen_count);
                 context_tokens_.push_back(piece);
-                    if (!pending_attn_weights_.empty()) {
+                if (!pending_attn_weights_.empty()) {
                     int actual_ctx = (int)context_tokens_.size();
                     for (auto& aw : pending_attn_weights_)
                         if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
@@ -1501,10 +1515,13 @@ void OpenGllamaApplet::run_inference_blocking(
     uint32_t s = seed_ == 0 ? (uint32_t)time(nullptr) : seed_;
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(s));
 
-    int n_gen = max_tokens_;
+    int n_ctx = (int)llama_n_ctx(ctx_);
+    int n_keep = std::min(n_tokens, n_ctx / 4);
+    int pos = n_tokens;
+    int gen_count = 0;
 
-    for (int i = 0; i < n_gen; ++i) {
-        if (!inference_running_) break;
+    while (inference_running_) {
+        if (max_tokens_ > 0 && gen_count >= max_tokens_) break;
 
         llama_token best = llama_sampler_sample(smpl, ctx_, -1);
         if (llama_vocab_is_eog(vocab, best)) break;
@@ -1518,17 +1535,32 @@ void OpenGllamaApplet::run_inference_blocking(
 
         batch.n_tokens = 1;
         batch.token[0] = best;
-        batch.pos[0] = n_tokens + i;
+        batch.pos[0] = pos;
         batch.n_seq_id[0] = 1;
         batch.seq_id[0][0] = 0;
         batch.logits[0] = 1;
-        if (llama_decode(ctx_, batch) != 0) break;
+
+        int rc = llama_decode(ctx_, batch);
+        if (rc == 1) {
+            int n_discard = (pos - n_keep) / 2;
+            if (n_discard < 1) break;
+            llama_memory_t mem = llama_get_memory(ctx_);
+            llama_memory_seq_rm(mem, 0, n_keep, n_keep + n_discard);
+            llama_memory_seq_add(mem, 0, n_keep + n_discard, -1, -n_discard);
+            pos -= n_discard;
+            batch.pos[0] = pos;
+            rc = llama_decode(ctx_, batch);
+        }
+        if (rc != 0) break;
+
+        pos++;
+        gen_count++;
 
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
             std::string piece_str(piece);
             output_text_ += piece_str;
-            tokens_generated_.store(i + 1);
+            tokens_generated_.store(gen_count);
             context_tokens_.push_back(piece_str);
             if (!pending_attn_weights_.empty()) {
                 int actual_ctx = (int)context_tokens_.size();

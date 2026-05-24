@@ -43,7 +43,7 @@ private:
     int context_size_ = 2048;
 
     // Inference hyperparameters
-    int max_tokens_ = 256;
+    int max_tokens_ = 0;  // 0 = unlimited (generate until EOS)
     float temperature_ = 0.8f;
     int top_k_ = 40;
     float top_p_ = 0.95f;
