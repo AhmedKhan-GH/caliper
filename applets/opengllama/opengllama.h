@@ -128,6 +128,14 @@ private:
     int cached_attn_n_lay_ = 0;
     int cached_attn_n_kv_ = 0;
 
+    // ISWA de-interleaved live attention snapshots
+    std::vector<std::vector<float>> cached_live_swa_;
+    std::vector<std::vector<float>> cached_live_full_;
+    int cached_live_swa_n_lay_ = 0;
+    int cached_live_swa_n_kv_ = 0;
+    int cached_live_full_n_lay_ = 0;
+    int cached_live_full_n_kv_ = 0;
+
     // Attention focus timeline: [n_layers][n_gen_tokens] = max attention weight per layer per step
     std::vector<std::vector<float>> attn_focus_timeline_;
     std::atomic<bool> attn_focus_dirty_{false};
