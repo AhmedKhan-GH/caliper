@@ -9,13 +9,11 @@ add_library(circuitnet SHARED
 target_include_directories(circuitnet PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/third_party/slang/include
 )
 
 target_link_libraries(circuitnet PRIVATE
     caliper_applet_sdk
     imgui-node-editor
-    slang::slang
     duckdb_static
     duckdb_generated_extension_loader
     parquet_extension

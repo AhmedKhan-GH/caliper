@@ -6,19 +6,6 @@
 #include <iostream>
 #include <unordered_set>
 
-#include <slang/ast/Compilation.h>
-#include <slang/ast/symbols/InstanceSymbols.h>
-#include <slang/ast/symbols/PortSymbols.h>
-#include <slang/ast/symbols/VariableSymbols.h>
-#include <slang/ast/symbols/MemberSymbols.h>
-#include <slang/ast/expressions/MiscExpressions.h>
-#include <slang/ast/ASTVisitor.h>
-#include <slang/syntax/SyntaxTree.h>
-
-using namespace slang;
-using namespace slang::ast;
-using namespace slang::syntax;
-
 static int extract_drive_strength(const std::string& cell_type) {
     auto pos = cell_type.find('X');
     if (pos == std::string::npos || pos + 1 >= cell_type.size()) return 1;
@@ -28,42 +15,57 @@ static int extract_drive_strength(const std::string& cell_type) {
 
 static const std::unordered_set<std::string> OUTPUT_PINS = {"Y", "Q", "QN", "S", "CO", "SN", "Z"};
 
+// Verilog keywords that are NOT cell instantiations
+static const std::unordered_set<std::string> VERILOG_KEYWORDS = {
+    "module", "endmodule", "input", "output", "inout", "wire", "reg",
+    "assign", "parameter", "localparam", "generate", "endgenerate",
+    "always", "initial", "begin", "end", "if", "else", "for", "while",
+    "case", "endcase", "default", "posedge", "negedge", "supply0", "supply1"
+};
+
 CircuitGraph parse_verilog_netlist(const std::string& verilog_path) {
     CircuitGraph graph;
 
-    auto result = SyntaxTree::fromFile(std::string_view(verilog_path));
-    if (!result) return graph;
+    std::ifstream file(verilog_path);
+    if (!file.is_open()) return graph;
 
-    auto tree = std::move(*result);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+    file.close();
 
-    Compilation compilation;
-    compilation.addSyntaxTree(tree);
-
-    auto& root = compilation.getRoot();
-    if (root.topInstances.empty()) return graph;
-
-    // Take the first top-level instance
-    auto* top = root.topInstances[0];
-    graph.module_name = std::string(top->name);
-
-    // Count ports
-    for (auto& member : top->body.members()) {
-        if (member.kind == SymbolKind::Port) {
-            auto& port = member.as<PortSymbol>();
-            if (port.direction == ArgumentDirection::In)
-                graph.num_inputs++;
-            else if (port.direction == ArgumentDirection::Out)
-                graph.num_outputs++;
-        }
+    // Extract module name: "module NAME (" or "module NAME\n("
+    std::regex module_re(R"(module\s+(\w+)\s*[\(;])");
+    std::smatch module_match;
+    if (std::regex_search(content, module_match, module_re)) {
+        graph.module_name = module_match[1].str();
     }
 
-    // Extract gate instances
-    for (auto& member : top->body.members()) {
-        if (member.kind != SymbolKind::Instance) continue;
+    // Count input/output ports
+    {
+        std::regex input_re(R"(input\s+(?:\[\d+:\d+\]\s*)?(\w+))");
+        auto it = std::sregex_iterator(content.begin(), content.end(), input_re);
+        for (; it != std::sregex_iterator(); ++it) graph.num_inputs++;
+    }
+    {
+        std::regex output_re(R"(output\s+(?:\[\d+:\d+\]\s*)?(\w+))");
+        auto it = std::sregex_iterator(content.begin(), content.end(), output_re);
+        for (; it != std::sregex_iterator(); ++it) graph.num_outputs++;
+    }
 
-        auto& inst = member.as<InstanceSymbol>();
-        std::string cell_type = std::string(inst.getDefinition().name);
-        std::string inst_name = std::string(inst.name);
+    // Extract gate instances: CELL_TYPE INST_NAME ( .PORT(NET), ... );
+    // Instances can span multiple lines. Find each "WORD WORD (" ... ");" block.
+    std::regex inst_re(R"((\w+)\s+(\w+)\s*\(([^;]*)\)\s*;)");
+    auto it = std::sregex_iterator(content.begin(), content.end(), inst_re);
+
+    for (; it != std::sregex_iterator(); ++it) {
+        std::string cell_type = (*it)[1].str();
+        std::string inst_name = (*it)[2].str();
+        std::string ports_str = (*it)[3].str();
+
+        if (VERILOG_KEYWORDS.count(cell_type)) continue;
+
+        // Must have named port connections (.PORT(NET))
+        if (ports_str.find('.') == std::string::npos) continue;
 
         Gate g;
         g.id = (int)graph.gates.size();
@@ -71,24 +73,12 @@ CircuitGraph parse_verilog_netlist(const std::string& verilog_path) {
         g.inst_name = inst_name;
         g.drive_strength = extract_drive_strength(cell_type);
 
-        // Extract port connections
-        auto connections = inst.getPortConnections();
-        for (auto* conn : connections) {
-            if (!conn) continue;
-
-            std::string port_name = std::string(conn->port.name);
-            const Expression* expr = conn->getExpression();
-            if (!expr) continue;
-
-            // Get the connected net name from the expression
-            std::string net_name;
-            if (expr->kind == ExpressionKind::NamedValue ||
-                expr->kind == ExpressionKind::HierarchicalValue) {
-                auto& sym = expr->as<ValueExpressionBase>().symbol;
-                net_name = std::string(sym.name);
-            }
-
-            if (net_name.empty()) continue;
+        // Parse port connections: .PORT_NAME(NET_NAME)
+        std::regex port_re(R"(\.(\w+)\s*\(\s*(\w+(?:\[\d+\])?)\s*\))");
+        auto pit = std::sregex_iterator(ports_str.begin(), ports_str.end(), port_re);
+        for (; pit != std::sregex_iterator(); ++pit) {
+            std::string port_name = (*pit)[1].str();
+            std::string net_name = (*pit)[2].str();
 
             if (OUTPUT_PINS.count(port_name)) {
                 g.output_net = net_name;
