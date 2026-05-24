@@ -1,0 +1,626 @@
+#include "circuitnet.h"
+#include "circuit_db.h"
+#include "circuit_viz.h"
+#include "verilog_parser.h"
+
+#include <imgui.h>
+#include <implot.h>
+#include <implot3d.h>
+#include <ImGuiFileDialog.h>
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <algorithm>
+#include <cmath>
+
+namespace fs = std::filesystem;
+
+// ============================================================================
+
+struct CircuitNetApplet::State {
+    CircuitDB db;
+    std::vector<DesignEntry> designs;
+    int selected_design = -1;
+    int page = 0;
+    int page_size = 200;
+
+    // Current design data
+    CircuitGraph current_graph;
+    GraphLayout current_layout;
+    std::string current_netlist_source;
+
+    // Graph view state
+    ImVec2 graph_scroll = {0, 0};
+    float graph_zoom = 1.0f;
+    int hovered_gate = -1;
+    int selected_gate = -1;
+    enum ColorMode { ByType, ByDelay, ByFanout, BySlew } color_mode = ByType;
+
+    // SQL console
+    char sql_buf[4096] = "SELECT name, num_gates, total_power FROM designs ORDER BY total_power DESC LIMIT 20";
+    QueryResult last_query;
+
+    // Statistics cache
+    std::vector<float> power_values;
+    std::unordered_map<std::string, int> cell_type_counts;
+
+    // Dataset loading
+    std::atomic<bool> loading{false};
+    std::atomic<int> load_progress{0};
+    std::atomic<int> load_total{0};
+    std::string dataset_path;
+    bool db_ready = false;
+
+    // UI state
+    int active_tab = 0;
+    char filter_buf[256] = "";
+    bool show_edges = true;
+    bool show_labels = true;
+};
+
+// ============================================================================
+
+CircuitNetApplet::CircuitNetApplet() : s_(std::make_unique<State>()) {}
+CircuitNetApplet::~CircuitNetApplet() = default;
+
+bool CircuitNetApplet::initialize() {
+    s_->db.open();
+    return true;
+}
+
+void CircuitNetApplet::draw_ui(int win_w, int win_h) {
+    ImGui::SetNextWindowPos({0, 0});
+    ImGui::SetNextWindowSize({(float)win_w, (float)win_h});
+    ImGui::Begin("CircuitNet 3.0 Explorer", nullptr,
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_MenuBar);
+
+    // Menu bar
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open Dataset...")) {
+                IGFD::FileDialogConfig config;
+                config.path = ".";
+                config.flags = ImGuiFileDialogFlags_Modal;
+                ImGuiFileDialog::Instance()->OpenDialog("ChooseDataset", "Select CircuitNet Dataset Directory", nullptr, config);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("Show Edges", nullptr, &s_->show_edges);
+            ImGui::MenuItem("Show Labels", nullptr, &s_->show_labels);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Color: Cell Type", nullptr, s_->color_mode == State::ByType))
+                s_->color_mode = State::ByType;
+            if (ImGui::MenuItem("Color: Delay", nullptr, s_->color_mode == State::ByDelay))
+                s_->color_mode = State::ByDelay;
+            if (ImGui::MenuItem("Color: Fanout", nullptr, s_->color_mode == State::ByFanout))
+                s_->color_mode = State::ByFanout;
+            if (ImGui::MenuItem("Color: Slew", nullptr, s_->color_mode == State::BySlew))
+                s_->color_mode = State::BySlew;
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
+
+    // File dialog handling — must be called every frame regardless of state
+    ImVec2 min_sz(600, 400);
+    ImVec2 max_sz(FLT_MAX, FLT_MAX);
+    if (ImGuiFileDialog::Instance()->Display("ChooseDataset",
+            ImGuiWindowFlags_NoCollapse, min_sz, max_sz)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string path = ImGuiFileDialog::Instance()->GetCurrentPath();
+            open_dataset(path);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    // Loading indicator
+    if (s_->loading) {
+        ImGui::Text("Loading dataset... %d / %d designs", s_->load_progress.load(), s_->load_total.load());
+        float frac = s_->load_total > 0 ? (float)s_->load_progress / s_->load_total : 0;
+        ImGui::ProgressBar(frac);
+        ImGui::End();
+        return;
+    }
+
+    if (!s_->db_ready) {
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextWrapped("Open a CircuitNet 3.0 dataset directory to begin.");
+        ImGui::TextWrapped("Expected structure: dataset/Final/{design_name}/{feature.json, final_netlist.v, power_summary.txt}");
+        ImGui::Spacing();
+        if (ImGui::Button("Open Dataset...")) {
+            IGFD::FileDialogConfig config;
+            config.path = ".";
+            config.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog("ChooseDataset", "Select CircuitNet Dataset Directory", nullptr, config);
+        }
+        ImGui::End();
+        return;
+    }
+
+    // Left sidebar: design browser (always visible)
+    float sidebar_w = 300;
+    ImGui::BeginChild("##sidebar", {sidebar_w, 0}, true);
+    draw_browser_panel();
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    // Right: tabbed views
+    ImGui::BeginChild("##main_view", {0, 0}, false);
+    draw_design_info();
+    if (ImGui::BeginTabBar("MainTabs")) {
+        if (ImGui::BeginTabItem("Circuit Graph")) {
+            draw_circuit_graph();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Netlist")) {
+            draw_netlist_viewer();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Statistics")) {
+            draw_statistics();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("SQL Console")) {
+            draw_sql_console();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::EndChild();
+
+    ImGui::End();
+}
+
+void CircuitNetApplet::cleanup() {
+    s_.reset();
+    s_ = std::make_unique<State>();
+}
+
+// ============================================================================
+// Dataset loading
+// ============================================================================
+
+void CircuitNetApplet::open_dataset(const std::string& dir) {
+    s_->dataset_path = dir;
+    s_->loading = true;
+    s_->load_progress = 0;
+
+    std::thread([this]() {
+        s_->db.ingest_dataset(s_->dataset_path, [this](int cur, int total) {
+            s_->load_progress = cur;
+            s_->load_total = total;
+        });
+
+        s_->designs = s_->db.get_designs(s_->page_size, 0);
+        s_->db_ready = true;
+        s_->loading = false;
+
+        // Cache power values for statistics
+        auto res = s_->db.query("SELECT total_power FROM designs WHERE total_power > 0");
+        if (res.ok) {
+            s_->power_values.clear();
+            for (auto& row : res.rows) {
+                try { s_->power_values.push_back(std::stof(row[0])); } catch (...) {}
+            }
+        }
+    }).detach();
+}
+
+void CircuitNetApplet::select_design(int idx) {
+    if (idx < 0 || idx >= (int)s_->designs.size()) return;
+    s_->selected_design = idx;
+    parse_current_netlist();
+}
+
+void CircuitNetApplet::parse_current_netlist() {
+    if (s_->selected_design < 0) return;
+    auto& design = s_->designs[s_->selected_design];
+
+    fs::path dir(design.path);
+    fs::path netlist_path = dir / "final_netlist.v";
+    fs::path feature_path = dir / "feature.json";
+
+    s_->current_graph = parse_verilog_netlist(netlist_path.string());
+
+    if (fs::exists(feature_path)) {
+        annotate_features(s_->current_graph, feature_path.string());
+    }
+
+    s_->current_graph.total_power = design.total_power;
+
+    // Read netlist source for viewer
+    if (fs::exists(netlist_path)) {
+        std::ifstream f(netlist_path);
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        s_->current_netlist_source = ss.str();
+    }
+
+    // Compute layout (cap at 2000 gates for interactive performance)
+    if (s_->current_graph.gates.size() <= 2000) {
+        s_->current_layout = compute_layout(s_->current_graph, 70, 30, 40, 20);
+    } else {
+        s_->current_layout = {};
+        s_->current_layout.valid = false;
+    }
+
+    // Cell type distribution
+    s_->cell_type_counts.clear();
+    for (auto& g : s_->current_graph.gates) {
+        s_->cell_type_counts[g.cell_type]++;
+    }
+
+    s_->selected_gate = -1;
+    s_->hovered_gate = -1;
+}
+
+// ============================================================================
+// Browser Panel
+// ============================================================================
+
+void CircuitNetApplet::draw_browser_panel() {
+    ImGui::Text("Designs (%d)", s_->db.design_count());
+    ImGui::Separator();
+
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##filter", "Filter...", s_->filter_buf, sizeof(s_->filter_buf));
+
+    std::string filter(s_->filter_buf);
+
+    ImGui::BeginChild("##design_list", {0, -ImGui::GetFrameHeightWithSpacing()});
+    for (int i = 0; i < (int)s_->designs.size(); i++) {
+        auto& d = s_->designs[i];
+        if (!filter.empty() && d.name.find(filter) == std::string::npos) continue;
+
+        bool selected = (i == s_->selected_design);
+        if (ImGui::Selectable(d.name.c_str(), selected)) {
+            select_design(i);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("%.2f W  |  %d gates", d.total_power, d.num_gates);
+            ImGui::EndTooltip();
+        }
+    }
+    ImGui::EndChild();
+
+    // Pagination
+    if (ImGui::Button("<<") && s_->page > 0) {
+        s_->page--;
+        s_->designs = s_->db.get_designs(s_->page_size, s_->page * s_->page_size);
+    }
+    ImGui::SameLine();
+    ImGui::Text("Page %d", s_->page + 1);
+    ImGui::SameLine();
+    if (ImGui::Button(">>")) {
+        s_->page++;
+        s_->designs = s_->db.get_designs(s_->page_size, s_->page * s_->page_size);
+    }
+}
+
+// ============================================================================
+// Design Info (main view header)
+// ============================================================================
+
+void CircuitNetApplet::draw_design_info() {
+    if (s_->selected_design < 0 || s_->selected_design >= (int)s_->designs.size()) return;
+
+    auto& d = s_->designs[s_->selected_design];
+
+    if (ImGui::CollapsingHeader("Design Info", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Columns(3, "##info_cols", false);
+        ImGui::Text("Module: %s", s_->current_graph.module_name.c_str());
+        ImGui::Text("Power: %.4f W", d.total_power);
+        ImGui::NextColumn();
+        ImGui::Text("Gates: %d", (int)s_->current_graph.gates.size());
+        ImGui::Text("Edges: %d", (int)s_->current_graph.edges.size());
+        ImGui::NextColumn();
+        ImGui::Text("Inputs: %d", s_->current_graph.num_inputs);
+        ImGui::Text("Outputs: %d", s_->current_graph.num_outputs);
+        ImGui::Columns(1);
+    }
+
+    if (s_->selected_gate >= 0 && s_->selected_gate < (int)s_->current_graph.gates.size()) {
+        auto& g = s_->current_graph.gates[s_->selected_gate];
+        if (ImGui::CollapsingHeader("Selected Gate", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Columns(3, "##gate_cols", false);
+            ImGui::Text("%s (%s X%d)", g.inst_name.c_str(), g.cell_type.c_str(), g.drive_strength);
+            ImGui::Text("Delay: %.4f", g.delay);
+            ImGui::NextColumn();
+            ImGui::Text("Fanout: %d  Load: %.4f", g.fanout_number, g.fanout_load);
+            ImGui::Text("Fanout Res: %.4f", g.fanout_resistance);
+            ImGui::NextColumn();
+            ImGui::Text("In Slew: %.4f  Out Slew: %.4f", g.input_slew, g.output_slew);
+            ImGui::Text("Out: %s  Ins: %d", g.output_net.c_str(), (int)g.input_nets.size());
+            ImGui::Columns(1);
+        }
+    }
+}
+
+// ============================================================================
+// Circuit Graph Visualization
+// ============================================================================
+
+void CircuitNetApplet::draw_circuit_graph() {
+    if (!s_->current_graph.valid) {
+        ImGui::TextWrapped("Select a design from the Browser tab to visualize its circuit graph.");
+        return;
+    }
+
+    if (!s_->current_layout.valid) {
+        ImGui::TextWrapped("Circuit has %d gates - too large for interactive graph view (max 2000).",
+                          (int)s_->current_graph.gates.size());
+        ImGui::TextWrapped("Use the Statistics or SQL Console tabs to explore large designs.");
+        return;
+    }
+
+    // Toolbar
+    ImGui::SliderFloat("Zoom", &s_->graph_zoom, 0.2f, 3.0f);
+    ImGui::SameLine();
+    ImGui::Checkbox("Edges", &s_->show_edges);
+    ImGui::SameLine();
+    ImGui::Checkbox("Labels", &s_->show_labels);
+
+    // Canvas
+    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+    ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    ImGui::InvisibleButton("##canvas", canvas_size,
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+
+    bool is_hovered = ImGui::IsItemHovered();
+
+    // Handle panning
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+        ImVec2 delta = ImGui::GetIO().MouseDelta;
+        s_->graph_scroll.x += delta.x;
+        s_->graph_scroll.y += delta.y;
+    }
+
+    // Handle zoom with scroll
+    if (is_hovered) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0) {
+            s_->graph_zoom *= (1.0f + wheel * 0.1f);
+            s_->graph_zoom = std::clamp(s_->graph_zoom, 0.1f, 5.0f);
+        }
+    }
+
+    // Clip region
+    draw_list->PushClipRect(canvas_pos, {canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y}, true);
+
+    float z = s_->graph_zoom;
+    float ox = canvas_pos.x + s_->graph_scroll.x + canvas_size.x * 0.1f;
+    float oy = canvas_pos.y + s_->graph_scroll.y + canvas_size.y * 0.5f;
+
+    float node_w = 70 * z;
+    float node_h = 30 * z;
+
+    // Find max values for heatmap normalization
+    float max_delay = 0, max_fanout = 0, max_slew = 0;
+    for (auto& g : s_->current_graph.gates) {
+        max_delay = std::max(max_delay, g.delay);
+        max_fanout = std::max(max_fanout, (float)g.fanout_number);
+        max_slew = std::max(max_slew, g.output_slew);
+    }
+
+    s_->hovered_gate = -1;
+
+    // Draw edges first
+    if (s_->show_edges) {
+        for (auto& e : s_->current_graph.edges) {
+            if (e.from_gate < 0 || e.from_gate >= (int)s_->current_layout.positions.size()) continue;
+            if (e.to_gate < 0 || e.to_gate >= (int)s_->current_layout.positions.size()) continue;
+
+            auto& from_pos = s_->current_layout.positions[e.from_gate];
+            auto& to_pos = s_->current_layout.positions[e.to_gate];
+
+            ImVec2 p1 = {ox + from_pos.x * z + node_w, oy + from_pos.y * z + node_h * 0.5f};
+            ImVec2 p2 = {ox + to_pos.x * z, oy + to_pos.y * z + node_h * 0.5f};
+
+            draw_list->AddLine(p1, p2, IM_COL32(100, 100, 100, 80), 1.0f * z);
+        }
+    }
+
+    // Draw gates
+    ImVec2 mouse = ImGui::GetIO().MousePos;
+
+    for (int i = 0; i < (int)s_->current_graph.gates.size(); i++) {
+        auto& gate = s_->current_graph.gates[i];
+        auto& pos = s_->current_layout.positions[i];
+
+        float x = ox + pos.x * z;
+        float y = oy + pos.y * z;
+        ImVec2 p_min = {x, y};
+        ImVec2 p_max = {x + node_w, y + node_h};
+
+        // Color based on mode
+        ImU32 fill;
+        switch (s_->color_mode) {
+            case State::ByType:   fill = cell_type_color(gate.cell_type); break;
+            case State::ByDelay:  fill = power_heatmap_color(max_delay > 0 ? gate.delay / max_delay : 0); break;
+            case State::ByFanout: fill = power_heatmap_color(max_fanout > 0 ? (float)gate.fanout_number / max_fanout : 0); break;
+            case State::BySlew:   fill = power_heatmap_color(max_slew > 0 ? gate.output_slew / max_slew : 0); break;
+        }
+
+        // Highlight
+        bool hovered = (mouse.x >= p_min.x && mouse.x <= p_max.x &&
+                        mouse.y >= p_min.y && mouse.y <= p_max.y);
+        if (hovered) {
+            s_->hovered_gate = i;
+            fill = IM_COL32(255, 255, 100, 255);
+        }
+        if (i == s_->selected_gate) {
+            draw_list->AddRect(
+                {p_min.x - 2, p_min.y - 2}, {p_max.x + 2, p_max.y + 2},
+                IM_COL32(255, 255, 0, 255), 4.0f, 0, 2.0f);
+        }
+
+        draw_list->AddRectFilled(p_min, p_max, fill, 4.0f * z);
+        draw_list->AddRect(p_min, p_max, IM_COL32(40, 40, 40, 200), 4.0f * z);
+
+        // Label
+        if (s_->show_labels && z > 0.5f) {
+            const char* label = gate.cell_type.c_str();
+            ImVec2 text_size = ImGui::CalcTextSize(label);
+            if (text_size.x < node_w - 4) {
+                draw_list->AddText(
+                    {x + (node_w - text_size.x) * 0.5f, y + (node_h - text_size.y) * 0.5f},
+                    IM_COL32(0, 0, 0, 255), label);
+            }
+        }
+    }
+
+    // Click to select
+    if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && s_->hovered_gate >= 0) {
+        s_->selected_gate = s_->hovered_gate;
+    }
+
+    draw_list->PopClipRect();
+
+    // Tooltip
+    if (s_->hovered_gate >= 0) {
+        auto& g = s_->current_graph.gates[s_->hovered_gate];
+        ImGui::BeginTooltip();
+        ImGui::Text("%s (%s)", g.inst_name.c_str(), g.cell_type.c_str());
+        ImGui::Text("Delay: %.4f  Fanout: %d", g.delay, g.fanout_number);
+        ImGui::EndTooltip();
+    }
+}
+
+// ============================================================================
+// Netlist Viewer
+// ============================================================================
+
+void CircuitNetApplet::draw_netlist_viewer() {
+    if (s_->current_netlist_source.empty()) {
+        ImGui::TextWrapped("Select a design to view its Verilog netlist.");
+        return;
+    }
+
+    ImGui::Text("Verilog Netlist (%d bytes)", (int)s_->current_netlist_source.size());
+    ImGui::Separator();
+
+    ImGui::BeginChild("##netlist_scroll", {0, 0}, false, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::TextUnformatted(s_->current_netlist_source.c_str(),
+                           s_->current_netlist_source.c_str() + std::min((size_t)100000, s_->current_netlist_source.size()));
+    ImGui::EndChild();
+}
+
+// ============================================================================
+// Statistics
+// ============================================================================
+
+void CircuitNetApplet::draw_statistics() {
+    ImGui::Text("Dataset Statistics (%d designs loaded)", s_->db.design_count());
+    ImGui::Separator();
+
+    // Power distribution histogram
+    if (!s_->power_values.empty() && ImPlot::BeginPlot("Power Distribution", {-1, 250})) {
+        ImPlot::SetupAxes("Total Power", "Count");
+        ImPlot::PlotHistogram("Power", s_->power_values.data(), (int)s_->power_values.size(), 50);
+        ImPlot::EndPlot();
+    }
+
+    // Gate count vs power scatter
+    {
+        auto res = s_->db.query("SELECT num_gates, total_power FROM designs WHERE total_power > 0 AND num_gates > 0 LIMIT 2000");
+        if (res.ok && !res.rows.empty()) {
+            std::vector<double> gates_v, power_v;
+            for (auto& row : res.rows) {
+                try {
+                    gates_v.push_back(std::stod(row[0]));
+                    power_v.push_back(std::stod(row[1]));
+                } catch (...) {}
+            }
+
+            if (!gates_v.empty() && ImPlot::BeginPlot("Gates vs Power", {-1, 250})) {
+                ImPlot::SetupAxes("Gate Count", "Total Power");
+                ImPlot::PlotScatter("Designs", gates_v.data(), power_v.data(), (int)gates_v.size());
+                ImPlot::EndPlot();
+            }
+        }
+    }
+
+    // Top power consumers
+    {
+        auto res = s_->db.query("SELECT name, total_power FROM designs ORDER BY total_power DESC LIMIT 15");
+        if (res.ok && !res.rows.empty()) {
+            ImGui::Spacing();
+            ImGui::Text("Top Power Consumers:");
+            if (ImGui::BeginTable("##top_power", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Design");
+                ImGui::TableSetupColumn("Power");
+                ImGui::TableHeadersRow();
+                for (auto& row : res.rows) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(row[0].c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(row[1].c_str());
+                }
+                ImGui::EndTable();
+            }
+        }
+    }
+}
+
+// ============================================================================
+// SQL Console
+// ============================================================================
+
+void CircuitNetApplet::draw_sql_console() {
+    ImGui::Text("DuckDB SQL Console");
+    ImGui::Separator();
+
+    ImGui::InputTextMultiline("##sql", s_->sql_buf, sizeof(s_->sql_buf), {-1, 80});
+
+    if (ImGui::Button("Execute") || (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+        s_->last_query = s_->db.query(s_->sql_buf);
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Tables: designs, gates)");
+
+    ImGui::Separator();
+
+    if (!s_->last_query.error.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, {1, 0.3f, 0.3f, 1});
+        ImGui::TextWrapped("Error: %s", s_->last_query.error.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (s_->last_query.ok && !s_->last_query.columns.empty()) {
+        ImGui::Text("%d rows", (int)s_->last_query.rows.size());
+
+        int ncols = (int)s_->last_query.columns.size();
+        if (ImGui::BeginTable("##results", ncols,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
+                              {0, ImGui::GetContentRegionAvail().y})) {
+
+            for (auto& col : s_->last_query.columns) {
+                ImGui::TableSetupColumn(col.c_str());
+            }
+            ImGui::TableHeadersRow();
+
+            for (auto& row : s_->last_query.rows) {
+                ImGui::TableNextRow();
+                for (int c = 0; c < ncols && c < (int)row.size(); c++) {
+                    ImGui::TableSetColumnIndex(c);
+                    ImGui::TextUnformatted(row[c].c_str());
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+}
