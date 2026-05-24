@@ -249,13 +249,7 @@ void CircuitNetApplet::parse_current_netlist() {
         s_->current_netlist_source = ss.str();
     }
 
-    // Compute layout (cap at 2000 gates for interactive performance)
-    if (s_->current_graph.gates.size() <= 2000) {
-        s_->current_layout = compute_layout(s_->current_graph, 70, 30, 40, 20);
-    } else {
-        s_->current_layout = {};
-        s_->current_layout.valid = false;
-    }
+    s_->current_layout = compute_layout(s_->current_graph, 70, 30, 40, 20);
 
     // Cell type distribution
     s_->cell_type_counts.clear();
@@ -361,9 +355,7 @@ void CircuitNetApplet::draw_circuit_graph() {
     }
 
     if (!s_->current_layout.valid) {
-        ImGui::TextWrapped("Circuit has %d gates - too large for interactive graph view (max 2000).",
-                          (int)s_->current_graph.gates.size());
-        ImGui::TextWrapped("Use the Statistics or SQL Console tabs to explore large designs.");
+        ImGui::TextWrapped("No layout available for this circuit.");
         return;
     }
 
