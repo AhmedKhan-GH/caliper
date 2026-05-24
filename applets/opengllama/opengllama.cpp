@@ -1015,6 +1015,8 @@ void OpenGllamaApplet::load_model_async(const std::string& path, const std::stri
             std::fprintf(stderr, "[opengllama] model loaded: desc='%s' layers=%d embd=%d\n",
                 model_desc, n_layers, n_embd);
 
+            context_size_ = llama_model_n_ctx_train(model_);
+
             llama_context_params ctx_params = llama_context_default_params();
             ctx_params.n_ctx = context_size_;
             ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
@@ -1059,6 +1061,8 @@ bool OpenGllamaApplet::load_model(const std::string& path) {
 
     model_ = llama_model_load_from_file(path.c_str(), model_params);
     if (!model_) return false;
+
+    context_size_ = llama_model_n_ctx_train(model_);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = context_size_;
