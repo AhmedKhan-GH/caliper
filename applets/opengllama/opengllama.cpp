@@ -615,100 +615,97 @@ void OpenGllamaApplet::draw_inference_view() {
             ImGui::EndChild();
         }
 
-        // ── Live Attention — where the model is looking right now ──
-        {
-            if (attn_map_dirty_.exchange(false)) {
-                std::lock_guard<std::mutex> lk(output_mutex_);
-                cached_attn_ = attn_latest_;
-                cached_attn_valid_ = attn_latest_valid_;
-                cached_attn_n_lay_ = (int)attn_latest_.layer_attn.size();
-                cached_attn_n_kv_ = 0;
-                for (auto& row : attn_latest_.layer_attn)
-                    cached_attn_n_kv_ = std::max(cached_attn_n_kv_, (int)row.size());
+        // Cache live attention data (always runs, independent of UI collapse state)
+        if (attn_map_dirty_.exchange(false)) {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            cached_attn_ = attn_latest_;
+            cached_attn_valid_ = attn_latest_valid_;
+            cached_attn_n_lay_ = (int)attn_latest_.layer_attn.size();
+            cached_attn_n_kv_ = 0;
+            for (auto& row : attn_latest_.layer_attn)
+                cached_attn_n_kv_ = std::max(cached_attn_n_kv_, (int)row.size());
 
-                bool has_swa = model_ && llama_model_n_swa(model_) > 0;
-                cached_live_swa_.clear();
-                cached_live_full_.clear();
-                cached_live_swa_n_lay_ = 0;
-                cached_live_swa_n_kv_ = 0;
-                cached_live_full_n_lay_ = 0;
-                cached_live_full_n_kv_ = 0;
-                if (has_swa && cached_attn_valid_) {
-                    for (int l = 0; l < cached_attn_n_lay_; ++l) {
-                        auto& dest = (l % 2 == 0) ? cached_live_swa_ : cached_live_full_;
-                        dest.push_back(cached_attn_.layer_attn[l]);
-                    }
-                    cached_live_swa_n_lay_ = (int)cached_live_swa_.size();
-                    for (auto& row : cached_live_swa_)
-                        cached_live_swa_n_kv_ = std::max(cached_live_swa_n_kv_, (int)row.size());
-                    cached_live_full_n_lay_ = (int)cached_live_full_.size();
-                    for (auto& row : cached_live_full_)
-                        cached_live_full_n_kv_ = std::max(cached_live_full_n_kv_, (int)row.size());
+            bool has_swa = model_ && llama_model_n_swa(model_) > 0;
+            cached_live_swa_.clear();
+            cached_live_full_.clear();
+            cached_live_swa_n_lay_ = 0;
+            cached_live_swa_n_kv_ = 0;
+            cached_live_full_n_lay_ = 0;
+            cached_live_full_n_kv_ = 0;
+            if (has_swa && cached_attn_valid_) {
+                for (int l = 0; l < cached_attn_n_lay_; ++l) {
+                    auto& dest = (l % 2 == 0) ? cached_live_swa_ : cached_live_full_;
+                    dest.push_back(cached_attn_.layer_attn[l]);
                 }
+                cached_live_swa_n_lay_ = (int)cached_live_swa_.size();
+                for (auto& row : cached_live_swa_)
+                    cached_live_swa_n_kv_ = std::max(cached_live_swa_n_kv_, (int)row.size());
+                cached_live_full_n_lay_ = (int)cached_live_full_.size();
+                for (auto& row : cached_live_full_)
+                    cached_live_full_n_kv_ = std::max(cached_live_full_n_kv_, (int)row.size());
             }
+        }
 
+        // Cache focus timeline data (always runs)
+        if (attn_focus_dirty_.exchange(false)) {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            cached_attn_focus_ = attn_focus_timeline_;
+            cached_attn_focus_n_lay_ = (int)attn_focus_timeline_.size();
+            cached_attn_focus_n_gen_ = 0;
+            for (auto& row : attn_focus_timeline_)
+                cached_attn_focus_n_gen_ = std::max(cached_attn_focus_n_gen_, (int)row.size());
+
+            cached_focus_swa_ = attn_focus_swa_;
+            cached_focus_swa_n_lay_ = (int)attn_focus_swa_.size();
+            cached_focus_swa_n_gen_ = 0;
+            for (auto& row : attn_focus_swa_)
+                cached_focus_swa_n_gen_ = std::max(cached_focus_swa_n_gen_, (int)row.size());
+
+            cached_focus_full_ = attn_focus_full_;
+            cached_focus_full_n_lay_ = (int)attn_focus_full_.size();
+            cached_focus_full_n_gen_ = 0;
+            for (auto& row : attn_focus_full_)
+                cached_focus_full_n_gen_ = std::max(cached_focus_full_n_gen_, (int)row.size());
+        }
+
+        // ── Live Attention ──
+        if (ImGui::CollapsingHeader("Live Attention", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (cached_attn_valid_ && !cached_attn_.layer_attn.empty()) {
-                draw_attn_tape("live_attn", "Live Attention",
+                draw_attn_tape("live_attn", "All Layers",
                     "Where the current token attends — bright = high attention weight",
                     cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true, true);
             } else {
                 static const std::vector<std::vector<float>> empty_data;
-                draw_attn_tape("live_attn", "Live Attention",
+                draw_attn_tape("live_attn", "All Layers",
                     "Where the current token attends — bright = high attention weight",
                     empty_data, 0, 0, false, true);
             }
 
-            if (cached_live_swa_n_lay_ > 0 || cached_live_full_n_lay_ > 0) {
-                if (cached_live_swa_n_lay_ > 0 && cached_live_swa_n_kv_ > 0) {
-                    draw_attn_tape("live_swa", "Live Attention — Sliding Window (even)",
-                        "SWA layers only — local attention pattern",
-                        cached_live_swa_, cached_live_swa_n_lay_, cached_live_swa_n_kv_, true, true);
-                }
-                if (cached_live_full_n_lay_ > 0 && cached_live_full_n_kv_ > 0) {
-                    draw_attn_tape("live_full", "Live Attention — Full Context (odd)",
-                        "Full-context layers only — global attention pattern",
-                        cached_live_full_, cached_live_full_n_lay_, cached_live_full_n_kv_, true, true);
-                }
+            if (cached_live_swa_n_lay_ > 0 && cached_live_swa_n_kv_ > 0) {
+                draw_attn_tape("live_swa", "Sliding Window Layers (even)",
+                    "SWA layers only — local attention pattern",
+                    cached_live_swa_, cached_live_swa_n_lay_, cached_live_swa_n_kv_, true, true);
+            }
+            if (cached_live_full_n_lay_ > 0 && cached_live_full_n_kv_ > 0) {
+                draw_attn_tape("live_full", "Full Attention Layers (odd)",
+                    "Full-context layers only — global attention pattern",
+                    cached_live_full_, cached_live_full_n_lay_, cached_live_full_n_kv_, true, true);
             }
         }
 
-        // ── Attention Focus — per-layer certainty across generated tokens ──
-        {
-            if (attn_focus_dirty_.exchange(false)) {
-                std::lock_guard<std::mutex> lk(output_mutex_);
-                cached_attn_focus_ = attn_focus_timeline_;
-                cached_attn_focus_n_lay_ = (int)attn_focus_timeline_.size();
-                cached_attn_focus_n_gen_ = 0;
-                for (auto& row : attn_focus_timeline_)
-                    cached_attn_focus_n_gen_ = std::max(cached_attn_focus_n_gen_, (int)row.size());
-
-                cached_focus_swa_ = attn_focus_swa_;
-                cached_focus_swa_n_lay_ = (int)attn_focus_swa_.size();
-                cached_focus_swa_n_gen_ = 0;
-                for (auto& row : attn_focus_swa_)
-                    cached_focus_swa_n_gen_ = std::max(cached_focus_swa_n_gen_, (int)row.size());
-
-                cached_focus_full_ = attn_focus_full_;
-                cached_focus_full_n_lay_ = (int)attn_focus_full_.size();
-                cached_focus_full_n_gen_ = 0;
-                for (auto& row : attn_focus_full_)
-                    cached_focus_full_n_gen_ = std::max(cached_focus_full_n_gen_, (int)row.size());
-            }
-
+        // ── Attention Focus ──
+        if (ImGui::CollapsingHeader("Attention Focus", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
-                draw_attn_tape("attn_focus", "Attention Focus",
+                draw_attn_tape("attn_focus", "All Layers",
                     "Max attention weight per layer per token — bright = focused, dark = diffuse",
                     cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
             } else {
                 static const std::vector<std::vector<float>> empty_data;
-                draw_attn_tape("attn_focus", "Attention Focus",
+                draw_attn_tape("attn_focus", "All Layers",
                     "Max attention weight per layer per token — bright = focused, dark = diffuse",
                     empty_data, 0, 0, false);
             }
-        }
 
-        // ── ISWA de-interleaved focus tapes ──
-        if (cached_focus_swa_n_lay_ > 0 || cached_focus_full_n_lay_ > 0) {
             if (cached_focus_swa_n_lay_ > 0 && cached_focus_swa_n_gen_ > 0) {
                 draw_attn_tape("focus_swa", "Sliding Window Layers (even)",
                     "SWA layers only — local attention with limited context window",
