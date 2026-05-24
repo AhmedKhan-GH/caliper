@@ -265,7 +265,7 @@ void CircuitNetApplet::parse_current_netlist() {
         s_->current_netlist_source = ss.str();
     }
 
-    s_->current_layout = compute_layout(s_->current_graph, 70, 30, 40, 20);
+    s_->current_layout = compute_layout(s_->current_graph, 200, 80, 100, 40);
 
     // Cell type distribution
     s_->cell_type_counts.clear();
@@ -414,24 +414,22 @@ void CircuitNetApplet::draw_circuit_graph() {
 
         ned::BeginNode(ned::NodeId(i + 1));
 
-        ImGui::TextUnformatted(gate.cell_type.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", gate.inst_name.c_str());
+        ImGui::Text("%s", gate.cell_type.c_str());
 
         ImGui::BeginGroup();
         for (int j = 0; j < (int)gate.input_nets.size(); j++) {
             ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 100000 + j + 1), ned::PinKind::Input);
-            ImGui::Text("-> %s", gate.input_nets[j].c_str());
+            ImGui::Bullet();
             ned::EndPin();
         }
         ImGui::EndGroup();
 
-        ImGui::SameLine();
+        ImGui::SameLine(0, 20);
 
         ImGui::BeginGroup();
         if (!gate.output_net.empty()) {
             ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 100000), ned::PinKind::Output);
-            ImGui::Text("%s ->", gate.output_net.c_str());
+            ImGui::Bullet();
             ned::EndPin();
         }
         ImGui::EndGroup();

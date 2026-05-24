@@ -12,31 +12,32 @@ GraphLayout compute_layout(const CircuitGraph& graph, float node_w, float node_h
     int n = (int)graph.gates.size();
     layout.positions.resize(n);
 
-    // Topological layering via BFS from sources
+    // Build adjacency lists
     std::vector<int> in_degree(n, 0);
-    std::vector<std::vector<int>> adj(n);
+    std::vector<std::vector<int>> fwd(n), rev(n);
 
     for (auto& e : graph.edges) {
         if (e.from_gate >= 0 && e.from_gate < n && e.to_gate >= 0 && e.to_gate < n) {
-            adj[e.from_gate].push_back(e.to_gate);
+            fwd[e.from_gate].push_back(e.to_gate);
+            rev[e.to_gate].push_back(e.from_gate);
             in_degree[e.to_gate]++;
         }
     }
 
+    // Topological layering via BFS (longest-path assignment)
     std::queue<int> q;
     std::vector<int> layer(n, 0);
 
     for (int i = 0; i < n; i++) {
         if (in_degree[i] == 0) {
             q.push(i);
-            layer[i] = 0;
         }
     }
 
     int max_layer = 0;
     while (!q.empty()) {
         int u = q.front(); q.pop();
-        for (int v : adj[u]) {
+        for (int v : fwd[u]) {
             layer[v] = std::max(layer[v], layer[u] + 1);
             max_layer = std::max(max_layer, layer[v]);
             in_degree[v]--;
@@ -46,25 +47,65 @@ GraphLayout compute_layout(const CircuitGraph& graph, float node_w, float node_h
         }
     }
 
-    // Count nodes per layer
-    std::vector<int> layer_count(max_layer + 1, 0);
+    // Group nodes by layer
+    std::vector<std::vector<int>> layers(max_layer + 1);
     for (int i = 0; i < n; i++) {
-        layer_count[layer[i]]++;
+        layers[layer[i]].push_back(i);
     }
 
-    // Assign positions
-    std::vector<int> layer_idx(max_layer + 1, 0);
-    float max_width = 0;
+    // Median heuristic to reduce edge crossings (a few sweeps)
+    auto median_pos = [&](int node, const std::vector<std::vector<int>>& neighbors,
+                          const std::vector<float>& positions) -> float {
+        std::vector<float> nbr_pos;
+        for (int nb : neighbors[node]) {
+            nbr_pos.push_back(positions[nb]);
+        }
+        if (nbr_pos.empty()) return positions[node];
+        std::sort(nbr_pos.begin(), nbr_pos.end());
+        return nbr_pos[nbr_pos.size() / 2];
+    };
 
+    // Initialize y-positions sequentially within each layer
+    std::vector<float> y_pos(n, 0);
+    for (auto& ly : layers) {
+        for (int idx = 0; idx < (int)ly.size(); idx++) {
+            y_pos[ly[idx]] = (float)idx;
+        }
+    }
+
+    for (int sweep = 0; sweep < 8; sweep++) {
+        // Forward sweep: order by median of predecessors
+        for (int l = 1; l <= max_layer; l++) {
+            for (int node : layers[l]) {
+                y_pos[node] = median_pos(node, rev, y_pos);
+            }
+            // Sort layer by y_pos and reassign to prevent overlaps
+            std::sort(layers[l].begin(), layers[l].end(),
+                      [&](int a, int b) { return y_pos[a] < y_pos[b]; });
+            for (int idx = 0; idx < (int)layers[l].size(); idx++) {
+                y_pos[layers[l][idx]] = (float)idx;
+            }
+        }
+        // Backward sweep: order by median of successors
+        for (int l = max_layer - 1; l >= 0; l--) {
+            for (int node : layers[l]) {
+                y_pos[node] = median_pos(node, fwd, y_pos);
+            }
+            std::sort(layers[l].begin(), layers[l].end(),
+                      [&](int a, int b) { return y_pos[a] < y_pos[b]; });
+            for (int idx = 0; idx < (int)layers[l].size(); idx++) {
+                y_pos[layers[l][idx]] = (float)idx;
+            }
+        }
+    }
+
+    // Assign final pixel positions
+    float max_width = 0;
     for (int i = 0; i < n; i++) {
         int l = layer[i];
-        int idx = layer_idx[l]++;
-        int count = layer_count[l];
-
         layout.positions[i].layer = l;
         layout.positions[i].x = l * (node_w + h_gap);
-        layout.positions[i].y = idx * (node_h + v_gap) - (count - 1) * (node_h + v_gap) * 0.5f;
-
+        layout.positions[i].y = y_pos[i] * (node_h + v_gap);
         max_width = std::max(max_width, layout.positions[i].x + node_w);
     }
 
@@ -77,7 +118,6 @@ GraphLayout compute_layout(const CircuitGraph& graph, float node_w, float node_h
     }
     layout.total_height = max_y - min_y;
 
-    // Shift so min_y = 0
     for (auto& p : layout.positions) {
         p.y -= min_y;
     }
