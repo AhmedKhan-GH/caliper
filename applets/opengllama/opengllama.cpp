@@ -653,7 +653,7 @@ void OpenGllamaApplet::draw_inference_view() {
             if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
                 draw_attn_tape("attn_focus", "Attention Focus",
                     "Max attention weight per layer per token — bright = focused, dark = diffuse",
-                    cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
+                    cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true, true);
             } else {
                 static const std::vector<std::vector<float>> empty_data;
                 draw_attn_tape("attn_focus", "Attention Focus",
