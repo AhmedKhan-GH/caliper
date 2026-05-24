@@ -17,6 +17,7 @@ private:
     void draw_design_info();
     void draw_netlist_viewer();
     void draw_circuit_graph();
+    void draw_module_view();
     void draw_statistics();
     void draw_sql_console();
 

@@ -20,10 +20,50 @@ namespace ned = ax::NodeEditor;
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
 // ============================================================================
+
+// Module-level abstracted graph
+struct ModuleNode {
+    std::string family;
+    int instance_count = 0;
+    ImU32 color = IM_COL32(180, 180, 180, 200);
+};
+
+struct ModuleEdge {
+    int from_node;
+    int to_node;
+    int connection_count = 0;
+};
+
+struct ModuleGraph {
+    std::vector<ModuleNode> nodes;
+    std::vector<ModuleEdge> edges;
+    std::unordered_map<std::string, int> family_to_idx;
+    bool valid = false;
+};
+
+static std::string gate_family(const std::string& cell_type) {
+    if (cell_type.find("NAND") != std::string::npos) return "NAND";
+    if (cell_type.find("NOR") != std::string::npos)  return "NOR";
+    if (cell_type.find("XOR") != std::string::npos)  return "XOR";
+    if (cell_type.find("XNOR") != std::string::npos) return "XNOR";
+    if (cell_type.find("AND") != std::string::npos)  return "AND";
+    if (cell_type.find("OR") != std::string::npos)   return "OR";
+    if (cell_type.find("INV") != std::string::npos)  return "INV";
+    if (cell_type.find("BUF") != std::string::npos)  return "BUF";
+    if (cell_type.find("DFF") != std::string::npos)  return "FF";
+    if (cell_type.find("LATCH") != std::string::npos) return "LATCH";
+    if (cell_type.find("MX") != std::string::npos)   return "MUX";
+    if (cell_type.find("AO") != std::string::npos)   return "AO";
+    if (cell_type.find("OA") != std::string::npos)   return "OA";
+    if (cell_type.find("HA") != std::string::npos)   return "HA";
+    if (cell_type.find("FA") != std::string::npos)   return "FA";
+    return "OTHER";
+}
 
 struct CircuitNetApplet::State {
     CircuitDB db;
@@ -40,6 +80,11 @@ struct CircuitNetApplet::State {
     // Graph view state
     int selected_gate = -1;
     enum ColorMode { ByType, ByDelay, ByFanout, BySlew } color_mode = ByType;
+
+    // Module view
+    ModuleGraph module_graph;
+    ned::EditorContext* module_editor_ctx = nullptr;
+    int module_layout_frames = -1;
 
     // SQL console
     char sql_buf[4096] = "SELECT name, num_gates, total_power FROM designs ORDER BY total_power DESC LIMIT 20";
@@ -80,6 +125,7 @@ bool CircuitNetApplet::initialize() {
     config.ContextMenuButtonIndex = 2;
     config.EnableSmoothZoom = true;
     s_->node_editor_ctx = ned::CreateEditor(&config);
+    s_->module_editor_ctx = ned::CreateEditor(&config);
 
     std::ifstream f(caliper::app_data_path("circuitnet_dataset.txt"));
     std::string last_dir;
@@ -176,6 +222,10 @@ void CircuitNetApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
             draw_circuit_graph();
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Module View")) {
+            draw_module_view();
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Netlist")) {
             draw_netlist_viewer();
             ImGui::EndTabItem();
@@ -196,6 +246,9 @@ void CircuitNetApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
 }
 
 void CircuitNetApplet::cleanup() {
+    if (s_->module_editor_ctx) {
+        ned::DestroyEditor(s_->module_editor_ctx);
+    }
     if (s_->node_editor_ctx) {
         ned::DestroyEditor(s_->node_editor_ctx);
     }
@@ -276,6 +329,104 @@ void CircuitNetApplet::parse_current_netlist() {
 
     s_->selected_gate = -1;
     s_->layout_frames = 0;
+
+    // Build module-level abstracted graph
+    {
+        ModuleGraph& mg = s_->module_graph;
+        mg = {};
+        auto& graph = s_->current_graph;
+
+        // Create family nodes
+        auto get_or_create = [&](const std::string& fam) -> int {
+            auto it = mg.family_to_idx.find(fam);
+            if (it != mg.family_to_idx.end()) return it->second;
+            int idx = (int)mg.nodes.size();
+            ModuleNode mn;
+            mn.family = fam;
+            mn.color = cell_type_color(fam);
+            mg.nodes.push_back(mn);
+            mg.family_to_idx[fam] = idx;
+            return idx;
+        };
+
+        // Add I/O port pseudo-nodes
+        int input_idx = get_or_create("INPUTS");
+        mg.nodes[input_idx].instance_count = graph.num_inputs;
+        mg.nodes[input_idx].color = IM_COL32(100, 200, 255, 220);
+        int output_idx = get_or_create("OUTPUTS");
+        mg.nodes[output_idx].instance_count = graph.num_outputs;
+        mg.nodes[output_idx].color = IM_COL32(255, 150, 100, 220);
+
+        // Map each gate to its family
+        std::vector<int> gate_family_idx(graph.gates.size());
+        for (int i = 0; i < (int)graph.gates.size(); i++) {
+            std::string fam = gate_family(graph.gates[i].cell_type);
+            int fi = get_or_create(fam);
+            gate_family_idx[i] = fi;
+            mg.nodes[fi].instance_count++;
+        }
+
+        // Find primary I/O nets (driven externally or consumed externally)
+        std::unordered_set<std::string> driven_nets, consumed_nets;
+        for (auto& [net, _] : graph.net_to_drivers) driven_nets.insert(net);
+        for (auto& [net, _] : graph.net_to_sinks) consumed_nets.insert(net);
+
+        // Nets consumed but not driven by any gate = primary inputs
+        for (auto& [net, sinks] : graph.net_to_sinks) {
+            if (driven_nets.find(net) == driven_nets.end()) {
+                for (int sink : sinks) {
+                    int to_fam = gate_family_idx[sink];
+                    // Edge from INPUTS to this family
+                    bool found = false;
+                    for (auto& e : mg.edges) {
+                        if (e.from_node == input_idx && e.to_node == to_fam) {
+                            e.connection_count++;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) mg.edges.push_back({input_idx, to_fam, 1});
+                }
+            }
+        }
+
+        // Nets driven but not consumed by any gate = primary outputs
+        for (auto& [net, drivers] : graph.net_to_drivers) {
+            if (consumed_nets.find(net) == consumed_nets.end()) {
+                for (int drv : drivers) {
+                    int from_fam = gate_family_idx[drv];
+                    bool found = false;
+                    for (auto& e : mg.edges) {
+                        if (e.from_node == from_fam && e.to_node == output_idx) {
+                            e.connection_count++;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) mg.edges.push_back({from_fam, output_idx, 1});
+                }
+            }
+        }
+
+        // Internal edges between families
+        for (auto& edge : graph.edges) {
+            int from_fam = gate_family_idx[edge.from_gate];
+            int to_fam = gate_family_idx[edge.to_gate];
+            if (from_fam == to_fam) continue;
+            bool found = false;
+            for (auto& e : mg.edges) {
+                if (e.from_node == from_fam && e.to_node == to_fam) {
+                    e.connection_count++;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) mg.edges.push_back({from_fam, to_fam, 1});
+        }
+
+        mg.valid = !mg.nodes.empty();
+        s_->module_layout_frames = 0;
+    }
 }
 
 // ============================================================================
@@ -467,6 +618,114 @@ void CircuitNetApplet::draw_circuit_graph() {
         ned::NodeId sel[1];
         int count = ned::GetSelectedNodes(sel, 1);
         s_->selected_gate = count > 0 ? (int)sel[0].Get() - 1 : -1;
+    }
+
+    ned::End();
+    ned::SetCurrentEditor(nullptr);
+}
+
+// ============================================================================
+// Module View (cell-family abstraction)
+// ============================================================================
+
+void CircuitNetApplet::draw_module_view() {
+    if (!s_->module_graph.valid) {
+        ImGui::TextWrapped("Select a design from the sidebar to view its module-level structure.");
+        return;
+    }
+
+    if (!s_->module_editor_ctx) return;
+
+    auto& mg = s_->module_graph;
+
+    ned::SetCurrentEditor(s_->module_editor_ctx);
+    ned::Begin("ModuleView", ImGui::GetContentRegionAvail());
+
+    // Layout: arrange nodes in a circle for now, refine on frame 1
+    if (s_->module_layout_frames == 0) {
+        int n = (int)mg.nodes.size();
+        float cx = 400, cy = 300;
+        float radius = 150.0f + n * 20.0f;
+        for (int i = 0; i < n; i++) {
+            float angle = 2.0f * 3.14159f * i / n - 3.14159f / 2.0f;
+            // Put INPUTS on far left, OUTPUTS on far right
+            float x, y;
+            if (mg.nodes[i].family == "INPUTS") {
+                x = 0; y = cy;
+            } else if (mg.nodes[i].family == "OUTPUTS") {
+                x = cx * 2; y = cy;
+            } else {
+                x = cx + radius * cosf(angle);
+                y = cy + radius * sinf(angle);
+            }
+            ned::SetNodePosition(ned::NodeId(i + 1), ImVec2(x, y));
+        }
+        s_->module_layout_frames = 1;
+    } else if (s_->module_layout_frames == 1) {
+        ned::NavigateToContent();
+        s_->module_layout_frames = -1;
+    }
+
+    // Draw nodes
+    for (int i = 0; i < (int)mg.nodes.size(); i++) {
+        auto& mn = mg.nodes[i];
+        ImVec4 col4 = ImGui::ColorConvertU32ToFloat4(mn.color);
+        ned::PushStyleColor(ned::StyleColor_NodeBg, col4);
+        ned::PushStyleVar(ned::StyleVar_NodeRounding, 8.0f);
+
+        ned::BeginNode(ned::NodeId(i + 1));
+
+        ImGui::Text("%s", mn.family.c_str());
+        if (mn.family != "INPUTS" && mn.family != "OUTPUTS") {
+            ImGui::Text("%d gates", mn.instance_count);
+        } else {
+            ImGui::Text("%d ports", mn.instance_count);
+        }
+
+        // Single input and output pin per family node
+        ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 1000 + 1), ned::PinKind::Input);
+        ImGui::Dummy({1, 1});
+        ned::EndPin();
+        ImGui::SameLine();
+        ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 1000), ned::PinKind::Output);
+        ImGui::Dummy({1, 1});
+        ned::EndPin();
+
+        ned::EndNode();
+        ned::PopStyleVar();
+        ned::PopStyleColor();
+    }
+
+    // Draw links with thickness based on connection count
+    int max_conn = 1;
+    for (auto& e : mg.edges) max_conn = std::max(max_conn, e.connection_count);
+
+    for (int i = 0; i < (int)mg.edges.size(); i++) {
+        auto& e = mg.edges[i];
+        float thickness = 1.0f + 4.0f * (float)e.connection_count / max_conn;
+        float alpha = 0.3f + 0.7f * (float)e.connection_count / max_conn;
+
+        ned::PinId from_pin((uintptr_t)(e.from_node + 1) * 1000);
+        ned::PinId to_pin((uintptr_t)(e.to_node + 1) * 1000 + 1);
+
+        ned::Link(ned::LinkId(i + 1), from_pin, to_pin,
+                  ImVec4(0.7f, 0.7f, 0.7f, alpha), thickness);
+    }
+
+    // Tooltip on hovered link
+    for (int i = 0; i < (int)mg.edges.size(); i++) {
+        if (ned::GetHoveredLink() == ned::LinkId(i + 1)) {
+            auto& e = mg.edges[i];
+            ned::Suspend();
+            ImGui::BeginTooltip();
+            ImGui::Text("%s -> %s: %d connections",
+                        mg.nodes[e.from_node].family.c_str(),
+                        mg.nodes[e.to_node].family.c_str(),
+                        e.connection_count);
+            ImGui::EndTooltip();
+            ned::Resume();
+            break;
+        }
     }
 
     ned::End();
