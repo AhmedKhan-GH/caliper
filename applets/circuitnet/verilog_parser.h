@@ -41,3 +41,37 @@ struct CircuitGraph {
 CircuitGraph parse_verilog_netlist(const std::string& verilog_path);
 void annotate_features(CircuitGraph& graph, const std::string& feature_json_path);
 float read_power(const std::string& power_path);
+
+// RTL module structure (behavioral Verilog)
+struct VerilogPort {
+    std::string name;
+    std::string direction; // "input", "output", "inout"
+    std::string width;     // "[31:0]" or ""
+    bool is_reg = false;
+};
+
+struct VerilogBlock {
+    enum Type { AlwaysFF, AlwaysComb, Assign, Instance };
+    Type type;
+    std::string label;
+    std::string body;
+    std::vector<std::string> reads;
+    std::vector<std::string> writes;
+    // For Instance type
+    std::string module_type;
+    std::string inst_name;
+};
+
+struct VerilogModule {
+    std::string name;
+    std::vector<VerilogPort> ports;
+    std::vector<std::string> wires;
+    std::vector<std::string> regs;
+    std::vector<std::string> params;
+    std::vector<VerilogBlock> blocks;
+    std::string source;
+    bool valid = false;
+};
+
+VerilogModule parse_rtl_module(const std::string& verilog_path);
+std::string find_rtl_file(const std::string& design_path);

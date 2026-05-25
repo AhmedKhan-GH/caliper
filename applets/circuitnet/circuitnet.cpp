@@ -26,51 +26,10 @@ namespace fs = std::filesystem;
 
 // ============================================================================
 
-// Module-level abstracted graph
-struct ModuleNode {
-    std::string family;
-    int instance_count = 0;
-    ImU32 color = IM_COL32(180, 180, 180, 200);
-};
-
-struct ModuleEdge {
-    int from_node;
-    int to_node;
-    int connection_count = 0;
-};
-
-struct ModuleGraph {
-    std::vector<ModuleNode> nodes;
-    std::vector<ModuleEdge> edges;
-    std::unordered_map<std::string, int> family_to_idx;
-    bool valid = false;
-};
-
-static std::string gate_family(const std::string& cell_type) {
-    if (cell_type.find("NAND") != std::string::npos) return "NAND";
-    if (cell_type.find("NOR") != std::string::npos)  return "NOR";
-    if (cell_type.find("XOR") != std::string::npos)  return "XOR";
-    if (cell_type.find("XNOR") != std::string::npos) return "XNOR";
-    if (cell_type.find("AND") != std::string::npos)  return "AND";
-    if (cell_type.find("OR") != std::string::npos)   return "OR";
-    if (cell_type.find("INV") != std::string::npos)  return "INV";
-    if (cell_type.find("BUF") != std::string::npos)  return "BUF";
-    if (cell_type.find("DFF") != std::string::npos)  return "FF";
-    if (cell_type.find("LATCH") != std::string::npos) return "LATCH";
-    if (cell_type.find("MX") != std::string::npos)   return "MUX";
-    if (cell_type.find("AO") != std::string::npos)   return "AO";
-    if (cell_type.find("OA") != std::string::npos)   return "OA";
-    if (cell_type.find("HA") != std::string::npos)   return "HA";
-    if (cell_type.find("FA") != std::string::npos)   return "FA";
-    return "OTHER";
-}
-
 struct CircuitNetApplet::State {
     CircuitDB db;
     std::vector<DesignEntry> designs;
     int selected_design = -1;
-    int page = 0;
-    int page_size = 200;
 
     // Current design data
     CircuitGraph current_graph;
@@ -81,14 +40,10 @@ struct CircuitNetApplet::State {
     int selected_gate = -1;
     enum ColorMode { ByType, ByDelay, ByFanout, BySlew } color_mode = ByType;
 
-    // Module view
-    ModuleGraph module_graph;
+    // RTL module view
+    VerilogModule rtl_module;
     ned::EditorContext* module_editor_ctx = nullptr;
     int module_layout_frames = -1;
-
-    // SQL console
-    char sql_buf[4096] = "SELECT name, num_gates, total_power FROM designs ORDER BY total_power DESC LIMIT 20";
-    QueryResult last_query;
 
     // Statistics cache
     std::vector<float> power_values;
@@ -230,12 +185,22 @@ void CircuitNetApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
             draw_netlist_viewer();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Statistics")) {
-            draw_statistics();
+        if (ImGui::BeginTabItem("RTL Source")) {
+            if (s_->rtl_module.valid && !s_->rtl_module.source.empty()) {
+                ImGui::Text("RTL Verilog (%s, %d bytes)",
+                            s_->rtl_module.name.c_str(), (int)s_->rtl_module.source.size());
+                ImGui::Separator();
+                ImGui::BeginChild("##rtl_scroll", {0, 0}, false, ImGuiWindowFlags_HorizontalScrollbar);
+                ImGui::TextUnformatted(s_->rtl_module.source.c_str(),
+                                       s_->rtl_module.source.c_str() + s_->rtl_module.source.size());
+                ImGui::EndChild();
+            } else {
+                ImGui::TextWrapped("No RTL source found for this design.");
+            }
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("SQL Console")) {
-            draw_sql_console();
+        if (ImGui::BeginTabItem("Statistics")) {
+            draw_statistics();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -274,7 +239,7 @@ void CircuitNetApplet::open_dataset(const std::string& dir) {
             s_->load_total = total;
         });
 
-        s_->designs = s_->db.get_designs(s_->page_size, 0);
+        s_->designs = s_->db.get_designs(100000, 0);
         s_->db_ready = true;
         s_->loading = false;
 
@@ -330,102 +295,13 @@ void CircuitNetApplet::parse_current_netlist() {
     s_->selected_gate = -1;
     s_->layout_frames = 0;
 
-    // Build module-level abstracted graph
-    {
-        ModuleGraph& mg = s_->module_graph;
-        mg = {};
-        auto& graph = s_->current_graph;
-
-        // Create family nodes
-        auto get_or_create = [&](const std::string& fam) -> int {
-            auto it = mg.family_to_idx.find(fam);
-            if (it != mg.family_to_idx.end()) return it->second;
-            int idx = (int)mg.nodes.size();
-            ModuleNode mn;
-            mn.family = fam;
-            mn.color = cell_type_color(fam);
-            mg.nodes.push_back(mn);
-            mg.family_to_idx[fam] = idx;
-            return idx;
-        };
-
-        // Add I/O port pseudo-nodes
-        int input_idx = get_or_create("INPUTS");
-        mg.nodes[input_idx].instance_count = graph.num_inputs;
-        mg.nodes[input_idx].color = IM_COL32(100, 200, 255, 220);
-        int output_idx = get_or_create("OUTPUTS");
-        mg.nodes[output_idx].instance_count = graph.num_outputs;
-        mg.nodes[output_idx].color = IM_COL32(255, 150, 100, 220);
-
-        // Map each gate to its family
-        std::vector<int> gate_family_idx(graph.gates.size());
-        for (int i = 0; i < (int)graph.gates.size(); i++) {
-            std::string fam = gate_family(graph.gates[i].cell_type);
-            int fi = get_or_create(fam);
-            gate_family_idx[i] = fi;
-            mg.nodes[fi].instance_count++;
-        }
-
-        // Find primary I/O nets (driven externally or consumed externally)
-        std::unordered_set<std::string> driven_nets, consumed_nets;
-        for (auto& [net, _] : graph.net_to_drivers) driven_nets.insert(net);
-        for (auto& [net, _] : graph.net_to_sinks) consumed_nets.insert(net);
-
-        // Nets consumed but not driven by any gate = primary inputs
-        for (auto& [net, sinks] : graph.net_to_sinks) {
-            if (driven_nets.find(net) == driven_nets.end()) {
-                for (int sink : sinks) {
-                    int to_fam = gate_family_idx[sink];
-                    // Edge from INPUTS to this family
-                    bool found = false;
-                    for (auto& e : mg.edges) {
-                        if (e.from_node == input_idx && e.to_node == to_fam) {
-                            e.connection_count++;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) mg.edges.push_back({input_idx, to_fam, 1});
-                }
-            }
-        }
-
-        // Nets driven but not consumed by any gate = primary outputs
-        for (auto& [net, drivers] : graph.net_to_drivers) {
-            if (consumed_nets.find(net) == consumed_nets.end()) {
-                for (int drv : drivers) {
-                    int from_fam = gate_family_idx[drv];
-                    bool found = false;
-                    for (auto& e : mg.edges) {
-                        if (e.from_node == from_fam && e.to_node == output_idx) {
-                            e.connection_count++;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) mg.edges.push_back({from_fam, output_idx, 1});
-                }
-            }
-        }
-
-        // Internal edges between families
-        for (auto& edge : graph.edges) {
-            int from_fam = gate_family_idx[edge.from_gate];
-            int to_fam = gate_family_idx[edge.to_gate];
-            if (from_fam == to_fam) continue;
-            bool found = false;
-            for (auto& e : mg.edges) {
-                if (e.from_node == from_fam && e.to_node == to_fam) {
-                    e.connection_count++;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) mg.edges.push_back({from_fam, to_fam, 1});
-        }
-
-        mg.valid = !mg.nodes.empty();
+    // Load RTL module if available
+    std::string rtl_path = find_rtl_file(design.path);
+    if (!rtl_path.empty()) {
+        s_->rtl_module = parse_rtl_module(rtl_path);
         s_->module_layout_frames = 0;
+    } else {
+        s_->rtl_module = {};
     }
 }
 
@@ -442,7 +318,7 @@ void CircuitNetApplet::draw_browser_panel() {
 
     std::string filter(s_->filter_buf);
 
-    ImGui::BeginChild("##design_list", {0, -ImGui::GetFrameHeightWithSpacing()});
+    ImGui::BeginChild("##design_list", {0, 0});
     for (int i = 0; i < (int)s_->designs.size(); i++) {
         auto& d = s_->designs[i];
         if (!filter.empty() && d.name.find(filter) == std::string::npos) continue;
@@ -458,19 +334,6 @@ void CircuitNetApplet::draw_browser_panel() {
         }
     }
     ImGui::EndChild();
-
-    // Pagination
-    if (ImGui::Button("<<") && s_->page > 0) {
-        s_->page--;
-        s_->designs = s_->db.get_designs(s_->page_size, s_->page * s_->page_size);
-    }
-    ImGui::SameLine();
-    ImGui::Text("Page %d", s_->page + 1);
-    ImGui::SameLine();
-    if (ImGui::Button(">>")) {
-        s_->page++;
-        s_->designs = s_->db.get_designs(s_->page_size, s_->page * s_->page_size);
-    }
 }
 
 // ============================================================================
@@ -625,40 +488,89 @@ void CircuitNetApplet::draw_circuit_graph() {
 }
 
 // ============================================================================
-// Module View (cell-family abstraction)
+// Module View (RTL block diagram)
 // ============================================================================
 
 void CircuitNetApplet::draw_module_view() {
-    if (!s_->module_graph.valid) {
-        ImGui::TextWrapped("Select a design from the sidebar to view its module-level structure.");
+    if (!s_->rtl_module.valid) {
+        ImGui::TextWrapped("No RTL source found for this design. Select a design with an RTL file.");
         return;
     }
 
     if (!s_->module_editor_ctx) return;
 
-    auto& mg = s_->module_graph;
+    auto& mod = s_->rtl_module;
+
+    ImGui::Text("Module: %s  |  %d ports  |  %d blocks",
+                mod.name.c_str(), (int)mod.ports.size(), (int)mod.blocks.size());
+    ImGui::Separator();
 
     ned::SetCurrentEditor(s_->module_editor_ctx);
     ned::Begin("ModuleView", ImGui::GetContentRegionAvail());
 
-    // Layout: arrange nodes in a circle for now, refine on frame 1
+    // Node ID scheme:
+    //   1..num_inputs          = input port nodes
+    //   num_inputs+1..num_io   = output port nodes
+    //   num_io+1..num_io+blocks = block nodes
+    // Pin ID scheme: node_id * 10000 + pin_index  (output pins use +0, input pins use +1..N)
+
+    std::vector<VerilogPort> inputs, outputs;
+    for (auto& p : mod.ports) {
+        if (p.direction == "input") inputs.push_back(p);
+        else if (p.direction == "output") outputs.push_back(p);
+    }
+
+    int num_in = (int)inputs.size();
+    int num_out = (int)outputs.size();
+    int num_blocks = (int)mod.blocks.size();
+    int id_block_base = num_in + num_out;
+
+    // Map signal name -> list of output pin IDs that produce it
+    // Map signal name -> list of input pin IDs that consume it
+    struct PinRef { int node_id; int pin_idx; };
+    std::unordered_map<std::string, std::vector<PinRef>> signal_sources;
+    std::unordered_map<std::string, std::vector<PinRef>> signal_sinks;
+
+    // Input ports are sources
+    for (int i = 0; i < num_in; i++) {
+        int nid = i + 1;
+        signal_sources[inputs[i].name].push_back({nid, 0});
+    }
+
+    // Output ports are sinks
+    for (int i = 0; i < num_out; i++) {
+        int nid = num_in + i + 1;
+        signal_sinks[outputs[i].name].push_back({nid, 1});
+    }
+
+    // Blocks: writes are sources, reads are sinks
+    for (int i = 0; i < num_blocks; i++) {
+        int nid = id_block_base + i + 1;
+        auto& blk = mod.blocks[i];
+        for (int j = 0; j < (int)blk.writes.size(); j++) {
+            signal_sources[blk.writes[j]].push_back({nid, 0});
+        }
+        for (int j = 0; j < (int)blk.reads.size(); j++) {
+            signal_sinks[blk.reads[j]].push_back({nid, (int)blk.writes.size() + j + 1});
+        }
+    }
+
+    // Layout: 3 columns — inputs | blocks | outputs
     if (s_->module_layout_frames == 0) {
-        int n = (int)mg.nodes.size();
-        float cx = 400, cy = 300;
-        float radius = 150.0f + n * 20.0f;
-        for (int i = 0; i < n; i++) {
-            float angle = 2.0f * 3.14159f * i / n - 3.14159f / 2.0f;
-            // Put INPUTS on far left, OUTPUTS on far right
-            float x, y;
-            if (mg.nodes[i].family == "INPUTS") {
-                x = 0; y = cy;
-            } else if (mg.nodes[i].family == "OUTPUTS") {
-                x = cx * 2; y = cy;
-            } else {
-                x = cx + radius * cosf(angle);
-                y = cy + radius * sinf(angle);
-            }
-            ned::SetNodePosition(ned::NodeId(i + 1), ImVec2(x, y));
+        float col_x[] = {0, 400, 800};
+        float y_gap = 80;
+
+        for (int i = 0; i < num_in; i++) {
+            ned::SetNodePosition(ned::NodeId(i + 1),
+                ImVec2(col_x[0], i * y_gap));
+        }
+        for (int i = 0; i < num_out; i++) {
+            ned::SetNodePosition(ned::NodeId(num_in + i + 1),
+                ImVec2(col_x[2], i * y_gap));
+        }
+        for (int i = 0; i < num_blocks; i++) {
+            ned::SetNodePosition(ned::NodeId(id_block_base + i + 1),
+                ImVec2(col_x[1], i * (y_gap + 40)));
         }
         s_->module_layout_frames = 1;
     } else if (s_->module_layout_frames == 1) {
@@ -666,29 +578,19 @@ void CircuitNetApplet::draw_module_view() {
         s_->module_layout_frames = -1;
     }
 
-    // Draw nodes
-    for (int i = 0; i < (int)mg.nodes.size(); i++) {
-        auto& mn = mg.nodes[i];
-        ImVec4 col4 = ImGui::ColorConvertU32ToFloat4(mn.color);
-        ned::PushStyleColor(ned::StyleColor_NodeBg, col4);
-        ned::PushStyleVar(ned::StyleVar_NodeRounding, 8.0f);
+    // Draw input port nodes (green)
+    for (int i = 0; i < num_in; i++) {
+        int nid = i + 1;
+        ned::PushStyleColor(ned::StyleColor_NodeBg, ImVec4(0.2f, 0.5f, 0.2f, 0.9f));
+        ned::PushStyleVar(ned::StyleVar_NodeRounding, 12.0f);
+        ned::BeginNode(ned::NodeId(nid));
 
-        ned::BeginNode(ned::NodeId(i + 1));
+        ImGui::Text("IN");
+        ImGui::Text("%s%s", inputs[i].name.c_str(),
+                    inputs[i].width.empty() ? "" : (" " + inputs[i].width).c_str());
 
-        ImGui::Text("%s", mn.family.c_str());
-        if (mn.family != "INPUTS" && mn.family != "OUTPUTS") {
-            ImGui::Text("%d gates", mn.instance_count);
-        } else {
-            ImGui::Text("%d ports", mn.instance_count);
-        }
-
-        // Single input and output pin per family node
-        ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 1000 + 1), ned::PinKind::Input);
-        ImGui::Dummy({1, 1});
-        ned::EndPin();
-        ImGui::SameLine();
-        ned::BeginPin(ned::PinId((uintptr_t)(i + 1) * 1000), ned::PinKind::Output);
-        ImGui::Dummy({1, 1});
+        ned::BeginPin(ned::PinId((uintptr_t)nid * 10000), ned::PinKind::Output);
+        ImGui::Bullet();
         ned::EndPin();
 
         ned::EndNode();
@@ -696,35 +598,105 @@ void CircuitNetApplet::draw_module_view() {
         ned::PopStyleColor();
     }
 
-    // Draw links with thickness based on connection count
-    int max_conn = 1;
-    for (auto& e : mg.edges) max_conn = std::max(max_conn, e.connection_count);
+    // Draw output port nodes (orange)
+    for (int i = 0; i < num_out; i++) {
+        int nid = num_in + i + 1;
+        ned::PushStyleColor(ned::StyleColor_NodeBg, ImVec4(0.6f, 0.3f, 0.1f, 0.9f));
+        ned::PushStyleVar(ned::StyleVar_NodeRounding, 12.0f);
+        ned::BeginNode(ned::NodeId(nid));
 
-    for (int i = 0; i < (int)mg.edges.size(); i++) {
-        auto& e = mg.edges[i];
-        float thickness = 1.0f + 4.0f * (float)e.connection_count / max_conn;
-        float alpha = 0.3f + 0.7f * (float)e.connection_count / max_conn;
+        ned::BeginPin(ned::PinId((uintptr_t)nid * 10000 + 1), ned::PinKind::Input);
+        ImGui::Bullet();
+        ned::EndPin();
 
-        ned::PinId from_pin((uintptr_t)(e.from_node + 1) * 1000);
-        ned::PinId to_pin((uintptr_t)(e.to_node + 1) * 1000 + 1);
+        ImGui::Text("OUT");
+        ImGui::Text("%s%s", outputs[i].name.c_str(),
+                    outputs[i].width.empty() ? "" : (" " + outputs[i].width).c_str());
 
-        ned::Link(ned::LinkId(i + 1), from_pin, to_pin,
-                  ImVec4(0.7f, 0.7f, 0.7f, alpha), thickness);
+        ned::EndNode();
+        ned::PopStyleVar();
+        ned::PopStyleColor();
     }
 
-    // Tooltip on hovered link
-    for (int i = 0; i < (int)mg.edges.size(); i++) {
-        if (ned::GetHoveredLink() == ned::LinkId(i + 1)) {
-            auto& e = mg.edges[i];
-            ned::Suspend();
-            ImGui::BeginTooltip();
-            ImGui::Text("%s -> %s: %d connections",
-                        mg.nodes[e.from_node].family.c_str(),
-                        mg.nodes[e.to_node].family.c_str(),
-                        e.connection_count);
-            ImGui::EndTooltip();
-            ned::Resume();
-            break;
+    // Draw block nodes
+    for (int i = 0; i < num_blocks; i++) {
+        int nid = id_block_base + i + 1;
+        auto& blk = mod.blocks[i];
+
+        ImVec4 bg;
+        const char* type_label;
+        switch (blk.type) {
+            case VerilogBlock::AlwaysFF:
+                bg = ImVec4(0.4f, 0.2f, 0.6f, 0.9f);
+                type_label = "FF";
+                break;
+            case VerilogBlock::AlwaysComb:
+                bg = ImVec4(0.2f, 0.4f, 0.6f, 0.9f);
+                type_label = "COMB";
+                break;
+            case VerilogBlock::Assign:
+                bg = ImVec4(0.3f, 0.5f, 0.3f, 0.9f);
+                type_label = "=";
+                break;
+            case VerilogBlock::Instance:
+                bg = ImVec4(0.5f, 0.4f, 0.2f, 0.9f);
+                type_label = blk.module_type.c_str();
+                break;
+        }
+
+        ned::PushStyleColor(ned::StyleColor_NodeBg, bg);
+        ned::PushStyleVar(ned::StyleVar_NodeRounding, 4.0f);
+        ned::BeginNode(ned::NodeId(nid));
+
+        ImGui::Text("[%s]", type_label);
+        if (blk.type == VerilogBlock::Instance) {
+            ImGui::Text("%s", blk.inst_name.c_str());
+        } else if (!blk.writes.empty()) {
+            std::string w;
+            for (auto& s : blk.writes) { if (!w.empty()) w += ", "; w += s; }
+            ImGui::TextWrapped("%s", w.c_str());
+        }
+
+        // Input pins (reads)
+        ImGui::BeginGroup();
+        for (int j = 0; j < (int)blk.reads.size(); j++) {
+            uintptr_t pin_id = (uintptr_t)nid * 10000 + (int)blk.writes.size() + j + 1;
+            ned::BeginPin(ned::PinId(pin_id), ned::PinKind::Input);
+            ImGui::Text("> %s", blk.reads[j].c_str());
+            ned::EndPin();
+        }
+        ImGui::EndGroup();
+
+        if (!blk.reads.empty() && !blk.writes.empty())
+            ImGui::SameLine(0, 30);
+
+        // Output pins (writes)
+        ImGui::BeginGroup();
+        for (int j = 0; j < (int)blk.writes.size(); j++) {
+            uintptr_t pin_id = (uintptr_t)nid * 10000;
+            ned::BeginPin(ned::PinId(pin_id), ned::PinKind::Output);
+            ImGui::Text("%s >", blk.writes[j].c_str());
+            ned::EndPin();
+        }
+        ImGui::EndGroup();
+
+        ned::EndNode();
+        ned::PopStyleVar();
+        ned::PopStyleColor();
+    }
+
+    // Draw links: for each signal, connect every source to every sink
+    int link_id = 1;
+    for (auto& [sig, sources] : signal_sources) {
+        auto sit = signal_sinks.find(sig);
+        if (sit == signal_sinks.end()) continue;
+        for (auto& src : sources) {
+            for (auto& dst : sit->second) {
+                ned::PinId from_pin((uintptr_t)src.node_id * 10000 + src.pin_idx);
+                ned::PinId to_pin((uintptr_t)dst.node_id * 10000 + dst.pin_idx);
+                ned::Link(ned::LinkId(link_id++), from_pin, to_pin,
+                          ImVec4(0.6f, 0.6f, 0.6f, 0.8f));
+            }
         }
     }
 
@@ -809,53 +781,3 @@ void CircuitNetApplet::draw_statistics() {
     }
 }
 
-// ============================================================================
-// SQL Console
-// ============================================================================
-
-void CircuitNetApplet::draw_sql_console() {
-    ImGui::Text("DuckDB SQL Console");
-    ImGui::Separator();
-
-    ImGui::InputTextMultiline("##sql", s_->sql_buf, sizeof(s_->sql_buf), {-1, 80});
-
-    if (ImGui::Button("Execute") || (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
-        s_->last_query = s_->db.query(s_->sql_buf);
-    }
-
-    ImGui::SameLine();
-    ImGui::TextDisabled("(Tables: designs, gates)");
-
-    ImGui::Separator();
-
-    if (!s_->last_query.error.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, {1, 0.3f, 0.3f, 1});
-        ImGui::TextWrapped("Error: %s", s_->last_query.error.c_str());
-        ImGui::PopStyleColor();
-    }
-
-    if (s_->last_query.ok && !s_->last_query.columns.empty()) {
-        ImGui::Text("%d rows", (int)s_->last_query.rows.size());
-
-        int ncols = (int)s_->last_query.columns.size();
-        if (ImGui::BeginTable("##results", ncols,
-                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
-                              {0, ImGui::GetContentRegionAvail().y})) {
-
-            for (auto& col : s_->last_query.columns) {
-                ImGui::TableSetupColumn(col.c_str());
-            }
-            ImGui::TableHeadersRow();
-
-            for (auto& row : s_->last_query.rows) {
-                ImGui::TableNextRow();
-                for (int c = 0; c < ncols && c < (int)row.size(); c++) {
-                    ImGui::TableSetColumnIndex(c);
-                    ImGui::TextUnformatted(row[c].c_str());
-                }
-            }
-            ImGui::EndTable();
-        }
-    }
-}

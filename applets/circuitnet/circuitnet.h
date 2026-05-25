@@ -19,7 +19,6 @@ private:
     void draw_circuit_graph();
     void draw_module_view();
     void draw_statistics();
-    void draw_sql_console();
 
     void open_dataset(const std::string& dir);
     void select_design(int idx);
