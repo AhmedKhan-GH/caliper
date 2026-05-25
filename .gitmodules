@@ -47,3 +47,6 @@
 [submodule "third_party/slang"]
 	path = third_party/slang
 	url = https://github.com/MikePopoloski/slang.git
+[submodule "third_party/OpenROAD"]
+	path = third_party/OpenROAD
+	url = https://github.com/The-OpenROAD-Project/OpenROAD
