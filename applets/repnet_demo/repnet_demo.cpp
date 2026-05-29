@@ -1860,7 +1860,8 @@ static const char* kLeadNames12[] = {
 void RepNetDemoApplet::draw_activation_detail() {
     auto& s = *s_;
 
-    if (!s.inference.valid || s.detail_acts.empty()) {
+    if (!s.inference.valid || s.detail_acts.empty()
+        || s.inference_sample_idx != s.selected) {
         ImGui::TextDisabled("Load a model and select a sample to view activations.");
         return;
     }
@@ -2107,8 +2108,7 @@ void RepNetDemoApplet::draw_activation_detail() {
 
         ImGui::PushID(i);
 
-        // Classifier logits / output probs — heatmap field with class labels,
-        // using softmax-normalized values so the colormap always spans full range.
+        // Classifier logits / output probs — color intensity scales with weight
         if ((i == 7 || i == 8) && s.detail_acts[i].defined() && s.detail_acts[i].numel() == 2) {
             auto vals = s.detail_acts[i].contiguous().to(torch::kCPU, torch::kFloat);
             auto va = vals.accessor<float, 1>();
@@ -2123,7 +2123,6 @@ void RepNetDemoApplet::draw_activation_detail() {
                 p0 = e0 / es; p1 = e1 / es;
             }
 
-            // Map through standard non-diverging colormap with fixed [0,1] range
             uint8_t c0r, c0g, c0b, c1r, c1g, c1b;
             heatmap::colormap(p0, c0r, c0g, c0b, false);
             heatmap::colormap(p1, c1r, c1g, c1b, false);
@@ -2135,25 +2134,58 @@ void RepNetDemoApplet::draw_activation_detail() {
             else
                 ImGui::TextDisabled("Normal: %.4f  PE: %.4f", v0, v1);
 
-            float field_h = 32.0f;
-            float half_w = hm_w * 0.5f;
             ImVec2 pos = ImGui::GetCursorScreenPos();
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
-            dl->AddRectFilled(pos,
-                ImVec2(pos.x + half_w, pos.y + field_h),
-                IM_COL32(c0r, c0g, c0b, 255));
-            dl->AddRectFilled(ImVec2(pos.x + half_w, pos.y),
-                ImVec2(pos.x + hm_w, pos.y + field_h),
-                IM_COL32(c1r, c1g, c1b, 255));
+            if (i == 7) {
+                // Classifier logits — equal-width cells, color = activation weight
+                float field_h = 32.0f;
+                float half_w = hm_w * 0.5f;
 
-            dl->AddText(ImVec2(pos.x + 6, pos.y + 9),
-                IM_COL32(255, 255, 255, 230), "Normal");
-            ImVec2 pe_ts = ImGui::CalcTextSize("PE");
-            dl->AddText(ImVec2(pos.x + hm_w - pe_ts.x - 6, pos.y + 9),
-                IM_COL32(255, 255, 255, 230), "PE");
+                dl->AddRectFilled(pos,
+                    ImVec2(pos.x + half_w, pos.y + field_h),
+                    IM_COL32(c0r, c0g, c0b, 255));
+                dl->AddRectFilled(ImVec2(pos.x + half_w, pos.y),
+                    ImVec2(pos.x + hm_w, pos.y + field_h),
+                    IM_COL32(c1r, c1g, c1b, 255));
 
-            ImGui::Dummy(ImVec2(hm_w, field_h));
+                char lbl0[48], lbl1[48];
+                std::snprintf(lbl0, sizeof(lbl0), "Normal %.3f", v0);
+                std::snprintf(lbl1, sizeof(lbl1), "PE %.3f", v1);
+                dl->AddText(ImVec2(pos.x + 6, pos.y + 9),
+                    IM_COL32(255, 255, 255, 220), lbl0);
+                ImVec2 ts1 = ImGui::CalcTextSize(lbl1);
+                dl->AddText(ImVec2(pos.x + hm_w - ts1.x - 6, pos.y + 9),
+                    IM_COL32(255, 255, 255, 220), lbl1);
+
+                ImGui::Dummy(ImVec2(hm_w, field_h));
+            } else {
+                // Output probabilities — width proportional to probability
+                float field_h = 38.0f;
+                float w0 = hm_w * p0;
+
+                dl->AddRectFilled(pos,
+                    ImVec2(pos.x + w0, pos.y + field_h),
+                    IM_COL32(c0r, c0g, c0b, 255));
+                dl->AddRectFilled(ImVec2(pos.x + w0, pos.y),
+                    ImVec2(pos.x + hm_w, pos.y + field_h),
+                    IM_COL32(c1r, c1g, c1b, 255));
+
+                dl->AddLine(ImVec2(pos.x + w0, pos.y),
+                    ImVec2(pos.x + w0, pos.y + field_h),
+                    IM_COL32(255, 255, 255, 100), 1.5f);
+
+                char lbl0[48], lbl1[48];
+                std::snprintf(lbl0, sizeof(lbl0), "Normal %.1f%%", p0 * 100);
+                std::snprintf(lbl1, sizeof(lbl1), "PE %.1f%%", p1 * 100);
+                dl->AddText(ImVec2(pos.x + 6, pos.y + 12),
+                    IM_COL32(255, 255, 255, 230), lbl0);
+                ImVec2 ts1 = ImGui::CalcTextSize(lbl1);
+                dl->AddText(ImVec2(pos.x + hm_w - ts1.x - 6, pos.y + 12),
+                    IM_COL32(255, 255, 255, 230), lbl1);
+
+                ImGui::Dummy(ImVec2(hm_w, field_h));
+            }
 
             ImGui::Spacing();
             ImGui::Separator();
