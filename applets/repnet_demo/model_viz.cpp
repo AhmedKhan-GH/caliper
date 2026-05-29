@@ -98,90 +98,58 @@ void ModelVisualizer::build_repnet_graph() {
         edges_.push_back({a, b, lbl});
     };
 
-    // ── Input ──
+    // ── Input ── (node 0)
     int n_in = add("Input: 12-Lead ECG", "input",
         {"12 leads: I, II, III, aVR, aVL, aVF, V1-V6",
          "250 Hz sampling, up to 2500 samples/lead"},
         "(B, 12, T)", 0);
 
-    // ── Stage 0 ──
-    float s0_top = y;
-    int n_c0 = add("PerLeadConvBlock  [x12 leads]", "conv",
-        {"main:  Conv1d(1->48, k=7) + BN + ReLU -> Conv1d(48->48, k=7) + BN",
-         "skip:  Conv1d(1->48, k=1) + BN",
-         "merge: Add(main, skip) -> ReLU -> Dropout(0.064) -> MaxPool(2)"},
-        "(B,12,48,T/2)", 16944, STAGE_GAP);
-    int n_a0 = add("CrossLeadAttention", "attention",
-        {"pool:  AdaptiveAvgPool1d(1) -> 12 tokens of dim 48",
-         "attn:  MultiheadAttention(embed=48, heads=4)",
-         "gate:  residual + LayerNorm -> Linear(48->48) + Sigmoid -> x*gate"},
-        "(B,12,48,T/2)", 11856);
-    float s0_bot = nodes_.back().y + nodes_.back().h;
+    // ── Per-Lead CNN Backbone ── (nodes 1-3)
+    float bb_top = y;
+    int n_s0 = add("Per-Lead Conv1d Stage 0", "conv",
+        {"Conv1d(1->16, k=31, stride=2, pad=15, bias=False)",
+         "BatchNorm1d(16) + Mish activation",
+         "Per-lead: same weights shared across all 12 leads"},
+        "(B, 12, 16, T/2)", 528, STAGE_GAP);
+    int n_s1 = add("Per-Lead Conv1d Stage 1", "conv",
+        {"Conv1d(16->32, k=21, stride=2, pad=10, bias=False)",
+         "BatchNorm1d(32) + Mish activation"},
+        "(B, 12, 32, T/4)", 10816);
+    int n_s2 = add("Per-Lead Conv1d Stage 2", "conv",
+        {"Conv1d(32->48, k=11, stride=2, pad=5, bias=False)",
+         "BatchNorm1d(48) + Mish activation"},
+        "(B, 12, 48, T/8)", 16992);
+    float bb_bot = nodes_.back().y + nodes_.back().h;
 
-    // ── Stage 1 ──
-    float s1_top = y;
-    int n_c1 = add("PerLeadConvBlock  [x12 leads]", "conv",
-        {"main:  Conv1d(48->96, k=5) + BN + ReLU -> Conv1d(96->96, k=5) + BN",
-         "skip:  Conv1d(48->96, k=1) + BN",
-         "merge: Add(main, skip) -> ReLU -> Dropout(0.064) -> MaxPool(2)"},
-        "(B,12,96,T/4)", 74592, STAGE_GAP);
-    int n_a1 = add("CrossLeadAttention", "attention",
-        {"pool:  AdaptiveAvgPool1d(1) -> 12 tokens of dim 96",
-         "attn:  MultiheadAttention(embed=96, heads=4)",
-         "gate:  residual + LayerNorm -> Linear(96->96) + Sigmoid -> x*gate"},
-        "(B,12,96,T/4)", 46752);
-    float s1_bot = nodes_.back().y + nodes_.back().h;
-
-    // ── Stage 2 ──
-    float s2_top = y;
-    int n_c2 = add("PerLeadConvBlock  [x12 leads]", "conv",
-        {"main:  Conv1d(96->192, k=3) + BN + ReLU -> Conv1d(192->192, k=3) + BN",
-         "skip:  Conv1d(96->192, k=1) + BN",
-         "merge: Add(main, skip) -> ReLU -> Dropout(0.064) -> MaxPool(2)"},
-        "(B,12,192,T/8)", 186048, STAGE_GAP);
-    int n_a2 = add("CrossLeadAttention", "attention",
-        {"pool:  AdaptiveAvgPool1d(1) -> 12 tokens of dim 192",
-         "attn:  MultiheadAttention(embed=192, heads=4)",
-         "gate:  residual + LayerNorm -> Linear(192->192) + Sigmoid -> x*gate"},
-        "(B,12,192,T/8)", 185664);
-    float s2_bot = nodes_.back().y + nodes_.back().h;
-
-    // ── Fusion + Head ──
-    int n_reshape = add("Lead Concatenation", "fusion",
-        {"Reshape: (B,12,192,T/8) -> (B, 2304, T/8)"},
-        "(B,2304,T/8)", 0, STAGE_GAP);
-    int n_fuse = add("Fusion Conv1d", "fusion",
-        {"Conv1d(2304->192, k=1) + BatchNorm + ReLU"},
-        "(B,192,T/8)", 442944);
+    // ── Pooling + Head ── (nodes 4-8)
     int n_gap = add("Global Average Pooling", "pool",
-        {"AdaptiveAvgPool1d(1): collapse temporal -> single vector"},
-        "(B,192)", 0);
-    int n_drop = add("Dropout (p=0.064)", "dropout", {}, "(B,192)", 0);
-    int n_fc = add("Classifier: Linear(192 -> 2)", "linear",
-        {"Output classes: PE (Pulmonary Embolism) vs Normal"},
-        "(B,2)", 386);
+        {"AdaptiveAvgPool1d(1): collapse temporal dim per lead"},
+        "(B, 12, 48)", 0, STAGE_GAP);
+    int n_concat = add("Lead Concatenation", "fusion",
+        {"Reshape: (B, 12, 48) -> (B, 576)"},
+        "(B, 576)", 0);
+    int n_drop = add("Dropout (p=0.15)", "dropout", {},
+        "(B, 576)", 0);
+    int n_fc = add("Classifier: Linear(576 -> 2)", "linear",
+        {"Output classes: PE (Preeclampsia) vs Normal"},
+        "(B, 2)", 1154);
     int n_out = add("Diagnosis Output", "input",
         {"Softmax probability: PE vs Normal"},
-        "(B,2)", 0);
+        "(B, 2)", 0);
 
     // ── Edges ──
-    edge(n_in,      n_c0,      "unsqueeze -> (B,12,1,T)");
-    edge(n_c0,      n_a0,      "(B,12,48,T/2)");
-    edge(n_a0,      n_c1,      "(B,12,48,T/2)");
-    edge(n_c1,      n_a1,      "(B,12,96,T/4)");
-    edge(n_a1,      n_c2,      "(B,12,96,T/4)");
-    edge(n_c2,      n_a2,      "(B,12,192,T/8)");
-    edge(n_a2,      n_reshape, "(B,12,192,T/8)");
-    edge(n_reshape, n_fuse,    "(B,2304,T/8)");
-    edge(n_fuse,    n_gap,     "(B,192,T/8)");
-    edge(n_gap,     n_drop,    "(B,192)");
-    edge(n_drop,    n_fc,      "(B,192)");
-    edge(n_fc,      n_out,     "(B,2)");
+    edge(n_in,     n_s0,    "reshape -> (B*12, 1, T)");
+    edge(n_s0,     n_s1,    "(B, 12, 16, T/2)");
+    edge(n_s1,     n_s2,    "(B, 12, 32, T/4)");
+    edge(n_s2,     n_gap,   "(B, 12, 48, T/8)");
+    edge(n_gap,    n_concat,"(B, 12, 48)");
+    edge(n_concat, n_drop,  "(B, 576)");
+    edge(n_drop,   n_fc,    "(B, 576)");
+    edge(n_fc,     n_out,   "(B, 2)");
 
-    // ── Stages ──
-    stages_.push_back({s0_top, s0_bot, "Stage 0 — QRS-level features (RF = 32 samples)"});
-    stages_.push_back({s1_top, s1_bot, "Stage 1 — ST-level features (RF = 40 samples)"});
-    stages_.push_back({s2_top, s2_bot, "Stage 2 — Morphology-level features (RF = 49 samples)"});
+    // ── Stage group ──
+    stages_.push_back({bb_top, bb_bot,
+        "Per-Lead CNN Backbone \xe2\x80\x94 shared weights across 12 leads"});
 
     built_ = true;
 }

@@ -165,11 +165,14 @@ void butterworth_highpass(std::vector<float>& data, float cutoff_hz, float sampl
         data[i] = (float)buf[pad + i];
 }
 
-void process(ECGSample& sample, const ProcessingParams& params) {
+void process(ECGSample& sample, const ProcessingParams& params,
+             const std::atomic<bool>* cancel = nullptr) {
     sample.processed.resize(NUM_LEADS);
     sample.stats.resize(NUM_LEADS);
 
     for (int lead = 0; lead < NUM_LEADS; lead++) {
+        if (cancel && cancel->load(std::memory_order_relaxed)) return;
+
         sample.processed[lead] = sample.raw[lead];
         auto& sig = sample.processed[lead];
 
@@ -342,14 +345,16 @@ static void release_textures(std::vector<GLuint>& texs) {
 
 class BackgroundProcessor {
 public:
-    BackgroundProcessor() : stop_(false) {
+    BackgroundProcessor() {
+        stop_.store(false);
         worker_ = std::thread(&BackgroundProcessor::run, this);
     }
 
     ~BackgroundProcessor() {
+        stop_.store(true);
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            stop_ = true;
+            queue_.clear();
         }
         cv_.notify_one();
         if (worker_.joinable()) worker_.join();
@@ -390,8 +395,8 @@ private:
 
             {
                 std::unique_lock<std::mutex> lk(mtx_);
-                cv_.wait(lk, [&] { return stop_ || !queue_.empty(); });
-                if (stop_ && queue_.empty()) return;
+                cv_.wait(lk, [&] { return stop_.load() || !queue_.empty(); });
+                if (stop_.load()) return;
                 if (queue_.empty()) continue;
 
                 idx = queue_.front();
@@ -401,12 +406,16 @@ private:
                 loader = loader_;
             }
 
+            if (stop_) { processed_count_.fetch_add(1); continue; }
+
             if (!sample->loaded && loader) {
                 loader->load(*sample);
             }
 
+            if (stop_) { processed_count_.fetch_add(1); continue; }
+
             if (sample->loaded) {
-                dsp::process(*sample, params);
+                dsp::process(*sample, params, &stop_);
             }
 
             processed_count_.fetch_add(1);
@@ -416,7 +425,7 @@ private:
     std::thread worker_;
     std::mutex mtx_;
     std::condition_variable cv_;
-    bool stop_;
+    std::atomic<bool> stop_;
     std::deque<int> queue_;
     std::vector<ECGSample>* samples_ = nullptr;
     IDatasetLoader* loader_ = nullptr;
@@ -606,7 +615,7 @@ struct RepNetDemoApplet::State {
         int true_class = -1;   // 0=Normal, 1=PE, -1=unknown
         int pred_class = -1;
         float prob_pe = 0;
-        float gap_feat[192] = {};
+        float gap_feat[576] = {};
     };
     std::vector<SampleResult> batch_results;
     std::vector<float> pca_x, pca_y;
@@ -886,16 +895,19 @@ void RepNetDemoApplet::select_sample(int idx) {
 
     if (samp.loaded && samp.processed_valid) return;
 
-    if (samp.loaded) {
+    // If the background processor is busy (e.g. after a params change),
+    // don't process on the main thread — it races with the bg thread.
+    // Just prioritize this sample in the queue instead.
+    if (samp.loaded && !s.bg->busy()) {
         dsp::process(samp, s.params);
         return;
     }
 
-    // Need to load from disk — prioritize without clearing existing queue
     std::vector<int> to_load;
     to_load.push_back(idx);
     for (int i : outward_indices(idx, 20, (int)s.samples.size())) {
-        if (!s.samples[i].loaded) to_load.push_back(i);
+        if (!s.samples[i].loaded || !s.samples[i].processed_valid)
+            to_load.push_back(i);
     }
     s.bg->prioritize(to_load);
 }
@@ -1208,18 +1220,22 @@ void RepNetDemoApplet::draw_leads() {
                 ImPlotAxisFlags_NoLabel, ImPlotAxisFlags_NoLabel);
             ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Once);
 
-            if (samp && lead < (int)samp->processed.size() && !samp->processed[lead].empty()) {
-                auto& st = samp->stats[lead];
-                float margin = (st.max_val - st.min_val) * 0.1f;
-                ImPlot::SetupAxisLimits(ImAxis_Y1, st.min_val - margin, st.max_val + margin,
-                    ImGuiCond_Always);
+            if (samp && lead < (int)samp->processed.size() && !samp->processed[lead].empty()
+                && lead < (int)samp->stats.size()) {
+                int plot_n = std::min(samp->num_samples, (int)samp->processed[lead].size());
+                if (plot_n > 0 && plot_n <= (int)s.time_axis.size()) {
+                    auto& st = samp->stats[lead];
+                    float margin = (st.max_val - st.min_val) * 0.1f;
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, st.min_val - margin, st.max_val + margin,
+                        ImGuiCond_Always);
 
-                ImPlot::Annotation(0.0, st.max_val, LEAD_COLORS[lead],
-                    ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
+                    ImPlot::Annotation(0.0, st.max_val, LEAD_COLORS[lead],
+                        ImVec2(5, 5), false, "%s", LEAD_NAMES[lead]);
 
-                ImPlot::PlotLine("##sig", s.time_axis.data(), samp->processed[lead].data(),
-                    samp->num_samples,
-                    ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead], ImPlotProp_LineWeight, 1.2f));
+                    ImPlot::PlotLine("##sig", s.time_axis.data(), samp->processed[lead].data(),
+                        plot_n,
+                        ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead], ImPlotProp_LineWeight, 1.2f));
+                }
             } else {
                 ImPlot::SetupAxisLimits(ImAxis_Y1, -1, 1, ImGuiCond_Once);
                 ImPlot::Annotation(0.0, 0.8, LEAD_COLORS[lead],
@@ -1499,29 +1515,29 @@ static torch::Tensor compute_grad_cam(torch::jit::Module& model,
                                        const torch::Tensor& input,
                                        int target_class,
                                        int input_length) {
+    int B = (int)input.size(0);
     int nl = (int)input.size(1);
-    torch::Tensor pre_reshape;
+    int T_in = (int)input.size(2);
+    torch::Tensor backbone_out;
 
     {
         torch::NoGradGuard no_grad;
-        auto x = input.unsqueeze(2);
-        auto stages_mod = model.attr("stages").toModule();
-        for (int si = 0; si < 3; si++) {
-            auto stage = stages_mod.attr(std::to_string(si)).toModule();
-            x = stage.attr("conv").toModule().forward({x}).toTensor();
-            x = stage.attr("attn").toModule().forward({x}).toTensor();
-        }
-        pre_reshape = x;
+        auto x = input.reshape({B * nl, 1, T_in});
+        x = model.attr("backbone").toModule().forward({x}).toTensor();
+        backbone_out = x;  // (B*nl, C, T')
     }
 
-    // Anchor gradients at pre-reshape where leads are separate: [1, C, nl, T]
-    auto A = pre_reshape.detach().clone();
+    int C = (int)backbone_out.size(1);
+    int Tp = (int)backbone_out.size(2);
+
+    // Reshape to (B, nl, C, T') and anchor gradients
+    auto A = backbone_out.reshape({B, nl, C, Tp}).detach().clone();
     A.requires_grad_(true);
 
-    auto sizes = A.sizes();
-    auto x = A.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
-    x = model.attr("fuse").toModule().forward({x}).toTensor();
-    x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
+    // Continue forward: pool, reshape, dropout, FC
+    auto a_flat = A.reshape({B * nl, C, Tp});
+    auto x = model.attr("pool").toModule().forward({a_flat}).toTensor().squeeze(-1);
+    x = x.reshape({B, nl * C});
     x = model.attr("head_drop").toModule().forward({x}).toTensor();
     auto logits = model.attr("fc").toModule().forward({x}).toTensor();
 
@@ -1535,31 +1551,29 @@ static torch::Tensor compute_grad_cam(torch::jit::Module& model,
         return {};
     }
 
-    // A: [1, C, nl, T], grads: [1, C, nl, T]
-    // Per-lead Grad-CAM: for each lead l, alpha = GAP over T of grad[:,:,l,:]
-    int C = (int)sizes[1];
-    int T = (int)sizes[3];
+    // A: [1, nl, C, T'], grads: [1, nl, C, T']
+    // Per-lead Grad-CAM: alpha = GAP over T' of grad, cam = sum(alpha * feat, dim=C)
     auto result = torch::zeros({nl, input_length});
     auto res_a = result.accessor<float, 2>();
 
     for (int l = 0; l < nl; l++) {
-        auto grad_l = grads[0].select(2, l);  // [1, C, T]
-        auto feat_l = A.select(2, l);          // [1, C, T]
+        auto grad_l = grads[0].select(1, l);  // [1, C, T']
+        auto feat_l = A.select(1, l);          // [1, C, T']
         auto alpha = grad_l.mean(2, true);     // [1, C, 1]
-        auto cam = (alpha * feat_l).sum(1).squeeze(0); // [T]
+        auto cam = (alpha * feat_l).sum(1).squeeze(0); // [T']
         auto cam_a = cam.accessor<float, 1>();
 
         for (int i = 0; i < input_length; i++) {
-            float src = (float)i * (T - 1) / std::max(input_length - 1, 1);
-            int lo = std::min((int)src, T - 1);
-            int hi = std::min(lo + 1, T - 1);
+            float src = (float)i * (Tp - 1) / std::max(input_length - 1, 1);
+            int lo = std::min((int)src, Tp - 1);
+            int hi = std::min(lo + 1, Tp - 1);
             float frac = src - lo;
             res_a[l][i] = cam_a[lo] * (1.0f - frac) + cam_a[hi] * frac;
         }
     }
 
-    std::fprintf(stderr, "[grad-cam] OK: C=%d T=%d range=[%.4f, %.4f]\n",
-        C, T, result.min().item<float>(), result.max().item<float>());
+    std::fprintf(stderr, "[grad-cam] OK: C=%d T'=%d range=[%.4f, %.4f]\n",
+        C, Tp, result.min().item<float>(), result.max().item<float>());
 
     return result.detach();
 }
@@ -1571,7 +1585,13 @@ static void run_step_inference(torch::jit::Module& model,
     if (!samp.processed_valid) return;
 
     const int nl = (int)samp.processed.size();
+    if (nl < NUM_LEADS) return;
     const int n = samp.num_samples;
+    if (n <= 0) return;
+
+    for (int l = 0; l < nl; l++)
+        if ((int)samp.processed[l].size() < n) return;
+
     auto input = torch::zeros({1, nl, n});
     {
         auto acc = input.accessor<float, 3>();
@@ -1582,56 +1602,59 @@ static void run_step_inference(torch::jit::Module& model,
 
     inf.valid = false;
     inf.layers.clear();
-    inf.layers.resize(13);
+    inf.layers.resize(9);
     inf.sample_id = samp.file_id;
     detail.clear();
-    detail.resize(13);
+    detail.resize(9);
 
     inf.layers[0] = tensor_stats(input);
 
     try {
         torch::Tensor logits;
 
-        // Forward pass without gradients for layer stats and detail tensors
         {
             torch::NoGradGuard no_grad;
-            auto x = input.unsqueeze(2);
-            auto stages_mod = model.attr("stages").toModule();
+            // Reshape to per-lead: (B*12, 1, T)
+            auto x = input.reshape({1 * nl, 1, n});
 
+            // Step through backbone in groups of 3 (Conv + BN + Mish = one stage)
+            auto backbone = model.attr("backbone").toModule();
             for (int si = 0; si < 3; si++) {
-                auto stage = stages_mod.attr(std::to_string(si)).toModule();
-                x = stage.attr("conv").toModule().forward({x}).toTensor();
-                inf.layers[1 + si * 2] = tensor_stats(x);
-                detail[1 + si * 2] = x.squeeze(0);
-                x = stage.attr("attn").toModule().forward({x}).toTensor();
-                inf.layers[2 + si * 2] = tensor_stats(x);
-                detail[2 + si * 2] = x.squeeze(0);
+                int base = si * 3;
+                x = backbone.attr(std::to_string(base)).toModule().forward({x}).toTensor();
+                x = backbone.attr(std::to_string(base + 1)).toModule().forward({x}).toTensor();
+                x = backbone.attr(std::to_string(base + 2)).toModule().forward({x}).toTensor();
+                // Reshape to (nl, C, T') for stats and detail
+                auto stage_out = x.reshape({nl, x.size(1), x.size(2)});
+                inf.layers[1 + si] = tensor_stats(stage_out.unsqueeze(0));
+                detail[1 + si] = stage_out;  // (12, C, T')
             }
 
-            auto sizes = x.sizes();
-            x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
-            inf.layers[7] = tensor_stats(x);
-            detail[7] = x.squeeze(0);
+            // Pool per-lead
+            x = model.attr("pool").toModule().forward({x}).toTensor().squeeze(-1);
+            auto pool_out = x.reshape({nl, x.size(1)});  // (12, 48)
+            inf.layers[4] = tensor_stats(pool_out.unsqueeze(0));
+            detail[4] = pool_out;
 
-            x = model.attr("fuse").toModule().forward({x}).toTensor();
-            inf.layers[8] = tensor_stats(x);
-            detail[8] = x.squeeze(0);
+            // Lead concatenation: (1, 576)
+            x = x.reshape({1, nl * x.size(1)});
+            inf.layers[5] = tensor_stats(x);
+            detail[5] = x.squeeze(0);
 
-            x = model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
-            inf.layers[9] = tensor_stats(x);
-            detail[9] = x.squeeze(0);
-
+            // Dropout
             x = model.attr("head_drop").toModule().forward({x}).toTensor();
-            inf.layers[10] = tensor_stats(x);
-            detail[10] = x.squeeze(0);
+            inf.layers[6] = tensor_stats(x);
+            detail[6] = x.squeeze(0);
 
+            // FC
             logits = model.attr("fc").toModule().forward({x}).toTensor();
-            inf.layers[11] = tensor_stats(logits);
-            detail[11] = logits.squeeze(0);
+            inf.layers[7] = tensor_stats(logits);
+            detail[7] = logits.squeeze(0);
 
+            // Softmax
             auto probs = torch::softmax(logits, 1);
-            inf.layers[12] = tensor_stats(probs);
-            detail[12] = probs.squeeze(0);
+            inf.layers[8] = tensor_stats(probs);
+            detail[8] = probs.squeeze(0);
             auto pa = probs.accessor<float, 2>();
             inf.probs[0] = pa[0][0];
             inf.probs[1] = pa[0][1];
@@ -1650,14 +1673,13 @@ static void run_step_inference(torch::jit::Module& model,
             inf.probs[0] = pa[0][0];
             inf.probs[1] = pa[0][1];
             inf.result_class = pa[0][1] > pa[0][0] ? 1 : 0;
-            inf.layers[12] = tensor_stats(probs);
+            inf.layers[8] = tensor_stats(probs);
             inf.valid = true;
         } catch (const std::exception& e2) {
             std::fprintf(stderr, "[model] Inference failed: %s\n", e2.what());
         }
     }
 
-    // Grad-CAM pass — separate try/catch so failures don't lose the inference results
     if (inf.valid) {
         try {
             auto cam = compute_grad_cam(model, input, 1, n);
@@ -1672,41 +1694,20 @@ static void extract_weights(torch::jit::Module& model,
                             std::vector<WeightEntry>& out) {
     out.clear();
     try {
-        auto stages = model.attr("stages").toModule();
+        auto backbone = model.attr("backbone").toModule();
         const char* stage_names[] = {"Stage 0", "Stage 1", "Stage 2"};
         for (int i = 0; i < 3; i++) {
-            auto stage = stages.attr(std::to_string(i)).toModule();
-            auto conv = stage.attr("conv").toModule();
-
-            auto c1w = conv.attr("conv1").toModule().attr("weight").toTensor();
-            out.push_back({std::string(stage_names[i]) + " Conv1 kernels "
-                + std::to_string(c1w.size(0)) + "x" + std::to_string(c1w.size(1))
-                + "x" + std::to_string(c1w.size(2)),
-                c1w.detach().flatten(0, 1), 0});
-
-            auto c2w = conv.attr("conv2").toModule().attr("weight").toTensor();
-            out.push_back({std::string(stage_names[i]) + " Conv2 kernels "
-                + std::to_string(c2w.size(0)) + "x" + std::to_string(c2w.size(1))
-                + "x" + std::to_string(c2w.size(2)),
-                c2w.detach().flatten(0, 1), 0});
-
-            auto attn = stage.attr("attn").toModule();
-            auto gate_w = attn.attr("gate").toModule().attr("0").toModule()
-                              .attr("weight").toTensor();
-            out.push_back({std::string(stage_names[i]) + " Attention gate "
-                + std::to_string(gate_w.size(0)) + "x" + std::to_string(gate_w.size(1)),
-                gate_w.detach(), 0});
+            auto conv = backbone.attr(std::to_string(i * 3)).toModule();
+            auto cw = conv.attr("weight").toTensor();
+            out.push_back({std::string(stage_names[i]) + " Conv1d kernels "
+                + std::to_string(cw.size(0)) + "x" + std::to_string(cw.size(1))
+                + "x" + std::to_string(cw.size(2)),
+                cw.detach().flatten(0, 1), 0});
         }
 
         auto fc_w = model.attr("fc").toModule().attr("weight").toTensor();
         out.push_back({"FC classifier " + std::to_string(fc_w.size(0))
             + "x" + std::to_string(fc_w.size(1)), fc_w.detach(), 0});
-
-        auto fuse = model.attr("fuse").toModule().attr("0").toModule();
-        auto fuse_w = fuse.attr("weight").toTensor();
-        out.push_back({"Fusion Conv1d " + std::to_string(fuse_w.size(0))
-            + "x" + std::to_string(fuse_w.size(1)),
-            fuse_w.detach().squeeze(-1), 0});
 
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[model] Weight extraction: %s\n", e.what());
@@ -1841,15 +1842,11 @@ void RepNetDemoApplet::draw_model_tab() {
 
 static const char* kLayerLabels[] = {
     "Input: 12-Lead ECG",
-    "Stage 0 — Conv Features",
-    "Stage 0 — After Attention",
-    "Stage 1 — Conv Features",
-    "Stage 1 — After Attention",
-    "Stage 2 — Conv Features",
-    "Stage 2 — After Attention",
-    "Lead Concatenation",
-    "Fusion Conv",
+    "Stage 0 — Conv + BN + Mish (k=31)",
+    "Stage 1 — Conv + BN + Mish (k=21)",
+    "Stage 2 — Conv + BN + Mish (k=11)",
     "Global Average Pool",
+    "Lead Concatenation",
     "Dropout",
     "Classifier (FC)",
     "Output Probabilities",
@@ -1891,9 +1888,9 @@ void RepNetDemoApplet::draw_activation_detail() {
     if (s.detail_texs_dirty || s.detail_lead_cached != s.detail_lead) {
         heatmap::release_textures(s.detail_texs);
         s.detail_texs.clear();
-        s.detail_texs.resize(13, 0);
+        s.detail_texs.resize(9, 0);
 
-        for (int i = 0; i < 13; i++) {
+        for (int i = 0; i < 9; i++) {
             if (!s.detail_acts[i].defined() || s.detail_acts[i].numel() == 0)
                 continue;
 
@@ -1945,12 +1942,14 @@ void RepNetDemoApplet::draw_activation_detail() {
         }
     }
 
-    // Count temporal subplot rows: waveform + each temporal activation layer
+    // Count temporal subplot rows: waveform + each activation layer with real
+    // temporal extent (exclude 2-element classifier/output — those are per-class,
+    // not temporal, and belong in the non-temporal section below).
     int n_subplot_rows = 0;
     std::vector<int> temporal_layers;
     if (has_samp && duration > 0.0f) {
         n_subplot_rows = 1; // waveform row
-        for (int i = 1; i < 13; i++) {
+        for (int i = 1; i < 9; i++) {
             if (!s.detail_acts[i].defined()) continue;
             auto& t = s.detail_acts[i];
             torch::Tensor t2d;
@@ -1958,7 +1957,7 @@ void RepNetDemoApplet::draw_activation_detail() {
             else if (t.dim() == 2) t2d = t;
             else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
             int cols = t2d.dim() >= 2 ? (int)t2d.size(1) : 1;
-            if (cols > 1 && s.detail_texs[i]) {
+            if (cols > 2 && s.detail_texs[i]) {
                 temporal_layers.push_back(i);
                 n_subplot_rows++;
             }
@@ -2010,10 +2009,18 @@ void RepNetDemoApplet::draw_activation_detail() {
             if (ImPlot::BeginPlot("##waveform", ImVec2(), ImPlotFlags_NoLegend)) {
                 auto& samp = s.samples[s.selected];
                 int lead = s.detail_lead;
-                auto& st = samp.stats[lead];
-                float margin = (st.max_val - st.min_val) * 0.1f;
-                float y_lo = st.min_val - margin;
-                float y_hi = st.max_val + margin;
+                bool lead_ok = lead < (int)samp.stats.size()
+                    && lead < (int)samp.processed.size()
+                    && !samp.processed[lead].empty();
+                int plot_n = lead_ok
+                    ? std::min(samp.num_samples, (int)samp.processed[lead].size()) : 0;
+                float y_lo = -1, y_hi = 1;
+                if (lead_ok) {
+                    auto& st = samp.stats[lead];
+                    float margin = (st.max_val - st.min_val) * 0.1f;
+                    y_lo = st.min_val - margin;
+                    y_hi = st.max_val + margin;
+                }
 
                 ImPlot::SetupAxes(nullptr, nullptr,
                     ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels,
@@ -2029,8 +2036,9 @@ void RepNetDemoApplet::draw_activation_detail() {
                         ImVec4(1, 1, 1, 0.45f));
                 }
 
+                if (plot_n > 0 && plot_n <= (int)s.time_axis.size())
                 ImPlot::PlotLine("##sig", s.time_axis.data(),
-                    samp.processed[lead].data(), samp.num_samples,
+                    samp.processed[lead].data(), plot_n,
                     ImPlotSpec(ImPlotProp_LineColor, LEAD_COLORS[lead],
                                ImPlotProp_LineWeight, 1.5f));
 
@@ -2065,6 +2073,13 @@ void RepNetDemoApplet::draw_activation_detail() {
                     ImPlot::Annotation(0.0, (double)rows, ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
                         ImVec2(5, 5), false, "%s", kLayerLabels[li]);
 
+                    if ((li == 7 || li == 8) && rows == 1) {
+                        ImPlot::Annotation(duration * 0.25, 0.5,
+                            ImVec4(1.0f, 1.0f, 1.0f, 0.9f), ImVec2(0, 0), true, "Normal");
+                        ImPlot::Annotation(duration * 0.75, 0.5,
+                            ImVec4(1.0f, 1.0f, 1.0f, 0.9f), ImVec2(0, 0), true, "PE");
+                    }
+
                     ImPlot::EndPlot();
                 }
             }
@@ -2074,7 +2089,7 @@ void RepNetDemoApplet::draw_activation_detail() {
     }
 
     // ── Non-temporal layers (GAP, Dropout, FC, Probs) ──
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 9; i++) {
         if (i == 0) continue;
         if (!s.detail_acts[i].defined()) continue;
 
@@ -2085,12 +2100,67 @@ void RepNetDemoApplet::draw_activation_detail() {
         else if (t.dim() == 3) t2d = t[std::min(s.detail_lead, (int)t.size(0)-1)];
         int cols = t2d.dim() >= 2 ? (int)t2d.size(1) : 1;
 
-        bool is_temporal = (cols > 1 && duration > 0.0f);
+        bool is_temporal = (cols > 2 && duration > 0.0f);
         if (is_temporal) continue;
 
         auto& la = s.inference.layers[i];
 
         ImGui::PushID(i);
+
+        // Classifier logits / output probs — heatmap field with class labels,
+        // using softmax-normalized values so the colormap always spans full range.
+        if ((i == 7 || i == 8) && s.detail_acts[i].defined() && s.detail_acts[i].numel() == 2) {
+            auto vals = s.detail_acts[i].contiguous().to(torch::kCPU, torch::kFloat);
+            auto va = vals.accessor<float, 1>();
+            float v0 = va[0], v1 = va[1];
+
+            float p0, p1;
+            if (i == 8) {
+                p0 = v0; p1 = v1;
+            } else {
+                float e0 = std::exp(v0), e1 = std::exp(v1);
+                float es = e0 + e1;
+                p0 = e0 / es; p1 = e1 / es;
+            }
+
+            // Map through standard non-diverging colormap with fixed [0,1] range
+            uint8_t c0r, c0g, c0b, c1r, c1g, c1b;
+            heatmap::colormap(p0, c0r, c0g, c0b, false);
+            heatmap::colormap(p1, c1r, c1g, c1b, false);
+
+            ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f}, "%s", kLayerLabels[i]);
+            ImGui::SameLine();
+            if (i == 8)
+                ImGui::TextDisabled("Normal: %.1f%%  PE: %.1f%%", v0 * 100, v1 * 100);
+            else
+                ImGui::TextDisabled("Normal: %.4f  PE: %.4f", v0, v1);
+
+            float field_h = 32.0f;
+            float half_w = hm_w * 0.5f;
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            dl->AddRectFilled(pos,
+                ImVec2(pos.x + half_w, pos.y + field_h),
+                IM_COL32(c0r, c0g, c0b, 255));
+            dl->AddRectFilled(ImVec2(pos.x + half_w, pos.y),
+                ImVec2(pos.x + hm_w, pos.y + field_h),
+                IM_COL32(c1r, c1g, c1b, 255));
+
+            dl->AddText(ImVec2(pos.x + 6, pos.y + 9),
+                IM_COL32(255, 255, 255, 230), "Normal");
+            ImVec2 pe_ts = ImGui::CalcTextSize("PE");
+            dl->AddText(ImVec2(pos.x + hm_w - pe_ts.x - 6, pos.y + 9),
+                IM_COL32(255, 255, 255, 230), "PE");
+
+            ImGui::Dummy(ImVec2(hm_w, field_h));
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::PopID();
+            continue;
+        }
 
         ImVec4 hdr_col = {0.6f, 0.8f, 1.0f, 1.0f};
         ImGui::TextColored(hdr_col, "%s", kLayerLabels[i]);
@@ -2257,20 +2327,14 @@ void RepNetDemoApplet::draw_statistics_tab() {
                         for (int i = 0; i < n; i++)
                             acc[0][l][i] = samp.processed[l][i];
 
-                    auto x = input.unsqueeze(2);
-                    auto stages_mod = s.model.attr("stages").toModule();
-                    for (int si = 0; si < 3; si++) {
-                        auto stage = stages_mod.attr(std::to_string(si)).toModule();
-                        x = stage.attr("conv").toModule().forward({x}).toTensor();
-                        x = stage.attr("attn").toModule().forward({x}).toTensor();
-                    }
-                    auto sizes = x.sizes();
-                    x = x.reshape({sizes[0], sizes[1] * sizes[2], sizes[3]});
-                    x = s.model.attr("fuse").toModule().forward({x}).toTensor();
-                    auto gap = s.model.attr("gap").toModule().forward({x}).toTensor().squeeze(-1);
+                    auto x = input.reshape({nl, 1, n});
+                    x = s.model.attr("backbone").toModule().forward({x}).toTensor();
+                    x = s.model.attr("pool").toModule().forward({x}).toTensor().squeeze(-1);
+                    // x: (12, 48) — concat to (1, 576)
+                    auto gap = x.reshape({1, nl * x.size(1)});
 
                     auto gap_acc = gap.accessor<float, 2>();
-                    int feat_dim = std::min(192, (int)gap.size(1));
+                    int feat_dim = std::min(576, (int)gap.size(1));
                     for (int fi = 0; fi < feat_dim; fi++)
                         r.gap_feat[fi] = gap_acc[0][fi];
 
@@ -2294,12 +2358,12 @@ void RepNetDemoApplet::draw_statistics_tab() {
                     if (r.pred_class >= 0) n_valid++;
 
                 if (n_valid >= 2) {
-                    auto mat = torch::zeros({n_valid, 192});
+                    auto mat = torch::zeros({n_valid, 576});
                     auto ma = mat.accessor<float, 2>();
                     int ri = 0;
                     for (auto& r : s.batch_results) {
                         if (r.pred_class < 0) continue;
-                        for (int f = 0; f < 192; f++)
+                        for (int f = 0; f < 576; f++)
                             ma[ri][f] = r.gap_feat[f];
                         ri++;
                     }
@@ -2506,7 +2570,7 @@ void RepNetDemoApplet::draw_statistics_tab() {
     // ── PCA Scatter ──
     if ((int)s.pca_x.size() >= 2) {
         ImGui::TextColored({0.6f, 0.8f, 1.0f, 1.0f},
-            "PCA — 192-dim Feature Space (GAP Layer)");
+            "PCA — 576-dim Feature Space (GAP Layer)");
         ImGui::Separator();
         ImGui::Spacing();
 
