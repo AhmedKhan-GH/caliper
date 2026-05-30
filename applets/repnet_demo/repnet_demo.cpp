@@ -1511,10 +1511,12 @@ static LayerActivation tensor_stats(const torch::Tensor& t) {
     return a;
 }
 
-static torch::Tensor compute_grad_cam(torch::jit::Module& model,
-                                       const torch::Tensor& input,
-                                       int target_class,
-                                       int input_length) {
+// Single-class Grad-CAM: returns (nl, input_length) with ReLU + [0,1] normalization.
+// Matches Python: relu(weights * activations).sum(channel), interpolated, normalized.
+static torch::Tensor compute_grad_cam_single(torch::jit::Module& model,
+                                              const torch::Tensor& input,
+                                              int target_class,
+                                              int input_length) {
     int B = (int)input.size(0);
     int nl = (int)input.size(1);
     int T_in = (int)input.size(2);
@@ -1530,52 +1532,67 @@ static torch::Tensor compute_grad_cam(torch::jit::Module& model,
     int C = (int)backbone_out.size(1);
     int Tp = (int)backbone_out.size(2);
 
-    // Reshape to (B, nl, C, T') and anchor gradients
-    auto A = backbone_out.reshape({B, nl, C, Tp}).detach().clone();
+    auto A = backbone_out.detach().clone();
     A.requires_grad_(true);
 
-    // Continue forward: pool, reshape, dropout, FC
-    auto a_flat = A.reshape({B * nl, C, Tp});
-    auto x = model.attr("pool").toModule().forward({a_flat}).toTensor().squeeze(-1);
+    auto x = model.attr("pool").toModule().forward({A}).toTensor().squeeze(-1);
     x = x.reshape({B, nl * C});
     x = model.attr("head_drop").toModule().forward({x}).toTensor();
     auto logits = model.attr("fc").toModule().forward({x}).toTensor();
 
-    auto target = logits.select(1, target_class).sum();
-    auto grads = torch::autograd::grad(
-        {target}, {A}, /*grad_outputs=*/{}, /*retain_graph=*/c10::nullopt,
-        /*create_graph=*/false, /*allow_unused=*/true);
+    logits.select(1, target_class).sum().backward();
 
-    if (grads.empty() || !grads[0].defined()) {
-        std::fprintf(stderr, "[grad-cam] No gradient on feature map\n");
-        return {};
-    }
+    auto grad = A.grad();
+    if (!grad.defined()) return {};
 
-    // A: [1, nl, C, T'], grads: [1, nl, C, T']
-    // Per-lead Grad-CAM: alpha = GAP over T' of grad, cam = sum(alpha * feat, dim=C)
+    // weights = GAP of gradients over temporal dim, cam = relu(sum(w * A, channel))
+    // A, grad: (B*nl, C, T')
+    auto weights = grad.mean(2, true);            // (B*nl, C, 1)
+    auto cam = torch::relu((weights * A).sum(1)); // (B*nl, T')
+    cam = cam.reshape({B, nl, Tp});               // (B, nl, T')
+
+    // Linear interpolation to input length
     auto result = torch::zeros({nl, input_length});
-    auto res_a = result.accessor<float, 2>();
-
-    for (int l = 0; l < nl; l++) {
-        auto grad_l = grads[0].select(1, l);  // [1, C, T']
-        auto feat_l = A.select(1, l);          // [1, C, T']
-        auto alpha = grad_l.mean(2, true);     // [1, C, 1]
-        auto cam = (alpha * feat_l).sum(1).squeeze(0); // [T']
-        auto cam_a = cam.accessor<float, 1>();
-
-        for (int i = 0; i < input_length; i++) {
-            float src = (float)i * (Tp - 1) / std::max(input_length - 1, 1);
-            int lo = std::min((int)src, Tp - 1);
-            int hi = std::min(lo + 1, Tp - 1);
-            float frac = src - lo;
-            res_a[l][i] = cam_a[lo] * (1.0f - frac) + cam_a[hi] * frac;
+    auto cam_sq = cam.squeeze(0); // (nl, T')
+    {
+        auto src_a = cam_sq.accessor<float, 2>();
+        auto dst_a = result.accessor<float, 2>();
+        for (int l = 0; l < nl; l++) {
+            for (int i = 0; i < input_length; i++) {
+                float pos = (float)i * (Tp - 1) / std::max(input_length - 1, 1);
+                int lo = std::min((int)pos, Tp - 1);
+                int hi = std::min(lo + 1, Tp - 1);
+                float frac = pos - lo;
+                dst_a[l][i] = src_a[l][lo] * (1.0f - frac) + src_a[l][hi] * frac;
+            }
         }
     }
 
-    std::fprintf(stderr, "[grad-cam] OK: C=%d T'=%d range=[%.4f, %.4f]\n",
-        C, Tp, result.min().item<float>(), result.max().item<float>());
+    // Per-sample [0,1] normalization
+    float cmin = result.min().item<float>();
+    float cmax = result.max().item<float>();
+    if (cmax > cmin)
+        result = (result - cmin) / (cmax - cmin);
 
     return result.detach();
+}
+
+// Bidirectional Grad-CAM: cam_PE - cam_Normal (diverging, red=PE, blue=Normal).
+static torch::Tensor compute_grad_cam(torch::jit::Module& model,
+                                       const torch::Tensor& input,
+                                       int input_length) {
+    auto cam_pe = compute_grad_cam_single(model, input, 1, input_length);
+    if (!cam_pe.defined() || cam_pe.numel() == 0) return {};
+
+    auto cam_norm = compute_grad_cam_single(model, input, 0, input_length);
+    if (!cam_norm.defined() || cam_norm.numel() == 0) return cam_pe;
+
+    auto diff = cam_pe - cam_norm;
+
+    std::fprintf(stderr, "[grad-cam] bidirectional OK: range=[%.4f, %.4f]\n",
+        diff.min().item<float>(), diff.max().item<float>());
+
+    return diff.detach();
 }
 
 static void run_step_inference(torch::jit::Module& model,
@@ -1682,7 +1699,7 @@ static void run_step_inference(torch::jit::Module& model,
 
     if (inf.valid) {
         try {
-            auto cam = compute_grad_cam(model, input, 1, n);
+            auto cam = compute_grad_cam(model, input, n);
             detail[0] = cam;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "[grad-cam] Failed: %s\n", e.what());
