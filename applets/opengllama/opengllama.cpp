@@ -487,9 +487,15 @@ void OpenGllamaApplet::draw_inference_view() {
             bool have_heatmap = ctx_text_heatmap_mode_ != THM_NONE
                 && n_gen > 0 && n_tok > 1 && !agg_snap.empty();
 
-            float text_h = std::min(ImGui::GetContentRegionAvail().y * 0.4f, 200.0f);
-            ImGui::BeginChild("##text_output", ImVec2(0, text_h), ImGuiChildFlags_Borders,
+            ImGui::BeginChild("##text_output", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY,
                 ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+            {
+                static bool was_running = false;
+                if (inference_running_ && !was_running)
+                    ImGui::SetScrollY(0.0f);
+                was_running = inference_running_;
+            }
 
             if (have_heatmap) {
                 float wrap_width = ImGui::GetContentRegionAvail().x;
@@ -697,7 +703,9 @@ void OpenGllamaApplet::draw_inference_view() {
                 }
             }
 
-            if (inference_running_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f)
+            bool at_bottom = ImGui::GetScrollMaxY() <= 0.0f
+                || ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40.0f;
+            if (inference_running_ && at_bottom)
                 ImGui::SetScrollHereY(1.0f);
             ImGui::EndChild();
         }
@@ -807,23 +815,27 @@ void OpenGllamaApplet::draw_inference_view() {
                 ImGui::Combo("##live_view", &live_attn_view_, live_items, 2);
             }
 
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            ImGui::SliderFloat("##live_scale", &live_attn_scale_, 0.1f, 10.0f, "Scale %.1f");
+
             if (live_attn_view_ == 1 && has_swa) {
                 draw_attn_tape("live_swa", "Sliding Window Layers",
                     "SWA layers only — local attention pattern",
-                    cached_live_swa_, cached_live_swa_n_lay_, cached_live_swa_n_kv_, true);
+                    cached_live_swa_, cached_live_swa_n_lay_, cached_live_swa_n_kv_, true, live_attn_scale_);
             } else if (live_attn_view_ == 2 && has_swa) {
                 draw_attn_tape("live_full", "Full Attention Layers",
                     "Full-context layers only — global attention pattern",
-                    cached_live_full_, cached_live_full_n_lay_, cached_live_full_n_kv_, true);
+                    cached_live_full_, cached_live_full_n_lay_, cached_live_full_n_kv_, true, live_attn_scale_);
             } else if (live_attn_view_ == 0 && has_recurrent_layers_ && cached_live_attn_only_n_lay_ > 0) {
                 draw_attn_tape("live_attn", "Attention Layers",
                     "Attention layers only — recurrent layers hidden",
-                    cached_live_attn_only_, cached_live_attn_only_n_lay_, cached_live_attn_only_n_kv_, true);
+                    cached_live_attn_only_, cached_live_attn_only_n_lay_, cached_live_attn_only_n_kv_, true, live_attn_scale_);
             } else {
                 if (cached_attn_valid_ && !cached_attn_.layer_attn.empty()) {
                     draw_attn_tape("live_attn", "All Layers",
                         "Where the current token attends — bright = high attention weight",
-                        cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true);
+                        cached_attn_.layer_attn, cached_attn_n_lay_, cached_attn_n_kv_, true, live_attn_scale_);
                 } else {
                     static const std::vector<std::vector<float>> empty_data;
                     draw_attn_tape("live_attn", "All Layers",
@@ -848,23 +860,27 @@ void OpenGllamaApplet::draw_inference_view() {
                 ImGui::Combo("##focus_view", &focus_attn_view_, focus_items, 2);
             }
 
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            ImGui::SliderFloat("##focus_scale", &focus_attn_scale_, 0.1f, 10.0f, "Scale %.1f");
+
             if (focus_attn_view_ == 1 && has_swa) {
                 draw_attn_tape("focus_swa", "Sliding Window Layers",
                     "SWA layers only — local attention with limited context window",
-                    cached_focus_swa_, cached_focus_swa_n_lay_, cached_focus_swa_n_gen_, true);
+                    cached_focus_swa_, cached_focus_swa_n_lay_, cached_focus_swa_n_gen_, true, focus_attn_scale_);
             } else if (focus_attn_view_ == 2 && has_swa) {
                 draw_attn_tape("focus_full", "Full Attention Layers",
                     "Full-context attention layers — global dependency tracking",
-                    cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true);
+                    cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true, focus_attn_scale_);
             } else if (focus_attn_view_ == 0 && has_recurrent_layers_ && cached_focus_attn_only_n_lay_ > 0) {
                 draw_attn_tape("attn_focus", "Attention Layers",
                     "Attention layers only — recurrent layers hidden",
-                    cached_focus_attn_only_, cached_focus_attn_only_n_lay_, cached_focus_attn_only_n_gen_, true);
+                    cached_focus_attn_only_, cached_focus_attn_only_n_lay_, cached_focus_attn_only_n_gen_, true, focus_attn_scale_);
             } else {
                 if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
                     draw_attn_tape("attn_focus", "All Layers",
                         "Non-sink attention focus — bright = focused, dark = diffuse",
-                        cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
+                        cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true, focus_attn_scale_);
                 } else {
                     static const std::vector<std::vector<float>> empty_data;
                     draw_attn_tape("attn_focus", "All Layers",
@@ -884,7 +900,7 @@ void OpenGllamaApplet::draw_inference_view() {
 void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
                                        const char* description,
                                        const std::vector<std::vector<float>>& layer_data,
-                                       int n_layers, int n_kv, bool auto_scroll) {
+                                       int n_layers, int n_kv, bool auto_scroll, float scale) {
     ImGui::Spacing();
     ImGui::SeparatorText(title);
     ImGui::TextDisabled("%s", description);
@@ -956,11 +972,9 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
 
         if (!all_vals.empty()) {
             std::sort(all_vals.begin(), all_vals.end());
-            int lo = (int)(all_vals.size() * 0.02f);
-            int hi = std::min((int)(all_vals.size() * 0.98f), (int)all_vals.size() - 1);
-            global_lo = all_vals[lo];
-            float global_hi = all_vals[hi];
-            global_range = (global_hi - global_lo) > 1e-30f ? (global_hi - global_lo) : 1.0f;
+            global_lo = 0.0f;
+            float global_hi = all_vals[std::min((int)(all_vals.size() * 0.995f), (int)all_vals.size() - 1)];
+            global_range = global_hi > 1e-30f ? global_hi : 1.0f;
         }
     }
 
@@ -969,7 +983,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
             float val = (l < (int)layer_data.size() && k < (int)layer_data[l].size())
                 ? layer_data[l][k] : 0.0f;
 
-            float norm = std::clamp((val - global_lo) / global_range, 0.0f, 1.0f);
+            float norm = std::clamp((val - global_lo) / global_range * scale, 0.0f, 1.0f);
 
             // 4-segment color ramp: dark blue -> cyan -> yellow-green -> white
             float r, g, b;
@@ -1658,6 +1672,20 @@ void OpenGllamaApplet::run_inference_blocking(
         context_tokens_.push_back(piece);
     }
 
+    int n_ctx = (int)llama_n_ctx(ctx_);
+    std::fprintf(stderr, "[opengllama] blocking inference: %d prompt tokens, n_ctx=%d, max_tokens=%d\n",
+        n_tokens, n_ctx, max_tokens_);
+
+    if (n_tokens >= n_ctx) {
+        std::fprintf(stderr, "[opengllama] ERROR: prompt (%d tokens) exceeds context window (%d)\n",
+            n_tokens, n_ctx);
+        std::lock_guard<std::mutex> lk(output_mutex_);
+        output_text_ = "ERROR: prompt exceeds context window";
+        inference_running_ = false;
+        inference_finished_ = true;
+        return;
+    }
+
     if (decode_prompt_chunked(tokens) != 0) {
         std::lock_guard<std::mutex> lk(output_mutex_);
         output_text_ = "ERROR: decode failed on prompt";
@@ -1688,13 +1716,23 @@ void OpenGllamaApplet::run_inference_blocking(
     uint32_t s = seed_ == 0 ? (uint32_t)time(nullptr) : seed_;
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(s));
 
-    int n_ctx = (int)llama_n_ctx(ctx_);
     int n_keep = std::min(n_tokens, n_ctx / 4);
     int pos = n_tokens;
     int gen_count = 0;
 
     while (inference_running_) {
         if (max_tokens_ > 0 && gen_count >= max_tokens_) break;
+
+        while (inference_running_ &&
+               inference_mode_ == InferenceMode::Paused &&
+               !step_requested_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        step_requested_ = false;
+        if (!inference_running_) break;
+
+        if (token_delay_ms_ > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(token_delay_ms_));
 
         llama_token best = llama_sampler_sample(smpl, ctx_, -1);
         if (llama_vocab_is_eog(vocab, best)) break;

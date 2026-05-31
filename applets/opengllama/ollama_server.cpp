@@ -40,6 +40,27 @@ static std::string iso8601_now() {
     return buf;
 }
 
+static std::string json_unescape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            switch (s[i + 1]) {
+                case '"':  out += '"';  ++i; break;
+                case '\\': out += '\\'; ++i; break;
+                case 'n':  out += '\n'; ++i; break;
+                case 'r':  out += '\r'; ++i; break;
+                case 't':  out += '\t'; ++i; break;
+                case '/':  out += '/';  ++i; break;
+                default:   out += s[i]; break;
+            }
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
 static std::string parse_json_string(const std::string& body, const std::string& key) {
     std::string needle = "\"" + key + "\"";
     auto pos = body.find(needle);
@@ -51,7 +72,21 @@ static std::string parse_json_string(const std::string& body, const std::string&
     while (end != std::string::npos && end > 0 && body[end - 1] == '\\')
         end = body.find('"', end + 1);
     if (end == std::string::npos) return "";
-    return body.substr(pos, end - pos);
+    return json_unescape(body.substr(pos, end - pos));
+}
+
+static int parse_json_int(const std::string& body, const std::string& key, int default_val) {
+    std::string needle = "\"" + key + "\"";
+    auto pos = body.find(needle);
+    if (pos == std::string::npos) return default_val;
+    pos += needle.size();
+    while (pos < body.size() && (body[pos] == ' ' || body[pos] == ':' || body[pos] == '\t'))
+        pos++;
+    size_t start = pos;
+    while (pos < body.size() && (body[pos] >= '0' && body[pos] <= '9'))
+        pos++;
+    if (pos == start) return default_val;
+    return std::atoi(body.substr(start, pos - start).c_str());
 }
 
 static bool parse_json_bool(const std::string& body, const std::string& key, bool default_val) {
@@ -205,6 +240,15 @@ void OllamaServer::setup_routes() {
         std::string prompt = parse_json_string(req.body, "prompt");
         bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
 
+        // Parse num_predict from options object (Ollama API convention)
+        int num_predict = parse_json_int(req.body, "num_predict", 0);
+        if (num_predict <= 0) num_predict = 2048;  // safety cap for non-streaming
+        int saved_max_tokens = applet_->max_tokens_;
+        applet_->max_tokens_ = num_predict;
+
+        std::fprintf(stderr, "[ollama-server] /api/generate: prompt=%zu chars, stream=%s, num_predict=%d\n",
+            prompt.size(), stream ? "true" : "false", num_predict);
+
         if (prompt.empty()) {
             request_active_ = false;
             res.status = 400;
@@ -233,16 +277,18 @@ void OllamaServer::setup_routes() {
                 "\"response\":\"" + json_escape(full_response) + "\","
                 "\"done\":true}";
             res.set_content(json, "application/json");
+            applet_->max_tokens_ = saved_max_tokens;
             request_active_ = false;
             return;
         }
 
         auto* active_flag = &request_active_;
         auto applet = applet_;
+        int saved_mt = saved_max_tokens;
         std::string mn = model_name;
 
         res.set_chunked_content_provider("application/x-ndjson",
-            [applet, prompt, mn, active_flag](size_t, httplib::DataSink& sink) -> bool {
+            [applet, prompt, mn, active_flag, saved_mt](size_t, httplib::DataSink& sink) -> bool {
                 applet->run_inference_blocking(prompt, [&](const std::string& piece) {
                     std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
                         "\"created_at\":\"" + iso8601_now() + "\","
@@ -257,6 +303,7 @@ void OllamaServer::setup_routes() {
                     "\"done\":true}\n";
                 sink.write(done_line.data(), done_line.size());
                 sink.done();
+                applet->max_tokens_ = saved_mt;
                 *active_flag = false;
                 return true;
             });
@@ -286,6 +333,11 @@ void OllamaServer::setup_routes() {
 
         std::string prompt = apply_chat_template(applet_->model_, msgs);
 
+        int num_predict = parse_json_int(req.body, "num_predict", 0);
+        if (num_predict <= 0) num_predict = 2048;
+        int saved_max_tokens = applet_->max_tokens_;
+        applet_->max_tokens_ = num_predict;
+
         std::string model_name = "opengllama";
         {
             std::string p = applet_->model_path();
@@ -307,16 +359,18 @@ void OllamaServer::setup_routes() {
                 "\"message\":{\"role\":\"assistant\",\"content\":\"" + json_escape(full_response) + "\"},"
                 "\"done\":true}";
             res.set_content(json, "application/json");
+            applet_->max_tokens_ = saved_max_tokens;
             request_active_ = false;
             return;
         }
 
         auto* active_flag = &request_active_;
         auto applet = applet_;
+        int saved_mt = saved_max_tokens;
         std::string mn = model_name;
 
         res.set_chunked_content_provider("application/x-ndjson",
-            [applet, prompt, mn, active_flag](size_t, httplib::DataSink& sink) -> bool {
+            [applet, prompt, mn, active_flag, saved_mt](size_t, httplib::DataSink& sink) -> bool {
                 applet->run_inference_blocking(prompt, [&](const std::string& piece) {
                     std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
                         "\"created_at\":\"" + iso8601_now() + "\","
@@ -331,6 +385,7 @@ void OllamaServer::setup_routes() {
                     "\"done\":true}\n";
                 sink.write(done_line.data(), done_line.size());
                 sink.done();
+                applet->max_tokens_ = saved_mt;
                 *active_flag = false;
                 return true;
             });
