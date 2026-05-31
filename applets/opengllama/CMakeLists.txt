@@ -8,6 +8,7 @@ add_library(opengllama SHARED
     opengllama.cpp
     ollama_models.cpp
     ollama_server.cpp
+    model_profiles.cpp
     ${CMAKE_SOURCE_DIR}/src/app_paths.cpp
 )
 
