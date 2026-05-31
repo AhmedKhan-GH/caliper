@@ -63,6 +63,7 @@ private:
     std::string prompt_buf_;
     std::string output_text_;
     std::atomic<bool> inference_running_{false};
+    std::atomic<bool> eval_capture_enabled_{true};
     std::atomic<int> tokens_generated_{0};
     std::atomic<bool> inference_finished_{false};
     std::thread inference_thread_;

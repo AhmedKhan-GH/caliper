@@ -58,6 +58,12 @@ static void DrawTextVertical(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* 
 
 bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user_data) {
     auto* self = static_cast<OpenGllamaApplet*>(user_data);
+
+    if (!self->eval_capture_enabled_.load(std::memory_order_relaxed)) {
+        if (ask) return false;
+        return true;
+    }
+
     const char* name = t->name;
 
     bool is_layer_out = (strncmp(name, "l_out-", 6) == 0);
@@ -1342,9 +1348,13 @@ int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& toke
     int n_tokens = (int)tokens.size();
     int n_batch  = (int)llama_n_batch(ctx_);
 
+    eval_capture_enabled_ = false;
+
     for (int i = 0; i < n_tokens; i += n_batch) {
         int chunk = std::min(n_batch, n_tokens - i);
         bool is_last = (i + chunk >= n_tokens);
+
+        if (is_last) eval_capture_enabled_ = true;
 
         llama_batch batch = llama_batch_init(chunk, 0, 1);
         batch.n_tokens = chunk;
@@ -1360,7 +1370,10 @@ int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& toke
 
         int rc = llama_decode(ctx_, batch);
         llama_batch_free(batch);
-        if (rc != 0) return rc;
+        if (rc != 0) {
+            eval_capture_enabled_ = true;
+            return rc;
+        }
 
         {
             std::lock_guard<std::mutex> lk(output_mutex_);
