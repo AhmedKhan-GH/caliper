@@ -69,6 +69,7 @@ private:
     std::mutex output_mutex_;
 
     std::string format_chat_prompt(const std::string& user_input) const;
+    int decode_prompt_chunked(const std::vector<int32_t>& tokens);
     void run_inference_async(const std::string& prompt);
     void run_inference_blocking(const std::string& prompt,
                                 const std::function<bool(const std::string&)>& token_cb);

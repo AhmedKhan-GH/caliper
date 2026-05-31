@@ -1348,6 +1348,52 @@ std::string OpenGllamaApplet::format_chat_prompt(const std::string& user_input) 
 }
 
 // ============================================================================
+// Chunked prompt decode — splits prompt into n_batch-sized pieces
+// ============================================================================
+
+int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& tokens) {
+    int n_tokens = (int)tokens.size();
+    int n_batch  = (int)llama_n_batch(ctx_);
+
+    for (int i = 0; i < n_tokens; i += n_batch) {
+        int chunk = std::min(n_batch, n_tokens - i);
+        bool is_last = (i + chunk >= n_tokens);
+
+        llama_batch batch = llama_batch_init(chunk, 0, 1);
+        batch.n_tokens = chunk;
+        for (int j = 0; j < chunk; ++j) {
+            batch.token[j]    = tokens[i + j];
+            batch.pos[j]      = i + j;
+            batch.n_seq_id[j] = 1;
+            batch.seq_id[j][0] = 0;
+            batch.logits[j]   = (is_last && j == chunk - 1) ? 1 : 0;
+        }
+
+        pending_attn_weights_.clear();
+
+        int rc = llama_decode(ctx_, batch);
+        llama_batch_free(batch);
+        if (rc != 0) return rc;
+
+        {
+            std::lock_guard<std::mutex> lk(output_mutex_);
+            if (!pending_attn_weights_.empty()) {
+                int actual_ctx = (int)context_tokens_.size();
+                for (auto& aw : pending_attn_weights_)
+                    if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
+                update_attn_aggregates(pending_attn_weights_);
+                attn_latest_.layer_attn = pending_attn_weights_;
+                attn_latest_valid_ = true;
+                attn_map_dirty_ = true;
+                append_focus_timelines(pending_attn_weights_);
+            }
+            context_map_dirty_ = true;
+        }
+    }
+    return 0;
+}
+
+// ============================================================================
 // Inference (async, streaming with real activations)
 // ============================================================================
 
@@ -1432,20 +1478,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             context_tokens_.push_back(piece);
         }
 
-        llama_batch batch = llama_batch_init(std::max(n_tokens, 1), 0, 1);
-        batch.n_tokens = n_tokens;
-        for (int i = 0; i < n_tokens; ++i) {
-            batch.token[i] = tokens[i];
-            batch.pos[i] = i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
-        }
-
-        pending_attn_weights_.clear();
-
-        if (llama_decode(ctx_, batch) != 0) {
-            llama_batch_free(batch);
+        if (decode_prompt_chunked(tokens) != 0) {
             std::lock_guard<std::mutex> lk(output_mutex_);
             output_text_ = "ERROR: decode failed on prompt";
             inference_running_ = false;
@@ -1453,21 +1486,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
             return;
         }
 
-        // Push prompt activations + attention + timeline
-        {
-            std::lock_guard<std::mutex> lk(output_mutex_);
-            if (!pending_attn_weights_.empty()) {
-                int actual_ctx = (int)context_tokens_.size();
-                for (auto& aw : pending_attn_weights_)
-                    if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
-                update_attn_aggregates(pending_attn_weights_);
-                attn_latest_.layer_attn = pending_attn_weights_;
-                attn_latest_valid_ = true;
-                attn_map_dirty_ = true;
-                append_focus_timelines(pending_attn_weights_);
-            }
-            context_map_dirty_ = true;
-        }
+        llama_batch batch = llama_batch_init(1, 0, 1);
 
         auto sparams = llama_sampler_chain_default_params();
         llama_sampler* smpl = llama_sampler_chain_init(sparams);
@@ -1654,20 +1673,7 @@ void OpenGllamaApplet::run_inference_blocking(
         context_tokens_.push_back(piece);
     }
 
-    llama_batch batch = llama_batch_init(std::max(n_tokens, 1), 0, 1);
-    batch.n_tokens = n_tokens;
-    for (int i = 0; i < n_tokens; ++i) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
-    }
-
-    pending_attn_weights_.clear();
-
-    if (llama_decode(ctx_, batch) != 0) {
-        llama_batch_free(batch);
+    if (decode_prompt_chunked(tokens) != 0) {
         std::lock_guard<std::mutex> lk(output_mutex_);
         output_text_ = "ERROR: decode failed on prompt";
         inference_running_ = false;
@@ -1675,20 +1681,7 @@ void OpenGllamaApplet::run_inference_blocking(
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lk(output_mutex_);
-        if (!pending_attn_weights_.empty()) {
-            int actual_ctx = (int)context_tokens_.size();
-            for (auto& aw : pending_attn_weights_)
-                if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
-            update_attn_aggregates(pending_attn_weights_);
-            attn_latest_.layer_attn = pending_attn_weights_;
-            attn_latest_valid_ = true;
-            attn_map_dirty_ = true;
-            append_focus_timelines(pending_attn_weights_);
-        }
-        context_map_dirty_ = true;
-    }
+    llama_batch batch = llama_batch_init(1, 0, 1);
 
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sparams);
