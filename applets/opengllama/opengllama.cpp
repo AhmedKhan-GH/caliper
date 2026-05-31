@@ -632,14 +632,47 @@ void OpenGllamaApplet::draw_inference_view() {
 
                     ImDrawList* dl = ImGui::GetWindowDrawList();
                     ImU32 txt_col = ImGui::GetColorU32(ImGuiCol_Text);
+                    ImU32 think_col = ImGui::GetColorU32(ImVec4(0.5f, 0.5f, 0.6f, 0.6f));
+
+                    bool in_think = false;
+                    std::string running_text;
                     for (auto& tl : ctx_text_layout_) {
+                        running_text += tl.text;
+                        if (running_text.find("<think>") != std::string::npos) in_think = true;
+                        if (running_text.find("</think>") != std::string::npos) in_think = false;
                         dl->AddText(
                             ImVec2(origin.x + tl.x, origin.y + tl.y),
-                            txt_col, tl.text.c_str());
+                            in_think ? think_col : txt_col, tl.text.c_str());
                     }
                 }
             } else {
-                ImGui::TextWrapped("%s", text_snap.c_str());
+                auto render_with_thinking = [](const std::string& text) {
+                    size_t pos = 0;
+                    bool in_think = false;
+                    while (pos < text.size()) {
+                        if (!in_think) {
+                            size_t tag = text.find("<think>", pos);
+                            std::string chunk = text.substr(pos, tag == std::string::npos ? std::string::npos : tag - pos);
+                            if (!chunk.empty())
+                                ImGui::TextWrapped("%s", chunk.c_str());
+                            if (tag == std::string::npos) break;
+                            pos = tag + 7;
+                            in_think = true;
+                        } else {
+                            size_t tag = text.find("</think>", pos);
+                            std::string chunk = text.substr(pos, tag == std::string::npos ? std::string::npos : tag - pos);
+                            if (!chunk.empty()) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.6f, 0.6f));
+                                ImGui::TextWrapped("%s", chunk.c_str());
+                                ImGui::PopStyleColor();
+                            }
+                            if (tag == std::string::npos) break;
+                            pos = tag + 8;
+                            in_think = false;
+                        }
+                    }
+                };
+                render_with_thinking(text_snap);
                 if (inference_running_) {
                     ImGui::SameLine();
                     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
@@ -1265,8 +1298,13 @@ std::string OpenGllamaApplet::format_chat_prompt(const std::string& user_input) 
         tmpl = tmpl_fallback.c_str();
     }
 
-    llama_chat_message sys_msg  = {"system", "You are a helpful assistant."};
-    llama_chat_message user_msg = {"user", user_input.c_str()};
+    std::string sys_text = active_profile_.system_prompt;
+    std::string user_text = user_input;
+    if (active_profile_.supports_thinking)
+        user_text += thinking_enabled_ ? " /think" : " /no_think";
+
+    llama_chat_message sys_msg  = {"system", sys_text.c_str()};
+    llama_chat_message user_msg = {"user", user_text.c_str()};
     const llama_chat_message msgs[] = { sys_msg, user_msg };
 
     std::vector<char> buf(user_input.size() * 2 + 512);
