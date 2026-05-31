@@ -897,7 +897,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     ImGui::SeparatorText(title);
     ImGui::TextDisabled("%s", description);
 
-    if (n_layers == 0 || n_kv == 0) {
+    if (n_layers == 0 || n_kv <= 1) {
         int model_layers = model_ ? llama_model_n_layer(model_) : 16;
         float cell_h_e = std::max(3.0f, std::min(10.0f, 200.0f / (float)model_layers));
         float total_h_e = cell_h_e * model_layers;
@@ -916,7 +916,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     float chart_w = avail_w - label_margin;
     float cell_w = 6.0f;
     float cell_h = std::max(3.0f, std::min(10.0f, 200.0f / (float)n_layers));
-    int k_start = (n_kv > 1) ? 1 : 0;
+    int k_start = 1;
     float total_w = cell_w * (n_kv - k_start);
     float total_h = cell_h * n_layers;
 
