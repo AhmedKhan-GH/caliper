@@ -1354,8 +1354,6 @@ int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& toke
         int chunk = std::min(n_batch, n_tokens - i);
         bool is_last = (i + chunk >= n_tokens);
 
-        if (is_last) eval_capture_enabled_ = true;
-
         llama_batch batch = llama_batch_init(chunk, 0, 1);
         batch.n_tokens = chunk;
         for (int j = 0; j < chunk; ++j) {
@@ -1366,41 +1364,17 @@ int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& toke
             batch.logits[j]   = (is_last && j == chunk - 1) ? 1 : 0;
         }
 
-        pending_attn_weights_.clear();
-
         int rc = llama_decode(ctx_, batch);
         llama_batch_free(batch);
         if (rc != 0) {
             eval_capture_enabled_ = true;
             return rc;
         }
-
-        {
-            std::lock_guard<std::mutex> lk(output_mutex_);
-            if (!pending_attn_weights_.empty()) {
-                int actual_ctx = (int)context_tokens_.size();
-                for (auto& aw : pending_attn_weights_)
-                    if ((int)aw.size() > actual_ctx) aw.resize(actual_ctx);
-                update_attn_aggregates(pending_attn_weights_);
-                attn_latest_.layer_attn = pending_attn_weights_;
-                attn_latest_valid_ = true;
-                attn_map_dirty_ = true;
-                append_focus_timelines(pending_attn_weights_);
-            }
-            context_map_dirty_ = true;
-        }
-
-        if (is_last && !pending_attn_weights_.empty()) {
-            int nl = (int)pending_attn_weights_.size();
-            int captured = 0, max_kv = 0;
-            for (auto& pw : pending_attn_weights_) {
-                if (!pw.empty()) ++captured;
-                max_kv = std::max(max_kv, (int)pw.size());
-            }
-            std::fprintf(stderr, "[opengllama] prompt decode: %d/%d layers captured attn, max_kv=%d\n",
-                captured, nl, max_kv);
-        }
     }
+
+    eval_capture_enabled_ = true;
+    std::fprintf(stderr, "[opengllama] prompt decode done: %d tokens in %d chunk(s)\n",
+        n_tokens, (n_tokens + n_batch - 1) / n_batch);
     return 0;
 }
 
