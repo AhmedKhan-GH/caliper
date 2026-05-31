@@ -294,6 +294,11 @@ void OpenGllamaApplet::draw_inference_view() {
             return;
         }
         ImGui::SameLine();
+        if (!active_profile_.id.empty()) {
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "[%s]",
+                active_profile_.display_name.c_str());
+            ImGui::SameLine();
+        }
         ImGui::TextDisabled("%d layers | %d ctx",
             model_ ? llama_model_n_layer(model_) : 0, context_size_);
         ImGui::SameLine();
@@ -368,6 +373,12 @@ void OpenGllamaApplet::draw_inference_view() {
         ImGui::SliderInt("Token Delay (ms)", &token_delay_ms_, 0, 2000);
         ImGui::SameLine();
         ImGui::TextDisabled("(0=full speed)");
+        if (active_profile_.supports_thinking) {
+            ImGui::Spacing();
+            ImGui::Checkbox("Thinking Mode", &thinking_enabled_);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(appends /think or /no_think to prompt)");
+        }
     }
 
     ImGui::Separator();
