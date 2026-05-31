@@ -174,8 +174,7 @@ private:
 
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,
-                        int n_layers, int n_kv, bool auto_scroll,
-                        bool relative_scale = false);
+                        int n_layers, int n_kv, bool auto_scroll);
 
     OllamaModelStore ollama_store_;
 
