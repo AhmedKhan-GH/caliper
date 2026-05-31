@@ -1104,8 +1104,20 @@ void OpenGllamaApplet::load_model_async(const std::string& path, const std::stri
             std::fprintf(stderr, "[opengllama] model loaded: desc='%s' layers=%d embd=%d\n",
                 model_desc, n_layers, n_embd);
 
-            int n_ctx_train = llama_model_n_ctx_train(model_);
-            context_size_ = std::min(n_ctx_train, 4096);
+            active_profile_ = detect_model_profile(model_);
+            std::fprintf(stderr, "[opengllama] detected profile: %s (ctx=%d thinking=%s)\n",
+                active_profile_.display_name.c_str(),
+                active_profile_.context_size,
+                active_profile_.supports_thinking ? "yes" : "no");
+
+            context_size_ = active_profile_.context_size;
+            temperature_  = active_profile_.temperature;
+            top_k_        = active_profile_.top_k;
+            top_p_        = active_profile_.top_p;
+            min_p_        = active_profile_.min_p;
+            repeat_penalty_ = active_profile_.repeat_penalty;
+            repeat_last_n_  = active_profile_.repeat_last_n;
+            thinking_enabled_ = active_profile_.supports_thinking;
 
             llama_context_params ctx_params = llama_context_default_params();
             ctx_params.n_ctx = context_size_;
@@ -1152,8 +1164,15 @@ bool OpenGllamaApplet::load_model(const std::string& path) {
     model_ = llama_model_load_from_file(path.c_str(), model_params);
     if (!model_) return false;
 
-    int n_ctx_train = llama_model_n_ctx_train(model_);
-    context_size_ = std::min(n_ctx_train, 4096);
+    active_profile_ = detect_model_profile(model_);
+    context_size_    = active_profile_.context_size;
+    temperature_     = active_profile_.temperature;
+    top_k_           = active_profile_.top_k;
+    top_p_           = active_profile_.top_p;
+    min_p_           = active_profile_.min_p;
+    repeat_penalty_  = active_profile_.repeat_penalty;
+    repeat_last_n_   = active_profile_.repeat_last_n;
+    thinking_enabled_ = active_profile_.supports_thinking;
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = context_size_;

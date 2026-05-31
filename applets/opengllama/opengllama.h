@@ -9,6 +9,7 @@
 
 #include "ollama_models.h"
 #include "ollama_server.h"
+#include "model_profiles.h"
 
 struct llama_model;
 struct llama_context;
@@ -177,6 +178,9 @@ private:
                         bool relative_scale = false);
 
     OllamaModelStore ollama_store_;
+
+    ModelProfile active_profile_;
+    bool thinking_enabled_ = true;
 
     // Embedded Ollama-compatible API server
     OllamaServer ollama_server_{this};
