@@ -93,19 +93,6 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
 
         self->pending_attn_weights_[layer] = std::move(avg);
 
-        static int diag_gen = -1;
-        int gen = self->tokens_generated_.load();
-        if (gen != diag_gen && gen <= 2) {
-            diag_gen = gen;
-            float pos0 = (n_kv > 0 && !self->pending_attn_weights_[layer].empty())
-                ? self->pending_attn_weights_[layer][0] : 0.0f;
-            float pos1_max = 0.0f;
-            for (int k = 1; k < (int)self->pending_attn_weights_[layer].size(); ++k)
-                pos1_max = std::max(pos1_max, self->pending_attn_weights_[layer][k]);
-            std::fprintf(stderr, "[opengllama] gen=%d layer=%d n_kv=%d pos0=%.6f pos1+_max=%.9f\n",
-                gen, layer, n_kv, pos0, pos1_max);
-        }
-
         return true;
     }
 
@@ -1388,6 +1375,17 @@ int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& toke
                 append_focus_timelines(pending_attn_weights_);
             }
             context_map_dirty_ = true;
+        }
+
+        if (is_last && !pending_attn_weights_.empty()) {
+            int nl = (int)pending_attn_weights_.size();
+            int captured = 0, max_kv = 0;
+            for (auto& pw : pending_attn_weights_) {
+                if (!pw.empty()) ++captured;
+                max_kv = std::max(max_kv, (int)pw.size());
+            }
+            std::fprintf(stderr, "[opengllama] prompt decode: %d/%d layers captured attn, max_kv=%d\n",
+                captured, nl, max_kv);
         }
     }
     return 0;
