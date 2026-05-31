@@ -92,6 +92,20 @@ bool OpenGllamaApplet::eval_callback(struct ggml_tensor* t, bool ask, void* user
         for (int k = 0; k < n_kv; ++k) avg[k] *= inv_h;
 
         self->pending_attn_weights_[layer] = std::move(avg);
+
+        static int diag_gen = -1;
+        int gen = self->tokens_generated_.load();
+        if (gen != diag_gen && gen <= 2) {
+            diag_gen = gen;
+            float pos0 = (n_kv > 0 && !self->pending_attn_weights_[layer].empty())
+                ? self->pending_attn_weights_[layer][0] : 0.0f;
+            float pos1_max = 0.0f;
+            for (int k = 1; k < (int)self->pending_attn_weights_[layer].size(); ++k)
+                pos1_max = std::max(pos1_max, self->pending_attn_weights_[layer][k]);
+            std::fprintf(stderr, "[opengllama] gen=%d layer=%d n_kv=%d pos0=%.6f pos1+_max=%.9f\n",
+                gen, layer, n_kv, pos0, pos1_max);
+        }
+
         return true;
     }
 
@@ -945,7 +959,7 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
         for (int l = 0; l < n_layers; ++l) {
             if (l >= (int)layer_data.size()) continue;
             const auto& row = layer_data[l];
-            for (int k = 1; k < n_kv && k < (int)row.size(); ++k)
+            for (int k = 0; k < n_kv && k < (int)row.size(); ++k)
                 if (row[k] > row_max[l]) row_max[l] = row[k];
         }
     }
@@ -957,7 +971,8 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
 
             float norm;
             if (relative_scale) {
-                norm = (row_max[l] > 1e-9f) ? std::clamp(val / row_max[l], 0.0f, 1.0f) : 0.0f;
+                float ratio = (row_max[l] > 1e-30f) ? val / row_max[l] : 0.0f;
+                norm = std::log1p(std::clamp(ratio, 0.0f, 1.0f) * 49.0f) / std::log1p(49.0f);
             } else {
                 float clamped = std::clamp(val, 0.0f, 1.0f);
                 norm = std::log1p(clamped * 49.0f) / std::log1p(49.0f);
