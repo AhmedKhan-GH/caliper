@@ -118,7 +118,7 @@ private:
     bool attn_latest_valid_ = false;
 
     // Incremental attention aggregates, updated in inference thread, O(n_ctx) each
-    float attn_ema_alpha_ = 0.3f;
+    float attn_ema_alpha_ = 0.5f;
     std::vector<float> attn_agg_ema_;        // EMA across all layers
     std::vector<float> attn_agg_max_;        // max across all layers and steps
     std::vector<float> attn_agg_final_ema_;  // EMA over final layer only
@@ -134,6 +134,9 @@ private:
     bool cached_attn_valid_ = false;
     int cached_attn_n_lay_ = 0;
     int cached_attn_n_kv_ = 0;
+
+    float live_attn_scale_ = 1.0f;
+    float focus_attn_scale_ = 1.0f;
 
     // ISWA de-interleaved live attention snapshots
     std::vector<std::vector<float>> cached_live_swa_;
@@ -176,7 +179,7 @@ private:
 
     void draw_attn_tape(const char* imgui_id, const char* title, const char* description,
                         const std::vector<std::vector<float>>& layer_data,
-                        int n_layers, int n_kv, bool auto_scroll);
+                        int n_layers, int n_kv, bool auto_scroll, float scale = 1.0f);
 
     OllamaModelStore ollama_store_;
 
