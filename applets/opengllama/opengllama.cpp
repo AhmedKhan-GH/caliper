@@ -858,24 +858,24 @@ void OpenGllamaApplet::draw_inference_view() {
             if (focus_attn_view_ == 1 && has_swa) {
                 draw_attn_tape("focus_swa", "Sliding Window Layers",
                     "SWA layers only — local attention with limited context window",
-                    cached_focus_swa_, cached_focus_swa_n_lay_, cached_focus_swa_n_gen_, true);
+                    cached_focus_swa_, cached_focus_swa_n_lay_, cached_focus_swa_n_gen_, true, true);
             } else if (focus_attn_view_ == 2 && has_swa) {
                 draw_attn_tape("focus_full", "Full Attention Layers",
                     "Full-context attention layers — global dependency tracking",
-                    cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true);
+                    cached_focus_full_, cached_focus_full_n_lay_, cached_focus_full_n_gen_, true, true);
             } else if (focus_attn_view_ == 0 && has_recurrent_layers_ && cached_focus_attn_only_n_lay_ > 0) {
                 draw_attn_tape("attn_focus", "Attention Layers",
                     "Attention layers only — recurrent layers hidden",
-                    cached_focus_attn_only_, cached_focus_attn_only_n_lay_, cached_focus_attn_only_n_gen_, true);
+                    cached_focus_attn_only_, cached_focus_attn_only_n_lay_, cached_focus_attn_only_n_gen_, true, true);
             } else {
                 if (cached_attn_focus_n_lay_ > 0 && cached_attn_focus_n_gen_ > 0) {
                     draw_attn_tape("attn_focus", "All Layers",
-                        "Max attention weight per layer per token — bright = focused, dark = diffuse",
-                        cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true);
+                        "Non-sink attention focus — bright = focused, dark = diffuse",
+                        cached_attn_focus_, cached_attn_focus_n_lay_, cached_attn_focus_n_gen_, true, true);
                 } else {
                     static const std::vector<std::vector<float>> empty_data;
                     draw_attn_tape("attn_focus", "All Layers",
-                        "Max attention weight per layer per token — bright = focused, dark = diffuse",
+                        "Non-sink attention focus — bright = focused, dark = diffuse",
                         empty_data, 0, 0, false);
                 }
             }
@@ -1100,8 +1100,9 @@ void OpenGllamaApplet::append_focus_timelines(const std::vector<std::vector<floa
         attn_focus_timeline_.push_back({});
     for (int l = 0; l < nl; ++l) {
         float mx = 0.0f;
-        for (float v : layer_attn[l])
-            mx = std::max(mx, v);
+        const auto& row = layer_attn[l];
+        for (int k = 1; k < (int)row.size(); ++k)
+            mx = std::max(mx, row[k]);
         attn_focus_timeline_[l].push_back(mx);
     }
 
@@ -1109,8 +1110,9 @@ void OpenGllamaApplet::append_focus_timelines(const std::vector<std::vector<floa
     if (has_swa) {
         for (int l = 0; l < nl; ++l) {
             float mx = 0.0f;
-            for (float v : layer_attn[l])
-                mx = std::max(mx, v);
+            const auto& swa_row = layer_attn[l];
+            for (int k = 1; k < (int)swa_row.size(); ++k)
+                mx = std::max(mx, swa_row[k]);
             auto& dest = (l % 2 == 0) ? attn_focus_swa_ : attn_focus_full_;
             int row = l / 2;
             while ((int)dest.size() <= row) dest.push_back({});
