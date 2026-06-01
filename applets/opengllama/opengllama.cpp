@@ -432,9 +432,9 @@ void OpenGllamaApplet::draw_inference_view() {
             char recent_label[32];
             snprintf(recent_label, sizeof(recent_label), "Recent (last %d)", attn_recent_window_);
             const char* thm_labels[] = {
-                "None", "EMA (decay)", "Max", recent_label, "Final Layer" };
+                "None", "EMA (decay)", "Max", recent_label, "Final Layer", "Single Layer" };
             ImGui::SetNextItemWidth(160.0f);
-            ImGui::Combo("##thm_mode", &ctx_text_heatmap_mode_, thm_labels, 5);
+            ImGui::Combo("##thm_mode", &ctx_text_heatmap_mode_, thm_labels, 6);
             if (ctx_text_heatmap_mode_ == THM_EMA) {
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(120.0f);
@@ -448,6 +448,12 @@ void OpenGllamaApplet::draw_inference_view() {
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(120.0f);
                 ImGui::SliderInt("Window", &attn_recent_window_, 1, kAttnRecentRingMax);
+            } else if (ctx_text_heatmap_mode_ == THM_SINGLE_LAYER) {
+                int max_layer = model_ ? llama_model_n_layer(model_) - 1 : 31;
+                ctx_text_heatmap_layer_ = std::clamp(ctx_text_heatmap_layer_, 0, max_layer);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::SliderInt("Layer", &ctx_text_heatmap_layer_, 0, max_layer);
             }
 
             std::vector<float> agg_snap;
@@ -483,6 +489,12 @@ void OpenGllamaApplet::draw_inference_view() {
                             agg_snap[k] /= (float)filled;
                     }
                 }
+                else if (ctx_text_heatmap_mode_ == THM_SINGLE_LAYER) {
+                    int layer = ctx_text_heatmap_layer_;
+                    if (attn_latest_valid_ &&
+                        layer < (int)attn_latest_.layer_attn.size())
+                        agg_snap = attn_latest_.layer_attn[layer];
+                }
             }
 
             int n_tok = (int)ctok_th.size();
@@ -505,7 +517,8 @@ void OpenGllamaApplet::draw_inference_view() {
 
                 bool mode_changed = (ctx_text_heatmap_mode_ != ctx_text_heatmap_prev_mode_);
                 bool contrast_changed = (ctx_text_heatmap_contrast_ != ctx_text_heatmap_prev_contrast_);
-                bool need_rebuild = mode_changed || contrast_changed
+                bool layer_changed = (ctx_text_heatmap_layer_ != ctx_text_heatmap_prev_layer_);
+                bool need_rebuild = mode_changed || contrast_changed || layer_changed
                     || (n_tok != ctx_text_heatmap_n_ctx_)
                     || (n_gen != ctx_text_heatmap_n_gen_)
                     || (std::abs(wrap_width - ctx_text_heatmap_last_width_) > 1.0f);
@@ -516,6 +529,7 @@ void OpenGllamaApplet::draw_inference_view() {
                     ctx_text_heatmap_last_width_ = wrap_width;
                     ctx_text_heatmap_prev_mode_ = ctx_text_heatmap_mode_;
                     ctx_text_heatmap_prev_contrast_ = ctx_text_heatmap_contrast_;
+                    ctx_text_heatmap_prev_layer_ = ctx_text_heatmap_layer_;
 
                     int n_agg = (int)agg_snap.size();
                     int n_prompt = n_prompt_snap;

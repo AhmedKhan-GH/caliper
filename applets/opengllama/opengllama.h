@@ -103,11 +103,13 @@ private:
     std::vector<TokenLayout> ctx_text_layout_;
     float ctx_text_total_h_ = 0.0f;
     std::vector<unsigned char> ctx_text_heatmap_pixels_;  // reusable pixel buffer
-    enum TextHeatmapMode { THM_NONE = 0, THM_EMA, THM_MAX, THM_RECENT, THM_FINAL_LAYER };
+    enum TextHeatmapMode { THM_NONE = 0, THM_EMA, THM_MAX, THM_RECENT, THM_FINAL_LAYER, THM_SINGLE_LAYER };
     int ctx_text_heatmap_mode_ = THM_MAX;
     int ctx_text_heatmap_prev_mode_ = -1;
     float ctx_text_heatmap_contrast_ = 3.0f;
     float ctx_text_heatmap_prev_contrast_ = 3.0f;
+    int ctx_text_heatmap_layer_ = 0;
+    int ctx_text_heatmap_prev_layer_ = -1;
 
     // Per-layer attention weights: [n_layers] = head-averaged attention over KV for latest token
     std::vector<std::vector<float>> pending_attn_weights_;  // built during eval callback
