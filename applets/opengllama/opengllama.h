@@ -65,6 +65,7 @@ private:
     std::atomic<bool> inference_running_{false};
     std::atomic<bool> eval_capture_enabled_{true};
     std::atomic<int> tokens_generated_{0};
+    int n_prompt_tokens_{0};
     std::atomic<bool> inference_finished_{false};
     std::thread inference_thread_;
     std::mutex output_mutex_;

@@ -453,9 +453,11 @@ void OpenGllamaApplet::draw_inference_view() {
             std::vector<float> agg_snap;
             std::vector<std::string> ctok_th;
             int n_gen;
+            int n_prompt_snap;
             {
                 std::lock_guard<std::mutex> lk(output_mutex_);
                 n_gen = attn_agg_gen_count_;
+                n_prompt_snap = n_prompt_tokens_;
                 ctok_th = context_tokens_;
                 if (ctx_text_heatmap_mode_ == THM_EMA)
                     agg_snap = attn_agg_ema_;
@@ -516,24 +518,39 @@ void OpenGllamaApplet::draw_inference_view() {
                     ctx_text_heatmap_prev_contrast_ = ctx_text_heatmap_contrast_;
 
                     int n_agg = (int)agg_snap.size();
+                    int n_prompt = n_prompt_snap;
 
-                    std::vector<float> sort_vals;
-                    sort_vals.reserve(n_agg);
-                    for (int c = 1; c < n_agg; ++c)
-                        sort_vals.push_back(agg_snap[c]);
-                    float pmin_t = 0.0f, pmax_t = 1.0f;
-                    if (!sort_vals.empty()) {
-                        std::sort(sort_vals.begin(), sort_vals.end());
-                        int lo = (int)(sort_vals.size() * 0.02f);
-                        int hi = std::min((int)(sort_vals.size() * 0.98f), (int)sort_vals.size() - 1);
-                        pmin_t = sort_vals[lo];
-                        pmax_t = sort_vals[hi];
+                    // Normalize prompt and output regions separately so that
+                    // lower-magnitude prompt attention stays visible
+                    float pmin_p = 0.0f, pmax_p = 1.0f;
+                    float pmin_o = 0.0f, pmax_o = 1.0f;
+                    {
+                        std::vector<float> sv_p, sv_o;
+                        for (int c = 1; c < n_agg; ++c) {
+                            if (c < n_prompt)
+                                sv_p.push_back(agg_snap[c]);
+                            else
+                                sv_o.push_back(agg_snap[c]);
+                        }
+                        if (!sv_p.empty()) {
+                            std::sort(sv_p.begin(), sv_p.end());
+                            pmin_p = sv_p[(int)(sv_p.size() * 0.02f)];
+                            pmax_p = sv_p[std::min((int)(sv_p.size() * 0.98f), (int)sv_p.size() - 1)];
+                        }
+                        if (!sv_o.empty()) {
+                            std::sort(sv_o.begin(), sv_o.end());
+                            pmin_o = sv_o[(int)(sv_o.size() * 0.02f)];
+                            pmax_o = sv_o[std::min((int)(sv_o.size() * 0.98f), (int)sv_o.size() - 1)];
+                        }
                     }
-                    float range_t = (pmax_t - pmin_t) > 1e-7f ? (pmax_t - pmin_t) : 1.0f;
+                    float range_p = (pmax_p - pmin_p) > 1e-7f ? (pmax_p - pmin_p) : 1.0f;
+                    float range_o = (pmax_o - pmin_o) > 1e-7f ? (pmax_o - pmin_o) : 1.0f;
 
                     std::vector<float> tok_norm(n_tok, 0.0f);
                     for (int c = 1; c < n_tok && c < n_agg; ++c) {
-                        float linear = std::clamp((agg_snap[c] - pmin_t) / range_t, 0.0f, 1.0f);
+                        float pmin = (c < n_prompt) ? pmin_p : pmin_o;
+                        float range = (c < n_prompt) ? range_p : range_o;
+                        float linear = std::clamp((agg_snap[c] - pmin) / range, 0.0f, 1.0f);
                         if (ctx_text_heatmap_mode_ == THM_MAX)
                             tok_norm[c] = std::pow(linear, ctx_text_heatmap_contrast_);
                         else
@@ -1016,6 +1033,12 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
         }
     }
 
+    if (n_prompt_tokens_ > k_start && n_prompt_tokens_ < n_kv) {
+        float bx = origin.x + (n_prompt_tokens_ - k_start) * cell_w;
+        dl->AddLine(ImVec2(bx, origin.y), ImVec2(bx, origin.y + total_h),
+                    IM_COL32(255, 255, 0, 180), 1.5f);
+    }
+
     ImGui::Dummy(ImVec2(total_w, total_h));
 
     if (ImGui::IsItemHovered()) {
@@ -1469,6 +1492,7 @@ void OpenGllamaApplet::run_inference_async(const std::string& prompt) {
                                       tokens.data(), (int)tokens.size(), true, true);
         }
         tokens.resize(n_tokens);
+        n_prompt_tokens_ = n_tokens;
 
         // Store prompt token texts for context map labels
         for (int i = 0; i < n_tokens; ++i) {
@@ -1665,6 +1689,7 @@ void OpenGllamaApplet::run_inference_blocking(
                                   tokens.data(), (int)tokens.size(), true, true);
     }
     tokens.resize(n_tokens);
+    n_prompt_tokens_ = n_tokens;
 
     for (int i = 0; i < n_tokens; ++i) {
         char piece[64] = {};
