@@ -526,7 +526,8 @@ void OpenGllamaApplet::draw_inference_view() {
                     float pmin_o = 0.0f, pmax_o = 1.0f;
                     {
                         std::vector<float> sv_p, sv_o;
-                        for (int c = 1; c < n_agg; ++c) {
+                        // Start at 2: skip BOS (0) and attention sink (1)
+                        for (int c = 2; c < n_agg; ++c) {
                             if (c < n_prompt)
                                 sv_p.push_back(agg_snap[c]);
                             else
@@ -981,9 +982,10 @@ void OpenGllamaApplet::draw_attn_tape(const char* imgui_id, const char* title,
     float global_lo = 0.0f, global_range = 1.0f;
     {
         std::vector<float> all_vals;
-        all_vals.reserve(n_layers * std::max(1, n_kv - k_start));
+        int k_norm_start = k_start + 1; // skip attention sink from normalization
+        all_vals.reserve(n_layers * std::max(1, n_kv - k_norm_start));
         for (int l = 0; l < n_layers && l < (int)layer_data.size(); ++l)
-            for (int k = k_start; k < n_kv && k < (int)layer_data[l].size(); ++k)
+            for (int k = k_norm_start; k < n_kv && k < (int)layer_data[l].size(); ++k)
                 if (layer_data[l][k] > 0.0f)
                     all_vals.push_back(layer_data[l][k]);
 
