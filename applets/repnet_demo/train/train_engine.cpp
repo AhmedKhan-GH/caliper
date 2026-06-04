@@ -163,7 +163,14 @@ void TrainEngine::publish(const TrainSnapshot& s) {
 void TrainEngine::run_loop() {
     torch::manual_seed(cfg_.seed);
 
-    const torch::Device device(torch::kCPU);
+    // Train on the Apple GPU (MPS) when available; fall back to CPU.
+    const bool use_mps = cfg_.use_mps && torch::hasMPS() && torch::mps::is_available();
+    const torch::Device device = use_mps ? torch::Device(torch::kMPS)
+                                         : torch::Device(torch::kCPU);
+    {
+        std::lock_guard<std::mutex> lk(snap_mutex_);
+        snap_.device = use_mps ? "MPS" : "CPU";
+    }
 
     // Fresh model per run.
     model_ = plcnn::PerLeadCNN(12, {16, 32, 48}, {31, 21, 11}, 0.15, 2);
@@ -201,7 +208,8 @@ void TrainEngine::run_loop() {
         torch::NoGradGuard ng;
         auto seq = model_->backbone;
         auto conv = seq->ptr<torch::nn::Conv1dImpl>(0);
-        return conv->weight.detach().squeeze(1).clone();
+        // (16,1,31) -> (16,31), on CPU for the UI thread.
+        return conv->weight.detach().squeeze(1).to(torch::kCPU).clone();
     };
 
     // Pin a held-out positive val sample (fallback: first val sample) so the
@@ -219,7 +227,7 @@ void TrainEngine::run_loop() {
     auto compute_gradcam = [&]() -> torch::Tensor {
         if (!pinned_input.defined()) return torch::Tensor();
         const int L = 12;
-        auto xr = pinned_input.reshape({L, 1, pinned_input.size(-1)});  // (12,1,T)
+        auto xr = pinned_input.reshape({L, 1, pinned_input.size(-1)}).to(device);  // (12,1,T)
         torch::Tensor A = model_->backbone->forward(xr).detach().set_requires_grad(true);
         auto pooled = model_->pool->forward(A).squeeze(-1);     // (12,48)
         auto flat = pooled.reshape({1, L * pooled.size(-1)});   // (1,576)
@@ -231,7 +239,7 @@ void TrainEngine::run_loop() {
         auto weights = grad.mean(2, true);                     // (12,48,1)
         auto cam = torch::relu((weights * A).sum(1));          // (12,T')
         model_->zero_grad();
-        return cam.detach().clone();
+        return cam.detach().to(torch::kCPU).clone();           // CPU for the UI thread
     };
 
     if (pinned_input.defined()) {
@@ -290,7 +298,10 @@ void TrainEngine::run_loop() {
                 }
                 yb_vec[i] = y_train_[gi];
             }
-            torch::Tensor yb = torch::tensor(yb_vec, torch::kLong);
+            // Augmentation runs on CPU per-sample; move the assembled batch to
+            // the training device for forward/backward.
+            xb = xb.to(device);
+            torch::Tensor yb = torch::tensor(yb_vec, torch::kLong).to(device);
 
             // Mixup on 50% of batches.
             bool use_mixup = cfg_.mixup && (uni(rng) < 0.5);
@@ -298,7 +309,8 @@ void TrainEngine::run_loop() {
             if (use_mixup) {
                 double g1 = gamma_a(rng), g2 = gamma_a(rng);
                 double lam = (g1 + g2) > 0 ? g1 / (g1 + g2) : 0.5;
-                torch::Tensor perm = torch::randperm(b, torch::kLong);
+                torch::Tensor perm = torch::randperm(
+                    b, torch::TensorOptions().dtype(torch::kLong).device(device));
                 torch::Tensor xb2 = xb.index_select(0, perm);
                 torch::Tensor x_mix = lam * xb + (1.0 - lam) * xb2;
                 torch::Tensor yb2 = yb.index_select(0, perm);
@@ -356,7 +368,7 @@ void TrainEngine::run_loop() {
             scores.reserve(Nv);
             for (int64_t start = 0; start < Nv; start += bs) {
                 int64_t end = std::min<int64_t>(start + bs, Nv);
-                torch::Tensor xb = X_val_.slice(0, start, end);
+                torch::Tensor xb = X_val_.slice(0, start, end).to(device);
                 torch::Tensor logits = model_->forward(xb);  // (b,2)
                 torch::Tensor prob = torch::softmax(logits, 1).select(1, 1);
                 for (int64_t i = 0; i < prob.size(0); ++i) {

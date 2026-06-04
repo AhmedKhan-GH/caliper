@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -27,6 +28,7 @@ struct TrainSnapshot {
     float lr = 0;
     bool running = false;
     bool done = false;
+    std::string device = "CPU";  // "MPS" or "CPU"
     std::vector<float> loss_history;   // per-epoch train loss
     std::vector<float> auroc_history;  // per-epoch val AUROC
     // (16,31) clone of backbone[0].weight squeezed -- for "kernels adapting".
@@ -52,6 +54,7 @@ class TrainEngine {
         int accum = 2;
         bool augment = true;
         bool mixup = true;
+        bool use_mps = true;  // train on Apple GPU (MPS) when available
     };
 
     TrainEngine();

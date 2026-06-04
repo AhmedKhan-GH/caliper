@@ -9,6 +9,11 @@
 #include <cstdio>
 #include <fstream>
 
+// Static, non-interactive plots: no pan/zoom/box-select, no context menus.
+static constexpr ImPlotFlags kLockedPlot =
+    ImPlotFlags_NoInputs | ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect |
+    ImPlotFlags_NoMouseText;
+
 // ---------------------------------------------------------------------------
 // local helpers
 // ---------------------------------------------------------------------------
@@ -209,11 +214,11 @@ void TrainingLabTab::draw_controls() {
 }
 
 void TrainingLabTab::draw_metrics(const TrainSnapshot& s) {
-    ImGui::Text("epoch %d / %d   loss %.4f   val AUROC %.4f   best %.4f (ep %d)   lr %.2e",
+    ImGui::Text("epoch %d / %d   loss %.4f   val AUROC %.4f   best %.4f (ep %d)   lr %.2e   [%s]",
                 s.epoch, s.max_epochs, s.train_loss, s.val_auroc, s.best_val_auroc,
-                s.best_epoch + 1, s.lr);
+                s.best_epoch + 1, s.lr, s.device.c_str());
 
-    if (ImPlot::BeginPlot("##metrics", ImVec2(-1, 240))) {
+    if (ImPlot::BeginPlot("##metrics", ImVec2(-1, 240), kLockedPlot)) {
         ImPlot::SetupAxes("epoch", "train loss", ImPlotAxisFlags_AutoFit,
                           ImPlotAxisFlags_AutoFit);
         ImPlot::SetupAxis(ImAxis_Y2, "val AUROC",
@@ -268,7 +273,7 @@ void TrainingLabTab::draw_kernels(const TrainSnapshot& s) {
         char id[32];
         std::snprintf(id, sizeof(id), "##k%d", f);
         if (ImPlot::BeginPlot(id, ImVec2(cell, cell * 0.7f),
-                              ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
+                              ImPlotFlags_NoLegend | kLockedPlot)) {
             ImPlot::SetupAxes(nullptr, nullptr,
                               ImPlotAxisFlags_NoDecorations,
                               ImPlotAxisFlags_NoDecorations | ImPlotAxisFlags_AutoFit);
@@ -304,7 +309,7 @@ void TrainingLabTab::draw_saliency(const TrainSnapshot& s) {
 
     ImPlot::PushColormap(ImPlotColormap_Hot);
     if (ImPlot::BeginPlot("##gradcam", ImVec2(-1, 220),
-                          ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
+                          ImPlotFlags_NoLegend | kLockedPlot)) {
         ImPlot::SetupAxes("time", "lead",
                           ImPlotAxisFlags_NoDecorations,
                           ImPlotAxisFlags_NoGridLines);
