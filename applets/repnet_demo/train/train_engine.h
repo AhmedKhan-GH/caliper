@@ -33,11 +33,15 @@ struct TrainSnapshot {
     std::vector<float> auroc_history;  // per-epoch val AUROC
     // (16,31) clone of backbone[0].weight squeezed -- for "kernels adapting".
     torch::Tensor stage1_kernels;
-    // Pinned held-out positive sample (12,2500) and its grad-cam saliency
-    // (12, T') under the current weights -- for "saliency from noise".
+    // Currently-selected held-out (val) example (12,2500) and its grad-cam
+    // saliency (12,2500, upsampled to align with the waveform) under the
+    // current weights -- for "saliency over the actual waveform".
     torch::Tensor pinned_input;
     torch::Tensor gradcam;
-    int pinned_label = -1;
+    int pinned_label = -1;   // 0/1 true label of the selected example
+    int viz_index = -1;      // index into the val set
+    float viz_prob = 0.0f;   // model P(positive) for the selected example
+    int val_count = 0;       // number of held-out examples available to scrub
 };
 
 class TrainEngine {
@@ -71,6 +75,11 @@ class TrainEngine {
     void request_stop();
     void step_once();
 
+    // Select which held-out example the saliency view follows (index into the
+    // val set). Recomputed promptly on the training thread, even while paused.
+    void set_viz_index(int idx);
+    int val_count() const;
+
     TrainSnapshot snapshot() const;  // thread-safe copy of latest snapshot
     plcnn::PerLeadCNN model() const;  // exposed for grad-cam etc.
     bool is_running() const;
@@ -91,6 +100,7 @@ class TrainEngine {
 
     std::atomic<bool> stop_{false};
     std::atomic<bool> running_{false};
+    std::atomic<int> viz_index_{-1};   // -1 = auto (first positive val example)
 
     // pause / step controls.
     std::mutex ctrl_mutex_;

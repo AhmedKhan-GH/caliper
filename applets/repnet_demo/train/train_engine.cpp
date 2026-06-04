@@ -5,6 +5,7 @@
 #include "train_engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <numeric>
@@ -140,6 +141,13 @@ void TrainEngine::step_once() {
     ctrl_cv_.notify_all();
 }
 
+void TrainEngine::set_viz_index(int idx) {
+    viz_index_.store(idx);
+    ctrl_cv_.notify_all();  // wake a paused loop to recompute saliency promptly
+}
+
+int TrainEngine::val_count() const { return static_cast<int>(y_val_.size()); }
+
 TrainSnapshot TrainEngine::snapshot() const {
     std::lock_guard<std::mutex> lk(snap_mutex_);
     TrainSnapshot copy = snap_;  // copies POD + vectors
@@ -212,26 +220,32 @@ void TrainEngine::run_loop() {
         return conv->weight.detach().squeeze(1).to(torch::kCPU).clone();
     };
 
-    // Pin a held-out positive val sample (fallback: first val sample) so the
-    // saliency view follows the same waveform from noise -> structure.
-    int pinned_idx = 0;
-    for (size_t i = 0; i < y_val_.size(); ++i) {
-        if (y_val_[i] == 1) { pinned_idx = static_cast<int>(i); break; }
-    }
-    const torch::Tensor pinned_input =
-        (X_val_.size(0) > 0) ? X_val_[pinned_idx].clone() : torch::Tensor();
-    const int pinned_label = y_val_.empty() ? -1 : y_val_[pinned_idx];
+    // Default example to highlight: first positive in the val set (fallback 0).
+    auto default_viz_idx = [&]() -> int {
+        for (size_t i = 0; i < y_val_.size(); ++i)
+            if (y_val_[i] == 1) return static_cast<int>(i);
+        return 0;
+    };
 
-    // Grad-cam over the last backbone conv activation for the pinned sample,
-    // class 1. Returns (12, T'); runs under the current (eval) weights.
-    auto compute_gradcam = [&]() -> torch::Tensor {
-        if (!pinned_input.defined()) return torch::Tensor();
+    // Compute grad-cam saliency for the user-selected held-out example and
+    // store the waveform + (waveform-aligned) saliency + prediction into `sp`.
+    // class 1. Must run on the training thread (touches model_).
+    auto update_saliency = [&](TrainSnapshot& sp) {
+        const int64_t Nval = X_val_.size(0);
+        if (Nval == 0) return;
+        int idx = viz_index_.load();
+        if (idx < 0) idx = default_viz_idx();
+        idx = std::max<int>(0, std::min<int>(idx, static_cast<int>(Nval) - 1));
+
+        model_->eval();
         const int L = 12;
-        auto xr = pinned_input.reshape({L, 1, pinned_input.size(-1)}).to(device);  // (12,1,T)
+        torch::Tensor xin = X_val_[idx].to(device);            // (12, T)
+        auto xr = xin.reshape({L, 1, xin.size(-1)});           // (12,1,T)
         torch::Tensor A = model_->backbone->forward(xr).detach().set_requires_grad(true);
-        auto pooled = model_->pool->forward(A).squeeze(-1);     // (12,48)
-        auto flat = pooled.reshape({1, L * pooled.size(-1)});   // (1,576)
-        auto logits = model_->fc->forward(flat);               // (1,2) (dropout=identity in eval)
+        auto pooled = model_->pool->forward(A).squeeze(-1);    // (12,48)
+        auto flat = pooled.reshape({1, L * pooled.size(-1)});  // (1,576)
+        auto logits = model_->fc->forward(flat);               // (1,2)
+        float prob = torch::softmax(logits.detach(), 1).select(1, 1).item<float>();
         auto score = logits.select(1, 1).sum();
         model_->zero_grad();
         score.backward();
@@ -239,24 +253,50 @@ void TrainEngine::run_loop() {
         auto weights = grad.mean(2, true);                     // (12,48,1)
         auto cam = torch::relu((weights * A).sum(1));          // (12,T')
         model_->zero_grad();
-        return cam.detach().to(torch::kCPU).clone();           // CPU for the UI thread
+        // Upsample saliency to the input length so it aligns 1:1 with the
+        // waveform when overlaid.
+        auto cam_up = torch::upsample_linear1d(
+                          cam.unsqueeze(1), {xin.size(-1)}, false)
+                          .squeeze(1);                         // (12, T)
+
+        sp.pinned_input = xin.to(torch::kCPU).clone();
+        sp.gradcam = cam_up.detach().to(torch::kCPU).clone();
+        sp.pinned_label = y_val_[idx];
+        sp.viz_index = idx;
+        sp.viz_prob = prob;
+        sp.val_count = static_cast<int>(Nval);
     };
 
-    if (pinned_input.defined()) {
-        s.pinned_input = pinned_input;
-        s.pinned_label = pinned_label;
-    }
+    s.val_count = static_cast<int>(X_val_.size(0));
+    update_saliency(s);  // baseline saliency on the untrained (noise) model
 
     for (int epoch = 0; epoch < cfg_.max_epochs; ++epoch) {
         if (stop_.load()) break;
 
-        // Honor pause / single-step controls between epochs.
+        // Honor pause / single-step controls between epochs. While paused, wake
+        // periodically to service saliency-scrub requests (recompute grad-cam
+        // for a newly-selected example without training).
         {
             std::unique_lock<std::mutex> lk(ctrl_mutex_);
-            ctrl_cv_.wait(lk, [this] { return !paused_ || stop_.load(); });
+            auto service_paused = [&] {
+                int last = viz_index_.load();
+                while (paused_ && !stop_.load()) {
+                    ctrl_cv_.wait_for(lk, std::chrono::milliseconds(80));
+                    int cur = viz_index_.load();
+                    if (cur != last && !stop_.load()) {
+                        last = cur;
+                        lk.unlock();
+                        TrainSnapshot sp = snapshot();
+                        update_saliency(sp);
+                        publish(sp);
+                        lk.lock();
+                    }
+                }
+            };
+            service_paused();
             if (step_budget_ == 0) {
                 paused_ = true;
-                ctrl_cv_.wait(lk, [this] { return !paused_ || stop_.load(); });
+                service_paused();
             }
             if (step_budget_ > 0) --step_budget_;
         }
@@ -401,7 +441,7 @@ void TrainEngine::run_loop() {
         }
         s.patience_left = patience_left;
         s.stage1_kernels = extract_stage1();
-        s.gradcam = compute_gradcam();
+        update_saliency(s);
 
         publish(s);
 
@@ -421,7 +461,28 @@ void TrainEngine::run_loop() {
     s.running = false;
     s.done = true;
     s.stage1_kernels = extract_stage1();
-    s.gradcam = compute_gradcam();
+    update_saliency(s);
     publish(s);
+    running_.store(false);
+
+    // Stay alive after training so the saliency view can still be scrubbed
+    // across examples (recompute on the training thread under the final model)
+    // until the engine is stopped/destroyed.
+    {
+        std::unique_lock<std::mutex> lk(ctrl_mutex_);
+        int last = viz_index_.load();
+        while (!stop_.load()) {
+            ctrl_cv_.wait_for(lk, std::chrono::milliseconds(100));
+            int cur = viz_index_.load();
+            if (cur != last && !stop_.load()) {
+                last = cur;
+                lk.unlock();
+                TrainSnapshot sp = snapshot();
+                update_saliency(sp);
+                publish(sp);
+                lk.lock();
+            }
+        }
+    }
     running_.store(false);
 }

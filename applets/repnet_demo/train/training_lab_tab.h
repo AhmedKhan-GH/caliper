@@ -24,9 +24,10 @@ class TrainingLabTab {
 
    private:
     void draw_controls();
+    void draw_example_picker(const TrainSnapshot& s);  // left sidebar scrubber
     void draw_metrics(const TrainSnapshot& s);
     void draw_kernels(const TrainSnapshot& s);
-    void draw_saliency(const TrainSnapshot& s);
+    void draw_saliency(const TrainSnapshot& s);        // saliency over waveform
 
     void start_load();          // spawn dataset load thread
     void start_training();      // (re)create engine and start on current split
@@ -51,6 +52,10 @@ class TrainingLabTab {
     int max_epochs_ = 80;
     bool augment_ = true, mixup_ = true;
     bool show_ghost_ = true;
+
+    // --- saliency example scrubber ---
+    int viz_index_ = -1;        // selected held-out example (-1 = engine default)
+    int viz_lead_ = 1;          // lead shown in the waveform overlay (default II)
 
     // --- reference (ghost) stage-1 kernels (16,31) ---
     torch::Tensor ref_kernels_;

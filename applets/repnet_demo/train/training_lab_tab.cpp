@@ -158,10 +158,15 @@ void TrainingLabTab::draw() {
     TrainSnapshot s;
     if (engine_) s = engine_->snapshot();
 
-    // Two-column layout: left = metrics + saliency, right = kernels.
+    // Three columns: example scrubber sidebar | metrics+saliency | kernels.
     float avail_w = ImGui::GetContentRegionAvail().x;
-    float left_w = avail_w * 0.52f;
-    ImGui::BeginChild("##tl_left", ImVec2(left_w, 0), false);
+    float side_w = 230.0f;
+    float center_w = (avail_w - side_w) * 0.56f;
+    ImGui::BeginChild("##tl_side", ImVec2(side_w, 0), true);
+    draw_example_picker(s);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##tl_center", ImVec2(center_w, 0), false);
     draw_metrics(s);
     ImGui::Separator();
     draw_saliency(s);
@@ -170,6 +175,57 @@ void TrainingLabTab::draw() {
     ImGui::BeginChild("##tl_right", ImVec2(0, 0), false);
     draw_kernels(s);
     ImGui::EndChild();
+}
+
+// 12-lead names for the lead selector / titles.
+static const char* kLeadNames[12] = {"I",  "II", "III", "aVR", "aVL", "aVF",
+                                      "V1", "V2", "V3",  "V4",  "V5",  "V6"};
+
+void TrainingLabTab::draw_example_picker(const TrainSnapshot& s) {
+    ImGui::TextUnformatted("Saliency example");
+    ImGui::Separator();
+
+    int n = s.val_count > 0 ? s.val_count : (engine_ ? engine_->val_count() : 0);
+    if (n <= 0) {
+        ImGui::TextDisabled("start training to\npick an example");
+        return;
+    }
+    // Adopt the engine's chosen example the first time.
+    if (viz_index_ < 0) viz_index_ = s.viz_index >= 0 ? s.viz_index : 0;
+
+    ImGui::Text("held-out example");
+    ImGui::SetNextItemWidth(-1);
+    bool changed = ImGui::SliderInt("##ex", &viz_index_, 0, n - 1);
+    if (ImGui::SmallButton("<- prev")) { viz_index_ = std::max(0, viz_index_ - 1); changed = true; }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("next ->")) { viz_index_ = std::min(n - 1, viz_index_ + 1); changed = true; }
+    if (changed && engine_) engine_->set_viz_index(viz_index_);
+
+    ImGui::Spacing();
+    // True label + prediction for the shown example.
+    bool is_pe = s.pinned_label == 1;
+    ImGui::Text("true label:");
+    ImGui::SameLine();
+    ImGui::TextColored(is_pe ? ImVec4(1.0f, 0.55f, 0.35f, 1) : ImVec4(0.5f, 0.8f, 1.0f, 1),
+                       "%s", is_pe ? "Preeclampsia" : "Normal");
+    ImGui::Text("P(PE) = %.3f", s.viz_prob);
+    bool correct = (s.viz_prob >= 0.5f) == is_pe;
+    ImGui::TextColored(correct ? ImVec4(0.4f, 0.9f, 0.4f, 1) : ImVec4(0.95f, 0.4f, 0.4f, 1),
+                       "%s", correct ? "correct" : "wrong");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextUnformatted("Lead");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##lead", kLeadNames[viz_lead_])) {
+        for (int i = 0; i < 12; ++i) {
+            if (ImGui::Selectable(kLeadNames[i], viz_lead_ == i)) viz_lead_ = i;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Spacing();
+    ImGui::TextDisabled(
+        "Scrub examples and leads.\nThe waveform is the actual\nECG; the heat band behind\nit is grad-cam saliency.\nUpdates live (even paused).");
 }
 
 void TrainingLabTab::draw_controls() {
@@ -296,24 +352,69 @@ void TrainingLabTab::draw_kernels(const TrainSnapshot& s) {
 }
 
 void TrainingLabTab::draw_saliency(const TrainSnapshot& s) {
-    ImGui::Text("grad-cam saliency on a pinned positive ECG (12 leads)");
-    ImGui::TextDisabled("flat/noisy early -> concentrates on diagnostic regions");
-    if (!s.gradcam.defined()) {
+    if (!s.gradcam.defined() || !s.pinned_input.defined()) {
+        ImGui::Text("grad-cam saliency over the ECG waveform");
         ImGui::TextDisabled("(start training to watch saliency emerge from noise)");
         return;
     }
-    auto cam = s.gradcam.to(torch::kCPU).contiguous();  // (12, T')
-    int rows = (int)cam.size(0), colsT = (int)cam.size(1);
+    auto cam = s.gradcam.to(torch::kCPU).contiguous();    // (12, T) aligned to wave
+    auto wave = s.pinned_input.to(torch::kCPU).contiguous();  // (12, T)
+    int rows = (int)cam.size(0);
+    int T = (int)cam.size(1);
     float vmax = cam.max().item<float>();
     if (vmax < 1e-8f) vmax = 1.0f;
+    const float fs = 250.0f;
+    const double duration = T / fs;
 
+    int lead = std::max(0, std::min(rows - 1, viz_lead_));
+    ImGui::Text("Lead %s — saliency over the actual waveform   (P(PE)=%.3f)",
+                kLeadNames[lead], s.viz_prob);
+
+    // Build the time axis + the selected lead's waveform and saliency row.
+    std::vector<float> xs(T), wl(T), sl(T);
+    auto wacc = wave.accessor<float, 2>();
+    auto cacc = cam.accessor<float, 2>();
+    float ylo = 1e30f, yhi = -1e30f;
+    for (int t = 0; t < T; ++t) {
+        xs[t] = t / fs;
+        wl[t] = wacc[lead][t];
+        sl[t] = cacc[lead][t];
+        ylo = std::min(ylo, wl[t]);
+        yhi = std::max(yhi, wl[t]);
+    }
+    float margin = 0.1f * (yhi - ylo) + 1e-3f;
+    ylo -= margin;
+    yhi += margin;
+
+    // Main overlay: saliency heat band behind the waveform line.
     ImPlot::PushColormap(ImPlotColormap_Hot);
-    if (ImPlot::BeginPlot("##gradcam", ImVec2(-1, 220),
+    if (ImPlot::BeginPlot("##wave_sal", ImVec2(-1, 230),
+                          ImPlotFlags_NoLegend | kLockedPlot)) {
+        ImPlot::SetupAxes("time (s)", "amplitude (z)", 0,
+                          ImPlotAxisFlags_NoGridLines);
+        ImPlot::SetupAxisLimits(ImAxis_X1, 0, duration, ImGuiCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, ylo, yhi, ImGuiCond_Always);
+        // Background: 1xT saliency heatmap spanning the full y-range.
+        ImPlot::PlotHeatmap("##band", sl.data(), 1, T, 0.0, vmax, nullptr,
+                            ImPlotPoint(0, ylo), ImPlotPoint(duration, yhi));
+        // Foreground: the ECG trace.
+        ImPlotSpec ws;
+        ws.LineColor = ImVec4(0.95f, 0.97f, 1.0f, 1.0f);
+        ws.LineWeight = 1.3f;
+        ImPlot::PlotLine("ecg", xs.data(), wl.data(), T, ws);
+        ImPlot::EndPlot();
+    }
+    ImPlot::PopColormap();
+
+    // Compact 12-lead overview so all leads are visible at once.
+    ImGui::TextDisabled("all 12 leads (saliency)");
+    ImPlot::PushColormap(ImPlotColormap_Hot);
+    if (ImPlot::BeginPlot("##gradcam_all", ImVec2(-1, 150),
                           ImPlotFlags_NoLegend | kLockedPlot)) {
         ImPlot::SetupAxes("time", "lead",
                           ImPlotAxisFlags_NoDecorations,
                           ImPlotAxisFlags_NoGridLines);
-        ImPlot::PlotHeatmap("cam", cam.data_ptr<float>(), rows, colsT, 0.0, vmax,
+        ImPlot::PlotHeatmap("cam", cam.data_ptr<float>(), rows, T, 0.0, vmax,
                             nullptr, ImPlotPoint(0, 0), ImPlotPoint(1, 1));
         ImPlot::EndPlot();
     }

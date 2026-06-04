@@ -75,10 +75,22 @@ int main() {
     H.check(s.pinned_input.defined() &&
                 s.pinned_input.sizes() == torch::IntArrayRef({12, 2500}),
             "pinned_input shape (12,2500)");
-    H.check(s.gradcam.defined() && s.gradcam.size(0) == 12,
-            "gradcam published (12, T')");
+    H.check(s.gradcam.defined() && s.gradcam.sizes() == torch::IntArrayRef({12, 2500}),
+            "gradcam published, waveform-aligned (12,2500)");
     H.check(s.gradcam.max().item<float>() >= 0.0f, "gradcam is non-negative (relu)");
     H.check((int)s.auroc_history.size() == s.epoch, "auroc history per epoch");
+    H.check(s.val_count == (int)sp.val.size(), "snapshot reports val_count");
+
+    // 4b. Scrubbing to another example post-training is serviced by the idle
+    //     loop (the thread stays alive after `done`).
+    int target = (s.viz_index + 7) % std::max(1, s.val_count);
+    engine.set_viz_index(target);
+    for (int tries = 0; tries < 40; ++tries) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        s = engine.snapshot();
+        if (s.viz_index == target) break;
+    }
+    H.check(s.viz_index == target, "scrub selects a new example after training");
 
     // 5. The model actually learned something on real data (best val AUROC well
     //    above chance). Real ECG is hard; even a few epochs should clear 0.6.
