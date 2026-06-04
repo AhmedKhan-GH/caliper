@@ -1,0 +1,130 @@
+{
+  "entries": [
+    {
+      "name": "backbone.0.weight",
+      "file": "backbone__0__weight.bin",
+      "shape": [
+        16,
+        1,
+        31
+      ]
+    },
+    {
+      "name": "backbone.1.weight",
+      "file": "backbone__1__weight.bin",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "backbone.1.bias",
+      "file": "backbone__1__bias.bin",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "backbone.1.running_mean",
+      "file": "backbone__1__running_mean.bin",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "backbone.1.running_var",
+      "file": "backbone__1__running_var.bin",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "backbone.3.weight",
+      "file": "backbone__3__weight.bin",
+      "shape": [
+        32,
+        16,
+        21
+      ]
+    },
+    {
+      "name": "backbone.4.weight",
+      "file": "backbone__4__weight.bin",
+      "shape": [
+        32
+      ]
+    },
+    {
+      "name": "backbone.4.bias",
+      "file": "backbone__4__bias.bin",
+      "shape": [
+        32
+      ]
+    },
+    {
+      "name": "backbone.4.running_mean",
+      "file": "backbone__4__running_mean.bin",
+      "shape": [
+        32
+      ]
+    },
+    {
+      "name": "backbone.4.running_var",
+      "file": "backbone__4__running_var.bin",
+      "shape": [
+        32
+      ]
+    },
+    {
+      "name": "backbone.6.weight",
+      "file": "backbone__6__weight.bin",
+      "shape": [
+        48,
+        32,
+        11
+      ]
+    },
+    {
+      "name": "backbone.7.weight",
+      "file": "backbone__7__weight.bin",
+      "shape": [
+        48
+      ]
+    },
+    {
+      "name": "backbone.7.bias",
+      "file": "backbone__7__bias.bin",
+      "shape": [
+        48
+      ]
+    },
+    {
+      "name": "backbone.7.running_mean",
+      "file": "backbone__7__running_mean.bin",
+      "shape": [
+        48
+      ]
+    },
+    {
+      "name": "backbone.7.running_var",
+      "file": "backbone__7__running_var.bin",
+      "shape": [
+        48
+      ]
+    },
+    {
+      "name": "fc.weight",
+      "file": "fc__weight.bin",
+      "shape": [
+        2,
+        576
+      ]
+    },
+    {
+      "name": "fc.bias",
+      "file": "fc__bias.bin",
+      "shape": [
+        2
+      ]
+    }
+  ]
+}
