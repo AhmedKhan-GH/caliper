@@ -4,11 +4,21 @@ add_library(repnet_demo SHARED
     dataset.cpp
     app_paths.cpp
     model_viz.cpp
+    # Training Lab: live PerLeadCNN training + visualization
+    train/dsp.cpp
+    train/sgkf.cpp
+    train/perlead_cnn.cpp
+    train/ecg_augment.cpp
+    train/train_dataset.cpp
+    train/train_engine.cpp
+    train/training_lab_tab.cpp
 )
 
 target_include_directories(repnet_demo PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/train
+    ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/vendor  # nlohmann/json.hpp
 )
 
 target_link_libraries(repnet_demo PRIVATE

@@ -29,6 +29,7 @@
 #include <torch/script.h>
 #include <torch/csrc/autograd/autograd.h>
 #include "model_viz.h"
+#include "train/training_lab_tab.h"
 
 namespace fs = std::filesystem;
 
@@ -597,6 +598,9 @@ struct RepNetDemoApplet::State {
     // ── Architecture visualizer ──
     std::unique_ptr<ModelVisualizer> viz;
 
+    // ── Training Lab (live training + viz) ──
+    std::unique_ptr<TrainingLabTab> training_lab;
+
     // ── Activation detail view ──
     std::vector<torch::Tensor> detail_acts;   // per-node (batch squeezed)
     std::vector<GLuint> detail_texs;          // cached heatmap textures
@@ -673,6 +677,7 @@ static void extract_weights(torch::jit::Module& model,
 
 bool RepNetDemoApplet::initialize() {
     s_ = std::make_unique<State>();
+    s_->training_lab = std::make_unique<TrainingLabTab>();
 
     s_->params.baseline_wander_correction = true;
     s_->params.baseline_cutoff_hz = 0.5f;
@@ -846,6 +851,10 @@ void RepNetDemoApplet::draw_ui(int /*win_w*/, int /*win_h*/) {
         }
         if (ImGui::BeginTabItem("Model")) {
             draw_model_tab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Training Lab")) {
+            if (s_->training_lab) s_->training_lab->draw();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
