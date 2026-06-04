@@ -143,9 +143,9 @@ void TrainEngine::step_once() {
 TrainSnapshot TrainEngine::snapshot() const {
     std::lock_guard<std::mutex> lk(snap_mutex_);
     TrainSnapshot copy = snap_;  // copies POD + vectors
-    if (snap_.stage1_kernels.defined()) {
-        copy.stage1_kernels = snap_.stage1_kernels.clone();
-    }
+    if (snap_.stage1_kernels.defined()) copy.stage1_kernels = snap_.stage1_kernels.clone();
+    if (snap_.pinned_input.defined()) copy.pinned_input = snap_.pinned_input.clone();
+    if (snap_.gradcam.defined()) copy.gradcam = snap_.gradcam.clone();
     return copy;
 }
 
@@ -156,6 +156,8 @@ void TrainEngine::publish(const TrainSnapshot& s) {
     std::lock_guard<std::mutex> lk(snap_mutex_);
     snap_ = s;
     if (s.stage1_kernels.defined()) snap_.stage1_kernels = s.stage1_kernels.clone();
+    if (s.pinned_input.defined()) snap_.pinned_input = s.pinned_input.clone();
+    if (s.gradcam.defined()) snap_.gradcam = s.gradcam.clone();
 }
 
 void TrainEngine::run_loop() {
@@ -201,6 +203,41 @@ void TrainEngine::run_loop() {
         auto conv = seq->ptr<torch::nn::Conv1dImpl>(0);
         return conv->weight.detach().squeeze(1).clone();
     };
+
+    // Pin a held-out positive val sample (fallback: first val sample) so the
+    // saliency view follows the same waveform from noise -> structure.
+    int pinned_idx = 0;
+    for (size_t i = 0; i < y_val_.size(); ++i) {
+        if (y_val_[i] == 1) { pinned_idx = static_cast<int>(i); break; }
+    }
+    const torch::Tensor pinned_input =
+        (X_val_.size(0) > 0) ? X_val_[pinned_idx].clone() : torch::Tensor();
+    const int pinned_label = y_val_.empty() ? -1 : y_val_[pinned_idx];
+
+    // Grad-cam over the last backbone conv activation for the pinned sample,
+    // class 1. Returns (12, T'); runs under the current (eval) weights.
+    auto compute_gradcam = [&]() -> torch::Tensor {
+        if (!pinned_input.defined()) return torch::Tensor();
+        const int L = 12;
+        auto xr = pinned_input.reshape({L, 1, pinned_input.size(-1)});  // (12,1,T)
+        torch::Tensor A = model_->backbone->forward(xr).detach().set_requires_grad(true);
+        auto pooled = model_->pool->forward(A).squeeze(-1);     // (12,48)
+        auto flat = pooled.reshape({1, L * pooled.size(-1)});   // (1,576)
+        auto logits = model_->fc->forward(flat);               // (1,2) (dropout=identity in eval)
+        auto score = logits.select(1, 1).sum();
+        model_->zero_grad();
+        score.backward();
+        auto grad = A.grad();                                  // (12,48,T')
+        auto weights = grad.mean(2, true);                     // (12,48,1)
+        auto cam = torch::relu((weights * A).sum(1));          // (12,T')
+        model_->zero_grad();
+        return cam.detach().clone();
+    };
+
+    if (pinned_input.defined()) {
+        s.pinned_input = pinned_input;
+        s.pinned_label = pinned_label;
+    }
 
     for (int epoch = 0; epoch < cfg_.max_epochs; ++epoch) {
         if (stop_.load()) break;
@@ -352,6 +389,7 @@ void TrainEngine::run_loop() {
         }
         s.patience_left = patience_left;
         s.stage1_kernels = extract_stage1();
+        s.gradcam = compute_gradcam();
 
         publish(s);
 
@@ -371,6 +409,7 @@ void TrainEngine::run_loop() {
     s.running = false;
     s.done = true;
     s.stage1_kernels = extract_stage1();
+    s.gradcam = compute_gradcam();
     publish(s);
     running_.store(false);
 }

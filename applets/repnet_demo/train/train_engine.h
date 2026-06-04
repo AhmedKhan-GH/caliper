@@ -31,6 +31,11 @@ struct TrainSnapshot {
     std::vector<float> auroc_history;  // per-epoch val AUROC
     // (16,31) clone of backbone[0].weight squeezed -- for "kernels adapting".
     torch::Tensor stage1_kernels;
+    // Pinned held-out positive sample (12,2500) and its grad-cam saliency
+    // (12, T') under the current weights -- for "saliency from noise".
+    torch::Tensor pinned_input;
+    torch::Tensor gradcam;
+    int pinned_label = -1;
 };
 
 class TrainEngine {
