@@ -1,0 +1,22 @@
+{
+  "data_dir": "/Users/ahmed/PycharmProjects/repnet/data/seniordesign_upload",
+  "n_samples": 2178,
+  "n_positive": 335,
+  "n_patients": 1383,
+  "n_params": 29490,
+  "split17_seed": 1119,
+  "split17_test_auroc": 0.7793313069908815,
+  "split17_test_n": 446,
+  "split17_test_pos": 70,
+  "filters": [
+    16,
+    32,
+    48
+  ],
+  "kernels": [
+    31,
+    21,
+    11
+  ],
+  "dropout": 0.15
+}
