@@ -3,6 +3,8 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <functional>
 
 namespace httplib { class Server; }
@@ -30,4 +32,9 @@ private:
     std::atomic<bool> running_{false};
     int port_ = 11435;
     std::atomic<bool> request_active_{false};
+    std::mutex request_mutex_;
+    std::condition_variable request_cv_;
+
+    void acquire_inference();
+    void release_inference();
 };

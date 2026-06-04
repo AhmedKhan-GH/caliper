@@ -1404,6 +1404,11 @@ int OpenGllamaApplet::decode_prompt_chunked(const std::vector<llama_token>& toke
     eval_capture_enabled_ = false;
 
     for (int i = 0; i < n_tokens; i += n_batch) {
+        if (abort_inference_.load(std::memory_order_relaxed)) {
+            eval_capture_enabled_ = true;
+            return -1;
+        }
+
         int chunk = std::min(n_batch, n_tokens - i);
         bool is_last = (i + chunk >= n_tokens);
 
@@ -1762,11 +1767,13 @@ void OpenGllamaApplet::run_inference_blocking(
     int gen_count = 0;
 
     while (inference_running_) {
+        if (abort_inference_.load(std::memory_order_relaxed)) break;
         if (max_tokens_ > 0 && gen_count >= max_tokens_) break;
 
         while (inference_running_ &&
                inference_mode_ == InferenceMode::Paused &&
                !step_requested_) {
+            if (abort_inference_.load(std::memory_order_relaxed)) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         step_requested_ = false;

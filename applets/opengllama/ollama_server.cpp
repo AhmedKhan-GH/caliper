@@ -173,6 +173,24 @@ OllamaServer::~OllamaServer() {
     stop();
 }
 
+void OllamaServer::acquire_inference() {
+    std::unique_lock<std::mutex> lk(request_mutex_);
+    if (request_active_.load()) {
+        applet_->abort_inference_ = true;
+        request_cv_.wait(lk, [this]{ return !request_active_.load(); });
+    }
+    request_active_ = true;
+    applet_->abort_inference_ = false;
+}
+
+void OllamaServer::release_inference() {
+    {
+        std::lock_guard<std::mutex> lk(request_mutex_);
+        request_active_ = false;
+    }
+    request_cv_.notify_all();
+}
+
 void OllamaServer::start(int port) {
     if (running_) return;
 
@@ -231,11 +249,7 @@ void OllamaServer::setup_routes() {
             res.set_content("{\"error\":\"no model loaded\"}", "application/json");
             return;
         }
-        if (request_active_.exchange(true)) {
-            res.status = 503;
-            res.set_content("{\"error\":\"inference already in progress\"}", "application/json");
-            return;
-        }
+        acquire_inference();
 
         std::string prompt = parse_json_string(req.body, "prompt");
         bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
@@ -250,7 +264,7 @@ void OllamaServer::setup_routes() {
             prompt.size(), stream ? "true" : "false", num_predict);
 
         if (prompt.empty()) {
-            request_active_ = false;
+            release_inference();
             res.status = 400;
             res.set_content("{\"error\":\"empty prompt\"}", "application/json");
             return;
@@ -278,17 +292,17 @@ void OllamaServer::setup_routes() {
                 "\"done\":true}";
             res.set_content(json, "application/json");
             applet_->max_tokens_ = saved_max_tokens;
-            request_active_ = false;
+            release_inference();
             return;
         }
 
-        auto* active_flag = &request_active_;
+        auto server = this;
         auto applet = applet_;
         int saved_mt = saved_max_tokens;
         std::string mn = model_name;
 
         res.set_chunked_content_provider("application/x-ndjson",
-            [applet, prompt, mn, active_flag, saved_mt](size_t, httplib::DataSink& sink) -> bool {
+            [applet, prompt, mn, server, saved_mt](size_t, httplib::DataSink& sink) -> bool {
                 applet->run_inference_blocking(prompt, [&](const std::string& piece) {
                     std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
                         "\"created_at\":\"" + iso8601_now() + "\","
@@ -304,7 +318,7 @@ void OllamaServer::setup_routes() {
                 sink.write(done_line.data(), done_line.size());
                 sink.done();
                 applet->max_tokens_ = saved_mt;
-                *active_flag = false;
+                server->release_inference();
                 return true;
             });
     });
@@ -315,17 +329,13 @@ void OllamaServer::setup_routes() {
             res.set_content("{\"error\":\"no model loaded\"}", "application/json");
             return;
         }
-        if (request_active_.exchange(true)) {
-            res.status = 503;
-            res.set_content("{\"error\":\"inference already in progress\"}", "application/json");
-            return;
-        }
+        acquire_inference();
 
         auto msgs = parse_messages(req.body);
         bool stream = !parse_json_bool(req.body, "stream", true) ? false : true;
 
         if (msgs.empty()) {
-            request_active_ = false;
+            release_inference();
             res.status = 400;
             res.set_content("{\"error\":\"no messages\"}", "application/json");
             return;
@@ -360,17 +370,17 @@ void OllamaServer::setup_routes() {
                 "\"done\":true}";
             res.set_content(json, "application/json");
             applet_->max_tokens_ = saved_max_tokens;
-            request_active_ = false;
+            release_inference();
             return;
         }
 
-        auto* active_flag = &request_active_;
+        auto server = this;
         auto applet = applet_;
         int saved_mt = saved_max_tokens;
         std::string mn = model_name;
 
         res.set_chunked_content_provider("application/x-ndjson",
-            [applet, prompt, mn, active_flag, saved_mt](size_t, httplib::DataSink& sink) -> bool {
+            [applet, prompt, mn, server, saved_mt](size_t, httplib::DataSink& sink) -> bool {
                 applet->run_inference_blocking(prompt, [&](const std::string& piece) {
                     std::string line = "{\"model\":\"" + json_escape(mn) + ":latest\","
                         "\"created_at\":\"" + iso8601_now() + "\","
@@ -386,7 +396,7 @@ void OllamaServer::setup_routes() {
                 sink.write(done_line.data(), done_line.size());
                 sink.done();
                 applet->max_tokens_ = saved_mt;
-                *active_flag = false;
+                server->release_inference();
                 return true;
             });
     });
