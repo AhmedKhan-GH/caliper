@@ -20,7 +20,7 @@ This document specifies the target state and the migration to it:
 3. **A packaging story** — applets as `.caliperapp` bundles with manifests, built in their own repositories against tagged SDK releases; heavy dependencies as host-managed **runtime packs**; a git-repo registry (the Homebrew-tap model) for discovery and install.
 4. **A migration plan** — six strangler-fig phases, each leaving the repo shippable, ending with `applets/` deleted from this repo and every applet living its own life with its own history.
 
-The unique selling point — **tightly integrated visualization running on bare metal (CUDA/MPS), in the same frame loop as training** — is preserved by keeping applets in-process and is productized as the `tensor_bridge` service.
+The unique selling point — **tightly integrated visualization running on bare metal (CUDA/MPS), in the same frame loop as training** — is preserved by keeping applets in-process and is productized as the `tensor_bridge` service, running GPU-resident on native rendering backends (Metal on macOS, Vulkan on Windows) behind a renderer-agnostic contract (§5.4).
 
 ---
 
@@ -149,7 +149,20 @@ Dependency rule: arrows point **down only**. Applets depend on the SDK; the host
 
 ### 5.3 The frame loop (unchanged, formalized)
 
-The host owns: GLFW window, GL context, ImGui/ImPlot/ImPlot3D contexts, the frame clock. Per frame: host begins ImGui frame → active applet's `frame()` renders its UI (and may consume GPU results produced by its own jobs) → host ends frame, swaps. Applets never create windows or GL contexts. Long work never runs on the frame thread — that's what `caliper.jobs.v1` is for, and the host's watchdog flags applets that stall the loop (§15).
+The host owns: GLFW window, the rendering backend (§5.4), ImGui/ImPlot/ImPlot3D contexts, the frame clock. Per frame: host begins ImGui frame → active applet's `frame()` renders its UI (and may consume GPU results produced by its own jobs) → host ends frame, swaps. Applets never create windows or touch the graphics API (§6c). Long work never runs on the frame thread — that's what `caliper.jobs.v1` is for, and the host's watchdog flags applets that stall the loop (§15).
+
+### 5.4 Rendering backend strategy — native first, GL demoted to fallback
+
+The USP is GPU-resident visualization, so the renderer must speak the API the tensors actually live in — and OpenGL doesn't: it is deprecated on macOS (capped at 4.1) and has no path to MPS memory, meaning every Mac tensor would take a CPU round-trip on its way to becoming a texture — a copy in the hottest loop the platform owns. Because zero external applets exist yet, the renderer question is settled **now, at the contract level**, and the migration itself becomes a host-internal detail forever:
+
+1. **The ABI never mentions a graphics API.** Textures cross the boundary as opaque `CaliperTextureId` (§7.4); applets render exclusively through ImGui/ImPlot (§6c rule). Backend changes therefore require no epoch bump and no applet rebuilds — ever.
+2. **`HostRenderer` — a host-internal interface** (surface/swapchain, ImGui backend binding, frame begin/end, texture create/update/release over `CaliperTensor` descriptors) with three implementations:
+   - **Metal (macOS) — primary.** `imgui_impl_metal` + a `GLFW_NO_API` window with a `CAMetalLayer`. MPS torch tensors are `MTLBuffer`s: the bridge aliases them as textures (zero-copy when layout/alignment permit) or blits device-side — either way, no CPU staging.
+   - **Vulkan (Windows now, Linux later) — primary.** `imgui_impl_vulkan`; CUDA interop via `VK_KHR_external_memory` + `cudaImportExternalMemory` — the modern successor to CUDA↔GL interop, present on every CUDA-capable machine.
+   - **OpenGL 3.3 — frozen fallback** for VMs/remote/odd environments: CPU-staged uploads, kept working, never extended. GLEW→GLAD is swapped opportunistically if this path is kept long-term, or both die together if it isn't (decided in Phase 4).
+3. **The tensor bridge is specified against `HostRenderer`** and built once, natively (Phase 2 on Metal, Phase 4 adds Vulkan) — not first on GL and rewritten later.
+
+Sequencing rationale: Metal lands with Phase 2 because that's when the bridge is built and the primary dev machine is Apple Silicon — otherwise the staged-copy ceiling sits in the middle of the reference applet's demo for the platform's entire formative period.
 
 ---
 
@@ -225,6 +238,7 @@ struct CaliperHost {
 
 - C types only: no STL, no exceptions across the boundary (sugar catches everything at the edge and reports via `caliper.log.v1`).
 - No `torch::`, `duckdb::`, or any third-party C++ type in any signature — interchange is `CaliperTensor` (§7.2) and Arrow C streams (§7.6).
+- No graphics-API types or handles (GL/Metal/Vulkan) anywhere in the ABI, and applets never issue raw graphics calls — rendering happens exclusively through ImGui/ImPlot and `caliper.tensor_bridge` textures. This single rule is what keeps the host's renderer swappable forever (§5.4); an explicit escape-hatch service could exist later for an applet that truly needs custom GPU drawing, clearly marked as backend-locking.
 - Memory allocated by a side is freed by that side. Host-returned strings/buffers are host-owned with documented lifetimes.
 - All strings UTF-8 `const char*`.
 - All structs are POD, `struct_size`-prefixed, alignment-stable.
@@ -277,7 +291,7 @@ Each service: a C table in `caliper/services/<name>_v1.h`, a host implementation
 | `caliper.ui.v1` | ImGui/ImPlot/ImPlot3D contexts + allocators | `applet_initialize` today |
 | `caliper.log.v1` | structured logs into host console | `printf` chaos today |
 | `caliper.device.v1` | negotiated compute device | per-applet `pick_device()` |
-| `caliper.tensor_bridge.v1` | tensor → live GL texture (zero-copy where possible) | `model_viz.cpp` |
+| `caliper.tensor_bridge.v1` | tensor → live texture, GPU-resident (opaque `CaliperTextureId`) | `model_viz.cpp` |
 | `caliper.jobs.v1` | background compute w/ progress+cancel | `train_engine.cpp` thread |
 | `caliper.metrics.v1` | run/tag/step scalars, histograms, images + free dashboards | Training Lab plots |
 | `caliper.data.v1` | dataset catalog + SQL, Arrow out | `dataset.cpp` |
@@ -335,22 +349,35 @@ Applets stop writing device-pick logic; the host decides once (user-overridable 
 ### 7.4 `caliper.tensor_bridge.v1` — the USP, productized
 
 ```c
+typedef uint64_t CaliperTextureId;   /* opaque; cast to ImTextureID. 0 = invalid.
+                                        NEVER a raw GL/Metal/Vulkan handle (§5.4) */
+
 typedef struct CaliperTensorBridgeV1 {
     uint32_t struct_size;
-    /* Create a GL texture mirroring a 2-D (H,W) or 3-D (H,W,C≤4) tensor.
-       CUDA device tensor + interop available → zero-copy via
-       cudaGraphicsGLRegisterImage/Map. MPS/CPU → staged upload this frame.
-       Returns 0 on failure (reason via caliper.log.v1). */
-    uint32_t (*texture_from_tensor)(const CaliperTensor* t, uint32_t flags);
-    bool     (*update_texture)(uint32_t texture, const CaliperTensor* t); // re-upload/remap
-    void     (*release_texture)(uint32_t texture);
+    /* Mirror a 2-D (H,W) or 3-D (H,W,C≤4) tensor as a texture.
+       Native backends (§5.4): Metal buffer aliasing on MPS, Vulkan
+       external-memory + CUDA import on Windows — GPU-resident, zero-copy
+       where layout permits, device-side blit otherwise. GL fallback:
+       CPU-staged upload. Returns 0 on failure (reason via caliper.log.v1). */
+    CaliperTextureId (*texture_from_tensor)(const CaliperTensor* t, uint32_t flags);
+    bool (*update_texture)(CaliperTextureId tex, const CaliperTensor* t);
+    void (*release_texture)(CaliperTextureId tex);
     /* Built-in colormaps for 1-channel tensors (viridis, magma, RdBu …) */
-    uint32_t (*texture_from_tensor_mapped)(const CaliperTensor* t, int32_t colormap,
-                                           float vmin, float vmax, uint32_t flags);
+    CaliperTextureId (*texture_from_tensor_mapped)(const CaliperTensor* t,
+                                                   int32_t colormap,
+                                                   float vmin, float vmax,
+                                                   uint32_t flags);
+    /* Literal zero-copy: allocate tensor memory that IS the texture's backing
+       store (shared MTLBuffer / Vulkan external memory imported into CUDA).
+       The applet wraps out_tensor->data (torch::from_blob) and writes from
+       kernels; the texture sees it after at most a layout transition. */
+    bool (*alloc_shared)(CaliperDType dtype, int32_t ndim, const int64_t* shape,
+                         CaliperTensor* out_tensor, CaliperTextureId* out_texture);
+    void (*free_shared)(CaliperTextureId tex);
 } CaliperTensorBridgeV1;
 ```
 
-This is the one call that turns "weights/activations/saliency living on the GPU" into "an `ImGui::Image` this frame". No TensorBoard round-trip, no PNG encode, no Python. Nothing mainstream offers this in-loop; it is the platform's reason to exist and the heart of the demo story.
+This is the one call that turns "weights/activations/saliency living on the GPU" into "an `ImGui::Image` this frame" — `CaliperTextureId` casts straight to `ImTextureID`. No TensorBoard round-trip, no PNG encode, no Python, and on the native backends no CPU staging either. `alloc_shared` completes the story: the training loop writes weights *into the texture's own memory*, so live visualization costs a layout transition, not a copy. The GL fallback stages through the CPU — acceptable for a VM, not for the demo machine. Nothing mainstream offers this in-loop; it is the platform's reason to exist and the heart of the demo story.
 
 ### 7.5 `caliper.jobs.v1`
 
@@ -739,7 +766,7 @@ Per the standing rule — no production code without a failing test first — ea
 | Loader v2 | descriptor resolution, lifecycle ordering, double-load, unload | `examples/hello` fixture applet built in-tree |
 | Crash guard | fixture applet with `crash_on_frame` flag → quarantined, host lives | integration test (headless GL) |
 | Hot reload | rebuild fixture mid-run → reload, lifecycle hooks called exactly once each | dev-mode integration test |
-| Each service | contract tests against the host implementation (e.g. metrics: write 10k scalars, query back ordered; jobs: cancel honored ≤ 100 ms; bridge: tensor→texture pixel-exact vs CPU reference) | service test suite in host CI |
+| Each service | contract tests against the host implementation (e.g. metrics: write 10k scalars, query back ordered; jobs: cancel honored ≤ 100 ms; bridge: tensor→texture pixel-exact vs CPU reference, run per backend) | service test suite in host CI |
 | SDK conformance | the `caliper_conformance` checker itself (exports, descriptor, imconfig hash) | SDK repo CI, and runs in every applet's ctest |
 | **Golden-applet wall** | host must load `.caliperapp` artifacts built against every supported SDK release | host CI, artifacts cached from SDK release CI |
 | Template | template CI builds against the SDK **release artifact** (not source) and produces a loadable bundle | template repo CI; also smoke-run in host CI |
@@ -765,9 +792,9 @@ Every phase ends with a shippable repo and a demo. No big bang; the v1 loader ke
 - **Exit:** all applets on epoch 2; negotiation/loader/crash tests green; Windows build on `/MD`.
 
 ### Phase 2 — extract the primitives (surgery on repnet_demo)
-- `jobs.v1` (from `train_engine` threading) → host jobs tray. `metrics.v1` (DuckDB store + Runs dashboard). `tensor.h` + `tensor_bridge.v1` (from `model_viz`; CUDA-GL interop path on Windows, staged path on MPS/CPU). `device.v1`. `data.v1` (Arrow out; from `dataset.cpp`). `artifacts.v1`. First `caliper::viz` components (SaliencyOverlay, KernelGrid).
+- `HostRenderer` abstraction + **Metal backend on macOS** (§5.4); the existing GL path becomes the fallback implementation behind the same interface. `jobs.v1` (from `train_engine` threading) → host jobs tray. `metrics.v1` (DuckDB store + Runs dashboard). `tensor.h` + `tensor_bridge.v1` built **once, natively over `HostRenderer`** (from `model_viz`): Metal aliasing/blit on MPS, GL staging on Windows until Phase 4's Vulkan work. `device.v1`. `data.v1` (Arrow out; from `dataset.cpp`). `artifacts.v1`. First `caliper::viz` components (SaliencyOverlay, KernelGrid).
 - repnet_demo consumes services and **shrinks**; it is now the reference applet.
-- **Exit:** Training Lab runs entirely on public services; the Runs dashboard renders metrics from *any* applet; service contract tests green.
+- **Exit:** Training Lab runs entirely on public services with **no CPU staging in the saliency/kernel path on macOS**; the Runs dashboard renders metrics from *any* applet; service contract tests green on Metal and GL backends.
 
 ### Phase 3 — independence (the milestone that defines the platform)
 - Split `caliper-sdk` to its own repo (`git filter-repo` preserves history), tag `v0.1.0`, set up SDK CI (conformance + per-platform ui-stack builds).
@@ -777,7 +804,7 @@ Every phase ends with a shippable repo and a demo. No big bang; the v1 loader ke
 - **Exit:** a `circuitnet.caliperapp` built by CI that never checked out Caliper, drag-dropped into a stock host, runs. **This is the moment Caliper becomes a platform.**
 
 ### Phase 4 — runtime packs, bundles, dev mode
-- Bundle-aware discovery (`*.caliperapp` + manifest gate). Pack manager (resolve/download/verify/GC; `AddDllDirectory` / pre-`dlopen` wiring; one-torch-per-session policy). `caliper::torch_stub`. `caliper dev <dir>` (file-watch hot reload, log tail) and `caliper new` (template instantiation) as host subcommands.
+- Bundle-aware discovery (`*.caliperapp` + manifest gate). Pack manager (resolve/download/verify/GC; `AddDllDirectory` / pre-`dlopen` wiring; one-torch-per-session policy). `caliper::torch_stub`. `caliper dev <dir>` (file-watch hot reload, log tail) and `caliper new` (template instantiation) as host subcommands. **Vulkan backend on Windows** + CUDA external-memory interop in the bridge; GL demoted to frozen compatibility fallback (GLEW→GLAD swap or outright deletion decided here).
 - Move **repnet-lab** and **opengllama** to their own repos (history-preserving), shipping as bundles with `libtorch` pack dependency.
 - **Exit:** fresh machine → install 50 MB host → install repnet-lab bundle → host fetches libtorch pack once → Training Lab live. `applets/` in this repo now contains only the `hello` fixture.
 
@@ -813,6 +840,8 @@ Contract before extraction (Phases 1→2) so services land behind a stable bound
 | D10 | SDK license: MIT (host may stay separate) | **Decide by Phase 3** | Ecosystem needs a permissive SDK; MIT matches ImGui/ImPlot neighborhood. Apache-2.0 acceptable if patent grant desired. |
 | D11 | Host ships without libtorch (bridge uses raw CUDA/Metal; metrics use embedded DuckDB) | Proposed | 50 MB host; packs on demand. |
 | D12 | Audience: (b) source-building collaborators now, contracts sized for (c) later | Proposed (assumption) | Stated in §3; revisit when a real (c) user appears. |
+| D13 | Renderer-agnostic ABI from epoch 2; native backends as the target — **Metal (macOS) + Vulkan (Windows)** primary, OpenGL 3.3 frozen fallback; textures cross as opaque `CaliperTextureId` | Proposed | The USP demands GPU-resident pixels; GL is deprecated on macOS and cannot touch MPS memory (today every Mac texture takes a CPU round-trip). Decided while zero external applets exist, so the renderer stays host-internal forever — no epoch bump, no applet rebuilds. GLEW's fate follows GL's (§5.4). |
+| D14 | The bridge *allocates* texture-backed shared tensors (`alloc_shared`), not just mirrors existing ones | Proposed | Upgrades "fast device copy" to literal zero-copy for live weights/saliency; applets adopt it with one `torch::from_blob`. |
 
 ---
 
@@ -823,7 +852,8 @@ Contract before extraction (Phases 1→2) so services land behind a stable bound
 | ImGui across DLL w/ static CRT crashes on Windows | High (latent today) | High | D7: `/MD` + allocator handoff (Phase 1); conformance checks imconfig hash. |
 | `dlclose` doesn't truly unload (TLS, ObjC) → hot-reload staleness | Medium | Low (dev-only) | Copy-to-unique-temp per reload; accept small dev-mode leak; full teardown semantics. |
 | Two applets demand incompatible libtorch | Medium | Medium | One-pack-per-session policy with clear refusal card (D5); Phase 6 isolation as the real fix. |
-| CUDA↔GL interop unavailable (VMs, remote, hybrid GPUs) | Medium | Medium | Bridge auto-falls back to staged upload; `device.v1` exposes what was negotiated. |
+| GPU interop quirks (Vulkan external-memory alignment/tiling, Metal buffer-aliasing limits, VMs/remote/hybrid GPUs) | Medium | Medium | Bridge degrades per-tensor: alias → device blit → CPU-staged upload (GL fallback); contract tests pin behavior per backend; `device.v1` exposes what was negotiated. |
+| Metal/Vulkan backend work displaces platform phases | Medium | Medium | Renderer is host-internal (no ABI coupling, §5.4) — it can slip without blocking any other phase; GL fallback keeps everything shippable; Metal lands with Phase 2 (primary dev machine), Vulkan deferred to Phase 4. |
 | `/MD` migration destabilizes DuckDB/static deps on Windows | Medium | Medium | Phase 1 task with its own test gate; fall back = keep `/MT` for host-internal DuckDB while plugins use `/MD` (allocators still fix ImGui). |
 | ABI surface creep (services accrete fields/semantics) | Medium | High | Constitution §6b; conformance suite; golden-applet wall; service review checklist in SDK CONTRIBUTING. |
 | Epoch bumps strand dormant applets | Low | Medium | N/N−1 host support window; registry surfaces "needs rebuild" state; rebuild = re-tag against bumped SDK. |
@@ -846,6 +876,8 @@ Contract before extraction (Phases 1→2) so services land behind a stable bound
 | **Registry** | `caliper-registry` git repo: `index.json` of applets/packs → release artifacts. Publishing = PR. |
 | **Golden-applet wall** | Host CI gate: bundles built against every supported SDK release must still load. |
 | **Fixture host** | Headless fake `CaliperHost` shipped in the SDK for TDD of applets and sugar. |
+| **HostRenderer** | Host-internal rendering interface; Metal/Vulkan/GL implementations live behind the renderer-agnostic ABI (§5.4). |
+| **CaliperTextureId** | Opaque 64-bit texture handle from the bridge; castable to `ImTextureID`, never a raw graphics handle. |
 
 ---
 
