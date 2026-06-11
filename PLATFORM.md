@@ -908,4 +908,4 @@ Contract before extraction (Phases 1→2) so services land behind a stable bound
 
 ---
 
-*Companion documents: `APPLETS.md` (current applet how-to; superseded progressively from Phase 1), `docs/applet-architecture.md` (historical first draft of the plugin split), `docs/applet-dependency-packaging.md` (early sketch of the dependency split — superseded by §11).*
+*Companion documents: `APPLETS.md` (current applet how-to; superseded progressively from Phase 1), `docs/applet-architecture.md` (historical first draft of the plugin split), `docs/applet-dependency-packaging.md` (early sketch of the dependency split — superseded by §11), `../compass/PLATFORM.md` (sibling spec: Compass as the interface-heavy second host — static-binary principle, UI-as-data ABI, phases C0–C4 gated on Phases 3 and 6 here).*
