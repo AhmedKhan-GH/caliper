@@ -125,6 +125,7 @@ Designing for **(b): collaborators building applets from source against publishe
 | **CUDA Toolkit / conda** | Users accept platform-managed, versioned runtime directories; apps don't bundle gigabyte runtimes. | Runtime packs (§11). |
 | **vcpkg registries / Homebrew taps** | A git repo of manifests *is* a registry. Publishing = a PR. | `caliper-registry` (§12). |
 | **Dear ImGui's own DLL guidance** | Crossing a DLL boundary requires `SetCurrentContext` **and** `SetAllocatorFunctions`. | `caliper.ui.v1` hands over allocators; sugar applies them in one call (§6d). |
+| **wxWidgets `wxGraphicsContext`** | The mature GUI-framework world converged on the same renderer answer: one abstract drawing API over *native* backends (Direct2D / CoreGraphics / Cairo), not one cross-platform GPU API. | Independent validation of the `HostRenderer` pattern (§5.4): standardize the interface, go native underneath. Also the toolkit of Compass, the planned interface-heavy second host (§17 Phase 6). |
 
 ---
 
@@ -180,7 +181,7 @@ The USP is GPU-resident visualization, so the renderer must speak the API the te
 2. **`HostRenderer` — a host-internal interface** (surface/swapchain, ImGui backend binding, frame begin/end, texture create/update/release over `CaliperTensor` descriptors) with three implementations:
    - **Metal (macOS) — primary.** `imgui_impl_metal` + a `GLFW_NO_API` window with a `CAMetalLayer`. MPS torch tensors are `MTLBuffer`s: the bridge aliases them as textures (zero-copy when layout/alignment permit) or blits device-side — either way, no CPU staging.
    - **Vulkan (Windows now, Linux later) — primary.** `imgui_impl_vulkan`; CUDA interop via `VK_KHR_external_memory` + `cudaImportExternalMemory` — the modern successor to CUDA↔GL interop, present on every CUDA-capable machine.
-   - **OpenGL 3.3 — frozen fallback** for VMs/remote/odd environments: CPU-staged uploads, kept working, never extended. GLEW→GLAD is swapped opportunistically if this path is kept long-term, or both die together if it isn't (decided in Phase 4).
+   - **OpenGL 3.3 core profile — frozen fallback** for VMs/remote/odd environments: CPU-staged uploads, kept working, never extended. **Core, forward-compatible context only — the compatibility profile is banned**, so the fallback can never quietly accumulate fixed-function code. (Sibling project Compass shows that drift in the wild: it settled on GL 2.1 `glBegin`/`glEnd` because nothing forced a decision, and is now stranded on a doubly-deprecated path.) When this code is touched in Phase 4, GLEW is replaced by a GLAD-generated 3.3-core-only loader — tiny, and it ends the loader question — or deleted along with the fallback if it proves unneeded.
 3. **The tensor bridge is specified against `HostRenderer`** and built once, natively (Phase 2 on Metal, Phase 4 adds Vulkan) — not first on GL and rewritten later.
 
 Sequencing rationale: Metal lands with Phase 2 because that's when the bridge is built and the primary dev machine is Apple Silicon — otherwise the staged-copy ceiling sits in the middle of the reference applet's demo for the platform's entire formative period.
@@ -200,8 +201,8 @@ Everything in this section lives in `caliper-sdk/include/caliper/` and is the **
 typedef struct CaliperHost CaliperHost;          // §6b
 typedef struct CaliperFrameInfo {
     uint32_t struct_size;        // sizeof(CaliperFrameInfo) — versioning w/o breaks
-    int32_t  fb_width, fb_height;
-    float    dpi_scale;
+    int32_t  fb_width, fb_height; /* PHYSICAL framebuffer pixels — never logical units */
+    float    dpi_scale;           /* physical = logical × dpi_scale (2.0 on Retina) */
     double   time_sec, delta_sec;
 } CaliperFrameInfo;
 
@@ -233,6 +234,8 @@ CALIPER_EXPORT const CaliperAppletDescriptor* caliper_applet_descriptor(void);
 ```
 
 Why a descriptor: one symbol to resolve; metadata readable without instantiating anything; the function table is data, so future entry points are *appended fields*, not new exported symbols. This is the CLAP/VST3 shape.
+
+**The pixel-space contract.** `fb_width`/`fb_height` are **physical framebuffer pixels**; ImGui/ImPlot coordinates are **logical units**; `dpi_scale` converts between them (2.0 on Retina, 1.0 on standard displays); `tensor_bridge` texture dimensions are always physical. Conflating the two spaces is *the* classic cross-platform rendering bug — sibling project Compass documents hitting exactly it (logical `GetSize()` vs. the 2× physical framebuffer on Retina, `compass/README.md` "macOS Retina Display Fix") — so the semantics are part of the ABI, not folklore, and the conformance suite runs the fixture applet at `dpi_scale = 2.0` to catch violations (§16).
 
 ### 6b. The host is a service registry, not a struct of fields
 
@@ -306,6 +309,8 @@ Additionally, host and applets move to the **dynamic CRT (`/MD`)** on Windows (�
 ## 7. The Primitives — Service Catalog v1
 
 Each service: a C table in `caliper/services/<name>_v1.h`, a host implementation, a sugar wrapper, and a conformance test. Origin column shows what existing code gets extracted.
+
+**Design rule — the service layer stays host-neutral.** `caliper.ui.v1` is the *only* service allowed to know that a UI toolkit or renderer exists. The other seven must work unchanged in any host: the headless fixture host (§16), and a future second host with entirely different chrome (§17 Phase 6 — Compass). A proposed service that needs to know about ImGui, windows, or the graphics backend is either part of `ui.vN` or doesn't belong in the catalog.
 
 | Id | Purpose | Origin |
 |---|---|---|
@@ -788,6 +793,7 @@ Per the standing rule — no production code without a failing test first — ea
 | Crash guard | fixture applet with `crash_on_frame` flag → quarantined, host lives | integration test (headless GL) |
 | Hot reload | rebuild fixture mid-run → reload, lifecycle hooks called exactly once each | dev-mode integration test |
 | Each service | contract tests against the host implementation (e.g. metrics: write 10k scalars, query back ordered; jobs: cancel honored ≤ 100 ms; bridge: tensor→texture pixel-exact vs CPU reference, run per backend) | service test suite in host CI |
+| Pixel-space contract | fixture applet runs at `dpi_scale = 2.0`; fails if viewport/texture/size math conflates logical and physical pixels (§6a) | integration test, macOS CI (native Retina) |
 | SDK conformance | the `caliper_conformance` checker itself (exports, descriptor, imconfig hash) | SDK repo CI, and runs in every applet's ctest |
 | **Golden-applet wall** | host must load `.caliperapp` artifacts built against every supported SDK release | host CI, artifacts cached from SDK release CI |
 | Template | template CI builds against the SDK **release artifact** (not source) and produces a loadable bundle | template repo CI; also smoke-run in host CI |
@@ -836,7 +842,7 @@ Every phase ends with a shippable repo and a demo. No big bang; the v1 loader ke
 ### Phase 6 — later, demand-driven
 - **Out-of-process applet host** for untrusted binaries (own GL context, composited; or software-isolated with shared-memory tensor transport) — unlocks audience (c) safely.
 - **Scripting bindings** (Python first: pybind over the sugar; the fixture host enables notebook-driven applet prototyping).
-- **`libcaliper`** — the host as an embeddable library so others ship branded visual-ML tools on the platform.
+- **`libcaliper` / second host: Compass** — the platform core (loader, negotiation, host-neutral services, pack manager, registry client) extracted as an embeddable library. First consumer: **Compass**, the interface-heavy sibling (native wxWidgets chrome — AUI docking, property grids, document-style UI; the Adobe-shaped face to Caliper's realtime face). Both hosts share the applet contract, the seven host-neutral services (§7 design rule), runtime packs, and the registry; they differ only in `ui.vN` and rendering — Caliper via `HostRenderer` (Metal/Vulkan), Compass via wx's native backends (Direct2D/CoreGraphics/Cairo). Neither leaks into the contract.
 - Linux as a first-class platform triple; bundle signing; hosted registry if PR volume demands it.
 
 ### Sequencing rationale
@@ -861,7 +867,7 @@ Contract before extraction (Phases 1→2) so services land behind a stable bound
 | D10 | SDK license: MIT (host may stay separate) | **Decide by Phase 3** | Ecosystem needs a permissive SDK; MIT matches ImGui/ImPlot neighborhood. Apache-2.0 acceptable if patent grant desired. |
 | D11 | Host ships without libtorch (bridge uses raw CUDA/Metal; metrics use embedded DuckDB) | Proposed | 50 MB host; packs on demand. |
 | D12 | Audience: (b) source-building collaborators now, contracts sized for (c) later | Proposed (assumption) | Stated in §3; revisit when a real (c) user appears. |
-| D13 | Renderer-agnostic ABI from epoch 2; native backends as the target — **Metal (macOS) + Vulkan (Windows)** primary, OpenGL 3.3 frozen fallback; textures cross as opaque `CaliperTextureId` | Proposed | The USP demands GPU-resident pixels; GL is deprecated on macOS and cannot touch MPS memory (today every Mac texture takes a CPU round-trip). Decided while zero external applets exist, so the renderer stays host-internal forever — no epoch bump, no applet rebuilds. GLEW's fate follows GL's (§5.4). |
+| D13 | Renderer-agnostic ABI from epoch 2; native backends as the target — **Metal (macOS) + Vulkan (Windows)** primary, OpenGL 3.3 frozen fallback; textures cross as opaque `CaliperTextureId` | Proposed | The USP demands GPU-resident pixels; GL is deprecated on macOS and cannot touch MPS memory (today every Mac texture takes a CPU round-trip). Decided while zero external applets exist, so the renderer stays host-internal forever — no epoch bump, no applet rebuilds. GLEW dies with the fallback refactor (GLAD 3.3-core loader, §5.4). Live evidence for the GL dead end: sibling project Compass stayed on "cross-platform GL" and is stranded between 2.1 fixed-function and macOS's capped 4.1 core, with per-platform `#ifdef` include paths. |
 | D14 | The bridge *allocates* texture-backed shared tensors (`alloc_shared`), not just mirrors existing ones | Proposed | Upgrades "fast device copy" to literal zero-copy for live weights/saliency; applets adopt it with one `torch::from_blob`. |
 
 ---
