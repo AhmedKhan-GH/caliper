@@ -7,6 +7,8 @@
 | **Owner** | Ahmed Khan |
 | **Scope** | Converting Caliper from a monorepo application into a platform: a versioned SDK of ML+visualization primitives, independently developed applets, and a distribution pipeline for hosts, applets, and heavy runtimes. |
 
+> **How to read this document.** §2 audits what exists in the repository **today** — it is the only section describing current reality. Everything from §5 onward is written in the present tense, as specs are, but describes the **proposed target state: none of it exists yet**, except the pieces §2 explicitly marks "keep". The delta table at the end of §2 gives the today→target mapping at a glance, §17 assigns every change to a migration phase, and §18 lists each design decision awaiting your ratification (only D1 reflects code that already exists).
+
 ---
 
 ## 1. Executive Summary
@@ -62,6 +64,25 @@ The Training Lab work (commits `7a66d90`…`e33b7f8`) already implements, privat
 | Per-applet data dir (`app_paths.cpp`, duplicated from host!) | `CaliperHost.applet_data_dir` |
 
 **Strategy: extract, don't invent.** Phase 2 is surgery on proven code.
+
+### Current vs. target at a glance
+
+Every row below is a **proposed change** — the left column is what the repo does today, the right columns are what this document specifies and where in §17 it lands.
+
+| Area | Today (current reality) | Target (this proposal) | Phase |
+|---|---|---|---|
+| Applet entry ABI | 6 `dlsym`'d C functions, `CALIPER_APPLET_ABI 1` (`src/applet_api.h`) | one `caliper_applet_descriptor()` export, ABI epoch 2 (§6a) | 1 |
+| Host → applet capabilities | fixed `CaliperHostContext` struct (3 UI contexts + `data_dir`) | `get_service()` registry + 8 versioned services (§6b, §7) | 1–2 |
+| ImGui across the DLL boundary | contexts passed; **no allocator handoff**; static CRT on Windows (latent crash) | `caliper.ui.v1` hands over allocators; Windows moves to `/MD` (§6d) | 1 |
+| SDK | in-tree `caliper_applet_sdk` INTERFACE target pointing at `${CMAKE_SOURCE_DIR}` paths | installable `caliper-sdk` CMake package → its own repo with tagged releases (§5.2, §10) | 0, 3 |
+| Where applets live & build | `applets/*` glob in the root CMake — must be inside this repo | own repos (history migrated), built against SDK release artifacts (§13.2) | 3–4 |
+| Applet discovery | scan for bare dylibs, `dlopen` first | `.caliperapp` bundles, manifest checked **before** `dlopen`, friendly failure cards (§10, §14) | 4 |
+| Heavy dependencies | libtorch + DuckDB fused into the monorepo build; applets link from the tree | libtorch as a shared **runtime pack**; DuckDB embedded in the host only (§11) | 4 |
+| Metrics / jobs / tensor-viz / device pick | private code inside `repnet_demo` | public services: `metrics.v1`, `jobs.v1`, `tensor_bridge.v1`, `device.v1` (§7) | 2 |
+| Renderer | OpenGL + GLEW everywhere; GL texture ids implicit in viz code | renderer-agnostic ABI (`CaliperTextureId`); native Metal (macOS) + Vulkan (Windows); GL frozen fallback (§5.4) | 2, 4 |
+| UI stack (imgui/implot/…) | monorepo `third_party/` submodules | pinned inside the SDK; the pin defines the ABI epoch (§9) | 3 |
+| Distribution | clone the monorepo and build everything | host binaries via GitHub Releases; applets via registry Browse tab or sideloading; `caliper new/dev/package` CLI (§12–13) | 4–5 |
+| Testing | ad-hoc; some applet-level tests | TDD'd loader/negotiation/service contract tests, fixture host in SDK, golden-applet wall in CI (§16) | every phase |
 
 ---
 
