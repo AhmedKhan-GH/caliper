@@ -57,6 +57,9 @@ public:
         host_ = &host;
         jobs_ = caliper::Jobs(host);          // required -> present (manifest)
         device_ = caliper::Device::query(host);
+        // curl global init MUST happen once here on the frame thread: lazy init
+        // from curl_easy_init on a worker thread is not thread-safe (libcurl docs).
+        curl_global_init(CURL_GLOBAL_DEFAULT);
         host.log_info("ml-scope: on_init");
         return true;
     }
@@ -125,6 +128,9 @@ public:
             for (int i = 0; i < 1000 && jobs_.is_running(job_id_); i++)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        // Pairs with the on_init curl_global_init; only safe once the worker
+        // (the sole curl user) has exited, which the bounded wait above ensures.
+        curl_global_cleanup();
         if (host_) host_->log_info("ml-scope: on_cleanup");
     }
 
@@ -135,6 +141,9 @@ private:
     }
 
     void start_training() {
+        // Re-entrancy latch: ignore a double-click that lands in the submit
+        // window before is_running() flips true (the review's flagged race).
+        if (job_id_ != 0 && jobs_.is_running(job_id_)) return;
         {
             std::lock_guard<std::mutex> lk(state_mutex_);
             loss_history_.clear();
@@ -192,9 +201,27 @@ private:
             }
             auto raw = mnist_idx::gunzip(gz);
             if (!raw) { self->fail_dl(ctl); return false; }
-            std::ofstream out(path, std::ios::binary);
-            if (!out) { self->fail_dl(ctl); return false; }
-            out.write((const char*)raw->data(), (std::streamsize)raw->size());
+            // Atomic cache write: write to `.tmp`, then rename onto the canonical
+            // name only on success. An interrupted write leaves a stray `.tmp`,
+            // never a truncated file at `path` a later run would trust. Copy me.
+            std::string tmp = path + ".tmp";
+            {
+                std::ofstream out(tmp, std::ios::binary);
+                if (!out) { self->fail_dl(ctl); return false; }
+                out.write((const char*)raw->data(), (std::streamsize)raw->size());
+                out.flush();
+                if (!out.good()) {
+                    out.close();
+                    std::remove(tmp.c_str());
+                    self->fail_dl(ctl);
+                    return false;
+                }
+            }
+            if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+                std::remove(tmp.c_str());
+                self->fail_dl(ctl);
+                return false;
+            }
         }
         return true;
     }
@@ -207,19 +234,26 @@ private:
     }
 
     // Load a cached IDX pair into tensors: X (n,1,28,28) float/255, y long.
+    // Self-healing: if a CACHED file fails to parse it is deleted so the next
+    // start re-downloads it (the corrupt-cache wedge fixes itself). Copy me.
     static bool load_split(const std::string& dir, const char* img_name,
                            const char* lab_name, torch::Tensor& X,
                            torch::Tensor& y) {
-        auto rd = [&](const char* nm) -> std::optional<std::vector<uint8_t>> {
-            std::ifstream f(dir + "/" + nm, std::ios::binary);
+        std::string ipath = dir + "/" + img_name, lpath = dir + "/" + lab_name;
+        auto rd = [&](const std::string& p) -> std::optional<std::vector<uint8_t>> {
+            std::ifstream f(p, std::ios::binary);
             if (!f) return std::nullopt;
             return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), {});
         };
-        auto ib = rd(img_name), lb = rd(lab_name);
+        auto ib = rd(ipath), lb = rd(lpath);
         if (!ib || !lb) return false;
         auto imgs = mnist_idx::parse_images(*ib);
         auto labs = mnist_idx::parse_labels(*lb);
-        if (!imgs || !labs || (int)labs->size() != imgs->n) return false;
+        if (!imgs || !labs || (int)labs->size() != imgs->n) {
+            std::remove(ipath.c_str());   // drop corrupt cache -> re-download
+            std::remove(lpath.c_str());
+            return false;
+        }
         int n = imgs->n, r = imgs->rows, c = imgs->cols;
         X = torch::from_blob(imgs->pixels.data(), {n, 1, r, c}, torch::kUInt8)
                 .to(torch::kFloat32)
@@ -244,9 +278,17 @@ private:
         self->set_status("parsing MNIST…");
         std::string d = self->host_ ? self->host_->data_dir() : "";
         torch::Tensor Xtr, ytr, Xte, yte;
+        // ensure_dataset guaranteed all four files exist, so a parse failure here
+        // means a cached file is corrupt (load_split already deleted it). Post
+        // the self-heal message, not the offline one — the next start re-fetches.
         if (!load_split(d, kFiles[0], kFiles[1], Xtr, ytr) ||
             !load_split(d, kFiles[2], kFiles[3], Xte, yte)) {
-            self->fail_dl(ctl);
+            self->set_status(
+                "cached MNIST file was corrupt — press start to re-download");
+            ctl->progress(ctl, 0.f,
+                "cached MNIST file was corrupt — press start to re-download");
+            if (self->host_)
+                self->host_->log_error("ml-scope: corrupt MNIST cache, deleted");
             return;
         }
         // Whole dataset fits comfortably in unified memory: move once.
@@ -337,9 +379,10 @@ CALIPER_APPLET(MLScope,
     .id       = "dev.caliper.ml-scope",
     .version  = "0.1.0",
     .name     = "MLScope",
-    .summary  = "ML exemplar: trains a tiny MLP off the frame thread via "
-                "caliper.jobs.v1, device-negotiated, with live loss. Weight "
-                "visualization arrives with tensor_bridge (Phase 2C).",
+    .summary  = "ML exemplar: trains a small CNN on MNIST off the frame thread "
+                "via caliper.jobs.v1, device-negotiated, with live loss and test "
+                "accuracy. Kernel visualization arrives with tensor_bridge "
+                "(Phase 2C).",
     .tag      = "ML",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_JOBS_V1,
                  CALIPER_DEVICE_V1})

@@ -2,7 +2,7 @@
 id      = "dev.caliper.ml-scope"
 name    = "MLScope"
 version = "0.1.0"
-summary = "ML exemplar: trains a tiny MLP off the frame thread via caliper.jobs.v1, device-negotiated, with live loss. Weight visualization arrives with tensor_bridge (Phase 2C)."
+summary = "ML exemplar: trains a small CNN on MNIST off the frame thread via caliper.jobs.v1, device-negotiated, with live loss and test accuracy. Kernel visualization arrives with tensor_bridge (Phase 2C)."
 tag     = "ML"
 
 [compat]
