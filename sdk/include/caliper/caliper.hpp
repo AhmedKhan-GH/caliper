@@ -4,6 +4,8 @@
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>
 #include <caliper/services/ui_v1.h>
+#include <caliper/services/jobs_v1.h>
+#include <caliper/services/device_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -48,6 +50,52 @@ public:
 private:
     const CaliperHost* raw_ = nullptr;
     const CaliperLogV1* log_ = nullptr;
+};
+
+// Typed wrapper over caliper.jobs.v1 (§7.5). Falsy when the host doesn't vend
+// the service; every method null-guards its fn pointer so it stays inert (not
+// UB) on a headless/older host. Job fns run UNGUARDED on host worker threads.
+class Jobs {
+public:
+    Jobs() = default;
+    explicit Jobs(const Host& host)
+        : t_(static_cast<const CaliperJobsV1*>(host.service(CALIPER_JOBS_V1))) {}
+    explicit operator bool() const { return t_ && t_->submit; }
+    uint64_t submit(const char* label, CaliperJobFn fn, void* user) const {
+        return (t_ && t_->submit) ? t_->submit(label, fn, user) : 0;
+    }
+    void request_cancel(uint64_t id) const {
+        if (t_ && t_->request_cancel) t_->request_cancel(id);
+    }
+    bool is_running(uint64_t id) const {
+        return (t_ && t_->is_running) ? t_->is_running(id) : false;
+    }
+    float progress_of(uint64_t id) const {
+        return (t_ && t_->progress_of) ? t_->progress_of(id) : 0.0f;
+    }
+private:
+    const CaliperJobsV1* t_ = nullptr;
+};
+
+// Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't
+// vend the service; name is host-owned (valid for the process lifetime).
+struct Device {
+    CaliperDeviceKind kind = CALIPER_DEV_CPU;
+    int32_t index = 0;
+    const char* name = "CPU";              // host-owned string
+    uint64_t free_memory_hint = 0;
+    static Device query(const Host& host) {
+        Device d;
+        auto* t = static_cast<const CaliperDeviceV1*>(
+            host.service(CALIPER_DEVICE_V1));
+        if (t && t->kind) {
+            d.kind = t->kind();
+            d.index = t->index ? t->index() : 0;
+            d.name = t->name ? t->name() : "";
+            d.free_memory_hint = t->free_memory_hint ? t->free_memory_hint() : 0;
+        }
+        return d;
+    }
 };
 
 class Applet {

@@ -6,6 +6,7 @@
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace caliper::testing {
@@ -32,13 +33,20 @@ public:
         return false;
     }
 
+    // Inject any service table (e.g. a fake jobs.v1) for wrapper tests.
+    void provide(const char* id, const void* table) {
+        provided_.emplace_back(id, table);
+    }
+
 private:
     static void log_thunk(CaliperLogLevel, const char* msg) {
         if (active_ && msg) active_->lines_.emplace_back(msg);
     }
     static const void* get_service_thunk(const CaliperHost*, const char* id) {
-        if (active_ && id && std::string(id) == CALIPER_LOG_V1)
-            return &active_->log_table_;
+        if (!active_ || !id) return nullptr;
+        if (std::string(id) == CALIPER_LOG_V1) return &active_->log_table_;
+        for (const auto& [pid, table] : active_->provided_)
+            if (pid == id) return table;
         return nullptr;
     }
     inline static FixtureHost* active_ = nullptr;
@@ -46,6 +54,7 @@ private:
     CaliperLogV1 log_table_{};
     std::string data_dir_ = "/tmp/caliper-fixture-data";
     std::vector<std::string> lines_;
+    std::vector<std::pair<std::string, const void*>> provided_;
 };
 
 } // namespace caliper::testing

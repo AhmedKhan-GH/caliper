@@ -19,6 +19,7 @@ add_executable(caliper_tests
     test_sugar.cpp
     test_jobs.cpp
     test_device.cpp
+    test_sugar_services.cpp
 )
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack)
