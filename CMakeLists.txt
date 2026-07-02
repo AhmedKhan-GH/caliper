@@ -245,10 +245,12 @@ option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + SignalScop
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/hello)
     add_subdirectory(examples/signal_scope)
-    add_dependencies(caliper hello_applet signal_scope_applet)
+    add_subdirectory(examples/ml_scope)
+    add_dependencies(caliper hello_applet signal_scope_applet ml_scope_applet)
     list(APPEND _active_applet_libs
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}ml_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
 # Remove stale applet libraries left from previously deleted applets
