@@ -109,15 +109,6 @@ add_library(caliper_app_paths STATIC src/app_paths.cpp)
 target_include_directories(caliper_app_paths PUBLIC ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# TRANSITIONAL (deleted in Task 3): old monolithic SDK target.
-add_library(caliper_applet_sdk INTERFACE)
-target_link_libraries(caliper_applet_sdk INTERFACE caliper::sdk caliper::ui_stack)
-target_include_directories(caliper_applet_sdk INTERFACE
-    ${CMAKE_SOURCE_DIR}/src
-    ${THIRD_PARTY_DIR}/duckdb/src/include
-)
-target_compile_definitions(caliper_applet_sdk INTERFACE DUCKDB_BUILD_LIBRARY)
-
 # ---- SDK install rules (component: sdk) ----
 include(CMakePackageConfigHelpers)
 install(DIRECTORY sdk/include/ DESTINATION include COMPONENT sdk)

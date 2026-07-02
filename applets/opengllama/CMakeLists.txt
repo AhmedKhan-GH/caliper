@@ -9,18 +9,18 @@ add_library(opengllama SHARED
     ollama_models.cpp
     ollama_server.cpp
     model_profiles.cpp
-    ${CMAKE_SOURCE_DIR}/src/app_paths.cpp
 )
 
 target_include_directories(opengllama PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/include
     ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/vendor/cpp-httplib
 )
 
 target_link_libraries(opengllama PRIVATE
-    caliper_applet_sdk
+    caliper::sdk
+    caliper::ui_stack
+    caliper_app_paths
     llama
     libglew_static
     cpp-httplib
