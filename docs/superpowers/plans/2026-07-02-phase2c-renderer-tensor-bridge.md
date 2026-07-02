@@ -204,3 +204,5 @@ std::unique_ptr<HostRenderer> make_renderer(const char* name); // "gl"|"metal"|n
 - Compute-shader LUT float determinism vs CPU reference — pinned by the shared index-math definition; if a GPU rounding edge appears, quantize the normalize step identically on both sides (the test will catch it, the fix is spec'd).
 - torch storage-bridge idiom is internal-adjacent (public headers, documented usage in custom-kernel ecosystem) — pinned to the vendored torch 2.5.1; revisit at any torch bump (golden note in ledger).
 
+
+> **Post-execution note (C8):** the shipped kernel grid uses **8 separate (3,3) f32 textures with CALIPER_CMAP_RDBU symmetric range**, not the single tiled VIRIDIS tensor sketched in the C8 task text above — the dispatch-level binding superseded the sketch and review confirmed the shipped form. Copy the shipped `ml_scope.cpp`, not the sketch.
