@@ -192,6 +192,7 @@ add_executable(caliper
     src/intro_screen.cpp
     src/host/host_services.cpp
     src/host/runs_dashboard.cpp
+    src/host/renderer/gl_renderer.cpp
     src/app_paths.cpp
 )
 

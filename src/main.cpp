@@ -1,9 +1,6 @@
 #include <iostream>
-#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
-#include <backends/imgui_impl_glfw.h>
-#include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
 #include <implot3d.h>
 
@@ -14,7 +11,10 @@
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
 #include "host/runs_dashboard.h"
+#include "host/renderer/host_renderer.h"
 #include "app_paths.h"
+
+#include <string>
 
 #include <filesystem>
 #ifdef __APPLE__
@@ -39,12 +39,10 @@ public:
             return false;
         }
 
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
+        // Renderer seam (PLATFORM.md §5.4): backend hints run before the
+        // window exists; init() runs after. GL is the only backend in C1.
+        renderer_ = caliper_host::make_renderer(nullptr);
+        renderer_->window_hints();
 
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         int ax, ay, aw, ah;
@@ -57,12 +55,8 @@ public:
         window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
         if (!window_) { glfwTerminate(); return false; }
 
-        glfwMakeContextCurrent(window_);
-        glfwSwapInterval(1);
-
-        glewExperimental = GL_TRUE;
-        if (glewInit() != GLEW_OK) { glfwTerminate(); return false; }
-
+        // Host-owned ImGui/ImPlot contexts must exist before the renderer
+        // initializes its ImGui backends. None of these touch GL.
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -73,8 +67,7 @@ public:
         ImGui::StyleColorsDark();
         style_ui();
 
-        ImGui_ImplGlfw_InitForOpenGL(window_, true);
-        ImGui_ImplOpenGL3_Init("#version 330");
+        if (!renderer_->init(window_)) { glfwTerminate(); return false; }
         caliper_host::services_init();
 
         if (!intro_.initialize()) {
@@ -129,18 +122,16 @@ public:
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
-            glViewport(0, 0, dw, dh);
-            glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
+
+            renderer_->new_frame();
 
             if (page_ == AppPage::Landing) {
                 intro_.update(window_);
-                intro_.render_3d(dw, dh);
+                // TODO(2D): dies with the backend flip — IntroScreen issues raw
+                // GL, so it only runs on the GL backend; Metal skips the 3D bg.
+                if (std::string(renderer_->name()) == "gl")
+                    intro_.render_3d(dw, dh);
             }
-
-            ImGui_ImplOpenGL3_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
 
             if (page_ == AppPage::Landing) {
                 // The Landing page has no menu bar of its own; add a minimal one
@@ -262,18 +253,14 @@ public:
                 }
             }
 
-            ImGui::Render();
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-            glfwSwapBuffers(window_);
+            renderer_->render(dw, dh);
         }
     }
 
     void cleanup() {
         loader_.close_all();
         intro_.cleanup();
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
+        renderer_->shutdown();
         ImPlot3D::DestroyContext();
         ImPlot::DestroyContext();
         ImGui::DestroyContext();
@@ -308,6 +295,7 @@ private:
     }
 
     GLFWwindow* window_ = nullptr;
+    std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
     IntroScreen intro_;
     caliper_host::AppletLoader loader_{
