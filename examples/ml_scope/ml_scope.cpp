@@ -12,6 +12,12 @@
 //     exact pattern the platform exists to delete.
 //   ML-EXEMPLAR 5 — heavy data is job work too — download once into data_dir,
 //     cache forever, cancellable. The frame thread never touches the network.
+//   ML-EXEMPLAR 6 — probe-optional pays off: caliper.metrics.v1 is optional in
+//     the manifest, so we probe it (caliper::Metrics, falsy-inert if absent)
+//     and stream the run only when it is truthy. The SAME binary runs on a host
+//     with metrics (loss/accuracy land in the Runs dashboard) and on one without
+//     (training is unchanged; status says `metrics: absent (ok)`). Every applet
+//     that logs a scalar this way inherits the Runs dashboard for free.
 // ============================================================================
 #include <caliper/caliper.hpp>
 #include <imgui.h>
@@ -57,6 +63,10 @@ public:
         host_ = &host;
         jobs_ = caliper::Jobs(host);          // required -> present (manifest)
         device_ = caliper::Device::query(host);
+        // ML-EXEMPLAR 6 — metrics is OPTIONAL: probe it here; the wrapper is
+        // falsy-inert if the host does not vend it. No branching in on_init —
+        // the job checks truthiness before it streams.
+        metrics_ = caliper::Metrics(host);
         // curl global init MUST happen once here on the frame thread: lazy init
         // from curl_easy_init on a worker thread is not thread-safe (libcurl docs).
         curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -87,6 +97,17 @@ public:
             status = status_line_;
         }
         ImGui::TextWrapped("%s", status.c_str());
+
+        // ML-EXEMPLAR 6 — surface the optional service's state. When present and
+        // a run is live, show its id; when absent, say so and reassure (ok).
+        if (metrics_) {
+            uint64_t run = run_id_.load();
+            if (run != 0) ImGui::TextDisabled("metrics: run #%llu",
+                                              (unsigned long long)run);
+            else          ImGui::TextDisabled("metrics: present (open Runs)");
+        } else {
+            ImGui::TextDisabled("metrics: absent (ok)");
+        }
 
         const bool running = job_id_ != 0 && jobs_.is_running(job_id_);
         if (!running) {
@@ -306,6 +327,19 @@ private:
         torch::optim::Adam opt(model->parameters(),
                                torch::optim::AdamOptions(1e-3));
 
+        // ML-EXEMPLAR 6 — begin the run now that data is loaded (so download /
+        // corrupt-cache exits above never leave a dangling run). begin_run
+        // returns 0 on error OR when metrics is absent (falsy wrapper): both
+        // mean "do not stream", so the same `run != 0` guard covers both.
+        // metrics.v1 is callable from this job thread — the host serializes
+        // internally; this is exactly the write the teardown-order fix protects
+        // (g_metrics outlives g_jobs, so a late scalar cannot fault).
+        uint64_t run = self->metrics_.begin_run("mnist", "cnn");
+        self->run_id_.store(run);
+        if (run != 0)
+            self->metrics_.hparams_json(
+                run, R"({"lr":0.001,"batch":256,"epochs":3,"model":"conv8-16-fc"})");
+
         const int64_t n = Xtr.size(0);
         const int64_t batches_per_epoch = (n + kBatch - 1) / kBatch;
         const int64_t total_steps = batches_per_epoch * kEpochs;
@@ -316,7 +350,10 @@ private:
             auto perm = torch::randperm(n, torch::TensorOptions(dev).dtype(
                                                torch::kInt64));
             for (int64_t b = 0; b < n; b += kBatch) {
-                if (ctl->cancelled(ctl)) return;   // ML-EXEMPLAR 1
+                if (ctl->cancelled(ctl)) {         // ML-EXEMPLAR 1 (+6: end_run)
+                    self->end_metrics_run(run);
+                    return;
+                }
                 int64_t hi = std::min<int64_t>(b + kBatch, n);
                 auto idx = perm.slice(0, b, hi);
                 auto xb = Xtr.index_select(0, idx);
@@ -331,6 +368,8 @@ private:
                     std::lock_guard<std::mutex> lk(self->state_mutex_);
                     self->loss_history_.push_back(l);
                 }
+                // ML-EXEMPLAR 6 — one scalar per batch under the global step.
+                if (run != 0) self->metrics_.scalar(run, "train/loss", step, l);
                 step++;
                 char msg[96];
                 std::snprintf(msg, sizeof msg, "epoch %d/%d  loss %.4f",
@@ -344,7 +383,10 @@ private:
             {
                 torch::NoGradGuard ng;
                 for (int64_t b = 0; b < seen; b += 1000) {
-                    if (ctl->cancelled(ctl)) return;
+                    if (ctl->cancelled(ctl)) {     // ML-EXEMPLAR 6: end_run
+                        self->end_metrics_run(run);
+                        return;
+                    }
                     int64_t hi = std::min<int64_t>(b + 1000, seen);
                     auto xb = Xte.slice(0, b, hi);
                     auto pred = model->forward(xb).argmax(1);
@@ -356,18 +398,32 @@ private:
                 std::lock_guard<std::mutex> lk(self->state_mutex_);
                 self->acc_history_.push_back(accpct);
             }
+            // ML-EXEMPLAR 6 — one scalar per epoch, stepped by epoch index.
+            if (run != 0)
+                self->metrics_.scalar(run, "test/accuracy", epoch, accpct);
             char msg[96];
             std::snprintf(msg, sizeof msg, "epoch %d/%d  test acc %.2f%%",
                           epoch + 1, kEpochs, accpct);
             self->set_status(msg);
             ctl->progress(ctl, (float)step / (float)total_steps, msg);
         }
+        self->end_metrics_run(run);            // ML-EXEMPLAR 6: completion path
         self->set_status("training complete");
+    }
+
+    // end_run on EVERY exit path from train_job (completion, both cancel points).
+    // No-op when run == 0 (metrics absent, or begin_run failed). Clearing
+    // run_id_ flips the status line back to "present (open Runs)".
+    void end_metrics_run(uint64_t run) {
+        if (run != 0) metrics_.end_run(run);
+        run_id_.store(0);
     }
 
     caliper::Host* host_ = nullptr;
     caliper::Jobs jobs_;
     caliper::Device device_;
+    caliper::Metrics metrics_;            // ML-EXEMPLAR 6 — optional, falsy-inert
+    std::atomic<uint64_t> run_id_{0};     // live run id for the status line (0 = none)
     uint64_t job_id_ = 0;
     std::mutex state_mutex_;
     std::vector<float> loss_history_;
