@@ -1,10 +1,15 @@
 #include "host_services.h"
 #include "job_system.h"
 #include "device_query.h"
+#include "metrics_store.h"
+#include "../app_paths.h"   // host_services.cpp compiles into the caliper exe,
+                            // which also compiles app_paths.cpp (CMakeLists)
 #include <caliper/services/log_v1.h>
 #include <caliper/services/ui_v1.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
+#include <caliper/services/metrics_v1.h>
+#include <caliper/tensor.h>
 #include <imgui.h>
 #include <implot.h>
 #include <implot3d.h>
@@ -70,14 +75,68 @@ uint64_t dev_hint(void)          { return device_info().free_memory_hint; }
 const CaliperDeviceV1 kDevice = {sizeof(CaliperDeviceV1), &dev_kind, &dev_index,
                                  &dev_name, &dev_hint};
 
+// --- caliper.metrics.v1: DuckDB-backed run/tag/step store (§7.6/§11) ---
+// One process-wide store, opened in services_init(). If the disk open fails we
+// still vend the table (never crash the host over a bad disk): g_metrics_open
+// stays false and every thunk no-ops on the unopened store.
+MetricsStore g_metrics;
+bool         g_metrics_open = false;
+
+uint64_t met_begin_run(const char* experiment, const char* run_name) {
+    return g_metrics_open
+        ? g_metrics.begin_run(experiment ? experiment : "", run_name ? run_name : "")
+        : 0;
+}
+void met_end_run(uint64_t run) { if (g_metrics_open) g_metrics.end_run(run); }
+void met_scalar(uint64_t run, const char* tag, int64_t step, double value) {
+    if (g_metrics_open) g_metrics.scalar(run, tag ? tag : "", step, value);
+}
+void met_histogram(uint64_t run, const char* tag, int64_t step,
+                   const float* values, int64_t count) {
+    if (g_metrics_open) g_metrics.histogram(run, tag ? tag : "", step, values, count);
+}
+// v1 accepts only CPU-resident HWC u8 tensors (documented in metrics_v1.h);
+// a non-conforming tensor is logged and dropped rather than misinterpreted.
+void met_image(uint64_t run, const char* tag, int64_t step,
+              const CaliperTensor* t) {
+    if (!g_metrics_open) return;
+    if (!(t && t->struct_size >= sizeof(CaliperTensor) &&
+          t->dtype == CALIPER_DT_U8 && t->ndim == 3 &&
+          t->device == CALIPER_DEV_CPU)) {
+        log_impl(CALIPER_LOG_WARN,
+                 "metrics.v1: image() dropped a non-CPU-u8-HWC tensor");
+        return;
+    }
+    g_metrics.image(run, tag ? tag : "", step, t->data,
+                    (int32_t)t->shape[1], (int32_t)t->shape[0], (int32_t)t->shape[2]);
+}
+void met_hparams_json(uint64_t run, const char* json_utf8) {
+    if (g_metrics_open) g_metrics.hparams_json(run, json_utf8 ? json_utf8 : "");
+}
+const CaliperMetricsV1 kMetrics = {sizeof(CaliperMetricsV1), &met_begin_run,
+                                   &met_end_run, &met_scalar, &met_histogram,
+                                   &met_image, &met_hparams_json};
+
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
-                                    CALIPER_JOBS_V1, CALIPER_DEVICE_V1};
+                                    CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
+                                    CALIPER_METRICS_V1};
 
 } // namespace
 
-void services_init() { /* tables are static; hook kept for later services */ }
+void services_init() {
+    // Open the metrics store; on failure log and carry on (the table is vended
+    // either way, its thunks no-op on the unopened store — §6b, never crash).
+    const std::string path = caliper::app_data_path("metrics.duckdb");
+    g_metrics_open = g_metrics.open(path);
+    if (!g_metrics_open)
+        std::fprintf(stderr,
+                     "[metrics] failed to open %s; metrics.v1 will no-op\n",
+                     path.c_str());
+}
 
 JobSystem& host_job_system() { return g_jobs; }
+
+MetricsStore& host_metrics_store() { return g_metrics; }
 
 const void* services_get(const char* id) {
     if (!id) return nullptr;
@@ -85,6 +144,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_LOG_V1) == 0)    return &kLog;
     if (std::strcmp(id, CALIPER_JOBS_V1) == 0)   return &kJobs;
     if (std::strcmp(id, CALIPER_DEVICE_V1) == 0) return &kDevice;
+    if (std::strcmp(id, CALIPER_METRICS_V1) == 0) return &kMetrics;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
 }
 

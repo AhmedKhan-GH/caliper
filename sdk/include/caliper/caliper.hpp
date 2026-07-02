@@ -6,6 +6,7 @@
 #include <caliper/services/ui_v1.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
+#include <caliper/services/metrics_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -75,6 +76,41 @@ public:
     }
 private:
     const CaliperJobsV1* t_ = nullptr;
+};
+
+// Typed wrapper over caliper.metrics.v1 (§7.6). Falsy when the host doesn't
+// vend the service; every method null-guards its fn pointer so it stays inert
+// (not UB) on a headless/older host. The writers are callable from job threads
+// (the host serializes internally). image() takes a CPU-resident HWC u8 tensor;
+// a non-conforming tensor is dropped by the host thunk (see host_services.cpp).
+class Metrics {
+public:
+    Metrics() = default;
+    explicit Metrics(const Host& host)
+        : t_(static_cast<const CaliperMetricsV1*>(host.service(CALIPER_METRICS_V1))) {}
+    explicit operator bool() const { return t_ && t_->begin_run; }
+    uint64_t begin_run(const char* experiment, const char* run_name) const {
+        return (t_ && t_->begin_run) ? t_->begin_run(experiment, run_name) : 0;
+    }
+    void end_run(uint64_t run) const {
+        if (t_ && t_->end_run) t_->end_run(run);
+    }
+    void scalar(uint64_t run, const char* tag, int64_t step, double value) const {
+        if (t_ && t_->scalar) t_->scalar(run, tag, step, value);
+    }
+    void histogram(uint64_t run, const char* tag, int64_t step,
+                   const float* values, int64_t count) const {
+        if (t_ && t_->histogram) t_->histogram(run, tag, step, values, count);
+    }
+    void image(uint64_t run, const char* tag, int64_t step,
+               const CaliperTensor* hwc_u8) const {
+        if (t_ && t_->image) t_->image(run, tag, step, hwc_u8);
+    }
+    void hparams_json(uint64_t run, const char* json_utf8) const {
+        if (t_ && t_->hparams_json) t_->hparams_json(run, json_utf8);
+    }
+private:
+    const CaliperMetricsV1* t_ = nullptr;
 };
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't
