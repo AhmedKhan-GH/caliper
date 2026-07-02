@@ -209,6 +209,13 @@ TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
         t.device = CALIPER_DEV_METAL;   // not the active (CPU) device
         CHECK(b.texture_from_tensor_mapped(&t, 0, 0, 3, 0) == 0);
     }
+    SUBCASE("non-positive shape rejected by the extent guard") {
+        // A dim of 0 is contiguous by construction but has no extent; the
+        // (shape[i]-1)*stride term would go negative without the guard, so the
+        // bridge must reject rather than address memory it can't reason about.
+        CaliperTensor t = f32_2d(f, 0, 2);   // shape {0,2}, strides {2,1}
+        CHECK(b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 3, 0) == 0);
+    }
 }
 
 TEST_CASE("CPU staging bytes match the reference conversion") {

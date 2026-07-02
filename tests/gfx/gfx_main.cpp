@@ -437,6 +437,40 @@ TEST_CASE("gfx/Metal: device f32+LUT takes the compute path, pixel-exact") {
     }
 }
 
+// Same compute path with a NONZERO vmin: values in [-1,1] mapped with
+// vmin=-1, so the (v-vmin) term the shader computes is exercised away from 0
+// (a zero vmin would hide a dropped/incorrect subtraction). Pixel-exact vs the
+// identical CPU reference, which uses the same (v-vmin)/(vmax-vmin) math.
+TEST_CASE("gfx/Metal: device f32+LUT compute path is exact with nonzero vmin") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+
+    const int w = 4, h = 4;
+    const int n = w * h;
+    std::vector<float> data(n);
+    for (int i = 0; i < n; ++i) data[i] = -1.0f + 2.0f * ((float)i / (float)(n - 1)); // -1..1
+    const float vmin = -1.0f, vmax = 1.0f;
+
+    id<MTLBuffer> buf = device_buffer(data.data(), data.size() * sizeof(float));
+    CaliperTensor t{};
+    t.struct_size = sizeof(t);
+    t.data = (__bridge void*)buf;
+    t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_METAL;
+
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_RDBU, vmin, vmax, 0);
+    REQUIRE(id != 0);
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
+
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_RDBU),
+                     vmin, vmax, ref.data());
+    CHECK(bk.readback(id, w, h) == ref);
+    bk.bridge->release_texture(id);
+}
+
 // u8 RGBA (HWC, C=4) on a METAL-device tensor -> blit -> byte-exact vs CPU ref.
 TEST_CASE("gfx/Metal: device u8 HWC takes the blit path, byte-exact") {
     if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
