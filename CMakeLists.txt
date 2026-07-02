@@ -119,6 +119,8 @@ set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # ---- SDK install rules (component: sdk) ----
 include(CMakePackageConfigHelpers)
 install(DIRECTORY sdk/include/ DESTINATION include COMPONENT sdk)
+# ALIAS targets are build-tree-only; without EXPORT_NAME the installed export
+# would be caliper::caliper_sdk (caught by the Phase 0 exit proof).
 set_target_properties(caliper_sdk PROPERTIES EXPORT_NAME sdk)
 install(TARGETS caliper_sdk EXPORT CaliperSDKTargets COMPONENT sdk)
 install(EXPORT CaliperSDKTargets NAMESPACE caliper::

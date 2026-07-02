@@ -103,7 +103,9 @@ struct AppletMeta {
     static void* cal_create(void) {                                            \
         try { return new Holder(); } catch (...) { return nullptr; }           \
     }                                                                          \
-    static void cal_destroy(void* s) { delete static_cast<Holder*>(s); }       \
+    static void cal_destroy(void* s) {                                         \
+        try { delete static_cast<Holder*>(s); } catch (...) {}                 \
+    }                                                                          \
     static bool cal_initialize(void* s, const CaliperHost* h) {                \
         auto* hold = static_cast<Holder*>(s);                                  \
         hold->host = ::caliper::Host(h);                                       \

@@ -3,6 +3,7 @@
 #include <caliper/services/ui_v1.h>
 #include <caliper/services/log_v1.h>
 #include <cstddef>
+#include <string>
 #include <type_traits>
 
 // ABI hygiene (PLATFORM.md §6c): POD, struct_size-prefixed, C-safe.
