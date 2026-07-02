@@ -19,8 +19,15 @@ endif()
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# Force static runtime library for all targets to match DuckDB
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# PLATFORM.md D7: dynamic CRT so host + applet DLLs share one heap. DuckDB
+# under /MD is unverified until the first Windows session — CALIPER_STATIC_CRT
+# is the escape hatch if it breaks.
+option(CALIPER_STATIC_CRT "Use static MSVC runtime (/MT) — pre-D7 behavior" OFF)
+if(CALIPER_STATIC_CRT)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
 set(BUILD_SHARED_LIBS OFF)
 
 # CUDA enabled
@@ -159,11 +166,12 @@ add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
     src/applet_host.cpp
+    src/host/host_services.cpp
     src/app_paths.cpp
 )
 
 # Host links UI libs + platform libs (no DuckDB, no LibTorch)
-target_link_libraries(caliper PRIVATE ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE caliper_host_lib caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)

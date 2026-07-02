@@ -76,5 +76,11 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 and `{manifest_filename}` is the manifest file the applet was scanned from.
 
 !!! note
-    Rendering these statuses as failure cards in the applet browser arrives at
-    Task 13.
+    The host now renders these statuses on the landing page. Any applet that is
+    not `Ready`/`Active` keeps its card, but the card body is prefixed with
+    `[unavailable] <reason>` — where `<reason>` is the exact `status_text` from
+    the tables above (the negotiation refusal, `Failed`, or `Quarantined`
+    message) — followed by the applet's normal summary. The card stays visible
+    but will not launch until the cause is fixed, and the text is refreshed each
+    time you return to the landing page so a mid-session quarantine shows up
+    immediately.
