@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -40,6 +41,10 @@
 namespace {
 constexpr int kEpochs = 3;
 constexpr int kBatch = 256;
+// Evaluate test accuracy every kEvalEvery training batches (plus a step-0
+// baseline and each epoch end). Per-epoch cadence hides the learning transient
+// on fast-converging datasets like MNIST — 3 points that snap to ~98%.
+constexpr int kEvalEvery = 50;
 
 // The four IDX files MNIST ships as (host-side names in data_dir; `.gz` on the
 // wire). Mirror on S3 — the classic yann.lecun.com host 403s from many nets.
@@ -88,11 +93,12 @@ public:
                             device_.free_memory_hint / 1073741824.0);
 
         // ML-EXEMPLAR 3 — read a copy of worker-published state under the mutex.
-        std::vector<float> loss, acc;
+        std::vector<float> loss, acc, acc_x;
         std::string status;
         {
             std::lock_guard<std::mutex> lk(state_mutex_);
             loss = loss_history_;
+            acc_x = acc_steps_;
             acc = acc_history_;
             status = status_line_;
         }
@@ -125,10 +131,13 @@ public:
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("test accuracy %", {-1, 200})) {
-            ImPlot::SetupAxes("epoch", "acc %");
+            // x-axis is the global step (same domain as the loss plot), so the
+            // step-0 baseline and mid-epoch samples trace the true learning ramp.
+            ImPlot::SetupAxes("step", "acc %");
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImPlotCond_Always);
             if (!acc.empty())
-                ImPlot::PlotLine("acc", acc.data(), (int)acc.size());
+                ImPlot::PlotLine("acc", acc_x.data(), acc.data(),
+                                 (int)acc.size());
             ImPlot::EndPlot();
         }
         ImGui::TextWrapped("First-layer conv kernels arrive with "
@@ -168,6 +177,7 @@ private:
         {
             std::lock_guard<std::mutex> lk(state_mutex_);
             loss_history_.clear();
+            acc_steps_.clear();
             acc_history_.clear();
             status_line_ = "starting…";
         }
@@ -345,6 +355,44 @@ private:
         const int64_t total_steps = batches_per_epoch * kEpochs;
         int64_t step = 0;
 
+        // Full-t10k test accuracy in no_grad 1000-image batches. Returns nullopt
+        // on cancel (caller ends the run and returns). One routine, reused for the
+        // step-0 baseline, the mid-epoch cadence, and each epoch end. Leaves the
+        // model in eval mode — training loops call model->train() before stepping.
+        auto evaluate = [&]() -> std::optional<float> {
+            model->eval();
+            int64_t correct = 0, seen = Xte.size(0);
+            torch::NoGradGuard ng;
+            for (int64_t b = 0; b < seen; b += 1000) {
+                if (ctl->cancelled(ctl)) return std::nullopt;
+                int64_t hi = std::min<int64_t>(b + 1000, seen);
+                auto xb = Xte.slice(0, b, hi);
+                auto pred = model->forward(xb).argmax(1);
+                correct += pred.eq(yte.slice(0, b, hi)).sum().item<int64_t>();
+            }
+            return seen ? 100.f * (float)correct / (float)seen : 0.f;
+        };
+        // Publish one evaluation at a global step: append to the paired UI arrays
+        // (xs = step, ys = acc %) under the mutex, and stream it to metrics.
+        // ML-EXEMPLAR 6 — test/accuracy is sampled every kEvalEvery steps (plus a
+        // step-0 baseline); per-epoch cadence hides the learning transient on
+        // fast-converging datasets. Step-indexed so it shares the loss x-axis.
+        auto record_acc = [&](int64_t at_step, float accpct) {
+            {
+                std::lock_guard<std::mutex> lk(self->state_mutex_);
+                self->acc_steps_.push_back((float)at_step);
+                self->acc_history_.push_back(accpct);
+            }
+            if (run != 0)
+                self->metrics_.scalar(run, "test/accuracy", at_step, accpct);
+        };
+
+        // Baseline BEFORE the first training step: an untrained net scores ~10%
+        // (chance on 10 classes), anchoring the curve so the ramp is visible.
+        if (auto acc0 = evaluate())
+            record_acc(step, *acc0);              // step == 0 here
+        else { self->end_metrics_run(run); return; }   // cancel during baseline
+
         for (int epoch = 0; epoch < kEpochs; epoch++) {
             model->train();
             auto perm = torch::randperm(n, torch::TensorOptions(dev).dtype(
@@ -375,32 +423,22 @@ private:
                 std::snprintf(msg, sizeof msg, "epoch %d/%d  loss %.4f",
                               epoch + 1, kEpochs, l);
                 ctl->progress(ctl, (float)step / (float)total_steps, msg);
-            }
 
-            // Per-epoch test accuracy in no_grad 1000-image batches.
-            model->eval();
-            int64_t correct = 0, seen = Xte.size(0);
-            {
-                torch::NoGradGuard ng;
-                for (int64_t b = 0; b < seen; b += 1000) {
-                    if (ctl->cancelled(ctl)) {     // ML-EXEMPLAR 6: end_run
-                        self->end_metrics_run(run);
-                        return;
-                    }
-                    int64_t hi = std::min<int64_t>(b + 1000, seen);
-                    auto xb = Xte.slice(0, b, hi);
-                    auto pred = model->forward(xb).argmax(1);
-                    correct += pred.eq(yte.slice(0, b, hi)).sum().item<int64_t>();
+                // Mid-epoch accuracy sample: MNIST converges inside epoch 1, so
+                // this is where the learning curve actually lives.
+                if (step % kEvalEvery == 0) {
+                    if (auto acc = evaluate()) record_acc(step, *acc);
+                    else { self->end_metrics_run(run); return; }  // cancel in eval
+                    model->train();   // evaluate() left the model in eval mode
                 }
             }
-            float accpct = seen ? 100.f * (float)correct / (float)seen : 0.f;
-            {
-                std::lock_guard<std::mutex> lk(self->state_mutex_);
-                self->acc_history_.push_back(accpct);
-            }
-            // ML-EXEMPLAR 6 — one scalar per epoch, stepped by epoch index.
-            if (run != 0)
-                self->metrics_.scalar(run, "test/accuracy", epoch, accpct);
+
+            // End-of-epoch accuracy (the final epoch end is also the completion
+            // point). batches_per_epoch is not a multiple of kEvalEvery, so this
+            // does not duplicate a mid-epoch sample at the same step.
+            float accpct;
+            if (auto acc = evaluate()) { accpct = *acc; record_acc(step, accpct); }
+            else { self->end_metrics_run(run); return; }   // cancel during eval
             char msg[96];
             std::snprintf(msg, sizeof msg, "epoch %d/%d  test acc %.2f%%",
                           epoch + 1, kEpochs, accpct);
@@ -427,7 +465,8 @@ private:
     uint64_t job_id_ = 0;
     std::mutex state_mutex_;
     std::vector<float> loss_history_;
-    std::vector<float> acc_history_;
+    std::vector<float> acc_steps_;    // xs for the accuracy plot (global step)
+    std::vector<float> acc_history_;  // ys (test accuracy %), paired with acc_steps_
     std::string status_line_ = "idle — press start to download MNIST + train";
 };
 

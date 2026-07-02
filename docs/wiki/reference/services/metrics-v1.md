@@ -19,8 +19,10 @@ The vocabulary is TensorBoard's, deliberately: **experiment / run / tag / step**
 - **`scalar(run, tag, step, value)`** appends one point. The **tag** is the
   series name (`"train/loss"`, `"test/accuracy"`); the `/` groups tags into
   panes in the dashboard. The **step** is the x-axis: a global batch index for
-  per-batch loss, an epoch index for per-epoch accuracy — you choose the axis by
-  choosing the step. The store keeps points ordered by step and queries them back
+  per-batch loss, and the *same* global step for accuracy sampled every N batches
+  (per-epoch cadence hides the learning transient on fast-converging datasets) —
+  you choose the axis by choosing the step. Sharing the step domain lets loss and
+  accuracy line up. The store keeps points ordered by step and queries them back
   ordered (the §16 contract: 10k scalars written and read back in order).
 - **`hparams_json(run, json_utf8)`** attaches a flat JSON blob of hyperparameters
   to the run (`{"lr":0.001,"batch":256,...}`) so runs are comparable.
@@ -47,4 +49,5 @@ Metrics is an **optional** service: probe it, and stream only when present. Ever
 applet that logs a scalar this way inherits the **Runs dashboard** for free —
 run list, per-tag plots, EMA smoothing — with no dashboard code of its own. See
 [MLScope](../../tutorials/first-applet.md) for the exemplar: MNIST training that
-streams `train/loss` per batch and `test/accuracy` per epoch to this service.
+streams `train/loss` per batch and `test/accuracy` every 50 batches (from a
+step-0 baseline) to this service.
