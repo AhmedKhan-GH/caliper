@@ -10,4 +10,6 @@ abi_epoch = 2
 min_host  = "0.6.0"
 
 [services]
-required = ["caliper.ui.v1", "caliper.log.v1"]
+# tensor_bridge.v1 is REQUIRED since Phase 2D: the attention heatmaps upload
+# through it (bridge-native, no raw GL) and cannot render without it.
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.tensor_bridge.v1"]
