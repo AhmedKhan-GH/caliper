@@ -27,6 +27,7 @@ nav:
       - Manifest (caliper.toml): reference/manifest.md
       - Refusal messages: reference/refusals.md
       - Tensor (caliper/tensor.h): reference/tensor.md
+      - Adapters (torch): reference/adapters.md
       - Services:
           - caliper.ui.v1: reference/services/ui-v1.md
           - caliper.log.v1: reference/services/log-v1.md
@@ -37,6 +38,7 @@ nav:
       - C++ sugar: reference/sugar.md
   - Explanation:
       - Architecture: explanation/architecture.md
+      - Rendering: explanation/rendering.md
       - Compatibility & epochs: explanation/compatibility.md
       - Trust model: explanation/trust-model.md
   - Decisions: decisions/index.md
