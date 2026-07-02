@@ -17,6 +17,7 @@ add_executable(caliper_tests
     test_crash_guard.cpp
     test_watchdog.cpp
     test_sugar.cpp
+    test_jobs.cpp
 )
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack)

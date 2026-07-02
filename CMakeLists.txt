@@ -152,6 +152,7 @@ add_library(caliper_host_lib STATIC
     src/host/negotiation.cpp
     src/host/crash_guard.cpp
     src/host/applet_loader.cpp
+    src/host/job_system.cpp
 )
 target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_host_lib
