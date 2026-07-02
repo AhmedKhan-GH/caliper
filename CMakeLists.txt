@@ -157,11 +157,19 @@ add_library(caliper_host_lib STATIC
     src/host/crash_guard.cpp
     src/host/applet_loader.cpp
     src/host/job_system.cpp
+    src/host/metrics_store.cpp
 )
 target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+# DuckDB is a host implementation detail (PLATFORM.md §11): it backs
+# MetricsStore but no DuckDB type crosses metrics_store.h (pimpl). Link PRIVATE
+# so the ABI seam stays clean; <duckdb.hpp> flows via duckdb_static's INTERFACE.
 target_link_libraries(caliper_host_lib
     PUBLIC caliper::sdk
-    PRIVATE tomlplusplus::tomlplusplus)
+    PRIVATE tomlplusplus::tomlplusplus
+            duckdb_static
+            duckdb_generated_extension_loader
+            parquet_extension
+            core_functions_extension)
 
 # Device query (caliper.device.v1): Metal-API-only on Apple, no ML framework
 # linked (D11). The Metal/Foundation frameworks flow PUBLIC so consumers of
@@ -183,6 +191,7 @@ add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
     src/host/host_services.cpp
+    src/host/runs_dashboard.cpp
     src/app_paths.cpp
 )
 

@@ -14,4 +14,11 @@ const std::set<std::string>& service_ids();
 // tray reads its views(). Cancelled + joined at shutdown by its own dtor.
 class JobSystem;
 JobSystem& host_job_system();
+
+// The process-wide metrics store backing caliper.metrics.v1 (§7.6/§11); the
+// host dashboard (B5) reads it. Opened by services_init() at
+// caliper::app_data_path("metrics.duckdb"); may be unopened if the disk failed
+// (the service is still vended, its thunks no-op on the null store).
+class MetricsStore;
+MetricsStore& host_metrics_store();
 }

@@ -3,4 +3,6 @@
 #include <caliper/services/log_v1.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
+#include <caliper/tensor.h>
+#include <caliper/services/metrics_v1.h>
 int caliper_abi_c_check_anchor(void) { return CALIPER_ABI_EPOCH; }

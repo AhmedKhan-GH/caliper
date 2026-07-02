@@ -1,8 +1,14 @@
 # The ML exemplar (PLATFORM.md §17 Phase 2). Links the in-tree libtorch the
 # same way repnet_demo does — runtime packs replace this at Phase 4.
+# curl + zlib are macOS system libs and exemplar-only deps: they cover the
+# cancellable MNIST download + gunzip that runs inside the job. The host links
+# neither — data acquisition is applet business, not platform business.
+find_package(CURL REQUIRED)
+find_package(ZLIB REQUIRED)
 add_library(ml_scope_applet SHARED ml_scope.cpp)
 target_link_libraries(ml_scope_applet PRIVATE
-    caliper::sdk caliper::ui_stack "${TORCH_LIBRARIES}")
+    caliper::sdk caliper::ui_stack "${TORCH_LIBRARIES}"
+    CURL::libcurl ZLIB::ZLIB)
 target_compile_definitions(ml_scope_applet PRIVATE CALIPER_APPLET_EXPORT)
 set_target_properties(ml_scope_applet PROPERTIES
     OUTPUT_NAME ml_scope
