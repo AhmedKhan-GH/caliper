@@ -29,6 +29,19 @@
 //     BRIDGE stages it — identical applet code, and no pixel work in the applet
 //     either way (§6c). tensor_bridge.v1 is OPTIONAL: absent -> the grid says so
 //     and training is unchanged (the EXEMPLAR 6 probe-optional pattern, again).
+//   ML-EXEMPLAR 8 — real-data visualization: inputs and activations, not just
+//     weights. Every eval tick the worker also snapshots ONE fixed probe digit
+//     (t10k index 0) and forwards it through conv1 alone -> its 8 (26,26)
+//     feature maps, plus the predicted/true labels — the SAME worker-snapshot
+//     discipline as EXEMPLAR 7, just bigger owned tensors, MPS drained once. The
+//     frame turns the digit into a VIRIDIS texture (fixed 0..1: create-once,
+//     update-after) and each map into an RdBu texture. Activations rescale hard
+//     as the net learns, so unlike the pinned-range kernels the maps use a fresh
+//     symmetric per-snapshot range — and since v1 update_texture has no range
+//     channel, a new range means fresh textures (release + recreate the 8, once
+//     per eval tick, never per frame). Still zero applet pixel work on either
+//     path: the bridge colormaps on-GPU (Metal) or CPU-stages (the shared C8
+//     GL fallback). Bridge absent -> the panel says so; training is unchanged.
 // ============================================================================
 #include <caliper/caliper.hpp>
 #include <caliper/adapters/torch.hpp>   // ML-EXEMPLAR 7 — torch::Tensor -> CaliperTensor
@@ -57,6 +70,9 @@ constexpr int kBatch = 256;
 // baseline and each epoch end). Per-epoch cadence hides the learning transient
 // on fast-converging datasets like MNIST — 3 points that snap to ~98%.
 constexpr int kEvalEvery = 50;
+// ML-EXEMPLAR 8 — the probe digit is a FIXED test index so you watch the SAME
+// digit's conv1 activations sharpen across the run (t10k[0]).
+constexpr int64_t kProbeIdx = 0;
 
 // The four IDX files MNIST ships as (host-side names in data_dir; `.gz` on the
 // wire). Mirror on S3 — the classic yann.lecun.com host 403s from many nets.
@@ -97,7 +113,7 @@ public:
 
     void on_frame(const caliper::Frame&) override {
         ImGui::SetNextWindowPos({60, 80}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({620, 560}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({620, 760}, ImGuiCond_FirstUseEver);
         ImGui::Begin("MLScope");
 
         // ML-EXEMPLAR 2 — the negotiated device, and what torch calls it.
@@ -158,6 +174,8 @@ public:
         }
         ImGui::Separator();
         render_kernels();   // ML-EXEMPLAR 7 — the live conv1 filter grid
+        ImGui::Separator();
+        render_probe();     // ML-EXEMPLAR 8 — the live probe digit + feature maps
         ImGui::End();
     }
 
@@ -180,6 +198,14 @@ public:
         for (auto id : kernel_tex_)
             if (id) bridge_.release_texture(id);
         kernel_tex_.clear();
+        // ML-EXEMPLAR 8 — the probe digit + feature-map textures are frame-thread
+        // owned too; release them in the same window (after the job wait, before
+        // renderer teardown).
+        if (probe_digit_tex_) bridge_.release_texture(probe_digit_tex_);
+        probe_digit_tex_ = 0;
+        for (auto id : probe_map_tex_)
+            if (id) bridge_.release_texture(id);
+        probe_map_tex_.clear();
         // Pairs with the on_init curl_global_init; only safe once the worker
         // (the sole curl user) has exited, which the bounded wait above ensures.
         curl_global_cleanup();
@@ -239,9 +265,99 @@ private:
                 ImGui::SetTooltip("kernel %zu / 8  (3x3 -> 48px, nearest)", k);
         }
         ImGui::TextDisabled("kernels: %s",
-            (kernel_tex_on_device_ && !kernel_stage_cpu_)
+            (kernel_tex_on_device_ && !stage_cpu_)
                 ? "GPU-resident (Metal, zero CPU staging)"
                 : "CPU-staged (GL fallback)");
+    }
+
+    // ML-EXEMPLAR 8 — the real-data payoff, drawn on the FRAME thread. Same
+    // read-a-copy-under-the-mutex discipline as render_kernels: the vector copy
+    // refcount-bumps the worker's owned clones so their storage outlives the
+    // (synchronous) uploads even if the worker publishes the next snapshot mid-
+    // frame.
+    void render_probe() {
+        if (!bridge_) {
+            ImGui::TextDisabled(
+                "probe: tensor_bridge.v1 absent (ok) — panel needs it");
+            return;
+        }
+        torch::Tensor digit;
+        std::vector<torch::Tensor> maps;
+        uint64_t gen = 0; float amax = 0.f; bool on_dev = false;
+        int pred = -1, truth = -1;
+        {
+            std::lock_guard<std::mutex> lk(state_mutex_);
+            gen = probe_gen_;
+            if (gen != 0) {
+                digit = probe_digit_;         // refcount bumps, keep storage alive
+                maps = probe_maps_;
+                amax = probe_amax_;
+                pred = probe_pred_;
+                truth = probe_true_;
+                on_dev = probe_on_device_;
+            }
+        }
+        if (gen == 0) {
+            ImGui::TextDisabled(
+                "probe: start training to watch a digit flow through conv1");
+            return;
+        }
+        if (gen != probe_tex_gen_) {          // new snapshot -> (re)upload
+            upload_probe(digit, maps, amax, on_dev);
+            probe_tex_gen_ = gen;
+        }
+        ImGui::Text("probe digit t10k[%lld] -> conv1 feature maps "
+                    "(RdBu +/-%.3f, per-snapshot range; live)",
+                    (long long)kProbeIdx, probe_amax_shown_);
+        // Digit (VIRIDIS 0..1, ~112px) + caption on the left; the 4x2 map grid
+        // (~52px cells) beside it on the right.
+        ImGui::BeginGroup();
+        if (probe_digit_tex_)
+            ImGui::Image(caliper::Bridge::imtex(probe_digit_tex_),
+                         ImVec2(112, 112));
+        const ImVec4 ok{0.35f, 0.85f, 0.40f, 1.f}, bad{0.90f, 0.35f, 0.35f, 1.f};
+        ImGui::TextColored(pred == truth ? ok : bad, "pred %d / true %d",
+                           pred, truth);
+        ImGui::EndGroup();
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        for (size_t m = 0; m < probe_map_tex_.size(); ++m) {
+            if (m % 4 != 0) ImGui::SameLine();
+            ImGui::Image(caliper::Bridge::imtex(probe_map_tex_[m]),
+                         ImVec2(52, 52));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("conv1 map %zu / 8  (26x26 -> 52px, nearest)", m);
+        }
+        ImGui::EndGroup();
+        ImGui::TextDisabled("feature maps: %s",
+            (probe_tex_on_device_ && !stage_cpu_)
+                ? "GPU-resident (Metal, zero CPU staging)"
+                : "CPU-staged (GL fallback)");
+    }
+
+    // Upload the probe snapshot. The digit is create-once/update-after (its
+    // VIRIDIS 0..1 range never changes). The 8 feature maps carry a fresh
+    // symmetric RdBu range every snapshot; v1 update_texture cannot rescale (no
+    // range channel), so we release + recreate them — cheap at eval cadence, and
+    // it also covers a shape change for free. Zero applet pixel work either way.
+    void upload_probe(const torch::Tensor& digit,
+                      const std::vector<torch::Tensor>& maps,
+                      float amax, bool on_dev) {
+        probe_tex_on_device_ = on_dev;
+        probe_amax_shown_ = (amax > 0.f) ? amax : 1e-6f;
+        probe_digit_tex_ = upload_mapped(probe_digit_tex_, digit,
+                                         CALIPER_CMAP_VIRIDIS, 0.f, 1.f);
+        if (probe_map_tex_.size() != maps.size()) {
+            for (auto id : probe_map_tex_)
+                if (id) bridge_.release_texture(id);
+            probe_map_tex_.assign(maps.size(), 0);
+        }
+        for (size_t m = 0; m < maps.size(); ++m) {
+            if (probe_map_tex_[m]) bridge_.release_texture(probe_map_tex_[m]);
+            probe_map_tex_[m] = upload_mapped(0, maps[m], CALIPER_CMAP_RDBU,
+                                              -probe_amax_shown_,
+                                              +probe_amax_shown_);
+        }
     }
 
     // Turn the 8 owned (3,3) kernel clones into 8 textures: create on the first
@@ -259,30 +375,44 @@ private:
             kernel_tex_range_ = (wmax > 0.f) ? wmax : 1e-6f;
         }
         kernel_tex_on_device_ = on_dev;
-        for (size_t k = 0; k < dev_ks.size(); ++k) {
-            // On the CPU-staging path this .to(kCPU) is a tiny (9-float) copy and
-            // may sync MPS — but only on the GL fallback, never the zero-copy
-            // claim path. The temporary outlives the synchronous bridge call.
-            torch::Tensor t =
-                kernel_stage_cpu_ ? dev_ks[k].to(torch::kCPU) : dev_ks[k];
-            auto ct = caliper::adapters::to_tensor(t);
-            if (!ct) continue;   // clones are offset-0 contiguous; defensive only
-            if (kernel_tex_[k] == 0) {
-                kernel_tex_[k] = bridge_.texture_from_tensor_mapped(
-                    &*ct, CALIPER_CMAP_RDBU,
-                    -kernel_tex_range_, +kernel_tex_range_, 0);
-                if (kernel_tex_[k] == 0 && !kernel_stage_cpu_ && k == 0) {
-                    // Device tensor rejected -> non-Metal bridge. Switch to CPU
-                    // staging for good and rebuild the whole snapshot once.
-                    kernel_stage_cpu_ = true;
-                    for (auto& id : kernel_tex_) id = 0;
-                    upload_kernels(dev_ks, wmax, on_dev);
-                    return;
-                }
-            } else {
-                bridge_.update_texture(kernel_tex_[k], &*ct);
-            }
+        for (size_t k = 0; k < dev_ks.size(); ++k)
+            // Create-once/update-after per kernel, range pinned at the first
+            // snapshot. upload_mapped owns the shared GL relocate-to-CPU fallback.
+            kernel_tex_[k] = upload_mapped(kernel_tex_[k], dev_ks[k],
+                                           CALIPER_CMAP_RDBU,
+                                           -kernel_tex_range_, +kernel_tex_range_);
+    }
+
+    // Shared bridge upload for ONE mapped (H,W) f32 tensor, with the C8 GL
+    // relocate-to-CPU fallback factored out (reused by kernels and the probe).
+    // id == 0 -> create; else update in place. We hand the bridge the TRAINING
+    // -device tensor first: the Metal renderer accepts and colormaps it on-GPU
+    // (zero CPU staging, the USP); a non-Metal bridge rejects the device tensor,
+    // so we relocate the clone to CPU and the BRIDGE stages it — the applet never
+    // touches a pixel (§6c), it only chooses where the tensor lives. stage_cpu_
+    // latches true on the first device rejection so every later upload skips
+    // straight to the CPU path. Returns the (possibly new) texture id.
+    CaliperTextureId upload_mapped(CaliperTextureId id, const torch::Tensor& dev_t,
+                                   int32_t cmap, float vmin, float vmax) {
+        // host_t keeps a CPU copy alive across the synchronous bridge call when
+        // the staging path is taken; the CaliperTensor descriptor aliases it.
+        torch::Tensor host_t;
+        auto view = [&](bool cpu) -> std::optional<CaliperTensor> {
+            if (cpu) { host_t = dev_t.to(torch::kCPU);
+                       return caliper::adapters::to_tensor(host_t); }
+            return caliper::adapters::to_tensor(dev_t);
+        };
+        auto ct = view(stage_cpu_);
+        if (!ct) return id;                  // clones are offset-0 contig; defensive
+        if (id != 0) { bridge_.update_texture(id, &*ct); return id; }
+        id = bridge_.texture_from_tensor_mapped(&*ct, cmap, vmin, vmax, 0);
+        if (id == 0 && !stage_cpu_) {        // device rejected -> non-Metal bridge
+            stage_cpu_ = true;
+            ct = view(true);
+            if (!ct) return 0;
+            id = bridge_.texture_from_tensor_mapped(&*ct, cmap, vmin, vmax, 0);
         }
+        return id;
     }
 
     void start_training() {
@@ -534,11 +664,44 @@ private:
             }
         };
 
+        // ML-EXEMPLAR 8 — snapshot the real-data panel: the fixed probe digit,
+        // its conv1 feature maps, and the predicted/true labels. Same discipline
+        // as snapshot_kernels — worker-only, NEVER touches the bridge, owned
+        // offset-0 clones (raw select() views carry a nonzero storage offset the
+        // MPS adapter rejects), one MPS drain here so the frame never syncs.
+        // Runs in eval mode (every caller evaluates first), under no_grad.
+        auto snapshot_probe = [&]() {
+            if (!self->bridge_) return;          // no consumer -> skip the copy
+            torch::NoGradGuard ng;
+            auto x = Xte.slice(0, kProbeIdx, kProbeIdx + 1);   // (1,1,28,28) on dev
+            auto feat = conv1->forward(x);                     // (1,8,26,26)
+            int pred = (int)model->forward(x).argmax(1).item<int64_t>();
+            int truth = (int)yte[kProbeIdx].item<int64_t>();
+            float amax = feat.abs().max().item<float>();       // symmetric range
+            auto digit = x[0][0].clone();        // (28,28) OWNED, offset-0, contig
+            std::vector<torch::Tensor> maps;
+            maps.reserve(feat.size(1));
+            for (int64_t c = 0; c < feat.size(1); ++c)
+                maps.push_back(feat[0][c].clone());  // (26,26) OWNED, offset-0
+            if (on_mps) torch::mps::synchronize();   // drain the clones once, here
+            {
+                std::lock_guard<std::mutex> lk(self->state_mutex_);
+                self->probe_digit_ = std::move(digit);
+                self->probe_maps_ = std::move(maps);
+                self->probe_amax_ = amax;
+                self->probe_pred_ = pred;
+                self->probe_true_ = truth;
+                self->probe_on_device_ = on_mps;
+                self->probe_gen_++;
+            }
+        };
+
         // Baseline BEFORE the first training step: an untrained net scores ~10%
         // (chance on 10 classes), anchoring the curve so the ramp is visible.
         if (auto acc0 = evaluate()) {
             record_acc(step, *acc0);              // step == 0 here
             snapshot_kernels();                  // random init: pure noise
+            snapshot_probe();                    // untrained conv1 on a real digit
         } else { self->end_metrics_run(run); return; } // cancel during baseline
 
         for (int epoch = 0; epoch < kEpochs; epoch++) {
@@ -576,7 +739,8 @@ private:
                 // this is where the learning curve actually lives.
                 if (step % kEvalEvery == 0) {
                     if (auto acc = evaluate()) { record_acc(step, *acc);
-                                                 snapshot_kernels(); }
+                                                 snapshot_kernels();
+                                                 snapshot_probe(); }
                     else { self->end_metrics_run(run); return; }  // cancel in eval
                     model->train();   // evaluate() left the model in eval mode
                 }
@@ -587,7 +751,8 @@ private:
             // does not duplicate a mid-epoch sample at the same step.
             float accpct;
             if (auto acc = evaluate()) { accpct = *acc; record_acc(step, accpct);
-                                         snapshot_kernels(); }
+                                         snapshot_kernels();
+                                         snapshot_probe(); }
             else { self->end_metrics_run(run); return; }   // cancel during eval
             char msg[96];
             std::snprintf(msg, sizeof msg, "epoch %d/%d  test acc %.2f%%",
@@ -633,7 +798,26 @@ private:
     uint64_t kernel_tex_gen_ = 0;              // last generation uploaded
     float    kernel_tex_range_ = 0.f;          // symmetric RdBu range (fixed at 1st)
     bool     kernel_tex_on_device_ = false;    // snapshot was device-resident
-    bool     kernel_stage_cpu_ = false;        // bridge rejected device -> stage CPU
+    // Shared across kernel + probe uploads: latches true the first time the
+    // bridge rejects a device tensor (non-Metal renderer -> CPU staging, §6c).
+    bool     stage_cpu_ = false;
+
+    // ML-EXEMPLAR 8 — real-data snapshot published by the worker (state_mutex_).
+    // OWNED torch storage, same lifetime contract as kernel_snap_: the frame
+    // holds a refcounted copy for the duration of each bridge call.
+    torch::Tensor probe_digit_;                 // (28,28) input on training device
+    std::vector<torch::Tensor> probe_maps_;     // 8 x (26,26) conv1 activations
+    float    probe_amax_ = 0.f;                 // max|activation| of the snapshot
+    int      probe_pred_ = -1;                  // argmax of the model on the probe
+    int      probe_true_ = -1;                  // ground-truth label of the probe
+    bool     probe_on_device_ = false;          // snapshot lives on MPS
+    uint64_t probe_gen_ = 0;                     // bumped per snapshot (0 = none yet)
+    // Frame-thread-owned probe textures (never touched by the worker).
+    CaliperTextureId probe_digit_tex_ = 0;      // VIRIDIS 0..1, create-once
+    std::vector<CaliperTextureId> probe_map_tex_; // 8 RdBu maps, recreated/snapshot
+    uint64_t probe_tex_gen_ = 0;                // last generation uploaded
+    float    probe_amax_shown_ = 0.f;           // symmetric RdBu range in use
+    bool     probe_tex_on_device_ = false;      // snapshot was device-resident
 };
 
 CALIPER_APPLET(MLScope,
