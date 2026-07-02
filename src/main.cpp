@@ -1,9 +1,6 @@
 #include <iostream>
-#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
-#include <backends/imgui_impl_glfw.h>
-#include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
 #include <implot3d.h>
 
@@ -14,7 +11,12 @@
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
 #include "host/runs_dashboard.h"
+#include "host/renderer/host_renderer.h"
 #include "app_paths.h"
+
+#include <string>
+#include <cstdlib>
+#include <cstring>
 
 #include <filesystem>
 #ifdef __APPLE__
@@ -39,12 +41,17 @@ public:
             return false;
         }
 
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        // Renderer seam (PLATFORM.md §5.4): backend hints run before the
+        // window exists; init() runs after. CALIPER_RENDERER=metal selects the
+        // Metal backend (Apple only); GL stays the default until the 2D flip.
+        const char* want = std::getenv("CALIPER_RENDERER");
+        bool want_metal = want && std::strcmp(want, "metal") == 0;
 #ifdef __APPLE__
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        if (want_metal) renderer_ = caliper_host::make_metal_renderer();
+#else
+        (void)want_metal;
 #endif
+        if (!renderer_) renderer_ = caliper_host::make_renderer("gl");
 
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         int ax, ay, aw, ah;
@@ -54,15 +61,8 @@ public:
         int ww = (int)((aw / sx) * 0.95f);
         int wh = (int)((ah / sy) * 0.95f);
 
-        window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
-        if (!window_) { glfwTerminate(); return false; }
-
-        glfwMakeContextCurrent(window_);
-        glfwSwapInterval(1);
-
-        glewExperimental = GL_TRUE;
-        if (glewInit() != GLEW_OK) { glfwTerminate(); return false; }
-
+        // Host-owned ImGui/ImPlot contexts must exist before the renderer
+        // initializes its ImGui backends. None of these touch GL/Metal.
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -73,13 +73,41 @@ public:
         ImGui::StyleColorsDark();
         style_ui();
 
-        ImGui_ImplGlfw_InitForOpenGL(window_, true);
-        ImGui_ImplOpenGL3_Init("#version 330");
+        // Backends whose window hints differ (Metal = NO_API, GL = a GL
+        // context) cannot share a window, so a failed backend init recreates
+        // the window for the fallback. GL is the guaranteed fallback.
+        if (!create_window_and_init(ww, wh)) {
+            if (std::string(renderer_->name()) != "gl") {
+                std::cerr << "[renderer] " << renderer_->name()
+                          << " init failed; falling back to gl" << std::endl;
+                renderer_ = caliper_host::make_renderer("gl");
+                if (!create_window_and_init(ww, wh)) {
+                    glfwTerminate();
+                    return false;
+                }
+            } else {
+                glfwTerminate();
+                return false;
+            }
+        }
+        std::cerr << "[renderer] " << renderer_->name() << std::endl;
         caliper_host::services_init();
+        // Hand the live renderer to the bridge (caliper.tensor_bridge.v1); it is
+        // cleared before renderer teardown in cleanup(). Do this right after the
+        // renderer is up so the first applet frame can vend textures.
+        caliper_host::services_set_renderer(renderer_.get());
 
-        if (!intro_.initialize()) {
-            std::cerr << "Intro screen init failed" << std::endl;
-            return false;
+        // IntroScreen is raw-GL end to end (its initialize/render_3d/cleanup all
+        // issue GL). On non-GL backends there is no GL context, so skip init:
+        // every other IntroScreen entry point early-outs when its state is null,
+        // so update()/draw_ui()/cleanup() stay crash-free. The 3D landing bg and
+        // card launcher return with the GL->2D migration (2D). render_3d is
+        // already guarded below; initialize() needs the same guard.
+        if (std::string(renderer_->name()) == "gl") {
+            if (!intro_.initialize()) {
+                std::cerr << "Intro screen init failed" << std::endl;
+                return false;
+            }
         }
 
         // Scan for applet shared libraries
@@ -129,18 +157,16 @@ public:
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
-            glViewport(0, 0, dw, dh);
-            glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
+
+            renderer_->new_frame();
 
             if (page_ == AppPage::Landing) {
                 intro_.update(window_);
-                intro_.render_3d(dw, dh);
+                // TODO(2D): dies with the backend flip — IntroScreen issues raw
+                // GL, so it only runs on the GL backend; Metal skips the 3D bg.
+                if (std::string(renderer_->name()) == "gl")
+                    intro_.render_3d(dw, dh);
             }
-
-            ImGui_ImplOpenGL3_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
 
             if (page_ == AppPage::Landing) {
                 // The Landing page has no menu bar of its own; add a minimal one
@@ -262,18 +288,18 @@ public:
                 }
             }
 
-            ImGui::Render();
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-            glfwSwapBuffers(window_);
+            renderer_->render(dw, dh);
         }
     }
 
     void cleanup() {
         loader_.close_all();
+        // Applets are torn down first (they may release bridge textures while the
+        // renderer is still live); THEN drop the renderer from the bridge before
+        // renderer teardown, so no bridge thunk touches a destroyed renderer.
+        caliper_host::services_set_renderer(nullptr);
         intro_.cleanup();
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
+        renderer_->shutdown();
         ImPlot3D::DestroyContext();
         ImPlot::DestroyContext();
         ImGui::DestroyContext();
@@ -282,6 +308,18 @@ public:
     }
 
 private:
+    // (Re)create the GLFW window for the current renderer and init the backend.
+    // glfwDefaultWindowHints() clears sticky hints from a prior attempt (e.g.
+    // Metal's GLFW_NO_API) so the fallback backend gets a clean slate.
+    bool create_window_and_init(int ww, int wh) {
+        if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
+        glfwDefaultWindowHints();
+        renderer_->window_hints();
+        window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
+        if (!window_) return false;
+        return renderer_->init(window_);
+    }
+
     void style_ui() {
         ImGuiStyle& st = ImGui::GetStyle();
         st.WindowRounding = 6.0f;
@@ -308,6 +346,7 @@ private:
     }
 
     GLFWwindow* window_ = nullptr;
+    std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
     IntroScreen intro_;
     caliper_host::AppletLoader loader_{

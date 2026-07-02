@@ -12,7 +12,10 @@ and a live loss curve — the pattern to copy for any applet that computes. It i
 also the exemplar for streaming training metrics to
 [`caliper.metrics.v1`](../reference/services/metrics-v1.md) (probed optionally, so
 the same binary runs with or without it) — every applet that logs a scalar that
-way inherits the Runs dashboard.
+way inherits the Runs dashboard. MLScope is also the exemplar for GPU-resident
+visualization — its live conv-kernel grid crosses
+[`caliper.tensor_bridge.v1`](../reference/services/tensor-bridge-v1.md) via the
+[torch adapter](../reference/adapters.md), zero-copy on the Metal renderer.
 
 The whole applet lives in `examples/hello/`:
 

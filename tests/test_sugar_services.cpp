@@ -2,6 +2,7 @@
 #include <caliper/caliper.hpp>
 #include <caliper/fixture_host.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/tensor_bridge_v1.h>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,42 @@ void fmet_hparams(uint64_t run, const char* json) {
 const CaliperMetricsV1 kFakeMetrics = {
     sizeof(CaliperMetricsV1), &fmet_begin_run, &fmet_end_run, &fmet_scalar,
     &fmet_histogram, &fmet_image, &fmet_hparams};
+
+// Fake tensor_bridge.v1: records that the Bridge sugar routes through it.
+struct BridgeCalls {
+    int tex_calls = 0, mapped_calls = 0, update_calls = 0, release_calls = 0;
+    int alloc_calls = 0, free_calls = 0;
+    uint32_t last_flags = 0;
+    int32_t last_colormap = -1;
+    float last_vmin = 0.0f, last_vmax = 0.0f;
+    CaliperTextureId last_released = 0, last_freed = 0;
+};
+BridgeCalls g_bridge;
+
+CaliperTextureId fbr_tex(const CaliperTensor*, uint32_t flags) {
+    g_bridge.tex_calls++; g_bridge.last_flags = flags; return 100;
+}
+bool fbr_update(CaliperTextureId, const CaliperTensor*) {
+    g_bridge.update_calls++; return true;
+}
+void fbr_release(CaliperTextureId tex) {
+    g_bridge.release_calls++; g_bridge.last_released = tex;
+}
+CaliperTextureId fbr_mapped(const CaliperTensor*, int32_t cm,
+                            float vmin, float vmax, uint32_t) {
+    g_bridge.mapped_calls++; g_bridge.last_colormap = cm;
+    g_bridge.last_vmin = vmin; g_bridge.last_vmax = vmax; return 200;
+}
+bool fbr_alloc(CaliperDType, int32_t, const int64_t*, CaliperTensor*,
+               CaliperTextureId* out) {
+    g_bridge.alloc_calls++; if (out) *out = 300; return true;
+}
+void fbr_free(CaliperTextureId tex) {
+    g_bridge.free_calls++; g_bridge.last_freed = tex;
+}
+const CaliperTensorBridgeV1 kFakeBridge = {
+    sizeof(CaliperTensorBridgeV1), &fbr_tex, &fbr_update, &fbr_release,
+    &fbr_mapped, &fbr_alloc, &fbr_free};
 } // namespace
 
 TEST_CASE("sugar: Jobs wrapper routes through the service table") {
@@ -135,4 +172,52 @@ TEST_CASE("sugar: Metrics wrapper is falsy and inert without the service") {
     metrics.end_run(0);
     metrics.hparams_json(0, "{}");
     CHECK(g_metrics.begin_runs == 0);          // nothing routed through
+}
+
+TEST_CASE("sugar: Bridge wrapper routes through the service table") {
+    g_bridge = BridgeCalls{};
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_TENSOR_BRIDGE_V1, &kFakeBridge);
+    caliper::Host host(fx.host());
+    caliper::Bridge bridge(host);
+    REQUIRE(static_cast<bool>(bridge));
+
+    CHECK(bridge.texture_from_tensor(nullptr, 5u) == 100);
+    CHECK(g_bridge.last_flags == 5u);
+
+    CHECK(bridge.texture_from_tensor_mapped(nullptr, CALIPER_CMAP_MAGMA,
+                                            -1.0f, 2.0f) == 200);
+    CHECK(g_bridge.last_colormap == CALIPER_CMAP_MAGMA);
+    CHECK(g_bridge.last_vmin == doctest::Approx(-1.0f));
+    CHECK(g_bridge.last_vmax == doctest::Approx(2.0f));
+
+    CHECK(bridge.update_texture(100, nullptr));
+    CHECK(g_bridge.update_calls == 1);
+
+    CaliperTextureId shared_tex = 0;
+    CHECK(bridge.alloc_shared(CALIPER_DT_F32, 2, nullptr, nullptr, &shared_tex));
+    CHECK(shared_tex == 300);
+
+    bridge.release_texture(100);
+    CHECK(g_bridge.last_released == 100);
+    bridge.free_shared(300);
+    CHECK(g_bridge.last_freed == 300);
+
+    // Opaque id -> ImTextureID convenience cast (never a raw GL/Metal handle).
+    CHECK(caliper::Bridge::imtex(42) == (ImTextureID)42);
+}
+
+TEST_CASE("sugar: Bridge wrapper is falsy and inert without the service") {
+    g_bridge = BridgeCalls{};
+    caliper::testing::FixtureHost fx;
+    caliper::Host host(fx.host());
+    caliper::Bridge bridge(host);
+    CHECK_FALSE(static_cast<bool>(bridge));
+    CHECK(bridge.texture_from_tensor(nullptr, 0) == 0);          // inert, not UB
+    CHECK(bridge.texture_from_tensor_mapped(nullptr, 0, 0.0f, 1.0f) == 0);
+    CHECK_FALSE(bridge.update_texture(1, nullptr));
+    CHECK_FALSE(bridge.alloc_shared(CALIPER_DT_F32, 2, nullptr, nullptr, nullptr));
+    bridge.release_texture(1);
+    bridge.free_shared(1);
+    CHECK(g_bridge.tex_calls == 0);            // nothing routed through
 }

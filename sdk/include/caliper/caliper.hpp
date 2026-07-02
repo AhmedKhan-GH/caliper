@@ -7,6 +7,7 @@
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/tensor_bridge_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -111,6 +112,54 @@ public:
     }
 private:
     const CaliperMetricsV1* t_ = nullptr;
+};
+
+// Typed wrapper over caliper.tensor_bridge.v1 (§7.4): a CaliperTensor becomes a
+// live texture, crossing the ABI as an opaque CaliperTextureId. Falsy when the
+// host doesn't vend the service; every method null-guards its fn pointer so it
+// stays inert (not UB) on a headless/older host. FRAME-THREAD ONLY in v1: a
+// tensor produced by a background job is consumed at frame time, so call these
+// on the UI/frame thread, never from a job worker (the C8 pattern).
+class Bridge {
+public:
+    Bridge() = default;
+    explicit Bridge(const Host& host)
+        : t_(static_cast<const CaliperTensorBridgeV1*>(
+              host.service(CALIPER_TENSOR_BRIDGE_V1))) {}
+    explicit operator bool() const { return t_ && t_->texture_from_tensor; }
+    CaliperTextureId texture_from_tensor(const CaliperTensor* t,
+                                         uint32_t flags = 0) const {
+        return (t_ && t_->texture_from_tensor)
+            ? t_->texture_from_tensor(t, flags) : 0;
+    }
+    bool update_texture(CaliperTextureId tex, const CaliperTensor* t) const {
+        return (t_ && t_->update_texture) ? t_->update_texture(tex, t) : false;
+    }
+    void release_texture(CaliperTextureId tex) const {
+        if (t_ && t_->release_texture) t_->release_texture(tex);
+    }
+    CaliperTextureId texture_from_tensor_mapped(const CaliperTensor* t,
+                                                int32_t colormap, float vmin,
+                                                float vmax,
+                                                uint32_t flags = 0) const {
+        return (t_ && t_->texture_from_tensor_mapped)
+            ? t_->texture_from_tensor_mapped(t, colormap, vmin, vmax, flags) : 0;
+    }
+    bool alloc_shared(CaliperDType dtype, int32_t ndim, const int64_t* shape,
+                      CaliperTensor* out_tensor,
+                      CaliperTextureId* out_texture) const {
+        return (t_ && t_->alloc_shared)
+            ? t_->alloc_shared(dtype, ndim, shape, out_tensor, out_texture)
+            : false;
+    }
+    void free_shared(CaliperTextureId tex) const {
+        if (t_ && t_->free_shared) t_->free_shared(tex);
+    }
+    // Opaque id -> ImTextureID for ImGui::Image (§5.4: the id is never a raw
+    // GL/Metal handle, but it is what the host's bridge table maps ImGui to).
+    static ImTextureID imtex(CaliperTextureId tex) { return (ImTextureID)tex; }
+private:
+    const CaliperTensorBridgeV1* t_ = nullptr;
 };
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't

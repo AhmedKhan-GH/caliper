@@ -7,9 +7,9 @@
 //     maps the KIND to its framework: METAL -> torch::kMPS here.
 //   ML-EXEMPLAR 3 — publish training state to the UI under a mutex; the frame
 //     reads a copy. (repnet's snapshot pattern, minimal form.)
-//   ML-EXEMPLAR 4 — deliberately NO weight-matrix visualization yet: that is
-//     tensor_bridge.v1's job (Plan 2C). A CPU-staged copy here would teach the
-//     exact pattern the platform exists to delete.
+//   ML-EXEMPLAR 4 — weight visualization crosses caliper.tensor_bridge.v1, never
+//     a CPU-staged copy hand-rolled in the applet (that would teach the exact
+//     pattern the platform exists to delete). Delivered form: ML-EXEMPLAR 7.
 //   ML-EXEMPLAR 5 — heavy data is job work too — download once into data_dir,
 //     cache forever, cancellable. The frame thread never touches the network.
 //   ML-EXEMPLAR 6 — probe-optional pays off: caliper.metrics.v1 is optional in
@@ -18,8 +18,20 @@
 //     with metrics (loss/accuracy land in the Runs dashboard) and on one without
 //     (training is unchanged; status says `metrics: absent (ok)`). Every applet
 //     that logs a scalar this way inherits the Runs dashboard for free.
+//   ML-EXEMPLAR 7 — GPU-resident visualization, the platform's reason to exist:
+//     the worker snapshots conv1's 8 first-layer filters ON THE TRAINING DEVICE
+//     every kEvalEvery batches (a tiny owned per-kernel clone, MPS drained once
+//     so the frame never syncs) and publishes them under the mutex. The FRAME
+//     thread — the only place tensor_bridge.v1 may be called (UI-thread-only
+//     contract) — turns each into a live texture. On the Metal renderer the MPS
+//     buffer is colormapped ON-GPU: zero CPU staging, the whole USP. On GL the
+//     bridge rejects the device tensor; the applet relocates it to CPU and the
+//     BRIDGE stages it — identical applet code, and no pixel work in the applet
+//     either way (§6c). tensor_bridge.v1 is OPTIONAL: absent -> the grid says so
+//     and training is unchanged (the EXEMPLAR 6 probe-optional pattern, again).
 // ============================================================================
 #include <caliper/caliper.hpp>
+#include <caliper/adapters/torch.hpp>   // ML-EXEMPLAR 7 — torch::Tensor -> CaliperTensor
 #include <imgui.h>
 #include <implot.h>
 #include <torch/torch.h>
@@ -72,6 +84,10 @@ public:
         // falsy-inert if the host does not vend it. No branching in on_init —
         // the job checks truthiness before it streams.
         metrics_ = caliper::Metrics(host);
+        // ML-EXEMPLAR 7 — tensor_bridge.v1 is OPTIONAL too: probe it here (same
+        // falsy-inert wrapper). The worker snapshots kernels only when it is
+        // present; the frame renders the grid only when it is present.
+        bridge_ = caliper::Bridge(host);
         // curl global init MUST happen once here on the frame thread: lazy init
         // from curl_easy_init on a worker thread is not thread-safe (libcurl docs).
         curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -140,9 +156,8 @@ public:
                                  (int)acc.size());
             ImPlot::EndPlot();
         }
-        ImGui::TextWrapped("First-layer conv kernels arrive with "
-                           "caliper.tensor_bridge.v1 — GPU-resident, no CPU "
-                           "staging. Watch this space (Plan 2C).");
+        ImGui::Separator();
+        render_kernels();   // ML-EXEMPLAR 7 — the live conv1 filter grid
         ImGui::End();
     }
 
@@ -158,6 +173,13 @@ public:
             for (int i = 0; i < 1000 && jobs_.is_running(job_id_); i++)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        // ML-EXEMPLAR 7 — the kernel textures are frame-thread-owned. Release
+        // them AFTER the job wait above (the worker never touched the bridge, and
+        // the frame loop is stopped by the time on_cleanup runs, so nothing races
+        // this) and BEFORE the host tears the renderer down.
+        for (auto id : kernel_tex_)
+            if (id) bridge_.release_texture(id);
+        kernel_tex_.clear();
         // Pairs with the on_init curl_global_init; only safe once the worker
         // (the sole curl user) has exited, which the bounded wait above ensures.
         curl_global_cleanup();
@@ -168,6 +190,99 @@ private:
     void set_status(const std::string& s) {
         std::lock_guard<std::mutex> lk(state_mutex_);
         status_line_ = s;
+    }
+
+    // ML-EXEMPLAR 7 — the payoff, drawn on the FRAME thread (tensor_bridge.v1 is
+    // UI-thread-only). Read the worker's latest snapshot under the mutex; the
+    // vector copy bumps each torch::Tensor's refcount, so the storage the bridge
+    // reads stays alive across the (synchronous) upload even if the worker
+    // publishes the next snapshot meanwhile. Ownership chain: worker owns the
+    // clones in kernel_snap_; this copy co-owns them for the duration of the
+    // frame; the CaliperTensor descriptors below point into that live storage.
+    void render_kernels() {
+        if (!bridge_) {
+            ImGui::TextDisabled(
+                "kernels: tensor_bridge.v1 absent (ok) — grid needs it");
+            return;
+        }
+        std::vector<torch::Tensor> ks;
+        uint64_t gen = 0; float wmax = 0.f; bool on_dev = false;
+        {
+            std::lock_guard<std::mutex> lk(state_mutex_);
+            gen = kernel_gen_;
+            if (gen != 0) {
+                ks = kernel_snap_;            // refcount bump, keeps storage alive
+                wmax = kernel_wmax_;
+                on_dev = kernel_on_device_;
+            }
+        }
+        if (gen == 0) {
+            ImGui::TextDisabled(
+                "kernels: start training to watch conv1 sharpen from noise");
+            return;
+        }
+        if (gen != kernel_tex_gen_) {         // new snapshot -> (re)upload
+            upload_kernels(ks, wmax, on_dev);
+            kernel_tex_gen_ = gen;
+        }
+        // The RdBu range is fixed at the first snapshot: v1 update_texture has no
+        // range channel (the frozen ABI is the point — you live within it). The
+        // filters still visibly sharpen; only the color scale is pinned.
+        ImGui::Text("conv1 filters (3x3, RdBu +/-%.3f, range set at first "
+                    "snapshot; weights live)", kernel_tex_range_);
+        for (size_t k = 0; k < kernel_tex_.size(); ++k) {
+            if (k % 4 != 0) ImGui::SameLine();
+            // ~16x nearest-sampled upscale (host sampler); a 3x3 filter at 48px.
+            ImGui::Image(caliper::Bridge::imtex(kernel_tex_[k]),
+                         ImVec2(48, 48));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("kernel %zu / 8  (3x3 -> 48px, nearest)", k);
+        }
+        ImGui::TextDisabled("kernels: %s",
+            (kernel_tex_on_device_ && !kernel_stage_cpu_)
+                ? "GPU-resident (Metal, zero CPU staging)"
+                : "CPU-staged (GL fallback)");
+    }
+
+    // Turn the 8 owned (3,3) kernel clones into 8 textures: create on the first
+    // snapshot, update thereafter (same id/shape). We hand the bridge the
+    // TRAINING-device tensor first — on the Metal renderer it is accepted and
+    // colormapped on-GPU (zero CPU staging, the USP). On a non-Metal renderer
+    // the bridge's active device is CPU, so a device tensor is rejected; we then
+    // relocate the clone to CPU and the BRIDGE stages it. The applet never
+    // touches a pixel on either path (§6c) — it only chooses where the tensor
+    // lives, and the bridge's own accept/reject drives that choice.
+    void upload_kernels(const std::vector<torch::Tensor>& dev_ks,
+                        float wmax, bool on_dev) {
+        if (kernel_tex_.empty()) {
+            kernel_tex_.assign(dev_ks.size(), 0);
+            kernel_tex_range_ = (wmax > 0.f) ? wmax : 1e-6f;
+        }
+        kernel_tex_on_device_ = on_dev;
+        for (size_t k = 0; k < dev_ks.size(); ++k) {
+            // On the CPU-staging path this .to(kCPU) is a tiny (9-float) copy and
+            // may sync MPS — but only on the GL fallback, never the zero-copy
+            // claim path. The temporary outlives the synchronous bridge call.
+            torch::Tensor t =
+                kernel_stage_cpu_ ? dev_ks[k].to(torch::kCPU) : dev_ks[k];
+            auto ct = caliper::adapters::to_tensor(t);
+            if (!ct) continue;   // clones are offset-0 contiguous; defensive only
+            if (kernel_tex_[k] == 0) {
+                kernel_tex_[k] = bridge_.texture_from_tensor_mapped(
+                    &*ct, CALIPER_CMAP_RDBU,
+                    -kernel_tex_range_, +kernel_tex_range_, 0);
+                if (kernel_tex_[k] == 0 && !kernel_stage_cpu_ && k == 0) {
+                    // Device tensor rejected -> non-Metal bridge. Switch to CPU
+                    // staging for good and rebuild the whole snapshot once.
+                    kernel_stage_cpu_ = true;
+                    for (auto& id : kernel_tex_) id = 0;
+                    upload_kernels(dev_ks, wmax, on_dev);
+                    return;
+                }
+            } else {
+                bridge_.update_texture(kernel_tex_[k], &*ct);
+            }
+        }
     }
 
     void start_training() {
@@ -301,6 +416,7 @@ private:
                                     torch::hasMPS()
                                 ? torch::Device(torch::kMPS)
                                 : torch::Device(torch::kCPU);
+        const bool on_mps = dev.type() == torch::kMPS;
 
         // ML-EXEMPLAR 5 — download+cache before training (both are job work).
         if (!ensure_dataset(self, ctl)) return;   // offline/cancel: clean exit
@@ -327,8 +443,12 @@ private:
         Xte = Xte.to(dev); yte = yte.to(dev);
 
         torch::manual_seed(7);
+        // conv1 is held separately so ML-EXEMPLAR 7 can snapshot its (8,1,3,3)
+        // weights; the Sequential shares the same module (holder = shared_ptr),
+        // so model->to(dev) moves this exact tensor onto the training device.
+        auto conv1 = torch::nn::Conv2d(1, 8, 3);
         auto model = torch::nn::Sequential(
-            torch::nn::Conv2d(1, 8, 3), torch::nn::ReLU(),
+            conv1, torch::nn::ReLU(),
             torch::nn::MaxPool2d(2),
             torch::nn::Conv2d(8, 16, 3), torch::nn::ReLU(),
             torch::nn::MaxPool2d(2),
@@ -387,11 +507,39 @@ private:
                 self->metrics_.scalar(run, "test/accuracy", at_step, accpct);
         };
 
+        // ML-EXEMPLAR 7 — snapshot conv1's 8 filters for the frame thread. Runs
+        // ONLY in the worker, and NEVER calls the bridge (UI-thread-only). Each
+        // (3,3) kernel is an OWNED device clone: a raw select() view carries a
+        // nonzero storage offset the MPS adapter rejects (offset-0 contract), and
+        // the live weight keeps mutating as training continues — the clone (9
+        // floats x 8, tiny) decouples both. Drain MPS ONCE here so the frame
+        // thread never pays the device barrier. Publish under the mutex + bump a
+        // generation the frame diffs against.
+        auto snapshot_kernels = [&]() {
+            if (!self->bridge_) return;          // no consumer -> skip the copy
+            torch::NoGradGuard ng;
+            auto w4 = conv1->weight.detach();    // (8,1,3,3), shares live storage
+            float wmax = w4.abs().max().item<float>();   // forces MPS->CPU read
+            std::vector<torch::Tensor> ks;
+            ks.reserve(w4.size(0));
+            for (int64_t k = 0; k < w4.size(0); ++k)
+                ks.push_back(w4[k][0].clone());  // (3,3) OWNED, offset-0, contig
+            if (on_mps) torch::mps::synchronize();  // pay the barrier once, here
+            {
+                std::lock_guard<std::mutex> lk(self->state_mutex_);
+                self->kernel_snap_ = std::move(ks);
+                self->kernel_wmax_ = wmax;
+                self->kernel_on_device_ = on_mps;
+                self->kernel_gen_++;
+            }
+        };
+
         // Baseline BEFORE the first training step: an untrained net scores ~10%
         // (chance on 10 classes), anchoring the curve so the ramp is visible.
-        if (auto acc0 = evaluate())
+        if (auto acc0 = evaluate()) {
             record_acc(step, *acc0);              // step == 0 here
-        else { self->end_metrics_run(run); return; }   // cancel during baseline
+            snapshot_kernels();                  // random init: pure noise
+        } else { self->end_metrics_run(run); return; } // cancel during baseline
 
         for (int epoch = 0; epoch < kEpochs; epoch++) {
             model->train();
@@ -427,7 +575,8 @@ private:
                 // Mid-epoch accuracy sample: MNIST converges inside epoch 1, so
                 // this is where the learning curve actually lives.
                 if (step % kEvalEvery == 0) {
-                    if (auto acc = evaluate()) record_acc(step, *acc);
+                    if (auto acc = evaluate()) { record_acc(step, *acc);
+                                                 snapshot_kernels(); }
                     else { self->end_metrics_run(run); return; }  // cancel in eval
                     model->train();   // evaluate() left the model in eval mode
                 }
@@ -437,7 +586,8 @@ private:
             // point). batches_per_epoch is not a multiple of kEvalEvery, so this
             // does not duplicate a mid-epoch sample at the same step.
             float accpct;
-            if (auto acc = evaluate()) { accpct = *acc; record_acc(step, accpct); }
+            if (auto acc = evaluate()) { accpct = *acc; record_acc(step, accpct);
+                                         snapshot_kernels(); }
             else { self->end_metrics_run(run); return; }   // cancel during eval
             char msg[96];
             std::snprintf(msg, sizeof msg, "epoch %d/%d  test acc %.2f%%",
@@ -461,6 +611,7 @@ private:
     caliper::Jobs jobs_;
     caliper::Device device_;
     caliper::Metrics metrics_;            // ML-EXEMPLAR 6 — optional, falsy-inert
+    caliper::Bridge bridge_;              // ML-EXEMPLAR 7 — optional, falsy-inert
     std::atomic<uint64_t> run_id_{0};     // live run id for the status line (0 = none)
     uint64_t job_id_ = 0;
     std::mutex state_mutex_;
@@ -468,6 +619,21 @@ private:
     std::vector<float> acc_steps_;    // xs for the accuracy plot (global step)
     std::vector<float> acc_history_;  // ys (test accuracy %), paired with acc_steps_
     std::string status_line_ = "idle — press start to download MNIST + train";
+
+    // ML-EXEMPLAR 7 — conv1 snapshot published by the worker (state_mutex_).
+    // OWNED torch storage: the CaliperTensor descriptors the frame builds point
+    // into these tensors, so they must outlive each bridge call (the frame holds
+    // a refcounted copy for the duration — see render_kernels).
+    std::vector<torch::Tensor> kernel_snap_;   // 8 x (3,3), on the training device
+    float    kernel_wmax_ = 0.f;               // max|weight| of the snapshot
+    bool     kernel_on_device_ = false;        // true when snapshot lives on MPS
+    uint64_t kernel_gen_ = 0;                   // bumped per snapshot (0 = none yet)
+    // Frame-thread-owned texture state (never touched by the worker).
+    std::vector<CaliperTextureId> kernel_tex_; // one texture per filter
+    uint64_t kernel_tex_gen_ = 0;              // last generation uploaded
+    float    kernel_tex_range_ = 0.f;          // symmetric RdBu range (fixed at 1st)
+    bool     kernel_tex_on_device_ = false;    // snapshot was device-resident
+    bool     kernel_stage_cpu_ = false;        // bridge rejected device -> stage CPU
 };
 
 CALIPER_APPLET(MLScope,
@@ -476,8 +642,8 @@ CALIPER_APPLET(MLScope,
     .name     = "MLScope",
     .summary  = "ML exemplar: trains a small CNN on MNIST off the frame thread "
                 "via caliper.jobs.v1, device-negotiated, with live loss and test "
-                "accuracy. Kernel visualization arrives with tensor_bridge "
-                "(Phase 2C).",
+                "accuracy — and a live conv1 kernel grid via tensor_bridge.v1, "
+                "GPU-resident (zero CPU staging) on the Metal backend.",
     .tag      = "ML",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_JOBS_V1,
                  CALIPER_DEVICE_V1})

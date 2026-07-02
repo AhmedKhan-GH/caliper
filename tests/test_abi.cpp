@@ -6,6 +6,7 @@
 #include <caliper/services/device_v1.h>
 #include <caliper/tensor.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/tensor_bridge_v1.h>
 #include <cstddef>
 #include <string>
 #include <type_traits>
@@ -48,4 +49,13 @@ static_assert(CALIPER_DT_F32 == 0);
 
 TEST_CASE("abi: phase-2b service ids are fixed") {
     CHECK(std::string(CALIPER_METRICS_V1) == "caliper.metrics.v1");
+}
+
+static_assert(std::is_standard_layout_v<CaliperTensorBridgeV1>);
+static_assert(offsetof(CaliperTensorBridgeV1, struct_size) == 0);
+static_assert(CALIPER_CMAP_VIRIDIS == 0 && CALIPER_CMAP_MAGMA == 1 &&
+              CALIPER_CMAP_RDBU == 2);
+
+TEST_CASE("abi: phase-2c service ids are fixed") {
+    CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1) == "caliper.tensor_bridge.v1");
 }
