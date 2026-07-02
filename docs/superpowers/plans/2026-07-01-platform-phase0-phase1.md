@@ -2333,12 +2333,19 @@ namespace caliper_host {
 namespace {
 
 // --- caliper.log.v1: timestamped console lines (console panel = later) ---
+// Reentrant time formatting: log() is thread-callable per the docs contract.
 void log_impl(CaliperLogLevel level, const char* msg) {
     static const char* kTag[] = {"DEBUG", "INFO ", "WARN ", "ERROR"};
     int idx = (level >= 0 && level <= 3) ? (int)level : 1;
     std::time_t t = std::time(nullptr);
+    std::tm tm_buf{};
+#ifdef _WIN32
+    localtime_s(&tm_buf, &t);
+#else
+    localtime_r(&t, &tm_buf);
+#endif
     char ts[16];
-    std::strftime(ts, sizeof ts, "%H:%M:%S", std::localtime(&t));
+    std::strftime(ts, sizeof ts, "%H:%M:%S", &tm_buf);
     std::fprintf(stderr, "[%s] [%s] %s\n", ts, kTag[idx], msg ? msg : "");
 }
 const CaliperLogV1 kLog = {sizeof(CaliperLogV1), &log_impl};
