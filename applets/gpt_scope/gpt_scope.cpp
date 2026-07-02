@@ -24,6 +24,7 @@
 #include "gpt_model.h"
 
 #include <caliper/caliper.hpp>
+#include <caliper/adapters/torch.hpp>   // torch::Tensor -> CaliperTensor (E2)
 #include <imgui.h>
 #include <implot.h>
 #include <torch/torch.h>
@@ -55,6 +56,7 @@ constexpr int    kSampleLen  = 200;   // chars per sample
 constexpr int    kValBatches = 20;    // batches averaged for the val-loss point
 constexpr double kLR         = 3e-4;  // AdamW
 constexpr double kTemp       = 0.8;   // sampling temperature
+constexpr int    kProbeLen   = 64;    // chars in the fixed E2 attention excerpt
 
 // The fixed corpus (phase2e constraints): a single plain-text file, cached as
 // <data_dir>/tinyshakespeare.txt.
@@ -92,6 +94,28 @@ struct GPTScopeState {
     std::string         status =
         "idle — press start to download TinyShakespeare + train";
     int                 vocab_size = 0;    // header, once the corpus is read
+
+    // E2 — the selected attention layer: UI writes it, the worker reads it at
+    // its next eval tick (the atomic desired-layer the brief specifies).
+    std::atomic<int>    att_layer_sel{0};
+
+    // E2 — attention snapshot published by the worker (guarded by mtx). OWNED
+    // torch storage: the CaliperTensor descriptors the frame builds point into
+    // these, so the frame holds a refcounted copy for the duration of each
+    // (synchronous) bridge call (the ml_scope EXEMPLAR-7/8 lifetime contract).
+    std::vector<torch::Tensor> att_heads;      // n_head x (T,T) on train device
+    std::vector<float>         att_hmax;       // per-head max (vmax; vmin 0)
+    std::string                att_probe;      // the fixed kProbeLen-char excerpt
+    int                        att_snap_layer = 0;   // layer this snapshot is for
+    bool                       att_on_device = false;// snapshot lives on MPS
+    uint64_t                   att_gen = 0;    // bumped per snapshot (0 = none)
+
+    // E2 — frame-thread-owned attention textures (the worker never touches these).
+    std::vector<CaliperTextureId> att_tex;     // one texture per head
+    uint64_t                      att_tex_gen = 0;     // last generation uploaded
+    std::vector<float>            att_tex_hmax;        // per-head vmax in use
+    bool                          att_tex_on_device = false;
+    bool                          att_stage_cpu = false;  // GL device-reject latch
 
     void set_status(const std::string& s) {
         std::lock_guard<std::mutex> lk(mtx);
@@ -183,6 +207,38 @@ std::optional<std::string> ensure_corpus(GPTScopeState* st,
     return body;
 }
 
+// E2 — shared bridge upload for ONE mapped (H,W) f32 tensor, with the C8 GL
+// relocate-to-CPU fallback (mirrors ml_scope's upload_mapped). id==0 -> create;
+// else update in place. We hand the bridge the TRAINING-device tensor first: the
+// Metal renderer accepts and colormaps it on-GPU (zero CPU staging, the USP); a
+// non-Metal bridge rejects the device tensor, so we relocate the clone to CPU
+// and the BRIDGE stages it — the applet never touches a pixel (§6c), it only
+// chooses where the tensor lives. `stage_cpu` latches true on the first device
+// rejection so every later upload skips straight to the CPU path.
+CaliperTextureId upload_mapped(const caliper::Bridge& bridge, bool& stage_cpu,
+                               CaliperTextureId id, const torch::Tensor& dev_t,
+                               int32_t cmap, float vmin, float vmax) {
+    // host_t keeps a CPU copy alive across the synchronous bridge call when the
+    // staging path is taken; the CaliperTensor descriptor aliases it.
+    torch::Tensor host_t;
+    auto view = [&](bool cpu) -> std::optional<CaliperTensor> {
+        if (cpu) { host_t = dev_t.to(torch::kCPU);
+                   return caliper::adapters::to_tensor(host_t); }
+        return caliper::adapters::to_tensor(dev_t);
+    };
+    auto ct = view(stage_cpu);
+    if (!ct) return id;                 // clones are offset-0 contig; defensive
+    if (id != 0) { bridge.update_texture(id, &*ct); return id; }
+    id = bridge.texture_from_tensor_mapped(&*ct, cmap, vmin, vmax, 0);
+    if (id == 0 && !stage_cpu) {        // device rejected -> non-Metal bridge
+        stage_cpu = true;
+        ct = view(true);
+        if (!ct) return 0;
+        id = bridge.texture_from_tensor_mapped(&*ct, cmap, vmin, vmax, 0);
+    }
+    return id;
+}
+
 void end_metrics_run(GPTScopeState* st, uint64_t run) {
     if (run != 0) st->metrics.end_run(run);
     st->run_id.store(0);
@@ -199,6 +255,7 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         (st->device.kind == CALIPER_DEV_METAL && torch::hasMPS())
             ? torch::Device(torch::kMPS)
             : torch::Device(torch::kCPU);
+    const bool on_mps = dev.type() == torch::kMPS;
 
     // ---- data acquisition (job work) --------------------------------------
     auto corpus = ensure_corpus(st, ctl);
@@ -230,6 +287,25 @@ void train_job(void* user, const CaliperJobControl* ctl) {
     auto all = torch::from_blob(ids.data(), {n}, torch::kInt64).clone();
     auto train_ids = all.slice(0, 0, n_train).to(dev);
     auto val_ids   = all.slice(0, n_train, n).to(dev);
+
+    // E2 — a FIXED kProbeLen-char val excerpt, chosen once per run (the first
+    // chars of the validation split). Encoded to a (1,plen) device tensor for
+    // the probe forward, and decoded to the string the panel highlights per
+    // char. The SAME excerpt across the run lets you watch the heads sharpen.
+    std::string probe_str;
+    torch::Tensor probe_tok;
+    {
+        const int64_t plen = std::min<int64_t>(kProbeLen, n - n_train);
+        std::vector<int64_t> pids((size_t)std::max<int64_t>(plen, 0));
+        probe_str.reserve((size_t)std::max<int64_t>(plen, 0));
+        for (int64_t i = 0; i < plen; ++i) {
+            pids[(size_t)i] = ids[(size_t)(n_train + i)];
+            probe_str.push_back(itos[pids[(size_t)i]]);
+        }
+        if (plen > 0)
+            probe_tok = torch::from_blob(pids.data(), {1, plen}, torch::kInt64)
+                            .clone().to(dev);
+    }
 
     // A random contiguous batch: x (B,block), y (B,block) shifted by one, built
     // entirely on-device via advanced indexing (no per-item host sync).
@@ -310,6 +386,42 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         return true;
     };
 
+    // E2 — snapshot the SELECTED layer's attention on the fixed probe excerpt for
+    // the frame thread. Worker-only, NEVER touches the bridge (UI-thread-only).
+    // probe_attention runs eval()+no_grad and restores the prior mode. Each head
+    // is an OWNED offset-0 (T,T) clone (a raw select() view carries a nonzero
+    // storage offset the MPS adapter rejects, and the live weights keep changing
+    // — the clone decouples both); MPS is drained ONCE here so the frame never
+    // syncs. Per-head max is the VIRIDIS vmax (vmin 0). Publish under the mutex +
+    // bump a generation the frame diffs against. Skipped when no bridge consumer.
+    auto snapshot_attention = [&]() {
+        if (!st->bridge || !probe_tok.defined()) return;
+        const int want = st->att_layer_sel.load();
+        auto att = model->probe_attention(probe_tok);   // per-layer (nh,T,T)
+        if (att.empty()) return;
+        const int li = std::clamp(want, 0, (int)att.size() - 1);
+        auto layer_att = att[li];                        // (nh,T,T) on device
+        const int64_t nh = layer_att.size(0);
+        std::vector<torch::Tensor> heads;
+        std::vector<float> hmax;
+        heads.reserve((size_t)nh); hmax.reserve((size_t)nh);
+        for (int64_t h = 0; h < nh; ++h) {
+            auto hd = layer_att[h].clone();   // (T,T) OWNED, offset-0, contiguous
+            hmax.push_back(hd.max().item<float>());   // forces read; vmax (vmin 0)
+            heads.push_back(std::move(hd));
+        }
+        if (on_mps) torch::mps::synchronize();   // pay the barrier once, here
+        {
+            std::lock_guard<std::mutex> lk(st->mtx);
+            st->att_heads = std::move(heads);
+            st->att_hmax  = std::move(hmax);
+            st->att_probe = probe_str;
+            st->att_snap_layer = li;
+            st->att_on_device = on_mps;
+            st->att_gen++;
+        }
+    };
+
     st->set_status("training…");
     for (int64_t step = 0; step < kMaxSteps; ++step) {
         if (ctl->cancelled(ctl)) { end_metrics_run(st, run); return; }
@@ -318,6 +430,7 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         // untrained net emits noise — it anchors the demo arc).
         if (step % kEvalEvery == 0) {
             if (!eval_and_sample(step)) { end_metrics_run(st, run); return; }
+            snapshot_attention();   // E2 — refresh the live attention panel
         }
 
         model->train();
@@ -345,6 +458,7 @@ void train_job(void* user, const CaliperJobControl* ctl) {
 
     // A final sample + val point at the end of the run.
     if (!eval_and_sample(kMaxSteps)) { end_metrics_run(st, run); return; }
+    snapshot_attention();   // E2 — final attention state of the trained net
     end_metrics_run(st, run);
     st->set_status("training complete");
 }
@@ -464,6 +578,138 @@ void GPTScopeApplet::draw_ui() {
         ImGui::TextUnformatted(sample.c_str());
     ImGui::EndChild();
 
+    // -----------------------------------------------------------------------
+    // E2 — live per-head attention heatmaps via tensor_bridge.v1. The manual
+    // attention in gpt_model.h keeps the (n_head,T,T) weight matrix reachable;
+    // the worker probes the fixed excerpt and snapshots the selected layer's 4
+    // heads, and the FRAME thread (the only place the bridge may be called)
+    // turns each into a VIRIDIS texture. Bridge absent -> the panel says so.
+    // -----------------------------------------------------------------------
+    ImGui::Separator();
+    if (!s_->bridge) {
+        ImGui::TextDisabled(
+            "attention: tensor_bridge.v1 absent (ok) — panel needs it");
+    } else {
+        // Layer radio row L0–L3: writes the atomic the worker reads at its next
+        // eval tick (so the map updates one eval cadence after a click).
+        int sel = s_->att_layer_sel.load();
+        ImGui::TextUnformatted("attention layer:");
+        for (int l = 0; l < 4; ++l) {
+            ImGui::SameLine();
+            char lbl[8];
+            std::snprintf(lbl, sizeof lbl, "L%d", l);
+            if (ImGui::RadioButton(lbl, sel == l)) s_->att_layer_sel.store(l);
+        }
+
+        // Read a copy of the worker's snapshot under the mutex. The vector copy
+        // refcount-bumps each clone, so the storage the bridge reads stays alive
+        // across the (synchronous) uploads even if the worker publishes meanwhile.
+        std::vector<torch::Tensor> heads;
+        std::vector<float> hmax;
+        std::string probe;
+        uint64_t gen = 0;
+        int snap_layer = 0;
+        bool on_dev = false;
+        {
+            std::lock_guard<std::mutex> lk(s_->mtx);
+            gen = s_->att_gen;
+            if (gen != 0) {
+                heads = s_->att_heads;
+                hmax = s_->att_hmax;
+                probe = s_->att_probe;
+                snap_layer = s_->att_snap_layer;
+                on_dev = s_->att_on_device;
+            }
+        }
+        if (gen == 0) {
+            ImGui::TextDisabled(
+                "attention: start training to watch the heads light up on a "
+                "fixed val excerpt");
+        } else {
+            // New snapshot -> recreate the 4 maps. Each head carries a fresh
+            // per-head VIRIDIS range (vmin 0, vmax per-head max); v1
+            // update_texture has no range channel, so a new range means fresh
+            // textures — cheap at eval cadence, and it covers a shape change for
+            // free. Zero applet pixel work on either path (§6c).
+            if (gen != s_->att_tex_gen) {
+                s_->att_tex_on_device = on_dev;
+                if (s_->att_tex.size() != heads.size()) {
+                    for (auto id : s_->att_tex)
+                        if (id) s_->bridge.release_texture(id);
+                    s_->att_tex.assign(heads.size(), 0);
+                }
+                s_->att_tex_hmax.assign(heads.size(), 0.f);
+                for (size_t h = 0; h < heads.size(); ++h) {
+                    if (s_->att_tex[h]) s_->bridge.release_texture(s_->att_tex[h]);
+                    const float vmax = hmax[h] > 0.f ? hmax[h] : 1e-6f;
+                    s_->att_tex_hmax[h] = vmax;
+                    s_->att_tex[h] =
+                        upload_mapped(s_->bridge, s_->att_stage_cpu, 0, heads[h],
+                                      CALIPER_CMAP_VIRIDIS, 0.f, vmax);
+                }
+                s_->att_tex_gen = gen;
+            }
+
+            const int T = (int)probe.size();
+            ImGui::Text("layer %d — 4 heads (VIRIDIS, per-head vmax; rows attend "
+                        "to cols)", snap_layer);
+
+            // 2x2 grid of ~140px cells with head captions. Hover computes the
+            // (row=source, col=target) index into the probe from the mouse's
+            // position within the image rect; all heads share the same indexing.
+            int hover_row = -1, hover_col = -1;
+            const float cell = 140.f;
+            for (size_t h = 0; h < s_->att_tex.size(); ++h) {
+                if (h % 2 != 0) ImGui::SameLine();
+                ImGui::BeginGroup();
+                ImGui::TextDisabled("head %zu", h);
+                ImGui::Image(caliper::Bridge::imtex(s_->att_tex[h]),
+                             ImVec2(cell, cell));
+                if (T > 0 && ImGui::IsItemHovered()) {
+                    const ImVec2 mn = ImGui::GetItemRectMin();
+                    const ImVec2 sz = ImGui::GetItemRectSize();
+                    const ImVec2 mp = ImGui::GetIO().MousePos;
+                    const int col = (int)((mp.x - mn.x) / sz.x * (float)T);
+                    const int row = (int)((mp.y - mn.y) / sz.y * (float)T);
+                    hover_row = std::clamp(row, 0, T - 1);
+                    hover_col = std::clamp(col, 0, T - 1);
+                }
+                ImGui::EndGroup();
+            }
+
+            // The probe excerpt, per-char highlighted: the hovered cell's ROW is
+            // the SOURCE (attending) char, its COL the TARGET (attended) char —
+            // the touch that makes attention legible. Control chars render as a
+            // space so per-char indices stay aligned with the (T,T) map.
+            const ImVec4 src{0.35f, 0.85f, 1.00f, 1.f};   // cyan  = source (row)
+            const ImVec4 tgt{1.00f, 0.65f, 0.25f, 1.f};   // amber = target (col)
+            const ImVec4 both{0.55f, 1.00f, 0.55f, 1.f};  // green = both
+            const ImVec4 def = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+            ImGui::TextDisabled("hover a map — highlighted:");
+            ImGui::SameLine();
+            ImGui::TextColored(src, "source (row, attending)");
+            ImGui::SameLine();
+            ImGui::TextColored(tgt, "target (col, attended)");
+            for (int i = 0; i < T; ++i) {
+                const char c = probe[(size_t)i];
+                const char buf[2] = {
+                    (c == '\n' || c == '\t' || c == '\r') ? ' ' : c, 0};
+                ImVec4 colr = def;
+                const bool isRow = (i == hover_row), isCol = (i == hover_col);
+                if (isRow && isCol) colr = both;
+                else if (isRow)     colr = src;
+                else if (isCol)     colr = tgt;
+                if (i) ImGui::SameLine(0, 0);
+                ImGui::TextColored(colr, "%s", buf);
+            }
+            ImGui::TextDisabled(
+                "attention maps: %s",
+                (s_->att_tex_on_device && !s_->att_stage_cpu)
+                    ? "GPU-resident (Metal, zero CPU staging)"
+                    : "CPU-staged (GL fallback)");
+        }
+    }
+
     // Deferred checkpoint save — the first honest demand for artifacts.v1.
     ImGui::BeginDisabled();
     ImGui::Button("save checkpoint");
@@ -486,6 +732,13 @@ void GPTScopeApplet::cleanup() {
         for (int i = 0; i < 1000 && s_->jobs.is_running(s_->job_id); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    // E2 — the attention textures are frame-thread-owned. Release them AFTER the
+    // job wait above (the worker never touched the bridge, and the frame loop is
+    // stopped by the time cleanup() runs, so nothing races this) and BEFORE the
+    // host tears the renderer down.
+    for (auto id : s_->att_tex)
+        if (id) s_->bridge.release_texture(id);
+    s_->att_tex.clear();
     // Pairs with the initialize() curl_global_init; safe only once the worker
     // (the sole curl user) has exited, which the bounded wait above ensures.
     curl_global_cleanup();

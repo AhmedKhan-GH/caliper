@@ -188,6 +188,21 @@ public:
         return idx;
     }
 
+    // E2 probe: run on `idx` (1,T) retaining attention, return the per-layer
+    // (n_head,T,T) weights for batch element 0 — owned detached clones on the
+    // model's device (built by CausalSelfAttention's need_weights path). eval()
+    // + no_grad so dropout never perturbs the weights and no graph is retained;
+    // the prior train/eval mode is restored so a caller can resume stepping.
+    std::vector<torch::Tensor> probe_attention(const torch::Tensor& idx) {
+        torch::NoGradGuard ng;
+        const bool was_training = is_training();
+        eval();
+        std::vector<torch::Tensor> att;
+        forward(idx, /*need_weights=*/true, &att);
+        if (was_training) train();
+        return att;
+    }
+
     const GPTConfig& config() const { return cfg_; }
 
 private:
