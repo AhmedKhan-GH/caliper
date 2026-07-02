@@ -1,0 +1,13 @@
+[applet]
+id      = "dev.ahmed.circuitnet"
+name    = "CircuitNet 3.0"
+version = "1.0.0"
+summary = "Gate-level circuit architecture explorer with DuckDB-powered querying, Verilog netlist parsing, and interactive graph visualization."
+tag     = "EDA"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1"]

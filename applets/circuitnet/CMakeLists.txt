@@ -29,3 +29,8 @@ set_target_properties(circuitnet PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
 )
+
+add_custom_command(TARGET circuitnet POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/circuitnet.caliper.toml
+        ${CMAKE_BINARY_DIR}/applets/circuitnet.caliper.toml)
