@@ -21,7 +21,7 @@ CALIPER_APPLET(OpenGllamaPlugin,
     .id       = "dev.ahmed.opengllama",
     .version  = "0.1.0",
     .name     = "OpenGllama",
-    .summary  = "Load GGUF models via llama.cpp and visualize layer activations "
-                "with OpenGL-rendered heatmaps on Metal/CUDA backends.",
+    .summary  = "Load GGUF models via llama.cpp and visualize attention heatmaps "
+                "uploaded live through caliper.tensor_bridge.v1 (bridge-native, no raw GL).",
     .tag      = "LLM",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_TENSOR_BRIDGE_V1})

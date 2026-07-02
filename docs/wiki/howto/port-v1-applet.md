@@ -186,6 +186,43 @@ were not edited. Any node-editor / ImPlot3D context those internals set up
 themselves keeps working — the macro only wires the host's *main* ImGui / ImPlot
 / ImPlot3D contexts, which is what the manual v1 code did too.
 
+## Porting raw GL textures to the bridge
+
+If your applet drew heatmaps or feature maps with **raw OpenGL**
+(`glGenTextures` / `glTexImage2D` / `glBindTexture` / `glDeleteTextures`), those
+calls are gone under §6c — a raw-GL applet cannot run in the Metal-backed host.
+Move them onto [`caliper.tensor_bridge.v1`](../reference/services/tensor-bridge-v1.md).
+This is the distilled recipe used to port **opengllama** (attention heatmaps) and
+**repnet_demo** (weight/kernel + detail views) — both shipped, bridge-native.
+
+- **The RGBA compose stays.** Whatever loop builds your `RGBA8` pixel buffer
+  (colormap, LUT, per-token tint) is unchanged — the bridge takes *pixels*, not
+  draw calls. Only the **upload path** swaps.
+- **Describe the buffer as a `(H,W,4)` `u8` CPU tensor.** Fill a `CaliperTensor`
+  by hand (C-ABI-direct, no torch needed): `dtype = CALIPER_DT_U8`, `ndim = 3`,
+  `shape = {H, W, 4}`, row-major `strides = {W*4, 4, 1}`, `device =
+  CALIPER_DEV_CPU`, `stream = nullptr`.
+- **Create once, then update; recreate on resize.** `texture_from_tensor(&ct, 0)`
+  the first time (keep the returned `CaliperTextureId`); `update_texture(id, &ct)`
+  thereafter while the shape is stable. When the size changes (reflow, growth),
+  `release_texture` the old id and create a new one. `release_texture` on
+  teardown — **on the frame thread**, after the job wait. (repnet_demo's viz
+  recomposes fresh each dirty and takes a simpler release-then-create path;
+  opengllama's context heatmap update-in-place / recreate-on-reflow is the fuller
+  pattern.)
+- **Draw with `imtex`.** Feed the id to ImGui as
+  `ImGui::Image(caliper::Bridge::imtex(id), size)` — the id is opaque, never a raw
+  GL/Metal handle.
+- **The manifest must require the bridge.** Add `"caliper.tensor_bridge.v1"` to
+  `[services].required` (and `CALIPER_TENSOR_BRIDGE_V1` to the macro's
+  `.services`). After the port the applet **cannot render without it**, so it is a
+  hard requirement — negotiation leaves the card unavailable rather than letting
+  it crash. opengllama's manifest moved the bridge from absent to required in
+  exactly this step.
+
+The applet code is then identical on Metal and GL; the bridge alone decides
+whether the pixels are staged on the device or CPU-staged onto the GL fallback.
+
 ## Verify
 
 ```bash
