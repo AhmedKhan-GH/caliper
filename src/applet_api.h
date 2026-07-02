@@ -1,47 +1,5 @@
 #pragma once
-
-#define CALIPER_APPLET_ABI 1
-
-struct ImGuiContext;
-struct ImPlotContext;
-struct ImPlot3DContext;
-
-struct CaliperHostContext {
-    ImGuiContext*    imgui;
-    ImPlotContext*   implot;
-    ImPlot3DContext* implot3d;
-    const char*      data_dir;
-};
-
-struct CaliperAppletInfo {
-    const char* name;
-    const char* version;
-    const char* description;
-    const char* tag;
-    int         abi;
-};
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef CaliperAppletInfo (*PFN_applet_info)(void);
-typedef void* (*PFN_applet_create)(void);
-typedef void  (*PFN_applet_destroy)(void* ctx);
-typedef bool  (*PFN_applet_initialize)(void* ctx, const CaliperHostContext* host);
-typedef void  (*PFN_applet_draw_ui)(void* ctx, int w, int h);
-typedef void  (*PFN_applet_cleanup)(void* ctx);
-
-#ifdef CALIPER_APPLET_EXPORT
-  #ifdef _WIN32
-    #define APPLET_API __declspec(dllexport)
-  #else
-    #define APPLET_API __attribute__((visibility("default")))
-  #endif
-#else
-  #define APPLET_API
-#endif
-
-#ifdef __cplusplus
-}
-#endif
+// COMPAT SHIM — the v1 ABI now lives in the SDK. This file exists only so
+// host sources keep compiling until the Phase 1 port completes (PLATFORM.md
+// §17 Phase 0/1). Deleted at the end of Phase 1. Do not add anything here.
+#include "../sdk/include/caliper/abi_v1.h"

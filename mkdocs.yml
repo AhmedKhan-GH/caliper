@@ -1,0 +1,37 @@
+site_name: Caliper Platform
+docs_dir: docs/wiki
+site_dir: build/wiki-site
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+    - search.suggest
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ['.']
+      check_paths: true
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Your first applet: tutorials/first-applet.md
+  - How-to:
+      - Port a v1 applet: howto/port-v1-applet.md
+      - Debug an applet: howto/debug-an-applet.md
+  - Reference:
+      - ABI (epoch 2): reference/abi.md
+      - Manifest (caliper.toml): reference/manifest.md
+      - Refusal messages: reference/refusals.md
+      - Services:
+          - caliper.ui.v1: reference/services/ui-v1.md
+          - caliper.log.v1: reference/services/log-v1.md
+      - C++ sugar: reference/sugar.md
+  - Explanation:
+      - Architecture: explanation/architecture.md
+      - Compatibility & epochs: explanation/compatibility.md
+      - Trust model: explanation/trust-model.md
+  - Decisions: decisions/index.md

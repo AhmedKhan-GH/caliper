@@ -182,6 +182,9 @@ target_compile_definitions(caliper_applet_sdk INTERFACE DUCKDB_BUILD_LIBRARY)
 # ---- SDK install rules (component: sdk) ----
 include(CMakePackageConfigHelpers)
 install(DIRECTORY sdk/include/ DESTINATION include COMPONENT sdk)
+# Without EXPORT_NAME the installed export would be caliper::caliper_sdk —
+# the alias only exists in the build tree (caught by the Task 4 exit proof).
+set_target_properties(caliper_sdk PROPERTIES EXPORT_NAME sdk)
 install(TARGETS caliper_sdk EXPORT CaliperSDKTargets COMPONENT sdk)
 install(EXPORT CaliperSDKTargets NAMESPACE caliper::
         DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)

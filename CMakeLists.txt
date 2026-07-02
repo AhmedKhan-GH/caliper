@@ -72,26 +72,57 @@ option(BUILD_TESTS "Build tests" OFF)
 include(cmake/Dependencies.cmake)
 
 # ============================================================================
-# Applet SDK (interface target for shared library applets)
+# Caliper SDK (PLATFORM.md §17 Phase 0: installable package, in-tree source)
 # ============================================================================
 
-add_library(caliper_applet_sdk INTERFACE)
-target_include_directories(caliper_applet_sdk INTERFACE
-    ${CMAKE_SOURCE_DIR}/src
+set(CALIPER_SDK_VERSION 0.1.0)
+
+add_library(caliper_sdk INTERFACE)
+add_library(caliper::sdk ALIAS caliper_sdk)
+target_include_directories(caliper_sdk INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/sdk/include>
+    $<INSTALL_INTERFACE:include>
+)
+
+# UI stack: pinned imgui/implot/implot3d/ImGuiFileDialog from the monorepo.
+# Moves into the SDK repo at Phase 3; a separate target so the seam is visible.
+add_library(caliper_ui_stack INTERFACE)
+add_library(caliper::ui_stack ALIAS caliper_ui_stack)
+target_include_directories(caliper_ui_stack INTERFACE
     ${THIRD_PARTY_DIR}/imgui
     ${THIRD_PARTY_DIR}/imgui/backends
     ${THIRD_PARTY_DIR}/implot
     ${THIRD_PARTY_DIR}/implot3d
     ${THIRD_PARTY_DIR}/ImGuiFileDialog
-    ${THIRD_PARTY_DIR}/duckdb/src/include
 )
-target_link_libraries(caliper_applet_sdk INTERFACE
+target_link_libraries(caliper_ui_stack INTERFACE
     imgui implot implot3d ImGuiFileDialog
 )
-target_compile_definitions(caliper_applet_sdk INTERFACE
-    DUCKDB_BUILD_LIBRARY
+target_compile_definitions(caliper_ui_stack INTERFACE
     IMGUI_IMPL_OPENGL_LOADER_GLEW
 )
+
+# Host-owned app-paths utility. Applets that still need the shared data dir
+# link this TARGET instead of compiling src/app_paths.cpp by path.
+# Dies when applets move to CaliperHost.applet_data_dir (Phase 1+).
+add_library(caliper_app_paths STATIC src/app_paths.cpp)
+target_include_directories(caliper_app_paths PUBLIC ${CMAKE_SOURCE_DIR}/src)
+set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# ---- SDK install rules (component: sdk) ----
+include(CMakePackageConfigHelpers)
+install(DIRECTORY sdk/include/ DESTINATION include COMPONENT sdk)
+set_target_properties(caliper_sdk PROPERTIES EXPORT_NAME sdk)
+install(TARGETS caliper_sdk EXPORT CaliperSDKTargets COMPONENT sdk)
+install(EXPORT CaliperSDKTargets NAMESPACE caliper::
+        DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
+write_basic_package_version_file(
+    "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
+    VERSION ${CALIPER_SDK_VERSION} COMPATIBILITY SameMajorVersion)
+install(FILES
+    "${CMAKE_SOURCE_DIR}/sdk/cmake/caliper-sdk-config.cmake"
+    "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
+    DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
 # ============================================================================
 # Main Application (host)

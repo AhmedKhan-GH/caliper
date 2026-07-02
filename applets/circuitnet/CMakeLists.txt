@@ -4,16 +4,16 @@ add_library(circuitnet SHARED
     verilog_parser.cpp
     circuit_db.cpp
     circuit_viz.cpp
-    ${CMAKE_SOURCE_DIR}/src/app_paths.cpp
 )
 
 target_include_directories(circuitnet PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(circuitnet PRIVATE
-    caliper_applet_sdk
+    caliper::sdk
+    caliper::ui_stack
+    caliper_app_paths
     imgui-node-editor
     duckdb_static
     duckdb_generated_extension_loader
