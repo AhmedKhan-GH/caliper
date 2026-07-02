@@ -21,4 +21,12 @@ JobSystem& host_job_system();
 // (the service is still vended, its thunks no-op on the null store).
 class MetricsStore;
 MetricsStore& host_metrics_store();
+
+// The active renderer backing caliper.tensor_bridge.v1 (§7.4). main owns the
+// HostRenderer; it hands it in right after renderer init and clears it (nullptr)
+// before renderer teardown. The bridge is constructed lazily on the first thunk
+// call once a renderer is bound; every bridge thunk no-ops (0/false) until then,
+// so a pre-renderer/headless call never crashes (the metrics-open pattern).
+class HostRenderer;
+void services_set_renderer(HostRenderer* renderer);
 }

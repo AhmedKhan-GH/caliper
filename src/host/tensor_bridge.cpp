@@ -1,5 +1,6 @@
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
+#include <caliper/services/log_v1.h>
 
 #include <cmath>
 #include <cstdio>
@@ -90,11 +91,17 @@ struct Luts {
 
 const Luts& luts() { static const Luts L; return L; }
 
+// Bridge rejections route through caliper.log.v1 when the host installs a sink
+// (host_services::set_bridge_log_sink); the unit/gfx test binaries link this TU
+// without host_services, so the sink stays null and rejections still surface on
+// stderr — a rejection is never a silent misinterpreted texture (§ rules).
+void (*g_log_sink)(CaliperLogLevel, const char*) = nullptr;
+
 void bridge_log(const char* what) {
-    // caliper.log.v1 wiring lands with the host_services adapter; until then a
-    // rejection is at least observable (§ acceptance rules: never a silent
-    // misinterpreted texture).
-    std::fprintf(stderr, "[tensor_bridge] reject: %s\n", what);
+    if (g_log_sink)
+        g_log_sink(CALIPER_LOG_WARN, what);
+    else
+        std::fprintf(stderr, "[tensor_bridge] reject: %s\n", what);
 }
 
 bool is_contiguous(const CaliperTensor& t) {
@@ -135,6 +142,12 @@ bool safe_extent_elems(const CaliperTensor& t, int64_t* out) {
 }
 
 }  // namespace
+
+// Install the host's caliper.log.v1 route for bridge rejections. Declared (not
+// in the frozen tensor_bridge.h) by host_services.cpp, which owns log_impl.
+void set_bridge_log_sink(void (*sink)(CaliperLogLevel, const char*)) {
+    g_log_sink = sink;
+}
 
 const uint32_t* colormap_lut(int32_t cm) {
     switch (cm) {

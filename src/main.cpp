@@ -92,6 +92,10 @@ public:
         }
         std::cerr << "[renderer] " << renderer_->name() << std::endl;
         caliper_host::services_init();
+        // Hand the live renderer to the bridge (caliper.tensor_bridge.v1); it is
+        // cleared before renderer teardown in cleanup(). Do this right after the
+        // renderer is up so the first applet frame can vend textures.
+        caliper_host::services_set_renderer(renderer_.get());
 
         // IntroScreen is raw-GL end to end (its initialize/render_3d/cleanup all
         // issue GL). On non-GL backends there is no GL context, so skip init:
@@ -290,6 +294,10 @@ public:
 
     void cleanup() {
         loader_.close_all();
+        // Applets are torn down first (they may release bridge textures while the
+        // renderer is still live); THEN drop the renderer from the bridge before
+        // renderer teardown, so no bridge thunk touches a destroyed renderer.
+        caliper_host::services_set_renderer(nullptr);
         intro_.cleanup();
         renderer_->shutdown();
         ImPlot3D::DestroyContext();
