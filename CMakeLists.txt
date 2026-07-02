@@ -221,8 +221,13 @@ add_executable(caliper
     src/host/host_services.cpp
     src/host/runs_dashboard.cpp
     src/host/renderer/gl_renderer.cpp
+    src/host/tensor_bridge.cpp
     src/app_paths.cpp
 )
+# TensorBridge (caliper.tensor_bridge.v1 core) lives in the exe link scope, not
+# caliper_host_lib, because it builds on the HostRenderer seam (C4). host_lib
+# stays renderer-free and headless-unit-testable.
+target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 
 # Host links UI libs + platform libs (no DuckDB, no LibTorch)
 target_link_libraries(caliper PRIVATE caliper_host_lib caliper::sdk ${CALIPER_DEPENDENCY_LIBS})

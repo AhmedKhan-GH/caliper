@@ -1,0 +1,89 @@
+#pragma once
+// TensorBridge — host-side core of caliper.tensor_bridge.v1 (PLATFORM.md §7.4).
+// Pure logic over the HostRenderer texture seam: it validates a CaliperTensor
+// against the frozen v1 acceptance rules, colormaps/expands it into RGBA8 on the
+// CPU staging path, or forwards a device tensor to the backend's device path —
+// and keeps the id -> backend-handle bookkeeping (§5.4). It never links torch
+// (D11) and never names a graphics API; the renderer stays swappable.
+//
+// This lives in the exe / gfx-test link scope, NOT caliper_host_lib: it depends
+// on the HostRenderer interface only (header), so unit tests drive it with a
+// stub renderer and no window.
+#include <caliper/tensor.h>
+#include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/device_v1.h>
+
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
+
+namespace caliper_host {
+
+class HostRenderer;
+
+// ---- Built-in 256-entry RGBA8 colormap LUTs -------------------------------
+// Packed little-endian as r | g<<8 | b<<16 | a<<24 — the exact byte layout the
+// CPU staging path writes and the Metal compute path uploads, so both backends
+// emit identical bytes (Phase-2C colormaps v1). Returned by value-stable
+// pointer; nullptr for an out-of-range colormap id.
+const uint32_t* colormap_lut(int32_t colormap);
+
+// ---- CPU reference conversions (single source of truth for §16) -----------
+// Colormap a row-major (h,w) f32 buffer through lut256 into a tightly-packed
+// RGBA8 dst (w*h*4 bytes). Index rule, byte-identical to the Metal shader:
+//   idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5   (truncated)
+// with vmax==vmin -> t=0, and NaN -> index 0 (never a misinterpreted texel).
+void map_f32_to_rgba8(const float* src, int w, int h,
+                      const uint32_t* lut256, float vmin, float vmax,
+                      uint8_t* dst);
+
+// Expand a row-major (h,w,c) u8 buffer (c in 1..4) into tightly-packed RGBA8:
+//   c==1 -> gray replicated to RGB, a=255;  c==3 -> RGB, a=255;  c==4 -> copy.
+void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst);
+
+class TensorBridge {
+public:
+    explicit TensorBridge(HostRenderer& renderer);
+
+    // caliper.tensor_bridge.v1 ops. Returns 0/false on an acceptance-rule
+    // violation (reason emitted via log; never a misinterpreted texture).
+    CaliperTextureId texture_from_tensor(const CaliperTensor* t, uint32_t flags);
+    bool             update_texture(CaliperTextureId tex, const CaliperTensor* t);
+    void             release_texture(CaliperTextureId tex);
+    CaliperTextureId texture_from_tensor_mapped(const CaliperTensor* t,
+                                                int32_t colormap,
+                                                float vmin, float vmax,
+                                                uint32_t flags);
+    bool             alloc_shared(CaliperDType dtype, int32_t ndim,
+                                  const int64_t* shape,
+                                  CaliperTensor* out_tensor,
+                                  CaliperTextureId* out_texture);
+    void             free_shared(CaliperTextureId tex);
+
+private:
+    // Per-texture bookkeeping. The CaliperTextureId handed to callers is the
+    // renderer's opaque id (never a raw GL/Metal handle — §5.4); this table
+    // adds the shape/dtype/colormap needed to re-upload on update_texture.
+    struct Entry {
+        uint64_t     tex = 0;       // renderer texture id
+        int          w = 0;
+        int          h = 0;
+        CaliperDType dtype = CALIPER_DT_F32;
+        int          channels = 1;  // direct-u8 source channel count
+        bool         mapped = false;// f32 -> colormap LUT
+        int32_t      colormap = 0;
+        float        vmin = 0.0f;
+        float        vmax = 1.0f;
+        bool         shared = false;
+        std::vector<uint8_t> shared_buf;  // alloc_shared CPU-unified backing
+    };
+
+    // Stage/forward a validated tensor into an existing entry's texture.
+    bool upload_into(Entry& e, const CaliperTensor* t);
+
+    HostRenderer&                          renderer_;
+    CaliperDeviceKind                      active_device_;  // backend's device
+    std::unordered_map<uint64_t, Entry>    entries_;
+};
+
+}  // namespace caliper_host

@@ -31,6 +31,11 @@ public:
                                         const uint32_t* lut256 /*nullable*/,
                                         float vmin, float vmax) = 0;
 
+    // Diagnostic: which path the last device update took ("compute"/"blit" on
+    // Metal). Lifted onto the interface (C2 review) so the bridge and gfx tests
+    // read it without dynamic_cast; GL and other CPU-staged backends default.
+    virtual const char* last_device_path() const { return "cpu-staged"; }
+
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
 };

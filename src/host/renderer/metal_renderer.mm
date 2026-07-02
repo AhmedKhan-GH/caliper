@@ -76,7 +76,7 @@ struct CmapParams {
 class MetalRenderer final : public HostRenderer {
 public:
     const char* name() const override { return "metal"; }
-    const char* last_device_path() const { return last_device_path_; }
+    const char* last_device_path() const override { return last_device_path_; }
 
     // Metal owns no GL context: the window must be created with NO_API so GLFW
     // does not attach an OpenGL context we would fight over. Runs before

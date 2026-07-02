@@ -22,6 +22,8 @@ add_executable(caliper_tests
     test_sugar_services.cpp
     test_mnist_idx.cpp
     test_metrics_store.cpp
+    test_tensor_bridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 find_package(ZLIB REQUIRED)
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
@@ -36,3 +38,23 @@ target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_DATA_ROOT="${CMAKE_BINARY_DIR}/test-data")
 
 add_test(NAME caliper_tests COMMAND caliper_tests)
+
+# ---------------------------------------------------------------------------
+# caliper_gfx_tests — windowed, pixel-exact tensor->texture proof (§16).
+# Separate binary because it pulls in the GL renderer (NOT caliper_host_lib):
+# it links the renderer + bridge sources directly into the exe/gfx-test scope.
+# Registered under the "gfx" label so `ctest -L gfx` selects it; it self-skips
+# with a MESSAGE when glfwInit() fails, so a headless CI run stays green.
+add_executable(caliper_gfx_tests
+    gfx/gfx_main.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/renderer/gl_renderer.cpp
+)
+target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_gfx_tests PRIVATE
+    doctest::doctest caliper::sdk caliper::ui_stack ${CALIPER_DEPENDENCY_LIBS})
+set_target_properties(caliper_gfx_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
+add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
+set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx")
