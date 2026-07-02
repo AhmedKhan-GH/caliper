@@ -12,8 +12,8 @@ class HostRenderer {
 public:
     virtual ~HostRenderer() = default;
     virtual bool init(GLFWwindow* window) = 0;      // after glfwCreateWindow
-    virtual void new_frame() = 0;                   // backend NewFrame calls
-    virtual void render(int fb_w, int fb_h) = 0;    // clear + RenderDrawData + present
+    virtual void new_frame() = 0;                   // frame CLEAR + backend NewFrame
+    virtual void render(int fb_w, int fb_h) = 0;    // RenderDrawData + present
     virtual void shutdown() = 0;
     virtual const char* name() const = 0;           // "gl" / "metal"
 
@@ -35,5 +35,15 @@ public:
     virtual void window_hints() = 0;
 };
 
+// GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend
+// until the 2D migration. The Metal backend is a SEPARATE factory below rather
+// than a branch inside make_renderer(), because make_renderer() lives in the
+// frozen (do-not-touch) gl_renderer.cpp and GLRenderer is file-local there;
+// main.cpp does the env-driven selection between the two factories (C2).
 std::unique_ptr<HostRenderer> make_renderer(const char* name); // "gl"|"metal"|nullptr->default
+
+// Metal factory (metal_renderer.mm, C2; Apple-only translation unit). Returns
+// the Metal backend, still un-init'd — caller runs window_hints()/init() and
+// falls back to make_renderer("gl") if init() fails. Not defined on non-Apple.
+std::unique_ptr<HostRenderer> make_metal_renderer();
 }

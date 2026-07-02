@@ -15,6 +15,8 @@
 #include "app_paths.h"
 
 #include <string>
+#include <cstdlib>
+#include <cstring>
 
 #include <filesystem>
 #ifdef __APPLE__
@@ -40,9 +42,16 @@ public:
         }
 
         // Renderer seam (PLATFORM.md §5.4): backend hints run before the
-        // window exists; init() runs after. GL is the only backend in C1.
-        renderer_ = caliper_host::make_renderer(nullptr);
-        renderer_->window_hints();
+        // window exists; init() runs after. CALIPER_RENDERER=metal selects the
+        // Metal backend (Apple only); GL stays the default until the 2D flip.
+        const char* want = std::getenv("CALIPER_RENDERER");
+        bool want_metal = want && std::strcmp(want, "metal") == 0;
+#ifdef __APPLE__
+        if (want_metal) renderer_ = caliper_host::make_metal_renderer();
+#else
+        (void)want_metal;
+#endif
+        if (!renderer_) renderer_ = caliper_host::make_renderer("gl");
 
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         int ax, ay, aw, ah;
@@ -52,11 +61,8 @@ public:
         int ww = (int)((aw / sx) * 0.95f);
         int wh = (int)((ah / sy) * 0.95f);
 
-        window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
-        if (!window_) { glfwTerminate(); return false; }
-
         // Host-owned ImGui/ImPlot contexts must exist before the renderer
-        // initializes its ImGui backends. None of these touch GL.
+        // initializes its ImGui backends. None of these touch GL/Metal.
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -67,12 +73,37 @@ public:
         ImGui::StyleColorsDark();
         style_ui();
 
-        if (!renderer_->init(window_)) { glfwTerminate(); return false; }
+        // Backends whose window hints differ (Metal = NO_API, GL = a GL
+        // context) cannot share a window, so a failed backend init recreates
+        // the window for the fallback. GL is the guaranteed fallback.
+        if (!create_window_and_init(ww, wh)) {
+            if (std::string(renderer_->name()) != "gl") {
+                std::cerr << "[renderer] " << renderer_->name()
+                          << " init failed; falling back to gl" << std::endl;
+                renderer_ = caliper_host::make_renderer("gl");
+                if (!create_window_and_init(ww, wh)) {
+                    glfwTerminate();
+                    return false;
+                }
+            } else {
+                glfwTerminate();
+                return false;
+            }
+        }
+        std::cerr << "[renderer] " << renderer_->name() << std::endl;
         caliper_host::services_init();
 
-        if (!intro_.initialize()) {
-            std::cerr << "Intro screen init failed" << std::endl;
-            return false;
+        // IntroScreen is raw-GL end to end (its initialize/render_3d/cleanup all
+        // issue GL). On non-GL backends there is no GL context, so skip init:
+        // every other IntroScreen entry point early-outs when its state is null,
+        // so update()/draw_ui()/cleanup() stay crash-free. The 3D landing bg and
+        // card launcher return with the GL->2D migration (2D). render_3d is
+        // already guarded below; initialize() needs the same guard.
+        if (std::string(renderer_->name()) == "gl") {
+            if (!intro_.initialize()) {
+                std::cerr << "Intro screen init failed" << std::endl;
+                return false;
+            }
         }
 
         // Scan for applet shared libraries
@@ -269,6 +300,18 @@ public:
     }
 
 private:
+    // (Re)create the GLFW window for the current renderer and init the backend.
+    // glfwDefaultWindowHints() clears sticky hints from a prior attempt (e.g.
+    // Metal's GLFW_NO_API) so the fallback backend gets a clean slate.
+    bool create_window_and_init(int ww, int wh) {
+        if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
+        glfwDefaultWindowHints();
+        renderer_->window_hints();
+        window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
+        if (!window_) return false;
+        return renderer_->init(window_);
+    }
+
     void style_ui() {
         ImGuiStyle& st = ImGui::GetStyle();
         st.WindowRounding = 6.0f;

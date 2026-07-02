@@ -184,6 +184,34 @@ set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
 # ============================================================================
+# Metal renderer backend (C2, Apple only)
+# ============================================================================
+# The Metal HostRenderer backend + the ImGui Metal backend live in their own
+# Objective-C++ static lib compiled with ARC (-fobjc-arc). Keeping it separate
+# scopes ARC to these two .mm files and keeps the exe a plain C++/OBJC build.
+# The vendored imgui_impl_metal.mm compiles here rather than into the exe.
+if(APPLE)
+    add_library(caliper_metal_backend STATIC
+        src/host/renderer/metal_renderer.mm
+        ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
+    )
+    target_include_directories(caliper_metal_backend PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(caliper_metal_backend
+        PUBLIC caliper::sdk
+               "-framework Metal" "-framework QuartzCore"
+               "-framework Foundation" "-framework Cocoa"
+        PRIVATE caliper::ui_stack glfw)
+    set_source_files_properties(
+        src/host/renderer/metal_renderer.mm
+        ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_metal_backend PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON)
+endif()
+
+# ============================================================================
 # Main Application (host)
 # ============================================================================
 
@@ -198,6 +226,9 @@ add_executable(caliper
 
 # Host links UI libs + platform libs (no DuckDB, no LibTorch)
 target_link_libraries(caliper PRIVATE caliper_host_lib caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
+if(APPLE)
+    target_link_libraries(caliper PRIVATE caliper_metal_backend)
+endif()
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
