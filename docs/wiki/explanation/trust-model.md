@@ -70,4 +70,16 @@ calls, visible quarantine, and no false promises.
 
 ## Frame watchdog
 
-*Status: written at Task 9.*
+The crash guard catches applets that fault; the watchdog catches applets that
+merely misbehave. The host owns the frame clock and calls each applet's `frame()`
+once per frame, so a `frame()` that does heavy work blocks the whole UI thread —
+the window stops responding until it returns. The watchdog makes that visible: it
+times each `frame()`, and when one exceeds the budget (about 250 ms) for three
+consecutive frames, it flags the applet's card with a plain note that long work
+belongs in `caliper.jobs` rather than the frame loop (PLATFORM.md §15). The flag
+**latches** — it stays raised until the applet is relaunched, and a later fast
+frame does *not* clear it — so the evidence of a stall doesn't scroll away the
+instant the applet recovers. The point is observability, not punishment: the
+applet keeps running and nothing is torn down, but the platform's threading rule
+("keep `frame()` cheap; push slow work to jobs") becomes something you can see
+instead of a convention you have to remember.
