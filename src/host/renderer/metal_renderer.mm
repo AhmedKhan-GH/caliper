@@ -73,6 +73,19 @@ struct CmapParams {
     float    vmin, vmax;
 };
 
+// Byte extent a tensor addresses: (max linear element index + 1) * elem_size,
+// from shape×strides. The bridge already bounds this in *elements* against a
+// sane cap, but only the backend sees the actual id<MTLBuffer> — so the device
+// paths bound the buffer's real byte length here before dispatch. A short
+// buffer (e.g. a caller passing a half-sized MTLBuffer) is rejected rather than
+// letting the shader/blit read past the allocation and fault the GPU.
+static uint64_t tensor_extent_bytes(const CaliperTensor& t, uint64_t elem_size) {
+    uint64_t maxidx = 0;
+    for (int i = 0; i < t.ndim; ++i)
+        maxidx += (uint64_t)(t.shape[i] - 1) * (uint64_t)t.strides[i];
+    return (maxidx + 1) * elem_size;
+}
+
 class MetalRenderer final : public HostRenderer {
 public:
     const char* name() const override { return "metal"; }
@@ -257,6 +270,8 @@ private:
                           const CaliperTensor& t, const uint32_t* lut256,
                           float vmin, float vmax) {
         if (!ensure_pipeline()) return false;
+        if (src.length < tensor_extent_bytes(t, sizeof(float)))
+            return false;   // buffer too short for the declared extent
 
         CmapParams p{};
         p.w = (uint32_t)dst.width;
@@ -298,6 +313,8 @@ private:
         NSUInteger w = (NSUInteger)t.shape[1];
         NSUInteger c = (t.ndim >= 3) ? (NSUInteger)t.shape[2] : 1;
         if (c != 4 || w != dst.width || h != dst.height) return false;  // RGBA8 only
+        if (src.length < tensor_extent_bytes(t, 1))
+            return false;   // buffer too short for the declared extent
 
         NSUInteger bytesPerRow = w * 4;
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];

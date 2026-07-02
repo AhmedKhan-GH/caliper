@@ -56,5 +56,16 @@ target_link_libraries(caliper_gfx_tests PRIVATE
 set_target_properties(caliper_gfx_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
+# On Apple, the same §16 matrix runs on the Metal backend too (C5). Link the
+# Metal HostRenderer backend and compile the harness itself as Objective-C++
+# with ARC so it can allocate the raw MTLBuffers the device paths consume and
+# blit textures back for verification.
+if(APPLE)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_metal_backend)
+    target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_METAL=1)
+    set_source_files_properties(gfx/gfx_main.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+endif()
+
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
 set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx")
