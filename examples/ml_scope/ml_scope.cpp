@@ -28,7 +28,8 @@ namespace {
 constexpr int kEpochs = 300;
 constexpr int kN = 512;   // two-moons points
 
-// Synthetic two-moons, generated on the training device.
+// Synthetic two-moons, generated on CPU (deterministic under manual_seed —
+// device RNGs vary), then moved to the training device.
 std::pair<torch::Tensor, torch::Tensor> make_moons(torch::Device dev) {
     auto t = torch::rand({kN}) * M_PI;
     auto x0 = torch::stack({torch::cos(t), torch::sin(t)}, 1);
