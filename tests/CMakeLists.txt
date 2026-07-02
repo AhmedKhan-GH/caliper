@@ -16,7 +16,9 @@ add_executable(caliper_tests
     test_negotiation.cpp
     test_crash_guard.cpp
     test_watchdog.cpp
+    test_sugar.cpp
 )
-target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib)
+target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
+    caliper::sdk_testing caliper::ui_stack)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_tests COMMAND caliper_tests)

@@ -124,6 +124,13 @@ install(FILES
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
+# Fixture host for TDD of applets/sugar (ships in the SDK at Phase 3).
+add_library(caliper_sdk_testing INTERFACE)
+add_library(caliper::sdk_testing ALIAS caliper_sdk_testing)
+target_include_directories(caliper_sdk_testing INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/sdk/testing>)
+target_link_libraries(caliper_sdk_testing INTERFACE caliper::sdk)
+
 # Host library: loader/negotiation logic, unit-testable without OpenGL.
 include(FetchContent)
 FetchContent_Declare(tomlplusplus
