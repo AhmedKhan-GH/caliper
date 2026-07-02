@@ -1,44 +1,28 @@
-#include <caliper/abi_v1.h>
+#include <caliper/caliper.hpp>
 #include "opengllama.h"
 
-#include <imgui.h>
-#include <implot.h>
-#include <implot3d.h>
+// NOTE: this applet still issues raw GL calls for its heatmaps — a known §6c
+// violation, grandfathered until caliper.tensor_bridge.v1 lands in Phase 2.
+class OpenGllamaPlugin final : public caliper::Applet {
+public:
+    bool on_init(caliper::Host& host) override {
+        (void)host;
+        return impl_.initialize();
+    }
+    void on_frame(const caliper::Frame& f) override {
+        impl_.draw_ui(f.fb_width, f.fb_height);
+    }
+    void on_cleanup() override { impl_.cleanup(); }
 
-extern "C" {
+private:
+    OpenGllamaApplet impl_;
+};
 
-APPLET_API CaliperAppletInfo applet_info() {
-    return {
-        "OpenGllama",
-        "0.1",
-        "Load GGUF models via llama.cpp and visualize layer activations "
-        "with OpenGL-rendered heatmaps on Metal/CUDA backends.",
-        "LLM",
-        CALIPER_APPLET_ABI
-    };
-}
-
-APPLET_API void* applet_create() {
-    return new OpenGllamaApplet();
-}
-
-APPLET_API void applet_destroy(void* ctx) {
-    delete static_cast<OpenGllamaApplet*>(ctx);
-}
-
-APPLET_API bool applet_initialize(void* ctx, const CaliperHostContext* host) {
-    ImGui::SetCurrentContext(host->imgui);
-    ImPlot::SetCurrentContext(host->implot);
-    ImPlot3D::SetCurrentContext(host->implot3d);
-    return static_cast<OpenGllamaApplet*>(ctx)->initialize();
-}
-
-APPLET_API void applet_draw_ui(void* ctx, int w, int h) {
-    static_cast<OpenGllamaApplet*>(ctx)->draw_ui(w, h);
-}
-
-APPLET_API void applet_cleanup(void* ctx) {
-    static_cast<OpenGllamaApplet*>(ctx)->cleanup();
-}
-
-} // extern "C"
+CALIPER_APPLET(OpenGllamaPlugin,
+    .id       = "dev.ahmed.opengllama",
+    .version  = "0.1.0",
+    .name     = "OpenGllama",
+    .summary  = "Load GGUF models via llama.cpp and visualize layer activations "
+                "with OpenGL-rendered heatmaps on Metal/CUDA backends.",
+    .tag      = "LLM",
+    .services = {CALIPER_UI_V1, CALIPER_LOG_V1})

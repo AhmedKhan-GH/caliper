@@ -1,0 +1,13 @@
+[applet]
+id      = "dev.ahmed.opengllama"
+name    = "OpenGllama"
+version = "0.1.0"
+summary = "Load GGUF models via llama.cpp and visualize layer activations with OpenGL-rendered heatmaps on Metal/CUDA backends."
+tag     = "LLM"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1"]
