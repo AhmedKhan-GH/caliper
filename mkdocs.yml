@@ -33,6 +33,7 @@ nav:
           - caliper.jobs.v1: reference/services/jobs-v1.md
           - caliper.device.v1: reference/services/device-v1.md
           - caliper.metrics.v1: reference/services/metrics-v1.md
+          - caliper.tensor_bridge.v1: reference/services/tensor-bridge-v1.md
       - C++ sugar: reference/sugar.md
   - Explanation:
       - Architecture: explanation/architecture.md
