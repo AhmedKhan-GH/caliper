@@ -35,9 +35,14 @@ target_compile_definitions(repnet_demo PRIVATE CALIPER_APPLET_EXPORT)
 set_target_properties(repnet_demo PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    CXX_STANDARD 17
+    CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
 )
+
+add_custom_command(TARGET repnet_demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/repnet_demo.caliper.toml
+        ${CMAKE_BINARY_DIR}/applets/repnet_demo.caliper.toml)
 
 if(APPLE)
     set_target_properties(repnet_demo PROPERTIES

@@ -1,0 +1,13 @@
+[applet]
+id      = "dev.ahmed.repnet-demo"
+name    = "RepNet Demo"
+version = "1.0.0"
+summary = "Load and visualize the UCDH Senior Design dataset, run signal preprocessing, inspect raw data via DuckDB, and run model inference on ECG recordings."
+tag     = "ECG"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1"]
