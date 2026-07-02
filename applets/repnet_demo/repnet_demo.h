@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <caliper/caliper.hpp>
+
 struct GLFWwindow;
 
 class RepNetDemoApplet {
@@ -9,7 +11,7 @@ public:
     RepNetDemoApplet();
     ~RepNetDemoApplet();
 
-    bool initialize();
+    bool initialize(caliper::Bridge bridge);
     void draw_ui(int win_w, int win_h);
     void cleanup();
 
@@ -33,5 +35,6 @@ private:
 
     struct State;
     std::unique_ptr<State> s_;
+    caliper::Bridge bridge_;   // caliper.tensor_bridge.v1 (viz heatmaps)
     bool exit_requested_ = false;
 };
