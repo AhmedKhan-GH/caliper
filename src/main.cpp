@@ -13,6 +13,7 @@
 #include "host/job_system.h"
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
+#include "host/runs_dashboard.h"
 #include "app_paths.h"
 
 #include <filesystem>
@@ -142,6 +143,14 @@ public:
             ImGui::NewFrame();
 
             if (page_ == AppPage::Landing) {
+                // The Landing page has no menu bar of its own; add a minimal one
+                // solely to host the always-reachable "Runs" toggle (the Applet
+                // page toggles it from its existing menu bar below).
+                if (ImGui::BeginMainMenuBar()) {
+                    if (ImGui::MenuItem("Runs", nullptr, runs_open_))
+                        runs_open_ = !runs_open_;
+                    ImGui::EndMainMenuBar();
+                }
                 intro_.draw_ui(dw, dh);
                 if (intro_.should_launch()) {
                     intro_.reset_launch_flag();
@@ -170,6 +179,8 @@ public:
 
                 if (ImGui::BeginMainMenuBar()) {
                     if (ImGui::MenuItem("< Home")) go_back = true;
+                    if (ImGui::MenuItem("Runs", nullptr, runs_open_))
+                        runs_open_ = !runs_open_;
                     ImGui::Separator();
                     ImGui::TextDisabled("%s",
                         loader_.at(active_applet_).manifest.name.c_str());
@@ -216,6 +227,11 @@ public:
                     intro_.set_applets(std::move(cards));
                 }
             }
+
+            // Runs dashboard (B5): host UI over the metrics store, toggled from
+            // the menu bar on either page; queries only while runs_open_.
+            caliper_host::render_runs_dashboard(
+                caliper_host::host_metrics_store(), &runs_open_);
 
             // Jobs tray (§7.5): visible on every page while jobs exist.
             {
@@ -301,6 +317,7 @@ private:
     caliper_host::FrameWatchdog watchdog_;
     int active_applet_ = -1;
     double last_frame_time_ = 0.0;
+    bool runs_open_ = false;
 };
 
 int main() {

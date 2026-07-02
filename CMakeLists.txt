@@ -191,6 +191,7 @@ add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
     src/host/host_services.cpp
+    src/host/runs_dashboard.cpp
     src/app_paths.cpp
 )
 
