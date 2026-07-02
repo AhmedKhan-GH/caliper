@@ -17,6 +17,15 @@ visualization — its live conv-kernel grid crosses
 [`caliper.tensor_bridge.v1`](../reference/services/tensor-bridge-v1.md) via the
 [torch adapter](../reference/adapters.md), zero-copy on the Metal renderer.
 
+When those idioms click, see them composed at full scale in **GPTScope**
+(`applets/gpt_scope/`) — the flagship, a char-level mini-GPT trained live on
+TinyShakespeare and built **entirely on public services** (jobs, device, metrics,
+and the tensor bridge — no private hooks). It streams train/val loss and
+perplexity to the Runs dashboard, samples text live, and renders per-head
+attention heatmaps through the bridge (layer switching, hover-highlighting, a
+temperature control). Its live-visual acceptance checks are in the
+[tensor-bridge demo checklist](../reference/services/tensor-bridge-v1.md#demo-checklist-human).
+
 The whole applet lives in `examples/hello/`:
 
 ```

@@ -4,6 +4,8 @@ Caliper is a desktop platform for **ML-native, GPU-resident visualization runnin
 
 The platform's reason to exist is the tensor bridge: weights, activations, and saliency maps that live on the GPU (CUDA or MPS) become an `ImGui::Image` *this frame* — no TensorBoard round-trip, no PNG encode, no Python, and on the native backends no CPU staging. That capability is preserved by keeping applets in-process and productized as the `caliper.tensor_bridge.v1` service.
 
+The flagship applet, **GPTScope**, is the proof: a char-level mini-GPT (nanoGPT-style, 4 layers / 4 heads) trained live on TinyShakespeare, built entirely on the public service stack. It trains off the frame thread via `caliper.jobs.v1` on the host-negotiated device, streams train/val loss (and val perplexity) to the `caliper.metrics.v1` Runs dashboard, samples text live as the loss falls (gibberish → words → cadence), and renders per-head attention heatmaps through `caliper.tensor_bridge.v1` — GPU-resident on Metal — with layer switching, hover-highlighting, and a sampling-temperature control. No private hooks; every capability it uses is one an out-of-tree applet has.
+
 This wiki is the docs-as-code companion to `PLATFORM.md` (the governing spec at the repo root). It is organized along the [Diátaxis](https://diataxis.fr/) axes — learning, tasks, information, and understanding.
 
 ## What's here

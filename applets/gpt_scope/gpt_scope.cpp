@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -98,6 +99,11 @@ struct GPTScopeState {
     // E2 — the selected attention layer: UI writes it, the worker reads it at
     // its next eval tick (the atomic desired-layer the brief specifies).
     std::atomic<int>    att_layer_sel{0};
+
+    // E3 — sampling temperature: UI writes it, the worker reads it at each
+    // sample tick, so a slider change lands on the NEXT sample (one eval cadence
+    // later). Lower = greedier/sharper; higher = more diverse.
+    std::atomic<float>  temp{(float)kTemp};
 
     // E2 — attention snapshot published by the worker (guarded by mtx). OWNED
     // torch storage: the CaliperTensor descriptors the frame builds point into
@@ -367,7 +373,10 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         const int64_t seed = seed_it != stoi.end() ? seed_it->second : 0;
         auto idx = torch::full({1, 1}, seed,
                                torch::TensorOptions(dev).dtype(torch::kLong));
-        auto out = model->generate(idx, kSampleLen, kTemp).to(torch::kCPU);
+        // E3 — read the live temperature at sample time (subsequent samples
+        // reflect a slider change).
+        const double temp = (double)st->temp.load();
+        auto out = model->generate(idx, kSampleLen, temp).to(torch::kCPU);
         auto* p = out.data_ptr<int64_t>();
         std::string s;
         s.reserve(out.size(1));
@@ -565,9 +574,32 @@ void GPTScopeApplet::draw_ui() {
         ImPlot::EndPlot();
     }
 
+    // E3 — val perplexity readout beside the loss plot: exp(val_loss) on the
+    // latest val point (per-char perplexity, the natural language-model metric).
+    if (!vy.empty()) {
+        const float vl = vy.back();
+        ImGui::Text("latest val loss %.4f   ·   val perplexity %.2f  (exp val_loss)",
+                    vl, std::exp(vl));
+    } else {
+        ImGui::TextDisabled(
+            "val perplexity: appears with the first val point (exp val_loss)");
+    }
+
+    // E3 — sampling temperature slider: writes the atomic the worker reads at
+    // its next sample tick, so the change takes effect on the following sample
+    // (one eval cadence later), not the current one.
+    {
+        float temp = s_->temp.load();
+        if (ImGui::SliderFloat("temperature", &temp, 0.2f, 1.5f, "%.2f"))
+            s_->temp.store(std::clamp(temp, 0.2f, 1.5f));
+        ImGui::SameLine();
+        ImGui::TextDisabled("(applies to the next sample)");
+    }
+
     // The live sample panel — the demo arc. The default ImGui font is fixed
     // width, so a plain scrollable child reads as monospace.
-    ImGui::Text("live sample  (temperature %.1f, seeded from newline)", kTemp);
+    ImGui::Text("live sample  (temperature %.2f, seeded from newline)",
+                s_->temp.load());
     ImGui::BeginChild("sample", {-1, 200}, ImGuiChildFlags_Borders,
                       ImGuiWindowFlags_HorizontalScrollbar);
     if (sample.empty())
