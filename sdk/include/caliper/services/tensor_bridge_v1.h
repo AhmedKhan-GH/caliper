@@ -17,6 +17,7 @@
  * §16 contract: a tensor uploaded this way reads back pixel-exact vs a CPU
  * reference, per backend. */
 #include <stdint.h>
+#include <stdbool.h>
 #include <caliper/tensor.h>
 
 #define CALIPER_TENSOR_BRIDGE_V1 "caliper.tensor_bridge.v1"
