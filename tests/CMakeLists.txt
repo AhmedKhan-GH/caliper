@@ -21,6 +21,7 @@ add_executable(caliper_tests
     test_device.cpp
     test_sugar_services.cpp
     test_mnist_idx.cpp
+    test_metrics_store.cpp
 )
 find_package(ZLIB REQUIRED)
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
