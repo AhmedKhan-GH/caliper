@@ -13,6 +13,7 @@ add_executable(caliper_tests
     test_abi.cpp
     abi_c_check.c
     test_manifest.cpp
+    test_negotiation.cpp
 )
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
