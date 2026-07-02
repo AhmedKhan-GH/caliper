@@ -104,9 +104,10 @@ tagged SDK release under the *same* target names — nothing else changes.
 
 ## 5. See it in the app
 
-Hello appears on the launcher landing page starting with the loader-v2 work
-(Task 13). Before that lands, the current host still runs the v1 loader, which
-probes for the old `applet_info()` symbol; it logs `missing applet_info()` for
-epoch-2 dylibs and skips them. That is expected — the epoch-2 loader that reads
-`caliper_applet_descriptor` arrives with loader v2, at which point Hello (and any
-applet you build the same way) shows up as a card you can open.
+Hello appears on the launcher landing page as a card you can open. The host's
+epoch-2 loader discovers it by reading its `<stem>.caliper.toml` manifest and the
+`caliper_applet_descriptor` export — the two signals every applet you build this
+way must ship. If the card is missing, check that both are present (the dylib and
+its manifest sit side by side in `build/applets/`); if the card shows an
+`[unavailable]` line instead, that line is the loader's refusal reason (see the
+[refusal reference](../reference/refusals.md)).

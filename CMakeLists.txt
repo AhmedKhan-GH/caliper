@@ -165,7 +165,6 @@ set_target_properties(caliper_host_lib PROPERTIES
 add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
-    src/applet_host.cpp
     src/host/host_services.cpp
     src/app_paths.cpp
 )

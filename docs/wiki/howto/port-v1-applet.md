@@ -1,10 +1,15 @@
 # Port a v1 applet
 
+> **Historical recipe (PLATFORM.md §17).** The v1 ABI this page ports *from* was
+> removed at the end of Phase 1 — `abi_v1.h`, the six `extern "C"` functions, and
+> the v1 loader no longer exist in the tree. This how-to is preserved as the
+> record of the v1→epoch-2 migration (it is exactly how the in-tree applets were
+> ported); the "before" snippets below describe the **removed** v1 ABI.
+
 The epoch-2 loader only sees applets that ship a `<stem>.caliper.toml` manifest
-and export the epoch-2 descriptor; the old six-function v1 ABI is invisible to
-it. Porting is therefore a change to the **entry boundary only** — the file that
-held the `extern "C"` bridge. Your applet class and all of its internal logic
-(parsing, rendering, DB access, …) do not change.
+and export the epoch-2 descriptor. Porting was therefore a change to the **entry
+boundary only** — the file that held the `extern "C"` bridge. The applet class
+and all of its internal logic (parsing, rendering, DB access, …) did not change.
 
 This page is the exact recipe used to port **CircuitNet** from v1 to epoch 2.
 The whole diff was three files: `plugin.cpp` (rewritten), a new
@@ -12,25 +17,25 @@ The whole diff was three files: `plugin.cpp` (rewritten), a new
 `CMakeLists.txt`. `circuitnet.cpp` / `circuitnet.h` and the four internal
 translation units were untouched.
 
-## What changes, at a glance
+## What changed, at a glance
 
-| v1 | epoch 2 |
+| v1 (removed) | epoch 2 |
 | --- | --- |
 | six `extern "C"` functions (`applet_info`, `applet_create`, `applet_destroy`, `applet_initialize`, `applet_draw_ui`, `applet_cleanup`) | one `caliper::Applet` subclass + the `CALIPER_APPLET(...)` macro |
-| `#include <caliper/abi_v1.h>` | `#include <caliper/caliper.hpp>` (sugar layer + pinned ImGui/ImPlot) |
+| `#include <caliper/abi_v1.h>` (header removed) | `#include <caliper/caliper.hpp>` (sugar layer + pinned ImGui/ImPlot) |
 | manual `ImGui::SetCurrentContext(host->imgui)` (× ImPlot, ImPlot3D) | nothing — the macro's `ui::connect()` does all three plus the shared allocator |
 | metadata returned from `applet_info()` | metadata in the macro **and** in `<stem>.caliper.toml` (they must agree) |
 | discovered by symbol probing | discovered by manifest; loader refuses on any mismatch |
 
 ## Step 1 — delete the six `extern "C"` functions
 
-Open the entry file and remove the entire `extern "C" { … }` block. That block
-was the whole v1 ABI: the info struct, `create`/`destroy`, `initialize`,
-`draw_ui`, `cleanup`. Delete `#include <caliper/abi_v1.h>` with it. Everything
-they forwarded to still lives in your applet class, so nothing of substance is
-lost — only the boilerplate bridge.
+The port opened the entry file and removed the entire `extern "C" { … }` block.
+That block was the whole v1 ABI: the info struct, `create`/`destroy`,
+`initialize`, `draw_ui`, `cleanup`. The `#include <caliper/abi_v1.h>` went with
+it (that header no longer exists). Everything they forwarded to still lives in
+the applet class, so nothing of substance was lost — only the boilerplate bridge.
 
-Before (the v1 CircuitNet entry file, in full):
+Before (the v1 CircuitNet entry file, in full — this is the code that was deleted):
 
 ```cpp
 #include <caliper/abi_v1.h>

@@ -63,10 +63,14 @@ service is `caliper.log.v1` (declare it in your manifest's `required` list, as t
 hello applet does); the sugar `host.log_info` / `host.log_error` are thin
 wrappers over it.
 
-Loader diagnostics from the host itself are prefixed `[applet]` — that is where
-you'll see `Loaded: …` for applets the current v1 loader accepts, and
-`missing applet_info()` for epoch-2 dylibs the v1 loader skips (expected until
-loader v2). Grep the host's stdout for `[applet]` when an applet fails to appear.
+When the loader turns an applet away, the diagnostic is on the applet's **card**,
+not in the console: the card's description gains an `[unavailable]` line carrying
+the contractual refusal reason (see [refusals](../reference/refusals.md)) — a
+missing or malformed manifest, an `id`/`version` that disagrees with the
+descriptor, an unmet required service, or an ABI-epoch mismatch. The same card
+surface names the fault for applets that crashed and were quarantined. If an
+applet doesn't appear at all, check the two discovery signals side by side in
+`build/applets/`: the dylib and its `<stem>.caliper.toml`.
 
 ## Where per-applet data lives
 
