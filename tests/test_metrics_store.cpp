@@ -178,10 +178,16 @@ TEST_CASE("metrics: threaded smoke — 4 threads x 500 scalars on distinct tags"
 
     constexpr int T = 4;
     constexpr int PER = 500;
+    // Start barrier: every writer parks until all T threads are up, so their
+    // scalar() calls actually overlap and the test exercises real contention
+    // instead of accidentally serializing.
+    std::atomic<int> ready{0};
     std::vector<std::thread> threads;
     for (int t = 0; t < T; ++t) {
-        threads.emplace_back([&store, run, t]() {
+        threads.emplace_back([&store, &ready, run, t]() {
             std::string tag = "t" + std::to_string(t);
+            ready.fetch_add(1);
+            while (ready.load() != T) { /* spin until all threads are ready */ }
             for (int64_t s = 0; s < PER; ++s) {
                 store.scalar(run, tag.c_str(), s, static_cast<double>(t * 1000 + s));
             }

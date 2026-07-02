@@ -54,31 +54,14 @@ void ui_allocators(CaliperImGuiAllocFn* out_alloc, CaliperImGuiFreeFn* out_free,
 const CaliperUiV1 kUi = {sizeof(CaliperUiV1), &ui_imgui, &ui_implot,
                          &ui_implot3d, &ui_allocators};
 
-// --- caliper.jobs.v1: background compute with progress + cancel (§7.5) ---
-// Backed by one process-wide JobSystem; its dtor cancels + joins at shutdown.
-JobSystem g_jobs;
-
-uint64_t jobs_submit(const char* label, CaliperJobFn fn, void* user) {
-    return g_jobs.submit(label ? label : "(job)", fn, user);
-}
-void jobs_cancel(uint64_t id)   { g_jobs.request_cancel(id); }
-bool jobs_running(uint64_t id)  { return g_jobs.is_running(id); }
-float jobs_progress(uint64_t id){ return g_jobs.progress_of(id); }
-const CaliperJobsV1 kJobs = {sizeof(CaliperJobsV1), &jobs_submit, &jobs_cancel,
-                             &jobs_running, &jobs_progress};
-
-// --- caliper.device.v1: negotiated compute device (§7.3) ---
-CaliperDeviceKind dev_kind(void) { return device_info().kind; }
-int32_t dev_index(void)          { return device_info().index; }
-const char* dev_name(void)       { return device_info().name.c_str(); }
-uint64_t dev_hint(void)          { return device_info().free_memory_hint; }
-const CaliperDeviceV1 kDevice = {sizeof(CaliperDeviceV1), &dev_kind, &dev_index,
-                                 &dev_name, &dev_hint};
-
 // --- caliper.metrics.v1: DuckDB-backed run/tag/step store (§7.6/§11) ---
 // One process-wide store, opened in services_init(). If the disk open fails we
 // still vend the table (never crash the host over a bad disk): g_metrics_open
 // stays false and every thunk no-ops on the unopened store.
+//
+// DECLARATION ORDER IS LOAD-BEARING: g_metrics must be declared BEFORE
+// g_jobs so it is destroyed AFTER g_jobs's destructor joins the worker
+// threads — jobs may write metrics until the moment they are joined.
 MetricsStore g_metrics;
 bool         g_metrics_open = false;
 
@@ -102,9 +85,11 @@ void met_image(uint64_t run, const char* tag, int64_t step,
     if (!g_metrics_open) return;
     if (!(t && t->struct_size >= sizeof(CaliperTensor) &&
           t->dtype == CALIPER_DT_U8 && t->ndim == 3 &&
-          t->device == CALIPER_DEV_CPU)) {
+          t->device == CALIPER_DEV_CPU &&
+          t->strides[2] == 1 && t->strides[1] == t->shape[2] &&
+          t->strides[0] == t->shape[1] * t->shape[2])) {
         log_impl(CALIPER_LOG_WARN,
-                 "metrics.v1: image() dropped a non-CPU-u8-HWC tensor");
+                 "metrics.v1: image() dropped a non-contiguous or non-CPU-u8-HWC tensor");
         return;
     }
     g_metrics.image(run, tag ? tag : "", step, t->data,
@@ -116,6 +101,27 @@ void met_hparams_json(uint64_t run, const char* json_utf8) {
 const CaliperMetricsV1 kMetrics = {sizeof(CaliperMetricsV1), &met_begin_run,
                                    &met_end_run, &met_scalar, &met_histogram,
                                    &met_image, &met_hparams_json};
+
+// --- caliper.jobs.v1: background compute with progress + cancel (§7.5) ---
+// Backed by one process-wide JobSystem; its dtor cancels + joins at shutdown.
+JobSystem g_jobs;
+
+uint64_t jobs_submit(const char* label, CaliperJobFn fn, void* user) {
+    return g_jobs.submit(label ? label : "(job)", fn, user);
+}
+void jobs_cancel(uint64_t id)   { g_jobs.request_cancel(id); }
+bool jobs_running(uint64_t id)  { return g_jobs.is_running(id); }
+float jobs_progress(uint64_t id){ return g_jobs.progress_of(id); }
+const CaliperJobsV1 kJobs = {sizeof(CaliperJobsV1), &jobs_submit, &jobs_cancel,
+                             &jobs_running, &jobs_progress};
+
+// --- caliper.device.v1: negotiated compute device (§7.3) ---
+CaliperDeviceKind dev_kind(void) { return device_info().kind; }
+int32_t dev_index(void)          { return device_info().index; }
+const char* dev_name(void)       { return device_info().name.c_str(); }
+uint64_t dev_hint(void)          { return device_info().free_memory_hint; }
+const CaliperDeviceV1 kDevice = {sizeof(CaliperDeviceV1), &dev_kind, &dev_index,
+                                 &dev_name, &dev_hint};
 
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
