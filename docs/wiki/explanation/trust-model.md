@@ -83,3 +83,25 @@ instant the applet recovers. The point is observability, not punishment: the
 applet keeps running and nothing is torn down, but the platform's threading rule
 ("keep `frame()` cheap; push slow work to jobs") becomes something you can see
 instead of a convention you have to remember.
+
+## Jobs run unguarded
+
+The watchdog tells you to push slow work to `caliper.jobs.v1` — so it is worth
+being just as plain about what that thread does *not* get. The crash guard above
+is **UI-thread-only by documented precondition**: the signal trampoline is armed
+around the host's calls into applet `frame()`/`init()`/`cleanup()`, all of which
+run on the frame thread. A job function submitted to `caliper.jobs.v1` runs on a
+**host worker thread**, outside that trampoline, and is therefore **not
+crash-guarded at all.** A null dereference or a bad tensor op inside a job does
+not `siglongjmp` back into a quarantine — it takes the whole process down, host
+and all.
+
+This is not an oversight to be fixed later; it is the same trust boundary stated
+from the other side. In-process applets are trusted code, and a worker thread is
+simply that trust without even the best-effort net the UI thread gets. The
+practical rules that follow are small and non-negotiable: keep job code as
+careful as anything that runs without a net; poll `cancelled()` so the host can
+stop it within the ≤ 100 ms contract; and make the object you pass as `user`
+outlive the job (cancel-and-bounded-wait in `on_cleanup`). Real isolation for
+worker code, like everything else here, waits for the out-of-process boundary in
+Phase 6.

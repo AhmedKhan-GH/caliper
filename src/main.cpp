@@ -10,6 +10,7 @@
 #include "intro_screen.h"
 #include "host/applet_loader.h"
 #include "host/host_services.h"
+#include "host/job_system.h"
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
 #include "app_paths.h"
@@ -213,6 +214,35 @@ public:
                                          desc, e.manifest.tag});
                     }
                     intro_.set_applets(std::move(cards));
+                }
+            }
+
+            // Jobs tray (§7.5): visible on every page while jobs exist.
+            {
+                auto views = caliper_host::host_job_system().views();
+                if (!views.empty()) {
+                    ImGuiIO& tio = ImGui::GetIO();
+                    ImGui::SetNextWindowPos(
+                        {tio.DisplaySize.x - 330.0f, tio.DisplaySize.y - 10.0f},
+                        ImGuiCond_Always, {0.0f, 1.0f});
+                    ImGui::SetNextWindowSize({320.0f, 0.0f});
+                    ImGui::Begin("Jobs", nullptr,
+                                 ImGuiWindowFlags_NoResize |
+                                     ImGuiWindowFlags_NoCollapse);
+                    for (auto& v : views) {
+                        ImGui::PushID((int)v.id);
+                        ImGui::Text("%s", v.label.c_str());
+                        ImGui::ProgressBar(v.progress, {-60.0f, 0.0f},
+                                           v.message.empty() ? nullptr
+                                                             : v.message.c_str());
+                        if (v.running) {
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("cancel"))
+                                caliper_host::host_job_system().request_cancel(v.id);
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::End();
                 }
             }
 

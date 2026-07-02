@@ -9,4 +9,9 @@ namespace caliper_host {
 void services_init();
 const void* services_get(const char* service_id);   // NULL for unknown ids
 const std::set<std::string>& service_ids();
+
+// The process-wide job system backing caliper.jobs.v1 (§7.5); the host jobs
+// tray reads its views(). Cancelled + joined at shutdown by its own dtor.
+class JobSystem;
+JobSystem& host_job_system();
 }

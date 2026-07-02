@@ -4,7 +4,11 @@ This walks the **hello** applet — the smallest complete Caliper applet on ABI
 epoch 2. It is the canonical starting point: one manifest, one macro, three
 lifecycle methods. Once it makes sense, open `examples/signal_scope/` in the
 repo — the exemplar with every idiom (probing optional services, persisting to
-the data dir, the watchdog anti-pattern) — and copy from there.
+the data dir, the watchdog anti-pattern) — and copy from there. For ML work, the
+**ML exemplar** `examples/ml_scope/` shows the idioms that matter on a GPU:
+training off the frame thread via [`caliper.jobs.v1`](../reference/services/jobs-v1.md),
+the host-negotiated device via [`caliper.device.v1`](../reference/services/device-v1.md),
+and a live loss curve — the pattern to copy for any applet that computes.
 
 The whole applet lives in `examples/hello/`:
 

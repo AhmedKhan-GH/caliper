@@ -341,7 +341,10 @@ Host renders a filterable console panel; dev mode tails it. Sugar: `caliper::log
 // caliper/tensor.h — DLPack-aligned on purpose: torch/numpy/jax interop is a cast away.
 typedef enum { CALIPER_DT_F32=0, CALIPER_DT_F16, CALIPER_DT_BF16,
                CALIPER_DT_I64, CALIPER_DT_I32, CALIPER_DT_U8 } CaliperDType;
-typedef enum { CALIPER_DEV_CPU=0, CALIPER_DEV_CUDA, CALIPER_DEV_MPS } CaliperDeviceKind;
+/* Device kinds name the MEMORY/API DOMAIN, not a framework backend: METAL
+ * covers torch-MPS, MLX, and ggml-Metal alike (all unified-memory MTLBuffers).
+ * Renamed from the earlier MPS sketch before first shipping (Phase 2). */
+typedef enum { CALIPER_DEV_CPU=0, CALIPER_DEV_CUDA, CALIPER_DEV_METAL } CaliperDeviceKind;
 
 typedef struct CaliperTensor {
     uint32_t         struct_size;

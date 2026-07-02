@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.18...4.2)
 project(caliper CXX C OBJC)
 
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -152,11 +156,22 @@ add_library(caliper_host_lib STATIC
     src/host/negotiation.cpp
     src/host/crash_guard.cpp
     src/host/applet_loader.cpp
+    src/host/job_system.cpp
 )
 target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_host_lib
     PUBLIC caliper::sdk
     PRIVATE tomlplusplus::tomlplusplus)
+
+# Device query (caliper.device.v1): Metal-API-only on Apple, no ML framework
+# linked (D11). The Metal/Foundation frameworks flow PUBLIC so consumers of
+# caliper_host_lib (the caliper executable, the test binary) link them too.
+if(APPLE)
+    target_sources(caliper_host_lib PRIVATE src/host/device_query_apple.mm)
+    target_link_libraries(caliper_host_lib PUBLIC "-framework Metal" "-framework Foundation")
+else()
+    target_sources(caliper_host_lib PRIVATE src/host/device_query_stub.cpp)
+endif()
 set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
@@ -230,10 +245,12 @@ option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + SignalScop
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/hello)
     add_subdirectory(examples/signal_scope)
-    add_dependencies(caliper hello_applet signal_scope_applet)
+    add_subdirectory(examples/ml_scope)
+    add_dependencies(caliper hello_applet signal_scope_applet ml_scope_applet)
     list(APPEND _active_applet_libs
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}ml_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
 # Remove stale applet libraries left from previously deleted applets
