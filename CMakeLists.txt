@@ -216,6 +216,16 @@ foreach(dir ${applet_dirs})
     endif()
 endforeach()
 
+option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + SignalScope exemplar)" ON)
+if(CALIPER_BUILD_EXAMPLES)
+    add_subdirectory(examples/hello)
+    add_subdirectory(examples/signal_scope)
+    add_dependencies(caliper hello_applet signal_scope_applet)
+    list(APPEND _active_applet_libs
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+endif()
+
 # Remove stale applet libraries left from previously deleted applets
 file(GLOB _existing_applet_libs "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}*${CMAKE_SHARED_LIBRARY_SUFFIX}")
 foreach(lib ${_existing_applet_libs})

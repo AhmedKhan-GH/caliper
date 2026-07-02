@@ -33,21 +33,13 @@ Notes:
 
 ## Example
 
-<!-- TODO(T11): replace inline example with a --8<-- embed of examples/hello/hello.caliper.toml once it exists -->
+The canonical minimal manifest is the one shipped by the **hello** fixture
+applet (`examples/hello/`), embedded here verbatim so it can never drift from the
+source of truth:
 
 ```toml
-[applet]
-id = "dev.ahmed.circuitnet"
-name = "CircuitNet 3.0"
-version = "1.0.0"
-summary = "Gate-level circuit explorer"
-tag = "EDA"
-
-[compat]
-abi_epoch = 2
-min_host = "0.6.0"
-
-[services]
-required = ["caliper.ui.v1"]
-optional = ["caliper.log.v1"]
+--8<-- "examples/hello/hello.caliper.toml"
 ```
+
+See [tutorials/first-applet.md](../tutorials/first-applet.md) for a full walk of
+the applet this manifest belongs to.

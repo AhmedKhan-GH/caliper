@@ -1,0 +1,13 @@
+[applet]
+id      = "dev.caliper.hello"
+name    = "Hello"
+version = "0.1.0"
+summary = "Epoch-2 fixture applet: sugar demo + loader-test substrate."
+tag     = "Demo"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1"]

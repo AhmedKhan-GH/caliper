@@ -110,8 +110,9 @@ public:
             static const char* kNames[kMaxLeads] = {"lead I", "lead II", "lead III"};
             for (int k = 0; k < active_leads_; k++)
                 ImPlot::PlotLine(kNames[k], leads_[k].xs, leads_[k].ys,
-                                 leads_[k].count, 0, leads_[k].offset(),
-                                 sizeof(float));
+                                 leads_[k].count,
+                                 ImPlotSpec(ImPlotProp_Offset, leads_[k].offset(),
+                                            ImPlotProp_Stride, (int)sizeof(float)));
             ImPlot::EndPlot();
         }
 
