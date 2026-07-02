@@ -124,6 +124,23 @@ install(FILES
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
+# Host library: loader/negotiation logic, unit-testable without OpenGL.
+include(FetchContent)
+FetchContent_Declare(tomlplusplus
+    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+    GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(tomlplusplus)
+
+add_library(caliper_host_lib STATIC
+    src/host/applet_manifest.cpp
+)
+target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_host_lib
+    PUBLIC caliper::sdk
+    PRIVATE tomlplusplus::tomlplusplus)
+set_target_properties(caliper_host_lib PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Main Application (host)
 # ============================================================================
