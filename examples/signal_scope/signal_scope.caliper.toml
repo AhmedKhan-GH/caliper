@@ -1,0 +1,15 @@
+[applet]
+id      = "dev.caliper.signal-scope"
+name    = "SignalScope"
+version = "0.1.0"
+summary = "Exemplar applet: live multi-lead signal viewer showing every Caliper SDK idiom, including what not to do."
+tag     = "Demo"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1"]
+# Probed at runtime in on_init; absent on Phase-1 hosts, present from Phase 2.
+optional = ["caliper.metrics.v1"]
