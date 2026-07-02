@@ -9,5 +9,7 @@ tag     = "ECG"
 abi_epoch = 2
 min_host  = "0.6.0"
 
+# tensor_bridge.v1 required since Phase 2D: viz heatmaps upload through the
+# bridge (raw GL removed) — it cannot render the activation/weight views without it.
 [services]
-required = ["caliper.ui.v1", "caliper.log.v1"]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.tensor_bridge.v1"]

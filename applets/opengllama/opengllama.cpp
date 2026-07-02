@@ -3,7 +3,6 @@
 #include <imgui.h>
 #include <implot.h>
 #include <ImGuiFileDialog.h>
-#include <GL/glew.h>
 #include <llama.h>
 #include <ggml.h>
 #include <ggml-backend.h>
@@ -133,7 +132,8 @@ OpenGllamaApplet::OpenGllamaApplet() = default;
 
 OpenGllamaApplet::~OpenGllamaApplet() { cleanup(); }
 
-bool OpenGllamaApplet::initialize() {
+bool OpenGllamaApplet::initialize(caliper::Bridge bridge) {
+    bridge_ = bridge;
     llama_backend_init();
     return true;
 }
@@ -144,6 +144,14 @@ void OpenGllamaApplet::cleanup() {
     if (inference_thread_.joinable()) inference_thread_.join();
     if (load_thread_.joinable()) load_thread_.join();
     unload_model();
+
+    // Bridge textures are frame-thread-owned; the frame loop is stopped by the
+    // time on_cleanup runs, so release here before the host tears the renderer
+    // down (mirrors ML-EXEMPLAR 7's release-in-cleanup).
+    if (ctx_text_heatmap_tex_) {
+        bridge_.release_texture(ctx_text_heatmap_tex_);
+        ctx_text_heatmap_tex_ = 0;
+    }
 
     llama_backend_free();
 }
@@ -656,26 +664,45 @@ void OpenGllamaApplet::draw_inference_view() {
                         }
                     }
 
-                    if (ctx_text_heatmap_tex_)
-                        glDeleteTextures(1, &ctx_text_heatmap_tex_);
-                    GLuint tex;
-                    glGenTextures(1, &tex);
-                    glBindTexture(GL_TEXTURE_2D, tex);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_w, tex_h, 0,
-                                 GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-                    glBindTexture(GL_TEXTURE_2D, 0);
-                    ctx_text_heatmap_tex_ = tex;
+                    // Mirror the composed RGBA8 buffer as a (H,W,4) u8 CPU
+                    // tensor onto caliper.tensor_bridge.v1. C-ABI-direct idiom
+                    // (no torch here): fill the descriptor by hand. All heatmap
+                    // modes reach this one upload path — they change the PIXELS
+                    // above, not how the texture is created. Create once, then
+                    // update in place while the size is stable; the layout can
+                    // change (reflow / growth), so recreate when it does.
+                    CaliperTensor ct{};
+                    ct.struct_size  = sizeof(CaliperTensor);
+                    ct.data         = pixels.data();
+                    ct.dtype        = CALIPER_DT_U8;
+                    ct.ndim         = 3;
+                    ct.shape[0]     = tex_h;
+                    ct.shape[1]     = tex_w;
+                    ct.shape[2]     = 4;
+                    ct.strides[0]   = (int64_t)tex_w * 4;  // elements, row-major
+                    ct.strides[1]   = 4;
+                    ct.strides[2]   = 1;
+                    ct.device       = CALIPER_DEV_CPU;
+                    ct.device_index = 0;
+                    ct.stream       = nullptr;
+
+                    bool same_size = ctx_text_heatmap_tex_
+                        && tex_w == ctx_text_heatmap_tex_w_
+                        && tex_h == ctx_text_heatmap_tex_h_;
+                    if (same_size) {
+                        bridge_.update_texture(ctx_text_heatmap_tex_, &ct);
+                    } else {
+                        if (ctx_text_heatmap_tex_)
+                            bridge_.release_texture(ctx_text_heatmap_tex_);
+                        ctx_text_heatmap_tex_ = bridge_.texture_from_tensor(&ct, 0);
+                    }
                     ctx_text_heatmap_tex_w_ = tex_w;
                     ctx_text_heatmap_tex_h_ = tex_h;
                 }
 
                 if (ctx_text_heatmap_tex_ && !ctx_text_layout_.empty()) {
                     ImVec2 origin = ImGui::GetCursorScreenPos();
-                    ImGui::Image((ImTextureID)(intptr_t)ctx_text_heatmap_tex_,
+                    ImGui::Image(caliper::Bridge::imtex(ctx_text_heatmap_tex_),
                                  ImVec2((float)ctx_text_heatmap_tex_w_, (float)ctx_text_heatmap_tex_h_));
 
                     if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))

@@ -132,3 +132,40 @@ green (C5/C8).
 4. **No frame hitching.** With kernel textures updating every eval cadence point,
    the **Runs dashboard keeps streaming** its loss/accuracy curves smoothly — no
    frame hitching from the uploads.
+
+### Phase-2D additions (bridge-native applets, Metal default)
+
+Phase 2D moved the last raw-GL applets onto the bridge and flipped the macOS
+default renderer to Metal. The `grep -rn 'glGenTextures\|glTexImage\|glDeleteTextures\|glBindTexture' applets/`
+sweep (§6c) is now **empty** — every applet texture crosses as a
+`CaliperTextureId`. These checks extend the demo:
+
+5. **OpenGllama heatmaps (bridge-native).** Open **OpenGllama**, load a GGUF
+   model, run a generation. Switch the context-heatmap mode through **EMA
+   (decay) / Max / Recent / Final Layer / Single Layer** — every mode renders
+   the attention overlay over the context text. All modes change the *composed
+   RGBA pixels* and reach the **one** bridge upload path (create-once, then
+   `update_texture` in place; recreate only when the text reflows and the size
+   changes). The applet issues no raw GL — `tensor_bridge.v1` is now a
+   **required** service (an unmet requirement leaves the card unavailable rather
+   than crashing).
+6. **RepNet viz tabs.** Open **repnet_demo**; the **Model** tab's weight/kernel
+   heatmaps and the per-lead detail views render through the same bridge upload
+   (RdBu/diverging colormap composed to RGBA8, then `texture_from_tensor`). The
+   tabs recompose-then-reupload on dirty (a release-then-create path), and switch
+   without artifacts.
+7. **MLScope real-data panel.** In MLScope, start training and watch the
+   real-data panel: a **fixed probe digit** (t10k[0]) rendered VIRIDIS on the
+   left with its **conv1 8× (26,26) feature maps** in a 4×2 grid on the right.
+   The maps **sharpen live** across the run as conv1 learns, and the caption
+   reads **`pred N / true N`** (green when they agree). The probe reuses the same
+   worker-snapshot frame the kernel grid does — no extra bridge calls off the
+   frame thread.
+8. **Default-flip expectations.** A **bare** `./build/caliper` launches on
+   **Metal** (macOS default; the startup line prints `[renderer] metal`). One
+   honest consequence: the landing-page 3D background (`IntroScreen`, still raw
+   GL) is **absent** on Metal — you get the plain app shell, cards and launch
+   flow intact. Relaunch with `CALIPER_RENDERER=gl` for the **full landing**
+   (animated 3D backdrop) on the frozen GL fallback; every applet above renders
+   identically on both backends — only where the bridge stages the pixels
+   differs.

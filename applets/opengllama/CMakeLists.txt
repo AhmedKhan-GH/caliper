@@ -22,7 +22,6 @@ target_link_libraries(opengllama PRIVATE
     caliper::ui_stack
     caliper_app_paths
     llama
-    libglew_static
     cpp-httplib
 )
 

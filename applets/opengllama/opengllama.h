@@ -7,6 +7,8 @@
 #include <mutex>
 #include <functional>
 
+#include <caliper/caliper.hpp>
+
 #include "ollama_models.h"
 #include "ollama_server.h"
 #include "model_profiles.h"
@@ -19,7 +21,7 @@ public:
     OpenGllamaApplet();
     ~OpenGllamaApplet();
 
-    bool initialize();
+    bool initialize(caliper::Bridge bridge);
     void draw_ui(int width, int height);
     void cleanup();
 
@@ -93,8 +95,12 @@ private:
     std::vector<std::string> context_tokens_;
     std::atomic<bool> context_map_dirty_{false};
 
-    // Text heatmap: GL texture baked to match paragraph layout
-    unsigned int ctx_text_heatmap_tex_ = 0;
+    // caliper.tensor_bridge.v1 handle — heatmaps are bridge-native since
+    // Phase 2D (§6c grandfather expired); acquired from the adapter in on_init.
+    caliper::Bridge bridge_;
+
+    // Text heatmap: bridge texture baked to match paragraph layout
+    CaliperTextureId ctx_text_heatmap_tex_ = 0;
     int ctx_text_heatmap_tex_w_ = 0;
     int ctx_text_heatmap_tex_h_ = 0;
     int ctx_text_heatmap_n_ctx_ = 0;

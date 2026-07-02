@@ -19,7 +19,6 @@
 #include <fstream>
 #include <sstream>
 
-#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <implot.h>
@@ -276,8 +275,10 @@ static void colormap(float t, uint8_t& r, uint8_t& g, uint8_t& b, bool diverging
     }
 }
 
-static GLuint upload_texture(const torch::Tensor& data_2d, bool diverging = true,
-                             bool log_scale = false) {
+static CaliperTextureId upload_texture(const caliper::Bridge& bridge,
+                                       const torch::Tensor& data_2d,
+                                       bool diverging = true,
+                                       bool log_scale = false) {
     auto data = data_2d.detach().contiguous().to(torch::kCPU, torch::kFloat);
     int rows = (int)data.size(0);
     int cols = (int)data.size(1);
@@ -320,21 +321,32 @@ static GLuint upload_texture(const torch::Tensor& data_2d, bool diverging = true
         }
     }
 
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, cols, rows, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    return tex;
+    // Mirror the composed RGBA8 buffer as a (H,W,4) u8 CPU tensor onto
+    // caliper.tensor_bridge.v1. C-ABI-direct idiom (no torch tensor here): fill
+    // the descriptor by hand. These viz textures are always recomposed fresh —
+    // callers release then re-upload on dirty — so this is a create-once path.
+    CaliperTensor ct{};
+    ct.struct_size  = sizeof(CaliperTensor);
+    ct.data         = px.data();
+    ct.dtype        = CALIPER_DT_U8;
+    ct.ndim         = 3;
+    ct.shape[0]     = rows;
+    ct.shape[1]     = cols;
+    ct.shape[2]     = 4;
+    ct.strides[0]   = (int64_t)cols * 4;   // elements, row-major
+    ct.strides[1]   = 4;
+    ct.strides[2]   = 1;
+    ct.device       = CALIPER_DEV_CPU;
+    ct.device_index = 0;
+    ct.stream       = nullptr;
+
+    return bridge.texture_from_tensor(&ct, 0);
 }
 
-static void release_textures(std::vector<GLuint>& texs) {
+static void release_textures(const caliper::Bridge& bridge,
+                             std::vector<CaliperTextureId>& texs) {
     for (auto& t : texs) {
-        if (t) { glDeleteTextures(1, &t); t = 0; }
+        if (t) { bridge.release_texture(t); t = 0; }
     }
 }
 
@@ -535,7 +547,7 @@ struct PreviewSnapshot {
 struct WeightEntry {
     std::string label;
     torch::Tensor tensor;
-    GLuint tex = 0;
+    CaliperTextureId tex = 0;
 };
 
 struct RepNetDemoApplet::State {
@@ -603,7 +615,7 @@ struct RepNetDemoApplet::State {
 
     // ── Activation detail view ──
     std::vector<torch::Tensor> detail_acts;   // per-node (batch squeezed)
-    std::vector<GLuint> detail_texs;          // cached heatmap textures
+    std::vector<CaliperTextureId> detail_texs; // cached heatmap textures
     int detail_sample_idx = -1;
     int detail_lead = 0;
     int detail_lead_cached = -1;
@@ -675,7 +687,8 @@ RepNetDemoApplet::~RepNetDemoApplet() = default;
 static void extract_weights(torch::jit::Module& model,
                             std::vector<WeightEntry>& out);
 
-bool RepNetDemoApplet::initialize() {
+bool RepNetDemoApplet::initialize(caliper::Bridge bridge) {
+    bridge_ = bridge;
     s_ = std::make_unique<State>();
     s_->training_lab = std::make_unique<TrainingLabTab>();
 
@@ -721,9 +734,9 @@ bool RepNetDemoApplet::initialize() {
 
 void RepNetDemoApplet::cleanup() {
     if (!s_) return;
-    heatmap::release_textures(s_->detail_texs);
+    heatmap::release_textures(bridge_, s_->detail_texs);
     for (auto& w : s_->weight_entries)
-        if (w.tex) { glDeleteTextures(1, &w.tex); w.tex = 0; }
+        if (w.tex) { bridge_.release_texture(w.tex); w.tex = 0; }
     s_->bg.reset();
     if (s_->scan_thread.joinable()) s_->scan_thread.join();
     s_->con.reset();
@@ -1913,7 +1926,7 @@ void RepNetDemoApplet::draw_activation_detail() {
 
     // ── Regenerate textures if needed ──
     if (s.detail_texs_dirty || s.detail_lead_cached != s.detail_lead) {
-        heatmap::release_textures(s.detail_texs);
+        heatmap::release_textures(bridge_, s.detail_texs);
         s.detail_texs.clear();
         s.detail_texs.resize(9, 0);
 
@@ -1948,7 +1961,7 @@ void RepNetDemoApplet::draw_activation_detail() {
 
             bool diverging = (i == 0);
             bool log_scale = (i == 0);
-            s.detail_texs[i] = heatmap::upload_texture(t2d, diverging, log_scale);
+            s.detail_texs[i] = heatmap::upload_texture(bridge_, t2d, diverging, log_scale);
         }
 
         s.detail_texs_dirty = false;
@@ -2057,7 +2070,7 @@ void RepNetDemoApplet::draw_activation_detail() {
 
                 if (s.detail_texs[0]) {
                     ImPlot::PlotImage("##sal",
-                        (ImTextureID)(intptr_t)s.detail_texs[0],
+                        caliper::Bridge::imtex(s.detail_texs[0]),
                         ImPlotPoint(0, y_hi), ImPlotPoint(duration, y_lo),
                         ImVec2(0, 0), ImVec2(1, 1),
                         ImVec4(1, 1, 1, 0.45f));
@@ -2094,7 +2107,7 @@ void RepNetDemoApplet::draw_activation_detail() {
                     ImPlot::SetupAxisLimits(ImAxis_Y1, 0, rows, ImGuiCond_Always);
 
                     ImPlot::PlotImage("##hm",
-                        (ImTextureID)(intptr_t)s.detail_texs[li],
+                        caliper::Bridge::imtex(s.detail_texs[li]),
                         ImPlotPoint(0, rows), ImPlotPoint(duration, 0));
 
                     ImPlot::Annotation(0.0, (double)rows, ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
@@ -2230,7 +2243,7 @@ void RepNetDemoApplet::draw_activation_detail() {
         if (s.detail_texs[i]) {
             int rows = (int)t2d.size(0);
             float hm_h = (rows <= 2) ? 32.0f : std::min(100.0f, (float)rows * 4.0f);
-            ImGui::Image((ImTextureID)(intptr_t)s.detail_texs[i],
+            ImGui::Image(caliper::Bridge::imtex(s.detail_texs[i]),
                          ImVec2(hm_w, hm_h));
         }
 
@@ -2278,7 +2291,7 @@ void RepNetDemoApplet::draw_weight_view() {
         float wstd = t.std().item<float>();
 
         if (!w.tex)
-            w.tex = heatmap::upload_texture(t, true);
+            w.tex = heatmap::upload_texture(bridge_, t, true);
 
         ImGui::TextColored({0.85f, 0.75f, 1.0f, 1.0f}, "%s", w.label.c_str());
         ImGui::SameLine();
@@ -2296,7 +2309,7 @@ void RepNetDemoApplet::draw_weight_view() {
             else
                 hm_h = std::min(200.0f, (float)rows * 1.5f);
 
-            ImGui::Image((ImTextureID)(intptr_t)w.tex, ImVec2(hm_w, hm_h));
+            ImGui::Image(caliper::Bridge::imtex(w.tex), ImVec2(hm_w, hm_h));
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
             ImVec2 lp = ImGui::GetCursorScreenPos();

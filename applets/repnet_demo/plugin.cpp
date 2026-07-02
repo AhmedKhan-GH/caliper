@@ -4,8 +4,7 @@
 class RepNetDemoPlugin final : public caliper::Applet {
 public:
     bool on_init(caliper::Host& host) override {
-        (void)host;
-        return impl_.initialize();
+        return impl_.initialize(caliper::Bridge(host));
     }
     void on_frame(const caliper::Frame& f) override {
         impl_.draw_ui(f.fb_width, f.fb_height);
@@ -24,4 +23,6 @@ CALIPER_APPLET(RepNetDemoPlugin,
                 "preprocessing, inspect raw data via DuckDB, and run model "
                 "inference on ECG recordings.",
     .tag      = "ECG",
-    .services = {CALIPER_UI_V1, CALIPER_LOG_V1})
+    // tensor_bridge.v1 required since Phase 2D: viz heatmaps (activation
+    // detail + weight views) upload through the bridge, so raw GL is gone.
+    .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_TENSOR_BRIDGE_V1})
