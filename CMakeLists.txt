@@ -215,3 +215,8 @@ message(STATUS "  MPS Support: ${USE_MPS}")
 message(STATUS "  Parallel Jobs: ${N}")
 message(STATUS "========================================")
 message(STATUS "")
+
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
