@@ -23,24 +23,31 @@ API (PLATFORM.md §5.4 discussion).
 
 | Backend | Selection | Status | Notes |
 |---------|-----------|--------|-------|
-| **OpenGL 3.3 core** | default | **Shipping default** | The frozen fallback; `tensor_bridge.v1` CPU-stages onto it. |
-| **Metal** | `CALIPER_RENDERER=metal` | **Preview** | Full app parity; `tensor_bridge.v1` colormaps MPS buffers on-GPU (zero CPU staging), §16 pixel-exact (C5). Apple-only translation unit. |
+| **Metal** | default (macOS) | **Shipping default** | Full app parity; `tensor_bridge.v1` colormaps MPS buffers on-GPU (zero CPU staging), §16 pixel-exact (C5). Apple-only translation unit. |
+| **OpenGL 3.3 core** | `CALIPER_RENDERER=gl` | **Frozen fallback** | The retained escape hatch; `tensor_bridge.v1` CPU-stages onto it. The only backend off Apple. |
 
 `main.cpp` does the env-driven selection between two factories
-(`make_renderer("gl"|"metal")` and `make_metal_renderer()`); if the Metal backend
-fails to init it falls back to GL.
+(`make_renderer("gl")` and `make_metal_renderer()`): on macOS the default is
+Metal and `CALIPER_RENDERER=gl` selects the frozen GL fallback; if the Metal
+backend fails to init it still falls back to GL.
 
-### Why GL is still the default
+### Why Metal is now the default
 
-GL stays the default **until the opengllama migration gates the flip**. The
-ratified Phase-2 sequencing (PLATFORM.md §17, ratified 2026-07-01) makes this a
-hard dependency: opengllama sheds its grandfathered raw-GL heatmaps onto
-`texture_from_tensor_mapped` (the bridge's first non-torch consumer — ggml/llama.cpp
-Metal buffers), and **the host's default macOS backend flips GL→Metal only after
-that step**. A raw-GL applet cannot run in a Metal-backed host, so the §6c
-grandfather clause expires there by necessity. Until then Metal is opt-in via the
-env var, and both backends are kept honest by the same §16 pixel-exact test
-matrix run per backend.
+Metal became the macOS default once the **opengllama migration cleared the flip
+gate**. The ratified Phase-2 sequencing (PLATFORM.md §17, ratified 2026-07-01)
+made this a hard dependency: opengllama shed its grandfathered raw-GL heatmaps
+onto `texture_from_tensor_mapped` (the bridge's first non-torch consumer —
+ggml/llama.cpp Metal buffers), leaving zero raw-GL applets. A raw-GL applet
+cannot run in a Metal-backed host, so the §6c grandfather clause expired there by
+necessity, and **the host's default macOS backend flipped GL→Metal**. Both
+backends stay honest under the same §16 pixel-exact test matrix run per backend.
+
+One honest gap: the landing-page 3D background (`IntroScreen`) is still raw GL,
+so it is absent on Metal — you get the plain app shell instead of the animated
+backdrop. The cards, launch flow, and dashboards are unaffected and behave
+identically on both backends. Restoring the 3D landing on Metal is tracked as the
+intro 2D-migration follow-up in the Phase-2 plan notes; until then it renders
+only under `CALIPER_RENDERER=gl`.
 
 ## The pixel-space contract, recapped
 

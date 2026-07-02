@@ -42,14 +42,16 @@ public:
         }
 
         // Renderer seam (PLATFORM.md §5.4): backend hints run before the
-        // window exists; init() runs after. CALIPER_RENDERER=metal selects the
-        // Metal backend (Apple only); GL stays the default until the 2D flip.
+        // window exists; init() runs after. On Apple the default is now Metal
+        // (device-resident tensors, zero CPU staging) — the opengllama migration
+        // retired the last raw-GL applet, clearing the flip gate. CALIPER_RENDERER=gl
+        // selects the frozen GL fallback; off Apple, GL is the only backend.
         const char* want = std::getenv("CALIPER_RENDERER");
-        bool want_metal = want && std::strcmp(want, "metal") == 0;
+        bool want_gl = want && std::strcmp(want, "gl") == 0;
 #ifdef __APPLE__
-        if (want_metal) renderer_ = caliper_host::make_metal_renderer();
+        if (!want_gl) renderer_ = caliper_host::make_metal_renderer();
 #else
-        (void)want_metal;
+        (void)want_gl;
 #endif
         if (!renderer_) renderer_ = caliper_host::make_renderer("gl");
 
