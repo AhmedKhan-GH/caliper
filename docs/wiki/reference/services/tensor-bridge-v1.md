@@ -169,3 +169,46 @@ sweep (§6c) is now **empty** — every applet texture crosses as a
    (animated 3D backdrop) on the frozen GL fallback; every applet above renders
    identically on both backends — only where the bridge stages the pixels
    differs.
+
+### Phase-2E′ additions (GPTScope, the flagship)
+
+Phase 2E′ shipped **GPTScope** — a char-level mini-GPT trained live on
+TinyShakespeare, built entirely on the public service stack. These checks are the
+flagship's live-visual acceptance demo (the machine verification — build green,
+full `ctest` + `caliper_gfx_tests` + torch-label suites, both renderers headless
+for 10s — is green):
+
+9. **Sample-evolution arc.** Open **GPTScope**, click *start*. The TinyShakespeare
+   corpus **downloads once** into the data dir (cached forever; a second run is
+   offline-clean), then training begins. Train loss **falls**, and the live sample
+   panel **evolves from gibberish → words → Shakespearean cadence** across the
+   ~3-minute run. The **val perplexity** readout beside the loss plot
+   (`exp(val_loss)`) drops alongside.
+10. **Attention grid, live.** The per-head attention panel shows the selected
+    layer's **4 heads** as VIRIDIS heatmaps (per-head vmax) over a fixed val
+    excerpt, refreshing every eval cadence — the heads **sharpen** as the net
+    learns. Switching **layer L0–L3** repoints the snapshot (the map updates one
+    eval tick after the click). **Hovering** a map highlights the excerpt's
+    **source char (row, cyan)** and **target char (col, amber)** — the touch that
+    makes attention legible. The status line reads **GPU-resident (Metal, zero CPU
+    staging)** on Metal, **CPU-staged (GL fallback)** on GL.
+11. **Temperature control.** Drag the **temperature slider** (0.2–1.5); the next
+    sample's character changes — **lower is greedier/sharper/more repetitive,
+    higher looser/more diverse** (the worker reads the live value at each sample
+    tick, so the change lands on the following sample).
+12. **Cancel / relaunch clean.** Cancel partway (or relaunch mid-run): the last
+    loss curve, sample, and attention grid **persist**, with **no crash** —
+    textures release on the frame thread after the bounded job wait.
+13. **Runs dashboard.** The GPTScope run appears in the **Runs dashboard**
+    (train/loss, val/loss) **alongside MLScope history** — the same optional
+    `caliper.metrics.v1` path, streaming smoothly with no frame hitching from the
+    attention uploads.
+14. **Both renderers.** All of the above renders identically on **Metal**
+    (`CALIPER_RENDERER=metal`) and the default **GL** fallback — same applet code,
+    only where the bridge stages the pixels differs.
+
+!!! note "Deferred by design: checkpoint save"
+    GPTScope's *save checkpoint* button is **disabled** with a tooltip saying it
+    arrives with `caliper.artifacts.v1`. That is the honest placeholder for the
+    D16 demand-driven clause — checkpointing is the first real demand for an
+    artifacts service, not something faked here.

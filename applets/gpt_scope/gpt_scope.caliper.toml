@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.gpt-scope"
+name    = "GPTScope"
+version = "0.1.0"
+summary = "Flagship: a nanoGPT-style char-level transformer trained on TinyShakespeare off the frame thread via caliper.jobs.v1, device-negotiated, with live train/val loss and a live text sample. metrics.v1 streams the run; tensor_bridge.v1 is probed for the E2 attention panel."
+tag     = "LLM"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.metrics.v1", "caliper.tensor_bridge.v1"]
