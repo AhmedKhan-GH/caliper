@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.18)
+project(sdk_install_probe CXX)
+find_package(caliper-sdk 0.1 CONFIG REQUIRED)
+add_library(probe STATIC probe.cpp)
+target_link_libraries(probe PRIVATE caliper::sdk)
+set_target_properties(probe PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
