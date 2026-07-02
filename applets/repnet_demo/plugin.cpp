@@ -1,45 +1,27 @@
-#include <caliper/abi_v1.h>
+#include <caliper/caliper.hpp>
 #include "repnet_demo.h"
 
-#include <imgui.h>
-#include <implot.h>
-#include <implot3d.h>
+class RepNetDemoPlugin final : public caliper::Applet {
+public:
+    bool on_init(caliper::Host& host) override {
+        (void)host;
+        return impl_.initialize();
+    }
+    void on_frame(const caliper::Frame& f) override {
+        impl_.draw_ui(f.fb_width, f.fb_height);
+    }
+    void on_cleanup() override { impl_.cleanup(); }
 
-extern "C" {
+private:
+    RepNetDemoApplet impl_;
+};
 
-APPLET_API CaliperAppletInfo applet_info() {
-    return {
-        "RepNet Demo",
-        "1.0",
-        "Load and visualize the UCDH Senior Design dataset, run "
-        "signal preprocessing, inspect raw data via DuckDB, and "
-        "run model inference on ECG recordings.",
-        "ECG",
-        CALIPER_APPLET_ABI
-    };
-}
-
-APPLET_API void* applet_create() {
-    return new RepNetDemoApplet();
-}
-
-APPLET_API void applet_destroy(void* ctx) {
-    delete static_cast<RepNetDemoApplet*>(ctx);
-}
-
-APPLET_API bool applet_initialize(void* ctx, const CaliperHostContext* host) {
-    ImGui::SetCurrentContext(host->imgui);
-    ImPlot::SetCurrentContext(host->implot);
-    ImPlot3D::SetCurrentContext(host->implot3d);
-    return static_cast<RepNetDemoApplet*>(ctx)->initialize();
-}
-
-APPLET_API void applet_draw_ui(void* ctx, int w, int h) {
-    static_cast<RepNetDemoApplet*>(ctx)->draw_ui(w, h);
-}
-
-APPLET_API void applet_cleanup(void* ctx) {
-    static_cast<RepNetDemoApplet*>(ctx)->cleanup();
-}
-
-} // extern "C"
+CALIPER_APPLET(RepNetDemoPlugin,
+    .id       = "dev.ahmed.repnet-demo",
+    .version  = "1.0.0",
+    .name     = "RepNet Demo",
+    .summary  = "Load and visualize the UCDH Senior Design dataset, run signal "
+                "preprocessing, inspect raw data via DuckDB, and run model "
+                "inference on ECG recordings.",
+    .tag      = "ECG",
+    .services = {CALIPER_UI_V1, CALIPER_LOG_V1})

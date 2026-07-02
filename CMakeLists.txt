@@ -19,8 +19,15 @@ endif()
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# Force static runtime library for all targets to match DuckDB
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# PLATFORM.md D7: dynamic CRT so host + applet DLLs share one heap. DuckDB
+# under /MD is unverified until the first Windows session — CALIPER_STATIC_CRT
+# is the escape hatch if it breaks.
+option(CALIPER_STATIC_CRT "Use static MSVC runtime (/MT) — pre-D7 behavior" OFF)
+if(CALIPER_STATIC_CRT)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
 set(BUILD_SHARED_LIBS OFF)
 
 # CUDA enabled
@@ -124,6 +131,33 @@ install(FILES
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
+# Fixture host for TDD of applets/sugar (ships in the SDK at Phase 3).
+add_library(caliper_sdk_testing INTERFACE)
+add_library(caliper::sdk_testing ALIAS caliper_sdk_testing)
+target_include_directories(caliper_sdk_testing INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/sdk/testing>)
+target_link_libraries(caliper_sdk_testing INTERFACE caliper::sdk)
+
+# Host library: loader/negotiation logic, unit-testable without OpenGL.
+include(FetchContent)
+FetchContent_Declare(tomlplusplus
+    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+    GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(tomlplusplus)
+
+add_library(caliper_host_lib STATIC
+    src/host/applet_manifest.cpp
+    src/host/negotiation.cpp
+    src/host/crash_guard.cpp
+    src/host/applet_loader.cpp
+)
+target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_host_lib
+    PUBLIC caliper::sdk
+    PRIVATE tomlplusplus::tomlplusplus)
+set_target_properties(caliper_host_lib PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Main Application (host)
 # ============================================================================
@@ -131,12 +165,12 @@ install(FILES
 add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
-    src/applet_host.cpp
+    src/host/host_services.cpp
     src/app_paths.cpp
 )
 
 # Host links UI libs + platform libs (no DuckDB, no LibTorch)
-target_link_libraries(caliper PRIVATE ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE caliper_host_lib caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
@@ -190,6 +224,16 @@ foreach(dir ${applet_dirs})
     endif()
 endforeach()
 
+option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + SignalScope exemplar)" ON)
+if(CALIPER_BUILD_EXAMPLES)
+    add_subdirectory(examples/hello)
+    add_subdirectory(examples/signal_scope)
+    add_dependencies(caliper hello_applet signal_scope_applet)
+    list(APPEND _active_applet_libs
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+endif()
+
 # Remove stale applet libraries left from previously deleted applets
 file(GLOB _existing_applet_libs "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}*${CMAKE_SHARED_LIBRARY_SUFFIX}")
 foreach(lib ${_existing_applet_libs})
@@ -215,3 +259,8 @@ message(STATUS "  MPS Support: ${USE_MPS}")
 message(STATUS "  Parallel Jobs: ${N}")
 message(STATUS "========================================")
 message(STATUS "")
+
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

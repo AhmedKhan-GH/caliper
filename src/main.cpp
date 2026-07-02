@@ -8,7 +8,10 @@
 #include <implot3d.h>
 
 #include "intro_screen.h"
-#include "applet_host.h"
+#include "host/applet_loader.h"
+#include "host/host_services.h"
+#include "host/host_version.h"
+#include "host/frame_watchdog.h"
 #include "app_paths.h"
 
 #include <filesystem>
@@ -70,6 +73,7 @@ public:
 
         ImGui_ImplGlfw_InitForOpenGL(window_, true);
         ImGui_ImplOpenGL3_Init("#version 330");
+        caliper_host::services_init();
 
         if (!intro_.initialize()) {
             std::cerr << "Intro screen init failed" << std::endl;
@@ -78,7 +82,7 @@ public:
 
         // Scan for applet shared libraries
         std::string applets_dir = caliper::app_data_path("applets");
-        host_.scan(applets_dir);
+        loader_.scan(applets_dir);
 
         // Also scan applets next to the executable (dev + prod)
         {
@@ -98,19 +102,19 @@ public:
                           .parent_path().string();
 #endif
             if (!exe_dir.empty())
-                host_.scan((fs::path(exe_dir) / "applets").string());
+                loader_.scan((fs::path(exe_dir) / "applets").string());
         }
 
         // Populate intro screen cards from loaded applets
         std::vector<AppletCard> cards;
-        for (int i = 0; i < host_.count(); i++) {
-            auto& info = host_[i].info;
-            cards.push_back({
-                info.name ? info.name : "",
-                info.description ? info.description : "",
-                info.description ? info.description : "",
-                info.tag ? info.tag : "",
-            });
+        for (int i = 0; i < loader_.count(); i++) {
+            const auto& e = loader_.at(i);
+            std::string desc = e.manifest.summary;
+            if (e.status != caliper_host::AppletStatus::Ready &&
+                e.status != caliper_host::AppletStatus::Active)
+                desc = "[unavailable] " + e.status_text + "\n\n" + desc;
+            cards.push_back({e.manifest.name, e.manifest.summary, desc,
+                             e.manifest.tag});
         }
         intro_.set_applets(std::move(cards));
 
@@ -141,18 +145,22 @@ public:
                 if (intro_.should_launch()) {
                     intro_.reset_launch_flag();
                     int idx = intro_.selected_index();
-                    if (idx >= 0 && idx < host_.count()) {
-                        CaliperHostContext ctx{};
-                        ctx.imgui    = ImGui::GetCurrentContext();
-                        ctx.implot   = ImPlot::GetCurrentContext();
-                        ctx.implot3d = ImPlot3D::GetCurrentContext();
-                        ctx.data_dir = caliper::app_data_dir().c_str();
-
-                        if (host_.launch(idx, ctx)) {
+                    if (idx >= 0 && idx < loader_.count()) {
+                        CaliperHost proto{};
+                        proto.struct_size  = sizeof(CaliperHost);
+                        proto.abi_epoch    = 2;
+                        proto.host_version = caliper_host::kHostVersionU32;
+                        proto.applet_data_dir = nullptr;   // loader fills per-applet
+                        proto.get_service = [](const CaliperHost*, const char* id) {
+                            return caliper_host::services_get(id);
+                        };
+                        if (loader_.launch(idx, proto)) {
                             active_applet_ = idx;
+                            watchdog_.reset();
+                            last_frame_time_ = glfwGetTime();
                             page_ = AppPage::Applet;
                             glfwSetWindowTitle(window_,
-                                ("Caliper - " + std::string(host_[idx].info.name)).c_str());
+                                ("Caliper - " + loader_.at(idx).manifest.name).c_str());
                         }
                     }
                 }
@@ -162,17 +170,49 @@ public:
                 if (ImGui::BeginMainMenuBar()) {
                     if (ImGui::MenuItem("< Home")) go_back = true;
                     ImGui::Separator();
-                    ImGui::TextDisabled("%s", host_[active_applet_].info.name);
+                    ImGui::TextDisabled("%s",
+                        loader_.at(active_applet_).manifest.name.c_str());
+                    if (watchdog_.flagged()) {
+                        ImGui::Separator();
+                        ImGui::TextColored({1.0f, 0.6f, 0.2f, 1.0f},
+                            "slow: long work belongs in background jobs");
+                    }
                     ImGui::EndMainMenuBar();
                 }
 
-                host_.draw(active_applet_, dw, dh);
+                double now = glfwGetTime();
+                int ww = 0, wh = 0;
+                glfwGetWindowSize(window_, &ww, &wh);
+                CaliperFrameInfo fi{};
+                fi.struct_size = sizeof fi;
+                fi.fb_width = dw; fi.fb_height = dh;              // physical px
+                fi.dpi_scale = (ww > 0) ? (float)dw / (float)ww : 1.0f;
+                fi.time_sec = now;
+                fi.delta_sec = now - last_frame_time_;
+                last_frame_time_ = now;
+
+                double t0 = glfwGetTime();
+                bool alive = loader_.frame(active_applet_, fi);
+                watchdog_.feed((glfwGetTime() - t0) * 1000.0);
+
+                if (!alive) go_back = true;   // quarantined mid-frame
 
                 if (go_back) {
-                    host_.teardown(active_applet_);
+                    loader_.teardown(active_applet_);
                     active_applet_ = -1;
                     page_ = AppPage::Landing;
                     glfwSetWindowTitle(window_, "Caliper");
+                    // refresh cards so refusal/quarantine text shows up
+                    std::vector<AppletCard> cards;
+                    for (int i = 0; i < loader_.count(); i++) {
+                        const auto& e = loader_.at(i);
+                        std::string desc = e.manifest.summary;
+                        if (e.status != caliper_host::AppletStatus::Ready)
+                            desc = "[unavailable] " + e.status_text + "\n\n" + desc;
+                        cards.push_back({e.manifest.name, e.manifest.summary,
+                                         desc, e.manifest.tag});
+                    }
+                    intro_.set_applets(std::move(cards));
                 }
             }
 
@@ -184,7 +224,7 @@ public:
     }
 
     void cleanup() {
-        host_.close_all();
+        loader_.close_all();
         intro_.cleanup();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -224,8 +264,13 @@ private:
     GLFWwindow* window_ = nullptr;
     AppPage page_ = AppPage::Landing;
     IntroScreen intro_;
-    AppletHost host_;
+    caliper_host::AppletLoader loader_{
+        caliper_host::HostCaps{2, caliper_host::kHostVersionStr,
+                               caliper_host::service_ids()},
+        caliper::app_data_path("data")};
+    caliper_host::FrameWatchdog watchdog_;
     int active_applet_ = -1;
+    double last_frame_time_ = 0.0;
 };
 
 int main() {

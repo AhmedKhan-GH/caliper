@@ -1,3 +1,8 @@
+> **Superseded (Phase 1, PLATFORM.md §17):** applets now use ABI epoch 2 —
+> `caliper_applet_descriptor()` + `CALIPER_APPLET` macro + `<name>.caliper.toml`
+> manifest. See `examples/hello/` for the canonical minimal applet. The v1
+> `applet_info`/six-function ABI described below no longer exists.
+
 # Creating Applets for Caliper
 
 Caliper applets are shared libraries (`.dylib` on macOS, `.so` on Linux, `.dll` on Windows) that the host discovers and loads at runtime via `dlopen`. Each applet exports a fixed set of C functions defined by the applet ABI, keeping the boundary simple and stable.
