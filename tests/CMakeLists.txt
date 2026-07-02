@@ -21,4 +21,11 @@ add_executable(caliper_tests
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
+target_sources(caliper_tests PRIVATE test_loader.cpp)
+add_dependencies(caliper_tests hello_applet)
+target_compile_definitions(caliper_tests PRIVATE
+    CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets"
+    CALIPER_TEST_DATA_ROOT="${CMAKE_BINARY_DIR}/test-data")
+
 add_test(NAME caliper_tests COMMAND caliper_tests)
