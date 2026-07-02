@@ -72,6 +72,8 @@ GuardResult guarded_call(const std::function<void()>& fn) {
     struct sigaction sa {}, saved[kNumSignals];
     sa.sa_handler = fault_handler;
     sigemptyset(&sa.sa_mask);
+    // NODEFER is load-bearing: it keeps the signal unmasked in the handler,
+    // so the out-of-guard re-raise path delivers synchronously to SIG_DFL.
     sa.sa_flags = SA_NODEFER;
     for (int i = 0; i < kNumSignals; i++)
         sigaction(kSignals[i], &sa, &saved[i]);
