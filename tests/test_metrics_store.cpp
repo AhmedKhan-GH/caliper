@@ -226,3 +226,32 @@ TEST_CASE("metrics_store: a throwing DuckDB open degrades to closed, never termi
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
 }
+
+TEST_CASE("metrics_store: delete_run removes the run and all its series") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t a = store.begin_run("exp", "keep");
+    uint64_t b = store.begin_run("exp", "drop");
+    store.scalar(a, "loss", 0, 1.0); store.scalar(b, "loss", 0, 2.0);
+    store.delete_run(b);
+    auto runs = store.runs();
+    REQUIRE(runs.size() == 1);
+    CHECK(runs[0].id == a);
+    CHECK(store.scalars(b, "loss").empty());
+    CHECK(store.scalars(a, "loss").size() == 1);
+    // deleted run id is inert for future writes, not resurrected
+    store.scalar(b, "loss", 1, 3.0);
+    CHECK(store.scalars(b, "loss").empty());
+}
+
+TEST_CASE("metrics_store: clear_all empties history but never reuses ids") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t a = store.begin_run("exp", "one");
+    store.scalar(a, "loss", 0, 1.0);
+    store.clear_all();
+    CHECK(store.runs().empty());
+    CHECK(store.scalars(a, "loss").empty());
+    uint64_t c = store.begin_run("exp", "after");
+    CHECK(c > a);   // artifacts lineage keys on run ids — never reuse them
+}

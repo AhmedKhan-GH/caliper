@@ -196,6 +196,31 @@ void MetricsStore::hparams_json(uint64_t run, const std::string& json_utf8) {
     impl_->upd_hparams->Execute(args, /*allow_stream_result=*/true);  // no-op if absent
 }
 
+void MetricsStore::delete_run(uint64_t run) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->con) return;
+    const int64_t id = static_cast<int64_t>(run);
+    auto del = [&](const char* sql) {
+        auto stmt = impl_->con->Prepare(sql);
+        if (!stmt->HasError()) stmt->Execute(id);
+    };
+    del("DELETE FROM scalars WHERE run = ?");
+    del("DELETE FROM histograms WHERE run = ?");
+    del("DELETE FROM images WHERE run = ?");
+    del("DELETE FROM runs WHERE id = ?");
+    impl_->known_runs.erase(run);   // future writes to this id: inert
+}
+
+void MetricsStore::clear_all() {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->con) return;
+    for (const char* sql : {"DELETE FROM scalars", "DELETE FROM histograms",
+                            "DELETE FROM images", "DELETE FROM runs"})
+        impl_->con->Query(sql);
+    impl_->known_runs.clear();
+    // next_id is deliberately NOT reset: artifacts lineage keys on run ids.
+}
+
 std::vector<RunInfo> MetricsStore::runs() {
     std::lock_guard<std::mutex> lk(impl_->mu);
     std::vector<RunInfo> out;

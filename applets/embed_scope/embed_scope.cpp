@@ -735,14 +735,17 @@ void EmbedScopeApplet::draw_ui() {
     else if (!st->save_status.empty())
         ImGui::TextDisabled("artifacts: %s", st->save_status.c_str());
 
-    // Loss + accuracy (2-D) live with the controls.
+    // Loss + accuracy (2-D) live with the controls. AutoFit axes so the
+    // curves keep tracing as training appends points (a one-shot fit would
+    // let the line run off the right edge of a frozen frame).
     if (ImPlot::BeginPlot("train loss", {-1, 150})) {
-        ImPlot::SetupAxes("step", "NLL");
+        ImPlot::SetupAxes("step", "NLL",
+                          ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
         if (!loss.empty()) ImPlot::PlotLine("loss", loss.data(), (int)loss.size());
         ImPlot::EndPlot();
     }
     if (ImPlot::BeginPlot("test accuracy %", {-1, 150})) {
-        ImPlot::SetupAxes("step", "acc %");
+        ImPlot::SetupAxes("step", "acc %", ImPlotAxisFlags_AutoFit, 0);
         ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImPlotCond_Always);
         if (!accy.empty())
             ImPlot::PlotLine("acc", accx.data(), accy.data(), (int)accy.size());

@@ -58,11 +58,12 @@ void render_runs_dashboard(MetricsStore& store, bool* p_open) {
         g_selected_run = selected->id;
     }
 
-    // --- left pane: run list ---
+    // --- left pane: run list + history management ---
     ImGui::BeginChild("run_list", {220.0f, 0.0f}, true);
     if (runs.empty()) {
         ImGui::TextDisabled("no runs yet");
     }
+    uint64_t delete_id = 0;   // deferred: never mutate the store mid-iteration
     for (const auto& r : runs) {
         ImGui::PushID((int)r.id);
         std::string label = r.experiment + "/" + r.name;
@@ -70,13 +71,35 @@ void render_runs_dashboard(MetricsStore& store, bool* p_open) {
         if (ImGui::Selectable(label.c_str(), is_selected)) {
             g_selected_run = r.id;
         }
+        // Right-click a run to delete it (a live run keeps writing into the
+        // void afterward — the store makes deleted ids inert, never crashy).
+        if (ImGui::BeginPopupContextItem("##runctx")) {
+            if (ImGui::MenuItem("Delete run")) delete_id = r.id;
+            ImGui::EndPopup();
+        }
         if (!r.done) {
             ImGui::SameLine();
             ImGui::TextColored({0.40f, 0.80f, 0.45f, 1.0f}, "\xE2\x97\x8f");  // ●
         }
         ImGui::PopID();
     }
+    if (!runs.empty()) {
+        ImGui::Separator();
+        // Two-click clear: arm, then confirm — no modal, no accidents.
+        static bool clear_armed = false;
+        if (!clear_armed) {
+            if (ImGui::SmallButton("Clear history…")) clear_armed = true;
+        } else {
+            if (ImGui::SmallButton("Really clear ALL runs")) {
+                store.clear_all();
+                clear_armed = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("keep")) clear_armed = false;
+        }
+    }
     ImGui::EndChild();
+    if (delete_id != 0) store.delete_run(delete_id);
 
     ImGui::SameLine();
 

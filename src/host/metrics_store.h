@@ -68,6 +68,14 @@ public:
                   const void* bytes, int32_t w, int32_t h, int32_t c);
     void     hparams_json(uint64_t run, const std::string& json_utf8);
 
+    // --- history management (host dashboard only; not part of metrics.v1) ---
+
+    // Remove one run and all its series. The id is never reissued (artifacts
+    // lineage keys on run ids), and future writes to it stay inert.
+    void delete_run(uint64_t run);
+    // Remove ALL runs/series. Ids keep counting upward — see delete_run.
+    void clear_all();
+
     // --- readers ---
 
     std::vector<RunInfo>     runs();
