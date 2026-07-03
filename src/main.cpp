@@ -56,13 +56,18 @@ public:
 #endif
         if (!renderer_) renderer_ = caliper_host::make_renderer("gl");
 
+        // Display asleep / headless-ish states can return NULL here — fall
+        // back to a sane default window instead of crashing at startup.
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-        int ax, ay, aw, ah;
-        glfwGetMonitorWorkarea(monitor, &ax, &ay, &aw, &ah);
-        float sx = 1.0f, sy = 1.0f;
-        glfwGetMonitorContentScale(monitor, &sx, &sy);
-        int ww = (int)((aw / sx) * 0.95f);
-        int wh = (int)((ah / sy) * 0.95f);
+        int ww = 1440, wh = 900;
+        if (monitor) {
+            int ax, ay, aw, ah;
+            glfwGetMonitorWorkarea(monitor, &ax, &ay, &aw, &ah);
+            float sx = 1.0f, sy = 1.0f;
+            glfwGetMonitorContentScale(monitor, &sx, &sy);
+            ww = (int)((aw / sx) * 0.95f);
+            wh = (int)((ah / sy) * 0.95f);
+        }
 
         // Host-owned ImGui/ImPlot contexts must exist before the renderer
         // initializes its ImGui backends. None of these touch GL/Metal.
