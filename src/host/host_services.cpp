@@ -283,6 +283,18 @@ void services_init() {
     set_bridge_log_sink(&log_impl);
 }
 
+void services_shutdown() {
+    // Workers first (they may still be writing metrics/artifacts), then the
+    // stores. Flags flip first so any thunk racing the close no-ops.
+    g_jobs.cancel_all_and_join();
+    g_metrics_open = false;
+    g_artifacts_open = false;
+    g_data_open = false;
+    g_data.close();
+    g_artifacts.close();
+    g_metrics.close();
+}
+
 ArtifactStore& host_artifact_store() { return g_artifacts; }
 
 DataStore& host_data_store() { return g_data; }

@@ -82,6 +82,13 @@ bool ArtifactStore::open(const std::string& root_dir) {
     return impl_->opened;
 }
 
+void ArtifactStore::close() {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    impl_->con.reset();
+    impl_->db.reset();
+    impl_->opened = false;
+}
+
 bool ArtifactStore::put(const std::string& name, const void* bytes,
                         uint64_t len, uint64_t run, char out_digest[65]) {
     if (!bytes || !out_digest) return false;

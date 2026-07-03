@@ -41,6 +41,8 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 | Accuracy learning curve | per-epoch sampling hid MNIST's sub-epoch convergence | `3c17dd1` |
 | Blank Metal landing page | GL-only IntroScreen owned the entire launcher; Metal skipped it | `913c891` |
 | SIGSEGV on first `ImGui::Image` (Metal) | bridge handed out integer texture ids; ImGui-Metal retained `1` as an object pointer | `4267753` |
+| Shutdown SIGABRT/SIGSEGV (exit 134/139) | three static DuckDB stores raced DuckDB's own globals at static-destruction (malloc abort); exit-time dlclose of torch dylibs + applet teardown before worker join (worker UAF) | `services_shutdown()` + join-before-teardown + leak-dylibs-at-exit policy |
+| Second Caliper instance died at startup | `MetricsStore::open` didn't catch DuckDB's lock IOException (the other two stores did) | `5d42c89` |
 | Docked desktop layout | floating windows → ImGui **docking branch** pin + host dockspace + first-run tiling (D17) | `7310a52` |
 
 ### ⬜ Not started

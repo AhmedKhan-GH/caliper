@@ -110,6 +110,13 @@ bool DataStore::open(const std::string& path) {
     }
 }
 
+void DataStore::close() {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    impl_->con.reset();
+    impl_->db.reset();
+    impl_->opened = false;
+}
+
 bool DataStore::exec(const std::string& sql) {
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->opened) { set_error("data store is not open"); return false; }

@@ -175,7 +175,18 @@ public:
     }
 
     void run() {
+        // Dev hook: CALIPER_EXIT_AFTER=<seconds> requests a NORMAL window
+        // close after N seconds — exercising the full teardown path
+        // (on_cleanup, dlclose policy, renderer/context destruction) that
+        // aliveness kill-checks skip. Clean-exit regressions hide there.
+        double exit_after = 0.0;
+        if (const char* ea = std::getenv("CALIPER_EXIT_AFTER"))
+            exit_after = std::atof(ea);
+        const double t0 = glfwGetTime();
+
         while (!glfwWindowShouldClose(window_)) {
+            if (exit_after > 0.0 && glfwGetTime() - t0 >= exit_after)
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
             glfwPollEvents();
 
             int dw, dh;
@@ -374,11 +385,20 @@ public:
     }
 
     void cleanup() {
+        // Workers FIRST: a job may hold a pointer into applet state, so every
+        // worker must be joined before close_all() destroys that state (the
+        // 139-at-exit was a worker touching a freed applet mid-teardown).
+        // Stores are still open here, so a finishing worker's last metrics
+        // writes land safely.
+        caliper_host::host_job_system().cancel_all_and_join();
         loader_.close_all();
         // Applets are torn down first (they may release bridge textures while the
         // renderer is still live); THEN drop the renderer from the bridge before
         // renderer teardown, so no bridge thunk touches a destroyed renderer.
         caliper_host::services_set_renderer(nullptr);
+        // Close the DuckDB stores NOW — leaving them to static destructors
+        // races DuckDB's globals and aborts in malloc at exit.
+        caliper_host::services_shutdown();
         intro_.cleanup();
         renderer_->shutdown();
         ImPlot3D::DestroyContext();

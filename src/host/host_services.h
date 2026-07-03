@@ -10,6 +10,13 @@ void services_init();
 const void* services_get(const char* service_id);   // NULL for unknown ids
 const std::set<std::string>& service_ids();
 
+// Deterministic service teardown, called from the host's cleanup() BEFORE
+// main returns: joins all job workers, then closes the DuckDB-backed stores.
+// Leaving those to static destructors races DuckDB's own globals (undefined
+// cross-TU destruction order) and aborts in malloc at exit. After this call
+// every store-backed thunk no-ops; the tables themselves remain valid.
+void services_shutdown();
+
 // The process-wide job system backing caliper.jobs.v1 (§7.5); the host jobs
 // tray reads its views(). Cancelled + joined at shutdown by its own dtor.
 class JobSystem;

@@ -32,6 +32,12 @@ public:
     // methods are inert (false + last_error) on an unopened store.
     bool open(const std::string& path);
 
+    // Deterministic teardown before main returns (see MetricsStore::close()
+    // — static-destructor DuckDB teardown aborts). Idempotent. Streams
+    // already handed out stay valid: they own materialized results, not the
+    // connection.
+    void close();
+
     // Run a statement for its side effects (DDL/INSERT); no result stream.
     bool exec(const std::string& sql);
 

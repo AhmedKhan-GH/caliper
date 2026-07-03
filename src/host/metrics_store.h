@@ -47,6 +47,12 @@ public:
     // Returns false if the database could not be opened.
     bool open(const std::string& path);
 
+    // Deterministic teardown: drop the connection + database now. Process-
+    // lifetime stores MUST be closed before main returns — destroying a
+    // DuckDB instance from a static destructor races DuckDB's own globals
+    // (undefined cross-TU order) and aborts in malloc. Idempotent.
+    void close();
+
     // --- writers (mirror the caliper.metrics.v1 vtable) ---
 
     // Begin a run; returns a unique nonzero id, or 0 on error. Ids are unique

@@ -39,6 +39,16 @@ struct MetricsStore::Impl {
 MetricsStore::MetricsStore() : impl_(std::make_unique<Impl>()) {}
 MetricsStore::~MetricsStore() = default;
 
+void MetricsStore::close() {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    impl_->ins_run.reset(); impl_->ins_scalar.reset();
+    impl_->ins_histogram.reset(); impl_->ins_image.reset();
+    impl_->upd_end_run.reset(); impl_->upd_hparams.reset();
+    impl_->con.reset();
+    impl_->db.reset();
+    impl_->known_runs.clear();
+}
+
 bool MetricsStore::open(const std::string& path) {
     std::lock_guard<std::mutex> lk(impl_->mu);
 

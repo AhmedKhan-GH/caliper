@@ -229,9 +229,15 @@ void AppletLoader::teardown(int idx) {
 void AppletLoader::close_all() {
     for (int i = 0; i < count(); i++) teardown(i);
     for (auto& a : entries_) {
-        // Quarantined dylibs are left mapped: running static destructors in a
-        // corrupted image is worse than a small leak at shutdown.
-        if (a.handle && a.status != AppletStatus::Quarantined) lib_close(a.handle);
+        // ALL dylibs are deliberately left mapped at shutdown — never
+        // dlclosed. close_all() only runs when the process is exiting, where
+        // unloading buys nothing (the OS reclaims every page anyway) and
+        // risks everything: dlclose runs the image's static destructors, and
+        // heavyweight applet deps (libtorch above all) are not unload-safe —
+        // their global thread pools and allocator state can abort in malloc
+        // at teardown. Same policy every mature plugin host converges on.
+        // (Quarantined images were already exempt: running destructors in a
+        // corrupted image is worse still.)
         a.handle = nullptr;
         a.desc = nullptr;
     }

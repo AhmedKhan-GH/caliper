@@ -32,6 +32,10 @@ public:
     // other methods are inert on an unopened store.
     bool open(const std::string& root_dir);
 
+    // Deterministic teardown before main returns (see MetricsStore::close()
+    // — static-destructor DuckDB teardown aborts). Idempotent.
+    void close();
+
     // --- mirrors the caliper.artifacts.v1 vtable ---
 
     // Store bytes under their sha256. Identical bytes dedup to one file;
