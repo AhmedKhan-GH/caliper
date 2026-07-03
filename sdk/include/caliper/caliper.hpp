@@ -7,11 +7,16 @@
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/artifacts_v1.h>
+#include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
 #include <implot3d.h>
+
+#include <string>
+#include <vector>
 
 namespace caliper {
 
@@ -112,6 +117,134 @@ public:
     }
 private:
     const CaliperMetricsV1* t_ = nullptr;
+};
+
+// Typed wrapper over caliper.artifacts.v1 (§7.8): content-addressed checkpoint
+// storage. Falsy when the host doesn't vend the service; every call is inert
+// then (put returns "", path_of nullptr, exists false).
+class Artifacts {
+public:
+    Artifacts() = default;
+    explicit Artifacts(const Host& host)
+        : t_(static_cast<const CaliperArtifactsV1*>(
+              host.service(CALIPER_ARTIFACTS_V1))) {}
+    explicit operator bool() const { return t_ && t_->put; }
+    // Returns the 64-hex digest, or "" on failure/absence.
+    std::string put(const char* name, const void* bytes, uint64_t len,
+                    uint64_t run = 0) const {
+        if (!(t_ && t_->put)) return {};
+        char digest[65] = {};
+        return t_->put(name, bytes, len, run, digest) ? std::string(digest)
+                                                      : std::string();
+    }
+    // Host-owned string, valid until the next artifacts.v1 call; nullptr if
+    // unknown or the service is absent.
+    const char* path_of(const char* digest_or_name) const {
+        return (t_ && t_->path_of) ? t_->path_of(digest_or_name) : nullptr;
+    }
+    bool exists(const char* digest_or_name) const {
+        return t_ && t_->exists && t_->exists(digest_or_name);
+    }
+private:
+    const CaliperArtifactsV1* t_ = nullptr;
+};
+
+// Typed wrapper over caliper.data.v1 (§7.7): SQL in, Arrow streams out.
+// Falsy-inert when absent. The raw stream API is fully exposed; the
+// drain_numeric helper covers the common all-numeric-columns case (each
+// column widened to double) so simple consumers never touch Arrow buffers.
+class Data {
+public:
+    Data() = default;
+    explicit Data(const Host& host)
+        : t_(static_cast<const CaliperDataV1*>(
+              host.service(CALIPER_DATA_V1))) {}
+    explicit operator bool() const { return t_ && t_->query; }
+    bool query(const char* sql, ArrowArrayStream* out) const {
+        return t_ && t_->query && t_->query(sql, out);
+    }
+    bool register_dataset(const char* name, const char* uri) const {
+        return t_ && t_->register_dataset && t_->register_dataset(name, uri);
+    }
+    bool open_dataset(const char* name, ArrowArrayStream* out) const {
+        return t_ && t_->open_dataset && t_->open_dataset(name, out);
+    }
+    const char* last_error() const {
+        return (t_ && t_->last_error) ? t_->last_error()
+                                      : "data.v1 is not available";
+    }
+
+    // Drain a stream of numeric columns (int8..int64 / uint8..uint64 /
+    // float / double / bool) into column-major doubles. Releases the stream.
+    // Returns false (and releases what it took) on a non-numeric column or
+    // stream error. NULL values read as whatever the producer left in the
+    // data buffer — callers that care about NULLs should walk the raw stream.
+    static bool drain_numeric(ArrowArrayStream* stream,
+                              std::vector<std::string>* names,
+                              std::vector<std::vector<double>>* cols) {
+        if (!stream || !stream->get_schema || !cols) return false;
+        ArrowSchema schema = {};
+        if (stream->get_schema(stream, &schema) != 0) {
+            stream->release(stream);
+            return false;
+        }
+        const int64_t n = schema.n_children;
+        std::vector<char> fmt(static_cast<size_t>(n < 0 ? 0 : n), 0);
+        cols->assign(fmt.size(), {});
+        if (names) names->assign(fmt.size(), "");
+        bool ok = true;
+        for (int64_t c = 0; c < n; c++) {
+            const char* f = schema.children[c]->format;
+            // Arrow primitive format strings: c/C s/S i/I l/L = ints,
+            // f/g = float32/64, b = bool. Anything else is non-numeric.
+            const bool numeric = f && f[0] != '\0' && f[1] == '\0' &&
+                                 std::string("cCsSiIlLfgb").find(f[0]) !=
+                                     std::string::npos;
+            if (!numeric) ok = false;
+            fmt[static_cast<size_t>(c)] = numeric ? f[0] : 0;
+            if (names && schema.children[c]->name)
+                (*names)[static_cast<size_t>(c)] = schema.children[c]->name;
+        }
+        if (schema.release) schema.release(&schema);
+        while (ok) {
+            ArrowArray array = {};
+            if (stream->get_next(stream, &array) != 0) { ok = false; break; }
+            if (!array.release) break;  // end of stream
+            for (int64_t c = 0; ok && c < array.n_children &&
+                                c < static_cast<int64_t>(cols->size()); c++) {
+                const ArrowArray* col = array.children[c];
+                const void* buf = col->buffers[1];
+                auto& out = (*cols)[static_cast<size_t>(c)];
+                for (int64_t i = 0; i < array.length; i++) {
+                    const int64_t at = col->offset + i;
+                    switch (fmt[static_cast<size_t>(c)]) {
+                        case 'c': out.push_back(static_cast<const int8_t*>(buf)[at]); break;
+                        case 'C': out.push_back(static_cast<const uint8_t*>(buf)[at]); break;
+                        case 's': out.push_back(static_cast<const int16_t*>(buf)[at]); break;
+                        case 'S': out.push_back(static_cast<const uint16_t*>(buf)[at]); break;
+                        case 'i': out.push_back(static_cast<const int32_t*>(buf)[at]); break;
+                        case 'I': out.push_back(static_cast<const uint32_t*>(buf)[at]); break;
+                        case 'l': out.push_back(static_cast<double>(static_cast<const int64_t*>(buf)[at])); break;
+                        case 'L': out.push_back(static_cast<double>(static_cast<const uint64_t*>(buf)[at])); break;
+                        case 'f': out.push_back(static_cast<const float*>(buf)[at]); break;
+                        case 'g': out.push_back(static_cast<const double*>(buf)[at]); break;
+                        case 'b': {  // bit-packed booleans
+                            const uint8_t* bits = static_cast<const uint8_t*>(buf);
+                            out.push_back((bits[at / 8] >> (at % 8)) & 1);
+                            break;
+                        }
+                        default: ok = false; break;
+                    }
+                }
+            }
+            array.release(&array);
+        }
+        if (stream->release) stream->release(stream);
+        return ok;
+    }
+
+private:
+    const CaliperDataV1* t_ = nullptr;
 };
 
 // Typed wrapper over caliper.tensor_bridge.v1 (§7.4): a CaliperTensor becomes a

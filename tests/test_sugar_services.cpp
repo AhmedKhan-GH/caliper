@@ -62,6 +62,111 @@ const CaliperMetricsV1 kFakeMetrics = {
     sizeof(CaliperMetricsV1), &fmet_begin_run, &fmet_end_run, &fmet_scalar,
     &fmet_histogram, &fmet_image, &fmet_hparams};
 
+// Fake artifacts.v1: records the calls the Artifacts sugar routes through it.
+struct ArtifactCalls {
+    std::string last_name;
+    uint64_t last_len = 0, last_run = 0;
+    int puts = 0;
+    std::string last_lookup;
+};
+ArtifactCalls g_artifacts;
+
+bool fart_put(const char* name, const void* bytes, uint64_t len,
+              uint64_t run, char out_digest[65]) {
+    if (!bytes) return false;
+    g_artifacts.puts++;
+    g_artifacts.last_name = name ? name : "";
+    g_artifacts.last_len = len;
+    g_artifacts.last_run = run;
+    for (int i = 0; i < 64; i++) out_digest[i] = 'a';
+    out_digest[64] = '\0';
+    return true;
+}
+const char* fart_path_of(const char* key) {
+    g_artifacts.last_lookup = key ? key : "";
+    return "/fake/artifacts/blob";
+}
+bool fart_exists(const char* key) {
+    return key && std::string(key) == std::string(64, 'a');
+}
+const CaliperArtifactsV1 kFakeArtifacts = {sizeof(CaliperArtifactsV1),
+                                           &fart_put, &fart_path_of,
+                                           &fart_exists};
+
+// Fake data.v1: serves one static int32+double batch through a real
+// ArrowArrayStream, so Data::drain_numeric is exercised end to end.
+std::string g_last_sql;
+const int32_t kColA[3] = {1, 2, 3};
+const double  kColB[3] = {0.5, 1.5, 2.5};
+
+void fdat_schema_release(ArrowSchema* s) { s->release = nullptr; }
+void fdat_array_release(ArrowArray* a) { a->release = nullptr; }
+
+int fdat_get_schema(ArrowArrayStream*, ArrowSchema* out) {
+    static ArrowSchema children[2];
+    static ArrowSchema* child_ptrs[2] = {&children[0], &children[1]};
+    children[0] = {};
+    children[0].format = "i"; children[0].name = "a";
+    children[0].release = &fdat_schema_release;
+    children[1] = {};
+    children[1].format = "g"; children[1].name = "b";
+    children[1].release = &fdat_schema_release;
+    *out = {};
+    out->format = "+s";
+    out->n_children = 2;
+    out->children = child_ptrs;
+    out->release = &fdat_schema_release;
+    return 0;
+}
+int fdat_get_next(ArrowArrayStream* self, ArrowArray* out) {
+    // One batch, then end-of-stream. private_data counts batches served.
+    auto* served = static_cast<int*>(self->private_data);
+    *out = {};
+    if (*served > 0) { out->release = nullptr; return 0; }
+    (*served)++;
+    static const void* bufs_a[2] = {nullptr, kColA};
+    static const void* bufs_b[2] = {nullptr, kColB};
+    static ArrowArray children[2];
+    static ArrowArray* child_ptrs[2] = {&children[0], &children[1]};
+    children[0] = {};
+    children[0].length = 3; children[0].n_buffers = 2;
+    children[0].buffers = bufs_a; children[0].release = &fdat_array_release;
+    children[1] = {};
+    children[1].length = 3; children[1].n_buffers = 2;
+    children[1].buffers = bufs_b; children[1].release = &fdat_array_release;
+    out->length = 3;
+    out->n_children = 2;
+    out->children = child_ptrs;
+    out->release = &fdat_array_release;
+    return 0;
+}
+const char* fdat_stream_error(ArrowArrayStream*) { return nullptr; }
+void fdat_stream_release(ArrowArrayStream* self) { self->release = nullptr; }
+
+int g_stream_batches_served = 0;
+bool fdat_query(const char* sql, struct ArrowArrayStream* out) {
+    g_last_sql = sql ? sql : "";
+    if (g_last_sql.find("garbage") != std::string::npos) return false;
+    g_stream_batches_served = 0;
+    *out = {};
+    out->get_schema = &fdat_get_schema;
+    out->get_next = &fdat_get_next;
+    out->get_last_error = &fdat_stream_error;
+    out->release = &fdat_stream_release;
+    out->private_data = &g_stream_batches_served;
+    return true;
+}
+bool fdat_register(const char* name, const char* uri) {
+    return name && uri && std::string(name) == "points";
+}
+bool fdat_open(const char* name, struct ArrowArrayStream* out) {
+    return fdat_query(name, out);
+}
+const char* fdat_last_error(void) { return "fake error"; }
+const CaliperDataV1 kFakeData = {sizeof(CaliperDataV1), &fdat_query,
+                                 &fdat_register, &fdat_open,
+                                 &fdat_last_error};
+
 // Fake tensor_bridge.v1: records that the Bridge sugar routes through it.
 struct BridgeCalls {
     int tex_calls = 0, mapped_calls = 0, update_calls = 0, release_calls = 0;
@@ -132,6 +237,75 @@ TEST_CASE("sugar: Device::query defaults to CPU without the service") {
     caliper::testing::FixtureHost fx;
     auto dev = caliper::Device::query(caliper::Host(fx.host()));
     CHECK(dev.kind == CALIPER_DEV_CPU);
+}
+
+TEST_CASE("sugar: Artifacts wrapper routes through the service table") {
+    g_artifacts = ArtifactCalls{};
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_ARTIFACTS_V1, &kFakeArtifacts);
+    caliper::Host host(fx.host());
+    caliper::Artifacts artifacts(host);
+    REQUIRE(static_cast<bool>(artifacts));
+
+    const char bytes[] = "ckpt";
+    std::string digest = artifacts.put("model", bytes, sizeof(bytes), 9);
+    CHECK(digest == std::string(64, 'a'));
+    CHECK(g_artifacts.puts == 1);
+    CHECK(g_artifacts.last_name == "model");
+    CHECK(g_artifacts.last_len == sizeof(bytes));
+    CHECK(g_artifacts.last_run == 9);
+
+    CHECK(artifacts.exists(digest.c_str()));
+    CHECK_FALSE(artifacts.exists("something-else"));
+    CHECK(std::string(artifacts.path_of("model")) == "/fake/artifacts/blob");
+    CHECK(g_artifacts.last_lookup == "model");
+}
+
+TEST_CASE("sugar: Artifacts wrapper is falsy and inert without the service") {
+    caliper::testing::FixtureHost fx;
+    caliper::Host host(fx.host());
+    caliper::Artifacts artifacts(host);
+    CHECK_FALSE(static_cast<bool>(artifacts));
+    CHECK(artifacts.put("x", "y", 1).empty());
+    CHECK(artifacts.path_of("x") == nullptr);
+    CHECK_FALSE(artifacts.exists("x"));
+}
+
+TEST_CASE("sugar: Data wrapper routes SQL and drains numeric streams") {
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_DATA_V1, &kFakeData);
+    caliper::Host host(fx.host());
+    caliper::Data data(host);
+    REQUIRE(static_cast<bool>(data));
+
+    ArrowArrayStream stream = {};
+    REQUIRE(data.query("SELECT a, b FROM t", &stream));
+    CHECK(g_last_sql == "SELECT a, b FROM t");
+
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> cols;
+    REQUIRE(caliper::Data::drain_numeric(&stream, &names, &cols));
+    CHECK(stream.release == nullptr);  // drained helper released the stream
+    REQUIRE(cols.size() == 2);
+    CHECK(names == std::vector<std::string>({"a", "b"}));
+    CHECK(cols[0] == std::vector<double>({1.0, 2.0, 3.0}));
+    CHECK(cols[1] == std::vector<double>({0.5, 1.5, 2.5}));
+
+    CHECK_FALSE(data.query("garbage", &stream));
+    CHECK(std::string(data.last_error()) == "fake error");
+    CHECK(data.register_dataset("points", "/tmp/p.csv"));
+    CHECK_FALSE(data.register_dataset("other", "/tmp/p.csv"));
+}
+
+TEST_CASE("sugar: Data wrapper is falsy and inert without the service") {
+    caliper::testing::FixtureHost fx;
+    caliper::Host host(fx.host());
+    caliper::Data data(host);
+    CHECK_FALSE(static_cast<bool>(data));
+    ArrowArrayStream stream = {};
+    CHECK_FALSE(data.query("SELECT 1", &stream));
+    CHECK_FALSE(data.register_dataset("x", "y"));
+    CHECK(std::string(data.last_error()) == "data.v1 is not available");
 }
 
 TEST_CASE("sugar: Metrics wrapper routes writers through the service table") {

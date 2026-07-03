@@ -22,6 +22,8 @@ add_executable(caliper_tests
     test_sugar_services.cpp
     test_mnist_idx.cpp
     test_metrics_store.cpp
+    test_artifact_store.cpp
+    test_data_store.cpp
     test_tensor_bridge.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )

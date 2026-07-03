@@ -26,6 +26,17 @@ attention heatmaps through the bridge (layer switching, hover-highlighting, a
 temperature control). Its live-visual acceptance checks are in the
 [tensor-bridge demo checklist](../reference/services/tensor-bridge-v1.md#demo-checklist-human).
 
+For the applet that exercises **every** service, see **EmbedScope**
+(`applets/embed_scope/`) — a small MNIST net with a learned 3-D embedding
+bottleneck, drawn as a live ImPlot3D scatter that splits one blob into ten
+colored lobes as it trains. It is the reference consumer of
+[`caliper.artifacts.v1`](../reference/services/artifacts-v1.md) (Save/Load a
+checkpoint — Load skips training) and
+[`caliper.data.v1`](../reference/services/data-v1.md) (SQL over the live embedding
+table for class centroids and misclassified counts), on top of the same jobs /
+device / metrics / bridge stack. Its 3-D acceptance checks join the same
+[demo checklist](../reference/services/tensor-bridge-v1.md#demo-checklist-human).
+
 The whole applet lives in `examples/hello/`:
 
 ```

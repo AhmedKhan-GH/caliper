@@ -2,6 +2,8 @@
 #include "job_system.h"
 #include "device_query.h"
 #include "metrics_store.h"
+#include "artifact_store.h"
+#include "data_store.h"
 #include "tensor_bridge.h"
 #include "../app_paths.h"   // host_services.cpp compiles into the caliper exe,
                             // which also compiles app_paths.cpp (CMakeLists)
@@ -10,6 +12,8 @@
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/artifacts_v1.h>
+#include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/tensor.h>
 #include <imgui.h>
@@ -112,6 +116,60 @@ const CaliperMetricsV1 kMetrics = {sizeof(CaliperMetricsV1), &met_begin_run,
                                    &met_end_run, &met_scalar, &met_histogram,
                                    &met_image, &met_hparams_json};
 
+// --- caliper.artifacts.v1: content-addressed checkpoints (§7.8) ---
+// Same non-fatal-open + no-op-thunks discipline as metrics above, and the
+// same DECLARATION ORDER rule: g_artifacts is declared BEFORE g_jobs so job
+// threads can save checkpoints until the moment they are joined.
+ArtifactStore g_artifacts;
+bool          g_artifacts_open = false;
+
+bool art_put(const char* name, const void* bytes, uint64_t len,
+             uint64_t run, char out_digest[65]) {
+    return g_artifacts_open &&
+           g_artifacts.put(name ? name : "", bytes, len, run, out_digest);
+}
+const char* art_path_of(const char* digest_or_name) {
+    if (!g_artifacts_open || !digest_or_name) return nullptr;
+    // ArtifactStore keeps the returned string alive until the next call
+    // (the artifacts.v1 "host-owned, valid until next call" contract).
+    static thread_local std::string held;
+    held = g_artifacts.path_of(digest_or_name);
+    return held.empty() ? nullptr : held.c_str();
+}
+bool art_exists(const char* digest_or_name) {
+    return g_artifacts_open && digest_or_name &&
+           g_artifacts.exists(digest_or_name);
+}
+const CaliperArtifactsV1 kArtifacts = {sizeof(CaliperArtifactsV1), &art_put,
+                                       &art_path_of, &art_exists};
+
+// --- caliper.data.v1: SQL over the host store, Arrow streams out (§7.7) ---
+// Same non-fatal-open + declaration-before-g_jobs discipline as above.
+DataStore g_data;
+bool      g_data_open = false;
+
+bool dat_query(const char* sql, struct ArrowArrayStream* out) {
+    return g_data_open && g_data.query(sql ? sql : "", out);
+}
+bool dat_register_dataset(const char* name, const char* uri) {
+    return g_data_open &&
+           g_data.register_dataset(name ? name : "", uri ? uri : "");
+}
+bool dat_open_dataset(const char* name, struct ArrowArrayStream* out) {
+    return g_data_open && g_data.open_dataset(name ? name : "", out);
+}
+const char* dat_last_error(void) {
+    // data.v1 promises never-NULL; the store's error is thread-local, so a
+    // thread-local holder honors "valid until the next data.v1 call on the
+    // same thread" without cross-thread stomping.
+    static thread_local std::string held;
+    held = g_data_open ? g_data.last_error() : "data store is not open";
+    return held.c_str();
+}
+const CaliperDataV1 kData = {sizeof(CaliperDataV1), &dat_query,
+                             &dat_register_dataset, &dat_open_dataset,
+                             &dat_last_error};
+
 // --- caliper.jobs.v1: background compute with progress + cancel (§7.5) ---
 // Backed by one process-wide JobSystem; its dtor cancels + joins at shutdown.
 JobSystem g_jobs;
@@ -187,7 +245,8 @@ const CaliperTensorBridgeV1 kBridge = {sizeof(CaliperTensorBridgeV1),
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
                                     CALIPER_METRICS_V1,
-                                    CALIPER_TENSOR_BRIDGE_V1};
+                                    CALIPER_TENSOR_BRIDGE_V1,
+                                    CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1};
 
 } // namespace
 
@@ -201,10 +260,32 @@ void services_init() {
                      "[metrics] failed to open %s; metrics.v1 will no-op\n",
                      path.c_str());
 
+    // Open the artifact store rooted in the app data dir; same non-fatal
+    // discipline as metrics (thunks no-op if this fails).
+    const std::string art_root = caliper::app_data_path("");
+    g_artifacts_open = g_artifacts.open(art_root);
+    if (!g_artifacts_open)
+        std::fprintf(stderr,
+                     "[artifacts] failed to open store under %s; "
+                     "artifacts.v1 will no-op\n",
+                     art_root.c_str());
+
+    // Open the data store; same non-fatal discipline.
+    const std::string data_path = caliper::app_data_path("data.duckdb");
+    g_data_open = g_data.open(data_path);
+    if (!g_data_open)
+        std::fprintf(stderr,
+                     "[data] failed to open %s; data.v1 will no-op\n",
+                     data_path.c_str());
+
     // Route the bridge's acceptance-rule rejections through caliper.log.v1
     // (retires the C4 stderr placeholder inside tensor_bridge.cpp).
     set_bridge_log_sink(&log_impl);
 }
+
+ArtifactStore& host_artifact_store() { return g_artifacts; }
+
+DataStore& host_data_store() { return g_data; }
 
 JobSystem& host_job_system() { return g_jobs; }
 
@@ -225,6 +306,8 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_DEVICE_V1) == 0) return &kDevice;
     if (std::strcmp(id, CALIPER_METRICS_V1) == 0) return &kMetrics;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1) == 0) return &kBridge;
+    if (std::strcmp(id, CALIPER_ARTIFACTS_V1) == 0) return &kArtifacts;
+    if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
 }
 
