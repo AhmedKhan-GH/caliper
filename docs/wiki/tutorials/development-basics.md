@@ -204,9 +204,11 @@ caches, scratch files go there and nowhere else.
 
 1. This page — the lay of the land.
 2. [Your first applet](first-applet.md) — walk hello line by line.
-3. `applets/embed_scope/` — the exemplar; every platform capability in one
+3. [Your first ML applet](first-ml-applet.md) — the staged climb: compute,
+   then torch, then live plots, then the bridge — one capability per stage.
+4. `applets/embed_scope/` — the exemplar; every platform capability in one
    annotated file, structured to be copied.
-4. [ML applet cookbook](../howto/ml-applet-cookbook.md) — the composition
+5. [ML applet cookbook](../howto/ml-applet-cookbook.md) — the composition
    idioms (threading, cadences, the device-resident pull, viewport policy).
-5. Per-service [reference pages](../reference/services/jobs-v1.md) — the
+6. Per-service [reference pages](../reference/services/jobs-v1.md) — the
    contracts, when you need exact semantics.

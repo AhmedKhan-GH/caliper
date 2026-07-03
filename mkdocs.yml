@@ -20,6 +20,7 @@ nav:
   - Tutorials:
       - Development basics: tutorials/development-basics.md
       - Your first applet: tutorials/first-applet.md
+      - Your first ML applet: tutorials/first-ml-applet.md
   - How-to:
       - Port a v1 applet: howto/port-v1-applet.md
       - Debug an applet: howto/debug-an-applet.md
