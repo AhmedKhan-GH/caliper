@@ -114,6 +114,11 @@ struct EmbedScopeState {
     // the current mini-batch's embeddings + the weight tensors, published
     // every optimizer step. This is where the tensor bridge earns its keep —
     // weights render as heatmaps that visibly reorganize while SGD runs.
+    // Cloud refresh cadence in optimizer steps (UI slider -> worker). The
+    // full-subset re-embed is forward-only but ~15x a batch, so per-step
+    // would dominate training; every ~10 steps streams at ~1 Hz for +~50%.
+    std::atomic<int> cloud_every{10};
+
     std::vector<float> live_x, live_y, live_z;   // current batch (<= kBatch)
     std::vector<float> w_conv1;                  // conv1 weights, 8 * 3*3
     std::vector<float> w_embed;                  // fc_embed weights, 3 * 64
@@ -126,6 +131,7 @@ struct EmbedScopeState {
     uint64_t plot_gen = 0;             // last gen split into per-class arrays
     std::array<std::vector<float>, 10> cx, cy, cz;
     bool  refit = false;
+    bool  axes_autofit = false;        // default OFF: fixed axes show migration
     double bmin[3] = {-1,-1,-1}, bmax[3] = {1,1,1};
 
     uint64_t data_gen = 0;             // last gen fed through data.v1 SQL
@@ -281,28 +287,38 @@ void publish_embeddings(EmbedScopeState* st, EmbedNet& model,
     auto pr  = model->fc_out->forward(emb).argmax(1);
     auto emb_c = emb.to(torch::kCPU).to(torch::kFloat32).contiguous();
     auto pr_c  = pr.to(torch::kCPU).to(torch::kInt64).contiguous();
-    auto lb_c  = yte.slice(0, 0, n).to(torch::kCPU).to(torch::kInt64).contiguous();
-    auto px_c  = xb.mul(255.0f).clamp(0, 255)
-                    .to(torch::kUInt8).to(torch::kCPU).contiguous();  // (n,1,28,28)
 
     const float*   ep = emb_c.data_ptr<float>();
     const int64_t* pp = pr_c.data_ptr<int64_t>();
-    const int64_t* lp = lb_c.data_ptr<int64_t>();
-    const uint8_t* xp = px_c.data_ptr<uint8_t>();
 
     std::vector<float>   ex(n), ey(n), ez(n);
-    std::vector<int>     lbl(n), prd(n);
-    std::vector<uint8_t> px((size_t)n * 28 * 28);
+    std::vector<int>     prd(n);
     for (int64_t i = 0; i < n; i++) {
         ex[i] = ep[i * 3 + 0]; ey[i] = ep[i * 3 + 1]; ez[i] = ep[i * 3 + 2];
-        lbl[i] = (int)lp[i];   prd[i] = (int)pp[i];
+        prd[i] = (int)pp[i];
     }
-    std::memcpy(px.data(), xp, px.size());
+
+    // Labels + pixels are constant for the fixed subset — publish them once.
+    // (snap_n is written only by this worker, so the unlocked read is safe.)
+    std::vector<int>     lbl;
+    std::vector<uint8_t> px;
+    if (st->snap_n != n) {
+        auto lb_c = yte.slice(0, 0, n).to(torch::kCPU)
+                        .to(torch::kInt64).contiguous();
+        auto px_c = xb.mul(255.0f).clamp(0, 255)
+                        .to(torch::kUInt8).to(torch::kCPU).contiguous();
+        const int64_t* lp = lb_c.data_ptr<int64_t>();
+        lbl.resize(n);
+        for (int64_t i = 0; i < n; i++) lbl[i] = (int)lp[i];
+        px.assign(px_c.data_ptr<uint8_t>(),
+                  px_c.data_ptr<uint8_t>() + (size_t)n * 28 * 28);
+    }
     {
         std::lock_guard<std::mutex> lk(st->mtx);
         st->ex = std::move(ex); st->ey = std::move(ey); st->ez = std::move(ez);
-        st->labels = std::move(lbl); st->preds = std::move(prd);
-        st->pixels = std::move(px);
+        st->preds = std::move(prd);
+        if (!lbl.empty()) { st->labels = std::move(lbl);
+                            st->pixels = std::move(px); }
         st->snap_n = n;
         st->embed_gen++;
     }
@@ -414,6 +430,15 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                 st->w_embed.assign(we.data_ptr<float>(),
                                    we.data_ptr<float>() + 3 * 64);
                 st->live_gen++;
+            }
+            {   // Cloud stream: re-embed the full test subset every N steps
+                // (UI slider) so the whole cloud migrates in near-real-time,
+                // not just at eval ticks.
+                int ce = st->cloud_every.load(std::memory_order_relaxed);
+                if (ce > 0 && step % ce == 0) {
+                    publish_embeddings(st, model, Xte, yte);
+                    model->train();
+                }
             }
             step++;
             char msg[96];
@@ -632,6 +657,14 @@ void EmbedScopeApplet::draw_ui() {
         else     ImGui::TextDisabled("metrics: present (open Runs)");
     } else ImGui::TextDisabled("metrics: absent (ok)");
 
+    {   // Cloud stream cadence (worker reads the atomic each step).
+        int ce = st->cloud_every.load(std::memory_order_relaxed);
+        ImGui::SetNextItemWidth(170);
+        if (ImGui::SliderInt("cloud refresh (steps)", &ce, 1, 50,
+                             "every %d steps"))
+            st->cloud_every.store(ce, std::memory_order_relaxed);
+    }
+
     const bool running = st->job_id != 0 && st->jobs.is_running(st->job_id);
     // Dev hook mirroring the host's CALIPER_AUTOLAUNCH: press Train on the
     // first frame when CALIPER_EMBED_AUTOTRAIN=1 (headless debugging / CI).
@@ -724,7 +757,11 @@ void EmbedScopeApplet::draw_ui() {
             double pad = 0.08 * (hi[k] - lo[k]);
             st->bmin[k] = lo[k] - pad; st->bmax[k] = hi[k] + pad;
         }
-        st->plot_gen = gen; st->refit = true;
+        // Fixed axes by default: fit ONCE on the first publish, then hold the
+        // frame still so points visibly migrate through space. Auto-fit (or
+        // the Refit button) restores the chase-the-data behavior.
+        st->refit = (st->plot_gen == 0) || st->axes_autofit;
+        st->plot_gen = gen;
     }
     if (gen != 0 && gen != st->data_gen) {
         refresh_data(st, ex, ey, ez, lbl, prd, n);
@@ -736,6 +773,14 @@ void EmbedScopeApplet::draw_ui() {
     if (gen == 0)
         ImGui::TextDisabled(
             "press Train to watch one blob split into ten colored lobes");
+    else {
+        ImGui::Checkbox("auto-fit axes", &st->axes_autofit);
+        ImGui::SameLine();
+        if (ImGui::Button("Refit"))
+            st->refit = true;   // one-shot re-frame; bounds are per-publish
+        ImGui::SameLine();
+        ImGui::TextDisabled("fixed axes show the migration");
+    }
     int hovered = -1;
     if (ImPlot3D::BeginPlot("##embed", ImVec2(-1, -1))) {
         ImPlot3D::SetupAxes("z0", "z1", "z2");
