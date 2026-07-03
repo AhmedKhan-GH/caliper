@@ -22,6 +22,7 @@ nav:
   - How-to:
       - Port a v1 applet: howto/port-v1-applet.md
       - Debug an applet: howto/debug-an-applet.md
+      - ML applet cookbook: howto/ml-applet-cookbook.md
   - Reference:
       - ABI (epoch 2): reference/abi.md
       - Manifest (caliper.toml): reference/manifest.md

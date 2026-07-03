@@ -18,11 +18,14 @@
 // the learned 3-D bottleneck sharpens. ImPlot3D (not raw GL) => renderer-
 // agnostic (§6c): Metal by default, GL on CALIPER_RENDERER=gl.
 //
-// Threading discipline mirrors ml_scope: the worker publishes OWNED std::vector
-// copies under a mutex (never live tensor memory); the frame reads a copy.
-// tensor_bridge.v1 and data.v1 are touched ONLY on the frame thread; artifacts
-// path resolution happens on the frame thread (host strings are "valid until the
-// next call") and the resolved path is handed to the eval job.
+// Threading discipline (docs/wiki/howto/ml-applet-cookbook.md is the full
+// treatment): the worker publishes under a mutex with generation counters —
+// OWNED std::vector copies for plot data, and device-resident tensor HANDLES
+// for the weight display tensors (handle swaps are refcount bumps; the frame
+// thread uploads the latest state at most once per frame, but never launches
+// torch ops itself). tensor_bridge.v1 and data.v1 are touched ONLY on the
+// frame thread; artifacts path resolution happens on the frame thread (host
+// strings are "valid until the next call") and the path is handed to the job.
 // ============================================================================
 #include "embed_model.h"
 
