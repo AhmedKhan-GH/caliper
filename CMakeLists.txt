@@ -222,7 +222,6 @@ add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
     src/host/host_services.cpp
-    src/host/runs_dashboard.cpp
     src/host/renderer/gl_renderer.cpp
     src/host/tensor_bridge.cpp
     src/app_paths.cpp

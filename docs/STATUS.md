@@ -28,7 +28,7 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 | **0** | SDK extraction | Installable `caliper::sdk` CMake package; applets build against it, not the host tree; `find_package` install probe |
 | **1** | ABI epoch 2 | `caliper_applet_descriptor()` + `get_service` registry; manifest-gated loader v2 with friendly refusal cards; crash quarantine (signal trampoline); frame watchdog; `CALIPER_APPLET` sugar + fixture host; **v1 ABI deleted** |
 | **2A** | Compute services | `caliper.jobs.v1` (thread-per-job, ≤100 ms cancel contract) + jobs tray; `caliper.device.v1` (Metal-native detection, no ML framework linked); MLScope exemplar born |
-| **2B** | Observability | MNIST CNN training; `caliper.metrics.v1` on embedded DuckDB (10k-ordered §16 contract); host **Runs dashboard** (run list, per-tag plots, EMA smoothing) |
+| **2B** | Observability | MNIST CNN training; `caliper.metrics.v1` on embedded DuckDB (10k-ordered §16 contract) |
 | **2C** | **The USP** | `HostRenderer` seam + **Metal backend**; `caliper.tensor_bridge.v1` **pixel-exact on both backends** (windowed gfx harness); torch adapter (`caliper/adapters/torch.hpp`); MLScope live conv-kernel grid, GPU-resident |
 | **2D** | Native coherence | Every applet bridge-native (**zero raw GL anywhere**); **Metal is the macOS default** (GL = frozen fallback); MLScope real-data viz (probe digit + feature maps) |
 | **2E′** | **Flagship** | **GPTScope** — nanoGPT-style char transformer on TinyShakespeare: jobs-trained, metrics-streamed, **live evolving samples**, **per-head attention heatmaps** + hover char-highlight, temperature, perplexity |

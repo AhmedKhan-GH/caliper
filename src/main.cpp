@@ -11,7 +11,6 @@
 #include "host/job_system.h"
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
-#include "host/runs_dashboard.h"
 #include "host/renderer/host_renderer.h"
 #include "app_paths.h"
 
@@ -77,8 +76,8 @@ public:
         ImPlot3D::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        // Docking (ImGui docking branch): lets the applet page host a docked
-        // desktop — applet windows in a central node, Runs docked to the right.
+        // Docking (ImGui docking branch): the applet page hosts a docked
+        // desktop — applet windows tile into a central node + side column.
         // Persisted per-window/dockspace layout lives in imgui.ini (host-owned).
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
@@ -208,14 +207,6 @@ public:
             }
 
             if (page_ == AppPage::Landing) {
-                // The Landing page has no menu bar of its own; add a minimal one
-                // solely to host the always-reachable "Runs" toggle (the Applet
-                // page toggles it from its existing menu bar below).
-                if (ImGui::BeginMainMenuBar()) {
-                    if (ImGui::MenuItem("Runs", nullptr, runs_open_))
-                        runs_open_ = !runs_open_;
-                    ImGui::EndMainMenuBar();
-                }
                 if (intro_active_) {
                     intro_.draw_ui(dw, dh);
                     if (intro_.should_launch()) {
@@ -231,9 +222,9 @@ public:
             } else if (page_ == AppPage::Applet) {
                 // Docked desktop (applet page only). A passthru dockspace fills
                 // the viewport's work area (below the main menu bar) so the
-                // applet's window and the Runs dashboard can be docked. The
-                // central node stays transparent while empty, so a full-viewport
-                // applet docked into it looks exactly as before.
+                // applet's windows can be docked. The central node stays
+                // transparent while empty, so a full-viewport applet docked
+                // into it looks exactly as before.
                 ImGuiID dock_id = ImGui::DockSpaceOverViewport(
                     0, ImGui::GetMainViewport(),
                     ImGuiDockNodeFlags_PassthruCentralNode);
@@ -297,7 +288,6 @@ public:
                         for (const char* w : side_bot_windows)
                             if (fresh || unseen(w))
                                 ImGui::DockBuilderDockWindow(w, side_bot);
-                        if (fresh) ImGui::DockBuilderDockWindow("Runs", right);
                         ImGui::DockBuilderFinish(dock_id);
                     }
                     dock_layout_built_ = true;
@@ -307,8 +297,6 @@ public:
 
                 if (ImGui::BeginMainMenuBar()) {
                     if (ImGui::MenuItem("< Home")) go_back = true;
-                    if (ImGui::MenuItem("Runs", nullptr, runs_open_))
-                        runs_open_ = !runs_open_;
                     ImGui::Separator();
                     ImGui::TextDisabled("%s",
                         loader_.at(active_applet_).manifest.name.c_str());
@@ -355,11 +343,6 @@ public:
                     intro_.set_applets(std::move(cards));
                 }
             }
-
-            // Runs dashboard (B5): host UI over the metrics store, toggled from
-            // the menu bar on either page; queries only while runs_open_.
-            caliper_host::render_runs_dashboard(
-                caliper_host::host_metrics_store(), &runs_open_);
 
             // Jobs tray (§7.5): visible on every page while jobs exist.
             {
@@ -524,7 +507,6 @@ private:
     caliper_host::FrameWatchdog watchdog_;
     int active_applet_ = -1;
     double last_frame_time_ = 0.0;
-    bool runs_open_ = false;
     bool dock_layout_built_ = false;  // first-run applet dock layout attempted
 };
 
