@@ -110,6 +110,15 @@ struct EmbedScopeState {
     int64_t  snap_n = 0;
     uint64_t embed_gen = 0;            // bumped per publish (0 = none yet)
 
+    // Live per-STEP stream (the real-time layer between eval snapshots):
+    // the current mini-batch's embeddings + the weight tensors, published
+    // every optimizer step. This is where the tensor bridge earns its keep —
+    // weights render as heatmaps that visibly reorganize while SGD runs.
+    std::vector<float> live_x, live_y, live_z;   // current batch (<= kBatch)
+    std::vector<float> w_conv1;                  // conv1 weights, 8 * 3*3
+    std::vector<float> w_embed;                  // fc_embed weights, 3 * 64
+    uint64_t live_gen = 0;                       // bumped per step (0 = none)
+
     // set on the frame thread before submitting the eval (Load) job
     std::string load_path;
 
@@ -127,6 +136,12 @@ struct EmbedScopeState {
 
     CaliperTextureId hover_tex = 0;
     int hover_idx = -1;
+
+    // frame-thread-only: live-tensor textures + plot copies (per live_gen)
+    uint64_t tex_gen = 0;
+    CaliperTextureId conv_tex[8] = {};   // 3x3 kernels, MAGMA-mapped
+    CaliperTextureId embw_tex = 0;       // 3x64 projection matrix, RdBu-mapped
+    std::vector<float> lbx, lby, lbz;    // live-batch plot copies
 
     std::string save_status;           // last Save/Load message
 };
@@ -375,6 +390,31 @@ void train_job(void* user, const CaliperJobControl* ctl) {
             float l = loss.item<float>();
             { std::lock_guard<std::mutex> lk(st->mtx); st->loss_hist.push_back(l); }
             if (run != 0) st->metrics.scalar(run, "train/loss", step, l);
+            {   // Live per-step publish: this batch's embeddings + the weight
+                // tensors, as owned CPU clones (the frame thread turns the
+                // weights into bridge textures — real-time, not per-eval).
+                torch::NoGradGuard ng;
+                auto e3 = model->embed(xb).to(torch::kCPU)
+                              .to(torch::kFloat32).contiguous();
+                auto wc = model->conv1->weight.detach().to(torch::kCPU)
+                              .to(torch::kFloat32).contiguous();
+                auto we = model->fc_embed->weight.detach().to(torch::kCPU)
+                              .to(torch::kFloat32).contiguous();
+                const float* ep = e3.data_ptr<float>();
+                const int64_t bn = e3.size(0);
+                std::lock_guard<std::mutex> lk(st->mtx);
+                st->live_x.resize(bn); st->live_y.resize(bn); st->live_z.resize(bn);
+                for (int64_t i = 0; i < bn; i++) {
+                    st->live_x[i] = ep[3 * i + 0];
+                    st->live_y[i] = ep[3 * i + 1];
+                    st->live_z[i] = ep[3 * i + 2];
+                }
+                st->w_conv1.assign(wc.data_ptr<float>(),
+                                   wc.data_ptr<float>() + 8 * 3 * 3);
+                st->w_embed.assign(we.data_ptr<float>(),
+                                   we.data_ptr<float>() + 3 * 64);
+                st->live_gen++;
+            }
             step++;
             char msg[96];
             std::snprintf(msg, sizeof msg, "epoch %d/%d  loss %.4f",
@@ -519,6 +559,17 @@ CaliperTextureId make_digit_tex(EmbedScopeState* st,
     return st->bridge.texture_from_tensor(&*ct);
 }
 
+// f32 HxW heatmap -> colormapped bridge texture (frame thread only; caller
+// owns the returned id). The upload copies, so `d` only outlives this call.
+CaliperTextureId make_map_tex(EmbedScopeState* st, const float* d, int h,
+                              int w, int cmap, float vmin, float vmax) {
+    if (!st->bridge) return 0;
+    auto t = torch::from_blob(const_cast<float*>(d), {h, w}, torch::kFloat32);
+    auto ct = caliper::adapters::to_tensor(t);
+    if (!ct) return 0;
+    return st->bridge.texture_from_tensor_mapped(&*ct, cmap, vmin, vmax);
+}
+
 } // namespace
 
 // ---- applet facade --------------------------------------------------------
@@ -557,14 +608,21 @@ void EmbedScopeApplet::draw_ui() {
     std::vector<float> loss, accx, accy, ex, ey, ez;
     std::vector<int>   lbl, prd;
     std::vector<uint8_t> px;
+    std::vector<float> w_conv1, w_embed;
     std::string status;
-    uint64_t gen; int64_t n;
+    uint64_t gen, lgen; int64_t n;
     {
         std::lock_guard<std::mutex> lk(st->mtx);
         loss = st->loss_hist; accx = st->acc_steps; accy = st->acc_hist;
         status = st->status;  gen = st->embed_gen;  n = st->snap_n;
         if (gen != 0) { ex = st->ex; ey = st->ey; ez = st->ez;
                         lbl = st->labels; prd = st->preds; px = st->pixels; }
+        lgen = st->live_gen;
+        if (lgen != 0 && lgen != st->tex_gen) {
+            // fresh step: take plot copies + weight clones out of the lock
+            st->lbx = st->live_x; st->lby = st->live_y; st->lbz = st->live_z;
+            w_conv1 = st->w_conv1; w_embed = st->w_embed;
+        }
     }
     ImGui::TextWrapped("%s", status.c_str());
 
@@ -687,7 +745,17 @@ void EmbedScopeApplet::draw_ui() {
                                             : ImPlot3DCond_Once);
         st->refit = false;
         if (gen == 0) {
-            ImPlot3D::EndPlot();   // empty axes until the first publish
+            // No test-set snapshot yet — but the live batch streams from the
+            // very first optimizer step, so the cloud moves immediately.
+            if (!st->lbx.empty())
+                ImPlot3D::PlotScatter("live batch", st->lbx.data(),
+                    st->lby.data(), st->lbz.data(), (int)st->lbx.size(),
+                    ImPlot3DSpec(ImPlot3DProp_MarkerFillColor,
+                                 IM_COL32(255, 255, 255, 180),
+                                 ImPlot3DProp_MarkerLineColor,
+                                 IM_COL32(30, 30, 30, 255),
+                                 ImPlot3DProp_MarkerSize, 2.8f));
+            ImPlot3D::EndPlot();
         } else {
             for (int c = 0; c < 10; c++) {
                 if (st->cx[c].empty()) continue;
@@ -710,6 +778,16 @@ void EmbedScopeApplet::draw_ui() {
                                  ImPlot3DProp_MarkerLineColor, IM_COL32(15,15,15,255),
                                  ImPlot3DProp_MarkerSize, 8.0f));
             }
+            // The live layer: the current mini-batch, re-embedded every
+            // optimizer step — white sparks moving between eval snapshots.
+            if (!st->lbx.empty())
+                ImPlot3D::PlotScatter("live batch", st->lbx.data(),
+                    st->lby.data(), st->lbz.data(), (int)st->lbx.size(),
+                    ImPlot3DSpec(ImPlot3DProp_MarkerFillColor,
+                                 IM_COL32(255, 255, 255, 180),
+                                 ImPlot3DProp_MarkerLineColor,
+                                 IM_COL32(30, 30, 30, 255),
+                                 ImPlot3DProp_MarkerSize, 2.8f));
             // Hover pick: nearest projected point within kPickPx (not while
             // dragging — that rotates the view).
             if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
@@ -747,6 +825,49 @@ void EmbedScopeApplet::draw_ui() {
     }
     ImGui::End();   // EmbedScope: Cloud
 
+    // Live tensors — the bridge's real-time surface: weight heatmaps that
+    // reorganize every optimizer step, not every eval tick.
+    ImGui::Begin("EmbedScope: Tensors");
+    if (!st->bridge) {
+        ImGui::TextDisabled("tensor_bridge.v1 absent (ok) — no live tensors");
+    } else if (lgen == 0) {
+        ImGui::TextDisabled("press Train — conv1 kernels and the 3-D "
+                            "projection matrix render here live, every "
+                            "optimizer step");
+    } else {
+        if (lgen != st->tex_gen && !w_conv1.empty() && !w_embed.empty()) {
+            for (auto& tx : st->conv_tex)
+                if (tx) { st->bridge.release_texture(tx); tx = 0; }
+            if (st->embw_tex) { st->bridge.release_texture(st->embw_tex);
+                                st->embw_tex = 0; }
+            float km = 1e-6f;
+            for (float v : w_conv1) km = std::max(km, std::fabs(v));
+            for (int k = 0; k < 8; k++)
+                st->conv_tex[k] = make_map_tex(st, w_conv1.data() + k * 9,
+                                               3, 3, CALIPER_CMAP_MAGMA,
+                                               -km, km);
+            float wm = 1e-6f;
+            for (float v : w_embed) wm = std::max(wm, std::fabs(v));
+            st->embw_tex = make_map_tex(st, w_embed.data(), 3, 64,
+                                        CALIPER_CMAP_RDBU, -wm, wm);
+            st->tex_gen = lgen;
+        }
+        ImGui::TextDisabled("streaming via tensor_bridge.v1 — step %llu",
+                            (unsigned long long)lgen);
+        ImGui::SeparatorText("conv1 kernels (8 x 3x3, magma)");
+        for (int k = 0; k < 8; k++) {
+            if (k) ImGui::SameLine();
+            if (st->conv_tex[k])
+                ImGui::Image(caliper::Bridge::imtex(st->conv_tex[k]),
+                             ImVec2(40, 40));
+        }
+        ImGui::SeparatorText("fc_embed weight — the 3-D projection (3 x 64, RdBu)");
+        if (st->embw_tex)
+            ImGui::Image(caliper::Bridge::imtex(st->embw_tex),
+                         ImVec2(ImGui::GetContentRegionAvail().x, 51));
+    }
+    ImGui::End();   // EmbedScope: Tensors
+
     // data.v1 panel.
     ImGui::Begin("EmbedScope: Data");
     ImGui::SeparatorText("data.v1 — SQL over the live embedding table");
@@ -774,10 +895,14 @@ void EmbedScopeApplet::cleanup() {
         for (int i = 0; i < 1000 && st->jobs.is_running(st->job_id); i++)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    // Frame-thread-owned texture: release after the job wait, before renderer
+    // Frame-thread-owned textures: release after the job wait, before renderer
     // teardown (the worker never touched the bridge).
     if (st->hover_tex) { st->bridge.release_texture(st->hover_tex);
                          st->hover_tex = 0; }
+    for (auto& tx : st->conv_tex)
+        if (tx) { st->bridge.release_texture(tx); tx = 0; }
+    if (st->embw_tex) { st->bridge.release_texture(st->embw_tex);
+                        st->embw_tex = 0; }
     curl_global_cleanup();   // pairs with on_init; safe once the worker exited
     if (st->host) st->host->log_info("embed-scope: on_cleanup");
 }

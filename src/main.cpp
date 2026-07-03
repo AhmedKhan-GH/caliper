@@ -250,7 +250,7 @@ public:
                     static const char* const side_top_windows[] = {
                         "EmbedScope: Training"};
                     static const char* const side_bot_windows[] = {
-                        "EmbedScope: Data"};
+                        "EmbedScope: Tensors", "EmbedScope: Data"};
                     auto unseen = [](const char* w) {
                         return ImGui::FindWindowSettingsByID(ImHashStr(w)) ==
                                nullptr;

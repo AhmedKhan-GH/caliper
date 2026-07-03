@@ -255,6 +255,7 @@ for 10 s, 8 applet cards — is green):
     (train/loss, test/accuracy) alongside MLScope and GPTScope history — the same
     optional `caliper.metrics.v1` path.
 20. **Both renderers.** All of the above renders identically on the default
+21. **EmbedScope live tensors:** while training runs, the `EmbedScope: Tensors` panel shows the 8 conv1 kernels (magma) and the 3x64 projection matrix (RdBu) **changing every optimizer step** (~8/s), and the Cloud shows the white "live batch" sparks moving between eval snapshots — this is the per-step bridge surface, distinct from the per-eval snapshot.
     **Metal** (`./build/caliper`) and the **GL** fallback
     (`CALIPER_RENDERER=gl ./build/caliper`) — the ImPlot3D cloud, the hover digit,
     the centroid diamonds, save/load, and the dashboard. Same applet code; only
