@@ -217,3 +217,45 @@ for 10s — is green):
     arrives with `caliper.artifacts.v1`. That is the honest placeholder for the
     D16 demand-driven clause — checkpointing is the first real demand for an
     artifacts service, not something faked here.
+
+### Phase-2F′ additions (EmbedScope, all-services exemplar)
+
+Phase 2F′ shipped **EmbedScope** — a small MNIST net with a learned **3-D
+embedding bottleneck**, drawn as a live **ImPlot3D** scatter, and the honest first
+consumer of the last two services ([`caliper.artifacts.v1`](artifacts-v1.md),
+[`caliper.data.v1`](data-v1.md)). ImPlot3D renders through ImGui's draw list, so
+the 3-D view works on **both** renderers (§6c-clean, no raw GL). These checks are
+the exemplar's live-visual acceptance demo (the machine verification — build
+green, full `ctest` + `caliper_gfx_tests` + torch suites, both renderers headless
+for 10 s, 8 applet cards — is green):
+
+15. **Blob → lobes, live.** Open **EmbedScope**, click *Train*. The 3-D point
+    cloud starts as **one gray blob** and, as training runs, **splits into ten
+    colored lobes** (tab10, one series per digit class) — visibly reorganizing
+    while the loss falls. The plot is **rotatable/zoomable** with the mouse
+    throughout. (Honest note: a 3-D bottleneck on MNIST yields **lobes, not
+    cleanly linearly-separated islands** — the blob→lobes *transition* is the
+    point, not perfect separation.)
+16. **Hover → digit.** Hover any point in the cloud; a tooltip shows that
+    sample's **digit texture** (its 28×28 image via `tensor_bridge.v1`) with its
+    `label N / pred N`. The texture is a CPU tensor, so it renders on Metal and GL
+    alike.
+17. **Live SQL panels (`data.v1`).** Each eval tick the worker republishes the
+    embedding table and EmbedScope runs SQL over it: **per-class centroids** appear
+    as large 3-D diamonds among the points, and the **misclassified count / total
+    (%)** line updates — both computed by `caliper.data.v1` and drained through the
+    Arrow stream.
+18. **Save → relaunch → Load skips training (`artifacts.v1`, load-bearing).**
+    Click **Save model** (shows a digest), **quit** the app, **relaunch**, open
+    EmbedScope, click **Load model**. The cloud is **restored from the checkpoint
+    by running eval only — with NO training** (the model persists across
+    relaunches via the content-addressed store). This is the load-bearing demand:
+    without artifacts.v1 there is no reload.
+19. **Runs dashboard.** The EmbedScope run appears in the **Runs dashboard**
+    (train/loss, test/accuracy) alongside MLScope and GPTScope history — the same
+    optional `caliper.metrics.v1` path.
+20. **Both renderers.** All of the above renders identically on the default
+    **Metal** (`./build/caliper`) and the **GL** fallback
+    (`CALIPER_RENDERER=gl ./build/caliper`) — the ImPlot3D cloud, the hover digit,
+    the centroid diamonds, save/load, and the dashboard. Same applet code; only
+    where the bridge stages the hover pixels differs.

@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **As of** | 2026-07-02 |
-| **Branch / tip** | `main` @ `7310a52` (~50 commits ahead of `origin/caliper-platform`) |
-| **Governing spec** | `PLATFORM.md` (repo root) — decision log D1–D17 |
+| **As of** | 2026-07-03 |
+| **Branch / tip** | `platform/phase-2f` @ `4dde8af`+docs (Phase 2F′; ready to merge to `main`) |
+| **Governing spec** | `PLATFORM.md` (repo root) — decision log D1–D18 |
 | **Execution record** | `docs/superpowers/plans/*` (per-phase plans) + `.superpowers/sdd/progress.md` (ledger) |
-| **Position** | **Phase 2 complete — at the ratified strategic stop-and-evaluate line before Phase 3** |
+| **Position** | **Phase 2 complete — all 8 services shipped and consumed; at the ratified strategic stop-and-evaluate line before Phase 3** |
 
 ---
 
@@ -32,6 +32,7 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 | **2C** | **The USP** | `HostRenderer` seam + **Metal backend**; `caliper.tensor_bridge.v1` **pixel-exact on both backends** (windowed gfx harness); torch adapter (`caliper/adapters/torch.hpp`); MLScope live conv-kernel grid, GPU-resident |
 | **2D** | Native coherence | Every applet bridge-native (**zero raw GL anywhere**); **Metal is the macOS default** (GL = frozen fallback); MLScope real-data viz (probe digit + feature maps) |
 | **2E′** | **Flagship** | **GPTScope** — nanoGPT-style char transformer on TinyShakespeare: jobs-trained, metrics-streamed, **live evolving samples**, **per-head attention heatmaps** + hover char-highlight, temperature, perplexity |
+| **2F′** | **Last two services + all-services exemplar** (D18) | `caliper.artifacts.v1` (content-addressed, deduped, run-lineaged checkpoints on DuckDB+blob files) + `caliper.data.v1` (SQL over the host store, results out as **Arrow C streams**); **EmbedScope** — MNIST net with a learned **3-D embedding bottleneck** on live ImPlot3D (blob→10 lobes, renderer-agnostic), the honest consumer of **all 8 services** (Save/Load load-bearing on artifacts; live SQL centroids/misclassified on data). Commits `626af5f..4dde8af` (+docs) |
 
 ### 🔧 Post-ship fixes (from your hands-on runs — all merged)
 
@@ -46,7 +47,6 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 
 | Phase | Milestone | Nature |
 |---|---|---|
-| **2F′** | Demand-driven services: `caliper.data.v1`, `caliper.artifacts.v1` | **Parked, not scheduled** — built only when the flagship (or another applet) actually needs them. GPTScope's disabled "save checkpoint" button is the recorded first demand for `artifacts.v1`. |
 | **3** | **Independence** | reach — the "platform moment" |
 | **4** | **Distribution** | reach |
 | **5** | **Ecosystem** | reach |
@@ -56,17 +56,18 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 
 ## 3. What "done" looks like today (inventory)
 
-**Services vended (7):** `ui.v1`, `log.v1`, `jobs.v1`, `device.v1`, `metrics.v1`, `tensor_bridge.v1` (+ `CaliperTensor` interchange type).
+**Services vended (8):** `ui.v1`, `log.v1`, `jobs.v1`, `device.v1`, `metrics.v1`, `tensor_bridge.v1`, `artifacts.v1`, `data.v1` (+ `CaliperTensor` and the Arrow C Data Interface as ABI-boundary interchange types). Every service now has an honest in-tree consumer.
 
-**Applets (7):**
+**Applets (8):**
 - *Flagship:* GPTScope (`applets/gpt_scope`)
+- *All-services exemplar:* EmbedScope (`applets/embed_scope`) — 3-D embedding projector; consumes all 8 services
 - *Exemplars:* SignalScope (general idioms), MLScope (MNIST CNN + kernel/digit/feature-map viz)
 - *Fixture:* Hello (`examples/hello`)
 - *Legacy (epoch-2, bridge-native, never service-migrated):* CircuitNet, OpenGllama, RepNet Demo
 
 **Tests:** ~80 cases across three ctest suites — `caliper_tests` (host units + sugar + ABI/C-gate), `caliper_gfx_tests` (windowed, pixel-exact bridge + ImGui-draw-path both backends, label `gfx`), `caliper_torch_tests` (adapter, label `torch`).
 
-**Docs:** 16-page MkDocs wiki (`docs/wiki/`), strict-build gated, reference pages embedding real headers.
+**Docs:** MkDocs wiki (`docs/wiki/`), strict-build gated, reference pages embedding real headers (incl. the two new service pages + an Arrow C Data Interface note).
 
 **Infra:** GitHub org `caliper-platform` (repo transferred); host self-versions `0.6.0`.
 
@@ -74,12 +75,13 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 
 ## 4. What's left to reach the full scope
 
-Everything below the sufficiency line. **None is required for the platform to be *complete for you*** — each exists to onboard other people, and the spec gates them on demand (D12).
+Everything below the sufficiency line. Phase 2F′ (the last two demand-driven services) is now **done** — it was the final piece of *completeness for the author*, and it closed on real demand exactly as D12/D16 prescribed. Everything remaining below it exists to onboard **other people**, and none of it is required for the platform to be complete for you.
 
-### Phase 2F′ — demand-driven services *(optional, do on demand)*
-- [ ] `caliper.artifacts.v1` — content-addressed checkpoint store; **trigger:** wire GPTScope's disabled "save checkpoint" button to it (the demand is already recorded).
-- [ ] `caliper.data.v1` — named datasets + SQL/Arrow out; **trigger:** an applet that needs shared, inspectable datasets rather than a private download.
-- *Freeze each header only when its consumer exists — extract-don't-invent.*
+### Phase 2F′ — demand-driven services *(done — the last two services shipped with their first honest consumer, D18)*
+- [x] `caliper.artifacts.v1` — content-addressed, deduped, run-lineaged checkpoint store (blob files + DuckDB index); **consumer:** EmbedScope Save/Load (load-bearing — Load restores the cloud without training).
+- [x] `caliper.data.v1` — named datasets + SQL over the host store, results out as Arrow C streams; **consumer:** EmbedScope's live class-centroid and misclassified-count queries over the published embedding table.
+- [x] `EmbedScope` — the all-services exemplar; 3-D embedding bottleneck on live ImPlot3D, renderer-agnostic, exercising the whole platform surface.
+- *Extract-don't-invent honored: each header was frozen only once its consumer existed.*
 
 ### Phase 3 — Independence *("this is the moment Caliper becomes a platform")*
 - [ ] Split `caliper-sdk` into its own repo via `git filter-repo` (history preserved), tag `v0.1.0`.
@@ -125,4 +127,4 @@ Everything below the sufficiency line. **None is required for the platform to be
 
 ## 6. One-line summary
 
-**The platform is done and sufficient for its author: 7 phases merged, the USP proven, a flagship you chose running end-to-end on public services, in a docked desktop. Everything remaining is about inviting other people in — and that's now a choice, not a task.**
+**Phase 2 is complete and the platform is sufficient for its author: all 8 services shipped and each honestly consumed, the USP proven, a flagship you chose plus an all-services exemplar (EmbedScope) running end-to-end on public services in a docked desktop. Everything remaining is about inviting other people in — and that's now a choice, not a task.**

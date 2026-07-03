@@ -27,6 +27,7 @@ nav:
       - Manifest (caliper.toml): reference/manifest.md
       - Refusal messages: reference/refusals.md
       - Tensor (caliper/tensor.h): reference/tensor.md
+      - Arrow C Data Interface: reference/arrow.md
       - Adapters (torch): reference/adapters.md
       - Services:
           - caliper.ui.v1: reference/services/ui-v1.md

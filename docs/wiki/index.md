@@ -6,6 +6,8 @@ The platform's reason to exist is the tensor bridge: weights, activations, and s
 
 The flagship applet, **GPTScope**, is the proof: a char-level mini-GPT (nanoGPT-style, 4 layers / 4 heads) trained live on TinyShakespeare, built entirely on the public service stack. It trains off the frame thread via `caliper.jobs.v1` on the host-negotiated device, streams train/val loss (and val perplexity) to the `caliper.metrics.v1` Runs dashboard, samples text live as the loss falls (gibberish → words → cadence), and renders per-head attention heatmaps through `caliper.tensor_bridge.v1` — GPU-resident on Metal — with layer switching, hover-highlighting, and a sampling-temperature control. No private hooks; every capability it uses is one an out-of-tree applet has.
 
+**EmbedScope** (`applets/embed_scope/`) is the all-services exemplar and the honest consumer of the last two services: a small MNIST net with a **3-D embedding bottleneck** whose test-set embeddings are drawn as a live ImPlot3D scatter (renderer-agnostic, so it works on both Metal and GL) that splits from one blob into ten colored lobes *while training runs*. It exercises every service — `caliper.artifacts.v1` (Save/Load the model; Load skips training) and `caliper.data.v1` (SQL over the live embedding table for class centroids and misclassified counts) alongside jobs, device, metrics, and the tensor bridge.
+
 This wiki is the docs-as-code companion to `PLATFORM.md` (the governing spec at the repo root). It is organized along the [Diátaxis](https://diataxis.fr/) axes — learning, tasks, information, and understanding.
 
 ## What's here
