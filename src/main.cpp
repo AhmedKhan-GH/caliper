@@ -110,7 +110,10 @@ public:
                 std::cerr << "Intro screen init failed" << std::endl;
                 return false;
             }
+            intro_active_ = true;
         }
+        // On non-GL backends the launcher must not depend on IntroScreen:
+        // draw_fallback_launcher() renders a plain-ImGui card list instead.
 
         // Scan for applet shared libraries
         std::string applets_dir = caliper::app_data_path("applets");
@@ -179,28 +182,17 @@ public:
                         runs_open_ = !runs_open_;
                     ImGui::EndMainMenuBar();
                 }
-                intro_.draw_ui(dw, dh);
-                if (intro_.should_launch()) {
-                    intro_.reset_launch_flag();
-                    int idx = intro_.selected_index();
-                    if (idx >= 0 && idx < loader_.count()) {
-                        CaliperHost proto{};
-                        proto.struct_size  = sizeof(CaliperHost);
-                        proto.abi_epoch    = 2;
-                        proto.host_version = caliper_host::kHostVersionU32;
-                        proto.applet_data_dir = nullptr;   // loader fills per-applet
-                        proto.get_service = [](const CaliperHost*, const char* id) {
-                            return caliper_host::services_get(id);
-                        };
-                        if (loader_.launch(idx, proto)) {
-                            active_applet_ = idx;
-                            watchdog_.reset();
-                            last_frame_time_ = glfwGetTime();
-                            page_ = AppPage::Applet;
-                            glfwSetWindowTitle(window_,
-                                ("Caliper - " + loader_.at(idx).manifest.name).c_str());
-                        }
+                if (intro_active_) {
+                    intro_.draw_ui(dw, dh);
+                    if (intro_.should_launch()) {
+                        intro_.reset_launch_flag();
+                        launch_applet(intro_.selected_index());
                     }
+                } else {
+                    // Metal (and any future non-GL backend): the GL-only
+                    // IntroScreen never initialized, so it owns no UI here.
+                    // Reads loader_ live each frame — statuses always fresh.
+                    draw_fallback_launcher();
                 }
             } else if (page_ == AppPage::Applet) {
                 bool go_back = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
@@ -310,6 +302,62 @@ public:
     }
 
 private:
+    void launch_applet(int idx) {
+        if (idx < 0 || idx >= loader_.count()) return;
+        CaliperHost proto{};
+        proto.struct_size  = sizeof(CaliperHost);
+        proto.abi_epoch    = 2;
+        proto.host_version = caliper_host::kHostVersionU32;
+        proto.applet_data_dir = nullptr;   // loader fills per-applet
+        proto.get_service = [](const CaliperHost*, const char* id) {
+            return caliper_host::services_get(id);
+        };
+        if (loader_.launch(idx, proto)) {
+            active_applet_ = idx;
+            watchdog_.reset();
+            last_frame_time_ = glfwGetTime();
+            page_ = AppPage::Applet;
+            glfwSetWindowTitle(window_,
+                ("Caliper - " + loader_.at(idx).manifest.name).c_str());
+        }
+    }
+
+    // Renderer-agnostic launcher for backends where the GL IntroScreen is
+    // inactive. Plain ImGui: name/tag/summary/status + Launch per applet.
+    void draw_fallback_launcher() {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->WorkPos);
+        ImGui::SetNextWindowSize(vp->WorkSize);
+        ImGui::Begin("##launcher", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::TextDisabled("C A L I P E R");
+        ImGui::Separator();
+        if (loader_.count() == 0)
+            ImGui::TextWrapped("No applets found. Drop a dylib + "
+                               "<name>.caliper.toml into the applets folder.");
+        for (int i = 0; i < loader_.count(); i++) {
+            const auto& e = loader_.at(i);
+            const bool ready = e.status == caliper_host::AppletStatus::Ready;
+            ImGui::PushID(i);
+            ImGui::Text("%s", e.manifest.name.c_str());
+            if (!e.manifest.tag.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("[%s]", e.manifest.tag.c_str());
+            }
+            ImGui::TextWrapped("%s", e.manifest.summary.c_str());
+            if (!ready)
+                ImGui::TextColored({1.0f, 0.55f, 0.35f, 1.0f},
+                                   "[unavailable] %s", e.status_text.c_str());
+            ImGui::BeginDisabled(!ready);
+            if (ImGui::Button("Launch")) launch_applet(i);
+            ImGui::EndDisabled();
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        ImGui::End();
+    }
+
     // (Re)create the GLFW window for the current renderer and init the backend.
     // glfwDefaultWindowHints() clears sticky hints from a prior attempt (e.g.
     // Metal's GLFW_NO_API) so the fallback backend gets a clean slate.
@@ -351,6 +399,7 @@ private:
     std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
     IntroScreen intro_;
+    bool intro_active_ = false;   // GL-only IntroScreen initialized (owns landing UI)
     caliper_host::AppletLoader loader_{
         caliper_host::HostCaps{2, caliper_host::kHostVersionStr,
                                caliper_host::service_ids()},
