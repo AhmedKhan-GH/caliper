@@ -7,6 +7,7 @@
 #include <caliper/tensor.h>
 #include <caliper/services/metrics_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/artifacts_v1.h>
 #include <cstddef>
 #include <string>
 #include <type_traits>
@@ -58,4 +59,11 @@ static_assert(CALIPER_CMAP_VIRIDIS == 0 && CALIPER_CMAP_MAGMA == 1 &&
 
 TEST_CASE("abi: phase-2c service ids are fixed") {
     CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1) == "caliper.tensor_bridge.v1");
+}
+
+static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);
+static_assert(offsetof(CaliperArtifactsV1, struct_size) == 0);
+
+TEST_CASE("abi: phase-2f service ids are fixed") {
+    CHECK(std::string(CALIPER_ARTIFACTS_V1) == "caliper.artifacts.v1");
 }

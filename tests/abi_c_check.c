@@ -1,6 +1,7 @@
 /* Every public header must compile as C *standalone* — newest-first include
  * order so a header missing its own includes can't hide behind a sibling
  * that pulled them earlier (caught the tensor_bridge stdbool gap, C3 review). */
+#include <caliper/services/artifacts_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/metrics_v1.h>
 #include <caliper/tensor.h>
