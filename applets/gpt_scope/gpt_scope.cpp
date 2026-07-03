@@ -1046,8 +1046,17 @@ void GPTScopeApplet::draw_ui() {
         if (ImGui::Button("Refit")) st->emb_refit = true;
         ImGui::SameLine();
         ImGui::TextDisabled("fixed axes show the geometry settle");
-        if (ImPlot3D::BeginPlot("##emb", ImVec2(-1, -1))) {
-            ImPlot3D::SetupAxes("PC1", "PC2", "PC3");
+        // Lock pan/zoom/menus (they drift the framing and hide the geometry
+        // settling) — but keep ROTATE: orbiting is how you read a 3-D cloud,
+        // and it's non-destructive. Axes also Lock'd so nothing rescales them.
+        const ImPlot3DFlags kNoDrift = ImPlot3DFlags_NoPan |
+                                       ImPlot3DFlags_NoZoom |
+                                       ImPlot3DFlags_NoMenus;
+        if (ImPlot3D::BeginPlot("##emb", ImVec2(-1, -1), kNoDrift)) {
+            ImPlot3D::SetupAxes("PC1", "PC2", "PC3",
+                                ImPlot3DAxisFlags_Lock,
+                                ImPlot3DAxisFlags_Lock,
+                                ImPlot3DAxisFlags_Lock);
             ImPlot3D::SetupAxesLimits(st->bmin[0], st->bmax[0], st->bmin[1],
                                       st->bmax[1], st->bmin[2], st->bmax[2],
                                       st->emb_refit ? ImPlot3DCond_Always
