@@ -222,33 +222,61 @@ public:
                     0, ImGui::GetMainViewport(),
                     ImGuiDockNodeFlags_PassthruCentralNode);
 
-                // First-run layout ONLY when this dockspace has no persisted
-                // node tree (a fresh, empty leaf) — an imgui.ini-restored layout
-                // is left untouched. Attempted once per process.
+                // Dock-by-title layout, attempted once per process. Two cases:
+                //  - fresh dockspace (no imgui.ini history): build the full
+                //    tiled layout (showcase central, panels in a side column,
+                //    Runs right).
+                //  - restored dockspace: dock ONLY windows that have no saved
+                //    settings yet (e.g. an applet grew new windows since the
+                //    ini was written). Anything the user ever placed is
+                //    untouched — their layout wins.
                 if (!dock_layout_built_) {
+                    // Titles are the exact Begin() strings from applet source.
+                    static const char* const central_windows[] = {
+                        "EmbedScope: Cloud",   // the showcase
+                        "Hello, Caliper",      // examples/hello
+                    };
+                    static const char* const side_top_windows[] = {
+                        "EmbedScope: Training"};
+                    static const char* const side_bot_windows[] = {
+                        "EmbedScope: Data"};
+                    auto unseen = [](const char* w) {
+                        return ImGui::FindWindowSettingsByID(ImHashStr(w)) ==
+                               nullptr;
+                    };
                     ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock_id);
-                    if (node && node->IsEmpty()) {
-                        ImGui::DockBuilderSetNodeSize(
-                            dock_id, ImGui::GetMainViewport()->WorkSize);
+                    const bool fresh = node && node->IsEmpty();
+                    bool any_unseen = false;
+                    for (const char* w : central_windows) any_unseen |= unseen(w);
+                    for (const char* w : side_top_windows) any_unseen |= unseen(w);
+                    for (const char* w : side_bot_windows) any_unseen |= unseen(w);
+                    if (node && (fresh || any_unseen)) {
                         ImGuiID central = dock_id;
-                        ImGuiID right = ImGui::DockBuilderSplitNode(
-                            central, ImGuiDir_Right, 0.32f, nullptr, &central);
-                        // Every applet's primary window docks into the central
-                        // node (only the live applet is ever submitted, so at
-                        // most one tab shows). Titles are the exact Begin()
-                        // strings from each applet's source.
-                        static const char* const applet_windows[] = {
-                            "GPTScope",                 // applets/gpt_scope
-                            "MLScope",                  // examples/ml_scope
-                            "SignalScope",              // examples/signal_scope
-                            "Hello, Caliper",           // examples/hello
-                            "CircuitNet 3.0 Explorer",  // applets/circuitnet
-                            "##OpenGllamaRoot",         // applets/opengllama
-                            "##WorkbenchRoot",          // applets/repnet_demo
-                        };
-                        for (const char* w : applet_windows)
-                            ImGui::DockBuilderDockWindow(w, central);
-                        ImGui::DockBuilderDockWindow("Runs", right);
+                        ImGuiID right = 0;
+                        if (fresh) {
+                            ImGui::DockBuilderSetNodeSize(
+                                dock_id, ImGui::GetMainViewport()->WorkSize);
+                            right = ImGui::DockBuilderSplitNode(
+                                central, ImGuiDir_Right, 0.32f, nullptr,
+                                &central);
+                        } else if (ImGuiDockNode* c =
+                                       ImGui::DockBuilderGetCentralNode(dock_id)) {
+                            central = c->ID;
+                        }
+                        ImGuiID side = ImGui::DockBuilderSplitNode(
+                            central, ImGuiDir_Right, 0.30f, nullptr, &central);
+                        ImGuiID side_bot = ImGui::DockBuilderSplitNode(
+                            side, ImGuiDir_Down, 0.40f, nullptr, &side);
+                        for (const char* w : central_windows)
+                            if (fresh || unseen(w))
+                                ImGui::DockBuilderDockWindow(w, central);
+                        for (const char* w : side_top_windows)
+                            if (fresh || unseen(w))
+                                ImGui::DockBuilderDockWindow(w, side);
+                        for (const char* w : side_bot_windows)
+                            if (fresh || unseen(w))
+                                ImGui::DockBuilderDockWindow(w, side_bot);
+                        if (fresh) ImGui::DockBuilderDockWindow("Runs", right);
                         ImGui::DockBuilderFinish(dock_id);
                     }
                     dock_layout_built_ = true;

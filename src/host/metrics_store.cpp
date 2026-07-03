@@ -43,8 +43,17 @@ bool MetricsStore::open(const std::string& path) {
     std::lock_guard<std::mutex> lk(impl_->mu);
 
     const char* target = (path == ":memory:") ? nullptr : path.c_str();
-    impl_->db  = std::make_unique<duckdb::DuckDB>(target);
-    impl_->con = std::make_unique<duckdb::Connection>(*impl_->db);
+    // DuckDB throws (e.g. IOException when another Caliper instance holds the
+    // file lock) — a failed open must degrade to a no-op service, never
+    // terminate the host. Same guard as ArtifactStore/DataStore.
+    try {
+        impl_->db  = std::make_unique<duckdb::DuckDB>(target);
+        impl_->con = std::make_unique<duckdb::Connection>(*impl_->db);
+    } catch (const std::exception&) {
+        impl_->db.reset();
+        impl_->con.reset();
+        return false;
+    }
 
     auto run_ddl = [&](const char* sql) {
         auto r = impl_->con->Query(sql);

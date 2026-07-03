@@ -7,6 +7,8 @@
 #include "metrics_store.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <unistd.h>
 #include <atomic>
 #include <numeric>
 #include <random>
@@ -206,4 +208,21 @@ TEST_CASE("metrics: threaded smoke — 4 threads x 500 scalars on distinct tags"
         total += static_cast<int>(s.size());
     }
     CHECK(total == T * PER);
+}
+
+TEST_CASE("metrics_store: a throwing DuckDB open degrades to closed, never terminates") {
+    // The DuckDB constructor throws on unopenable paths — including the
+    // IOException a second Caliper instance gets when the first holds the
+    // file lock (cross-process; simulated here with a directory path, which
+    // throws through the same constructor). open() must return false and
+    // leave an inert store; an uncaught exception here terminated the whole
+    // host before this guard.
+    auto dir = std::filesystem::temp_directory_path() /
+               ("caliper-metrics-dir-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    MetricsStore store;
+    CHECK_FALSE(store.open(dir.string()));    // path is a directory: throws
+    CHECK(store.begin_run("e", "r") == 0);    // and inert, not UB
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
 }

@@ -544,7 +544,10 @@ bool EmbedScopeApplet::initialize(caliper::Host& host) {
 
 void EmbedScopeApplet::draw_ui() {
     auto* st = s_.get();
-    ImGui::Begin("EmbedScope");   // no SetNextWindowPos/Size — host dockspace
+    // Three docked windows — the host dockspace tiles them (Cloud central,
+    // Training and Data in a side column). No SetNextWindowPos/Size anywhere:
+    // placement is the host's job, rearranging is the user's.
+    ImGui::Begin("EmbedScope: Training");
 
     ImGui::TextDisabled("device: %s (%s)", st->device.name,
                         st->device.kind == CALIPER_DEV_METAL ? "METAL->torch MPS"
@@ -629,6 +632,21 @@ void EmbedScopeApplet::draw_ui() {
     else if (!st->save_status.empty())
         ImGui::TextDisabled("artifacts: %s", st->save_status.c_str());
 
+    // Loss + accuracy (2-D) live with the controls.
+    if (ImPlot::BeginPlot("train loss", {-1, 150})) {
+        ImPlot::SetupAxes("step", "NLL");
+        if (!loss.empty()) ImPlot::PlotLine("loss", loss.data(), (int)loss.size());
+        ImPlot::EndPlot();
+    }
+    if (ImPlot::BeginPlot("test accuracy %", {-1, 150})) {
+        ImPlot::SetupAxes("step", "acc %");
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImPlotCond_Always);
+        if (!accy.empty())
+            ImPlot::PlotLine("acc", accx.data(), accy.data(), (int)accy.size());
+        ImPlot::EndPlot();
+    }
+    ImGui::End();   // EmbedScope: Training
+
     // Refresh the frame-side per-class split + data.v1 SQL when a new snapshot
     // arrived (once per publish, not per frame).
     if (gen != 0 && gen != st->plot_gen) {
@@ -655,9 +673,13 @@ void EmbedScopeApplet::draw_ui() {
         st->data_gen = gen;
     }
 
-    // The centerpiece: the live 3-D embedding scatter.
+    // The centerpiece: the live 3-D embedding scatter, filling its own window.
+    ImGui::Begin("EmbedScope: Cloud");
+    if (gen == 0)
+        ImGui::TextDisabled(
+            "press Train to watch one blob split into ten colored lobes");
     int hovered = -1;
-    if (ImPlot3D::BeginPlot("##embed", ImVec2(-1, 380))) {
+    if (ImPlot3D::BeginPlot("##embed", ImVec2(-1, -1))) {
         ImPlot3D::SetupAxes("z0", "z1", "z2");
         ImPlot3D::SetupAxesLimits(st->bmin[0], st->bmax[0], st->bmin[1],
                                   st->bmax[1], st->bmin[2], st->bmax[2],
@@ -665,9 +687,7 @@ void EmbedScopeApplet::draw_ui() {
                                             : ImPlot3DCond_Once);
         st->refit = false;
         if (gen == 0) {
-            ImPlot3D::EndPlot();
-            ImGui::TextDisabled("press Train to watch one blob split into ten "
-                                "colored lobes");
+            ImPlot3D::EndPlot();   // empty axes until the first publish
         } else {
             for (int c = 0; c < 10; c++) {
                 if (st->cx[c].empty()) continue;
@@ -725,22 +745,10 @@ void EmbedScopeApplet::draw_ui() {
                              st->hover_tex = 0; }
         st->hover_idx = -1;
     }
-
-    // Loss + accuracy (2-D).
-    if (ImPlot::BeginPlot("train loss", {-1, 140})) {
-        ImPlot::SetupAxes("step", "NLL");
-        if (!loss.empty()) ImPlot::PlotLine("loss", loss.data(), (int)loss.size());
-        ImPlot::EndPlot();
-    }
-    if (ImPlot::BeginPlot("test accuracy %", {-1, 140})) {
-        ImPlot::SetupAxes("step", "acc %");
-        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImPlotCond_Always);
-        if (!accy.empty())
-            ImPlot::PlotLine("acc", accx.data(), accy.data(), (int)accy.size());
-        ImPlot::EndPlot();
-    }
+    ImGui::End();   // EmbedScope: Cloud
 
     // data.v1 panel.
+    ImGui::Begin("EmbedScope: Data");
     ImGui::SeparatorText("data.v1 — SQL over the live embedding table");
     if (!st->data) {
         ImGui::TextDisabled("data.v1 absent (ok) — centroids/misclassified need it");
