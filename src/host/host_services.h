@@ -22,6 +22,12 @@ JobSystem& host_job_system();
 class MetricsStore;
 MetricsStore& host_metrics_store();
 
+// The process-wide artifact store backing caliper.artifacts.v1 (§7.8).
+// Opened by services_init() under the app data dir; may be unopened if the
+// disk failed (the service is still vended, its thunks no-op).
+class ArtifactStore;
+ArtifactStore& host_artifact_store();
+
 // The active renderer backing caliper.tensor_bridge.v1 (§7.4). main owns the
 // HostRenderer; it hands it in right after renderer init and clears it (nullptr)
 // before renderer teardown. The bridge is constructed lazily on the first thunk

@@ -62,6 +62,37 @@ const CaliperMetricsV1 kFakeMetrics = {
     sizeof(CaliperMetricsV1), &fmet_begin_run, &fmet_end_run, &fmet_scalar,
     &fmet_histogram, &fmet_image, &fmet_hparams};
 
+// Fake artifacts.v1: records the calls the Artifacts sugar routes through it.
+struct ArtifactCalls {
+    std::string last_name;
+    uint64_t last_len = 0, last_run = 0;
+    int puts = 0;
+    std::string last_lookup;
+};
+ArtifactCalls g_artifacts;
+
+bool fart_put(const char* name, const void* bytes, uint64_t len,
+              uint64_t run, char out_digest[65]) {
+    if (!bytes) return false;
+    g_artifacts.puts++;
+    g_artifacts.last_name = name ? name : "";
+    g_artifacts.last_len = len;
+    g_artifacts.last_run = run;
+    for (int i = 0; i < 64; i++) out_digest[i] = 'a';
+    out_digest[64] = '\0';
+    return true;
+}
+const char* fart_path_of(const char* key) {
+    g_artifacts.last_lookup = key ? key : "";
+    return "/fake/artifacts/blob";
+}
+bool fart_exists(const char* key) {
+    return key && std::string(key) == std::string(64, 'a');
+}
+const CaliperArtifactsV1 kFakeArtifacts = {sizeof(CaliperArtifactsV1),
+                                           &fart_put, &fart_path_of,
+                                           &fart_exists};
+
 // Fake tensor_bridge.v1: records that the Bridge sugar routes through it.
 struct BridgeCalls {
     int tex_calls = 0, mapped_calls = 0, update_calls = 0, release_calls = 0;
@@ -132,6 +163,38 @@ TEST_CASE("sugar: Device::query defaults to CPU without the service") {
     caliper::testing::FixtureHost fx;
     auto dev = caliper::Device::query(caliper::Host(fx.host()));
     CHECK(dev.kind == CALIPER_DEV_CPU);
+}
+
+TEST_CASE("sugar: Artifacts wrapper routes through the service table") {
+    g_artifacts = ArtifactCalls{};
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_ARTIFACTS_V1, &kFakeArtifacts);
+    caliper::Host host(fx.host());
+    caliper::Artifacts artifacts(host);
+    REQUIRE(static_cast<bool>(artifacts));
+
+    const char bytes[] = "ckpt";
+    std::string digest = artifacts.put("model", bytes, sizeof(bytes), 9);
+    CHECK(digest == std::string(64, 'a'));
+    CHECK(g_artifacts.puts == 1);
+    CHECK(g_artifacts.last_name == "model");
+    CHECK(g_artifacts.last_len == sizeof(bytes));
+    CHECK(g_artifacts.last_run == 9);
+
+    CHECK(artifacts.exists(digest.c_str()));
+    CHECK_FALSE(artifacts.exists("something-else"));
+    CHECK(std::string(artifacts.path_of("model")) == "/fake/artifacts/blob");
+    CHECK(g_artifacts.last_lookup == "model");
+}
+
+TEST_CASE("sugar: Artifacts wrapper is falsy and inert without the service") {
+    caliper::testing::FixtureHost fx;
+    caliper::Host host(fx.host());
+    caliper::Artifacts artifacts(host);
+    CHECK_FALSE(static_cast<bool>(artifacts));
+    CHECK(artifacts.put("x", "y", 1).empty());
+    CHECK(artifacts.path_of("x") == nullptr);
+    CHECK_FALSE(artifacts.exists("x"));
 }
 
 TEST_CASE("sugar: Metrics wrapper routes writers through the service table") {

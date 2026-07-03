@@ -7,11 +7,14 @@
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/artifacts_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
 #include <implot3d.h>
+
+#include <string>
 
 namespace caliper {
 
@@ -112,6 +115,36 @@ public:
     }
 private:
     const CaliperMetricsV1* t_ = nullptr;
+};
+
+// Typed wrapper over caliper.artifacts.v1 (§7.8): content-addressed checkpoint
+// storage. Falsy when the host doesn't vend the service; every call is inert
+// then (put returns "", path_of nullptr, exists false).
+class Artifacts {
+public:
+    Artifacts() = default;
+    explicit Artifacts(const Host& host)
+        : t_(static_cast<const CaliperArtifactsV1*>(
+              host.service(CALIPER_ARTIFACTS_V1))) {}
+    explicit operator bool() const { return t_ && t_->put; }
+    // Returns the 64-hex digest, or "" on failure/absence.
+    std::string put(const char* name, const void* bytes, uint64_t len,
+                    uint64_t run = 0) const {
+        if (!(t_ && t_->put)) return {};
+        char digest[65] = {};
+        return t_->put(name, bytes, len, run, digest) ? std::string(digest)
+                                                      : std::string();
+    }
+    // Host-owned string, valid until the next artifacts.v1 call; nullptr if
+    // unknown or the service is absent.
+    const char* path_of(const char* digest_or_name) const {
+        return (t_ && t_->path_of) ? t_->path_of(digest_or_name) : nullptr;
+    }
+    bool exists(const char* digest_or_name) const {
+        return t_ && t_->exists && t_->exists(digest_or_name);
+    }
+private:
+    const CaliperArtifactsV1* t_ = nullptr;
 };
 
 // Typed wrapper over caliper.tensor_bridge.v1 (§7.4): a CaliperTensor becomes a
