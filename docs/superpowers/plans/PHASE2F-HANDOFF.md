@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Repo** | `/Users/ahmed/CLionProjects/caliper` (github.com/caliper-platform/caliper; local is ~50 commits ahead — do NOT push) |
+| **Repo** | `/Users/ahmed/CLionProjects/caliper` (github.com/sternbild-org/caliper; local is ~50 commits ahead — do NOT push) |
 | **Working branch** | `platform/phase-2f` (branched from `main`; F1 already committed on it) |
 | **Governing spec** | `PLATFORM.md` at repo root — decision log D1–D18. §7.7 (data.v1), §7.8 (artifacts.v1), §16 (test contracts), §6c (no raw GL in applets), §9 (UI-stack pin) matter most here. |
 | **Binding plan** | `docs/superpowers/plans/2026-07-02-phase2f-data-artifacts-embedscope.md` — task definitions F1–F6. This handoff elaborates it; where they conflict, the plan wins. |

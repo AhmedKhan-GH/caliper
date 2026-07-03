@@ -69,7 +69,7 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 
 **Docs:** MkDocs wiki (`docs/wiki/`), strict-build gated, reference pages embedding real headers (incl. the two new service pages + an Arrow C Data Interface note).
 
-**Infra:** GitHub org `caliper-platform` (repo transferred); host self-versions `0.6.0`.
+**Infra:** GitHub org `sternbild-org` (repo transferred); host self-versions `0.6.0`.
 
 ---
 
