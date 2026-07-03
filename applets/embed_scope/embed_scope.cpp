@@ -114,11 +114,6 @@ struct EmbedScopeState {
     // the current mini-batch's embeddings + the weight tensors, published
     // every optimizer step. This is where the tensor bridge earns its keep —
     // weights render as heatmaps that visibly reorganize while SGD runs.
-    // Cloud refresh cadence in optimizer steps (UI slider -> worker). The
-    // full-subset re-embed is forward-only but ~15x a batch, so per-step
-    // would dominate training; every ~10 steps streams at ~1 Hz for +~50%.
-    std::atomic<int> cloud_every{10};
-
     std::vector<float> live_x, live_y, live_z;   // current batch (<= kBatch)
     // Weight DISPLAY tensors: built on the TRAINING device each step (block-
     // upscaled with repeat_interleave so tiny maps render as hard, sharp
@@ -451,15 +446,11 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                 st->w_wm = std::max(wm, 1e-6f);
                 st->live_gen++;
             }
-            {   // Cloud stream: re-embed the full test subset every N steps
-                // (UI slider) so the whole cloud migrates in near-real-time,
-                // not just at eval ticks.
-                int ce = st->cloud_every.load(std::memory_order_relaxed);
-                if (ce > 0 && step % ce == 0) {
-                    publish_embeddings(st, model, Xte, yte);
-                    model->train();
-                }
-            }
+            // Cloud stream: re-embed the full test subset EVERY step — the
+            // cloud is as live as the weights. The extra forward is noise
+            // next to the per-step MPS sync cost that dominates step time.
+            publish_embeddings(st, model, Xte, yte);
+            model->train();
             step++;
             char msg[96];
             std::snprintf(msg, sizeof msg, "epoch %d/%d  loss %.4f",
@@ -670,14 +661,6 @@ void EmbedScopeApplet::draw_ui() {
         else     ImGui::TextDisabled("metrics: present (open Runs)");
     } else ImGui::TextDisabled("metrics: absent (ok)");
 
-    {   // Cloud stream cadence (worker reads the atomic each step).
-        int ce = st->cloud_every.load(std::memory_order_relaxed);
-        ImGui::SetNextItemWidth(170);
-        if (ImGui::SliderInt("cloud refresh (steps)", &ce, 1, 50,
-                             "every %d steps"))
-            st->cloud_every.store(ce, std::memory_order_relaxed);
-    }
-
     const bool running = st->job_id != 0 && st->jobs.is_running(st->job_id);
     // Dev hook mirroring the host's CALIPER_AUTOLAUNCH: press Train on the
     // first frame when CALIPER_EMBED_AUTOTRAIN=1 (headless debugging / CI).
@@ -784,8 +767,16 @@ void EmbedScopeApplet::draw_ui() {
         st->plot_gen = gen;
     }
     if (gen != 0 && gen != st->data_gen) {
-        refresh_data(st, ex, ey, ez, lbl, prd, n);
-        st->data_gen = gen;
+        // The cloud publishes per step (~8 Hz) but the SQL rebuild (a 2000-row
+        // INSERT on the frame thread) is throttled to ~2 Hz — centroids and
+        // the misclassified count glide; the plot itself never waits on SQL.
+        const double now = ImGui::GetTime();
+        static double last_sql = -1e9;
+        if (now - last_sql > 0.5) {
+            refresh_data(st, ex, ey, ez, lbl, prd, n);
+            st->data_gen = gen;
+            last_sql = now;
+        }
     }
 
     // The centerpiece: the live 3-D embedding scatter, filling its own window.
