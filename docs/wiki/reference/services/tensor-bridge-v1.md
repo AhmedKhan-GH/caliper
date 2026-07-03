@@ -93,11 +93,16 @@ with `free_shared`.
 
 ### `CaliperTextureId` lifetime
 
-`CaliperTextureId` is an opaque `uint64_t`, `0` = invalid, and casts to
-`ImTextureID` for `ImGui::Image`. It is **never** a raw GL/Metal handle — the
-host keeps an id→backend-handle table (§5.4), which is exactly what keeps the
-renderer swappable. Ids from `texture_from_tensor*` are freed with
-`release_texture`; ids from `alloc_shared` with `free_shared`.
+`CaliperTextureId` is a `uint64_t`, opaque to applets (`0` = invalid;
+compare-only — never interpret or dereference it, its representation is
+backend-internal). Its value is directly castable to `ImTextureID` for
+`ImGui::Image`: the host vends the ImGui-compatible handle per backend (the GL
+texture name on GL, the `id<MTLTexture>` pointer on Metal), so the cast Just
+Works on both — binding an integer table id here is what crashed
+`ImGui_ImplMetal` on the first `Image`. The renderer stays swappable because the
+value is the host's business, never the applet's (§5.4). Ids from
+`texture_from_tensor*` are freed with `release_texture`; ids from `alloc_shared`
+with `free_shared`.
 
 ### Sync model
 

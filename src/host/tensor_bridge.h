@@ -61,11 +61,14 @@ public:
     void             free_shared(CaliperTextureId tex);
 
 private:
-    // Per-texture bookkeeping. The CaliperTextureId handed to callers is the
-    // renderer's opaque id (never a raw GL/Metal handle — §5.4); this table
-    // adds the shape/dtype/colormap needed to re-upload on update_texture.
+    // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
+    // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_{metal,
+    // opengl3} bind as ImTextureID; §5.4), and this table is keyed by it. The
+    // internal renderer id (`tex` below) drives upload/release and never leaves
+    // the host. Entry adds the shape/dtype/colormap needed to re-upload on
+    // update_texture.
     struct Entry {
-        uint64_t     tex = 0;       // renderer texture id
+        uint64_t     tex = 0;       // renderer texture id (internal, for up/release)
         int          w = 0;
         int          h = 0;
         CaliperDType dtype = CALIPER_DT_F32;

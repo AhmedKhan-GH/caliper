@@ -26,9 +26,13 @@
 extern "C" {
 #endif
 
-typedef uint64_t CaliperTextureId; /* opaque; 0 = invalid. Casts to ImTextureID.
-                                      NEVER a raw GL/Metal handle (§5.4 — the
-                                      bridge keeps an id->backend-handle table). */
+typedef uint64_t CaliperTextureId; /* Opaque to applets: 0 = invalid; compare-
+                                      only — applets must never interpret or
+                                      dereference it, its representation is
+                                      backend-internal. The value is directly
+                                      castable to ImTextureID for ImGui::Image
+                                      (the host vends the ImGui-compatible handle
+                                      per backend; §5.4). */
 
 /* Built-in 256-entry RGBA8 colormap LUTs for 1-channel tensors; identical
  * numeric output on every backend. */

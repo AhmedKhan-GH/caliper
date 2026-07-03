@@ -232,13 +232,18 @@ CaliperTextureId TensorBridge::texture_from_tensor(const CaliperTensor* t, uint3
     const int h = (int)t->shape[0], w = (int)t->shape[1];
     const uint64_t tex = renderer_.tex_create_rgba8(w, h);
     if (tex == 0)                               { bridge_log("tex_create failed"); return 0; }
+    // The PUBLIC CaliperTextureId is the renderer's ImGui-compatible handle
+    // (§5.4): the value imgui_impl_{metal,opengl3} bind directly as ImTextureID.
+    // The internal renderer id (`tex`) stays in Entry for upload/release.
+    const CaliperTextureId id = renderer_.tex_imtexture_id(tex);
+    if (id == 0) { renderer_.tex_release(tex); bridge_log("direct: null imtexture id"); return 0; }
 
     Entry e;
     e.tex = tex; e.w = w; e.h = h; e.dtype = CALIPER_DT_U8;
     e.channels = c; e.mapped = false;
     if (!upload_into(e, t)) { renderer_.tex_release(tex); bridge_log("direct: upload failed"); return 0; }
-    entries_[tex] = std::move(e);
-    return tex;
+    entries_[id] = std::move(e);
+    return id;
 }
 
 CaliperTextureId TensorBridge::texture_from_tensor_mapped(const CaliperTensor* t,
@@ -251,13 +256,15 @@ CaliperTextureId TensorBridge::texture_from_tensor_mapped(const CaliperTensor* t
     const int h = (int)t->shape[0], w = (int)t->shape[1];
     const uint64_t tex = renderer_.tex_create_rgba8(w, h);
     if (tex == 0)                                  { bridge_log("tex_create failed"); return 0; }
+    const CaliperTextureId id = renderer_.tex_imtexture_id(tex);   // ImGui handle (§5.4)
+    if (id == 0) { renderer_.tex_release(tex); bridge_log("mapped: null imtexture id"); return 0; }
 
     Entry e;
     e.tex = tex; e.w = w; e.h = h; e.dtype = CALIPER_DT_F32;
     e.mapped = true; e.colormap = colormap; e.vmin = vmin; e.vmax = vmax;
     if (!upload_into(e, t)) { renderer_.tex_release(tex); bridge_log("mapped: upload failed"); return 0; }
-    entries_[tex] = std::move(e);
-    return tex;
+    entries_[id] = std::move(e);
+    return id;
 }
 
 bool TensorBridge::update_texture(CaliperTextureId tex, const CaliperTensor* t) {
@@ -314,12 +321,14 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
 
     const uint64_t tex = renderer_.tex_create_rgba8(w, h);
     if (tex == 0) { bridge_log("alloc_shared: tex_create failed"); return false; }
+    const CaliperTextureId id = renderer_.tex_imtexture_id(tex);   // ImGui handle (§5.4)
+    if (id == 0) { renderer_.tex_release(tex); bridge_log("alloc_shared: null imtexture id"); return false; }
 
     Entry e;
     e.tex = tex; e.w = w; e.h = h; e.dtype = dtype; e.channels = channels;
     e.mapped = mapped; e.colormap = CALIPER_CMAP_VIRIDIS; e.vmin = 0.0f; e.vmax = 1.0f;
     e.shared = true; e.shared_buf.assign(bytes, 0);
-    Entry& stored = (entries_[tex] = std::move(e));
+    Entry& stored = (entries_[id] = std::move(e));
 
     std::memset(out, 0, sizeof(*out));
     out->struct_size = sizeof(CaliperTensor);
@@ -335,7 +344,7 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
     out->device = CALIPER_DEV_CPU;
     out->device_index = 0;
 
-    *out_texture = tex;
+    *out_texture = id;
     return true;
 }
 

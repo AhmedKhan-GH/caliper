@@ -155,8 +155,9 @@ public:
     void free_shared(CaliperTextureId tex) const {
         if (t_ && t_->free_shared) t_->free_shared(tex);
     }
-    // Opaque id -> ImTextureID for ImGui::Image (§5.4: the id is never a raw
-    // GL/Metal handle, but it is what the host's bridge table maps ImGui to).
+    // Opaque id -> ImTextureID for ImGui::Image (§5.4: the id's value IS the
+    // host's ImGui-compatible handle for this backend; applets never interpret
+    // it, they only cast it here).
     static ImTextureID imtex(CaliperTextureId tex) { return (ImTextureID)tex; }
 private:
     const CaliperTensorBridgeV1* t_ = nullptr;

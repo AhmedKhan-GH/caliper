@@ -20,6 +20,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <backends/imgui_impl_opengl3.h>
 
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
@@ -33,6 +34,7 @@
 
 #ifdef CALIPER_HAVE_METAL
 #import <Metal/Metal.h>
+#include <backends/imgui_impl_metal.h>
 #endif
 
 using namespace caliper_host;
@@ -88,10 +90,11 @@ struct GlEnv {
 
 GlEnv& gl_env() { static GlEnv e; return e; }
 
-// Read an RGBA8 texture back off the GL GPU. The bridge id maps (via the
-// renderer) to the GL name; the raw handle never escaped the renderer (§5.4).
-std::vector<uint8_t> gl_readback(HostRenderer& r, CaliperTextureId id, int w, int h) {
-    GLuint name = (GLuint)r.tex_imtexture_id(id);
+// Read an RGBA8 texture back off the GL GPU. Post-fix, the bridge id's VALUE is
+// the renderer's ImGui handle — for GL that is the GL texture name — so it is
+// bound directly here, the same value ImGui_ImplOpenGL3 binds (§5.4).
+std::vector<uint8_t> gl_readback(HostRenderer& /*r*/, CaliperTextureId id, int w, int h) {
+    GLuint name = (GLuint)id;
     std::vector<uint8_t> px((size_t)w * h * 4, 0xAB);
     glBindTexture(GL_TEXTURE_2D, name);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -274,6 +277,62 @@ TEST_CASE("gfx/GL: last_device_path is the frozen CPU-staged fallback") {
     CHECK(std::string(gl_env().renderer->last_device_path()) == "cpu-staged");
 }
 
+// Regression test for the user SIGSEGV (integer table ids crashed ImGui on the
+// first Image bind). Two guarantees: (a) the PUBLIC bridge id's VALUE is exactly
+// the renderer's ImGui handle for that texture — for GL, a live GL name; and (b)
+// binding it via ImGui::Image and running the REAL ImGui_ImplOpenGL3 draw path
+// (RenderDrawData -> glBindTexture on the id) executes cleanly offscreen. This
+// is the exact path that faulted on Metal; here it is proven on GL.
+TEST_CASE("gfx/GL: bridge id is the ImGui handle and survives the real ImGui draw path") {
+    REQUIRE_GL();
+    Backend bk = gl_backend();
+
+    uint8_t rgba[2 * 2 * 4]; for (int i = 0; i < 16; ++i) rgba[i] = (uint8_t)(i * 15 + 8);
+    CaliperTensor t = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId id = bk.bridge->texture_from_tensor(&t, 0);
+    REQUIRE(id != 0);
+    // (a) the id's VALUE is the renderer's ImGui handle: a live GL texture name.
+    CHECK(glIsTexture((GLuint)id) == GL_TRUE);
+
+    // (b) offscreen FBO to draw into deterministically (hidden window).
+    const int W = 32, H = 32;
+    GLuint color = 0, fbo = 0;
+    glGenTextures(1, &color);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    REQUIRE(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+
+    ImGui::SetCurrentContext(gl_env().imgui_ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2((float)W, (float)H);
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui::NewFrame();
+    ImGui::GetBackgroundDrawList()->AddImage(
+        (ImTextureID)id, ImVec2(0, 0), ImVec2((float)W, (float)H));
+    ImGui::Render();
+
+    glViewport(0, 0, W, H);
+    glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());   // <- exact path that crashed
+    glFinish();
+
+    std::vector<uint8_t> px((size_t)W * H * 4, 0);
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &color);
+
+    bool drew = false;   // the bridge texture actually rasterized (non-bg texel)
+    for (size_t i = 0; i < px.size(); ++i) if ((i % 4) != 3 && px[i]) { drew = true; break; }
+    CHECK(drew);
+    bk.bridge->release_texture(id);
+}
+
 // ===========================================================================
 // Metal run — same matrix (CPU-tensor uploads, staged) + the device paths that
 // nothing had ever executed (compute / blit from a raw MTLBuffer).
@@ -323,9 +382,11 @@ MetalEnv& metal_env() { static MetalEnv e; return e; }
 
 // Test-only readback: blit the RGBA8 texture into a shared MTLBuffer, wait, and
 // copy its unified contents out. NOT the render path.
-std::vector<uint8_t> metal_readback(HostRenderer& r, CaliperTextureId tex, int w, int h) {
+std::vector<uint8_t> metal_readback(HostRenderer& /*r*/, CaliperTextureId tex, int w, int h) {
     @autoreleasepool {
-        void* p = (void*)(uintptr_t)r.tex_imtexture_id(tex);
+        // Post-fix, the bridge id's VALUE is the ImGui handle — for Metal that is
+        // the id<MTLTexture> pointer ImGui_ImplMetal binds — so cast it directly.
+        void* p = (void*)(uintptr_t)tex;
         id<MTLTexture> t = (__bridge id<MTLTexture>)p;
         id<MTLDevice> dev = t.device;
         id<MTLCommandQueue> q = [dev newCommandQueue];
@@ -522,5 +583,85 @@ TEST_CASE("gfx/Metal: short device buffer is rejected (no GPU fault)") {
     CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
         &t, CALIPER_CMAP_VIRIDIS, 0.0f, 15.0f, 0);
     CHECK(id == 0);   // rejected: buffer too short for the declared extent
+}
+
+// THE regression test for the reported SIGSEGV. Before the fix the bridge handed
+// out a small monotonic integer id; ImGui_ImplMetal_RenderDrawData reached
+// setFragmentTexture:/objc_retain on that integer-as-pointer and faulted on
+// KERN_INVALID_ADDRESS 0x1 the first time any bridge texture was drawn. Post-fix
+// the id's VALUE is the id<MTLTexture> pointer ImGui binds. This binds a bridge
+// id via ImGui::Image and runs the ACTUAL ImGui_ImplMetal draw path offscreen —
+// the exact call chain that crashed. If it returns, the crash is fixed.
+TEST_CASE("gfx/Metal: bridge id is the ImGui handle and survives the real ImGui draw path") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    @autoreleasepool {
+        uint8_t rgba[2 * 2 * 4]; for (int i = 0; i < 16; ++i) rgba[i] = (uint8_t)(i * 15 + 8);
+        CaliperTensor t = u8_3d(rgba, 2, 2, 4);
+        // NB: not named `id` — that is the Objective-C `id` keyword, needed below.
+        CaliperTextureId tex_id = bk.bridge->texture_from_tensor(&t, 0);
+        REQUIRE(tex_id != 0);
+        // (a) the id's VALUE is the renderer's ImGui handle: a live id<MTLTexture>.
+        id<MTLTexture> as_tex = (__bridge id<MTLTexture>)(void*)(uintptr_t)tex_id;
+        bool tex_live = (as_tex != nil);   // keep the ObjC ptr out of doctest decomposition
+        REQUIRE(tex_live);
+        CHECK((int)as_tex.width == 2);
+        CHECK((int)as_tex.height == 2);
+
+        // (b) offscreen RGBA8 render target on the SAME device ImGui_ImplMetal was
+        //     initialized with (== the bridge texture's device).
+        const int W = 32, H = 32;
+        id<MTLDevice> dev = as_tex.device;
+        MTLTextureDescriptor* rtd =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:(NSUInteger)W
+                                                              height:(NSUInteger)H
+                                                           mipmapped:NO];
+        rtd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        rtd.storageMode = MTLStorageModeShared;
+        id<MTLTexture> rt = [dev newTextureWithDescriptor:rtd];
+        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = rt;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+
+        ImGui::SetCurrentContext(metal_env().imgui_ctx);
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((float)W, (float)H);
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui_ImplMetal_NewFrame(pass);
+        ImGui::NewFrame();
+        ImGui::GetBackgroundDrawList()->AddImage(
+            (ImTextureID)tex_id, ImVec2(0, 0), ImVec2((float)W, (float)H));
+        ImGui::Render();
+
+        id<MTLCommandQueue> q = [dev newCommandQueue];
+        id<MTLCommandBuffer> cb = [q commandBuffer];
+        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
+        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cb, enc);  // <- exact crashing path
+        [enc endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+
+        // It ran without SIGSEGV. Confirm the bridge texture actually rasterized.
+        NSUInteger bpr = (NSUInteger)W * 4;
+        id<MTLBuffer> out = [dev newBufferWithLength:bpr * (NSUInteger)H
+                                            options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cb2 = [q commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb2 blitCommandEncoder];
+        [blit copyFromTexture:rt sourceSlice:0 sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake((NSUInteger)W, (NSUInteger)H, 1)
+                     toBuffer:out destinationOffset:0
+       destinationBytesPerRow:bpr destinationBytesPerImage:bpr * (NSUInteger)H];
+        [blit endEncoding]; [cb2 commit]; [cb2 waitUntilCompleted];
+        const uint8_t* p = (const uint8_t*)out.contents;
+        bool drew = false;   // a non-background (non-alpha) texel means it drew
+        for (NSUInteger i = 0; i < bpr * (NSUInteger)H; ++i)
+            if ((i % 4) != 3 && p[i]) { drew = true; break; }
+        CHECK(drew);
+        bk.bridge->release_texture(tex_id);
+    }
 }
 #endif  // CALIPER_HAVE_METAL
