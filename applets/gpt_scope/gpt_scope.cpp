@@ -900,7 +900,14 @@ void GPTScopeApplet::draw_ui() {
         ImGui::TextDisabled("press Train — the 16 heads appear once the probe runs.");
     } else {
         if (ImPlot::BeginPlot("##heads", ImVec2(-1, 240))) {
+            // Fixed, input-locked frame (viewport policy #6): the POINTS move
+            // as heads specialize; the camera must not. Bounds = the metric
+            // ranges: distance in [0, T), entropy in [0, ln T].
+            const double Tmax = probe_text.empty() ? 64.0
+                                                   : (double)probe_text.size();
             ImPlot::SetupAxes("mean attended distance", "entropy (nats)");
+            ImPlot::SetupAxesLimits(-1.0, Tmax, -0.1, std::log(Tmax) + 0.3,
+                                    ImPlotCond_Always);
             const int H = 4;  // heads per layer
             for (int l = 0; l < 4; ++l) {
                 std::vector<float> xs, ys;
@@ -953,8 +960,16 @@ void GPTScopeApplet::draw_ui() {
                 const float vmax = attn_vmax[(size_t)sel] > 0.f
                                        ? attn_vmax[(size_t)sel] : 1e-6f;
                 st->head_tex_vmax = vmax;
+                // Block-upscale before upload (cookbook #4): a raw (T,T) map
+                // stretched to 260 px is linear-filter mush; hard k x k blocks
+                // stay sharp. k chosen so the texture >= the drawn size.
+                const auto& amap = attn_all[(size_t)sel];
+                const int64_t Tt = amap.size(0);
+                const int64_t kk = std::max<int64_t>(1, (320 + Tt - 1) / Tt);
+                auto blocks = amap.repeat_interleave(kk, 0)
+                                  .repeat_interleave(kk, 1).contiguous();
                 st->head_tex = upload_mapped(st->bridge, st->head_stage_cpu, 0,
-                                             attn_all[(size_t)sel],
+                                             blocks,
                                              CALIPER_CMAP_MAGMA, 0.f, vmax);
                 st->head_tex_gen = probe_gen; st->head_tex_sel = sel;
             }
@@ -1068,7 +1083,8 @@ void GPTScopeApplet::draw_ui() {
             a[i] = attn_wn[i]; m[i] = mlp_wn[i];
         }
         if (ImPlot::BeginPlot("write norms per layer", ImVec2(-1, 200))) {
-            ImPlot::SetupAxes("layer", "L2 write norm");
+            ImPlot::SetupAxes("layer", "L2 write norm",  // AutoFit = follow
+                              ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);  // + input-lock
             ImPlot::SetupAxisLimits(ImAxis_X1, 0.5, L + 0.5, ImPlotCond_Always);
             ImPlot::SetupAxisFormat(ImAxis_X1, "%.0f");
             ImPlot::PlotBars("attention", xa.data(), a.data(), L, 0.32);
@@ -1137,7 +1153,9 @@ void GPTScopeApplet::draw_ui() {
         if (ImPlot::BeginPlot("##top8", ImVec2(-1, 150))) {
             std::vector<double> xs(top8p.size()), ys(top8p.size());
             for (size_t i = 0; i < top8p.size(); ++i) { xs[i] = (double)i; ys[i] = top8p[i]; }
-            ImPlot::SetupAxes("candidate", "probability");
+            ImPlot::SetupAxes("candidate", "probability",
+                              ImPlotAxisFlags_AutoFit, 0);  // input-locked
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImPlotCond_Always);
             // tick labels = the actual chars
             std::vector<double> ticks(top8id.size()); std::vector<std::string> lbls;
