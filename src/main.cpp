@@ -1,6 +1,7 @@
 #include <iostream>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h>   // DockBuilder* — first-run applet dock layout
 #include <implot.h>
 #include <implot3d.h>
 
@@ -71,6 +72,10 @@ public:
         ImPlot3D::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        // Docking (ImGui docking branch): lets the applet page host a docked
+        // desktop — applet windows in a central node, Runs docked to the right.
+        // Persisted per-window/dockspace layout lives in imgui.ini (host-owned).
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
         ImGui::StyleColorsDark();
         style_ui();
@@ -195,6 +200,47 @@ public:
                     draw_fallback_launcher();
                 }
             } else if (page_ == AppPage::Applet) {
+                // Docked desktop (applet page only). A passthru dockspace fills
+                // the viewport's work area (below the main menu bar) so the
+                // applet's window and the Runs dashboard can be docked. The
+                // central node stays transparent while empty, so a full-viewport
+                // applet docked into it looks exactly as before.
+                ImGuiID dock_id = ImGui::DockSpaceOverViewport(
+                    0, ImGui::GetMainViewport(),
+                    ImGuiDockNodeFlags_PassthruCentralNode);
+
+                // First-run layout ONLY when this dockspace has no persisted
+                // node tree (a fresh, empty leaf) — an imgui.ini-restored layout
+                // is left untouched. Attempted once per process.
+                if (!dock_layout_built_) {
+                    ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock_id);
+                    if (node && node->IsEmpty()) {
+                        ImGui::DockBuilderSetNodeSize(
+                            dock_id, ImGui::GetMainViewport()->WorkSize);
+                        ImGuiID central = dock_id;
+                        ImGuiID right = ImGui::DockBuilderSplitNode(
+                            central, ImGuiDir_Right, 0.32f, nullptr, &central);
+                        // Every applet's primary window docks into the central
+                        // node (only the live applet is ever submitted, so at
+                        // most one tab shows). Titles are the exact Begin()
+                        // strings from each applet's source.
+                        static const char* const applet_windows[] = {
+                            "GPTScope",                 // applets/gpt_scope
+                            "MLScope",                  // examples/ml_scope
+                            "SignalScope",              // examples/signal_scope
+                            "Hello, Caliper",           // examples/hello
+                            "CircuitNet 3.0 Explorer",  // applets/circuitnet
+                            "##OpenGllamaRoot",         // applets/opengllama
+                            "##WorkbenchRoot",          // applets/repnet_demo
+                        };
+                        for (const char* w : applet_windows)
+                            ImGui::DockBuilderDockWindow(w, central);
+                        ImGui::DockBuilderDockWindow("Runs", right);
+                        ImGui::DockBuilderFinish(dock_id);
+                    }
+                    dock_layout_built_ = true;
+                }
+
                 bool go_back = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
 
                 if (ImGui::BeginMainMenuBar()) {
@@ -408,6 +454,7 @@ private:
     int active_applet_ = -1;
     double last_frame_time_ = 0.0;
     bool runs_open_ = false;
+    bool dock_layout_built_ = false;  // first-run applet dock layout attempted
 };
 
 int main() {
