@@ -4,7 +4,7 @@
 # libtorch the same way ml_scope/gpt_scope do (runtime packs replace this at
 # Phase 4). curl + zlib are macOS system libs covering the cancellable MNIST
 # download + gunzip inside the job; the MNIST IDX reader is reused verbatim from
-# examples/ml_scope (added to the include path — no file duplicated). The host
+# its own mnist_idx.h (self-contained — the exemplar doubles as a template). The host
 # links none of these: data acquisition is applet business.
 find_package(CURL REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -15,8 +15,7 @@ add_library(embed_scope SHARED
 )
 
 target_include_directories(embed_scope PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/examples/ml_scope)   # reuse mnist_idx.h verbatim
+    ${CMAKE_CURRENT_SOURCE_DIR})   # mnist_idx.h is local — the exemplar is self-contained
 
 target_link_libraries(embed_scope PRIVATE
     caliper::sdk

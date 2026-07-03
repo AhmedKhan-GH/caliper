@@ -2,31 +2,30 @@
 
 This walks the **hello** applet — the smallest complete Caliper applet on ABI
 epoch 2. It is the canonical starting point: one manifest, one macro, three
-lifecycle methods. Once it makes sense, open `examples/signal_scope/` in the
-repo — the exemplar with every idiom (probing optional services, persisting to
-the data dir, the watchdog anti-pattern) — and copy from there. For ML work, the
-**ML exemplar** `examples/ml_scope/` shows the idioms that matter on a GPU:
-training off the frame thread via [`caliper.jobs.v1`](../reference/services/jobs-v1.md),
-the host-negotiated device via [`caliper.device.v1`](../reference/services/device-v1.md),
-and a live loss curve — the pattern to copy for any applet that computes. It is
-also the exemplar for streaming training metrics to
-[`caliper.metrics.v1`](../reference/services/metrics-v1.md) (probed optionally, so
-the same binary runs with or without it) — every applet that logs a scalar that
-way inherits the Runs dashboard. MLScope is also the exemplar for GPU-resident
-visualization — its live conv-kernel grid crosses
+lifecycle methods. Once it makes sense, open `applets/embed_scope/` — **the
+exemplar** — and copy from there. EmbedScope demonstrates every idiom the
+platform has: probing optional services (the same binary runs with or without
+each), training off the frame thread via
+[`caliper.jobs.v1`](../reference/services/jobs-v1.md), the host-negotiated
+device via [`caliper.device.v1`](../reference/services/device-v1.md), streaming
+scalars to [`caliper.metrics.v1`](../reference/services/metrics-v1.md) (which
+inherits the Runs dashboard for free), GPU-resident visualization across
 [`caliper.tensor_bridge.v1`](../reference/services/tensor-bridge-v1.md) via the
-[torch adapter](../reference/adapters.md), zero-copy on the Metal renderer.
+[torch adapter](../reference/adapters.md), checkpoints through
+[`caliper.artifacts.v1`](../reference/services/artifacts-v1.md), and live SQL
+over [`caliper.data.v1`](../reference/services/data-v1.md) — all eight
+services in one applet, with an ImPlot3D embedding cloud as the centerpiece.
 
-When those idioms click, see them composed at full scale in **GPTScope**
-(`applets/gpt_scope/`) — the flagship, a char-level mini-GPT trained live on
-TinyShakespeare and built **entirely on public services** (jobs, device, metrics,
-and the tensor bridge — no private hooks). It streams train/val loss and
-perplexity to the Runs dashboard, samples text live, and renders per-head
-attention heatmaps through the bridge (layer switching, hover-highlighting, a
-temperature control). Its live-visual acceptance checks are in the
-[tensor-bridge demo checklist](../reference/services/tensor-bridge-v1.md#demo-checklist-human).
+Earlier exemplars that drove the platform's architecture (SignalScope,
+MLScope, GPTScope) are archived under `applets/legacy-dev/` — not built or
+loaded, kept for history and code reference.
 
-For the applet that exercises **every** service, see **EmbedScope**
+Of the archived exemplars, **GPTScope** (`applets/legacy-dev/gpt_scope/`) is
+worth a read even unbuilt — a char-level mini-GPT trained live on
+TinyShakespeare, built entirely on public services, which served as the
+Phase-2 flagship proof.
+
+For the live applet that exercises **every** service, see **EmbedScope**
 (`applets/embed_scope/`) — a small MNIST net with a learned 3-D embedding
 bottleneck, drawn as a live ImPlot3D scatter that splits one blob into ten
 colored lobes as it trains. It is the reference consumer of

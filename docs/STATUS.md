@@ -58,12 +58,12 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 
 **Services vended (8):** `ui.v1`, `log.v1`, `jobs.v1`, `device.v1`, `metrics.v1`, `tensor_bridge.v1`, `artifacts.v1`, `data.v1` (+ `CaliperTensor` and the Arrow C Data Interface as ABI-boundary interchange types). Every service now has an honest in-tree consumer.
 
-**Applets (8):**
-- *Flagship:* GPTScope (`applets/gpt_scope`)
-- *All-services exemplar:* EmbedScope (`applets/embed_scope`) — 3-D embedding projector; consumes all 8 services
-- *Exemplars:* SignalScope (general idioms), MLScope (MNIST CNN + kernel/digit/feature-map viz)
-- *Fixture:* Hello (`examples/hello`)
-- *Legacy (epoch-2, bridge-native, never service-migrated):* CircuitNet, OpenGllama, RepNet Demo
+**Applets (2 active + 6 archived — post-cull, 2026-07-03):**
+- *The exemplar:* **EmbedScope** (`applets/embed_scope`) — sole showcase + template; consumes all 8 services; ImPlot3D embedding cloud; self-contained (own `mnist_idx.h`)
+- *Fixture:* Hello (`examples/hello`) — loader-test dependency + the tutorial applet
+- *Archived, not built or loaded (`applets/legacy/`):* CircuitNet, OpenGllama, RepNet Demo — Ahmed's real projects, awaiting their own repos (Phase 3+)
+- *Archived, not built or loaded (`applets/legacy-dev/`):* GPTScope, MLScope, SignalScope — the demos that drove the platform's architecture, kept for history and reference
+- Archive dirs have no top-level CMakeLists, so the applet glob never builds them; the configure-time stale sweep removes their old dylibs *and manifests* from `build/applets/`. Dev hooks: `CALIPER_AUTOLAUNCH=<id>` (host) and `CALIPER_EMBED_AUTOTRAIN=1` (exemplar) reproduce a card click + Train headlessly.
 
 **Tests:** ~80 cases across three ctest suites — `caliper_tests` (host units + sugar + ABI/C-gate), `caliper_gfx_tests` (windowed, pixel-exact bridge + ImGui-draw-path both backends, label `gfx`), `caliper_torch_tests` (adapter, label `torch`).
 

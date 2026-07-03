@@ -290,25 +290,45 @@ foreach(dir ${applet_dirs})
     endif()
 endforeach()
 
-option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + SignalScope exemplar)" ON)
+# hello is the loader-test fixture (tests dlopen it) and the docs' embedded
+# tutorial applet — it builds even though it is not a showcase piece.
+# Archived applets live under applets/legacy/ (Ahmed's real projects, awaiting
+# their own repos) and applets/legacy-dev/ (demos that drove the platform's
+# architecture, kept for history). Neither has a top-level CMakeLists, so the
+# applets/* glob above never descends into them: archived = not built,
+# not loaded.
+option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture)" ON)
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/hello)
-    add_subdirectory(examples/signal_scope)
-    add_subdirectory(examples/ml_scope)
-    add_dependencies(caliper hello_applet signal_scope_applet ml_scope_applet)
+    add_dependencies(caliper hello_applet)
     list(APPEND _active_applet_libs
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}signal_scope${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}ml_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
-# Remove stale applet libraries left from previously deleted applets
+# Remove stale applet libraries AND manifests left from previously deleted or
+# archived applets (a stale manifest without its dylib would show a ghost
+# refusal card in the launcher).
 file(GLOB _existing_applet_libs "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}*${CMAKE_SHARED_LIBRARY_SUFFIX}")
 foreach(lib ${_existing_applet_libs})
     if(NOT lib IN_LIST _active_applet_libs)
         get_filename_component(_stale_name "${lib}" NAME)
         message(STATUS "  Removing stale applet: ${_stale_name}")
         file(REMOVE "${lib}")
+    endif()
+endforeach()
+set(_active_applet_stems "")
+foreach(lib ${_active_applet_libs})
+    get_filename_component(_stem "${lib}" NAME_WE)
+    string(REGEX REPLACE "^${CMAKE_SHARED_LIBRARY_PREFIX}" "" _stem "${_stem}")
+    list(APPEND _active_applet_stems "${_stem}")
+endforeach()
+file(GLOB _existing_manifests "${CMAKE_BINARY_DIR}/applets/*.caliper.toml")
+foreach(mf ${_existing_manifests})
+    get_filename_component(_mf_name "${mf}" NAME)
+    string(REPLACE ".caliper.toml" "" _mf_stem "${_mf_name}")
+    if(NOT _mf_stem IN_LIST _active_applet_stems)
+        message(STATUS "  Removing stale manifest: ${_mf_name}")
+        file(REMOVE "${mf}")
     endif()
 endforeach()
 

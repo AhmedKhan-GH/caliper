@@ -572,6 +572,17 @@ void EmbedScopeApplet::draw_ui() {
     } else ImGui::TextDisabled("metrics: absent (ok)");
 
     const bool running = st->job_id != 0 && st->jobs.is_running(st->job_id);
+    // Dev hook mirroring the host's CALIPER_AUTOLAUNCH: press Train on the
+    // first frame when CALIPER_EMBED_AUTOTRAIN=1 (headless debugging / CI).
+    static bool autotrain_fired = false;
+    if (!autotrain_fired && !running && std::getenv("CALIPER_EMBED_AUTOTRAIN")) {
+        autotrain_fired = true;
+        { std::lock_guard<std::mutex> lk(st->mtx);
+          st->loss_hist.clear(); st->acc_steps.clear(); st->acc_hist.clear();
+          st->status = "starting…"; }
+        st->job_id = st->jobs.submit("embed_scope: train MNIST 3-D embedding",
+                                     &train_job, st);
+    }
     if (!running) {
         if (ImGui::Button("Train")) {
             { std::lock_guard<std::mutex> lk(st->mtx);

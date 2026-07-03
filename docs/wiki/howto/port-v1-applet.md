@@ -111,7 +111,7 @@ ImPlot3D contexts and allocator. Field order is fixed:
 The whole ported entry file — steps 2 and 3 together — is just this:
 
 ```cpp
---8<-- "applets/circuitnet/plugin.cpp"
+--8<-- "applets/legacy/circuitnet/plugin.cpp"
 ```
 
 Note there is **no** `ImGui::SetCurrentContext` anywhere in it. If your v1 file

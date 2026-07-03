@@ -158,6 +158,19 @@ public:
         }
         intro_.set_applets(std::move(cards));
 
+        // Dev hook: CALIPER_AUTOLAUNCH=<manifest id> skips the landing page
+        // and launches that applet immediately — reproduces a card click for
+        // headless debugging/CI and seeds the future `caliper dev` workflow.
+        if (const char* want_id = std::getenv("CALIPER_AUTOLAUNCH")) {
+            for (int i = 0; i < loader_.count(); i++) {
+                if (loader_.at(i).manifest.id == want_id) {
+                    std::cerr << "[autolaunch] " << want_id << std::endl;
+                    launch_applet(i);
+                    break;
+                }
+            }
+        }
+
         return true;
     }
 

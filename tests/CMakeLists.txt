@@ -30,7 +30,8 @@ add_executable(caliper_tests
 find_package(ZLIB REQUIRED)
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB)
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/examples/ml_scope)
+# mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
+target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_sources(caliper_tests PRIVATE test_loader.cpp)
