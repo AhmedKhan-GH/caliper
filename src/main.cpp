@@ -246,6 +246,8 @@ public:
                     static const char* const central_windows[] = {
                         "EmbedScope: Cloud",   // the showcase
                         "Hello, Caliper",      // examples/hello
+                        "MyScope",             // examples/my_scope (tutorial)
+                        "SineScope",           // examples/sine_scope (tutorial)
                     };
                     static const char* const side_top_windows[] = {
                         "EmbedScope: Training"};

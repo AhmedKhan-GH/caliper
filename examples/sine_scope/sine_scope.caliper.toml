@@ -1,0 +1,15 @@
+[applet]
+id      = "dev.example.sine-scope"
+name    = "SineScope"
+version = "0.1.0"
+summary = "Tutorial applet: a tiny MLP learns sin(x) live — loss curve, prediction vs target, first-layer weights as a heatmap."
+tag     = "Demo"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1",
+            "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.metrics.v1"]

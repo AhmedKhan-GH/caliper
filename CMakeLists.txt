@@ -297,12 +297,19 @@ endforeach()
 # architecture, kept for history). Neither has a top-level CMakeLists, so the
 # applets/* glob above never descends into them: archived = not built,
 # not loaded.
-option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture)" ON)
+option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + tutorial applets)" ON)
 if(CALIPER_BUILD_EXAMPLES)
+    # hello = loader-test fixture; my_scope/sine_scope = the tutorial applets
+    # the wiki embeds VERBATIM (dev-basics / first-ml-applet) — building them
+    # here is what keeps the docs' code honest.
     add_subdirectory(examples/hello)
-    add_dependencies(caliper hello_applet)
+    add_subdirectory(examples/my_scope)
+    add_subdirectory(examples/sine_scope)
+    add_dependencies(caliper hello_applet my_scope sine_scope)
     list(APPEND _active_applet_libs
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}my_scope${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}sine_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
 # Remove stale applet libraries AND manifests left from previously deleted or

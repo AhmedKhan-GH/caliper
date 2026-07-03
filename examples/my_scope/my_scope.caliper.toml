@@ -1,0 +1,13 @@
+[applet]
+id      = "dev.example.my-scope"
+name    = "MyScope"
+version = "0.1.0"
+summary = "Smallest complete applet."
+tag     = "Demo"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1"]

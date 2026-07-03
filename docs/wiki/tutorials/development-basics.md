@@ -72,79 +72,21 @@ applets/my_scope/
 
 ### The smallest complete applet, in full
 
-This is everything — all four files, condensed. It compiles, loads, and
-draws a live plot:
+This is everything — all three files. It is **built in this repo** as
+`examples/my_scope/` (the MyScope card in your launcher), and the listings
+below are the actual files, embedded verbatim — they cannot drift from what
+compiles:
 
-```cpp
-// my_scope.cpp — the whole applet
-#include <caliper/caliper.hpp>
-#include <cmath>
-
-class MyScope final : public caliper::Applet {
-public:
-    bool on_init(caliper::Host& host) override {
-        host_ = &host;
-        host.log_info("my_scope: on_init");
-        return true;                       // false aborts loading
-    }
-    void on_frame(const caliper::Frame& f) override {
-        ImGui::Begin("MyScope");           // host dockspace places it
-        ImGui::Text("%.0f x %.0f px, t = %.1fs",
-                    (float)f.fb_width, (float)f.fb_height, f.time_sec);
-        if (ImPlot::BeginPlot("wave", {-1, 220})) {
-            static float xs[256], ys[256];
-            for (int i = 0; i < 256; i++) {
-                xs[i] = i / 255.0f * 6.28318f;
-                ys[i] = std::sin(xs[i] + (float)f.time_sec);
-            }
-            ImPlot::PlotLine("sin", xs, ys, 256);
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-    }
-    void on_cleanup() override { host_->log_info("my_scope: bye"); }
-private:
-    caliper::Host* host_ = nullptr;
-};
-
-CALIPER_APPLET(MyScope,                    // generates the entire C ABI glue
-    .id       = "dev.example.my-scope",    // byte-identical to the manifest
-    .version  = "0.1.0",
-    .name     = "MyScope",
-    .summary  = "Smallest complete applet.",
-    .tag      = "Demo",
-    .services = {CALIPER_UI_V1, CALIPER_LOG_V1})
+```cpp title="examples/my_scope/my_scope.cpp"
+--8<-- "examples/my_scope/my_scope.cpp"
 ```
 
-```toml
-# my_scope.caliper.toml
-[applet]
-id      = "dev.example.my-scope"
-name    = "MyScope"
-version = "0.1.0"
-summary = "Smallest complete applet."
-tag     = "Demo"
-
-[compat]
-abi_epoch = 2
-min_host  = "0.6.0"
-
-[services]
-required = ["caliper.ui.v1", "caliper.log.v1"]
+```toml title="examples/my_scope/my_scope.caliper.toml"
+--8<-- "examples/my_scope/my_scope.caliper.toml"
 ```
 
-```cmake
-# CMakeLists.txt
-add_library(my_scope SHARED my_scope.cpp)
-target_link_libraries(my_scope PRIVATE caliper::sdk caliper::ui_stack)
-target_compile_definitions(my_scope PRIVATE CALIPER_APPLET_EXPORT)
-set_target_properties(my_scope PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_custom_command(TARGET my_scope POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/my_scope.caliper.toml
-        ${CMAKE_BINARY_DIR}/applets/my_scope.caliper.toml)
+```cmake title="examples/my_scope/CMakeLists.txt"
+--8<-- "examples/my_scope/CMakeLists.txt"
 ```
 
 Note what is **absent**: no `main`, no window, no GL/Metal, no ImGui
