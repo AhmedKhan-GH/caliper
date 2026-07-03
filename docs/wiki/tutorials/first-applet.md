@@ -1,5 +1,7 @@
 # Your first applet
 
+*(New here? [Development basics](development-basics.md) explains what you write vs. what the host provides, and where every library comes from.)*
+
 This walks the **hello** applet — the smallest complete Caliper applet on ABI
 epoch 2. It is the canonical starting point: one manifest, one macro, three
 lifecycle methods. Once it makes sense, open `applets/embed_scope/` — **the
