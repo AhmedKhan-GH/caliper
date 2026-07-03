@@ -8,6 +8,7 @@
 #include <caliper/services/metrics_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/artifacts_v1.h>
+#include <caliper/services/data_v1.h>
 #include <cstddef>
 #include <string>
 #include <type_traits>
@@ -64,6 +65,15 @@ TEST_CASE("abi: phase-2c service ids are fixed") {
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);
 static_assert(offsetof(CaliperArtifactsV1, struct_size) == 0);
 
+static_assert(std::is_standard_layout_v<CaliperDataV1>);
+static_assert(offsetof(CaliperDataV1, struct_size) == 0);
+// The Arrow C Data Interface structs cross the data.v1 boundary; they are
+// spec-frozen upstream but our vendored copy must stay POD.
+static_assert(std::is_standard_layout_v<ArrowSchema>);
+static_assert(std::is_standard_layout_v<ArrowArray>);
+static_assert(std::is_standard_layout_v<ArrowArrayStream>);
+
 TEST_CASE("abi: phase-2f service ids are fixed") {
     CHECK(std::string(CALIPER_ARTIFACTS_V1) == "caliper.artifacts.v1");
+    CHECK(std::string(CALIPER_DATA_V1) == "caliper.data.v1");
 }

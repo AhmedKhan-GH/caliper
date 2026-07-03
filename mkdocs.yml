@@ -36,6 +36,7 @@ nav:
           - caliper.metrics.v1: reference/services/metrics-v1.md
           - caliper.tensor_bridge.v1: reference/services/tensor-bridge-v1.md
           - caliper.artifacts.v1: reference/services/artifacts-v1.md
+          - caliper.data.v1: reference/services/data-v1.md
       - C++ sugar: reference/sugar.md
   - Explanation:
       - Architecture: explanation/architecture.md
