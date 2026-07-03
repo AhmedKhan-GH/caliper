@@ -66,7 +66,12 @@ stream**, so simple consumers never touch Arrow buffers:
 
 ```cpp
 caliper::Data data(host);                       // falsy if the host doesn't vend it
-data.query("CREATE OR REPLACE TABLE embed_points(label INT, x REAL, y REAL, z REAL)", nullptr);
+// DDL/INSERT still hand back a (empty) stream — release it (EmbedScope's
+// data_exec helper wraps exactly this):
+ArrowArrayStream ddl{};
+if (data.query("CREATE OR REPLACE TABLE embed_points(label INT, x REAL, y REAL, z REAL)", &ddl)
+    && ddl.release)
+    ddl.release(&ddl);
 ArrowArrayStream s{};
 std::vector<std::string> names;
 std::vector<std::vector<double>> cols;
