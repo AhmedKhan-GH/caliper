@@ -295,6 +295,15 @@ public:
 
                 bool go_back = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
 
+                // Dev hook: CALIPER_HOME_AFTER=<sec> forces Home once, N sec
+                // after the applet page opened — reproduces "click Home during
+                // training" headlessly (for the SIGSEGV repro).
+                if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
+                    static double page_t0 = -1.0;
+                    if (page_t0 < 0) page_t0 = glfwGetTime();
+                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                }
+
                 if (ImGui::BeginMainMenuBar()) {
                     if (ImGui::MenuItem("< Home")) go_back = true;
                     ImGui::Separator();
@@ -325,30 +334,13 @@ public:
 
                 if (!alive) go_back = true;   // quarantined mid-frame
 
-                if (go_back) {
-                    // Job workers are host-owned but reference applet state; a
-                    // training worker that hasn't honored cancel yet would
-                    // touch freed memory once teardown destroys the applet
-                    // (the applet's own cleanup wait is a 100ms-ish TIMEOUT,
-                    // not a join). Hard-join every worker FIRST — same
-                    // discipline as app-exit; only the active applet has jobs.
-                    caliper_host::host_job_system().cancel_all_and_join();
-                    loader_.teardown(active_applet_);
-                    active_applet_ = -1;
-                    page_ = AppPage::Landing;
-                    glfwSetWindowTitle(window_, "Caliper");
-                    // refresh cards so refusal/quarantine text shows up
-                    std::vector<AppletCard> cards;
-                    for (int i = 0; i < loader_.count(); i++) {
-                        const auto& e = loader_.at(i);
-                        std::string desc = e.manifest.summary;
-                        if (e.status != caliper_host::AppletStatus::Ready)
-                            desc = "[unavailable] " + e.status_text + "\n\n" + desc;
-                        cards.push_back({e.manifest.name, e.manifest.summary,
-                                         desc, e.manifest.tag});
-                    }
-                    intro_.set_applets(std::move(cards));
-                }
+                // Teardown is DEFERRED to after render() (see below): the
+                // applet's draw list THIS frame may reference bridge textures,
+                // and releasing them in cleanup() before the Metal render pass
+                // consumes that draw list is a use-after-free (objc_retain on a
+                // freed MTLTexture). We only flag it here; the applet keeps
+                // drawing valid textures through this frame's render.
+                if (go_back) pending_home_ = active_applet_;
             }
 
             // Jobs tray (§7.5): visible on every page while jobs exist.
@@ -381,6 +373,31 @@ public:
             }
 
             renderer_->render(dw, dh);
+
+            // Deferred applet teardown — runs ONLY after this frame's draw list
+            // has been rendered, so no just-released bridge texture is still
+            // referenced by the Metal pass. Order: hard-join workers (they
+            // reference applet state and the applet's own cleanup wait is a
+            // timeout, not a join), tear the applet down, then return to the
+            // landing page and refresh the cards.
+            if (pending_home_ >= 0) {
+                caliper_host::host_job_system().cancel_all_and_join();
+                loader_.teardown(pending_home_);
+                pending_home_ = -1;
+                active_applet_ = -1;
+                page_ = AppPage::Landing;
+                glfwSetWindowTitle(window_, "Caliper");
+                std::vector<AppletCard> cards;
+                for (int i = 0; i < loader_.count(); i++) {
+                    const auto& e = loader_.at(i);
+                    std::string desc = e.manifest.summary;
+                    if (e.status != caliper_host::AppletStatus::Ready)
+                        desc = "[unavailable] " + e.status_text + "\n\n" + desc;
+                    cards.push_back({e.manifest.name, e.manifest.summary,
+                                     desc, e.manifest.tag});
+                }
+                intro_.set_applets(std::move(cards));
+            }
         }
     }
 
@@ -513,6 +530,7 @@ private:
         caliper::app_data_path("data")};
     caliper_host::FrameWatchdog watchdog_;
     int active_applet_ = -1;
+    int pending_home_ = -1;   // applet idx awaiting post-render teardown (Home)
     double last_frame_time_ = 0.0;
     bool dock_layout_built_ = false;  // first-run applet dock layout attempted
 };
