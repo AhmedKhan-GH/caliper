@@ -159,6 +159,7 @@ add_library(caliper_host_lib STATIC
     src/host/job_system.cpp
     src/host/metrics_store.cpp
     src/host/artifact_store.cpp
+    src/host/data_store.cpp
     src/host/sha256.cpp
 )
 target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
