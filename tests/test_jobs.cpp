@@ -92,6 +92,32 @@ TEST_CASE("jobs: destructor cancels and joins") {
     CHECK(exited.load());
 }
 
+TEST_CASE("jobs: cancel_all_and_join waits for a worker still touching state") {
+    // The Home/teardown crash: a worker keeps writing to caller-owned state
+    // for a while AFTER seeing cancel. cancel_all_and_join() must not return
+    // until that write is finished — otherwise teardown frees the state under
+    // a live thread (SIGSEGV). Proves it is a real join, not a timeout.
+    struct Shared { std::atomic<bool> writing{false}, done{false}; };
+    Shared sh;
+    {
+        JobSystem js;
+        auto fn = [](void* user, const CaliperJobControl* ctl) {
+            auto* s = static_cast<Shared*>(user);
+            while (!ctl->cancelled(ctl))
+                std::this_thread::sleep_for(milliseconds(1));
+            s->writing.store(true);                 // still touching state...
+            std::this_thread::sleep_for(milliseconds(120));  // ...well past a
+            s->done.store(true);                    // short timeout window
+            s->writing.store(false);
+        };
+        js.submit("late-writer", fn, &sh);
+        std::this_thread::sleep_for(milliseconds(20));
+        js.cancel_all_and_join();                   // must block until done
+        CHECK(sh.done.load());                      // worker fully finished
+        CHECK_FALSE(sh.writing.load());             // not mid-write on return
+    }
+}
+
 TEST_CASE("jobs: concurrent jobs get distinct ids and all finish") {
     JobSystem js;
     std::atomic<int> done{0};

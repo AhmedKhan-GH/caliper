@@ -326,6 +326,13 @@ public:
                 if (!alive) go_back = true;   // quarantined mid-frame
 
                 if (go_back) {
+                    // Job workers are host-owned but reference applet state; a
+                    // training worker that hasn't honored cancel yet would
+                    // touch freed memory once teardown destroys the applet
+                    // (the applet's own cleanup wait is a 100ms-ish TIMEOUT,
+                    // not a join). Hard-join every worker FIRST — same
+                    // discipline as app-exit; only the active applet has jobs.
+                    caliper_host::host_job_system().cancel_all_and_join();
                     loader_.teardown(active_applet_);
                     active_applet_ = -1;
                     page_ = AppPage::Landing;
