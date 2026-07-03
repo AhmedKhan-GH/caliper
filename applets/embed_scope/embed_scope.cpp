@@ -120,8 +120,16 @@ struct EmbedScopeState {
     std::atomic<int> cloud_every{10};
 
     std::vector<float> live_x, live_y, live_z;   // current batch (<= kBatch)
-    std::vector<float> w_conv1;                  // conv1 weights, 8 * 3*3
-    std::vector<float> w_embed;                  // fc_embed weights, 3 * 64
+    // Weight DISPLAY tensors: built on the TRAINING device each step (block-
+    // upscaled with repeat_interleave so tiny maps render as hard, sharp
+    // texels), handed over as tensor HANDLES — zero CPU staging on Metal
+    // (the bridge colormaps device tensors on-GPU). The frame thread uploads
+    // the latest state at most once per frame: if steps outpace frames you
+    // see 60 fps of true memory states; the display never throttles training.
+    torch::Tensor disp_conv[8];                  // (48,48) f32, x16 blocks
+    torch::Tensor disp_embw;                     // (36,512) f32, 12x/8x blocks
+    float w_km = 0.f, w_wm = 0.f;                // symmetric colormap ranges
+    std::atomic<bool> disp_force_cpu{false};     // set if bridge rejects device
     uint64_t live_gen = 0;                       // bumped per step (0 = none)
 
     // set on the frame thread before submitting the eval (Load) job
@@ -406,16 +414,27 @@ void train_job(void* user, const CaliperJobControl* ctl) {
             float l = loss.item<float>();
             { std::lock_guard<std::mutex> lk(st->mtx); st->loss_hist.push_back(l); }
             if (run != 0) st->metrics.scalar(run, "train/loss", step, l);
-            {   // Live per-step publish: this batch's embeddings + the weight
-                // tensors, as owned CPU clones (the frame thread turns the
-                // weights into bridge textures — real-time, not per-eval).
+            {   // Live per-step publish: batch embeddings (CPU copies for the
+                // plot) + weight DISPLAY tensors that stay on the training
+                // device — block-upscaled here so they render sharp, handed
+                // over as handles, colormapped on-GPU by the bridge (Metal).
                 torch::NoGradGuard ng;
                 auto e3 = model->embed(xb).to(torch::kCPU)
                               .to(torch::kFloat32).contiguous();
-                auto wc = model->conv1->weight.detach().to(torch::kCPU)
-                              .to(torch::kFloat32).contiguous();
-                auto we = model->fc_embed->weight.detach().to(torch::kCPU)
-                              .to(torch::kFloat32).contiguous();
+                auto wc = model->conv1->weight.detach();      // (8,1,3,3)
+                auto we = model->fc_embed->weight.detach();   // (3,64)
+                if (st->disp_force_cpu.load(std::memory_order_relaxed)) {
+                    wc = wc.to(torch::kCPU);   // GL fallback: bridge is CPU-only
+                    we = we.to(torch::kCPU);
+                }
+                const float km = wc.abs().max().item<float>();
+                const float wm = we.abs().max().item<float>();
+                torch::Tensor dc[8];
+                for (int k = 0; k < 8; k++)
+                    dc[k] = wc[k][0].repeat_interleave(16, 0)
+                                    .repeat_interleave(16, 1).contiguous();
+                auto de = we.repeat_interleave(12, 0)
+                            .repeat_interleave(8, 1).contiguous();
                 const float* ep = e3.data_ptr<float>();
                 const int64_t bn = e3.size(0);
                 std::lock_guard<std::mutex> lk(st->mtx);
@@ -425,10 +444,10 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                     st->live_y[i] = ep[3 * i + 1];
                     st->live_z[i] = ep[3 * i + 2];
                 }
-                st->w_conv1.assign(wc.data_ptr<float>(),
-                                   wc.data_ptr<float>() + 8 * 3 * 3);
-                st->w_embed.assign(we.data_ptr<float>(),
-                                   we.data_ptr<float>() + 3 * 64);
+                for (int k = 0; k < 8; k++) st->disp_conv[k] = dc[k];
+                st->disp_embw = de;
+                st->w_km = std::max(km, 1e-6f);
+                st->w_wm = std::max(wm, 1e-6f);
                 st->live_gen++;
             }
             {   // Cloud stream: re-embed the full test subset every N steps
@@ -584,17 +603,6 @@ CaliperTextureId make_digit_tex(EmbedScopeState* st,
     return st->bridge.texture_from_tensor(&*ct);
 }
 
-// f32 HxW heatmap -> colormapped bridge texture (frame thread only; caller
-// owns the returned id). The upload copies, so `d` only outlives this call.
-CaliperTextureId make_map_tex(EmbedScopeState* st, const float* d, int h,
-                              int w, int cmap, float vmin, float vmax) {
-    if (!st->bridge) return 0;
-    auto t = torch::from_blob(const_cast<float*>(d), {h, w}, torch::kFloat32);
-    auto ct = caliper::adapters::to_tensor(t);
-    if (!ct) return 0;
-    return st->bridge.texture_from_tensor_mapped(&*ct, cmap, vmin, vmax);
-}
-
 } // namespace
 
 // ---- applet facade --------------------------------------------------------
@@ -633,7 +641,8 @@ void EmbedScopeApplet::draw_ui() {
     std::vector<float> loss, accx, accy, ex, ey, ez;
     std::vector<int>   lbl, prd;
     std::vector<uint8_t> px;
-    std::vector<float> w_conv1, w_embed;
+    torch::Tensor disp_conv[8], disp_embw;   // handle copies (no data copy)
+    float w_km = 0.f, w_wm = 0.f;
     std::string status;
     uint64_t gen, lgen; int64_t n;
     {
@@ -644,9 +653,12 @@ void EmbedScopeApplet::draw_ui() {
                         lbl = st->labels; prd = st->preds; px = st->pixels; }
         lgen = st->live_gen;
         if (lgen != 0 && lgen != st->tex_gen) {
-            // fresh step: take plot copies + weight clones out of the lock
+            // fresh step: batch plot copies + co-owning display handles (the
+            // handles keep the device tensors alive through the upload)
             st->lbx = st->live_x; st->lby = st->live_y; st->lbz = st->live_z;
-            w_conv1 = st->w_conv1; w_embed = st->w_embed;
+            for (int k = 0; k < 8; k++) disp_conv[k] = st->disp_conv[k];
+            disp_embw = st->disp_embw;
+            w_km = st->w_km; w_wm = st->w_wm;
         }
     }
     ImGui::TextWrapped("%s", status.c_str());
@@ -880,36 +892,47 @@ void EmbedScopeApplet::draw_ui() {
                             "projection matrix render here live, every "
                             "optimizer step");
     } else {
-        if (lgen != st->tex_gen && !w_conv1.empty() && !w_embed.empty()) {
+        if (lgen != st->tex_gen && disp_embw.defined()) {
             for (auto& tx : st->conv_tex)
                 if (tx) { st->bridge.release_texture(tx); tx = 0; }
             if (st->embw_tex) { st->bridge.release_texture(st->embw_tex);
                                 st->embw_tex = 0; }
-            float km = 1e-6f;
-            for (float v : w_conv1) km = std::max(km, std::fabs(v));
-            for (int k = 0; k < 8; k++)
-                st->conv_tex[k] = make_map_tex(st, w_conv1.data() + k * 9,
-                                               3, 3, CALIPER_CMAP_MAGMA,
-                                               -km, km);
-            float wm = 1e-6f;
-            for (float v : w_embed) wm = std::max(wm, std::fabs(v));
-            st->embw_tex = make_map_tex(st, w_embed.data(), 3, 64,
-                                        CALIPER_CMAP_RDBU, -wm, wm);
+            bool device_rejected = false;
+            for (int k = 0; k < 8; k++) {
+                auto ct = caliper::adapters::to_tensor(disp_conv[k]);
+                st->conv_tex[k] = ct ? st->bridge.texture_from_tensor_mapped(
+                                           &*ct, CALIPER_CMAP_MAGMA,
+                                           -w_km, w_km) : 0;
+                device_rejected |= (st->conv_tex[k] == 0);
+            }
+            {
+                auto ct = caliper::adapters::to_tensor(disp_embw);
+                st->embw_tex = ct ? st->bridge.texture_from_tensor_mapped(
+                                        &*ct, CALIPER_CMAP_RDBU,
+                                        -w_wm, w_wm) : 0;
+                device_rejected |= (st->embw_tex == 0);
+            }
+            // GL fallback can't take device tensors — ask the worker to hand
+            // over CPU display tensors from the next step onward.
+            if (device_rejected && disp_embw.device().type() != torch::kCPU)
+                st->disp_force_cpu.store(true, std::memory_order_relaxed);
             st->tex_gen = lgen;
         }
-        ImGui::TextDisabled("streaming via tensor_bridge.v1 — step %llu",
-                            (unsigned long long)lgen);
+        ImGui::TextDisabled("device-resident pull via tensor_bridge.v1 — "
+                            "step %llu", (unsigned long long)lgen);
         ImGui::SeparatorText("conv1 kernels (8 x 3x3, magma)");
         for (int k = 0; k < 8; k++) {
             if (k) ImGui::SameLine();
             if (st->conv_tex[k])
                 ImGui::Image(caliper::Bridge::imtex(st->conv_tex[k]),
-                             ImVec2(40, 40));
+                             ImVec2(48, 48));   // 1:1 with the 48x48 blocks
         }
         ImGui::SeparatorText("fc_embed weight — the 3-D projection (3 x 64, RdBu)");
-        if (st->embw_tex)
+        if (st->embw_tex) {
+            const float aw = ImGui::GetContentRegionAvail().x;
             ImGui::Image(caliper::Bridge::imtex(st->embw_tex),
-                         ImVec2(ImGui::GetContentRegionAvail().x, 51));
+                         ImVec2(aw, aw * 36.f / 512.f));   // keep block aspect
+        }
     }
     ImGui::End();   // EmbedScope: Tensors
 
