@@ -140,6 +140,7 @@ struct EmbedScopeState {
     std::array<std::vector<float>, 10> cx, cy, cz;
     bool  refit = false;
     bool  axes_autofit = false;        // default OFF: fixed axes show migration
+    bool  follow_curves = true;        // loss/acc AutoFit; OFF = free zoom/pan
     double bmin[3] = {-1,-1,-1}, bmax[3] = {1,1,1};
 
     uint64_t data_gen = 0;             // last gen fed through data.v1 SQL
@@ -735,18 +736,22 @@ void EmbedScopeApplet::draw_ui() {
     else if (!st->save_status.empty())
         ImGui::TextDisabled("artifacts: %s", st->save_status.c_str());
 
-    // Loss + accuracy (2-D) live with the controls. AutoFit axes so the
-    // curves keep tracing as training appends points (a one-shot fit would
-    // let the line run off the right edge of a frozen frame).
+    // Loss + accuracy (2-D). "follow" = AutoFit axes tracing the growing
+    // series — but ImPlot input-locks auto-fitting axes, so following and
+    // hand-zooming are mutually exclusive; the checkbox picks (the console
+    // auto-scroll idiom). Unchecked: free zoom/pan, double-click re-fits.
+    ImGui::Checkbox("follow", &st->follow_curves);
+    const ImPlotAxisFlags follow =
+        st->follow_curves ? ImPlotAxisFlags_AutoFit : 0;
     if (ImPlot::BeginPlot("train loss", {-1, 150})) {
-        ImPlot::SetupAxes("step", "NLL",
-                          ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+        ImPlot::SetupAxes("step", "NLL", follow, follow);
         if (!loss.empty()) ImPlot::PlotLine("loss", loss.data(), (int)loss.size());
         ImPlot::EndPlot();
     }
     if (ImPlot::BeginPlot("test accuracy %", {-1, 150})) {
-        ImPlot::SetupAxes("step", "acc %", ImPlotAxisFlags_AutoFit, 0);
-        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImPlotCond_Always);
+        ImPlot::SetupAxes("step", "acc %", follow, 0);
+        if (st->follow_curves)
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImPlotCond_Always);
         if (!accy.empty())
             ImPlot::PlotLine("acc", accx.data(), accy.data(), (int)accy.size());
         ImPlot::EndPlot();
