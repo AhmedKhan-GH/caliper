@@ -245,14 +245,17 @@ public:
                     // Titles are the exact Begin() strings from applet source.
                     static const char* const central_windows[] = {
                         "EmbedScope: Cloud",   // the showcase
+                        "GPTScope: Logit Lens",// the mech-interp centerpiece
                         "Hello, Caliper",      // examples/hello
                         "MyScope",             // examples/my_scope (tutorial)
                         "SineScope",           // examples/sine_scope (tutorial)
                     };
                     static const char* const side_top_windows[] = {
-                        "EmbedScope: Training"};
+                        "EmbedScope: Training", "GPTScope: Training"};
                     static const char* const side_bot_windows[] = {
-                        "EmbedScope: Tensors", "EmbedScope: Data"};
+                        "EmbedScope: Tensors", "EmbedScope: Data",
+                        "GPTScope: Heads", "GPTScope: Embeddings",
+                        "GPTScope: Residual", "GPTScope: Sample"};
                     auto unseen = [](const char* w) {
                         return ImGui::FindWindowSettingsByID(ImHashStr(w)) ==
                                nullptr;

@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.gpt-scope"
+name    = "GPTScope"
+version = "0.2.0"
+summary = "Mechanistic interpretability for a live-training char GPT (4L/4H/128d, TinyShakespeare): the logit lens across depth, head roles as a distance/entropy scatter with on-demand attention drill-down, W_E embedding geometry as a glyph cloud, attn-vs-MLP residual write accounting with per-group gradient norms, and confidence-colored live sampling. Trains off the frame thread via caliper.jobs.v1, device-negotiated; metrics.v1 streams the run; tensor_bridge.v1 draws the head heatmap; artifacts.v1 saves/loads the model."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.metrics.v1", "caliper.tensor_bridge.v1", "caliper.artifacts.v1"]
