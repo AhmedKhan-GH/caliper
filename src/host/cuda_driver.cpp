@@ -48,6 +48,7 @@ const Api* load() {
         {(void**)&a.cuCtxSetCurrent,                "cuCtxSetCurrent"},
         {(void**)&a.cuCtxSynchronize,               "cuCtxSynchronize"},
         {(void**)&a.cuMemcpyDtoD,                   "cuMemcpyDtoD_v2"},
+        {(void**)&a.cuMemGetAddressRange,           "cuMemGetAddressRange_v2"},
         {(void**)&a.cuImportExternalMemory,         "cuImportExternalMemory"},
         {(void**)&a.cuExternalMemoryGetMappedBuffer,"cuExternalMemoryGetMappedBuffer"},
         {(void**)&a.cuDestroyExternalMemory,        "cuDestroyExternalMemory"},

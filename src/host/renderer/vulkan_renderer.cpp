@@ -140,7 +140,21 @@ public:
         }
 
         if (!create_oneshot_pool()) return false;
+
+        // Resolve the CUDA interop pairing NOW, at session start (spec §3.1),
+        // not lazily: the bridge reads interop_device() when it is constructed
+        // (before the first device upload), so the pairing must be settled by
+        // the time init() returns. Requires both the Vulkan external-memory
+        // extensions AND a CUDA device whose UUID matches this one.
+        interop_ok_ = external_memory_ok_ && ensure_cuda();
         return true;
+    }
+
+    // Vulkan imports CUDA VRAM only when a UUID-matched CUDA device is paired
+    // (spec §3.4/D20). Otherwise the backend still renders, but via CPU staging,
+    // so it advertises CPU and the bridge won't accept CUDA tensors.
+    CaliperDeviceKind interop_device() const override {
+        return interop_ok_ ? CALIPER_DEV_CUDA : CALIPER_DEV_CPU;
     }
 
     void new_frame() override {
@@ -297,7 +311,7 @@ public:
         Tex& dst = it->second;
         if (t.device != CALIPER_DEV_CUDA || t.data == nullptr)
             return dev_bail("tensor not CUDA-resident");
-        if (!external_memory_ok_) return dev_bail("external-memory interop unavailable");
+        if (!interop_ok_) return dev_bail("external-memory interop unavailable");
 
         const uint64_t elem = (t.dtype == CALIPER_DT_F32) ? 4 : 1;
         if (t.dtype != CALIPER_DT_F32 && t.dtype != CALIPER_DT_U8)
@@ -305,15 +319,27 @@ public:
         const uint64_t bytes = tensor_extent_bytes(t, elem);
 
         if (!ensure_cuda()) return dev_bail("CUDA context init failed");
+        const cudadrv::Api* cu = cudadrv::api();
+        cu->cuCtxSetCurrent(cuda_ctx_);
+
+        // Bounds check before any copy (spec §3.3.2 — the CUDA analog of Metal's
+        // src.length check): the tensor's byte extent must fit inside the owning
+        // CUDA allocation, or the DtoD below would read past it. The bridge
+        // already bounded the extent in elements; this re-bounds it against the
+        // real allocation. Query failure -> treat as unbounded -> reject.
+        const cudadrv::CUdeviceptr src = (cudadrv::CUdeviceptr)(uintptr_t)t.data;
+        cudadrv::CUdeviceptr base = 0; size_t alloc = 0;
+        if (cu->cuMemGetAddressRange(&base, &alloc, src) != cudadrv::CUDA_SUCCESS)
+            return dev_bail("cuMemGetAddressRange failed");
+        if (src < base || (src - base) + bytes > alloc)
+            return dev_bail("tensor extent exceeds CUDA allocation");
+
         if (!ensure_shared_buffer(dst, bytes)) return dev_bail("shared-buffer import failed");
 
         // In-VRAM copy: torch allocation -> shared allocation, then drain so
         // the Vulkan pass below (fence-waited) reads finished bytes.
-        const cudadrv::Api* cu = cudadrv::api();
-        cu->cuCtxSetCurrent(cuda_ctx_);
-        if (cu->cuMemcpyDtoD(dst.interop.cuda_ptr,
-                             (cudadrv::CUdeviceptr)(uintptr_t)t.data,
-                             (size_t)bytes) != cudadrv::CUDA_SUCCESS)
+        if (cu->cuMemcpyDtoD(dst.interop.cuda_ptr, src, (size_t)bytes)
+                != cudadrv::CUDA_SUCCESS)
             return dev_bail("cuMemcpyDtoD failed");
         if (cu->cuCtxSynchronize() != cudadrv::CUDA_SUCCESS)
             return dev_bail("cuCtxSynchronize failed");
@@ -323,7 +349,10 @@ public:
             ok = colormap_compute(dst, t, lut256, vmin, vmax);
         else if (t.dtype == CALIPER_DT_U8)
             ok = blit_u8(dst, t);
-        if (ok) dev_note("CUDA interop OK — zero-copy VRAM path");
+        // Honesty rule (spec §3.5): reserve "zero-copy" for the alloc_shared
+        // path; an arbitrary torch tensor costs one D2D copy, so it's
+        // "GPU-resident", not zero-copy.
+        if (ok) dev_note("CUDA interop OK — GPU-resident (no CPU staging)");
         return ok;
     }
 
@@ -665,15 +694,20 @@ private:
         int count = 0;
         if (cu->cuDeviceGetCount(&count) != cudadrv::CUDA_SUCCESS || count <= 0)
             return false;
-        cuda_dev_ = 0;
+        int matched = -1;
         for (int i = 0; i < count; ++i) {
             cudadrv::CUuuid u{};
             if (cu->cuDeviceGetUuid(&u, i) == cudadrv::CUDA_SUCCESS &&
                 std::memcmp(u.bytes, device_uuid_, 16) == 0) {
-                cuda_dev_ = i;
+                matched = i;
                 break;
             }
         }
+        // D20: no CUDA device matches the Vulkan device's UUID (hybrid laptop,
+        // or the Vulkan device isn't the NVIDIA one) -> interop OFF. Never fall
+        // back to device 0, which would pair with the wrong GPU.
+        if (matched < 0) return false;
+        cuda_dev_ = matched;
         return cu->cuDevicePrimaryCtxRetain(&cuda_ctx_, cuda_dev_) == cudadrv::CUDA_SUCCESS;
     }
 
@@ -910,7 +944,8 @@ private:
     VkDescriptorSet cmap_set_ = VK_NULL_HANDLE;
 
     // CUDA interop (driver API, loaded at runtime; see cuda_driver.h).
-    bool external_memory_ok_ = false;
+    bool external_memory_ok_ = false;   // Vulkan side exports external memory
+    bool interop_ok_ = false;           // …AND a UUID-matched CUDA device paired
     uint8_t device_uuid_[16] = {};
     cudadrv::CUcontext cuda_ctx_ = nullptr;
     cudadrv::CUdevice cuda_dev_ = 0;

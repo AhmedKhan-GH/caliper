@@ -27,6 +27,14 @@ public:
     void render(int, int) override {}
     void shutdown() override {}
     const char* name() const override { return name_; }
+    // Mirror the real backends' name->interop-device mapping so a stub named
+    // "metal"/"vulkan" activates the device path (the bridge reads this, not
+    // name(), since spec §3.4).
+    CaliperDeviceKind interop_device() const override {
+        if (std::strcmp(name_, "metal") == 0)  return CALIPER_DEV_METAL;
+        if (std::strcmp(name_, "vulkan") == 0) return CALIPER_DEV_CUDA;
+        return CALIPER_DEV_CPU;
+    }
     void window_hints() override {}
 
     uint64_t tex_create_rgba8(int w, int h) override {

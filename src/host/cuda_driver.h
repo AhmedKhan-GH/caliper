@@ -67,6 +67,11 @@ struct Api {
     CUresult (*cuCtxSetCurrent)(CUcontext ctx);
     CUresult (*cuCtxSynchronize)();
     CUresult (*cuMemcpyDtoD)(CUdeviceptr dst, CUdeviceptr src, size_t bytes); // _v2
+    // Owning allocation's [base, base+size) for a device pointer — lets the
+    // renderer bound a tensor's byte extent against real memory before the
+    // copy (finding-#1 parity with Metal's src.length check).
+    CUresult (*cuMemGetAddressRange)(CUdeviceptr* base, size_t* size,
+                                     CUdeviceptr dptr);                       // _v2
     CUresult (*cuImportExternalMemory)(CUexternalMemory* out,
                                        const ExternalMemoryHandleDesc* desc);
     CUresult (*cuExternalMemoryGetMappedBuffer)(CUdeviceptr* out,

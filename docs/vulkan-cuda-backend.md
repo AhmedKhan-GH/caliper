@@ -29,6 +29,25 @@
 
 ---
 
+## 1a. As-Built Status (implemented 2026-07-05)
+
+Increments **V1 and V2 are implemented and verified on a Windows/NVIDIA machine** (RTX 500 Ada, driver 596.47): the Vulkan backend is the default renderer on Windows, `gpt_scope` training on CUDA drives its attention heatmap through the interop path with no CPU staging (`[vulkan] device path: CUDA interop OK — GPU-resident (no CPU staging)`), and the full unit + torch + gfx suites pass. What matches the spec and what was built differently:
+
+**Built as specified.** UUID-driven device pairing (§3.1/D20 — including interop *off*, not device-0-fallback, on a UUID mismatch); buffer-level-only interop (D19); the `interop_device()` seam replacing the bridge's name-matching (§3.4); `OPAQUE_WIN32` export → CUDA import → D2D copy → SPIR-V colormap / `vkCmdCopyBufferToImage` (§3.3); the `cuMemGetAddressRange` byte-extent bounds check (§3.3.2); `device_query_cuda` (§3.4); Vulkan-default-with-GL-fallback selection (§3.4); synchronous fenced interop (D21).
+
+**Deliberate deviations (justified):**
+
+| Spec said | Built as | Why |
+|---|---|---|
+| CUDA **runtime** API (`cudaImportExternalMemory`, §3.3) | CUDA **driver** API via `nvcuda.dll`, loaded at runtime (`cuda_driver.{h,cpp}`) | Stronger D11: no CUDA toolkit link at all — the driver library ships with the GPU driver, so machines without NVIDIA build and run unchanged. §2.2 already permits "driver/runtime." |
+| Vulkan via `find_package(Vulkan)` / LunarG SDK (§7) | `Vulkan-Headers` + `volk` + `glslang` via FetchContent | No SDK install required on dev or CI machines; SPIR-V still compiled at build time (§8 D22 preserved). |
+| `tex_release` deferred-destruction queue, destroyed `kFramesInFlight` later (§3.2) | Synchronous `vkQueueWaitIdle` before destroy | Correct (nothing in flight after idle), simpler for V1; the deferred queue is a perf refinement, not a correctness need. Release is gen-gated, so the stall is infrequent. |
+| Sync via `cudaStreamSynchronize` honoring `t.stream` (§3.3.4) | `cuCtxSynchronize` (full context drain); producer drained applet-side via `synced_to_tensor` | `t.stream` is NULL in v1; a full drain matches Metal's `waitUntilCompleted`. The applet-side sync-at-handoff closes the producer→consumer race the renderer's post-copy sync alone cannot. |
+
+**Not yet built (as sequenced):** V3 `alloc_shared` on CUDA (§3.5) — `alloc_shared` still returns a CPU vector; V4 semaphore pipelining (§8 D21). **Outstanding from §5:** the automated `gfx-vulkan` (lavapipe) and `gfx-cuda` determinism suites are not yet added — V2 was verified end-to-end via a live autolaunch training run, not yet by byte-equality tests. This is the highest-value remaining gap.
+
+---
+
 ## 2. Constraints Inherited From the Platform
 
 These are settled upstream and constrain every choice below:

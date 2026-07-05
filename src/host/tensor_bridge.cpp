@@ -203,12 +203,11 @@ void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst) {
 // ---------------------------------------------------------------------------
 
 TensorBridge::TensorBridge(HostRenderer& renderer) : renderer_(renderer) {
-    if (std::strcmp(renderer.name(), "metal") == 0)
-        active_device_ = CALIPER_DEV_METAL;
-    else if (std::strcmp(renderer.name(), "vulkan") == 0)
-        active_device_ = CALIPER_DEV_CUDA;   // Vulkan backend imports CUDA VRAM
-    else
-        active_device_ = CALIPER_DEV_CPU;
+    // The backend declares the device its zero-copy path imports (spec §3.4).
+    // Vulkan reports CUDA only when a UUID-matched CUDA device is actually
+    // paired, so on a hybrid/CPU-Vulkan box the bridge advertises CPU and
+    // never accepts a CUDA tensor it would only end up staging.
+    active_device_ = renderer.interop_device();
 }
 
 namespace {

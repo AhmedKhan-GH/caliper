@@ -90,6 +90,7 @@ class MetalRenderer final : public HostRenderer {
 public:
     const char* name() const override { return "metal"; }
     const char* last_device_path() const override { return last_device_path_; }
+    CaliperDeviceKind interop_device() const override { return CALIPER_DEV_METAL; }
 
     // Metal owns no GL context: the window must be created with NO_API so GLFW
     // does not attach an OpenGL context we would fight over. Runs before

@@ -36,6 +36,12 @@ public:
     // read it without dynamic_cast; GL and other CPU-staged backends default.
     virtual const char* last_device_path() const { return "cpu-staged"; }
 
+    // Which device kind this backend imports on its zero-copy path (spec §3.4).
+    // The bridge maps this to active_device_ instead of matching on name(),
+    // so a new backend never grows a strcmp arm. Metal -> METAL; Vulkan -> CUDA
+    // when a UUID-matched CUDA device is paired, else CPU; everyone else CPU.
+    virtual CaliperDeviceKind interop_device() const { return CALIPER_DEV_CPU; }
+
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
 };
