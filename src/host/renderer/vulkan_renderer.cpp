@@ -18,11 +18,19 @@
 // exportable allocations, so the renderer exports and CUDA imports. Same
 // residency guarantee, same crossing count.
 //
-// Synchronization is the v1 sync-then-update contract (§7.2), same as Metal:
-// the adapter drains the producer (torch::cuda::synchronize()), our DtoD copy
-// is followed by cuCtxSynchronize(), and every Vulkan submission here is
-// fence-waited (Metal's waitUntilCompleted). Shared timeline semaphores are a
-// Phase-4+ optimization, not a correctness requirement at v1.
+// Synchronization (V4, spec D21 upgraded): the handoff is GPU-ordered via a
+// per-texture SHARED TIMELINE SEMAPHORE (VK_KHR_timeline_semaphore exported
+// opaque-Win32, cuImportExternalSemaphore). Per update: CUDA's stream-ordered
+// copy signals base+1, the Vulkan pass GPU-waits base+1 and signals base+2,
+// and the frame submission GPU-waits base+2 before sampling — no
+// cuCtxSynchronize, no fence wait, the CPU never blocks on this update. The
+// only host wait is retire(): back-pressure if the PREVIOUS update of the same
+// texture hasn't finished (re-record + buffer-overwrite safety; instant in
+// steady state). Where timeline semaphores are unavailable, the v1 synchronous
+// model (copy + cuCtxSynchronize + fenced submit, Metal's waitUntilCompleted
+// shape) remains as the per-texture fallback. The adapter-side
+// torch::cuda::synchronize() at the handoff is the v1 ABI contract and stays;
+// eliding it needs a stream channel in CaliperTensor (a v2 ABI question).
 //
 // The frame loop follows imgui's example_glfw_vulkan (the ImGui_ImplVulkanH_
 // helpers); the CLEAR lives in the render pass load-op with the same color as
@@ -46,6 +54,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -147,6 +156,17 @@ public:
         // the time init() returns. Requires both the Vulkan external-memory
         // extensions AND a CUDA device whose UUID matches this one.
         interop_ok_ = external_memory_ok_ && ensure_cuda();
+
+        // V4 semaphore pipelining: available when the device also exports
+        // timeline semaphores CUDA can import. Per-texture creation can still
+        // fall back to the synchronous path if a runtime step fails.
+        const cudadrv::Api* cu = cudadrv::api();
+        pipelined_ok_ = interop_ok_ && timeline_ok_ &&
+                        cu && cu->cuImportExternalSemaphore != nullptr;
+        if (interop_ok_)
+            dev_note(pipelined_ok_
+                         ? "sync mode: pipelined (shared timeline semaphores)"
+                         : "sync mode: synchronous (timeline semaphores unavailable)");
         return true;
     }
 
@@ -264,6 +284,7 @@ public:
         auto it = textures_.find(tex);
         if (it == textures_.end() || data == nullptr || w <= 0 || h <= 0) return false;
         Tex& t = it->second;
+        if (!retire(t)) return false;   // a pipelined update may still be writing
         const VkDeviceSize bytes = (VkDeviceSize)w * h * 4;
         if (!ensure_buffer(staging_, bytes,
                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -336,24 +357,31 @@ public:
 
         if (!ensure_shared_buffer(dst, bytes)) return dev_bail("shared-buffer import failed");
 
-        // In-VRAM copy: torch allocation -> shared allocation, then drain so
-        // the Vulkan pass below (fence-waited) reads finished bytes. When the
-        // tensor's data IS our shared buffer (the alloc_shared literal-zero-copy
-        // path, spec §3.5), there is nothing to copy — the applet's kernels
-        // already wrote it in place.
+        // When the tensor's data IS our shared buffer (the alloc_shared
+        // literal-zero-copy path, spec §3.5), there is nothing to copy — the
+        // applet's kernels already wrote it in place.
         const bool shared_in_place = (src == dst.interop.cuda_ptr);
-        if (!shared_in_place &&
-            cu->cuMemcpyDtoD(dst.interop.cuda_ptr, src, (size_t)bytes)
-                != cudadrv::CUDA_SUCCESS)
-            return dev_bail("cuMemcpyDtoD failed");
-        if (cu->cuCtxSynchronize() != cudadrv::CUDA_SUCCESS)
-            return dev_bail("cuCtxSynchronize failed");
 
         bool ok = false;
-        if (t.dtype == CALIPER_DT_F32 && lut256 != nullptr)
-            ok = colormap_compute(dst, t, lut256, vmin, vmax);
-        else if (t.dtype == CALIPER_DT_U8)
-            ok = blit_u8(dst, t);
+        if (pipelined_ok_ && ensure_pipeline_objects(dst)) {
+            // V4: GPU-ordered handoff via the texture's timeline semaphore —
+            // stream-ordered copy, GPU signal/wait, no CPU synchronize.
+            ok = update_pipelined(dst, t, src, bytes, shared_in_place,
+                                  lut256, vmin, vmax);
+        } else {
+            // Synchronous fallback (the v1 model, Metal's waitUntilCompleted
+            // shape): in-VRAM copy, drain, fence-waited Vulkan pass.
+            if (!shared_in_place &&
+                cu->cuMemcpyDtoD(dst.interop.cuda_ptr, src, (size_t)bytes)
+                    != cudadrv::CUDA_SUCCESS)
+                return dev_bail("cuMemcpyDtoD failed");
+            if (cu->cuCtxSynchronize() != cudadrv::CUDA_SUCCESS)
+                return dev_bail("cuCtxSynchronize failed");
+            if (t.dtype == CALIPER_DT_F32 && lut256 != nullptr)
+                ok = colormap_compute(dst, t, lut256, vmin, vmax);
+            else if (t.dtype == CALIPER_DT_U8)
+                ok = blit_u8(dst, t);
+        }
         // Honesty rule (spec §3.5): "zero-copy" is the alloc_shared in-place
         // path (no D2D); an arbitrary torch tensor costs one D2D copy, so it's
         // "GPU-resident", not zero-copy.
@@ -408,6 +436,19 @@ private:
         void* win32_handle = nullptr;        // NT handle from Vulkan
         cudadrv::CUexternalMemory ext = nullptr;
         cudadrv::CUdeviceptr cuda_ptr = 0;
+
+        // V4 pipelining (per texture): a shared timeline semaphore orders
+        // CUDA-copy -> Vulkan-pass -> frame-draw entirely on the GPU. The
+        // monotonic timeline_value is the last value the chain will signal;
+        // a host wait on it retires the whole prior chain.
+        VkSemaphore timeline = VK_NULL_HANDLE;
+        void* sem_handle = nullptr;          // NT handle exported to CUDA
+        cudadrv::CUexternalSemaphore cuda_sem = nullptr;
+        uint64_t timeline_value = 0;
+        VkCommandBuffer cb = VK_NULL_HANDLE; // re-recorded per update (retired first)
+        VkDescriptorSet set = VK_NULL_HANDLE;// per-texture cmap descriptor set
+        Buffer lut;                          // per-texture LUT (256 RGBA8)
+        bool pipelined = false;              // sync objects created OK
     };
     struct Tex {
         VkImage image = VK_NULL_HANDLE;
@@ -467,6 +508,10 @@ private:
             const bool ext_mem =
                 has_ext(eprops, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME) &&
                 has_ext(eprops, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+            // V4 pipelining wants timeline semaphores exportable to CUDA.
+            const bool ext_sem =
+                has_ext(eprops, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) &&
+                has_ext(eprops, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
             int score = 0;
             if (p2.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 4;
             if (ext_mem) score += 2;
@@ -474,10 +519,22 @@ private:
                 best_score = score;
                 physical_ = d;
                 external_memory_ok_ = ext_mem;
+                timeline_ok_ = ext_sem;
                 std::memcpy(device_uuid_, idp.deviceUUID, 16);
             }
         }
         if (physical_ == VK_NULL_HANDLE) return false;
+
+        // The extension alone isn't enough — the timelineSemaphore feature must
+        // be supported and explicitly enabled at device creation.
+        if (timeline_ok_) {
+            VkPhysicalDeviceTimelineSemaphoreFeaturesKHR tlf{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR};
+            VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            f2.pNext = &tlf;
+            vkGetPhysicalDeviceFeatures2(physical_, &f2);
+            timeline_ok_ = (tlf.timelineSemaphore == VK_TRUE);
+        }
 
         uint32_t qn = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qn, nullptr);
@@ -495,6 +552,9 @@ private:
             dev_exts.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
             dev_exts.push_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
         }
+        VkPhysicalDeviceTimelineSemaphoreFeaturesKHR tl_feat{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR};
+        tl_feat.timelineSemaphore = VK_TRUE;
         const float prio = 1.0f;
         VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         qci.queueFamilyIndex = queue_family_;
@@ -503,6 +563,11 @@ private:
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
+        if (timeline_ok_) {
+            dev_exts.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+            dev_exts.push_back(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
+            dci.pNext = &tl_feat;
+        }
         dci.enabledExtensionCount = (uint32_t)dev_exts.size();
         dci.ppEnabledExtensionNames = dev_exts.data();
         if (vkCreateDevice(physical_, &dci, nullptr, &device_) != VK_SUCCESS) return false;
@@ -565,16 +630,34 @@ private:
         vkCmdEndRenderPass(fd->CommandBuffer);
         vkEndCommandBuffer(fd->CommandBuffer);
 
-        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        // V4: pipelined device updates queued this frame must complete before
+        // ImGui samples their textures — GPU-side timeline waits, not fences.
+        std::vector<VkSemaphore> wait_sems{img_acq};
+        std::vector<uint64_t> wait_vals{0};                 // binary: ignored
+        std::vector<VkPipelineStageFlags> wait_stages{
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        for (const auto& pw : pending_frame_waits_) {
+            wait_sems.push_back(pw.first);
+            wait_vals.push_back(pw.second);
+            wait_stages.push_back(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        }
+        uint64_t sig_val = 0;                               // binary: ignored
+        VkTimelineSemaphoreSubmitInfoKHR tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
+        tsi.waitSemaphoreValueCount = (uint32_t)wait_vals.size();
+        tsi.pWaitSemaphoreValues = wait_vals.data();
+        tsi.signalSemaphoreValueCount = 1;
+        tsi.pSignalSemaphoreValues = &sig_val;
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        si.waitSemaphoreCount = 1;
-        si.pWaitSemaphores = &img_acq;
-        si.pWaitDstStageMask = &wait_stage;
+        if (!pending_frame_waits_.empty()) si.pNext = &tsi;
+        si.waitSemaphoreCount = (uint32_t)wait_sems.size();
+        si.pWaitSemaphores = wait_sems.data();
+        si.pWaitDstStageMask = wait_stages.data();
         si.commandBufferCount = 1;
         si.pCommandBuffers = &fd->CommandBuffer;
         si.signalSemaphoreCount = 1;
         si.pSignalSemaphores = &rend_done;
-        vkQueueSubmit(queue_, 1, &si, fd->Fence);
+        if (vkQueueSubmit(queue_, 1, &si, fd->Fence) == VK_SUCCESS)
+            pending_frame_waits_.clear();
     }
 
     void frame_present() {
@@ -687,7 +770,38 @@ private:
         b.size = 0;
     }
 
+    // V4 sync-object teardown (subset of destroy_interop; also the cleanup for
+    // a partially-constructed ensure_pipeline_objects). Caller guarantees the
+    // GPU is done with them (retire/queue-idle/device-idle).
+    void destroy_sync_objects(Interop& io) {
+        const cudadrv::Api* cu = cudadrv::api();
+        if (io.timeline != VK_NULL_HANDLE) {
+            // A destroyed semaphore must never linger in the frame-wait list.
+            for (size_t i = pending_frame_waits_.size(); i-- > 0;)
+                if (pending_frame_waits_[i].first == io.timeline)
+                    pending_frame_waits_.erase(pending_frame_waits_.begin() + (long)i);
+        }
+        if (io.cuda_sem && cu) {
+            cu->cuCtxSetCurrent(cuda_ctx_);
+            cu->cuDestroyExternalSemaphore(io.cuda_sem);
+            io.cuda_sem = nullptr;
+        }
+        if (io.sem_handle) {
+#ifdef _WIN32
+            CloseHandle((HANDLE)io.sem_handle);
+#endif
+            io.sem_handle = nullptr;
+        }
+        if (io.timeline) { vkDestroySemaphore(device_, io.timeline, nullptr); io.timeline = VK_NULL_HANDLE; }
+        if (io.cb) { vkFreeCommandBuffers(device_, oneshot_pool_, 1, &io.cb); io.cb = VK_NULL_HANDLE; }
+        if (io.set) { vkFreeDescriptorSets(device_, cmap_pool_, 1, &io.set); io.set = VK_NULL_HANDLE; }
+        destroy_buffer(io.lut);
+        io.timeline_value = 0;
+        io.pipelined = false;
+    }
+
     void destroy_interop(Interop& io) {
+        destroy_sync_objects(io);
         const cudadrv::Api* cu = cudadrv::api();
         if (io.ext && cu) {
             cu->cuCtxSetCurrent(cuda_ctx_);
@@ -702,6 +816,93 @@ private:
             io.win32_handle = nullptr;
         }
         destroy_buffer(io.shared);
+    }
+
+    // ---- V4 semaphore pipelining -------------------------------------------
+    // Host wait on a timeline value: retires a chain. 2 s timeout so a hung
+    // GPU degrades to a staged frame instead of deadlocking the UI thread.
+    bool wait_timeline(VkSemaphore sem, uint64_t value) {
+        VkSemaphoreWaitInfoKHR wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO_KHR};
+        wi.semaphoreCount = 1;
+        wi.pSemaphores = &sem;
+        wi.pValues = &value;
+        return vkWaitSemaphoresKHR(device_, &wi, 2000000000ull) == VK_SUCCESS;
+    }
+
+    // Retire any in-flight pipelined chain on this texture. Needed before
+    // re-recording its command buffer, overwriting its shared buffer, mixing
+    // in a staged upload, or reading it back. Instant in steady state (the
+    // chain from the previous training step finished long ago).
+    bool retire(Tex& t) {
+        if (!t.interop.pipelined || t.interop.timeline_value == 0) return true;
+        return wait_timeline(t.interop.timeline, t.interop.timeline_value);
+    }
+
+    // Per-texture V4 sync objects, created lazily on the first pipelined
+    // update: an exported timeline semaphore CUDA imports, plus this texture's
+    // own command buffer, descriptor set, and LUT buffer (an in-flight update
+    // of one texture must never race another's resources — the sync path's
+    // shared globals are safe only because it fence-waits every dispatch).
+    bool ensure_pipeline_objects(Tex& t) {
+        Interop& io = t.interop;
+        if (io.pipelined) return true;
+        if (!pipelined_ok_ || !ensure_compute()) return false;
+
+        VkSemaphoreTypeCreateInfoKHR sti{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR};
+        sti.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR;
+        sti.initialValue = 0;
+        VkExportSemaphoreCreateInfo esi{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+        esi.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        sti.pNext = &esi;
+        VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        sci.pNext = &sti;
+        if (vkCreateSemaphore(device_, &sci, nullptr, &io.timeline) != VK_SUCCESS)
+            return false;
+
+#ifdef _WIN32
+        VkSemaphoreGetWin32HandleInfoKHR gi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR};
+        gi.semaphore = io.timeline;
+        gi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        HANDLE h = nullptr;
+        if (vkGetSemaphoreWin32HandleKHR(device_, &gi, &h) != VK_SUCCESS) {
+            destroy_sync_objects(io);
+            return false;
+        }
+        io.sem_handle = h;
+
+        const cudadrv::Api* cu = cudadrv::api();
+        cu->cuCtxSetCurrent(cuda_ctx_);
+        cudadrv::ExternalSemaphoreHandleDesc sd{};
+        sd.type = cudadrv::kExtSemHandleTypeTimelineOpaqueWin32;
+        sd.handle.win32.handle = h;
+        if (cu->cuImportExternalSemaphore(&io.cuda_sem, &sd) != cudadrv::CUDA_SUCCESS) {
+            destroy_sync_objects(io);
+            return false;
+        }
+#else
+        destroy_sync_objects(io);
+        return false;   // non-Win32 handle export is a Linux-port task
+#endif
+
+        VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        ai.commandPool = oneshot_pool_;   // RESET flag -> Begin re-records
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(device_, &ai, &io.cb) != VK_SUCCESS) {
+            destroy_sync_objects(io);
+            return false;
+        }
+        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dai.descriptorPool = cmap_pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &cmap_layout_;
+        if (vkAllocateDescriptorSets(device_, &dai, &io.set) != VK_SUCCESS) {
+            destroy_sync_objects(io);
+            return false;
+        }
+
+        io.pipelined = true;
+        return true;
     }
 
     void destroy_tex(Tex& t) {
@@ -752,6 +953,7 @@ private:
     // set at create). Drives debug_readback_rgba8 for the gfx determinism suite.
     // Restores the image's prior layout.
     std::vector<uint8_t> readback_rgba8(Tex& t) {
+        if (!retire(t)) return {};      // drain any in-flight pipelined chain
         const size_t n = (size_t)t.w * (size_t)t.h * 4;
         Buffer host{};
         if (!ensure_buffer(host, n, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -863,12 +1065,16 @@ private:
         vkDestroyShaderModule(device_, sm, nullptr);
         if (!ok) return false;
 
+        // 1 global set (sync path) + up to 256 per-texture sets (pipelined
+        // path — each texture needs its own set because its dispatch may still
+        // be in flight when another texture's update records).
         const VkDescriptorPoolSize sizes[] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
-            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * 257},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 257},
         };
         VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pi.maxSets = 1;
+        pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        pi.maxSets = 257;
         pi.poolSizeCount = 2;
         pi.pPoolSizes = sizes;
         if (vkCreateDescriptorPool(device_, &pi, nullptr, &cmap_pool_) != VK_SUCCESS)
@@ -887,6 +1093,71 @@ private:
         if (cmap_layout_) { vkDestroyDescriptorSetLayout(device_, cmap_layout_, nullptr); cmap_layout_ = VK_NULL_HANDLE; }
     }
 
+    // Write a cmap descriptor set: shared buffer + LUT + storage image.
+    void write_cmap_set(VkDescriptorSet set, Tex& dst, const Buffer& lut) {
+        VkDescriptorBufferInfo src_info{dst.interop.shared.buf, 0, VK_WHOLE_SIZE};
+        VkDescriptorBufferInfo lut_info{lut.buf, 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo img_info{VK_NULL_HANDLE, dst.view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet writes[3]{};
+        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &src_info, nullptr};
+        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &lut_info, nullptr};
+        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &img_info, nullptr, nullptr};
+        vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
+    }
+
+    // Command-buffer bodies shared by the sync path (fence-waited, global set)
+    // and the V4 pipelined path (semaphore-ordered, per-texture set).
+    void record_cmap_body(VkCommandBuffer cb, Tex& dst, const CmapPush& p,
+                          VkDescriptorSet set) {
+        // Make the CUDA writes to the shared buffer visible to the shader.
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             1, &mb, 0, nullptr, 0, nullptr);
+        barrier(cb, dst, dst.layout, VK_IMAGE_LAYOUT_GENERAL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cmap_pipeline_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                cmap_pipe_layout_, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cb, cmap_pipe_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(p), &p);
+        vkCmdDispatch(cb, (p.w + 15) / 16, (p.h + 15) / 16, 1);
+        barrier(cb, dst, VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    void record_blit_body(VkCommandBuffer cb, Tex& dst, uint32_t w, uint32_t h) {
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             1, &mb, 0, nullptr, 0, nullptr);
+        barrier(cb, dst, dst.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {w, h, 1};
+        vkCmdCopyBufferToImage(cb, dst.interop.shared.buf, dst.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    CmapPush make_push(Tex& dst, const CaliperTensor& t, float vmin, float vmax) {
+        CmapPush p{};
+        p.w = (uint32_t)dst.w;
+        p.h = (uint32_t)dst.h;
+        p.sx = (t.ndim >= 1) ? (uint32_t)t.strides[t.ndim - 1] : 1u;
+        p.sy = (t.ndim >= 2) ? (uint32_t)t.strides[t.ndim - 2] : p.w;
+        p.vmin = vmin;
+        p.vmax = vmax;
+        return p;
+    }
+
     bool colormap_compute(Tex& dst, const CaliperTensor& t,
                           const uint32_t* lut256, float vmin, float vmax) {
         if (!ensure_compute()) return false;
@@ -898,45 +1169,12 @@ private:
             return false;
         std::memcpy(lut_buf_.mapped, lut256, 256 * sizeof(uint32_t));
 
-        CmapPush p{};
-        p.w = (uint32_t)dst.w;
-        p.h = (uint32_t)dst.h;
-        p.sx = (t.ndim >= 1) ? (uint32_t)t.strides[t.ndim - 1] : 1u;
-        p.sy = (t.ndim >= 2) ? (uint32_t)t.strides[t.ndim - 2] : p.w;
-        p.vmin = vmin;
-        p.vmax = vmax;
-
-        // The set is not in flight (every dispatch below is fence-waited), so
-        // one reusable descriptor set updated in place is safe.
-        VkDescriptorBufferInfo src_info{dst.interop.shared.buf, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo lut_info{lut_buf_.buf, 0, VK_WHOLE_SIZE};
-        VkDescriptorImageInfo img_info{VK_NULL_HANDLE, dst.view, VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet writes[3]{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, cmap_set_, 0, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &src_info, nullptr};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, cmap_set_, 1, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &lut_info, nullptr};
-        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, cmap_set_, 2, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &img_info, nullptr, nullptr};
-        vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
-
+        const CmapPush p = make_push(dst, t, vmin, vmax);
+        // The global set is not in flight (this path fence-waits every
+        // dispatch), so one reusable descriptor set updated in place is safe.
+        write_cmap_set(cmap_set_, dst, lut_buf_);
         const bool ok = submit_once([&](VkCommandBuffer cb) {
-            // Make the CUDA writes to the shared buffer visible to the shader.
-            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                                 1, &mb, 0, nullptr, 0, nullptr);
-            barrier(cb, dst, dst.layout, VK_IMAGE_LAYOUT_GENERAL);
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cmap_pipeline_);
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                    cmap_pipe_layout_, 0, 1, &cmap_set_, 0, nullptr);
-            vkCmdPushConstants(cb, cmap_pipe_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                               0, sizeof(p), &p);
-            vkCmdDispatch(cb, (p.w + 15) / 16, (p.h + 15) / 16, 1);
-            barrier(cb, dst, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            record_cmap_body(cb, dst, p, cmap_set_);
         });
         if (!ok) return false;
         dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -953,24 +1191,102 @@ private:
         if (c != 4 || (int)w != dst.w || (int)h != dst.h) return false;   // RGBA8 only
 
         const bool ok = submit_once([&](VkCommandBuffer cb) {
-            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-            mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                                 1, &mb, 0, nullptr, 0, nullptr);
-            barrier(cb, dst, dst.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkBufferImageCopy region{};
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.imageExtent = {w, h, 1};
-            vkCmdCopyBufferToImage(cb, dst.interop.shared.buf, dst.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-            barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            record_blit_body(cb, dst, w, h);
         });
         if (!ok) return false;
         dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         last_device_path_ = "blit";
+        return true;
+    }
+
+    // ---- V4 pipelined update: GPU-ordered CUDA->Vulkan handoff --------------
+    // No CPU sync anywhere on the hot path. The texture's timeline semaphore
+    // carries the chain: CUDA signals base+1 after its stream-ordered copy,
+    // this texture's Vulkan pass waits base+1 on the GPU and signals base+2,
+    // and the frame submission waits base+2 before sampling (frame_render).
+    // The only host wait is retire() — back-pressure if the PREVIOUS update of
+    // this same texture hasn't finished (rare; command-buffer re-record and
+    // shared-buffer overwrite safety demand it).
+    bool update_pipelined(Tex& dst, const CaliperTensor& t,
+                          cudadrv::CUdeviceptr src, uint64_t bytes,
+                          bool shared_in_place, const uint32_t* lut256,
+                          float vmin, float vmax) {
+        Interop& io = dst.interop;
+        if (!retire(dst)) return dev_bail("pipelined: retire timed out");
+
+        // Validate + prepare descriptors BEFORE enqueuing anything on CUDA,
+        // so a rejected tensor leaves no half-signaled timeline behind.
+        const bool is_cmap = (t.dtype == CALIPER_DT_F32 && lut256 != nullptr);
+        uint32_t blit_w = 0, blit_h = 0;
+        VkPipelineStageFlags wait_stage;
+        if (is_cmap) {
+            if (!ensure_buffer(io.lut, 256 * sizeof(uint32_t),
+                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               /*external=*/false))
+                return dev_bail("pipelined: lut alloc failed");
+            std::memcpy(io.lut.mapped, lut256, 256 * sizeof(uint32_t));
+            write_cmap_set(io.set, dst, io.lut);
+            wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        } else if (t.dtype == CALIPER_DT_U8) {
+            if (t.ndim < 2) return false;
+            blit_h = (uint32_t)t.shape[0];
+            blit_w = (uint32_t)t.shape[1];
+            const uint32_t c = (t.ndim >= 3) ? (uint32_t)t.shape[2] : 1;
+            if (c != 4 || (int)blit_w != dst.w || (int)blit_h != dst.h) return false;
+            wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else {
+            return false;
+        }
+
+        // CUDA side, stream-ordered on the legacy default stream: the copy
+        // (skipped on the alloc_shared in-place rung) then the GPU-side signal.
+        const cudadrv::Api* cu = cudadrv::api();
+        const uint64_t base = io.timeline_value;
+        if (!shared_in_place &&
+            cu->cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, nullptr)
+                != cudadrv::CUDA_SUCCESS)
+            return dev_bail("pipelined: cuMemcpyDtoDAsync failed");
+        cudadrv::ExternalSemaphoreSignalParams sp{};
+        sp.params.fence.value = base + 1;
+        if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, nullptr)
+                != cudadrv::CUDA_SUCCESS)
+            return dev_bail("pipelined: semaphore signal failed");
+
+        // Vulkan side: re-record this texture's command buffer (retired above)
+        // and submit waiting base+1 / signaling base+2. No fence.
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(io.cb, &bi);
+        if (is_cmap)
+            record_cmap_body(io.cb, dst, make_push(dst, t, vmin, vmax), io.set);
+        else
+            record_blit_body(io.cb, dst, blit_w, blit_h);
+        vkEndCommandBuffer(io.cb);
+
+        uint64_t wait_val = base + 1, signal_val = base + 2;
+        VkTimelineSemaphoreSubmitInfoKHR tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
+        tsi.waitSemaphoreValueCount = 1;
+        tsi.pWaitSemaphoreValues = &wait_val;
+        tsi.signalSemaphoreValueCount = 1;
+        tsi.pSignalSemaphoreValues = &signal_val;
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.pNext = &tsi;
+        si.waitSemaphoreCount = 1;
+        si.pWaitSemaphores = &io.timeline;
+        si.pWaitDstStageMask = &wait_stage;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &io.cb;
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores = &io.timeline;
+        if (vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS)
+            return dev_bail("pipelined: submit failed");
+
+        io.timeline_value = base + 2;
+        pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
+        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;   // CB's end state
+        last_device_path_ = is_cmap ? "compute" : "blit";
         return true;
     }
 
@@ -1001,9 +1317,16 @@ private:
     // CUDA interop (driver API, loaded at runtime; see cuda_driver.h).
     bool external_memory_ok_ = false;   // Vulkan side exports external memory
     bool interop_ok_ = false;           // …AND a UUID-matched CUDA device paired
+    bool timeline_ok_ = false;          // device exports timeline semaphores
+    bool pipelined_ok_ = false;         // interop + timeline: V4 pipelining live
     uint8_t device_uuid_[16] = {};
     cudadrv::CUcontext cuda_ctx_ = nullptr;
     cudadrv::CUdevice cuda_dev_ = 0;
+
+    // Timeline waits the next frame submission must honor before sampling
+    // (semaphore, value) — filled by pipelined updates, consumed by
+    // frame_render. Bridge + frame loop are UI-thread-only, so no lock.
+    std::vector<std::pair<VkSemaphore, uint64_t>> pending_frame_waits_;
 
     std::unordered_map<uint64_t, Tex> textures_;
     uint64_t next_id_ = 1;   // 0 is the invalid id

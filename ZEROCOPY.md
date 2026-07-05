@@ -137,10 +137,15 @@ torch's caching allocator does not produce exportable allocations. The
 handoff is one `cuMemcpyDtoD` from the tensor into the shared VRAM
 buffer — the "1 in-VRAM copy" the table below always budgeted — followed
 by the same buffer → texture pass as Metal (compute colormap for f32,
-buffer-to-image copy for u8). Synchronization is the v1 sync-then-update
-contract, CUDA form: `torch::cuda::synchronize()` at the adapter,
-`cuCtxSynchronize()` after the copy, fence-waited Vulkan submits (Metal's
-`waitUntilCompleted`). Shared semaphores remain a later optimization.
+buffer-to-image copy for u8). Synchronization is GPU-ordered by a per-texture
+**shared timeline semaphore** (`VK_KHR_timeline_semaphore` ↔
+`cuImportExternalSemaphore`): CUDA signals after its stream-ordered copy, the
+Vulkan pass GPU-waits it, and the frame draw GPU-waits the pass — no CPU sync
+on the hot path. `torch::cuda::synchronize()` at the adapter is still the v1
+producer→consumer barrier (the ABI has no stream channel yet). Where the
+device can't export timeline semaphores, the handoff falls back to the
+synchronous model (`cuCtxSynchronize()` + fence-waited submits, Metal's
+`waitUntilCompleted`).
 The host stays toolkit-free: the CUDA driver API is loaded from
 `nvcuda.dll` at runtime (`src/host/cuda_driver.h`), and the Vulkan stack
 needs no SDK (volk + in-tree glslang; `vulkan-1.dll` ships with the GPU

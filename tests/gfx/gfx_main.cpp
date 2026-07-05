@@ -804,6 +804,51 @@ TEST_CASE("gfx/Vulkan+CUDA: device f32+LUT takes the compute path, pixel-exact")
     }
 }
 
+// V4 pipelining stress: several device updates enqueued back-to-back with NO
+// readback between them, so successive chains (CUDA copy -> Vulkan pass) are
+// actually in flight together and ordered only by the texture's timeline
+// semaphore (retire + signal/wait). The final readback must equal the LAST
+// write byte-for-byte — a torn or reordered chain would surface a stale mix.
+TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-exact") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int w = 17, h = 9, n = w * h;   // non-16-multiple edge sizes
+    cudadrv::CUdeviceptr buf = 0;
+    REQUIRE(cu->cuMemAlloc(&buf, (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+
+    CaliperTensor t{};
+    t.struct_size = sizeof(t); t.data = (void*)(uintptr_t)buf; t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_CUDA;
+
+    // Create with generation 0, then burst 8 more generations without reading.
+    std::vector<float> data(n);
+    auto fill = [&](int gen) {
+        for (int i = 0; i < n; ++i) data[i] = (float)((i * 7 + gen * 13) % n);
+        cu->cuMemcpyHtoD(buf, data.data(), (size_t)n * sizeof(float));
+    };
+    fill(0);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(id != 0);
+    for (int gen = 1; gen <= 8; ++gen) {
+        fill(gen);
+        REQUIRE(bk.bridge->update_texture(id, &t));
+    }
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
+
+    // fill(8) is the last write; the readback retires the whole chain.
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    CHECK(bk.readback(id, w, h) == ref);
+    bk.bridge->release_texture(id);
+    cu->cuMemFree(buf);
+}
+
 TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-exact") {
     if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
     if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }

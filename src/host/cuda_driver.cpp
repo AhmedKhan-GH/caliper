@@ -55,6 +55,10 @@ const Api* load() {
         {(void**)&a.cuImportExternalMemory,         "cuImportExternalMemory"},
         {(void**)&a.cuExternalMemoryGetMappedBuffer,"cuExternalMemoryGetMappedBuffer"},
         {(void**)&a.cuDestroyExternalMemory,        "cuDestroyExternalMemory"},
+        {(void**)&a.cuMemcpyDtoDAsync,              "cuMemcpyDtoDAsync_v2"},
+        {(void**)&a.cuImportExternalSemaphore,      "cuImportExternalSemaphore"},
+        {(void**)&a.cuSignalExternalSemaphoresAsync,"cuSignalExternalSemaphoresAsync"},
+        {(void**)&a.cuDestroyExternalSemaphore,     "cuDestroyExternalSemaphore"},
         {(void**)&a.cuGetErrorName,                 "cuGetErrorName"},
     };
     for (const Entry& e : entries) {

@@ -19,7 +19,9 @@ using CUresult   = int;            // CUDA_SUCCESS == 0
 using CUdevice   = int;
 using CUdeviceptr = unsigned long long;
 using CUcontext  = void*;
+using CUstream   = void*;          // NULL = the legacy default stream
 using CUexternalMemory = void*;
+using CUexternalSemaphore = void*;
 
 constexpr CUresult CUDA_SUCCESS = 0;
 
@@ -29,6 +31,9 @@ struct CUuuid {
 
 // CUexternalMemoryHandleType (cuda.h): opaque Win32 NT handle == 2.
 constexpr unsigned kExtMemHandleTypeOpaqueWin32 = 2;
+// CUexternalSemaphoreHandleType (cuda.h): a Vulkan timeline semaphore exported
+// as an opaque Win32 NT handle == 10 (V4 semaphore pipelining).
+constexpr unsigned kExtSemHandleTypeTimelineOpaqueWin32 = 10;
 
 // CUDA_EXTERNAL_MEMORY_HANDLE_DESC (v1 layout, cuda.h).
 struct ExternalMemoryHandleDesc {
@@ -50,6 +55,34 @@ struct ExternalMemoryHandleDesc {
 struct ExternalMemoryBufferDesc {
     unsigned long long offset;
     unsigned long long size;
+    unsigned int flags;
+    unsigned int reserved[16];
+};
+
+// CUDA_EXTERNAL_SEMAPHORE_HANDLE_DESC (v1 layout, cuda.h).
+struct ExternalSemaphoreHandleDesc {
+    unsigned int type;                 // CUexternalSemaphoreHandleType
+    union {
+        int fd;
+        struct {
+            void*       handle;        // NT HANDLE from vkGetSemaphoreWin32HandleKHR
+            const void* name;
+        } win32;
+        const void* nvSciSyncObj;
+    } handle;
+    unsigned int flags;
+    unsigned int reserved[16];
+};
+
+// CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS (v1 layout, cuda.h). For a timeline
+// semaphore, params.fence.value is the value to signal.
+struct ExternalSemaphoreSignalParams {
+    struct {
+        struct { unsigned long long value; } fence;
+        union { void* fence; unsigned long long reserved; } nvSciSync;
+        struct { unsigned long long key; } keyedMutex;
+        unsigned int reserved[12];
+    } params;
     unsigned int flags;
     unsigned int reserved[16];
 };
@@ -84,6 +117,16 @@ struct Api {
                                                 CUexternalMemory mem,
                                                 const ExternalMemoryBufferDesc* desc);
     CUresult (*cuDestroyExternalMemory)(CUexternalMemory mem);
+    // V4 semaphore pipelining: stream-ordered copy + GPU-side signal so the
+    // handoff needs no CPU synchronize (vulkan_renderer.cpp).
+    CUresult (*cuMemcpyDtoDAsync)(CUdeviceptr dst, CUdeviceptr src,
+                                  size_t bytes, CUstream stream);             // _v2
+    CUresult (*cuImportExternalSemaphore)(CUexternalSemaphore* out,
+                                          const ExternalSemaphoreHandleDesc* desc);
+    CUresult (*cuSignalExternalSemaphoresAsync)(
+        const CUexternalSemaphore* sems, const ExternalSemaphoreSignalParams* params,
+        unsigned int count, CUstream stream);
+    CUresult (*cuDestroyExternalSemaphore)(CUexternalSemaphore sem);
     CUresult (*cuGetErrorName)(CUresult err, const char** str);
 };
 
