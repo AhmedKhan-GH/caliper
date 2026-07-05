@@ -902,19 +902,20 @@ void EmbedScopeApplet::draw_ui() {
             if (st->embw_tex) { st->bridge.release_texture(st->embw_tex);
                                 st->embw_tex = 0; }
             bool device_rejected = false;
+            // stream_: with a stream-honoring host (bridge v1.1 caps bit 0)
+            // the handoff rides the producer queue — no full-device drain.
+            // Otherwise this IS synced_to_tensor: drain the producer before
+            // the device upload reads it (no-op on CPU).
+            const uint32_t bcaps = st->bridge.caps();
             for (int k = 0; k < 8; k++) {
-                // synced_: disp_conv is device-resident during CUDA/MPS
-                // training; drain the producer before the device upload reads
-                // it (no-op on CPU). Redundant syncs after the first are ~free
-                // (device already idle by then).
-                auto ct = caliper::adapters::synced_to_tensor(disp_conv[k]);
+                auto ct = caliper::adapters::stream_to_tensor(disp_conv[k], bcaps);
                 st->conv_tex[k] = ct ? st->bridge.texture_from_tensor_mapped(
                                            &*ct, CALIPER_CMAP_MAGMA,
                                            -w_km, w_km) : 0;
                 device_rejected |= (st->conv_tex[k] == 0);
             }
             {
-                auto ct = caliper::adapters::synced_to_tensor(disp_embw);  // device-resident: sync at handoff
+                auto ct = caliper::adapters::stream_to_tensor(disp_embw, bcaps);
                 st->embw_tex = ct ? st->bridge.texture_from_tensor_mapped(
                                         &*ct, CALIPER_CMAP_RDBU,
                                         -w_wm, w_wm) : 0;
