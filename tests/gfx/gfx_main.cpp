@@ -557,6 +557,53 @@ TEST_CASE("gfx/Metal: short device buffer is rejected (no GPU fault)") {
     CHECK(id == 0);   // rejected: buffer too short for the declared extent
 }
 
+// M1 pipelining proof (the Vulkan burst test's twin): several device updates
+// enqueued back-to-back with NO readback between them, so successive compute
+// passes are in flight together, ordered only by queue commit order (D23).
+// The final readback must equal the LAST write byte-for-byte. Fresh source
+// buffers per generation keep CPU writes outside the contract (a NULL-stream
+// caller owns producer quiescence); dropping each buffer's last strong ref
+// mid-flight also exercises command-buffer resource retention (spec §3.2).
+TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+
+    const int w = 17, h = 9, n = w * h;   // non-16-multiple edge sizes
+    auto gen_data = [&](int gen) {
+        std::vector<float> d(n);
+        for (int i = 0; i < n; ++i) d[i] = (float)((i * 7 + gen * 13) % n);
+        return d;
+    };
+
+    std::vector<float> d0 = gen_data(0);
+    id<MTLBuffer> buf0 = device_buffer(d0.data(), (size_t)n * sizeof(float));
+    CaliperTensor t{};
+    t.struct_size = sizeof(t); t.data = (__bridge void*)buf0; t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_METAL;
+
+    // NB: not named `id` — that is the Objective-C `id` type, needed by the
+    // `id<MTLBuffer>` declaration inside the loop below.
+    CaliperTextureId tex_id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(tex_id != 0);
+
+    std::vector<float> last;
+    for (int gen = 1; gen <= 8; ++gen) {
+        last = gen_data(gen);
+        id<MTLBuffer> b = device_buffer(last.data(), (size_t)n * sizeof(float));
+        t.data = (__bridge void*)b;      // b's last strong ref dies each loop turn
+        REQUIRE(bk.bridge->update_texture(tex_id, &t));
+    }
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
+
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(last.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    CHECK(bk.readback(tex_id, w, h) == ref);
+    bk.bridge->release_texture(tex_id);
+}
+
 // THE regression test for the reported SIGSEGV. Before the fix the bridge handed
 // out a small monotonic integer id; ImGui_ImplMetal_RenderDrawData reached
 // setFragmentTexture:/objc_retain on that integer-as-pointer and faulted on

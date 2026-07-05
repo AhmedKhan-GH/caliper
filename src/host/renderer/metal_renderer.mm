@@ -341,8 +341,12 @@ private:
         MTLSize groups = MTLSizeMake((p.w + 15) / 16, (p.h + 15) / 16, 1);
         [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];
         [enc endEncoding];
+        // No CPU wait (M1/D23): the frame's command buffer commits AFTER this
+        // one on the same queue_, so draw ordering is free by commit order; cb
+        // retains src, lutbuf, and dst until the GPU retires it (default,
+        // non-`unretained` encoding), so lifetime is free too. Test readbacks
+        // retire the queue themselves (debug_readback_rgba8).
         [cb commit];
-        [cb waitUntilCompleted];   // texture must be ready for the frame/readback
 
         last_device_path_ = "compute";
         return true;
@@ -371,8 +375,7 @@ private:
             destinationLevel:0
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
-        [cb commit];
-        [cb waitUntilCompleted];
+        [cb commit];   // no CPU wait (M1/D23): same-queue commit order + retention
 
         last_device_path_ = "blit";
         return true;
