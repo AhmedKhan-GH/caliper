@@ -41,8 +41,16 @@ echo Syncing submodule URLs...
 git submodule sync --recursive
 
 REM Initialize and update submodules (excluding pytorch)
+REM
+REM Mirror of init-submodules.sh: each submodule updates individually because
+REM a single `git submodule update --init --recursive --force` aborts at the
+REM first submodule whose pinned commit is missing from its remote, leaving
+REM everything after it un-initialized. Some pins in this repo reference
+REM commits that were never pushed upstream (locally-generated GLEW sources,
+REM a llama.cpp fork commit) — tolerate those and fall back to the remote's
+REM default branch rather than failing the whole setup.
 echo Initializing submodules...
-git submodule update --init --recursive --force
+for /f "tokens=2" %%P in ('git config -f .gitmodules --get-regexp "path$"') do call :init_one "%%P"
 
 REM Skip GLEW source generation on Windows (using pre-built binaries)
 echo Skipping GLEW source generation on Windows (using pre-built binaries)
@@ -50,3 +58,29 @@ echo Skipping GLEW source generation on Windows (using pre-built binaries)
 echo.
 echo Submodule initialization complete!
 echo Note: PyTorch libtorch binaries will be downloaded by CMake during build.
+goto :eof
+
+:init_one
+set "SM_PATH=%~1"
+git submodule update --init --recursive --force "%SM_PATH%" >nul 2>&1
+if not errorlevel 1 (
+    echo   [OK] %SM_PATH%
+    exit /b 0
+)
+for /f "delims=" %%U in ('git config -f .gitmodules --get "submodule.%SM_PATH%.url"') do set "SM_URL=%%U"
+echo   [!] %SM_PATH%: pinned commit unavailable from %SM_URL%
+git -C "%SM_PATH%" rev-parse HEAD >nul 2>&1
+if not errorlevel 1 (
+    REM update already cloned the default branch before the checkout failed
+    echo       using default branch instead
+    exit /b 0
+)
+echo       cloning default branch from %SM_URL%
+if exist "%SM_PATH%" rmdir /s /q "%SM_PATH%"
+git clone --recursive "%SM_URL%" "%SM_PATH%" >nul 2>&1
+if not errorlevel 1 (
+    echo       [OK] cloned %SM_PATH%
+) else (
+    echo       [X] failed to clone %SM_PATH% - build may not work
+)
+exit /b 0

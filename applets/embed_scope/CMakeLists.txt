@@ -6,8 +6,13 @@
 # download + gunzip inside the job; the MNIST IDX reader is reused verbatim from
 # its own mnist_idx.h (self-contained — the exemplar doubles as a template). The host
 # links none of these: data acquisition is applet business.
-find_package(CURL REQUIRED)
-find_package(ZLIB REQUIRED)
+# On Windows the host build provides both targets in-tree (Dependencies.cmake).
+if(NOT TARGET CURL::libcurl)
+    find_package(CURL REQUIRED)
+endif()
+if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB REQUIRED)
+endif()
 
 add_library(embed_scope SHARED
     plugin.cpp

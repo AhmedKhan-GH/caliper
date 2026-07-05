@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.18...4.2)
-project(caliper CXX C OBJC)
+project(caliper CXX C)
 
 if(APPLE)
-    enable_language(OBJCXX)
+    enable_language(OBJC OBJCXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -181,7 +181,15 @@ if(APPLE)
     target_sources(caliper_host_lib PRIVATE src/host/device_query_apple.mm)
     target_link_libraries(caliper_host_lib PUBLIC "-framework Metal" "-framework Foundation")
 else()
-    target_sources(caliper_host_lib PRIVATE src/host/device_query_stub.cpp)
+    # Real CUDA detection (Phase 4) via the runtime-loaded driver API — still
+    # no ML framework and no CUDA toolkit linked (D11). Machines without an
+    # NVIDIA driver fall through to the same CPU defaults as the old stub.
+    target_sources(caliper_host_lib PRIVATE
+        src/host/device_query_cuda.cpp
+        src/host/cuda_driver.cpp)
+    if(UNIX)
+        target_link_libraries(caliper_host_lib PRIVATE ${CMAKE_DL_LIBS})
+    endif()
 endif()
 set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
@@ -215,6 +223,47 @@ if(APPLE)
 endif()
 
 # ============================================================================
+# Vulkan renderer backend (Phase 4, Windows only today)
+# ============================================================================
+# Sibling of the Metal backend: its own static lib holding the Vulkan
+# HostRenderer + the vendored ImGui Vulkan backend (compiled against volk, so
+# no Vulkan SDK / import lib is needed — vulkan-1.dll is loaded at runtime).
+# The colormap compute shader compiles to a SPIR-V header at build time via
+# the in-tree glslang (§16: byte-identical output to the CPU reference).
+if(WIN32)
+    set(CALIPER_SPV_DIR "${CMAKE_BINARY_DIR}/generated")
+    add_custom_command(
+        OUTPUT "${CALIPER_SPV_DIR}/colormap_spv.h"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
+        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+                --vn kColormapSpv -o "${CALIPER_SPV_DIR}/colormap_spv.h"
+                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/colormap.comp"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/colormap.comp"
+                glslang-standalone
+        COMMENT "Compiling colormap.comp -> SPIR-V header")
+    add_custom_target(caliper_shaders DEPENDS "${CALIPER_SPV_DIR}/colormap_spv.h")
+
+    add_library(caliper_vulkan_backend STATIC
+        src/host/renderer/vulkan_renderer.cpp
+        ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_vulkan.cpp
+    )
+    add_dependencies(caliper_vulkan_backend caliper_shaders)
+    target_include_directories(caliper_vulkan_backend PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/host
+        ${CALIPER_SPV_DIR})
+    target_compile_definitions(caliper_vulkan_backend PRIVATE
+        IMGUI_IMPL_VULKAN_USE_VOLK
+        VK_USE_PLATFORM_WIN32_KHR)
+    target_link_libraries(caliper_vulkan_backend
+        PUBLIC caliper::sdk volk::volk
+        PRIVATE caliper::ui_stack glfw)
+    set_target_properties(caliper_vulkan_backend PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON)
+endif()
+
+# ============================================================================
 # Main Application (host)
 # ============================================================================
 
@@ -236,6 +285,9 @@ target_link_libraries(caliper PRIVATE caliper_host_lib caliper::sdk ${CALIPER_DE
 if(APPLE)
     target_link_libraries(caliper PRIVATE caliper_metal_backend)
 endif()
+if(WIN32)
+    target_link_libraries(caliper PRIVATE caliper_vulkan_backend)
+endif()
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
@@ -248,7 +300,9 @@ set_target_properties(caliper PROPERTIES
 
 if(MSVC)
     target_compile_options(caliper PRIVATE /W3 /MP /wd4251 /wd4275)
-    file(GLOB TORCH_DLLS "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib/*.dll")
+    # LIBTORCH_DIR is the variant-specific dir set by Dependencies.cmake
+    # (libtorch-debug / libtorch-release on Windows).
+    file(GLOB TORCH_DLLS "${LIBTORCH_DIR}/lib/*.dll")
     add_custom_command(TARGET caliper POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${TORCH_DLLS}

@@ -42,8 +42,43 @@ echo "Syncing submodule URLs..."
 git submodule sync --recursive
 
 # Initialize and update submodules (excluding pytorch)
+#
+# We update each submodule individually instead of a single
+# `git submodule update --init --recursive --force`. That single command aborts
+# at the first submodule whose pinned commit is missing from its remote, which
+# leaves every submodule processed after it un-initialized. Some pins in this
+# repo reference commits that were never pushed upstream (e.g. locally-generated
+# GLEW sources, or a llama.cpp fork commit), so we tolerate those and fall back
+# to the remote's default branch rather than failing the whole setup.
 echo "Initializing submodules..."
-git submodule update --init --recursive --force
+git config -f .gitmodules --get-regexp 'path$' | awk '{print $2}' | while read -r sm_path; do
+    sm_name=$(basename "$sm_path")
+    if git submodule update --init --recursive --force "$sm_path" >/dev/null 2>&1; then
+        echo "  ✓ $sm_name @ $(git -C "$sm_path" rev-parse --short HEAD)"
+        continue
+    fi
+
+    # Pinned commit could not be checked out. This is almost always because the
+    # commit recorded in the superproject is not fetchable from the submodule's
+    # remote ("upload-pack: not our ref").
+    sm_url=$(git config -f .gitmodules --get "submodule.$sm_path.url")
+    echo "  ! $sm_name: pinned commit unavailable from $sm_url"
+
+    if git -C "$sm_path" rev-parse HEAD >/dev/null 2>&1; then
+        # `git submodule update` already cloned the repo at its default branch
+        # before the checkout to the (missing) pinned commit failed. Keep it.
+        echo "    -> using default branch instead: $(git -C "$sm_path" rev-parse --short HEAD)"
+    else
+        # Nothing usable on disk; clone the default branch ourselves.
+        echo "    -> cloning default branch from $sm_url"
+        rm -rf "$sm_path"
+        if git clone --recursive "$sm_url" "$sm_path" >/dev/null 2>&1; then
+            echo "    ✓ cloned $sm_name @ $(git -C "$sm_path" rev-parse --short HEAD)"
+        else
+            echo "    ✗ failed to clone $sm_name — build may not work"
+        fi
+    fi
+done
 
 # Generate GLEW sources (only needed on macOS/Linux, Windows uses pre-built binaries)
 # Detect Windows more reliably

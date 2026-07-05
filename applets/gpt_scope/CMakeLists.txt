@@ -3,7 +3,10 @@
 # (runtime packs replace this at Phase 4). curl is a macOS system lib covering
 # the cancellable TinyShakespeare download inside the job — no zlib: the corpus
 # is plain text. The host links neither: data acquisition is applet business.
-find_package(CURL REQUIRED)
+# On Windows the host build provides CURL::libcurl in-tree (Dependencies.cmake).
+if(NOT TARGET CURL::libcurl)
+    find_package(CURL REQUIRED)
+endif()
 
 add_library(gpt_scope SHARED
     plugin.cpp

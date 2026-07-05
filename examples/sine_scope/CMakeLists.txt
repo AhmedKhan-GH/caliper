@@ -5,6 +5,7 @@ target_link_libraries(sine_scope PRIVATE
 target_compile_definitions(sine_scope PRIVATE CALIPER_APPLET_EXPORT)
 set_target_properties(sine_scope PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"   # .dll on Windows
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(APPLE)   # let the dylib find libtorch at runtime
     set_target_properties(sine_scope PROPERTIES

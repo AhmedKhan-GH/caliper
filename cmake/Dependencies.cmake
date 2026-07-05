@@ -233,6 +233,28 @@ if(WIN32)
     endif()
 endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
+# DuckDB's own CMakeLists hard-sets CMAKE_MSVC_RUNTIME_LIBRARY to the STATIC
+# CRT for its whole subtree, which conflicts with our /MD policy (PLATFORM.md
+# D7: host + applet DLLs must share one heap) and fails the final link with
+# LNK2005 (msvcprtd vs duckdb_static). Re-apply our runtime choice to every
+# target DuckDB created, recursively.
+if(WIN32)
+    function(caliper_force_msvc_runtime dir)
+        get_property(_tgts DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+        foreach(_t ${_tgts})
+            get_target_property(_type ${_t} TYPE)
+            if(NOT _type STREQUAL "INTERFACE_LIBRARY")
+                set_property(TARGET ${_t} PROPERTY
+                    MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+            endif()
+        endforeach()
+        get_property(_subs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+        foreach(_s ${_subs})
+            caliper_force_msvc_runtime("${_s}")
+        endforeach()
+    endfunction()
+    caliper_force_msvc_runtime("${THIRD_PARTY_DIR}/duckdb")
+endif()
 # DuckDB doesn't set target_include_directories on duckdb_static — it relies
 # on global include_directories() inside its own subdirectory. Re-attach the
 # include path so our targets can `#include <duckdb.hpp>`.
@@ -290,9 +312,15 @@ if(APPLE)
     set(GGML_METAL ON CACHE BOOL "" FORCE)
     set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
     message(STATUS "    Metal backend enabled for llama.cpp")
-elseif(USE_CUDA)
+elseif(USE_CUDA AND NOT WIN32)
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
     message(STATUS "    CUDA backend enabled for llama.cpp")
+elseif(WIN32)
+    # Windows: keep ggml on CPU. nvcc device compilation against this MSVC is
+    # unsupported, and a ggml CUDA build would load a cudart64_12.dll that
+    # collides with the one libtorch ships (cu121). No active applet links
+    # llama.cpp, so nothing is lost; torch's own CUDA path is prebuilt.
+    message(STATUS "    llama.cpp: CPU backend on Windows (no nvcc build)")
 endif()
 add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
@@ -307,6 +335,86 @@ add_subdirectory(${THIRD_PARTY_DIR}/ImGuiFileDialog EXCLUDE_FROM_ALL)
 target_link_libraries(ImGuiFileDialog PUBLIC imgui)
 list(APPEND CALIPER_DEPENDENCY_LIBS ImGuiFileDialog)
 message(STATUS "    ✓ ImGuiFileDialog configured")
+
+# --- CURL + ZLIB (Windows only) ---
+# On macOS these are system libraries; the applets find them with plain
+# find_package. Windows ships neither, so build them in-tree and let the
+# applets' `if(NOT TARGET ...)` guards pick these targets up instead.
+# curl uses Schannel (Windows-native TLS) so no OpenSSL is involved.
+if(WIN32)
+    message(STATUS "  Configuring ZLIB + CURL (Windows in-tree)...")
+    include(FetchContent)
+
+    # zlib's ancient cmake_minimum_required needs this shim under CMake 4.x
+    # (same trick tests/ uses for doctest).
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(zlib
+        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(zlib)
+    # zlib's CMake predates usage requirements: attach include dirs (zconf.h is
+    # generated into the build dir) and provide the standard imported name.
+    target_include_directories(zlibstatic INTERFACE
+        $<BUILD_INTERFACE:${zlib_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${zlib_BINARY_DIR}>)
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+
+    set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    set(BUILD_LIBCURL_DOCS OFF CACHE BOOL "" FORCE)
+    set(BUILD_MISC_DOCS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CURL_MANUAL OFF CACHE BOOL "" FORCE)
+    set(HTTP_ONLY ON CACHE BOOL "" FORCE)
+    set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+    set(CURL_ZLIB OFF CACHE STRING "" FORCE)
+    set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+    set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+    set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
+    set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(curl
+        URL https://github.com/curl/curl/releases/download/curl-8_11_1/curl-8.11.1.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(curl)
+
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
+    message(STATUS "    ✓ ZLIB + CURL configured (static, Schannel TLS)")
+
+    # --- Vulkan backend toolchain (Windows, Phase 4) ---
+    # No Vulkan SDK required on the machine: headers + the volk loader come in
+    # as FetchContent (the runtime vulkan-1.dll ships with the GPU driver),
+    # and glslang builds from source to compile colormap.comp to a SPIR-V
+    # header at build time. One consistent vulkan-sdk tag for all three.
+    message(STATUS "  Configuring Vulkan headers + volk + glslang...")
+    set(_VK_TAG "vulkan-sdk-1.3.290.0")
+    FetchContent_Declare(vulkan-headers
+        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/${_VK_TAG}.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)   # win32 entry points
+    FetchContent_Declare(volk
+        URL https://github.com/zeux/volk/archive/refs/tags/${_VK_TAG}.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    set(ENABLE_OPT OFF CACHE BOOL "" FORCE)              # no SPIRV-Tools dep
+    set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+    set(ENABLE_GLSLANG_BINARIES ON CACHE BOOL "" FORCE)  # the compiler exe
+    set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(glslang
+        URL https://github.com/KhronosGroup/glslang/archive/refs/tags/${_VK_TAG}.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    # volk at this tag locates headers via VULKAN_HEADERS_INSTALL_DIR (a path
+    # it appends /include to), not the Vulkan::Headers target — populate the
+    # headers first and point volk at their source dir.
+    FetchContent_MakeAvailable(vulkan-headers)
+    set(VULKAN_HEADERS_INSTALL_DIR "${vulkan-headers_SOURCE_DIR}" CACHE PATH "" FORCE)
+    FetchContent_MakeAvailable(volk glslang)
+    message(STATUS "    ✓ Vulkan toolchain configured (headers + volk + glslang)")
+endif()
 
 # ============================================================================
 # Category 4: PyTorch (Large dependency)
@@ -327,18 +435,18 @@ set(PYTORCH_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/pytorch_install")
 if(USE_CUDA)
     set(_CUDA_VER "${CUDAToolkit_VERSION_MAJOR}.${CUDAToolkit_VERSION_MINOR}")
 
-    # Available variants for PyTorch 2.5.1 (highest first)
-    set(_CUDA_VARIANTS "12.4;cu124" "12.1;cu121" "11.8;cu118")
-
-    set(PYTORCH_VARIANT "")
-    foreach(_entry ${_CUDA_VARIANTS})
-        list(GET _entry 0 _min_ver)
-        list(GET _entry 1 _tag)
-        if(NOT _CUDA_VER VERSION_LESS _min_ver)
-            set(PYTORCH_VARIANT "${_tag}")
-            break()
-        endif()
-    endforeach()
+    # Available variants for PyTorch 2.5.1 (highest first). Plain if/elseif —
+    # the previous pair-list foreach flattened its "ver;tag" entries into
+    # single tokens, so list(GET _entry 1 ...) errored whenever CUDA was found.
+    if(NOT _CUDA_VER VERSION_LESS 12.4)
+        set(PYTORCH_VARIANT "cu124")
+    elseif(NOT _CUDA_VER VERSION_LESS 12.1)
+        set(PYTORCH_VARIANT "cu121")
+    elseif(NOT _CUDA_VER VERSION_LESS 11.8)
+        set(PYTORCH_VARIANT "cu118")
+    else()
+        set(PYTORCH_VARIANT "")
+    endif()
 
     if(PYTORCH_VARIANT STREQUAL "")
         message(WARNING "CUDA ${_CUDA_VER} is too old for any PyTorch 2.5.1 CUDA build — falling back to CPU")
@@ -374,7 +482,14 @@ if(WIN32)
         set(PYTORCH_BUILD_TYPE "Release")
     endif()
 
-    set(LIBTORCH_DIR "${THIRD_PARTY_DIR}/libtorch")
+    # Debug and Release libtorch are DIFFERENT zips (debug torch is 10-50x
+    # slower at runtime and uses the debug CRT). The download is guarded by
+    # directory existence, so the two variants must not share a directory —
+    # a stale variant would silently keep linking into the wrong config.
+    # Variant-specific dirs let cmake-build-debug and cmake-build-release
+    # coexist, each against its matching libtorch.
+    string(TOLOWER "${PYTORCH_BUILD_TYPE}" _TORCH_FLAVOR)
+    set(LIBTORCH_DIR "${THIRD_PARTY_DIR}/libtorch-${_TORCH_FLAVOR}")
 
     # Download and extract if not already present
     if(NOT EXISTS "${LIBTORCH_DIR}")
@@ -399,12 +514,15 @@ if(WIN32)
             COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/libtorch.zip"
             WORKING_DIRECTORY ${THIRD_PARTY_DIR}
         )
+        # The zip's root folder is always "libtorch" — move it to the
+        # variant-specific location.
+        file(RENAME "${THIRD_PARTY_DIR}/libtorch" "${LIBTORCH_DIR}")
 
         # Clean up zip file
         file(REMOVE "${CMAKE_BINARY_DIR}/libtorch.zip")
         message(STATUS "  ✓ PyTorch extracted successfully")
     else()
-        message(STATUS "  ✓ PyTorch already downloaded (${PYTORCH_VARIANT_NAME})")
+        message(STATUS "  ✓ PyTorch already downloaded (${PYTORCH_BUILD_TYPE}, ${PYTORCH_VARIANT_NAME})")
     endif()
 
     # Add LibTorch to CMAKE_PREFIX_PATH
@@ -418,6 +536,11 @@ if(WIN32)
     # Find Torch package (standard approach)
     find_package(Torch REQUIRED)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+
+    # torch headers pull in windows.h; without NOMINMAX its min/max macros
+    # break tensor.max() / std::max in every consumer. Attach to the imported
+    # target so all torch-linking applets inherit it.
+    set_property(TARGET torch APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS NOMINMAX)
 
     # Use Torch's provided libraries
     list(APPEND CALIPER_DEPENDENCY_LIBS "${TORCH_LIBRARIES}")
