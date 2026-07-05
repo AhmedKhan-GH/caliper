@@ -13,6 +13,9 @@
 
 #include <torch/torch.h>
 
+#include <atomic>
+#include <thread>
+
 using caliper::adapters::to_tensor;
 using caliper::adapters::synced_to_tensor;
 using caliper::adapters::stream_to_tensor;
@@ -161,4 +164,35 @@ TEST_CASE("stream_to_tensor: mps tensor carries the producer queue when honored;
     auto v1 = stream_to_tensor(t, 0);            // negotiation pin, other direction
     REQUIRE(v1.has_value());
     CHECK(v1->stream == nullptr);
+}
+
+TEST_CASE("stream_to_tensor: handoff survives a concurrently-encoding training thread") {
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    // Regression for the EmbedScope SIGABRT (MPSCore MPSPredicate.mm 'command
+    // buffer already committed. State: 4'): the frame thread performs stream
+    // handoffs while a worker thread — the training loop — continuously
+    // enqueues MPS kernels. torch::mps::get_command_buffer() is a bare,
+    // UNSERIALIZED accessor of MPSStream::_commandBuffer, so calling it here
+    // raced the worker's encode/commitAndContinue blocks and MPS aborted
+    // within a few hundred handoffs. The fix snapshots the producer queue
+    // inside a dispatch_sync block on torch's stream dispatch queue — the
+    // documented synchronization point every torch-internal encode also uses.
+    std::atomic<bool> stop{false};
+    std::thread worker([&] {
+        torch::Tensor a = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kMPS));
+        torch::Tensor b = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kMPS));
+        while (!stop.load(std::memory_order_relaxed))
+            a = torch::mm(a, b).tanh();          // endless kernel stream
+    });
+    torch::Tensor t = torch::ones({8, 8}, torch::TensorOptions().device(torch::kMPS));
+    for (int i = 0; i < 500; ++i) {
+        auto ct = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+        REQUIRE(ct.has_value());
+        CHECK_FALSE(ct->stream == nullptr);
+    }
+    stop.store(true, std::memory_order_relaxed);
+    worker.join();
+    torch::mps::synchronize();                   // leave the device quiet for other cases
 }

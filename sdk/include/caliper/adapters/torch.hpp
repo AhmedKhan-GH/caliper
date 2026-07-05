@@ -28,7 +28,8 @@
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <torch/torch.h>
 #if defined(__APPLE__)
-#include <objc/message.h>   // producer-queue lookup without an ObjC++ TU
+#include <dispatch/dispatch.h>  // dispatch_sync_f: serialize on torch's MPS stream queue
+#include <objc/message.h>       // producer-queue lookup without an ObjC++ TU
 #endif
 // !__APPLE__: mac libtorch ships the c10/cuda headers but no CUDA toolkit
 // headers, so presence-of-header alone is not usability — and Apple torch
@@ -64,6 +65,33 @@ inline void* mtl_command_queue_of(void* command_buffer) {
     return command_buffer
         ? ((Send)objc_msgSend)(command_buffer, sel_registerName("commandQueue"))
         : nullptr;
+}
+
+// The whole MPS handoff — command-buffer peek AND commit — as ONE block on
+// torch's MPS stream dispatch queue. NONE of the torch::mps stream calls are
+// internally serialized (verified by disassembly of this libtorch:
+// commitStream/deviceSynchronize tail-call MPSStream::synchronize, which is
+// straight-line objc_msgSends — no dispatch_sync anywhere), while every
+// torch-internal kernel encode runs as a block on get_dispatch_queue() (its
+// documented purpose is exactly this synchronization). Touching the stream
+// from a frame thread while a training thread encodes therefore corrupts the
+// MPSCommandBuffer/encoder state — MPS aborts with 'command buffer already
+// committed' / AGX encoder-coalescing crashes (the EmbedScope SIGABRT). The
+// same disassembly is what makes nesting commit() inside our block safe: it
+// cannot deadlock, because it never dispatches. Plain C dispatch API — no
+// ObjC blocks — keeps the header .cpp-compilable.
+inline void mps_handoff_probe(void* ctx) {
+    void** queue = static_cast<void**>(ctx);
+    *queue = mtl_command_queue_of(torch::mps::get_command_buffer());
+    if (*queue != nullptr)
+        torch::mps::commit();   // enqueue-not-drain, atomic with the peek
+}
+inline void* mps_commit_and_get_queue() {
+    void* queue = nullptr;
+    if (void* dq = torch::mps::get_dispatch_queue())
+        dispatch_sync_f(static_cast<dispatch_queue_t>(dq), &queue,
+                        &mps_handoff_probe);
+    return queue;
 }
 #endif
 
@@ -153,13 +181,14 @@ inline std::optional<CaliperTensor> stream_to_tensor(const at::Tensor& t,
     if (t.is_mps()) {
         auto out = to_tensor(t);
         if (!out) return out;
-        // Queue BEFORE commit: torch may release the command-buffer object
-        // once the GPU retires it; the queue lives for the process.
-        void* queue = detail::mtl_command_queue_of(torch::mps::get_command_buffer());
+        // One dispatch-serialized block does the queue peek AND the commit —
+        // atomic against concurrent training-thread encodes (see the detail
+        // helper's comment for why nothing here may touch the stream outside
+        // that block). Enqueue, not drain: pending torch kernels become
+        // committed GPU work the renderer's producer-queue signal is ordered
+        // after (M2b). The queue outlives the handoff (process-lifetime).
+        void* queue = detail::mps_commit_and_get_queue();
         if (queue == nullptr) { torch::mps::synchronize(); return out; }
-        // Enqueue, not drain: pending torch kernels become committed GPU work
-        // the renderer's producer-queue signal is ordered after (M2b).
-        torch::mps::commit();
         out->stream = queue;
         return out;
     }
