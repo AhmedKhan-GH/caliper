@@ -332,3 +332,20 @@ TEST_CASE("alloc_shared: host buffer + texture pair, update-on-demand") {
     b.free_shared(tex);
     CHECK(gl.release_count == 1);
 }
+
+TEST_CASE("bridge caps() surfaces the renderer's stream-handoff capability (D24)") {
+    // Default renderer: no stream honor -> caps 0 (adapters must drain).
+    StubRenderer plain("gl");
+    TensorBridge b_plain(plain);
+    CHECK(b_plain.caps() == 0u);
+
+    // A backend that honors the stream channel -> bit 0.
+    class StreamStub : public StubRenderer {
+    public:
+        using StubRenderer::StubRenderer;
+        bool honors_stream_ordered_handoff() const override { return true; }
+    };
+    StreamStub honored("metal");
+    TensorBridge b_honored(honored);
+    CHECK(b_honored.caps() == CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+}

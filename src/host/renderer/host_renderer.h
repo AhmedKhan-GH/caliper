@@ -62,6 +62,13 @@ public:
                                                       int /*w*/, int /*h*/) {
         return {};
     }
+
+    // D24 (docs/metal-pipelining.md §4): true when this backend honors a
+    // non-NULL CaliperTensor.stream by GPU-ordering the device update after
+    // the producer's stream/queue. Surfaced to applets as bridge-v1.1 caps()
+    // bit 0. Default false: a backend that ignores stream must never let an
+    // adapter skip its drain.
+    virtual bool honors_stream_ordered_handoff() const { return false; }
 };
 
 // GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend
