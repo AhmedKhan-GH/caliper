@@ -27,7 +27,10 @@ add_executable(caliper_tests
     test_tensor_bridge.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
-find_package(ZLIB REQUIRED)
+# On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
+if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB REQUIRED)
+endif()
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).

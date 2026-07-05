@@ -4,8 +4,25 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#ifdef _WIN32
+// POSIX setenv/unsetenv don't exist on MSVC; _putenv_s with "" removes.
+#define setenv(k, v, overwrite) _putenv_s(k, v)
+#define unsetenv(k) _putenv_s(k, "")
+#endif
 namespace fs = std::filesystem;
 using namespace caliper_host;
+
+// Platform shared-library naming (matches applet_loader.cpp's constants):
+// Windows = "<name>.dll", macOS = "lib<name>.dylib", Linux = "lib<name>.so".
+static std::string lib_name(const std::string& stem) {
+#ifdef _WIN32
+    return stem + ".dll";
+#elif defined(__APPLE__)
+    return "lib" + stem + ".dylib";
+#else
+    return "lib" + stem + ".so";
+#endif
+}
 
 // CALIPER_TEST_APPLETS_DIR + CALIPER_TEST_DATA_ROOT are compile definitions.
 static HostCaps caps() {
@@ -63,8 +80,8 @@ TEST_CASE("loader: descriptor/manifest agreement is enforced") {
     caliper::testing::FixtureHost fx;
     fs::path dir = fs::temp_directory_path() / "caliper-liar";
     fs::create_directories(dir);
-    fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / "libhello.dylib",
-                  dir / "libhello.dylib", fs::copy_options::overwrite_existing);
+    fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello"),
+                  dir / lib_name("hello"), fs::copy_options::overwrite_existing);
     std::ofstream(dir / "hello.caliper.toml") <<
         "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"9.9.9\"\n"
         "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
@@ -75,7 +92,11 @@ TEST_CASE("loader: descriptor/manifest agreement is enforced") {
     CHECK_FALSE(L.launch(0, *fx.host()));              // descriptor sanity fails
     CHECK(L.at(0).status == AppletStatus::Failed);
     CHECK(L.at(0).status_text.find("descriptor") != std::string::npos);
-    fs::remove_all(dir);
+    // Windows locks loaded DLL files: drop the loader's handle before cleanup,
+    // and tolerate a straggling lock rather than failing the case on cleanup.
+    L.close_all();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }
 
 TEST_CASE("loader: epoch mismatch refused before any dlopen") {
@@ -84,7 +105,7 @@ TEST_CASE("loader: epoch mismatch refused before any dlopen") {
     std::ofstream(dir / "fake.caliper.toml") <<
         "[applet]\nid=\"x.fake\"\nname=\"Fake\"\nversion=\"1.0.0\"\n"
         "[compat]\nabi_epoch=99\n";
-    std::ofstream(dir / "libfake.dylib") << "not a real dylib";  // never opened
+    std::ofstream(dir / lib_name("fake")) << "not a real library";  // never opened
     AppletLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
     REQUIRE(L.count() == 1);
@@ -117,7 +138,9 @@ TEST_CASE("loader: fault in frame() quarantines, host survives") {
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
     CHECK_FALSE(L.frame(i, fi));                       // fault -> quarantined
     CHECK(L.at(i).status == AppletStatus::Quarantined);
-    CHECK(L.at(i).status_text.find("SIG") != std::string::npos);
+    // POSIX guard reports "SIGSEGV (...)", the Windows guard "SEH exception 0x...".
+    CHECK((L.at(i).status_text.find("SIG") != std::string::npos ||
+           L.at(i).status_text.find("SEH") != std::string::npos));
     unsetenv("CALIPER_HELLO_CRASH");
     // The host (this test process) is alive to assert all of the above.
 }

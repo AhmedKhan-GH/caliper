@@ -8,7 +8,12 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
 #include <unistd.h>
+#endif
 #include <fstream>
 #include <string>
 

@@ -8,7 +8,12 @@
 
 #include <algorithm>
 #include <filesystem>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
 #include <unistd.h>
+#endif
 #include <atomic>
 #include <numeric>
 #include <random>

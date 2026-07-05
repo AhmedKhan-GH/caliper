@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include <caliper/caliper.hpp>
 #include <caliper/fixture_host.h>
+#include <stdexcept>
 #include <string>
 
 namespace {

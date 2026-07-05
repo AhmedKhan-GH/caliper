@@ -17,7 +17,9 @@ TEST_CASE("guard: null write is contained and named") {
     });
     CHECK_FALSE(r.ok);
     // macOS arm64 reports EXC_BAD_ACCESS as SIGSEGV or SIGBUS — accept either.
-    CHECK(r.fault.find("SIG") != std::string::npos);
+    // The Windows guard reports "SEH exception 0x...".
+    CHECK((r.fault.find("SIG") != std::string::npos ||
+           r.fault.find("SEH") != std::string::npos));
 }
 
 TEST_CASE("guard: handlers restore — ok call after a crash works") {

@@ -13,7 +13,10 @@ TEST_CASE("device: detection is stable and sane on this machine") {
     CHECK_FALSE(a.name.empty());
     CHECK(a.free_memory_hint > 0);
 #else
-    CHECK(a.kind == CALIPER_DEV_CPU);
+    // Non-Apple: CUDA when an NVIDIA driver is present (Phase 4 detection via
+    // the runtime-loaded driver API), CPU otherwise. Both are sane here.
+    CHECK((a.kind == CALIPER_DEV_CPU || a.kind == CALIPER_DEV_CUDA));
+    if (a.kind == CALIPER_DEV_CUDA) CHECK_FALSE(a.name.empty());
 #endif
     CHECK(a.index == 0);
 }
