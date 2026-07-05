@@ -903,14 +903,18 @@ void EmbedScopeApplet::draw_ui() {
                                 st->embw_tex = 0; }
             bool device_rejected = false;
             for (int k = 0; k < 8; k++) {
-                auto ct = caliper::adapters::to_tensor(disp_conv[k]);
+                // synced_: disp_conv is device-resident during CUDA/MPS
+                // training; drain the producer before the device upload reads
+                // it (no-op on CPU). Redundant syncs after the first are ~free
+                // (device already idle by then).
+                auto ct = caliper::adapters::synced_to_tensor(disp_conv[k]);
                 st->conv_tex[k] = ct ? st->bridge.texture_from_tensor_mapped(
                                            &*ct, CALIPER_CMAP_MAGMA,
                                            -w_km, w_km) : 0;
                 device_rejected |= (st->conv_tex[k] == 0);
             }
             {
-                auto ct = caliper::adapters::to_tensor(disp_embw);
+                auto ct = caliper::adapters::synced_to_tensor(disp_embw);  // device-resident: sync at handoff
                 st->embw_tex = ct ? st->bridge.texture_from_tensor_mapped(
                                         &*ct, CALIPER_CMAP_RDBU,
                                         -w_wm, w_wm) : 0;

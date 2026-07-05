@@ -342,7 +342,10 @@ CaliperTextureId upload_mapped(const caliper::Bridge& bridge, bool& stage_cpu,
     auto view = [&](bool cpu) -> std::optional<CaliperTensor> {
         if (cpu) { host_t = dev_t.to(torch::kCPU);
                    return caliper::adapters::to_tensor(host_t); }
-        return caliper::adapters::to_tensor(dev_t);
+        // Device handoff: drain the producer (MPS/CUDA) so the bridge's in-VRAM
+        // copy reads finished bytes, not a tensor the training stream is still
+        // writing. No-op for CPU. This is the sync-at-handoff the ABI mandates.
+        return caliper::adapters::synced_to_tensor(dev_t);
     };
     auto ct = view(stage_cpu);
     if (!ct) return id;
