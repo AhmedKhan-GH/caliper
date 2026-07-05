@@ -604,6 +604,63 @@ TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exac
     bk.bridge->release_texture(tex_id);
 }
 
+// M2b: a non-NULL t.stream (the producer's MTLCommandQueue*) must GPU-order
+// the update AFTER the producer's committed work. Deterministic, no timing
+// luck: the producer's payload write is gated behind an MTLSharedEvent the
+// TEST only fires after update_texture returns. A renderer that ignores
+// t.stream colormaps the stale bytes (fails); one that orders reads the fresh.
+TEST_CASE("gfx/Metal: non-NULL stream orders the update after the producer queue") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE(bk.renderer->honors_stream_ordered_handoff());
+
+    const int w = 8, h = 8, n = w * h;
+    std::vector<float> stale(n, 0.0f);
+    std::vector<float> fresh(n);
+    for (int i = 0; i < n; ++i) fresh[i] = (float)i;
+
+    id<MTLBuffer> tensor_buf = device_buffer(stale.data(), (size_t)n * sizeof(float));
+    id<MTLBuffer> payload    = device_buffer(fresh.data(), (size_t)n * sizeof(float));
+
+    CaliperTensor t{};
+    t.struct_size = sizeof(t);
+    t.data = (__bridge void*)tensor_buf;
+    t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_METAL;
+
+    // NB: not named `id` — that is the Objective-C `id` keyword, needed below.
+    CaliperTextureId tex_id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(tex_id != 0);
+
+    // Producer queue with pending committed work: a payload blit blocked on a
+    // gate the CPU holds — the stand-in for torch's just-committed kernels.
+    id<MTLDevice> dev = metal_env().device;
+    id<MTLCommandQueue> producer = [dev newCommandQueue];
+    id<MTLSharedEvent> gate = [dev newSharedEvent];
+    id<MTLCommandBuffer> pc = [producer commandBuffer];
+    [pc encodeWaitForEvent:gate value:1];
+    id<MTLBlitCommandEncoder> pb = [pc blitCommandEncoder];
+    [pb copyFromBuffer:payload sourceOffset:0
+              toBuffer:tensor_buf destinationOffset:0
+                  size:(NSUInteger)n * sizeof(float)];
+    [pb endEncoding];
+    [pc commit];
+
+    // Handoff with the producer queue in t.stream and NO drain anywhere.
+    t.stream = (__bridge void*)producer;
+    REQUIRE(bk.bridge->update_texture(tex_id, &t));
+
+    gate.signaledValue = 1;   // only NOW may the producer's write run
+
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(fresh.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    CHECK(bk.readback(tex_id, w, h) == ref);
+    bk.bridge->release_texture(tex_id);
+}
+
 // THE regression test for the reported SIGSEGV. Before the fix the bridge handed
 // out a small monotonic integer id; ImGui_ImplMetal_RenderDrawData reached
 // setFragmentTexture:/objc_retain on that integer-as-pointer and faulted on

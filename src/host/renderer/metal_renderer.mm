@@ -26,6 +26,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 namespace caliper_host {
 namespace {
@@ -93,6 +94,10 @@ public:
     const char* last_device_path() const override { return last_device_path_; }
     CaliperDeviceKind interop_device() const override { return CALIPER_DEV_METAL; }
 
+    // M2b shipped: a non-NULL t.stream is GPU-ordered after the producer
+    // queue in both device paths above (D24).
+    bool honors_stream_ordered_handoff() const override { return true; }
+
     // Metal owns no GL context: the window must be created with NO_API so GLFW
     // does not attach an OpenGL context we would fight over. Runs before
     // glfwCreateWindow (sibling to the GL backend's profile hints).
@@ -125,6 +130,7 @@ public:
         }
 
         textures_ = [NSMutableDictionary dictionary];
+        events_ = [NSMutableDictionary dictionary];
         pass_desc_ = [MTLRenderPassDescriptor new];
         return true;
     }
@@ -182,6 +188,7 @@ public:
     void shutdown() override {
         ImGui_ImplMetal_Shutdown();
         ImGui_ImplGlfw_Shutdown();
+        [events_ removeAllObjects]; events_ = nil; event_values_.clear();
         [textures_ removeAllObjects];
         textures_ = nil;
         cmap_pipeline_ = nil;
@@ -222,6 +229,7 @@ public:
 
     void tex_release(uint64_t tex) override {
         [textures_ removeObjectForKey:@(tex)];
+        [events_ removeObjectForKey:@(tex)]; event_values_.erase(tex);
     }
 
     uint64_t tex_imtexture_id(uint64_t tex) override {
@@ -241,9 +249,9 @@ public:
         if (src == nil) return false;
 
         if (t.dtype == CALIPER_DT_F32 && lut256 != nullptr)
-            return colormap_compute(dst, src, t, lut256, vmin, vmax);
+            return colormap_compute(tex, dst, src, t, lut256, vmin, vmax);
         if (t.dtype == CALIPER_DT_U8)
-            return blit_u8(dst, src, t);
+            return blit_u8(tex, dst, src, t);
         return false;
     }
 
@@ -307,8 +315,34 @@ private:
         return cmap_pipeline_ != nil;
     }
 
+    // M2b (spec §4): GPU-order this texture's update after the producer
+    // queue's already-committed work. A tiny command buffer on the PRODUCER's
+    // queue signals value v (queue order puts it after the producer's
+    // committed kernels); the tensor-op command buffer waits v before any
+    // encoder runs. No CPU block. If the event can't be created, fall back to
+    // a CPU wait on the producer queue — slower, never silently unordered.
+    void order_after_producer(uint64_t tex, id<MTLCommandBuffer> cb, void* stream) {
+        id<MTLCommandQueue> producer = (__bridge id<MTLCommandQueue>)stream;
+        if (producer == nil) return;
+        id<MTLSharedEvent> ev = events_[@(tex)];
+        if (ev == nil) {
+            ev = [device_ newSharedEvent];
+            if (ev != nil) events_[@(tex)] = ev;
+        }
+        id<MTLCommandBuffer> sig = [producer commandBuffer];
+        if (ev != nil && sig != nil) {
+            const uint64_t v = ++event_values_[tex];
+            [sig encodeSignalEvent:ev value:v];
+            [sig commit];
+            [cb encodeWaitForEvent:ev value:v];
+        } else if (sig != nil) {
+            [sig commit];
+            [sig waitUntilCompleted];   // rare fallback: CPU-ordered, still correct
+        }
+    }
+
     // f32 + LUT -> runtime-compiled compute shader. Records "compute".
-    bool colormap_compute(id<MTLTexture> dst, id<MTLBuffer> src,
+    bool colormap_compute(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
                           const CaliperTensor& t, const uint32_t* lut256,
                           float vmin, float vmax) {
         if (!ensure_pipeline()) return false;
@@ -330,6 +364,7 @@ private:
         if (lutbuf == nil) return false;
 
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+        if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);
         id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
         [enc setComputePipelineState:cmap_pipeline_];
         [enc setBuffer:src offset:0 atIndex:0];
@@ -353,7 +388,7 @@ private:
     }
 
     // u8 HWC (RGBA8) -> blit straight into the texture. Records "blit".
-    bool blit_u8(id<MTLTexture> dst, id<MTLBuffer> src, const CaliperTensor& t) {
+    bool blit_u8(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src, const CaliperTensor& t) {
         if (t.ndim < 2) return false;
         NSUInteger h = (NSUInteger)t.shape[0];
         NSUInteger w = (NSUInteger)t.shape[1];
@@ -364,6 +399,7 @@ private:
 
         NSUInteger bytesPerRow = w * 4;
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+        if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         [blit copyFromBuffer:src
                 sourceOffset:0
@@ -394,6 +430,13 @@ private:
     id<MTLRenderCommandEncoder>  frame_enc_ = nil;
 
     NSMutableDictionary<NSNumber*, id<MTLTexture>>* textures_ = nil;
+
+    // M2b: per-texture producer-ordering events (D23 — MTLSharedEvent appears
+    // ONLY where cross-queue ordering genuinely exists). Values are a per-
+    // texture monotonic timeline, the Metal analog of Vulkan's semaphores.
+    NSMutableDictionary<NSNumber*, id<MTLSharedEvent>>* events_ = nil;
+    std::unordered_map<uint64_t, uint64_t> event_values_;
+
     uint64_t next_id_ = 1;          // 0 is the invalid id
     const char* last_device_path_ = "";
 };
