@@ -15,6 +15,7 @@
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/tensor.h>
 #include <imgui.h>
 #include <implot.h>
@@ -242,10 +243,23 @@ const CaliperTensorBridgeV1 kBridge = {sizeof(CaliperTensorBridgeV1),
     &br_texture_from_tensor, &br_update_texture, &br_release_texture,
     &br_texture_from_tensor_mapped, &br_alloc_shared, &br_free_shared};
 
+// v1.1 (D24): the same six thunks plus caps(). Bit 0 reflects the ACTIVE
+// renderer (Metal/Vulkan honor it once M2 lands there; GL and headless never
+// do) — 0 with no renderer bound, so adapters keep draining.
+uint32_t br_caps(void) {
+    TensorBridge* b = bridge();
+    return b ? b->caps() : 0u;
+}
+const CaliperTensorBridgeV1_1 kBridge11 = {sizeof(CaliperTensorBridgeV1_1),
+    &br_texture_from_tensor, &br_update_texture, &br_release_texture,
+    &br_texture_from_tensor_mapped, &br_alloc_shared, &br_free_shared,
+    &br_caps};
+
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
                                     CALIPER_METRICS_V1,
                                     CALIPER_TENSOR_BRIDGE_V1,
+                                    CALIPER_TENSOR_BRIDGE_V1_1,
                                     CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1};
 
 } // namespace
@@ -318,6 +332,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_DEVICE_V1) == 0) return &kDevice;
     if (std::strcmp(id, CALIPER_METRICS_V1) == 0) return &kMetrics;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1) == 0) return &kBridge;
+    if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_1) == 0) return &kBridge11;
     if (std::strcmp(id, CALIPER_ARTIFACTS_V1) == 0) return &kArtifacts;
     if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
