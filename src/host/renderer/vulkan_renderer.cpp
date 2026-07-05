@@ -30,7 +30,8 @@
 // model (copy + cuCtxSynchronize + fenced submit, Metal's waitUntilCompleted
 // shape) remains as the per-texture fallback. The adapter-side
 // torch::cuda::synchronize() at the handoff is the v1 ABI contract and stays;
-// eliding it needs a stream channel in CaliperTensor (a v2 ABI question).
+// elided when the adapter populates CaliperTensor.stream under bridge-v1.1
+// caps (M2a, D24) — the copy+signal then ride the producer's stream.
 //
 // The frame loop follows imgui's example_glfw_vulkan (the ImGui_ImplVulkanH_
 // helpers); the CLEAR lives in the render pass load-op with the same color as
@@ -176,6 +177,11 @@ public:
     CaliperDeviceKind interop_device() const override {
         return interop_ok_ ? CALIPER_DEV_CUDA : CALIPER_DEV_CPU;
     }
+
+    // M2a (D24): only the pipelined path GPU-orders after t.stream; the
+    // synchronous fallback must keep the v1 drained contract, so advertise
+    // stream handoff only when pipelining is actually live.
+    bool honors_stream_ordered_handoff() const override { return pipelined_ok_; }
 
     void new_frame() override {
         int w = 0, h = 0;
@@ -1240,17 +1246,20 @@ private:
             return false;
         }
 
-        // CUDA side, stream-ordered on the legacy default stream: the copy
-        // (skipped on the alloc_shared in-place rung) then the GPU-side signal.
+        // CUDA side, ordered on the PRODUCER's stream when the adapter
+        // supplied one (M2a, D24) — stream order puts the copy after the
+        // producer's kernels, so the adapter's torch::cuda::synchronize() is
+        // elided. NULL keeps the legacy default stream (v1 drained handoff).
         const cudadrv::Api* cu = cudadrv::api();
+        cudadrv::CUstream stream = (cudadrv::CUstream)t.stream;
         const uint64_t base = io.timeline_value;
         if (!shared_in_place &&
-            cu->cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, nullptr)
+            cu->cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, stream)
                 != cudadrv::CUDA_SUCCESS)
             return dev_bail("pipelined: cuMemcpyDtoDAsync failed");
         cudadrv::ExternalSemaphoreSignalParams sp{};
         sp.params.fence.value = base + 1;
-        if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, nullptr)
+        if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)
                 != cudadrv::CUDA_SUCCESS)
             return dev_bail("pipelined: semaphore signal failed");
 
