@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Implemented — M1 + M2b shipped and gfx-verified on Apple Silicon (in-app step-time measurement pending); M2a code-complete, Windows hardware verification pending |
+| **Status** | Implemented & verified — M1 + M2b shipped and gfx-verified on Apple Silicon (in-app step-time measurement pending); M2a **verified on NVIDIA hardware** (RTX 500 Ada laptop, Windows 11, 2026-07-05 — `docs/m2a-windows-verification.md`) |
 | **Date** | 2026-07-05 |
 | **Owner** | Ahmed Khan |
 | **Scope** | The macOS counterpart of the Windows V4 work: remove the CPU sync stalls from the Metal backend's device-update path, and — the part that actually matters, on both platforms — retire the adapter's full-device drain at the tensor handoff by giving the dormant `CaliperTensor.stream` channel semantics. |
@@ -83,7 +83,7 @@ The honest ordering: **M1 is cheap hygiene; M2 is the real win** — and M2's CU
 | # | Deliverable | Exit criterion |
 |---|---|---|
 | **M1** | Metal renderer drops per-op `waitUntilCompleted`; `MetalRenderer::debug_readback_rgba8` on the renderer's queue; Mac gfx harness readback switched to it | Mac gfx suite green and byte-exact; a burst test (the Vulkan one's twin: N back-to-back device updates, readback once) passes; no per-op CPU wait remains in the hot path. **Shipped:** gfx suite + burst test byte-exact; sole remaining wait is the test readback. |
-| **M2a** | CUDA stream channel: adapter populates `t.stream`, Vulkan renderer enqueues copy+signal on it, bridge v1.1 `caps()` bit, adapter drain skipped when honored | gpt_scope/embed_scope training on Windows shows no `torch::cuda::synchronize` in the handoff profile; gfx suite green; NULL-stream fallback covered by a test forcing v1 behavior. **Code-complete:** stream pass-through + caps; Windows profile/gfx verification pending — agent brief: `docs/m2a-windows-verification.md`. |
+| **M2a** | CUDA stream channel: adapter populates `t.stream`, Vulkan renderer enqueues copy+signal on it, bridge v1.1 `caps()` bit, adapter drain skipped when honored | gpt_scope/embed_scope training on Windows shows no `torch::cuda::synchronize` in the handoff profile; gfx suite green; NULL-stream fallback covered by a test forcing v1 behavior. **Verified on NVIDIA hardware** (RTX 500 Ada, 2026-07-05): gfx 16/16 incl. burst + alloc_shared byte-exact; the adapter carries a non-default producer stream end-to-end (pool-stream tripwire — note: the DEFAULT stream's handle is legitimately NULL, still drain-elided); 10/10 concurrency stress vs a training thread; `caps()==1` in-app. embed_scope steps/sec delta vs the drained parent ≈ 0 (laptop thermal variance ±15% dominates; the training thread already syncs per step via `loss.item()`) — honest per D21: the elision's win is frame-thread stall removal, proven by the tripwire + byte-exact ordering, not throughput. |
 | **M2b** | Metal stream channel: `MTLSharedEvent` per texture, producer-queue signal after `torch::mps::commit()`, consumer-side `encodeWaitForEvent` | embed_scope on Mac no longer pays the "per-step MPS sync cost that dominates step time" (`embed_scope.cpp:455` comment retired with measurement); Mac gfx suite green. **Shipped:** gated-producer ordering test byte-exact; adapter commits + hands the queue; embed_scope step-time measurement pending a manual training run. |
 
 M1 has no dependency on M2. M2a before M2b: it reuses shipped V4 machinery and validates the caps-negotiation design on the platform with the stronger test harness, before the Metal half takes on the torch-MPS API risk.

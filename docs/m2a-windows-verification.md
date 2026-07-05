@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Ready to execute — blocked only on Windows/NVIDIA hardware |
+| **Status** | **Executed 2026-07-05** on RTX 500 Ada Laptop GPU (Windows 11, driver 596.47, CUDA 13.0) — T1–T5 complete, T6 skipped (optional). Results in §5 below. |
 | **Date** | 2026-07-05 |
 | **Owner** | Ahmed Khan |
 | **Scope** | Verify, on real NVIDIA hardware, the M2a stream-channel handoff that was code-authored blind on macOS (`vulkan_renderer.cpp` is a Windows-only TU). Everything else in the M1/M2 program is already shipped and gfx-verified on Apple Silicon. |
@@ -68,5 +68,15 @@ Work on branch `feat/metal-pipelining`, repo conventions apply: never `git add -
 Per task: exit criterion met yes/no, exact test counts, commit hashes. Plus: the T3 `stream` non-NULL confirmation, T4 run tally (n/10), T5 steps/sec table (branch vs parent, hardware named), and any deviation from this brief with rationale. A failed exit criterion is a finding, not a failure of the run — report it with the captured evidence and stop before "fixing forward" beyond T3/T4's explicit remits.
 
 ---
+
+## 5. Results (2026-07-05, RTX 500 Ada Laptop GPU, Windows 11, driver 596.47)
+
+- **T1 ✓** — zero errors. `vulkan_renderer.cpp` (the never-compiled M2a TU) compiles clean under MSVC 14.50 / CUDA 13.0.
+- **T2 ✓** — unit 90/90 (33,295 assertions); torch 11/11; gfx 16/16, 0 skipped, **including** the burst-pipeline and alloc_shared cases, byte-exact; `sync mode: pipelined (shared timeline semaphores)` live.
+- **T3 ✓ (amended)** — the tripwire fired as written, but root-cause diagnosis (preprocessor probe with the TU's exact include dirs) proved the guard was **never broken**: the branch compiles in on Windows. The NULL came from CUDA semantics — `CUDAStream::stream()` returns `nullptr` for the legacy default stream (unlike MPS, whose queue pointer is never NULL). A NULL-carrying honored handoff is still correct and drain-elided (the renderer's NULL rung is the same legacy default stream the producer used). The test now pins a **non-default pool stream** via `CUDAStreamGuard` — the exact handle round-trips (`REQUIRE(stream == pool.stream())` passed) — and a missing c10 CUDA header fails loudly instead of skipping. Committed as `28d53a7`.
+- **T4 ✓** — CUDA stress twin: **10/10 runs green** (500 pool-stream handoffs/run vs a concurrent `mm().tanh()` training thread). The MPS-class race does not reproduce on CUDA.
+- **T5 ✓** — `caps()==1` in-app (init stderr line, proof chain `pipelined_ok_` → `honors_stream_ordered_handoff()` → caps bit 0). Steps/sec, embed_scope MNIST (1,407-step runs, WAL-envelope timing): branch 95.7 and 68.2* steps/s; parent `3a814cc^` 103.0, 80.1, 75.9 steps/s (*partial run, ≥100 steps). **Delta ≈ 0** — laptop thermal throttling (±15–20% monotonic decline across sessions) dominates, and the training thread already pays a per-step device sync via `loss.item()`, so the frame-thread drain never gated training throughput on this applet. The elision's verified win is the frame-thread stall removal + ordering (tripwire + byte-exact tests), per D21's measured-optimization honesty.
+- **T6 — skipped** (optional per §3): burst + T4 cover the practical risk; extending `cuda_driver.h`'s loader with `cuStreamCreate`/`cuLaunchHostFunc` remains available future work.
+- **Deviation log**: T3 test code corrected as above (fix-the-guard remit assumed a broken guard; the guard was sound). Observation for a future issue: CUDA epoch-boundary stalls in embed_scope (eval + `publish_embeddings` burst, allocator churn on 4 GB) are visible as training pauses on Windows but not on MPS — orthogonal to M2a, present in both builds.
 
 *Companion to `docs/metal-pipelining.md` (design + decision log D23/D24) and `docs/superpowers/plans/2026-07-05-metal-pipelining.md` (the executed implementation plan whose Notes section defers to this brief). The macOS-side crash forensics live in commit `545a2f7`'s message.*

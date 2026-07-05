@@ -143,7 +143,12 @@ buffer-to-image copy for u8). Synchronization is GPU-ordered by a per-texture
 Vulkan pass GPU-waits it, and the frame draw GPU-waits the pass — no CPU sync
 on the hot path. The adapter's `torch::cuda::synchronize()` barrier is elided when bridge-v1.1
 caps grant stream-ordered handoff — the copy+signal then ride the producer's
-CUDA stream (docs/metal-pipelining.md M2a). Where the
+CUDA stream (docs/metal-pipelining.md M2a; verified on NVIDIA hardware
+2026-07-05: the handoff carries a non-default producer stream end-to-end and
+survives 10/10 concurrent-training stress runs; embed_scope training
+steps/sec vs the drained parent measured ≈ 0 delta on an RTX 500 Ada — the
+win is frame-thread stall removal, not training throughput, because the
+training loop's own per-step `loss.item()` sync dominates). Where the
 device can't export timeline semaphores, the handoff falls back to the
 synchronous model (`cuCtxSynchronize()` + fence-waited submits, Metal's
 `waitUntilCompleted`).
