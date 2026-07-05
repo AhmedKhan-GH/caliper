@@ -1,0 +1,140 @@
+# How zero-copy tensor visualization works
+
+How a tensor goes from a training step to pixels on screen without a CPU
+round trip — on Apple Silicon today (implemented, tested), and on
+Windows/NVIDIA by design (Phase 4, not yet built). GitHub renders the
+diagrams below natively.
+
+**What "zero-copy" means here, precisely:** the tensor's *data* never
+leaves the GPU and is never staged through CPU memory. There is still one
+GPU-side blit (buffer → texture, required because samplers read textures,
+not raw buffers) — but it runs on the GPU at memory bandwidth, not over a
+bus into host RAM and back.
+
+## The problem: the round trip everyone else takes
+
+The conventional way to look inside a training run (TensorBoard et al.)
+crosses the CPU twice and usually a filesystem once:
+
+```mermaid
+flowchart LR
+    subgraph Conventional["Conventional: TensorBoard-style round trip"]
+        A[GPU tensor] -->|"device→host copy"| B[CPU numpy array]
+        B -->|encode| C[PNG / event file on disk]
+        C -->|poll + decode| D[CPU pixel buffer]
+        D -->|"host→device upload"| E[GPU texture in a browser]
+    end
+
+    subgraph Caliper["Caliper: stays on the GPU"]
+        F[GPU tensor] -->|"GPU blit + colormap"| G[GPU texture]
+        G -->|"same frame"| H[ImGui draw]
+    end
+```
+
+The conventional path costs two bus transfers, an encode/decode, and
+seconds of latency. The Caliper path costs one on-GPU blit and is visible
+**the same frame** — which is what makes per-training-step visualization
+(weights reorganizing at 60 fps) possible at all.
+
+## The architecture that makes it portable
+
+Applets never talk to a graphics API. They fill a `CaliperTensor` — a
+plain C struct whose `device` field says where the bytes live — and hand
+it to the `tensor_bridge.v1` service. A renderer backend behind the host
+turns it into a texture however that platform does it best:
+
+```mermaid
+flowchart TD
+    APP["Applet code<br/>(PyTorch, any thread)"] -->|"CaliperTensor{data*, shape, device: CPU / MPS / CUDA}"| BRIDGE["tensor_bridge.v1<br/>(frozen C ABI — graphics-API-neutral)"]
+    BRIDGE --> SEAM{HostRenderer seam}
+    SEAM -->|macOS| METAL["Metal backend<br/>zero-copy (implemented)"]
+    SEAM -->|anywhere| GL["OpenGL backend<br/>CPU staging (implemented fallback)"]
+    SEAM -.->|"Windows (Phase 4 design)"| VK["Vulkan backend<br/>CUDA interop (designed)"]
+    METAL --> IMG["ImTextureID → ImGui::Image"]
+    GL --> IMG
+    VK -.-> IMG
+```
+
+The frozen ABI is the reason the Windows path can exist later without
+touching a single applet: `CALIPER_DEV_CUDA` is already in the device
+enum, and the contract says nothing about Metal.
+
+## Apple Silicon (MPS) — implemented
+
+The enabling hardware fact: Apple Silicon has **unified memory**. CPU and
+GPU share one pool of physical RAM, so a PyTorch MPS tensor's storage
+*already is* an `MTLBuffer` — the same object Metal renders from. There is
+no "GPU memory" to copy out of; the handoff is a pointer cast plus rules
+that make the cast safe.
+
+```mermaid
+sequenceDiagram
+    participant W as Worker thread (torch MPS)
+    participant U as Unified memory (one physical RAM)
+    participant B as Bridge (Metal backend)
+    participant F as Frame thread (ImGui)
+
+    W->>U: training kernels write weight MTLBuffer
+    W->>W: tensor.contiguous(), storage_offset == 0
+    W->>B: hand over pointer — cast to id&lt;MTLBuffer&gt;, zero bytes moved
+    Note over W,B: one torch::mps synchronize at the handoff —<br/>pending kernels finish before the GPU reads
+    B->>U: GPU blit encoder: buffer → MTLTexture<br/>+ colormap LUT applied on-GPU (f32 heatmaps)
+    B->>F: ImTextureID (the texture, directly drawable)
+    F->>F: ImGui::Image — pixels this frame
+```
+
+The two safety rules exist because the frozen ABI has no storage-offset
+channel: the tensor must be `contiguous()` with `storage_offset() == 0`,
+or the buffer cast would address the wrong texels — so the adapter
+*rejects* views instead of guessing. Fresh results of GPU ops always
+qualify.
+
+Proof, not promise: a windowed test harness pushes known tensors through
+this exact path and asserts **pixel-exact** output — on both the Metal and
+OpenGL backends, every CI run.
+
+## Windows / NVIDIA — the Phase 4 design (not yet implemented)
+
+Discrete GPUs have no unified memory: VRAM and system RAM are separate,
+connected by PCIe. Zero-copy there means something different — **keep the
+data in VRAM** and make the compute API and the graphics API share the
+same allocation, instead of bouncing through system RAM:
+
+```mermaid
+sequenceDiagram
+    participant T as Worker thread (torch CUDA)
+    participant V as VRAM (device-local)
+    participant X as External-memory interop
+    participant R as Vulkan backend
+    participant F as Frame thread (ImGui)
+
+    T->>V: training kernels write CUDA tensor
+    X->>X: export allocation (cudaExternalMemory)<br/>import as Vulkan memory (VK_KHR_external_memory_win32)
+    Note over V,R: same physical VRAM — no PCIe round trip,<br/>no host staging
+    T-->>R: semaphore sync (VK_KHR_external_semaphore ↔ CUDA)
+    R->>V: GPU copy/compute: buffer → VkImage + colormap
+    R->>F: ImTextureID via the same frozen bridge ABI
+    F->>F: ImGui::Image — pixels this frame
+```
+
+Same shape as the Metal story — write, sync, on-GPU blit, draw — with the
+interop machinery (`cudaExternalMemory_t`, `VK_KHR_external_memory`,
+shared semaphores) standing in for what unified memory gives Apple for
+free. **Status: designed-for, unverified** — the ABI slot, device enum,
+and adapter structure all exist; nobody has run it on NVIDIA hardware.
+Until then, Windows would use the OpenGL fallback (CPU staging): slower,
+but identical applet code and identical on-screen results.
+
+## The fallback path, for honesty's sake
+
+On the OpenGL backend (or any CPU tensor), the bridge stages through host
+memory: colormap on CPU into an RGBA scratch buffer, one `glTexSubImage2D`
+upload. Same ABI, same textures, same tests — just with the copy the
+other paths avoid. This is what "portable by construction" costs: the
+worst case is a working slow path, never a broken one.
+
+| Path | Data crossings | Status |
+|---|---|---|
+| Metal / MPS (Apple Silicon) | 0 host copies; 1 on-GPU blit | **Implemented + pixel-exact tested** |
+| Vulkan / CUDA (Windows) | 0 host copies; 1 in-VRAM copy | Designed (Phase 4), unverified |
+| OpenGL / CPU (anywhere) | 1 host staging + 1 upload | Implemented fallback, tested |
