@@ -11,6 +11,13 @@ GPU-side blit (buffer → texture, required because samplers read textures,
 not raw buffers) — but it runs on the GPU at memory bandwidth, not over a
 bus into host RAM and back.
 
+**And what it's *for* is bigger than showing tensors.** The texture path
+is one output route; the same live pipeline feeds **derived graphics** —
+3-D point clouds, learned-coordinate scatters, head-specialization plots,
+prediction grids — anything you can compute *from* the training data,
+drawn the same frame it was computed. See
+[§ Derived graphics](#derived-graphics-not-just-pictures-of-tensors).
+
 ## The problem: the round trip everyone else takes
 
 The conventional way to look inside a training run (TensorBoard et al.)
@@ -124,6 +131,60 @@ free. **Status: designed-for, unverified** — the ABI slot, device enum,
 and adapter structure all exist; nobody has run it on NVIDIA hardware.
 Until then, Windows would use the OpenGL fallback (CPU staging): slower,
 but identical applet code and identical on-screen results.
+
+## Derived graphics: not just pictures of tensors
+
+The heatmap route (tensor → texture) is the *narrowest* use of this
+pipeline. The broader point: because the model's internal state is
+reachable **live, in-process, in the same address space as the renderer**,
+an applet can run *any transformation* on it — on the GPU, mid-training —
+and turn the result into whatever graphic actually carries the insight.
+The tensor is the *source*; the visualization is *derived*:
+
+```mermaid
+flowchart LR
+    T["Live training state<br/>(weights, activations,<br/>embeddings — on GPU)"] --> D["Derive, per step:<br/>projections · PCA · statistics<br/>entropy · argmax · norms<br/>(torch ops, still on GPU)"]
+
+    D -->|"image-like result"| TEX["tensor_bridge<br/>→ GPU texture"]
+    D -->|"coordinates"| P3["ImPlot3D<br/>3-D point clouds, glyphs, meshes"]
+    D -->|"series / scalars"| P2["ImPlot<br/>curves, scatters, bars"]
+    D -->|"tokens / labels"| TXT["Styled text grids<br/>(colored predictions)"]
+
+    TEX --> S["Screen — same frame"]
+    P3 --> S
+    P2 --> S
+    TXT --> S
+```
+
+This is exactly how the shipped applets work — each panel is a
+*computation over* training state, not a dump of it:
+
+- **EmbedScope's 3-D cloud**: the network has a learned 3-neuron
+  bottleneck, so its activations *are* coordinates — 2,000 test digits
+  drawn as a rotating ImPlot3D scatter that visibly splits from one blob
+  into ten colored lobes as training runs. Nothing "shows a tensor";
+  the geometry *is* the model's learned representation.
+- **GPTScope's embedding view**: the token-embedding matrix, PCA-projected
+  every few seconds, drawn with **each character as its own glyph in 3-D
+  space** — you watch vowels find each other.
+- **GPTScope's head scatter**: sixteen attention heads reduced to two
+  *derived statistics* (mean attended distance × entropy) and plotted as
+  migrating points — head specialization as motion, with the raw heatmap
+  demoted to an on-click drill-down.
+- **GPTScope's logit lens**: residual streams at every depth pushed
+  through the unembedding and rendered as a colored text grid — "when
+  does the model decide?" as a picture.
+
+So if you want "cool 3-D visualizations of the data being trained": that
+is the *intended* use, not a side effect. The recipe is always the same —
+derive on the worker (any torch op), publish coordinates or an image-like
+tensor, draw with ImPlot3D / ImPlot / the bridge — and the zero-copy
+machinery is what makes the whole loop fast enough to run every
+optimizer step. One honest nuance: coordinate-style graphics (point
+clouds, curves) flow through the plotting libraries as small CPU arrays —
+kilobytes, negligible; the zero-copy texture path matters for the *dense*
+outputs (heatmaps, feature maps, attention grids), and the two routes
+compose freely in one panel.
 
 ## The fallback path, for honesty's sake
 
