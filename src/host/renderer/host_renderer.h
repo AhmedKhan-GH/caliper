@@ -42,6 +42,14 @@ public:
     // when a UUID-matched CUDA device is paired, else CPU; everyone else CPU.
     virtual CaliperDeviceKind interop_device() const { return CALIPER_DEV_CPU; }
 
+    // Literal zero-copy alloc_shared (spec §3.5): make texture `tex`'s interop
+    // buffer be the tensor's backing store and return a device pointer to it
+    // (a CUDA device ptr on Vulkan). The applet's kernels write there directly
+    // and the update pass reads it in place — zero data copies. Default false:
+    // backends without device interop keep the CPU-vector alloc_shared.
+    virtual bool alloc_device_shared(uint64_t /*tex*/, uint64_t /*bytes*/,
+                                     void** /*out_device_ptr*/) { return false; }
+
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
 };

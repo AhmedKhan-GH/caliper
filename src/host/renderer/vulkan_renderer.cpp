@@ -36,12 +36,15 @@
 
 #include "host_renderer.h"
 #include "../cuda_driver.h"
+#include "../tensor_bridge.h"   // colormap_lut + map_f32_to_rgba8 (self-test ref)
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
@@ -147,6 +150,9 @@ public:
         // the time init() returns. Requires both the Vulkan external-memory
         // extensions AND a CUDA device whose UUID matches this one.
         interop_ok_ = external_memory_ok_ && ensure_cuda();
+
+        // On-hardware pixel-exact proof of the interop path (opt-in).
+        if (std::getenv("CALIPER_VULKAN_SELFTEST")) run_selftest();
         return true;
     }
 
@@ -220,7 +226,7 @@ public:
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling = VK_IMAGE_TILING_OPTIMAL;
         ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                    VK_IMAGE_USAGE_STORAGE_BIT;
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (vkCreateImage(device_, &ici, nullptr, &t.image) != VK_SUCCESS) return 0;
 
@@ -337,8 +343,13 @@ public:
         if (!ensure_shared_buffer(dst, bytes)) return dev_bail("shared-buffer import failed");
 
         // In-VRAM copy: torch allocation -> shared allocation, then drain so
-        // the Vulkan pass below (fence-waited) reads finished bytes.
-        if (cu->cuMemcpyDtoD(dst.interop.cuda_ptr, src, (size_t)bytes)
+        // the Vulkan pass below (fence-waited) reads finished bytes. When the
+        // tensor's data IS our shared buffer (the alloc_shared literal-zero-copy
+        // path, spec §3.5), there is nothing to copy — the applet's kernels
+        // already wrote it in place.
+        const bool shared_in_place = (src == dst.interop.cuda_ptr);
+        if (!shared_in_place &&
+            cu->cuMemcpyDtoD(dst.interop.cuda_ptr, src, (size_t)bytes)
                 != cudadrv::CUDA_SUCCESS)
             return dev_bail("cuMemcpyDtoD failed");
         if (cu->cuCtxSynchronize() != cudadrv::CUDA_SUCCESS)
@@ -349,11 +360,27 @@ public:
             ok = colormap_compute(dst, t, lut256, vmin, vmax);
         else if (t.dtype == CALIPER_DT_U8)
             ok = blit_u8(dst, t);
-        // Honesty rule (spec §3.5): reserve "zero-copy" for the alloc_shared
-        // path; an arbitrary torch tensor costs one D2D copy, so it's
+        // Honesty rule (spec §3.5): "zero-copy" is the alloc_shared in-place
+        // path (no D2D); an arbitrary torch tensor costs one D2D copy, so it's
         // "GPU-resident", not zero-copy.
-        if (ok) dev_note("CUDA interop OK — GPU-resident (no CPU staging)");
+        if (ok) dev_note(shared_in_place ? "CUDA interop OK — zero-copy (alloc_shared in place)"
+                                         : "CUDA interop OK — GPU-resident (no CPU staging)");
         return ok;
+    }
+
+    // Literal zero-copy alloc_shared (spec §3.5): create/size texture `tex`'s
+    // interop buffer and hand back a CUDA device pointer into it. The applet
+    // wraps this with torch::from_blob and writes it; update_texture then runs
+    // the buffer->image pass with no copy (shared_in_place above).
+    bool alloc_device_shared(uint64_t tex, uint64_t bytes, void** out) override {
+        if (!interop_ok_ || out == nullptr) return false;
+        auto it = textures_.find(tex);
+        if (it == textures_.end()) return false;
+        if (!ensure_cuda()) return false;
+        cudadrv::api()->cuCtxSetCurrent(cuda_ctx_);
+        if (!ensure_shared_buffer(it->second, bytes)) return false;
+        *out = (void*)(uintptr_t)it->second.interop.cuda_ptr;
+        return true;
     }
 
     // One-time-per-message stderr breadcrumbs so a run makes it obvious whether
@@ -716,6 +743,94 @@ private:
         if (cuda_ctx_ && cu) {
             cu->cuDevicePrimaryCtxRelease(cuda_dev_);
             cuda_ctx_ = nullptr;
+        }
+    }
+
+    // Copy a texture's pixels back to host RGBA8 (requires TRANSFER_SRC usage,
+    // set at create). Used by the self-test and, later, the gfx determinism
+    // suite. Restores the image's prior layout.
+    std::vector<uint8_t> readback_rgba8(Tex& t) {
+        const size_t n = (size_t)t.w * (size_t)t.h * 4;
+        Buffer host{};
+        if (!ensure_buffer(host, n, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, /*external=*/false))
+            return {};
+        const VkImageLayout prev = t.layout;
+        const bool ok = submit_once([&](VkCommandBuffer cb) {
+            barrier(cb, t, prev, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy r{};
+            r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.imageExtent = {(uint32_t)t.w, (uint32_t)t.h, 1};
+            vkCmdCopyImageToBuffer(cb, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   host.buf, 1, &r);
+            barrier(cb, t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, prev);
+        });
+        std::vector<uint8_t> out;
+        if (ok && host.mapped) { out.resize(n); std::memcpy(out.data(), host.mapped, n); }
+        destroy_buffer(host);
+        return out;
+    }
+
+    // On-hardware pixel-exact proof of the interop path, gated by
+    // CALIPER_VULKAN_SELFTEST. Pushes a known f32 ramp through BOTH device
+    // rungs — an arbitrary CUDA tensor (D2D copy) and an alloc_shared in-place
+    // buffer (zero copy) — and asserts the readback is byte-identical to the
+    // CPU reference map_f32_to_rgba8 (§16). Logs PASS/FAIL; never fatal.
+    void run_selftest() {
+        if (!interop_ok_) { std::fprintf(stderr, "[vulkan] selftest: interop unavailable, skipped\n"); return; }
+        const cudadrv::Api* cu = cudadrv::api();
+        if (!cu || !cu->cuMemAlloc) { std::fprintf(stderr, "[vulkan] selftest: cuMemAlloc unavailable, skipped\n"); return; }
+        cu->cuCtxSetCurrent(cuda_ctx_);
+
+        const int W = 8, H = 8, N = W * H;
+        std::vector<float> ramp(N);
+        for (int i = 0; i < N; ++i) ramp[i] = (float)i;
+        const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+        std::vector<uint8_t> ref(N * 4);
+        map_f32_to_rgba8(ramp.data(), W, H, lut, 0.0f, (float)(N - 1), ref.data());
+
+        auto make_t = [&](void* data) {
+            CaliperTensor t{};
+            t.struct_size = sizeof(t); t.data = data; t.dtype = CALIPER_DT_F32;
+            t.ndim = 2; t.shape[0] = H; t.shape[1] = W; t.strides[0] = W; t.strides[1] = 1;
+            t.device = CALIPER_DEV_CUDA; return t;
+        };
+        auto report = [&](const char* name, const std::vector<uint8_t>& got) {
+            int maxdiff = -1;
+            if (got.size() != ref.size()) { std::fprintf(stderr, "[vulkan] selftest %s: FAIL (readback size %zu != %zu)\n", name, got.size(), ref.size()); return; }
+            maxdiff = 0;
+            for (size_t i = 0; i < ref.size(); ++i)
+                maxdiff = std::max(maxdiff, std::abs((int)got[i] - (int)ref[i]));
+            std::fprintf(stderr, "[vulkan] selftest %s: %s (max byte diff %d)\n",
+                         name, maxdiff == 0 ? "PASS — pixel-exact" : "FAIL", maxdiff);
+        };
+
+        // Rung 1: arbitrary CUDA tensor -> D2D copy -> colormap.
+        {
+            cudadrv::CUdeviceptr src = 0;
+            if (cu->cuMemAlloc(&src, (size_t)N * sizeof(float)) == cudadrv::CUDA_SUCCESS) {
+                cu->cuMemcpyHtoD(src, ramp.data(), (size_t)N * sizeof(float));
+                uint64_t tex = tex_create_rgba8(W, H);
+                CaliperTensor t = make_t((void*)(uintptr_t)src);
+                tex_update_from_device(tex, t, lut, 0.0f, (float)(N - 1));
+                report("arbitrary-tensor (D2D)", readback_rgba8(textures_[tex]));
+                tex_release(tex);
+                cu->cuMemFree(src);
+            }
+        }
+        // Rung 2: alloc_shared in place -> zero copy -> colormap.
+        {
+            uint64_t tex = tex_create_rgba8(W, H);
+            void* dptr = nullptr;
+            if (alloc_device_shared(tex, (uint64_t)N * sizeof(float), &dptr) && dptr) {
+                cu->cuMemcpyHtoD((cudadrv::CUdeviceptr)(uintptr_t)dptr,
+                                 ramp.data(), (size_t)N * sizeof(float));  // applet's kernels
+                CaliperTensor t = make_t(dptr);
+                tex_update_from_device(tex, t, lut, 0.0f, (float)(N - 1));
+                report("alloc_shared (zero-copy)", readback_rgba8(textures_[tex]));
+            }
+            tex_release(tex);
         }
     }
 

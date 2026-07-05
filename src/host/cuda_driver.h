@@ -72,6 +72,12 @@ struct Api {
     // copy (finding-#1 parity with Metal's src.length check).
     CUresult (*cuMemGetAddressRange)(CUdeviceptr* base, size_t* size,
                                      CUdeviceptr dptr);                       // _v2
+    // Plain device alloc / host->device copy / free. Used only by the renderer's
+    // hardware self-test (CALIPER_VULKAN_SELFTEST) to stage a known source
+    // tensor; the production interop path never allocates device memory itself.
+    CUresult (*cuMemAlloc)(CUdeviceptr* dptr, size_t bytes);                  // _v2
+    CUresult (*cuMemcpyHtoD)(CUdeviceptr dst, const void* src, size_t bytes); // _v2
+    CUresult (*cuMemFree)(CUdeviceptr dptr);                                  // _v2
     CUresult (*cuImportExternalMemory)(CUexternalMemory* out,
                                        const ExternalMemoryHandleDesc* desc);
     CUresult (*cuExternalMemoryGetMappedBuffer)(CUdeviceptr* out,

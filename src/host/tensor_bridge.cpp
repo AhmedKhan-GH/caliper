@@ -330,12 +330,23 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
     Entry e;
     e.tex = tex; e.w = w; e.h = h; e.dtype = dtype; e.channels = channels;
     e.mapped = mapped; e.colormap = CALIPER_CMAP_VIRIDIS; e.vmin = 0.0f; e.vmax = 1.0f;
-    e.shared = true; e.shared_buf.assign(bytes, 0);
+    e.shared = true;
+
+    // Literal zero-copy (§3.5): when the backend imports our device, back the
+    // shared tensor with a device buffer the applet's kernels write in place —
+    // update_texture then does no copy. Falls back to a CPU-unified vector when
+    // the backend has no device interop (GL, Metal-today, or CUDA unpaired).
+    void* device_ptr = nullptr;
+    const bool device_shared =
+        active_device_ != CALIPER_DEV_CPU &&
+        renderer_.alloc_device_shared(tex, (uint64_t)bytes, &device_ptr) &&
+        device_ptr != nullptr;
+    if (!device_shared) e.shared_buf.assign(bytes, 0);
     Entry& stored = (entries_[id] = std::move(e));
 
     std::memset(out, 0, sizeof(*out));
     out->struct_size = sizeof(CaliperTensor);
-    out->data = stored.shared_buf.data();   // unified CPU-device backing store
+    out->data = device_shared ? device_ptr : stored.shared_buf.data();
     out->dtype = dtype;
     out->ndim = ndim;
     int64_t st = 1;
@@ -344,7 +355,7 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
         out->strides[i] = st;
         st *= shape[i];
     }
-    out->device = CALIPER_DEV_CPU;
+    out->device = device_shared ? active_device_ : CALIPER_DEV_CPU;
     out->device_index = 0;
 
     *out_texture = id;
