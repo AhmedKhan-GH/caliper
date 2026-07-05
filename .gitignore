@@ -26,7 +26,10 @@ data/
 # Ignore generated/built files in third_party, but track custom CMakeLists.txt
 third_party/*/build/
 third_party/*/cmake-build-*/
+# libtorch is downloaded by CMake; Windows uses per-config variant dirs
+# (libtorch-debug / libtorch-release) so Debug and Release can coexist.
 third_party/libtorch/
+third_party/libtorch-*/
 
 # Ignore generated files in submodules
 third_party/*/.dummy
@@ -69,3 +72,13 @@ dist/
 dump
 .swarm
 .claude.superpowers/
+
+# AI agent scratch (MCP servers, etc.)
+.ai/
+
+# Machine-specific local build wrappers (paths hardcoded to this toolchain).
+# Portable equivalents live in CMakePresets.json — use `cmake --preset`.
+/configure.cmd
+/build.cmd
+/build_release.cmd
+/build_tests.cmd
