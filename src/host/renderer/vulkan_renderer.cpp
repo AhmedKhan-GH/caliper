@@ -43,6 +43,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <set>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -291,17 +293,19 @@ public:
                                 const uint32_t* lut256,
                                 float vmin, float vmax) override {
         auto it = textures_.find(tex);
-        if (it == textures_.end()) return false;
+        if (it == textures_.end()) return dev_bail("no such texture");
         Tex& dst = it->second;
-        if (t.device != CALIPER_DEV_CUDA || t.data == nullptr) return false;
-        if (!external_memory_ok_) return false;
+        if (t.device != CALIPER_DEV_CUDA || t.data == nullptr)
+            return dev_bail("tensor not CUDA-resident");
+        if (!external_memory_ok_) return dev_bail("external-memory interop unavailable");
 
         const uint64_t elem = (t.dtype == CALIPER_DT_F32) ? 4 : 1;
-        if (t.dtype != CALIPER_DT_F32 && t.dtype != CALIPER_DT_U8) return false;
+        if (t.dtype != CALIPER_DT_F32 && t.dtype != CALIPER_DT_U8)
+            return dev_bail("dtype not f32/u8");
         const uint64_t bytes = tensor_extent_bytes(t, elem);
 
-        if (!ensure_cuda()) return false;
-        if (!ensure_shared_buffer(dst, bytes)) return false;
+        if (!ensure_cuda()) return dev_bail("CUDA context init failed");
+        if (!ensure_shared_buffer(dst, bytes)) return dev_bail("shared-buffer import failed");
 
         // In-VRAM copy: torch allocation -> shared allocation, then drain so
         // the Vulkan pass below (fence-waited) reads finished bytes.
@@ -310,15 +314,27 @@ public:
         if (cu->cuMemcpyDtoD(dst.interop.cuda_ptr,
                              (cudadrv::CUdeviceptr)(uintptr_t)t.data,
                              (size_t)bytes) != cudadrv::CUDA_SUCCESS)
-            return false;
-        if (cu->cuCtxSynchronize() != cudadrv::CUDA_SUCCESS) return false;
+            return dev_bail("cuMemcpyDtoD failed");
+        if (cu->cuCtxSynchronize() != cudadrv::CUDA_SUCCESS)
+            return dev_bail("cuCtxSynchronize failed");
 
+        bool ok = false;
         if (t.dtype == CALIPER_DT_F32 && lut256 != nullptr)
-            return colormap_compute(dst, t, lut256, vmin, vmax);
-        if (t.dtype == CALIPER_DT_U8)
-            return blit_u8(dst, t);
-        return false;
+            ok = colormap_compute(dst, t, lut256, vmin, vmax);
+        else if (t.dtype == CALIPER_DT_U8)
+            ok = blit_u8(dst, t);
+        if (ok) dev_note("CUDA interop OK — zero-copy VRAM path");
+        return ok;
     }
+
+    // One-time-per-message stderr breadcrumbs so a run makes it obvious whether
+    // the zero-copy interop path fired or why it fell back to CPU staging. A
+    // bail here is not an error (the bridge CPU-stages) — just diagnostic.
+    void dev_note(const char* msg) {
+        if (dev_seen_.insert(msg).second)
+            std::fprintf(stderr, "[vulkan] device path: %s\n", msg);
+    }
+    bool dev_bail(const char* why) { dev_note(why); return false; }
 
 private:
     static constexpr uint32_t kMinImageCount = 2;
@@ -902,6 +918,7 @@ private:
     std::unordered_map<uint64_t, Tex> textures_;
     uint64_t next_id_ = 1;   // 0 is the invalid id
     const char* last_device_path_ = "";
+    std::set<std::string> dev_seen_;   // messages already logged by dev_note()
 };
 
 }  // namespace
