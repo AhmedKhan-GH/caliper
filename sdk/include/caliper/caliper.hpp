@@ -10,6 +10,7 @@
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/tensor_bridge_v1_1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -258,7 +259,9 @@ public:
     Bridge() = default;
     explicit Bridge(const Host& host)
         : t_(static_cast<const CaliperTensorBridgeV1*>(
-              host.service(CALIPER_TENSOR_BRIDGE_V1))) {}
+              host.service(CALIPER_TENSOR_BRIDGE_V1))),
+          t11_(static_cast<const CaliperTensorBridgeV1_1*>(
+              host.service(CALIPER_TENSOR_BRIDGE_V1_1))) {}
     explicit operator bool() const { return t_ && t_->texture_from_tensor; }
     CaliperTextureId texture_from_tensor(const CaliperTensor* t,
                                          uint32_t flags = 0) const {
@@ -288,12 +291,18 @@ public:
     void free_shared(CaliperTextureId tex) const {
         if (t_ && t_->free_shared) t_->free_shared(tex);
     }
+    // v1.1 capability bits — 0 on a v1-only or headless host (D24). Query
+    // once per handoff site and pass to adapters::stream_to_tensor; bit
+    // CALIPER_BRIDGE_CAP_STREAM_ORDERED means a non-NULL CaliperTensor.stream
+    // replaces the adapter's device drain.
+    uint32_t caps() const { return (t11_ && t11_->caps) ? t11_->caps() : 0u; }
     // Opaque id -> ImTextureID for ImGui::Image (§5.4: the id's value IS the
     // host's ImGui-compatible handle for this backend; applets never interpret
     // it, they only cast it here).
     static ImTextureID imtex(CaliperTextureId tex) { return (ImTextureID)tex; }
 private:
     const CaliperTensorBridgeV1* t_ = nullptr;
+    const CaliperTensorBridgeV1_1* t11_ = nullptr;
 };
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't
