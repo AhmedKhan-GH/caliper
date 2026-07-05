@@ -326,6 +326,8 @@ void build_vocab(const std::string& text, std::vector<char>& itos,
 }
 
 torch::Device pick_device(GPTScopeState* st) {
+    if (st->device.kind == CALIPER_DEV_CUDA && torch::cuda::is_available())
+        return torch::Device(torch::kCUDA);
     return (st->device.kind == CALIPER_DEV_METAL && torch::hasMPS())
                ? torch::Device(torch::kMPS)
                : torch::Device(torch::kCPU);

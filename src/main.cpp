@@ -50,6 +50,11 @@ public:
         bool want_gl = want && std::strcmp(want, "gl") == 0;
 #ifdef __APPLE__
         if (!want_gl) renderer_ = caliper_host::make_metal_renderer();
+#elif defined(_WIN32)
+        // Windows default is Vulkan (Phase 4: device-resident CUDA tensors
+        // via external-memory interop). Same fallback contract as Metal:
+        // if init() fails (no Vulkan driver, RDP, ...) GL takes over below.
+        if (!want_gl) renderer_ = caliper_host::make_vulkan_renderer();
 #else
         (void)want_gl;
 #endif

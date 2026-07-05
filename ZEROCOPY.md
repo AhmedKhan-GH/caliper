@@ -100,7 +100,7 @@ Proof, not promise: a windowed test harness pushes known tensors through
 this exact path and asserts **pixel-exact** output — on both the Metal and
 OpenGL backends, every CI run.
 
-## Windows / NVIDIA — the Phase 4 design (not yet implemented)
+## Windows / NVIDIA — the Phase 4 design (implemented, verification in progress)
 
 Discrete GPUs have no unified memory: VRAM and system RAM are separate,
 connected by PCIe. Zero-copy there means something different — **keep the
@@ -127,10 +127,28 @@ sequenceDiagram
 Same shape as the Metal story — write, sync, on-GPU blit, draw — with the
 interop machinery (`cudaExternalMemory_t`, `VK_KHR_external_memory`,
 shared semaphores) standing in for what unified memory gives Apple for
-free. **Status: designed-for, unverified** — the ABI slot, device enum,
-and adapter structure all exist; nobody has run it on NVIDIA hardware.
-Until then, Windows would use the OpenGL fallback (CPU staging): slower,
-but identical applet code and identical on-screen results.
+free.
+
+**Implementation notes (src/host/renderer/vulkan_renderer.cpp):** the
+direction is the reverse of the sketch above — the **Vulkan backend
+exports** the shared buffer (`VkExportMemoryAllocateInfo`, opaque Win32
+handle) and **CUDA imports** it (`cuImportExternalMemory`), because
+torch's caching allocator does not produce exportable allocations. The
+handoff is one `cuMemcpyDtoD` from the tensor into the shared VRAM
+buffer — the "1 in-VRAM copy" the table below always budgeted — followed
+by the same buffer → texture pass as Metal (compute colormap for f32,
+buffer-to-image copy for u8). Synchronization is the v1 sync-then-update
+contract, CUDA form: `torch::cuda::synchronize()` at the adapter,
+`cuCtxSynchronize()` after the copy, fence-waited Vulkan submits (Metal's
+`waitUntilCompleted`). Shared semaphores remain a later optimization.
+The host stays toolkit-free: the CUDA driver API is loaded from
+`nvcuda.dll` at runtime (`src/host/cuda_driver.h`), and the Vulkan stack
+needs no SDK (volk + in-tree glslang; `vulkan-1.dll` ships with the GPU
+driver). **Status: implemented, runtime verification on NVIDIA hardware
+in progress; the pixel-exact gfx harness does not yet run a Vulkan env.**
+If Vulkan init or interop fails at runtime, Windows falls back to the
+OpenGL path (CPU staging): slower, but identical applet code and
+identical on-screen results.
 
 ## Derived graphics: not just pictures of tensors
 

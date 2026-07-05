@@ -203,8 +203,12 @@ void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst) {
 // ---------------------------------------------------------------------------
 
 TensorBridge::TensorBridge(HostRenderer& renderer) : renderer_(renderer) {
-    active_device_ = (std::strcmp(renderer.name(), "metal") == 0)
-                         ? CALIPER_DEV_METAL : CALIPER_DEV_CPU;
+    if (std::strcmp(renderer.name(), "metal") == 0)
+        active_device_ = CALIPER_DEV_METAL;
+    else if (std::strcmp(renderer.name(), "vulkan") == 0)
+        active_device_ = CALIPER_DEV_CUDA;   // Vulkan backend imports CUDA VRAM
+    else
+        active_device_ = CALIPER_DEV_CPU;
 }
 
 namespace {

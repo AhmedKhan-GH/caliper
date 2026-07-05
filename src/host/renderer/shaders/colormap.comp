@@ -1,0 +1,43 @@
+#version 450
+// Vulkan port of the Metal cmap_f32 kernel (metal_renderer.mm). The §16
+// cross-backend determinism contract requires BYTE-IDENTICAL output to the
+// CPU reference map_f32_to_rgba8:
+//   idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5   (floor)
+// LUT: 256 RGBA8 entries packed little-endian r | g<<8 | b<<16 | a<<24.
+// NaN handling matches the CPU reference: NaN -> index 0.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Src { float src[]; };
+layout(std430, binding = 1) readonly buffer Lut { uint lut[]; };
+layout(binding = 2, rgba8) uniform writeonly image2D dst;
+
+layout(push_constant) uniform Params {
+    uint  w;
+    uint  h;
+    uint  sx;    // element stride along x
+    uint  sy;    // element stride along y
+    float vmin;
+    float vmax;
+} p;
+
+void main() {
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= p.w || gid.y >= p.h) return;
+    float v = src[gid.y * p.sy + gid.x * p.sx];
+    uint idx;
+    if (isnan(v)) {
+        idx = 0u;
+    } else {
+        float denom = p.vmax - p.vmin;
+        float t = denom != 0.0 ? (v - p.vmin) / denom : 0.0;
+        t = clamp(t, 0.0, 1.0);
+        idx = uint(t * 255.0 + 0.5);
+    }
+    uint packed = lut[idx];
+    vec4 c = vec4(float(packed         & 0xffu),
+                  float((packed >> 8)  & 0xffu),
+                  float((packed >> 16) & 0xffu),
+                  float((packed >> 24) & 0xffu)) / 255.0;
+    imageStore(dst, ivec2(gid), c);
+}

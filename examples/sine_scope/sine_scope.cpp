@@ -92,10 +92,13 @@ void publish(SineState* st, SineNet& model, const torch::Tensor& X,
 void train_job(void* user, const CaliperJobControl* ctl) {
     auto* st = static_cast<SineState*>(user);
 
-    // device.v1 -> torch device: METAL means MPS on Apple.
+    // device.v1 -> torch device: METAL means MPS on Apple, CUDA on Windows/Linux.
     auto d = caliper::Device::query(*st->host);
-    torch::Device dev = (d.kind == CALIPER_DEV_METAL) ? torch::Device(torch::kMPS)
-                                                      : torch::Device(torch::kCPU);
+    torch::Device dev =
+        (d.kind == CALIPER_DEV_CUDA && torch::cuda::is_available())
+            ? torch::Device(torch::kCUDA)
+        : (d.kind == CALIPER_DEV_METAL) ? torch::Device(torch::kMPS)
+                                        : torch::Device(torch::kCPU);
 
     // Synthetic dataset: 256 points of y = sin(x) on [-pi, pi].
     auto X = torch::linspace(-M_PI, M_PI, 256,

@@ -87,7 +87,17 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
         out.device_index = static_cast<int32_t>(t.device().index());
         return out;
     }
-    // Any other device (e.g. CUDA) is not a v1 target for this adapter.
+    if (t.is_cuda()) {
+        // Unlike MPS there is no buffer-object cast: data_ptr() IS the device
+        // address (storage offset already applied), and the Vulkan backend
+        // copies from it in-VRAM (ZEROCOPY.md). Contiguity was enforced above;
+        // views with a nonzero storage offset are therefore fine here.
+        out.data = t.data_ptr();
+        out.device = CALIPER_DEV_CUDA;
+        out.device_index = static_cast<int32_t>(t.device().index());
+        return out;
+    }
+    // Any other device is not a v1 target for this adapter.
     return std::nullopt;
 }
 
@@ -99,6 +109,7 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
 // need no sync, so the call is skipped for them.
 inline std::optional<CaliperTensor> synced_to_tensor(const at::Tensor& t) {
     if (t.is_mps()) torch::mps::synchronize();
+    if (t.is_cuda()) torch::cuda::synchronize();   // same contract, CUDA form
     return to_tensor(t);
 }
 

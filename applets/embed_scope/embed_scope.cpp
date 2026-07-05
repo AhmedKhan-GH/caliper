@@ -276,6 +276,8 @@ bool load_split(const std::string& ipath, const std::string& lpath,
 }
 
 torch::Device pick_device(EmbedScopeState* st) {
+    if (st->device.kind == CALIPER_DEV_CUDA && torch::cuda::is_available())
+        return torch::Device(torch::kCUDA);
     return (st->device.kind == CALIPER_DEV_METAL && torch::hasMPS())
                ? torch::Device(torch::kMPS)
                : torch::Device(torch::kCPU);

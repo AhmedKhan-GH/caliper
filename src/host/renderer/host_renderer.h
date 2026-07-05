@@ -51,4 +51,10 @@ std::unique_ptr<HostRenderer> make_renderer(const char* name); // "gl"|"metal"|n
 // the Metal backend, still un-init'd — caller runs window_hints()/init() and
 // falls back to make_renderer("gl") if init() fails. Not defined on non-Apple.
 std::unique_ptr<HostRenderer> make_metal_renderer();
+
+// Vulkan factory (vulkan_renderer.cpp, Phase 4; Windows-only translation unit
+// today). Same contract as the Metal factory: un-init'd, caller falls back to
+// GL if init() fails. Device-resident CUDA tensors via VK_KHR_external_memory
+// + the runtime-loaded CUDA driver API (ZEROCOPY.md). Not defined elsewhere.
+std::unique_ptr<HostRenderer> make_vulkan_renderer();
 }
