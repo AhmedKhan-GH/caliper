@@ -36,15 +36,12 @@
 
 #include "host_renderer.h"
 #include "../cuda_driver.h"
-#include "../tensor_bridge.h"   // colormap_lut + map_f32_to_rgba8 (self-test ref)
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 
-#include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
@@ -150,9 +147,6 @@ public:
         // the time init() returns. Requires both the Vulkan external-memory
         // extensions AND a CUDA device whose UUID matches this one.
         interop_ok_ = external_memory_ok_ && ensure_cuda();
-
-        // On-hardware pixel-exact proof of the interop path (opt-in).
-        if (std::getenv("CALIPER_VULKAN_SELFTEST")) run_selftest();
         return true;
     }
 
@@ -372,6 +366,14 @@ public:
     // interop buffer and hand back a CUDA device pointer into it. The applet
     // wraps this with torch::from_blob and writes it; update_texture then runs
     // the buffer->image pass with no copy (shared_in_place above).
+    // Test-only readback: the CaliperTextureId is the descriptor set, so find
+    // the Tex whose descset matches and copy its image to host bytes.
+    std::vector<uint8_t> debug_readback_rgba8(uint64_t id, int, int) override {
+        for (auto& kv : textures_)
+            if ((uint64_t)kv.second.descset == id) return readback_rgba8(kv.second);
+        return {};
+    }
+
     bool alloc_device_shared(uint64_t tex, uint64_t bytes, void** out) override {
         if (!interop_ok_ || out == nullptr) return false;
         auto it = textures_.find(tex);
@@ -747,8 +749,8 @@ private:
     }
 
     // Copy a texture's pixels back to host RGBA8 (requires TRANSFER_SRC usage,
-    // set at create). Used by the self-test and, later, the gfx determinism
-    // suite. Restores the image's prior layout.
+    // set at create). Drives debug_readback_rgba8 for the gfx determinism suite.
+    // Restores the image's prior layout.
     std::vector<uint8_t> readback_rgba8(Tex& t) {
         const size_t n = (size_t)t.w * (size_t)t.h * 4;
         Buffer host{};
@@ -770,68 +772,6 @@ private:
         if (ok && host.mapped) { out.resize(n); std::memcpy(out.data(), host.mapped, n); }
         destroy_buffer(host);
         return out;
-    }
-
-    // On-hardware pixel-exact proof of the interop path, gated by
-    // CALIPER_VULKAN_SELFTEST. Pushes a known f32 ramp through BOTH device
-    // rungs — an arbitrary CUDA tensor (D2D copy) and an alloc_shared in-place
-    // buffer (zero copy) — and asserts the readback is byte-identical to the
-    // CPU reference map_f32_to_rgba8 (§16). Logs PASS/FAIL; never fatal.
-    void run_selftest() {
-        if (!interop_ok_) { std::fprintf(stderr, "[vulkan] selftest: interop unavailable, skipped\n"); return; }
-        const cudadrv::Api* cu = cudadrv::api();
-        if (!cu || !cu->cuMemAlloc) { std::fprintf(stderr, "[vulkan] selftest: cuMemAlloc unavailable, skipped\n"); return; }
-        cu->cuCtxSetCurrent(cuda_ctx_);
-
-        const int W = 8, H = 8, N = W * H;
-        std::vector<float> ramp(N);
-        for (int i = 0; i < N; ++i) ramp[i] = (float)i;
-        const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
-        std::vector<uint8_t> ref(N * 4);
-        map_f32_to_rgba8(ramp.data(), W, H, lut, 0.0f, (float)(N - 1), ref.data());
-
-        auto make_t = [&](void* data) {
-            CaliperTensor t{};
-            t.struct_size = sizeof(t); t.data = data; t.dtype = CALIPER_DT_F32;
-            t.ndim = 2; t.shape[0] = H; t.shape[1] = W; t.strides[0] = W; t.strides[1] = 1;
-            t.device = CALIPER_DEV_CUDA; return t;
-        };
-        auto report = [&](const char* name, const std::vector<uint8_t>& got) {
-            int maxdiff = -1;
-            if (got.size() != ref.size()) { std::fprintf(stderr, "[vulkan] selftest %s: FAIL (readback size %zu != %zu)\n", name, got.size(), ref.size()); return; }
-            maxdiff = 0;
-            for (size_t i = 0; i < ref.size(); ++i)
-                maxdiff = std::max(maxdiff, std::abs((int)got[i] - (int)ref[i]));
-            std::fprintf(stderr, "[vulkan] selftest %s: %s (max byte diff %d)\n",
-                         name, maxdiff == 0 ? "PASS — pixel-exact" : "FAIL", maxdiff);
-        };
-
-        // Rung 1: arbitrary CUDA tensor -> D2D copy -> colormap.
-        {
-            cudadrv::CUdeviceptr src = 0;
-            if (cu->cuMemAlloc(&src, (size_t)N * sizeof(float)) == cudadrv::CUDA_SUCCESS) {
-                cu->cuMemcpyHtoD(src, ramp.data(), (size_t)N * sizeof(float));
-                uint64_t tex = tex_create_rgba8(W, H);
-                CaliperTensor t = make_t((void*)(uintptr_t)src);
-                tex_update_from_device(tex, t, lut, 0.0f, (float)(N - 1));
-                report("arbitrary-tensor (D2D)", readback_rgba8(textures_[tex]));
-                tex_release(tex);
-                cu->cuMemFree(src);
-            }
-        }
-        // Rung 2: alloc_shared in place -> zero copy -> colormap.
-        {
-            uint64_t tex = tex_create_rgba8(W, H);
-            void* dptr = nullptr;
-            if (alloc_device_shared(tex, (uint64_t)N * sizeof(float), &dptr) && dptr) {
-                cu->cuMemcpyHtoD((cudadrv::CUdeviceptr)(uintptr_t)dptr,
-                                 ramp.data(), (size_t)N * sizeof(float));  // applet's kernels
-                CaliperTensor t = make_t(dptr);
-                tex_update_from_device(tex, t, lut, 0.0f, (float)(N - 1));
-                report("alloc_shared (zero-copy)", readback_rgba8(textures_[tex]));
-            }
-            tex_release(tex);
-        }
     }
 
     bool ensure_shared_buffer(Tex& t, uint64_t bytes) {

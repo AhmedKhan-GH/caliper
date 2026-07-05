@@ -37,6 +37,11 @@
 #include <backends/imgui_impl_metal.h>
 #endif
 
+#ifdef CALIPER_HAVE_VULKAN
+#include "cuda_driver.h"
+#include <utility>
+#endif
+
 using namespace caliper_host;
 
 namespace {
@@ -665,3 +670,168 @@ TEST_CASE("gfx/Metal: bridge id is the ImGui handle and survives the real ImGui 
     }
 }
 #endif  // CALIPER_HAVE_METAL
+
+// ===========================================================================
+// Vulkan run (Windows) — the same §16 matrix on the CPU-staged Vulkan path
+// (portable, no CUDA), plus hardware-gated CUDA device-path + alloc_shared
+// byte-exact tests when a UUID-matched CUDA device is paired.
+// ===========================================================================
+#ifdef CALIPER_HAVE_VULKAN
+namespace {
+
+struct VkEnv {
+    bool ok = false;
+    GLFWwindow* window = nullptr;
+    ImGuiContext* imgui_ctx = nullptr;
+    std::unique_ptr<HostRenderer> renderer;
+    std::unique_ptr<TensorBridge> bridge;
+
+    VkEnv() {
+        if (!glfw_guard().ok) return;
+        renderer = make_vulkan_renderer();
+        glfwDefaultWindowHints();
+        renderer->window_hints();                  // GLFW_NO_API
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+        window = glfwCreateWindow(64, 64, "caliper_gfx_tests(vk)", nullptr, nullptr);
+        if (!window) return;
+        imgui_ctx = ImGui::CreateContext();
+        ImGui::SetCurrentContext(imgui_ctx);
+        if (!renderer->init(window)) {             // no Vulkan ICD -> skip
+            ImGui::DestroyContext(imgui_ctx);
+            glfwDestroyWindow(window);
+            return;
+        }
+        bridge = std::make_unique<TensorBridge>(*renderer);
+        ok = true;
+    }
+    ~VkEnv() {
+        if (!ok) return;
+        ImGui::SetCurrentContext(imgui_ctx);
+        bridge.reset();
+        renderer->shutdown();
+        ImGui::DestroyContext(imgui_ctx);
+        glfwDestroyWindow(window);
+    }
+};
+
+VkEnv& vk_env() { static VkEnv e; return e; }
+
+Backend vk_backend() {
+    Backend b;
+    b.bridge = vk_env().bridge.get();
+    b.renderer = vk_env().renderer.get();
+    HostRenderer* r = b.renderer;
+    b.readback = [r](CaliperTextureId id, int w, int h) {
+        return r->debug_readback_rgba8(id, w, h);   // renderer copies the VkImage out
+    };
+    return b;
+}
+
+// CUDA device tests need a current context to allocate source buffers. On a
+// single-GPU box device 0 IS the renderer's UUID-paired device, and the primary
+// context is process-global, so retaining it here yields the same context the
+// renderer's interop uses. Multi-GPU -> skip (can't assume which device pairs).
+bool vk_cuda_ready() {
+    if (!vk_env().ok) return false;
+    if (vk_env().renderer->interop_device() != CALIPER_DEV_CUDA) return false;
+    const cudadrv::Api* cu = cudadrv::api();
+    if (!cu || !cu->cuMemAlloc) return false;
+    int n = 0;
+    if (cu->cuDeviceGetCount(&n) != cudadrv::CUDA_SUCCESS || n != 1) return false;
+    static cudadrv::CUcontext ctx = nullptr;
+    if (!ctx && cu->cuDevicePrimaryCtxRetain(&ctx, 0) != cudadrv::CUDA_SUCCESS) return false;
+    cu->cuCtxSetCurrent(ctx);
+    return true;
+}
+
+}  // namespace
+
+// ---- CPU-staged matrix (portable: runs on any Vulkan ICD, no CUDA) ----------
+TEST_CASE("gfx/Vulkan: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend(); mat_f32_viridis(bk);
+}
+TEST_CASE("gfx/Vulkan: f32 mapped through magma and RdBu is pixel-exact (staged)") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend(); mat_f32_magma_rdbu(bk);
+}
+TEST_CASE("gfx/Vulkan: 2x3 u8 direct (C=1,3,4) expands pixel-exact (staged)") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend(); mat_u8_direct(bk);
+}
+TEST_CASE("gfx/Vulkan: update_texture changes the pixels on the GPU (staged)") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend(); mat_update(bk);
+}
+TEST_CASE("gfx/Vulkan: invalid tensors return id 0") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend(); mat_invalid(bk);
+}
+
+// ---- CUDA device paths (hardware-gated: needs a UUID-paired CUDA device) -----
+TEST_CASE("gfx/Vulkan+CUDA: device f32+LUT takes the compute path, pixel-exact") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    for (auto wh : {std::pair<int,int>{4, 4}, {5, 3}, {17, 9}}) {   // non-16-multiple edges
+        const int w = wh.first, h = wh.second, n = w * h;
+        std::vector<float> data(n);
+        for (int i = 0; i < n; ++i) data[i] = (float)i;
+        const float vmin = 0.0f, vmax = (float)(n - 1);
+
+        cudadrv::CUdeviceptr buf = 0;
+        REQUIRE(cu->cuMemAlloc(&buf, (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+        cu->cuMemcpyHtoD(buf, data.data(), (size_t)n * sizeof(float));
+
+        CaliperTensor t{};
+        t.struct_size = sizeof(t); t.data = (void*)(uintptr_t)buf; t.dtype = CALIPER_DT_F32;
+        t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+        t.device = CALIPER_DEV_CUDA;
+
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &t, CALIPER_CMAP_VIRIDIS, vmin, vmax, 0);
+        REQUIRE(id != 0);
+        CHECK(std::string(bk.renderer->last_device_path()) == "compute");
+
+        std::vector<uint8_t> ref((size_t)n * 4);
+        map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                         vmin, vmax, ref.data());
+        CHECK(bk.readback(id, w, h) == ref);
+        bk.bridge->release_texture(id);
+        cu->cuMemFree(buf);
+    }
+}
+
+TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-exact") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 8, H = 8, n = W * H;
+    int64_t shape[2] = {H, W};
+    CaliperTensor out{};
+    CaliperTextureId tex = 0;
+    REQUIRE(bk.bridge->alloc_shared(CALIPER_DT_F32, 2, shape, &out, &tex));
+    REQUIRE(tex != 0);
+    REQUIRE(out.data != nullptr);
+    CHECK(out.device == CALIPER_DEV_CUDA);          // literal zero-copy: device-backed
+
+    // The applet's kernels would write out.data (a CUDA device ptr) in place;
+    // stand in with a host->device copy. alloc_shared f32 defaults vmin=0,vmax=1.
+    std::vector<float> data(n);
+    for (int i = 0; i < n; ++i) data[i] = (float)i / (float)(n - 1);
+    cu->cuMemcpyHtoD((cudadrv::CUdeviceptr)(uintptr_t)out.data,
+                     data.data(), (size_t)n * sizeof(float));
+
+    REQUIRE(bk.bridge->update_texture(tex, &out));
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");   // no D2D, then colormap
+
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(data.data(), W, H, colormap_lut(CALIPER_CMAP_VIRIDIS), 0.0f, 1.0f, ref.data());
+    CHECK(bk.readback(tex, W, H) == ref);
+    bk.bridge->free_shared(tex);
+}
+#endif  // CALIPER_HAVE_VULKAN

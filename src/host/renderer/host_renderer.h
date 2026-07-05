@@ -2,6 +2,7 @@
 #include <caliper/tensor.h>
 #include <cstdint>
 #include <memory>
+#include <vector>
 struct GLFWwindow;
 
 namespace caliper_host {
@@ -52,6 +53,15 @@ public:
 
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
+
+    // Test-only: copy a texture's pixels back to host RGBA8 (w*h*4 bytes), or
+    // empty on failure. GL/Metal read back their handle directly in the gfx
+    // harness; Vulkan's CaliperTextureId is an opaque descriptor set, so the
+    // backend must do the copy. Not used on any hot path.
+    virtual std::vector<uint8_t> debug_readback_rgba8(uint64_t /*id*/,
+                                                      int /*w*/, int /*h*/) {
+        return {};
+    }
 };
 
 // GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend

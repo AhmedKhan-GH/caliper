@@ -73,6 +73,16 @@ if(APPLE)
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 
+# On Windows the same §16 matrix runs on the Vulkan backend (CPU-staged path),
+# plus hardware-gated CUDA device-path + alloc_shared byte-exact tests. Link the
+# Vulkan HostRenderer backend and compile cuda_driver.cpp in (the backend refs
+# it, and the CUDA tests build device tensors through it).
+if(WIN32)
+    target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host/cuda_driver.cpp)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_vulkan_backend)
+    target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_VULKAN=1)
+endif()
+
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
 set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx")
 

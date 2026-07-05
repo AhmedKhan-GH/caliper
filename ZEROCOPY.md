@@ -225,10 +225,10 @@ worst case is a working slow path, never a broken one.
 | OpenGL / CPU (anywhere) | 1 host staging + 1 upload | Implemented fallback, tested |
 
 On Windows/NVIDIA, both rungs are byte-verified against the CPU reference
-(`map_f32_to_rgba8`) on real hardware — `CALIPER_VULKAN_SELFTEST=1` reports
-both pixel-exact (max byte diff 0). The "1 in-VRAM copy" row is the general
-path for an *arbitrary* torch CUDA tensor (torch's allocator can't export, so
-one VRAM→VRAM copy is the floor); the literal **zero**-copy row is the
-`alloc_shared` path, where the applet's kernels write the texture's own
-backing buffer and the update reduces to the buffer→texture pass. Folding this
-proof into the `ctest` gfx harness (a Vulkan env) is the remaining CI wiring.
+(`map_f32_to_rgba8`) on real hardware, in the `caliper_gfx_tests` suite (a
+Vulkan env beside the GL/Metal ones): the CUDA device path and `alloc_shared`
+read back pixel-exact across several sizes. The "1 in-VRAM copy" row is the
+general path for an *arbitrary* torch CUDA tensor (torch's allocator can't
+export, so one VRAM→VRAM copy is the floor); the literal **zero**-copy row is
+the `alloc_shared` path, where the applet's kernels write the texture's own
+backing buffer and the update reduces to the buffer→texture pass.

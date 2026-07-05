@@ -46,9 +46,13 @@ Increments **V1 and V2 are implemented and verified on a Windows/NVIDIA machine*
 
 **V3 `alloc_shared` on CUDA (§3.5) — implemented & verified 2026-07-05.** The bridge's `alloc_shared` now backs the tensor with a device buffer on the Vulkan/CUDA backend (`HostRenderer::alloc_device_shared` → the interop buffer's CUDA-mapped pointer); the applet writes it in place and `update_texture` runs the buffer→image pass with **no copy** (`tex_update_from_device` skips the D2D when the tensor's data is already the shared buffer). Falls back to the CPU-vector allocation when interop is absent (GL, Metal-today, CUDA unpaired), so the existing unit/gfx `alloc_shared` tests are unchanged.
 
-**Verification.** A gated on-hardware self-test (`CALIPER_VULKAN_SELFTEST=1`) pushes a known f32 ramp through both device rungs and asserts the texture readback is **byte-identical** to `map_f32_to_rgba8` (§16). On the RTX 500 Ada both pass pixel-exact (max byte diff 0): `arbitrary-tensor (D2D)` and `alloc_shared (zero-copy)`. This is the byte-equality proof §5's End-to-end row calls for, run as an app self-test rather than a `ctest` (see below).
+**Verification — in `caliper_gfx_tests` (§5, done).** The gfx harness now has a Vulkan env (`vk_env`, hidden window) alongside GL/Metal, with a renderer-provided readback (`HostRenderer::debug_readback_rgba8`). It runs:
+- the **CPU-staged §16 matrix on Vulkan** (viridis/magma/RdBu f32, u8 direct, update, invalid) — portable, no CUDA needed (the `gfx-vulkan` rows);
+- **hardware-gated CUDA device tests** (`gfx-cuda`): an arbitrary CUDA tensor (built via the driver API) through `texture_from_tensor_mapped` must take the `"compute"` path and read back **byte-identical** to `map_f32_to_rgba8` across non-16-multiple sizes (4×4, 5×3, 17×9); and `alloc_shared` must return a `CALIPER_DEV_CUDA`-backed tensor whose in-place write reads back pixel-exact. These skip cleanly when no UUID-paired CUDA device is present (or multi-GPU).
 
-**Not yet built (as sequenced):** V4 semaphore pipelining (§8 D21). **Outstanding from §5:** folding the self-test into the formal `caliper_gfx_tests` binary (a `vk_env` + Vulkan readback path, hardware-gated `gfx-cuda` label) so it runs under `ctest` in CI, and the `gfx-vulkan` (lavapipe) rows for the CPU-staged Vulkan matrix. The correctness is proven on hardware today; this is the remaining CI-regression wiring.
+On the RTX 500 Ada the full suite is **15/15, 67 assertions**, both rungs pixel-exact. This replaces the earlier `CALIPER_VULKAN_SELFTEST` app self-test (removed).
+
+**Not yet built (as sequenced):** V4 semaphore pipelining (§8 D21). The `gfx-cuda` rows are hardware-gated, so a lavapipe/SwiftShader CI run covers only the pure-Vulkan matrix; the CUDA byte-equality rows run on a self-hosted NVIDIA box (as §5 always intended).
 
 ---
 
