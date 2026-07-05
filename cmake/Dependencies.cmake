@@ -315,12 +315,28 @@ if(APPLE)
 elseif(USE_CUDA AND NOT WIN32)
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
     message(STATUS "    CUDA backend enabled for llama.cpp")
+elseif(WIN32 AND USE_CUDA AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13)
+    # Windows needs CUDA 13+: a 12.x ggml build would load a cudart64_12.dll /
+    # cublas64_12.dll that collide with the copies libtorch cu12x ships, and
+    # CUDA 12.x's host_config.h hard-rejects MSVC >= 19.50 (VS2026). CUDA 13's
+    # runtime DLLs carry different names (cudart64_13.dll), so both runtimes
+    # coexist in one process, and nvcc 13's MSVC gate is lifted by the
+    # -allow-unsupported-compiler flag set at the top level.
+    # Pin ggml's nvcc to the same toolkit find_package(CUDAToolkit) resolved,
+    # so the version gate above and the compiler actually agree.
+    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc.exe")
+    # Both ggml and torch's Caffe2 config enable the CUDA language and need
+    # CMAKE_CUDA_ARCHITECTURES defined at this (root) scope — Caffe2's
+    # try_compile hard-fails on an empty value. "native" targets the local
+    # GPU (requires one at configure time, which USE_CUDA already implies).
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    message(STATUS "    CUDA backend enabled for llama.cpp (CUDA ${CUDAToolkit_VERSION})")
 elseif(WIN32)
-    # Windows: keep ggml on CPU. nvcc device compilation against this MSVC is
-    # unsupported, and a ggml CUDA build would load a cudart64_12.dll that
-    # collides with the one libtorch ships (cu121). No active applet links
-    # llama.cpp, so nothing is lost; torch's own CUDA path is prebuilt.
-    message(STATUS "    llama.cpp: CPU backend on Windows (no nvcc build)")
+    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+    message(STATUS "    llama.cpp: CPU backend on Windows (CUDA 13+ toolkit not found)")
 endif()
 add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
