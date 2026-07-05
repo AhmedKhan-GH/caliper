@@ -25,6 +25,7 @@
 #include <backends/imgui_impl_metal.h>
 
 #include <cstdio>
+#include <cstring>
 
 namespace caliper_host {
 namespace {
@@ -244,6 +245,46 @@ public:
         if (t.dtype == CALIPER_DT_U8)
             return blit_u8(dst, src, t);
         return false;
+    }
+
+    // Test-only (spec §3.4 / M1): copy a texture back on the RENDERER's own
+    // queue — commit order retires every previously committed tensor op, so
+    // this reads fully-updated texels without the hot path ever waiting. The
+    // gfx harness passes the PUBLIC bridge id (the bridged texture pointer),
+    // so resolve by pointer value against the id table; internal renderer ids
+    // resolve via lookup(). NB: parameter is tex_id, never `id` (ObjC keyword).
+    std::vector<uint8_t> debug_readback_rgba8(uint64_t tex_id, int w, int h) override {
+        @autoreleasepool {
+            id<MTLTexture> t = lookup(tex_id);
+            if (t == nil) {
+                for (NSNumber* key in textures_) {
+                    id<MTLTexture> cand = textures_[key];
+                    if ((uint64_t)(__bridge void*)cand == tex_id) { t = cand; break; }
+                }
+            }
+            if (t == nil || w <= 0 || h <= 0) return {};
+            const NSUInteger bpr = (NSUInteger)w * 4;
+            id<MTLBuffer> out = [device_ newBufferWithLength:bpr * (NSUInteger)h
+                                                     options:MTLResourceStorageModeShared];
+            if (out == nil) return {};
+            id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+            [blit copyFromTexture:t
+                      sourceSlice:0
+                      sourceLevel:0
+                     sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
+                         toBuffer:out
+                destinationOffset:0
+           destinationBytesPerRow:bpr
+         destinationBytesPerImage:bpr * (NSUInteger)h];
+            [blit endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];   // waits live in test readbacks, not the hot path
+            std::vector<uint8_t> px((size_t)w * h * 4);
+            std::memcpy(px.data(), out.contents, px.size());
+            return px;
+        }
     }
 
 private:

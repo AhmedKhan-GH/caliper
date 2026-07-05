@@ -385,46 +385,13 @@ struct MetalEnv {
 
 MetalEnv& metal_env() { static MetalEnv e; return e; }
 
-// Test-only readback: blit the RGBA8 texture into a shared MTLBuffer, wait, and
-// copy its unified contents out. NOT the render path.
-std::vector<uint8_t> metal_readback(HostRenderer& /*r*/, CaliperTextureId tex, int w, int h) {
-    @autoreleasepool {
-        // Post-fix, the bridge id's VALUE is the ImGui handle — for Metal that is
-        // the id<MTLTexture> pointer ImGui_ImplMetal binds — so cast it directly.
-        void* p = (void*)(uintptr_t)tex;
-        id<MTLTexture> t = (__bridge id<MTLTexture>)p;
-        id<MTLDevice> dev = t.device;
-        id<MTLCommandQueue> q = [dev newCommandQueue];
-        NSUInteger bpr = (NSUInteger)w * 4;
-        id<MTLBuffer> out = [dev newBufferWithLength:bpr * (NSUInteger)h
-                                             options:MTLResourceStorageModeShared];
-        id<MTLCommandBuffer> cb = [q commandBuffer];
-        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        [blit copyFromTexture:t
-                  sourceSlice:0
-                  sourceLevel:0
-                 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
-                     toBuffer:out
-            destinationOffset:0
-       destinationBytesPerRow:bpr
-     destinationBytesPerImage:bpr * (NSUInteger)h];
-        [blit endEncoding];
-        [cb commit];
-        [cb waitUntilCompleted];
-        std::vector<uint8_t> px((size_t)w * h * 4);
-        std::memcpy(px.data(), out.contents, px.size());
-        return px;
-    }
-}
-
 Backend metal_backend() {
     Backend b;
     b.bridge = metal_env().bridge.get();
     b.renderer = metal_env().renderer.get();
     HostRenderer* r = b.renderer;
     b.readback = [r](CaliperTextureId id, int w, int h) {
-        return metal_readback(*r, id, w, h);
+        return r->debug_readback_rgba8(id, w, h);   // renderer-queue readback (M1)
     };
     return b;
 }
