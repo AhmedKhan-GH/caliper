@@ -144,8 +144,13 @@ contract, CUDA form: `torch::cuda::synchronize()` at the adapter,
 The host stays toolkit-free: the CUDA driver API is loaded from
 `nvcuda.dll` at runtime (`src/host/cuda_driver.h`), and the Vulkan stack
 needs no SDK (volk + in-tree glslang; `vulkan-1.dll` ships with the GPU
-driver). **Status: implemented, runtime verification on NVIDIA hardware
-in progress; the pixel-exact gfx harness does not yet run a Vulkan env.**
+driver). Beyond the arbitrary-tensor path, the literal zero-copy rung is
+also built: `alloc_shared` backs the tensor with the interop buffer itself,
+so the applet's kernels write texture-backed VRAM in place and the update
+skips even the in-VRAM copy. **Status: implemented and pixel-exact verified
+on NVIDIA hardware** (`CALIPER_VULKAN_SELFTEST=1` — both rungs byte-identical
+to the CPU reference); folding that proof into the `ctest` gfx harness as a
+Vulkan env is the remaining CI wiring.
 If Vulkan init or interop fails at runtime, Windows falls back to the
 OpenGL path (CPU staging): slower, but identical applet code and
 identical on-screen results.
@@ -215,5 +220,15 @@ worst case is a working slow path, never a broken one.
 | Path | Data crossings | Status |
 |---|---|---|
 | Metal / MPS (Apple Silicon) | 0 host copies; 1 on-GPU blit | **Implemented + pixel-exact tested** |
-| Vulkan / CUDA (Windows) | 0 host copies; 1 in-VRAM copy | Designed (Phase 4), unverified |
+| Vulkan / CUDA (Windows), arbitrary tensor | 0 host copies; 1 in-VRAM copy | **Implemented + pixel-exact verified on NVIDIA** |
+| Vulkan / CUDA (Windows), `alloc_shared` | 0 host copies; **0 in-VRAM copies** (kernels write texture-backed VRAM in place) | **Implemented + pixel-exact verified on NVIDIA** |
 | OpenGL / CPU (anywhere) | 1 host staging + 1 upload | Implemented fallback, tested |
+
+On Windows/NVIDIA, both rungs are byte-verified against the CPU reference
+(`map_f32_to_rgba8`) on real hardware — `CALIPER_VULKAN_SELFTEST=1` reports
+both pixel-exact (max byte diff 0). The "1 in-VRAM copy" row is the general
+path for an *arbitrary* torch CUDA tensor (torch's allocator can't export, so
+one VRAM→VRAM copy is the floor); the literal **zero**-copy row is the
+`alloc_shared` path, where the applet's kernels write the texture's own
+backing buffer and the update reduces to the buffer→texture pass. Folding this
+proof into the `ctest` gfx harness (a Vulkan env) is the remaining CI wiring.
