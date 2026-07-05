@@ -15,6 +15,7 @@
 
 using caliper::adapters::to_tensor;
 using caliper::adapters::synced_to_tensor;
+using caliper::adapters::stream_to_tensor;
 
 TEST_CASE("cpu f32 2D round-trips field-by-field, zero-copy") {
     // A contiguous (3,4) f32 CPU tensor with known values.
@@ -129,4 +130,35 @@ TEST_CASE("synced_to_tensor matches to_tensor for a cpu tensor (no sync needed)"
     REQUIRE(b.has_value());
     CHECK(a->data == b->data);
     CHECK(a->device == CALIPER_DEV_CPU);
+}
+
+TEST_CASE("stream_to_tensor: no caps bit -> exactly the v1 drained handoff (stream NULL)") {
+    torch::Tensor t = torch::arange(12, torch::kFloat).reshape({3, 4}).contiguous();
+    auto ct = stream_to_tensor(t, 0);
+    REQUIRE(ct.has_value());
+    CHECK(ct->stream == nullptr);
+    CHECK(ct->device == CALIPER_DEV_CPU);
+    CHECK(ct->data == t.data_ptr());
+}
+
+TEST_CASE("stream_to_tensor: cpu tensor never carries a stream, even when honored") {
+    torch::Tensor t = torch::arange(12, torch::kFloat).reshape({3, 4}).contiguous();
+    auto ct = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+    REQUIRE(ct.has_value());
+    CHECK(ct->stream == nullptr);
+}
+
+TEST_CASE("stream_to_tensor: mps tensor carries the producer queue when honored; drains when not") {
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    torch::Tensor t = torch::ones({4, 4},
+        torch::TensorOptions().device(torch::kMPS)) * 2.0f;
+
+    auto honored = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+    REQUIRE(honored.has_value());
+    CHECK(honored->device == CALIPER_DEV_METAL);
+    CHECK(honored->stream != nullptr);           // the MTLCommandQueue*
+
+    auto v1 = stream_to_tensor(t, 0);            // negotiation pin, other direction
+    REQUIRE(v1.has_value());
+    CHECK(v1->stream == nullptr);
 }

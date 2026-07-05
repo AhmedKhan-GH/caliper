@@ -19,12 +19,23 @@
  *     from torch::mps::synchronize() (see synced_to_tensor), i.e. sync-then-
  *     update. That sync is a FULL device barrier — it blocks the calling CPU
  *     thread until every MPS stream drains — so pay it once at the handoff, not
- *     needlessly per frame.
+ *     needlessly per frame. stream_to_tensor (M2/D24) supersedes this when the
+ *     host's bridge-v1.1 caps() grants stream-ordered handoff.
  */
 #include <optional>
 
 #include <caliper/tensor.h>
+#include <caliper/services/tensor_bridge_v1_1.h>
 #include <torch/torch.h>
+#if defined(__APPLE__)
+#include <objc/message.h>   // producer-queue lookup without an ObjC++ TU
+#endif
+// !__APPLE__: mac libtorch ships the c10/cuda headers but no CUDA toolkit
+// headers, so presence-of-header alone is not usability — and Apple torch
+// builds never have CUDA anyway.
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+#include <c10/cuda/CUDAStream.h>
+#endif
 
 namespace caliper::adapters {
 
@@ -43,6 +54,18 @@ inline std::optional<CaliperDType> map_dtype(at::ScalarType st) {
         default:            return std::nullopt;
     }
 }
+
+#if defined(__APPLE__)
+// [cb commandQueue] via the C ObjC runtime, so this header stays compilable
+// as plain C++ (applet TUs are .cpp, not .mm). The queue is torch's global
+// MPS command queue — process-lifetime, safe to hand across the ABI.
+inline void* mtl_command_queue_of(void* command_buffer) {
+    using Send = void* (*)(void*, SEL);
+    return command_buffer
+        ? ((Send)objc_msgSend)(command_buffer, sel_registerName("commandQueue"))
+        : nullptr;
+}
+#endif
 
 }  // namespace detail
 
@@ -111,6 +134,48 @@ inline std::optional<CaliperTensor> synced_to_tensor(const at::Tensor& t) {
     if (t.is_mps()) torch::mps::synchronize();
     if (t.is_cuda()) torch::cuda::synchronize();   // same contract, CUDA form
     return to_tensor(t);
+}
+
+// M2 (docs/metal-pipelining.md §4, D24): hand over ORDER instead of a drained
+// device. When the host's bridge-v1.1 caps carry
+// CALIPER_BRIDGE_CAP_STREAM_ORDERED, populate t.stream with the producer's
+// stream/queue and SKIP the full-device drain; the renderer GPU-orders its
+// update after the producer's already-enqueued work. Without the bit (v1
+// host, GL fallback, headless) this is exactly synced_to_tensor — the adapter
+// never skips a drain the host didn't promise to replace. Thread-safety story
+// unchanged from v1: the caller still hands over a tensor it owns at a
+// quiescent point in its own logic (spec §4, last paragraph).
+inline std::optional<CaliperTensor> stream_to_tensor(const at::Tensor& t,
+                                                     uint32_t bridge_caps) {
+    if (!(bridge_caps & CALIPER_BRIDGE_CAP_STREAM_ORDERED))
+        return synced_to_tensor(t);
+#if defined(__APPLE__)
+    if (t.is_mps()) {
+        auto out = to_tensor(t);
+        if (!out) return out;
+        // Queue BEFORE commit: torch may release the command-buffer object
+        // once the GPU retires it; the queue lives for the process.
+        void* queue = detail::mtl_command_queue_of(torch::mps::get_command_buffer());
+        if (queue == nullptr) { torch::mps::synchronize(); return out; }
+        // Enqueue, not drain: pending torch kernels become committed GPU work
+        // the renderer's producer-queue signal is ordered after (M2b).
+        torch::mps::commit();
+        out->stream = queue;
+        return out;
+    }
+#endif
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+    if (t.is_cuda()) {
+        auto out = to_tensor(t);
+        if (!out) return out;
+        // Stream order puts the renderer's DtoD copy after the producer's
+        // kernels — torch::cuda::synchronize() elided entirely (M2a).
+        out->stream = (void*)at::cuda::getCurrentCUDAStream(
+                          t.device().index()).stream();
+        return out;
+    }
+#endif
+    return synced_to_tensor(t);   // CPU: no sync needed; unknown devices drain
 }
 
 }  // namespace caliper::adapters
