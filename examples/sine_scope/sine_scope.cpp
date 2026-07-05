@@ -183,6 +183,13 @@ public:
         // --8<-- [end:controls]
 
         // --8<-- [start:plots]
+        // These plots are for *viewing*, not editing: ImPlot is interactive by
+        // default (drag-pan, scroll-zoom, box-select, right-click menu), so
+        // lock every input off. Read-only plots always want these four flags.
+        constexpr ImPlotFlags kLockedPlot =
+            ImPlotFlags_NoInputs | ImPlotFlags_NoMenus |
+            ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText;
+
         // The fixed grid + target are frame-side constants.
         static std::vector<float> xs, target;
         if (xs.empty()) {
@@ -192,7 +199,7 @@ public:
                 target[i] = std::sin(xs[i]);
             }
         }
-        if (ImPlot::BeginPlot("fit", {-1, 240})) {
+        if (ImPlot::BeginPlot("fit", {-1, 240}, kLockedPlot)) {
             ImPlot::SetupAxes("x", "y", 0, 0);
             ImPlot::PlotLine("target sin(x)", xs.data(), target.data(), 256);
             if (!pred.empty())
@@ -202,7 +209,7 @@ public:
         ImGui::Checkbox("follow", &st->follow);   // viewport policy, §6
         const ImPlotAxisFlags f =
             st->follow ? ImPlotAxisFlags_AutoFit : 0;
-        if (ImPlot::BeginPlot("loss", {-1, 160})) {
+        if (ImPlot::BeginPlot("loss", {-1, 160}, kLockedPlot)) {
             ImPlot::SetupAxes("step", "MSE", f, f);
             if (!loss.empty())
                 ImPlot::PlotLine("mse", loss.data(), (int)loss.size());
