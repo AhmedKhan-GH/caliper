@@ -25,6 +25,9 @@
 
 #include <caliper/tensor.h>
 #include <torch/torch.h>
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>  // dispatch_sync_f: serialize on torch's MPS stream queue
+#endif
 
 namespace caliper::adapters {
 
@@ -43,6 +46,28 @@ inline std::optional<CaliperDType> map_dtype(at::ScalarType st) {
         default:            return std::nullopt;
     }
 }
+
+#if defined(__APPLE__)
+// torch::mps::synchronize() is NOT internally serialized in this libtorch
+// (verified by disassembly: deviceSynchronize tail-calls MPSStream::synchronize
+// — straight-line objc_msgSends, no dispatch_sync), while every torch-internal
+// kernel encode runs as a block on get_dispatch_queue() (its documented purpose
+// is exactly this synchronization). Draining from the frame thread while a
+// training thread encodes therefore corrupts the MPSCommandBuffer/encoder
+// state — MPS aborts with 'commit an already committed command buffer' (the
+// EmbedScope SIGABRT). Run the drain as ONE block on torch's stream dispatch
+// queue, atomic with worker encodes. The same disassembly makes nesting
+// synchronize() inside the block deadlock-free: it never dispatches. Plain C
+// dispatch API — no ObjC blocks — keeps the header .cpp-compilable.
+inline void mps_sync_block(void*) { torch::mps::synchronize(); }
+inline void mps_synchronize_serialized() {
+    if (void* dq = torch::mps::get_dispatch_queue())
+        dispatch_sync_f(static_cast<dispatch_queue_t>(dq), nullptr,
+                        &mps_sync_block);
+    else
+        torch::mps::synchronize();
+}
+#endif
 
 }  // namespace detail
 
@@ -108,7 +133,13 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
 // all MPS streams complete — the price of a stream-free v1 ABI. CPU tensors
 // need no sync, so the call is skipped for them.
 inline std::optional<CaliperTensor> synced_to_tensor(const at::Tensor& t) {
+#if defined(__APPLE__)
+    // Serialized on torch's MPS stream dispatch queue — a bare synchronize()
+    // races concurrent training-thread encodes (see the detail helper).
+    if (t.is_mps()) detail::mps_synchronize_serialized();
+#else
     if (t.is_mps()) torch::mps::synchronize();
+#endif
     if (t.is_cuda()) torch::cuda::synchronize();   // same contract, CUDA form
     return to_tensor(t);
 }

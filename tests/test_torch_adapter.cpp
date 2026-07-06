@@ -13,6 +13,9 @@
 
 #include <torch/torch.h>
 
+#include <atomic>
+#include <thread>
+
 using caliper::adapters::to_tensor;
 using caliper::adapters::synced_to_tensor;
 
@@ -129,4 +132,34 @@ TEST_CASE("synced_to_tensor matches to_tensor for a cpu tensor (no sync needed)"
     REQUIRE(b.has_value());
     CHECK(a->data == b->data);
     CHECK(a->device == CALIPER_DEV_CPU);
+}
+
+TEST_CASE("synced_to_tensor: handoff survives a concurrently-encoding training thread") {
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    // Regression for the EmbedScope SIGABRT ('commit an already committed
+    // command buffer', MPSCore MPSPredicate.mm State: 4): the frame thread
+    // drains via synced_to_tensor while a worker thread — the training loop —
+    // continuously enqueues MPS kernels. torch::mps::synchronize() is NOT
+    // internally serialized on torch's MPS stream dispatch queue (verified by
+    // disassembly: deviceSynchronize tail-calls MPSStream::synchronize —
+    // straight-line objc_msgSends), while every torch-internal encode runs as
+    // a block on get_dispatch_queue(). Racing them corrupts the
+    // MPSCommandBuffer state and MPS aborts within a few hundred handoffs.
+    std::atomic<bool> stop{false};
+    std::thread worker([&] {
+        torch::Tensor a = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kMPS));
+        torch::Tensor b = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kMPS));
+        while (!stop.load(std::memory_order_relaxed))
+            a = torch::mm(a, b).tanh();          // endless kernel stream
+    });
+    torch::Tensor t = torch::ones({8, 8}, torch::TensorOptions().device(torch::kMPS));
+    for (int i = 0; i < 500; ++i) {
+        auto ct = synced_to_tensor(t);
+        REQUIRE(ct.has_value());
+    }
+    stop.store(true, std::memory_order_relaxed);
+    worker.join();
+    torch::mps::synchronize();                   // leave the device quiet for other cases
 }
