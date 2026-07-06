@@ -45,6 +45,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <condition_variable>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -143,7 +144,27 @@ struct EmbedScopeState {
     double bmin[3] = {-1,-1,-1}, bmax[3] = {1,1,1};
 
     uint64_t data_gen = 0;             // last gen fed through data.v1 SQL
-    bool     centroid_valid[10] = {};
+
+    // --- SQL rebuild job (cross-thread, under mtx) ---
+    // The data.v1 table rebuild runs as a BACKGROUND job: measured 80-500 ms
+    // per rebuild on Windows (NTFS WAL + session-aged catalog), which froze
+    // the whole window at ~2 fps when it lived in draw_ui. The frame thread
+    // stages inputs under mtx and submits; the job commits results under mtx.
+    // Applet-owned worker thread, NOT a jobs.v1 job: the rebuild is internal
+    // plumbing (2 Hz maintenance), not user-meaningful work, so it must not
+    // occupy the Jobs panel. One thread for the applet's lifetime: it sleeps
+    // on sql_cv, rebuilds when the frame thread stages fresh inputs, exits on
+    // sql_exit (cleanup joins it). Coalescing is free: staging overwrites, so
+    // a slow rebuild just skips to the newest snapshot.
+    std::thread sql_thread;            // frame-thread-only lifecycle
+    std::condition_variable sql_cv;    // signaled after staging / on exit (mtx)
+    bool     sql_pending = false;      // fresh inputs staged (mtx)
+    bool     sql_exit = false;         // cleanup shutdown flag (mtx)
+    std::vector<float> sqx, sqy, sqz;  // job inputs (owned copies, mtx)
+    std::vector<int>   sql_lbl, sql_prd;
+    int64_t  sql_n = 0;
+    bool     sql_main_dropped = false; // one-time legacy on-disk table cleanup
+    bool     centroid_valid[10] = {};  // job results (mtx)
     double   cent[10][3] = {};
     int64_t  misclassified = -1, total_rows = 0;
     std::string data_status;
@@ -542,18 +563,40 @@ bool data_exec(EmbedScopeState* st, const std::string& sql) {
 }
 
 // Rebuild the DuckDB table from the current snapshot and run the SQL panels.
+// Rebuild the SQL table + derived panels. Runs on a JOB thread (sql_job):
+// all SQL work stages into locals, ONE mtx commit at the end. The table is
+// TEMPORARY — in-memory, so rebuilds do not append to the on-disk WAL or
+// churn the catalog (which is what grew rebuild cost from ~80 ms to ~500 ms
+// over a session and, on the frame thread, froze the window — see the state
+// struct's sql-job comment).
 void refresh_data(EmbedScopeState* st, const std::vector<float>& ex,
                   const std::vector<float>& ey, const std::vector<float>& ez,
                   const std::vector<int>& lbl, const std::vector<int>& prd,
                   int64_t n) {
-    for (int c = 0; c < 10; c++) st->centroid_valid[c] = false;
-    st->misclassified = -1; st->total_rows = 0;
-    if (!st->data) { st->data_status = "data.v1 absent (ok) — SQL panels need it";
-                     return; }
-    if (!data_exec(st, "CREATE OR REPLACE TABLE embed_points"
+    bool        cvalid[10] = {};
+    double      cent[10][3] = {};
+    int64_t     mis = -1, tot = 0;
+    std::string status;
+    auto commit = [&] {
+        std::lock_guard<std::mutex> lk(st->mtx);
+        for (int c = 0; c < 10; c++) {
+            st->centroid_valid[c] = cvalid[c];
+            for (int k = 0; k < 3; k++) st->cent[c][k] = cent[c][k];
+        }
+        st->misclassified = mis; st->total_rows = tot;
+        st->data_status = std::move(status);
+    };
+
+    if (!st->data) { status = "data.v1 absent (ok) — SQL panels need it";
+                     commit(); return; }
+    if (!st->sql_main_dropped) {   // sql_job-thread-only; reclaim the legacy
+        data_exec(st, "DROP TABLE IF EXISTS main.embed_points");  // on-disk table
+        st->sql_main_dropped = true;
+    }
+    if (!data_exec(st, "CREATE OR REPLACE TEMP TABLE embed_points"
                        "(label INTEGER, pred INTEGER, x DOUBLE, y DOUBLE, z DOUBLE)")) {
-        st->data_status = std::string("data.v1 error: ") + st->data.last_error();
-        return;
+        status = std::string("data.v1 error: ") + st->data.last_error();
+        commit(); return;
     }
     std::string sql;
     sql.reserve((size_t)n * 40 + 64);
@@ -565,8 +608,8 @@ void refresh_data(EmbedScopeState* st, const std::vector<float>& ex,
         sql += row;
     }
     if (n > 0 && !data_exec(st, sql)) {
-        st->data_status = std::string("data.v1 error: ") + st->data.last_error();
-        return;
+        status = std::string("data.v1 error: ") + st->data.last_error();
+        commit(); return;
     }
     // Centroids: AVG(x,y,z) GROUP BY label -> drained as numeric doubles.
     ArrowArrayStream cs{};
@@ -578,10 +621,10 @@ void refresh_data(EmbedScopeState* st, const std::vector<float>& ex,
         for (size_t r = 0; r < cols[0].size(); r++) {
             int c = (int)cols[0][r];
             if (c >= 0 && c < 10) {
-                st->centroid_valid[c] = true;
-                st->cent[c][0] = cols[1][r];
-                st->cent[c][1] = cols[2][r];
-                st->cent[c][2] = cols[3][r];
+                cvalid[c] = true;
+                cent[c][0] = cols[1][r];
+                cent[c][1] = cols[2][r];
+                cent[c][2] = cols[3][r];
             }
         }
     }
@@ -592,10 +635,33 @@ void refresh_data(EmbedScopeState* st, const std::vector<float>& ex,
                        "COUNT(*) FROM embed_points", &ms) &&
         caliper::Data::drain_numeric(&ms, nullptr, &mc) && mc.size() >= 2 &&
         !mc[0].empty()) {
-        st->misclassified = (int64_t)mc[0][0];
-        st->total_rows    = (int64_t)mc[1][0];
+        mis = (int64_t)mc[0][0];
+        tot = (int64_t)mc[1][0];
     }
-    st->data_status = "data.v1: table rebuilt, SQL panels live";
+    status = "data.v1: table rebuilt, SQL panels live";
+    commit();
+}
+
+// The SQL worker loop (applet-owned thread — deliberately NOT jobs.v1, see
+// the state struct's sql-thread comment). Sleeps on sql_cv; each wake with
+// staged inputs copies them under mtx and rebuilds. data.v1 is only ever
+// touched from THIS thread, so the store's single connection stays
+// single-user. Exit: cleanup sets sql_exit under mtx and notifies.
+void sql_worker(EmbedScopeState* st) {
+    for (;;) {
+        std::vector<float> ex, ey, ez;
+        std::vector<int>   lbl, prd;
+        int64_t n = 0;
+        {
+            std::unique_lock<std::mutex> lk(st->mtx);
+            st->sql_cv.wait(lk, [&] { return st->sql_pending || st->sql_exit; });
+            if (st->sql_exit) return;
+            st->sql_pending = false;
+            ex = st->sqx; ey = st->sqy; ez = st->sqz;
+            lbl = st->sql_lbl; prd = st->sql_prd; n = st->sql_n;
+        }
+        refresh_data(st, ex, ey, ez, lbl, prd, n);
+    }
 }
 
 // Build a (28,28,4) RGBA u8 CPU texture for a hovered digit. CPU tensor => the
@@ -655,6 +721,10 @@ void EmbedScopeApplet::draw_ui() {
     std::vector<int>   lbl, prd;
     std::vector<uint8_t> px;
     torch::Tensor disp_conv[8], disp_embw;   // handle copies (no data copy)
+    bool    sql_cvalid[10];                  // sql-job results (copied under mtx)
+    double  sql_cent[10][3];
+    int64_t sql_mis, sql_tot;
+    std::string sql_status;
     std::string status;
     uint64_t gen, lgen; int64_t n;
     {
@@ -671,6 +741,12 @@ void EmbedScopeApplet::draw_ui() {
             for (int k = 0; k < 8; k++) disp_conv[k] = st->disp_conv[k];
             disp_embw = st->disp_embw;
         }
+        for (int c = 0; c < 10; c++) {
+            sql_cvalid[c] = st->centroid_valid[c];
+            for (int k = 0; k < 3; k++) sql_cent[c][k] = st->cent[c][k];
+        }
+        sql_mis = st->misclassified; sql_tot = st->total_rows;
+        sql_status = st->data_status;
     }
     ImGui::TextWrapped("%s", status.c_str());
 
@@ -786,13 +862,22 @@ void EmbedScopeApplet::draw_ui() {
         st->plot_gen = gen;
     }
     if (gen != 0 && gen != st->data_gen) {
-        // The cloud publishes per step (~8 Hz) but the SQL rebuild (a 2000-row
-        // INSERT on the frame thread) is throttled to ~2 Hz — centroids and
-        // the misclassified count glide; the plot itself never waits on SQL.
+        // The SQL rebuild is a BACKGROUND job (80-500 ms of DuckDB work —
+        // on the frame thread it froze the whole window; see the state
+        // struct's sql-job comment). Throttled to ~2 Hz and never re-entered:
+        // centroids and the misclassified count glide in as each job lands.
         const double now = ImGui::GetTime();
         static double last_sql = -1e9;
         if (now - last_sql > 0.5) {
-            refresh_data(st, ex, ey, ez, lbl, prd, n);
+            {
+                std::lock_guard<std::mutex> lk(st->mtx);
+                st->sqx = ex; st->sqy = ey; st->sqz = ez;
+                st->sql_lbl = lbl; st->sql_prd = prd; st->sql_n = n;
+                st->sql_pending = true;
+            }
+            if (!st->sql_thread.joinable())
+                st->sql_thread = std::thread(sql_worker, st);
+            st->sql_cv.notify_one();
             st->data_gen = gen;
             last_sql = now;
         }
@@ -843,9 +928,9 @@ void EmbedScopeApplet::draw_ui() {
             }
             // data.v1 centroids as large outlined diamonds.
             for (int c = 0; c < 10; c++) {
-                if (!st->centroid_valid[c]) continue;
-                float cx = (float)st->cent[c][0], cy = (float)st->cent[c][1],
-                      cz = (float)st->cent[c][2];
+                if (!sql_cvalid[c]) continue;
+                float cx = (float)sql_cent[c][0], cy = (float)sql_cent[c][1],
+                      cz = (float)sql_cent[c][2];
                 char id[8]; std::snprintf(id, sizeof id, "##k%d", c);
                 ImPlot3D::PlotScatter(id, &cx, &cy, &cz, 1,
                     ImPlot3DSpec(ImPlot3DProp_Marker, ImPlot3DMarker_Diamond,
@@ -967,14 +1052,14 @@ void EmbedScopeApplet::draw_ui() {
     ImGui::SeparatorText("data.v1 — SQL over the live embedding table");
     if (!st->data) {
         ImGui::TextDisabled("data.v1 absent (ok) — centroids/misclassified need it");
-    } else if (st->total_rows > 0) {
-        double pct = 100.0 * (double)st->misclassified / (double)st->total_rows;
+    } else if (sql_tot > 0) {
+        double pct = 100.0 * (double)sql_mis / (double)sql_tot;
         ImGui::Text("rows %lld   misclassified %lld  (%.1f%%)   "
                     "class centroids drawn as diamonds above",
-                    (long long)st->total_rows, (long long)st->misclassified, pct);
+                    (long long)sql_tot, (long long)sql_mis, pct);
     } else {
-        ImGui::TextDisabled("%s", st->data_status.empty()
-            ? "train to populate the table" : st->data_status.c_str());
+        ImGui::TextDisabled("%s", sql_status.empty()
+            ? "train to populate the table" : sql_status.c_str());
     }
 
     ImGui::End();
@@ -988,6 +1073,13 @@ void EmbedScopeApplet::cleanup() {
         // honored <=100ms; the ceiling also covers a cancel mid-download.
         for (int i = 0; i < 1000 && st->jobs.is_running(st->job_id); i++)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (st->sql_thread.joinable()) {
+        // Applet-owned worker: flag exit, wake it, join (an in-flight rebuild
+        // bounds the wait at ~a rebuild, well under the teardown budget).
+        { std::lock_guard<std::mutex> lk(st->mtx); st->sql_exit = true; }
+        st->sql_cv.notify_one();
+        st->sql_thread.join();
     }
     // Frame-thread-owned textures: release after the job wait, before renderer
     // teardown (the worker never touched the bridge).

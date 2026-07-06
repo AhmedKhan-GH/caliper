@@ -103,6 +103,24 @@ std::vector<JobSystem::JobView> JobSystem::views() const {
     return out;
 }
 
+void JobSystem::clear_finished() {
+    std::vector<std::unique_ptr<Job>> done;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        auto it = jobs_.begin();
+        while (it != jobs_.end()) {
+            if (!(*it)->running.load()) {
+                done.push_back(std::move(*it));
+                it = jobs_.erase(it);
+            } else ++it;
+        }
+    }
+    // Join outside the lock: the fn has already returned (running==false),
+    // so these joins are instant — but join we must before ~Job.
+    for (auto& j : done)
+        if (j->thread.joinable()) j->thread.join();
+}
+
 void JobSystem::cancel_all_and_join() {
     std::vector<std::unique_ptr<Job>> taken;
     {
