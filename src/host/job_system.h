@@ -36,6 +36,11 @@ public:
     };
     std::vector<JobView> views() const;   // running jobs first, then recent
 
+    // Drop finished entries from the list (the Jobs panel's "clear" button).
+    // Finished threads are joined before their Job is destroyed; running jobs
+    // are untouched.
+    void clear_finished();
+
     void cancel_all_and_join();
 
 private:

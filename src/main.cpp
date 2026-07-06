@@ -360,6 +360,10 @@ public:
                     ImGui::Begin("Jobs", nullptr,
                                  ImGuiWindowFlags_NoResize |
                                      ImGuiWindowFlags_NoCollapse);
+                    bool any_done = false;
+                    for (auto& v : views) any_done |= !v.running;
+                    if (any_done && ImGui::SmallButton("clear finished"))
+                        caliper_host::host_job_system().clear_finished();
                     for (auto& v : views) {
                         ImGui::PushID((int)v.id);
                         ImGui::Text("%s", v.label.c_str());
