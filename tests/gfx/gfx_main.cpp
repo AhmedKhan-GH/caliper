@@ -25,6 +25,7 @@
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -918,6 +919,67 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
     CHECK(bk.readback(id, w, h) == ref);
     bk.bridge->release_texture(id);
     cu->cuMemFree(buf);
+}
+
+// Frame-thread hitch forensics (embed_scope "hitches every batch" report):
+// the applet's per-generation refresh does release+create for all 9 textures
+// (8x conv 48x48 + 1x embw 36x512). On the Vulkan+CUDA path a CREATE is the
+// full interop setup — vkCreateImage + exportable memory + cuImportExternalMemory
+// + timeline semaphore create/export/import — while an UPDATE is just a
+// stream-ordered copy + compute pass. This case times both patterns at the
+// applet's real sizes and prints µs/op so the fix (create-once + update) is
+// justified by measurement, not vibes (D21).
+TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-shaped") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    struct Shape { int w, h; const char* name; };
+    const Shape shapes[2] = {{48, 48, "conv 48x48"}, {512, 36, "embw 36x512"}};
+    constexpr int kIters = 200;
+
+    for (const auto& s : shapes) {
+        const int n = s.w * s.h;
+        std::vector<float> data(n);
+        for (int i = 0; i < n; ++i) data[i] = (float)(i % 251);
+        cudadrv::CUdeviceptr buf = 0;
+        REQUIRE(cu->cuMemAlloc(&buf, (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+        cu->cuMemcpyHtoD(buf, data.data(), (size_t)n * sizeof(float));
+
+        CaliperTensor t{};
+        t.struct_size = sizeof(t); t.data = (void*)(uintptr_t)buf; t.dtype = CALIPER_DT_F32;
+        t.ndim = 2; t.shape[0] = s.h; t.shape[1] = s.w; t.strides[0] = s.w; t.strides[1] = 1;
+        t.device = CALIPER_DEV_CUDA;
+
+        // Pattern A: the applet today — release + create per generation.
+        using clk = std::chrono::steady_clock;
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+        REQUIRE(id != 0);
+        auto t0 = clk::now();
+        for (int i = 0; i < kIters; ++i) {
+            bk.bridge->release_texture(id);
+            id = bk.bridge->texture_from_tensor_mapped(
+                &t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+            REQUIRE(id != 0);
+        }
+        double us_create = std::chrono::duration<double, std::micro>(
+                               clk::now() - t0).count() / kIters;
+
+        // Pattern B: the proposed fix — create once, update per generation.
+        auto t1 = clk::now();
+        for (int i = 0; i < kIters; ++i)
+            REQUIRE(bk.bridge->update_texture(id, &t));
+        double us_update = std::chrono::duration<double, std::micro>(
+                               clk::now() - t1).count() / kIters;
+        bk.bridge->release_texture(id);
+        cu->cuMemFree(buf);
+
+        MESSAGE(s.name << ": release+create = " << us_create
+                << " us/op, update = " << us_update << " us/op ("
+                << (us_update > 0 ? us_create / us_update : 0) << "x)");
+    }
 }
 
 TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-exact") {
