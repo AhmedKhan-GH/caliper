@@ -126,7 +126,8 @@ struct EmbedScopeState {
     // see 60 fps of true memory states; the display never throttles training.
     torch::Tensor disp_conv[8];                  // (48,48) f32, x16 blocks
     torch::Tensor disp_embw;                     // (36,512) f32, 12x/8x blocks
-    float w_km = 0.f, w_wm = 0.f;                // symmetric colormap ranges
+    // (display tensors are pre-normalized to [-1,1] by the worker, so the
+    // frame thread's colormap range is constant and textures update in place)
     std::atomic<bool> disp_force_cpu{false};     // set if bridge rejects device
     uint64_t live_gen = 0;                       // bumped per step (0 = none)
 
@@ -375,14 +376,22 @@ void train_job(void* user, const CaliperJobControl* ctl) {
 
     auto evaluate = [&]() -> std::optional<float> {
         model->eval();
-        int64_t correct = 0, seen = Xte.size(0);
+        int64_t seen = Xte.size(0);
         torch::NoGradGuard ng;
+        // Accumulate correct-counts ON the device and read back ONCE: the
+        // per-batch .item() this replaces was a full stream drain per 1000
+        // images — 10 forced syncs per eval, which WDDM turns into scheduler
+        // round-trips (the Windows "freeze every 4%"; Metal absorbs the same
+        // pattern). Same batches, same math, one sync.
+        auto correct_t = torch::zeros({}, torch::TensorOptions(Xte.device())
+                                              .dtype(torch::kInt64));
         for (int64_t b = 0; b < seen; b += 1000) {
             if (ctl->cancelled(ctl)) return std::nullopt;
             int64_t hi = std::min<int64_t>(b + 1000, seen);
             auto pred = model->forward(Xte.slice(0, b, hi)).argmax(1);
-            correct += pred.eq(yte.slice(0, b, hi)).sum().item<int64_t>();
+            correct_t += pred.eq(yte.slice(0, b, hi)).sum();
         }
+        const int64_t correct = correct_t.item<int64_t>();
         return seen ? 100.f * (float)correct / (float)seen : 0.f;
     };
     auto record_acc = [&](int64_t at, float pct) {
@@ -428,8 +437,17 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                     wc = wc.to(torch::kCPU);   // GL fallback: bridge is CPU-only
                     we = we.to(torch::kCPU);
                 }
-                const float km = wc.abs().max().item<float>();
-                const float wm = we.abs().max().item<float>();
+                // Normalize HERE (on the producer device) so the colormap
+                // range is a constant [-1,1]: the frame thread can then keep
+                // ONE texture per tensor and update_texture in place. Re-
+                // creating mapped textures per step to chase the range was
+                // ~1.4 ms x9 of Vulkan+CUDA interop setup per generation —
+                // the frame thread blew its 60 fps budget every batch
+                // (measured: gfx timing case, create 1.4 ms vs update 0.27 ms).
+                const float km = std::max(wc.abs().max().item<float>(), 1e-6f);
+                const float wm = std::max(we.abs().max().item<float>(), 1e-6f);
+                wc = wc / km;
+                we = we / wm;
                 torch::Tensor dc[8];
                 for (int k = 0; k < 8; k++)
                     dc[k] = wc[k][0].repeat_interleave(16, 0)
@@ -447,8 +465,6 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                 }
                 for (int k = 0; k < 8; k++) st->disp_conv[k] = dc[k];
                 st->disp_embw = de;
-                st->w_km = std::max(km, 1e-6f);
-                st->w_wm = std::max(wm, 1e-6f);
                 st->live_gen++;
             }
             // Cloud stream: re-embed the full test subset EVERY step — the
@@ -639,7 +655,6 @@ void EmbedScopeApplet::draw_ui() {
     std::vector<int>   lbl, prd;
     std::vector<uint8_t> px;
     torch::Tensor disp_conv[8], disp_embw;   // handle copies (no data copy)
-    float w_km = 0.f, w_wm = 0.f;
     std::string status;
     uint64_t gen, lgen; int64_t n;
     {
@@ -655,7 +670,6 @@ void EmbedScopeApplet::draw_ui() {
             st->lbx = st->live_x; st->lby = st->live_y; st->lbz = st->live_z;
             for (int k = 0; k < 8; k++) disp_conv[k] = st->disp_conv[k];
             disp_embw = st->disp_embw;
-            w_km = st->w_km; w_wm = st->w_wm;
         }
     }
     ImGui::TextWrapped("%s", status.c_str());
@@ -897,30 +911,33 @@ void EmbedScopeApplet::draw_ui() {
                             "optimizer step");
     } else {
         if (lgen != st->tex_gen && disp_embw.defined()) {
-            for (auto& tx : st->conv_tex)
-                if (tx) { st->bridge.release_texture(tx); tx = 0; }
-            if (st->embw_tex) { st->bridge.release_texture(st->embw_tex);
-                                st->embw_tex = 0; }
             bool device_rejected = false;
             // stream_: with a stream-honoring host (bridge v1.1 caps bit 0)
             // the handoff rides the producer queue — no full-device drain.
             // Otherwise this IS synced_to_tensor: drain the producer before
             // the device upload reads it (no-op on CPU).
             const uint32_t bcaps = st->bridge.caps();
-            for (int k = 0; k < 8; k++) {
-                auto ct = caliper::adapters::stream_to_tensor(disp_conv[k], bcaps);
-                st->conv_tex[k] = ct ? st->bridge.texture_from_tensor_mapped(
-                                           &*ct, CALIPER_CMAP_MAGMA,
-                                           -w_km, w_km) : 0;
-                device_rejected |= (st->conv_tex[k] == 0);
-            }
-            {
-                auto ct = caliper::adapters::stream_to_tensor(disp_embw, bcaps);
-                st->embw_tex = ct ? st->bridge.texture_from_tensor_mapped(
-                                        &*ct, CALIPER_CMAP_RDBU,
-                                        -w_wm, w_wm) : 0;
-                device_rejected |= (st->embw_tex == 0);
-            }
+            // Textures live for the whole run: update in place per generation
+            // (display tensors are pre-normalized to [-1,1], so the mapped
+            // range never changes). Re-creating them per step was ~1.4 ms x9
+            // of Vulkan+CUDA interop setup — the every-batch UI hitch.
+            // update_texture also survives the device->CPU fallback flip:
+            // shape and dtype are constant and the bridge accepts CPU tensors.
+            auto update_or_create = [&](CaliperTextureId& tex,
+                                        const torch::Tensor& src,
+                                        int32_t cmap) {
+                auto ct = caliper::adapters::stream_to_tensor(src, bcaps);
+                if (!ct) { device_rejected = true; return; }
+                if (tex && st->bridge.update_texture(tex, &*ct)) return;
+                if (tex) { st->bridge.release_texture(tex); tex = 0; }
+                tex = st->bridge.texture_from_tensor_mapped(&*ct, cmap,
+                                                            -1.f, 1.f);
+                device_rejected |= (tex == 0);
+            };
+            for (int k = 0; k < 8; k++)
+                update_or_create(st->conv_tex[k], disp_conv[k],
+                                 CALIPER_CMAP_MAGMA);
+            update_or_create(st->embw_tex, disp_embw, CALIPER_CMAP_RDBU);
             // GL fallback can't take device tensors — ask the worker to hand
             // over CPU display tensors from the next step onward.
             if (device_rejected && disp_embw.device().type() != torch::kCPU)
