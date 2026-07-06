@@ -45,6 +45,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <condition_variable>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -149,7 +150,16 @@ struct EmbedScopeState {
     // per rebuild on Windows (NTFS WAL + session-aged catalog), which froze
     // the whole window at ~2 fps when it lived in draw_ui. The frame thread
     // stages inputs under mtx and submits; the job commits results under mtx.
-    uint64_t sql_job_id = 0;           // frame-thread-only bookkeeping
+    // Applet-owned worker thread, NOT a jobs.v1 job: the rebuild is internal
+    // plumbing (2 Hz maintenance), not user-meaningful work, so it must not
+    // occupy the Jobs panel. One thread for the applet's lifetime: it sleeps
+    // on sql_cv, rebuilds when the frame thread stages fresh inputs, exits on
+    // sql_exit (cleanup joins it). Coalescing is free: staging overwrites, so
+    // a slow rebuild just skips to the newest snapshot.
+    std::thread sql_thread;            // frame-thread-only lifecycle
+    std::condition_variable sql_cv;    // signaled after staging / on exit (mtx)
+    bool     sql_pending = false;      // fresh inputs staged (mtx)
+    bool     sql_exit = false;         // cleanup shutdown flag (mtx)
     std::vector<float> sqx, sqy, sqz;  // job inputs (owned copies, mtx)
     std::vector<int>   sql_lbl, sql_prd;
     int64_t  sql_n = 0;
@@ -632,20 +642,26 @@ void refresh_data(EmbedScopeState* st, const std::vector<float>& ex,
     commit();
 }
 
-// jobs.v1 trampoline: copy the staged inputs under mtx, then rebuild. Runs
-// concurrently with train_job (each job owns a thread); data.v1 is only ever
-// touched from THIS job, so the store's single connection stays single-user.
-void sql_job(void* user, const CaliperJobControl*) {
-    auto* st = static_cast<EmbedScopeState*>(user);
-    std::vector<float> ex, ey, ez;
-    std::vector<int>   lbl, prd;
-    int64_t n;
-    {
-        std::lock_guard<std::mutex> lk(st->mtx);
-        ex = st->sqx; ey = st->sqy; ez = st->sqz;
-        lbl = st->sql_lbl; prd = st->sql_prd; n = st->sql_n;
+// The SQL worker loop (applet-owned thread — deliberately NOT jobs.v1, see
+// the state struct's sql-thread comment). Sleeps on sql_cv; each wake with
+// staged inputs copies them under mtx and rebuilds. data.v1 is only ever
+// touched from THIS thread, so the store's single connection stays
+// single-user. Exit: cleanup sets sql_exit under mtx and notifies.
+void sql_worker(EmbedScopeState* st) {
+    for (;;) {
+        std::vector<float> ex, ey, ez;
+        std::vector<int>   lbl, prd;
+        int64_t n = 0;
+        {
+            std::unique_lock<std::mutex> lk(st->mtx);
+            st->sql_cv.wait(lk, [&] { return st->sql_pending || st->sql_exit; });
+            if (st->sql_exit) return;
+            st->sql_pending = false;
+            ex = st->sqx; ey = st->sqy; ez = st->sqz;
+            lbl = st->sql_lbl; prd = st->sql_prd; n = st->sql_n;
+        }
+        refresh_data(st, ex, ey, ez, lbl, prd, n);
     }
-    refresh_data(st, ex, ey, ez, lbl, prd, n);
 }
 
 // Build a (28,28,4) RGBA u8 CPU texture for a hovered digit. CPU tensor => the
@@ -852,14 +868,16 @@ void EmbedScopeApplet::draw_ui() {
         // centroids and the misclassified count glide in as each job lands.
         const double now = ImGui::GetTime();
         static double last_sql = -1e9;
-        if (now - last_sql > 0.5 && !st->jobs.is_running(st->sql_job_id)) {
+        if (now - last_sql > 0.5) {
             {
                 std::lock_guard<std::mutex> lk(st->mtx);
                 st->sqx = ex; st->sqy = ey; st->sqz = ez;
                 st->sql_lbl = lbl; st->sql_prd = prd; st->sql_n = n;
+                st->sql_pending = true;
             }
-            st->sql_job_id = st->jobs.submit("embed_scope: SQL panels",
-                                             sql_job, st);
+            if (!st->sql_thread.joinable())
+                st->sql_thread = std::thread(sql_worker, st);
+            st->sql_cv.notify_one();
             st->data_gen = gen;
             last_sql = now;
         }
@@ -1056,11 +1074,12 @@ void EmbedScopeApplet::cleanup() {
         for (int i = 0; i < 1000 && st->jobs.is_running(st->job_id); i++)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (st->sql_job_id != 0) {
-        // The SQL job has no cancel points (one bounded rebuild, <=~1 s);
-        // just outlive it — same jobs_v1 contract as above.
-        for (int i = 0; i < 2000 && st->jobs.is_running(st->sql_job_id); i++)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (st->sql_thread.joinable()) {
+        // Applet-owned worker: flag exit, wake it, join (an in-flight rebuild
+        // bounds the wait at ~a rebuild, well under the teardown budget).
+        { std::lock_guard<std::mutex> lk(st->mtx); st->sql_exit = true; }
+        st->sql_cv.notify_one();
+        st->sql_thread.join();
     }
     // Frame-thread-owned textures: release after the job wait, before renderer
     // teardown (the worker never touched the bridge).
