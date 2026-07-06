@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Implemented & verified — M1 + M2b shipped and gfx-verified on Apple Silicon (in-app step-time measurement pending); M2a **verified on NVIDIA hardware** (RTX 500 Ada laptop, Windows 11, 2026-07-05 — `docs/m2a-windows-verification.md`) |
+| **Status** | Implemented & verified on both platforms — M1 + M2b shipped and gfx-verified on Apple Silicon (in-app step-time measurement pending); M2a **verified on NVIDIA hardware** (RTX 500 Ada laptop, Windows 11, 2026-07-05 — `docs/m2a-windows-verification.md`). Post-merge, the MPS serialization discipline (D24 finding) was extended to the **v1 drain path** too (`8b0a010`) — both adapter rungs now run their MPS work on torch's stream dispatch queue. |
 | **Date** | 2026-07-05 |
 | **Owner** | Ahmed Khan |
 | **Scope** | The macOS counterpart of the Windows V4 work: remove the CPU sync stalls from the Metal backend's device-update path, and — the part that actually matters, on both platforms — retire the adapter's full-device drain at the tensor handoff by giving the dormant `CaliperTensor.stream` channel semantics. |

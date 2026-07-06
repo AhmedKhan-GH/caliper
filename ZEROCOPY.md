@@ -1,9 +1,9 @@
 # How zero-copy tensor visualization works
 
 How a tensor goes from a training step to pixels on screen without a CPU
-round trip — on Apple Silicon today (implemented, tested), and on
-Windows/NVIDIA by design (Phase 4, not yet built). GitHub renders the
-diagrams below natively.
+round trip — implemented and hardware-verified on **both** platforms:
+Apple Silicon (Metal/MPS) and Windows/NVIDIA (Vulkan/CUDA interop).
+GitHub renders the diagrams below natively.
 
 **What "zero-copy" means here, precisely:** the tensor's *data* never
 leaves the GPU and is never staged through CPU memory. There is still one
@@ -55,16 +55,16 @@ flowchart TD
     APP["Applet code<br/>(PyTorch, any thread)"] -->|"CaliperTensor{data*, shape, device: CPU / MPS / CUDA}"| BRIDGE["tensor_bridge.v1<br/>(frozen C ABI — graphics-API-neutral)"]
     BRIDGE --> SEAM{HostRenderer seam}
     SEAM -->|macOS| METAL["Metal backend<br/>zero-copy (implemented)"]
+    SEAM -->|Windows| VK["Vulkan backend<br/>CUDA interop (implemented)"]
     SEAM -->|anywhere| GL["OpenGL backend<br/>CPU staging (implemented fallback)"]
-    SEAM -.->|"Windows (Phase 4 design)"| VK["Vulkan backend<br/>CUDA interop (designed)"]
     METAL --> IMG["ImTextureID → ImGui::Image"]
+    VK --> IMG
     GL --> IMG
-    VK -.-> IMG
 ```
 
-The frozen ABI is the reason the Windows path can exist later without
-touching a single applet: `CALIPER_DEV_CUDA` is already in the device
-enum, and the contract says nothing about Metal.
+The frozen ABI is the reason the Windows path landed without touching a
+single applet: `CALIPER_DEV_CUDA` was in the device enum from day one,
+and the contract says nothing about Metal.
 
 ## Apple Silicon (MPS) — implemented
 
@@ -100,7 +100,7 @@ Proof, not promise: a windowed test harness pushes known tensors through
 this exact path and asserts **pixel-exact** output — on both the Metal and
 OpenGL backends, every CI run.
 
-## Windows / NVIDIA — the Phase 4 design (implemented, verification in progress)
+## Windows / NVIDIA — implemented, verified on hardware
 
 Discrete GPUs have no unified memory: VRAM and system RAM are separate,
 connected by PCIe. Zero-copy there means something different — **keep the
@@ -165,6 +165,61 @@ Vulkan env is the remaining CI wiring.
 If Vulkan init or interop fails at runtime, Windows falls back to the
 OpenGL path (CPU staging): slower, but identical applet code and
 identical on-screen results.
+
+## Synchronization: the negotiated ladder (and the two races it survived)
+
+The data path above says *where* bytes live; this section says *when* it is
+safe to read them. There are two rungs, negotiated at runtime — applets ask
+the bridge what the host honors and the adapter does the right thing:
+
+```
+caps = bridge.caps()                     // tensor_bridge.v1_1, additive
+ct   = adapters::stream_to_tensor(t, caps)
+```
+
+- **v1 rung — drain (`t.stream == NULL`).** The adapter synchronizes the whole
+  producer device (`torch::mps::synchronize()` / `torch::cuda::synchronize()`)
+  before the handoff, so the renderer may read the tensor immediately. Always
+  correct, costs a full-device barrier. This is what `synced_to_tensor` does,
+  and what `stream_to_tensor` degrades to when caps bit 0 is absent.
+- **v1.1 rung — stream-ordered handoff (caps bit 0).** No drain. The adapter
+  populates `CaliperTensor.stream` with the producer's queue/stream (an
+  `MTLCommandQueue*` on MPS, a `CUstream` on CUDA), and the renderer GPU-orders
+  its copy+colormap *after* the producer's queued work — per-texture
+  `MTLSharedEvent` on Metal, shared timeline semaphore riding the producer
+  stream on Vulkan+CUDA. The CPU never waits on the hot path.
+
+Three hard-won facts are load-bearing here:
+
+1. **torch's public MPS stream calls are not internally serialized** (proven by
+   disassembly: `deviceSynchronize`/`commitStream` are straight-line
+   `objc_msgSend`s). Calling the handoff while the training thread encodes
+   corrupted command-buffer state — SIGABRT/SIGSEGV in three different
+   costumes. Both adapter rungs therefore run their MPS work **as one block on
+   torch's own stream dispatch queue**: the stream handoff since `545a2f7`,
+   the v1 drain since `8b0a010`. Any future MPS-touching adapter code must
+   follow the same rule.
+2. **CUDA needs no such serialization** — driver calls are thread-safe by API
+   contract — but that was the same *kind* of assumption that failed on MPS,
+   so it is pinned by a stress test (500 pool-stream handoffs against a
+   concurrently-training thread, 10/10 green on NVIDIA hardware), not trusted.
+3. **A NULL `stream` from a CUDA producer can still be an honored handoff:**
+   `CUDAStream::stream()` returns `nullptr` for the *legacy default stream* by
+   CUDA semantics. The renderer's NULL rung enqueues on that same default
+   stream, so ordering holds and the drain stays elided. Tests that want to
+   prove the stream channel is live must pin a **non-default** pool stream
+   (see `tests/test_torch_adapter.cpp`, the tripwire case).
+
+One honest measurement note: eliding the drain did **not** move training
+steps/sec in embed_scope (~0 delta on an RTX 500 Ada — the training loop's own
+per-step `loss.item()` sync dominates). The verified win is ordering
+correctness plus frame-thread stall removal. And the biggest frame-thread
+stall of all turned out to be unrelated to tensors entirely: a DuckDB table
+rebuilt on the UI thread — see
+`docs/embedscope-freeze-postmortem.md` for that arc and the operational rules
+it produced (zero frame-thread I/O; create textures once and `update_texture`
+in place — an interop texture *create* costs ~1.4 ms on Vulkan+CUDA vs
+~0.27 ms for an update).
 
 ## Derived graphics: not just pictures of tensors
 

@@ -6,7 +6,7 @@
 | **Platform observed** | Windows 11, RTX 500 Ada Laptop GPU (4 GB), NVMe/NTFS |
 | **Symptom** | Whole-window freeze while training: rhythmic hitches early in a session, degrading to a constant ~2 fps (window unresponsive, even OS resize stuttered). macOS: same code, smooth. |
 | **Root cause** | data.v1 SQL table rebuild (`CREATE OR REPLACE TABLE` + 2,000-row `INSERT` into the **on-disk** DuckDB store) executed **on the frame thread**, with per-rebuild cost that **grows over the session** (WAL append + catalog churn), until it exceeded its own 0.5 s throttle and ran every frame. |
-| **Fixed in** | `3c465e7`, `b14633a`, `6535820`, plus the SQL-worker/`clear finished` commits landing with this doc |
+| **Fixed in** | `3c465e7`, `b14633a`, `6535820`, `c3458ce` (Jobs `clear finished`), `f122026` (SQL worker thread). Related Mac-side race fix on the v1 drain: `8b0a010`. |
 | **Audience** | Future contributors on either platform; the macOS-side agent (see §6) |
 
 ---
@@ -174,6 +174,8 @@ pull. Worth a verification pass on Apple Silicon:
 ---
 
 *Diagnosis history and crash-level detail live in the commit messages of
-`3c465e7`, `b14633a`, `6535820`, and the SQL-worker commit. The M2a/stream
+`3c465e7`, `b14633a`, `6535820`, `c3458ce`, and `f122026`. The M2a/stream
 handoff verification that preceded (and was initially, wrongly, suspected) is
-`docs/m2a-windows-verification.md`.*
+`docs/m2a-windows-verification.md`. The synchronization ladder these fixes
+completed is documented in `ZEROCOPY.md` §Synchronization and
+`docs/wiki/reference/adapters.md`.*
