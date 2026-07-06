@@ -1,0 +1,146 @@
+From 22bddef34c871c5cd00c54b9ef4f1c3881408443 Mon Sep 17 00:00:00 2001
+From: Ahmed Khan <emailahmedebadkhan@gmail.com>
+Date: Sat, 23 May 2026 19:37:26 -0700
+Subject: [PATCH 1/2] add GPT-OSS (OpenAI MoE) architecture support
+
+- Register tensor name overrides for attn_out mapping
+- Add gptoss/gpt-oss chat template with channel system
+- Make LLM_TN non-const for deferred arch initialization
+- Remove incorrect RoPE scaling override (linear scaling is correct)
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ src/llama-arch.cpp        | 21 +++++++++++++++++----
+ src/llama-chat.cpp        |  1 +
+ src/llama-model.cpp       |  1 +
+ src/llama-model.h         |  2 +-
+ src/models/openai-moe.cpp | 15 +++++++++++----
+ 5 files changed, 31 insertions(+), 9 deletions(-)
+
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index c9eead18a..5165f804f 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -111,7 +111,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_HUNYUAN_DENSE,    "hunyuan-dense"    },
+     { LLM_ARCH_HUNYUAN_VL,       "hunyuan_vl"       },
+     { LLM_ARCH_SMOLLM3,          "smollm3"          },
+-    { LLM_ARCH_OPENAI_MOE,       "gpt-oss"          },
++    { LLM_ARCH_OPENAI_MOE,       "gptoss"           },
+     { LLM_ARCH_LFM2,             "lfm2"             },
+     { LLM_ARCH_LFM2MOE,          "lfm2moe"          },
+     { LLM_ARCH_DREAM,            "dream"            },
+@@ -787,12 +787,25 @@ std::string LLM_KV::operator()(llm_kv kv) const {
+ LLM_TN_IMPL::LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid)
+     : arch(arch), tensor(tensor), suffix(suffix), bid(bid), xid(xid) {}
+ 
++static const std::map<std::pair<llm_arch, llm_tensor>, const char *> LLM_TENSOR_NAME_OVERRIDES = {
++    {{ LLM_ARCH_OPENAI_MOE, LLM_TENSOR_ATTN_OUT }, "blk.%d.attn_out" },
++};
++
+ std::string LLM_TN_IMPL::str() const {
+-    if (LLM_TENSOR_NAMES.find(tensor) == LLM_TENSOR_NAMES.end()) {
+-        GGML_ABORT("unknown tensor name for tensor id %d", static_cast<int>(tensor));
++    const char * fmt = nullptr;
++    auto key = std::make_pair(arch, tensor);
++    auto ov = LLM_TENSOR_NAME_OVERRIDES.find(key);
++    if (ov != LLM_TENSOR_NAME_OVERRIDES.end()) {
++        fmt = ov->second;
++    } else {
++        auto it = LLM_TENSOR_NAMES.find(tensor);
++        if (it == LLM_TENSOR_NAMES.end()) {
++            GGML_ABORT("unknown tensor name for tensor id %d", static_cast<int>(tensor));
++        }
++        fmt = it->second;
+     }
+ 
+-    std::string name = ::format(LLM_TENSOR_NAMES.at(tensor), bid, xid);
++    std::string name = ::format(fmt, bid, xid);
+     if (suffix != nullptr) {
+         name += ".";
+         name += suffix;
+diff --git a/src/llama-chat.cpp b/src/llama-chat.cpp
+index 6554a89b2..b75e85004 100644
+--- a/src/llama-chat.cpp
++++ b/src/llama-chat.cpp
+@@ -71,6 +71,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
+     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
+     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
+     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
++    { "gptoss",            LLM_CHAT_TEMPLATE_OPENAI_MOE        },
+     { "gpt-oss",           LLM_CHAT_TEMPLATE_OPENAI_MOE        },
+     { "hunyuan-dense",     LLM_CHAT_TEMPLATE_HUNYUAN_DENSE     },
+     { "hunyuan-ocr",       LLM_CHAT_TEMPLATE_HUNYUAN_OCR       },
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 8bf20a716..e1e960245 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1168,6 +1168,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+     const bool use_mmap_buffer = true;
+ 
+     this->ml = &ml; // to be used by create_tensor() and load_arch_tensors()
++    this->tn = LLM_TN(arch);
+ 
+     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
+         __func__, ml.use_mmap ? "true" : "false", ml.use_direct_io ? "true" : "false");
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 01c87a752..0eaac4f9e 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -649,7 +649,7 @@ struct llama_model_base : public llama_model {
+ 
+     llama_model * model;
+     llama_model_loader * ml = nullptr;
+-    const LLM_TN tn;
++    LLM_TN tn;
+ 
+     // llama_model_loader is not yet defined at this point, so we will set it after construction
+     const int TENSOR_DUPLICATED;
+diff --git a/src/models/openai-moe.cpp b/src/models/openai-moe.cpp
+index 15b6c8c12..3532aae66 100644
+--- a/src/models/openai-moe.cpp
++++ b/src/models/openai-moe.cpp
+@@ -2,7 +2,9 @@
+ 
+ void llama_model_openai_moe::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
++    if (!ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false)) {
++        hparams.n_ff_exp = hparams.n_ff();
++    }
+     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+ 
+     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+@@ -10,8 +12,10 @@ void llama_model_openai_moe::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+     hparams.set_swa_pattern(swa_period);
+ 
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale, false);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,  hparams.expert_weights_norm, false);
++
+     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+-    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+ 
+     switch (hparams.n_layer) {
+@@ -36,12 +40,15 @@ void llama_model_openai_moe::load_arch_tensors(llama_model_loader &) {
+         auto & layer = layers[i];
+ 
+         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
+-        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
++        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
++        if (!layer.attn_post_norm) {
++            layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
++        }
+ 
+         create_tensor_qkv(layer, i, n_embd, n_head * n_rot, n_head_kv * n_rot, n_head_kv * n_rot, 0);
+         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_rot, n_embd}, 0);
+ 
+-        layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
++        layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, i), {n_head}, 0);
+ 
+         layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert}, 0);
+         layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+-- 
+2.50.1 (Apple Git-155)
+

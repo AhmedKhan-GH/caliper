@@ -338,6 +338,48 @@ elseif(WIN32)
     set(GGML_CUDA OFF CACHE BOOL "" FORCE)
     message(STATUS "    llama.cpp: CPU backend on Windows (CUDA 13+ toolkit not found)")
 endif()
+
+# Caliper's local llama.cpp deltas live as patch files in-tree (NOT a fork):
+# the submodule pin stays on fetchable upstream, and these apply at configure
+# time. They adapt the loader to ollama's GGUF encoding (ssm_dt tensor name,
+# 3-section rope) and add GPT-OSS arch support — see
+# third_party/patches/llama.cpp/README.md. The apply is idempotent AND atomic:
+# the whole set is reverse-checked first (already-applied dev checkout or a
+# re-configure -> no-op), else forward-checked and applied together (both
+# patches touch llama-model.cpp, so they must land as one transaction).
+file(GLOB _llama_patches "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/llama.cpp/*.patch")
+list(SORT _llama_patches)
+if(_llama_patches)
+    set(_llama_patches_rev ${_llama_patches})
+    list(REVERSE _llama_patches_rev)
+    execute_process(
+        COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply --reverse --check ${_llama_patches_rev}
+        RESULT_VARIABLE _llama_patched OUTPUT_QUIET ERROR_QUIET)
+    if(_llama_patched EQUAL 0)
+        message(STATUS "    llama.cpp patches already applied — skipping")
+    else()
+        execute_process(
+            COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply --check ${_llama_patches}
+            RESULT_VARIABLE _llama_clean OUTPUT_QUIET ERROR_QUIET)
+        if(NOT _llama_clean EQUAL 0)
+            message(FATAL_ERROR
+                "  llama.cpp patches neither apply cleanly nor are already applied.\n"
+                "  The submodule is likely not at the expected upstream base "
+                "(a4107133).\n"
+                "  Reset it (git -C third_party/llama.cpp checkout a4107133) or "
+                "regenerate the patches — see third_party/patches/llama.cpp/README.md.")
+        endif()
+        execute_process(
+            COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply ${_llama_patches}
+            RESULT_VARIABLE _llama_apply)
+        if(NOT _llama_apply EQUAL 0)
+            message(FATAL_ERROR "  Failed to apply llama.cpp patches.")
+        endif()
+        list(LENGTH _llama_patches _llama_npatch)
+        message(STATUS "    applied ${_llama_npatch} local llama.cpp patch(es)")
+    endif()
+endif()
+
 add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
 message(STATUS "    ✓ llama.cpp configured")

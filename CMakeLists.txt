@@ -365,6 +365,17 @@ if(CALIPER_BUILD_EXAMPLES)
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}sine_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
+# Opt-in resurrection of the archived GGUF-inference applet (applets/legacy/):
+# needs the patched llama.cpp submodule (caliper-patches: Qwen3.5/3.6 loading,
+# GPT-OSS). OFF by default — legacy stays archived; flip for inference testing.
+option(CALIPER_BUILD_OPENGLLAMA "Build the archived opengllama applet (GGUF inference via llama.cpp)" OFF)
+if(CALIPER_BUILD_OPENGLLAMA)
+    add_subdirectory(applets/legacy/opengllama)
+    add_dependencies(caliper opengllama)
+    list(APPEND _active_applet_libs
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}opengllama${CMAKE_SHARED_LIBRARY_SUFFIX}")
+endif()
+
 # Remove stale applet libraries AND manifests left from previously deleted or
 # archived applets (a stale manifest without its dylib would show a ghost
 # refusal card in the launcher).

@@ -44,6 +44,7 @@
 [submodule "third_party/llama.cpp"]
 	path = third_party/llama.cpp
 	url = https://github.com/ggerganov/llama.cpp.git
+	ignore = dirty
 [submodule "third_party/slang"]
 	path = third_party/slang
 	url = https://github.com/MikePopoloski/slang.git
