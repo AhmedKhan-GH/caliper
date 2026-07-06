@@ -210,6 +210,11 @@ TensorBridge::TensorBridge(HostRenderer& renderer) : renderer_(renderer) {
     active_device_ = renderer.interop_device();
 }
 
+uint32_t TensorBridge::caps() const {
+    return renderer_.honors_stream_ordered_handoff()
+        ? CALIPER_BRIDGE_CAP_STREAM_ORDERED : 0u;
+}
+
 namespace {
 // Shared acceptance checks for BOTH entry points: data present, device is CPU
 // or the active backend, row-major contiguous, and a bounded extent.

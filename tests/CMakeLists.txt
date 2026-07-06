@@ -101,6 +101,10 @@ set_target_properties(caliper_torch_tests PROPERTIES
 if(APPLE)
     set_target_properties(caliper_torch_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+    # adapters/torch.hpp reaches the producer MTLCommandQueue through the C
+    # ObjC runtime (objc_msgSend/sel_registerName — M2/D24), so any macOS TU
+    # including it must link libobjc.
+    target_link_libraries(caliper_torch_tests PRIVATE objc)
 endif()
 
 add_test(NAME caliper_torch_tests COMMAND caliper_torch_tests)

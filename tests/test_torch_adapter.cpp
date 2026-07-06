@@ -13,11 +13,19 @@
 
 #include <torch/torch.h>
 
+// Mirrors the adapter's guard (adapters/torch.hpp): the CUDA cases drive the
+// handoff from a non-default pool stream, which needs the c10 stream API.
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+#endif
+
 #include <atomic>
 #include <thread>
 
 using caliper::adapters::to_tensor;
 using caliper::adapters::synced_to_tensor;
+using caliper::adapters::stream_to_tensor;
 
 TEST_CASE("cpu f32 2D round-trips field-by-field, zero-copy") {
     // A contiguous (3,4) f32 CPU tensor with known values.
@@ -134,17 +142,122 @@ TEST_CASE("synced_to_tensor matches to_tensor for a cpu tensor (no sync needed)"
     CHECK(a->device == CALIPER_DEV_CPU);
 }
 
-TEST_CASE("synced_to_tensor: handoff survives a concurrently-encoding training thread") {
+TEST_CASE("stream_to_tensor: no caps bit -> exactly the v1 drained handoff (stream NULL)") {
+    torch::Tensor t = torch::arange(12, torch::kFloat).reshape({3, 4}).contiguous();
+    auto ct = stream_to_tensor(t, 0);
+    REQUIRE(ct.has_value());
+    CHECK(ct->stream == nullptr);
+    CHECK(ct->device == CALIPER_DEV_CPU);
+    CHECK(ct->data == t.data_ptr());
+}
+
+TEST_CASE("stream_to_tensor: cpu tensor never carries a stream, even when honored") {
+    torch::Tensor t = torch::arange(12, torch::kFloat).reshape({3, 4}).contiguous();
+    auto ct = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+    REQUIRE(ct.has_value());
+    CHECK(ct->stream == nullptr);
+}
+
+TEST_CASE("stream_to_tensor: mps tensor carries the producer queue when honored; drains when not") {
     if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
-    // Regression for the EmbedScope SIGABRT ('commit an already committed
-    // command buffer', MPSCore MPSPredicate.mm State: 4): the frame thread
-    // drains via synced_to_tensor while a worker thread — the training loop —
-    // continuously enqueues MPS kernels. torch::mps::synchronize() is NOT
-    // internally serialized on torch's MPS stream dispatch queue (verified by
-    // disassembly: deviceSynchronize tail-calls MPSStream::synchronize —
-    // straight-line objc_msgSends), while every torch-internal encode runs as
-    // a block on get_dispatch_queue(). Racing them corrupts the
-    // MPSCommandBuffer state and MPS aborts within a few hundred handoffs.
+    torch::Tensor t = torch::ones({4, 4},
+        torch::TensorOptions().device(torch::kMPS)) * 2.0f;
+
+    auto honored = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+    REQUIRE(honored.has_value());
+    CHECK(honored->device == CALIPER_DEV_METAL);
+    CHECK(honored->stream != nullptr);           // the MTLCommandQueue*
+
+    auto v1 = stream_to_tensor(t, 0);            // negotiation pin, other direction
+    REQUIRE(v1.has_value());
+    CHECK(v1->stream == nullptr);
+}
+
+TEST_CASE("stream_to_tensor: cuda tensor carries the producer stream when honored; drains when not") {
+    if (!torch::cuda::is_available()) { MESSAGE("no CUDA device — skipping"); return; }
+#if defined(__APPLE__)
+    // Unreachable: Apple torch never reports CUDA. The early return above
+    // keeps this TU compiling without the c10 CUDA headers.
+#elif !__has_include(<c10/cuda/CUDAStream.h>)
+    // The finding-1 tripwire must fire LOUDLY, never skip: if this header
+    // vanished from the include path, the adapter's guard compiled its CUDA
+    // branch out too — the drain is silently back and the speedup fictional.
+    REQUIRE_MESSAGE(false, "c10/cuda/CUDAStream.h not found — the adapter's "
+                           "CUDA branch is compiled out on a CUDA machine");
+#else
+    torch::Tensor t = torch::ones({4, 4},
+        torch::TensorOptions().device(torch::kCUDA)) * 2.0f;
+
+    // On the DEFAULT current stream the handoff is honored but the handle it
+    // carries is NULL — CUDAStream::stream() returns nullptr for the legacy
+    // default stream by CUDA semantics (unlike MPS, whose queue pointer is
+    // never NULL). That is still a correct, drain-elided handoff: the
+    // renderer's NULL rung enqueues on the same legacy default stream the
+    // producer used, so the copy stays stream-ordered after its kernels.
+    auto honored_default = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+    REQUIRE(honored_default.has_value());
+    REQUIRE(honored_default->device == CALIPER_DEV_CUDA);
+
+    // NULL therefore can't distinguish "default stream" from "branch compiled
+    // out", so the tripwire pins a NON-default pool stream: a compiled-in
+    // branch must hand back exactly that stream's handle, which is never NULL.
+    {
+        auto pool = c10::cuda::getStreamFromPool(false, t.device().index());
+        c10::cuda::CUDAStreamGuard guard(pool);
+        auto honored = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+        REQUIRE(honored.has_value());
+        REQUIRE(honored->device == CALIPER_DEV_CUDA);
+        CHECK_FALSE(honored->stream == nullptr);   // FAILS if the guard compiled the branch out
+        REQUIRE(honored->stream == (void*)pool.stream());
+    }
+
+    auto v1 = stream_to_tensor(t, 0);          // negotiation pin, other direction
+    REQUIRE(v1.has_value());
+    CHECK_FALSE(v1->stream != nullptr);
+#endif
+}
+
+TEST_CASE("stream_to_tensor: handoff survives a concurrently-encoding training thread") {
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    // Regression for the EmbedScope SIGABRT (MPSCore MPSPredicate.mm 'command
+    // buffer already committed. State: 4'): the frame thread performs stream
+    // handoffs while a worker thread — the training loop — continuously
+    // enqueues MPS kernels. torch::mps::get_command_buffer() is a bare,
+    // UNSERIALIZED accessor of MPSStream::_commandBuffer, so calling it here
+    // raced the worker's encode/commitAndContinue blocks and MPS aborted
+    // within a few hundred handoffs. The fix snapshots the producer queue
+    // inside a dispatch_sync block on torch's stream dispatch queue — the
+    // documented synchronization point every torch-internal encode also uses.
+    std::atomic<bool> stop{false};
+    std::thread worker([&] {
+        torch::Tensor a = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kMPS));
+        torch::Tensor b = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kMPS));
+        while (!stop.load(std::memory_order_relaxed))
+            a = torch::mm(a, b).tanh();          // endless kernel stream
+    });
+    torch::Tensor t = torch::ones({8, 8}, torch::TensorOptions().device(torch::kMPS));
+    for (int i = 0; i < 500; ++i) {
+        auto ct = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+        REQUIRE(ct.has_value());
+        CHECK_FALSE(ct->stream == nullptr);
+    }
+    stop.store(true, std::memory_order_relaxed);
+    worker.join();
+    torch::mps::synchronize();                   // leave the device quiet for other cases
+}
+
+TEST_CASE("synced_to_tensor: drain survives a concurrently-encoding training thread") {
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    // The drain-path twin of the stress case above (the fix backported to main
+    // as 8b0a010, kept through the metal-pipelining merge): the frame thread
+    // drains via synced_to_tensor — the no-caps / GL-fallback route — while a
+    // worker thread continuously enqueues MPS kernels.
+    // torch::mps::synchronize() is just as unserialized as get_command_buffer()
+    // (deviceSynchronize tail-calls MPSStream::synchronize — straight-line
+    // objc_msgSends), so a bare drain corrupts the MPSCommandBuffer state the
+    // same way: SIGABRT on either thread, or an AGX encoder-coalescing SIGSEGV.
     std::atomic<bool> stop{false};
     std::thread worker([&] {
         torch::Tensor a = torch::randn({64, 64},
@@ -158,8 +271,45 @@ TEST_CASE("synced_to_tensor: handoff survives a concurrently-encoding training t
     for (int i = 0; i < 500; ++i) {
         auto ct = synced_to_tensor(t);
         REQUIRE(ct.has_value());
+        CHECK(ct->stream == nullptr);            // drained handoff carries no stream
     }
     stop.store(true, std::memory_order_relaxed);
     worker.join();
     torch::mps::synchronize();                   // leave the device quiet for other cases
+}
+
+TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training thread") {
+    if (!torch::cuda::is_available()) { MESSAGE("no CUDA device — skipping"); return; }
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+    // CUDA twin of the MPS stress case above (docs/m2a-windows-verification.md
+    // T4, finding 2). On MPS the equivalent race SIGABRTed within a few hundred
+    // handoffs because torch's public stream calls are not internally
+    // serialized. The CUDA handoff is only a getCurrentCUDAStream() handle
+    // read and CUDA driver calls are thread-safe by API contract, so no
+    // serialization SHOULD be needed — this case tests that assumption
+    // empirically instead of trusting it. The handoff thread runs on a
+    // non-default pool stream so the carried handle is assertable (non-NULL,
+    // see the tripwire case above) while the worker encodes on its own
+    // thread-local current stream.
+    std::atomic<bool> stop{false};
+    std::thread worker([&] {
+        torch::Tensor a = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kCUDA));
+        torch::Tensor b = torch::randn({64, 64},
+            torch::TensorOptions().device(torch::kCUDA));
+        while (!stop.load(std::memory_order_relaxed))
+            a = torch::mm(a, b).tanh();          // endless kernel stream
+    });
+    torch::Tensor t = torch::ones({8, 8}, torch::TensorOptions().device(torch::kCUDA));
+    auto pool = c10::cuda::getStreamFromPool(false, t.device().index());
+    c10::cuda::CUDAStreamGuard guard(pool);
+    for (int i = 0; i < 500; ++i) {
+        auto ct = stream_to_tensor(t, CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+        REQUIRE(ct.has_value());
+        CHECK_FALSE(ct->stream == nullptr);
+    }
+    stop.store(true, std::memory_order_relaxed);
+    worker.join();
+    torch::cuda::synchronize();                  // leave the device quiet for other cases
+#endif
 }

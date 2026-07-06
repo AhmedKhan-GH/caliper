@@ -84,7 +84,7 @@ sequenceDiagram
     W->>U: training kernels write weight MTLBuffer
     W->>W: tensor.contiguous(), storage_offset == 0
     W->>B: hand over pointer — cast to id&lt;MTLBuffer&gt;, zero bytes moved
-    Note over W,B: one torch::mps synchronize at the handoff —<br/>pending kernels finish before the GPU reads
+    Note over W,B: handoff sync: v1 drains (torch::mps::synchronize); with bridge-v1.1 stream handoff the renderer GPU-orders<br/>after the producer queue instead (docs/metal-pipelining.md)
     B->>U: GPU blit encoder: buffer → MTLTexture<br/>+ colormap LUT applied on-GPU (f32 heatmaps)
     B->>F: ImTextureID (the texture, directly drawable)
     F->>F: ImGui::Image — pixels this frame
@@ -141,8 +141,14 @@ buffer-to-image copy for u8). Synchronization is GPU-ordered by a per-texture
 **shared timeline semaphore** (`VK_KHR_timeline_semaphore` ↔
 `cuImportExternalSemaphore`): CUDA signals after its stream-ordered copy, the
 Vulkan pass GPU-waits it, and the frame draw GPU-waits the pass — no CPU sync
-on the hot path. `torch::cuda::synchronize()` at the adapter is still the v1
-producer→consumer barrier (the ABI has no stream channel yet). Where the
+on the hot path. The adapter's `torch::cuda::synchronize()` barrier is elided when bridge-v1.1
+caps grant stream-ordered handoff — the copy+signal then ride the producer's
+CUDA stream (docs/metal-pipelining.md M2a; verified on NVIDIA hardware
+2026-07-05: the handoff carries a non-default producer stream end-to-end and
+survives 10/10 concurrent-training stress runs; embed_scope training
+steps/sec vs the drained parent measured ≈ 0 delta on an RTX 500 Ada — the
+win is frame-thread stall removal, not training throughput, because the
+training loop's own per-step `loss.item()` sync dominates). Where the
 device can't export timeline semaphores, the handoff falls back to the
 synchronous model (`cuCtxSynchronize()` + fence-waited submits, Metal's
 `waitUntilCompleted`).

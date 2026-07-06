@@ -11,6 +11,7 @@
 // stub renderer and no window.
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -59,6 +60,10 @@ public:
                                   CaliperTensor* out_tensor,
                                   CaliperTextureId* out_texture);
     void             free_shared(CaliperTextureId tex);
+
+    // Bridge-v1.1 capability bits (D24). Bit 0 = the active renderer honors
+    // stream-ordered handoff, so adapters may skip the device drain.
+    uint32_t caps() const;
 
 private:
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is

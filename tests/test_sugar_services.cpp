@@ -381,6 +381,30 @@ TEST_CASE("sugar: Bridge wrapper routes through the service table") {
     CHECK(caliper::Bridge::imtex(42) == (ImTextureID)42);
 }
 
+static uint32_t fake_caps(void) { return CALIPER_BRIDGE_CAP_STREAM_ORDERED; }
+
+TEST_CASE("sugar Bridge::caps(): v1_1 bit surfaces; absent service -> 0") {
+    caliper::testing::FixtureHost fx;            // the file's existing fixture type
+    // v1-only host: caps() must be 0 (adapters drain).
+    fx.provide(CALIPER_TENSOR_BRIDGE_V1, &kFakeBridge);
+    {
+        caliper::Host host(fx.host());
+        caliper::Bridge b(host);
+        CHECK(b.caps() == 0u);
+    }
+    // v1.1 host: the bit crosses.
+    static const CaliperTensorBridgeV1_1 kFake11 = {sizeof(CaliperTensorBridgeV1_1),
+        kFakeBridge.texture_from_tensor, kFakeBridge.update_texture,
+        kFakeBridge.release_texture, kFakeBridge.texture_from_tensor_mapped,
+        kFakeBridge.alloc_shared, kFakeBridge.free_shared, &fake_caps};
+    fx.provide(CALIPER_TENSOR_BRIDGE_V1_1, &kFake11);
+    {
+        caliper::Host host(fx.host());
+        caliper::Bridge b(host);
+        CHECK(b.caps() == CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+    }
+}
+
 TEST_CASE("sugar: Bridge wrapper is falsy and inert without the service") {
     g_bridge = BridgeCalls{};
     caliper::testing::FixtureHost fx;

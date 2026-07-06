@@ -7,6 +7,7 @@
 #include <caliper/tensor.h>
 #include <caliper/services/metrics_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <cstddef>
@@ -60,6 +61,29 @@ static_assert(CALIPER_CMAP_VIRIDIS == 0 && CALIPER_CMAP_MAGMA == 1 &&
 
 TEST_CASE("abi: phase-2c service ids are fixed") {
     CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1) == "caliper.tensor_bridge.v1");
+}
+
+TEST_CASE("tensor_bridge v1_1 is an additive, prefix-compatible superset of v1 (D24)") {
+    CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1_1) == "caliper.tensor_bridge.v1_1");
+    CHECK(CALIPER_BRIDGE_CAP_STREAM_ORDERED == (1u << 0));
+    // Same table: every v1 member sits at the same offset in v1_1.
+    CHECK(offsetof(CaliperTensorBridgeV1_1, struct_size) ==
+          offsetof(CaliperTensorBridgeV1, struct_size));
+    CHECK(offsetof(CaliperTensorBridgeV1_1, texture_from_tensor) ==
+          offsetof(CaliperTensorBridgeV1, texture_from_tensor));
+    CHECK(offsetof(CaliperTensorBridgeV1_1, update_texture) ==
+          offsetof(CaliperTensorBridgeV1, update_texture));
+    CHECK(offsetof(CaliperTensorBridgeV1_1, release_texture) ==
+          offsetof(CaliperTensorBridgeV1, release_texture));
+    CHECK(offsetof(CaliperTensorBridgeV1_1, texture_from_tensor_mapped) ==
+          offsetof(CaliperTensorBridgeV1, texture_from_tensor_mapped));
+    CHECK(offsetof(CaliperTensorBridgeV1_1, alloc_shared) ==
+          offsetof(CaliperTensorBridgeV1, alloc_shared));
+    CHECK(offsetof(CaliperTensorBridgeV1_1, free_shared) ==
+          offsetof(CaliperTensorBridgeV1, free_shared));
+    // Plus exactly one query at the end.
+    CHECK(sizeof(CaliperTensorBridgeV1_1) ==
+          offsetof(CaliperTensorBridgeV1_1, caps) + sizeof(void*));
 }
 
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);

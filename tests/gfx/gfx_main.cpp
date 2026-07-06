@@ -25,6 +25,7 @@
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -385,46 +386,13 @@ struct MetalEnv {
 
 MetalEnv& metal_env() { static MetalEnv e; return e; }
 
-// Test-only readback: blit the RGBA8 texture into a shared MTLBuffer, wait, and
-// copy its unified contents out. NOT the render path.
-std::vector<uint8_t> metal_readback(HostRenderer& /*r*/, CaliperTextureId tex, int w, int h) {
-    @autoreleasepool {
-        // Post-fix, the bridge id's VALUE is the ImGui handle — for Metal that is
-        // the id<MTLTexture> pointer ImGui_ImplMetal binds — so cast it directly.
-        void* p = (void*)(uintptr_t)tex;
-        id<MTLTexture> t = (__bridge id<MTLTexture>)p;
-        id<MTLDevice> dev = t.device;
-        id<MTLCommandQueue> q = [dev newCommandQueue];
-        NSUInteger bpr = (NSUInteger)w * 4;
-        id<MTLBuffer> out = [dev newBufferWithLength:bpr * (NSUInteger)h
-                                             options:MTLResourceStorageModeShared];
-        id<MTLCommandBuffer> cb = [q commandBuffer];
-        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        [blit copyFromTexture:t
-                  sourceSlice:0
-                  sourceLevel:0
-                 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
-                     toBuffer:out
-            destinationOffset:0
-       destinationBytesPerRow:bpr
-     destinationBytesPerImage:bpr * (NSUInteger)h];
-        [blit endEncoding];
-        [cb commit];
-        [cb waitUntilCompleted];
-        std::vector<uint8_t> px((size_t)w * h * 4);
-        std::memcpy(px.data(), out.contents, px.size());
-        return px;
-    }
-}
-
 Backend metal_backend() {
     Backend b;
     b.bridge = metal_env().bridge.get();
     b.renderer = metal_env().renderer.get();
     HostRenderer* r = b.renderer;
     b.readback = [r](CaliperTextureId id, int w, int h) {
-        return metal_readback(*r, id, w, h);
+        return r->debug_readback_rgba8(id, w, h);   // renderer-queue readback (M1)
     };
     return b;
 }
@@ -588,6 +556,110 @@ TEST_CASE("gfx/Metal: short device buffer is rejected (no GPU fault)") {
     CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
         &t, CALIPER_CMAP_VIRIDIS, 0.0f, 15.0f, 0);
     CHECK(id == 0);   // rejected: buffer too short for the declared extent
+}
+
+// M1 pipelining proof (the Vulkan burst test's twin): several device updates
+// enqueued back-to-back with NO readback between them, so successive compute
+// passes are in flight together, ordered only by queue commit order (D23).
+// The final readback must equal the LAST write byte-for-byte. Fresh source
+// buffers per generation keep CPU writes outside the contract (a NULL-stream
+// caller owns producer quiescence); dropping each buffer's last strong ref
+// mid-flight also exercises command-buffer resource retention (spec §3.2).
+TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+
+    const int w = 17, h = 9, n = w * h;   // non-16-multiple edge sizes
+    auto gen_data = [&](int gen) {
+        std::vector<float> d(n);
+        for (int i = 0; i < n; ++i) d[i] = (float)((i * 7 + gen * 13) % n);
+        return d;
+    };
+
+    std::vector<float> d0 = gen_data(0);
+    id<MTLBuffer> buf0 = device_buffer(d0.data(), (size_t)n * sizeof(float));
+    CaliperTensor t{};
+    t.struct_size = sizeof(t); t.data = (__bridge void*)buf0; t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_METAL;
+
+    // NB: not named `id` — that is the Objective-C `id` type, needed by the
+    // `id<MTLBuffer>` declaration inside the loop below.
+    CaliperTextureId tex_id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(tex_id != 0);
+
+    std::vector<float> last;
+    for (int gen = 1; gen <= 8; ++gen) {
+        last = gen_data(gen);
+        id<MTLBuffer> b = device_buffer(last.data(), (size_t)n * sizeof(float));
+        t.data = (__bridge void*)b;      // b's last strong ref dies each loop turn
+        REQUIRE(bk.bridge->update_texture(tex_id, &t));
+    }
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
+
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(last.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    CHECK(bk.readback(tex_id, w, h) == ref);
+    bk.bridge->release_texture(tex_id);
+}
+
+// M2b: a non-NULL t.stream (the producer's MTLCommandQueue*) must GPU-order
+// the update AFTER the producer's committed work. Deterministic, no timing
+// luck: the producer's payload write is gated behind an MTLSharedEvent the
+// TEST only fires after update_texture returns. A renderer that ignores
+// t.stream colormaps the stale bytes (fails); one that orders reads the fresh.
+TEST_CASE("gfx/Metal: non-NULL stream orders the update after the producer queue") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE(bk.renderer->honors_stream_ordered_handoff());
+
+    const int w = 8, h = 8, n = w * h;
+    std::vector<float> stale(n, 0.0f);
+    std::vector<float> fresh(n);
+    for (int i = 0; i < n; ++i) fresh[i] = (float)i;
+
+    id<MTLBuffer> tensor_buf = device_buffer(stale.data(), (size_t)n * sizeof(float));
+    id<MTLBuffer> payload    = device_buffer(fresh.data(), (size_t)n * sizeof(float));
+
+    CaliperTensor t{};
+    t.struct_size = sizeof(t);
+    t.data = (__bridge void*)tensor_buf;
+    t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_METAL;
+
+    // NB: not named `id` — that is the Objective-C `id` keyword, needed below.
+    CaliperTextureId tex_id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(tex_id != 0);
+
+    // Producer queue with pending committed work: a payload blit blocked on a
+    // gate the CPU holds — the stand-in for torch's just-committed kernels.
+    id<MTLDevice> dev = metal_env().device;
+    id<MTLCommandQueue> producer = [dev newCommandQueue];
+    id<MTLSharedEvent> gate = [dev newSharedEvent];
+    id<MTLCommandBuffer> pc = [producer commandBuffer];
+    [pc encodeWaitForEvent:gate value:1];
+    id<MTLBlitCommandEncoder> pb = [pc blitCommandEncoder];
+    [pb copyFromBuffer:payload sourceOffset:0
+              toBuffer:tensor_buf destinationOffset:0
+                  size:(NSUInteger)n * sizeof(float)];
+    [pb endEncoding];
+    [pc commit];
+
+    // Handoff with the producer queue in t.stream and NO drain anywhere.
+    t.stream = (__bridge void*)producer;
+    REQUIRE(bk.bridge->update_texture(tex_id, &t));
+
+    gate.signaledValue = 1;   // only NOW may the producer's write run
+
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(fresh.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    CHECK(bk.readback(tex_id, w, h) == ref);
+    bk.bridge->release_texture(tex_id);
 }
 
 // THE regression test for the reported SIGSEGV. Before the fix the bridge handed
@@ -847,6 +919,67 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
     CHECK(bk.readback(id, w, h) == ref);
     bk.bridge->release_texture(id);
     cu->cuMemFree(buf);
+}
+
+// Frame-thread hitch forensics (embed_scope "hitches every batch" report):
+// the applet's per-generation refresh does release+create for all 9 textures
+// (8x conv 48x48 + 1x embw 36x512). On the Vulkan+CUDA path a CREATE is the
+// full interop setup — vkCreateImage + exportable memory + cuImportExternalMemory
+// + timeline semaphore create/export/import — while an UPDATE is just a
+// stream-ordered copy + compute pass. This case times both patterns at the
+// applet's real sizes and prints µs/op so the fix (create-once + update) is
+// justified by measurement, not vibes (D21).
+TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-shaped") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    struct Shape { int w, h; const char* name; };
+    const Shape shapes[2] = {{48, 48, "conv 48x48"}, {512, 36, "embw 36x512"}};
+    constexpr int kIters = 200;
+
+    for (const auto& s : shapes) {
+        const int n = s.w * s.h;
+        std::vector<float> data(n);
+        for (int i = 0; i < n; ++i) data[i] = (float)(i % 251);
+        cudadrv::CUdeviceptr buf = 0;
+        REQUIRE(cu->cuMemAlloc(&buf, (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+        cu->cuMemcpyHtoD(buf, data.data(), (size_t)n * sizeof(float));
+
+        CaliperTensor t{};
+        t.struct_size = sizeof(t); t.data = (void*)(uintptr_t)buf; t.dtype = CALIPER_DT_F32;
+        t.ndim = 2; t.shape[0] = s.h; t.shape[1] = s.w; t.strides[0] = s.w; t.strides[1] = 1;
+        t.device = CALIPER_DEV_CUDA;
+
+        // Pattern A: the applet today — release + create per generation.
+        using clk = std::chrono::steady_clock;
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+        REQUIRE(id != 0);
+        auto t0 = clk::now();
+        for (int i = 0; i < kIters; ++i) {
+            bk.bridge->release_texture(id);
+            id = bk.bridge->texture_from_tensor_mapped(
+                &t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+            REQUIRE(id != 0);
+        }
+        double us_create = std::chrono::duration<double, std::micro>(
+                               clk::now() - t0).count() / kIters;
+
+        // Pattern B: the proposed fix — create once, update per generation.
+        auto t1 = clk::now();
+        for (int i = 0; i < kIters; ++i)
+            REQUIRE(bk.bridge->update_texture(id, &t));
+        double us_update = std::chrono::duration<double, std::micro>(
+                               clk::now() - t1).count() / kIters;
+        bk.bridge->release_texture(id);
+        cu->cuMemFree(buf);
+
+        MESSAGE(s.name << ": release+create = " << us_create
+                << " us/op, update = " << us_update << " us/op ("
+                << (us_update > 0 ? us_create / us_update : 0) << "x)");
+    }
 }
 
 TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-exact") {
