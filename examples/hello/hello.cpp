@@ -26,17 +26,12 @@ public:
         ImGui::Text("framebuffer: %d x %d px   dpi_scale: %.1f",
                     f.fb_width, f.fb_height, f.dpi_scale);
 
-        // Input: two buttons that own the animation. A button returns true on
-        // the frame it is clicked; the applet — not ImGui — holds the state it
-        // toggles. BeginDisabled/EndDisabled greys out the button that would be
-        // a no-op (Play while already playing, Pause while already paused).
-        ImGui::BeginDisabled(playing_);
-        if (ImGui::Button("Play"))  playing_ = true;
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!playing_);
-        if (ImGui::Button("Pause")) playing_ = false;
-        ImGui::EndDisabled();
+        // Input: one button that owns the animation. Its label is an
+        // expression over the state it controls, so it reads "Pause" while
+        // running and "Play" while stopped; the click flips that state. A
+        // button returns true only on the frame it is clicked, and the state
+        // it toggles lives in the applet — not ImGui.
+        if (ImGui::Button(playing_ ? "Pause" : "Play")) playing_ = !playing_;
 
         // The animation runs on phase the applet accumulates itself, advanced
         // only while playing. f.time_sec (monotonic wall-clock) can't be

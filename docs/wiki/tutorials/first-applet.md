@@ -121,39 +121,32 @@ Hello also reads `CALIPER_HELLO_CRASH` in `on_init` and, when set, faults inside
 `on_frame` *before* any ImGui call. That is a deliberate test hook the loader's
 crash-quarantine tests use — not something your own applets need.
 
-## 3a. Input: the Play/Pause buttons
+## 3a. Input: the Play/Pause button
 
-The buttons above the plot are the smallest complete lesson in ImGui **IO**, and
-they turn on three ideas you will use in every applet:
+The button above the plot is the smallest complete lesson in ImGui **IO**, and
+it turns on three ideas you will use in every applet:
 
-- **A widget call both draws and reports.** `ImGui::Button("Pause")` draws the
+- **A widget call both draws and reports.** `ImGui::Button(...)` draws the
   button *and* returns `true` on the single frame it was clicked. There is no
   callback and no event queue — you check the return value inline:
   ```cpp
-  if (ImGui::Button("Pause")) playing_ = false;
+  if (ImGui::Button(playing_ ? "Pause" : "Play")) playing_ = !playing_;
   ```
   This is *immediate mode*: the UI is a function of your state, re-issued every
   frame, and input comes back as the return value of the call that drew it.
 
+- **The label is derived from state, every frame.** There is one button, not a
+  Play button and a Pause button — its *label* is an expression over
+  `playing_`, recomputed on every `on_frame`. Because the whole UI is rebuilt
+  each frame from your state, a widget that reflects state costs nothing extra:
+  you just compute what to show. The click flips the same `bool` the label
+  reads, so the button relabels itself the very next frame.
+
 - **The state lives in your applet, not in ImGui.** ImGui does not remember
-  "paused" for you — `playing_` is a member of `HelloApplet`. The widgets read
-  and write your fields; ImGui only owns pixels and the click. That is why the
+  "paused" for you — `playing_` is a member of `HelloApplet`. The widget reads
+  and writes your field; ImGui only owns pixels and the click. That is why the
   state is a `bool` on the class, initialised in the header, not a `static`
   inside `on_frame`.
-
-- **Guard a widget with `BeginDisabled`/`EndDisabled`.** Wrapping a button in
-  `ImGui::BeginDisabled(cond)` greys it out and ignores clicks while `cond` is
-  true, so `Play` is dead while already playing and `Pause` is dead while
-  paused — the button can only be pressed when pressing it means something:
-  ```cpp
-  ImGui::BeginDisabled(playing_);
-  if (ImGui::Button("Play")) playing_ = true;
-  ImGui::EndDisabled();
-  ImGui::SameLine();                    // put the next widget on this row
-  ImGui::BeginDisabled(!playing_);
-  if (ImGui::Button("Pause")) playing_ = false;
-  ImGui::EndDisabled();
-  ```
 
 The subtle part is *why the animation can be paused at all*. Earlier the sine
 was drawn from `f.time_sec` — the host's monotonic wall-clock, which keeps
