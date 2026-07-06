@@ -109,7 +109,9 @@ Your class overrides three methods from `caliper::Applet`:
   here, and nothing slow — you share the frame thread with the host and every
   other applet. `f.fb_width`/`f.fb_height` are **physical** pixels;
   `f.dpi_scale` converts to the logical units ImGui sizes in; drive animation
-  from `f.time_sec`/`f.delta_sec`, never a wall-clock sleep.
+  from `f.time_sec`/`f.delta_sec`, never a wall-clock sleep (§3a shows why a
+  *pausable* animation accumulates its own phase from `f.delta_sec` rather than
+  reading `f.time_sec` directly).
 
 - **`on_cleanup()`** runs when the applet closes — symmetric with `on_init`:
   persist, release, log. After it returns the host destroys your object; do not
@@ -118,6 +120,55 @@ Your class overrides three methods from `caliper::Applet`:
 Hello also reads `CALIPER_HELLO_CRASH` in `on_init` and, when set, faults inside
 `on_frame` *before* any ImGui call. That is a deliberate test hook the loader's
 crash-quarantine tests use — not something your own applets need.
+
+## 3a. Input: the Play/Pause buttons
+
+The buttons above the plot are the smallest complete lesson in ImGui **IO**, and
+they turn on three ideas you will use in every applet:
+
+- **A widget call both draws and reports.** `ImGui::Button("Pause")` draws the
+  button *and* returns `true` on the single frame it was clicked. There is no
+  callback and no event queue — you check the return value inline:
+  ```cpp
+  if (ImGui::Button("Pause")) playing_ = false;
+  ```
+  This is *immediate mode*: the UI is a function of your state, re-issued every
+  frame, and input comes back as the return value of the call that drew it.
+
+- **The state lives in your applet, not in ImGui.** ImGui does not remember
+  "paused" for you — `playing_` is a member of `HelloApplet`. The widgets read
+  and write your fields; ImGui only owns pixels and the click. That is why the
+  state is a `bool` on the class, initialised in the header, not a `static`
+  inside `on_frame`.
+
+- **Guard a widget with `BeginDisabled`/`EndDisabled`.** Wrapping a button in
+  `ImGui::BeginDisabled(cond)` greys it out and ignores clicks while `cond` is
+  true, so `Play` is dead while already playing and `Pause` is dead while
+  paused — the button can only be pressed when pressing it means something:
+  ```cpp
+  ImGui::BeginDisabled(playing_);
+  if (ImGui::Button("Play")) playing_ = true;
+  ImGui::EndDisabled();
+  ImGui::SameLine();                    // put the next widget on this row
+  ImGui::BeginDisabled(!playing_);
+  if (ImGui::Button("Pause")) playing_ = false;
+  ImGui::EndDisabled();
+  ```
+
+The subtle part is *why the animation can be paused at all*. Earlier the sine
+was drawn from `f.time_sec` — the host's monotonic wall-clock, which keeps
+advancing no matter what the applet does, so there is nothing you could freeze.
+Pause only becomes possible once the applet **owns the time**: Hello accumulates
+its own `phase_`, advanced by `f.delta_sec` **only while playing**:
+
+```cpp
+if (playing_) phase_ += (float)f.delta_sec;   // ...then draw sin(x + phase_)
+```
+
+That is the general shape of interactive animation in a Caliper applet — derive
+what you draw from state you control, and let the widgets edit that state. The
+same three ideas scale straight up to sliders (`SliderFloat` returns an edited
+value), checkboxes, and the live training controls the ML applets use.
 
 ## 4. Build it
 
