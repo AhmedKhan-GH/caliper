@@ -352,16 +352,14 @@ endforeach()
 # not loaded.
 option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + tutorial applets)" ON)
 if(CALIPER_BUILD_EXAMPLES)
-    # hello = loader-test fixture; my_scope/sine_scope = the tutorial applets
-    # the wiki embeds VERBATIM (dev-basics / first-ml-applet) — building them
-    # here is what keeps the docs' code honest.
+    # hello = loader-test fixture AND the UI-only tutorial applet the wiki
+    # embeds VERBATIM (dev-basics / first-applet); sine_scope = the ML tutorial
+    # applet (first-ml-applet) — building them here keeps the docs' code honest.
     add_subdirectory(examples/hello)
-    add_subdirectory(examples/my_scope)
     add_subdirectory(examples/sine_scope)
-    add_dependencies(caliper hello_applet my_scope sine_scope)
+    add_dependencies(caliper hello_applet sine_scope)
     list(APPEND _active_applet_libs
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}my_scope${CMAKE_SHARED_LIBRARY_SUFFIX}"
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}sine_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 

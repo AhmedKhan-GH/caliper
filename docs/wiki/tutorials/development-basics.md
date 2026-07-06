@@ -44,23 +44,22 @@ provided; what is *yours* (torch, curl) you link privately; what is
 
 ## Anatomy of an applet
 
-Four files, one folder. This is the entire footprint:
+Three files, one folder. This is the entire footprint:
 
 ```
-applets/my_scope/
-├── my_scope.caliper.toml    the manifest — checked BEFORE your code loads
-├── plugin.cpp               ~20 lines: the CALIPER_APPLET macro + descriptor
-├── my_scope.cpp             your applet class: initialize / draw_ui / cleanup
-└── CMakeLists.txt           ~12 lines (hello) to ~40 (with torch)
+examples/hello/
+├── hello.caliper.toml    the manifest — checked BEFORE your code loads
+├── hello.cpp             your applet class + the CALIPER_APPLET macro
+└── CMakeLists.txt        ~12 lines (hello) to ~40 (with torch)
 ```
 
 - **Manifest**: id (reverse-DNS), name, version, summary, required/optional
   service lists. The `id` and `version` must be **byte-identical** between
   the manifest and the descriptor in plugin.cpp, or the loader refuses (with
   a polite card, not a crash). See [manifest reference](../reference/manifest.md).
-- **plugin.cpp**: the `CALIPER_APPLET` macro generates the epoch-2 C ABI
-  glue — exception walls on every entry point included. You never write
-  `extern "C"` yourself.
+- **The macro**: the `CALIPER_APPLET(...)` at the bottom of your `.cpp`
+  generates the epoch-2 C ABI glue — the descriptor plus exception walls on
+  every entry point. You never write `extern "C"` yourself.
 - **The class**: three lifecycle methods. `initialize(Host&)` — probe your
   services (required ones you assert; optional ones degrade). `draw_ui()` —
   called every frame on the frame thread; submit ImGui windows, read
@@ -73,20 +72,21 @@ applets/my_scope/
 ### The smallest complete applet, in full
 
 This is everything — all three files. It is **built in this repo** as
-`examples/my_scope/` (the MyScope card in your launcher), and the listings
+`examples/hello/` (the Hello card in your launcher), and the listings
 below are the actual files, embedded verbatim — they cannot drift from what
-compiles:
+compiles. [Your first applet](first-applet.md) walks this same file line by
+line:
 
-```cpp title="examples/my_scope/my_scope.cpp"
---8<-- "examples/my_scope/my_scope.cpp"
+```cpp title="examples/hello/hello.cpp"
+--8<-- "examples/hello/hello.cpp"
 ```
 
-```toml title="examples/my_scope/my_scope.caliper.toml"
---8<-- "examples/my_scope/my_scope.caliper.toml"
+```toml title="examples/hello/hello.caliper.toml"
+--8<-- "examples/hello/hello.caliper.toml"
 ```
 
-```cmake title="examples/my_scope/CMakeLists.txt"
---8<-- "examples/my_scope/CMakeLists.txt"
+```cmake title="examples/hello/CMakeLists.txt"
+--8<-- "examples/hello/CMakeLists.txt"
 ```
 
 Note what is **absent**: no `main`, no window, no GL/Metal, no ImGui
@@ -101,21 +101,21 @@ exemplar.
 ```bash
 # 1. create — the applets/* glob auto-discovers it (CONFIGURE_DEPENDS);
 #    no root CMake edits, just build:
-mkdir applets/my_scope   # + the four files (copy examples/hello/ to start)
+mkdir applets/my_applet   # + the three files (copy examples/hello/ to start)
 
 # 2. build — your dylib + manifest land in build/applets/
-cmake --build build --target my_scope -j
+cmake --build build --target my_applet -j
 
 # 3. run — it appears as a card in the launcher
 ./build/caliper
 
 # 4. iterate fast — skip the launcher click every rebuild:
-CALIPER_AUTOLAUNCH=dev.caliper.my-scope ./build/caliper
+CALIPER_AUTOLAUNCH=dev.example.my-applet ./build/caliper
 #    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI)
 ```
 
 In CLion the same works via the CMake tool window — reload the project once
-after creating the folder, then the `my_scope` target exists.
+after creating the folder, then the `my_applet` target exists.
 
 **Testing without a window:** the fixture host
 (`caliper::sdk_testing`, `<caliper/fixture_host.h>`) fakes `get_service`

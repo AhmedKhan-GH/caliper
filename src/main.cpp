@@ -247,8 +247,7 @@ public:
                     static const char* const central_windows[] = {
                         "EmbedScope: Cloud",   // the showcase
                         "GPTScope: Logit Lens",// the mech-interp centerpiece
-                        "Hello, Caliper",      // examples/hello
-                        "MyScope",             // examples/my_scope (tutorial)
+                        "Hello, Caliper",      // examples/hello (tutorial)
                         "SineScope",           // examples/sine_scope (tutorial)
                     };
                     static const char* const side_top_windows[] = {

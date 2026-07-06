@@ -60,11 +60,11 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 
 **Services vended (8):** `ui.v1`, `log.v1`, `jobs.v1`, `device.v1`, `metrics.v1`, `tensor_bridge.v1`, `artifacts.v1`, `data.v1` (+ `CaliperTensor` and the Arrow C Data Interface as ABI-boundary interchange types). Every service now has an honest in-tree consumer.
 
-**Applets (5 active + 6 archived):**
+**Applets (4 active + 6 archived):**
 - *Flagship:* **GPTScope 0.2.0** (`applets/gpt_scope`) — mechanistic-insight rebuild: logit lens (per-depth prediction grid), head-role scatter (distance x entropy) with drill-down heatmap, embedding-geometry glyph cloud (W_E PCA in ImPlot3D), residual write-norm accounting + per-layer grad norms, confidence-colored sampling; metrics + artifacts wired
-- *Tutorial applets (docs embed their source verbatim):* MyScope (`examples/my_scope`, dev-basics), SineScope (`examples/sine_scope`, first-ml-applet)
+- *Tutorial applet (docs embed its source verbatim):* SineScope (`examples/sine_scope`, first-ml-applet)
 - *The exemplar:* **EmbedScope** (`applets/embed_scope`) — sole showcase + template; consumes all 8 services; ImPlot3D embedding cloud + **per-step live tensors** (conv1 kernels + projection matrix as bridge heatmaps, live-batch sparks); self-contained (own `mnist_idx.h`)
-- *Fixture:* Hello (`examples/hello`) — loader-test dependency + the tutorial applet
+- *Fixture + UI tutorial:* Hello (`examples/hello`) — loader-test dependency AND the UI-only tutorial applet the docs embed verbatim (dev-basics + first-applet)
 - *Archived, not built or loaded (`applets/legacy/`):* CircuitNet, OpenGllama, RepNet Demo — Ahmed's real projects, awaiting their own repos (Phase 3+)
 - *Archived, not built or loaded (`applets/legacy-dev/`):* GPTScope, MLScope, SignalScope — the demos that drove the platform's architecture, kept for history and reference
 - Archive dirs have no top-level CMakeLists, so the applet glob never builds them; the configure-time stale sweep removes their old dylibs *and manifests* from `build/applets/`. Dev hooks: `CALIPER_AUTOLAUNCH=<id>` (host) and `CALIPER_EMBED_AUTOTRAIN=1` (exemplar) reproduce a card click + Train headlessly.
