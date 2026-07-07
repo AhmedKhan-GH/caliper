@@ -13,6 +13,7 @@
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
+#include <caliper/services/geometry_v1.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -81,6 +82,23 @@ public:
                                              uint64_t offset_bytes,
                                              const CaliperTensor* desc);
 
+    // caliper.geometry.v1 (imported 3-D points). Lives on the SAME object as
+    // the bridge so views share the texture table (ImGui-drawable ids) and
+    // points address v1.2 imported allocations directly. Every gate fails
+    // closed with a logged reason; a false draw leaves the view's pixels and
+    // telemetry untouched.
+    uint32_t         geom_caps() const;
+    CaliperTextureId geom_create_view(uint32_t w, uint32_t h);
+    void             geom_release_view(CaliperTextureId view);
+    bool             geom_draw_points(CaliperTextureId view,
+                                      const CaliperGeomCamera* cam,
+                                      CaliperAllocId pos_alloc,
+                                      uint64_t pos_offset, uint64_t count,
+                                      CaliperAllocId attr_alloc,
+                                      uint64_t attr_offset,
+                                      int32_t colormap, float vmin, float vmax,
+                                      float size_px, uint32_t clear_rgba);
+
 private:
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
     // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_{metal,
@@ -100,6 +118,8 @@ private:
         float        vmax = 1.0f;
         bool         shared = false;
         std::vector<uint8_t> shared_buf;  // alloc_shared CPU-unified backing
+        bool         view = false;        // geometry.v1 render target: updates
+                                          // and bridge-release refuse it
     };
 
     // Stage/forward a validated tensor into an existing entry's texture.

@@ -247,6 +247,8 @@ public:
                     static const char* const central_windows[] = {
                         "EmbedScope: Cloud",   // the showcase
                         "GPTScope: Logit Lens",// the mech-interp centerpiece
+                        "GPTScope: ThoughtSpace", // residual constellation (3-D)
+                        "FlowScope: Field",    // the geometry.v1 exemplar
                         "Hello, Caliper",      // examples/hello (tutorial)
                         "SineScope",           // examples/sine_scope (tutorial)
                     };

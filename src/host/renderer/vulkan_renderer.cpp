@@ -77,6 +77,9 @@ extern "C" __declspec(dllimport) int __stdcall DuplicateHandle(
 // Build-time SPIR-V of shaders/colormap.comp (glslang -V --vn kColormapSpv),
 // byte-identical index math to the CPU reference (§16).
 #include <colormap_spv.h>
+// caliper.geometry.v1 instanced-point shaders (same build-time discipline).
+#include <points_vert_spv.h>
+#include <points_frag_spv.h>
 
 namespace caliper_host {
 
@@ -104,6 +107,18 @@ struct CmapPush {
     uint32_t w, h, sx, sy;
     float    vmin, vmax;
 };
+
+// Push block of shaders/points.vert: proj*view premultiplied host-side so the
+// whole block (88 B) fits Vulkan's guaranteed 128-byte push budget.
+struct GeomPush {
+    float    mvp[16];
+    uint32_t pos_base;    // float-element bases: byte offsets / 4
+    uint32_t attr_base;
+    uint32_t use_attr;
+    float    vmin, vmax;
+    float    size_px;
+};
+static_assert(sizeof(GeomPush) == 88, "points.vert push block layout");
 
 class VulkanRenderer final : public HostRenderer {
 public:
@@ -242,6 +257,7 @@ public:
         }
         imported_.clear();
         destroy_compute();
+        destroy_geom();
         destroy_buffer(staging_);
         destroy_buffer(lut_buf_);
         if (oneshot_pool_) { vkDestroyCommandPool(device_, oneshot_pool_, nullptr); oneshot_pool_ = VK_NULL_HANDLE; }
@@ -458,6 +474,226 @@ public:
 #endif
     }
 
+    // ---- caliper.geometry.v1: instanced points from imported allocations ----
+    // Same gate as the imported-texture path: point data lives in v1.2
+    // imported blocks, which only exist when interop + external memory are up.
+    bool supports_geometry() const override { return supports_external_import(); }
+
+    // An offscreen render target that is ALSO an ordinary sampled texture:
+    // it lives in textures_, so tex_imtexture_id / debug_readback / tex_release
+    // work unchanged; the extra COLOR_ATTACHMENT usage + framebuffer make it
+    // drawable by the point pass. Cleared to opaque black at create so ImGui
+    // sampling before the first draw is defined.
+    uint64_t geom_create_view(int w, int h) override {
+        if (w <= 0 || h <= 0 || device_ == VK_NULL_HANDLE) return 0;
+        if (!ensure_geom_objects()) return 0;
+        Tex t{};
+        t.w = w; t.h = h;
+
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = VK_FORMAT_R8G8B8A8_UNORM;
+        ici.extent = {(uint32_t)w, (uint32_t)h, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device_, &ici, nullptr, &t.image) != VK_SUCCESS) return 0;
+
+        VkMemoryRequirements mr;
+        vkGetImageMemoryRequirements(device_, t.image, &mr);
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.allocationSize = mr.size;
+        if (!find_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           &mai.memoryTypeIndex) ||
+            vkAllocateMemory(device_, &mai, nullptr, &t.memory) != VK_SUCCESS) {
+            destroy_tex(t); return 0;
+        }
+        vkBindImageMemory(device_, t.image, t.memory, 0);
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image = t.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &vci, nullptr, &t.view) != VK_SUCCESS) {
+            destroy_tex(t); return 0;
+        }
+
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fci.renderPass = geom_pass_;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &t.view;
+        fci.width = (uint32_t)w;
+        fci.height = (uint32_t)h;
+        fci.layers = 1;
+        if (vkCreateFramebuffer(device_, &fci, nullptr, &t.fb) != VK_SUCCESS) {
+            destroy_tex(t); return 0;
+        }
+
+        t.descset = ImGui_ImplVulkan_AddTexture(t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (t.descset == VK_NULL_HANDLE) { destroy_tex(t); return 0; }
+
+        const bool ok = submit_once([&](VkCommandBuffer cb) {
+            barrier(cb, t, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkClearColorValue black{};
+            black.float32[3] = 1.0f;
+            VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cb, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 &black, 1, &r);
+            barrier(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+        if (!ok) { destroy_tex(t); return 0; }
+        t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        uint64_t id = next_id_++;
+        textures_[id] = t;
+        return id;
+    }
+
+    // One view frame, atomically: clear + draw `count` vertex-pulled points.
+    // Positions/attr are element bases into the imported blocks (bound whole),
+    // so the offset gate is 4-byte alignment — deliberately looser than the
+    // descriptor-offset path's minStorageBufferOffsetAlignment. Additive
+    // blend, no depth. GL-style NDC (+y up) via the negative-viewport trick
+    // (core in Vulkan 1.1). Fenced submit, like the v1.2 sync fallback.
+    bool geom_draw_points(uint64_t view_tex, const float* view16,
+                          const float* proj16,
+                          uint64_t pos_alloc, uint64_t pos_offset,
+                          uint64_t count,
+                          uint64_t attr_alloc, uint64_t attr_offset,
+                          const uint32_t* lut256, float vmin, float vmax,
+                          float size_px, uint32_t clear_rgba) override {
+        if (!supports_geometry() || !ensure_geom_objects()) return false;
+        auto vt = textures_.find(view_tex);
+        if (vt == textures_.end() || vt->second.fb == VK_NULL_HANDLE) return false;
+        Tex& t = vt->second;
+
+        const ImportedAlloc* pos = nullptr;
+        const ImportedAlloc* attr = nullptr;
+        if (count > 0) {
+            auto pit = imported_.find(pos_alloc);
+            if (pit == imported_.end()) return false;
+            pos = &pit->second;
+            // Renderer re-check of the host-side gates against the REAL
+            // allocation (same both-layers discipline as the texture path).
+            if (pos_offset % 4 != 0 || count > UINT64_MAX / 12u) return false;
+            const uint64_t pos_bytes = count * 12u;
+            if (pos_offset > pos->size || pos_bytes > pos->size - pos_offset)
+                return false;
+            // Element bases ride a 32-bit push constant.
+            if (pos_offset / 4 > UINT32_MAX || count > UINT32_MAX) return false;
+            if (attr_alloc != 0) {
+                auto ait = imported_.find(attr_alloc);
+                if (ait == imported_.end() || lut256 == nullptr) return false;
+                attr = &ait->second;
+                if (attr_offset % 4 != 0) return false;
+                const uint64_t attr_bytes = count * 4u;
+                if (attr_offset > attr->size || attr_bytes > attr->size - attr_offset)
+                    return false;
+                if (attr_offset / 4 > UINT32_MAX) return false;
+            }
+        }
+
+        // Stage the LUT for this draw (fenced submits serialize all draws, so
+        // one shared host-visible buffer is race-free).
+        if (attr) std::memcpy(geom_lut_.mapped, lut256, 256 * sizeof(uint32_t));
+
+        // Descriptor set: positions, attr (positions again when flat — a valid
+        // binding the shader never reads), LUT.
+        VkDescriptorBufferInfo bi[3] = {};
+        bi[0].buffer = pos ? pos->buf : geom_lut_.buf;   // count==0: never read
+        bi[0].range  = VK_WHOLE_SIZE;
+        bi[1].buffer = attr ? attr->buf : bi[0].buffer;
+        bi[1].range  = VK_WHOLE_SIZE;
+        bi[2].buffer = geom_lut_.buf;
+        bi[2].range  = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet wr[3] = {};
+        for (int i = 0; i < 3; ++i) {
+            wr[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            wr[i].dstSet = geom_set_;
+            wr[i].dstBinding = (uint32_t)i;
+            wr[i].descriptorCount = 1;
+            wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[i].pBufferInfo = &bi[i];
+        }
+        vkUpdateDescriptorSets(device_, 3, wr, 0, nullptr);
+
+        GeomPush push{};
+        // mvp = proj * view, column-major (GLSL default).
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) {
+                float s = 0.f;
+                for (int k = 0; k < 4; ++k)
+                    s += proj16[k * 4 + r] * view16[c * 4 + k];
+                push.mvp[c * 4 + r] = s;
+            }
+        push.pos_base  = (uint32_t)(pos_offset / 4);
+        push.attr_base = (uint32_t)(attr_offset / 4);
+        push.use_attr  = attr ? 1u : 0u;
+        push.vmin = vmin;
+        push.vmax = vmax;
+        push.size_px = size_px < 1.f ? 1.f
+                     : (size_px > point_size_max_ ? point_size_max_ : size_px);
+
+        VkClearValue clear{};
+        clear.color.float32[0] = (float)((clear_rgba)       & 0xFFu) / 255.f;
+        clear.color.float32[1] = (float)((clear_rgba >> 8)  & 0xFFu) / 255.f;
+        clear.color.float32[2] = (float)((clear_rgba >> 16) & 0xFFu) / 255.f;
+        clear.color.float32[3] = (float)((clear_rgba >> 24) & 0xFFu) / 255.f;
+
+        const bool ok = submit_once([&](VkCommandBuffer cb) {
+            // Make the applet's CUDA writes to the imported blocks visible to
+            // the vertex stage (external-memory coherence, as on the imported
+            // texture path).
+            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0,
+                                 1, &mb, 0, nullptr, 0, nullptr);
+
+            VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+            rp.renderPass = geom_pass_;
+            rp.framebuffer = t.fb;
+            rp.renderArea = {{0, 0}, {(uint32_t)t.w, (uint32_t)t.h}};
+            rp.clearValueCount = 1;
+            rp.pClearValues = &clear;
+            vkCmdBeginRenderPass(cb, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+            if (count > 0) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, geom_pipeline_);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        geom_pipe_layout_, 0, 1, &geom_set_, 0, nullptr);
+                // Negative viewport height = GL-style NDC (+y up), core 1.1.
+                VkViewport vp{};
+                vp.x = 0.f;
+                vp.y = (float)t.h;
+                vp.width  = (float)t.w;
+                vp.height = -(float)t.h;
+                vp.minDepth = 0.f;
+                vp.maxDepth = 1.f;
+                vkCmdSetViewport(cb, 0, 1, &vp);
+                VkRect2D sc{{0, 0}, {(uint32_t)t.w, (uint32_t)t.h}};
+                vkCmdSetScissor(cb, 0, 1, &sc);
+                vkCmdPushConstants(cb, geom_pipe_layout_, VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(GeomPush), &push);
+                vkCmdDraw(cb, (uint32_t)count, 1, 0, 0);
+            }
+            vkCmdEndRenderPass(cb);   // finalLayout: SHADER_READ_ONLY_OPTIMAL
+        });
+        if (!ok) return false;
+        t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        last_device_path_ = "points-imported";
+        dev_note("geometry path OK — points drawn from imported allocation in place");
+        return true;
+    }
+
     // Import an applet-exported CUDA allocation as one VkBuffer (its import
     // twin of ensure_buffer's export). Returns a renderer-internal id (0 on
     // failure -> bridge falls back). Any failure frees everything it created.
@@ -653,6 +889,7 @@ private:
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         int w = 0, h = 0;
         Interop interop;
+        VkFramebuffer fb = VK_NULL_HANDLE;  // geometry.v1 view render target
     };
 
     // Bridge v1.2 imported external allocation: one VkBuffer per applet-exported
@@ -1121,6 +1358,7 @@ private:
 
     void destroy_tex(Tex& t) {
         destroy_interop(t.interop);
+        if (t.fb) { vkDestroyFramebuffer(device_, t.fb, nullptr); t.fb = VK_NULL_HANDLE; }
         if (t.descset) { ImGui_ImplVulkan_RemoveTexture(t.descset); t.descset = VK_NULL_HANDLE; }
         if (t.view) { vkDestroyImageView(device_, t.view, nullptr); t.view = VK_NULL_HANDLE; }
         if (t.image) { vkDestroyImage(device_, t.image, nullptr); t.image = VK_NULL_HANDLE; }
@@ -1305,6 +1543,189 @@ private:
         if (cmap_pipeline_) { vkDestroyPipeline(device_, cmap_pipeline_, nullptr); cmap_pipeline_ = VK_NULL_HANDLE; }
         if (cmap_pipe_layout_) { vkDestroyPipelineLayout(device_, cmap_pipe_layout_, nullptr); cmap_pipe_layout_ = VK_NULL_HANDLE; }
         if (cmap_layout_) { vkDestroyDescriptorSetLayout(device_, cmap_layout_, nullptr); cmap_layout_ = VK_NULL_HANDLE; }
+    }
+
+    // ---- geometry.v1 pipeline objects (lazy, once; destroyed at shutdown) ---
+    bool ensure_geom_objects() {
+        if (geom_pipeline_ != VK_NULL_HANDLE) return true;
+
+        VkPhysicalDeviceProperties pd{};
+        vkGetPhysicalDeviceProperties(physical_, &pd);
+        point_size_max_ = pd.limits.pointSizeRange[1] > 1.f
+                              ? pd.limits.pointSizeRange[1] : 1.f;
+
+        // Render pass: one RGBA8 color attachment, clear-on-load, ends
+        // SHADER_READ_ONLY so a drawn view is immediately sampleable.
+        VkAttachmentDescription att{};
+        att.format = VK_FORMAT_R8G8B8A8_UNORM;
+        att.samples = VK_SAMPLE_COUNT_1_BIT;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;   // cleared every draw
+        att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ar{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sp{};
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.colorAttachmentCount = 1;
+        sp.pColorAttachments = &ar;
+        VkSubpassDependency deps[2] = {};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rpi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        rpi.attachmentCount = 1;
+        rpi.pAttachments = &att;
+        rpi.subpassCount = 1;
+        rpi.pSubpasses = &sp;
+        rpi.dependencyCount = 2;
+        rpi.pDependencies = deps;
+        if (vkCreateRenderPass(device_, &rpi, nullptr, &geom_pass_) != VK_SUCCESS)
+            return false;
+
+        // Set layout: three storage buffers (positions, attr, LUT), vertex stage.
+        VkDescriptorSetLayoutBinding bindings[3] = {};
+        for (uint32_t i = 0; i < 3; ++i) {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.bindingCount = 3;
+        li.pBindings = bindings;
+        if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &geom_layout_) != VK_SUCCESS) {
+            destroy_geom(); return false;
+        }
+
+        VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GeomPush)};
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &geom_layout_;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &pcr;
+        if (vkCreatePipelineLayout(device_, &pli, nullptr, &geom_pipe_layout_) != VK_SUCCESS) {
+            destroy_geom(); return false;
+        }
+
+        VkShaderModuleCreateInfo vmi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        vmi.codeSize = sizeof(kPointsVertSpv);
+        vmi.pCode = kPointsVertSpv;
+        VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+        if (vkCreateShaderModule(device_, &vmi, nullptr, &vs) != VK_SUCCESS) {
+            destroy_geom(); return false;
+        }
+        VkShaderModuleCreateInfo fmi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        fmi.codeSize = sizeof(kPointsFragSpv);
+        fmi.pCode = kPointsFragSpv;
+        if (vkCreateShaderModule(device_, &fmi, nullptr, &fs) != VK_SUCCESS) {
+            vkDestroyShaderModule(device_, vs, nullptr);
+            destroy_geom(); return false;
+        }
+
+        VkPipelineShaderStageCreateInfo stages[2] = {};
+        stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vs;
+        stages[0].pName = "main";
+        stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fs;
+        stages[1].pName = "main";
+
+        VkPipelineVertexInputStateCreateInfo vin{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        vps.viewportCount = 1;
+        vps.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.cullMode = VK_CULL_MODE_NONE;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth = 1.f;
+        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.blendEnable = VK_TRUE;                     // additive: glow, order-free
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.colorBlendOp = VK_BLEND_OP_ADD;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.alphaBlendOp = VK_BLEND_OP_ADD;
+        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        cb.attachmentCount = 1;
+        cb.pAttachments = &ba;
+        const VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+        ds.dynamicStateCount = 2;
+        ds.pDynamicStates = dyn;
+
+        VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        gpi.stageCount = 2;
+        gpi.pStages = stages;
+        gpi.pVertexInputState = &vin;
+        gpi.pInputAssemblyState = &ia;
+        gpi.pViewportState = &vps;
+        gpi.pRasterizationState = &rs;
+        gpi.pMultisampleState = &ms;
+        gpi.pColorBlendState = &cb;
+        gpi.pDynamicState = &ds;
+        gpi.layout = geom_pipe_layout_;
+        gpi.renderPass = geom_pass_;
+        gpi.subpass = 0;
+        const VkResult pr = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                                                      &gpi, nullptr, &geom_pipeline_);
+        vkDestroyShaderModule(device_, vs, nullptr);
+        vkDestroyShaderModule(device_, fs, nullptr);
+        if (pr != VK_SUCCESS) { destroy_geom(); return false; }
+
+        VkDescriptorPoolSize psz{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
+        VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dpi.maxSets = 1;
+        dpi.poolSizeCount = 1;
+        dpi.pPoolSizes = &psz;
+        if (vkCreateDescriptorPool(device_, &dpi, nullptr, &geom_pool_) != VK_SUCCESS) {
+            destroy_geom(); return false;
+        }
+        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dai.descriptorPool = geom_pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &geom_layout_;
+        if (vkAllocateDescriptorSets(device_, &dai, &geom_set_) != VK_SUCCESS) {
+            destroy_geom(); return false;
+        }
+
+        if (!ensure_buffer(geom_lut_, 256 * sizeof(uint32_t),
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           /*external=*/false)) {
+            destroy_geom(); return false;
+        }
+        return true;
+    }
+
+    void destroy_geom() {
+        destroy_buffer(geom_lut_);
+        if (geom_pool_) { vkDestroyDescriptorPool(device_, geom_pool_, nullptr); geom_pool_ = VK_NULL_HANDLE; geom_set_ = VK_NULL_HANDLE; }
+        if (geom_pipeline_) { vkDestroyPipeline(device_, geom_pipeline_, nullptr); geom_pipeline_ = VK_NULL_HANDLE; }
+        if (geom_pipe_layout_) { vkDestroyPipelineLayout(device_, geom_pipe_layout_, nullptr); geom_pipe_layout_ = VK_NULL_HANDLE; }
+        if (geom_layout_) { vkDestroyDescriptorSetLayout(device_, geom_layout_, nullptr); geom_layout_ = VK_NULL_HANDLE; }
+        if (geom_pass_) { vkDestroyRenderPass(device_, geom_pass_, nullptr); geom_pass_ = VK_NULL_HANDLE; }
     }
 
     // Write a cmap descriptor set from an explicit source buffer subrange
@@ -1669,6 +2090,16 @@ private:
     VkPipeline cmap_pipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool cmap_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet cmap_set_ = VK_NULL_HANDLE;
+
+    // caliper.geometry.v1 point pipeline (lazy; destroy_geom at shutdown).
+    VkRenderPass geom_pass_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout geom_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout geom_pipe_layout_ = VK_NULL_HANDLE;
+    VkPipeline geom_pipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool geom_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet geom_set_ = VK_NULL_HANDLE;
+    Buffer geom_lut_;                 // per-draw LUT staging (serialized draws)
+    float point_size_max_ = 1.f;
 
     // CUDA interop (driver API, loaded at runtime; see cuda_driver.h).
     bool external_memory_ok_ = false;   // Vulkan side exports external memory

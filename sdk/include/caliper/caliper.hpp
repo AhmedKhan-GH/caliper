@@ -12,6 +12,7 @@
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
+#include <caliper/services/geometry_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -323,6 +324,44 @@ private:
     const CaliperTensorBridgeV1* t_ = nullptr;
     const CaliperTensorBridgeV1_1* t11_ = nullptr;
     const CaliperTensorBridgeV1_2* t12_ = nullptr;
+};
+
+// Typed wrapper over caliper.geometry.v1: instanced 3-D points drawn directly
+// from an imported allocation (bridge v1.2) into an offscreen view texture.
+// Falsy when the host doesn't vend the service; every method null-guards so
+// it stays inert on hosts without the geometry path (D24). FRAME-THREAD ONLY,
+// same as Bridge.
+class Geometry {
+public:
+    Geometry() = default;
+    explicit Geometry(const Host& host)
+        : g_(static_cast<const CaliperGeometryV1*>(
+              host.service(CALIPER_GEOMETRY_V1))) {}
+
+    explicit operator bool() const { return g_ != nullptr; }
+
+    uint32_t caps() const { return (g_ && g_->caps) ? g_->caps() : 0u; }
+
+    CaliperTextureId create_view(uint32_t w, uint32_t h) const {
+        return (g_ && g_->create_view) ? g_->create_view(w, h) : 0;
+    }
+    void release_view(CaliperTextureId view) const {
+        if (g_ && g_->release_view) g_->release_view(view);
+    }
+    bool draw_points(CaliperTextureId view, const CaliperGeomCamera* cam,
+                     CaliperAllocId pos_alloc, uint64_t pos_offset,
+                     uint64_t count,
+                     CaliperAllocId attr_alloc, uint64_t attr_offset,
+                     int32_t colormap, float vmin, float vmax,
+                     float size_px, uint32_t clear_rgba) const {
+        return (g_ && g_->draw_points)
+                   ? g_->draw_points(view, cam, pos_alloc, pos_offset, count,
+                                     attr_alloc, attr_offset, colormap, vmin,
+                                     vmax, size_px, clear_rgba)
+                   : false;
+    }
+private:
+    const CaliperGeometryV1* g_ = nullptr;
 };
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't

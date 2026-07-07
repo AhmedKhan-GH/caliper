@@ -1373,5 +1373,163 @@ TEST_CASE("gfx/Vulkan+CUDA: imported window exceeding the allocation is rejected
     bk.bridge->release_allocation(alloc);
     bk.bridge->release_texture(id);
 }
+// ===========================================================================
+// caliper.geometry.v1 rows (points from imported allocations). Same guards as
+// the v1.2 rows; byte-exact where rasterization is deterministic: 1-px points
+// at exact pixel centers land on exactly those pixels with exactly the LUT
+// color (additive blend onto the cleared background), and every other pixel
+// equals the clear color.
+// ===========================================================================
+namespace {
+
+// NDC position whose 1-px point covers exactly pixel (px,py) of a WxH view
+// under the backend's GL-style (+y up, negative-viewport) mapping.
+void ndc_for_pixel(int px, int py, int w, int h, float* out3) {
+    out3[0] = 2.0f * ((float)px + 0.5f) / (float)w - 1.0f;
+    out3[1] = 1.0f - 2.0f * ((float)py + 0.5f) / (float)h;
+    out3[2] = 0.0f;
+}
+
+CaliperGeomCamera identity_cam() {
+    CaliperGeomCamera c{};
+    for (int i = 0; i < 4; ++i) { c.view[i * 4 + i] = 1.f; c.proj[i * 4 + i] = 1.f; }
+    return c;
+}
+
+// Expected image: clear color everywhere, LUT/flat color at the given pixels.
+std::vector<uint8_t> geom_ref(int w, int h, uint32_t clear_rgba,
+                              const std::vector<std::pair<int,int>>& px,
+                              const std::vector<uint32_t>& color_rgba) {
+    std::vector<uint8_t> ref((size_t)w * h * 4);
+    for (int i = 0; i < w * h; ++i) {
+        ref[(size_t)i * 4 + 0] = (uint8_t)(clear_rgba         & 0xFF);
+        ref[(size_t)i * 4 + 1] = (uint8_t)((clear_rgba >> 8)  & 0xFF);
+        ref[(size_t)i * 4 + 2] = (uint8_t)((clear_rgba >> 16) & 0xFF);
+        ref[(size_t)i * 4 + 3] = (uint8_t)((clear_rgba >> 24) & 0xFF);
+    }
+    for (size_t k = 0; k < px.size(); ++k) {
+        const size_t at = ((size_t)px[k].second * w + px[k].first) * 4;
+        ref[at + 0] = (uint8_t)(color_rgba[k]         & 0xFF);
+        ref[at + 1] = (uint8_t)((color_rgba[k] >> 8)  & 0xFF);
+        ref[at + 2] = (uint8_t)((color_rgba[k] >> 16) & 0xFF);
+        ref[at + 3] = (uint8_t)((color_rgba[k] >> 24) & 0xFF);
+    }
+    return ref;
+}
+
+}  // namespace
+
+TEST_CASE("gfx/geometry: imported points byte-exact — colormap extremes at a nonzero offset") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    if (bk.bridge->geom_caps() == 0) { MESSAGE("no geometry path — skipping"); return; }
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 64, H = 64;
+    const uint64_t pos_off = 512, attr_off = 2048;
+    VmmBlock blk(4096);
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+
+    // Three points at distinct pixel centers; attrs hit LUT[0], LUT[255],
+    // LUT[128] (t=0.5 -> idx = 0.5*255+0.5 = 128 exactly).
+    const std::vector<std::pair<int,int>> px = {{3, 5}, {40, 22}, {63, 63}};
+    float pos[9];
+    for (int i = 0; i < 3; ++i)
+        ndc_for_pixel(px[i].first, px[i].second, W, H, pos + 3 * i);
+    const float attrs[3] = {0.0f, 1.0f, 0.5f};
+    REQUIRE(cu->cuMemcpyHtoD(blk.va + pos_off, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(blk.va + attr_off, attrs, sizeof(attrs)) == cudadrv::CUDA_SUCCESS);
+
+    const CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view(W, H);
+    REQUIRE(view != 0);
+
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t clear = 0xFF000000u;   // opaque black
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, alloc, pos_off, 3,
+                                        alloc, attr_off, CALIPER_CMAP_VIRIDIS,
+                                        0.f, 1.f, 1.f, clear));
+    CHECK(std::string(bk.renderer->last_device_path()) == "points-imported");
+
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+    const std::vector<uint8_t> ref =
+        geom_ref(W, H, clear, px, {lut[0], lut[255], lut[128]});
+    const std::vector<uint8_t> got = bk.readback(view, W, H);
+    if (got != ref) {
+        size_t first = 0;
+        while (first < ref.size() && first < got.size() && got[first] == ref[first]) ++first;
+        MESSAGE("geom readback mismatch: first-diff byte=" << first
+                << " got=" << (first < got.size() ? (int)got[first] : -1)
+                << " ref=" << (first < ref.size() ? (int)ref[first] : -1));
+    }
+    CHECK(got == ref);   // byte-exact, no tolerances
+
+    // Flat path: attr_alloc 0 -> pure white points, same geometry.
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, alloc, pos_off, 3,
+                                        0, 0, 0, 0.f, 1.f, 1.f, clear));
+    const std::vector<uint8_t> ref_flat =
+        geom_ref(W, H, clear, px, {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu});
+    CHECK(bk.readback(view, W, H) == ref_flat);
+
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+TEST_CASE("gfx/geometry: count 0 clears; gates keep prior pixels; released view refuses") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    if (bk.bridge->geom_caps() == 0) { MESSAGE("no geometry path — skipping"); return; }
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    VmmBlock blk(4096);
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    float p[3];
+    ndc_for_pixel(7, 9, W, H, p);
+    REQUIRE(cu->cuMemcpyHtoD(blk.va, p, sizeof(p)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view(W, H);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    // count 0 = pure clear to a known non-black color (r=10 g=20 b=30 a=255).
+    const uint32_t teal = 10u | (20u << 8) | (30u << 16) | (255u << 24);
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, 0, 0, 0, 0, 0, 0,
+                                        0.f, 1.f, 1.f, teal));
+    const std::vector<uint8_t> cleared = geom_ref(W, H, teal, {}, {});
+    CHECK(bk.readback(view, W, H) == cleared);
+
+    // A real frame, then every gate: false + pixels stay exactly that frame.
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, alloc, 0, 1, 0, 0, 0,
+                                        0.f, 1.f, 1.f, 0xFF000000u));
+    const std::vector<uint8_t> frame = bk.readback(view, W, H);
+    const std::string before = bk.renderer->last_device_path();
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, alloc, 2, 1, 0, 0, 0,
+                                            0.f, 1.f, 1.f, 0u));            // misaligned
+    // OOB against the REAL (granularity-padded) size — 4096 requested bytes
+    // became a 2 MiB block, so the count must be derived, not assumed.
+    const uint64_t oob_count = blk.size / 12u + 1u;
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, alloc, 0, oob_count, 0, 0, 0,
+                                            0.f, 1.f, 1.f, 0u));            // OOB
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, 999u, 0, 1, 0, 0, 0,
+                                            0.f, 1.f, 1.f, 0u));            // unknown alloc
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, nullptr, alloc, 0, 1, 0, 0, 0,
+                                            0.f, 1.f, 1.f, 0u));            // null cam
+    CHECK(std::string(bk.renderer->last_device_path()) == before);
+    CHECK(bk.readback(view, W, H) == frame);
+
+    // Released alloc, then released view: both refuse.
+    bk.bridge->release_allocation(alloc);
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, alloc, 0, 1, 0, 0, 0,
+                                            0.f, 1.f, 1.f, 0u));
+    bk.bridge->geom_release_view(view);
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, 0, 0, 0, 0, 0, 0,
+                                            0.f, 1.f, 1.f, 0u));
+}
+
 #endif  // _WIN32
 #endif  // CALIPER_HAVE_VULKAN

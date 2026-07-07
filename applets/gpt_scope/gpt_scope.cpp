@@ -24,6 +24,7 @@
 // inside the sampling loop (§7).
 // ============================================================================
 #include "gpt_model.h"
+#include "thoughtspace.h"               // residual-constellation pure compute
 
 #include <caliper/caliper.hpp>
 #include <caliper/adapters/torch.hpp>   // torch::Tensor -> CaliperTensor (heatmap)
@@ -67,6 +68,12 @@ constexpr int    kSampleLen  = 240;    // chars per live sample
 constexpr double kLR         = 3e-4;   // AdamW
 constexpr int    kProbeLen   = 48;     // chars in the fixed mechanistic probe
 constexpr double kProbeHz    = 1.0;    // probe bundle cadence (lens/heads/resid)
+// ThoughtSpace constellation dims (design §4; D = n_layer+1 = 5 from cfg).
+// 96*96 tokens * (5 stations + 4*5 trails) = 230,400 points; the (5,96,96,128)
+// residual probe is ~24 MB — comfortable next to training on this GPU.
+constexpr int64_t kTS_S      = 96;     // probe sequences
+constexpr int64_t kTS_T      = 96;     // tokens per sequence (<= kBlock)
+constexpr int64_t kTS_K      = 5;      // trail points per depth segment
 constexpr double kPcaSec     = 5.0;    // embedding PCA cadence
 constexpr double kSampleSec  = 2.0;    // auto-sample cadence
 constexpr const char* kModelName = "gptscope-model";
@@ -128,6 +135,34 @@ size_t write_to_string(char* ptr, size_t size, size_t nmemb, void* ud) {
     return n;
 }
 
+// ---- tiny column-major mat4 / camera helpers (copied from flow_scope's anon
+// namespace; ThoughtSpace's orbit camera feeds CaliperGeomCamera the same way).
+struct V3 { float x, y, z; };
+inline V3 operator-(V3 a, V3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+inline V3 cross3(V3 a, V3 b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+inline float dot3(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+inline V3 norm3(V3 a) {
+    const float l = std::sqrt(dot3(a, a));
+    return l > 0 ? V3{a.x / l, a.y / l, a.z / l} : V3{0, 0, 1};
+}
+inline void look_at(V3 eye, V3 at, V3 up, float* m) {
+    const V3 f = norm3(at - eye);
+    const V3 s = norm3(cross3(f, up));
+    const V3 u = cross3(s, f);
+    const float t[16] = {s.x, u.x, -f.x, 0,  s.y, u.y, -f.y, 0,
+                         s.z, u.z, -f.z, 0,  -dot3(s, eye), -dot3(u, eye),
+                         dot3(f, eye), 1};
+    std::memcpy(m, t, sizeof(t));
+}
+inline void perspective(float fovy, float aspect, float zn, float zf, float* m) {
+    const float f = 1.0f / std::tan(fovy * 0.5f);
+    std::memset(m, 0, 16 * sizeof(float));
+    m[0] = f / aspect; m[5] = f; m[10] = zf / (zn - zf);
+    m[11] = -1.0f; m[14] = (zn * zf) / (zn - zf);
+}
+
 int grad_group(const std::string& name) {
     if (name.rfind("blocks.", 0) == 0 && name.size() > 7) {
         int n = name[7] - '0';
@@ -150,8 +185,10 @@ struct GPTScopeState {
     caliper::Device    device;
     caliper::Metrics   metrics;    // optional
     caliper::Bridge    bridge;     // optional (head drill-down heatmap)
+    caliper::Geometry  geometry;   // optional (ThoughtSpace 3-D constellation)
     caliper::Artifacts artifacts;  // optional (Save/Load)
     uint32_t bridge_caps = 0;      // snapshot at init (Bridge is frame-thread-only)
+    uint32_t geom_caps   = 0;      // snapshot at init (Geometry is frame-thread-only)
 
     // v1.2 zero-copy opt-in: attention tensors allocated from this pool live in
     // shareable blocks the host imports once; texture updates then read them in
@@ -159,6 +196,18 @@ struct GPTScopeState {
     // with it null, every path below is byte-identical to the pre-pool applet.
     std::unique_ptr<caliper::adapters::ExportablePool> pool;  // set once by worker
     bool pool_tried = false;                                  // worker-only
+
+    // ThoughtSpace (residual constellation) — its OWN pool + triple-buffered
+    // slots, independent of the heatmap pool above so the verified heatmap path
+    // is untouched. All of these are WORKER-ONLY (built/read on the train job
+    // thread), except the ts_pos/ts_attr slots + ts_ready/display/count which
+    // cross to the frame thread under `mtx` (declared below).
+    std::unique_ptr<caliper::adapters::ExportablePool> ts_pool;
+    bool          ts_pool_tried = false;   // worker-only
+    torch::Tensor ts_basis;                // (C,3) seeded projection, worker-only
+    torch::Tensor ts_probe;                // (S,T) int64 val slice, built once
+    torch::Tensor ts_gen_ids;              // last-T sampled ids (1,T), worker-only
+    float         ts_fit_scale = 0.4f;     // smoothed projection fit (worker RW)
 
     GPT model{nullptr};            // persistent so Save/Load reaches it
     std::atomic<uint64_t> run_id{0};
@@ -168,6 +217,12 @@ struct GPTScopeState {
     std::atomic<float> temp{0.8f};
     std::atomic<bool>  auto_sample{true};
     std::atomic<bool>  sample_now{false};
+    // ThoughtSpace frame -> worker controls.
+    std::atomic<bool>  thoughtspace_wanted{false};  // window drawn this frame
+    std::atomic<int>   ts_color_mode{0};            // 0 loss, 1 confidence, 2 depth
+    std::atomic<bool>  ts_raw_norms{false};         // show raw residual-norm radius
+    std::atomic<float> ts_color_vmax{3.0f};         // loss-mode window; worker reads
+                                                    // it (gen attr) AND frame does
 
     std::mutex mtx;   // guards everything from here to the frame-thread block
 
@@ -219,6 +274,17 @@ struct GPTScopeState {
     std::vector<int>   top8_id;                 // last-position top-8 char ids
     uint64_t           sample_gen = 0;
 
+    // ThoughtSpace triple-buffered slots (pool-backed pos/attr, written in place
+    // by the worker, drawn zero-copy by the frame). ready/display invariant from
+    // flow_scope: the worker never writes the slot the frame is displaying.
+    torch::Tensor ts_pos[3], ts_attr[3];
+    int      ts_ready_slot   = -1;
+    int      ts_display_slot = -1;
+    int64_t  ts_count = 0;                       // live point count (probe or +gen)
+    // CPU-subsample fallback (stations only), flow_scope pattern.
+    std::vector<float> ts_sub_x, ts_sub_y, ts_sub_z;
+    uint64_t ts_sub_gen = 0;
+
     // ------- frame-thread-only -------
     std::string load_path;                      // set before submitting Load job
     std::string save_status;
@@ -238,6 +304,14 @@ struct GPTScopeState {
     bool     head_stage_cpu = false;
     bool     head_tex_imported = false;  // last update ran the imported path
     int64_t  head_tex_dim = 0;           // pool-mode texture side (kk*T)
+
+    // ThoughtSpace view (frame-thread-only): offscreen geometry render target,
+    // orbit camera, and color controls.
+    CaliperTextureId ts_view = 0;
+    int   ts_view_w = 768, ts_view_h = 768;
+    float ts_cam_az = 0.8f, ts_cam_el = 0.4f, ts_cam_dist = 4.5f;
+    int   ts_point_size = 2;
+    bool  ts_zero_copy_frame = false;    // provenance of the current view content
 };
 
 namespace {
@@ -593,6 +667,11 @@ void publish_sample(GPTScopeState* st, GPT& model, const std::vector<char>& itos
         idx = torch::cat({idx, next}, 1);
     }
     if (was_training) model->train();
+    // ThoughtSpace gen thread: keep the last kTS_T generated token ids so the
+    // constellation can draw one bright thread. Worker-only (same thread runs
+    // publish_thoughtspace), so no mutex — a plain device tensor of shape (1,T).
+    if (idx.size(1) >= kTS_T)
+        st->ts_gen_ids = idx.slice(1, idx.size(1) - kTS_T, idx.size(1)).clone();
     {
         std::lock_guard<std::mutex> lk(st->mtx);
         st->sample_text = std::move(out);
@@ -605,6 +684,161 @@ void publish_sample(GPTScopeState* st, GPT& model, const std::vector<char>& itos
 void end_metrics_run(GPTScopeState* st, uint64_t run) {
     if (run != 0) st->metrics.end_run(run);
     st->run_id.store(0);
+}
+
+// ===========================================================================
+// ThoughtSpace: the residual stream as a live 3-D constellation (design
+// 2026-07-07-gptscope-thoughtspace-design). One batched residual probe ->
+// projected stations + interpolated trails, written in place into the pool
+// slots the frame draws zero-copy. Runs ONLY when the window is open
+// (thoughtspace_wanted) — the interp tax is paid only when someone is looking.
+// All worker-thread; the only cross-thread handoff is the slot flip under mtx.
+// ===========================================================================
+void publish_thoughtspace(GPTScopeState* st, GPT& model, torch::Device dev,
+                          bool cuda) {
+    torch::NoGradGuard ng;
+    if (!st->ts_probe.defined()) return;
+
+    const int64_t C = model->config().n_embd;
+    const int64_t D = model->config().n_layer + 1;
+    const int64_t S = kTS_S, T = kTS_T;
+    ts::Dims dm{S, T, D, kTS_K, C};
+
+    // Seeded basis, once (works on any device; needed even for CPU fallback).
+    if (!st->ts_basis.defined())
+        st->ts_basis = ts::make_basis(C, 0xC0FFEEULL, dev);
+
+    // Lazy pool + slots, once, gated on the geometry import path + CUDA. Failure
+    // stays null -> CPU-subsample fallback, never a crash.
+    if (!st->ts_pool_tried && cuda && st->ts_probe.is_cuda()) {
+        st->ts_pool_tried = true;
+        if ((st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS) &&
+            torch::cuda::is_available()) {
+            try {
+                auto p = std::make_unique<caliper::adapters::ExportablePool>(
+                    (int)st->ts_probe.device().index());
+                if (p->ok()) {
+                    torch::Tensor pos[3], attr[3];
+                    {   // slots allocated ONCE inside the scope; every later
+                        // write is in place, so the host imports each block once.
+                        auto scope = p->use();
+                        auto fo = torch::TensorOptions(dev).dtype(torch::kFloat32);
+                        for (int i = 0; i < 3; ++i) {
+                            pos[i]  = torch::zeros({dm.n_max(), 3}, fo);
+                            attr[i] = torch::zeros({dm.n_max()}, fo);
+                        }
+                    }
+                    std::lock_guard<std::mutex> lk(st->mtx);
+                    st->ts_pool = std::move(p);
+                    for (int i = 0; i < 3; ++i) {
+                        st->ts_pos[i] = pos[i]; st->ts_attr[i] = attr[i];
+                    }
+                }
+            } catch (...) { /* null pool -> fallback */ }
+        }
+    }
+
+    // One batched residual probe: (D,S,T,C) on device.
+    auto resid = model->forward_resid(st->ts_probe);
+    const int  mode = st->ts_color_mode.load();
+    const bool raw  = st->ts_raw_norms.load();
+
+    // --- model-derived color scalars (the integrator's job; the pure layout is
+    // thoughtspace.h's). Targets are the actual next chars of the probe. ---
+    // per-token loss: CE of the FINAL depth's next-token prediction (S,T).
+    auto per_token_loss = [&]() {
+        auto fin = resid.select(0, D - 1);                       // (S,T,C)
+        auto logits = model->lm_head()->forward(model->ln_f()->forward(fin));
+        auto logp = torch::log_softmax(logits, -1);              // (S,T,V)
+        auto tgt = st->ts_probe.slice(1, 1, T);                  // (S,T-1)
+        auto lp = logp.slice(1, 0, T - 1)
+                      .gather(-1, tgt.unsqueeze(-1)).squeeze(-1);// (S,T-1)
+        auto ce = -lp;                                           // (S,T-1)
+        auto out = torch::zeros({S, T}, ce.options());
+        out.slice(1, 0, T - 1).copy_(ce);
+        out.slice(1, T - 1, T).copy_(ce.slice(1, T - 2, T - 1));// last = prev
+        return out;
+    };
+    // per-station confidence: logit-lens p(target) at EVERY depth (D,S,T).
+    auto per_station_conf = [&]() {
+        auto lens = model->lm_head()->forward(model->ln_f()->forward(resid));
+        auto p = torch::softmax(lens, -1);                       // (D,S,T,V)
+        auto tgt = st->ts_probe.slice(1, 1, T);                  // (S,T-1)
+        auto tgt_e = tgt.view({1, S, T - 1, 1}).expand({D, S, T - 1, 1});
+        auto conf = p.slice(2, 0, T - 1).gather(-1, tgt_e).squeeze(-1); // (D,S,T-1)
+        auto out = torch::zeros({D, S, T}, conf.options());
+        out.slice(2, 0, T - 1).copy_(conf);
+        out.slice(2, T - 1, T).copy_(conf.slice(2, T - 2, T - 1));
+        return out;
+    };
+
+    if (st->ts_pool) {
+        // Pick the write slot: not the one the frame is displaying, not the last
+        // ready (triple-buffer invariant). NOT inside pool.use() — the slots are
+        // already pool-backed; the projection temporaries must go to the DEFAULT
+        // allocator, so writing in place here needs no scope.
+        int display, ready;
+        {   std::lock_guard<std::mutex> lk(st->mtx);
+            display = st->ts_display_slot; ready = st->ts_ready_slot; }
+        int write = 0;
+        for (int i = 0; i < 3; ++i) if (i != display && i != ready) { write = i; break; }
+        auto& pos  = st->ts_pos[write];
+        auto& attr = st->ts_attr[write];
+
+        // Positions: use last frame's fit scale, then update it (1-frame lag is
+        // imperceptible at ~1 Hz probe cadence).
+        const float used_scale = st->ts_fit_scale;
+        const float pre_max =
+            ts::write_probe_positions(pos, resid, st->ts_basis, dm, raw, used_scale);
+        const float target = pre_max > 1e-6f ? 1.5f / pre_max : st->ts_fit_scale;
+        st->ts_fit_scale = 0.85f * st->ts_fit_scale + 0.15f * target;
+
+        // Color attr for the active mode.
+        if (mode == 0)      ts::write_attr_per_token(attr, per_token_loss(), dm);
+        else if (mode == 1) ts::write_attr_per_station(attr, per_station_conf(), dm);
+        else                ts::write_attr_depth(attr, dm);
+
+        // Generation thread: if a sample exists, run its last-T ids and append a
+        // white-hot thread; else draw only the probe.
+        int64_t count = dm.n_probe();
+        if (st->ts_gen_ids.defined() && st->ts_gen_ids.size(1) == T) {
+            auto rg = model->forward_resid(st->ts_gen_ids).select(1, 0); // (D,T,C)
+            ts::write_gen_positions(pos, rg, st->ts_basis, dm, raw, used_scale);
+            ts::write_gen_attr(attr, dm,
+                               mode == 0 ? st->ts_color_vmax.load() : 1.0f);
+            count = dm.n_max();
+        }
+
+        if (cuda) torch::cuda::synchronize();   // writes done BEFORE the flip
+        std::lock_guard<std::mutex> lk(st->mtx);
+        st->ts_count = count;
+        st->ts_ready_slot = write;
+        return;
+    }
+
+    // --- CPU fallback: project stations, subsample ~8k points for ImPlot3D ---
+    auto proj = torch::matmul(
+        (raw ? resid
+             : resid / (resid.norm(2, {-1}, false)
+                            .mean({1, 2}, false).detach().add(1e-8)
+                            .view({D, 1, 1, 1})))
+            .to(torch::kFloat32),
+        st->ts_basis.to(torch::kFloat32));                 // (D,S,T,3)
+    auto flat = (proj * st->ts_fit_scale).reshape({-1, 3}).to(torch::kCPU).contiguous();
+    const int64_t total = flat.size(0);
+    const int64_t stride = std::max<int64_t>(1, total / 8000);
+    auto sub = flat.index({torch::arange(0, total, stride, torch::kLong)}).contiguous();
+    const int64_t ns = sub.size(0);
+    const float* sp = sub.data_ptr<float>();
+    std::vector<float> sx((size_t)ns), sy((size_t)ns), sz((size_t)ns);
+    for (int64_t i = 0; i < ns; ++i) {
+        sx[(size_t)i] = sp[i * 3 + 0];
+        sy[(size_t)i] = sp[i * 3 + 1];
+        sz[(size_t)i] = sp[i * 3 + 2];
+    }
+    std::lock_guard<std::mutex> lk(st->mtx);
+    st->ts_sub_x = std::move(sx); st->ts_sub_y = std::move(sy);
+    st->ts_sub_z = std::move(sz); st->ts_sub_gen++;
 }
 
 // ===========================================================================
@@ -653,6 +887,23 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                             .clone().to(dev);
     }
 
+    // ThoughtSpace probe: a deterministic (S,T) slice of the val split — S
+    // sequences of T consecutive tokens, evenly spaced, so training's
+    // reorganization is comparable across runs. Worker-only (frame never reads).
+    if (val_ids.size(0) >= kTS_T + 1) {
+        const int64_t vlen = val_ids.size(0);
+        auto lo = torch::TensorOptions(dev).dtype(torch::kLong);
+        auto starts = torch::linspace(0, (double)(vlen - kTS_T - 1), kTS_S,
+                                      torch::TensorOptions(dev).dtype(torch::kFloat32))
+                          .to(torch::kLong);                    // (S,)
+        auto ar = torch::arange(kTS_T, lo);                     // (T,)
+        auto rows = starts.unsqueeze(1) + ar.unsqueeze(0);      // (S,T)
+        st->ts_probe = val_ids.index({rows}).contiguous();      // (S,T) on dev
+    }
+    // Fresh run: drop any prior run's generation thread so the constellation
+    // doesn't draw a stale white-hot thread until this run's first sample.
+    st->ts_gen_ids = torch::Tensor();
+
     auto get_batch = [&](const torch::Tensor& data) {
         const int64_t len = data.size(0);
         auto ix = torch::randint(0, len - kBlock - 1, {kBatch},
@@ -698,6 +949,7 @@ void train_job(void* user, const CaliperJobControl* ctl) {
     auto last_probe  = clock::time_point{};   // fire immediately at step 0
     auto last_pca    = clock::time_point{};
     auto last_sample = clock::time_point{};
+    auto last_ts     = clock::time_point{};   // ThoughtSpace probe cadence
     auto elapsed = [&](clock::time_point t) {
         return std::chrono::duration<double>(now() - t).count();
     };
@@ -719,6 +971,13 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         if (probe_tok.defined() && elapsed(last_probe) >= 1.0 / kProbeHz) {
             publish_probe(st, model, probe_tok, probe_str, itos, on_mps);
             last_probe = now();
+        }
+        // ThoughtSpace constellation ~1 Hz — ONLY when the window is open (the
+        // probe/projection is skipped entirely otherwise: pay per look).
+        if (st->thoughtspace_wanted.load() &&
+            elapsed(last_ts) >= 1.0 / kProbeHz) {
+            publish_thoughtspace(st, model, dev, dev.is_cuda());
+            last_ts = now();
         }
         // Embedding PCA ~5 s.
         if (elapsed(last_pca) >= kPcaSec) {
@@ -774,6 +1033,7 @@ void train_job(void* user, const CaliperJobControl* ctl) {
     if (probe_tok.defined()) publish_probe(st, model, probe_tok, probe_str, itos, on_mps);
     publish_pca(st, model, itos);
     publish_sample(st, model, itos, stoi, dev, ctl, (double)st->temp.load());
+    if (st->thoughtspace_wanted.load()) publish_thoughtspace(st, model, dev, dev.is_cuda());
     end_metrics_run(st, run);
     set_status(st, "training complete — Save the model, or keep sampling");
 }
@@ -844,8 +1104,10 @@ bool GPTScopeApplet::initialize(caliper::Host& host) {
     s_->device    = caliper::Device::query(host);
     s_->metrics   = caliper::Metrics(host);
     s_->bridge    = caliper::Bridge(host);
+    s_->geometry  = caliper::Geometry(host);
     s_->artifacts = caliper::Artifacts(host);
     s_->bridge_caps = s_->bridge.caps();   // worker threads read the snapshot
+    s_->geom_caps   = s_->geometry.caps(); // ThoughtSpace import-path gate
     curl_global_init(CURL_GLOBAL_DEFAULT);
     host.log_info("gpt-scope: on_init");
     return true;
@@ -888,6 +1150,10 @@ void GPTScopeApplet::draw_ui() {
     std::vector<float> px, py, pz; std::string pca_chars; uint64_t pca_gen = 0;
     std::string sample_text; std::vector<float> sample_prob, top8p;
     std::vector<int> top8id; uint64_t sample_gen = 0;
+    // ThoughtSpace snapshot.
+    caliper::adapters::ExportablePool* ts_pool = nullptr;
+    torch::Tensor ts_pos_draw, ts_attr_draw; int64_t ts_count = 0;
+    std::vector<float> ts_sx, ts_sy, ts_sz;
     {
         std::lock_guard<std::mutex> lk(st->mtx);
         lx = st->loss_x; ly = st->loss_y; vx = st->val_x; vy = st->val_y;
@@ -908,6 +1174,14 @@ void GPTScopeApplet::draw_ui() {
         pca_chars = st->pca_chars; pca_gen = st->pca_gen;
         sample_text = st->sample_text; sample_prob = st->sample_prob;
         top8p = st->top8_p; top8id = st->top8_id; sample_gen = st->sample_gen;
+        ts_pool = st->ts_pool.get();
+        if (st->ts_ready_slot >= 0) {
+            st->ts_display_slot = st->ts_ready_slot;      // publish what we draw
+            ts_pos_draw  = st->ts_pos[st->ts_display_slot];
+            ts_attr_draw = st->ts_attr[st->ts_display_slot];
+        }
+        ts_count = st->ts_count;
+        ts_sx = st->ts_sub_x; ts_sy = st->ts_sub_y; ts_sz = st->ts_sub_z;
     }
     auto decode = [&](int id) -> char {
         return (id >= 0 && id < (int)itos.size()) ? itos[(size_t)id] : '?';
@@ -1314,6 +1588,136 @@ void GPTScopeApplet::draw_ui() {
     ImGui::End();
 
     // =====================================================================
+    // ThoughtSpace — the residual stream as a live 3-D constellation. Every
+    // (sequence, token, depth) residual state is a point; interpolated trails
+    // between depths make each token a thread through the network. Zero-copy:
+    // the worker's pool tensors ARE the renderer's point buffers. Colored by
+    // loss / logit-lens confidence / depth; training reorganizes the whole
+    // space live. (design 2026-07-07-gptscope-thoughtspace.)
+    // =====================================================================
+    {
+        const bool ts_open = ImGui::Begin("GPTScope: ThoughtSpace");
+        // Pay-per-look: the worker skips the whole probe unless this is drawn.
+        st->thoughtspace_wanted.store(ts_open);
+        if (ts_open) {
+            // toolbar panel
+            const float bar_h = ImGui::GetFrameHeight() +
+                                ImGui::GetStyle().WindowPadding.y * 2.f;
+            if (ImGui::BeginChild("##ts_bar", ImVec2(0, bar_h),
+                                  ImGuiChildFlags_Borders)) {
+                const char* modes[] = {"loss", "confidence", "depth"};
+                int mode = st->ts_color_mode.load();
+                ImGui::SetNextItemWidth(130);
+                if (ImGui::Combo("color by", &mode, modes, 3))
+                    st->ts_color_mode.store(mode);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(110);
+                float vmx = st->ts_color_vmax.load();
+                if (ImGui::SliderFloat("vmax", &vmx, 0.5f, 8.f))
+                    st->ts_color_vmax.store(vmx);
+                ImGui::SameLine();
+                bool raw = st->ts_raw_norms.load();
+                if (ImGui::Checkbox("raw norms", &raw)) st->ts_raw_norms.store(raw);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ImGui::SliderInt("size", &st->ts_point_size, 1, 4);
+                ImGui::SameLine();
+                ImGui::TextDisabled("|");
+                ImGui::SameLine();
+                if (st->ts_zero_copy_frame)
+                    ImGui::TextColored({0.55f, 0.9f, 0.6f, 1.f},
+                        "%lld thought-points — zero-copy (imported geometry)",
+                        (long long)ts_count);
+                else if (!ts_sx.empty())   // fallback is actively rendering
+                    ImGui::TextColored({1.f, 0.7f, 0.4f, 1.f},
+                        "%d residual stations — CPU fallback (%s)",
+                        (int)ts_sx.size(),
+                        !st->geom_caps ? "no geometry service" : "pool unavailable");
+                else
+                    ImGui::TextColored({1.f, 0.7f, 0.4f, 1.f},
+                        "%s", "waiting for the first probe…");
+            }
+            ImGui::EndChild();
+
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            const bool geom_live =
+                st->geometry && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS);
+
+            auto clampi = [](int v, int lo, int hi) {
+                return v < lo ? lo : (v > hi ? hi : v); };
+            const int dw = clampi((int)avail.x, 64, 4096);
+            const int dh = clampi((int)avail.y, 64, 4096);
+            if (geom_live && avail.x >= 64 && avail.y >= 64 &&
+                (st->ts_view == 0 || std::abs(dw - st->ts_view_w) >= 3 ||
+                 std::abs(dh - st->ts_view_h) >= 3)) {
+                if (st->ts_view != 0) st->geometry.release_view(st->ts_view);
+                st->ts_view = st->geometry.create_view((uint32_t)dw, (uint32_t)dh);
+                st->ts_view_w = dw; st->ts_view_h = dh;
+            }
+
+            st->ts_zero_copy_frame = false;
+            if (geom_live && st->ts_view != 0 && ts_pool && ts_pos_draw.defined()
+                && ts_count > 0) {
+                const float ce = std::cos(st->ts_cam_el), se = std::sin(st->ts_cam_el);
+                const float ca = std::cos(st->ts_cam_az), sa = std::sin(st->ts_cam_az);
+                const V3 eye{st->ts_cam_dist * ce * ca, st->ts_cam_dist * se,
+                             st->ts_cam_dist * ce * sa};
+                CaliperGeomCamera cam{};
+                look_at(eye, {0, 0, 0}, {0, 1, 0}, cam.view);
+                perspective(45.f * 3.14159265f / 180.f,
+                            (float)st->ts_view_w / (float)st->ts_view_h,
+                            0.05f, 50.f, cam.proj);
+                // Per-mode colormap + baseline floor (negative vmin lifts the
+                // low end off the LUT's black so still points stay visible).
+                const int m = st->ts_color_mode.load();
+                int cmap; float vmax;
+                if (m == 0)      { cmap = CALIPER_CMAP_MAGMA;   vmax = st->ts_color_vmax.load(); }
+                else if (m == 1) { cmap = CALIPER_CMAP_VIRIDIS; vmax = 1.0f; }
+                else             { cmap = CALIPER_CMAP_MAGMA;   vmax = 1.0f; }
+                const float vmin = -0.33f * vmax;
+
+                auto pref = ts_pool->to_bridge(st->bridge, ts_pos_draw);
+                auto sref = ts_pool->to_bridge(st->bridge, ts_attr_draw);
+                if (pref && sref)
+                    st->ts_zero_copy_frame = st->geometry.draw_points(
+                        st->ts_view, &cam, pref->alloc, pref->offset,
+                        (uint64_t)ts_count, sref->alloc, sref->offset, cmap,
+                        vmin, vmax, (float)st->ts_point_size, 0xFF000000u);
+            }
+
+            if (st->ts_zero_copy_frame) {
+                ImGui::Image(caliper::Bridge::imtex(st->ts_view),
+                             ImVec2((float)st->ts_view_w, (float)st->ts_view_h));
+                // Orbit (either button) + wheel zoom — no impulse.
+                const bool hovered = ImGui::IsItemHovered();
+                ImGuiIO& io = ImGui::GetIO();
+                if (hovered && (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                                ImGui::IsMouseDown(ImGuiMouseButton_Right))) {
+                    st->ts_cam_az += io.MouseDelta.x * 0.008f;
+                    st->ts_cam_el += io.MouseDelta.y * 0.008f;
+                    if (st->ts_cam_el > 1.5f) st->ts_cam_el = 1.5f;
+                    if (st->ts_cam_el < -1.5f) st->ts_cam_el = -1.5f;
+                }
+                if (hovered && io.MouseWheel != 0.f) {
+                    st->ts_cam_dist *= (1.f - io.MouseWheel * 0.08f);
+                    if (st->ts_cam_dist < 1.5f) st->ts_cam_dist = 1.5f;
+                    if (st->ts_cam_dist > 14.f) st->ts_cam_dist = 14.f;
+                }
+            } else if (!ts_sx.empty() &&
+                       ImPlot3D::BeginPlot("##ts_fallback", ImVec2(-1, -1))) {
+                ImPlot3D::SetupAxesLimits(-2, 2, -2, 2, -2, 2, ImPlot3DCond_Once);
+                ImPlot3D::PlotScatter("residual stations", ts_sx.data(),
+                                      ts_sy.data(), ts_sz.data(), (int)ts_sx.size());
+                ImPlot3D::EndPlot();
+            } else if (ts_sx.empty()) {
+                ImGui::TextDisabled(
+                    "press Train — the constellation forms with the first probe.");
+            }
+        }
+        ImGui::End();
+    }
+
+    // =====================================================================
     // 6. GPTScope: Training — controls, loss + val perplexity, metrics, Save/Load.
     // =====================================================================
     ImGui::Begin("GPTScope: Training");
@@ -1406,6 +1810,7 @@ void GPTScopeApplet::cleanup() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (st->head_tex) { st->bridge.release_texture(st->head_tex); st->head_tex = 0; }
+    if (st->ts_view)  { st->geometry.release_view(st->ts_view); st->ts_view = 0; }
     // Pool teardown order: drop the pool-backed tensors first, then the pool —
     // its destructor releases the cached bridge imports and driver blocks, and
     // both need the host/bridge still alive (they are until on_cleanup ends).
@@ -1413,17 +1818,25 @@ void GPTScopeApplet::cleanup() {
         std::lock_guard<std::mutex> lk(st->mtx);
         st->attn_all.clear();
         st->attn_blocks.clear();
+        for (int i = 0; i < 3; ++i) {
+            st->ts_pos[i] = torch::Tensor(); st->ts_attr[i] = torch::Tensor();
+        }
+        st->ts_basis = torch::Tensor();
+        st->ts_probe = torch::Tensor();
+        st->ts_gen_ids = torch::Tensor();
     }
     if (st->job_id != 0 && st->jobs.is_running(st->job_id)) {
-        // Worker outlived the cancel grace above: destroying the pool now
-        // would be a use-after-free under its feet. Leak it deliberately —
+        // Worker outlived the cancel grace above: destroying either pool now
+        // would be a use-after-free under its feet. Leak them deliberately —
         // a leak at process exit, never a crash.
         (void)st->pool.release();
+        (void)st->ts_pool.release();
         if (st->host)
             st->host->log_info("gpt-scope: worker still live at cleanup — "
-                               "exportable pool deliberately leaked");
+                               "exportable pools deliberately leaked");
     } else {
         st->pool.reset();
+        st->ts_pool.reset();
     }
     curl_global_cleanup();
     if (st->host) st->host->log_info("gpt-scope: on_cleanup");
