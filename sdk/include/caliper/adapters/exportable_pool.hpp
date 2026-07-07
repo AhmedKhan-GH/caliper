@@ -51,6 +51,26 @@
 #define CALIPER_EXPORTABLE_POOL_CUDA 0
 #endif
 
+/* Windows compile fix (first build of this TU): these includes lived inside
+ * namespace caliper::adapters, which nested c10/torch into
+ * caliper::adapters::c10 and broke every torch declaration. Includes must
+ * precede the namespace. */
+#if CALIPER_EXPORTABLE_POOL_CUDA
+#include <torch/csrc/cuda/CUDAPluggableAllocator.h>
+#include <c10/cuda/CUDACachingAllocator.h>
+
+#include <map>
+#include <memory>
+#include <mutex>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#include <unistd.h>
+#endif
+#endif  // CALIPER_EXPORTABLE_POOL_CUDA
+
 namespace caliper::adapters {
 
 // A tensor located inside a pool block, expressed the way the v1.2 bridge wants
@@ -67,20 +87,7 @@ struct BridgeRef {
 // Structs/enums mirror the stable driver ABI in cuda.h (VMM APIs, CUDA 10.2+),
 // same reserved-padding style as src/host/cuda_driver.h but self-contained: the
 // SDK must not include host-internal headers. Only the layouts the pool uses.
-
-#include <torch/csrc/cuda/CUDAPluggableAllocator.h>
-#include <c10/cuda/CUDACachingAllocator.h>
-
-#include <map>
-#include <memory>
-#include <mutex>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#include <unistd.h>
-#endif
+// (Includes for this section are hoisted above the namespace — see top.)
 
 namespace detail {
 
@@ -246,6 +253,12 @@ public:
     explicit ExportablePool(int device_index) : device_(device_index) {
         cu_ = detail::load_cu_vmm();
         if (!cu_) return;                     // no driver / missing symbol
+        // Hardware finding (cold start): torch's CUDA caching allocator
+        // initializes lazily on the first CUDA op; beginAllocateToPool on the
+        // uninitialized per-device table terminates the process when the pool
+        // scope is the process's FIRST CUDA use. Force init here.
+        if (!torch::cuda::is_available()) return;   // ok_ stays false -> fallback
+        at::globalContext().lazyInitCUDA();
         allocator_ = torch::cuda::CUDAPluggableAllocator::createCustomAllocator(
             [this](size_t size, int device, cudaStream_t stream) {
                 return alloc_block(size, device, stream);
@@ -326,6 +339,15 @@ private:
         prop.requestedHandleTypes = kHandleType;
         prop.location.type        = detail::CU_MEM_LOCATION_TYPE_DEVICE;
         prop.location.id          = device;
+#ifdef _WIN32
+        // Hardware finding (RTX 500 Ada, driver 596.47): cuMemCreate REJECTS a
+        // WIN32-shareable request with null win32HandleMetaData
+        // (CUDA_ERROR_INVALID_VALUE). An exportable NT handle needs
+        // SECURITY_ATTRIBUTES (the CUDA memMapIPCDrv sample's precedent); the
+        // default descriptor is enough for same-user DuplicateHandle import.
+        static SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), nullptr, FALSE};
+        prop.win32HandleMetaData = &sa;
+#endif
 
         size_t gran = 0;
         if (cu_->cuMemGetAllocationGranularity(
