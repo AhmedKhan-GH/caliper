@@ -69,11 +69,45 @@ const Api* load() {
     return &a;
 }
 
+// Optional VMM table (bridge v1.2). Separate from load() so a driver without
+// these nine symbols still yields a full core Api; a hole here nulls ONLY the
+// VMM surface. Requires api() to have succeeded (cuInit done) so callers can
+// use the table immediately.
+const VmmApi* load_vmm() {
+    if (api() == nullptr) return nullptr;
+    void* lib = lib_open();
+    if (!lib) return nullptr;
+
+    static VmmApi v{};
+    struct Entry { void** slot; const char* name; };
+    const Entry entries[] = {
+        {(void**)&v.cuMemGetAllocationGranularity, "cuMemGetAllocationGranularity"},
+        {(void**)&v.cuMemCreate,                   "cuMemCreate"},
+        {(void**)&v.cuMemAddressReserve,           "cuMemAddressReserve"},
+        {(void**)&v.cuMemMap,                      "cuMemMap"},
+        {(void**)&v.cuMemSetAccess,                "cuMemSetAccess"},
+        {(void**)&v.cuMemExportToShareableHandle,  "cuMemExportToShareableHandle"},
+        {(void**)&v.cuMemUnmap,                    "cuMemUnmap"},
+        {(void**)&v.cuMemRelease,                  "cuMemRelease"},
+        {(void**)&v.cuMemAddressFree,              "cuMemAddressFree"},
+    };
+    for (const Entry& e : entries) {
+        *e.slot = lib_sym(lib, e.name);
+        if (*e.slot == nullptr) return nullptr;
+    }
+    return &v;
+}
+
 }  // namespace
 
 const Api* api() {
     static const Api* a = load();   // magic-static: thread-safe, once
     return a;
+}
+
+const VmmApi* vmm_api() {
+    static const VmmApi* v = load_vmm();
+    return v;
 }
 
 }  // namespace cudadrv
