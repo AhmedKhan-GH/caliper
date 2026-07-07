@@ -12,6 +12,7 @@
 // live as members / in an internal id table; the uint64 texture ids handed to
 // callers are sequential handles, never raw retained pointers (§5.4).
 #include "host_renderer.h"
+#include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -29,6 +30,14 @@
 #include <unordered_map>
 
 namespace caliper_host {
+
+// Resolve a colormap id to its 256-entry RGBA8 LUT (tensor_bridge.cpp, present
+// in every exe/test link scope that pulls this backend). Unlike
+// tex_update_from_device — where the bridge hands the renderer a resolved
+// lut256 — the v1.2 imported path receives the raw colormap id (the texture's
+// pinned mapping), so the renderer resolves it here.
+const uint32_t* colormap_lut(int32_t colormap);
+
 namespace {
 
 // Cross-backend determinism contract (§16): the compute colormap must produce
@@ -191,6 +200,7 @@ public:
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
         [textures_ removeAllObjects];
         textures_ = nil;
+        imported_.clear();
         cmap_pipeline_ = nil;
         pass_desc_ = nil;
         queue_ = nil;
@@ -249,9 +259,53 @@ public:
         if (src == nil) return false;
 
         if (t.dtype == CALIPER_DT_F32 && lut256 != nullptr)
-            return colormap_compute(tex, dst, src, t, lut256, vmin, vmax);
+            return colormap_compute_from(tex, dst, src, 0, t, lut256, vmin, vmax,
+                                         /*imported=*/false);
         if (t.dtype == CALIPER_DT_U8)
-            return blit_u8(tex, dst, src, t);
+            return blit_u8_from(tex, dst, src, 0, t, /*imported=*/false);
+        return false;
+    }
+
+    // ---- v1.2 imported allocations (in-process MTLBuffer import) -----------
+    // The Metal analog of Vulkan's DuplicateHandle + VkImportMemory: there is
+    // no OS handle transfer on Apple unified memory, so the "dup" is an ObjC
+    // strong retain. Lights up CALIPER_BRIDGE_CAP_IMPORT_ALLOC via the bridge.
+    bool supports_external_import() const override { return device_ != nil; }
+
+    uint64_t import_external_allocation(void* os_handle, uint64_t size_bytes,
+                                        uint32_t handle_type) override {
+        if (handle_type != CALIPER_ALLOC_HANDLE_MTLBUFFER) return 0;
+        if (os_handle == nullptr || size_bytes == 0 || device_ == nil) return 0;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)os_handle;
+        if (buf == nil) return 0;
+        if (buf.device.registryID != device_.registryID) return 0;  // wrong GPU
+        if (buf.length < size_bytes) return 0;   // caller overclaims — refuse
+        const uint64_t iid = next_import_id_++;
+        imported_[iid] = buf;                    // ARC strong ref IS the dup
+        return iid;
+    }
+
+    void release_external_allocation(uint64_t iid) override { imported_.erase(iid); }
+
+    // Colormap/blit a texture FROM an imported buffer at a byte offset, with NO
+    // data copy (the applet's kernels already wrote the bytes). Guards mirror
+    // tex_update_from_device; the byte offset rides setBuffer:offset: (f32) or
+    // sourceOffset: (u8). Colormap/vmin/vmax are the texture's pinned mapping.
+    bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t offset_bytes,
+                                  const CaliperTensor& desc, int32_t colormap,
+                                  float vmin, float vmax) override {
+        id<MTLTexture> dst = lookup(tex);
+        id<MTLBuffer>  src = lookup_import(alloc);
+        if (dst == nil || src == nil) return false;
+        if (offset_bytes % 4 != 0 || offset_bytes > src.length) return false;
+        if (desc.dtype == CALIPER_DT_F32) {
+            const uint32_t* lut = colormap_lut(colormap);
+            if (lut == nullptr) return false;
+            return colormap_compute_from(tex, dst, src, offset_bytes, desc,
+                                         lut, vmin, vmax, /*imported=*/true);
+        }
+        if (desc.dtype == CALIPER_DT_U8)
+            return blit_u8_from(tex, dst, src, offset_bytes, desc, /*imported=*/true);
         return false;
     }
 
@@ -301,6 +355,11 @@ private:
         return textures_[@(id)];
     }
 
+    id<MTLBuffer> lookup_import(uint64_t iid) {
+        auto it = imported_.find(iid);
+        return it == imported_.end() ? nil : it->second;
+    }
+
     bool ensure_pipeline() {
         if (cmap_pipeline_ != nil) return true;
         NSError* err = nil;
@@ -341,13 +400,16 @@ private:
         }
     }
 
-    // f32 + LUT -> runtime-compiled compute shader. Records "compute".
-    bool colormap_compute(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
-                          const CaliperTensor& t, const uint32_t* lut256,
-                          float vmin, float vmax) {
+    // f32 + LUT -> runtime-compiled compute shader. Sources from src at
+    // src_offset bytes (0 on the direct path). Records "compute" (direct) or
+    // "compute-imported" (v1.2 imported path).
+    bool colormap_compute_from(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
+                               uint64_t src_offset, const CaliperTensor& t,
+                               const uint32_t* lut256, float vmin, float vmax,
+                               bool imported) {
         if (!ensure_pipeline()) return false;
-        if (src.length < tensor_extent_bytes(t, sizeof(float)))
-            return false;   // buffer too short for the declared extent
+        if (tensor_extent_bytes(t, sizeof(float)) > src.length - src_offset)
+            return false;   // buffer too short for the declared extent at offset
 
         CmapParams p{};
         p.w = (uint32_t)dst.width;
@@ -367,7 +429,7 @@ private:
         if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);
         id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
         [enc setComputePipelineState:cmap_pipeline_];
-        [enc setBuffer:src offset:0 atIndex:0];
+        [enc setBuffer:src offset:(NSUInteger)src_offset atIndex:0];
         [enc setBuffer:lutbuf offset:0 atIndex:1];
         [enc setBytes:&p length:sizeof(p) atIndex:2];
         [enc setTexture:dst atIndex:0];
@@ -383,26 +445,29 @@ private:
         // retire the queue themselves (debug_readback_rgba8).
         [cb commit];
 
-        last_device_path_ = "compute";
+        last_device_path_ = imported ? "compute-imported" : "compute";
         return true;
     }
 
-    // u8 HWC (RGBA8) -> blit straight into the texture. Records "blit".
-    bool blit_u8(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src, const CaliperTensor& t) {
+    // u8 HWC (RGBA8) -> blit straight into the texture. Sources from src at
+    // src_offset bytes (0 on the direct path). Records "blit" (direct) or
+    // "blit-imported" (v1.2 imported path).
+    bool blit_u8_from(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
+                      uint64_t src_offset, const CaliperTensor& t, bool imported) {
         if (t.ndim < 2) return false;
         NSUInteger h = (NSUInteger)t.shape[0];
         NSUInteger w = (NSUInteger)t.shape[1];
         NSUInteger c = (t.ndim >= 3) ? (NSUInteger)t.shape[2] : 1;
         if (c != 4 || w != dst.width || h != dst.height) return false;  // RGBA8 only
-        if (src.length < tensor_extent_bytes(t, 1))
-            return false;   // buffer too short for the declared extent
+        if (tensor_extent_bytes(t, 1) > src.length - src_offset)
+            return false;   // buffer too short for the declared extent at offset
 
         NSUInteger bytesPerRow = w * 4;
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
         if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         [blit copyFromBuffer:src
-                sourceOffset:0
+                sourceOffset:(NSUInteger)src_offset
            sourceBytesPerRow:bytesPerRow
          sourceBytesPerImage:bytesPerRow * h
                   sourceSize:MTLSizeMake(w, h, 1)
@@ -413,7 +478,7 @@ private:
         [blit endEncoding];
         [cb commit];   // no CPU wait (M1/D23): same-queue commit order + retention
 
-        last_device_path_ = "blit";
+        last_device_path_ = imported ? "blit-imported" : "blit";
         return true;
     }
 
@@ -436,6 +501,11 @@ private:
     // texture monotonic timeline, the Metal analog of Vulkan's semaphores.
     NSMutableDictionary<NSNumber*, id<MTLSharedEvent>>* events_ = nil;
     std::unordered_map<uint64_t, uint64_t> event_values_;
+
+    // v1.2 imported allocations: in-process MTLBuffers, strong-retained (ARC) —
+    // the Metal analog of Vulkan's DuplicateHandle+VkImportMemory. 0 invalid.
+    std::unordered_map<uint64_t, id<MTLBuffer>> imported_;
+    uint64_t next_import_id_ = 1;
 
     uint64_t next_id_ = 1;          // 0 is the invalid id
     const char* last_device_path_ = "";

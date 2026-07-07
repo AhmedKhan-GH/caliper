@@ -744,6 +744,96 @@ TEST_CASE("gfx/Metal: bridge id is the ImGui handle and survives the real ImGui 
         bk.bridge->release_texture(tex_id);
     }
 }
+
+// ---- v1.2 imported-allocation rows (Metal: in-process MTLBuffer import) ----
+
+// Import an in-process MTLBuffer and colormap a texture straight from a NONZERO
+// byte offset inside it — no CPU copy of the tensor data. Byte-exact vs the same
+// CPU reference the staged path uses. Then a released alloc must refuse.
+TEST_CASE("gfx/Metal: import in-process MTLBuffer, colormap from a nonzero offset, byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) != 0);
+
+    // 4×4 f32 ramp at byte offset 256 inside a 4096-byte buffer.
+    const int W = 4, H = 4;
+    const uint64_t off = 256;
+    std::vector<uint8_t> bytes(4096, 0);
+    float ramp[W * H];
+    for (int i = 0; i < W * H; ++i) ramp[i] = (float)i / (float)(W * H - 1);
+    std::memcpy(bytes.data() + off, ramp, sizeof(ramp));
+    id<MTLBuffer> buf = device_buffer(bytes.data(), bytes.size());
+    bool buf_live = (buf != nil);   // keep the ObjC ptr out of doctest decomposition
+    REQUIRE(buf_live);
+
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        (__bridge void*)buf, bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(alloc != 0);
+
+    // Create the W×H viridis texture the house way: a seed CPU tensor pins the
+    // colormap/vmin/vmax (0..1) that the imported update reuses (§ update_alloc).
+    std::vector<float> seed((size_t)W * H, 0.0f);
+    CaliperTensor seed_t = f32_2d(seed.data(), H, W);
+    CaliperTextureId tex = bk.bridge->texture_from_tensor_mapped(
+        &seed_t, CALIPER_CMAP_VIRIDIS, 0.0f, 1.0f, 0);
+    REQUIRE(tex != 0);
+
+    CaliperTensor d{};
+    d.struct_size = sizeof(CaliperTensor);
+    d.dtype = CALIPER_DT_F32; d.ndim = 2;
+    d.shape[0] = H; d.shape[1] = W; d.strides[0] = W; d.strides[1] = 1;
+    d.device = CALIPER_DEV_METAL;    // data/stream stay null: alloc+offset IS the address
+    REQUIRE(bk.bridge->update_texture_from_alloc(tex, alloc, off, &d));
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute-imported");
+
+    // Byte-exact vs the identical CPU reference the staged path uses (vmin=0, vmax=1).
+    std::vector<uint8_t> ref((size_t)W * H * 4);
+    map_f32_to_rgba8(ramp, W, H, colormap_lut(CALIPER_CMAP_VIRIDIS), 0.0f, 1.0f, ref.data());
+    CHECK(bk.readback(tex, W, H) == ref);
+
+    bk.bridge->release_allocation(alloc);
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(tex, alloc, off, &d));  // released → refuses
+    bk.bridge->release_texture(tex);
+}
+
+// Import gates fail closed: wrong handle kind, null handle, zero size, and a
+// size overclaim (buf shorter than declared) all return 0; an OOB offset on a
+// valid import refuses and leaves pixels untouched.
+TEST_CASE("gfx/Metal: import gates fail closed") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    std::vector<uint8_t> z(1024, 0);
+    id<MTLBuffer> buf = device_buffer(z.data(), z.size());
+
+    // wrong handle kind / null handle / zero size / size overclaim
+    CHECK(bk.bridge->import_allocation((__bridge void*)buf, 1024,
+                                       CALIPER_ALLOC_HANDLE_OPAQUE_FD) == 0);
+    CHECK(bk.bridge->import_allocation(nullptr, 1024,
+                                       CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);
+    CHECK(bk.bridge->import_allocation((__bridge void*)buf, 0,
+                                       CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);
+    CHECK(bk.bridge->import_allocation((__bridge void*)buf, 4096,
+                                       CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);  // buf.length is 1024
+
+    // OOB offset on a valid import refuses and leaves pixels untouched
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        (__bridge void*)buf, 1024, CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(alloc != 0);
+    std::vector<float> seed(16, 0.0f);
+    CaliperTensor seed_t = f32_2d(seed.data(), 4, 4);
+    CaliperTextureId tex = bk.bridge->texture_from_tensor_mapped(
+        &seed_t, CALIPER_CMAP_VIRIDIS, 0.0f, 1.0f, 0);
+    REQUIRE(tex != 0);
+    CaliperTensor d{};
+    d.struct_size = sizeof(CaliperTensor);
+    d.dtype = CALIPER_DT_F32; d.ndim = 2;
+    d.shape[0] = 4; d.shape[1] = 4; d.strides[0] = 4; d.strides[1] = 1;
+    d.device = CALIPER_DEV_METAL;
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(tex, alloc, 1024, &d));   // offset==length
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(tex, alloc, 1000, &d));   // extent past end
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->release_texture(tex);
+}
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================
