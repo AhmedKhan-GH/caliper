@@ -106,6 +106,7 @@ struct FlowScopeState {
     std::atomic<float> noise_scale{2.2f};
     std::atomic<float> damping{0.6f};
     std::atomic<float> impulse_strength{6.0f};
+    std::atomic<float> turbulence{0.03f};   // Langevin velocity noise (entropy)
 
     std::mutex mtx;  // guards everything below, down to the frame block
     // Impulse ray (frame writes, worker reads).
@@ -129,8 +130,9 @@ struct FlowScopeState {
     // ------- frame-thread-only -------
     CaliperTextureId view = 0;
     int   view_w = 768, view_h = 768;
-    float cam_az = 0.8f, cam_el = 0.45f, cam_dist = 4.2f;
-    float color_vmax = 1.2f;   // hardware-tuned: most of the LUT range lights up
+    float cam_az = 0.8f, cam_el = 0.45f, cam_dist = 5.5f;
+    float color_vmax = 3.0f;   // wide window: speeds spread into magenta→orange
+                               // instead of saturating the LUT's white end
     bool  zero_copy_frame = false;   // provenance of the current view content
     uint64_t frames = 0;
 };
@@ -148,6 +150,7 @@ void sim_step(FlowScopeState* st, torch::Tensor& p_in, torch::Tensor& p_out,
     const float k = st->noise_scale.load();
     const float A = st->field_strength.load();
     const float damp = st->damping.load();
+    const float turb = st->turbulence.load();
 
     auto x = p_in.select(1, 0), y = p_in.select(1, 1), z = p_in.select(1, 2);
     const float tw = 0.6f * t;
@@ -180,6 +183,11 @@ void sim_step(FlowScopeState* st, torch::Tensor& p_in, torch::Tensor& p_out,
     }
 
     vel.add_(F, kDt).mul_(1.f - damp * kDt);
+    // Langevin entropy: a per-step random velocity kick (temporary in the
+    // default allocator, not the pool). Damping + this noise form an
+    // Ornstein–Uhlenbeck process — the laminar field gains turbulence, and
+    // since color follows speed the cloud gains color variation too.
+    if (turb > 0.f) vel.add_(torch::randn_like(vel), turb);
     p_out.copy_(p_in).add_(vel, kDt);
     // Wrap into [-L, L): continuous flow, no respawn popping.
     p_out.sub_(torch::floor((p_out + kBoxL) / (2 * kBoxL)) * (2 * kBoxL));
@@ -360,6 +368,11 @@ void FlowScopeApplet::draw_ui() {
         ImGui::SetNextItemWidth(100);
         if (ImGui::SliderFloat("damping", &dp, 0.f, 2.f)) st->damping.store(dp);
         ImGui::SameLine();
+        float tb = st->turbulence.load();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::SliderFloat("turb", &tb, 0.f, 0.12f, "%.3f"))
+            st->turbulence.store(tb);
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(100);
         ImGui::SliderFloat("color", &st->color_vmax, 0.5f, 6.f);
         // Status reflects last frame's provenance (imperceptible 1-frame lag);
@@ -417,10 +430,15 @@ void FlowScopeApplet::draw_ui() {
         auto pref = pool->to_bridge(st->bridge, draw_pos);
         auto sref = pool->to_bridge(st->bridge, draw_speed);
         if (pref && sref) {
+            // Baseline color: a negative vmin lifts speed-0 off the magma
+            // LUT's black floor to ~25% up (a dim magenta), so still
+            // particles stay visible; faster particles climb to the bright
+            // end. Purely the mapping window — no shader/ABI change.
+            const float vmin = -0.33f * st->color_vmax;
             st->zero_copy_frame = st->geometry.draw_points(
                 st->view, &cam, pref->alloc, pref->offset, (uint64_t)n,
-                sref->alloc, sref->offset, CALIPER_CMAP_MAGMA, 0.f,
-                st->color_vmax, 2.0f, 0xFF000000u);
+                sref->alloc, sref->offset, CALIPER_CMAP_MAGMA, vmin,
+                st->color_vmax, 1.5f, 0xFF000000u);
         }
     }
 
