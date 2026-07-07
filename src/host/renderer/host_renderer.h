@@ -51,6 +51,24 @@ public:
     virtual bool alloc_device_shared(uint64_t /*tex*/, uint64_t /*bytes*/,
                                      void** /*out_device_ptr*/) { return false; }
 
+    // External-allocation import (bridge v1.2). Default: unsupported — the
+    // bridge then never grants CALIPER_BRIDGE_CAP_IMPORT_ALLOC. import_external_
+    // allocation dups the OS shareable handle and returns a renderer-internal
+    // id (0 on failure); the update pass runs a device texture update FROM the
+    // imported allocation at offset_bytes, with the imported bytes as the
+    // address (desc->data ignored). Colormap/vmin/vmax are the texture's stored
+    // (pinned-at-create) mapping values, same as tex_update_from_device.
+    virtual bool supports_external_import() const { return false; }
+    virtual uint64_t import_external_allocation(void* /*os_handle*/,
+                                                uint64_t /*size_bytes*/,
+                                                uint32_t /*handle_type*/) { return 0; }
+    virtual void release_external_allocation(uint64_t /*id*/) {}
+    virtual bool tex_update_from_imported(uint64_t /*tex*/, uint64_t /*alloc*/,
+                                          uint64_t /*offset_bytes*/,
+                                          const CaliperTensor& /*desc*/,
+                                          int32_t /*colormap*/,
+                                          float /*vmin*/, float /*vmax*/) { return false; }
+
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
 

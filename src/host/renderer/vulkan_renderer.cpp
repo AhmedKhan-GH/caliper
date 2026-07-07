@@ -45,6 +45,7 @@
 
 #include "host_renderer.h"
 #include "../cuda_driver.h"
+#include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_OPAQUE_WIN32
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
@@ -63,6 +64,14 @@
 // <windows.h> (deliberate, see volk.h) — so declare the one kernel32 call we
 // use the same way rather than dragging the whole header in after the shims.
 extern "C" __declspec(dllimport) int __stdcall CloseHandle(void* hObject);
+// import_external_allocation dups the applet's shareable handle so the host
+// owns a lifetime-independent copy (closed at release). Same declare-not-
+// include discipline as CloseHandle above.
+extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess(void);
+extern "C" __declspec(dllimport) int __stdcall DuplicateHandle(
+    void* hSourceProcessHandle, void* hSourceHandle,
+    void* hTargetProcessHandle, void** lpTargetHandle,
+    unsigned long dwDesiredAccess, int bInheritHandle, unsigned long dwOptions);
 #endif
 
 // Build-time SPIR-V of shaders/colormap.comp (glslang -V --vn kColormapSpv),
@@ -70,6 +79,14 @@ extern "C" __declspec(dllimport) int __stdcall CloseHandle(void* hObject);
 #include <colormap_spv.h>
 
 namespace caliper_host {
+
+// Resolve a colormap id to its 256-entry RGBA8 LUT (tensor_bridge.cpp, present
+// in every exe/test link scope that pulls this backend). Unlike
+// tex_update_from_device — where the bridge hands the renderer a resolved
+// lut256 — the v1.2 imported path receives the raw colormap id (the texture's
+// pinned mapping), so the renderer resolves it here.
+const uint32_t* colormap_lut(int32_t colormap);
+
 namespace {
 
 // Byte extent a tensor addresses (same derivation as metal_renderer.mm).
@@ -214,6 +231,16 @@ public:
         vkDeviceWaitIdle(device_);
         for (auto& kv : textures_) destroy_tex(kv.second);
         textures_.clear();
+        // Any imported allocations the bridge did not release (device is idle).
+        for (auto& kv : imported_) {
+            ImportedAlloc& a = kv.second;
+            if (a.buf) vkDestroyBuffer(device_, a.buf, nullptr);
+            if (a.memory) vkFreeMemory(device_, a.memory, nullptr);
+#ifdef _WIN32
+            if (a.handle_dup) CloseHandle((HANDLE)a.handle_dup);
+#endif
+        }
+        imported_.clear();
         destroy_compute();
         destroy_buffer(staging_);
         destroy_buffer(lut_buf_);
@@ -419,6 +446,168 @@ public:
         return true;
     }
 
+    // ---- Bridge v1.2: import applet-exported allocations (zero data copies) --
+    // supports_external_import gates the bridge's CALIPER_BRIDGE_CAP_IMPORT_ALLOC:
+    // available only when the Vulkan side exports external memory AND a
+    // UUID-matched CUDA device is paired (interop live).
+    bool supports_external_import() const override {
+#ifdef _WIN32
+        return interop_ok_ && external_memory_ok_;
+#else
+        return false;
+#endif
+    }
+
+    // Import an applet-exported CUDA allocation as one VkBuffer (its import
+    // twin of ensure_buffer's export). Returns a renderer-internal id (0 on
+    // failure -> bridge falls back). Any failure frees everything it created.
+    uint64_t import_external_allocation(void* os_handle, uint64_t size_bytes,
+                                        uint32_t handle_type) override {
+#ifdef _WIN32
+        if (!interop_ok_ || !external_memory_ok_) return 0;
+        if (handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_WIN32) return 0;
+        if (os_handle == nullptr || size_bytes == 0) return 0;
+
+        // Own our own copy of the shareable handle (DUPLICATE_SAME_ACCESS);
+        // the applet/adapter keeps and closes theirs independently.
+        HANDLE dup = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)os_handle,
+                             GetCurrentProcess(), &dup, 0, /*bInheritHandle=*/0,
+                             /*DUPLICATE_SAME_ACCESS=*/0x00000002u) ||
+            dup == nullptr)
+            return 0;
+
+        ImportedAlloc a{};
+        a.handle_dup = dup;
+        a.size = (VkDeviceSize)size_bytes;
+
+        VkExternalMemoryBufferCreateInfo emci{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+        emci.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        ci.pNext = &emci;
+        ci.size = size_bytes;
+        ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(device_, &ci, nullptr, &a.buf) != VK_SUCCESS) {
+            CloseHandle(dup);
+            return 0;
+        }
+
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(device_, a.buf, &mr);
+        if (mr.size > size_bytes) {
+            // Binding a buffer bigger than the imported memory is invalid
+            // usage. Never expected (CUDA granularity is 2 MiB multiples),
+            // but if the padded-size assumption ever breaks, fail closed and
+            // report both sizes — the caller falls back to the copy path.
+            std::fprintf(stderr,
+                         "[vulkan] import: buffer needs %llu bytes > imported "
+                         "%llu — declining import\n",
+                         (unsigned long long)mr.size,
+                         (unsigned long long)size_bytes);
+            vkDestroyBuffer(device_, a.buf, nullptr);
+            CloseHandle(dup);
+            return 0;
+        }
+        VkImportMemoryWin32HandleInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
+        imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        imp.handle = dup;
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.pNext = &imp;
+        mai.allocationSize = size_bytes;   // the applet's padded allocation size
+        if (!find_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           &mai.memoryTypeIndex) ||
+            vkAllocateMemory(device_, &mai, nullptr, &a.memory) != VK_SUCCESS) {
+            vkDestroyBuffer(device_, a.buf, nullptr);
+            CloseHandle(dup);
+            return 0;
+        }
+        if (vkBindBufferMemory(device_, a.buf, a.memory, 0) != VK_SUCCESS) {
+            vkFreeMemory(device_, a.memory, nullptr);
+            vkDestroyBuffer(device_, a.buf, nullptr);
+            CloseHandle(dup);
+            return 0;
+        }
+
+        const uint64_t id = next_import_id_++;   // 0 invalid; never reused
+        imported_[id] = a;
+        return id;
+#else
+        (void)os_handle; (void)size_bytes; (void)handle_type;
+        return 0;
+#endif
+    }
+
+    // Synchronous release (the tex_release precedent): drain the queue, then
+    // destroy buffer -> free memory -> close the dup handle -> erase. A texture
+    // still referencing a released alloc simply fails its next update -> the
+    // bridge CPU-stages.
+    void release_external_allocation(uint64_t id) override {
+        auto it = imported_.find(id);
+        if (it == imported_.end()) return;   // invalid id / double release: no-op
+        vkQueueWaitIdle(queue_);
+        ImportedAlloc& a = it->second;
+        if (a.buf) vkDestroyBuffer(device_, a.buf, nullptr);
+        if (a.memory) vkFreeMemory(device_, a.memory, nullptr);
+#ifdef _WIN32
+        if (a.handle_dup) CloseHandle((HANDLE)a.handle_dup);
+#endif
+        imported_.erase(it);
+    }
+
+    // Colormap/blit a texture FROM an imported allocation at a byte offset, with
+    // NO data copy (the applet's kernels already wrote the bytes). Guards mirror
+    // tex_update_from_device; the byte offset rides the descriptor (f32) or the
+    // BufferImageCopy (u8). Returns false -> bridge CPU-stages.
+    bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t offset_bytes,
+                                  const CaliperTensor& desc, int32_t colormap,
+                                  float vmin, float vmax) override {
+        auto it = textures_.find(tex);
+        if (it == textures_.end()) return dev_bail("import-update: no such texture");
+        Tex& dst = it->second;
+        auto ia = imported_.find(alloc);
+        if (ia == imported_.end()) return dev_bail("import-update: no such alloc");
+        ImportedAlloc& src = ia->second;
+        if (!interop_ok_) return dev_bail("import-update: interop unavailable");
+
+        if (desc.dtype != CALIPER_DT_F32 && desc.dtype != CALIPER_DT_U8)
+            return dev_bail("import-update: dtype not f32/u8");
+        const uint64_t elem = (desc.dtype == CALIPER_DT_F32) ? 4 : 1;
+        const uint64_t bytes = tensor_extent_bytes(desc, elem);
+        // offset + bytes <= size, phrased to never overflow.
+        if (bytes > (uint64_t)src.size || offset_bytes > (uint64_t)src.size - bytes)
+            return dev_bail("import-update: extent exceeds imported allocation");
+
+        const bool is_cmap = (desc.dtype == CALIPER_DT_F32);
+        const uint32_t* lut256 = is_cmap ? colormap_lut(colormap) : nullptr;
+        if (is_cmap && lut256 == nullptr)
+            return dev_bail("import-update: bad colormap");
+
+        // f32: VkDescriptorBufferInfo.offset must meet minStorageBufferOffsetAlignment.
+        if (is_cmap && (offset_bytes % (uint64_t)storage_buffer_alignment_) != 0)
+            return dev_bail("import-update: f32 offset misaligned");
+        // u8: VkBufferImageCopy.bufferOffset must be a multiple of 4 (non-depth
+        // format rule; the RGBA8 texel size 4 also divides it).
+        if (!is_cmap && (offset_bytes % 4u) != 0)
+            return dev_bail("import-update: u8 offset not 4-aligned");
+
+        if (!ensure_cuda()) return dev_bail("import-update: CUDA context init failed");
+        cudadrv::api()->cuCtxSetCurrent(cuda_ctx_);
+
+        // stream != NULL => GPU-order after the producer via the texture's
+        // timeline semaphore (no copy). stream == NULL => adapter drained (v1
+        // rung contract) => a plain fenced submit is correct and simpler.
+        bool ok;
+        if (desc.stream != nullptr && pipelined_ok_ && ensure_pipeline_objects(dst))
+            ok = update_imported_pipelined(dst, src, offset_bytes, bytes, is_cmap,
+                                           lut256, desc, vmin, vmax);
+        else
+            ok = update_imported_sync(dst, src, offset_bytes, bytes, is_cmap,
+                                      lut256, desc, vmin, vmax);
+        if (ok) dev_note("import path OK — zero-copy (imported allocation in place)");
+        return ok;
+    }
+
     // One-time-per-message stderr breadcrumbs so a run makes it obvious whether
     // the zero-copy interop path fired or why it fell back to CPU staging. A
     // bail here is not an error (the bridge CPU-stages) — just diagnostic.
@@ -464,6 +653,18 @@ private:
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         int w = 0, h = 0;
         Interop interop;
+    };
+
+    // Bridge v1.2 imported external allocation: one VkBuffer per applet-exported
+    // CUDA allocation, imported (not exported) via VkImportMemoryWin32HandleInfoKHR.
+    // Textures reference it at descriptor/copy byte offsets — no per-texture
+    // buffer, no data copy. handle_dup is our DuplicateHandle copy (CloseHandle
+    // at release; the applet/adapter keeps and closes its own).
+    struct ImportedAlloc {
+        VkBuffer buf = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize size = 0;
+        void* handle_dup = nullptr;
     };
 
     // ---- init helpers ----
@@ -580,6 +781,13 @@ private:
         volkLoadDevice(device_);
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
         vkGetPhysicalDeviceMemoryProperties(physical_, &mem_props_);
+        // The v1.2 imported f32 path binds the allocation at a byte offset as a
+        // storage buffer; VkDescriptorBufferInfo.offset must be a multiple of
+        // this. Cache it once (torch sub-allocations are 512-aligned, so real
+        // offsets clear it; a violation falls back — see tex_update_from_imported).
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physical_, &props);
+        storage_buffer_alignment_ = props.limits.minStorageBufferOffsetAlignment;
         return true;
     }
 
@@ -1099,9 +1307,13 @@ private:
         if (cmap_layout_) { vkDestroyDescriptorSetLayout(device_, cmap_layout_, nullptr); cmap_layout_ = VK_NULL_HANDLE; }
     }
 
-    // Write a cmap descriptor set: shared buffer + LUT + storage image.
-    void write_cmap_set(VkDescriptorSet set, Tex& dst, const Buffer& lut) {
-        VkDescriptorBufferInfo src_info{dst.interop.shared.buf, 0, VK_WHOLE_SIZE};
+    // Write a cmap descriptor set from an explicit source buffer subrange
+    // (binding 0) + LUT (binding 1) + storage image (binding 2). The v1.2
+    // imported path binds imported.buf at a byte offset here; the byte offset
+    // rides the descriptor so colormap.comp is unchanged.
+    void write_cmap_set_src(VkDescriptorSet set, Tex& dst, const Buffer& lut,
+                            VkBuffer src, VkDeviceSize src_off, VkDeviceSize src_range) {
+        VkDescriptorBufferInfo src_info{src, src_off, src_range};
         VkDescriptorBufferInfo lut_info{lut.buf, 0, VK_WHOLE_SIZE};
         VkDescriptorImageInfo img_info{VK_NULL_HANDLE, dst.view, VK_IMAGE_LAYOUT_GENERAL};
         VkWriteDescriptorSet writes[3]{};
@@ -1112,6 +1324,11 @@ private:
         writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1,
                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &img_info, nullptr, nullptr};
         vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
+    }
+
+    // Write a cmap descriptor set: the per-texture shared buffer + LUT + image.
+    void write_cmap_set(VkDescriptorSet set, Tex& dst, const Buffer& lut) {
+        write_cmap_set_src(set, dst, lut, dst.interop.shared.buf, 0, VK_WHOLE_SIZE);
     }
 
     // Command-buffer bodies shared by the sync path (fence-waited, global set)
@@ -1136,7 +1353,11 @@ private:
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
-    void record_blit_body(VkCommandBuffer cb, Tex& dst, uint32_t w, uint32_t h) {
+    // Blit body from an explicit source buffer + byte offset. The v1.2 imported
+    // path copies imported.buf at offset; the sync/pipelined device paths pass
+    // the per-texture shared buffer at 0.
+    void record_blit_body_src(VkCommandBuffer cb, Tex& dst, uint32_t w, uint32_t h,
+                              VkBuffer src, VkDeviceSize src_off) {
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -1145,12 +1366,17 @@ private:
                              1, &mb, 0, nullptr, 0, nullptr);
         barrier(cb, dst, dst.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkBufferImageCopy region{};
+        region.bufferOffset = src_off;
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {w, h, 1};
-        vkCmdCopyBufferToImage(cb, dst.interop.shared.buf, dst.image,
+        vkCmdCopyBufferToImage(cb, src, dst.image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    void record_blit_body(VkCommandBuffer cb, Tex& dst, uint32_t w, uint32_t h) {
+        record_blit_body_src(cb, dst, w, h, dst.interop.shared.buf, 0);
     }
 
     CmapPush make_push(Tex& dst, const CaliperTensor& t, float vmin, float vmax) {
@@ -1299,6 +1525,126 @@ private:
         return true;
     }
 
+    // ---- V4 pipelined imported update: update_pipelined minus the D2D copy ----
+    // The applet already wrote the imported allocation, so CUDA only SIGNALS
+    // base+1 on the producer's stream (no cuMemcpyDtoDAsync); the Vulkan pass
+    // GPU-waits base+1 / signals base+2, exactly as update_pipelined does. Reads
+    // src.buf at src_off in place. Reuses the texture's own sync objects
+    // (ensure_pipeline_objects, which does not touch the interop shared buffer).
+    bool update_imported_pipelined(Tex& dst, ImportedAlloc& src, uint64_t offset,
+                                   uint64_t bytes, bool is_cmap,
+                                   const uint32_t* lut256, const CaliperTensor& desc,
+                                   float vmin, float vmax) {
+        Interop& io = dst.interop;
+        if (!retire(dst)) return dev_bail("import-pipelined: retire timed out");
+
+        uint32_t blit_w = 0, blit_h = 0;
+        VkPipelineStageFlags wait_stage;
+        if (is_cmap) {
+            if (!ensure_buffer(io.lut, 256 * sizeof(uint32_t),
+                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               /*external=*/false))
+                return dev_bail("import-pipelined: lut alloc failed");
+            std::memcpy(io.lut.mapped, lut256, 256 * sizeof(uint32_t));
+            write_cmap_set_src(io.set, dst, io.lut, src.buf, offset, bytes);
+            wait_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        } else {
+            if (desc.ndim < 2) return false;
+            blit_h = (uint32_t)desc.shape[0];
+            blit_w = (uint32_t)desc.shape[1];
+            const uint32_t c = (desc.ndim >= 3) ? (uint32_t)desc.shape[2] : 1;
+            if (c != 4 || (int)blit_w != dst.w || (int)blit_h != dst.h) return false;
+            wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        }
+
+        const cudadrv::Api* cu = cudadrv::api();
+        cudadrv::CUstream stream = (cudadrv::CUstream)desc.stream;
+        const uint64_t base = io.timeline_value;
+        cudadrv::ExternalSemaphoreSignalParams sp{};
+        sp.params.fence.value = base + 1;
+        if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)
+                != cudadrv::CUDA_SUCCESS)
+            return dev_bail("import-pipelined: semaphore signal failed");
+
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(io.cb, &bi);
+        if (is_cmap)
+            record_cmap_body(io.cb, dst, make_push(dst, desc, vmin, vmax), io.set);
+        else
+            record_blit_body_src(io.cb, dst, blit_w, blit_h, src.buf, offset);
+        vkEndCommandBuffer(io.cb);
+
+        uint64_t wait_val = base + 1, signal_val = base + 2;
+        VkTimelineSemaphoreSubmitInfoKHR tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
+        tsi.waitSemaphoreValueCount = 1;
+        tsi.pWaitSemaphoreValues = &wait_val;
+        tsi.signalSemaphoreValueCount = 1;
+        tsi.pSignalSemaphoreValues = &signal_val;
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.pNext = &tsi;
+        si.waitSemaphoreCount = 1;
+        si.pWaitSemaphores = &io.timeline;
+        si.pWaitDstStageMask = &wait_stage;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &io.cb;
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores = &io.timeline;
+        if (vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS)
+            return dev_bail("import-pipelined: submit failed");
+
+        io.timeline_value = base + 2;
+        pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
+        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        last_device_path_ = is_cmap ? "compute-imported" : "blit-imported";
+        return true;
+    }
+
+    // Synchronous imported update (stream == NULL: adapter drained per the v1
+    // rung contract): the sync device shape (:tex_update_from_device fallback)
+    // without any copy — fence-waited submit reading src.buf at src_off. retire()
+    // first so a still-in-flight pipelined chain on this texture can't race the
+    // shared global cmap_set_ / oneshot fence.
+    bool update_imported_sync(Tex& dst, ImportedAlloc& src, uint64_t offset,
+                              uint64_t bytes, bool is_cmap,
+                              const uint32_t* lut256, const CaliperTensor& desc,
+                              float vmin, float vmax) {
+        if (!retire(dst)) return dev_bail("import-sync: retire timed out");
+        if (is_cmap) {
+            if (!ensure_compute()) return false;
+            if (!ensure_buffer(lut_buf_, 256 * sizeof(uint32_t),
+                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               /*external=*/false))
+                return false;
+            std::memcpy(lut_buf_.mapped, lut256, 256 * sizeof(uint32_t));
+            const CmapPush p = make_push(dst, desc, vmin, vmax);
+            write_cmap_set_src(cmap_set_, dst, lut_buf_, src.buf, offset, bytes);
+            const bool ok = submit_once([&](VkCommandBuffer cb) {
+                record_cmap_body(cb, dst, p, cmap_set_);
+            });
+            if (!ok) return false;
+            dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            last_device_path_ = "compute-imported";
+            return true;
+        }
+        if (desc.ndim < 2) return false;
+        const uint32_t h = (uint32_t)desc.shape[0];
+        const uint32_t w = (uint32_t)desc.shape[1];
+        const uint32_t c = (desc.ndim >= 3) ? (uint32_t)desc.shape[2] : 1;
+        if (c != 4 || (int)w != dst.w || (int)h != dst.h) return false;
+        const bool ok = submit_once([&](VkCommandBuffer cb) {
+            record_blit_body_src(cb, dst, w, h, src.buf, offset);
+        });
+        if (!ok) return false;
+        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        last_device_path_ = "blit-imported";
+        return true;
+    }
+
     // ---- members ----
     GLFWwindow* window_ = nullptr;
     VkInstance instance_ = VK_NULL_HANDLE;
@@ -1309,6 +1655,7 @@ private:
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkDescriptorPool imgui_pool_ = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties mem_props_{};
+    VkDeviceSize storage_buffer_alignment_ = 256;   // minStorageBufferOffsetAlignment
     ImGui_ImplVulkanH_Window wd_{};
     bool rebuild_swapchain_ = false;
 
@@ -1339,6 +1686,11 @@ private:
 
     std::unordered_map<uint64_t, Tex> textures_;
     uint64_t next_id_ = 1;   // 0 is the invalid id
+
+    // Bridge v1.2 imported allocations. Ids are renderer-internal (the bridge
+    // maps its own CaliperAllocId -> this); never reused, 0 invalid.
+    std::unordered_map<uint64_t, ImportedAlloc> imported_;
+    uint64_t next_import_id_ = 1;
     const char* last_device_path_ = "";
     std::set<std::string> dev_seen_;   // messages already logged by dev_note()
 };

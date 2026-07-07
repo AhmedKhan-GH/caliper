@@ -211,22 +211,36 @@ TensorBridge::TensorBridge(HostRenderer& renderer) : renderer_(renderer) {
 }
 
 uint32_t TensorBridge::caps() const {
-    return renderer_.honors_stream_ordered_handoff()
+    uint32_t c = renderer_.honors_stream_ordered_handoff()
         ? CALIPER_BRIDGE_CAP_STREAM_ORDERED : 0u;
+    if (renderer_.supports_external_import())
+        c |= CALIPER_BRIDGE_CAP_IMPORT_ALLOC;
+    return c;
 }
 
 namespace {
-// Shared acceptance checks for BOTH entry points: data present, device is CPU
-// or the active backend, row-major contiguous, and a bounded extent.
-bool accept_common(const CaliperTensor& t, CaliperDeviceKind active) {
-    if (t.data == nullptr)               { bridge_log("null data");        return false; }
+// The frozen shape gates minus the null-data check: device is CPU or the active
+// backend, known dtype, row-major contiguous, a bounded extent. Fills *extent
+// with the element count. Shared by accept_common (CPU/device tensors, where
+// data must be present) AND the imported-alloc path (where desc->data is
+// ignored — the allocation + offset are the address), so the contiguity/dtype/
+// extent gate logic lives in exactly one place.
+bool accept_shape(const CaliperTensor& t, CaliperDeviceKind active,
+                  int64_t* extent) {
     if (t.device != CALIPER_DEV_CPU && t.device != active)
                                          { bridge_log("foreign device");   return false; }
     if (dtype_size(t.dtype) == 0)        { bridge_log("unknown dtype");    return false; }
     if (!is_contiguous(t))               { bridge_log("non-contiguous");   return false; }
-    int64_t extent = 0;
-    if (!safe_extent_elems(t, &extent))  { bridge_log("bad extent");       return false; }
+    if (!safe_extent_elems(t, extent))   { bridge_log("bad extent");       return false; }
     return true;
+}
+
+// Shared acceptance checks for BOTH entry points: data present, device is CPU
+// or the active backend, row-major contiguous, and a bounded extent.
+bool accept_common(const CaliperTensor& t, CaliperDeviceKind active) {
+    if (t.data == nullptr)               { bridge_log("null data");        return false; }
+    int64_t extent = 0;
+    return accept_shape(t, active, &extent);
 }
 }  // namespace
 
@@ -275,22 +289,27 @@ CaliperTextureId TensorBridge::texture_from_tensor_mapped(const CaliperTensor* t
     return id;
 }
 
+bool TensorBridge::desc_matches_entry(const Entry& e, const CaliperTensor& t) const {
+    if (t.dtype != e.dtype) { bridge_log("update: dtype mismatch"); return false; }
+    if (e.mapped) {
+        if (t.ndim != 2 || (int)t.shape[0] != e.h || (int)t.shape[1] != e.w) {
+            bridge_log("update: shape mismatch"); return false;
+        }
+    } else {
+        if (t.ndim != 3 || (int)t.shape[0] != e.h || (int)t.shape[1] != e.w
+            || (int)t.shape[2] != e.channels) {
+            bridge_log("update: shape mismatch"); return false;
+        }
+    }
+    return true;
+}
+
 bool TensorBridge::update_texture(CaliperTextureId tex, const CaliperTensor* t) {
     auto it = entries_.find(tex);
     if (it == entries_.end() || !t) return false;
     Entry& e = it->second;
 
-    if (t->dtype != e.dtype) { bridge_log("update: dtype mismatch"); return false; }
-    if (e.mapped) {
-        if (t->ndim != 2 || (int)t->shape[0] != e.h || (int)t->shape[1] != e.w) {
-            bridge_log("update: shape mismatch"); return false;
-        }
-    } else {
-        if (t->ndim != 3 || (int)t->shape[0] != e.h || (int)t->shape[1] != e.w
-            || (int)t->shape[2] != e.channels) {
-            bridge_log("update: shape mismatch"); return false;
-        }
-    }
+    if (!desc_matches_entry(e, *t)) return false;
     if (!accept_common(*t, active_device_)) return false;
     return upload_into(e, t);
 }
@@ -368,6 +387,67 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
 }
 
 void TensorBridge::free_shared(CaliperTextureId tex) { release_texture(tex); }
+
+// ---------------------------------------------------------------------------
+// caliper.tensor_bridge.v1.2 — imported external allocations
+// ---------------------------------------------------------------------------
+
+CaliperAllocId TensorBridge::import_allocation(void* os_handle,
+                                               uint64_t size_bytes,
+                                               uint32_t handle_type) {
+    if (os_handle == nullptr)        { bridge_log("import: null handle");    return 0; }
+    if (size_bytes == 0)             { bridge_log("import: zero size");      return 0; }
+    if (handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_WIN32 &&
+        handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_FD)
+                                     { bridge_log("import: bad handle type"); return 0; }
+    const uint64_t rid =
+        renderer_.import_external_allocation(os_handle, size_bytes, handle_type);
+    if (rid == 0) { bridge_log("import: renderer refused"); return 0; }  // no insert
+
+    const CaliperAllocId id = next_alloc_id_++;
+    imported_[id] = ImportedAlloc{rid, size_bytes};
+    return id;
+}
+
+void TensorBridge::release_allocation(CaliperAllocId a) {
+    auto it = imported_.find(a);
+    if (it == imported_.end()) return;   // invalid id / double release: no-op
+    renderer_.release_external_allocation(it->second.renderer_id);
+    imported_.erase(it);
+}
+
+bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocId a,
+                                             uint64_t offset_bytes,
+                                             const CaliperTensor* desc) {
+    if (!desc) { bridge_log("update_alloc: null desc"); return false; }
+    auto te = entries_.find(tex);
+    if (te == entries_.end()) { bridge_log("update_alloc: unknown texture"); return false; }
+    auto ia = imported_.find(a);
+    if (ia == imported_.end()) { bridge_log("update_alloc: unknown alloc"); return false; }
+    Entry& e = te->second;
+    const ImportedAlloc& alloc = ia->second;
+
+    // Same frozen acceptance gates as update_texture — dtype/shape vs the entry,
+    // then contiguity/dtype/extent — but desc->data is IGNORED (the imported
+    // allocation + offset are the address), so the null-data check is skipped.
+    if (!desc_matches_entry(e, *desc)) return false;
+    int64_t extent = 0;
+    if (!accept_shape(*desc, active_device_, &extent)) return false;
+
+    // Host-side bounds (the analog of cuMemGetAddressRange): the byte window the
+    // desc addresses must lie inside the imported allocation. The renderer
+    // re-checks against the real device allocation before touching it.
+    const uint64_t bytes = (uint64_t)extent * (uint64_t)dtype_size(desc->dtype);
+    if (offset_bytes > alloc.size_bytes || bytes > alloc.size_bytes - offset_bytes) {
+        bridge_log("update_alloc: window out of imported bounds"); return false;
+    }
+
+    // Forward to the device update-from-imported path with the texture's stored
+    // (pinned-at-create) colormap/vmin/vmax — same values update_texture uses.
+    return renderer_.tex_update_from_imported(e.tex, alloc.renderer_id,
+                                              offset_bytes, *desc,
+                                              e.colormap, e.vmin, e.vmax);
+}
 
 bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
     if (t->device != CALIPER_DEV_CPU) {

@@ -135,5 +135,79 @@ struct Api {
 // callers treat that as "no CUDA device", never an error.
 const Api* api();
 
+// ---------------------------------------------------------------------------
+// OPTIONAL VMM surface (bridge v1.2 tests): the cuMem* virtual-memory APIs
+// (CUDA 10.2+) used to build applet-shaped exportable allocations. A SEPARATE
+// table so the core Api above keeps its all-or-nothing rule on older drivers:
+// vmm_api() returns nullptr when the driver lacks ANY of these nine symbols
+// (or api() itself failed), and callers skip — never an error.
+// Struct layouts mirror cuda.h's stable v1 ABI, field-for-field identical to
+// the applet-side transcriptions in sdk/.../adapters/exportable_pool.hpp
+// (which the host must not include).
+// ---------------------------------------------------------------------------
+
+using CUmemGenericAllocationHandle = unsigned long long;
+
+// CUmemAllocationType / CUmemAllocationHandleType / CUmemLocationType /
+// CUmemAllocationGranularity_flags / CUmemAccess_flags values (cuda.h).
+constexpr unsigned kMemAllocationTypePinned      = 1;  // CU_MEM_ALLOCATION_TYPE_PINNED
+constexpr unsigned kMemHandleTypePosixFd         = 1;  // CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
+constexpr unsigned kMemHandleTypeWin32           = 2;  // CU_MEM_HANDLE_TYPE_WIN32
+constexpr unsigned kMemLocationTypeDevice        = 1;  // CU_MEM_LOCATION_TYPE_DEVICE
+constexpr unsigned kMemAllocGranularityMinimum   = 0;  // CU_MEM_ALLOC_GRANULARITY_MINIMUM
+constexpr unsigned kMemAccessFlagsProtReadWrite  = 3;  // CU_MEM_ACCESS_FLAGS_PROT_READWRITE
+
+// CUmemLocation (cuda.h).
+struct MemLocation {
+    unsigned int type;                 // CUmemLocationType
+    int          id;
+};
+// CUmemAllocationProp (cuda.h, v1 layout). win32HandleMetaData must be a valid
+// LPSECURITYATTRIBUTES when requestedHandleTypes is WIN32 (hardware-verified:
+// null is CUDA_ERROR_INVALID_VALUE on 596.47).
+struct MemAllocationProp {
+    unsigned int type;                 // CUmemAllocationType
+    unsigned int requestedHandleTypes; // CUmemAllocationHandleType
+    MemLocation  location;
+    void*        win32HandleMetaData;
+    struct {
+        unsigned char  compressionType;
+        unsigned char  gpuDirectRDMACapable;
+        unsigned short usage;
+        unsigned char  reserved[4];
+    } allocFlags;
+};
+// CUmemAccessDesc (cuda.h).
+struct MemAccessDesc {
+    MemLocation  location;
+    unsigned int flags;                // CUmemAccess_flags
+};
+
+// The nine VMM entry points (none have _v2 exports). All null until load.
+struct VmmApi {
+    CUresult (*cuMemGetAllocationGranularity)(size_t* granularity,
+                                              const MemAllocationProp* prop,
+                                              unsigned int option);
+    CUresult (*cuMemCreate)(CUmemGenericAllocationHandle* handle, size_t size,
+                            const MemAllocationProp* prop, unsigned long long flags);
+    CUresult (*cuMemAddressReserve)(CUdeviceptr* ptr, size_t size, size_t alignment,
+                                    CUdeviceptr addr, unsigned long long flags);
+    CUresult (*cuMemMap)(CUdeviceptr ptr, size_t size, size_t offset,
+                         CUmemGenericAllocationHandle handle, unsigned long long flags);
+    CUresult (*cuMemSetAccess)(CUdeviceptr ptr, size_t size,
+                               const MemAccessDesc* desc, size_t count);
+    CUresult (*cuMemExportToShareableHandle)(void* shareableHandle,
+                                             CUmemGenericAllocationHandle handle,
+                                             unsigned int handleType,
+                                             unsigned long long flags);
+    CUresult (*cuMemUnmap)(CUdeviceptr ptr, size_t size);
+    CUresult (*cuMemRelease)(CUmemGenericAllocationHandle handle);
+    CUresult (*cuMemAddressFree)(CUdeviceptr ptr, size_t size);
+};
+
+// Resolves the optional table on first call; cached. nullptr when the driver
+// is absent, the core api() load failed, or ANY symbol is missing.
+const VmmApi* vmm_api();
+
 }  // namespace cudadrv
 }  // namespace caliper_host

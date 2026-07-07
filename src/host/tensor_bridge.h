@@ -12,6 +12,7 @@
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
+#include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -62,8 +63,23 @@ public:
     void             free_shared(CaliperTextureId tex);
 
     // Bridge-v1.1 capability bits (D24). Bit 0 = the active renderer honors
-    // stream-ordered handoff, so adapters may skip the device drain.
+    // stream-ordered handoff, so adapters may skip the device drain. Bit 1
+    // (v1.2) = the renderer can import an applet-exported device allocation.
     uint32_t caps() const;
+
+    // caliper.tensor_bridge.v1.2 ops (imported external allocations). The host
+    // dups the applet's OS shareable handle into a renderer-internal id and
+    // runs device texture updates FROM the imported bytes — zero copies. All
+    // return 0/false/no-op when the renderer can't import or on a rule breach
+    // (reason logged), and update_texture_from_alloc reuses the SAME frozen
+    // acceptance gates as update_texture plus a host-side bounds check.
+    CaliperAllocId import_allocation(void* os_handle, uint64_t size_bytes,
+                                     uint32_t handle_type);
+    void           release_allocation(CaliperAllocId a);
+    bool           update_texture_from_alloc(CaliperTextureId tex,
+                                             CaliperAllocId a,
+                                             uint64_t offset_bytes,
+                                             const CaliperTensor* desc);
 
 private:
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
@@ -89,9 +105,24 @@ private:
     // Stage/forward a validated tensor into an existing entry's texture.
     bool upload_into(Entry& e, const CaliperTensor* t);
 
+    // dtype + ndim + per-dim shape match of an update/alloc desc against an
+    // existing entry (mapped: 2D h×w; direct: 3D h×w×channels). Shared by
+    // update_texture and update_texture_from_alloc so the shape gate is
+    // written once; logs "update: ..." and returns false on a mismatch.
+    bool desc_matches_entry(const Entry& e, const CaliperTensor& t) const;
+
+    // Imported external allocations (v1.2): public CaliperAllocId -> the
+    // renderer-internal id + its byte size (for the host-side bounds check).
+    struct ImportedAlloc {
+        uint64_t renderer_id = 0;
+        uint64_t size_bytes  = 0;
+    };
+
     HostRenderer&                          renderer_;
     CaliperDeviceKind                      active_device_;  // backend's device
     std::unordered_map<uint64_t, Entry>    entries_;
+    std::unordered_map<uint64_t, ImportedAlloc> imported_;   // alloc id -> entry
+    uint64_t                               next_alloc_id_ = 1;
 };
 
 }  // namespace caliper_host

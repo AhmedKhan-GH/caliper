@@ -288,6 +288,7 @@ worst case is a working slow path, never a broken one.
 | Metal / MPS (Apple Silicon) | 0 host copies; 1 on-GPU blit | **Implemented + pixel-exact tested** |
 | Vulkan / CUDA (Windows), arbitrary tensor | 0 host copies; 1 in-VRAM copy | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), `alloc_shared` | 0 host copies; **0 in-VRAM copies** (kernels write texture-backed VRAM in place) | **Implemented + pixel-exact verified on NVIDIA** |
+| Vulkan / CUDA (Windows), exportable-pool tensor | 0 host copies; **0 in-VRAM copies** (bridge imports the pool block once; the pass reads it at byte offset) | **Implemented + hardware-verified on NVIDIA** |
 | OpenGL / CPU (anywhere) | 1 host staging + 1 upload | Implemented fallback, tested |
 
 On Windows/NVIDIA, both rungs are byte-verified against the CPU reference
@@ -298,3 +299,18 @@ general path for an *arbitrary* torch CUDA tensor (torch's allocator can't
 export, so one VRAM→VRAM copy is the floor); the literal **zero**-copy row is
 the `alloc_shared` path, where the applet's kernels write the texture's own
 backing buffer and the update reduces to the buffer→texture pass.
+
+**Imported allocations (bridge v1.2).** The exportable-pool row removes the
+arbitrary-tensor floor by changing where the tensor is *born*: an applet
+allocates its torch CUDA tensors from `caliper::adapters::ExportablePool`, a
+torch `MemPool` whose blocks are `cuMemCreate`'d with a shareable OS handle.
+The host imports each block into Vulkan **once** (`import_allocation`), and
+`update_texture_from_alloc(tex, alloc, offset, desc)` runs the colormap/blit
+pass directly on the imported buffer at the tensor's byte offset — the
+per-update `cuMemcpyDtoD` of the general path is gone. The floor is therefore
+per-allocation-origin: memory born in the pool updates with zero copies of
+the data; memory born unshareable (torch's default caching allocator, any
+foreign allocator) keeps the 1-copy floor. Every miss — no cap bit, import
+declined, misaligned offset, out-of-bounds window, released allocation —
+returns `false` and the caller falls back to the copying path; a failed
+import is never a crash or a wrong image.

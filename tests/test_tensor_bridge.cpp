@@ -7,8 +7,10 @@
 
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
+#include <caliper/services/tensor_bridge_v1_2.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
@@ -348,4 +350,88 @@ TEST_CASE("bridge caps() surfaces the renderer's stream-handoff capability (D24)
     StreamStub honored("metal");
     TensorBridge b_honored(honored);
     CHECK(b_honored.caps() == CALIPER_BRIDGE_CAP_STREAM_ORDERED);
+}
+
+// --- Bridge v1.2: imported external allocations -----------------------------
+
+namespace {
+struct ImportStub : StubRenderer {
+    using StubRenderer::StubRenderer;
+    uint64_t next_id = 1;
+    std::vector<uint64_t> released;
+    struct Update { uint64_t tex, alloc, offset; };
+    std::vector<Update> updates;
+    bool supports_external_import() const override { return true; }
+    uint64_t import_external_allocation(void*, uint64_t size, uint32_t type) override {
+        if (type != CALIPER_ALLOC_HANDLE_OPAQUE_WIN32 &&
+            type != CALIPER_ALLOC_HANDLE_OPAQUE_FD) return 0;
+        if (size == 0) return 0;
+        return next_id++;
+    }
+    void release_external_allocation(uint64_t id) override { released.push_back(id); }
+    bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t off,
+                                  const CaliperTensor&, int32_t, float, float) override {
+        updates.push_back({tex, alloc, off});
+        return true;
+    }
+};
+} // namespace
+
+TEST_CASE("caps() adds IMPORT_ALLOC only when the renderer supports it") {
+    StubRenderer plain("vulkan");
+    TensorBridge b1(plain);
+    CHECK((b1.caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) == 0u);
+    ImportStub imp("vulkan");
+    TensorBridge b2(imp);
+    CHECK((b2.caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) != 0u);
+}
+
+TEST_CASE("import_allocation: id lifecycle, invalid args, double release") {
+    ImportStub imp("vulkan");
+    TensorBridge b(imp);
+    uint64_t dummy = 42;
+    CaliperAllocId a = b.import_allocation(&dummy, 4096,
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a != 0);
+    CHECK(b.import_allocation(nullptr, 4096,
+                              CALIPER_ALLOC_HANDLE_OPAQUE_WIN32) == 0);   // null handle
+    CHECK(b.import_allocation(&dummy, 0,
+                              CALIPER_ALLOC_HANDLE_OPAQUE_WIN32) == 0);   // zero size
+    CHECK(b.import_allocation(&dummy, 4096, 99u) == 0);                   // bad type
+    b.release_allocation(a);
+    CHECK(imp.released.size() == 1);
+    b.release_allocation(a);              // double release: no-op, no crash
+    CHECK(imp.released.size() == 1);
+    b.release_allocation(0);              // invalid id: no-op
+    CHECK(imp.released.size() == 1);
+}
+
+TEST_CASE("update_texture_from_alloc: acceptance gates + bounds + fallback contract") {
+    ImportStub imp("vulkan");
+    TensorBridge b(imp);
+    uint64_t dummy = 42;
+    // 4x4 f32 mapped texture created through the normal path first
+    std::vector<float> px(16, 0.5f);
+    CaliperTensor t = f32_2d(px.data(), 4, 4);            // existing test helper
+    CaliperTextureId tex = b.texture_from_tensor_mapped(&t, 0, 0.f, 1.f, 0);
+    REQUIRE(tex != 0);
+    CaliperAllocId a = b.import_allocation(&dummy, 4 * 4 * sizeof(float),
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a != 0);
+    CaliperTensor d = t; d.data = nullptr;                  // desc: data ignored
+    CHECK(b.update_texture_from_alloc(tex, a, 0, &d));
+    CHECK(imp.updates.size() == 1);
+    // offset + extent exceeding the imported size must be rejected host-side
+    CHECK_FALSE(b.update_texture_from_alloc(tex, a, 8, &d));
+    // overflow guard: near-UINT64_MAX offset must not wrap past the bounds check
+    CHECK_FALSE(b.update_texture_from_alloc(tex, a, UINT64_MAX - 30, &d));
+    CHECK(imp.updates.size() == 1);
+    // unknown alloc / unknown texture / null desc reject without renderer call
+    CHECK_FALSE(b.update_texture_from_alloc(tex, 999u, 0, &d));
+    CHECK_FALSE(b.update_texture_from_alloc(0, a, 0, &d));
+    CHECK_FALSE(b.update_texture_from_alloc(tex, a, 0, nullptr));
+    // non-contiguous desc rejected by the same frozen gate
+    CaliperTensor bad = d; bad.strides[0] = 5;
+    CHECK_FALSE(b.update_texture_from_alloc(tex, a, 0, &bad));
+    CHECK(imp.updates.size() == 1);
 }

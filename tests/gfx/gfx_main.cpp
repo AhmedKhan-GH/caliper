@@ -41,6 +41,9 @@
 #ifdef CALIPER_HAVE_VULKAN
 #include "cuda_driver.h"
 #include <utility>
+#ifdef _WIN32
+#include <windows.h>   // CloseHandle for the VMM shareable-handle test blocks
+#endif
 #endif
 
 using namespace caliper_host;
@@ -1012,4 +1015,363 @@ TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-e
     CHECK(bk.readback(tex, W, H) == ref);
     bk.bridge->free_shared(tex);
 }
+
+// ===========================================================================
+// Bridge v1.2 imported-allocation rows (Task 6). Hardware-gated like the CUDA
+// rows above PLUS cudadrv::vmm_api() presence (VMM shareable handles need a
+// CUDA 10.2+ driver; a missing table skips, never fails). Windows-only: the
+// import path is OPAQUE_WIN32 (the locked T5 design).
+// ===========================================================================
+#ifdef _WIN32
+namespace {
+
+// A cuMemCreate'd, granularity-padded, WIN32-shareable, mapped+RW device
+// allocation — the exact shape ExportablePool::alloc_block produces applet-side,
+// built here through the OPTIONAL VmmApi table so the test controls every byte.
+struct VmmBlock {
+    const cudadrv::VmmApi* vmm = nullptr;
+    cudadrv::CUdeviceptr va = 0;
+    cudadrv::CUmemGenericAllocationHandle mem = 0;
+    size_t size = 0;
+    void* os_handle = nullptr;
+    bool ok = false;
+
+    explicit VmmBlock(size_t min_bytes) {
+        vmm = cudadrv::vmm_api();
+        if (!vmm) return;
+        cudadrv::MemAllocationProp prop{};
+        prop.type                 = cudadrv::kMemAllocationTypePinned;
+        prop.requestedHandleTypes = cudadrv::kMemHandleTypeWin32;
+        prop.location.type        = cudadrv::kMemLocationTypeDevice;
+        prop.location.id          = 0;
+        // Hardware finding (driver 596.47): a WIN32-shareable cuMemCreate with
+        // null win32HandleMetaData is CUDA_ERROR_INVALID_VALUE — an exportable
+        // NT handle needs SECURITY_ATTRIBUTES (same fix as ExportablePool).
+        static SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), nullptr, FALSE};
+        prop.win32HandleMetaData  = &sa;
+        size_t gran = 0;
+        if (vmm->cuMemGetAllocationGranularity(&gran, &prop,
+                cudadrv::kMemAllocGranularityMinimum) != cudadrv::CUDA_SUCCESS ||
+            gran == 0)
+            return;
+        size = ((min_bytes + gran - 1) / gran) * gran;
+        if (vmm->cuMemCreate(&mem, size, &prop, 0) != cudadrv::CUDA_SUCCESS) {
+            mem = 0; return;
+        }
+        if (vmm->cuMemAddressReserve(&va, size, 0, 0, 0) != cudadrv::CUDA_SUCCESS) {
+            va = 0; unwind(); return;
+        }
+        if (vmm->cuMemMap(va, size, 0, mem, 0) != cudadrv::CUDA_SUCCESS) {
+            vmm->cuMemAddressFree(va, size); va = 0; unwind(); return;
+        }
+        cudadrv::MemAccessDesc acc{};
+        acc.location.type = cudadrv::kMemLocationTypeDevice;
+        acc.location.id   = 0;
+        acc.flags         = cudadrv::kMemAccessFlagsProtReadWrite;
+        if (vmm->cuMemSetAccess(va, size, &acc, 1) != cudadrv::CUDA_SUCCESS) {
+            mapped_unwind(); return;
+        }
+        if (vmm->cuMemExportToShareableHandle(&os_handle, mem,
+                cudadrv::kMemHandleTypeWin32, 0) != cudadrv::CUDA_SUCCESS) {
+            os_handle = nullptr; mapped_unwind(); return;
+        }
+        ok = true;
+    }
+    void mapped_unwind() {
+        vmm->cuMemUnmap(va, size);
+        vmm->cuMemAddressFree(va, size);
+        va = 0;
+        unwind();
+    }
+    void unwind() {
+        if (mem) { vmm->cuMemRelease(mem); mem = 0; }
+    }
+    ~VmmBlock() {
+        if (os_handle) CloseHandle((HANDLE)os_handle);
+        if (ok) mapped_unwind(); else unwind();
+    }
+};
+
+// Guard set shared by every v1.2 row: Vulkan ICD + UUID-paired single CUDA GPU
+// + the optional VMM driver table.
+bool vmm_rows_ready() {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return false; }
+    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return false; }
+    if (!cudadrv::vmm_api()) { MESSAGE("no CUDA VMM driver API — skipping"); return false; }
+    return true;
+}
+
+// Row-major 2D f32 CPU tensor over `data` (the CPU seed shape the §16 matrix uses).
+CaliperTensor f32_2d(float* data, int w, int h) {
+    CaliperTensor t{};
+    t.struct_size = sizeof(t); t.data = data; t.dtype = CALIPER_DT_F32;
+    t.ndim = 2; t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    t.device = CALIPER_DEV_CPU;
+    return t;
+}
+
+// The same tensor re-phrased as an imported-allocation update desc: data is
+// IGNORED by contract (alloc + offset are the address), device is the active
+// CUDA backend.
+CaliperTensor import_desc(const CaliperTensor& t) {
+    CaliperTensor d = t;
+    d.data = nullptr;
+    d.device = CALIPER_DEV_CUDA;
+    return d;
+}
+
+}  // namespace
+
+// Row 1 — byte-exact at offset 0 AND at a 512-byte offset (torch pool
+// sub-allocation alignment), both through "compute-imported": no D2D copy, the
+// pass reads the imported buffer in place.
+TEST_CASE("gfx/Vulkan+CUDA: imported allocation f32 byte-exact at offsets 0 and 512") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int wA = 17, hA = 9, nA = wA * hA;   // grid A at offset 0
+    const int wB = 5,  hB = 3, nB = wB * hB;   // grid B at offset 512
+    const uint64_t offB = 512;
+
+    VmmBlock blk(offB + (size_t)nB * sizeof(float));
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine "
+                            "— shareable handles unsupported by this driver?");
+
+    std::vector<float> dataA(nA), dataB(nB);
+    for (int i = 0; i < nA; ++i) dataA[i] = (float)i;
+    for (int i = 0; i < nB; ++i) dataB[i] = (float)(nB - 1 - i);
+
+    const CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+
+    // Grid A (612 bytes at offset 0) and grid B (offset 512) overlap by
+    // construction, so each region is written, updated, and read back before
+    // the next write — the update captures the bytes present at update time.
+    auto row = [&](int w, int h, uint64_t off, const std::vector<float>& data) {
+        const int n = w * h;
+        REQUIRE(cu->cuMemcpyHtoD(blk.va + off, data.data(),
+                                 (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+        std::vector<float> seed((size_t)n, 0.0f);
+        CaliperTensor t = f32_2d(seed.data(), w, h);
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+        REQUIRE(id != 0);
+
+        CaliperTensor d = import_desc(t);
+        REQUIRE(bk.bridge->update_texture_from_alloc(id, alloc, off, &d));
+        CHECK(std::string(bk.renderer->last_device_path()) == "compute-imported");
+
+        std::vector<uint8_t> ref((size_t)n * 4);
+        map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                         0.0f, (float)(n - 1), ref.data());
+        CAPTURE(off); CAPTURE(w); CAPTURE(h);
+        const std::vector<uint8_t> got = bk.readback(id, w, h);
+        if (got != ref) {
+            size_t first = 0;
+            while (first < ref.size() && first < got.size() && got[first] == ref[first]) ++first;
+            MESSAGE("readback mismatch: off=" << off << " got.size=" << got.size()
+                    << " ref.size=" << ref.size() << " first-diff byte=" << first
+                    << " got=" << (first < got.size() ? (int)got[first] : -1)
+                    << " ref=" << (first < ref.size() ? (int)ref[first] : -1));
+        }
+        CHECK(got == ref);   // byte-exact, no tolerance
+        bk.bridge->release_texture(id);
+    };
+    row(wA, hA, 0, dataA);
+    row(wB, hB, offB, dataB);
+    bk.bridge->release_allocation(alloc);
+}
+
+// Row 2 — misaligned f32 offset (4 violates minStorageBufferOffsetAlignment):
+// update returns false, the texture keeps its prior pixels, and the device-path
+// telemetry is untouched. Fallback, never a wrong image. (Assumes the limit is
+// > 4 — 16+ on NVIDIA, and these rows are UUID-gated to NVIDIA hardware; if
+// the gate ever widens to an ICD with limit <= 4, this row would need a
+// different misaligned offset.)
+TEST_CASE("gfx/Vulkan+CUDA: imported f32 misaligned offset falls back, pixels unchanged") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+
+    const int w = 4, h = 4, n = w * h;
+    std::vector<float> seed((size_t)n);
+    for (int i = 0; i < n; ++i) seed[i] = (float)i;
+    CaliperTensor t = f32_2d(seed.data(), w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(id != 0);
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(seed.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    REQUIRE(bk.readback(id, w, h) == ref);
+
+    VmmBlock blk(4096);
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    const CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+
+    CaliperTensor d = import_desc(t);
+    const std::string before = bk.renderer->last_device_path();
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(id, alloc, 4, &d));
+    CHECK(std::string(bk.renderer->last_device_path()) == before);
+    CHECK(bk.readback(id, w, h) == ref);   // pixels unchanged
+
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->release_texture(id);
+}
+
+// Row 3 — u8 RGBA at a nonzero offset takes "blit-imported" byte-exact.
+// DEVIATION from the handoff row wording ("3-channel"): the locked T5 design
+// mirrors blit_u8's RGBA8-only gate (c != 4 -> false; 1/3-channel expansion is
+// the CPU staging path's job), so the positive row uses C=4 and the 3-channel
+// desc is asserted as the fallback contract instead. Recorded in progress.md.
+TEST_CASE("gfx/Vulkan+CUDA: imported u8 RGBA at offset 512 blit-imported; 3-channel falls back") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int w = 6, h = 4, n = w * h;
+    const uint64_t off = 512;
+    VmmBlock blk(off + (size_t)n * 4);
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+
+    std::vector<uint8_t> px((size_t)n * 4);
+    for (size_t i = 0; i < px.size(); ++i) px[i] = (uint8_t)((i * 37 + 11) & 0xff);
+    REQUIRE(cu->cuMemcpyHtoD(blk.va + off, px.data(), px.size()) == cudadrv::CUDA_SUCCESS);
+
+    const CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+
+    // 4-channel texture (CPU seed), then the imported RGBA update.
+    std::vector<uint8_t> seed4((size_t)n * 4, 0);
+    CaliperTensor t4{};
+    t4.struct_size = sizeof(t4); t4.data = seed4.data(); t4.dtype = CALIPER_DT_U8;
+    t4.ndim = 3; t4.shape[0] = h; t4.shape[1] = w; t4.shape[2] = 4;
+    t4.strides[0] = (int64_t)w * 4; t4.strides[1] = 4; t4.strides[2] = 1;
+    t4.device = CALIPER_DEV_CPU;
+    CaliperTextureId id4 = bk.bridge->texture_from_tensor(&t4, 0);
+    REQUIRE(id4 != 0);
+
+    CaliperTensor d4 = import_desc(t4);
+    REQUIRE(bk.bridge->update_texture_from_alloc(id4, alloc, off, &d4));
+    CHECK(std::string(bk.renderer->last_device_path()) == "blit-imported");
+    std::vector<uint8_t> ref4((size_t)n * 4);
+    expand_u8_to_rgba8(px.data(), w, h, 4, ref4.data());
+    CHECK(bk.readback(id4, w, h) == ref4);
+
+    // Fallback contract: a 3-channel u8 desc must return false (RGBA8-only
+    // blit), leave the texture's pixels alone, and not claim a device path.
+    std::vector<uint8_t> seed3((size_t)n * 3, 200);
+    CaliperTensor t3{};
+    t3.struct_size = sizeof(t3); t3.data = seed3.data(); t3.dtype = CALIPER_DT_U8;
+    t3.ndim = 3; t3.shape[0] = h; t3.shape[1] = w; t3.shape[2] = 3;
+    t3.strides[0] = (int64_t)w * 3; t3.strides[1] = 3; t3.strides[2] = 1;
+    t3.device = CALIPER_DEV_CPU;
+    CaliperTextureId id3 = bk.bridge->texture_from_tensor(&t3, 0);
+    REQUIRE(id3 != 0);
+    std::vector<uint8_t> ref3((size_t)n * 4);
+    expand_u8_to_rgba8(seed3.data(), w, h, 3, ref3.data());
+    REQUIRE(bk.readback(id3, w, h) == ref3);
+
+    CaliperTensor d3 = import_desc(t3);
+    const std::string before = bk.renderer->last_device_path();
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(id3, alloc, off, &d3));
+    CHECK(std::string(bk.renderer->last_device_path()) == before);
+    CHECK(bk.readback(id3, w, h) == ref3);   // pixels unchanged
+
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->release_texture(id4);
+    bk.bridge->release_texture(id3);
+}
+
+// Row 4 — release + reuse: update-after-release is false (the fallback
+// contract — the applet CPU-stages, never crashes), and a 50x import/release
+// loop yields strictly increasing ids (never reused while live).
+TEST_CASE("gfx/Vulkan+CUDA: imported alloc release contract + 50x import/release ids increase") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int w = 4, h = 4, n = w * h;
+    VmmBlock blk((size_t)n * sizeof(float));
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+
+    std::vector<float> data((size_t)n);
+    for (int i = 0; i < n; ++i) data[i] = (float)((i * 5 + 3) % n);
+    REQUIRE(cu->cuMemcpyHtoD(blk.va, data.data(),
+                             (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+
+    std::vector<float> seed((size_t)n, 0.0f);
+    CaliperTensor t = f32_2d(seed.data(), w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(id != 0);
+
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+
+    CaliperTensor d = import_desc(t);
+    REQUIRE(bk.bridge->update_texture_from_alloc(id, alloc, 0, &d));
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    CHECK(bk.readback(id, w, h) == ref);
+
+    bk.bridge->release_allocation(alloc);
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(id, alloc, 0, &d));
+    CHECK(bk.readback(id, w, h) == ref);      // keeps the last good pixels
+
+    CaliperAllocId prev = alloc;
+    for (int i = 0; i < 50; ++i) {
+        const CaliperAllocId a = bk.bridge->import_allocation(
+            blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(a != 0);
+        CHECK(a > prev);                       // strictly increasing, never reused
+        prev = a;
+        bk.bridge->release_allocation(a);
+    }
+    bk.bridge->release_texture(id);
+}
+
+// Row 5 — bounds: a window with offset + extent > imported size is rejected by
+// the host-side gate (the renderer re-checks against the real allocation too),
+// with pixels and telemetry untouched.
+TEST_CASE("gfx/Vulkan+CUDA: imported window exceeding the allocation is rejected") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+
+    const int w = 4, h = 4, n = w * h;                 // 64-byte f32 window
+    std::vector<float> seed((size_t)n);
+    for (int i = 0; i < n; ++i) seed[i] = (float)i;
+    CaliperTensor t = f32_2d(seed.data(), w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &t, CALIPER_CMAP_VIRIDIS, 0.0f, (float)(n - 1), 0);
+    REQUIRE(id != 0);
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(seed.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                     0.0f, (float)(n - 1), ref.data());
+    REQUIRE(bk.readback(id, w, h) == ref);
+
+    VmmBlock blk(4096);
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    const CaliperAllocId alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(alloc != 0);
+
+    CaliperTensor d = import_desc(t);
+    const std::string before = bk.renderer->last_device_path();
+    // Window entirely past the end, and one straddling the end.
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(id, alloc, blk.size, &d));
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(id, alloc, blk.size - 32, &d));
+    CHECK(std::string(bk.renderer->last_device_path()) == before);
+    CHECK(bk.readback(id, w, h) == ref);   // untouched
+
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->release_texture(id);
+}
+#endif  // _WIN32
 #endif  // CALIPER_HAVE_VULKAN
