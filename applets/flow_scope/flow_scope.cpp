@@ -447,6 +447,17 @@ void FlowScopeApplet::draw_ui() {
         if (st->view != 0) st->geometry.release_view(st->view);
         st->view = st->geometry.create_view((uint32_t)dw, (uint32_t)dh);
         st->view_w = dw; st->view_h = dh;
+        if (st->host) {
+            // One line per recreate: the DPI facts a crispness bug hides in
+            // (scale seen, logical avail, physical RT size, clamp hit or not).
+            char dbg[160];
+            std::snprintf(dbg, sizeof(dbg),
+                "flow-scope: view %dx%d px (fb_scale %.2f, avail %.1fx%.1f, "
+                "clamped %s)", dw, dh, fb_scale, avail.x, avail.y,
+                (dw != (int)(avail.x * fb_scale) || dh != (int)(avail.y * fb_scale))
+                    ? "YES" : "no");
+            st->host->log_info(dbg);
+        }
     }
 
     st->zero_copy_frame = false;
