@@ -99,6 +99,11 @@ target_link_libraries(caliper_torch_tests PRIVATE
     doctest::doctest caliper::sdk "${TORCH_LIBRARIES}")
 set_target_properties(caliper_torch_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+# adapters/exportable_pool.hpp includes <caliper/caliper.hpp> for caliper::Bridge;
+# the SDK sugar header pulls in the imgui/implot UI-stack headers, so this target
+# needs their include dirs (caliper::ui_stack — the same interface caliper_tests
+# links). ImTextureID etc. are header-only typedefs; the libs come along harmlessly.
+target_link_libraries(caliper_torch_tests PRIVATE caliper::ui_stack)
 if(APPLE)
     set_target_properties(caliper_torch_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")

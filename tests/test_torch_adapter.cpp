@@ -10,6 +10,7 @@
 #include <doctest/doctest.h>
 
 #include <caliper/adapters/torch.hpp>
+#include <caliper/adapters/exportable_pool.hpp>
 
 #include <torch/torch.h>
 
@@ -276,6 +277,33 @@ TEST_CASE("synced_to_tensor: drain survives a concurrently-encoding training thr
     stop.store(true, std::memory_order_relaxed);
     worker.join();
     torch::mps::synchronize();                   // leave the device quiet for other cases
+}
+
+TEST_CASE("exportable pool: allocations are pool-backed, registry-resolvable, "
+          "and export a shareable handle" * doctest::skip(!torch::cuda::is_available())) {
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
+    __has_include(<c10/cuda/CUDACachingAllocator.h>)
+    caliper::adapters::ExportablePool pool(0);
+    REQUIRE_MESSAGE(pool.ok(), "cuMemCreate-backed pool failed on a CUDA machine "
+                               "— VMM or export unsupported by this driver?");
+    at::Tensor t;
+    {
+        auto scope = pool.use();
+        t = torch::rand({17, 9}, torch::TensorOptions()
+                                     .device(torch::kCUDA).dtype(torch::kFloat32));
+        // a DERIVED tensor inside the scope must also land in the pool:
+        t = t.square().contiguous();
+    }
+    auto hit = pool.registry().find(t.data_ptr(), t.numel() * sizeof(float));
+    REQUIRE_MESSAGE(hit.has_value(),
+        "pool-scoped tensor not resolvable in the AllocRegistry — "
+        "MemPool routing broke (torch 2.5.1 API drift?)");
+    CHECK(hit->os_handle != nullptr);
+    CHECK(hit->size >= t.numel() * sizeof(float));
+#else
+    REQUIRE_MESSAGE(!torch::cuda::is_available(),
+        "CUDA machine but the exportable-pool branch is compiled out");
+#endif
 }
 
 TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training thread") {
