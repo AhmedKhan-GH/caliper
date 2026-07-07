@@ -241,7 +241,28 @@ if(WIN32)
         DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/colormap.comp"
                 glslang-standalone
         COMMENT "Compiling colormap.comp -> SPIR-V header")
-    add_custom_target(caliper_shaders DEPENDS "${CALIPER_SPV_DIR}/colormap_spv.h")
+    add_custom_command(
+        OUTPUT "${CALIPER_SPV_DIR}/points_vert_spv.h"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
+        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+                --vn kPointsVertSpv -o "${CALIPER_SPV_DIR}/points_vert_spv.h"
+                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.vert"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.vert"
+                glslang-standalone
+        COMMENT "Compiling points.vert -> SPIR-V header")
+    add_custom_command(
+        OUTPUT "${CALIPER_SPV_DIR}/points_frag_spv.h"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
+        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+                --vn kPointsFragSpv -o "${CALIPER_SPV_DIR}/points_frag_spv.h"
+                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.frag"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.frag"
+                glslang-standalone
+        COMMENT "Compiling points.frag -> SPIR-V header")
+    add_custom_target(caliper_shaders DEPENDS
+        "${CALIPER_SPV_DIR}/colormap_spv.h"
+        "${CALIPER_SPV_DIR}/points_vert_spv.h"
+        "${CALIPER_SPV_DIR}/points_frag_spv.h")
 
     add_library(caliper_vulkan_backend STATIC
         src/host/renderer/vulkan_renderer.cpp
