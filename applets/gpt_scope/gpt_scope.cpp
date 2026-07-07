@@ -27,6 +27,7 @@
 
 #include <caliper/caliper.hpp>
 #include <caliper/adapters/torch.hpp>   // torch::Tensor -> CaliperTensor (heatmap)
+#include <caliper/adapters/exportable_pool.hpp>  // v1.2 zero-copy attention uploads
 #include <imgui.h>
 #include <implot.h>
 #include <implot3d.h>
@@ -45,6 +46,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -149,6 +151,14 @@ struct GPTScopeState {
     caliper::Metrics   metrics;    // optional
     caliper::Bridge    bridge;     // optional (head drill-down heatmap)
     caliper::Artifacts artifacts;  // optional (Save/Load)
+    uint32_t bridge_caps = 0;      // snapshot at init (Bridge is frame-thread-only)
+
+    // v1.2 zero-copy opt-in: attention tensors allocated from this pool live in
+    // shareable blocks the host imports once; texture updates then read them in
+    // place. Null whenever the host lacks IMPORT_ALLOC or torch isn't on CUDA —
+    // with it null, every path below is byte-identical to the pre-pool applet.
+    std::unique_ptr<caliper::adapters::ExportablePool> pool;  // set once by worker
+    bool pool_tried = false;                                  // worker-only
 
     GPT model{nullptr};            // persistent so Save/Load reaches it
     std::atomic<uint64_t> run_id{0};
@@ -186,6 +196,11 @@ struct GPTScopeState {
     // Per-head (T,T) attention for the drill-down heatmap (owned; on train dev).
     std::vector<torch::Tensor> attn_all;    // 16 x (T,T)
     std::vector<float>         attn_vmax;   // per-head max (MAGMA vmax; vmin 0)
+    // Pool mode only: per-head upscaled maps, each pre-normalized by its own
+    // vmax so one fixed 0..1 mapping serves every head — the frame thread then
+    // UPDATES one texture (ideally from the imported block) instead of
+    // re-creating per selection. Empty when the pool is absent.
+    std::vector<torch::Tensor> attn_blocks; // 16 x (kk*T, kk*T), pool-backed
     bool     probe_on_device = false;
     uint64_t probe_gen = 0;                 // bumped per probe bundle (0 = none)
 
@@ -221,6 +236,8 @@ struct GPTScopeState {
     int      head_tex_sel = -1;
     float    head_tex_vmax = 0.f;
     bool     head_stage_cpu = false;
+    bool     head_tex_imported = false;  // last update ran the imported path
+    int64_t  head_tex_dim = 0;           // pool-mode texture side (kk*T)
 };
 
 namespace {
@@ -333,6 +350,12 @@ torch::Device pick_device(GPTScopeState* st) {
                : torch::Device(torch::kCPU);
 }
 
+// Block-upscale factor for the head heatmap (cookbook #4): hard k x k blocks
+// so the texture is at least the drawn size. One formula for both upload paths.
+int64_t head_upscale_k(int64_t T) {
+    return std::max<int64_t>(1, (320 + T - 1) / T);
+}
+
 // Shared mapped-texture upload with the GL relocate-to-CPU fallback (archived
 // upload_mapped). id==0 -> create; else update in place.
 CaliperTextureId upload_mapped(const caliper::Bridge& bridge, bool& stage_cpu,
@@ -426,16 +449,50 @@ void publish_probe(GPTScopeState* st, GPT& model, const torch::Tensor& probe_tok
             hlayer.push_back(l);
         }
     }
-    // Owned (T,T) clones for the drill-down heatmap (on train device, offset-0).
-    for (int l = 0; l < L; ++l) {
-        auto layer_att = ff.attn[(size_t)l];                 // (H,T,T) on device
-        const int64_t H = layer_att.size(0);
-        for (int64_t h = 0; h < H; ++h) {
-            auto hd = layer_att[h].clone();                  // (T,T) owned contig
-            hvmax.push_back(hd.max().item<float>());
-            heads.push_back(std::move(hd));
+    // Zero-copy opt-in (v1.2): the first CUDA probe decides once. The pool
+    // exists only when the host granted IMPORT_ALLOC and torch runs on CUDA;
+    // failed construction stays null and every consumer keeps the v1 path.
+    if (!st->pool_tried && probe_tok.is_cuda()) {
+        st->pool_tried = true;
+        if ((st->bridge_caps & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) &&
+            torch::cuda::is_available()) {
+            auto p = std::make_unique<caliper::adapters::ExportablePool>(
+                (int)probe_tok.device().index());
+            if (p->ok()) {
+                std::lock_guard<std::mutex> lk(st->mtx);
+                st->pool = std::move(p);
+            }
         }
     }
+
+    // Owned (T,T) clones for the drill-down heatmap (on train device, offset-0).
+    // Pool mode additionally materializes, INSIDE the pool scope, the exact
+    // tensors the frame thread hands to the bridge: 0..1-normalized (each head
+    // by its own vmax, so one fixed mapping serves all) and block-upscaled.
+    std::vector<torch::Tensor> blocks_up;
+    auto materialize = [&] {
+        for (int l = 0; l < L; ++l) {
+            auto layer_att = ff.attn[(size_t)l];             // (H,T,T) on device
+            const int64_t H = layer_att.size(0);
+            for (int64_t h = 0; h < H; ++h) {
+                auto hd = layer_att[h].clone();              // (T,T) owned contig
+                hvmax.push_back(hd.max().item<float>());
+                heads.push_back(std::move(hd));
+            }
+        }
+        if (!st->pool) return;
+        const int64_t kk = head_upscale_k(T);
+        blocks_up.reserve(heads.size());
+        for (size_t i = 0; i < heads.size(); ++i) {
+            const float vmax = hvmax[i] > 0.f ? hvmax[i] : 1e-6f;
+            blocks_up.push_back((heads[i] / vmax)
+                                    .repeat_interleave(kk, 0)
+                                    .repeat_interleave(kk, 1)
+                                    .contiguous());
+        }
+    };
+    if (st->pool) { auto scope = st->pool->use(); materialize(); }
+    else          { materialize(); }
     if (on_mps) torch::mps::synchronize();
 
     {
@@ -451,6 +508,7 @@ void publish_probe(GPTScopeState* st, GPT& model, const torch::Tensor& probe_tok
         st->head_layer = std::move(hlayer);
         st->attn_all = std::move(heads);
         st->attn_vmax = std::move(hvmax);
+        st->attn_blocks = std::move(blocks_up);
         st->attn_wnorm = ff.attn_wnorm;
         st->mlp_wnorm  = ff.mlp_wnorm;
         st->probe_on_device = on_mps;
@@ -782,6 +840,7 @@ bool GPTScopeApplet::initialize(caliper::Host& host) {
     s_->metrics   = caliper::Metrics(host);
     s_->bridge    = caliper::Bridge(host);
     s_->artifacts = caliper::Artifacts(host);
+    s_->bridge_caps = s_->bridge.caps();   // worker threads read the snapshot
     curl_global_init(CURL_GLOBAL_DEFAULT);
     host.log_info("gpt-scope: on_init");
     return true;
@@ -817,6 +876,8 @@ void GPTScopeApplet::draw_ui() {
     std::string probe_text; std::vector<char> itos;
     std::vector<float> hdist, hent; std::vector<int> hlayer;
     std::vector<torch::Tensor> attn_all; std::vector<float> attn_vmax;
+    std::vector<torch::Tensor> attn_blocks;
+    caliper::adapters::ExportablePool* pool = nullptr;
     bool probe_on_dev = false; uint64_t probe_gen = 0;
     std::vector<float> attn_wn, mlp_wn;
     std::vector<float> px, py, pz; std::string pca_chars; uint64_t pca_gen = 0;
@@ -834,7 +895,9 @@ void GPTScopeApplet::draw_ui() {
         hdist = st->head_dist; hent = st->head_ent; hlayer = st->head_layer;
         probe_gen = st->probe_gen;
         if (probe_gen != 0) { attn_all = st->attn_all; attn_vmax = st->attn_vmax;
+                              attn_blocks = st->attn_blocks;
                               probe_on_dev = st->probe_on_device; }
+        pool = st->pool.get();
         attn_wn = st->attn_wnorm; mlp_wn = st->mlp_wnorm;
         px = st->pca_x; py = st->pca_y; pz = st->pca_z;
         pca_chars = st->pca_chars; pca_gen = st->pca_gen;
@@ -958,7 +1021,43 @@ void GPTScopeApplet::draw_ui() {
         } else if (probe_gen != 0 && sel < (int)attn_all.size()) {
             const bool need = (probe_gen != st->head_tex_gen) ||
                               (sel != st->head_tex_sel);
-            if (need) {
+            const bool pool_live = pool && sel < (int)attn_blocks.size();
+            if (need && pool_live) {
+                // Zero-copy path: the worker materialized this head inside the
+                // pool, 0..1-normalized + upscaled, so the texture is created
+                // once (fixed mapping) and every later probe/selection is an
+                // UPDATE — from the imported block when the host accepts it.
+                const auto& blocks = attn_blocks[(size_t)sel];
+                const int64_t side = blocks.size(0);
+                if (st->head_tex && st->head_tex_dim != side) {
+                    st->bridge.release_texture(st->head_tex); st->head_tex = 0;
+                }
+                bool imported = false;
+                if (st->head_tex) {
+                    bool updated = false;
+                    auto d = caliper::adapters::stream_to_tensor(blocks,
+                                                                 st->bridge_caps);
+                    if (d) {
+                        if (auto ref = pool->to_bridge(st->bridge, blocks))
+                            imported = updated = st->bridge.update_texture_from_alloc(
+                                st->head_tex, ref->alloc, ref->offset, &*d);
+                        if (!updated)            // miss or false -> v1 update
+                            updated = st->bridge.update_texture(st->head_tex, &*d);
+                    }
+                    if (!updated) {              // never a stale image: recreate
+                        st->bridge.release_texture(st->head_tex);
+                        st->head_tex = 0;
+                    }
+                }
+                if (!st->head_tex) {
+                    st->head_tex = upload_mapped(st->bridge, st->head_stage_cpu, 0,
+                                                 blocks, CALIPER_CMAP_MAGMA,
+                                                 0.f, 1.f);
+                    st->head_tex_dim = side;
+                }
+                st->head_tex_imported = imported;
+                st->head_tex_gen = probe_gen; st->head_tex_sel = sel;
+            } else if (need) {
                 if (probe_on_dev != !st->head_stage_cpu) { /* handled by helper */ }
                 if (st->head_tex) { st->bridge.release_texture(st->head_tex);
                                     st->head_tex = 0; }
@@ -969,13 +1068,13 @@ void GPTScopeApplet::draw_ui() {
                 // stretched to 260 px is linear-filter mush; hard k x k blocks
                 // stay sharp. k chosen so the texture >= the drawn size.
                 const auto& amap = attn_all[(size_t)sel];
-                const int64_t Tt = amap.size(0);
-                const int64_t kk = std::max<int64_t>(1, (320 + Tt - 1) / Tt);
+                const int64_t kk = head_upscale_k(amap.size(0));
                 auto blocks = amap.repeat_interleave(kk, 0)
                                   .repeat_interleave(kk, 1).contiguous();
                 st->head_tex = upload_mapped(st->bridge, st->head_stage_cpu, 0,
                                              blocks,
                                              CALIPER_CMAP_MAGMA, 0.f, vmax);
+                st->head_tex_imported = false;
                 st->head_tex_gen = probe_gen; st->head_tex_sel = sel;
             }
             const int T = (int)probe_text.size();
@@ -1003,10 +1102,15 @@ void GPTScopeApplet::draw_ui() {
                 if (i) ImGui::SameLine(0, 0);
                 ImGui::TextColored(c, "%c", vis(probe_text[(size_t)i]));
             }
+            // "zero-copy" wording discipline (PLATFORM.md §7.4): the imported
+            // line appears only while the texture's latest content actually
+            // came through update_texture_from_alloc.
             ImGui::TextDisabled("heatmap: %s",
-                (probe_on_dev && !st->head_stage_cpu)
-                    ? "GPU-resident (Metal, zero CPU staging)"
-                    : "CPU-staged (GL fallback)");
+                st->head_tex_imported
+                    ? "zero-copy (imported pool)"
+                    : (probe_on_dev && !st->head_stage_cpu)
+                          ? "GPU-resident (Metal, zero CPU staging)"
+                          : "CPU-staged (GL fallback)");
         } else {
             ImGui::TextDisabled("waiting for the first probe…");
         }
@@ -1297,6 +1401,15 @@ void GPTScopeApplet::cleanup() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (st->head_tex) { st->bridge.release_texture(st->head_tex); st->head_tex = 0; }
+    // Pool teardown order: drop the pool-backed tensors first, then the pool —
+    // its destructor releases the cached bridge imports and driver blocks, and
+    // both need the host/bridge still alive (they are until on_cleanup ends).
+    {
+        std::lock_guard<std::mutex> lk(st->mtx);
+        st->attn_all.clear();
+        st->attn_blocks.clear();
+    }
+    st->pool.reset();
     curl_global_cleanup();
     if (st->host) st->host->log_info("gpt-scope: on_cleanup");
 }
