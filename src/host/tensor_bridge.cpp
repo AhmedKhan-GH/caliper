@@ -438,7 +438,7 @@ bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocI
     // desc addresses must lie inside the imported allocation. The renderer
     // re-checks against the real device allocation before touching it.
     const uint64_t bytes = (uint64_t)extent * (uint64_t)dtype_size(desc->dtype);
-    if (offset_bytes + bytes > alloc.size_bytes) {
+    if (offset_bytes > alloc.size_bytes || bytes > alloc.size_bytes - offset_bytes) {
         bridge_log("update_alloc: window out of imported bounds"); return false;
     }
 

@@ -10,6 +10,7 @@
 #include <caliper/services/tensor_bridge_v1_2.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
@@ -422,6 +423,9 @@ TEST_CASE("update_texture_from_alloc: acceptance gates + bounds + fallback contr
     CHECK(imp.updates.size() == 1);
     // offset + extent exceeding the imported size must be rejected host-side
     CHECK_FALSE(b.update_texture_from_alloc(tex, a, 8, &d));
+    // overflow guard: near-UINT64_MAX offset must not wrap past the bounds check
+    CHECK_FALSE(b.update_texture_from_alloc(tex, a, UINT64_MAX - 30, &d));
+    CHECK(imp.updates.size() == 1);
     // unknown alloc / unknown texture / null desc reject without renderer call
     CHECK_FALSE(b.update_texture_from_alloc(tex, 999u, 0, &d));
     CHECK_FALSE(b.update_texture_from_alloc(0, a, 0, &d));
