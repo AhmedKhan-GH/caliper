@@ -198,17 +198,40 @@ void sim_step(FlowScopeState* st, torch::Tensor& p_in, torch::Tensor& p_out,
 void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
     torch::NoGradGuard ng;
     const bool cuda = torch::cuda::is_available();
+#if defined(__APPLE__)
+    const bool mps  = !cuda && torch::mps::is_available();
+#else
+    const bool mps  = false;
+#endif
+    const bool gpu  = cuda || mps;
     const torch::Device dev = cuda ? torch::Device(torch::kCUDA)
+                            : mps  ? torch::Device(torch::kMPS)
                                    : torch::Device(torch::kCPU);
-    const int64_t N = cuda ? 1'000'000 : 50'000;
+    const int64_t N = gpu ? 1'000'000 : 50'000;
 
-    // Zero-copy opt-in, decided once: geometry caps + import caps + CUDA.
+    // Zero-copy opt-in, decided once: geometry caps + import caps + a GPU
+    // device (CUDA or MPS). The MPS variant of ExportablePool shares CUDA's
+    // public surface and ignores the ordinal.
     std::unique_ptr<caliper::adapters::ExportablePool> pool;
-    if (cuda && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS)) {
+    if (gpu && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS)) {
         try {
             auto p = std::make_unique<caliper::adapters::ExportablePool>(0);
             if (p->ok()) pool = std::move(p);
         } catch (...) { /* pool absent -> fallback path, never a crash */ }
+    }
+
+    // Honest, greppable provenance mirroring the status line — logged once at
+    // worker start so the chosen path is verifiable without an ImGui overlay.
+    if (st->host) {
+        if (pool)
+            st->host->log_info(cuda ? "flow-scope: zero-copy pool ready (cuda)"
+                                    : "flow-scope: zero-copy pool ready (mps)");
+        else
+            st->host->log_info(
+                !gpu ? "flow-scope: fallback (torch CPU)"
+                     : !(st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS)
+                           ? "flow-scope: fallback (no geometry service)"
+                           : "flow-scope: fallback (pool unavailable)");
     }
 
     // Slot tensors: inside the pool scope when we have one (they are ALL the
@@ -232,7 +255,7 @@ void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
         st->pool = std::move(pool);
         for (int i = 0; i < kSlots; ++i) { st->pos[i] = pos[i]; st->speed[i] = speed[i]; }
         st->n_particles = N;
-        st->sim_on_cuda = cuda;
+        st->sim_on_cuda = gpu;
         st->ready_slot  = 0;
     }
 
@@ -254,7 +277,13 @@ void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
             read = st->ready_slot;
         }
         sim_step(st, pos[read], pos[write], speed[write], vel, t);
-        if (cuda) torch::cuda::synchronize();   // writes done BEFORE publish
+        if (cuda) torch::cuda::synchronize();     // writes done BEFORE publish
+#if defined(__APPLE__)
+        else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
+        // serialized on torch's MPS stream queue — a bare synchronize() races
+        // any other applet's encodes (see torch.hpp:70-111); full drain keeps
+        // the renderer's imported-points read ordered without events.
+#endif
         t += kDt;
         ++steps;
         ++rate_steps;
