@@ -364,7 +364,8 @@ struct ImportStub : StubRenderer {
     bool supports_external_import() const override { return true; }
     uint64_t import_external_allocation(void*, uint64_t size, uint32_t type) override {
         if (type != CALIPER_ALLOC_HANDLE_OPAQUE_WIN32 &&
-            type != CALIPER_ALLOC_HANDLE_OPAQUE_FD) return 0;
+            type != CALIPER_ALLOC_HANDLE_OPAQUE_FD &&
+            type != CALIPER_ALLOC_HANDLE_MTLBUFFER) return 0;
         if (size == 0) return 0;
         return next_id++;
     }
@@ -403,6 +404,20 @@ TEST_CASE("import_allocation: id lifecycle, invalid args, double release") {
     b.release_allocation(a);              // double release: no-op, no crash
     CHECK(imp.released.size() == 1);
     b.release_allocation(0);              // invalid id: no-op
+    CHECK(imp.released.size() == 1);
+}
+
+TEST_CASE("import_allocation: host gate forwards kind 3 (in-process MTLBuffer)") {
+    // The bridge stays kind-agnostic: it passes handle_type through to the
+    // renderer unchanged. A renderer that speaks kind 3 accepts; this fails if
+    // the host gate rejected the tag before it ever reached the renderer.
+    ImportStub imp("metal");
+    TensorBridge b(imp);
+    uint64_t dummy = 42;
+    CaliperAllocId a = b.import_allocation(&dummy, 4096,
+                                           CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(a != 0);
+    b.release_allocation(a);
     CHECK(imp.released.size() == 1);
 }
 

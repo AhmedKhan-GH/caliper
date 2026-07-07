@@ -17,6 +17,10 @@
 /* OS handle types accepted by import_allocation. */
 #define CALIPER_ALLOC_HANDLE_OPAQUE_WIN32 1u
 #define CALIPER_ALLOC_HANDLE_OPAQUE_FD    2u
+/* void* is an in-process id<MTLBuffer> (Apple unified memory). No OS handle
+ * transfer: the "dup" the host performs is an ObjC strong retain. Additive,
+ * same discipline as the two kinds above. */
+#define CALIPER_ALLOC_HANDLE_MTLBUFFER    3u
 
 #ifdef __cplusplus
 extern "C" {

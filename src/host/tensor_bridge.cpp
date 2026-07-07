@@ -400,7 +400,8 @@ CaliperAllocId TensorBridge::import_allocation(void* os_handle,
     if (os_handle == nullptr)        { bridge_log("import: null handle");    return 0; }
     if (size_bytes == 0)             { bridge_log("import: zero size");      return 0; }
     if (handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_WIN32 &&
-        handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_FD)
+        handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_FD &&
+        handle_type != CALIPER_ALLOC_HANDLE_MTLBUFFER)
                                      { bridge_log("import: bad handle type"); return 0; }
     const uint64_t rid =
         renderer_.import_external_allocation(os_handle, size_bytes, handle_type);
