@@ -25,6 +25,7 @@ add_executable(caliper_tests
     test_artifact_store.cpp
     test_data_store.cpp
     test_tensor_bridge.cpp
+    test_alloc_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
