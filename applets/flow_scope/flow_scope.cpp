@@ -429,12 +429,18 @@ void FlowScopeApplet::draw_ui() {
     const bool geom_live =
         st->geometry && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS);
 
-    // Size the offscreen view to the content region; recreate on real change
-    // (a few-px threshold avoids reallocating on sub-pixel jitter). Clamp to a
-    // sane range so a collapsed/huge dock node can't ask for a degenerate RT.
+    // Size the offscreen view to the content region IN PHYSICAL PIXELS:
+    // avail is logical points, but the swapchain renders at framebuffer scale
+    // (2x on Retina) — a view allocated at logical size gets stretched 2x by
+    // ImGui::Image and reads soft next to the native-res UI. Recreate on real
+    // change (a few-px threshold avoids reallocating on sub-pixel jitter).
+    // Clamp to a sane range so a collapsed/huge dock node can't ask for a
+    // degenerate RT.
+    const float fb_scale = ImGui::GetIO().DisplayFramebufferScale.y > 0.f
+                               ? ImGui::GetIO().DisplayFramebufferScale.y : 1.f;
     auto clampi = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
-    const int dw = clampi((int)avail.x, 64, 4096);
-    const int dh = clampi((int)avail.y, 64, 4096);
+    const int dw = clampi((int)(avail.x * fb_scale), 64, 4096);
+    const int dh = clampi((int)(avail.y * fb_scale), 64, 4096);
     if (geom_live && avail.x >= 64 && avail.y >= 64 &&
         (st->view == 0 || std::abs(dw - st->view_w) >= 3 ||
          std::abs(dh - st->view_h) >= 3)) {
@@ -464,17 +470,22 @@ void FlowScopeApplet::draw_ui() {
             // particles stay visible; faster particles climb to the bright
             // end. Purely the mapping window — no shader/ABI change.
             const float vmin = -0.33f * st->color_vmax;
+            // size_px is in view (physical) pixels: scale with the view so
+            // points keep the same apparent thickness on HiDPI displays.
             st->zero_copy_frame = st->geometry.draw_points(
                 st->view, &cam, pref->alloc, pref->offset, (uint64_t)n,
                 sref->alloc, sref->offset, CALIPER_CMAP_MAGMA, vmin,
-                st->color_vmax, 1.5f, 0xFF000000u);
+                st->color_vmax, 1.5f * fb_scale, 0xFF000000u);
         }
     }
 
     if (st->zero_copy_frame) {
         // Fill the region with the offscreen view; interaction rides the image.
+        // The view texture is PHYSICAL pixels — display at logical size so it
+        // maps 1 texel : 1 framebuffer pixel instead of being stretched.
         ImGui::Image(caliper::Bridge::imtex(st->view),
-                     ImVec2((float)st->view_w, (float)st->view_h));
+                     ImVec2((float)st->view_w / fb_scale,
+                            (float)st->view_h / fb_scale));
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 mn = ImGui::GetItemRectMin();
         const ImVec2 sz = ImGui::GetItemRectSize();
