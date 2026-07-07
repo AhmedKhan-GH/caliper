@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.flow-scope"
+name    = "FlowScope"
+version = "0.1.0"
+summary = "A million-particle flow field, drawn with zero copies: the torch CUDA simulation writes exportable-pool tensors and the renderer's instanced point pass (caliper.geometry.v1) reads the SAME memory in place, per frame. Left-drag pushes the field with a cursor-ray impulse; right-drag orbits. Falls back to a subsampled CPU scatter wherever the zero-copy path is absent."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.geometry.v1"]
