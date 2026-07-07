@@ -16,6 +16,7 @@
 #include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
+#include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/tensor.h>
 #include <imgui.h>
 #include <implot.h>
@@ -255,11 +256,34 @@ const CaliperTensorBridgeV1_1 kBridge11 = {sizeof(CaliperTensorBridgeV1_1),
     &br_texture_from_tensor_mapped, &br_alloc_shared, &br_free_shared,
     &br_caps};
 
+// v1.2 (zero-copy imported allocations): the seven v1.1 members plus the three
+// import ops. Null-bridge (no renderer / headless) → 0 / no-op / false, the
+// same discipline as the v1 thunks above.
+CaliperAllocId br_import_allocation(void* os_handle, uint64_t size_bytes,
+                                    uint32_t handle_type) {
+    TensorBridge* b = bridge();
+    return b ? b->import_allocation(os_handle, size_bytes, handle_type) : 0;
+}
+void br_release_allocation(CaliperAllocId alloc) {
+    if (TensorBridge* b = bridge()) b->release_allocation(alloc);
+}
+bool br_update_texture_from_alloc(CaliperTextureId tex, CaliperAllocId alloc,
+                                  uint64_t offset_bytes, const CaliperTensor* desc) {
+    TensorBridge* b = bridge();
+    return b ? b->update_texture_from_alloc(tex, alloc, offset_bytes, desc) : false;
+}
+const CaliperTensorBridgeV1_2 kBridge12 = {sizeof(CaliperTensorBridgeV1_2),
+    &br_texture_from_tensor, &br_update_texture, &br_release_texture,
+    &br_texture_from_tensor_mapped, &br_alloc_shared, &br_free_shared,
+    &br_caps, &br_import_allocation, &br_release_allocation,
+    &br_update_texture_from_alloc};
+
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
                                     CALIPER_METRICS_V1,
                                     CALIPER_TENSOR_BRIDGE_V1,
                                     CALIPER_TENSOR_BRIDGE_V1_1,
+                                    CALIPER_TENSOR_BRIDGE_V1_2,
                                     CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1};
 
 } // namespace
@@ -333,6 +357,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_METRICS_V1) == 0) return &kMetrics;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1) == 0) return &kBridge;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_1) == 0) return &kBridge11;
+    if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_2) == 0) return &kBridge12;
     if (std::strcmp(id, CALIPER_ARTIFACTS_V1) == 0) return &kArtifacts;
     if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
