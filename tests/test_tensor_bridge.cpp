@@ -435,3 +435,129 @@ TEST_CASE("update_texture_from_alloc: acceptance gates + bounds + fallback contr
     CHECK_FALSE(b.update_texture_from_alloc(tex, a, 0, &bad));
     CHECK(imp.updates.size() == 1);
 }
+
+// --- caliper.geometry.v1: imported 3-D points ------------------------------
+
+namespace {
+struct GeomStub : ImportStub {
+    using ImportStub::ImportStub;
+    uint64_t next_view = 100;
+    struct Draw {
+        uint64_t view, pos, pos_off, count, attr, attr_off;
+        const uint32_t* lut;
+        float size_px;
+        uint32_t clear;
+    };
+    std::vector<Draw> draws;
+    bool draw_return = true;
+    bool supports_geometry() const override { return true; }
+    uint64_t geom_create_view(int w, int h) override {
+        if (w <= 0 || h <= 0) return 0;
+        return next_view++;
+    }
+    bool geom_draw_points(uint64_t view, const float*, const float*,
+                          uint64_t pos, uint64_t pos_off, uint64_t count,
+                          uint64_t attr, uint64_t attr_off,
+                          const uint32_t* lut, float, float,
+                          float size_px, uint32_t clear) override {
+        draws.push_back({view, pos, pos_off, count, attr, attr_off, lut,
+                         size_px, clear});
+        return draw_return;
+    }
+};
+} // namespace
+
+TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
+    ImportStub plain("vulkan");
+    TensorBridge b1(plain);
+    CHECK(b1.geom_caps() == 0u);
+    GeomStub g("vulkan");
+    TensorBridge b2(g);
+    CHECK((b2.geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS) != 0u);
+}
+
+TEST_CASE("geom views: lifecycle, wrong-door release, update refusal") {
+    GeomStub g("vulkan");
+    TensorBridge b(g);
+    CHECK(b.geom_create_view(0, 64) == 0);                 // bad size
+    CaliperTextureId v = b.geom_create_view(64, 64);
+    REQUIRE(v != 0);
+
+    // A view refuses the bridge's texture doors: update and bridge-release
+    // are no-ops/false, and the geometry release is the only teardown.
+    std::vector<float> px(64 * 64, 0.f);
+    CaliperTensor t = f32_2d(px.data(), 64, 64);
+    CHECK_FALSE(b.update_texture(v, &t));
+    b.release_texture(v);                                   // wrong door: no-op
+    CHECK(g.release_count == 0);
+    b.geom_release_view(v);
+    CHECK(g.release_count == 1);
+    b.geom_release_view(v);                                 // double release: no-op
+    CHECK(g.release_count == 1);
+
+    // geom_release_view refuses non-view textures.
+    CaliperTextureId tex = b.texture_from_tensor_mapped(&t, 0, 0.f, 1.f, 0);
+    REQUIRE(tex != 0);
+    b.geom_release_view(tex);
+    CHECK(g.release_count == 1);
+}
+
+TEST_CASE("geom_draw_points: gates fail closed, count 0 clears, happy path") {
+    GeomStub g("vulkan");
+    TensorBridge b(g);
+    CaliperTextureId v = b.geom_create_view(64, 64);
+    REQUIRE(v != 0);
+    uint64_t dummy = 42;
+    // 100 points (100*12 = 1200 bytes) + 100 attrs (400 bytes) in one alloc.
+    CaliperAllocId a = b.import_allocation(&dummy, 1600,
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a != 0);
+    CaliperGeomCamera cam{};
+
+    // happy path: positions at 0, attrs at 1200, viridis
+    CHECK(b.geom_draw_points(v, &cam, a, 0, 100, a, 1200, 0, 0.f, 1.f, 1.f, 0xff000000u));
+    REQUIRE(g.draws.size() == 1);
+    CHECK(g.draws[0].count == 100);
+    CHECK(g.draws[0].lut != nullptr);
+
+    // flat path: attr_alloc 0 -> null lut
+    CHECK(b.geom_draw_points(v, &cam, a, 0, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    REQUIRE(g.draws.size() == 2);
+    CHECK(g.draws[1].lut == nullptr);
+
+    // count 0 = pure clear; alloc ids may be 0
+    CHECK(b.geom_draw_points(v, &cam, 0, 0, 0, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    CHECK(g.draws.size() == 3);
+
+    // gates: each false, no renderer call
+    CHECK_FALSE(b.geom_draw_points(v, nullptr, a, 0, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    CHECK_FALSE(b.geom_draw_points(999u, &cam, a, 0, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    CHECK_FALSE(b.geom_draw_points(v, &cam, 999u, 0, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 2, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u));    // misaligned
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, 134, 0, 0, 0, 0.f, 1.f, 1.f, 0u));    // 134*12 > 1600
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, UINT64_MAX - 8, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u)); // overflow
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, UINT64_MAX / 4u, 0, 0, 0, 0.f, 1.f, 1.f, 0u));  // count overflow
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, 100, 999u, 0, 0, 0.f, 1.f, 1.f, 0u)); // unknown attr
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, 100, a, 1500, 0, 0.f, 1.f, 1.f, 0u)); // attr OOB
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, 100, a, 1200, 99, 0.f, 1.f, 1.f, 0u)); // bad colormap
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, 100, 0, 0, 0, 0.f, 1.f, 0.f, 0u));    // size_px 0
+    CHECK(g.draws.size() == 3);
+
+    // released alloc: draw goes false (fallback contract)
+    b.release_allocation(a);
+    CHECK_FALSE(b.geom_draw_points(v, &cam, a, 0, 100, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    CHECK(g.draws.size() == 3);
+    b.geom_release_view(v);
+}
+
+TEST_CASE("geom_draw_points on a non-view texture is refused") {
+    GeomStub g("vulkan");
+    TensorBridge b(g);
+    std::vector<float> px(16, 0.f);
+    CaliperTensor t = f32_2d(px.data(), 4, 4);
+    CaliperTextureId tex = b.texture_from_tensor_mapped(&t, 0, 0.f, 1.f, 0);
+    REQUIRE(tex != 0);
+    CaliperGeomCamera cam{};
+    CHECK_FALSE(b.geom_draw_points(tex, &cam, 0, 0, 0, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
+    CHECK(g.draws.empty());
+}

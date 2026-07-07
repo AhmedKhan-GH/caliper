@@ -69,6 +69,29 @@ public:
                                           int32_t /*colormap*/,
                                           float /*vmin*/, float /*vmax*/) { return false; }
 
+    // Imported 3-D geometry (caliper.geometry.v1). Default: unsupported — the
+    // service then never grants CALIPER_GEOM_CAP_IMPORTED_POINTS. A view is an
+    // offscreen render target registered in the SAME texture table as bridge
+    // textures (ImGui-drawable, debug-readable); it is released via
+    // tex_release like any texture. geom_draw_points renders ONE view frame
+    // atomically: clear to clear_rgba, then `count` instanced points pulled
+    // from the imported allocation (positions (count,3) f32 at pos_offset;
+    // optional (count,) f32 attr colormapped via lut256, lut null = flat
+    // white). Additive blend, no depth. count 0 = pure clear (alloc ids may
+    // be 0 then). false = view pixels untouched.
+    virtual bool supports_geometry() const { return false; }
+    virtual uint64_t geom_create_view(int /*w*/, int /*h*/) { return 0; }
+    virtual bool geom_draw_points(uint64_t /*view_tex*/,
+                                  const float* /*view16*/, const float* /*proj16*/,
+                                  uint64_t /*pos_alloc*/, uint64_t /*pos_offset*/,
+                                  uint64_t /*count*/,
+                                  uint64_t /*attr_alloc*/, uint64_t /*attr_offset*/,
+                                  const uint32_t* /*lut256*/,
+                                  float /*vmin*/, float /*vmax*/,
+                                  float /*size_px*/, uint32_t /*clear_rgba*/) {
+        return false;
+    }
+
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
 

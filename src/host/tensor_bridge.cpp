@@ -308,6 +308,7 @@ bool TensorBridge::update_texture(CaliperTextureId tex, const CaliperTensor* t) 
     auto it = entries_.find(tex);
     if (it == entries_.end() || !t) return false;
     Entry& e = it->second;
+    if (e.view) { bridge_log("update: id is a geometry view"); return false; }
 
     if (!desc_matches_entry(e, *t)) return false;
     if (!accept_common(*t, active_device_)) return false;
@@ -317,6 +318,7 @@ bool TensorBridge::update_texture(CaliperTextureId tex, const CaliperTensor* t) 
 void TensorBridge::release_texture(CaliperTextureId tex) {
     auto it = entries_.find(tex);
     if (it == entries_.end()) return;
+    if (it->second.view) { bridge_log("release: id is a geometry view"); return; }
     renderer_.tex_release(it->second.tex);
     entries_.erase(it);
 }
@@ -425,6 +427,7 @@ bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocI
     auto ia = imported_.find(a);
     if (ia == imported_.end()) { bridge_log("update_alloc: unknown alloc"); return false; }
     Entry& e = te->second;
+    if (e.view) { bridge_log("update_alloc: id is a geometry view"); return false; }
     const ImportedAlloc& alloc = ia->second;
 
     // Same frozen acceptance gates as update_texture — dtype/shape vs the entry,
@@ -447,6 +450,86 @@ bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocI
     return renderer_.tex_update_from_imported(e.tex, alloc.renderer_id,
                                               offset_bytes, *desc,
                                               e.colormap, e.vmin, e.vmax);
+}
+
+// --- caliper.geometry.v1: imported 3-D points into offscreen views ---------
+
+uint32_t TensorBridge::geom_caps() const {
+    return renderer_.supports_geometry() ? CALIPER_GEOM_CAP_IMPORTED_POINTS : 0u;
+}
+
+CaliperTextureId TensorBridge::geom_create_view(uint32_t w, uint32_t h) {
+    if (w == 0 || h == 0 || w > 16384 || h > 16384) {
+        bridge_log("geom_view: bad size"); return 0;
+    }
+    const uint64_t rid = renderer_.geom_create_view((int)w, (int)h);
+    if (rid == 0) { bridge_log("geom_view: renderer refused"); return 0; }
+    const CaliperTextureId pub = renderer_.tex_imtexture_id(rid);
+    Entry e;
+    e.tex  = rid;
+    e.w    = (int)w;
+    e.h    = (int)h;
+    e.view = true;
+    entries_[pub] = std::move(e);
+    return pub;
+}
+
+void TensorBridge::geom_release_view(CaliperTextureId view) {
+    auto it = entries_.find(view);
+    if (it == entries_.end() || !it->second.view) return;   // wrong door: no-op
+    renderer_.tex_release(it->second.tex);
+    entries_.erase(it);
+}
+
+bool TensorBridge::geom_draw_points(CaliperTextureId view,
+                                    const CaliperGeomCamera* cam,
+                                    CaliperAllocId pos_alloc,
+                                    uint64_t pos_offset, uint64_t count,
+                                    CaliperAllocId attr_alloc,
+                                    uint64_t attr_offset,
+                                    int32_t colormap, float vmin, float vmax,
+                                    float size_px, uint32_t clear_rgba) {
+    if (!cam) { bridge_log("geom_draw: null camera"); return false; }
+    auto vt = entries_.find(view);
+    if (vt == entries_.end() || !vt->second.view) {
+        bridge_log("geom_draw: unknown view"); return false;
+    }
+    if (!(size_px > 0.0f)) { bridge_log("geom_draw: bad point size"); return false; }
+
+    uint64_t pos_rid = 0, attr_rid = 0;
+    const uint32_t* lut = nullptr;
+    if (count > 0) {
+        // Positions: (count,3) f32, 4-byte-aligned offset, overflow-safe
+        // bounds against the imported allocation (the renderer re-checks).
+        auto pa = imported_.find(pos_alloc);
+        if (pa == imported_.end()) { bridge_log("geom_draw: unknown pos alloc"); return false; }
+        if (pos_offset % 4 != 0) { bridge_log("geom_draw: pos offset misaligned"); return false; }
+        if (count > UINT64_MAX / 12u) { bridge_log("geom_draw: count overflow"); return false; }
+        const uint64_t pos_bytes = count * 12u;
+        if (pos_offset > pa->second.size_bytes ||
+            pos_bytes > pa->second.size_bytes - pos_offset) {
+            bridge_log("geom_draw: positions out of imported bounds"); return false;
+        }
+        pos_rid = pa->second.renderer_id;
+
+        if (attr_alloc != 0) {
+            auto aa = imported_.find(attr_alloc);
+            if (aa == imported_.end()) { bridge_log("geom_draw: unknown attr alloc"); return false; }
+            if (attr_offset % 4 != 0) { bridge_log("geom_draw: attr offset misaligned"); return false; }
+            const uint64_t attr_bytes = count * 4u;   // bounded by the *12 check
+            if (attr_offset > aa->second.size_bytes ||
+                attr_bytes > aa->second.size_bytes - attr_offset) {
+                bridge_log("geom_draw: attr out of imported bounds"); return false;
+            }
+            lut = colormap_lut(colormap);
+            if (!lut) { bridge_log("geom_draw: bad colormap"); return false; }
+            attr_rid = aa->second.renderer_id;
+        }
+    }
+    return renderer_.geom_draw_points(vt->second.tex, cam->view, cam->proj,
+                                      pos_rid, pos_offset, count,
+                                      attr_rid, attr_offset,
+                                      lut, vmin, vmax, size_px, clear_rgba);
 }
 
 bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {

@@ -9,6 +9,7 @@
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
+#include <caliper/services/geometry_v1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <cstddef>
@@ -117,6 +118,29 @@ TEST_CASE("tensor_bridge v1_2 is prefix-identical to v1_1 (additive, D24 pattern
           offsetof(CaliperTensorBridgeV1_2, update_texture_from_alloc) + sizeof(void*));
     CHECK(CALIPER_BRIDGE_CAP_IMPORT_ALLOC == (1u << 1));
     CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1_2) == "caliper.tensor_bridge.v1_2");
+}
+
+TEST_CASE("geometry v1 layout is frozen (new service, D24 pattern)") {
+    static_assert(std::is_standard_layout_v<CaliperGeometryV1>);
+    static_assert(std::is_standard_layout_v<CaliperGeomCamera>);
+    static_assert(offsetof(CaliperGeometryV1, struct_size) == 0);
+    // The camera crosses the ABI by pointer: two packed 4x4 float matrices.
+    static_assert(offsetof(CaliperGeomCamera, view) == 0);
+    static_assert(offsetof(CaliperGeomCamera, proj) == 16 * sizeof(float));
+    CHECK(sizeof(CaliperGeomCamera) == 32 * sizeof(float));
+    // Member order pinned: caps, create_view, release_view, draw_points —
+    // contiguous fn pointers after struct_size (padded to pointer alignment).
+    static_assert(offsetof(CaliperGeometryV1, caps) == sizeof(void*));
+    static_assert(offsetof(CaliperGeometryV1, create_view) ==
+                  offsetof(CaliperGeometryV1, caps) + sizeof(void*));
+    static_assert(offsetof(CaliperGeometryV1, release_view) ==
+                  offsetof(CaliperGeometryV1, create_view) + sizeof(void*));
+    static_assert(offsetof(CaliperGeometryV1, draw_points) ==
+                  offsetof(CaliperGeometryV1, release_view) + sizeof(void*));
+    CHECK(sizeof(CaliperGeometryV1) ==
+          offsetof(CaliperGeometryV1, draw_points) + sizeof(void*));
+    CHECK(CALIPER_GEOM_CAP_IMPORTED_POINTS == (1u << 0));
+    CHECK(std::string(CALIPER_GEOMETRY_V1) == "caliper.geometry.v1");
 }
 
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);
