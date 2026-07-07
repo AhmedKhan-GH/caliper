@@ -212,6 +212,36 @@ public:
         return ff;
     }
 
+    // Batched residual probe for ThoughtSpace. eval()+no_grad forward of idx
+    // (S,T), keeping EVERY batch element; returns the stacked per-depth residual
+    // stream as ONE tensor of shape (D,S,T,C) on the model's device, where
+    // D = n_layer + 1 (station 0 = token+pos embeddings, station d = residual
+    // stream after block d-1). No attention weights, no write norms — cheaper
+    // than forward_full. Restores prior train/eval mode; NoGradGuard so no graph
+    // is retained and dropout never perturbs the picture. Training forward path
+    // is left completely unchanged.
+    torch::Tensor forward_resid(const torch::Tensor& idx) {
+        torch::NoGradGuard ng;
+        const bool was_training = is_training();
+        eval();
+        const auto T = idx.size(1);
+        auto pos = torch::arange(
+            T, torch::TensorOptions(idx.device()).dtype(torch::kLong));
+        auto x = wte_->forward(idx) + wpe_->forward(pos);   // (S,T,C), no dropout
+        std::vector<torch::Tensor> stations;
+        stations.reserve(cfg_.n_layer + 1);
+        stations.push_back(x);                              // station 0 = emb
+        for (auto& b : block_vec_) {
+            // Plain block forward (same math as the training path), no attention
+            // retained; eval() makes the block's dropout the identity.
+            x = b->forward(x, /*need_weights=*/false, /*out_att=*/nullptr);
+            stations.push_back(x);                          // (S,T,C) after block
+        }
+        auto out = torch::stack(stations, 0);               // (D,S,T,C)
+        if (was_training) train();
+        return out;
+    }
+
     // Autoregressive sampling: seeded by idx (1,t0), grows by max_new tokens at
     // temperature. no_grad + eval; crops context to block_size. Restores mode.
     torch::Tensor generate(torch::Tensor idx, int64_t max_new,
