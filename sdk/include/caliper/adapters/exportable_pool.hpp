@@ -38,6 +38,7 @@
 #include <torch/torch.h>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 
 // Same guard discipline as adapters/torch.hpp:37 — mac libtorch ships the
@@ -78,6 +79,16 @@ namespace caliper::adapters {
 struct BridgeRef {
     CaliperAllocId alloc;
     uint64_t       offset;
+};
+
+// The MPS variant's storage view: the ObjC bridge pointer of the tensor
+// storage's id<MTLBuffer>, the storage's full byte size, and the tensor's
+// byte offset within it. Declared here (outside the platform #if) so it
+// compiles on every TU that includes this header.
+struct MpsStorageRef {
+    void*    buffer;
+    uint64_t size;
+    uint64_t offset;
 };
 
 #if CALIPER_EXPORTABLE_POOL_CUDA
@@ -499,7 +510,81 @@ ExportablePool::to_bridge(caliper::Bridge& bridge, const at::Tensor& t) {
     return BridgeRef{it->second, hit->offset};
 }
 
-#else   // !CALIPER_EXPORTABLE_POOL_CUDA
+#elif defined(__APPLE__)
+// ===========================================================================
+// MPS variant. On unified memory every MPS tensor's storage IS an
+// id<MTLBuffer> (see adapters/torch.hpp:152) — there is nothing to route, so
+// use() is a no-op and to_bridge() imports the tensor's own storage buffer
+// in-process (handle kind CALIPER_ALLOC_HANDLE_MTLBUFFER; the host's "dup"
+// is an ObjC retain). Unlike the offset-rejecting texture path, (alloc,
+// offset) addressing carries storage_offset explicitly.
+//
+// Lifetime contract: a tensor handed to to_bridge must stay alive until the
+// pool is destroyed (or the import released) — the MPS caching allocator may
+// otherwise hand the same MTLBuffer to an unrelated tensor while the host
+// still renders from it. flow_scope's persistent slot tensors satisfy this.
+// ===========================================================================
+class ExportablePool {
+public:
+    class Scope { public: Scope() = default; };
+
+    explicit ExportablePool(int /*device_index*/)
+        : ok_(torch::mps::is_available()) {}
+
+    ~ExportablePool() {
+        if (import_bridge_ != nullptr)
+            for (auto& [buf, id] : import_cache_)
+                if (id != 0) import_bridge_->release_allocation(id);
+    }
+
+    ExportablePool(const ExportablePool&)            = delete;
+    ExportablePool& operator=(const ExportablePool&) = delete;
+
+    bool                 ok() const       { return ok_; }
+    const AllocRegistry& registry() const { return registry_; }
+    Scope                use()            { return Scope{}; }
+
+    // (buffer, size, offset) of an MPS tensor's storage; nullopt for
+    // non-MPS / non-contiguous / empty storage. Static and bridge-free so
+    // the extraction math is unit-testable without a host.
+    static std::optional<MpsStorageRef> storage_ref(const at::Tensor& t) {
+        if (!t.is_mps() || !t.is_contiguous()) return std::nullopt;
+        void* buf = t.storage().mutable_data();
+        if (buf == nullptr) return std::nullopt;
+        return MpsStorageRef{
+            buf,
+            static_cast<uint64_t>(t.storage().nbytes()),
+            static_cast<uint64_t>(t.storage_offset()) *
+                static_cast<uint64_t>(t.element_size())};
+    }
+
+    std::optional<BridgeRef> to_bridge(caliper::Bridge& bridge,
+                                       const at::Tensor& t) {
+        if (!ok_) return std::nullopt;
+        auto ref = storage_ref(t);
+        if (!ref) return std::nullopt;
+        import_bridge_ = &bridge;
+        auto it = import_cache_.find(ref->buffer);
+        if (it == import_cache_.end()) {
+            // Import once per storage buffer. 0 = host declined; cached as a
+            // permanent negative (caller stays on fallback), same discipline
+            // as the CUDA variant.
+            const CaliperAllocId id = bridge.import_allocation(
+                ref->buffer, ref->size, CALIPER_ALLOC_HANDLE_MTLBUFFER);
+            it = import_cache_.emplace(ref->buffer, id).first;
+        }
+        if (it->second == 0) return std::nullopt;
+        return BridgeRef{it->second, ref->offset};
+    }
+
+private:
+    bool ok_ = false;
+    AllocRegistry registry_;
+    std::map<void*, CaliperAllocId> import_cache_;   // storage buffer -> id
+    caliper::Bridge* import_bridge_ = nullptr;       // frame-thread-only, like the bridge
+};
+
+#else   // neither CUDA nor Apple
 // ===========================================================================
 // Fallback: the class exists everywhere so applet code compiles, but the pool
 // is never backed — ok() == false, use() is a no-op, to_bridge always declines.
@@ -521,6 +606,6 @@ public:
 private:
     AllocRegistry registry_;
 };
-#endif  // CALIPER_EXPORTABLE_POOL_CUDA
+#endif  // CALIPER_EXPORTABLE_POOL_CUDA / __APPLE__
 
 }  // namespace caliper::adapters
