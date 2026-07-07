@@ -1,7 +1,7 @@
 # Watching Models Learn: Eliminating the Round Trip Between Training and Seeing
 
 **Whitepaper draft — v0.1**
-*Ahmed Khan · July 2026*
+*[Ahmed Khan](https://github.com/AhmedKhan-GH) · July 2026*
 
 > **One-sentence thesis.** Every mainstream tool for looking inside a neural
 > network while it trains copies the data off the GPU, through the CPU, usually
@@ -10,6 +10,12 @@
 > drawn on screen *in the same frame it was computed*, and this is verified
 > pixel-exact on both of the dominant hardware ecosystems (Apple Silicon and
 > Windows/NVIDIA).
+
+**Code & projects.** Caliper is open source at
+[github.com/AhmedKhan-GH/caliper](https://github.com/AhmedKhan-GH/caliper), in
+development since February 2026 — alongside its sibling instruments
+[Astrolabe](https://github.com/AhmedKhan-GH/astrolabe) (Feb 2026–present) and
+[Polaris](https://github.com/AhmedKhan-GH/polaris) (Apr 2026–present).
 
 ---
 
