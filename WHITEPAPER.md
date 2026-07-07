@@ -420,8 +420,9 @@ and reject rather than render a plausible-but-wrong image.
 *(Research audience explicitly; business audience implicitly — a paper that
 states its limits is a paper whose claims can be trusted.)*
 
-- Arbitrary framework-allocated CUDA tensors carry a one in-VRAM-copy floor;
-  literal zero-copy requires `alloc_shared`.
+- Arbitrary framework-allocated CUDA tensors carry a one in-VRAM-copy floor
+  **unless allocated from Caliper's exportable pool, which removes it**; the
+  floor persists only for memory born unshareable.
 - The v1 contract requires contiguous, offset-0 tensors; views are rejected,
   not repaired.
 - Dense outputs (heatmaps, feature maps, attention grids) are where the
