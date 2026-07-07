@@ -12,6 +12,7 @@
 // live as members / in an internal id table; the uint64 texture ids handed to
 // callers are sequential handles, never raw retained pointers (§5.4).
 #include "host_renderer.h"
+#include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,11 +25,20 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_metal.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
 
 namespace caliper_host {
+
+// Resolve a colormap id to its 256-entry RGBA8 LUT (tensor_bridge.cpp, present
+// in every exe/test link scope that pulls this backend). Unlike
+// tex_update_from_device — where the bridge hands the renderer a resolved
+// lut256 — the v1.2 imported path receives the raw colormap id (the texture's
+// pinned mapping), so the renderer resolves it here.
+const uint32_t* colormap_lut(int32_t colormap);
+
 namespace {
 
 // Cross-backend determinism contract (§16): the compute colormap must produce
@@ -74,6 +84,68 @@ struct CmapParams {
     uint32_t w, h, sx, sy;
     float    vmin, vmax;
 };
+
+// Vertex-pulled point pipeline (caliper.geometry.v1) — MSL port of
+// shaders/points.vert + points.frag. Element-base addressing (byte offset / 4)
+// into whole-bound buffers, same 4-byte alignment gate as Vulkan. Color index
+// math byte-identical to points.vert / map_f32_to_rgba8 (NaN->0, degenerate
+// range->0). Square points, no discard — deterministic rasterization.
+static const char* kPointsShaderSrc = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+
+struct GeomParams {
+    float4x4 mvp;        // proj*view, premultiplied host-side (column-major)
+    uint  pos_base;      // element base = byte offset / 4
+    uint  attr_base;
+    uint  use_attr;
+    float vmin;
+    float vmax;
+    float size_px;
+};
+
+struct VOut {
+    float4 pos   [[position]];
+    float  size  [[point_size]];
+    float4 color;
+};
+
+vertex VOut points_vs(uint vid [[vertex_id]],
+                      device const float* pos  [[buffer(0)]],
+                      device const float* attr [[buffer(1)]],
+                      device const uint*  lut  [[buffer(2)]],
+                      constant GeomParams& p   [[buffer(3)]])
+{
+    VOut o;
+    float3 wp = float3(pos[p.pos_base + 3u * vid + 0u],
+                       pos[p.pos_base + 3u * vid + 1u],
+                       pos[p.pos_base + 3u * vid + 2u]);
+    o.pos  = p.mvp * float4(wp, 1.0f);
+    o.size = p.size_px;
+    if (p.use_attr != 0u) {
+        float v = attr[p.attr_base + vid];
+        float t = (v == v && p.vmax > p.vmin)
+                ? clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0f, 1.0f) : 0.0f;
+        uint packed = lut[(uint)(t * 255.0f + 0.5f)];
+        o.color = float4(float(packed         & 0xffu),
+                         float((packed >> 8)  & 0xffu),
+                         float((packed >> 16) & 0xffu),
+                         float((packed >> 24) & 0xffu)) / 255.0f;
+    } else {
+        o.color = float4(1.0f);
+    }
+    return o;
+}
+
+fragment float4 points_fs(VOut in [[stage_in]]) { return in.color; }
+)metal";
+
+struct GeomParams {          // must match the MSL struct byte-for-byte (88 B)
+    float    mvp[16];
+    uint32_t pos_base, attr_base, use_attr;
+    float    vmin, vmax, size_px;
+};
+static_assert(sizeof(GeomParams) == 88, "MSL constant-buffer layout");
 
 // Byte extent a tensor addresses: (max linear element index + 1) * elem_size,
 // from shape×strides. The bridge already bounds this in *elements* against a
@@ -191,7 +263,9 @@ public:
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
         [textures_ removeAllObjects];
         textures_ = nil;
+        imported_.clear();
         cmap_pipeline_ = nil;
+        points_pipeline_ = nil;
         pass_desc_ = nil;
         queue_ = nil;
         layer_ = nil;
@@ -249,10 +323,174 @@ public:
         if (src == nil) return false;
 
         if (t.dtype == CALIPER_DT_F32 && lut256 != nullptr)
-            return colormap_compute(tex, dst, src, t, lut256, vmin, vmax);
+            return colormap_compute_from(tex, dst, src, 0, t, lut256, vmin, vmax,
+                                         /*imported=*/false);
         if (t.dtype == CALIPER_DT_U8)
-            return blit_u8(tex, dst, src, t);
+            return blit_u8_from(tex, dst, src, 0, t, /*imported=*/false);
         return false;
+    }
+
+    // ---- v1.2 imported allocations (in-process MTLBuffer import) -----------
+    // The Metal analog of Vulkan's DuplicateHandle + VkImportMemory: there is
+    // no OS handle transfer on Apple unified memory, so the "dup" is an ObjC
+    // strong retain. Lights up CALIPER_BRIDGE_CAP_IMPORT_ALLOC via the bridge.
+    bool supports_external_import() const override { return device_ != nil; }
+
+    uint64_t import_external_allocation(void* os_handle, uint64_t size_bytes,
+                                        uint32_t handle_type) override {
+        if (handle_type != CALIPER_ALLOC_HANDLE_MTLBUFFER) return 0;
+        if (os_handle == nullptr || size_bytes == 0 || device_ == nil) return 0;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)os_handle;
+        if (buf == nil) return 0;
+        if (buf.device.registryID != device_.registryID) return 0;  // wrong GPU
+        if (buf.length < size_bytes) return 0;   // caller overclaims — refuse
+        const uint64_t iid = next_import_id_++;
+        imported_[iid] = buf;                    // ARC strong ref IS the dup
+        return iid;
+    }
+
+    void release_external_allocation(uint64_t iid) override { imported_.erase(iid); }
+
+    // Colormap/blit a texture FROM an imported buffer at a byte offset, with NO
+    // data copy (the applet's kernels already wrote the bytes). Guards mirror
+    // tex_update_from_device; the byte offset rides setBuffer:offset: (f32) or
+    // sourceOffset: (u8). Colormap/vmin/vmax are the texture's pinned mapping.
+    bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t offset_bytes,
+                                  const CaliperTensor& desc, int32_t colormap,
+                                  float vmin, float vmax) override {
+        id<MTLTexture> dst = lookup(tex);
+        id<MTLBuffer>  src = lookup_import(alloc);
+        if (dst == nil || src == nil) return false;
+        if (offset_bytes % 4 != 0 || offset_bytes > src.length) return false;
+        if (desc.dtype == CALIPER_DT_F32) {
+            const uint32_t* lut = colormap_lut(colormap);
+            if (lut == nullptr) return false;
+            return colormap_compute_from(tex, dst, src, offset_bytes, desc,
+                                         lut, vmin, vmax, /*imported=*/true);
+        }
+        if (desc.dtype == CALIPER_DT_U8)
+            return blit_u8_from(tex, dst, src, offset_bytes, desc, /*imported=*/true);
+        return false;
+    }
+
+    // ---- caliper.geometry.v1: instanced points from imported allocations ----
+    // Same gate as the imported-texture path: point data lives in v1.2 imported
+    // MTLBuffers, which only exist when external import is up.
+    bool supports_geometry() const override { return supports_external_import(); }
+
+    // An offscreen render target that is ALSO an ordinary sampled texture: it
+    // lives in textures_, so tex_imtexture_id / debug_readback / tex_release
+    // work unchanged; the RenderTarget usage makes it drawable by the point
+    // pass. Cleared to opaque black at create so ImGui sampling before the
+    // first draw is defined.
+    uint64_t geom_create_view(int w, int h) override {
+        if (w <= 0 || h <= 0 || device_ == nil) return 0;
+        MTLTextureDescriptor* d =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:(NSUInteger)w
+                                                              height:(NSUInteger)h
+                                                           mipmapped:NO];
+        d.storageMode = MTLStorageModeShared;                // unified memory: renderable + readback
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+        id<MTLTexture> tex = [device_ newTextureWithDescriptor:d];
+        if (tex == nil) return 0;
+        @autoreleasepool {                                    // defined pre-first-draw: opaque black
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture     = tex;
+            rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[0].clearColor  = MTLClearColorMake(0, 0, 0, 1);
+            id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+            id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+            [enc endEncoding];
+            [cb commit];
+        }
+        uint64_t tid = next_id_++;
+        textures_[@(tid)] = tex;
+        return tid;
+    }
+
+    // One view frame, atomically: clear + draw `count` vertex-pulled points.
+    // Positions/attr are element bases into whole-bound imported buffers, so the
+    // offset gate is 4-byte alignment (same as Vulkan). Additive blend, no
+    // depth. Metal NDC is +y up with a positive-height viewport, which lands the
+    // GL-style ndc_for_pixel mapping directly (NO y-flip, unlike Vulkan). Every
+    // gate runs BEFORE the encoder exists — creating the encoder performs the
+    // clear, so any late refusal would violate pixels-untouched.
+    bool geom_draw_points(uint64_t view_tex, const float* view16, const float* proj16,
+                          uint64_t pos_alloc, uint64_t pos_offset, uint64_t count,
+                          uint64_t attr_alloc, uint64_t attr_offset,
+                          const uint32_t* lut256, float vmin, float vmax,
+                          float size_px, uint32_t clear_rgba) override {
+        @autoreleasepool {
+            // ---- every gate BEFORE the encoder exists: false = pixels untouched ----
+            id<MTLTexture> t = lookup(view_tex);
+            if (t == nil || view16 == nullptr || proj16 == nullptr) return false;
+            id<MTLBuffer> pos = nil, attr = nil;
+            if (count > 0) {
+                pos = lookup_import(pos_alloc);
+                if (pos == nil || pos_offset % 4 != 0) return false;
+                if (count > UINT64_MAX / 12) return false;
+                if (pos_offset > pos.length || count * 12 > pos.length - pos_offset)
+                    return false;
+                if (attr_alloc != 0) {
+                    attr = lookup_import(attr_alloc);
+                    if (attr == nil || attr_offset % 4 != 0 || lut256 == nullptr)
+                        return false;
+                    if (attr_offset > attr.length || count * 4 > attr.length - attr_offset)
+                        return false;
+                }
+                if (!ensure_points_pipeline()) return false;
+            }
+
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture     = t;
+            rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[0].clearColor  = MTLClearColorMake(
+                (double)( clear_rgba        & 0xFFu) / 255.0,
+                (double)((clear_rgba >> 8)  & 0xFFu) / 255.0,
+                (double)((clear_rgba >> 16) & 0xFFu) / 255.0,
+                (double)((clear_rgba >> 24) & 0xFFu) / 255.0);
+            id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+            id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+            if (enc == nil) return false;   // nothing encoded, nothing cleared
+
+            if (count > 0) {
+                GeomParams p{};
+                // mvp = proj * view, column-major — same loop as vulkan_renderer.cpp.
+                for (int c = 0; c < 4; ++c)
+                    for (int r = 0; r < 4; ++r) {
+                        float acc = 0.f;
+                        for (int k = 0; k < 4; ++k)
+                            acc += proj16[k * 4 + r] * view16[c * 4 + k];
+                        p.mvp[c * 4 + r] = acc;
+                    }
+                p.pos_base  = (uint32_t)(pos_offset / 4);
+                p.attr_base = (uint32_t)(attr_offset / 4);
+                p.use_attr  = attr != nil ? 1u : 0u;
+                p.vmin = vmin; p.vmax = vmax;
+                p.size_px = std::min(std::max(size_px, 1.0f), 511.0f);  // Metal point-size cap
+
+                static const uint32_t kZeroLut[256] = {};   // valid-but-unread when flat
+                [enc setRenderPipelineState:points_pipeline_];
+                MTLViewport vp = {0.0, 0.0, (double)t.width, (double)t.height, 0.0, 1.0};
+                [enc setViewport:vp];                        // positive height: no Y flip on Metal
+                [enc setVertexBuffer:pos offset:0 atIndex:0];
+                [enc setVertexBuffer:(attr != nil ? attr : pos) offset:0 atIndex:1];
+                [enc setVertexBytes:(lut256 ? lut256 : kZeroLut)
+                             length:256 * sizeof(uint32_t) atIndex:2];  // 1 KB < 4 KB setBytes cap
+                [enc setVertexBytes:&p length:sizeof(p) atIndex:3];
+                [enc drawPrimitives:MTLPrimitiveTypePoint
+                        vertexStart:0 vertexCount:(NSUInteger)count];
+            }
+            [enc endEncoding];
+            [cb commit];   // no CPU wait: same-queue_ commit order covers the frame's
+                           // sampling; producer (MPS) writes are already CPU-drained
+                           // before publish (flow_scope sync contract).
+            last_device_path_ = "points-imported";
+            return true;
+        }
     }
 
     // Test-only (spec §3.4 / M1): copy a texture back on the RENDERER's own
@@ -301,6 +539,11 @@ private:
         return textures_[@(id)];
     }
 
+    id<MTLBuffer> lookup_import(uint64_t iid) {
+        auto it = imported_.find(iid);
+        return it == imported_.end() ? nil : it->second;
+    }
+
     bool ensure_pipeline() {
         if (cmap_pipeline_ != nil) return true;
         NSError* err = nil;
@@ -313,6 +556,35 @@ private:
         if (fn == nil) return false;
         cmap_pipeline_ = [device_ newComputePipelineStateWithFunction:fn error:&err];
         return cmap_pipeline_ != nil;
+    }
+
+    // Lazy point pipeline (once; released at shutdown). Additive ONE/ONE blend
+    // on both channels, matching the Vulkan geom pipeline: a 1-px point at a
+    // pixel center lands exactly the LUT color on top of the cleared background.
+    bool ensure_points_pipeline() {
+        if (points_pipeline_ != nil) return true;
+        NSError* err = nil;
+        id<MTLLibrary> lib =
+            [device_ newLibraryWithSource:[NSString stringWithUTF8String:kPointsShaderSrc]
+                                  options:nil error:&err];
+        if (lib == nil) return false;
+        id<MTLFunction> vs = [lib newFunctionWithName:@"points_vs"];
+        id<MTLFunction> fs = [lib newFunctionWithName:@"points_fs"];
+        if (vs == nil || fs == nil) return false;
+        MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+        d.vertexFunction   = vs;
+        d.fragmentFunction = fs;
+        d.inputPrimitiveTopology = MTLPrimitiveTopologyClassPoint;
+        d.colorAttachments[0].pixelFormat         = MTLPixelFormatRGBA8Unorm;
+        d.colorAttachments[0].blendingEnabled     = YES;   // additive ONE/ONE, both channels
+        d.colorAttachments[0].rgbBlendOperation   = MTLBlendOperationAdd;
+        d.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+        d.colorAttachments[0].sourceRGBBlendFactor        = MTLBlendFactorOne;
+        d.colorAttachments[0].destinationRGBBlendFactor   = MTLBlendFactorOne;
+        d.colorAttachments[0].sourceAlphaBlendFactor      = MTLBlendFactorOne;
+        d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+        points_pipeline_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
+        return points_pipeline_ != nil;
     }
 
     // M2b (spec §4): GPU-order this texture's update after the producer
@@ -341,13 +613,16 @@ private:
         }
     }
 
-    // f32 + LUT -> runtime-compiled compute shader. Records "compute".
-    bool colormap_compute(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
-                          const CaliperTensor& t, const uint32_t* lut256,
-                          float vmin, float vmax) {
+    // f32 + LUT -> runtime-compiled compute shader. Sources from src at
+    // src_offset bytes (0 on the direct path). Records "compute" (direct) or
+    // "compute-imported" (v1.2 imported path).
+    bool colormap_compute_from(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
+                               uint64_t src_offset, const CaliperTensor& t,
+                               const uint32_t* lut256, float vmin, float vmax,
+                               bool imported) {
         if (!ensure_pipeline()) return false;
-        if (src.length < tensor_extent_bytes(t, sizeof(float)))
-            return false;   // buffer too short for the declared extent
+        if (tensor_extent_bytes(t, sizeof(float)) > src.length - src_offset)
+            return false;   // buffer too short for the declared extent at offset
 
         CmapParams p{};
         p.w = (uint32_t)dst.width;
@@ -367,7 +642,7 @@ private:
         if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);
         id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
         [enc setComputePipelineState:cmap_pipeline_];
-        [enc setBuffer:src offset:0 atIndex:0];
+        [enc setBuffer:src offset:(NSUInteger)src_offset atIndex:0];
         [enc setBuffer:lutbuf offset:0 atIndex:1];
         [enc setBytes:&p length:sizeof(p) atIndex:2];
         [enc setTexture:dst atIndex:0];
@@ -383,26 +658,29 @@ private:
         // retire the queue themselves (debug_readback_rgba8).
         [cb commit];
 
-        last_device_path_ = "compute";
+        last_device_path_ = imported ? "compute-imported" : "compute";
         return true;
     }
 
-    // u8 HWC (RGBA8) -> blit straight into the texture. Records "blit".
-    bool blit_u8(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src, const CaliperTensor& t) {
+    // u8 HWC (RGBA8) -> blit straight into the texture. Sources from src at
+    // src_offset bytes (0 on the direct path). Records "blit" (direct) or
+    // "blit-imported" (v1.2 imported path).
+    bool blit_u8_from(uint64_t tex, id<MTLTexture> dst, id<MTLBuffer> src,
+                      uint64_t src_offset, const CaliperTensor& t, bool imported) {
         if (t.ndim < 2) return false;
         NSUInteger h = (NSUInteger)t.shape[0];
         NSUInteger w = (NSUInteger)t.shape[1];
         NSUInteger c = (t.ndim >= 3) ? (NSUInteger)t.shape[2] : 1;
         if (c != 4 || w != dst.width || h != dst.height) return false;  // RGBA8 only
-        if (src.length < tensor_extent_bytes(t, 1))
-            return false;   // buffer too short for the declared extent
+        if (tensor_extent_bytes(t, 1) > src.length - src_offset)
+            return false;   // buffer too short for the declared extent at offset
 
         NSUInteger bytesPerRow = w * 4;
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
         if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         [blit copyFromBuffer:src
-                sourceOffset:0
+                sourceOffset:(NSUInteger)src_offset
            sourceBytesPerRow:bytesPerRow
          sourceBytesPerImage:bytesPerRow * h
                   sourceSize:MTLSizeMake(w, h, 1)
@@ -413,7 +691,7 @@ private:
         [blit endEncoding];
         [cb commit];   // no CPU wait (M1/D23): same-queue commit order + retention
 
-        last_device_path_ = "blit";
+        last_device_path_ = imported ? "blit-imported" : "blit";
         return true;
     }
 
@@ -423,6 +701,7 @@ private:
     CAMetalLayer*               layer_  = nil;
     MTLRenderPassDescriptor*    pass_desc_ = nil;
     id<MTLComputePipelineState> cmap_pipeline_ = nil;
+    id<MTLRenderPipelineState>  points_pipeline_ = nil;  // caliper.geometry.v1 point pass
 
     // Per-frame transients created in new_frame(), consumed in render().
     id<CAMetalDrawable>          drawable_  = nil;
@@ -436,6 +715,11 @@ private:
     // texture monotonic timeline, the Metal analog of Vulkan's semaphores.
     NSMutableDictionary<NSNumber*, id<MTLSharedEvent>>* events_ = nil;
     std::unordered_map<uint64_t, uint64_t> event_values_;
+
+    // v1.2 imported allocations: in-process MTLBuffers, strong-retained (ARC) —
+    // the Metal analog of Vulkan's DuplicateHandle+VkImportMemory. 0 invalid.
+    std::unordered_map<uint64_t, id<MTLBuffer>> imported_;
+    uint64_t next_import_id_ = 1;
 
     uint64_t next_id_ = 1;          // 0 is the invalid id
     const char* last_device_path_ = "";

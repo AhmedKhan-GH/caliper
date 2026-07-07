@@ -118,6 +118,9 @@ TEST_CASE("tensor_bridge v1_2 is prefix-identical to v1_1 (additive, D24 pattern
           offsetof(CaliperTensorBridgeV1_2, update_texture_from_alloc) + sizeof(void*));
     CHECK(CALIPER_BRIDGE_CAP_IMPORT_ALLOC == (1u << 1));
     CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1_2) == "caliper.tensor_bridge.v1_2");
+    // Additive v1.2 handle kind: an in-process id<MTLBuffer> (Apple). Value is
+    // frozen — 1=win32, 2=fd, 3=mtlbuffer; renumbering breaks shipped applets.
+    static_assert(CALIPER_ALLOC_HANDLE_MTLBUFFER == 3u, "frozen handle kind");
 }
 
 TEST_CASE("geometry v1 layout is frozen (new service, D24 pattern)") {

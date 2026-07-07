@@ -286,6 +286,7 @@ worst case is a working slow path, never a broken one.
 | Path | Data crossings | Status |
 |---|---|---|
 | Metal / MPS (Apple Silicon) | 0 host copies; 1 on-GPU blit | **Implemented + pixel-exact tested** |
+| Metal / MPS (Apple Silicon), imported allocation (bridge v1.2) | 0 host copies; **0 in-VRAM copies** (in-process `id<MTLBuffer>` import; geometry.v1 points + imported-texture updates read it directly) | **Implemented + byte-exact verified on Apple Silicon** |
 | Vulkan / CUDA (Windows), arbitrary tensor | 0 host copies; 1 in-VRAM copy | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), `alloc_shared` | 0 host copies; **0 in-VRAM copies** (kernels write texture-backed VRAM in place) | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), exportable-pool tensor | 0 host copies; **0 in-VRAM copies** (bridge imports the pool block once; the pass reads it at byte offset) | **Implemented + hardware-verified on NVIDIA** |
@@ -314,3 +315,19 @@ foreign allocator) keeps the 1-copy floor. Every miss — no cap bit, import
 declined, misaligned offset, out-of-bounds window, released allocation —
 returns `false` and the caller falls back to the copying path; a failed
 import is never a crash or a wrong image.
+
+**Metal joins the same floor.** Handle kind 3 (`CALIPER_ALLOC_HANDLE_MTLBUFFER`,
+bridge v1.2) carries an in-process `id<MTLBuffer>` — no OS handle, no driver
+export, because unified memory means the pointer already *is* the resource.
+The Metal renderer's `import_allocation` keeps the ARC strong ref as the dup,
+matches the device by `registryID`, and declines short buffers;
+`update_texture_from_alloc` colormaps/blits directly from the imported
+buffer at a byte offset, same contract as Vulkan. The geometry.v1 point
+pipeline rides the same import path — vertex-pulled straight from the
+buffer, byte-exact against the CPU reference in `caliper_gfx_tests` on real
+Apple Silicon hardware. `ExportablePool`'s MPS variant makes applet tensors
+eligible without an allocator change: its `to_bridge()` imports the tensor's
+own storage buffer in-process. flow_scope's worker gate now reads
+CUDA-or-MPS and is live-verified end to end on Metal ("flow-scope: zero-copy
+pool ready (mps)"). The in-VRAM-copy floor is therefore per-allocation-origin
+on **both** GPU platforms now, not just Vulkan/CUDA.

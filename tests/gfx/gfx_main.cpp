@@ -744,6 +744,236 @@ TEST_CASE("gfx/Metal: bridge id is the ImGui handle and survives the real ImGui 
         bk.bridge->release_texture(tex_id);
     }
 }
+
+// ---- v1.2 imported-allocation rows (Metal: in-process MTLBuffer import) ----
+
+// Import an in-process MTLBuffer and colormap a texture straight from a NONZERO
+// byte offset inside it — no CPU copy of the tensor data. Byte-exact vs the same
+// CPU reference the staged path uses. Then a released alloc must refuse.
+TEST_CASE("gfx/Metal: import in-process MTLBuffer, colormap from a nonzero offset, byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) != 0);
+
+    // 4×4 f32 ramp at byte offset 256 inside a 4096-byte buffer.
+    const int W = 4, H = 4;
+    const uint64_t off = 256;
+    std::vector<uint8_t> bytes(4096, 0);
+    float ramp[W * H];
+    for (int i = 0; i < W * H; ++i) ramp[i] = (float)i / (float)(W * H - 1);
+    std::memcpy(bytes.data() + off, ramp, sizeof(ramp));
+    id<MTLBuffer> buf = device_buffer(bytes.data(), bytes.size());
+    bool buf_live = (buf != nil);   // keep the ObjC ptr out of doctest decomposition
+    REQUIRE(buf_live);
+
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        (__bridge void*)buf, bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(alloc != 0);
+
+    // Create the W×H viridis texture the house way: a seed CPU tensor pins the
+    // colormap/vmin/vmax (0..1) that the imported update reuses (§ update_alloc).
+    std::vector<float> seed((size_t)W * H, 0.0f);
+    CaliperTensor seed_t = f32_2d(seed.data(), H, W);
+    CaliperTextureId tex = bk.bridge->texture_from_tensor_mapped(
+        &seed_t, CALIPER_CMAP_VIRIDIS, 0.0f, 1.0f, 0);
+    REQUIRE(tex != 0);
+
+    CaliperTensor d{};
+    d.struct_size = sizeof(CaliperTensor);
+    d.dtype = CALIPER_DT_F32; d.ndim = 2;
+    d.shape[0] = H; d.shape[1] = W; d.strides[0] = W; d.strides[1] = 1;
+    d.device = CALIPER_DEV_METAL;    // data/stream stay null: alloc+offset IS the address
+    REQUIRE(bk.bridge->update_texture_from_alloc(tex, alloc, off, &d));
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute-imported");
+
+    // Byte-exact vs the identical CPU reference the staged path uses (vmin=0, vmax=1).
+    std::vector<uint8_t> ref((size_t)W * H * 4);
+    map_f32_to_rgba8(ramp, W, H, colormap_lut(CALIPER_CMAP_VIRIDIS), 0.0f, 1.0f, ref.data());
+    CHECK(bk.readback(tex, W, H) == ref);
+
+    bk.bridge->release_allocation(alloc);
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(tex, alloc, off, &d));  // released → refuses
+    bk.bridge->release_texture(tex);
+}
+
+// Import gates fail closed: wrong handle kind, null handle, zero size, and a
+// size overclaim (buf shorter than declared) all return 0; an OOB offset on a
+// valid import refuses and leaves pixels untouched.
+TEST_CASE("gfx/Metal: import gates fail closed") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    std::vector<uint8_t> z(1024, 0);
+    id<MTLBuffer> buf = device_buffer(z.data(), z.size());
+
+    // wrong handle kind / null handle / zero size / size overclaim
+    CHECK(bk.bridge->import_allocation((__bridge void*)buf, 1024,
+                                       CALIPER_ALLOC_HANDLE_OPAQUE_FD) == 0);
+    CHECK(bk.bridge->import_allocation(nullptr, 1024,
+                                       CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);
+    CHECK(bk.bridge->import_allocation((__bridge void*)buf, 0,
+                                       CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);
+    CHECK(bk.bridge->import_allocation((__bridge void*)buf, 4096,
+                                       CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);  // buf.length is 1024
+
+    // OOB offset on a valid import refuses and leaves pixels untouched
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        (__bridge void*)buf, 1024, CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(alloc != 0);
+    std::vector<float> seed(16, 0.0f);
+    CaliperTensor seed_t = f32_2d(seed.data(), 4, 4);
+    CaliperTextureId tex = bk.bridge->texture_from_tensor_mapped(
+        &seed_t, CALIPER_CMAP_VIRIDIS, 0.0f, 1.0f, 0);
+    REQUIRE(tex != 0);
+    CaliperTensor d{};
+    d.struct_size = sizeof(CaliperTensor);
+    d.dtype = CALIPER_DT_F32; d.ndim = 2;
+    d.shape[0] = 4; d.shape[1] = 4; d.strides[0] = 4; d.strides[1] = 1;
+    d.device = CALIPER_DEV_METAL;
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(tex, alloc, 1024, &d));   // offset==length
+    CHECK_FALSE(bk.bridge->update_texture_from_alloc(tex, alloc, 1000, &d));   // extent past end
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->release_texture(tex);
+}
+
+// ---- caliper.geometry.v1 rows (Metal): byte-exact mirror of the Vulkan cases,
+// alloc source = in-process shared MTLBuffer instead of CUDA VMM. The three
+// helpers below are duplicated verbatim from the Vulkan section (compiled out
+// on Mac) — same NDC mapping / identity camera / CPU reference image. ----
+namespace {
+
+// NDC position whose 1-px point covers exactly pixel (px,py) of a WxH view
+// under the backend's GL-style (+y up) mapping.
+void ndc_for_pixel(int px, int py, int w, int h, float* out3) {
+    out3[0] = 2.0f * ((float)px + 0.5f) / (float)w - 1.0f;
+    out3[1] = 1.0f - 2.0f * ((float)py + 0.5f) / (float)h;
+    out3[2] = 0.0f;
+}
+
+CaliperGeomCamera identity_cam() {
+    CaliperGeomCamera c{};
+    for (int i = 0; i < 4; ++i) { c.view[i * 4 + i] = 1.f; c.proj[i * 4 + i] = 1.f; }
+    return c;
+}
+
+// Expected image: clear color everywhere, LUT/flat color at the given pixels.
+std::vector<uint8_t> geom_ref(int w, int h, uint32_t clear_rgba,
+                              const std::vector<std::pair<int,int>>& px,
+                              const std::vector<uint32_t>& color_rgba) {
+    std::vector<uint8_t> ref((size_t)w * h * 4);
+    for (int i = 0; i < w * h; ++i) {
+        ref[(size_t)i * 4 + 0] = (uint8_t)(clear_rgba         & 0xFF);
+        ref[(size_t)i * 4 + 1] = (uint8_t)((clear_rgba >> 8)  & 0xFF);
+        ref[(size_t)i * 4 + 2] = (uint8_t)((clear_rgba >> 16) & 0xFF);
+        ref[(size_t)i * 4 + 3] = (uint8_t)((clear_rgba >> 24) & 0xFF);
+    }
+    for (size_t k = 0; k < px.size(); ++k) {
+        const size_t at = ((size_t)px[k].second * w + px[k].first) * 4;
+        ref[at + 0] = (uint8_t)(color_rgba[k]         & 0xFF);
+        ref[at + 1] = (uint8_t)((color_rgba[k] >> 8)  & 0xFF);
+        ref[at + 2] = (uint8_t)((color_rgba[k] >> 16) & 0xFF);
+        ref[at + 3] = (uint8_t)((color_rgba[k] >> 24) & 0xFF);
+    }
+    return ref;
+}
+
+}  // namespace
+
+TEST_CASE("gfx/metal geometry: imported points byte-exact — colormap extremes at a nonzero offset") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS));
+
+    const int W = 64, H = 64;
+    const uint64_t pos_off = 512, attr_off = 2048;
+    const std::vector<std::pair<int,int>> px = {{3, 5}, {40, 22}, {63, 63}};
+    const float attrs[3] = {0.0f, 1.0f, 0.5f};      // LUT[0], LUT[255], LUT[128]
+
+    std::vector<uint8_t> bytes(4096, 0);
+    float pos[9];
+    for (int i = 0; i < 3; ++i) ndc_for_pixel(px[i].first, px[i].second, W, H, &pos[i*3]);
+    std::memcpy(bytes.data() + pos_off,  pos,   sizeof(pos));
+    std::memcpy(bytes.data() + attr_off, attrs, sizeof(attrs));
+    id<MTLBuffer> buf = device_buffer(bytes.data(), bytes.size());
+    REQUIRE((buf != nil));
+
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        (__bridge void*)buf, bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(alloc != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view(W, H);
+    REQUIRE(view != 0);
+
+    CaliperGeomCamera cam = identity_cam();
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, alloc, pos_off, 3,
+                                        alloc, attr_off, CALIPER_CMAP_VIRIDIS,
+                                        0.f, 1.f, 1.f, 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "points-imported");
+
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+    auto ref = geom_ref(W, H, 0xFF000000u, px, {lut[0], lut[255], lut[128]});
+    auto got = bk.readback(view, W, H);
+    REQUIRE(got.size() == ref.size());
+    for (size_t i = 0; i < got.size(); ++i)
+        if (got[i] != ref[i]) { FAIL("first diff at byte ", i, ": got ", (int)got[i], " ref ", (int)ref[i]); }
+    CHECK(got == ref);
+
+    // flat-white path: attr_alloc = 0
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, alloc, pos_off, 3,
+                                        0, 0, CALIPER_CMAP_VIRIDIS,
+                                        0.f, 1.f, 1.f, 0xFF000000u));
+    auto ref2 = geom_ref(W, H, 0xFF000000u, px,
+                         {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu});
+    CHECK(bk.readback(view, W, H) == ref2);
+    bk.bridge->release_allocation(alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+TEST_CASE("gfx/metal geometry: count 0 clears; gates keep prior pixels; released refuses") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    if ((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS) == 0) return;
+
+    const int W = 32, H = 32;
+    CaliperTextureId view = bk.bridge->geom_create_view(W, H);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    // count==0 = pure clear (teal), alloc ids 0
+    const uint32_t teal = 10u | (20u << 8) | (30u << 16) | (255u << 24);
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, 0, 0, 0, 0, 0,
+                                        CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, teal));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, teal, {}, {}));
+
+    // one real point, then assert every gate refuses AND pixels stay put
+    std::vector<uint8_t> bytes(1024, 0);
+    float p3[3]; ndc_for_pixel(7, 9, W, H, p3);
+    std::memcpy(bytes.data(), p3, sizeof(p3));
+    id<MTLBuffer> buf = device_buffer(bytes.data(), bytes.size());
+    CaliperAllocId alloc = bk.bridge->import_allocation(
+        (__bridge void*)buf, bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(alloc != 0);
+    REQUIRE(bk.bridge->geom_draw_points(view, &cam, alloc, 0, 1, 0, 0,
+                                        CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));
+    auto snap = bk.readback(view, W, H);
+    std::string path = bk.renderer->last_device_path();
+
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, alloc, 2, 1, 0, 0,
+                CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));      // misaligned
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, alloc, 0, 1024/12 + 1, 0, 0,
+                CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));      // OOB count
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, 999, 0, 1, 0, 0,
+                CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));      // unknown alloc
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, nullptr, alloc, 0, 1, 0, 0,
+                CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));      // null cam
+    CHECK(bk.readback(view, W, H) == snap);
+    CHECK(std::string(bk.renderer->last_device_path()) == path);
+
+    bk.bridge->release_allocation(alloc);
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, alloc, 0, 1, 0, 0,
+                CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));      // released alloc
+    bk.bridge->geom_release_view(view);
+    CHECK_FALSE(bk.bridge->geom_draw_points(view, &cam, 0, 0, 0, 0, 0,
+                CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 1.f, 0xFF000000u));      // released view
+}
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================

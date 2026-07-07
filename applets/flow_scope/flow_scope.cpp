@@ -198,17 +198,40 @@ void sim_step(FlowScopeState* st, torch::Tensor& p_in, torch::Tensor& p_out,
 void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
     torch::NoGradGuard ng;
     const bool cuda = torch::cuda::is_available();
+#if defined(__APPLE__)
+    const bool mps  = !cuda && torch::mps::is_available();
+#else
+    const bool mps  = false;
+#endif
+    const bool gpu  = cuda || mps;
     const torch::Device dev = cuda ? torch::Device(torch::kCUDA)
+                            : mps  ? torch::Device(torch::kMPS)
                                    : torch::Device(torch::kCPU);
-    const int64_t N = cuda ? 1'000'000 : 50'000;
+    const int64_t N = gpu ? 1'000'000 : 50'000;
 
-    // Zero-copy opt-in, decided once: geometry caps + import caps + CUDA.
+    // Zero-copy opt-in, decided once: geometry caps + import caps + a GPU
+    // device (CUDA or MPS). The MPS variant of ExportablePool shares CUDA's
+    // public surface and ignores the ordinal.
     std::unique_ptr<caliper::adapters::ExportablePool> pool;
-    if (cuda && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS)) {
+    if (gpu && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS)) {
         try {
             auto p = std::make_unique<caliper::adapters::ExportablePool>(0);
             if (p->ok()) pool = std::move(p);
         } catch (...) { /* pool absent -> fallback path, never a crash */ }
+    }
+
+    // Honest, greppable provenance mirroring the status line — logged once at
+    // worker start so the chosen path is verifiable without an ImGui overlay.
+    if (st->host) {
+        if (pool)
+            st->host->log_info(cuda ? "flow-scope: zero-copy pool ready (cuda)"
+                                    : "flow-scope: zero-copy pool ready (mps)");
+        else
+            st->host->log_info(
+                !gpu ? "flow-scope: fallback (torch CPU)"
+                     : !(st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS)
+                           ? "flow-scope: fallback (no geometry service)"
+                           : "flow-scope: fallback (pool unavailable)");
     }
 
     // Slot tensors: inside the pool scope when we have one (they are ALL the
@@ -232,7 +255,7 @@ void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
         st->pool = std::move(pool);
         for (int i = 0; i < kSlots; ++i) { st->pos[i] = pos[i]; st->speed[i] = speed[i]; }
         st->n_particles = N;
-        st->sim_on_cuda = cuda;
+        st->sim_on_cuda = gpu;
         st->ready_slot  = 0;
     }
 
@@ -254,7 +277,13 @@ void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
             read = st->ready_slot;
         }
         sim_step(st, pos[read], pos[write], speed[write], vel, t);
-        if (cuda) torch::cuda::synchronize();   // writes done BEFORE publish
+        if (cuda) torch::cuda::synchronize();     // writes done BEFORE publish
+#if defined(__APPLE__)
+        else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
+        // serialized on torch's MPS stream queue — a bare synchronize() races
+        // any other applet's encodes (see torch.hpp:70-111); full drain keeps
+        // the renderer's imported-points read ordered without events.
+#endif
         t += kDt;
         ++steps;
         ++rate_steps;
@@ -400,18 +429,35 @@ void FlowScopeApplet::draw_ui() {
     const bool geom_live =
         st->geometry && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS);
 
-    // Size the offscreen view to the content region; recreate on real change
-    // (a few-px threshold avoids reallocating on sub-pixel jitter). Clamp to a
-    // sane range so a collapsed/huge dock node can't ask for a degenerate RT.
+    // Size the offscreen view to the content region IN PHYSICAL PIXELS:
+    // avail is logical points, but the swapchain renders at framebuffer scale
+    // (2x on Retina) — a view allocated at logical size gets stretched 2x by
+    // ImGui::Image and reads soft next to the native-res UI. Recreate on real
+    // change (a few-px threshold avoids reallocating on sub-pixel jitter).
+    // Clamp to a sane range so a collapsed/huge dock node can't ask for a
+    // degenerate RT.
+    const float fb_scale = ImGui::GetIO().DisplayFramebufferScale.y > 0.f
+                               ? ImGui::GetIO().DisplayFramebufferScale.y : 1.f;
     auto clampi = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
-    const int dw = clampi((int)avail.x, 64, 4096);
-    const int dh = clampi((int)avail.y, 64, 4096);
+    const int dw = clampi((int)(avail.x * fb_scale), 64, 4096);
+    const int dh = clampi((int)(avail.y * fb_scale), 64, 4096);
     if (geom_live && avail.x >= 64 && avail.y >= 64 &&
         (st->view == 0 || std::abs(dw - st->view_w) >= 3 ||
          std::abs(dh - st->view_h) >= 3)) {
         if (st->view != 0) st->geometry.release_view(st->view);
         st->view = st->geometry.create_view((uint32_t)dw, (uint32_t)dh);
         st->view_w = dw; st->view_h = dh;
+        if (st->host) {
+            // One line per recreate: the DPI facts a crispness bug hides in
+            // (scale seen, logical avail, physical RT size, clamp hit or not).
+            char dbg[160];
+            std::snprintf(dbg, sizeof(dbg),
+                "flow-scope: view %dx%d px (fb_scale %.2f, avail %.1fx%.1f, "
+                "clamped %s)", dw, dh, fb_scale, avail.x, avail.y,
+                (dw != (int)(avail.x * fb_scale) || dh != (int)(avail.y * fb_scale))
+                    ? "YES" : "no");
+            st->host->log_info(dbg);
+        }
     }
 
     st->zero_copy_frame = false;
@@ -435,17 +481,22 @@ void FlowScopeApplet::draw_ui() {
             // particles stay visible; faster particles climb to the bright
             // end. Purely the mapping window — no shader/ABI change.
             const float vmin = -0.33f * st->color_vmax;
+            // size_px is in view (physical) pixels: scale with the view so
+            // points keep the same apparent thickness on HiDPI displays.
             st->zero_copy_frame = st->geometry.draw_points(
                 st->view, &cam, pref->alloc, pref->offset, (uint64_t)n,
                 sref->alloc, sref->offset, CALIPER_CMAP_MAGMA, vmin,
-                st->color_vmax, 1.5f, 0xFF000000u);
+                st->color_vmax, 1.5f * fb_scale, 0xFF000000u);
         }
     }
 
     if (st->zero_copy_frame) {
         // Fill the region with the offscreen view; interaction rides the image.
+        // The view texture is PHYSICAL pixels — display at logical size so it
+        // maps 1 texel : 1 framebuffer pixel instead of being stretched.
         ImGui::Image(caliper::Bridge::imtex(st->view),
-                     ImVec2((float)st->view_w, (float)st->view_h));
+                     ImVec2((float)st->view_w / fb_scale,
+                            (float)st->view_h / fb_scale));
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 mn = ImGui::GetItemRectMin();
         const ImVec2 sz = ImGui::GetItemRectSize();

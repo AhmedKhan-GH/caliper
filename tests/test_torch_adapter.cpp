@@ -306,6 +306,40 @@ TEST_CASE("exportable pool: allocations are pool-backed, registry-resolvable, "
 #endif
 }
 
+TEST_CASE("mps exportable pool: storage_ref extracts (buffer, size, offset) "
+          "from tensor storage" * doctest::skip(!torch::mps::is_available())) {
+#if defined(__APPLE__)
+    caliper::adapters::ExportablePool pool(0);
+    REQUIRE(pool.ok());
+
+    auto t = torch::rand({17, 9}, torch::TensorOptions()
+                                      .device(torch::kMPS).dtype(torch::kFloat32));
+    auto ref = caliper::adapters::ExportablePool::storage_ref(t);
+    REQUIRE(ref.has_value());
+    CHECK(ref->buffer == t.storage().mutable_data());   // the id<MTLBuffer> bridge pointer
+    CHECK(ref->size >= (uint64_t)t.numel() * sizeof(float));
+    CHECK(ref->offset == 0);
+
+    // a slice that shares storage carries its byte offset — this is exactly
+    // what the (alloc, offset) addressing fixes vs the offset-rejecting v1 path
+    auto view = t.reshape({17 * 9}).slice(0, 9, 18);    // storage_offset 9 elements
+    auto vref = caliper::adapters::ExportablePool::storage_ref(view);
+    REQUIRE(vref.has_value());
+    CHECK(vref->buffer == ref->buffer);
+    CHECK(vref->offset == 9 * sizeof(float));
+
+    // rejections: CPU tensor, non-contiguous
+    CHECK_FALSE(caliper::adapters::ExportablePool::storage_ref(
+        torch::rand({4, 4})).has_value());
+    CHECK_FALSE(caliper::adapters::ExportablePool::storage_ref(
+        t.transpose(0, 1)).has_value());
+
+    // to_bridge against a null (default) Bridge declines without crashing
+    caliper::Bridge nobridge{};
+    CHECK_FALSE(pool.to_bridge(nobridge, t).has_value());
+#endif
+}
+
 TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training thread") {
     if (!torch::cuda::is_available()) { MESSAGE("no CUDA device — skipping"); return; }
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
