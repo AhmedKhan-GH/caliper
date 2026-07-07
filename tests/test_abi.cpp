@@ -8,6 +8,7 @@
 #include <caliper/services/metrics_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
+#include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <cstddef>
@@ -84,6 +85,27 @@ TEST_CASE("tensor_bridge v1_1 is an additive, prefix-compatible superset of v1 (
     // Plus exactly one query at the end.
     CHECK(sizeof(CaliperTensorBridgeV1_1) ==
           offsetof(CaliperTensorBridgeV1_1, caps) + sizeof(void*));
+}
+
+TEST_CASE("tensor_bridge v1_2 is prefix-identical to v1_1 (additive, D24 pattern)") {
+    static_assert(offsetof(CaliperTensorBridgeV1_2, struct_size) ==
+                  offsetof(CaliperTensorBridgeV1_1, struct_size));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, texture_from_tensor) ==
+                  offsetof(CaliperTensorBridgeV1_1, texture_from_tensor));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, update_texture) ==
+                  offsetof(CaliperTensorBridgeV1_1, update_texture));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, release_texture) ==
+                  offsetof(CaliperTensorBridgeV1_1, release_texture));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, texture_from_tensor_mapped) ==
+                  offsetof(CaliperTensorBridgeV1_1, texture_from_tensor_mapped));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, alloc_shared) ==
+                  offsetof(CaliperTensorBridgeV1_1, alloc_shared));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, free_shared) ==
+                  offsetof(CaliperTensorBridgeV1_1, free_shared));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, caps) ==
+                  offsetof(CaliperTensorBridgeV1_1, caps));
+    CHECK(CALIPER_BRIDGE_CAP_IMPORT_ALLOC == (1u << 1));
+    CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1_2) == "caliper.tensor_bridge.v1_2");
 }
 
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);

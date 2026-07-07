@@ -11,6 +11,7 @@
 #include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
+#include <caliper/services/tensor_bridge_v1_2.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -261,7 +262,9 @@ public:
         : t_(static_cast<const CaliperTensorBridgeV1*>(
               host.service(CALIPER_TENSOR_BRIDGE_V1))),
           t11_(static_cast<const CaliperTensorBridgeV1_1*>(
-              host.service(CALIPER_TENSOR_BRIDGE_V1_1))) {}
+              host.service(CALIPER_TENSOR_BRIDGE_V1_1))),
+          t12_(static_cast<const CaliperTensorBridgeV1_2*>(
+              host.service(CALIPER_TENSOR_BRIDGE_V1_2))) {}
     explicit operator bool() const { return t_ && t_->texture_from_tensor; }
     CaliperTextureId texture_from_tensor(const CaliperTensor* t,
                                          uint32_t flags = 0) const {
@@ -296,6 +299,22 @@ public:
     // CALIPER_BRIDGE_CAP_STREAM_ORDERED means a non-NULL CaliperTensor.stream
     // replaces the adapter's device drain.
     uint32_t caps() const { return (t11_ && t11_->caps) ? t11_->caps() : 0u; }
+    // v1.2 imported-allocation ops — inert (0/false/no-op) on a host without
+    // the v1_2 service or the CALIPER_BRIDGE_CAP_IMPORT_ALLOC bit (D24). Hand
+    // import_allocation an OS shareable handle from cuMemExportToShareableHandle;
+    // a 0 return means the applet stays on the v1 D2D-copy path.
+    CaliperAllocId import_allocation(void* h, uint64_t size, uint32_t type) const {
+        return (t12_ && t12_->import_allocation)
+                   ? t12_->import_allocation(h, size, type) : 0;
+    }
+    void release_allocation(CaliperAllocId a) const {
+        if (t12_ && t12_->release_allocation) t12_->release_allocation(a);
+    }
+    bool update_texture_from_alloc(CaliperTextureId tex, CaliperAllocId a,
+                                   uint64_t off, const CaliperTensor* d) const {
+        return (t12_ && t12_->update_texture_from_alloc)
+                   ? t12_->update_texture_from_alloc(tex, a, off, d) : false;
+    }
     // Opaque id -> ImTextureID for ImGui::Image (§5.4: the id's value IS the
     // host's ImGui-compatible handle for this backend; applets never interpret
     // it, they only cast it here).
@@ -303,6 +322,7 @@ public:
 private:
     const CaliperTensorBridgeV1* t_ = nullptr;
     const CaliperTensorBridgeV1_1* t11_ = nullptr;
+    const CaliperTensorBridgeV1_2* t12_ = nullptr;
 };
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't
