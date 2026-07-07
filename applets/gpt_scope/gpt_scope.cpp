@@ -221,6 +221,8 @@ struct GPTScopeState {
     std::atomic<bool>  thoughtspace_wanted{false};  // window drawn this frame
     std::atomic<int>   ts_color_mode{0};            // 0 loss, 1 confidence, 2 depth
     std::atomic<bool>  ts_raw_norms{false};         // show raw residual-norm radius
+    std::atomic<float> ts_color_vmax{3.0f};         // loss-mode window; worker reads
+                                                    // it (gen attr) AND frame does
 
     std::mutex mtx;   // guards everything from here to the frame-thread block
 
@@ -308,7 +310,6 @@ struct GPTScopeState {
     CaliperTextureId ts_view = 0;
     int   ts_view_w = 768, ts_view_h = 768;
     float ts_cam_az = 0.8f, ts_cam_el = 0.4f, ts_cam_dist = 4.5f;
-    float ts_color_vmax = 3.0f;          // loss-mode color window (slider)
     int   ts_point_size = 2;
     bool  ts_zero_copy_frame = false;    // provenance of the current view content
 };
@@ -803,7 +804,8 @@ void publish_thoughtspace(GPTScopeState* st, GPT& model, torch::Device dev,
         if (st->ts_gen_ids.defined() && st->ts_gen_ids.size(1) == T) {
             auto rg = model->forward_resid(st->ts_gen_ids).select(1, 0); // (D,T,C)
             ts::write_gen_positions(pos, rg, st->ts_basis, dm, raw, used_scale);
-            ts::write_gen_attr(attr, dm, mode == 0 ? st->ts_color_vmax : 1.0f);
+            ts::write_gen_attr(attr, dm,
+                               mode == 0 ? st->ts_color_vmax.load() : 1.0f);
             count = dm.n_max();
         }
 
@@ -898,6 +900,9 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         auto rows = starts.unsqueeze(1) + ar.unsqueeze(0);      // (S,T)
         st->ts_probe = val_ids.index({rows}).contiguous();      // (S,T) on dev
     }
+    // Fresh run: drop any prior run's generation thread so the constellation
+    // doesn't draw a stale white-hot thread until this run's first sample.
+    st->ts_gen_ids = torch::Tensor();
 
     auto get_batch = [&](const torch::Tensor& data) {
         const int64_t len = data.size(0);
@@ -1607,7 +1612,9 @@ void GPTScopeApplet::draw_ui() {
                     st->ts_color_mode.store(mode);
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(110);
-                ImGui::SliderFloat("vmax", &st->ts_color_vmax, 0.5f, 8.f);
+                float vmx = st->ts_color_vmax.load();
+                if (ImGui::SliderFloat("vmax", &vmx, 0.5f, 8.f))
+                    st->ts_color_vmax.store(vmx);
                 ImGui::SameLine();
                 bool raw = st->ts_raw_norms.load();
                 if (ImGui::Checkbox("raw norms", &raw)) st->ts_raw_norms.store(raw);
@@ -1621,11 +1628,14 @@ void GPTScopeApplet::draw_ui() {
                     ImGui::TextColored({0.55f, 0.9f, 0.6f, 1.f},
                         "%lld thought-points — zero-copy (imported geometry)",
                         (long long)ts_count);
+                else if (!ts_sx.empty())   // fallback is actively rendering
+                    ImGui::TextColored({1.f, 0.7f, 0.4f, 1.f},
+                        "%d residual stations — CPU fallback (%s)",
+                        (int)ts_sx.size(),
+                        !st->geom_caps ? "no geometry service" : "pool unavailable");
                 else
                     ImGui::TextColored({1.f, 0.7f, 0.4f, 1.f},
-                        "%s",
-                        !st->geom_caps ? "no geometry service — CPU fallback"
-                                       : "waiting for the first probe…");
+                        "%s", "waiting for the first probe…");
             }
             ImGui::EndChild();
 
@@ -1661,7 +1671,7 @@ void GPTScopeApplet::draw_ui() {
                 // low end off the LUT's black so still points stay visible).
                 const int m = st->ts_color_mode.load();
                 int cmap; float vmax;
-                if (m == 0)      { cmap = CALIPER_CMAP_MAGMA;   vmax = st->ts_color_vmax; }
+                if (m == 0)      { cmap = CALIPER_CMAP_MAGMA;   vmax = st->ts_color_vmax.load(); }
                 else if (m == 1) { cmap = CALIPER_CMAP_VIRIDIS; vmax = 1.0f; }
                 else             { cmap = CALIPER_CMAP_MAGMA;   vmax = 1.0f; }
                 const float vmin = -0.33f * vmax;
