@@ -278,8 +278,25 @@ public:
                 static_cast<c10::DeviceIndex>(device_), pool_->id());
         }
         std::lock_guard<std::mutex> lock(mu_);
-        for (auto& [ptr, blk] : blocks_) reclaim(blk);
+        // The destructor is a frame-thread call site, so bridge releases are
+        // legal here: drain whatever the allocator callbacks queued, then
+        // release the import of every block torch still holds before
+        // reclaiming it. Whether releasePool freed cached segments
+        // synchronously (through free_block) is a torch internal this code
+        // deliberately does not depend on — both orders end fully released.
+        if (import_bridge_) {
+            for (CaliperAllocId id : pending_releases_)
+                import_bridge_->release_allocation(id);
+        }
+        pending_releases_.clear();
+        for (auto& [base, blk] : blocks_) {
+            if (auto ci = import_cache_.find(base); ci != import_cache_.end() &&
+                ci->second != 0 && import_bridge_)
+                import_bridge_->release_allocation(ci->second);
+            reclaim(blk);
+        }
         blocks_.clear();
+        import_cache_.clear();
     }
 
     ExportablePool(const ExportablePool&)            = delete;
@@ -414,8 +431,11 @@ private:
     }
 
     // Pluggable-allocator free fn: reverse of alloc_block. Deregisters from the
-    // AllocRegistry, releases any host import of this block, then reclaims the
-    // driver resources and closes the shareable handle.
+    // AllocRegistry, QUEUES the host-import release, then reclaims the driver
+    // resources and closes the shareable handle. Queued, not called: torch may
+    // invoke this callback from any thread, and the Bridge is frame-thread-only
+    // by contract — the queue drains in to_bridge()/~ExportablePool, both
+    // applet frame-thread call sites.
     void free_block(void* ptr) {
         const uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
         std::lock_guard<std::mutex> lock(mu_);
@@ -425,8 +445,8 @@ private:
         blocks_.erase(it);
         registry_.remove(base);
         if (auto ci = import_cache_.find(base); ci != import_cache_.end()) {
-            if (ci->second != 0 && import_bridge_)
-                import_bridge_->release_allocation(ci->second);
+            if (ci->second != 0)
+                pending_releases_.push_back(ci->second);
             import_cache_.erase(ci);              // clear the per-base cache
         }
         reclaim(b);
@@ -443,6 +463,7 @@ private:
     std::mutex                         mu_;      // guards the maps below
     std::map<uintptr_t, Block>         blocks_;
     std::map<uintptr_t, CaliperAllocId> import_cache_;  // base -> id (0 = negative)
+    std::vector<CaliperAllocId>        pending_releases_;  // freed off-thread
     caliper::Bridge*                   import_bridge_ = nullptr;
 };
 
@@ -458,7 +479,14 @@ ExportablePool::to_bridge(caliper::Bridge& bridge, const at::Tensor& t) {
     if (!hit) return std::nullopt;               // tensor is not pool-backed
 
     std::lock_guard<std::mutex> lock(mu_);
-    import_bridge_ = &bridge;                     // remembered so free can release
+    import_bridge_ = &bridge;                     // remembered for the drains
+    // Frame-thread call site: drain releases queued by off-thread frees.
+    for (CaliperAllocId id : pending_releases_) bridge.release_allocation(id);
+    pending_releases_.clear();
+    // Re-validate under mu_: a free_block between registry_.find and here
+    // means the handle is gone — and a FUTURE block may reuse this base, so
+    // caching a negative for it would silently disable zero-copy forever.
+    if (blocks_.find(hit->base) == blocks_.end()) return std::nullopt;
     auto it = import_cache_.find(hit->base);
     if (it == import_cache_.end()) {
         // Import once per block. 0 = host declined; cache it as a permanent

@@ -1186,7 +1186,10 @@ TEST_CASE("gfx/Vulkan+CUDA: imported allocation f32 byte-exact at offsets 0 and 
 
 // Row 2 — misaligned f32 offset (4 violates minStorageBufferOffsetAlignment):
 // update returns false, the texture keeps its prior pixels, and the device-path
-// telemetry is untouched. Fallback, never a wrong image.
+// telemetry is untouched. Fallback, never a wrong image. (Assumes the limit is
+// > 4 — 16+ on NVIDIA, and these rows are UUID-gated to NVIDIA hardware; if
+// the gate ever widens to an ICD with limit <= 4, this row would need a
+// different misaligned offset.)
 TEST_CASE("gfx/Vulkan+CUDA: imported f32 misaligned offset falls back, pixels unchanged") {
     if (!vmm_rows_ready()) return;
     Backend bk = vk_backend();

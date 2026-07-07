@@ -456,11 +456,16 @@ void publish_probe(GPTScopeState* st, GPT& model, const torch::Tensor& probe_tok
         st->pool_tried = true;
         if ((st->bridge_caps & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) &&
             torch::cuda::is_available()) {
-            auto p = std::make_unique<caliper::adapters::ExportablePool>(
-                (int)probe_tok.device().index());
-            if (p->ok()) {
-                std::lock_guard<std::mutex> lk(st->mtx);
-                st->pool = std::move(p);
+            try {
+                auto p = std::make_unique<caliper::adapters::ExportablePool>(
+                    (int)probe_tok.device().index());
+                if (p->ok()) {
+                    std::lock_guard<std::mutex> lk(st->mtx);
+                    st->pool = std::move(p);
+                }
+            } catch (...) {
+                // c10 init can throw; a pool that failed to exist is just the
+                // v1 path — never a crash.
             }
         }
     }
@@ -1409,7 +1414,17 @@ void GPTScopeApplet::cleanup() {
         st->attn_all.clear();
         st->attn_blocks.clear();
     }
-    st->pool.reset();
+    if (st->job_id != 0 && st->jobs.is_running(st->job_id)) {
+        // Worker outlived the cancel grace above: destroying the pool now
+        // would be a use-after-free under its feet. Leak it deliberately —
+        // a leak at process exit, never a crash.
+        (void)st->pool.release();
+        if (st->host)
+            st->host->log_info("gpt-scope: worker still live at cleanup — "
+                               "exportable pool deliberately leaked");
+    } else {
+        st->pool.reset();
+    }
     curl_global_cleanup();
     if (st->host) st->host->log_info("gpt-scope: on_cleanup");
 }

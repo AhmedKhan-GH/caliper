@@ -104,6 +104,17 @@ TEST_CASE("tensor_bridge v1_2 is prefix-identical to v1_1 (additive, D24 pattern
                   offsetof(CaliperTensorBridgeV1_1, free_shared));
     static_assert(offsetof(CaliperTensorBridgeV1_2, caps) ==
                   offsetof(CaliperTensorBridgeV1_1, caps));
+    // The three v1.2 members follow the shared prefix contiguously — a padding
+    // or reordering surprise in the NEW members would slip past the prefix
+    // checks alone.
+    static_assert(offsetof(CaliperTensorBridgeV1_2, import_allocation) ==
+                  offsetof(CaliperTensorBridgeV1_1, caps) + sizeof(void*));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, release_allocation) ==
+                  offsetof(CaliperTensorBridgeV1_2, import_allocation) + sizeof(void*));
+    static_assert(offsetof(CaliperTensorBridgeV1_2, update_texture_from_alloc) ==
+                  offsetof(CaliperTensorBridgeV1_2, release_allocation) + sizeof(void*));
+    CHECK(sizeof(CaliperTensorBridgeV1_2) ==
+          offsetof(CaliperTensorBridgeV1_2, update_texture_from_alloc) + sizeof(void*));
     CHECK(CALIPER_BRIDGE_CAP_IMPORT_ALLOC == (1u << 1));
     CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1_2) == "caliper.tensor_bridge.v1_2");
 }

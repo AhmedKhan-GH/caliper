@@ -52,7 +52,12 @@ typedef struct CaliperTensorBridgeV1_2 {
      * from tensor bytes living INSIDE an imported allocation at offset_bytes.
      * desc describes shape/dtype/strides/stream; desc->data is IGNORED (the
      * imported allocation + offset are the address). Same acceptance gates
-     * as update_texture; false = not updated, caller falls back. */
+     * as update_texture; false = not updated, caller falls back.
+     * Memory-stability contract: the pass reads the imported bytes IN PLACE,
+     * so [offset_bytes, offset_bytes + extent) must not be rewritten until
+     * the next update of the same texture (or the applet's next frame) —
+     * device-side ordering covers producer writes BEFORE the call, not
+     * writes issued after it. */
     bool (*update_texture_from_alloc)(CaliperTextureId tex, CaliperAllocId alloc,
                                       uint64_t offset_bytes,
                                       const CaliperTensor* desc);

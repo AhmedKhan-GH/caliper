@@ -495,6 +495,20 @@ public:
 
         VkMemoryRequirements mr;
         vkGetBufferMemoryRequirements(device_, a.buf, &mr);
+        if (mr.size > size_bytes) {
+            // Binding a buffer bigger than the imported memory is invalid
+            // usage. Never expected (CUDA granularity is 2 MiB multiples),
+            // but if the padded-size assumption ever breaks, fail closed and
+            // report both sizes — the caller falls back to the copy path.
+            std::fprintf(stderr,
+                         "[vulkan] import: buffer needs %llu bytes > imported "
+                         "%llu — declining import\n",
+                         (unsigned long long)mr.size,
+                         (unsigned long long)size_bytes);
+            vkDestroyBuffer(device_, a.buf, nullptr);
+            CloseHandle(dup);
+            return 0;
+        }
         VkImportMemoryWin32HandleInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
         imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
         imp.handle = dup;
