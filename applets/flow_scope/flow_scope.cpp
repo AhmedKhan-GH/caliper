@@ -25,10 +25,12 @@
 #include <implot3d.h>
 #include <torch/torch.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -128,7 +130,7 @@ struct FlowScopeState {
     CaliperTextureId view = 0;
     int   view_w = 768, view_h = 768;
     float cam_az = 0.8f, cam_el = 0.45f, cam_dist = 4.2f;
-    float color_vmax = 2.5f;
+    float color_vmax = 1.2f;   // hardware-tuned: most of the LUT range lights up
     bool  zero_copy_frame = false;   // provenance of the current view content
     uint64_t frames = 0;
 };
@@ -335,39 +337,73 @@ void FlowScopeApplet::draw_ui() {
         sx = st->sub_x; sy = st->sub_y; sz = st->sub_z;
     }
 
+    // No SetNextWindowSize: this window docks into the host's central node
+    // (main.cpp central_windows list), so it fills the viewport work area.
     ImGui::Begin("FlowScope: Field");
-    ImGui::TextDisabled(
-        "a million particles in a curl field — the sim's pool tensors ARE the "
-        "renderer's point buffers. left-drag: push the field. right-drag: "
-        "orbit. wheel: zoom.");
 
-    // ---- controls ----
-    bool paused = st->paused.load();
-    if (ImGui::Checkbox("pause", &paused)) st->paused.store(paused);
-    ImGui::SameLine();
-    float fs = st->field_strength.load();
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::SliderFloat("field", &fs, 0.f, 2.5f)) st->field_strength.store(fs);
-    ImGui::SameLine();
-    float ns = st->noise_scale.load();
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::SliderFloat("scale", &ns, 0.5f, 6.f)) st->noise_scale.store(ns);
-    ImGui::SameLine();
-    float dp = st->damping.load();
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::SliderFloat("damping", &dp, 0.f, 2.f)) st->damping.store(dp);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
-    ImGui::SliderFloat("color vmax", &st->color_vmax, 0.5f, 6.f);
+    // ---- toolbar panel: controls + honest status (from last frame's draw) --
+    // Fixed-height bordered child so the 3-D view below gets everything else.
+    const float bar_h = ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.f;
+    if (ImGui::BeginChild("##toolbar", ImVec2(0, bar_h), ImGuiChildFlags_Borders)) {
+        bool paused = st->paused.load();
+        if (ImGui::Checkbox("pause", &paused)) st->paused.store(paused);
+        ImGui::SameLine();
+        float fs = st->field_strength.load();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::SliderFloat("field", &fs, 0.f, 2.5f)) st->field_strength.store(fs);
+        ImGui::SameLine();
+        float ns = st->noise_scale.load();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::SliderFloat("scale", &ns, 0.5f, 6.f)) st->noise_scale.store(ns);
+        ImGui::SameLine();
+        float dp = st->damping.load();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::SliderFloat("damping", &dp, 0.f, 2.f)) st->damping.store(dp);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        ImGui::SliderFloat("color", &st->color_vmax, 0.5f, 6.f);
+        // Status reflects last frame's provenance (imperceptible 1-frame lag);
+        // "zero-copy (imported geometry)" only when that path actually drew.
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        if (st->zero_copy_frame)
+            ImGui::TextColored({0.55f, 0.9f, 0.6f, 1.f},
+                "%lld particles — zero-copy (imported geometry) · %.0f steps/s",
+                (long long)n, sps);
+        else
+            ImGui::TextColored({1.f, 0.7f, 0.4f, 1.f},
+                "%lld particles — CPU fallback (subsampled %d) · %.0f steps/s · %s",
+                (long long)n, (int)sx.size(), sps,
+                !cuda ? "torch CPU"
+                      : (st->geom_caps ? "pool unavailable" : "no geometry service"));
+        ImGui::SameLine();
+        ImGui::TextDisabled("   (left-drag: push · right-drag: orbit · wheel: zoom)");
+    }
+    ImGui::EndChild();
 
-    // ---- the zero-copy path: pool tensors -> imported blocks -> point pass --
+    // ---- the 3-D view fills all remaining space ----
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const bool geom_live =
+        st->geometry && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS);
+
+    // Size the offscreen view to the content region; recreate on real change
+    // (a few-px threshold avoids reallocating on sub-pixel jitter). Clamp to a
+    // sane range so a collapsed/huge dock node can't ask for a degenerate RT.
+    auto clampi = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
+    const int dw = clampi((int)avail.x, 64, 4096);
+    const int dh = clampi((int)avail.y, 64, 4096);
+    if (geom_live && avail.x >= 64 && avail.y >= 64 &&
+        (st->view == 0 || std::abs(dw - st->view_w) >= 3 ||
+         std::abs(dh - st->view_h) >= 3)) {
+        if (st->view != 0) st->geometry.release_view(st->view);
+        st->view = st->geometry.create_view((uint32_t)dw, (uint32_t)dh);
+        st->view_w = dw; st->view_h = dh;
+    }
+
     st->zero_copy_frame = false;
-    const bool geom_live = st->geometry && (st->geom_caps & CALIPER_GEOM_CAP_IMPORTED_POINTS);
-    if (geom_live && st->view == 0)
-        st->view = st->geometry.create_view((uint32_t)st->view_w, (uint32_t)st->view_h);
-
     if (geom_live && st->view != 0 && pool && draw_pos.defined()) {
-        // Camera from the orbit state.
+        // Camera from the orbit state; aspect matches the live view size.
         const float ce = std::cos(st->cam_el), se = std::sin(st->cam_el);
         const float ca = std::cos(st->cam_az), sa = std::sin(st->cam_az);
         const V3 eye{st->cam_dist * ce * ca, st->cam_dist * se,
@@ -389,10 +425,9 @@ void FlowScopeApplet::draw_ui() {
     }
 
     if (st->zero_copy_frame) {
+        // Fill the region with the offscreen view; interaction rides the image.
         ImGui::Image(caliper::Bridge::imtex(st->view),
                      ImVec2((float)st->view_w, (float)st->view_h));
-        // Interaction on the image: LEFT-drag pushes (cursor ray -> impulse),
-        // RIGHT-drag orbits, wheel zooms.
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 mn = ImGui::GetItemRectMin();
         const ImVec2 sz = ImGui::GetItemRectSize();
@@ -412,7 +447,7 @@ void FlowScopeApplet::draw_ui() {
         {
             std::lock_guard<std::mutex> lk(st->mtx);
             st->imp_active = pushing;
-            if (pushing) {
+            if (pushing && sz.x > 0.f && sz.y > 0.f) {
                 // Cursor ray in world space from the SAME camera parameters.
                 const float ce = std::cos(st->cam_el), se = std::sin(st->cam_el);
                 const float ca = std::cos(st->cam_az), sa = std::sin(st->cam_az);
@@ -432,14 +467,10 @@ void FlowScopeApplet::draw_ui() {
                 st->imp_d[0] = dir.x; st->imp_d[1] = dir.y; st->imp_d[2] = dir.z;
             }
         }
-        // Honest status: this exact wording only when the imported path drew
-        // THIS frame's content (PLATFORM.md 7.4 discipline).
-        ImGui::Text("%lld particles — zero-copy (imported geometry)   ·   "
-                    "%.0f sim steps/s", (long long)n, sps);
     } else {
-        // Fallback ladder: subsampled CPU scatter, honestly labeled.
-        if (!sx.empty() && ImPlot3D::BeginPlot("##flow_fallback",
-                                               ImVec2(-1, 560))) {
+        // Fallback ladder: subsampled CPU scatter, filling the same region.
+        if (!sx.empty() &&
+            ImPlot3D::BeginPlot("##flow_fallback", ImVec2(-1, -1))) {
             ImPlot3D::SetupAxesLimits(-kBoxL, kBoxL, -kBoxL, kBoxL, -kBoxL,
                                       kBoxL, ImPlot3DCond_Once);
             ImPlot3D::PlotScatter("particles", sx.data(), sy.data(), sz.data(),
@@ -448,12 +479,6 @@ void FlowScopeApplet::draw_ui() {
         } else if (sx.empty()) {
             ImGui::TextDisabled("waiting for the first sim step…");
         }
-        ImGui::TextDisabled(
-            "%lld particles — CPU fallback (subsampled to %d)   ·   %.0f sim "
-            "steps/s   ·   %s",
-            (long long)n, (int)sx.size(), sps,
-            !cuda ? "torch CPU"
-                  : (st->geom_caps ? "pool unavailable" : "no geometry service"));
     }
     ImGui::End();
     st->frames++;
