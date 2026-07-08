@@ -15,11 +15,14 @@ generate the field that pushes them.
 A few hundred thousand charged particles evolve under their **own** electric field —
 each step the particles deposit charge onto a grid, a **free-space (open-boundary)**
 Poisson FFT solve produces the self-consistent field of the isolated cloud, that field
-is gathered back and a Boris pusher advances them under it plus a soft harmonic trap
-(a Penning/Paul-trap-like confinement) and optional background **B**. The cloud thus
-**floats freely in open space** — like SculptScope's cloud, not a box — while real
-collective dynamics (space-charge breathing, rotation under B) emerge. Positions render
-zero-copy (pool-born tensor drawn in place by `geometry.v1`), coloured by speed.
+is gathered back and a Boris pusher advances them under it plus a strong background **B**
+and a soft axial trap. In that **magnetized** regime the transverse motion is E×B drift,
+so the cloud behaves as a **2-D vortex fluid**: a handful of charge clumps **orbit their
+common centre and merge** (a real vortex-merger), a hollow ring breaks into a rotating
+necklace (the *diocotron instability*) — genuine emergent structure, not a spring
+breathing about its centre of mass (the failure mode of the plain harmonic-trap version).
+The cloud **floats freely in open space** — like SculptScope's cloud, not a box.
+Positions render zero-copy (pool-born tensor drawn in place by `geometry.v1`), by speed.
 
 **Design note (open vs periodic).** An earlier draft used a *periodic* solver with a
 neutralising background (a one-component plasma). That is mathematically a **cube**: the
@@ -28,6 +31,15 @@ the solver must be **open-boundary** (free-space Green's function, Hockney's dou
 FFT) and the plasma **single-species** (like charges repel, so a harmonic trap yields a
 stable floating equilibrium instead of the two-species attractive collapse that heats a
 coarse grid to blow-up). Both were found during implementation and verified headless.
+
+**Third fix (dynamics).** A *harmonic* trap is a linear spring: a repulsive cloud in it
+only breathes about its centre of mass — no structure. The interesting regime is
+**magnetized** (strong B, trap acting mainly in z): the transverse E×B dynamics are 2-D
+vortex dynamics, where clumps orbit and merge and rings go diocotron-unstable. Verified
+headless with an azimuthal-clumpiness metric: 4 clumps persist (clumpiness ≈ 2.6–2.9)
+for ~15 s, then merge into a ring, with KE **bounded** throughout (≈[0.3k, 18k], no
+blow-up). Grid resolution (`G=48`) and a finite slab thickness were needed to stop the
+under-resolved thin disk from finite-grid heating.
 
 ## Motivation — what was wrong
 

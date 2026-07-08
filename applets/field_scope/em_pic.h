@@ -183,50 +183,64 @@ inline void boris_push(const torch::Tensor& p_in, torch::Tensor& p_out,
 }
 
 // ---- initial conditions (free-floating, centred at L/2) --------------------
-enum class IC { kBlob = 0, kTwoStream = 1, kSphere = 2, kRing = 3 };
+// Quasi-2-D: a thin slab in z (the plane ⊥ B, where the magnetized E×B "2-D
+// vortex" dynamics live) with structured xy layouts. Single species (all +1);
+// a strong background B does the transverse confinement, a z-trap the axial.
+enum class IC { kClumps = 0, kRing = 1, kBlob = 2, kTwoStream = 3 };
 
-// Returns (pos in a blob near centre, vel, charge (N,1)). Single species (all
-// +1): like charges repel, so the trapped cloud settles instead of collapsing.
 inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 init_state(IC kind, int64_t N, double L, double temp, double v0,
            torch::Device dev) {
     auto o = torch::TensorOptions(dev).dtype(torch::kFloat32);
     const float c = 0.5f * (float)L;
-    const float sigma = 0.09f * (float)L;      // blob radius
-    const float R     = 0.14f * (float)L;      // shell / ring radius
+    const float R  = 0.15f * (float)L;         // ring / clump-ring radius
+    const float zt = 0.07f * (float)L;         // slab half-thickness in z
+    const float pi = (float)M_PI;
     torch::Tensor pos, vel;
     auto charge = torch::ones({N, 1}, o);
+    auto zslab = [&] { return c + torch::randn({N}, o) * zt; };
 
     switch (kind) {
-        case IC::kTwoStream: {
-            pos = torch::randn({N, 3}, o) * sigma + c;
-            vel = torch::randn({N, 3}, o) * temp;
-            auto sign = torch::ones({N}, o);
-            sign.narrow(0, N / 2, N - N / 2).mul_(-1.f);        // two beams
-            vel.select(1, 0).add_(sign * (float)v0);
-            break;
-        }
-        case IC::kSphere: {
-            auto dir = torch::randn({N, 3}, o);
-            dir = dir / dir.norm(2, {1}, true).clamp_min(1e-6f);
-            pos = dir * R + c + torch::randn({N, 3}, o) * (0.15f * R);
+        case IC::kClumps: {
+            // K compact Gaussian vortices on a circle -> they orbit and MERGE
+            // under B (compact enough to resist shear phase-mixing into a ring).
+            const int K = 4;
+            auto cl  = torch::randint(0, K, {N}, torch::TensorOptions(dev).dtype(torch::kLong));
+            auto ang = cl.to(torch::kFloat32) * (2.f * pi / (float)K);
+            auto cx  = R * torch::cos(ang) + c, cy = R * torch::sin(ang) + c;
+            auto x = cx + torch::randn({N}, o) * (0.18f * R);
+            auto y = cy + torch::randn({N}, o) * (0.18f * R);
+            pos = torch::stack({x, y, zslab()}, 1);
             vel = torch::randn({N, 3}, o) * temp;
             break;
         }
         case IC::kRing: {
-            auto th = torch::rand({N}, o) * (2.f * (float)M_PI);
-            auto x = R * torch::cos(th), y = R * torch::sin(th);
-            pos = torch::stack({x, y, torch::zeros_like(x)}, 1) + c
-                  + torch::randn({N, 3}, o) * (0.08f * R);
+            // Hollow annulus -> diocotron instability breaks it into a rotating
+            // necklace of vortices.
+            auto th = torch::rand({N}, o) * (2.f * pi);
+            auto rr = R + torch::randn({N}, o) * (0.10f * R);   // thin annulus
+            auto x = rr * torch::cos(th) + c, y = rr * torch::sin(th) + c;
+            pos = torch::stack({x, y, zslab()}, 1);
             vel = torch::randn({N, 3}, o) * temp;
-            vel.select(1, 0).add_(-torch::sin(th) * (float)v0);   // tangential spin
-            vel.select(1, 1).add_(torch::cos(th) * (float)v0);
             break;
         }
-        case IC::kBlob: default:
-            pos = torch::randn({N, 3}, o) * sigma + c;
+        case IC::kTwoStream: {
+            auto x = c + torch::randn({N}, o) * (0.18f * (float)L);
+            auto y = c + torch::randn({N}, o) * (0.06f * (float)L);
+            pos = torch::stack({x, y, zslab()}, 1);
+            vel = torch::randn({N, 3}, o) * temp;
+            auto sign = torch::ones({N}, o);
+            sign.narrow(0, N / 2, N - N / 2).mul_(-1.f);        // counter-stream
+            vel.select(1, 1).add_(sign * (float)v0);
+            break;
+        }
+        case IC::kBlob: default: {
+            auto x = c + torch::randn({N}, o) * (0.10f * (float)L);
+            auto y = c + torch::randn({N}, o) * (0.10f * (float)L);
+            pos = torch::stack({x, y, zslab()}, 1);
             vel = torch::randn({N, 3}, o) * temp;
             break;
+        }
     }
     return {pos, vel, charge};
 }

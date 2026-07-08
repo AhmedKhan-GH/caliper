@@ -45,11 +45,11 @@ namespace fieldscope {
 namespace {
 
 constexpr int   kSlots     = 3;                 // write / ready / displayed
-constexpr int   kG         = 32;                // PIC grid is kG^3
+constexpr int   kG         = 48;                // PIC grid is kG^3
 constexpr float kL         = 10.0f;             // solver domain [0,L)^3; cloud
                                                 // floats near the centre (open)
-constexpr float kDt        = 0.03f;
-constexpr float kV0        = 1.2f;              // stream/ring drift speed
+constexpr float kDt        = 0.02f;
+constexpr float kV0        = 1.2f;              // stream drift speed
 constexpr float kCenter    = kL * 0.5f;         // cloud centre (camera target)
 constexpr int   kSubsample = 10000;             // CPU fallback scatter size
 
@@ -105,11 +105,11 @@ struct FieldScopeState {
     std::atomic<bool> paused{false};
 
     // frame -> worker knobs (atomics; torn reads harmless).
-    std::atomic<float> b_field{0.0f};        // uniform background B along +z
-    std::atomic<float> coupling{12.0f};      // self-field scale (space charge)
-    std::atomic<float> trap{0.3f};           // harmonic confinement stiffness
-    std::atomic<float> temperature{0.05f};   // thermal spread used on re-seed
-    std::atomic<int>   ic_kind{(int)IC::kBlob};
+    std::atomic<float> b_field{14.0f};       // uniform background B along +z
+    std::atomic<float> coupling{6.0f};       // self-field scale (space charge)
+    std::atomic<float> trap{0.6f};           // axial (z) confinement stiffness
+    std::atomic<float> temperature{0.03f};   // thermal spread used on re-seed
+    std::atomic<int>   ic_kind{(int)IC::kClumps};
     std::atomic<bool>  reseed_req{false};
     std::atomic<float> impulse_strength{6.0f};
 
@@ -132,8 +132,8 @@ struct FieldScopeState {
     // ------- frame-thread-only -------
     CaliperTextureId view = 0;
     int   view_w = 768, view_h = 768;
-    float cam_az = 0.9f, cam_el = 0.45f, cam_dist = 6.5f;
-    float color_vmax = 2.5f;
+    float cam_az = 0.9f, cam_el = 0.9f, cam_dist = 6.5f;   // start looking down
+    float color_vmax = 0.6f;
     bool  zero_copy_frame = false;
     uint64_t frames = 0;
 };
@@ -249,7 +249,13 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
         auto rho   = deposit_cic(pos[read], kG, kL, charge.squeeze(1));
         auto E     = poisson_E_free(rho, kL) * (st->coupling.load() / (float)N);
         auto accel = charge * gather_cic(E, pos[read], kL);
-        accel = accel - (pos[read] - c3) * st->trap.load();     // harmonic trap
+        // Anisotropic trap: strong in z (holds the slab), gentle in x/y (frames
+        // the disk) — the transverse confinement is really the magnetic field,
+        // so the in-plane E×B vortex dynamics stay free to organise.
+        const float kz = st->trap.load();
+        auto kvec = torch::tensor({0.12f * kz, 0.12f * kz, kz},
+                                  torch::TensorOptions(dev).dtype(torch::kFloat32));
+        accel = accel - (pos[read] - c3) * kvec;
 
         // Cursor-ray impulse: a radial push away from the mouse ray (an
         // external, charge-independent perturbation the cloud responds to).
@@ -317,8 +323,8 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
                 logged_first = true;
                 char m[128];
                 std::snprintf(m, sizeof(m),
-                              "field-scope: PIC running — %lld particles, %d^3 grid, KE %.1f",
-                              (long long)N, kG, ke);
+                              "field-scope: PIC running — %lld particles, %d^3 grid, "
+                              "magnetized (B=%.0f)", (long long)N, kG, st->b_field.load());
                 st->host->log_info(m);
             }
         }
@@ -375,7 +381,7 @@ void FieldScopeApplet::draw_ui() {
         bool paused = st->paused.load();
         if (ImGui::Checkbox("pause", &paused)) st->paused.store(paused);
         ImGui::SameLine();
-        const char* ics[] = {"blob", "two-stream", "sphere", "ring"};
+        const char* ics[] = {"clumps", "ring", "blob", "two-stream"};
         int ic = st->ic_kind.load();
         ImGui::SetNextItemWidth(110);
         if (ImGui::Combo("init", &ic, ics, IM_ARRAYSIZE(ics))) {
@@ -395,14 +401,14 @@ void FieldScopeApplet::draw_ui() {
         ImGui::SameLine();
         float b = st->b_field.load();
         ImGui::SetNextItemWidth(80);
-        if (ImGui::SliderFloat("B", &b, 0.f, 8.f)) st->b_field.store(b);
+        if (ImGui::SliderFloat("B", &b, 0.f, 40.f)) st->b_field.store(b);
         ImGui::SameLine();
         float tmp = st->temperature.load();
         ImGui::SetNextItemWidth(80);
         if (ImGui::SliderFloat("temp", &tmp, 0.f, 0.5f, "%.3f")) st->temperature.store(tmp);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
-        ImGui::SliderFloat("color", &st->color_vmax, 0.5f, 6.f);
+        ImGui::SliderFloat("color", &st->color_vmax, 0.1f, 3.f);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
