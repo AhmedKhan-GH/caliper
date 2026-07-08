@@ -2,7 +2,7 @@
 id      = "dev.caliper.field-scope"
 name    = "FieldScope"
 version = "0.1.0"
-summary = "A self-consistent electrostatic Particle-In-Cell plasma, drawn with zero copies: the torch simulation writes exportable-pool tensors and the renderer's instanced point pass (caliper.geometry.v1) reads the SAME memory in place, per frame. Each step the particles deposit charge onto a grid, an FFT Poisson solve produces their own electric field, and a Boris pusher advances them under that self-field plus an optional background B — so real collective behaviour (the two-stream instability, plasma oscillations) emerges rather than being scripted. Choose the initial condition; left-drag perturbs the plasma, right-drag orbits, wheel zooms. Falls back to a subsampled CPU scatter wherever zero-copy is absent."
+summary = "A charged-particle field simulator, drawn with zero copies: the torch simulation writes exportable-pool tensors and the renderer's instanced point pass (caliper.geometry.v1) reads the SAME memory in place, per frame. A self-consistent electrostatic Particle-In-Cell plasma mode (particles deposit charge to a grid, an FFT Poisson solve gives their own field, a Boris pusher advances them) shows magnetized vortices orbit and merge; or switch to a prescribed field geometry to observe charged-particle motion directly — uniform (gyration), magnetic mirror / solenoid bottle (mirroring), toroidal tokamak (confined orbits), or magnetic dipole (Earth-like trapped belts). Left-drag perturbs, right-drag orbits, wheel zooms. Falls back to a subsampled CPU scatter wherever zero-copy is absent."
 tag     = "ML"
 
 [compat]

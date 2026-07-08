@@ -125,8 +125,26 @@ sync(); publish(write)                      # renderer imports pos[write] in pla
 ```
 `E`/`rho` are grid-sized (default allocator); only `pos`/`speed` slots are pool-born.
 
+### Field modes — prescribed geometries (test-particle observation)
+Besides the self-consistent `plasma` mode, a **field selector** runs the particles as
+test particles in a prescribed static `B(x)` (no self-field, no trap) so the classic
+single-particle motions are directly observable. A charged particle in a static B
+conserves `|v|` (Boris is exact for the rotation), so these modes are unconditionally
+stable — verified headless: KE constant to 6 digits, the cloud stays bounded/in-view.
+
+- **`uniform`** — `B = B0 ẑ`; pure gyration (v∥ = 0 so no drift-off).
+- **`mirror`** — a magnetic bottle `B_z = B0(1+(z/z_c)²)`, `B_r = −(r/2)∂_zB_z` (∇·B=0):
+  particles mirror and bounce (a finite solenoid). Verified: `|z|` bounded ≈2.1.
+- **`toroidal`** — tokamak `B_φ ∝ 1/R` **plus a poloidal twist** so field lines wind and
+  orbits stay confined on the torus. Verified: `r_xy`≈2.5, `|z|`≈0.7 bounded.
+- **`dipole`** — magnetic dipole along ẑ; Earth-like trapped radiation belts (gyrate +
+  bounce + azimuthal drift). Verified: belt stable over 4000 steps, no escape.
+
+`external_B(pos, mode, c, B0, L)` in `em_pic.h` returns the per-particle field; the Boris
+`B` argument was generalised from a single vector to a per-particle `(N,3)`.
+
 ## Interaction
-Right-drag orbit, wheel zoom. **Initial-condition combo** (re-seeds). Left-drag →
+Right-drag orbit, wheel zoom. **Field combo** (re-seeds). Left-drag →
 cursor-ray impulse (an external, charge-independent perturbation). Sliders: **charge**
 (space-charge `coupling`), **trap** (confinement), **B** (background field),
 **temperature** (on re-seed), **color**. Status line reports

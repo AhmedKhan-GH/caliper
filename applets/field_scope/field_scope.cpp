@@ -105,11 +105,12 @@ struct FieldScopeState {
     std::atomic<bool> paused{false};
 
     // frame -> worker knobs (atomics; torn reads harmless).
-    std::atomic<float> b_field{14.0f};       // uniform background B along +z
-    std::atomic<float> coupling{6.0f};       // self-field scale (space charge)
-    std::atomic<float> trap{0.6f};           // axial (z) confinement stiffness
-    std::atomic<float> temperature{0.03f};   // thermal spread used on re-seed
-    std::atomic<int>   ic_kind{(int)IC::kClumps};
+    std::atomic<int>   field_mode{(int)Field::kToroidal}; // which field to observe
+    std::atomic<float> b_field{8.0f};        // field strength (B0 / magnetization)
+    std::atomic<float> vth{1.6f};            // test-particle speed (field modes)
+    std::atomic<float> coupling{6.0f};       // self-field scale (plasma mode)
+    std::atomic<float> trap{0.6f};           // axial (z) confinement (plasma mode)
+    std::atomic<float> temperature{0.03f};   // thermal spread (plasma mode)
     std::atomic<bool>  reseed_req{false};
     std::atomic<float> impulse_strength{6.0f};
 
@@ -132,8 +133,8 @@ struct FieldScopeState {
     // ------- frame-thread-only -------
     CaliperTextureId view = 0;
     int   view_w = 768, view_h = 768;
-    float cam_az = 0.9f, cam_el = 0.9f, cam_dist = 6.5f;   // start looking down
-    float color_vmax = 0.6f;
+    float cam_az = 0.9f, cam_el = 0.6f, cam_dist = 9.0f;
+    float color_vmax = 1.2f;
     bool  zero_copy_frame = false;
     uint64_t frames = 0;
 };
@@ -188,11 +189,18 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
         if (pool) { auto scope = pool->use(); alloc_slots(); }
         else      { alloc_slots(); }
     }
-    auto [p0, vel, charge] = init_state((IC)st->ic_kind.load(), N, kL,
-                                        st->temperature.load(), kV0, dev);
-    pos[0].copy_(p0);
     const auto c3 = torch::tensor({kCenter, kCenter, kCenter},
                                   torch::TensorOptions(dev).dtype(torch::kFloat32));
+    // Seed pos/vel/charge for the selected mode: plasma = the self-consistent
+    // magnetized clumps; the rest = test particles in a prescribed field.
+    auto seed = [&] {
+        const auto mode = (Field)st->field_mode.load();
+        return mode == Field::kPlasma
+            ? init_state(IC::kClumps, N, kL, st->temperature.load(), kV0, dev)
+            : init_field(mode, N, kL, st->vth.load(), dev);
+    };
+    auto [p0, vel, charge] = seed();
+    pos[0].copy_(p0);
 
     {
         std::lock_guard<std::mutex> lk(st->mtx);
@@ -225,11 +233,10 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
         int read;
         { std::lock_guard<std::mutex> lk(st->mtx); read = st->ready_slot; }
 
-        // Re-seed (initial-condition change or reset button): rebuild the plasma
-        // into the write slot and publish it, skipping a physics step.
+        // Re-seed (mode change or reset button): rebuild into the write slot
+        // and publish it, skipping a physics step.
         if (st->reseed_req.exchange(false)) {
-            auto [pp, vv, cc] = init_state((IC)st->ic_kind.load(), N, kL,
-                                           st->temperature.load(), kV0, dev);
+            auto [pp, vv, cc] = seed();
             vel = vv; charge = cc;
             pos[write].copy_(pp);
             speed[write].copy_(vel.norm(2, {1}));
@@ -241,24 +248,30 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
             continue;
         }
 
-        // ---- one PIC step ----
-        // Self-field: signed charge -> grid -> FFT Poisson -> gather. accel is
-        // charge-inclusive (opposite charges pushed opposite ways), plus a soft
-        // harmonic trap that keeps the neutral cloud floating near the centre
-        // (open space — no periodic wrap, no box-fill).
-        auto rho   = deposit_cic(pos[read], kG, kL, charge.squeeze(1));
-        auto E     = poisson_E_free(rho, kL) * (st->coupling.load() / (float)N);
-        auto accel = charge * gather_cic(E, pos[read], kL);
-        // Anisotropic trap: strong in z (holds the slab), gentle in x/y (frames
-        // the disk) — the transverse confinement is really the magnetic field,
-        // so the in-plane E×B vortex dynamics stay free to organise.
-        const float kz = st->trap.load();
-        auto kvec = torch::tensor({0.12f * kz, 0.12f * kz, kz},
-                                  torch::TensorOptions(dev).dtype(torch::kFloat32));
-        accel = accel - (pos[read] - c3) * kvec;
+        // ---- one step ----
+        const auto opt_dev = torch::TensorOptions(dev).dtype(torch::kFloat32);
+        const auto mode = (Field)st->field_mode.load();
+        torch::Tensor accel, B;
+        if (mode == Field::kPlasma) {
+            // Self-consistent magnetized plasma: signed charge -> grid -> FFT
+            // free-space Poisson -> gather, plus an anisotropic trap (strong z,
+            // gentle xy; B does the transverse confinement).
+            auto rho = deposit_cic(pos[read], kG, kL, charge.squeeze(1));
+            auto E   = poisson_E_free(rho, kL) * (st->coupling.load() / (float)N);
+            accel = charge * gather_cic(E, pos[read], kL);
+            const float kz = st->trap.load();
+            auto kvec = torch::tensor({0.12f * kz, 0.12f * kz, kz}, opt_dev);
+            accel = accel - (pos[read] - c3) * kvec;
+            B = torch::tensor({0.f, 0.f, st->b_field.load()}, opt_dev);
+        } else {
+            // Prescribed field geometry: pure test-particle motion (no self-
+            // field, no trap) in B(x) — gyration / mirroring / drifts.
+            B = external_B(pos[read], mode, kCenter, st->b_field.load(), kL);
+            accel = torch::zeros_like(pos[read]);
+        }
 
         // Cursor-ray impulse: a radial push away from the mouse ray (an
-        // external, charge-independent perturbation the cloud responds to).
+        // external, charge-independent perturbation).
         bool active; float o3[3], d3[3];
         {
             std::lock_guard<std::mutex> lk(st->mtx);
@@ -279,8 +292,6 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
                             (torch::exp(dist2 / (-2.f * rad * rad)) * strength);
         }
 
-        auto B = torch::tensor({0.f, 0.f, st->b_field.load()},
-                               torch::TensorOptions(dev).dtype(torch::kFloat32));
         boris_push(pos[read], pos[write], vel, accel, charge, B, kDt);
         speed[write].copy_(vel.norm(2, {1}));
         sync();
@@ -321,10 +332,11 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
             rate_t0 = now; rate_steps = 0;
             if (st->host && !logged_first) {
                 logged_first = true;
+                const char* mn[] = {"plasma", "uniform", "mirror", "toroidal", "dipole"};
                 char m[128];
                 std::snprintf(m, sizeof(m),
-                              "field-scope: PIC running — %lld particles, %d^3 grid, "
-                              "magnetized (B=%.0f)", (long long)N, kG, st->b_field.load());
+                              "field-scope: running — %lld particles, field=%s, B=%.1f",
+                              (long long)N, mn[st->field_mode.load() & 7], st->b_field.load());
                 st->host->log_info(m);
             }
         }
@@ -348,6 +360,7 @@ bool FieldScopeApplet::initialize(caliper::Host& host) {
     s_->bridge   = caliper::Bridge(host);
     s_->geometry = caliper::Geometry(host);
     s_->geom_caps = s_->geometry.caps();
+    if (const char* fm = std::getenv("FS_FIELD")) s_->field_mode.store(std::atoi(fm));
     host.log_info("field-scope: on_init");
     s_->job_id = s_->jobs.submit("field_scope: PIC", &field_job_tramp, s_.get());
     return true;
@@ -381,33 +394,37 @@ void FieldScopeApplet::draw_ui() {
         bool paused = st->paused.load();
         if (ImGui::Checkbox("pause", &paused)) st->paused.store(paused);
         ImGui::SameLine();
-        const char* ics[] = {"clumps", "ring", "blob", "two-stream"};
-        int ic = st->ic_kind.load();
-        ImGui::SetNextItemWidth(110);
-        if (ImGui::Combo("init", &ic, ics, IM_ARRAYSIZE(ics))) {
-            st->ic_kind.store(ic);
+        const char* modes[] = {"plasma (self-field)", "uniform B", "mirror",
+                               "toroidal", "dipole"};
+        int fm = st->field_mode.load();
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::Combo("field", &fm, modes, IM_ARRAYSIZE(modes))) {
+            st->field_mode.store(fm);
             st->reseed_req.store(true);           // re-seed on selection
         }
+        const bool plasma = (fm == (int)Field::kPlasma);
         ImGui::SameLine();
         if (ImGui::Button("reseed")) st->reseed_req.store(true);
         ImGui::SameLine();
-        float cpl = st->coupling.load();
-        ImGui::SetNextItemWidth(80);
-        if (ImGui::SliderFloat("charge", &cpl, 1.f, 30.f)) st->coupling.store(cpl);
-        ImGui::SameLine();
-        float tr = st->trap.load();
-        ImGui::SetNextItemWidth(80);
-        if (ImGui::SliderFloat("trap", &tr, 0.05f, 1.5f)) st->trap.store(tr);
-        ImGui::SameLine();
         float b = st->b_field.load();
-        ImGui::SetNextItemWidth(80);
-        if (ImGui::SliderFloat("B", &b, 0.f, 40.f)) st->b_field.store(b);
-        ImGui::SameLine();
-        float tmp = st->temperature.load();
-        ImGui::SetNextItemWidth(80);
-        if (ImGui::SliderFloat("temp", &tmp, 0.f, 0.5f, "%.3f")) st->temperature.store(tmp);
-        ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
+        if (ImGui::SliderFloat("B (strength)", &b, 0.f, 40.f)) st->b_field.store(b);
+        ImGui::SameLine();
+        if (plasma) {
+            float cpl = st->coupling.load();
+            ImGui::SetNextItemWidth(70);
+            if (ImGui::SliderFloat("charge", &cpl, 1.f, 30.f)) st->coupling.store(cpl);
+            ImGui::SameLine();
+            float tr = st->trap.load();
+            ImGui::SetNextItemWidth(60);
+            if (ImGui::SliderFloat("trap", &tr, 0.05f, 1.5f)) st->trap.store(tr);
+        } else {
+            float vs = st->vth.load();
+            ImGui::SetNextItemWidth(90);
+            if (ImGui::SliderFloat("speed", &vs, 0.2f, 4.f)) st->vth.store(vs);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
         ImGui::SliderFloat("color", &st->color_vmax, 0.1f, 3.f);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
@@ -415,11 +432,11 @@ void FieldScopeApplet::draw_ui() {
         if (st->zero_copy_frame)
             ImGui::TextColored({0.55f, 0.9f, 0.6f, 1.f},
                 "%lld particles — zero-copy (imported geometry) · %s · KE %.2f · %.0f steps/s",
-                (long long)n, ics[ic], ke, sps);
+                (long long)n, modes[fm], ke, sps);
         else
             ImGui::TextColored({1.f, 0.7f, 0.4f, 1.f},
                 "%lld particles — CPU fallback (subsampled %d) · %s · KE %.2f · %s",
-                (long long)n, (int)sx.size(), ics[ic], ke,
+                (long long)n, (int)sx.size(), modes[fm], ke,
                 !gpu ? "torch CPU"
                      : (st->geom_caps ? "pool unavailable" : "no geometry service"));
         ImGui::SameLine();

@@ -172,7 +172,9 @@ inline void boris_push(const torch::Tensor& p_in, torch::Tensor& p_out,
                        double dt) {
     const double h = 0.5 * dt;
     vel.add_(accel, h);                                   // half kick
-    auto t  = B.reshape({1, 3}) * (charge * (0.5 * dt));  // (N,3) per particle
+    // B may be uniform (3,)/(1,3) or a per-particle field (N,3); reshape to
+    // (-1,3) so it broadcasts against the (N,1) charge either way.
+    auto t  = B.reshape({-1, 3}) * (charge * (0.5 * dt)); // (N,3) per particle
     auto t2 = (t * t).sum(1, /*keepdim=*/true);
     auto s  = t * (2.0 / (1.0 + t2));
     auto vp = vel + torch::linalg_cross(vel, t, /*dim=*/1);
@@ -239,6 +241,99 @@ init_state(IC kind, int64_t N, double L, double temp, double v0,
             auto y = c + torch::randn({N}, o) * (0.10f * (float)L);
             pos = torch::stack({x, y, zslab()}, 1);
             vel = torch::randn({N, 3}, o) * temp;
+            break;
+        }
+    }
+    return {pos, vel, charge};
+}
+
+// ---- prescribed external field geometries (test-particle observation) ------
+// A charged particle in a static B conserves |v| (Boris is exact for the
+// rotation), so these modes are unconditionally stable — no self-field, no
+// trap; the field geometry alone shapes the motion. Watch: gyration (uniform),
+// mirroring/trapping between field maxima (mirror = a finite solenoid/bottle),
+// toroidal streaming + grad-B drift (toroidal), and belt trapping (dipole).
+enum class Field { kPlasma = 0, kUniform = 1, kMirror = 2, kToroidal = 3, kDipole = 4 };
+
+// Analytic B(x) at every particle, centred at `c`. `B0` is the field strength.
+inline torch::Tensor external_B(const torch::Tensor& pos, Field mode,
+                                float c, float B0, float L) {
+    auto X = pos - c;
+    auto x = X.select(1, 0), y = X.select(1, 1), z = X.select(1, 2);
+    const float eps = 1e-3f;
+    switch (mode) {
+        case Field::kMirror: {                       // magnetic bottle (∇·B=0)
+            const float zc = 0.32f * L;
+            auto bz  = B0 * (1.f + (z * z) / (zc * zc));
+            auto brr = -B0 * z / (zc * zc);          // B_r / r  (from ∇·B=0)
+            return torch::stack({brr * x, brr * y, bz}, 1);
+        }
+        case Field::kToroidal: {                     // tokamak: toroidal ~1/R
+            const float R0 = 0.25f * L;              // + poloidal twist so the
+            auto rxy = torch::sqrt(x * x + y * y + eps);   // field lines wind and
+            auto fac = B0 * R0 / (rxy * rxy);              // orbits stay confined
+            auto bt_x = -fac * y, bt_y = fac * x;    // toroidal (φ̂)
+            // poloidal: circles the minor cross-section (ρ_R, ρ_z)=(rxy-R0, z).
+            auto rhoR = rxy - R0;
+            auto rho  = torch::sqrt(rhoR * rhoR + z * z + eps);
+            auto bpol = (0.35f * B0) / rho;          // poloidal magnitude
+            auto Rx = x / rxy, Ry = y / rxy;         // R̂ in xy
+            auto bp_x = bpol * (-z) * Rx, bp_y = bpol * (-z) * Ry, bp_z = bpol * rhoR;
+            return torch::stack({bt_x + bp_x, bt_y + bp_y, bp_z}, 1);
+        }
+        case Field::kDipole: {                       // magnetic dipole along +z
+            auto r2    = x * x + y * y + z * z + eps;
+            auto invr5 = torch::pow(r2, -2.5f);
+            const float k = 6.f * B0 * std::pow(0.28f * L, 3.f);
+            return torch::stack({k * 3.f * z * x * invr5,
+                                 k * 3.f * z * y * invr5,
+                                 k * (3.f * z * z - r2) * invr5}, 1);
+        }
+        case Field::kUniform: default:               // uniform axial -> helices
+            return torch::stack({torch::zeros_like(x), torch::zeros_like(x),
+                                 B0 + torch::zeros_like(x)}, 1);
+    }
+}
+
+// Seed positions + velocities so the characteristic motion is visible. `vth`
+// sets the speed (gyroradius ≈ vth/B0). charge is +1 throughout.
+inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+init_field(Field mode, int64_t N, double L, double vth, torch::Device dev) {
+    auto o = torch::TensorOptions(dev).dtype(torch::kFloat32);
+    const float c = 0.5f * (float)L;
+    const float pi = (float)M_PI;
+    auto charge = torch::ones({N, 1}, o);
+    torch::Tensor pos, vel;
+    switch (mode) {
+        case Field::kMirror: {
+            pos = c + torch::randn({N, 3}, o) * (0.06f * (float)L);
+            vel = torch::randn({N, 3}, o) * (float)vth;   // isotropic -> mixed pitch
+            break;
+        }
+        case Field::kToroidal: {
+            auto th = torch::rand({N}, o) * (2.f * pi);
+            auto rr = 0.25f * (float)L + torch::randn({N}, o) * (0.05f * (float)L);
+            auto x = rr * torch::cos(th) + c, y = rr * torch::sin(th) + c;
+            pos = torch::stack({x, y, c + torch::randn({N}, o) * (0.05f * (float)L)}, 1);
+            // Mostly stream along the field (φ̂) + a perpendicular gyration part.
+            auto phx = -torch::sin(th), phy = torch::cos(th);
+            vel = torch::randn({N, 3}, o) * (0.5f * (float)vth);
+            vel.select(1, 0).add_(phx * (float)vth);
+            vel.select(1, 1).add_(phy * (float)vth);
+            break;
+        }
+        case Field::kDipole: {
+            auto th = torch::rand({N}, o) * (2.f * pi);
+            auto rd = 0.28f * (float)L + torch::randn({N}, o) * (0.03f * (float)L);
+            auto x = rd * torch::cos(th) + c, y = rd * torch::sin(th) + c;
+            pos = torch::stack({x, y, c + torch::randn({N}, o) * (0.03f * (float)L)}, 1);
+            vel = torch::randn({N, 3}, o) * (float)vth;   // isotropic -> belts
+            break;
+        }
+        case Field::kUniform: default: {
+            pos = c + torch::randn({N, 3}, o) * (0.12f * (float)L);
+            vel = torch::randn({N, 3}, o) * (float)vth;
+            vel.select(1, 2).mul_(0.f);                   // v∥=0 -> pure gyration, no drift
             break;
         }
     }
