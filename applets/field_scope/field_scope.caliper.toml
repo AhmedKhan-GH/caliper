@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.field-scope"
+name    = "FieldScope"
+version = "0.1.0"
+summary = "A self-consistent electrostatic Particle-In-Cell plasma, drawn with zero copies: the torch simulation writes exportable-pool tensors and the renderer's instanced point pass (caliper.geometry.v1) reads the SAME memory in place, per frame. Each step the particles deposit charge onto a grid, an FFT Poisson solve produces their own electric field, and a Boris pusher advances them under that self-field plus an optional background B — so real collective behaviour (the two-stream instability, plasma oscillations) emerges rather than being scripted. Choose the initial condition; left-drag perturbs the plasma, right-drag orbits, wheel zooms. Falls back to a subsampled CPU scatter wherever zero-copy is absent."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.geometry.v1"]

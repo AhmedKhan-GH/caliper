@@ -13,11 +13,21 @@ generate the field that pushes them.
 ## One-line
 
 A few hundred thousand charged particles evolve under their **own** electric field —
-each step the particles deposit charge onto a grid, a Poisson FFT solve produces the
-self-consistent field, that field is gathered back and a Boris pusher advances them —
-so real plasma phenomena (two-stream instability, plasma oscillations) *emerge* instead
-of being scripted. Positions render zero-copy (pool-born tensor drawn in place by
-`geometry.v1`), coloured by speed — SculptScope's visual twin, a genuine EM simulation.
+each step the particles deposit charge onto a grid, a **free-space (open-boundary)**
+Poisson FFT solve produces the self-consistent field of the isolated cloud, that field
+is gathered back and a Boris pusher advances them under it plus a soft harmonic trap
+(a Penning/Paul-trap-like confinement) and optional background **B**. The cloud thus
+**floats freely in open space** — like SculptScope's cloud, not a box — while real
+collective dynamics (space-charge breathing, rotation under B) emerge. Positions render
+zero-copy (pool-born tensor drawn in place by `geometry.v1`), coloured by speed.
+
+**Design note (open vs periodic).** An earlier draft used a *periodic* solver with a
+neutralising background (a one-component plasma). That is mathematically a **cube**: the
+background fills the box and the cloud spreads to tile it. To get a free-floating cloud
+the solver must be **open-boundary** (free-space Green's function, Hockney's doubled-grid
+FFT) and the plasma **single-species** (like charges repel, so a harmonic trap yields a
+stable floating equilibrium instead of the two-species attractive collapse that heats a
+coarse grid to blow-up). Both were found during implementation and verified headless.
 
 ## Motivation — what was wrong
 
@@ -62,60 +72,70 @@ header `em_pic.h` (unit-testable like `sculpt_model.h`); `field_scope.cpp` calls
 
 ### PIC core — `em_pic.h` (pure torch, host-free)
 
-Periodic box `[0,L)³`, `L = 2π`, grid `G³` (`G = 32`; ~6 particles/cell at N≈200k for
-good statistics). Normalised units: `ε₀ = 1`, `q/m = 1`; a tunable `coupling` scales
-the field (sets the effective plasma frequency `ω_p ≈ √coupling`).
+Solver domain `[0,L)³`, `L = 10`, grid `G³` (`G = 32`). The cloud is **single-species**
+(charge `+1`), floats near the box centre, and is confined by a soft harmonic trap. The
+FFT Poisson solve runs on CPU (grid tiny; robust across backends incl. MPS whose FFT
+support is spotty); the `N ≈ 200k` scatter/gather stay on the GPU. A tunable `coupling`
+scales the total space charge (`E ×= coupling/N`); a tunable `trap` sets the confinement.
 
-- **`deposit_cic(pos, G, L) → rho (G,G,G)`** — Cloud-In-Cell: each particle contributes
-  to its 8 surrounding nodes with weights `∏(1−f or f)` per axis; scatter via
-  `index_add_` on the flattened grid. Charge-conserving; per-particle charge normalised
-  so mean density ≈ 1.
-- **`solve_field(rho, L) → E (G,G,G,3)`** — neutralise `rho -= rho.mean()`; `rho_hat =
-  fftn(rho)`; `k` from `fftfreq(G)`; `phi_hat = rho_hat / k²` with `k²[0]=1`,
-  `phi_hat[0]=0`; `E_hat = −i·k·phi_hat` per axis; `E = real(ifftn(E_hat))`. Device-first
-  with a CPU fallback (caught once) for backends lacking FFT — the grid is `32³`, tiny.
-- **`gather_cic(E, pos, L) → Epart (N,3)`** — same 8-node CIC weights, `Σ w·E[node]`.
-- **`boris_push(pos, vel, Epart, B, qm, dt, L)`** — half E-kick, magnetic rotation
-  (`t=qm·B·dt/2`, `s=2t/(1+|t|²)`, `v⁻→v'→v⁺`), half E-kick; `pos += vel·dt`; wrap mod L.
-  Standard, energy-conserving in static B.
+- **`deposit_cic(pos, G, L, charge) → rho (G,G,G)`** — Cloud-In-Cell: each particle adds
+  `charge` split across its 8 surrounding nodes (`∏(1−f or f)` weights) via `index_add_`.
+  Weights partition unity → total charge conserved.
+- **`poisson_E_free(rho, L) → E (G,G,G,3)`** — **free-space (open-boundary)** Poisson by
+  Hockney's doubled-grid method: `φ = rho (*) G_free`, the *linear* convolution with the
+  free-space Green's function `G_free(r)=1/(4π r)`, computed as a cyclic convolution on a
+  `2G` grid with `rho` zero-padded into one octant (Green's-function FFT cached; self-cell
+  softened). `E = −∇φ` by central differences. This is the field of the *isolated* cloud,
+  decaying at infinity — no periodic images, no cube. (The periodic `poisson_E` still
+  exists and is unit-tested, but the applet uses the free-space solver.)
+- **`gather_cic(E, pos, L) → (N,3)`** — same 8-node CIC weights, `Σ w·E[node]`.
+- **`boris_push(pos, vel, accel, charge, B, dt)`** — half kick with the charge-inclusive
+  acceleration `accel` (`= charge·E + trap + impulse`), magnetic rotation driven by
+  per-particle `charge` (`t=charge·B·dt/2`, `s=2t/(1+|t|²)`, `v⁻→v'→v⁺`), half kick;
+  `pos += vel·dt`. **Open** — no wrap; the trap keeps the cloud inside the grid.
 
-### Initial conditions — `init_state(kind, N, L, device) → (pos, vel)`
-Selector mirroring SculptScope's shape combo (the collective result *emerges*):
-- **`kTwoStream`** — uniform in space; half the particles at `+v₀ x̂`, half at `−v₀ x̂`,
-  small thermal spread. The two-stream instability grows into phase-space vortices.
-- **`kThermal`** — uniform positions, Maxwellian velocities → plasma oscillations.
-- **`kBeam`** — a drifting warm beam.
-- **`kBlob`** — a localised warm clump that expands and rings against the background.
+### Initial conditions — `init_state(kind, N, L, temp, v0, dev) → (pos, vel, charge)`
+All free-floating blobs centred at `L/2` (single species). Selector mirroring
+SculptScope's shape combo:
+- **`kBlob`** — a warm Gaussian clump (settles into a breathing trapped ball).
+- **`kTwoStream`** — one blob, halves counter-streaming ±v₀ x̂ (beam dynamics).
+- **`kSphere`** — a spherical shell.
+- **`kRing`** — a spinning ring (striking under background B).
 
 ### Data flow (per worker step)
 ```
-rho   ← deposit_cic(pos, G, L)              # 1M particles → 32³ grid (scatter)
-E     ← solve_field(rho, L)                 # FFT Poisson: particles' OWN field
-Epart ← gather_cic(E, pos, L)               # field → particles (interp)
-boris_push(pos, vel, Epart + impulse, B)    # self-field (+ optional bg B, + cursor)
+rho   ← deposit_cic(pos, G, L, charge)      # 200k particles → 32³ grid (scatter)
+E     ← poisson_E_free(rho, L) * coupling/N # free-space FFT Poisson: cloud's OWN field
+accel ← charge*gather_cic(E,pos) − trap*(pos−centre) [+ cursor impulse]
+boris_push(pos, vel, accel, charge, B, dt)  # self-field + trap + optional bg B
 speed ← ‖vel‖                               # colour channel
 sync(); publish(write)                      # renderer imports pos[write] in place
 ```
 `E`/`rho` are grid-sized (default allocator); only `pos`/`speed` slots are pool-born.
 
 ## Interaction
-Right-drag orbit, wheel zoom (unchanged). **Initial-condition combo** (re-seeds the
-plasma, like `reset`). Left-drag → cursor-ray impulse added to `Epart` (perturb the
-plasma, watch it respond). Sliders: **B** (background field), **coupling** (ω_p),
-**temperature** (thermal spread on re-seed), **color**. Status line reports
-`N particles · zero-copy (imported geometry) · <IC> · KE <energy> · N steps · Metal`.
+Right-drag orbit, wheel zoom. **Initial-condition combo** (re-seeds). Left-drag →
+cursor-ray impulse (an external, charge-independent perturbation). Sliders: **charge**
+(space-charge `coupling`), **trap** (confinement), **B** (background field),
+**temperature** (on re-seed), **color**. Status line reports
+`N particles · zero-copy (imported geometry) · <IC> · KE <energy> · N steps/s`.
 
 ## Testing (physics invariants — real tests, not change-detectors)
 `tests/test_em_pic.cpp` (pure torch, CPU, `REQUIRE` — c10 shadows doctest's `CHECK`):
-1. **Poisson solve is correct.** For `ρ = cos(k·x)` on the grid, the solved `E` matches
-   the analytic `E = −∇φ`, `φ = ρ/|k|²`, to tolerance (the core of the whole method).
-2. **CIC conserves charge and partitions unity.** `Σ rho·cell_vol ≈ N·q`; the 8 CIC
-   weights sum to 1 for arbitrary positions.
-3. **Boris gyration.** In uniform B (E=0) a particle traces a circle at `ω = qB/m`,
+1. **Periodic Poisson solve is correct.** For `ρ = cos(k·x)`, the solved `E` matches the
+   analytic `E = −∇φ`, `φ = ρ/|k|²`, to tolerance.
+2. **Free-space Poisson gives `1/r`.** A unit point charge produces `φ(r) ≈ 1/(4π r)` at
+   several radii (validates the Hockney free-space Green's function — the applet's solver).
+3. **CIC conserves charge.** Unsigned deposit sums to `N`; a signed (neutral) set deposits
+   ≈ zero net charge.
+4. **Boris gyration.** In uniform B (E=0) a particle traces a circle at `ω = qB/m`,
    kinetic energy conserved over a full orbit to tolerance.
-4. **E×B drift.** Under crossed uniform E,B the guiding-centre drift matches `E×B/|B|²`.
-5. **Neutral plasma conserves momentum.** A periodic OCP with no background B conserves
-   total momentum over many steps (no external force) to tolerance.
+5. **E×B drift.** Under crossed uniform E,B the guiding-centre drift matches `E×B/|B|²`.
+6. **Momentum conservation.** A closed system with no external force conserves total
+   momentum over many steps (Newton's third law) to tolerance.
+
+Headless verification (`CALIPER_AUTOLAUNCH`): zero-copy pool + draw on MPS, and KE stays
+**bounded** (a stable breathing oscillation, ~[3k,17k] over 20 s) — no blow-up.
 
 Rendering, UI, colour, camera get no tests (per TDD-by-stakes).
 
@@ -129,8 +149,9 @@ applet dir; `tests/test_em_pic.cpp` gets its own torch test executable (mirrors
 ## Explicitly out of scope (YAGNI)
 - Full electromagnetic PIC (Yee-grid FDTD Maxwell) — much heavier; electrostatic PIC is
   the right scope for this particle count / framerate.
-- Multiple explicit species (electrons + ions) — the one-component-plasma neutralising
-  background is the standard simplification and enough for the target phenomena.
+- Two-species neutral plasma (electrons + ions) — the attractive close-encounter collapse
+  heats a coarse grid to blow-up (found in testing); a single-species trapped cloud is the
+  stable, free-floating choice here. (A finer grid + smoothing could revisit this later.)
 - Collisions / higher-order shape functions (TSC) — CIC is the standard baseline.
 - The learned RL controller (the superseded 2026-07-07 spec) — this is a simulation.
 - Render-to-tensor, custom shaders, picking (GEOMETRY.md invariants).

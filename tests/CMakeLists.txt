@@ -132,4 +132,22 @@ if(APPLE)
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
 endif()
 add_test(NAME caliper_sculpt_tests COMMAND caliper_sculpt_tests)
+
+# ---------------------------------------------------------------------------
+# FieldScope PIC physics tests (FFT Poisson solve, charge-conserving CIC
+# deposition, Boris gyration + E×B drift, plasma momentum conservation). Pure
+# torch; links only doctest + torch and includes the applet's em_pic.h.
+# ---------------------------------------------------------------------------
+add_executable(caliper_em_pic_tests test_em_pic.cpp)
+target_link_libraries(caliper_em_pic_tests PRIVATE
+    doctest::doctest "${TORCH_LIBRARIES}")
+target_include_directories(caliper_em_pic_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}/applets/field_scope")
+set_target_properties(caliper_em_pic_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    set_target_properties(caliper_em_pic_tests PROPERTIES
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+endif()
+add_test(NAME caliper_em_pic_tests COMMAND caliper_em_pic_tests)
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
