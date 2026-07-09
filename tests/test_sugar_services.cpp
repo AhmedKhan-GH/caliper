@@ -202,6 +202,46 @@ void fbr_free(CaliperTextureId tex) {
 const CaliperTensorBridgeV1 kFakeBridge = {
     sizeof(CaliperTensorBridgeV1), &fbr_tex, &fbr_update, &fbr_release,
     &fbr_mapped, &fbr_alloc, &fbr_free};
+
+// Fake geometry.v1_1: records the calls the Geometry sugar routes through it.
+struct GeometryCalls {
+    uint32_t last_create_flags = 0;
+    uint32_t last_draw_count = 0;
+    uint32_t last_draw_stride = 0;
+    uint32_t last_clear = 0;
+    int create_ex_calls = 0;
+    int draw_prims_calls = 0;
+};
+GeometryCalls g_geom;
+
+uint32_t fgeo_caps(void) {
+    return CALIPER_GEOM_CAP_IMPORTED_POINTS | CALIPER_GEOM_CAP_PRIMITIVES;
+}
+CaliperTextureId fgeo_create(uint32_t, uint32_t) { return 10; }
+void fgeo_release(CaliperTextureId) {}
+bool fgeo_points(CaliperTextureId, const CaliperGeomCamera*,
+                 CaliperAllocId, uint64_t, uint64_t,
+                 CaliperAllocId, uint64_t, int32_t, float, float,
+                 float, uint32_t) {
+    return true;
+}
+CaliperTextureId fgeo_create_ex(uint32_t, uint32_t, uint32_t flags) {
+    g_geom.create_ex_calls++;
+    g_geom.last_create_flags = flags;
+    return 20;
+}
+bool fgeo_prims(CaliperTextureId, const CaliperGeomCamera*,
+                const CaliperGeomDraw*, uint32_t count,
+                uint32_t stride, uint32_t clear) {
+    g_geom.draw_prims_calls++;
+    g_geom.last_draw_count = count;
+    g_geom.last_draw_stride = stride;
+    g_geom.last_clear = clear;
+    return true;
+}
+const CaliperGeometryV1_1 kFakeGeom11 = {sizeof(CaliperGeometryV1_1),
+    &fgeo_caps, &fgeo_create, &fgeo_release, &fgeo_points,
+    &fgeo_create_ex, &fgeo_prims, nullptr};
 } // namespace
 
 TEST_CASE("sugar: Jobs wrapper routes through the service table") {
@@ -418,4 +458,43 @@ TEST_CASE("sugar: Bridge wrapper is falsy and inert without the service") {
     bridge.release_texture(1);
     bridge.free_shared(1);
     CHECK(g_bridge.tex_calls == 0);            // nothing routed through
+}
+
+TEST_CASE("sugar: Geometry v1_1 wrapper routes primitives and defaults model identity") {
+    g_geom = GeometryCalls{};
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_GEOMETRY_V1_1, &kFakeGeom11);
+    caliper::Host host(fx.host());
+    caliper::Geometry geom(host);
+    REQUIRE(static_cast<bool>(geom));
+    CHECK(geom.has_primitives());
+
+    CHECK(geom.create_view(8, 8) == 10);
+    CHECK(geom.create_view_ex(8, 8, CALIPER_GEOM_VIEW_DEPTH) == 20);
+    CHECK(g_geom.create_ex_calls == 1);
+    CHECK(g_geom.last_create_flags == CALIPER_GEOM_VIEW_DEPTH);
+
+    CaliperGeomCamera cam{};
+    CaliperGeomDraw d = caliper::geom_draw_defaults();
+    CHECK(d.model[0] == doctest::Approx(1.0f));
+    CHECK(d.model[5] == doctest::Approx(1.0f));
+    CHECK(d.model[10] == doctest::Approx(1.0f));
+    CHECK(d.model[15] == doctest::Approx(1.0f));
+    CHECK(geom.draw_primitives(20, cam, &d, 1, 0xff000000u));
+    CHECK(g_geom.draw_prims_calls == 1);
+    CHECK(g_geom.last_draw_count == 1);
+    CHECK(g_geom.last_draw_stride == static_cast<uint32_t>(sizeof(CaliperGeomDraw)));
+    CHECK(g_geom.last_clear == 0xff000000u);
+}
+
+TEST_CASE("sugar: Geometry v1_1 methods are inert without the v1_1 table") {
+    caliper::testing::FixtureHost fx;
+    caliper::Host host(fx.host());
+    caliper::Geometry geom(host);
+    CHECK_FALSE(static_cast<bool>(geom));
+    CHECK_FALSE(geom.has_primitives());
+    CHECK(geom.create_view_ex(8, 8, CALIPER_GEOM_VIEW_DEPTH) == 0);
+    CaliperGeomCamera cam{};
+    CaliperGeomDraw d{};
+    CHECK_FALSE(geom.draw_primitives(1, cam, &d, 1, 0));
 }

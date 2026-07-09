@@ -480,6 +480,33 @@ struct GeomStub : ImportStub {
         return draw_return;
     }
 };
+
+struct PrimStub : GeomStub {
+    using GeomStub::GeomStub;
+    struct PrimDraw {
+        uint64_t view = 0;
+        std::vector<HostGeomDraw> draws;
+        uint32_t clear = 0;
+    };
+    std::vector<PrimDraw> prims;
+    bool prim_return = true;
+    bool supports_geometry_primitives() const override { return true; }
+    uint64_t geom_create_view_ex(int w, int h, uint32_t flags) override {
+        if (w <= 0 || h <= 0) return 0;
+        if ((flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u) return 0;
+        return next_view++;
+    }
+    bool geom_draw_primitives(uint64_t view, const float*, const float*,
+                              const HostGeomDraw* draws, uint32_t count,
+                              uint32_t clear) override {
+        PrimDraw rec;
+        rec.view = view;
+        rec.clear = clear;
+        if (count > 0) rec.draws.assign(draws, draws + count);
+        prims.push_back(std::move(rec));
+        return prim_return;
+    }
+};
 } // namespace
 
 TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
@@ -489,6 +516,11 @@ TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
     GeomStub g("vulkan");
     TensorBridge b2(g);
     CHECK((b2.geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS) != 0u);
+    CHECK((b2.geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) == 0u);
+    PrimStub p("vulkan");
+    TensorBridge b3(p);
+    CHECK((b3.geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS) != 0u);
+    CHECK((b3.geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) != 0u);
 }
 
 TEST_CASE("geom views: lifecycle, wrong-door release, update refusal") {
@@ -575,4 +607,101 @@ TEST_CASE("geom_draw_points on a non-view texture is refused") {
     CaliperGeomCamera cam{};
     CHECK_FALSE(b.geom_draw_points(tex, &cam, 0, 0, 0, 0, 0, 0, 0.f, 1.f, 1.f, 0u));
     CHECK(g.draws.empty());
+}
+
+TEST_CASE("geom v1_1: create_view_ex and draw_primitives gate before forwarding") {
+    PrimStub g("vulkan");
+    TensorBridge b(g);
+    uint64_t dummy = 42;
+    CaliperAllocId a = b.import_allocation(&dummy, 4096,
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a != 0);
+    CaliperGeomCamera cam{};
+
+    CHECK(b.geom_create_view_ex(64, 64, 99u) == 0);  // bad flags
+    CaliperTextureId depthless = b.geom_create_view_ex(64, 64, 0);
+    REQUIRE(depthless != 0);
+    CaliperTextureId depth = b.geom_create_view_ex(64, 64, CALIPER_GEOM_VIEW_DEPTH);
+    REQUIRE(depth != 0);
+
+    CaliperGeomDraw d{};
+    d.pos_alloc = a;
+    d.vertex_count = 3;
+    d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.flat_rgba = 0xff336699u;
+    d.model[0] = d.model[5] = d.model[10] = d.model[15] = 1.0f;
+
+    CHECK(b.geom_draw_primitives(depthless, &cam, &d, 1, sizeof(d), 0xff000000u));
+    REQUIRE(g.prims.size() == 1);
+    CHECK(g.prims[0].draws.size() == 1);
+    CHECK(g.prims[0].draws[0].pos_alloc == 1u);  // renderer-side import id
+    CHECK(g.prims[0].draws[0].vertex_count == 3u);
+    CHECK(g.prims[0].draws[0].flat_rgba == 0xff336699u);
+    CHECK(g.prims[0].draws[0].lut256 == nullptr);
+
+    CaliperGeomDraw cm = d;
+    cm.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    cm.attr_alloc = a;
+    cm.attr_offset = 128;
+    cm.colormap = CALIPER_CMAP_MAGMA;
+    CHECK(b.geom_draw_primitives(depthless, &cam, &cm, 1, sizeof(cm), 0u));
+    REQUIRE(g.prims.size() == 2);
+    CHECK(g.prims[1].draws[0].attr_alloc == 1u);
+    CHECK(g.prims[1].draws[0].lut256 != nullptr);
+
+    CaliperGeomDraw indexed = d;
+    indexed.vertex_count = 4;
+    indexed.topology = CALIPER_GEOM_TOPO_LINES;
+    indexed.index_alloc = a;
+    indexed.index_offset = 512;
+    indexed.index_count = 2;
+    CHECK(b.geom_draw_primitives(depthless, &cam, &indexed, 1, sizeof(indexed), 0u));
+    REQUIRE(g.prims.size() == 3);
+    CHECK(g.prims[2].draws[0].index_alloc == 1u);
+    CHECK(g.prims[2].draws[0].index_offset == 512u);
+    CHECK(g.prims[2].draws[0].index_count == 2u);
+
+    // draw_count 0 is a pure clear and does not require a draw array.
+    CHECK(b.geom_draw_primitives(depthless, &cam, nullptr, 0, sizeof(d), 0xff010203u));
+    REQUIRE(g.prims.size() == 4);
+    CHECK(g.prims[3].draws.empty());
+    CHECK(g.prims[3].clear == 0xff010203u);
+
+    CaliperGeomDraw z = d;
+    z.depth_flags = CALIPER_GEOM_DEPTH_TEST;
+    CHECK_FALSE(b.geom_draw_primitives(depthless, &cam, &z, 1, sizeof(z), 0u));
+    CHECK(g.prims.size() == 4);
+    CHECK(b.geom_draw_primitives(depth, &cam, &z, 1, sizeof(z), 0u));
+    CHECK(g.prims.size() == 5);
+
+    CHECK_FALSE(b.geom_draw_primitives(depth, nullptr, &d, 1, sizeof(d), 0u));
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &d, 1, sizeof(d) - 1, 0u));
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, nullptr, 1, sizeof(d), 0u));
+    CHECK(g.prims.size() == 5);
+
+    CaliperGeomDraw bad = d;
+    bad.reserved[0] = 1;
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.color_mode = 99;
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.topology = CALIPER_GEOM_TOPO_POINTS; bad.size_px = 0.0f;
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.index_alloc = a; bad.index_count = 2000;  // 8000 bytes > alloc
+    CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &bad, 1, sizeof(bad), 0u));
+    CHECK(g.prims.size() == 5);
+}
+
+TEST_CASE("geom v1_1: primitive entry points are inert without renderer support") {
+    GeomStub g("vulkan");
+    TensorBridge b(g);
+    CHECK((b.geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) == 0u);
+    CHECK(b.geom_create_view_ex(64, 64, 0) == 0);
+    CaliperGeomCamera cam{};
+    CaliperGeomDraw d{};
+    CHECK_FALSE(b.geom_draw_primitives(1, &cam, &d, 1, sizeof(d), 0u));
 }

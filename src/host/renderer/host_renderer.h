@@ -7,6 +7,38 @@ struct GLFWwindow;
 
 namespace caliper_host {
 
+// Host-side resolved draw for caliper.geometry.v1_1. Applet-facing allocation
+// ids and colormap ids have already been resolved by TensorBridge; backends
+// still re-check liveness/bounds against their own tables before encoding.
+struct HostGeomDraw {
+    uint64_t pos_alloc = 0;
+    uint64_t pos_offset = 0;
+    uint64_t vertex_count = 0;
+    uint64_t index_alloc = 0;
+    uint64_t index_offset = 0;
+    uint64_t index_count = 0;
+    uint64_t normal_alloc = 0;
+    uint64_t normal_offset = 0;
+    uint64_t attr_alloc = 0;
+    uint64_t attr_offset = 0;
+    uint32_t topology = 0;
+    uint32_t color_mode = 0;
+    uint32_t shade_mode = 0;
+    uint32_t blend_mode = 0;
+    uint32_t depth_flags = 0;
+    uint32_t flat_rgba = 0xffffffffu;
+    const uint32_t* lut256 = nullptr;
+    float vmin = 0.0f;
+    float vmax = 1.0f;
+    float size_px = 1.0f;
+    float model[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+};
+
 // Host-internal renderer seam (PLATFORM.md §5.4). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
 class HostRenderer {
@@ -89,6 +121,16 @@ public:
                                   const uint32_t* /*lut256*/,
                                   float /*vmin*/, float /*vmax*/,
                                   float /*size_px*/, uint32_t /*clear_rgba*/) {
+        return false;
+    }
+    virtual bool supports_geometry_primitives() const { return false; }
+    virtual uint64_t geom_create_view_ex(int /*w*/, int /*h*/,
+                                         uint32_t /*flags*/) { return 0; }
+    virtual bool geom_draw_primitives(uint64_t /*view_tex*/,
+                                      const float* /*view16*/, const float* /*proj16*/,
+                                      const HostGeomDraw* /*draws*/,
+                                      uint32_t /*count*/,
+                                      uint32_t /*clear_rgba*/) {
         return false;
     }
 

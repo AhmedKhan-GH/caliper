@@ -3,8 +3,11 @@
  * that pulled them earlier (caught the tensor_bridge stdbool gap, C3 review). */
 #include <caliper/services/data_v1.h>
 #include <caliper/services/artifacts_v1.h>
-#include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/geometry_v1_1.h>
+#include <caliper/services/geometry_v1.h>
+#include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
+#include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/metrics_v1.h>
 #include <caliper/tensor.h>
 #include <caliper/services/device_v1.h>

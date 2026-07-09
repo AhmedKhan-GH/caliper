@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace caliper_host {
@@ -361,7 +362,7 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
     // Literal zero-copy (§3.5): when the backend imports our device, back the
     // shared tensor with a device buffer the applet's kernels write in place —
     // update_texture then does no copy. Falls back to a CPU-unified vector when
-    // the backend has no device interop (GL, Metal-today, or CUDA unpaired).
+    // the backend has no device-shared texture path (GL or CUDA unpaired).
     void* device_ptr = nullptr;
     const bool device_shared =
         active_device_ != CALIPER_DEV_CPU &&
@@ -456,7 +457,12 @@ bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocI
 // --- caliper.geometry.v1: imported 3-D points into offscreen views ---------
 
 uint32_t TensorBridge::geom_caps() const {
-    return renderer_.supports_geometry() ? CALIPER_GEOM_CAP_IMPORTED_POINTS : 0u;
+    const bool primitives = renderer_.supports_geometry_primitives();
+    uint32_t c = (renderer_.supports_geometry() || primitives)
+        ? CALIPER_GEOM_CAP_IMPORTED_POINTS : 0u;
+    if (primitives)
+        c |= CALIPER_GEOM_CAP_PRIMITIVES;
+    return c;
 }
 
 CaliperTextureId TensorBridge::geom_create_view(uint32_t w, uint32_t h) {
@@ -471,6 +477,31 @@ CaliperTextureId TensorBridge::geom_create_view(uint32_t w, uint32_t h) {
     e.w    = (int)w;
     e.h    = (int)h;
     e.view = true;
+    e.view_depth = false;
+    entries_[pub] = std::move(e);
+    return pub;
+}
+
+CaliperTextureId TensorBridge::geom_create_view_ex(uint32_t w, uint32_t h,
+                                                   uint32_t flags) {
+    if (w == 0 || h == 0 || w > 16384 || h > 16384) {
+        bridge_log("geom_view_ex: bad size"); return 0;
+    }
+    if ((flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u) {
+        bridge_log("geom_view_ex: bad flags"); return 0;
+    }
+    if (!renderer_.supports_geometry_primitives()) {
+        bridge_log("geom_view_ex: primitives unsupported"); return 0;
+    }
+    const uint64_t rid = renderer_.geom_create_view_ex((int)w, (int)h, flags);
+    if (rid == 0) { bridge_log("geom_view_ex: renderer refused"); return 0; }
+    const CaliperTextureId pub = renderer_.tex_imtexture_id(rid);
+    Entry e;
+    e.tex  = rid;
+    e.w    = (int)w;
+    e.h    = (int)h;
+    e.view = true;
+    e.view_depth = (flags & CALIPER_GEOM_VIEW_DEPTH) != 0u;
     entries_[pub] = std::move(e);
     return pub;
 }
@@ -531,6 +562,187 @@ bool TensorBridge::geom_draw_points(CaliperTextureId view,
                                       pos_rid, pos_offset, count,
                                       attr_rid, attr_offset,
                                       lut, vmin, vmax, size_px, clear_rgba);
+}
+
+bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
+                                        const CaliperGeomCamera* cam,
+                                        const CaliperGeomDraw* draws,
+                                        uint32_t draw_count,
+                                        uint32_t draw_stride,
+                                        uint32_t clear_rgba) {
+    if (!renderer_.supports_geometry_primitives()) {
+        bridge_log("geom_prims: primitives unsupported"); return false;
+    }
+    if (!cam) { bridge_log("geom_prims: null camera"); return false; }
+    if (draw_stride < sizeof(CaliperGeomDraw)) {
+        bridge_log("geom_prims: short stride"); return false;
+    }
+    if (draw_count > 0 && draws == nullptr) {
+        bridge_log("geom_prims: null draws"); return false;
+    }
+    if (draw_count > 0 &&
+        (size_t)draw_count > std::numeric_limits<size_t>::max() / draw_stride) {
+        bridge_log("geom_prims: draw array overflow"); return false;
+    }
+    auto vt = entries_.find(view);
+    if (vt == entries_.end() || !vt->second.view) {
+        bridge_log("geom_prims: unknown view"); return false;
+    }
+
+    auto range_ok = [](uint64_t size, uint64_t offset, uint64_t elem_count,
+                       uint64_t elem_size, const char* what) -> bool {
+        if (offset % 4u != 0u) {
+            char msg[96];
+            std::snprintf(msg, sizeof msg, "geom_prims: %s offset misaligned", what);
+            bridge_log(msg);
+            return false;
+        }
+        if (elem_size != 0 && elem_count > UINT64_MAX / elem_size) {
+            char msg[96];
+            std::snprintf(msg, sizeof msg, "geom_prims: %s byte count overflow", what);
+            bridge_log(msg);
+            return false;
+        }
+        const uint64_t bytes = elem_count * elem_size;
+        if (offset > size || bytes > size - offset) {
+            char msg[96];
+            std::snprintf(msg, sizeof msg, "geom_prims: %s out of imported bounds", what);
+            bridge_log(msg);
+            return false;
+        }
+        return true;
+    };
+
+    std::vector<HostGeomDraw> resolved;
+    resolved.reserve(draw_count);
+    for (uint32_t i = 0; i < draw_count; ++i) {
+        const auto* d = reinterpret_cast<const CaliperGeomDraw*>(
+            reinterpret_cast<const uint8_t*>(draws) + (uint64_t)i * draw_stride);
+        auto reject_i = [i](const char* reason) {
+            char msg[128];
+            std::snprintf(msg, sizeof msg, "geom_prims: draw %u refused: %s", i, reason);
+            bridge_log(msg);
+        };
+
+        if (d->topology > CALIPER_GEOM_TOPO_TRIANGLE_STRIP) {
+            reject_i("bad topology"); return false;
+        }
+        if (d->color_mode > CALIPER_GEOM_COLOR_VERTEX_RGBA) {
+            reject_i("bad color mode"); return false;
+        }
+        if (d->shade_mode > CALIPER_GEOM_SHADE_LAMBERT) {
+            reject_i("bad shade mode"); return false;
+        }
+        if (d->blend_mode > CALIPER_GEOM_BLEND_ADDITIVE) {
+            reject_i("bad blend mode"); return false;
+        }
+        if ((d->depth_flags & ~(CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE)) != 0u) {
+            reject_i("bad depth flags"); return false;
+        }
+        if (d->reserved[0] != 0u || d->reserved[1] != 0u) {
+            reject_i("reserved nonzero"); return false;
+        }
+        if (d->depth_flags != 0u && !vt->second.view_depth) {
+            reject_i("depth flags on depthless view"); return false;
+        }
+        if (d->vertex_count == 0) {
+            reject_i("zero vertices"); return false;
+        }
+        if (d->vertex_count > UINT32_MAX) {
+            reject_i("too many vertices"); return false;
+        }
+        if (d->topology == CALIPER_GEOM_TOPO_POINTS && !(d->size_px > 0.0f)) {
+            reject_i("bad point size"); return false;
+        }
+
+        auto pa = imported_.find(d->pos_alloc);
+        if (pa == imported_.end()) { reject_i("unknown pos alloc"); return false; }
+        if (!range_ok(pa->second.size_bytes, d->pos_offset, d->vertex_count,
+                      12u, "positions")) {
+            return false;
+        }
+
+        uint64_t consumed = d->vertex_count;
+        uint64_t index_rid = 0;
+        if (d->index_alloc != 0) {
+            auto ia = imported_.find(d->index_alloc);
+            if (ia == imported_.end()) { reject_i("unknown index alloc"); return false; }
+            if (d->index_count == 0) { reject_i("zero indices"); return false; }
+            if (d->index_count > UINT32_MAX) { reject_i("too many indices"); return false; }
+            if (!range_ok(ia->second.size_bytes, d->index_offset, d->index_count,
+                          4u, "indices")) {
+                return false;
+            }
+            index_rid = ia->second.renderer_id;
+            consumed = d->index_count;
+        }
+        if ((d->topology == CALIPER_GEOM_TOPO_LINES ||
+             d->topology == CALIPER_GEOM_TOPO_LINE_STRIP) && consumed < 2) {
+            reject_i("line needs two vertices"); return false;
+        }
+        if ((d->topology == CALIPER_GEOM_TOPO_TRIANGLES ||
+             d->topology == CALIPER_GEOM_TOPO_TRIANGLE_STRIP) && consumed < 3) {
+            reject_i("triangle needs three vertices"); return false;
+        }
+
+        uint64_t normal_rid = 0;
+        if (d->shade_mode == CALIPER_GEOM_SHADE_LAMBERT && d->normal_alloc == 0) {
+            reject_i("lambert needs normals"); return false;
+        }
+        if (d->normal_alloc != 0) {
+            auto na = imported_.find(d->normal_alloc);
+            if (na == imported_.end()) { reject_i("unknown normal alloc"); return false; }
+            if (!range_ok(na->second.size_bytes, d->normal_offset, d->vertex_count,
+                          12u, "normals")) {
+                return false;
+            }
+            normal_rid = na->second.renderer_id;
+        }
+
+        uint64_t attr_rid = 0;
+        const uint32_t* lut = nullptr;
+        if (d->color_mode != CALIPER_GEOM_COLOR_FLAT) {
+            auto aa = imported_.find(d->attr_alloc);
+            if (aa == imported_.end()) { reject_i("unknown attr alloc"); return false; }
+            if (!range_ok(aa->second.size_bytes, d->attr_offset, d->vertex_count,
+                          4u, "attributes")) {
+                return false;
+            }
+            attr_rid = aa->second.renderer_id;
+            if (d->color_mode == CALIPER_GEOM_COLOR_COLORMAP) {
+                lut = colormap_lut(d->colormap);
+                if (!lut) { reject_i("bad colormap"); return false; }
+            }
+        }
+
+        HostGeomDraw hd;
+        hd.pos_alloc = pa->second.renderer_id;
+        hd.pos_offset = d->pos_offset;
+        hd.vertex_count = d->vertex_count;
+        hd.index_alloc = index_rid;
+        hd.index_offset = index_rid ? d->index_offset : 0u;
+        hd.index_count = index_rid ? d->index_count : 0u;
+        hd.normal_alloc = normal_rid;
+        hd.normal_offset = normal_rid ? d->normal_offset : 0u;
+        hd.attr_alloc = attr_rid;
+        hd.attr_offset = attr_rid ? d->attr_offset : 0u;
+        hd.topology = d->topology;
+        hd.color_mode = d->color_mode;
+        hd.shade_mode = d->shade_mode;
+        hd.blend_mode = d->blend_mode;
+        hd.depth_flags = d->depth_flags;
+        hd.flat_rgba = d->flat_rgba;
+        hd.lut256 = lut;
+        hd.vmin = d->vmin;
+        hd.vmax = d->vmax;
+        hd.size_px = d->size_px;
+        std::memcpy(hd.model, d->model, sizeof(hd.model));
+        resolved.push_back(hd);
+    }
+
+    const HostGeomDraw* resolved_ptr = resolved.empty() ? nullptr : resolved.data();
+    return renderer_.geom_draw_primitives(vt->second.tex, cam->view, cam->proj,
+                                          resolved_ptr, draw_count, clear_rgba);
 }
 
 bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {

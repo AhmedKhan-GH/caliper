@@ -13,6 +13,7 @@
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/geometry_v1.h>
+#include <caliper/services/geometry_v1_1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -336,14 +337,28 @@ public:
     Geometry() = default;
     explicit Geometry(const Host& host)
         : g_(static_cast<const CaliperGeometryV1*>(
-              host.service(CALIPER_GEOMETRY_V1))) {}
+              host.service(CALIPER_GEOMETRY_V1))),
+          g11_(static_cast<const CaliperGeometryV1_1*>(
+              host.service(CALIPER_GEOMETRY_V1_1))) {
+        if (!g_ && g11_) {
+            g_ = reinterpret_cast<const CaliperGeometryV1*>(g11_);
+        }
+    }
 
     explicit operator bool() const { return g_ != nullptr; }
 
     uint32_t caps() const { return (g_ && g_->caps) ? g_->caps() : 0u; }
+    bool has_primitives() const {
+        return (caps() & CALIPER_GEOM_CAP_PRIMITIVES) != 0u;
+    }
 
     CaliperTextureId create_view(uint32_t w, uint32_t h) const {
         return (g_ && g_->create_view) ? g_->create_view(w, h) : 0;
+    }
+    CaliperTextureId create_view_ex(uint32_t w, uint32_t h,
+                                    uint32_t flags) const {
+        return (g11_ && g11_->create_view_ex)
+                   ? g11_->create_view_ex(w, h, flags) : 0;
     }
     void release_view(CaliperTextureId view) const {
         if (g_ && g_->release_view) g_->release_view(view);
@@ -360,9 +375,31 @@ public:
                                      vmax, size_px, clear_rgba)
                    : false;
     }
+    bool draw_primitives(CaliperTextureId view, const CaliperGeomCamera& cam,
+                         const CaliperGeomDraw* draws, uint32_t count,
+                         uint32_t clear_rgba) const {
+        return (g11_ && g11_->draw_primitives)
+                   ? g11_->draw_primitives(view, &cam, draws, count,
+                                           sizeof(CaliperGeomDraw), clear_rgba)
+                   : false;
+    }
 private:
     const CaliperGeometryV1* g_ = nullptr;
+    const CaliperGeometryV1_1* g11_ = nullptr;
 };
+
+inline CaliperGeomDraw geom_draw_defaults() {
+    CaliperGeomDraw d{};
+    d.flat_rgba = 0xffffffffu;
+    d.vmin = 0.0f;
+    d.vmax = 1.0f;
+    d.size_px = 1.0f;
+    d.model[0] = 1.0f;
+    d.model[5] = 1.0f;
+    d.model[10] = 1.0f;
+    d.model[15] = 1.0f;
+    return d;
+}
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't
 // vend the service; name is host-owned (valid for the process lifetime).
