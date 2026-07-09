@@ -24,6 +24,7 @@ checkboxes — they don't ship, they hold.
 - [x] S1 — Metal `[[point_size]]` topology-class fix (`c2febe0`); first correct v1_1 frame
 - [x] S2 — full §9.2 matrix: 13 cases / 173 assertions on live Metal (coverage, LUT-at-offsets, v1 parity, pure clear+depth, depth order-independence, ALPHA byte-exact, 1-px lines, Lambert ±2 LSB, coplanar overlay, index clamp, 22-case gate battery, stride forward-compat)
 - [x] S3 — MeshScope: learned-surface exemplar per design doc (jobs.v1 worker, triple-buffered slots, 3-draw frame, `caliper_mesh_tests`); run-proven: "first zero-copy frame drawn" on Metal+MPS, honest GL fallback
+- [x] S3b — MeshScope "paint the target": left-drag sculpts the target grid, the net chases the edit live (stroke queue keeps torch off the frame thread; chase test green; run-proven)
 
 ## 3 · Ship it (next actions, in order)
 
