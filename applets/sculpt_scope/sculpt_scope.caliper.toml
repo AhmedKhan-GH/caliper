@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.sculpt-scope"
+name    = "SculptScope"
+version = "0.1.0"
+summary = "A small libtorch MLP maps N latent codes to N 3-D points and trains live (Adam, real backprop) to match a target shape. Its forward output is written straight into the pool-born tensor the renderer's instanced point pass (caliper.geometry.v1) reads in place — the buffer the final Linear layer writes IS the buffer the GPU draws, with zero copies between the ML and the picture. Watch a formless blob flow into a crisp shape as the network learns; color tracks per-point motion so a converged cloud dims. Right-drag orbits, wheel zooms. Falls back to a subsampled CPU scatter wherever the zero-copy path is absent."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.geometry.v1"]

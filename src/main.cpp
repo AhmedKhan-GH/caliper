@@ -249,6 +249,8 @@ public:
                         "GPTScope: Logit Lens",// the mech-interp centerpiece
                         "GPTScope: ThoughtSpace", // residual constellation (3-D)
                         "FlowScope: Field",    // the geometry.v1 exemplar
+                        "FieldScope: EM Field",// PIC plasma — the physics exemplar
+                        "SculptScope: Learned Cloud", // net's own tensor drawn live
                         "Hello, Caliper",      // examples/hello (tutorial)
                         "SineScope",           // examples/sine_scope (tutorial)
                     };
