@@ -1047,6 +1047,269 @@ TEST_CASE("gfx/metal geometry.v1_1: indexed triangles from imported buffers hono
     bk.bridge->release_allocation(idx_alloc);
     bk.bridge->geom_release_view(view);
 }
+
+// Row A — one non-indexed full-viewport triangle, FLAT/UNLIT/OPAQUE, no depth.
+// The (-1,-1),(3,-1),(-1,3) trick covers every pixel center unambiguously, so
+// the whole frame is the flat color: identical to geom_ref's clear-only image.
+TEST_CASE("gfx/metal geometry.v1_1: unindexed triangle, FLAT, OPAQUE is byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 16, H = 16;
+    const float pos[] = {
+        -1.0f, -1.0f, 0.5f,
+         3.0f, -1.0f, 0.5f,
+        -1.0f,  3.0f, 0.5f,
+    };
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    REQUIRE((pos_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t flat = 0xFF3377AAu;   // little-endian RGBA8
+    CaliperGeomDraw d{};
+    d.pos_alloc = pos_alloc;
+    d.vertex_count = 3;
+    d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.flat_rgba = flat;
+    d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, flat, {}, {}));
+
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row B — indexed quad (4 verts, 6 u32 indices) with all buffers at nonzero,
+// 4-byte-aligned offsets (buffer starts filled with garbage to prove offsets
+// are honored). COLOR_COLORMAP with every vertex attr equal keeps the color
+// flat and byte-exact: attr==1 -> LUT[255], attr==0 -> LUT[0]. The quad covers
+// exactly pixel columns/rows 8..23 of a 32x32 view (NDC edges at +/-0.5, which
+// land on integer pixel boundaries — never through a pixel center).
+TEST_CASE("gfx/metal geometry.v1_1: indexed quad pulls u32 indices and LUT extremes at nonzero offsets") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 32, H = 32;
+    const float pos[12] = {
+        -0.5f,  0.5f, 0.5f,   // v0 top-left     -> pixel (8,8)
+         0.5f,  0.5f, 0.5f,   // v1 top-right    -> col 24, row 8
+        -0.5f, -0.5f, 0.5f,   // v2 bottom-left  -> col 8, row 24
+         0.5f, -0.5f, 0.5f,   // v3 bottom-right -> col 24, row 24
+    };
+    const uint32_t idx[6] = {0, 1, 2, 2, 1, 3};   // culling off; winding free
+    const uint64_t pos_off = 256, idx_off = 128, attr_off = 64;
+
+    std::vector<uint8_t> pos_bytes(pos_off + sizeof(pos), 0xAB);
+    std::memcpy(pos_bytes.data() + pos_off, pos, sizeof(pos));
+    std::vector<uint8_t> idx_bytes(idx_off + sizeof(idx), 0xCD);
+    std::memcpy(idx_bytes.data() + idx_off, idx, sizeof(idx));
+
+    id<MTLBuffer> pos_buf = device_buffer(pos_bytes.data(), pos_bytes.size());
+    id<MTLBuffer> idx_buf = device_buffer(idx_bytes.data(), idx_bytes.size());
+    REQUIRE((pos_buf != nil)); REQUIRE((idx_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, pos_bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId idx_alloc = bk.bridge->import_allocation(
+        (__bridge void*)idx_buf, idx_bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(idx_alloc != 0);
+
+    std::vector<std::pair<int,int>> rect;   // cols 8..23, rows 8..23
+    for (int y = 8; y < 24; ++y)
+        for (int x = 8; x < 24; ++x) rect.emplace_back(x, y);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+
+    auto make_draw = [&](CaliperAllocId attr_alloc) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pos_alloc;   d.pos_offset = pos_off;   d.vertex_count = 4;
+        d.index_alloc = idx_alloc; d.index_offset = idx_off; d.index_count = 6;
+        d.attr_alloc = attr_alloc; d.attr_offset = attr_off;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.colormap = CALIPER_CMAP_VIRIDIS;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // attr all 1.0 -> constant LUT[255]
+    const float ones[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    std::vector<uint8_t> a1(attr_off + sizeof(ones), 0xEE);
+    std::memcpy(a1.data() + attr_off, ones, sizeof(ones));
+    id<MTLBuffer> a1_buf = device_buffer(a1.data(), a1.size());
+    CaliperAllocId a1_alloc = bk.bridge->import_allocation(
+        (__bridge void*)a1_buf, a1.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(a1_alloc != 0);
+    CaliperGeomDraw d1 = make_draw(a1_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d1, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) ==
+          geom_ref(W, H, 0xFF000000u, rect, std::vector<uint32_t>(rect.size(), lut[255])));
+
+    // fresh clear, attr all 0.0 -> constant LUT[0]
+    const float zeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<uint8_t> a0(attr_off + sizeof(zeros), 0x11);
+    std::memcpy(a0.data() + attr_off, zeros, sizeof(zeros));
+    id<MTLBuffer> a0_buf = device_buffer(a0.data(), a0.size());
+    CaliperAllocId a0_alloc = bk.bridge->import_allocation(
+        (__bridge void*)a0_buf, a0.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(a0_alloc != 0);
+    CaliperGeomDraw d0 = make_draw(a0_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d0, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) ==
+          geom_ref(W, H, 0xFF000000u, rect, std::vector<uint32_t>(rect.size(), lut[0])));
+
+    bk.bridge->release_allocation(a0_alloc);
+    bk.bridge->release_allocation(a1_alloc);
+    bk.bridge->release_allocation(idx_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row C — the v1_1 primitives point path (ADDITIVE) must be byte-identical to
+// the frozen v1 draw_points path given the same buffers. Over a black clear,
+// additive one-pixel points equal the LUT color exactly, matching v1.
+TEST_CASE("gfx/metal geometry.v1_1: additive points via draw_primitives match v1 draw_points byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 32, H = 32;
+    const std::pair<int,int> px[3] = {{3, 5}, {18, 20}, {31, 31}};
+    const float attrs[3] = {0.0f, 0.5f, 1.0f};
+    float pos[9];
+    for (int i = 0; i < 3; ++i) ndc_for_pixel(px[i].first, px[i].second, W, H, &pos[i * 3]);
+
+    id<MTLBuffer> pos_buf  = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> attr_buf = device_buffer(attrs, sizeof(attrs));
+    REQUIRE((pos_buf != nil)); REQUIRE((attr_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, sizeof(attrs), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(attr_alloc != 0);
+
+    const uint32_t clear = 0xFF000000u;
+    CaliperGeomCamera cam = identity_cam();
+
+    // frozen v1 path
+    CaliperTextureId view1 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view1 != 0);
+    REQUIRE(bk.bridge->geom_draw_points(view1, &cam, pos_alloc, 0, 3,
+                                        attr_alloc, 0, CALIPER_CMAP_VIRIDIS,
+                                        0.0f, 1.0f, 1.0f, clear));
+    auto got1 = bk.readback(view1, W, H);
+
+    // v1_1 primitives path
+    CaliperTextureId view2 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view2 != 0);
+    CaliperGeomDraw d{};
+    d.pos_alloc = pos_alloc; d.vertex_count = 3;
+    d.attr_alloc = attr_alloc; d.attr_offset = 0;
+    d.topology = CALIPER_GEOM_TOPO_POINTS;
+    d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_ADDITIVE;
+    d.colormap = CALIPER_CMAP_VIRIDIS;
+    d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+    REQUIRE(bk.bridge->geom_draw_primitives(view2, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), clear));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    auto got2 = bk.readback(view2, W, H);
+
+    CHECK(got1 == got2);
+
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view1);
+    bk.bridge->geom_release_view(view2);
+}
+
+// Row D — draw_count 0 is a pure clear of BOTH color and depth. Write depth 0.2
+// with a near triangle, then a count-0 clear to teal, then a far (z=0.9) DEPTH_TEST
+// triangle: it only draws if the count-0 clear reset depth to 1.0.
+TEST_CASE("gfx/metal geometry.v1_1: draw_count 0 is a pure clear, and clears depth to 1.0") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 16, H = 16;
+    const float near_pos[9] = {-1.f, -1.f, 0.2f,  3.f, -1.f, 0.2f, -1.f, 3.f, 0.2f};
+    const float far_pos[9]  = {-1.f, -1.f, 0.9f,  3.f, -1.f, 0.9f, -1.f, 3.f, 0.9f};
+    id<MTLBuffer> near_buf = device_buffer(near_pos, sizeof(near_pos));
+    id<MTLBuffer> far_buf  = device_buffer(far_pos,  sizeof(far_pos));
+    REQUIRE((near_buf != nil)); REQUIRE((far_buf != nil));
+    CaliperAllocId near_alloc = bk.bridge->import_allocation(
+        (__bridge void*)near_buf, sizeof(near_pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId far_alloc = bk.bridge->import_allocation(
+        (__bridge void*)far_buf, sizeof(far_pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(near_alloc != 0); REQUIRE(far_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, CALIPER_GEOM_VIEW_DEPTH);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    auto tri_draw = [&](CaliperAllocId a, uint32_t depth_flags, uint32_t color) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = a; d.vertex_count = 3;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.depth_flags = depth_flags;
+        d.flat_rgba = color;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // (1) near green, TEST|WRITE -> colors view, writes depth 0.2
+    const uint32_t green = 0xFF00FF00u;
+    CaliperGeomDraw d1 = tri_draw(near_alloc,
+        CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE, green);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d1, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, green, {}, {}));
+
+    // (2) draw_count 0 -> pure clear to teal (and depth cleared to 1.0)
+    const uint32_t teal = 10u | (20u << 8) | (30u << 16) | (255u << 24);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, nullptr, 0,
+                                            sizeof(CaliperGeomDraw), teal));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, teal, {}, {}));
+
+    // (3) far blue, TEST only -> passes only because depth was cleared to 1.0
+    const uint32_t blue = 0xFFFF0000u;
+    CaliperGeomDraw d3 = tri_draw(far_alloc, CALIPER_GEOM_DEPTH_TEST, blue);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d3, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, blue, {}, {}));
+
+    bk.bridge->release_allocation(far_alloc);
+    bk.bridge->release_allocation(near_alloc);
+    bk.bridge->geom_release_view(view);
+}
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================
