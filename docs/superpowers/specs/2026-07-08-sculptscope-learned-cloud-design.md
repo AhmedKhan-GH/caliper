@@ -1,7 +1,8 @@
 # SculptScope — a neural network sculpts a point cloud, rendered from its own tensor with zero copies
 
 **Date:** 2026-07-08
-**Status:** approved (design), pending implementation plan
+**Status:** implemented + verified (`applets/sculpt_scope`, `tests/test_sculpt.cpp`;
+commit `7e03599`)
 **Built on the zero-copy spine of:** `applets/field_scope` / `applets/flow_scope`
 **Sibling ML exemplars (training, but copy-to-plot):** `applets/embed_scope`, `applets/gpt_scope`
 
