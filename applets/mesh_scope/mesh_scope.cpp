@@ -134,9 +134,17 @@ struct MeshScopeState {
     // frame -> worker knobs (atomics; torn reads harmless).
     std::atomic<bool>  train_on{true};
     std::atomic<bool>  reset_req{false};
+    std::atomic<bool>  reset_target_req{false};   // "reset target" button; worker applies
     std::atomic<float> lr{3e-3f};
 
+    // A painted Gaussian bump on the target: domain center, radius, signed amp.
+    struct Stroke { float cx, cy, radius, amp; };
+
     std::mutex mtx;  // guards everything below, down to the frame block
+
+    // Brush strokes pushed by the frame thread (never torch), drained by the
+    // worker at the top of each step before train_step (the threading rule).
+    std::vector<Stroke> strokes;
 
     // Triple-buffered render slots (pool-born on the zero-copy path) + the two
     // static index buffers, imported once.
@@ -165,6 +173,8 @@ struct MeshScopeState {
     int   view_w = 768, view_h = 768;
     float cam_az = 0.8f, cam_el = 0.55f, cam_dist = 4.5f;
     float color_vmax = 0.05f;   // err^2 LUT ceiling (UI-tunable)
+    float brush_radius = 0.35f;   // paint brush radius, domain units
+    float brush_strength = 0.8f;  // paint rate, target units/sec
     bool  zero_copy_frame = false;
     bool  logged_first_draw = false;
     const char* frame_status = "initializing";
@@ -255,7 +265,7 @@ void mesh_job(MeshScopeState* st, const CaliperJobControl* ctl) {
             pos[w].select(1, 0).copy_(gx);
             pos[w].select(1, 1).copy_(z);
             pos[w].select(1, 2).copy_(gy);
-            auto err = (z - model.grid_tgt).pow(2);             // (N,) err^2
+            auto err = (z - model.target.grid).pow(2);          // (N,) err^2
             attr[w].copy_(err);
             normal[w].copy_(finite_diff_normals(z));
             sample_pos[w].select(1, 0).copy_(model.batch_xy.select(1, 0));
@@ -313,6 +323,20 @@ void mesh_job(MeshScopeState* st, const CaliperJobControl* ctl) {
             st->steps_trained = 0;
             st->last_loss = 0.f;
         }
+
+        // Drain the paint queue BEFORE train_step: the single-writer of the
+        // target grid is always the worker (the frame thread only enqueues).
+        if (st->reset_target_req.exchange(false)) model.target.reset_preset();
+        {
+            std::vector<MeshScopeState::Stroke> pending;
+            {
+                std::lock_guard<std::mutex> lk(st->mtx);
+                pending.swap(st->strokes);
+            }
+            for (const auto& s : pending)
+                model.target.brush(s.cx, s.cy, s.radius, s.amp);
+        }
+
         model.set_lr(st->lr.load());
 
         if (st->train_on.load()) {
@@ -399,6 +423,14 @@ void MeshScopeApplet::draw_ui() {
         ImGui::SetNextItemWidth(110);
         ImGui::SliderFloat("err vmax", &st->color_vmax, 0.005f, 0.2f, "%.3f");
         ImGui::SameLine();
+        ImGui::SetNextItemWidth(110);
+        ImGui::SliderFloat("brush", &st->brush_radius, 0.08f, 1.0f, "%.2f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110);
+        ImGui::SliderFloat("strength", &st->brush_strength, 0.1f, 2.0f, "%.2f");
+        ImGui::SameLine();
+        if (ImGui::Button("reset target")) st->reset_target_req.store(true);
+        ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
         if (st->zero_copy_frame)
@@ -410,7 +442,7 @@ void MeshScopeApplet::draw_ui() {
                 "fallback: %s · step %lld · loss %.4f · grid-MSE %.4f",
                 st->frame_status, (long long)steps, loss, mse);
         ImGui::SameLine();
-        ImGui::TextDisabled("   (right-drag: orbit · wheel: zoom)");
+        ImGui::TextDisabled("   (left-drag: paint · alt: lower · right-drag: orbit · wheel: zoom)");
     }
     ImGui::EndChild();
 
@@ -530,6 +562,8 @@ void MeshScopeApplet::draw_ui() {
                      ImVec2((float)st->view_w / fb_scale,
                             (float)st->view_h / fb_scale));
         const bool hovered = ImGui::IsItemHovered();
+        const ImVec2 mn = ImGui::GetItemRectMin();
+        const ImVec2 sz = ImGui::GetItemRectSize();
         ImGuiIO& io = ImGui::GetIO();
         if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
             st->cam_az += io.MouseDelta.x * 0.008f;
@@ -539,6 +573,38 @@ void MeshScopeApplet::draw_ui() {
         if (hovered && io.MouseWheel != 0.f) {
             st->cam_dist *= (1.f - io.MouseWheel * 0.08f);
             st->cam_dist = std::clamp(st->cam_dist, 2.0f, 9.0f);
+        }
+        // Left-drag paints the target: unproject the cursor through the SAME
+        // view/proj the applet built above, intersect the base plane y=0, and
+        // enqueue a brush at those domain coords. Frame thread never touches
+        // torch — it only pushes a Stroke under the publish mutex.
+        if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+            sz.x > 0.f && sz.y > 0.f) {
+            const float ce = std::cos(st->cam_el), se = std::sin(st->cam_el);
+            const float ca = std::cos(st->cam_az), sa = std::sin(st->cam_az);
+            const V3 eye{st->cam_dist * ce * ca, st->cam_dist * se,
+                         st->cam_dist * ce * sa};
+            const V3 fwd = norm3(V3{0, 0, 0} - eye);
+            const V3 right = norm3(cross(fwd, {0, 1, 0}));
+            const V3 up = cross(right, fwd);
+            const float u = ((io.MousePos.x - mn.x) / sz.x) * 2.f - 1.f;
+            const float v = 1.f - ((io.MousePos.y - mn.y) / sz.y) * 2.f;
+            const float ta = std::tan(45.f * kPi / 360.f);
+            const float aspect = (float)st->view_w / (float)st->view_h;
+            const V3 dir = norm3({fwd.x + u * ta * aspect * right.x + v * ta * up.x,
+                                  fwd.y + u * ta * aspect * right.y + v * ta * up.y,
+                                  fwd.z + u * ta * aspect * right.z + v * ta * up.z});
+            if (std::abs(dir.y) > 1e-6f) {
+                const float t = -eye.y / dir.y;   // ray . plane y=0
+                const float wx = eye.x + t * dir.x;   // world x == domain x
+                const float wz = eye.z + t * dir.z;   // world z == domain y
+                if (t > 0.f && std::abs(wx) <= kDomain && std::abs(wz) <= kDomain) {
+                    const float sign = io.KeyAlt ? -1.f : 1.f;
+                    const float amp = sign * st->brush_strength * io.DeltaTime;
+                    std::lock_guard<std::mutex> lk(st->mtx);
+                    st->strokes.push_back({wx, wz, st->brush_radius, amp});
+                }
+            }
         }
     } else {
         // Fallback ladder: the same per-vertex err^2, as an input-locked CPU

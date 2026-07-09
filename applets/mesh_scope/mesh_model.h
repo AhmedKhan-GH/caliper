@@ -32,7 +32,8 @@ constexpr int   kHidden = 64;     // MLP hidden width
 // ---- target surface --------------------------------------------------------
 // z*(x,y): two Gaussian lobes (one up, one down) plus a low ripple, amplitude
 // ~±0.4 over the domain. Visually distinct features so the net's capture order
-// is watchable. Pure analytic, vectorized: coords (M,2) -> heights (M,).
+// is watchable. Pure analytic, vectorized: coords (M,2) -> heights (M,). Now the
+// *preset* for the mutable TargetGrid below (paint-the-target upgrade).
 inline torch::Tensor target_z(const torch::Tensor& xy) {
     auto x = xy.select(1, 0), y = xy.select(1, 1);
     auto bump  =  0.38f * torch::exp(-3.0f * ((x - 0.55f).pow(2) + (y - 0.55f).pow(2)));
@@ -71,6 +72,65 @@ inline torch::Tensor grid_xy(torch::Device device) {
     auto gy = lin.view({kGrid, 1}).expand({kGrid, kGrid}).reshape({-1});  // row -> y
     return torch::stack({gx, gy}, 1);   // (N,2)
 }
+
+// ---- the mutable target grid -----------------------------------------------
+// The answer key you can paint. `grid` (N,) holds the target height at each
+// lattice node (i = row*kGrid + col, x fastest — the shared layout). Init from
+// the analytic preset above; `brush` raises/lowers a Gaussian bump; `sample`
+// bilinearly reads a continuous coord for the training minibatch loss. Owned by
+// the worker thread — the frame thread only ever enqueues brush requests.
+struct TargetGrid {
+    torch::Tensor grid;    // (N,) mutable target heights on the lattice
+    torch::Tensor nodes;   // (N,2) constant node coords (for brush distances)
+    torch::Device device;
+
+    explicit TargetGrid(torch::Device dev) : device(dev) {
+        nodes = grid_xy(device);
+        reset_preset();
+    }
+
+    // Restore the two-lobe + ripple analytic preset (the cold-open demo).
+    void reset_preset() {
+        torch::NoGradGuard ng;
+        grid = target_z(nodes).contiguous();
+    }
+
+    // Bilinear read of `grid` at continuous domain coords (B,2) -> heights (B,).
+    // Coords are clamped to the domain (a brush can't push a sample outside).
+    torch::Tensor sample(const torch::Tensor& xy) const {
+        torch::NoGradGuard ng;
+        const float h = 2.0f * kDomain / static_cast<float>(kGrid - 1);
+        auto x = xy.select(1, 0).clamp(-kDomain, kDomain);
+        auto y = xy.select(1, 1).clamp(-kDomain, kDomain);
+        auto fx = (x + kDomain) / h;                  // [0, kGrid-1]
+        auto fy = (y + kDomain) / h;
+        auto x0 = fx.floor().clamp(0.0, kGrid - 2);   // clamp so x0+1 is valid
+        auto y0 = fy.floor().clamp(0.0, kGrid - 2);
+        auto tx = fx - x0;
+        auto ty = fy - y0;
+        auto c0 = x0.to(torch::kLong), c1 = c0 + 1;
+        auto r0 = y0.to(torch::kLong), r1 = r0 + 1;
+        auto v00 = grid.index_select(0, r0 * kGrid + c0);
+        auto v01 = grid.index_select(0, r0 * kGrid + c1);
+        auto v10 = grid.index_select(0, r1 * kGrid + c0);
+        auto v11 = grid.index_select(0, r1 * kGrid + c1);
+        auto v0 = v00 * (1.0f - tx) + v01 * tx;       // interp along x, row r0
+        auto v1 = v10 * (1.0f - tx) + v11 * tx;       //                  row r1
+        return v0 * (1.0f - ty) + v1 * ty;            // interp along y
+    }
+
+    // Add a Gaussian bump centered at domain (cx,cy). sigma = radius/2 (the
+    // brush "radius" is ~2 sigma, its visible edge); result clamped to [-1,1] so
+    // the paint can't push the camera framing out of range.
+    void brush(float cx, float cy, float radius, float amp) {
+        torch::NoGradGuard ng;
+        const float sigma = radius * 0.5f;
+        auto dx = nodes.select(1, 0) - cx;
+        auto dy = nodes.select(1, 1) - cy;
+        auto bump = amp * torch::exp(-(dx * dx + dy * dy) / (2.0f * sigma * sigma));
+        grid = (grid + bump).clamp(-1.0f, 1.0f);
+    }
+};
 
 // ---- central finite-difference normals -------------------------------------
 // z_flat: (N,) heights on the regular grid (layout above). Central differences
@@ -113,14 +173,13 @@ struct MeshModel {
     float lr;
 
     torch::Tensor grid;       // (N,2) constant coords
-    torch::Tensor grid_tgt;   // (N,)  constant target heights on the grid
+    TargetGrid    target;     // mutable target heights (paint-the-target)
     torch::Tensor batch_xy;   // (B,2) last training minibatch coords
     torch::Tensor batch_pred; // (B,)  net height at that minibatch (current θ)
 
     explicit MeshModel(torch::Device dev, float lr_ = 3e-3f)
-        : device(dev), lr(lr_) {
+        : device(dev), lr(lr_), target(dev) {
         grid = grid_xy(device);
-        { torch::NoGradGuard ng; grid_tgt = target_z(grid); }
         reset(0);
     }
 
@@ -149,7 +208,7 @@ struct MeshModel {
     float train_step() {
         auto opt_f = torch::TensorOptions(device).dtype(torch::kFloat32);
         auto batch = torch::rand({kBatch, 2}, opt_f) * (2.0f * kDomain) - kDomain;
-        auto tgt   = target_z(batch);
+        auto tgt   = target.sample(batch);
         auto pred  = net->forward(batch);
         auto loss  = torch::mse_loss(pred, tgt);
         opt->zero_grad();
@@ -173,7 +232,7 @@ struct MeshModel {
     torch::Tensor err_sq() {
         torch::NoGradGuard ng;
         auto p = net->forward(grid);
-        return (p - grid_tgt).pow(2);
+        return (p - target.grid).pow(2);
     }
 
     // Mean squared error over the whole grid (the "grid-MSE" the status reports).
