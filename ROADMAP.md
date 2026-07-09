@@ -4,6 +4,47 @@ Checkbox discipline: an item is checked only when verified by artifacts
 (suites green, run-proven, commit named). Invariants at the bottom are never
 checkboxes — they don't ship, they hold.
 
+## Direction (read this first — the why behind the boxes)
+
+**The goal** (GEOMETRY.md §11, decided 2026-07-07): *complex simulations and
+digital twins, trained on, watched live.* The whitepaper's thesis is the
+mechanism — model state drawn the same frame it's computed, no round trip —
+and the graphics API grows that mechanism through a ladder of **nouns** the
+instrument can draw live, while the **verbs** never change (zero-copy, gated,
+byte-verified against one CPU reference, honestly degraded):
+
+  images (bridge) → point clouds (v1) → connected shapes (v1_1, HERE)
+  → state painted ON shapes (R2 textures) → populations of shapes
+  (R3 instancing) → other people's hosts (R4 libcaliper/Compass)
+
+What each remaining rung buys, in twin terms:
+- **S4 Vulkan (§4)** adds no capability — it makes the existing ones true on
+  the hardware that matters for serious training. Same applets, unchanged.
+  It converts a Mac demo into the portability claim.
+- **R2 textures-on-meshes** decouples shape from state-on-the-shape: a CAD
+  housing loaded once, its live temperature/stress/error field re-draped
+  every optimizer step at any resolution. The twin's state painted on its skin.
+- **R3 instanced transforms** decouples one object from many: one mesh ×
+  an imported `(N,16)` pose tensor = a fleet in one draw, moved per-frame by
+  whatever writes the tensor (sim or policy). Also the rung that can draw
+  Gaussian-splat captures as instanced primitives.
+- **R2+R3 together ARE the twin demo** (§6) — which is why they're gated on
+  that exemplar's design doc, not built on spec.
+
+**The competitive wedge, one line:** everyone else moves data to the picture
+(TensorBoard/W&B log-and-poll; rerun.io logs-then-views; Omniverse renders
+then imports; game engines bake ONNX) — **Caliper makes the data BE the
+picture**, verified byte-exact on both hardware ecosystems, behind a frozen
+~200-byte ABI. Isaac/MuJoCo/Genesis run the opposite dataflow (render→tensor)
+and are explicitly not competitors — that direction is a rejected invariant.
+
+**Open strategic decisions** (§7 — decisions before code): telemetry
+ingestion for *physical* twins (feed-applet pattern vs. new service; touches
+the whitepaper's local-loop claim), and the R4/libcaliper platform call
+(intent lives at PLATFORM.md:850 — Compass, the wx sibling host; no spec yet
+by design). The next spec to write, per this roadmap's own ordering, is the
+**twin exemplar design doc** (§6) — it drags the R2/R3 spec passes behind it.
+
 ## 0 · Platform spine (done)
 
 - [x] `tensor_bridge.v1 → v1_2` — zero-copy textures + `import_allocation`, both memory models (Metal/MPS unified, Vulkan/CUDA external-memory)
