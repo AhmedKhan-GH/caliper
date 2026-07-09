@@ -251,6 +251,7 @@ public:
                         "FlowScope: Field",    // the geometry.v1 exemplar
                         "FieldScope: EM Field",// PIC plasma — the physics exemplar
                         "SculptScope: Learned Cloud", // net's own tensor drawn live
+                        "MeshScope: Surface", // indexed triangles + lines via geometry.v1_1
                         "Hello, Caliper",      // examples/hello (tutorial)
                         "SineScope",           // examples/sine_scope (tutorial)
                     };

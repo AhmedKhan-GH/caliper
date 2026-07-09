@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.mesh-scope"
+name    = "MeshScope"
+version = "0.1.0"
+summary = "Arbitrary imported geometry demo for caliper.geometry.v1_1: a live deforming height-field mesh rendered as indexed triangles with depth, Lambert normals, a colormapped per-vertex attribute, and a wireframe line overlay. The vertex/index/normal/attribute tensors are imported through tensor_bridge.v1_2 and read directly by the renderer."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.tensor_bridge.v1_2", "caliper.geometry.v1_1"]
