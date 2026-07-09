@@ -176,7 +176,16 @@ struct PrimParams {
     float size_px;
 };
 
-struct POut {
+/* Metal validates [[point_size]] against the pipeline's topology class: a
+ * vertex function that writes it is rejected at pipeline creation for Line
+ * and Triangle classes. So the point class gets its own entry point and the
+ * two variants share one body. */
+struct VOut {
+    float4 pos [[position]];
+    float4 color;
+};
+
+struct VOutPoint {
     float4 pos [[position]];
     float  size [[point_size]];
     float4 color;
@@ -189,22 +198,21 @@ static inline float4 unpack_rgba(uint packed) {
                   float((packed >> 24) & 0xffu)) / 255.0f;
 }
 
-vertex POut geom_vs(uint vid [[vertex_id]],
-                    device const float* pos  [[buffer(0)]],
-                    device const uint*  idx  [[buffer(1)]],
-                    device const float* nrm  [[buffer(2)]],
-                    device const uint*  attr [[buffer(3)]],
-                    constant uint*      lut  [[buffer(4)]],
-                    constant PrimParams& p   [[buffer(5)]])
+static inline VOut geom_compute(uint vid,
+                                device const float* pos,
+                                device const uint*  idx,
+                                device const float* nrm,
+                                device const uint*  attr,
+                                constant uint*      lut,
+                                constant PrimParams& p)
 {
-    POut o;
+    VOut o;
     uint vi = p.use_index != 0u ? min(idx[p.idx_base + vid], p.vertex_count - 1u)
                                 : vid;
     float3 wp = float3(pos[p.pos_base + 3u * vi + 0u],
                        pos[p.pos_base + 3u * vi + 1u],
                        pos[p.pos_base + 3u * vi + 2u]);
     o.pos = p.mvp * float4(wp, 1.0f);
-    o.size = p.size_px;
 
     float4 c;
     if (p.color_mode == 1u) {
@@ -232,7 +240,34 @@ vertex POut geom_vs(uint vid [[vertex_id]],
     return o;
 }
 
-fragment float4 geom_fs(POut in [[stage_in]]) { return in.color; }
+vertex VOut geom_vs(uint vid [[vertex_id]],
+                    device const float* pos  [[buffer(0)]],
+                    device const uint*  idx  [[buffer(1)]],
+                    device const float* nrm  [[buffer(2)]],
+                    device const uint*  attr [[buffer(3)]],
+                    constant uint*      lut  [[buffer(4)]],
+                    constant PrimParams& p   [[buffer(5)]])
+{
+    return geom_compute(vid, pos, idx, nrm, attr, lut, p);
+}
+
+vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
+                               device const float* pos  [[buffer(0)]],
+                               device const uint*  idx  [[buffer(1)]],
+                               device const float* nrm  [[buffer(2)]],
+                               device const uint*  attr [[buffer(3)]],
+                               constant uint*      lut  [[buffer(4)]],
+                               constant PrimParams& p   [[buffer(5)]])
+{
+    VOut b = geom_compute(vid, pos, idx, nrm, attr, lut, p);
+    VOutPoint o;
+    o.pos   = b.pos;
+    o.size  = p.size_px;
+    o.color = b.color;
+    return o;
+}
+
+fragment float4 geom_fs(VOut in [[stage_in]]) { return in.color; }
 )metal";
 
 struct PrimParams {
@@ -995,7 +1030,8 @@ private:
 
         id<MTLLibrary> lib = geom_library();
         if (lib == nil) return nil;
-        id<MTLFunction> vs = [lib newFunctionWithName:@"geom_vs"];
+        id<MTLFunction> vs = [lib newFunctionWithName:
+            (cls == 0 ? @"geom_vs_point" : @"geom_vs")];
         id<MTLFunction> fs = [lib newFunctionWithName:@"geom_fs"];
         if (vs == nil || fs == nil) {
             std::fprintf(stderr, "[metal] geom_prims: missing geom shader function\n");
