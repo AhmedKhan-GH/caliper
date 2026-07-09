@@ -166,6 +166,7 @@ struct MeshScopeState {
     float cam_az = 0.8f, cam_el = 0.55f, cam_dist = 4.5f;
     float color_vmax = 0.05f;   // err^2 LUT ceiling (UI-tunable)
     bool  zero_copy_frame = false;
+    bool  logged_first_draw = false;
     const char* frame_status = "initializing";
 };
 
@@ -506,6 +507,13 @@ void MeshScopeApplet::draw_ui() {
             st->zero_copy_frame =
                 st->geometry.draw_primitives(st->view, cam, draws, 3, 0xff05050au);
             if (!st->zero_copy_frame) st->frame_status = "draw_primitives refused";
+            // One-shot provenance line: the log is the artifact that the
+            // zero-copy path actually drew (host UI text can't be grepped).
+            if (st->zero_copy_frame && !st->logged_first_draw && st->host) {
+                st->host->log_info("mesh-scope: first zero-copy frame drawn "
+                                   "(imported geometry, 3 draws)");
+                st->logged_first_draw = true;
+            }
         } else {
             st->frame_status =
                 !pref ? "position import failed"
