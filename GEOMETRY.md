@@ -1,14 +1,18 @@
 # GEOMETRY.md — caliper.geometry.v1_1: general primitives from zero-copy tensors
 
-**Status: SPEC — implementation in progress on `feat/geometry-v1_1`.**
-As of 2026-07-09: Phase A (ABI + vend + SDK + host tests, §10) builds and its
-tests pass; Phase C (Metal) is written but carries one known bug — the geom
-vertex shader writes `[[point_size]]` unconditionally, so Metal refuses
-line/triangle-class pipeline creation (1 red gfx row: "indexed triangles honor
-depth") and `draw_primitives` returns false for meshes; Phase B (Vulkan) is
-not started; the Phase D `mesh_scope` skeleton exists but is an analytic
-heightfield with no fallback ladder and no test — it must become the §9.3
-learned surface before it counts as the exemplar.
+**Status: macOS COMPLETE on `feat/geometry-v1_1`; Vulkan (Phase B) pending.**
+As of 2026-07-09 (later the same day): Phase A (ABI + vend + SDK + host
+tests) green; Phase C (Metal) complete — the point/non-point vertex-fn split
+fixed the `[[point_size]]` pipeline-class bug and the full §9.2 matrix is
+implemented and green on live Metal (13 byte-exact/tolerance rows, 173
+assertions, including the 22-case §2.3 gate battery and stride
+forward-compat); Phase D shipped — `mesh_scope` is the §9.3 learned-surface
+exemplar per `docs/superpowers/specs/2026-07-09-meshscope-learned-surface-design.md`,
+run-verified both ways ("first zero-copy frame drawn (imported geometry, 3
+draws)" on Metal+MPS; honest "fallback (no geometry.v1_1 backend)" under
+`CALIPER_RENDERER=gl`). Remaining before merge: Phase B (Vulkan mirrors of
+every Metal row, on the Windows box) and the S5 doc rows
+(execution plan: `docs/superpowers/specs/2026-07-09-geometry-v1_1-execution-plan.md`).
 
 This document is the end-to-end design for
 extending the imported-geometry service from "instanced points only" (v1, shipped)

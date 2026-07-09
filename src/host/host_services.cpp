@@ -18,6 +18,7 @@
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/geometry_v1.h>
+#include <caliper/services/geometry_v1_1.h>
 #include <caliper/tensor.h>
 #include <imgui.h>
 #include <implot.h>
@@ -291,6 +292,10 @@ CaliperTextureId geo_create_view(uint32_t w, uint32_t h) {
     TensorBridge* b = bridge();
     return b ? b->geom_create_view(w, h) : 0;
 }
+CaliperTextureId geo_create_view_ex(uint32_t w, uint32_t h, uint32_t flags) {
+    TensorBridge* b = bridge();
+    return b ? b->geom_create_view_ex(w, h, flags) : 0;
+}
 void geo_release_view(CaliperTextureId view) {
     if (TensorBridge* b = bridge()) b->geom_release_view(view);
 }
@@ -306,8 +311,19 @@ bool geo_draw_points(CaliperTextureId view, const CaliperGeomCamera* cam,
                                    vmax, size_px, clear_rgba)
              : false;
 }
+bool geo_draw_primitives(CaliperTextureId view, const CaliperGeomCamera* cam,
+                         const CaliperGeomDraw* draws, uint32_t draw_count,
+                         uint32_t draw_stride, uint32_t clear_rgba) {
+    TensorBridge* b = bridge();
+    return b ? b->geom_draw_primitives(view, cam, draws, draw_count,
+                                       draw_stride, clear_rgba)
+             : false;
+}
 const CaliperGeometryV1 kGeom1 = {sizeof(CaliperGeometryV1),
     &geo_caps, &geo_create_view, &geo_release_view, &geo_draw_points};
+const CaliperGeometryV1_1 kGeom11 = {sizeof(CaliperGeometryV1_1),
+    &geo_caps, &geo_create_view, &geo_release_view, &geo_draw_points,
+    &geo_create_view_ex, &geo_draw_primitives, nullptr};
 
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
@@ -316,6 +332,7 @@ const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_TENSOR_BRIDGE_V1_1,
                                     CALIPER_TENSOR_BRIDGE_V1_2,
                                     CALIPER_GEOMETRY_V1,
+                                    CALIPER_GEOMETRY_V1_1,
                                     CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1};
 
 } // namespace
@@ -391,6 +408,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_1) == 0) return &kBridge11;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_2) == 0) return &kBridge12;
     if (std::strcmp(id, CALIPER_GEOMETRY_V1) == 0) return &kGeom1;
+    if (std::strcmp(id, CALIPER_GEOMETRY_V1_1) == 0) return &kGeom11;
     if (std::strcmp(id, CALIPER_ARTIFACTS_V1) == 0) return &kArtifacts;
     if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
     return nullptr;   // unknown ids: NULL, never UB (§6b)

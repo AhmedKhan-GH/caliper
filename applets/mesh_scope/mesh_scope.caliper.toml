@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.mesh-scope"
+name    = "MeshScope"
+version = "0.1.0"
+summary = "A small MLP learns a fixed 2-D target surface live: every optimizer step its 72x72-grid prediction is written into imported device tensors and drawn the same frame as Lambert-lit indexed triangles colored by per-vertex squared error through the MAGMA LUT, with a wireframe overlay and the training minibatch as additive points — the caliper.geometry.v1_1 exemplar. Falls back to an input-locked CPU error heatmap wherever the zero-copy path is absent."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.tensor_bridge.v1_2", "caliper.geometry.v1_1"]

@@ -10,6 +10,7 @@
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/geometry_v1.h>
+#include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <cstddef>
@@ -144,6 +145,42 @@ TEST_CASE("geometry v1 layout is frozen (new service, D24 pattern)") {
           offsetof(CaliperGeometryV1, draw_points) + sizeof(void*));
     CHECK(CALIPER_GEOM_CAP_IMPORTED_POINTS == (1u << 0));
     CHECK(std::string(CALIPER_GEOMETRY_V1) == "caliper.geometry.v1");
+}
+
+TEST_CASE("geometry v1_1 is prefix-identical to v1 and pins draw ABI") {
+    static_assert(std::is_standard_layout_v<CaliperGeometryV1_1>);
+    static_assert(std::is_standard_layout_v<CaliperGeomDraw>);
+    static_assert(offsetof(CaliperGeometryV1_1, struct_size) ==
+                  offsetof(CaliperGeometryV1, struct_size));
+    static_assert(offsetof(CaliperGeometryV1_1, caps) ==
+                  offsetof(CaliperGeometryV1, caps));
+    static_assert(offsetof(CaliperGeometryV1_1, create_view) ==
+                  offsetof(CaliperGeometryV1, create_view));
+    static_assert(offsetof(CaliperGeometryV1_1, release_view) ==
+                  offsetof(CaliperGeometryV1, release_view));
+    static_assert(offsetof(CaliperGeometryV1_1, draw_points) ==
+                  offsetof(CaliperGeometryV1, draw_points));
+    static_assert(offsetof(CaliperGeometryV1_1, create_view_ex) ==
+                  offsetof(CaliperGeometryV1, draw_points) + sizeof(void*));
+    static_assert(offsetof(CaliperGeometryV1_1, draw_primitives) ==
+                  offsetof(CaliperGeometryV1_1, create_view_ex) + sizeof(void*));
+    static_assert(offsetof(CaliperGeometryV1_1, reserved0) ==
+                  offsetof(CaliperGeometryV1_1, draw_primitives) + sizeof(void*));
+    CHECK(sizeof(CaliperGeometryV1_1) ==
+          offsetof(CaliperGeometryV1_1, reserved0) + sizeof(void*));
+
+    CHECK(sizeof(CaliperGeomDraw) == 192);
+    CHECK(offsetof(CaliperGeomDraw, pos_alloc) == 0);
+    CHECK(offsetof(CaliperGeomDraw, topology) == 80);
+    CHECK(offsetof(CaliperGeomDraw, model) == 120);
+    CHECK(offsetof(CaliperGeomDraw, reserved) == 184);
+    CHECK(CALIPER_GEOM_CAP_PRIMITIVES == (1u << 1));
+    CHECK(CALIPER_GEOM_VIEW_DEPTH == (1u << 0));
+    CHECK(CALIPER_GEOM_TOPO_TRIANGLE_STRIP == 4u);
+    CHECK(CALIPER_GEOM_COLOR_VERTEX_RGBA == 2u);
+    CHECK(CALIPER_GEOM_SHADE_LAMBERT == 1u);
+    CHECK(CALIPER_GEOM_BLEND_ADDITIVE == 2u);
+    CHECK(std::string(CALIPER_GEOMETRY_V1_1) == "caliper.geometry.v1_1");
 }
 
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);

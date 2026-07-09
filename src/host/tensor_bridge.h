@@ -14,6 +14,7 @@
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/geometry_v1.h>
+#include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -89,6 +90,8 @@ public:
     // telemetry untouched.
     uint32_t         geom_caps() const;
     CaliperTextureId geom_create_view(uint32_t w, uint32_t h);
+    CaliperTextureId geom_create_view_ex(uint32_t w, uint32_t h,
+                                         uint32_t flags);
     void             geom_release_view(CaliperTextureId view);
     bool             geom_draw_points(CaliperTextureId view,
                                       const CaliperGeomCamera* cam,
@@ -98,6 +101,12 @@ public:
                                       uint64_t attr_offset,
                                       int32_t colormap, float vmin, float vmax,
                                       float size_px, uint32_t clear_rgba);
+    bool             geom_draw_primitives(CaliperTextureId view,
+                                          const CaliperGeomCamera* cam,
+                                          const CaliperGeomDraw* draws,
+                                          uint32_t draw_count,
+                                          uint32_t draw_stride,
+                                          uint32_t clear_rgba);
 
 private:
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
@@ -120,6 +129,7 @@ private:
         std::vector<uint8_t> shared_buf;  // alloc_shared CPU-unified backing
         bool         view = false;        // geometry.v1 render target: updates
                                           // and bridge-release refuse it
+        bool         view_depth = false;  // geometry.v1_1 depth attachment
     };
 
     // Stage/forward a validated tensor into an existing entry's texture.

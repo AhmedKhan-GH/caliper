@@ -13,6 +13,7 @@
 // callers are sequential handles, never raw retained pointers (§5.4).
 #include "host_renderer.h"
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
+#include <caliper/services/geometry_v1_1.h>
 
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -26,6 +27,7 @@
 #include <backends/imgui_impl_metal.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -147,6 +149,191 @@ struct GeomParams {          // must match the MSL struct byte-for-byte (88 B)
 };
 static_assert(sizeof(GeomParams) == 88, "MSL constant-buffer layout");
 
+// caliper.geometry.v1_1 primitive pipeline: vertex-pulled from imported
+// MTLBuffers. The shader reads all sources as whole buffers plus element bases,
+// mirroring the Vulkan plan and the existing point shader. Indices are pulled
+// as u32 and clamped against vertex_count to make out-of-range values defined.
+static const char* kGeomShaderSrc = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+
+struct PrimParams {
+    float4x4 mvp;
+    float4 nmat0;
+    float4 nmat1;
+    float4 nmat2;
+    uint pos_base;
+    uint idx_base;
+    uint nrm_base;
+    uint attr_base;
+    uint use_index;
+    uint vertex_count;
+    uint color_mode;
+    uint shade_mode;
+    uint flat_rgba;
+    float vmin;
+    float vmax;
+    float size_px;
+};
+
+/* Metal validates [[point_size]] against the pipeline's topology class: a
+ * vertex function that writes it is rejected at pipeline creation for Line
+ * and Triangle classes. So the point class gets its own entry point and the
+ * two variants share one body. */
+struct VOut {
+    float4 pos [[position]];
+    float4 color;
+};
+
+struct VOutPoint {
+    float4 pos [[position]];
+    float  size [[point_size]];
+    float4 color;
+};
+
+static inline float4 unpack_rgba(uint packed) {
+    return float4(float(packed         & 0xffu),
+                  float((packed >> 8)  & 0xffu),
+                  float((packed >> 16) & 0xffu),
+                  float((packed >> 24) & 0xffu)) / 255.0f;
+}
+
+static inline VOut geom_compute(uint vid,
+                                device const float* pos,
+                                device const uint*  idx,
+                                device const float* nrm,
+                                device const uint*  attr,
+                                constant uint*      lut,
+                                constant PrimParams& p)
+{
+    VOut o;
+    uint vi = p.use_index != 0u ? min(idx[p.idx_base + vid], p.vertex_count - 1u)
+                                : vid;
+    float3 wp = float3(pos[p.pos_base + 3u * vi + 0u],
+                       pos[p.pos_base + 3u * vi + 1u],
+                       pos[p.pos_base + 3u * vi + 2u]);
+    o.pos = p.mvp * float4(wp, 1.0f);
+
+    float4 c;
+    if (p.color_mode == 1u) {
+        float v = as_type<float>(attr[p.attr_base + vi]);
+        float t = (v == v && p.vmax > p.vmin)
+                ? clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0f, 1.0f) : 0.0f;
+        c = unpack_rgba(lut[(uint)(t * 255.0f + 0.5f)]);
+    } else if (p.color_mode == 2u) {
+        c = unpack_rgba(attr[p.attr_base + vi]);
+    } else {
+        c = unpack_rgba(p.flat_rgba);
+    }
+
+    if (p.shade_mode == 1u) {
+        float3 n = normalize(float3(nrm[p.nrm_base + 3u * vi + 0u],
+                                   nrm[p.nrm_base + 3u * vi + 1u],
+                                   nrm[p.nrm_base + 3u * vi + 2u]));
+        float3 nvs = normalize(n.x * p.nmat0.xyz +
+                               n.y * p.nmat1.xyz +
+                               n.z * p.nmat2.xyz);
+        float lit = 0.30f + 0.70f * max(dot(nvs, float3(0.0f, 0.0f, 1.0f)), 0.0f);
+        c.rgb *= lit;
+    }
+    o.color = c;
+    return o;
+}
+
+vertex VOut geom_vs(uint vid [[vertex_id]],
+                    device const float* pos  [[buffer(0)]],
+                    device const uint*  idx  [[buffer(1)]],
+                    device const float* nrm  [[buffer(2)]],
+                    device const uint*  attr [[buffer(3)]],
+                    constant uint*      lut  [[buffer(4)]],
+                    constant PrimParams& p   [[buffer(5)]])
+{
+    return geom_compute(vid, pos, idx, nrm, attr, lut, p);
+}
+
+vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
+                               device const float* pos  [[buffer(0)]],
+                               device const uint*  idx  [[buffer(1)]],
+                               device const float* nrm  [[buffer(2)]],
+                               device const uint*  attr [[buffer(3)]],
+                               constant uint*      lut  [[buffer(4)]],
+                               constant PrimParams& p   [[buffer(5)]])
+{
+    VOut b = geom_compute(vid, pos, idx, nrm, attr, lut, p);
+    VOutPoint o;
+    o.pos   = b.pos;
+    o.size  = p.size_px;
+    o.color = b.color;
+    return o;
+}
+
+fragment float4 geom_fs(VOut in [[stage_in]]) { return in.color; }
+)metal";
+
+struct PrimParams {
+    float    mvp[16];
+    float    nmat0[4];
+    float    nmat1[4];
+    float    nmat2[4];
+    uint32_t pos_base, idx_base, nrm_base, attr_base;
+    uint32_t use_index, vertex_count, color_mode, shade_mode;
+    uint32_t flat_rgba;
+    float    vmin, vmax, size_px;
+};
+static_assert(sizeof(PrimParams) == 160, "MSL primitive params layout");
+
+void mat4_mul_cm(const float* a, const float* b, float* out) {
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) {
+            float acc = 0.f;
+            for (int k = 0; k < 4; ++k)
+                acc += a[k * 4 + r] * b[c * 4 + k];
+            out[c * 4 + r] = acc;
+        }
+}
+
+void normal_matrix_columns(const float* view_model, float* c0, float* c1, float* c2) {
+    const double a00 = view_model[0], a01 = view_model[4], a02 = view_model[8];
+    const double a10 = view_model[1], a11 = view_model[5], a12 = view_model[9];
+    const double a20 = view_model[2], a21 = view_model[6], a22 = view_model[10];
+    const double det = a00 * (a11 * a22 - a12 * a21)
+                     - a01 * (a10 * a22 - a12 * a20)
+                     + a02 * (a10 * a21 - a11 * a20);
+    if (std::abs(det) < 1e-12) {
+        c0[0] = 1.f; c0[1] = 0.f; c0[2] = 0.f; c0[3] = 0.f;
+        c1[0] = 0.f; c1[1] = 1.f; c1[2] = 0.f; c1[3] = 0.f;
+        c2[0] = 0.f; c2[1] = 0.f; c2[2] = 1.f; c2[3] = 0.f;
+        return;
+    }
+    const double inv_det = 1.0 / det;
+    const double inv00 =  (a11 * a22 - a12 * a21) * inv_det;
+    const double inv01 = -(a01 * a22 - a02 * a21) * inv_det;
+    const double inv02 =  (a01 * a12 - a02 * a11) * inv_det;
+    const double inv10 = -(a10 * a22 - a12 * a20) * inv_det;
+    const double inv11 =  (a00 * a22 - a02 * a20) * inv_det;
+    const double inv12 = -(a00 * a12 - a02 * a10) * inv_det;
+    const double inv20 =  (a10 * a21 - a11 * a20) * inv_det;
+    const double inv21 = -(a00 * a21 - a01 * a20) * inv_det;
+    const double inv22 =  (a00 * a11 - a01 * a10) * inv_det;
+
+    // Columns of transpose(inverse(A)) are rows of inverse(A).
+    c0[0] = (float)inv00; c0[1] = (float)inv01; c0[2] = (float)inv02; c0[3] = 0.f;
+    c1[0] = (float)inv10; c1[1] = (float)inv11; c1[2] = (float)inv12; c1[3] = 0.f;
+    c2[0] = (float)inv20; c2[1] = (float)inv21; c2[2] = (float)inv22; c2[3] = 0.f;
+}
+
+uint32_t topo_class(uint32_t topology) {
+    if (topology == CALIPER_GEOM_TOPO_POINTS) return 0u;
+    if (topology == CALIPER_GEOM_TOPO_LINES ||
+        topology == CALIPER_GEOM_TOPO_LINE_STRIP) return 1u;
+    return 2u;
+}
+
+bool metal_geom_fail(const char* reason) {
+    std::fprintf(stderr, "[metal] geom_prims: %s\n", reason);
+    return false;
+}
+
 // Byte extent a tensor addresses: (max linear element index + 1) * elem_size,
 // from shape×strides. The bridge already bounds this in *elements* against a
 // sane cap, but only the backend sees the actual id<MTLBuffer> — so the device
@@ -261,11 +448,15 @@ public:
         ImGui_ImplMetal_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
+        depth_textures_.clear();
         [textures_ removeAllObjects];
         textures_ = nil;
         imported_.clear();
         cmap_pipeline_ = nil;
         points_pipeline_ = nil;
+        geom_lib_ = nil;
+        geom_pipelines_.clear();
+        depth_states_.clear();
         pass_desc_ = nil;
         queue_ = nil;
         layer_ = nil;
@@ -304,6 +495,7 @@ public:
     void tex_release(uint64_t tex) override {
         [textures_ removeObjectForKey:@(tex)];
         [events_ removeObjectForKey:@(tex)]; event_values_.erase(tex);
+        depth_textures_.erase(tex);
     }
 
     uint64_t tex_imtexture_id(uint64_t tex) override {
@@ -377,6 +569,7 @@ public:
     // Same gate as the imported-texture path: point data lives in v1.2 imported
     // MTLBuffers, which only exist when external import is up.
     bool supports_geometry() const override { return supports_external_import(); }
+    bool supports_geometry_primitives() const override { return supports_external_import(); }
 
     // An offscreen render target that is ALSO an ordinary sampled texture: it
     // lives in textures_, so tex_imtexture_id / debug_readback / tex_release
@@ -407,6 +600,57 @@ public:
         }
         uint64_t tid = next_id_++;
         textures_[@(tid)] = tex;
+        return tid;
+    }
+
+    uint64_t geom_create_view_ex(int w, int h, uint32_t flags) override {
+        if ((flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u) return 0;
+        if (w <= 0 || h <= 0 || device_ == nil) return 0;
+
+        MTLTextureDescriptor* d =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:(NSUInteger)w
+                                                              height:(NSUInteger)h
+                                                           mipmapped:NO];
+        d.storageMode = MTLStorageModeShared;
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+        id<MTLTexture> color = [device_ newTextureWithDescriptor:d];
+        if (color == nil) return 0;
+
+        id<MTLTexture> depth = nil;
+        if ((flags & CALIPER_GEOM_VIEW_DEPTH) != 0u) {
+            MTLTextureDescriptor* dd =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                                   width:(NSUInteger)w
+                                                                  height:(NSUInteger)h
+                                                               mipmapped:NO];
+            dd.storageMode = MTLStorageModePrivate;
+            dd.usage = MTLTextureUsageRenderTarget;
+            depth = [device_ newTextureWithDescriptor:dd];
+            if (depth == nil) return 0;
+        }
+
+        @autoreleasepool {
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture     = color;
+            rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[0].clearColor  = MTLClearColorMake(0, 0, 0, 1);
+            if (depth != nil) {
+                rp.depthAttachment.texture     = depth;
+                rp.depthAttachment.loadAction  = MTLLoadActionClear;
+                rp.depthAttachment.storeAction = MTLStoreActionDontCare;
+                rp.depthAttachment.clearDepth  = 1.0;
+            }
+            id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+            id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+            [enc endEncoding];
+            [cb commit];
+        }
+
+        uint64_t tid = next_id_++;
+        textures_[@(tid)] = color;
+        if (depth != nil) depth_textures_[tid] = depth;
         return tid;
     }
 
@@ -489,6 +733,185 @@ public:
                            // sampling; producer (MPS) writes are already CPU-drained
                            // before publish (flow_scope sync contract).
             last_device_path_ = "points-imported";
+            return true;
+        }
+    }
+
+    bool geom_draw_primitives(uint64_t view_tex,
+                              const float* view16, const float* proj16,
+                              const HostGeomDraw* draws, uint32_t count,
+                              uint32_t clear_rgba) override {
+        @autoreleasepool {
+            id<MTLTexture> color = lookup(view_tex);
+            if (color == nil) return metal_geom_fail("unknown color view");
+            if (view16 == nullptr || proj16 == nullptr) return metal_geom_fail("null camera matrices");
+            if (count > 0 && draws == nullptr) return metal_geom_fail("null draw array");
+            id<MTLTexture> depth = nil;
+            auto dt = depth_textures_.find(view_tex);
+            if (dt != depth_textures_.end()) depth = dt->second;
+
+            struct EncodedDraw {
+                const HostGeomDraw* d = nullptr;
+                id<MTLBuffer> pos = nil;
+                id<MTLBuffer> idx = nil;
+                id<MTLBuffer> nrm = nil;
+                id<MTLBuffer> attr = nil;
+                NSUInteger consumed = 0;
+                MTLPrimitiveType prim = MTLPrimitiveTypeTriangle;
+                id<MTLRenderPipelineState> pipeline = nil;
+                id<MTLDepthStencilState> depth_state = nil;
+                PrimParams params{};
+            };
+            std::vector<EncodedDraw> encs;
+            encs.reserve(count);
+
+            for (uint32_t i = 0; i < count; ++i) {
+                const HostGeomDraw& d = draws[i];
+                if (d.vertex_count == 0 || d.vertex_count > UINT32_MAX)
+                    return metal_geom_fail("bad vertex count");
+                id<MTLBuffer> pos = lookup_import(d.pos_alloc);
+                if (pos == nil) return metal_geom_fail("unknown pos import");
+                if (d.pos_offset % 4 != 0) return metal_geom_fail("pos offset misaligned");
+                if (d.vertex_count > UINT64_MAX / 12u) return metal_geom_fail("position byte overflow");
+                if (d.pos_offset > pos.length || d.vertex_count * 12u > pos.length - d.pos_offset)
+                    return metal_geom_fail("positions out of bounds");
+
+                id<MTLBuffer> idx = nil;
+                uint64_t consumed = d.vertex_count;
+                if (d.index_alloc != 0) {
+                    idx = lookup_import(d.index_alloc);
+                    if (idx == nil || d.index_offset % 4 != 0 || d.index_count == 0)
+                        return metal_geom_fail("bad index import/range");
+                    if (d.index_count > UINT32_MAX || d.index_count > UINT64_MAX / 4u)
+                        return metal_geom_fail("index count overflow");
+                    if (d.index_offset > idx.length || d.index_count * 4u > idx.length - d.index_offset)
+                        return metal_geom_fail("indices out of bounds");
+                    consumed = d.index_count;
+                }
+                if ((d.topology == CALIPER_GEOM_TOPO_LINES ||
+                     d.topology == CALIPER_GEOM_TOPO_LINE_STRIP) && consumed < 2)
+                    return metal_geom_fail("line draw has too few vertices");
+                if ((d.topology == CALIPER_GEOM_TOPO_TRIANGLES ||
+                     d.topology == CALIPER_GEOM_TOPO_TRIANGLE_STRIP) && consumed < 3)
+                    return metal_geom_fail("triangle draw has too few vertices");
+                if (d.topology == CALIPER_GEOM_TOPO_POINTS && !(d.size_px > 0.0f))
+                    return metal_geom_fail("bad point size");
+                if (d.depth_flags != 0 && depth == nil) return metal_geom_fail("depth draw on depthless view");
+
+                id<MTLBuffer> nrm = nil;
+                if (d.shade_mode == CALIPER_GEOM_SHADE_LAMBERT) {
+                    nrm = lookup_import(d.normal_alloc);
+                    if (nrm == nil) return metal_geom_fail("unknown normal import");
+                    if (d.normal_offset % 4 != 0) return metal_geom_fail("normal offset misaligned");
+                    if (d.normal_offset > nrm.length ||
+                        d.vertex_count * 12u > nrm.length - d.normal_offset)
+                        return metal_geom_fail("normals out of bounds");
+                } else if (d.normal_alloc != 0) {
+                    nrm = lookup_import(d.normal_alloc);
+                    if (nrm == nil) return metal_geom_fail("unknown optional normal import");
+                    if (d.normal_offset % 4 != 0) return metal_geom_fail("optional normal offset misaligned");
+                    if (d.normal_offset > nrm.length ||
+                        d.vertex_count * 12u > nrm.length - d.normal_offset)
+                        return metal_geom_fail("optional normals out of bounds");
+                }
+
+                id<MTLBuffer> attr = nil;
+                if (d.color_mode != CALIPER_GEOM_COLOR_FLAT) {
+                    attr = lookup_import(d.attr_alloc);
+                    if (attr == nil) return metal_geom_fail("unknown attr import");
+                    if (d.attr_offset % 4 != 0) return metal_geom_fail("attr offset misaligned");
+                    if (d.vertex_count > UINT64_MAX / 4u) return metal_geom_fail("attr byte overflow");
+                    if (d.attr_offset > attr.length ||
+                        d.vertex_count * 4u > attr.length - d.attr_offset)
+                        return metal_geom_fail("attributes out of bounds");
+                    if (d.color_mode == CALIPER_GEOM_COLOR_COLORMAP && d.lut256 == nullptr)
+                        return metal_geom_fail("missing colormap LUT");
+                }
+
+                MTLPrimitiveType prim;
+                switch (d.topology) {
+                    case CALIPER_GEOM_TOPO_POINTS:         prim = MTLPrimitiveTypePoint; break;
+                    case CALIPER_GEOM_TOPO_LINES:          prim = MTLPrimitiveTypeLine; break;
+                    case CALIPER_GEOM_TOPO_LINE_STRIP:     prim = MTLPrimitiveTypeLineStrip; break;
+                    case CALIPER_GEOM_TOPO_TRIANGLES:      prim = MTLPrimitiveTypeTriangle; break;
+                    case CALIPER_GEOM_TOPO_TRIANGLE_STRIP: prim = MTLPrimitiveTypeTriangleStrip; break;
+                    default: return metal_geom_fail("bad topology");
+                }
+
+                id<MTLRenderPipelineState> pipe =
+                    geom_pipeline(topo_class(d.topology), d.blend_mode, depth != nil);
+                id<MTLDepthStencilState> ds = geom_depth_state(d.depth_flags);
+                if (pipe == nil) return metal_geom_fail("pipeline creation failed");
+                if (ds == nil) return metal_geom_fail("depth-state creation failed");
+
+                EncodedDraw e;
+                e.d = &d;
+                e.pos = pos;
+                e.idx = idx;
+                e.nrm = nrm;
+                e.attr = attr;
+                e.consumed = (NSUInteger)consumed;
+                e.prim = prim;
+                e.pipeline = pipe;
+                e.depth_state = ds;
+
+                float view_model[16], mvp[16];
+                mat4_mul_cm(view16, d.model, view_model);
+                mat4_mul_cm(proj16, view_model, mvp);
+                std::memcpy(e.params.mvp, mvp, sizeof(mvp));
+                normal_matrix_columns(view_model, e.params.nmat0, e.params.nmat1, e.params.nmat2);
+                e.params.pos_base = (uint32_t)(d.pos_offset / 4u);
+                e.params.idx_base = (uint32_t)(d.index_offset / 4u);
+                e.params.nrm_base = (uint32_t)(d.normal_offset / 4u);
+                e.params.attr_base = (uint32_t)(d.attr_offset / 4u);
+                e.params.use_index = d.index_alloc != 0 ? 1u : 0u;
+                e.params.vertex_count = (uint32_t)d.vertex_count;
+                e.params.color_mode = d.color_mode;
+                e.params.shade_mode = d.shade_mode;
+                e.params.flat_rgba = d.flat_rgba;
+                e.params.vmin = d.vmin;
+                e.params.vmax = d.vmax;
+                e.params.size_px = std::min(std::max(d.size_px, 1.0f), 511.0f);
+                encs.push_back(e);
+            }
+
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture     = color;
+            rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[0].clearColor  = MTLClearColorMake(
+                (double)( clear_rgba        & 0xFFu) / 255.0,
+                (double)((clear_rgba >> 8)  & 0xFFu) / 255.0,
+                (double)((clear_rgba >> 16) & 0xFFu) / 255.0,
+                (double)((clear_rgba >> 24) & 0xFFu) / 255.0);
+            if (depth != nil) {
+                rp.depthAttachment.texture     = depth;
+                rp.depthAttachment.loadAction  = MTLLoadActionClear;
+                rp.depthAttachment.storeAction = MTLStoreActionDontCare;
+                rp.depthAttachment.clearDepth  = 1.0;
+            }
+
+            id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+            id<MTLRenderCommandEncoder> re = [cb renderCommandEncoderWithDescriptor:rp];
+            if (re == nil) return metal_geom_fail("render encoder creation failed");
+            MTLViewport vp = {0.0, 0.0, (double)color.width, (double)color.height, 0.0, 1.0};
+            [re setViewport:vp];
+            static const uint32_t kZeroLut[256] = {};
+            for (const EncodedDraw& e : encs) {
+                [re setRenderPipelineState:e.pipeline];
+                [re setDepthStencilState:e.depth_state];
+                [re setVertexBuffer:e.pos offset:0 atIndex:0];
+                [re setVertexBuffer:(e.idx != nil ? e.idx : e.pos) offset:0 atIndex:1];
+                [re setVertexBuffer:(e.nrm != nil ? e.nrm : e.pos) offset:0 atIndex:2];
+                [re setVertexBuffer:(e.attr != nil ? e.attr : e.pos) offset:0 atIndex:3];
+                [re setVertexBytes:(e.d->lut256 ? e.d->lut256 : kZeroLut)
+                            length:256 * sizeof(uint32_t) atIndex:4];
+                [re setVertexBytes:&e.params length:sizeof(e.params) atIndex:5];
+                [re drawPrimitives:e.prim vertexStart:0 vertexCount:e.consumed];
+            }
+            [re endEncoding];
+            [cb commit];
+            last_device_path_ = "primitives-imported";
             return true;
         }
     }
@@ -585,6 +1008,87 @@ private:
         d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
         points_pipeline_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
         return points_pipeline_ != nil;
+    }
+
+    id<MTLLibrary> geom_library() {
+        if (geom_lib_ != nil) return geom_lib_;
+        NSError* err = nil;
+        geom_lib_ = [device_ newLibraryWithSource:[NSString stringWithUTF8String:kGeomShaderSrc]
+                                          options:nil error:&err];
+        if (geom_lib_ == nil) {
+            const char* msg = err ? [[err localizedDescription] UTF8String] : "unknown error";
+            std::fprintf(stderr, "[metal] geom_prims: shader compile failed: %s\n", msg);
+        }
+        return geom_lib_;
+    }
+
+    id<MTLRenderPipelineState> geom_pipeline(uint32_t cls, uint32_t blend,
+                                             bool has_depth) {
+        const uint32_t key = cls | (blend << 2) | (has_depth ? (1u << 4) : 0u);
+        auto hit = geom_pipelines_.find(key);
+        if (hit != geom_pipelines_.end()) return hit->second;
+
+        id<MTLLibrary> lib = geom_library();
+        if (lib == nil) return nil;
+        id<MTLFunction> vs = [lib newFunctionWithName:
+            (cls == 0 ? @"geom_vs_point" : @"geom_vs")];
+        id<MTLFunction> fs = [lib newFunctionWithName:@"geom_fs"];
+        if (vs == nil || fs == nil) {
+            std::fprintf(stderr, "[metal] geom_prims: missing geom shader function\n");
+            return nil;
+        }
+
+        MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+        d.vertexFunction = vs;
+        d.fragmentFunction = fs;
+        d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        d.depthAttachmentPixelFormat = has_depth ? MTLPixelFormatDepth32Float
+                                                 : MTLPixelFormatInvalid;
+        switch (cls) {
+            case 0: d.inputPrimitiveTopology = MTLPrimitiveTopologyClassPoint; break;
+            case 1: d.inputPrimitiveTopology = MTLPrimitiveTopologyClassLine; break;
+            default: d.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle; break;
+        }
+
+        if (blend == CALIPER_GEOM_BLEND_ALPHA) {
+            d.colorAttachments[0].blendingEnabled = YES;
+            d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+            d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        } else if (blend == CALIPER_GEOM_BLEND_ADDITIVE) {
+            d.colorAttachments[0].blendingEnabled = YES;
+            d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+            d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+            d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+            d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+        }
+
+        NSError* err = nil;
+        id<MTLRenderPipelineState> p = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
+        if (p == nil) {
+            const char* msg = err ? [[err localizedDescription] UTF8String] : "unknown error";
+            std::fprintf(stderr, "[metal] geom_prims: render pipeline failed: %s\n", msg);
+        }
+        if (p != nil) geom_pipelines_[key] = p;
+        return p;
+    }
+
+    id<MTLDepthStencilState> geom_depth_state(uint32_t flags) {
+        const uint32_t key = flags & (CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE);
+        auto hit = depth_states_.find(key);
+        if (hit != depth_states_.end()) return hit->second;
+        MTLDepthStencilDescriptor* d = [MTLDepthStencilDescriptor new];
+        d.depthCompareFunction = (key & CALIPER_GEOM_DEPTH_TEST)
+            ? MTLCompareFunctionLessEqual : MTLCompareFunctionAlways;
+        d.depthWriteEnabled = (key & CALIPER_GEOM_DEPTH_WRITE) != 0u;
+        id<MTLDepthStencilState> s = [device_ newDepthStencilStateWithDescriptor:d];
+        if (s != nil) depth_states_[key] = s;
+        return s;
     }
 
     // M2b (spec §4): GPU-order this texture's update after the producer
@@ -702,6 +1206,9 @@ private:
     MTLRenderPassDescriptor*    pass_desc_ = nil;
     id<MTLComputePipelineState> cmap_pipeline_ = nil;
     id<MTLRenderPipelineState>  points_pipeline_ = nil;  // caliper.geometry.v1 point pass
+    id<MTLLibrary>              geom_lib_ = nil;
+    std::unordered_map<uint32_t, id<MTLRenderPipelineState>> geom_pipelines_;
+    std::unordered_map<uint32_t, id<MTLDepthStencilState>> depth_states_;
 
     // Per-frame transients created in new_frame(), consumed in render().
     id<CAMetalDrawable>          drawable_  = nil;
@@ -709,6 +1216,7 @@ private:
     id<MTLRenderCommandEncoder>  frame_enc_ = nil;
 
     NSMutableDictionary<NSNumber*, id<MTLTexture>>* textures_ = nil;
+    std::unordered_map<uint64_t, id<MTLTexture>> depth_textures_;
 
     // M2b: per-texture producer-ordering events (D23 — MTLSharedEvent appears
     // ONLY where cross-queue ordering genuinely exists). Values are a per-

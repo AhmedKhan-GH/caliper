@@ -134,6 +134,25 @@ endif()
 add_test(NAME caliper_sculpt_tests COMMAND caliper_sculpt_tests)
 
 # ---------------------------------------------------------------------------
+# MeshScope learning-core tests (that the tanh MLP learns the target surface,
+# the per-vertex error map is honest, the finite-difference normals match the
+# analytic normals of a known heightfield, and reset(seed) is reproducible).
+# Pure torch; links only doctest + torch and includes the applet's model header.
+# ---------------------------------------------------------------------------
+add_executable(caliper_mesh_tests test_mesh_surface.cpp)
+target_link_libraries(caliper_mesh_tests PRIVATE
+    doctest::doctest "${TORCH_LIBRARIES}")
+target_include_directories(caliper_mesh_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}/applets/mesh_scope")
+set_target_properties(caliper_mesh_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    set_target_properties(caliper_mesh_tests PROPERTIES
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+endif()
+add_test(NAME caliper_mesh_tests COMMAND caliper_mesh_tests)
+
+# ---------------------------------------------------------------------------
 # FieldScope PIC physics tests (FFT Poisson solve, charge-conserving CIC
 # deposition, Boris gyration + E×B drift, plasma momentum conservation). Pure
 # torch; links only doctest + torch and includes the applet's em_pic.h.
