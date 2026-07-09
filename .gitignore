@@ -82,3 +82,6 @@ dump
 /build.cmd
 /build_release.cmd
 /build_tests.cmd
+
+# Local secrets
+.env
