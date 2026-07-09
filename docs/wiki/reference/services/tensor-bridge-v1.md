@@ -112,6 +112,51 @@ comes from the applet draining the device **once** at the handoff
 update — not from a stream channel. See the [adapter reference](../../reference/adapters.md)
 for the cost of that barrier and why you pay it once, not per frame.
 
+## Additive revisions: v1_1 and v1_2
+
+Two **additive** revisions extend the bridge under the same discipline (D24): the
+struct is **prefix-identical** — the same members in the same order, same
+semantics — with new members appended and one new caps bit each. No ABI epoch
+bump; the v1 header, table, and id are untouched and frozen. An applet negotiates
+by asking the host for each id and calling `caps()`; a missing id or unset bit
+means "fall back to the previous contract", never a crash.
+
+### `caliper.tensor_bridge.v1_1` — stream-ordered handoff
+
+Adds one query, `caps()`, over the v1-identical six operations. Bit 0,
+`CALIPER_BRIDGE_CAP_STREAM_ORDERED`, set means the host honours a non-NULL
+`CaliperTensor.stream`: the device update is ordered on the **producer's
+stream/queue** (`CUstream` on CUDA, `MTLCommandQueue*` on Metal), so the adapter
+may **skip its full device drain**. Hosts that don't vend this id — or leave the
+bit unset — keep the v1 contract: the adapter drains and `stream` stays NULL.
+
+### `caliper.tensor_bridge.v1_2` — imported device allocations
+
+Adds three entry points over v1_1's seven members. Bit 1,
+`CALIPER_BRIDGE_CAP_IMPORT_ALLOC`, set means the host can **import an
+applet-exported device allocation** and run device texture updates directly *from*
+it — zero copies of the tensor data:
+
+- `import_allocation(os_handle, size_bytes, handle_type)` hands the host an OS
+  shareable handle (from `cuMemExportToShareableHandle`) — or, on Apple,
+  `CALIPER_ALLOC_HANDLE_MTLBUFFER`, an in-process `id<MTLBuffer>` the host retains —
+  and returns a `CaliperAllocId` (`0` when the host cannot import, so the applet
+  stays on the v1 D2D-copy path). The host dups the handle; the applet keeps
+  ownership of its copy.
+- `release_allocation(alloc)` frees the import.
+- `update_texture_from_alloc(tex, alloc, offset_bytes, desc)` updates a texture
+  (created first via `texture_from_tensor*`) from bytes living **inside** the
+  imported allocation at `offset_bytes`; `desc` carries shape/dtype/strides/stream
+  and `desc->data` is ignored. Same acceptance gates as `update_texture`; `false`
+  → caller falls back. The **memory-stability contract**: the pass reads the
+  imported bytes in place, so `[offset_bytes, offset_bytes + extent)` must not be
+  rewritten until the next update of the same texture.
+
+`CaliperAllocId` is an opaque `uint64_t` (`0` = invalid; compare-only). This is the
+import machinery that [`caliper.geometry.v1` / v1_1](geometry-v1.md) draws
+geometry from: geometry sources are `(CaliperAllocId, byte offset)` pairs into
+these same imports, reusing v1.2's caches, gates, and lifecycle wholesale.
+
 ---
 
 ## Demo checklist (human)
