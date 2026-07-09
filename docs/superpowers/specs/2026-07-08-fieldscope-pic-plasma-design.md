@@ -1,7 +1,8 @@
 # FieldScope — a self-consistent electrostatic PIC plasma, drawn zero-copy
 
 **Date:** 2026-07-08
-**Status:** approved (design), pending implementation plan
+**Status:** implemented + verified (`applets/field_scope`, `tests/test_em_pic.cpp`;
+commits `4ce9d30` → `f2eae2f` → `b886f95`)
 **Replaces the physics of:** `applets/field_scope` (the analytic-dipole sim — test
 particles in a canned field, not a plasma)
 **Supersedes (physics direction):** `docs/superpowers/specs/2026-07-07-fieldscope-em-controller-design.md`

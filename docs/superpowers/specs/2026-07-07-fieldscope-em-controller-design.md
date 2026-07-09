@@ -1,16 +1,20 @@
 # FieldScope — a charged cloud steered by a learned controller
 
 **Date:** 2026-07-07
-**Status:** approved (design), pending implementation plan
+**Status:** design retained, NOT implemented — superseded by
+`2026-07-08-fieldscope-pic-plasma-design.md` (the PIC plasma is what shipped as
+`applets/field_scope`). Revisit as a learned-control layer *on* field_scope if
+the physics+RL fusion is ever wanted; the actor-critic design below is current.
 **Supersedes the physics of:** `applets/flow_scope` (FlowScope, `dev.caliper.flow-scope`)
 **Prior spec:** `docs/superpowers/specs/2026-07-07-geometry-flowscope-design.md`
 
 ## One-line
 
 A million charged particles move under real Lorentz-force physics `F = q(E + v×B)`;
-a small neural policy watches the cloud and sets the E/B field each step to drive
+a small actor-critic policy watches the cloud and sets the E/B field each step to drive
 the cloud's centroid onto a target the user drags around. The policy **trains live**
-and visibly improves. The `caliper.geometry.v1` zero-copy render path is untouched.
+and visibly improves, streams to `caliper.metrics.v1`, and checkpoints via
+`caliper.artifacts.v1`. The `caliper.geometry.v1` zero-copy render path is untouched.
 
 ## Motivation
 
@@ -24,8 +28,15 @@ with a fusion the platform's stated mission ("state-based ML viz") actually want
 policy** — the literal shape of plasma-confinement / accelerator beam-steering control.
 
 Both halves are load-bearing: the physics is genuine (Boris-pusher Lorentz
-integration), and the ML does real work you can watch (an analytic-policy-gradient
-controller whose loss falls in real time).
+integration), and the ML does real work you can watch. The controller trains by
+**black-box actor-critic RL** — the simulator is a frozen environment, gradients flow
+only through the policy/value nets, never the Boris step. This is deliberately more
+practical than analytic-policy-gradient-through-differentiable-physics: the Boris
+pusher is rotations and normalizations whose gradients explode/vanish, and E×B drift
+flattens the signal, so an APG-through-Boris trainer is research-fragile and unlikely
+to visibly improve. Actor-critic with a TD(0) critic baseline on a dense reward is the
+canonical, reliable continuous-control answer — and it stays decoupled from the
+forward-only render cloud, so the zero-copy showcase is intact.
 
 ## Invariants (do not violate)
 
@@ -75,16 +86,44 @@ controller whose loss falls in real time).
 - **Action (output):** `E` (3) and `B` (3) for the next step.
 - Runs every sim step to produce the field the full cloud integrates under.
 
-**C. Live trainer — analytic policy gradient through differentiable physics (worker)**
-- Every frame, sample a **256-particle tracer batch** from the cloud and roll it forward
-  ~8 steps **differentiably through the same Boris physics**, loss
-  `Σ‖centroid_t − target‖² + λ‖action‖²`. One Adam step; gradients flow through the
-  physics into the policy.
-- The **full 1M cloud is forward-only** (no grad) and simply consumes the policy's E/B,
-  so training cost is decoupled from the render cloud and the zero-copy showcase is
-  intact. Tracer count and horizon are tunable constants.
-- Controls: `train on/off`, `reset policy`, learning rate. The policy runs (inference)
-  even when training is off.
+**C. Live trainer — black-box actor-critic RL (worker, torch)**
+
+Every step the **simulator runs forward-only** under `torch::NoGradGuard` —
+the Boris pusher is treated as a frozen environment, exactly the way the
+1M-cloud step already runs. Gradients flow only through the policy and value
+networks, never the physics, so nothing here touches the zero-copy render path
+or risks grad-instability from the pusher's rotations/normalizations.
+
+- **Reward (per step, dense).** `r = −‖centroid − target‖ − α·centroid_speed −
+  β·‖action‖²`: pull toward target, penalize jitter, penalize field effort. A
+  step-γ discount `γ` shapes a short return from the n-step rollout below.
+- **Critic (value head).** Same backbone as the policy (`state(~10) → 64 →
+  64`), single scalar output `V(s)`. Trained by TD(0):
+  `L_value = (V(s_t) − r_t − γ·V(s_t+1).detach())²`.
+- **Policy update (black-box, REINFORCE-with-baseline).** The log-prob of the
+  chosen action is backpropped against the **advantage** `A = return_t −
+  V(s_t).detach()` (return = the discounted rollout below), so the Boris
+  physics never enters the backward graph:
+  `L_policy = −log π(action|state) · A.detach() − η·H(π)` (an entropy bonus
+  keeps exploration alive early). One Adam step on `L_policy + L_value`.
+- **Rollout for the return.** Sample a **256-particle tracer batch** from the
+  cloud and roll it forward **~8 steps** through the *frozen* Boris pusher
+  (the same `sim_step` code, `NoGradGuard` on), accumulating per-step rewards.
+  The full 1M cloud consumes the policy's E/B forward-only, so training cost
+  is decoupled from the render cloud and the zero-copy showcase is intact.
+  Tracer count, horizon, γ, and reward weights are tunable constants.
+- **Live metrics.** Every eval cadence, stream
+  `train/policy_loss`, `train/value_loss`, `train/return`, `train/advantage`,
+  `train/entropy` and `eval/centroid_error`, `eval/E_norm`, `eval/B_norm` to
+  `caliper.metrics.v1` (`begin_run("fieldscope", "ac-controller")`), so the
+  host's Runs dashboard renders the policy learning for free — the same
+  integration `gpt_scope` already proves.
+- **Checkpoints.** `caliper.artifacts.v1` Save/Load the policy+critic
+  (`torch::save` into a `put`-bytes blob; `path_of` + `torch::load` to
+  restore). A trained controller is reusable across sessions — the same
+  checkpoint shape `gpt_scope` uses for its model.
+- Controls: `train on/off`, `reset policy`, learning rate, entropy bonus,
+  reward weights. The policy runs (inference) even when training is off.
 
 ### Data flow (per worker step)
 ```
@@ -93,8 +132,14 @@ E,B   ← policy(state)                    # inference, no grad
 cloud ← boris_push(cloud, E, B, dt)      # 1M particles, forward-only  → publish slot
 if training:
     tracers ← sample(cloud, 256)
-    loss ← Σ‖centroid(rollout(tracers,E,B,H)) − target‖² + λ‖E,B‖²   # differentiable
-    adam.step(∇loss)                     # updates policy weights
+    with NoGradGuard:                    # frozen env — Boris never in the grad graph
+        rollout ← boris_push(tracers, E_t, B_t, dt) for t in 0..H
+        returns ← discounted Σ rewards along rollout
+    A     ← returns - V(state).detach()           # advantage (critic baseline)
+    L_pol ← -log π(E,B|state) * A.detach() - η·H(π)
+    L_val ← (V(state) - returns.mean())²
+    adam.step(∇(L_pol + L_val))                    # grads through nets only
+    metrics.scalar(run, "train/policy_loss", step, L_pol)
 ```
 
 ## Interaction
@@ -119,8 +164,11 @@ color, and the target overlay do not.
    tolerance over a full orbit (validates the Boris pusher).
 2. **E×B drift.** Under crossed uniform E and B, the guiding-center drift velocity matches
    the analytic `v_drift = E×B/‖B‖²`.
-3. **Training gradient smoke test.** One APG step on a fixed target measurably *reduces*
-   the steering loss (gradients flow, sign is correct).
+3. **Training improvement smoke test.** One actor-critic step on a fixed target
+   measurably *reduces* the steering loss over a short window: the critic
+   baseline lowers variance enough that the policy gradient's sign is correct
+   and the centroid moves toward the target over ~50 steps (gradients flow
+   through nets only, never the frozen Boris env).
 
 ## Naming
 
@@ -133,6 +181,12 @@ optional mechanical follow-up, out of scope here.
 
 - Multiple charge species / sign-colored particles.
 - Discrete current-loop coils or spatially-varying analytic fields.
-- Differentiating through the full 1M-particle rollout (tracer batch replaces it).
+- Differentiating through the full 1M-particle rollout (the frozen-env tracer
+  batch replaces it; gradients never touch the Boris pusher).
+- Differentiable physics / analytic policy gradients through the Boris pusher
+  (deliberately rejected: the pusher's rotation/normalization gradients are
+  unstable, and E×B drift flattens the steering signal — actor-critic is the
+  reliable continuous-control choice instead).
 - Full applet/target rename.
-- Pretrained / checkpointed policy weights (live training from reset only).
+- Pretrained / checkpointed policy weights shipped in-repo (live training from
+  reset; a trained policy is *saveable* via artifacts.v1, just not bundled).
