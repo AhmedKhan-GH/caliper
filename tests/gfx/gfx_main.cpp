@@ -1310,6 +1310,368 @@ TEST_CASE("gfx/metal geometry.v1_1: draw_count 0 is a pure clear, and clears dep
     bk.bridge->release_allocation(near_alloc);
     bk.bridge->geom_release_view(view);
 }
+
+// Row E — two overlapping OPAQUE quads with DEPTH_TEST|DEPTH_WRITE must produce
+// the same frame regardless of draw order: LESS_OR_EQUAL keeps the near quad in
+// the overlap either way. Quad P (near, z=0.25, green) covers pixel rect
+// [8,24)x[8,24); quad Q (far, z=0.75, red) covers [16,28)x[16,28); they overlap
+// in [16,24)x[16,24). Both readbacks must be byte-identical AND equal the CPU
+// reference (near wins overlap; each quad's non-overlap keeps its own color).
+TEST_CASE("gfx/metal geometry.v1_1: overlapping depth-tested quads are draw-order-independent") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 32, H = 32;
+    // Quad P: near z=0.25, cols/rows 8..23  -> NDC x,y in [-0.5, 0.5].
+    const float posP[18] = {
+        -0.5f,  0.5f, 0.25f,   0.5f,  0.5f, 0.25f,  -0.5f, -0.5f, 0.25f,
+        -0.5f, -0.5f, 0.25f,   0.5f,  0.5f, 0.25f,   0.5f, -0.5f, 0.25f,
+    };
+    // Quad Q: far z=0.75, cols/rows 16..27 -> NDC x in [0,0.75], y in [-0.75,0].
+    const float posQ[18] = {
+         0.0f,  0.0f,  0.75f,   0.75f, 0.0f,  0.75f,   0.0f, -0.75f, 0.75f,
+         0.0f, -0.75f, 0.75f,   0.75f, 0.0f,  0.75f,   0.75f,-0.75f, 0.75f,
+    };
+    id<MTLBuffer> pbuf = device_buffer(posP, sizeof(posP));
+    id<MTLBuffer> qbuf = device_buffer(posQ, sizeof(posQ));
+    REQUIRE((pbuf != nil)); REQUIRE((qbuf != nil));
+    CaliperAllocId pal = bk.bridge->import_allocation(
+        (__bridge void*)pbuf, sizeof(posP), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId qal = bk.bridge->import_allocation(
+        (__bridge void*)qbuf, sizeof(posQ), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pal != 0); REQUIRE(qal != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, CALIPER_GEOM_VIEW_DEPTH);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    const uint32_t green = 0xFF00FF00u, red = 0xFF0000FFu;
+    auto quad_draw = [&](CaliperAllocId a, uint32_t color) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = a; d.vertex_count = 6;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.depth_flags = CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE;
+        d.flat_rgba = color;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+    CaliperGeomDraw P = quad_draw(pal, green);
+    CaliperGeomDraw Q = quad_draw(qal, red);
+
+    // Reference: paint Q red first, then P green (near P wins the overlap since
+    // geom_ref lets a later entry override an earlier one at the same pixel).
+    std::vector<std::pair<int,int>> px; std::vector<uint32_t> col;
+    for (int y = 16; y < 28; ++y) for (int x = 16; x < 28; ++x) { px.emplace_back(x, y); col.push_back(red); }
+    for (int y = 8;  y < 24; ++y) for (int x = 8;  x < 24; ++x) { px.emplace_back(x, y); col.push_back(green); }
+    auto ref = geom_ref(W, H, 0xFF000000u, px, col);
+
+    CaliperGeomDraw pq[2] = {P, Q};
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, pq, 2,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got_pq = bk.readback(view, W, H);
+
+    CaliperGeomDraw qp[2] = {Q, P};
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, qp, 2,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got_qp = bk.readback(view, W, H);
+
+    CHECK(got_pq == got_qp);
+    CHECK(got_pq == ref);
+
+    bk.bridge->release_allocation(pal);
+    bk.bridge->release_allocation(qal);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row F — ALPHA blend equations are byte-exact (§4.2). Over an opaque-black
+// clear, one COLOR_FLAT quad with flat_rgba=0x80FFFFFF (white, alpha 128),
+// BLEND_ALPHA, no depth. color = 255*(128/255) + 0 = 128 exactly per channel;
+// alpha = 128*1 + 255*(127/255) = 255 exactly -> rect pixel = 0xFF808080.
+TEST_CASE("gfx/metal geometry.v1_1: ALPHA blend equations are byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 32, H = 32;
+    // Quad over cols/rows 8..23 (NDC +/-0.5); z irrelevant, no depth attachment.
+    const float pos[18] = {
+        -0.5f,  0.5f, 0.5f,   0.5f,  0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,
+        -0.5f, -0.5f, 0.5f,   0.5f,  0.5f, 0.5f,   0.5f, -0.5f, 0.5f,
+    };
+    id<MTLBuffer> pbuf = device_buffer(pos, sizeof(pos));
+    REQUIRE((pbuf != nil));
+    CaliperAllocId pal = bk.bridge->import_allocation(
+        (__bridge void*)pbuf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pal != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    const uint32_t clear = 0xFF000000u;   // opaque black
+    CaliperGeomDraw d{};
+    d.pos_alloc = pal; d.vertex_count = 6;
+    d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_ALPHA;
+    d.flat_rgba = 0x80FFFFFFu;            // white, alpha 128
+    d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), clear));
+    auto got = bk.readback(view, W, H);
+
+    std::vector<std::pair<int,int>> rect;
+    for (int y = 8; y < 24; ++y) for (int x = 8; x < 24; ++x) rect.emplace_back(x, y);
+    auto ref = geom_ref(W, H, clear, rect,
+                        std::vector<uint32_t>(rect.size(), 0xFF808080u));
+
+    if (got != ref) {
+        uint32_t obs = metal_geom_pixel_rgba(got, W, 8, 8);   // interior rect pixel
+        FAIL("ALPHA blend byte mismatch at (8,8): R=", (int)(obs & 0xFF),
+             " G=", (int)((obs >> 8) & 0xFF), " B=", (int)((obs >> 16) & 0xFF),
+             " A=", (int)((obs >> 24) & 0xFF), " expected R=128 G=128 B=128 A=255");
+    }
+    CHECK(got == ref);
+
+    bk.bridge->release_allocation(pal);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row G — two axis-aligned 1-px LINES crossing. Horizontal along pixel row 10
+// (x 4..27), vertical along pixel column 20 (y 3..28). OPAQUE white, no depth.
+// The CPU reference colors every pixel of each segment (the crossing pixel once,
+// OPAQUE so no double-blend). The four segment ENDPOINT pixels are masked
+// (Metal/Vulkan diamond-exit endpoint rules differ) by overwriting them with the
+// GPU's own bytes before the compare.
+TEST_CASE("gfx/metal geometry.v1_1: axis-aligned 1-px LINES cross, endpoints masked") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 32, H = 32;
+    float pos[12];
+    ndc_for_pixel(4,  10, W, H, &pos[0]);   // horizontal, left end   (pixel 4,10)
+    ndc_for_pixel(27, 10, W, H, &pos[3]);   // horizontal, right end  (pixel 27,10)
+    ndc_for_pixel(20, 3,  W, H, &pos[6]);   // vertical, top end      (pixel 20,3)
+    ndc_for_pixel(20, 28, W, H, &pos[9]);   // vertical, bottom end   (pixel 20,28)
+    id<MTLBuffer> pbuf = device_buffer(pos, sizeof(pos));
+    REQUIRE((pbuf != nil));
+    CaliperAllocId pal = bk.bridge->import_allocation(
+        (__bridge void*)pbuf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pal != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw d{};
+    d.pos_alloc = pal; d.vertex_count = 4;
+    d.topology = CALIPER_GEOM_TOPO_LINES;
+    d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.flat_rgba = 0xFFFFFFFFu;
+    d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got = bk.readback(view, W, H);
+
+    std::vector<std::pair<int,int>> px;
+    for (int x = 4; x <= 27; ++x) px.emplace_back(x, 10);   // horizontal row 10
+    for (int y = 3; y <= 28; ++y) px.emplace_back(20, y);   // vertical col 20
+    auto ref = geom_ref(W, H, 0xFF000000u, px,
+                        std::vector<uint32_t>(px.size(), 0xFFFFFFFFu));
+
+    // Mask the 4 segment endpoints: copy the GPU's own bytes into the reference.
+    const std::pair<int,int> ep[4] = {{4,10},{27,10},{20,3},{20,28}};
+    for (const auto& e : ep) {
+        const size_t at = ((size_t)e.second * W + e.first) * 4;
+        for (int c = 0; c < 4; ++c) ref[at + c] = got[at + c];
+    }
+    CHECK(got == ref);
+
+    bk.bridge->release_allocation(pal);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row H — LAMBERT headlight shading within +/-2 LSB. Full-viewport triangle,
+// COLOR_FLAT mid-gray 0xFFB4B4B4 (180), SHADE_LAMBERT, normals required.
+// Case 1: normals (0,0,1) -> lit=0.30+0.70*1.0=1.0 -> 180. Case 2: normals
+// (sin60,0,cos60)=(0.8660254,0,0.5) -> lit=0.30+0.70*0.5=0.65 -> round(180*0.65)
+// =117. Alpha stays 255 (Lambert scales rgb only). nmat is identity here.
+TEST_CASE("gfx/metal geometry.v1_1: LAMBERT headlight shading within +/-2 LSB") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 16, H = 16;
+    const float pos[9] = { -1.0f, -1.0f, 0.5f,  3.0f, -1.0f, 0.5f, -1.0f, 3.0f, 0.5f };
+    id<MTLBuffer> pbuf = device_buffer(pos, sizeof(pos));
+    REQUIRE((pbuf != nil));
+    CaliperAllocId pal = bk.bridge->import_allocation(
+        (__bridge void*)pbuf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pal != 0);
+
+    const float n1[9] = { 0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f };
+    const float s = 0.8660254f;
+    const float n2[9] = { s, 0.0f, 0.5f,  s, 0.0f, 0.5f,  s, 0.0f, 0.5f };
+    id<MTLBuffer> n1_buf = device_buffer(n1, sizeof(n1));
+    id<MTLBuffer> n2_buf = device_buffer(n2, sizeof(n2));
+    REQUIRE((n1_buf != nil)); REQUIRE((n2_buf != nil));
+    CaliperAllocId n1_alloc = bk.bridge->import_allocation(
+        (__bridge void*)n1_buf, sizeof(n1), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId n2_alloc = bk.bridge->import_allocation(
+        (__bridge void*)n2_buf, sizeof(n2), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(n1_alloc != 0); REQUIRE(n2_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    // channel-wise |got-ref| <= tol compare (float lighting rounds to nearest)
+    auto within = [](const std::vector<uint8_t>& g, const std::vector<uint8_t>& r, int tol) {
+        if (g.size() != r.size()) return false;
+        for (size_t i = 0; i < g.size(); ++i) {
+            int diff = (int)g[i] - (int)r[i];
+            if (diff < 0) diff = -diff;
+            if (diff > tol) return false;
+        }
+        return true;
+    };
+
+    auto lambert_draw = [&](CaliperAllocId n_alloc) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pal; d.vertex_count = 3;
+        d.normal_alloc = n_alloc;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.flat_rgba = 0xFFB4B4B4u;   // mid-gray 180, opaque
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // Case 1: lit=1.0 -> 0xB4 per channel.
+    CaliperGeomDraw d1 = lambert_draw(n1_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d1, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got1 = bk.readback(view, W, H);
+    auto ref1 = geom_ref(W, H, 0xFFB4B4B4u, {}, {});
+    if (!within(got1, ref1, 2)) {
+        uint32_t o = metal_geom_pixel_rgba(got1, W, W / 2, H / 2);
+        FAIL("LAMBERT case1 out of tol: got R=", (int)(o & 0xFF), " G=", (int)((o >> 8) & 0xFF),
+             " B=", (int)((o >> 16) & 0xFF), " A=", (int)((o >> 24) & 0xFF), " expected 180,180,180,255");
+    }
+    CHECK(within(got1, ref1, 2));
+
+    // Case 2: lit=0.65 -> 117 per RGB channel, alpha 255 (0xFF757575).
+    CaliperGeomDraw d2 = lambert_draw(n2_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d2, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got2 = bk.readback(view, W, H);
+    auto ref2 = geom_ref(W, H, 0xFF757575u, {}, {});
+    if (!within(got2, ref2, 2)) {
+        uint32_t o = metal_geom_pixel_rgba(got2, W, W / 2, H / 2);
+        FAIL("LAMBERT case2 out of tol: got R=", (int)(o & 0xFF), " G=", (int)((o >> 8) & 0xFF),
+             " B=", (int)((o >> 16) & 0xFF), " A=", (int)((o >> 24) & 0xFF), " expected 117,117,117,255");
+    }
+    CHECK(within(got2, ref2, 2));
+
+    bk.bridge->release_allocation(n2_alloc);
+    bk.bridge->release_allocation(n1_alloc);
+    bk.bridge->release_allocation(pal);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row I — wireframe-over-mesh: a coplanar LESS_OR_EQUAL line overlay wins.
+// Draw 0: full-viewport triangle at z=0.5, FLAT dark blue, DEPTH_TEST|WRITE.
+// Draw 1: the Row-G cross at the SAME z=0.5, FLAT white, DEPTH_TEST only (no
+// WRITE). LESS_OR_EQUAL (§4.2) lets the coplanar lines paint over the mesh.
+// Reference: blue everywhere, white along the two segments; the 4 line endpoints
+// are masked as in Row G.
+TEST_CASE("gfx/metal geometry.v1_1: wireframe-over-mesh coplanar LESS_OR_EQUAL overlay") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+
+    const int W = 32, H = 32;
+    const float tri[9] = { -1.0f, -1.0f, 0.5f,  3.0f, -1.0f, 0.5f, -1.0f, 3.0f, 0.5f };
+    float line[12];
+    ndc_for_pixel(4,  10, W, H, &line[0]); line[2]  = 0.5f;
+    ndc_for_pixel(27, 10, W, H, &line[3]); line[5]  = 0.5f;
+    ndc_for_pixel(20, 3,  W, H, &line[6]); line[8]  = 0.5f;
+    ndc_for_pixel(20, 28, W, H, &line[9]); line[11] = 0.5f;
+
+    id<MTLBuffer> tri_buf  = device_buffer(tri,  sizeof(tri));
+    id<MTLBuffer> line_buf = device_buffer(line, sizeof(line));
+    REQUIRE((tri_buf != nil)); REQUIRE((line_buf != nil));
+    CaliperAllocId tri_alloc = bk.bridge->import_allocation(
+        (__bridge void*)tri_buf, sizeof(tri), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId line_alloc = bk.bridge->import_allocation(
+        (__bridge void*)line_buf, sizeof(line), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(tri_alloc != 0); REQUIRE(line_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, CALIPER_GEOM_VIEW_DEPTH);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    const uint32_t blue = 0xFF800000u;   // dark blue (B=128), opaque
+    CaliperGeomDraw dtri{};
+    dtri.pos_alloc = tri_alloc; dtri.vertex_count = 3;
+    dtri.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    dtri.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    dtri.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    dtri.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    dtri.depth_flags = CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE;
+    dtri.flat_rgba = blue;
+    dtri.vmin = 0.0f; dtri.vmax = 1.0f; dtri.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) dtri.model[i * 4 + i] = 1.0f;
+
+    CaliperGeomDraw dline{};
+    dline.pos_alloc = line_alloc; dline.vertex_count = 4;
+    dline.topology = CALIPER_GEOM_TOPO_LINES;
+    dline.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    dline.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    dline.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    dline.depth_flags = CALIPER_GEOM_DEPTH_TEST;   // no WRITE; coplanar overlay
+    dline.flat_rgba = 0xFFFFFFFFu;
+    dline.vmin = 0.0f; dline.vmax = 1.0f; dline.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) dline.model[i * 4 + i] = 1.0f;
+
+    CaliperGeomDraw draws[2] = {dtri, dline};
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, draws, 2,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got = bk.readback(view, W, H);
+
+    std::vector<std::pair<int,int>> px;
+    for (int x = 4; x <= 27; ++x) px.emplace_back(x, 10);
+    for (int y = 3; y <= 28; ++y) px.emplace_back(20, y);
+    auto ref = geom_ref(W, H, blue, px,
+                        std::vector<uint32_t>(px.size(), 0xFFFFFFFFu));
+
+    const std::pair<int,int> ep[4] = {{4,10},{27,10},{20,3},{20,28}};
+    for (const auto& e : ep) {
+        const size_t at = ((size_t)e.second * W + e.first) * 4;
+        for (int c = 0; c < 4; ++c) ref[at + c] = got[at + c];
+    }
+    CHECK(got == ref);
+
+    bk.bridge->release_allocation(line_alloc);
+    bk.bridge->release_allocation(tri_alloc);
+    bk.bridge->geom_release_view(view);
+}
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================
