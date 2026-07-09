@@ -26,14 +26,18 @@ checkboxes — they don't ship, they hold.
 - [x] S3 — MeshScope: learned-surface exemplar per design doc (jobs.v1 worker, triple-buffered slots, 3-draw frame, `caliper_mesh_tests`); run-proven: "first zero-copy frame drawn" on Metal+MPS, honest GL fallback
 - [x] S3b — MeshScope "paint the target": left-drag sculpts the target grid, the net chases the edit live (stroke queue keeps torch off the frame thread; chase test green; run-proven)
 
-## 3 · Ship it (next actions, in order)
+## 3 · Ship it (done 2026-07-09)
 
-- [ ] Push `main` to origin (currently 13 commits ahead, local only)
-- [ ] Code-review pass over `feat/geometry-v1_1` (11 commits)
-- [ ] Merge `feat/geometry-v1_1` → main, caps-gated (Windows honestly reports no primitives until S4; the ladder covers it) — amends the S5 both-platforms gate deliberately
-- [ ] Push merged main
+- [x] Push `main` to origin
+- [x] Code-review pass over `feat/geometry-v1_1` (15 commits) — no blockers, 2 cosmetic NOTEs
+- [x] Merge `feat/geometry-v1_1` → main, caps-gated (`d0b61f1`); 6/6 suites green on merged main; branch deleted
+- [x] Push merged main (origin in sync)
 
 ## 4 · geometry.v1_1 — Windows (S4, needs the Windows box)
+
+Spec: `docs/superpowers/specs/2026-07-09-geometry-v1_1-vulkan-phase-b-design.md`
+(self-contained for a fresh session on that machine; folds the S5 doc rows into
+its acceptance).
 
 - [ ] Vulkan backend: `geom.vert/.frag` SPIR-V, per-frame descriptor pool + dynamic-UBO params ring, depth pass, pipeline cache
 - [ ] Mirror EVERY Metal §9.2 row byte-exact against the same CPU references (D24 verification discipline)
