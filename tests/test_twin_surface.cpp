@@ -13,6 +13,7 @@
 
 #include <torch/torch.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -141,12 +142,19 @@ TEST_CASE("subdivide_midpoint: counts, original-vertex prefix, manifold") {
     REQUIRE(torch::allclose(two.positions.narrow(0, 0, V0), base.positions));
     REQUIRE(torch::allclose(two.uvs.narrow(0, 0, V0), base.uvs));
 
-    // A midpoint position/uv is the mean of its endpoints (edge 0-1).
+    // A midpoint vertex's position AND uv are the mean of its parent edge's
+    // endpoints (edge 0-1). Pin the uv to the endpoint-uv mean too, not just the
+    // position — the split must average both streams. Endpoint uvs {0.1,0.1} and
+    // {0.9,0.1} mean to {0.5,0.1}.
     auto one = subdivide_midpoint(base, 1);
     auto pmid = 0.5f * (base.positions[0] + base.positions[1]);
+    auto uvmid = 0.5f * (base.uvs[0] + base.uvs[1]);
     bool found = false;
     for (int64_t v = V0; v < one.positions.size(0); ++v)
-        if (torch::allclose(one.positions[v], pmid)) found = true;
+        if (torch::allclose(one.positions[v], pmid)) {
+            REQUIRE(torch::allclose(one.uvs[v], uvmid));
+            found = true;
+        }
     REQUIRE(found);
 }
 
@@ -173,11 +181,27 @@ TEST_CASE("cotan_laplacian: symmetry, zero row sums, PSD") {
 // --------------------------------------------------------------------------
 // Masses + stable dt.
 // --------------------------------------------------------------------------
-TEST_CASE("vertex_masses: Voronoi-third sums to total area") {
+TEST_CASE("vertex_masses: Voronoi-third sums to total area and per-vertex share") {
     auto strip = make_strip(4, 2);  // 8 unit quads -> total area 8
     auto M = vertex_masses(strip);
     REQUIRE(M.sum().item<double>() == doctest::Approx(8.0).epsilon(1e-5));
     REQUIRE(M.min().item<float>() > 0.f);
+
+    // Voronoi-third gives each vertex one third of every incident triangle's
+    // area. Every triangle in the strip is a unit right triangle (area 1/2), so
+    // a vertex's mass is exactly (incident triangle count)/6 — a distribution
+    // the sum-only check above cannot see. For make_strip(4,2)'s 5x3 grid with
+    // a single (r,c)->(r+1,c+1) diagonal the incident-triangle counts are
+    // (row-major, V=15): diagonal corners 2, off-diagonal corners 1, boundary
+    // 3, interior 6 (they sum to 48 = 8*6).
+    const double tris[15] = {2, 3, 3, 3, 1,
+                             3, 6, 6, 6, 3,
+                             1, 3, 3, 3, 2};
+    REQUIRE(M.size(0) == 15);
+    auto Md = M.to(torch::kFloat64).contiguous();
+    auto Ma = Md.accessor<double, 1>();
+    for (int64_t v = 0; v < 15; ++v)
+        REQUIRE(Ma[v] == doctest::Approx(tris[v] / 6.0).epsilon(1e-6));
 }
 
 TEST_CASE("stable_dt: matches min_i M_i/(kappa L_ii), no dense materialisation") {
@@ -330,6 +354,62 @@ TEST_CASE("bake_matrix: every >=1-texel-thick asset triangle owns a 256^2 texel"
     // sampling guarantee. The uncovered residue are all sub-texel slivers.
     REQUIRE(uncovered_thick == 0);
     REQUIRE(max_uncovered_minheight < 1.0);
+}
+
+// The committed housing packs its 30 charts into a 6x5 UV grid, each chart
+// inset 3/256 per side (v2-task-5). Adjacent charts are therefore separated by a
+// 2*(3/256) = 6/256 gutter — the 6-texel-@256 isolation the bake relies on so no
+// texel centre is claimed by two charts. Pin that width from the atlas UVs: it
+// is the width the "gutter map on a UV quad" test above assumes but never sizes.
+TEST_CASE("bake atlas: inter-chart gutter is exactly 6 texels at 256^2") {
+    caliper::obj::Mesh om;
+    std::string err;
+    const std::string path =
+        std::string(CALIPER_TEST_SOURCE_ROOT) + "/applets/twin_scope/assets/housing.obj";
+    REQUIRE_MESSAGE(caliper::obj::load_file(path, om, &err), err);
+    auto mesh = surface_from_obj(om);
+
+    auto uv = mesh.uvs.to(torch::kFloat64).contiguous();
+    auto ua = uv.accessor<double, 2>();
+    const int64_t V = uv.size(0);
+
+    // Per-cell UV bounding boxes on the 6x5 grid (u -> 6 columns, v -> 5 rows).
+    constexpr int CU = 6, CV = 5;
+    double umin[CU][CV], umax[CU][CV], vmin[CU][CV], vmax[CU][CV];
+    bool used[CU][CV] = {};
+    for (int i = 0; i < CU; ++i)
+        for (int j = 0; j < CV; ++j) {
+            umin[i][j] = vmin[i][j] = 2.0;
+            umax[i][j] = vmax[i][j] = -1.0;
+        }
+    for (int64_t v = 0; v < V; ++v) {
+        const double u = ua[v][0], w = ua[v][1];
+        const int cu = std::min(CU - 1, static_cast<int>(u * CU));
+        const int cv = std::min(CV - 1, static_cast<int>(w * CV));
+        used[cu][cv] = true;
+        umin[cu][cv] = std::min(umin[cu][cv], u);
+        umax[cu][cv] = std::max(umax[cu][cv], u);
+        vmin[cu][cv] = std::min(vmin[cu][cv], w);
+        vmax[cu][cv] = std::max(vmax[cu][cv], w);
+    }
+    int occupied = 0;
+    for (int i = 0; i < CU; ++i)
+        for (int j = 0; j < CV; ++j) occupied += used[i][j] ? 1 : 0;
+    REQUIRE(occupied == 30);  // all 30 charts land in distinct grid cells
+
+    double min_gutter = 2.0;
+    for (int j = 0; j < CV; ++j)  // horizontal neighbours
+        for (int i = 0; i + 1 < CU; ++i)
+            if (used[i][j] && used[i + 1][j])
+                min_gutter = std::min(min_gutter, umin[i + 1][j] - umax[i][j]);
+    for (int i = 0; i < CU; ++i)  // vertical neighbours
+        for (int j = 0; j + 1 < CV; ++j)
+            if (used[i][j] && used[i][j + 1])
+                min_gutter = std::min(min_gutter, vmin[i][j + 1] - vmax[i][j]);
+
+    // Adjacent charts fill to their inset edges, so the tightest gutter is
+    // exactly 6/256 uv == 6 texels @256 (asset UVs are rounded to 1e-6).
+    REQUIRE(min_gutter * 256.0 == doctest::Approx(6.0).epsilon(1e-3));
 }
 
 // --------------------------------------------------------------------------
