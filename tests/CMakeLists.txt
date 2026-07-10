@@ -26,6 +26,7 @@ add_executable(caliper_tests
     test_data_store.cpp
     test_tensor_bridge.cpp
     test_alloc_registry.cpp
+    test_obj.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
@@ -42,7 +43,8 @@ target_sources(caliper_tests PRIVATE test_loader.cpp)
 add_dependencies(caliper_tests hello_applet)
 target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets"
-    CALIPER_TEST_DATA_ROOT="${CMAKE_BINARY_DIR}/test-data")
+    CALIPER_TEST_DATA_ROOT="${CMAKE_BINARY_DIR}/test-data"
+    CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 add_test(NAME caliper_tests COMMAND caliper_tests)
 
