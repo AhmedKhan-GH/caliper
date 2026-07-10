@@ -1002,6 +1002,13 @@ void EmbedScopeApplet::draw_ui() {
             // Otherwise this IS synced_to_tensor: drain the producer before
             // the device upload reads it (no-op on CPU).
             const uint32_t bcaps = st->bridge.caps();
+            // FRAME-THREAD gate (adapters/torch.hpp): without STREAM_ORDERED,
+            // stream_to_tensor degrades to a full device drain — a blocking
+            // barrier in draw_ui (the embed_scope freeze class). Cap absent ->
+            // CPU-stage each tensor instead (src.to(kCPU) syncs only this
+            // tensor, never the whole device).
+            const bool stream_ordered =
+                (bcaps & CALIPER_BRIDGE_CAP_STREAM_ORDERED) != 0;
             // Textures live for the whole run: update in place per generation
             // (display tensors are pre-normalized to [-1,1], so the mapped
             // range never changes). Re-creating them per step was ~1.4 ms x9
@@ -1011,7 +1018,14 @@ void EmbedScopeApplet::draw_ui() {
             auto update_or_create = [&](CaliperTextureId& tex,
                                         const torch::Tensor& src,
                                         int32_t cmap) {
-                auto ct = caliper::adapters::stream_to_tensor(src, bcaps);
+                std::optional<CaliperTensor> ct;
+                torch::Tensor host;
+                if (stream_ordered) {
+                    ct = caliper::adapters::stream_to_tensor(src, bcaps);
+                } else {
+                    host = src.to(torch::kCPU);   // no-op if already CPU
+                    ct = caliper::adapters::to_tensor(host);
+                }
                 if (!ct) { device_rejected = true; return; }
                 if (tex && st->bridge.update_texture(tex, &*ct)) return;
                 if (tex) { st->bridge.release_texture(tex); tex = 0; }
