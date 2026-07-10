@@ -477,6 +477,14 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
             vert_slot[FIELD_SIM][write_slot].copy_(sim_vf);
             vert_slot[FIELD_NET][write_slot].copy_(net_vf);
             vert_slot[FIELD_ERR][write_slot].copy_(err_vf);
+            // Drain BEFORE the publish flip (the geometry memory-stability
+            // contract's temporal half, geometry_v1.h): the slot copies above
+            // are enqueued AFTER the cpu3 sync, so without this they can still
+            // be in flight when the frame thread draws the slot.
+            if (cuda) torch::cuda::synchronize();   // writes done BEFORE publish
+#if defined(__APPLE__)
+            else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
+#endif
 
             std::lock_guard<std::mutex> lock(state->mutex);
             state->cpu_fields = cpuvec;

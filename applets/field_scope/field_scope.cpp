@@ -202,6 +202,14 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
     auto [p0, vel, charge] = seed();
     pos[0].copy_(p0);
 
+    auto sync = [&] {
+        if (cuda) torch::cuda::synchronize();
+#if defined(__APPLE__)
+        else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
+#endif
+    };
+    sync();   // seed writes done BEFORE the initial publish (temporal half)
+
     {
         std::lock_guard<std::mutex> lk(st->mtx);
         st->pool = std::move(pool);
@@ -210,13 +218,6 @@ void sim_job(FieldScopeState* st, const CaliperJobControl* ctl) {
         st->on_gpu   = gpu;
         st->ready_slot = 0;
     }
-
-    auto sync = [&] {
-        if (cuda) torch::cuda::synchronize();
-#if defined(__APPLE__)
-        else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
-#endif
-    };
 
     int write = 1;
     int64_t step = 0;

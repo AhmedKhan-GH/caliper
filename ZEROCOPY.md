@@ -222,10 +222,18 @@ applet owns, both load-bearing:
 
 1. **Temporal (producer completion) — the drain.** Every applet worker drains
    its device (`torch::cuda::synchronize()` / `mps_synchronize_serialized()`)
-   *before* it flips `ready_slot` under the publish mutex — e.g.
-   `applets/mesh_scope/mesh_scope.cpp:276`, `flow_scope.cpp:280`,
-   `sculpt_scope.cpp:215`, `field_scope.cpp:215`, `twin_scope.cpp`,
-   `gpt_scope.cpp:818`. So the producer's writes to the imported allocation are
+   *before* it flips `ready_slot` under the publish mutex —
+   `applets/mesh_scope/mesh_scope.cpp:276`, `flow_scope.cpp:286` (initial seed
+   publish drained at `:255`), `sculpt_scope.cpp:215`,
+   `field_scope.cpp:206-211` (`sync()` before the initial flip too),
+   `twin_scope.cpp:484-486`, `gpt_scope.cpp:818`. This invariant was *audited
+   and enforced* under the §3.2 verdict, not merely observed: twin_scope's
+   publish and flow_scope/field_scope's initial seed publishes originally
+   flipped `ready_slot` with device writes still potentially in flight (their
+   only sync — `.item()` / `.to(kCPU)` — preceded the slot copies), exactly
+   the race the temporal half names; the drains were added to make the rule
+   true at every publish site, steady-state and initial.
+   So the producer's writes to the imported allocation are
    CPU-observably **retired** before the frame thread even reads which slot to
    draw. There is no in-flight producer work for a semaphore to order against;
    the renderer only has to make already-complete writes visible to its vertex
