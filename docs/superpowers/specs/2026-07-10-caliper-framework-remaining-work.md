@@ -172,7 +172,11 @@ Non-blocking, but framework-internal and worth clearing before or alongside
 R3 so they don't compound. Each was surfaced and triaged during the
 `feat/geometry-v1_2` reviews (`.superpowers/sdd/progress.md`).
 
-- [ ] **3.1 Ungated frame-thread `stream_to_tensor` sweep.** R2 gated
+- [x] **3.1 Ungated frame-thread `stream_to_tensor` sweep.** *Done — commit
+  `14e143a`: audit found exactly four call sites (all frame-thread, no worker
+  callers); the two ungated ones (gpt_scope `upload_mapped`, embed_scope
+  `update_or_create`) now gate on STREAM_ORDERED with CPU-staged fallbacks
+  matching the R2 pattern. ctest 8/8.* R2 gated
   twin_scope and gpt_scope's draw-path calls on `STREAM_ORDERED`, but the
   final review found **two pre-existing ungated callers**:
   `applets/gpt_scope/gpt_scope.cpp:445` (`upload_mapped`) and
@@ -181,7 +185,18 @@ R3 so they don't compound. Each was surfaced and triaged during the
   `stream_to_tensor` caller across applets; gate each on the cap with the CPU-
   staged fallback. This is the codebase-wide close of the discipline the
   postmortem established.
-- [ ] **3.2 Per-vertex attr path handshake (latent, codebase-wide).** The
+- [x] **3.2 Per-vertex attr path handshake (latent, codebase-wide).** *Done —
+  commits `bfe30e1` + `335d0b1`. Verdict: safe by construction via TWO
+  invariants — temporal (worker drains its device before flipping
+  `ready_slot`) + spatial (triple-buffer rotation); the STREAM_ORDERED gate is
+  structurally impossible on the geometry ABI (no stream channel) and
+  unnecessary given the drain. The audit falsified the temporal half at three
+  sites (twin_scope every publish; flow/field initial publish) — drains
+  enforced there, so the documented rule now holds at every publish site.
+  Contract written into `geometry_v1.h`/`geometry_v1_1.h` headers +
+  ZEROCOPY.md/GEOMETRY.md — R3's pose/attr publish path inherits it. ctest
+  8/8; twin/flow/field run-proven live post-fix. Note for §1.2: the new
+  twin_scope MPS drain branch is compile-verified on Windows only.* The
   final review noted the per-vertex COLORMAP draw path writes device tensors
   from the worker with **no** STREAM_ORDERED handshake (only the *texture*
   path is gated). Empirically clean in every run-proof, but it is a latent
@@ -189,12 +204,20 @@ R3 so they don't compound. Each was surfaced and triaged during the
   path safe by construction (the pool's triple-buffer stability contract), or
   does it need the same gate? Document the answer where the contract lives;
   gate if the answer is "needs it."
-- [ ] **3.3 Optional test-coverage tightening** (accept-or-do, low value):
+- [x] **3.3 Optional test-coverage tightening** *(done — commit `a087b03`: all
+  four tightened as spec-derived pins, none accepted-out; per-vertex masses =
+  incident-area/3, midpoint UV = parent-edge mean, exact OBJ counts
+  3184/2430, 6/256-uv gutter pin. ctest 8/8.)* Original items:
   surface-engine `vertex_masses` per-vertex distribution (currently sum-only);
   midpoint-UV-mean assertion in subdivision; asset test exact-count pins
   (currently ranges); inter-chart gutter-width pin in the bake test. None
   block; batch into the next test-touching task if convenient.
-- [ ] **3.4 TwinScope efficiency/honesty minors** (M1/M2 from the T8b review):
+- [x] **3.4 TwinScope efficiency/honesty minors** *(done — commit `35b2661`:
+  provenance now per-half — zero-copy claimed only when every drawn half
+  imported; publish gated on `sim_on || train_on` with drain-before-publish
+  preserved. M1 + startup run-proven live; the idle-off branch is
+  reading-verified only — headless runs can't toggle the checkboxes.)*
+  Original items (M1/M2 from the T8b review):
   split-view provenance ORs both halves (over-claims zero-copy when one half
   falls back — make it per-draw); the idle worker still publishes + syncs
   every 33 ms when both sim and train are off (gate the publish on
