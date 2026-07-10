@@ -1,6 +1,8 @@
 # Watching Models Learn: Eliminating the Round Trip Between Training and Seeing
 
-**Whitepaper draft — v0.1**
+**Whitepaper draft — v0.2** *(v0.1 + §4/§9 geometry rewrite: coordinate-style
+graphics are no longer CPU-array-only — `caliper.geometry.v1_1` makes meshes,
+lines, and point clouds a zero-copy class on both ecosystems)*
 *Ahmed Khan · July 2026*
 
 > **One-sentence thesis.** Every mainstream tool for looking inside a neural
@@ -168,11 +170,13 @@ flowchart LR
     T["Live training state<br/>(weights, activations,<br/>embeddings — on GPU)"] --> D["Derive, per step:<br/>projections · PCA · statistics<br/>entropy · argmax · norms<br/>(torch ops, still on GPU)"]
 
     D -->|"image-like result"| TEX["tensor_bridge<br/>→ GPU texture"]
-    D -->|"coordinates"| P3["ImPlot3D<br/>3-D point clouds, glyphs, meshes"]
+    D -->|"vertices · indices ·<br/>per-vertex state"| GEO["geometry.v1_1<br/>meshes, lines, point clouds —<br/>drawn zero-copy, in place"]
+    D -->|"small coordinates"| P3["ImPlot3D<br/>glyph clouds, 3-D scatters<br/>(CPU-array route)"]
     D -->|"series / scalars"| P2["ImPlot<br/>curves, scatters, bars"]
     D -->|"tokens / labels"| TXT["Styled text grids<br/>(colored predictions)"]
 
     TEX --> S["Screen — same frame"]
+    GEO --> S
     P3 --> S
     P2 --> S
     TXT --> S
@@ -189,6 +193,15 @@ flowchart LR
   specialize; a logit lens renders "when does the model decide?" as a colored
   text grid; generated samples evolve from gibberish to iambic cadence over
   three minutes.
+- **MeshScope — the model's output as a solid, live.** A small network learns
+  a 2-D surface; every optimizer step writes its prediction into GPU memory
+  the renderer draws **in place** — a Lambert-lit, loss-colored mesh with a
+  wireframe overlay, with zero copies of the geometry ever made. Paint on the
+  target with the mouse and the net visibly chases the edit. The same applet
+  binary draws zero-copy on both ecosystems (Metal + MPS, Vulkan + CUDA) —
+  the exemplar of the geometry class, joined by FlowScope (a million-particle
+  flow field, points drawn from the tensor the simulation writes) and
+  GPTScope's ThoughtSpace (the residual stream as a live 3-D constellation).
 - **Per-step surfaces.** Convolution kernels and projection matrices update
   ~8 times per second — every optimizer step, not every eval — because the
   cost of showing a tensor no longer includes a trip through the CPU.
@@ -425,10 +438,15 @@ states its limits is a paper whose claims can be trusted.)*
   floor persists only for memory born unshareable.
 - The v1 contract requires contiguous, offset-0 tensors; views are rejected,
   not repaired.
-- Dense outputs (heatmaps, feature maps, attention grids) are where the
-  zero-copy path matters; coordinate-style graphics (point clouds, curves)
-  flow through plotting libraries as small CPU arrays — kilobytes, and the
-  two routes compose freely.
+- Dense outputs (heatmaps, feature maps, attention grids) and geometry
+  (point clouds, lines, indexed meshes — `caliper.geometry.v1_1`) both ride
+  zero-copy paths, byte-exact-verified on both ecosystems; small derived
+  series (curves, scatters, glyph clouds) still flow through plotting
+  libraries as CPU arrays — kilobytes, and the routes compose freely.
+- Geometry appearance is a fixed menu (flat / colormap / per-vertex color;
+  unlit / Lambert; five topologies): applets supply tensors, never shaders.
+  Render-to-tensor does not exist and never will — data flows tensors →
+  pixels, one way.
 - The OpenGL fallback stages through the CPU by design; it exists so the
   worst case is slow, not broken.
 - Same-frame visualization does not by itself accelerate training; its value
