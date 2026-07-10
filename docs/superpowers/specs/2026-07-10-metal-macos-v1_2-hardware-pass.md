@@ -355,6 +355,37 @@ When §2–§6 are all green with artifacts, the following flip — and only the
 
 ---
 
+## 8. Addendum — code merged after this spec was written (tech-debt merge `30e52f6`)
+
+The §3 tech-debt branch (`fix/r2-tech-debt`, merged the same day) landed applet
+code with `__APPLE__`-guarded branches that **no compiler has seen** — the same
+risk class as §2. The mac session must fold these into the pass:
+
+- [ ] **8.1 Compile gate additions.** New Apple-guarded drain sites, all calling
+  `caliper::adapters::detail::mps_synchronize_serialized()` in the mesh_scope
+  idiom: `applets/twin_scope/twin_scope.cpp:497-500` (the drain between the
+  slot copies and the `ready_slot` flip — commit `335d0b1`),
+  `applets/flow_scope/flow_scope.cpp:255-258` (initial-publish drain), and the
+  hoisted `sync` lambda call at `applets/field_scope/field_scope.cpp:206-211`.
+  These must compile on macOS; they are one-line siblings of code that already
+  compiles there, but verify, don't assume.
+- [ ] **8.2 Contract holds on MPS.** The drain-before-publish invariant is now
+  documented contract (`ZEROCOPY.md`, `geometry_v1.h:66-90`): every worker
+  drains its device before flipping `ready_slot`. On MPS the drain is the
+  serialized-sync helper — confirm during the §5 TwinScope run that publishes
+  are drained (no torn per-vertex COLORMAP frames) with the sim under load.
+- [ ] **8.3 Frame-thread gates behave on Metal.** `14e143a` gated the last two
+  frame-thread `stream_to_tensor` callers (gpt_scope `upload_mapped`,
+  embed_scope `update_or_create`) on STREAM_ORDERED. Metal reports that cap
+  unconditionally (`metal_renderer.mm:384`), so on this Mac the gated *fast*
+  arm is what executes — confirm gpt_scope and embed_scope draw without stall
+  as part of the §5-adjacent applet sweep. (`gpt_scope.cpp:818`'s drain is
+  CUDA-only by design; its imported path is CUDA-gated at `:719` — not a gap.)
+
+Line anchors are as of `30e52f6`; re-grep if the tree has moved.
+
+---
+
 ## Invariants (hold forever — restated from ROADMAP.md / GEOMETRY.md §12)
 
 - **Byte-exact bar:** the Metal twin is byte-identical to the one CPU reference
