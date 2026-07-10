@@ -106,8 +106,13 @@ mv). Outside-chart texels get a precomputed gutter map (index of nearest
 inside texel, `index_select` at publish) so bilinear/clamp sampling never
 bleeds garbage. The rasterizer is a small header-only helper next to the
 OBJ loader, unit-tested (partition of unity: each inside texel's weights
-sum to 1; coverage: every triangle with nonzero UV area owns ≥1 texel at
-256² for this asset).
+sum to 1; coverage: every triangle whose UV extent is ≥1 texel owns ≥1
+texel at 256². Sub-texel UV slivers — thin fin-thickness faces — cannot be
+owned by any texel-center rasterizer (Nyquist); they are permitted and must
+be neighbor-filled via the gutter/partition-of-unity path. Amended
+2026-07-10 after T6 measured 445/3184 sliver triangles on the committed
+asset; the original "every nonzero-UV-area triangle" wording was
+unsatisfiable at 256².)
 
 ## 6. The views (what the demo shows)
 
