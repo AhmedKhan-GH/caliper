@@ -376,7 +376,8 @@ imported) and `s̄² = (‖c0‖² + ‖c1‖² + ‖c2‖²) / 3`, the draw is 
 *Why `1e-4`:* f32 rotation/scale matrices composed from a handful of f32 ops carry
 relative error ~`1e-6`, so `1e-4` gives two orders of headroom over legitimate
 composition noise, while any intentional shear or non-uniform scale registers at
-`1e-2`+ — four-plus orders above the gate — and the residual non-orthogonality it
+`1e-2`+ — two-plus orders above the gate and four-plus above composition noise — and
+the residual non-orthogonality it
 admits perturbs the lit term well inside the ±2-LSB Lambert row tolerance (§4.4). The
 number is part of the byte-exact contract: it is pinned in the header next to the caps
 bit and asserted in the G14 gate test, never a tunable.
@@ -392,6 +393,22 @@ addressable via a bounded `N*64`-byte readback of the instance range — before 
 clear or encode, refusal surfacing through the same whole-frame-false path with pixels
 untouched. Both backends run the identical comparison in the identical float order
 (Metal transcribed, §7).
+
+*Readback mechanics (binding, not guidance):* **(a)** all LAMBERT-instanced draws in
+the array share **one** staged-copy submit (one fence wait) placed after the metadata
+gate loop and before the render submit — never one round-trip per draw. **(b)** the
+staging buffer is a grow-only host-visible buffer reusing the `ensure_buffer` pattern
+of `geom_prim_params_` (`vulkan_renderer.cpp:1120-1128`) — never allocated per frame.
+**(c) Ledger note:** G14 is the hot path's **first device-contents read** (every
+existing re-gate reads metadata only). Cost: one extra fenced round-trip + `N*64`
+bytes over PCIe per frame containing LAMBERT-instanced draws (fleet: N=50 → 3.2 KB,
+microseconds against a path that already fence-waits its render — `submit_once`,
+`vulkan_renderer.cpp:1735-1753`); it scales with the same `N*64` bytes the draw itself
+reads. Coherence rides the drain-before-publish temporal half (`geometry_v1.h:66-90`):
+the producer drained before flipping the slot, so the bytes are complete and stable
+when read. On Metal, shared-storage imported buffers may be read via `contents()`
+directly (no blit) — same comparison, same float order. The refusal-purity claim is
+unaffected: the copy touches only staging, never the view.
 
 **Whole-frame refusal & pixel purity:** every `return false` above leaves the view's
 pixels exactly as they were, because (as on every existing path) nothing is cleared or
