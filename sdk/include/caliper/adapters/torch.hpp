@@ -195,6 +195,10 @@ inline std::optional<CaliperTensor> synced_to_tensor(const at::Tensor& t) {
 // never skips a drain the host didn't promise to replace. Thread-safety story
 // unchanged from v1: the caller still hands over a tensor it owns at a
 // quiescent point in its own logic (spec §4, last paragraph).
+//
+// FRAME-THREAD WARNING: without CALIPER_BRIDGE_CAP_STREAM_ORDERED this degrades
+// to synced_to_tensor (a full device barrier). Gate on the cap before calling
+// from draw_ui.
 inline std::optional<CaliperTensor> stream_to_tensor(const at::Tensor& t,
                                                      uint32_t bridge_caps) {
     if (!(bridge_caps & CALIPER_BRIDGE_CAP_STREAM_ORDERED))

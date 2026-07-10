@@ -1312,16 +1312,35 @@ void GPTScopeApplet::draw_ui() {
                     st->bridge.release_texture(st->head_tex); st->head_tex = 0;
                 }
                 bool imported = false;
+                // FRAME-THREAD gate (design §8.b, adapters/torch.hpp):
+                // stream_to_tensor degrades to a full device barrier without
+                // STREAM_ORDERED, so the zero-copy import only runs when the
+                // host granted the cap. Cap absent -> the v1 update_texture
+                // rung, CPU-staged from the SAME 0..1-normalized block (honest
+                // "CPU-staged" status via head_stage_cpu below).
+                const bool stream_ordered =
+                    (st->bridge_caps & CALIPER_BRIDGE_CAP_STREAM_ORDERED) != 0;
                 if (st->head_tex) {
                     bool updated = false;
-                    auto d = caliper::adapters::stream_to_tensor(blocks,
-                                                                 st->bridge_caps);
-                    if (d) {
-                        if (auto ref = pool->to_bridge(st->bridge, blocks))
-                            imported = updated = st->bridge.update_texture_from_alloc(
-                                st->head_tex, ref->alloc, ref->offset, &*d);
-                        if (!updated)            // miss or false -> v1 update
-                            updated = st->bridge.update_texture(st->head_tex, &*d);
+                    if (stream_ordered) {
+                        auto d = caliper::adapters::stream_to_tensor(
+                            blocks, st->bridge_caps);
+                        if (d) {
+                            if (auto ref = pool->to_bridge(st->bridge, blocks))
+                                imported = updated =
+                                    st->bridge.update_texture_from_alloc(
+                                        st->head_tex, ref->alloc, ref->offset,
+                                        &*d);
+                            if (!updated)        // import miss -> v1 update
+                                updated = st->bridge.update_texture(
+                                    st->head_tex, &*d);
+                        }
+                    } else {
+                        st->head_stage_cpu = true;      // honest status line
+                        auto host = blocks.to(torch::kCPU);
+                        if (auto d = caliper::adapters::to_tensor(host))
+                            updated = st->bridge.update_texture(
+                                st->head_tex, &*d);
                     }
                     if (!updated) {              // never a stale image: recreate
                         st->bridge.release_texture(st->head_tex);
