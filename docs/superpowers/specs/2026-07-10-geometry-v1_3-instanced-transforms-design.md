@@ -30,11 +30,14 @@ existing colormap/`vmin`/`vmax` LUT. It is a **pure additive struct-growth revis
 in the exact shape v1_2 used: a new record `CaliperGeomDrawV1_3` = `V1_2` + an
 appended instance tail carried by the existing `draw_primitives` + `draw_stride`
 mechanism, one new service id, one new caps bit, `reserved0` still NULL, **no new
-entry points**. Both backends already draw instanced *points* in `geometry.v1`
-(`vkCmdDraw(count, 1, 0, 0)` at `vulkan_renderer.cpp:760`; `drawPrimitives:…` at
-`metal_renderer.mm:973`, and the v1 points path is literally an "instanced points"
-draw — `host_renderer.h:110-116`); R3 **generalizes that instance-count mechanism to
-primitives**, it does not invent it. With R2 (textures-on-meshes, shipped) and R3
+entry points**. Honest framing of what exists: both backends' draw calls already carry
+the instance-count *slot* R3 turns on, but every shipped draw passes an instance count
+of **1** (`vkCmdDraw(cb, count, 1, 0, 0)` at `vulkan_renderer.cpp:760` and `:1270`;
+Metal's `drawPrimitives:vertexStart:vertexCount:` at `metal_renderer.mm:755`/`:973`
+uses the non-instanced arity; the v1 "instanced points" naming at
+`host_renderer.h:110-116` describes the vertex-pull architecture, not an N>1 path).
+R3 is the framework's **first true N>1 instanced draw** — what it generalizes is the
+existing draw-call slot and vertex-pull mechanism, not a shipped N>1 code path. With R2 (textures-on-meshes, shipped) and R3
 merged, the roadmap's rule that **"R2+R3 together ARE the twin demo"** is satisfied:
 TwinScope's hidden 50-variant batch becomes fifty housings on screen, each tinted by
 its own live state.
@@ -52,7 +55,8 @@ its own live state.
   **instance matrix's upper-3×3 composed with the existing per-draw double-precision
   normal matrix, then normalize**, and **restrict instanced LAMBERT draws to rigid +
   uniform-scale instance transforms** (rotation, uniform scale, translation — no shear,
-  no non-uniform scale). *Rationale:* a full shader-side `inverse(transpose(mat3(…)))`
+  no non-uniform scale), **enforced by gate G14** (whole-frame refusal, tolerance
+  `1e-4` — §5.1), never merely documented. *Rationale:* a full shader-side `inverse(transpose(mat3(…)))`
   of the combined transform is cross-backend non-deterministic (GLSL vs MSL differ at
   the ULP, which fails the byte bar); a second per-instance normal-matrix stream
   doubles the ABI and the host's N-matrix compute for no exemplar benefit; under the
@@ -147,12 +151,16 @@ tail (short-stride refusal), and a v1.1/v1.2 caller can never reach the instance
   `struct_size`, the v1 prefix (mirror `test_abi.cpp:200-205`).
 - `CALIPER_GEOMETRY_V1_3` string equals `"caliper.geometry.v1_3"`;
   `CALIPER_GEOM_CAP_INSTANCED == (1u<<3)`.
-- **Widening/compat regression** (extend the `test_abi.cpp:214-274` stub pattern): a
-  v1.2-shaped applet record passed through the `V1_2` entry still enforces stride 216
-  and drives a valid draw; a v1.3 caller with a zero instance tail
-  (`instance_alloc==0`) is byte-identical to a v1.2 draw (the additive-default rule,
-  proven pixel-exact in §8, row C). Add a stub `kStubGeom13` that records the stride it
-  received and assert it equals `sizeof(CaliperGeomDrawV1_3)`.
+- **Widening/compat regression** — the true analog of the v1_2 precedent
+  (`test_abi.cpp:214-274`, where `kStubGeom12` is the fixture's ONLY geometry table,
+  `:258`): provide a stub `kStubGeom13` as the **only** geometry service (v1, v1_1,
+  v1_2 all NULL — a v1.3-only host), then drive fully-poisoned frozen **192-byte
+  v1.1-shaped** records and **216-byte v1.2-shaped** records through the SDK wrapper's
+  respective overloads. Assert each call arrives widened: received stride ==
+  `sizeof(CaliperGeomDrawV1_3)` (256), the 192/216-byte prefix intact byte-for-byte,
+  and the appended tail all-zero. (The pixel-level half of the additive-default rule —
+  a v1.3 record with `instance_alloc==0` drawing byte-identically to v1.2 — is §8
+  row C.)
 
 ---
 
@@ -207,9 +215,34 @@ gate block (§5) runs only under `GeomRev::V1_3`.
   `instance_alloc`/`instance_offset`/`instance_count`/`instance_attr_alloc`/
   `instance_attr_offset` (renderer ids + byte offsets, mirroring how `uv_alloc` holds a
   resolved renderer id — `tensor_bridge.cpp:776-777`). Defaults zero → non-instanced.
+  **Tint-LUT resolution rule (binding contract):** `HostGeomDraw.lut256` is populated
+  whenever the draw needs a LUT — base `color_mode == COLORMAP` (as today,
+  `tensor_bridge.cpp:743-745`) **or** `instance_attr_alloc != 0` — resolved from the
+  base record's `colormap` (gate G12 guarantees it resolves), **regardless of base
+  color_mode**. A FLAT- or VERTEX_RGBA-based instanced-tint draw still carries a real
+  LUT; today `lut256` stays null for those modes, which would leave the tint reading
+  placeholder garbage (§6.2).
 - SDK sugar `sdk/include/caliper/caliper.hpp` (`:433-437`): add
   `geom_draw_v1_3_defaults()` returning `{ .base = geom_draw_v1_2_defaults() }` with a
   zero instance tail.
+- **SDK `caliper::Geometry` wrapper surface (pinned — TwinScope draws through it,
+  `twin_scope.cpp:889/:912`).** The wrapper (`caliper.hpp:336-418`) grows exactly:
+  - a `g13_` member resolved from `CALIPER_GEOMETRY_V1_3` in the constructor,
+    following the `g12_` resolution pattern (`:344-345`);
+  - `bool has_instanced()` returning `(caps() & CALIPER_GEOM_CAP_INSTANCED) != 0u`,
+    mirroring `has_textured()` (`:364-366`);
+  - a `draw_primitives(view, cam, const CaliperGeomDrawV1_3* draws, count, clear)`
+    overload passing `sizeof(CaliperGeomDrawV1_3)` as stride, mirroring the v1.2
+    overload (`:404-412`);
+  - the **widening tier** `if (!g12_ && g13_) { g12_ =
+    reinterpret_cast<const CaliperGeometryV1_2*>(g13_); widen_v12_draws_ = true; }`,
+    placed BEFORE and chaining into the existing `!g11_ && g12_` tier (`:346-352`), so
+    on a v1_3-only host both flags set. The overloads then widen to the **widest
+    required record**: the v1.1 overload (`:391-403`) builds zero-tailed
+    `CaliperGeomDrawV1_3` records (stride 256) when `widen_v12_draws_`, else zero-tailed
+    `V1_2` records (stride 216) when only `widen_v11_draws_`; the v1.2 overload builds
+    zero-tailed `V1_3` records (stride 256) when `widen_v12_draws_`. Prefix copied
+    intact, tail zero — the v1_2 widening precedent (`:398-402`) extended one tier.
 
 ---
 
@@ -285,12 +318,15 @@ the host and compares within the v1.2 Lambert tolerance (±2 RGB LSB, alpha exac
 bar `geometry_v1_2.md` verification row 6 already uses). Positions, tint, and depth
 rows are **exact** (0 LSB); only the Lambert-lit rows carry the ±2-LSB tolerance, and
 only because a `normalize` sits in the path — the same reason v1.2's Lambert row is a
-tolerance row, not a regression from R3. A non-rigid instance matrix on a LAMBERT draw
-is **not** UB and not silently wrong-lit: the shader still runs (the restriction is a
-documented contract, like clamp-to-edge is fixed), but the CPU reference and the gfx
-rows only assert byte-parity for the rigid+uniform-scale class; the fleet demo uses
-grid translations + uniform scale, well inside it. UNLIT instanced draws (the fleet's
-default tint mode) never touch normals.
+tolerance row, not a regression from R3. An out-of-class instance matrix on a LAMBERT
+draw **would be silently mis-lit**: for shear or non-uniform scale, raw-upper-3×3 +
+`normalize` does NOT equal the inverse-transpose even up to a positive scalar, so the
+image would be wrong under a clean status line — a direct violation of "never a wrong
+image." The restriction is therefore **enforced, not documented**: gate G14 (§5.1)
+refuses the whole frame when a LAMBERT-instanced draw carries an out-of-class instance
+matrix, pixels untouched. The fleet demo uses grid translations + uniform scale, well
+inside the class. UNLIT instanced draws (the fleet's default tint mode) never touch
+normals and are unrestricted.
 
 ---
 
@@ -317,7 +353,7 @@ when `color_mode`/topology otherwise validates.
 | G3 | N bound | `instance_count <= UINT32_MAX` (Vulkan `instanceCount`/`gl_InstanceIndex` are u32; `metal_renderer.mm` instanceCount is `NSUInteger` but re-bound to u32 for parity) | `too many instances` |
 | G4 | matrix alignment | `instance_offset % 4 == 0` (the uniform 4-byte offset rule, `range_ok` `:618`) | `instance offset misaligned` |
 | G5 | matrix overflow + bounds | `instance_count * 64` overflow-safe AND `instance_offset + N*64 <= imported size` (16 f32 = 64 B/instance; `range_ok(size, off, N, 64, "instances")`) | `instances out of imported bounds` |
-| G6 | matrix base fits u32 | `instance_offset / 4 <= UINT32_MAX` (rides a `PrimParams` u32 base) | `instance base exceeds 32 bits` |
+| G6 | matrix base fits u32 | `instance_offset / 4 <= UINT32_MAX` (rides a `PrimParams` u32 base). Fires in **BOTH** the host validator **and** each backend re-gate, like the existing base checks (`vulkan_renderer.cpp:978,993`; Metal's uv twin `metal_renderer.mm:933-934`) — the Metal parity ledger stays honest | `instance base exceeds 32 bits` |
 | G7 | matrix alloc live | `imported_.find(instance_alloc)` resolves (host) / renderer `imported_` resolves (backend) | `unknown instance alloc` |
 | G8 | attr requires instances | `instance_attr_alloc!=0` requires `instance_alloc!=0 && instance_count>0` (a tint with nothing to tint is refused, not ignored) | `instance attr without instances` |
 | G9 | attr alignment | `instance_attr_offset % 4 == 0` | `instance attr offset misaligned` |
@@ -325,6 +361,37 @@ when `color_mode`/topology otherwise validates.
 | G11 | attr alloc live | `imported_.find(instance_attr_alloc)` resolves | `unknown instance attr alloc` |
 | G12 | tint needs colormap | `instance_attr_alloc!=0` requires `colormap_lut(colormap) != nullptr` (reuses the COLORMAP LUT gate `:743-745`) | `instance tint needs colormap` |
 | G13 | LAMBERT+instanced needs normals | already covered by the existing "lambert needs normals" gate `:719`; no new gate (the normal stream is per-vertex, shared across instances) | *(existing)* `lambert needs normals` |
+| G14 | LAMBERT rigidity (the §4.4 enforcement) | when `shade_mode==LAMBERT && instance_count>0`: every instance upper-3×3 is orthogonal-up-to-uniform-scale within the §5.1 tolerance | `instanced lambert needs rigid+uniform-scale` |
+
+### 5.1 The G14 rigidity check (tolerance is part of the contract)
+
+For each instance matrix, with `c0,c1,c2` the columns of the upper-3×3 (f32, read as
+imported) and `s̄² = (‖c0‖² + ‖c1‖² + ‖c2‖²) / 3`, the draw is refused unless, for a
+**contract constant `kGeomRigidTol = 1e-4`** (relative, dimensionless):
+
+- `|c_i · c_j| <= kGeomRigidTol * s̄²` for all `i != j` (columns orthogonal), AND
+- `| ‖c_i‖² − s̄² | <= kGeomRigidTol * s̄²` for each `i` (columns equal-length), AND
+- `s̄² > 0` (a zero/degenerate upper-3×3 is refused).
+
+*Why `1e-4`:* f32 rotation/scale matrices composed from a handful of f32 ops carry
+relative error ~`1e-6`, so `1e-4` gives two orders of headroom over legitimate
+composition noise, while any intentional shear or non-uniform scale registers at
+`1e-2`+ — four-plus orders above the gate — and the residual non-orthogonality it
+admits perturbs the lit term well inside the ±2-LSB Lambert row tolerance (§4.4). The
+number is part of the byte-exact contract: it is pinned in the header next to the caps
+bit and asserted in the G14 gate test, never a tunable.
+
+*Cost:* an O(N) scan of `N*64` bytes, run **only** on LAMBERT-instanced draws
+(comparable to the existing per-draw bounds scans; a pose-only or UNLIT fleet never
+pays it). *Placement honesty:* the instance matrices live in an **imported device
+allocation** — the host's `imported_` table resolves ids and sizes, never a mapped
+host pointer (`tensor_bridge.cpp:688-691`), so while the gate's *contract* (atomicity,
+reason string, refusal-before-any-encode) belongs to the validator battery above, its
+*execution* lands in each backend's re-gate stage, where the imported bytes are
+addressable via a bounded `N*64`-byte readback of the instance range — before any
+clear or encode, refusal surfacing through the same whole-frame-false path with pixels
+untouched. Both backends run the identical comparison in the identical float order
+(Metal transcribed, §7).
 
 **Whole-frame refusal & pixel purity:** every `return false` above leaves the view's
 pixels exactly as they were, because (as on every existing path) nothing is cleared or
@@ -335,8 +402,9 @@ freed `instance_alloc`/`instance_attr_alloc` fails G7/G11 (`imported_.find` miss
 both the host and the backend re-gate, so a use-after-release draws nothing. **Backend
 re-gate for parity:** the Vulkan and Metal binding models differ (SSBO descriptor vs
 `setVertexBuffer` index), so each backend re-runs G1-G12 against its own `imported_`
-table before binding — the same discipline the v1.2 texture gate uses
-(`vulkan_renderer.cpp:1070-1076` re-checks the sampled texture; Metal mirrors).
+table before binding — plus G14, which executes *only* there (§5.1) — the same
+discipline the v1.2 texture gate uses (`vulkan_renderer.cpp:1070-1076` re-checks the
+sampled texture; Metal mirrors).
 
 ---
 
@@ -368,6 +436,17 @@ Absent-source binding follows the existing placeholder trick (bind `pos` when a 
 is unused so the shader's guarded read is harmless — `:1172-1190`): when
 `use_instance==0` bind `pos` at 8; when `use_instance_attr==0` bind `pos` at 9. The
 descriptor writes extend the `bi[7]`/`wr[8]` arrays at `:1174-1217` to `bi[9]`/`wr[10]`.
+
+**Tint LUT at binding 4 (explicit — do not follow the current predicate literally):**
+today the LUT ring slot is assigned only for COLORMAP draws (`e.lut_slot >= 0` when
+`d.color_mode == COLORMAP`, slot assignment `:1048-1052`, ring write `:1148-1151`,
+binding `:1179-1185`); every other draw placeholder-binds `pos` at binding 4
+(`:1184`). R3 changes the slot-assignment predicate to **`d.lut256 != nullptr`** — set
+by the host for COLORMAP **or** instanced-tint draws (§3.3 resolution rule) — so an
+instanced-tint draw over a FLAT/VERTEX_RGBA/TEXTURE base still receives the real LUT
+at binding 4. An executor who leaves the COLORMAP-only predicate in place ships a tint
+path that reads placeholder garbage; §8 row B (tint over a FLAT base) exists to catch
+exactly that.
 
 ### 6.3 PrimParams growth — the three hand-synced copies
 
@@ -451,9 +530,15 @@ instance-index-semantics surprises a review cannot catch.
   [[buffer(8)]]`, threaded through both `geom_vs` (`:257-267`) and `geom_vs_point`
   (`:269-285`) with `uint iid [[instance_id]]`. Apply the instance matrix and the
   §4.4 normal composition with the **identical float op order** as GLSL.
-- **Day-one gate parity:** G1-G12 (§5) fire in the Metal re-gate before encode, byte-for-
-  byte the same reasons, so a Metal build refuses exactly what Vulkan refuses even before
-  hardware runs. Fix the T3-ledgered cosmetic while here if it recurs: the Metal refusal
+- **Tint LUT (buffer index 4):** Metal binds the LUT by value —
+  `setVertexBytes:(e.d->lut256 ? e.d->lut256 : kZeroLut) … atIndex:4`
+  (`metal_renderer.mm:968-969`) — so the §3.3 host resolution rule is sufficient: with
+  `lut256` populated for instanced-tint draws, the correct LUT lands at index 4
+  regardless of base color_mode. The `kZeroLut` fallback must never be reachable for a
+  tint draw (G12 refuses upstream); the Metal twin of §8 row B pins it.
+- **Day-one gate parity:** G1-G12 plus G14 (§5/§5.1) fire in the Metal re-gate before
+  encode, byte-for-byte the same reasons and the same G14 float order, so a Metal build
+  refuses exactly what Vulkan refuses even before hardware runs. Fix the T3-ledgered cosmetic while here if it recurs: the Metal refusal
   log double-prefix (`geom_prims: primitives:`) noted in remaining-work §1.2 — do not add
   a new instance of it.
 - **`supports_geometry_instanced()`** on `MetalRenderer` returns
@@ -470,8 +555,13 @@ row exists in the **Vulkan block** (`#ifdef CALIPER_HAVE_VULKAN`, ~`gfx_main.cpp
 1000-2350`, **runs on this box**) and the mirrored **Metal block**
 (`#ifdef CALIPER_HAVE_METAL`, ~`:3170-4750`, **transcribed, runs in the mac pass**),
 gated on `metal_env().ok`. Add a small CPU helper `instanced_geom_reference(...)` that
-composes `mvp_draw * M_i * vertex` and the §4.4 normal chain in host float, reused by
-every row.
+composes the transform and the §4.4 normal chain in host float, reused by every row.
+**Matrix association is pinned (byte-load-bearing):** the reference applies `M_i` to
+the vertex **vector first**, then `mvp_draw` to the result —
+`p' = mvp_draw * (M_i * vec4(v, 1))` — matching the shader's grouping (§6.4
+`p.mvp * (M * vec4(wp, 1.0))`). It must **never** premultiply `(mvp_draw * M_i)` into
+one matrix: matrix-matrix-then-vector groups the float sums differently and breaks
+Row A's 0-LSB claim.
 
 - **Row A — pose-only fleet, N distinct transforms (exact).** One triangle/quad, N=4
   instances at four axis-separated translations (pixel-center-unambiguous), FLAT color,
@@ -479,8 +569,10 @@ every row.
   `last_device_path == "primitives-imported"`. **Exact (0 LSB).**
 - **Row B — per-instance tint through the LUT (exact).** Same N=4, `instance_attr` = 4
   distinct scalars spanning `[vmin,vmax]` at exact quantized LUT indices, MAGMA,
-  UNLIT. Reference: each quad = `unpack_rgba(LUT[idx(attr_i)])`. **Exact (0 LSB)** —
-  the tint path has no `normalize`.
+  UNLIT — and the base record's `color_mode` set to **FLAT**, so the row also proves
+  the binding-4 tint-LUT rule (§6.2: a COLORMAP-only LUT predicate would read
+  placeholder garbage here). Reference: each quad = `unpack_rgba(LUT[idx(attr_i)])`.
+  **Exact (0 LSB)** — the tint path has no `normalize`.
 - **Row C — `instance_count==0` == non-instanced, byte-identical (exact).** Draw the
   same geometry twice into two views: once as a v1.2 record, once as a v1.3 record with
   `instance_alloc==0`. Byte-compare the two readbacks directly (not just against a CPU
@@ -492,9 +584,11 @@ every row.
   attempt each of: (i) misaligned `instance_offset` (G4); (ii) `N*64` overflow past the
   imported allocation (G5); (iii) `instance_alloc!=0` with `instance_count==0` (G2);
   (iv) a **released** instance alloc (G7); (v) `instance_attr` present with
-  `instance_alloc==0` (G8); (vi) `instance_attr` without a valid colormap (G12). Each
-  returns `false` and the readback equals the last-good frame byte-for-byte
-  (mirror the refusal-purity structure `gfx_main.cpp:1785-1912` / `4030-4159`).
+  `instance_alloc==0` (G8); (vi) `instance_attr` without a valid colormap (G12);
+  (vii) a **sheared** instance matrix on a LAMBERT-instanced draw (G14, §5.1 — shear
+  well above `kGeomRigidTol`, e.g. `m[4]=0.1`). Each returns `false` and the readback
+  equals the last-good frame byte-for-byte (mirror the refusal-purity structure
+  `gfx_main.cpp:1785-1912` / `4030-4159`).
 
 ---
 
@@ -504,7 +598,8 @@ Replace the split-view stand-in with the real 50-variant fleet. The applet **alr
 batches all 50 variants** — `ThermalSim` holds `sim.T` shape `(B=50, V_sim)` and
 `sim.active` `(B,K)` (`twin_scope.cpp:297,466-468`; `kVariants=50` at `:67`, variant 0
 is the hero) — so this is a **draw path, not new physics**. The split stand-in to remove
-is the `MODE_SPLIT` two-half `specs` construction at `twin_scope.cpp:775-785,867-916`.
+is the `MODE_SPLIT` two-half `specs` construction at `twin_scope.cpp:778-784` and its
+two-half draw loops at `:871-916`.
 
 - **Per-variant scalars (new reduction, worker-side):** the worker currently reduces the
   peak only for the hero variant (`cpu3.select(0,0).max()`, `:483`). Add a batched
@@ -555,18 +650,23 @@ Verification is by artifacts only — subagent report text is data, not proof
 1. **T1 — ABI + SDK + host vend.** `geometry_v1_3.h` record + `static_assert`s; the
    `GeomRev` enum refactor (§3, replacing `bool v12`); `geom_caps` bit 3 +
    `supports_geometry_instanced()` default-false query; `kGeom13` vend +
-   `geo_draw_primitives_v13` + `kIds`; `HostGeomDraw` instance fields;
-   `geom_draw_v1_3_defaults()`. **Gate:** `test_abi` pins (§2.4) green; existing
-   suite green; no backend yet grants the cap, so no pixels change. Commit.
+   `geo_draw_primitives_v13` + `kIds`; `HostGeomDraw` instance fields + the §3.3
+   tint-LUT resolution rule; `geom_draw_v1_3_defaults()`; the full `caliper::Geometry`
+   wrapper surface (§3.3: `g13_`, `has_instanced()`, the v1_3 overload, the widening
+   tiers). **Gate:** `test_abi` pins (§2.4, incl. the v1.3-only-host widening
+   regression) green; existing suite green; no backend yet grants the cap, so no
+   pixels change. Commit.
 2. **T2 — host validator gate battery.** The instance block (G1-G12) in
    `geom_draw_primitives_impl` under `GeomRev::V1_3`; the `geom_draw_primitives_v1_3`
-   wrapper. **Gate:** new `test_tensor_bridge.cpp` cases (mirror the v1.2 textured-gate
+   wrapper. (G14's *execution* lands in T3/T4's backend re-gate — §5.1 placement.)
+   **Gate:** new `test_tensor_bridge.cpp` cases (mirror the v1.2 textured-gate
    battery `:718-780`) — atomic refusal per gate, valid instanced draw resolves. Commit.
 3. **T3 — Vulkan backend.** `PrimParams` → 192 (all three copies in lockstep, §6.3);
-   bindings 8/9 + pool growth; `geom.vert` instance pull + tint + §4.4 normal;
-   `vkCmdDraw` instance count; backend re-gate. **Gate:** builds; gfx rows A-E present
-   and green on this box; v1/v1.1/v1.2 rows untouched; `primitives-imported` observed.
-   Commit.
+   bindings 8/9 + pool growth + the binding-4 tint-LUT predicate change (§6.2);
+   `geom.vert` instance pull + tint + §4.4 normal; `vkCmdDraw` instance count; backend
+   re-gate incl. G14 (§5.1). **Gate:** builds; gfx rows A-E present and green on this
+   box (row E incl. the G14 refusal); v1/v1.1/v1.2 rows untouched;
+   `primitives-imported` observed. Commit.
 4. **T4 — Metal transcription.** MSL + host `PrimParams` growth, buffer indices 7/8,
    `instanceCount`, day-one gate parity (§7). **Gate:** transcription reviewed against T3
    line-by-line; the `.mm` is compiled-out on this box (`CALIPER_HAVE_METAL` unset), so
