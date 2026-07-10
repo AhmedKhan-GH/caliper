@@ -85,10 +85,10 @@ its acceptance).
 - [x] MeshScope run-proven on Windows: zero-copy log line on Vulkan+CUDA; `points-imported` path still green
 - [x] S5 docs: ZEROCOPY.md primitives row, STATUS.md, GEOMETRY.md status → shipped
 
-## 5 · Whitepaper v0.2 (after S4)
+## 5 · Whitepaper v0.2 (done 2026-07-09)
 
-- [ ] Rewrite §4/§9: coordinate-style graphics no longer CPU-array-only — geometry is now a zero-copy class on both ecosystems
-- [ ] Add MeshScope as the geometry exemplar figure; keep the never-claim-unverified discipline
+- [x] Rewrite §4/§9: coordinate-style graphics no longer CPU-array-only — geometry is now a zero-copy class on both ecosystems
+- [x] Add MeshScope as the geometry exemplar figure; keep the never-claim-unverified discipline
 
 ## 6 · The twin exemplar (forcing function for R2/R3)
 
