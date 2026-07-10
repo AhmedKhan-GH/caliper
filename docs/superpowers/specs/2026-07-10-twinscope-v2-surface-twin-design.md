@@ -74,6 +74,10 @@ Explicit heat step on the sim mesh, pure batched torch ops on the worker:
   (`A` = vertex mass) so FINS VISIBLY SHED HEAT — the geometry is thermally
   load-bearing. `dt` fixed and stable for the operator's spectral bound
   (explicit scheme; dt chosen from the max row sum at init, ×0.9 safety).
+  (Clarified after T7: with the lumped mass, `M⁻¹·h·A` reduces to uniform
+  Newton cooling per vertex — the fins' thermal role is carried by the
+  diffusion operator and mass-weighted geometry, not by a per-vertex loss
+  coefficient. Synthetic, never FEA — unchanged.)
 - **Batched:** one `sparse.mm` per step services all 50 variants
   (`L @ Tᵀ` layout). Sim steps uncapped; publish at ≤30 Hz (v1 pattern).
 - **Honesty line unchanged:** UI and docs say "synthetic surface heat
