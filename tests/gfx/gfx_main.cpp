@@ -2821,5 +2821,140 @@ TEST_CASE("gfx/geometry: count 0 clears; gates keep prior pixels; released view 
                                             0.f, 1.f, 1.f, 0u));
 }
 
+// ===========================================================================
+// caliper.geometry.v1_1 portable gate-refusal rows (no CUDA required). These
+// pin the §2.3 gates that need no live imported allocation, so they run on
+// any Vulkan ICD — vmm_rows_ready()/vk_cuda_ready() are NOT used here. The
+// byte-exact drawing mirrors (imports, index pulling, shading, blending) are
+// separate CUDA-gated follow-up tasks.
+// ===========================================================================
+
+TEST_CASE("gfx/geometry.v1_1: create_view_ex refuses unknown flags and degenerate sizes (portable)") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend();
+    if ((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) == 0) {
+        MESSAGE("no geometry primitives path — skipping"); return;
+    }
+
+    // Unknown flag bits (only CALIPER_GEOM_VIEW_DEPTH is defined) refuse.
+    CHECK(bk.bridge->geom_create_view_ex(32, 32, CALIPER_GEOM_VIEW_DEPTH | (1u << 1)) == 0);
+    CHECK(bk.bridge->geom_create_view_ex(32, 32, ~0u) == 0);
+
+    // Degenerate/out-of-range sizes refuse exactly as v1 create_view does.
+    CHECK(bk.bridge->geom_create_view_ex(0, 32, 0) == 0);
+    CHECK(bk.bridge->geom_create_view_ex(32, 0, 0) == 0);
+    CHECK(bk.bridge->geom_create_view_ex(0, 0, 0) == 0);
+    CHECK(bk.bridge->geom_create_view_ex(20000, 32, 0) == 0);
+
+    // Sanity: a plain valid call still succeeds — the checks above aren't
+    // accidentally refusing everything.
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(32, 32, 0);
+    CHECK(view != 0);
+    if (view != 0) bk.bridge->geom_release_view(view);
+}
+
+// Portable subset of the Metal "every §2.3 gate refuses the whole frame"
+// battery (Row K, ~line 1754): only the gates that need no live imported
+// allocation. draw_stride/reserved/enum-range/depth-flags checks all fire
+// in TensorBridge::geom_draw_primitives() BEFORE pos_alloc is ever resolved
+// (read tensor_bridge.cpp: topology/color/shade/blend range -> depth_flags
+// unknown bits -> reserved zero -> depth_flags-vs-view -> vertex_count ->
+// point size -> THEN pos_alloc lookup) — so every draw below can carry the
+// same never-imported pos_alloc and still isolate the gate under test; only
+// the last row (nonexistent alloc id) actually exercises the pos_alloc gate
+// itself, with every earlier field left honestly valid.
+TEST_CASE("gfx/geometry.v1_1: portable §2.3 gates refuse draw_primitives, pixels untouched (no CUDA)") {
+    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    Backend bk = vk_backend();
+    if ((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) == 0) {
+        MESSAGE("no geometry primitives path — skipping"); return;
+    }
+
+    const int W = 16, H = 16;
+    const uint32_t stride = sizeof(CaliperGeomDraw);
+    // Never imported in this test — resolvable only once a real live alloc
+    // exists, which portable (no-CUDA) rows cannot create.
+    const CaliperAllocId kFakePosAlloc = 0x7FFFFFFFu;
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);   // no depth
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    // Views are cleared to opaque black at creation (vulkan_renderer.cpp) —
+    // that clear IS the "prior pixels" baseline; no valid draw is possible
+    // here since draw_primitives requires a live pos_alloc and this row has
+    // none (by design: portable-only, no CUDA import).
+    const std::vector<uint8_t> snap = bk.readback(view, W, H);
+    CHECK(snap == geom_ref(W, H, 0xFF000000u, {}, {}));
+    const std::string before = bk.renderer->last_device_path();
+
+    auto make_valid = [&]() {
+        CaliperGeomDraw d{};
+        d.pos_alloc = kFakePosAlloc; d.vertex_count = 3;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.flat_rgba = 0xFF00AA00u;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    CaliperGeomDraw d;
+    // 3. null camera.
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, nullptr, &d, 1, stride, 0xFF000000u));
+    // 4. draw_stride below the host minimum (a valid-looking draw is fine —
+    // the stride gate must fire before anything touches the draw).
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, 100u, 0xFF000000u));
+    // 6. out-of-range enums.
+    d = make_valid(); d.topology = 5;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+    d = make_valid(); d.color_mode = 3;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+    d = make_valid(); d.shade_mode = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+    d = make_valid(); d.blend_mode = 3;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+    // 5. reserved must be zero. NOTE: pos_alloc here is the same unresolvable
+    // sentinel as every other row — but per the gate order above, the
+    // reserved-zero check runs before pos_alloc is ever looked up, so this
+    // row still isolates the reserved gate (see the comment above the case).
+    d = make_valid(); d.reserved[0] = 1;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+    // 7. depth_flags on a depthless view — must refuse, never silently ignore.
+    d = make_valid(); d.depth_flags = CALIPER_GEOM_DEPTH_TEST;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+    // 8. nonexistent alloc id: every other field is honestly valid, so this
+    // is the pos_alloc-liveness gate itself.
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1, stride, 0xFF000000u));
+
+    // whole battery so far touched nothing
+    CHECK(bk.readback(view, W, H) == snap);
+    CHECK(std::string(bk.renderer->last_device_path()) == before);
+
+    // 2. dead view: a never-created id (0 is always invalid by ABI contract)
+    // and a released view id.
+    {
+        d = make_valid();
+        CHECK_FALSE(bk.bridge->geom_draw_primitives(0, &cam, &d, 1, stride, 0xFF000000u));
+
+        CaliperTextureId sview = bk.bridge->geom_create_view_ex(W, H, 0);
+        REQUIRE(sview != 0);
+        bk.bridge->geom_release_view(sview);
+        d = make_valid();
+        CHECK_FALSE(bk.bridge->geom_draw_primitives(sview, &cam, &d, 1, stride, 0xFF000000u));
+    }
+
+    // final: the live view is still exactly its post-creation clear.
+    CHECK(bk.readback(view, W, H) == snap);
+    CHECK(std::string(bk.renderer->last_device_path()) == before);
+
+    bk.bridge->geom_release_view(view);
+}
+
 #endif  // _WIN32
 #endif  // CALIPER_HAVE_VULKAN
