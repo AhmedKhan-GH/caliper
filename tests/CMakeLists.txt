@@ -118,57 +118,49 @@ endif()
 add_test(NAME caliper_torch_tests COMMAND caliper_torch_tests)
 
 # ---------------------------------------------------------------------------
-# SculptScope learning-core tests (energy loss, target samplers, that the net
-# learns, and that the addmm_out display fusion == the true forward). Pure
-# torch; links only doctest + torch and includes the applet's model header.
+# Applet learning-core / engine tests. Each is a SEPARATE binary that links
+# only doctest + libtorch and puts one applet's header directory on the include
+# path — keeping torch out of the fast caliper_tests unit suite. The four blocks
+# below were near-verbatim, so they share one helper (§8.f cleanup class).
 # ---------------------------------------------------------------------------
-add_executable(caliper_sculpt_tests test_sculpt.cpp)
-target_link_libraries(caliper_sculpt_tests PRIVATE
-    doctest::doctest "${TORCH_LIBRARIES}")
-target_include_directories(caliper_sculpt_tests PRIVATE
+function(add_caliper_torch_model_test name src applet_dir)
+    add_executable(${name} ${src})
+    target_link_libraries(${name} PRIVATE doctest::doctest "${TORCH_LIBRARIES}")
+    target_include_directories(${name} PRIVATE "${applet_dir}")
+    set_target_properties(${name} PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    if(APPLE)
+        set_target_properties(${name} PROPERTIES
+            BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+    endif()
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+# SculptScope learning-core (energy loss, target samplers, that the net learns,
+# and that the addmm_out display fusion == the true forward).
+add_caliper_torch_model_test(caliper_sculpt_tests test_sculpt.cpp
     "${CMAKE_SOURCE_DIR}/applets/sculpt_scope")
-set_target_properties(caliper_sculpt_tests PROPERTIES
-    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-if(APPLE)
-    set_target_properties(caliper_sculpt_tests PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-endif()
-add_test(NAME caliper_sculpt_tests COMMAND caliper_sculpt_tests)
 
-# ---------------------------------------------------------------------------
-# MeshScope learning-core tests (that the tanh MLP learns the target surface,
-# the per-vertex error map is honest, the finite-difference normals match the
-# analytic normals of a known heightfield, and reset(seed) is reproducible).
-# Pure torch; links only doctest + torch and includes the applet's model header.
-# ---------------------------------------------------------------------------
-add_executable(caliper_mesh_tests test_mesh_surface.cpp)
-target_link_libraries(caliper_mesh_tests PRIVATE
-    doctest::doctest "${TORCH_LIBRARIES}")
-target_include_directories(caliper_mesh_tests PRIVATE
+# MeshScope learning-core (that the tanh MLP learns the target surface, the
+# per-vertex error map is honest, finite-difference normals match the analytic
+# normals of a known heightfield, and reset(seed) is reproducible).
+add_caliper_torch_model_test(caliper_mesh_tests test_mesh_surface.cpp
     "${CMAKE_SOURCE_DIR}/applets/mesh_scope")
-set_target_properties(caliper_mesh_tests PROPERTIES
-    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-if(APPLE)
-    set_target_properties(caliper_mesh_tests PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-endif()
-add_test(NAME caliper_mesh_tests COMMAND caliper_mesh_tests)
 
-# ---------------------------------------------------------------------------
-# FieldScope PIC physics tests (FFT Poisson solve, charge-conserving CIC
-# deposition, Boris gyration + E×B drift, plasma momentum conservation). Pure
-# torch; links only doctest + torch and includes the applet's em_pic.h.
-# ---------------------------------------------------------------------------
-add_executable(caliper_em_pic_tests test_em_pic.cpp)
-target_link_libraries(caliper_em_pic_tests PRIVATE
-    doctest::doctest "${TORCH_LIBRARIES}")
-target_include_directories(caliper_em_pic_tests PRIVATE
+# FieldScope PIC physics (FFT Poisson solve, charge-conserving CIC deposition,
+# Boris gyration + E×B drift, plasma momentum conservation).
+add_caliper_torch_model_test(caliper_em_pic_tests test_em_pic.cpp
     "${CMAKE_SOURCE_DIR}/applets/field_scope")
-set_target_properties(caliper_em_pic_tests PROPERTIES
-    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-if(APPLE)
-    set_target_properties(caliper_em_pic_tests PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-endif()
-add_test(NAME caliper_em_pic_tests COMMAND caliper_em_pic_tests)
+
+# TwinScope v2 surface engine (midpoint subdivision, cotan Laplacian, Voronoi
+# masses, stable dt, UV bake). The asset-coverage row loads the committed
+# housing.obj via the T5 loader, so this target also needs the SDK include dir
+# and the source-root macro.
+add_caliper_torch_model_test(caliper_surface_tests test_twin_surface.cpp
+    "${CMAKE_SOURCE_DIR}/applets/twin_scope")
+target_include_directories(caliper_surface_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}/sdk/include")
+target_compile_definitions(caliper_surface_tests PRIVATE
+    CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
