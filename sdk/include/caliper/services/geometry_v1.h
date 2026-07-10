@@ -63,11 +63,31 @@ typedef struct CaliperGeometryV1 {
      * ADDITIVELY with no depth test (v1 — built for particle clouds; order-
      * independent, no sort).
      *
-     * Memory-stability contract (same as update_texture_from_alloc): the
-     * addressed bytes are read IN PLACE and must not be rewritten until this
-     * view's next draw. Gates: live view/allocations only, 4-byte-aligned
-     * offsets, overflow-safe bounds. false = nothing drawn, the view keeps
-     * its prior pixels. */
+     * Memory-stability contract (same as update_texture_from_alloc) — TWO
+     * halves the caller owns, both load-bearing (a new worker->frame publish
+     * path must honor both):
+     *   (1) SPATIAL — the addressed bytes are read IN PLACE and must not be
+     *       rewritten until this view's next draw. Applets satisfy this by
+     *       triple-buffering the render slots: the worker only ever writes a
+     *       slot that is neither the just-published one nor the one the frame
+     *       thread is drawing, so it never overwrites bytes mid-read.
+     *   (2) TEMPORAL — the producer must FINISH its device writes to those
+     *       bytes BEFORE this call is issued. This ABI carries NO producer-
+     *       stream channel (unlike the CaliperTensor texture path's
+     *       STREAM_ORDERED handshake — there is no field for a CUstream /
+     *       MTLCommandQueue here), so the geometry path is PERMANENTLY the
+     *       drain rung: the worker drains its device
+     *       (torch::cuda::synchronize / MPS synchronize) before publishing the
+     *       slot the frame thread draws from. The renderer only makes those
+     *       already-complete writes visible to its own vertex stage (Vulkan
+     *       MEMORY_WRITE->SHADER_READ barrier / Metal same-queue commit order);
+     *       it does NOT GPU-order against an in-flight producer. Publishing a
+     *       slot whose writes are still in flight therefore RACES the vertex
+     *       read — the barrier is renderer-internal and cannot order an
+     *       external producer. The triple-buffer alone is NOT sufficient; the
+     *       drain is what the (absent) STREAM_ORDERED gate would otherwise buy.
+     * Gates: live view/allocations only, 4-byte-aligned offsets, overflow-safe
+     * bounds. false = nothing drawn, the view keeps its prior pixels. */
     bool (*draw_points)(CaliperTextureId view,
                         const CaliperGeomCamera* cam,
                         CaliperAllocId pos_alloc, uint64_t pos_offset,
