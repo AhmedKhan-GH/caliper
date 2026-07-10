@@ -2822,6 +2822,306 @@ TEST_CASE("gfx/geometry: count 0 clears; gates keep prior pixels; released view 
 }
 
 // ===========================================================================
+// caliper.geometry.v1_1 §9.2 byte-exact drawing mirrors (CUDA-gated). These are
+// the Vulkan twins of the Metal §9.2 rows: same geometry, same reference math,
+// same expected constants — the only difference is the alloc source (a live
+// cuMemCreate'd VMM block imported through OPAQUE_WIN32, instead of an in-process
+// shared MTLBuffer). Each row is compared against ONE CPU reference (geom_ref),
+// never against the other backend's readback. Same guards as the v1 rows above.
+// ===========================================================================
+
+// Row A — one non-indexed full-viewport triangle, FLAT/UNLIT/OPAQUE, no depth.
+// The (-1,-1),(3,-1),(-1,3) trick covers every pixel center unambiguously, so
+// the whole frame is the flat color: identical to geom_ref's clear-only image.
+TEST_CASE("gfx/geometry.v1_1: unindexed triangle, FLAT, OPAQUE is byte-exact") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 16, H = 16;
+    const float pos[] = {
+        -1.0f, -1.0f, 0.5f,
+         3.0f, -1.0f, 0.5f,
+        -1.0f,  3.0f, 0.5f,
+    };
+    VmmBlock blk(sizeof(pos));
+    REQUIRE_MESSAGE(blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        blk.os_handle, blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t flat = 0xFF3377AAu;   // little-endian RGBA8
+    CaliperGeomDraw d{};
+    d.pos_alloc = pos_alloc;
+    d.vertex_count = 3;
+    d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.flat_rgba = flat;
+    d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, flat, {}, {}));
+
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row B — indexed quad (4 verts, 6 u32 indices) with all buffers at nonzero,
+// 4-byte-aligned offsets (each block's leading bytes are filled with garbage to
+// prove offsets are honored). COLOR_COLORMAP with every vertex attr equal keeps
+// the color flat and byte-exact: attr==1 -> LUT[255], attr==0 -> LUT[0]. The
+// quad covers exactly pixel columns/rows 8..23 of a 32x32 view (NDC edges at
+// +/-0.5, which land on integer pixel boundaries — never through a pixel
+// center). Each imported region is its OWN VMM block (writing region B after A
+// through one block would clobber A — the ledgered Task-6 lesson).
+TEST_CASE("gfx/geometry.v1_1: indexed quad pulls u32 indices and LUT extremes at nonzero offsets") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const float pos[12] = {
+        -0.5f,  0.5f, 0.5f,   // v0 top-left     -> pixel (8,8)
+         0.5f,  0.5f, 0.5f,   // v1 top-right    -> col 24, row 8
+        -0.5f, -0.5f, 0.5f,   // v2 bottom-left  -> col 8, row 24
+         0.5f, -0.5f, 0.5f,   // v3 bottom-right -> col 24, row 24
+    };
+    const uint32_t idx[6] = {0, 1, 2, 2, 1, 3};   // culling off; winding free
+    const uint64_t pos_off = 256, idx_off = 128, attr_off = 64;
+
+    std::vector<uint8_t> pos_bytes(pos_off + sizeof(pos), 0xAB);
+    std::memcpy(pos_bytes.data() + pos_off, pos, sizeof(pos));
+    std::vector<uint8_t> idx_bytes(idx_off + sizeof(idx), 0xCD);
+    std::memcpy(idx_bytes.data() + idx_off, idx, sizeof(idx));
+
+    VmmBlock pos_blk(pos_bytes.size());
+    VmmBlock idx_blk(idx_bytes.size());
+    REQUIRE_MESSAGE(pos_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(idx_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos_bytes.data(), pos_bytes.size()) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(idx_blk.va, idx_bytes.data(), idx_bytes.size()) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId idx_alloc = bk.bridge->import_allocation(
+        idx_blk.os_handle, idx_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(idx_alloc != 0);
+
+    std::vector<std::pair<int,int>> rect;   // cols 8..23, rows 8..23
+    for (int y = 8; y < 24; ++y)
+        for (int x = 8; x < 24; ++x) rect.emplace_back(x, y);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+
+    auto make_draw = [&](CaliperAllocId attr_alloc) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pos_alloc;   d.pos_offset = pos_off;   d.vertex_count = 4;
+        d.index_alloc = idx_alloc; d.index_offset = idx_off; d.index_count = 6;
+        d.attr_alloc = attr_alloc; d.attr_offset = attr_off;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.colormap = CALIPER_CMAP_VIRIDIS;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // attr all 1.0 -> constant LUT[255]
+    const float ones[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    std::vector<uint8_t> a1(attr_off + sizeof(ones), 0xEE);
+    std::memcpy(a1.data() + attr_off, ones, sizeof(ones));
+    VmmBlock a1_blk(a1.size());
+    REQUIRE_MESSAGE(a1_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(a1_blk.va, a1.data(), a1.size()) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId a1_alloc = bk.bridge->import_allocation(
+        a1_blk.os_handle, a1_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a1_alloc != 0);
+    CaliperGeomDraw d1 = make_draw(a1_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d1, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) ==
+          geom_ref(W, H, 0xFF000000u, rect, std::vector<uint32_t>(rect.size(), lut[255])));
+
+    // fresh clear, attr all 0.0 -> constant LUT[0]
+    const float zeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<uint8_t> a0(attr_off + sizeof(zeros), 0x11);
+    std::memcpy(a0.data() + attr_off, zeros, sizeof(zeros));
+    VmmBlock a0_blk(a0.size());
+    REQUIRE_MESSAGE(a0_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(a0_blk.va, a0.data(), a0.size()) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId a0_alloc = bk.bridge->import_allocation(
+        a0_blk.os_handle, a0_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a0_alloc != 0);
+    CaliperGeomDraw d0 = make_draw(a0_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d0, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) ==
+          geom_ref(W, H, 0xFF000000u, rect, std::vector<uint32_t>(rect.size(), lut[0])));
+
+    bk.bridge->release_allocation(a0_alloc);
+    bk.bridge->release_allocation(a1_alloc);
+    bk.bridge->release_allocation(idx_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row C — the v1_1 primitives point path (ADDITIVE) must be byte-identical to
+// the frozen v1 draw_points path given the same buffers. Over a black clear,
+// additive one-pixel points equal the LUT color exactly, so BOTH readbacks equal
+// the ONE CPU reference (geom_ref with the LUT colors) and therefore each other.
+TEST_CASE("gfx/geometry.v1_1: additive points via draw_primitives match v1 draw_points byte-exact") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const std::pair<int,int> px[3] = {{3, 5}, {18, 20}, {31, 31}};
+    const float attrs[3] = {0.0f, 0.5f, 1.0f};
+    float pos[9];
+    for (int i = 0; i < 3; ++i) ndc_for_pixel(px[i].first, px[i].second, W, H, &pos[i * 3]);
+
+    VmmBlock pos_blk(sizeof(pos));
+    VmmBlock attr_blk(sizeof(attrs));
+    REQUIRE_MESSAGE(pos_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(attr_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attrs, sizeof(attrs)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        attr_blk.os_handle, attr_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(attr_alloc != 0);
+
+    const uint32_t clear = 0xFF000000u;
+    CaliperGeomCamera cam = identity_cam();
+
+    // frozen v1 path
+    CaliperTextureId view1 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view1 != 0);
+    REQUIRE(bk.bridge->geom_draw_points(view1, &cam, pos_alloc, 0, 3,
+                                        attr_alloc, 0, CALIPER_CMAP_VIRIDIS,
+                                        0.0f, 1.0f, 1.0f, clear));
+    const std::vector<uint8_t> got1 = bk.readback(view1, W, H);
+
+    // v1_1 primitives path
+    CaliperTextureId view2 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view2 != 0);
+    CaliperGeomDraw d{};
+    d.pos_alloc = pos_alloc; d.vertex_count = 3;
+    d.attr_alloc = attr_alloc; d.attr_offset = 0;
+    d.topology = CALIPER_GEOM_TOPO_POINTS;
+    d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.blend_mode = CALIPER_GEOM_BLEND_ADDITIVE;
+    d.colormap = CALIPER_CMAP_VIRIDIS;
+    d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+    REQUIRE(bk.bridge->geom_draw_primitives(view2, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), clear));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    const std::vector<uint8_t> got2 = bk.readback(view2, W, H);
+
+    // The ONE CPU reference: attrs {0, 0.5, 1} -> LUT[0], LUT[128], LUT[255]
+    // (t=0.5 -> idx = 0.5*255 + 0.5 = 128 exactly), additive over black clear.
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+    const std::vector<uint8_t> ref = geom_ref(W, H, clear,
+        {px[0], px[1], px[2]}, {lut[0], lut[128], lut[255]});
+    CHECK(got1 == ref);
+    CHECK(got2 == ref);
+    CHECK(got1 == got2);
+
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view1);
+    bk.bridge->geom_release_view(view2);
+}
+
+// Row D — draw_count 0 is a pure clear of BOTH color and depth. Write depth 0.2
+// with a near triangle, then a count-0 clear to teal, then a far (z=0.9)
+// DEPTH_TEST triangle: it only draws if the count-0 clear reset depth to 1.0.
+TEST_CASE("gfx/geometry.v1_1: draw_count 0 is a pure clear, and clears depth to 1.0") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 16, H = 16;
+    const float near_pos[9] = {-1.f, -1.f, 0.2f,  3.f, -1.f, 0.2f, -1.f, 3.f, 0.2f};
+    const float far_pos[9]  = {-1.f, -1.f, 0.9f,  3.f, -1.f, 0.9f, -1.f, 3.f, 0.9f};
+    VmmBlock near_blk(sizeof(near_pos));
+    VmmBlock far_blk(sizeof(far_pos));
+    REQUIRE_MESSAGE(near_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(far_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(near_blk.va, near_pos, sizeof(near_pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(far_blk.va, far_pos, sizeof(far_pos)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId near_alloc = bk.bridge->import_allocation(
+        near_blk.os_handle, near_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId far_alloc = bk.bridge->import_allocation(
+        far_blk.os_handle, far_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(near_alloc != 0); REQUIRE(far_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, CALIPER_GEOM_VIEW_DEPTH);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    auto tri_draw = [&](CaliperAllocId a, uint32_t depth_flags, uint32_t color) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = a; d.vertex_count = 3;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.depth_flags = depth_flags;
+        d.flat_rgba = color;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // (1) near green, TEST|WRITE -> colors view, writes depth 0.2
+    const uint32_t green = 0xFF00FF00u;
+    CaliperGeomDraw d1 = tri_draw(near_alloc,
+        CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE, green);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d1, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, green, {}, {}));
+
+    // (2) draw_count 0 -> pure clear to teal (and depth cleared to 1.0)
+    const uint32_t teal = 10u | (20u << 8) | (30u << 16) | (255u << 24);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, nullptr, 0,
+                                            sizeof(CaliperGeomDraw), teal));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, teal, {}, {}));
+
+    // (3) far blue, TEST only -> passes only because depth was cleared to 1.0
+    const uint32_t blue = 0xFFFF0000u;
+    CaliperGeomDraw d3 = tri_draw(far_alloc, CALIPER_GEOM_DEPTH_TEST, blue);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d3, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, blue, {}, {}));
+
+    bk.bridge->release_allocation(far_alloc);
+    bk.bridge->release_allocation(near_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// ===========================================================================
 // caliper.geometry.v1_1 portable gate-refusal rows (no CUDA required). These
 // pin the §2.3 gates that need no live imported allocation, so they run on
 // any Vulkan ICD — vmm_rows_ready()/vk_cuda_ready() are NOT used here. The
