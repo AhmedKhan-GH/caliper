@@ -3573,6 +3573,399 @@ TEST_CASE("gfx/geometry.v1_1: wireframe-over-mesh coplanar LESS_OR_EQUAL overlay
     bk.bridge->geom_release_view(view);
 }
 
+// Row K — out-of-range index values clamp to vertex_count-1, defined image.
+// Textual twin of the Metal-section row (~line 1681): three 1-px POINTS at
+// distinct pixel centers; index buffer {0,1,999} where 999 clamps to vertex 2
+// in-shader. The clamped draw is byte-identical to the {0,1,2} reference draw.
+TEST_CASE("gfx/geometry.v1_1: out-of-range index values clamp to vertex_count-1, defined image") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const std::pair<int,int> px[3] = {{3, 5}, {18, 20}, {31, 31}};
+    float pos[9];
+    for (int i = 0; i < 3; ++i) ndc_for_pixel(px[i].first, px[i].second, W, H, &pos[i * 3]);
+    VmmBlock pos_blk(sizeof(pos));
+    REQUIRE_MESSAGE(pos_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0);
+
+    const uint32_t idx_ref[3]   = {0, 1, 2};
+    const uint32_t idx_clamp[3] = {0, 1, 999};   // 999 -> clamps to vertex 2
+    VmmBlock ref_blk(sizeof(idx_ref));
+    VmmBlock clamp_blk(sizeof(idx_clamp));
+    REQUIRE_MESSAGE(ref_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(clamp_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(ref_blk.va, idx_ref, sizeof(idx_ref)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(clamp_blk.va, idx_clamp, sizeof(idx_clamp)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId ref_alloc = bk.bridge->import_allocation(
+        ref_blk.os_handle, ref_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId clamp_alloc = bk.bridge->import_allocation(
+        clamp_blk.os_handle, clamp_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(ref_alloc != 0); REQUIRE(clamp_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t flat = 0xFF00FF00u;   // opaque green
+
+    auto point_draw = [&](CaliperAllocId idx_alloc) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pos_alloc; d.vertex_count = 3;
+        d.index_alloc = idx_alloc; d.index_offset = 0; d.index_count = 3;
+        d.topology = CALIPER_GEOM_TOPO_POINTS;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.flat_rgba = flat;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // reference: {0,1,2} -> all three pixels lit
+    CaliperGeomDraw d_ref = point_draw(ref_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d_ref, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got_ref = bk.readback(view, W, H);
+    CHECK(got_ref == geom_ref(W, H, 0xFF000000u,
+                              {px[0], px[1], px[2]}, {flat, flat, flat}));
+
+    // clamp: {0,1,999} -> 999 clamps to vertex 2 -> byte-identical image
+    CaliperGeomDraw d_clamp = point_draw(clamp_alloc);
+    REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, &d_clamp, 1,
+                                            sizeof(CaliperGeomDraw), 0xFF000000u));
+    auto got_clamp = bk.readback(view, W, H);
+    CHECK(got_clamp == got_ref);
+
+    bk.bridge->release_allocation(clamp_alloc);
+    bk.bridge->release_allocation(ref_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row L — every §2.3 gate refuses the WHOLE frame and leaves pixels untouched.
+// Full-battery textual twin of the Metal-section row (~line 1754), from LIVE
+// imported allocations. Draw a known-good frame on a DEPTH view and a NO-depth
+// view (distinct colors), snapshot both readbacks + last_device_path. Then for
+// each §2.3 violation build a draws[] valid EXCEPT the one item, CHECK_FALSE the
+// return; after the battery re-read BOTH views and CHECK byte-for-byte equality
+// with the snapshots (and last_device_path unchanged). One valid draw = full-
+// viewport triangle: any refusal that leaks would change the frame. SANCTIONED
+// ADAPTATION (documented in the report): the Metal bounds cases (9/11/14/16) fit
+// against tight 36/12-byte MTLBuffers; here every VmmBlock is granularity-padded
+// (2 MiB on this box), so the OOB counts/offsets are DERIVED from blk.size to
+// remain out of bounds against the PADDED size — same gate, real threshold.
+TEST_CASE("gfx/geometry.v1_1: every §2.3 gate refuses the whole frame, pixels untouched") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const uint32_t stride = sizeof(CaliperGeomDraw);
+
+    // ---- source allocations (all valid; each battery case pokes ONE hole).
+    // Each is its OWN VmmBlock (never layered through one block — the ledgered
+    // Task-6 clobber lesson). Every block is granularity-padded to blk.size.
+    const float tri[9] = { -1.f, -1.f, 0.5f,  3.f, -1.f, 0.5f, -1.f, 3.f, 0.5f };
+    const uint32_t idx[3]  = {0, 1, 2};
+    const float    nrm[9]  = { 0.f, 0.f, 1.f,  0.f, 0.f, 1.f,  0.f, 0.f, 1.f };
+    const float    attr[3] = { 0.5f, 0.5f, 0.5f };
+    VmmBlock pos_blk(sizeof(tri));
+    VmmBlock idx_blk(sizeof(idx));
+    VmmBlock nrm_blk(sizeof(nrm));
+    VmmBlock attr_blk(sizeof(attr));
+    REQUIRE_MESSAGE(pos_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(idx_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(nrm_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(attr_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va,  tri,  sizeof(tri))  == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(idx_blk.va,  idx,  sizeof(idx))  == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va,  nrm,  sizeof(nrm))  == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attr, sizeof(attr)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId idx_alloc = bk.bridge->import_allocation(
+        idx_blk.os_handle, idx_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        nrm_blk.os_handle, nrm_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        attr_blk.os_handle, attr_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(idx_alloc != 0);
+    REQUIRE(nrm_alloc != 0); REQUIRE(attr_alloc != 0);
+
+    // Derived OOB thresholds against the PADDED block sizes (Metal used tight
+    // 36/12-byte buffers; here range_ok checks against blk.size).
+    const uint64_t pos_oob_vc  = pos_blk.size / 12u + 1u;   // positions overflow
+    const uint64_t idx_oob_ic  = idx_blk.size / 4u  + 1u;   // indices overflow
+    const uint64_t nrm_oob_off = nrm_blk.size - 12u;        // 3*12 spills past end
+    const uint64_t attr_oob_off = attr_blk.size - 8u;       // 3*4 spills past end
+
+    CaliperTextureId ndv = bk.bridge->geom_create_view_ex(W, H, 0);                       // no depth
+    CaliperTextureId dv  = bk.bridge->geom_create_view_ex(W, H, CALIPER_GEOM_VIEW_DEPTH); // depth
+    REQUIRE(ndv != 0); REQUIRE(dv != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    // A fully valid full-viewport-triangle draw for the NO-depth view.
+    auto make_valid = [&]() {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pos_alloc; d.vertex_count = 3;
+        d.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        d.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        d.flat_rgba = 0xFF00AA00u;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+
+    // ---- known-good frame on each view; snapshot both + last_device_path ----
+    CaliperGeomDraw good_nd = make_valid();
+    REQUIRE(bk.bridge->geom_draw_primitives(ndv, &cam, &good_nd, 1, stride, 0xFF000000u));
+    CaliperGeomDraw good_d = make_valid();
+    good_d.flat_rgba = 0xFFAA0000u;
+    good_d.depth_flags = CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE;
+    REQUIRE(bk.bridge->geom_draw_primitives(dv, &cam, &good_d, 1, stride, 0xFF000000u));
+    const auto snap_nd = bk.readback(ndv, W, H);
+    const auto snap_d  = bk.readback(dv,  W, H);
+    const std::string good_path = bk.renderer->last_device_path();
+    REQUIRE(snap_nd == geom_ref(W, H, 0xFF00AA00u, {}, {}));
+    REQUIRE(snap_d  == geom_ref(W, H, 0xFFAA0000u, {}, {}));
+
+    CaliperGeomDraw d;
+    // 1. topology out of range
+    d = make_valid(); d.topology = 5;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 2. color_mode out of range
+    d = make_valid(); d.color_mode = 3;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 3. shade_mode out of range
+    d = make_valid(); d.shade_mode = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 4. blend_mode out of range
+    d = make_valid(); d.blend_mode = 3;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 5. reserved must be zero
+    d = make_valid(); d.reserved[0] = 1;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 6. absent position source
+    d = make_valid(); d.pos_alloc = 0;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 7. misaligned pos_offset
+    d = make_valid(); d.pos_offset = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 8. vertex_count 0
+    d = make_valid(); d.vertex_count = 0;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 9. pos bounds overflow (Metal: 4 verts*12 > 36-byte alloc; here derived so
+    //    vertex_count*12 exceeds the PADDED pos block).
+    d = make_valid(); d.vertex_count = pos_oob_vc;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 10. indexed with misaligned index_offset
+    d = make_valid(); d.index_alloc = idx_alloc; d.index_count = 3; d.index_offset = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 11. indexed with index_count*4 out of bounds (Metal: 4*4 > 12-byte alloc;
+    //     here derived so index_count*4 exceeds the PADDED index block).
+    d = make_valid(); d.index_alloc = idx_alloc; d.index_offset = 0; d.index_count = idx_oob_ic;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 12. too few consumed vertices for the topology
+    d = make_valid(); d.topology = CALIPER_GEOM_TOPO_LINES; d.vertex_count = 1;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    d = make_valid(); d.topology = CALIPER_GEOM_TOPO_TRIANGLES; d.vertex_count = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 13. LAMBERT without normals
+    d = make_valid(); d.shade_mode = CALIPER_GEOM_SHADE_LAMBERT; d.normal_alloc = 0;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 14. LAMBERT normal bounds overflow (Metal: 24 + 3*12 > 36-byte alloc; here
+    //     normal_offset derived so offset + 3*12 exceeds the PADDED normal block).
+    d = make_valid(); d.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    d.normal_alloc = nrm_alloc; d.normal_offset = nrm_oob_off;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 15. COLORMAP without attr; COLORMAP with unknown colormap id
+    d = make_valid(); d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    d.colormap = CALIPER_CMAP_VIRIDIS; d.attr_alloc = 0;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    d = make_valid(); d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    d.attr_alloc = attr_alloc; d.attr_offset = 0; d.colormap = 999;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 16. attr bounds overflow (Metal: 4 + 3*4 > 12-byte alloc; here attr_offset
+    //     derived so offset + 3*4 exceeds the PADDED attr block).
+    d = make_valid(); d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    d.colormap = CALIPER_CMAP_VIRIDIS; d.attr_alloc = attr_alloc; d.attr_offset = attr_oob_off;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 17. depth flags on the NO-depth view (must refuse, not silently ignore)
+    d = make_valid(); d.depth_flags = CALIPER_GEOM_DEPTH_TEST;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    // 20. null camera
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, nullptr, &d, 1, stride, 0xFF000000u));
+    // 21. draw_stride below the host minimum
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, 100u, 0xFF000000u));
+    // 22. frame atomicity: draws[0] valid, draws[1] invalid -> whole call refused
+    {
+        CaliperGeomDraw twod[2] = { make_valid(), make_valid() };
+        twod[1].topology = 5;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, twod, 2, stride, 0xFF000000u));
+    }
+
+    // whole battery so far touched nothing
+    CHECK(bk.readback(ndv, W, H) == snap_nd);
+    CHECK(bk.readback(dv,  W, H) == snap_d);
+    CHECK(std::string(bk.renderer->last_device_path()) == good_path);
+
+    // 18. dead alloc: reference a released allocation (mutates alloc table).
+    {
+        CaliperAllocId salloc = bk.bridge->import_allocation(
+            pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(salloc != 0);
+        bk.bridge->release_allocation(salloc);
+        d = make_valid(); d.pos_alloc = salloc;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives(ndv, &cam, &d, 1, stride, 0xFF000000u));
+    }
+    // 19. dead view: released view id.
+    {
+        CaliperTextureId sview = bk.bridge->geom_create_view_ex(W, H, 0);
+        REQUIRE(sview != 0);
+        bk.bridge->geom_release_view(sview);
+        d = make_valid();
+        CHECK_FALSE(bk.bridge->geom_draw_primitives(sview, &cam, &d, 1, stride, 0xFF000000u));
+    }
+
+    // final: both live views still byte-identical to their good frames
+    CHECK(bk.readback(ndv, W, H) == snap_nd);
+    CHECK(bk.readback(dv,  W, H) == snap_d);
+    CHECK(std::string(bk.renderer->last_device_path()) == good_path);
+
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(idx_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(dv);
+    bk.bridge->geom_release_view(ndv);
+}
+
+// Row M — draw_stride forward-compat. Textual twin of the Metal-section row
+// (~line 1934): a struct that grew by 16 tail bytes must draw identically when
+// the host is told the real stride — it reads min(stride, its own sizeof) per
+// descriptor and steps `stride` between them. Part 1: one FLAT triangle via a
+// normal array and via a GrownDraw array both match the CPU reference and each
+// other. Part 2: two GrownDraw descriptors in one call — correct stride
+// addressing must step 208 bytes, not 192, so draw[1] (a different-colored quad)
+// lands only when stepping is right.
+TEST_CASE("gfx/geometry.v1_1: draw_stride forward-compat, a grown struct draws identically") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    struct GrownDraw { CaliperGeomDraw d; uint8_t tail[16]; };
+    static_assert(sizeof(GrownDraw) == sizeof(CaliperGeomDraw) + 16,
+                  "GrownDraw must be exactly 16 bytes larger with no padding");
+
+    const int W = 32, H = 32;
+    const uint32_t nstride = sizeof(CaliperGeomDraw);
+    const uint32_t gstride = sizeof(GrownDraw);
+
+    const float tri[9] = { -1.f, -1.f, 0.5f,  3.f, -1.f, 0.5f, -1.f, 3.f, 0.5f };
+    VmmBlock tri_blk(sizeof(tri));
+    REQUIRE_MESSAGE(tri_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(tri_blk.va, tri, sizeof(tri)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId tri_alloc = bk.bridge->import_allocation(
+        tri_blk.os_handle, tri_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(tri_alloc != 0);
+
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t flat = 0xFF3377AAu;
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = tri_alloc; base.vertex_count = 3;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = flat;
+    base.vmin = 0.0f; base.vmax = 1.0f; base.size_px = 1.0f;
+    for (int i = 0; i < 4; ++i) base.model[i * 4 + i] = 1.0f;
+
+    const auto ref1 = geom_ref(W, H, flat, {}, {});
+
+    // Part 1a: normal array, normal stride.
+    CaliperTextureId v1 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(v1 != 0);
+    CaliperGeomDraw nd = base;
+    REQUIRE(bk.bridge->geom_draw_primitives(v1, &cam, &nd, 1, nstride, 0xFF000000u));
+    auto got_normal = bk.readback(v1, W, H);
+    CHECK(got_normal == ref1);
+
+    // Part 1b: grown array (tail zeroed), grown stride, pointer cast to base type.
+    CaliperTextureId v2 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(v2 != 0);
+    GrownDraw g{}; g.d = base;
+    REQUIRE(bk.bridge->geom_draw_primitives(
+        v2, &cam, reinterpret_cast<const CaliperGeomDraw*>(&g), 1, gstride, 0xFF000000u));
+    auto got_grown = bk.readback(v2, W, H);
+    CHECK(got_grown == ref1);
+    CHECK(got_grown == got_normal);
+
+    // ---- Part 2: two descriptors; wrong stepping (192 vs 208) breaks draw[1] ----
+    // draw[1] = a quad covering cols/rows 8..23 (NDC +/-0.5 -> pixel boundaries),
+    // a different flat color, drawn OVER the full-viewport triangle.
+    const float quad[18] = {
+        -0.5f,  0.5f, 0.5f,   0.5f,  0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,   // tri 1
+        -0.5f, -0.5f, 0.5f,   0.5f,  0.5f, 0.5f,   0.5f, -0.5f, 0.5f,   // tri 2
+    };
+    VmmBlock quad_blk(sizeof(quad));
+    REQUIRE_MESSAGE(quad_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(quad_blk.va, quad, sizeof(quad)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId quad_alloc = bk.bridge->import_allocation(
+        quad_blk.os_handle, quad_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(quad_alloc != 0);
+
+    const uint32_t colA = 0xFF00AA00u;   // triangle background
+    const uint32_t colB = 0xFF0000AAu;   // quad overlay (distinct)
+    CaliperGeomDraw dA = base; dA.flat_rgba = colA;
+    CaliperGeomDraw dB = base;
+    dB.pos_alloc = quad_alloc; dB.vertex_count = 6; dB.flat_rgba = colB;
+
+    std::vector<std::pair<int,int>> rect;
+    for (int y = 8; y < 24; ++y)
+        for (int x = 8; x < 24; ++x) rect.emplace_back(x, y);
+    const auto ref2 = geom_ref(W, H, colA, rect,
+                               std::vector<uint32_t>(rect.size(), colB));
+
+    // reference via normal structs
+    CaliperTextureId v3 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(v3 != 0);
+    CaliperGeomDraw ndraws[2] = { dA, dB };
+    REQUIRE(bk.bridge->geom_draw_primitives(v3, &cam, ndraws, 2, nstride, 0xFF000000u));
+    auto got_two_normal = bk.readback(v3, W, H);
+    CHECK(got_two_normal == ref2);
+
+    // via grown structs, 208-byte stride
+    CaliperTextureId v4 = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(v4 != 0);
+    GrownDraw g2[2] = {}; g2[0].d = dA; g2[1].d = dB;
+    REQUIRE(bk.bridge->geom_draw_primitives(
+        v4, &cam, reinterpret_cast<const CaliperGeomDraw*>(g2), 2, gstride, 0xFF000000u));
+    auto got_two_grown = bk.readback(v4, W, H);
+    CHECK(got_two_grown == ref2);
+    CHECK(got_two_grown == got_two_normal);
+
+    bk.bridge->release_allocation(quad_alloc);
+    bk.bridge->release_allocation(tri_alloc);
+    bk.bridge->geom_release_view(v4);
+    bk.bridge->geom_release_view(v3);
+    bk.bridge->geom_release_view(v2);
+    bk.bridge->geom_release_view(v1);
+}
+
 // ===========================================================================
 // caliper.geometry.v1_1 portable gate-refusal rows (no CUDA required). These
 // pin the §2.3 gates that need no live imported allocation, so they run on
