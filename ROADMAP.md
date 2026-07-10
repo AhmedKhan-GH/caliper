@@ -92,8 +92,8 @@ its acceptance).
 
 ## 6 · The twin exemplar (forcing function for R2/R3)
 
-- [ ] Design doc: one concrete twin — learned thermal/stress field over a CAD housing, fleet of ~50 instanced units
-- [ ] Applet-side OBJ/glTF loader helper (fills vertex/index tensors; NO ABI growth)
+- [x] Design doc: one concrete twin — learned thermal/stress field over a CAD housing, fleet of ~50 instanced units — TwinScope twin-exemplar design (`0b84c57`), redirected to the v2 surface twin (`e29f000`)
+- [x] Applet-side OBJ loader helper (fills vertex/index tensors; NO ABI growth) — donor OBJ loader + v2 heatsink asset (`071a7f7`); glTF not implemented (OBJ satisfied the exemplar's need)
 - [x] R2 `geometry.v1_2` — textures-on-meshes (the `reserved0` slot): spec → Metal → matrix rows → Vulkan mirror — shipped both backends on `feat/geometry-v1_2` (COLOR_TEXTURE, appended uv/texture draw fields, caps bit 2); Vulkan run-proven byte-exact on this box, Metal transcribed + reviewed, hardware verification pending macOS
 - [ ] R3 — instanced transforms from an imported `(N,16)` alloc: spec → backends → rows
 - [ ] Twin applet ships run-proven on both platforms — the flagship demo — TwinScope v2 surface twin run-proven zero-copy on Vulkan+CUDA (GL fallback proven); Metal/MPS pass pending macOS
