@@ -1043,7 +1043,7 @@ void EmbedScopeApplet::draw_ui() {
                 st->disp_force_cpu.store(true, std::memory_order_relaxed);
             st->tex_gen = lgen;
         }
-        ImGui::TextDisabled("device-resident pull via tensor_bridge.v1 — "
+        ImGui::TextDisabled("upload via tensor_bridge.v1 — "
                             "step %llu", (unsigned long long)lgen);
         ImGui::SeparatorText("conv1 kernels (8 x 3x3, magma)");
         for (int k = 0; k < 8; k++) {

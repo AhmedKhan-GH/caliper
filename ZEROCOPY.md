@@ -226,7 +226,7 @@ applet owns, both load-bearing:
    `applets/mesh_scope/mesh_scope.cpp:276`, `flow_scope.cpp:286` (initial seed
    publish drained at `:255`), `sculpt_scope.cpp:215`,
    `field_scope.cpp:206-211` (`sync()` before the initial flip too),
-   `twin_scope.cpp:484-486`, `gpt_scope.cpp:818`. This invariant was *audited
+   `twin_scope.cpp:497-500`, `gpt_scope.cpp:818`. This invariant was *audited
    and enforced* under the §3.2 verdict, not merely observed: twin_scope's
    publish and flow_scope/field_scope's initial seed publishes originally
    flipped `ready_slot` with device writes still potentially in flight (their
