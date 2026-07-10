@@ -435,6 +435,12 @@ int64_t head_upscale_k(int64_t T) {
 CaliperTextureId upload_mapped(const caliper::Bridge& bridge, bool& stage_cpu,
                                CaliperTextureId id, const torch::Tensor& dev_t,
                                int32_t cmap, float vmin, float vmax) {
+    // FRAME-THREAD gate (design §8.b, adapters/torch.hpp): stream_to_tensor
+    // degrades to a full device barrier without STREAM_ORDERED, and this helper
+    // runs on the draw thread. Cap absent -> force the CPU-staged rung so
+    // draw_ui never drains the device; stage_cpu is a ref to the applet's
+    // head_stage_cpu, so this also keeps the heatmap status line honest.
+    if (!(bridge.caps() & CALIPER_BRIDGE_CAP_STREAM_ORDERED)) stage_cpu = true;
     torch::Tensor host_t;
     auto view = [&](bool cpu) -> std::optional<CaliperTensor> {
         if (cpu) { host_t = dev_t.to(torch::kCPU);

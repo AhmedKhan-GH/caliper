@@ -93,6 +93,14 @@ typedef struct CaliperGeometryV1_1 {
     /* v1_1 additions. */
     CaliperTextureId (*create_view_ex)(uint32_t width, uint32_t height,
                                        uint32_t flags);
+    /* Render one frame of `view` atomically. Every source (pos/index/normal/
+     * attr, incl. the per-vertex COLORMAP attr) obeys the same two-half
+     * memory-stability contract as draw_points (see geometry_v1.h): SPATIAL
+     * (bytes read in place — don't rewrite a drawn slot) + TEMPORAL (drain the
+     * producer BEFORE publishing — this ABI has no producer-stream channel, so
+     * it is always the drain rung, never STREAM_ORDERED). Any future added
+     * source (e.g. an instanced (N,16) pose stream) inherits both halves.
+     * draw_stride = the caller's sizeof(CaliperGeomDraw). */
     bool (*draw_primitives)(CaliperTextureId view,
                             const CaliperGeomCamera* cam,
                             const CaliperGeomDraw* draws, uint32_t draw_count,

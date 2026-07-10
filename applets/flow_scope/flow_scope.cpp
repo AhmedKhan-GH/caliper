@@ -250,6 +250,12 @@ void sim_job(FlowScopeState* st, const CaliperJobControl* ctl) {
     }
     torch::Tensor vel = torch::zeros({N, 3},
                                      torch::TensorOptions(dev).dtype(torch::kFloat32));
+    // Seed writes (torch::rand into slot 0) done BEFORE the initial publish —
+    // the geometry contract's temporal half (geometry_v1.h).
+    if (cuda) torch::cuda::synchronize();
+#if defined(__APPLE__)
+    else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
+#endif
     {
         std::lock_guard<std::mutex> lk(st->mtx);
         st->pool = std::move(pool);

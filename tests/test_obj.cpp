@@ -91,10 +91,12 @@ TEST_CASE("obj adapter loads the committed TwinScope housing") {
     REQUIRE_MESSAGE(caliper::obj::load_file(path, mesh, &error), error);
     CHECK(mesh.has_uvs);
     CHECK(mesh.has_normals);
-    // Coarse render mesh, per spec: 2,500-4,000 triangles.
-    CHECK(mesh.triangle_count() >= 2500);
-    CHECK(mesh.triangle_count() <= 4000);
-    CHECK(mesh.vertex_count() >= 100);
+    // Exact pins for the committed asset (generator self-verification, confirmed
+    // from the loader): 1592 quads triangulate to 3184 triangles, and the
+    // (v,vt,vn)-dedup yields 2430 vertices (every face pairs v==vt, one of 6
+    // normals). Spec envelope is 2,500-4,000 triangles.
+    CHECK(mesh.triangle_count() == 3184);
+    CHECK(mesh.vertex_count() == 2430);
     // Vertices are deduplicated on the (v,vt,vn) triple: far fewer than 3 per tri.
     CHECK(mesh.vertex_count() < mesh.triangle_count() * 3);
     CHECK(mesh.positions.size() == mesh.vertex_count() * 3);

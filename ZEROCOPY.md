@@ -210,6 +210,55 @@ Three hard-won facts are load-bearing here:
    prove the stream channel is live must pin a **non-default** pool stream
    (see `tests/test_torch_adapter.cpp`, the tripwire case).
 
+**The geometry path is permanently the drain rung — and that is safe by
+construction, not a gap.** The `geometry.v1/v1_1/v1_2` draw calls
+(`draw_points`, `draw_primitives`, incl. the per-vertex COLORMAP attr) address
+device memory as `(alloc id, byte offset)` — there is **no `CaliperTensor` and
+therefore no `stream` field** in that ABI
+(`sdk/include/caliper/services/geometry_v1.h:91` `draw_points`,
+`geometry_v1_1.h:104` `draw_primitives`), so a STREAM_ORDERED handshake is *structurally
+impossible* on it. It doesn't need one. Correctness rests on two invariants the
+applet owns, both load-bearing:
+
+1. **Temporal (producer completion) — the drain.** Every applet worker drains
+   its device (`torch::cuda::synchronize()` / `mps_synchronize_serialized()`)
+   *before* it flips `ready_slot` under the publish mutex —
+   `applets/mesh_scope/mesh_scope.cpp:276`, `flow_scope.cpp:286` (initial seed
+   publish drained at `:255`), `sculpt_scope.cpp:215`,
+   `field_scope.cpp:206-211` (`sync()` before the initial flip too),
+   `twin_scope.cpp:497-500`, `gpt_scope.cpp:818`. This invariant was *audited
+   and enforced* under the §3.2 verdict, not merely observed: twin_scope's
+   publish and flow_scope/field_scope's initial seed publishes originally
+   flipped `ready_slot` with device writes still potentially in flight (their
+   only sync — `.item()` / `.to(kCPU)` — preceded the slot copies), exactly
+   the race the temporal half names; the drains were added to make the rule
+   true at every publish site, steady-state and initial.
+   So the producer's writes to the imported allocation are
+   CPU-observably **retired** before the frame thread even reads which slot to
+   draw. There is no in-flight producer work for a semaphore to order against;
+   the renderer only has to make already-complete writes visible to its vertex
+   stage — a Vulkan `MEMORY_WRITE→SHADER_READ` barrier
+   (`src/host/renderer/vulkan_renderer.cpp:1233-1239`) over a CPU-fenced
+   `submit_once`, or Metal same-queue commit order
+   (`src/host/renderer/metal_renderer.mm:759-760, 976`). This is exactly the v1
+   drain rung `synced_to_tensor` uses on the texture path — the geometry path
+   just never takes the drain-eliding v1.1 optimization.
+2. **Spatial (slot stability) — the triple buffer.** The worker picks its next
+   write slot as the one that is neither `ready_slot` nor `display_slot`
+   (`mesh_scope.cpp:286-287` and every sibling), so it never rewrites the slot
+   the frame thread is reading in place — the "Memory-stability contract" in
+   `geometry_v1.h`.
+
+Both are required: the triple buffer alone would let the frame read a slot
+whose producer writes are still in flight; the drain alone would let the worker
+overwrite a slot mid-read. Together they make the per-vertex attr path safe
+**without** the STREAM_ORDERED gate the texture path uses. The one written-down
+gap this closes (§3.2 verdict, 2026-07-10): the header contract historically
+stated only the *spatial* half; the *temporal* drain-before-publish half lived
+as tribal knowledge in each applet. It is now written into the contract so the
+next worker→frame publish path (R3's instanced `(N,16)` pose + `(N,)` attr
+streams) inherits the rule rather than rediscovering the race.
+
 One honest measurement note: eliding the drain did **not** move training
 steps/sec in embed_scope (~0 delta on an RTX 500 Ada — the training loop's own
 per-step `loss.item()` sync dominates). The verified win is ordering

@@ -442,13 +442,26 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
             sim.override_value.copy_(val.to(device));
         }
 
-        if (state->sim_on.load()) { sim.step(t); ++rate_sim; }
+        const bool run_sim = state->sim_on.load();
+        const bool run_train = state->train_on.load();
+        if (run_sim) { sim.step(t); ++rate_sim; }
         float loss = state->loss;
-        if (state->train_on.load()) { loss = learner->train_step(sim); ++rate_train; }
+        if (run_train) { loss = learner->train_step(sim); ++rate_train; }
 
-        // Publish ≤30 Hz; sim+train run uncapped between publishes.
-        if (last_publish.time_since_epoch().count() == 0 ||
-            now - last_publish >= std::chrono::milliseconds(33)) {
+        // Publish ≤30 Hz; sim+train run uncapped between publishes. Idle gate
+        // (M2, T8b): skip the whole bake/predict/sync/publish when BOTH sim and
+        // train are off — no wasted device work at idle. last_publish is left
+        // stale across the idle gap, so the first iteration after a re-enable
+        // satisfies the ≥33 ms condition and republishes promptly (no lingering
+        // stale frame). Nothing-published-yet (both off from startup) leaves
+        // ready_slot == -1; the draw path degrades honestly to the "waiting"
+        // state. The drain-before-publish invariant is preserved: the drain
+        // below sits inside this gated block, on every path that still flips
+        // ready_slot.
+        const bool active = run_sim || run_train;
+        if (active &&
+            (last_publish.time_since_epoch().count() == 0 ||
+             now - last_publish >= std::chrono::milliseconds(33))) {
             last_publish = now;
             const int mode = state->display_mode.load();
             auto T0 = sim.T.select(0, 0);              // (V_sim,)
@@ -477,6 +490,14 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
             vert_slot[FIELD_SIM][write_slot].copy_(sim_vf);
             vert_slot[FIELD_NET][write_slot].copy_(net_vf);
             vert_slot[FIELD_ERR][write_slot].copy_(err_vf);
+            // Drain BEFORE the publish flip (the geometry memory-stability
+            // contract's temporal half, geometry_v1.h): the slot copies above
+            // are enqueued AFTER the cpu3 sync, so without this they can still
+            // be in flight when the frame thread draws the slot.
+            if (cuda) torch::cuda::synchronize();   // writes done BEFORE publish
+#if defined(__APPLE__)
+            else if (mps) caliper::adapters::detail::mps_synchronize_serialized();
+#endif
 
             std::lock_guard<std::mutex> lock(state->mutex);
             state->cpu_fields = cpuvec;
@@ -517,7 +538,7 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
         }
 
         // No hot-loop sleep (§8.f): only idle when nothing is running.
-        if (!state->sim_on.load() && !state->train_on.load())
+        if (!active)
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
@@ -773,7 +794,12 @@ void TwinScopeApplet::draw_ui() {
     look_at(eye, target, {0.f, 1.f, 0.f}, camera.view);
     perspective(45.f * kPi / 180.f, aspect, 0.05f, 60.f, camera.proj);
 
-    bool textured_drew = false, pervertex_drew = false, imported_any = false;
+    // Per-half provenance (M1, T8b): count textured halves and how many of
+    // them actually imported zero-copy. ZEROCOPY is claimed only when EVERY
+    // drawn half imported — a fallback on one half drops the honest status to
+    // CPU-staged instead of being masked by an OR across halves.
+    bool textured_drew = false, pervertex_drew = false;
+    int textured_halves = 0, imported_halves = 0;
     const bool want_textured = state->textured_pref.load() && has_textured;
 
     if (state->view && pool && positions.defined() && have_field) {
@@ -845,7 +871,8 @@ void TwinScopeApplet::draw_ui() {
                 for (const Spec& sp : specs) {
                     const CaliperTextureId ft = ensure_tex(sp.field);
                     if (ft == 0) continue;
-                    imported_any |= update_tex(sp.field, ft);
+                    ++textured_halves;
+                    if (update_tex(sp.field, ft)) ++imported_halves;
                     CaliperGeomDrawV1_2 d = caliper::geom_draw_v1_2_defaults();
                     set_base(d.base, sp.offset);
                     d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
@@ -891,8 +918,12 @@ void TwinScopeApplet::draw_ui() {
     const bool geometry_drew = textured_drew || pervertex_drew;
 
     // provenance (honest, post-draw): claimed only for what actually drew.
+    // ZEROCOPY requires that EVERY textured half imported (M1 per-draw): if one
+    // half fell back to CPU staging, the status honestly reports CPU-staged.
     Prov prov = !geometry_drew ? (cpu_fields ? PROV_HEATMAP : PROV_WAIT)
-              : textured_drew ? (imported_any ? PROV_ZEROCOPY : PROV_CPU_TEX)
+              : textured_drew ? (textured_halves > 0 &&
+                                 imported_halves == textured_halves
+                                     ? PROV_ZEROCOPY : PROV_CPU_TEX)
               : PROV_PERVERTEX;
     if (state->logged_prov != prov && state->host) {
         state->logged_prov = prov;

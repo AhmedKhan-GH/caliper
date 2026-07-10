@@ -192,9 +192,15 @@ typedef struct CaliperGeomDraw {
      * stride < the host's known minimum -> refuse).
      * draw_count == 0 is a pure clear.
      * false = NOTHING drawn or cleared, prior pixels intact, one log line.
-     * Memory-stability contract identical to draw_points: every addressed
-     * byte range is read IN PLACE and must not be rewritten until this
-     * view's next draw. */
+     * Memory-stability contract identical to draw_points, TWO load-bearing
+     * halves: (1) SPATIAL — every addressed byte range is read IN PLACE and
+     * must not be rewritten until this view's next draw (triple-buffer the
+     * slots); (2) TEMPORAL — the producer must FINISH its writes before the
+     * call (this ABI has no producer-stream channel, so it is permanently the
+     * drain rung: the worker drains its device before publishing the drawn
+     * slot; the renderer's barrier makes complete writes visible but does not
+     * order an in-flight producer — publishing mid-write races). Any R3
+     * instanced source inherits both halves. */
     bool (*draw_primitives)(CaliperTextureId view,
                             const CaliperGeomCamera* cam,
                             const CaliperGeomDraw* draws, uint32_t draw_count,
