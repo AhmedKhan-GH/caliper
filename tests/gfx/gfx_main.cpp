@@ -2192,9 +2192,11 @@ TEST_CASE("gfx/metal geometry.v1_2: out-of-range UVs clamp to edge texels byte-e
 
 // Row [v1.2 compat] — the same non-textured indexed COLORMAP+LAMBERT mesh drawn
 // through the frozen v1.1 entry (stride 192) into view A and through the v1.2
-// entry (zeroed tail, stride 216) into view B. Both walk the changed shared
-// vertex shader; full-image equality is the regression guard. A mismatch is a
-// real shared-shader regression, never a reason to loosen the check.
+// entry (zeroed tail, stride 216) into view B. Full-image equality guards against
+// DIVERGENCE between the two entry points — stride handling, tail defaults,
+// pipeline selection — not shader correctness: a shared-shader break corrupts both
+// paths identically and still compares equal. Absolute shader correctness is
+// guarded by the byte-exact rows above.
 TEST_CASE("gfx/metal geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-identical") {
     if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
     Backend bk = metal_backend();
@@ -2245,6 +2247,9 @@ TEST_CASE("gfx/metal geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-id
         vb, &cam, &d, 1, sizeof(CaliperGeomDrawV1_2), 0xFF000000u));
 
     CHECK(bk.readback(va, W, H) == bk.readback(vb, W, H));
+    // Non-triviality: view A must actually rasterize the mesh, else a blank-vs-blank
+    // match would pass the equality above vacuously.
+    CHECK(bk.readback(va, W, H) != geom_ref(W, H, 0xFF000000u, {}, {}));
 
     bk.bridge->geom_release_view(vb);
     bk.bridge->geom_release_view(va);
@@ -4579,9 +4584,11 @@ TEST_CASE("gfx/geometry.v1_2: out-of-range UVs clamp to edge texels byte-exact")
 
 // Row [v1.2 compat] — the same non-textured indexed COLORMAP+LAMBERT mesh drawn
 // through the frozen v1.1 entry (stride 192) into view A and through the v1.2
-// entry (zeroed tail, stride 216) into view B. Both walk the changed shared
-// vertex shader; full-image equality is the regression guard. A mismatch is a
-// real shared-shader regression, never a reason to loosen the check.
+// entry (zeroed tail, stride 216) into view B. Full-image equality guards against
+// DIVERGENCE between the two entry points — stride handling, tail defaults,
+// pipeline selection — not shader correctness: a shared-shader break corrupts both
+// paths identically and still compares equal. Absolute shader correctness is
+// guarded by the byte-exact rows above.
 TEST_CASE("gfx/geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-identical") {
     if (!vmm_rows_ready()) return;
     Backend bk = vk_backend();
@@ -4634,6 +4641,9 @@ TEST_CASE("gfx/geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-identica
         vb, &cam, &d, 1, sizeof(CaliperGeomDrawV1_2), 0xFF000000u));
 
     CHECK(bk.readback(va, W, H) == bk.readback(vb, W, H));
+    // Non-triviality: view A must actually rasterize the mesh, else a blank-vs-blank
+    // match would pass the equality above vacuously.
+    CHECK(bk.readback(va, W, H) != geom_ref(W, H, 0xFF000000u, {}, {}));
 
     bk.bridge->geom_release_view(vb);
     bk.bridge->geom_release_view(va);
