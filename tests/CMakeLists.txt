@@ -163,4 +163,9 @@ target_include_directories(caliper_surface_tests PRIVATE
 target_compile_definitions(caliper_surface_tests PRIVATE
     CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
+# TwinScope v2 thermal model + chasing learner (batched surface heat step,
+# seeded duty schedule, MLP learner). Pure torch, small subdivided-tetra sims.
+add_caliper_torch_model_test(caliper_twin_tests test_twin_thermal.cpp
+    "${CMAKE_SOURCE_DIR}/applets/twin_scope")
+
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
