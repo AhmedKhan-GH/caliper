@@ -462,6 +462,8 @@ uint32_t TensorBridge::geom_caps() const {
         ? CALIPER_GEOM_CAP_IMPORTED_POINTS : 0u;
     if (primitives)
         c |= CALIPER_GEOM_CAP_PRIMITIVES;
+    if (primitives && renderer_.supports_geometry_textured())
+        c |= CALIPER_GEOM_CAP_TEXTURED;
     return c;
 }
 
@@ -570,11 +572,33 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
                                         uint32_t draw_count,
                                         uint32_t draw_stride,
                                         uint32_t clear_rgba) {
+    return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
+                                     /*v12=*/false, clear_rgba);
+}
+
+bool TensorBridge::geom_draw_primitives_v1_2(
+        CaliperTextureId view, const CaliperGeomCamera* cam,
+        const CaliperGeomDrawV1_2* draws, uint32_t draw_count,
+        uint32_t draw_stride, uint32_t clear_rgba) {
+    return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
+                                     /*v12=*/true, clear_rgba);
+}
+
+bool TensorBridge::geom_draw_primitives_impl(
+        CaliperTextureId view, const CaliperGeomCamera* cam,
+        const void* draws, uint32_t draw_count, uint32_t draw_stride,
+        bool v12, uint32_t clear_rgba) {
+    // The single revision axis: v1.2 records carry the UV/texture tail and may
+    // request COLOR_TEXTURE; v1.1 records do neither.
+    const uint32_t min_stride =
+        v12 ? sizeof(CaliperGeomDrawV1_2) : sizeof(CaliperGeomDraw);
+    const uint32_t max_color =
+        v12 ? CALIPER_GEOM_COLOR_TEXTURE : CALIPER_GEOM_COLOR_VERTEX_RGBA;
     if (!renderer_.supports_geometry_primitives()) {
         bridge_log("geom_prims: primitives unsupported"); return false;
     }
     if (!cam) { bridge_log("geom_prims: null camera"); return false; }
-    if (draw_stride < sizeof(CaliperGeomDraw)) {
+    if (draw_stride < min_stride) {
         bridge_log("geom_prims: short stride"); return false;
     }
     if (draw_count > 0 && draws == nullptr) {
@@ -616,8 +640,10 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
     std::vector<HostGeomDraw> resolved;
     resolved.reserve(draw_count);
     for (uint32_t i = 0; i < draw_count; ++i) {
-        const auto* d = reinterpret_cast<const CaliperGeomDraw*>(
-            reinterpret_cast<const uint8_t*>(draws) + (uint64_t)i * draw_stride);
+        const auto* record = reinterpret_cast<const uint8_t*>(draws) +
+                             (uint64_t)i * draw_stride;
+        const auto* d = reinterpret_cast<const CaliperGeomDraw*>(record);
+        const auto* d12 = reinterpret_cast<const CaliperGeomDrawV1_2*>(record);
         auto reject_i = [i](const char* reason) {
             char msg[128];
             std::snprintf(msg, sizeof msg, "geom_prims: draw %u refused: %s", i, reason);
@@ -627,8 +653,12 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
         if (d->topology > CALIPER_GEOM_TOPO_TRIANGLE_STRIP) {
             reject_i("bad topology"); return false;
         }
-        if (d->color_mode > CALIPER_GEOM_COLOR_VERTEX_RGBA) {
+        if (d->color_mode > max_color) {
             reject_i("bad color mode"); return false;
+        }
+        if (d->color_mode == CALIPER_GEOM_COLOR_TEXTURE &&
+            !renderer_.supports_geometry_textured()) {
+            reject_i("textured geometry unsupported"); return false;
         }
         if (d->shade_mode > CALIPER_GEOM_SHADE_LAMBERT) {
             reject_i("bad shade mode"); return false;
@@ -701,7 +731,8 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
 
         uint64_t attr_rid = 0;
         const uint32_t* lut = nullptr;
-        if (d->color_mode != CALIPER_GEOM_COLOR_FLAT) {
+        if (d->color_mode == CALIPER_GEOM_COLOR_COLORMAP ||
+            d->color_mode == CALIPER_GEOM_COLOR_VERTEX_RGBA) {
             auto aa = imported_.find(d->attr_alloc);
             if (aa == imported_.end()) { reject_i("unknown attr alloc"); return false; }
             if (!range_ok(aa->second.size_bytes, d->attr_offset, d->vertex_count,
@@ -715,6 +746,22 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
             }
         }
 
+        uint64_t uv_rid = 0;
+        uint64_t texture_rid = 0;
+        if (d->color_mode == CALIPER_GEOM_COLOR_TEXTURE) {
+            auto ua = imported_.find(d12->uv_alloc);
+            if (ua == imported_.end()) { reject_i("unknown uv alloc"); return false; }
+            if (!range_ok(ua->second.size_bytes, d12->uv_offset,
+                          d->vertex_count, 8u, "uvs")) {
+                return false;
+            }
+            auto te = entries_.find(d12->texture);
+            if (te == entries_.end()) { reject_i("unknown texture"); return false; }
+            if (te->second.view) { reject_i("geometry view used as texture"); return false; }
+            uv_rid = ua->second.renderer_id;
+            texture_rid = te->second.tex;
+        }
+
         HostGeomDraw hd;
         hd.pos_alloc = pa->second.renderer_id;
         hd.pos_offset = d->pos_offset;
@@ -726,6 +773,9 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
         hd.normal_offset = normal_rid ? d->normal_offset : 0u;
         hd.attr_alloc = attr_rid;
         hd.attr_offset = attr_rid ? d->attr_offset : 0u;
+        hd.uv_alloc = uv_rid;
+        hd.uv_offset = uv_rid ? d12->uv_offset : 0u;
+        hd.texture = texture_rid;
         hd.topology = d->topology;
         hd.color_mode = d->color_mode;
         hd.shade_mode = d->shade_mode;

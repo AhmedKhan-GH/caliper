@@ -14,6 +14,7 @@
 #include "host_renderer.h"
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 #include <caliper/services/geometry_v1_1.h>
+#include <caliper/services/geometry_v1_2.h>
 
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -174,6 +175,10 @@ struct PrimParams {
     float vmin;
     float vmax;
     float size_px;
+    uint uv_base;
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
 /* Metal validates [[point_size]] against the pipeline's topology class: a
@@ -183,12 +188,14 @@ struct PrimParams {
 struct VOut {
     float4 pos [[position]];
     float4 color;
+    float2 uv;
 };
 
 struct VOutPoint {
     float4 pos [[position]];
     float  size [[point_size]];
     float4 color;
+    float2 uv;
 };
 
 static inline float4 unpack_rgba(uint packed) {
@@ -203,6 +210,7 @@ static inline VOut geom_compute(uint vid,
                                 device const uint*  idx,
                                 device const float* nrm,
                                 device const uint*  attr,
+                                device const float* uv,
                                 constant uint*      lut,
                                 constant PrimParams& p)
 {
@@ -213,6 +221,10 @@ static inline VOut geom_compute(uint vid,
                        pos[p.pos_base + 3u * vi + 1u],
                        pos[p.pos_base + 3u * vi + 2u]);
     o.pos = p.mvp * float4(wp, 1.0f);
+    o.uv = p.color_mode == 3u
+        ? float2(uv[p.uv_base + 2u * vi + 0u],
+                 uv[p.uv_base + 2u * vi + 1u])
+        : float2(0.0f);
 
     float4 c;
     if (p.color_mode == 1u) {
@@ -222,6 +234,8 @@ static inline VOut geom_compute(uint vid,
         c = unpack_rgba(lut[(uint)(t * 255.0f + 0.5f)]);
     } else if (p.color_mode == 2u) {
         c = unpack_rgba(attr[p.attr_base + vi]);
+    } else if (p.color_mode == 3u) {
+        c = float4(1.0f);
     } else {
         c = unpack_rgba(p.flat_rgba);
     }
@@ -246,9 +260,10 @@ vertex VOut geom_vs(uint vid [[vertex_id]],
                     device const float* nrm  [[buffer(2)]],
                     device const uint*  attr [[buffer(3)]],
                     constant uint*      lut  [[buffer(4)]],
-                    constant PrimParams& p   [[buffer(5)]])
+                    constant PrimParams& p   [[buffer(5)]],
+                    device const float* uv   [[buffer(6)]])
 {
-    return geom_compute(vid, pos, idx, nrm, attr, lut, p);
+    return geom_compute(vid, pos, idx, nrm, attr, uv, lut, p);
 }
 
 vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
@@ -257,17 +272,27 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
                                device const float* nrm  [[buffer(2)]],
                                device const uint*  attr [[buffer(3)]],
                                constant uint*      lut  [[buffer(4)]],
-                               constant PrimParams& p   [[buffer(5)]])
+                               constant PrimParams& p   [[buffer(5)]],
+                               device const float* uv   [[buffer(6)]])
 {
-    VOut b = geom_compute(vid, pos, idx, nrm, attr, lut, p);
+    VOut b = geom_compute(vid, pos, idx, nrm, attr, uv, lut, p);
     VOutPoint o;
     o.pos   = b.pos;
     o.size  = p.size_px;
     o.color = b.color;
+    o.uv    = b.uv;
     return o;
 }
 
 fragment float4 geom_fs(VOut in [[stage_in]]) { return in.color; }
+fragment float4 geom_tex_fs(VOut in [[stage_in]],
+                            texture2d<float> tex [[texture(0)]]) {
+    constexpr sampler smp(coord::normalized, address::clamp_to_edge,
+                          filter::linear, mip_filter::none);
+    float4 sampled = tex.sample(smp, in.uv);
+    sampled.rgb *= in.color.rgb;
+    return sampled;
+}
 )metal";
 
 struct PrimParams {
@@ -279,8 +304,9 @@ struct PrimParams {
     uint32_t use_index, vertex_count, color_mode, shade_mode;
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
+    uint32_t uv_base, pad0, pad1, pad2;
 };
-static_assert(sizeof(PrimParams) == 160, "MSL primitive params layout");
+static_assert(sizeof(PrimParams) == 176, "MSL primitive params layout");
 
 void mat4_mul_cm(const float* a, const float* b, float* out) {
     for (int c = 0; c < 4; ++c)
@@ -570,6 +596,7 @@ public:
     // MTLBuffers, which only exist when external import is up.
     bool supports_geometry() const override { return supports_external_import(); }
     bool supports_geometry_primitives() const override { return supports_external_import(); }
+    bool supports_geometry_textured() const override { return supports_external_import(); }
 
     // An offscreen render target that is ALSO an ordinary sampled texture: it
     // lives in textures_, so tex_imtexture_id / debug_readback / tex_release
@@ -756,6 +783,8 @@ public:
                 id<MTLBuffer> idx = nil;
                 id<MTLBuffer> nrm = nil;
                 id<MTLBuffer> attr = nil;
+                id<MTLBuffer> uv = nil;
+                id<MTLTexture> texture = nil;
                 NSUInteger consumed = 0;
                 MTLPrimitiveType prim = MTLPrimitiveTypeTriangle;
                 id<MTLRenderPipelineState> pipeline = nil;
@@ -816,7 +845,8 @@ public:
                 }
 
                 id<MTLBuffer> attr = nil;
-                if (d.color_mode != CALIPER_GEOM_COLOR_FLAT) {
+                if (d.color_mode == CALIPER_GEOM_COLOR_COLORMAP ||
+                    d.color_mode == CALIPER_GEOM_COLOR_VERTEX_RGBA) {
                     attr = lookup_import(d.attr_alloc);
                     if (attr == nil) return metal_geom_fail("unknown attr import");
                     if (d.attr_offset % 4 != 0) return metal_geom_fail("attr offset misaligned");
@@ -826,6 +856,30 @@ public:
                         return metal_geom_fail("attributes out of bounds");
                     if (d.color_mode == CALIPER_GEOM_COLOR_COLORMAP && d.lut256 == nullptr)
                         return metal_geom_fail("missing colormap LUT");
+                }
+
+                id<MTLBuffer> uv = nil;
+                id<MTLTexture> texture = nil;
+                if (d.color_mode == CALIPER_GEOM_COLOR_TEXTURE) {
+                    uv = lookup_import(d.uv_alloc);
+                    texture = lookup(d.texture);
+                    if (uv == nil) return metal_geom_fail("unknown uv import");
+                    // Refuse sampling ANY geometry view: unknown id, the current
+                    // target, or any entry created by geom_create_view* (which
+                    // uniquely carry MTLTextureUsageRenderTarget — tex_create_rgba8
+                    // never does). Metal views share textures_ with sampled
+                    // textures, so the usage flag is the marker create_view sets.
+                    // Mirrors Vulkan's `fb != VK_NULL_HANDLE` refusal.
+                    if (texture == nil || d.texture == view_tex ||
+                        (texture.usage & MTLTextureUsageRenderTarget) != 0)
+                        return metal_geom_fail("bad sampled texture");
+                    if (d.uv_offset % 4 != 0)
+                        return metal_geom_fail("uv offset misaligned");
+                    if (d.vertex_count > UINT64_MAX / 8u)
+                        return metal_geom_fail("uv byte overflow");
+                    if (d.uv_offset > uv.length ||
+                        d.vertex_count * 8u > uv.length - d.uv_offset)
+                        return metal_geom_fail("uvs out of bounds");
                 }
 
                 MTLPrimitiveType prim;
@@ -839,7 +893,9 @@ public:
                 }
 
                 id<MTLRenderPipelineState> pipe =
-                    geom_pipeline(topo_class(d.topology), d.blend_mode, depth != nil);
+                    geom_pipeline(topo_class(d.topology), d.blend_mode,
+                                  depth != nil,
+                                  d.color_mode == CALIPER_GEOM_COLOR_TEXTURE);
                 id<MTLDepthStencilState> ds = geom_depth_state(d.depth_flags);
                 if (pipe == nil) return metal_geom_fail("pipeline creation failed");
                 if (ds == nil) return metal_geom_fail("depth-state creation failed");
@@ -850,6 +906,8 @@ public:
                 e.idx = idx;
                 e.nrm = nrm;
                 e.attr = attr;
+                e.uv = uv;
+                e.texture = texture;
                 e.consumed = (NSUInteger)consumed;
                 e.prim = prim;
                 e.pipeline = pipe;
@@ -872,6 +930,9 @@ public:
                 e.params.vmin = d.vmin;
                 e.params.vmax = d.vmax;
                 e.params.size_px = std::min(std::max(d.size_px, 1.0f), 511.0f);
+                if (d.uv_offset / 4 > UINT32_MAX)
+                    return metal_geom_fail("primitives: uv base exceeds 32 bits");
+                e.params.uv_base = (uint32_t)(d.uv_offset / 4u);
                 encs.push_back(e);
             }
 
@@ -907,6 +968,8 @@ public:
                 [re setVertexBytes:(e.d->lut256 ? e.d->lut256 : kZeroLut)
                             length:256 * sizeof(uint32_t) atIndex:4];
                 [re setVertexBytes:&e.params length:sizeof(e.params) atIndex:5];
+                [re setVertexBuffer:(e.uv != nil ? e.uv : e.pos) offset:0 atIndex:6];
+                if (e.texture != nil) [re setFragmentTexture:e.texture atIndex:0];
                 [re drawPrimitives:e.prim vertexStart:0 vertexCount:e.consumed];
             }
             [re endEncoding];
@@ -1023,8 +1086,9 @@ private:
     }
 
     id<MTLRenderPipelineState> geom_pipeline(uint32_t cls, uint32_t blend,
-                                             bool has_depth) {
-        const uint32_t key = cls | (blend << 2) | (has_depth ? (1u << 4) : 0u);
+                                             bool has_depth, bool textured) {
+        const uint32_t key = cls | (blend << 2) |
+            (has_depth ? (1u << 4) : 0u) | (textured ? (1u << 5) : 0u);
         auto hit = geom_pipelines_.find(key);
         if (hit != geom_pipelines_.end()) return hit->second;
 
@@ -1032,7 +1096,8 @@ private:
         if (lib == nil) return nil;
         id<MTLFunction> vs = [lib newFunctionWithName:
             (cls == 0 ? @"geom_vs_point" : @"geom_vs")];
-        id<MTLFunction> fs = [lib newFunctionWithName:@"geom_fs"];
+        id<MTLFunction> fs = [lib newFunctionWithName:
+            (textured ? @"geom_tex_fs" : @"geom_fs")];
         if (vs == nil || fs == nil) {
             std::fprintf(stderr, "[metal] geom_prims: missing geom shader function\n");
             return nil;

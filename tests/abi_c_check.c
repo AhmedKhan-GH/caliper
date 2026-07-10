@@ -4,6 +4,7 @@
 #include <caliper/services/data_v1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/geometry_v1_1.h>
+#include <caliper/services/geometry_v1_2.h>
 #include <caliper/services/geometry_v1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/tensor_bridge_v1_1.h>

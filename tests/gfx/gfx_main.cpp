@@ -24,6 +24,7 @@
 
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
+#include <caliper/services/geometry_v1_2.h>
 
 #include <chrono>
 #include <cstdint>
@@ -2033,6 +2034,326 @@ TEST_CASE("gfx/metal geometry.v1_1: draw_stride forward-compat, a grown struct d
     bk.bridge->geom_release_view(v3);
     bk.bridge->geom_release_view(v2);
     bk.bridge->geom_release_view(v1);
+}
+
+// Row [v1.2 donor] — UV pull at a poisoned nonzero offset, exact texel-center
+// red, bilinear-center gray (within one RGBA8 LSB), and Lambert x texture
+// (within two RGB LSB, alpha untouched). Transcribed byte-for-byte from the
+// donor's Vulkan twin below; runs on mac later.
+TEST_CASE("gfx/metal geometry.v1_2: UV offset, bilinear texture, and Lambert are byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+
+    const int W = 16, H = 16;
+    const float pos[] = {-1.f,-1.f,0.5f, 3.f,-1.f,0.5f, -1.f,3.f,0.5f};
+    const uint64_t uv_off = 64;
+    const float red_uv[] = {0.25f,0.25f, 0.25f,0.25f, 0.25f,0.25f};
+    std::vector<uint8_t> uv_bytes(uv_off + sizeof(red_uv), 0xA5);
+    std::memcpy(uv_bytes.data() + uv_off, red_uv, sizeof(red_uv));
+    const float nrm[] = {0.f,0.f,-1.f, 0.f,0.f,-1.f, 0.f,0.f,-1.f};
+
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> uv_buf = device_buffer(uv_bytes.data(), uv_bytes.size());
+    id<MTLBuffer> nrm_buf = device_buffer(nrm, sizeof(nrm));
+    REQUIRE(pos_buf != nil); REQUIRE(uv_buf != nil); REQUIRE(nrm_buf != nil);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        (__bridge void*)uv_buf, uv_bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId na = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(nrm), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pa != 0); REQUIRE(ua != 0); REQUIRE(na != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    REQUIRE(texture != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+
+    CaliperGeomDrawV1_2 d{};
+    d.base.pos_alloc = pa; d.base.vertex_count = 3;
+    d.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) d.base.model[i * 4 + i] = 1.f;
+    d.uv_alloc = ua; d.uv_offset = uv_off; d.texture = texture;
+    CaliperGeomCamera cam = identity_cam();
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, 0xFF0000FFu, {}, {}));
+
+    const float mid_uv[] = {0.5f,0.5f, 0.5f,0.5f, 0.5f,0.5f};
+    std::memcpy((uint8_t*)uv_buf.contents + uv_off, mid_uv, sizeof(mid_uv));
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    {
+        const auto got = bk.readback(view, W, H);
+        CHECK((got == geom_ref(W, H, 0xFF7F7F7Fu, {}, {}) ||
+               got == geom_ref(W, H, 0xFF808080u, {}, {})));
+    }
+
+    std::memcpy((uint8_t*)uv_buf.contents + uv_off, red_uv, sizeof(red_uv));
+    d.base.normal_alloc = na;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    {
+        const auto got = bk.readback(view, W, H);
+        CHECK((got == geom_ref(W, H, 0xFF00004Cu, {}, {}) ||
+               got == geom_ref(W, H, 0xFF00004Du, {}, {})));
+    }
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(na);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row [v1.2 clamp-to-edge] — a full-viewport quad whose per-vertex UV is
+// (0.5 + x_ndc, 0.5 + y_ndc), so UV spans -0.5..1.5 across the 2x2 texture.
+// FLAT (UNLIT) so nothing but the sample colors the pixel. Each read pixel sits
+// deep in an out-of-range corner (|beyond [0,1]| = 0.4375 >> 0.125 = a quarter
+// texel), so clamp-to-edge samples the nearest edge texel with no bilinear mix.
+TEST_CASE("gfx/metal geometry.v1_2: out-of-range UVs clamp to edge texels byte-exact") {
+    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+
+    const int W = 16, H = 16;
+    const float pos[] = {
+        -1.f,-1.f,0.5f,  1.f,-1.f,0.5f,  -1.f,1.f,0.5f,
+        -1.f, 1.f,0.5f,  1.f,-1.f,0.5f,   1.f,1.f,0.5f,
+    };
+    const uint64_t uv_off = 64;
+    const float uv[] = {
+        -0.5f,-0.5f,  1.5f,-0.5f,  -0.5f,1.5f,
+        -0.5f, 1.5f,  1.5f,-0.5f,   1.5f,1.5f,
+    };
+    std::vector<uint8_t> uv_bytes(uv_off + sizeof(uv), 0xA5);
+    std::memcpy(uv_bytes.data() + uv_off, uv, sizeof(uv));
+
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> uv_buf = device_buffer(uv_bytes.data(), uv_bytes.size());
+    REQUIRE(pos_buf != nil); REQUIRE(uv_buf != nil);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        (__bridge void*)uv_buf, uv_bytes.size(), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pa != 0); REQUIRE(ua != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    REQUIRE(texture != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+
+    CaliperGeomDrawV1_2 d{};
+    d.base.pos_alloc = pa; d.base.vertex_count = 6;
+    d.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) d.base.model[i * 4 + i] = 1.f;
+    d.uv_alloc = ua; d.uv_offset = uv_off; d.texture = texture;
+    CaliperGeomCamera cam = identity_cam();
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    const auto got = bk.readback(view, W, H);
+    auto at = [&](int x, int y) {
+        const size_t o = ((size_t)y * W + x) * 4;
+        return (uint32_t)got[o] | ((uint32_t)got[o + 1] << 8) |
+               ((uint32_t)got[o + 2] << 16) | ((uint32_t)got[o + 3] << 24);
+    };
+    CHECK(at(0, 15)  == 0xFF0000FFu);   // u<0, v<0 -> col0,row0 red
+    CHECK(at(15, 15) == 0xFF00FF00u);   // u>1, v<0 -> col1,row0 green
+    CHECK(at(0, 0)   == 0xFFFF0000u);   // u<0, v>1 -> col0,row1 blue
+    CHECK(at(15, 0)  == 0xFFFFFFFFu);   // u>1, v>1 -> col1,row1 white
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row [v1.2 compat] — the same non-textured indexed COLORMAP+LAMBERT mesh drawn
+// through the frozen v1.1 entry (stride 192) into view A and through the v1.2
+// entry (zeroed tail, stride 216) into view B. Full-image equality guards against
+// DIVERGENCE between the two entry points — stride handling, tail defaults,
+// pipeline selection — not shader correctness: a shared-shader break corrupts both
+// paths identically and still compares equal. Absolute shader correctness is
+// guarded by the byte-exact rows above.
+TEST_CASE("gfx/metal geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-identical") {
+    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+
+    const int W = 32, H = 32;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const uint32_t idx[3] = {0, 1, 2};
+    const float nrm[9] = { 0.f,0.f,-1.f,  0.f,0.f,-1.f,  0.f,0.f,-1.f };
+    const float attr[3] = { 0.5f, 0.5f, 0.5f };
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> idx_buf = device_buffer(idx, sizeof(idx));
+    id<MTLBuffer> nrm_buf = device_buffer(nrm, sizeof(nrm));
+    id<MTLBuffer> attr_buf = device_buffer(attr, sizeof(attr));
+    REQUIRE(pos_buf != nil); REQUIRE(idx_buf != nil);
+    REQUIRE(nrm_buf != nil); REQUIRE(attr_buf != nil);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId ia = bk.bridge->import_allocation(
+        (__bridge void*)idx_buf, sizeof(idx), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId na = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(nrm), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId aa = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, sizeof(attr), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pa != 0); REQUIRE(ia != 0); REQUIRE(na != 0); REQUIRE(aa != 0);
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pa; base.vertex_count = 3;
+    base.index_alloc = ia; base.index_count = 3;
+    base.normal_alloc = na; base.attr_alloc = aa;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    base.colormap = CALIPER_CMAP_VIRIDIS;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i * 4 + i] = 1.f;
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperTextureId va = bk.bridge->geom_create_view_ex(W, H, 0);
+    CaliperTextureId vb = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(va != 0); REQUIRE(vb != 0);
+
+    REQUIRE(bk.bridge->geom_draw_primitives(
+        va, &cam, &base, 1, sizeof(CaliperGeomDraw), 0xFF000000u));
+    CaliperGeomDrawV1_2 d{}; d.base = base;   // zeroed UV/texture tail
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        vb, &cam, &d, 1, sizeof(CaliperGeomDrawV1_2), 0xFF000000u));
+
+    CHECK(bk.readback(va, W, H) == bk.readback(vb, W, H));
+    // Non-triviality: view A must actually rasterize the mesh, else a blank-vs-blank
+    // match would pass the equality above vacuously.
+    CHECK(bk.readback(va, W, H) != geom_ref(W, H, 0xFF000000u, {}, {}));
+
+    bk.bridge->geom_release_view(vb);
+    bk.bridge->geom_release_view(va);
+    bk.bridge->release_allocation(aa);
+    bk.bridge->release_allocation(na);
+    bk.bridge->release_allocation(ia);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row [v1.2 refusal purity] — a valid textured draw fills the view (pre-image),
+// then four COLOR_TEXTURE gate breaches are attempted in order; each must refuse
+// AND leave the view byte-identical to the pre-image, cumulatively (the Phase-B
+// T3 pattern): (a) uv_alloc released after import, (b) texture names a geometry
+// view (the target itself), (c) texture is a released texture id, (d) a v1.2
+// submission with a short (192) draw_stride.
+TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouched (cumulative)") {
+    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+
+    const int W = 16, H = 16;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const float uv[6]  = { 0.25f,0.25f, 0.25f,0.25f, 0.25f,0.25f };   // -> red
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> uv_buf = device_buffer(uv, sizeof(uv));
+    REQUIRE(pos_buf != nil); REQUIRE(uv_buf != nil);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        (__bridge void*)uv_buf, sizeof(uv), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pa != 0); REQUIRE(ua != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(texture != 0); REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    auto make_valid = [&]() {
+        CaliperGeomDrawV1_2 dd{};
+        dd.base.pos_alloc = pa; dd.base.vertex_count = 3;
+        dd.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        dd.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+        dd.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        dd.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        dd.base.size_px = 1.f;
+        for (int i = 0; i < 4; ++i) dd.base.model[i * 4 + i] = 1.f;
+        dd.uv_alloc = ua; dd.uv_offset = 0; dd.texture = texture;
+        return dd;
+    };
+
+    CaliperGeomDrawV1_2 good = make_valid();
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &good, 1, sizeof(good), 0xFF000000u));
+    const auto snap = bk.readback(view, W, H);
+    REQUIRE(snap == geom_ref(W, H, 0xFF0000FFu, {}, {}));
+
+    CaliperGeomDrawV1_2 d;
+    // (a) uv_alloc released after import.
+    {
+        id<MTLBuffer> sbuf = device_buffer(uv, sizeof(uv));
+        REQUIRE(sbuf != nil);
+        CaliperAllocId sa = bk.bridge->import_allocation(
+            (__bridge void*)sbuf, sizeof(uv), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+        REQUIRE(sa != 0);
+        bk.bridge->release_allocation(sa);
+        d = make_valid(); d.uv_alloc = sa;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+            view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+        CHECK(bk.readback(view, W, H) == snap);
+    }
+    // (b) texture names a geometry view (the current target).
+    d = make_valid(); d.texture = view;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == snap);
+    // (c) texture is a released texture id.
+    {
+        CaliperTensor td2 = u8_3d(rgba, 2, 2, 4);
+        CaliperTextureId stex = bk.bridge->texture_from_tensor(&td2, 0);
+        REQUIRE(stex != 0);
+        bk.bridge->release_texture(stex);
+        d = make_valid(); d.texture = stex;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+            view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+        CHECK(bk.readback(view, W, H) == snap);
+    }
+    // (d) v1.2 submission with a short (192) draw_stride.
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == snap);
+
+    // final cumulative: nothing in the battery touched the view.
+    CHECK(bk.readback(view, W, H) == snap);
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
 }
 #endif  // CALIPER_HAVE_METAL
 
@@ -4099,6 +4420,337 @@ TEST_CASE("gfx/geometry.v1_1: portable §2.3 gates refuse draw_primitives, pixel
     CHECK(std::string(bk.renderer->last_device_path()) == before);
 
     bk.bridge->geom_release_view(view);
+}
+
+// Row [v1.2 donor] — UV pull at a poisoned nonzero offset, exact texel-center
+// red, bilinear-center gray (within one RGBA8 LSB), and Lambert x texture
+// (within two RGB LSB, alpha untouched). Runs byte-exact against the live
+// Vulkan textured path; the Metal-section twin is transcribed from here.
+TEST_CASE("gfx/geometry.v1_2: UV offset, bilinear texture, and Lambert are byte-exact") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 16, H = 16;
+    const float pos[] = {-1.f,-1.f,0.5f, 3.f,-1.f,0.5f, -1.f,3.f,0.5f};
+    const uint64_t uv_off = 64;
+    const float red_uv[] = {0.25f,0.25f, 0.25f,0.25f, 0.25f,0.25f};
+    std::vector<uint8_t> uv_bytes(uv_off + sizeof(red_uv), 0xA5);
+    std::memcpy(uv_bytes.data() + uv_off, red_uv, sizeof(red_uv));
+    const float nrm[] = {0.f,0.f,-1.f, 0.f,0.f,-1.f, 0.f,0.f,-1.f};
+
+    VmmBlock pos_blk(sizeof(pos)), uv_blk(uv_bytes.size()), nrm_blk(sizeof(nrm));
+    REQUIRE(pos_blk.ok); REQUIRE(uv_blk.ok); REQUIRE(nrm_blk.ok);
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(uv_blk.va, uv_bytes.data(), uv_bytes.size()) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, nrm, sizeof(nrm)) == cudadrv::CUDA_SUCCESS);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        uv_blk.os_handle, uv_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId na = bk.bridge->import_allocation(
+        nrm_blk.os_handle, nrm_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pa != 0); REQUIRE(ua != 0); REQUIRE(na != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    REQUIRE(texture != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+
+    CaliperGeomDrawV1_2 d{};
+    d.base.pos_alloc = pa; d.base.vertex_count = 3;
+    d.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) d.base.model[i * 4 + i] = 1.f;
+    d.uv_alloc = ua; d.uv_offset = uv_off; d.texture = texture;
+    CaliperGeomCamera cam = identity_cam();
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, 0xFF0000FFu, {}, {}));
+
+    const float mid_uv[] = {0.5f,0.5f, 0.5f,0.5f, 0.5f,0.5f};
+    REQUIRE(cu->cuMemcpyHtoD(uv_blk.va + uv_off, mid_uv, sizeof(mid_uv)) ==
+            cudadrv::CUDA_SUCCESS);
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    {
+        const auto got = bk.readback(view, W, H);
+        CHECK((got == geom_ref(W, H, 0xFF7F7F7Fu, {}, {}) ||
+               got == geom_ref(W, H, 0xFF808080u, {}, {})));
+    }
+
+    REQUIRE(cu->cuMemcpyHtoD(uv_blk.va + uv_off, red_uv, sizeof(red_uv)) ==
+            cudadrv::CUDA_SUCCESS);
+    d.base.normal_alloc = na;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    {
+        const auto got = bk.readback(view, W, H);
+        CHECK((got == geom_ref(W, H, 0xFF00004Cu, {}, {}) ||
+               got == geom_ref(W, H, 0xFF00004Du, {}, {})));
+    }
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(na);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row [v1.2 clamp-to-edge] — a full-viewport quad whose per-vertex UV is
+// (0.5 + x_ndc, 0.5 + y_ndc), so UV spans -0.5..1.5 across the 2x2 texture.
+// FLAT (UNLIT) so nothing but the sample colors the pixel. Each read pixel sits
+// deep in an out-of-range corner (|beyond [0,1]| = 0.4375 >> 0.125 = a quarter
+// texel), so clamp-to-edge samples the nearest edge texel with no bilinear mix.
+TEST_CASE("gfx/geometry.v1_2: out-of-range UVs clamp to edge texels byte-exact") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 16, H = 16;
+    const float pos[] = {
+        -1.f,-1.f,0.5f,  1.f,-1.f,0.5f,  -1.f,1.f,0.5f,
+        -1.f, 1.f,0.5f,  1.f,-1.f,0.5f,   1.f,1.f,0.5f,
+    };
+    const uint64_t uv_off = 64;
+    const float uv[] = {
+        -0.5f,-0.5f,  1.5f,-0.5f,  -0.5f,1.5f,
+        -0.5f, 1.5f,  1.5f,-0.5f,   1.5f,1.5f,
+    };
+    std::vector<uint8_t> uv_bytes(uv_off + sizeof(uv), 0xA5);
+    std::memcpy(uv_bytes.data() + uv_off, uv, sizeof(uv));
+
+    VmmBlock pos_blk(sizeof(pos)), uv_blk(uv_bytes.size());
+    REQUIRE(pos_blk.ok); REQUIRE(uv_blk.ok);
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(uv_blk.va, uv_bytes.data(), uv_bytes.size()) == cudadrv::CUDA_SUCCESS);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        uv_blk.os_handle, uv_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pa != 0); REQUIRE(ua != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    REQUIRE(texture != 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+
+    CaliperGeomDrawV1_2 d{};
+    d.base.pos_alloc = pa; d.base.vertex_count = 6;
+    d.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) d.base.model[i * 4 + i] = 1.f;
+    d.uv_alloc = ua; d.uv_offset = uv_off; d.texture = texture;
+    CaliperGeomCamera cam = identity_cam();
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    const auto got = bk.readback(view, W, H);
+    auto at = [&](int x, int y) {
+        const size_t o = ((size_t)y * W + x) * 4;
+        return (uint32_t)got[o] | ((uint32_t)got[o + 1] << 8) |
+               ((uint32_t)got[o + 2] << 16) | ((uint32_t)got[o + 3] << 24);
+    };
+    CHECK(at(0, 15)  == 0xFF0000FFu);   // u<0, v<0 -> col0,row0 red
+    CHECK(at(15, 15) == 0xFF00FF00u);   // u>1, v<0 -> col1,row0 green
+    CHECK(at(0, 0)   == 0xFFFF0000u);   // u<0, v>1 -> col0,row1 blue
+    CHECK(at(15, 0)  == 0xFFFFFFFFu);   // u>1, v>1 -> col1,row1 white
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row [v1.2 compat] — the same non-textured indexed COLORMAP+LAMBERT mesh drawn
+// through the frozen v1.1 entry (stride 192) into view A and through the v1.2
+// entry (zeroed tail, stride 216) into view B. Full-image equality guards against
+// DIVERGENCE between the two entry points — stride handling, tail defaults,
+// pipeline selection — not shader correctness: a shared-shader break corrupts both
+// paths identically and still compares equal. Absolute shader correctness is
+// guarded by the byte-exact rows above.
+TEST_CASE("gfx/geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-identical") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const uint32_t idx[3] = {0, 1, 2};
+    const float nrm[9] = { 0.f,0.f,-1.f,  0.f,0.f,-1.f,  0.f,0.f,-1.f };
+    const float attr[3] = { 0.5f, 0.5f, 0.5f };
+    VmmBlock pos_blk(sizeof(pos)), idx_blk(sizeof(idx)),
+             nrm_blk(sizeof(nrm)), attr_blk(sizeof(attr));
+    REQUIRE(pos_blk.ok); REQUIRE(idx_blk.ok); REQUIRE(nrm_blk.ok); REQUIRE(attr_blk.ok);
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(idx_blk.va, idx, sizeof(idx)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, nrm, sizeof(nrm)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attr, sizeof(attr)) == cudadrv::CUDA_SUCCESS);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId ia = bk.bridge->import_allocation(
+        idx_blk.os_handle, idx_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId na = bk.bridge->import_allocation(
+        nrm_blk.os_handle, nrm_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId aa = bk.bridge->import_allocation(
+        attr_blk.os_handle, attr_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pa != 0); REQUIRE(ia != 0); REQUIRE(na != 0); REQUIRE(aa != 0);
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pa; base.vertex_count = 3;
+    base.index_alloc = ia; base.index_count = 3;
+    base.normal_alloc = na; base.attr_alloc = aa;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    base.colormap = CALIPER_CMAP_VIRIDIS;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i * 4 + i] = 1.f;
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperTextureId va = bk.bridge->geom_create_view_ex(W, H, 0);
+    CaliperTextureId vb = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(va != 0); REQUIRE(vb != 0);
+
+    REQUIRE(bk.bridge->geom_draw_primitives(
+        va, &cam, &base, 1, sizeof(CaliperGeomDraw), 0xFF000000u));
+    CaliperGeomDrawV1_2 d{}; d.base = base;   // zeroed UV/texture tail
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        vb, &cam, &d, 1, sizeof(CaliperGeomDrawV1_2), 0xFF000000u));
+
+    CHECK(bk.readback(va, W, H) == bk.readback(vb, W, H));
+    // Non-triviality: view A must actually rasterize the mesh, else a blank-vs-blank
+    // match would pass the equality above vacuously.
+    CHECK(bk.readback(va, W, H) != geom_ref(W, H, 0xFF000000u, {}, {}));
+
+    bk.bridge->geom_release_view(vb);
+    bk.bridge->geom_release_view(va);
+    bk.bridge->release_allocation(aa);
+    bk.bridge->release_allocation(na);
+    bk.bridge->release_allocation(ia);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row [v1.2 refusal purity] — a valid textured draw fills the view (pre-image),
+// then four COLOR_TEXTURE gate breaches are attempted in order; each must refuse
+// AND leave the view byte-identical to the pre-image, cumulatively (the Phase-B
+// T3 pattern): (a) uv_alloc released after import, (b) texture names a geometry
+// view (the target itself), (c) texture is a released texture id, (d) a v1.2
+// submission with a short (192) draw_stride.
+TEST_CASE("gfx/geometry.v1_2: textured gate refusals leave the view untouched (cumulative)") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 16, H = 16;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const float uv[6]  = { 0.25f,0.25f, 0.25f,0.25f, 0.25f,0.25f };   // -> red
+    VmmBlock pos_blk(sizeof(pos)), uv_blk(sizeof(uv));
+    REQUIRE(pos_blk.ok); REQUIRE(uv_blk.ok);
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(uv_blk.va, uv, sizeof(uv)) == cudadrv::CUDA_SUCCESS);
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        uv_blk.os_handle, uv_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pa != 0); REQUIRE(ua != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(texture != 0); REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    auto make_valid = [&]() {
+        CaliperGeomDrawV1_2 dd{};
+        dd.base.pos_alloc = pa; dd.base.vertex_count = 3;
+        dd.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        dd.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+        dd.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        dd.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        dd.base.size_px = 1.f;
+        for (int i = 0; i < 4; ++i) dd.base.model[i * 4 + i] = 1.f;
+        dd.uv_alloc = ua; dd.uv_offset = 0; dd.texture = texture;
+        return dd;
+    };
+
+    CaliperGeomDrawV1_2 good = make_valid();
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &good, 1, sizeof(good), 0xFF000000u));
+    const auto snap = bk.readback(view, W, H);
+    REQUIRE(snap == geom_ref(W, H, 0xFF0000FFu, {}, {}));
+
+    CaliperGeomDrawV1_2 d;
+    // (a) uv_alloc released after import.
+    {
+        VmmBlock sblk(sizeof(uv));
+        REQUIRE(sblk.ok);
+        REQUIRE(cu->cuMemcpyHtoD(sblk.va, uv, sizeof(uv)) == cudadrv::CUDA_SUCCESS);
+        CaliperAllocId sa = bk.bridge->import_allocation(
+            sblk.os_handle, sblk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(sa != 0);
+        bk.bridge->release_allocation(sa);
+        d = make_valid(); d.uv_alloc = sa;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+            view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+        CHECK(bk.readback(view, W, H) == snap);
+    }
+    // (b) texture names a geometry view (the current target).
+    d = make_valid(); d.texture = view;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == snap);
+    // (c) texture is a released texture id.
+    {
+        CaliperTensor td2 = u8_3d(rgba, 2, 2, 4);
+        CaliperTextureId stex = bk.bridge->texture_from_tensor(&td2, 0);
+        REQUIRE(stex != 0);
+        bk.bridge->release_texture(stex);
+        d = make_valid(); d.texture = stex;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+            view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+        CHECK(bk.readback(view, W, H) == snap);
+    }
+    // (d) v1.2 submission with a short (192) draw_stride.
+    d = make_valid();
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(CaliperGeomDraw), 0xFF000000u));
+    CHECK(bk.readback(view, W, H) == snap);
+
+    // final cumulative: nothing in the battery touched the view.
+    CHECK(bk.readback(view, W, H) == snap);
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
 }
 
 #endif  // _WIN32

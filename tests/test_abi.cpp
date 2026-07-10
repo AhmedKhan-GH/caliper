@@ -11,9 +11,13 @@
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/geometry_v1.h>
 #include <caliper/services/geometry_v1_1.h>
+#include <caliper/services/geometry_v1_2.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
+#include <caliper/caliper.hpp>
+#include <caliper/fixture_host.h>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <type_traits>
 
@@ -181,6 +185,97 @@ TEST_CASE("geometry v1_1 is prefix-identical to v1 and pins draw ABI") {
     CHECK(CALIPER_GEOM_SHADE_LAMBERT == 1u);
     CHECK(CALIPER_GEOM_BLEND_ADDITIVE == 2u);
     CHECK(std::string(CALIPER_GEOMETRY_V1_1) == "caliper.geometry.v1_1");
+}
+
+TEST_CASE("geometry v1_2 preserves v1_1 and pins the textured draw tail") {
+    static_assert(std::is_standard_layout_v<CaliperGeometryV1_2>);
+    static_assert(std::is_standard_layout_v<CaliperGeomDrawV1_2>);
+    CHECK(sizeof(CaliperGeomDraw) == 192);
+    CHECK(sizeof(CaliperGeomDrawV1_2) == 216);
+    CHECK(offsetof(CaliperGeomDrawV1_2, base) == 0);
+    CHECK(offsetof(CaliperGeomDrawV1_2, uv_alloc) == 192);
+    CHECK(offsetof(CaliperGeomDrawV1_2, uv_offset) == 200);
+    CHECK(offsetof(CaliperGeomDrawV1_2, texture) == 208);
+
+    CHECK(offsetof(CaliperGeometryV1_2, struct_size) ==
+          offsetof(CaliperGeometryV1_1, struct_size));
+    CHECK(offsetof(CaliperGeometryV1_2, draw_primitives) ==
+          offsetof(CaliperGeometryV1_1, draw_primitives));
+    CHECK(offsetof(CaliperGeometryV1_2, reserved0) ==
+          offsetof(CaliperGeometryV1_1, reserved0));
+    CHECK(sizeof(CaliperGeometryV1_2) == sizeof(CaliperGeometryV1_1));
+    CHECK(CALIPER_GEOM_CAP_TEXTURED == (1u << 2));
+    CHECK(CALIPER_GEOM_COLOR_TEXTURE == 3u);
+    CHECK(std::string(CALIPER_GEOMETRY_V1_2) == "caliper.geometry.v1_2");
+}
+
+namespace {
+// Records what a v1_2-only host actually receives from the Geometry wrapper's
+// v1.1-shaped draw path — proving Task 1's record widening (the v1.2
+// draw_primitives entry enforces min stride 216; a raw 192-byte alias is
+// refused). Statics because the C table carries no user data.
+struct GeomWidenCapture {
+    uint32_t draw_stride = 0;
+    CaliperAllocId uv_alloc = 1;   // poison: proves the wrapper wrote zero
+    uint64_t uv_offset = 1;
+    CaliperTextureId texture = 1;
+    CaliperGeomDraw base{};
+    bool called = false;
+};
+GeomWidenCapture g_widen;
+
+uint32_t stub12_caps(void) {
+    return CALIPER_GEOM_CAP_PRIMITIVES | CALIPER_GEOM_CAP_TEXTURED;
+}
+bool stub12_draw_primitives(CaliperTextureId, const CaliperGeomCamera*,
+                            const CaliperGeomDrawV1_2* draws, uint32_t,
+                            uint32_t draw_stride, uint32_t) {
+    g_widen.called = true;
+    g_widen.draw_stride = draw_stride;
+    if (draws) {
+        g_widen.uv_alloc = draws[0].uv_alloc;
+        g_widen.uv_offset = draws[0].uv_offset;
+        g_widen.texture = draws[0].texture;
+        g_widen.base = draws[0].base;
+    }
+    return true;
+}
+const CaliperGeometryV1_2 kStubGeom12 = {
+    sizeof(CaliperGeometryV1_2),
+    &stub12_caps,
+    nullptr,   // create_view
+    nullptr,   // release_view
+    nullptr,   // draw_points
+    nullptr,   // create_view_ex
+    &stub12_draw_primitives,
+    nullptr,   // reserved0
+};
+} // namespace
+
+TEST_CASE("geometry wrapper widens v1.1 draws on a v1_2-only host") {
+    g_widen = GeomWidenCapture{};
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_GEOMETRY_V1_2, &kStubGeom12);  // v1 and v1_1 stay NULL
+    caliper::Host host(fx.host());
+    caliper::Geometry geo(host);
+
+    // The v1_2->v1_1 fallback must WORK, not be disabled.
+    CHECK(geo.has_primitives());
+
+    // Two fully-poisoned frozen 192-byte records through the v1.1-shaped overload.
+    CaliperGeomDraw draws[2];
+    std::memset(draws, 0xA5, sizeof(draws));
+    CaliperGeomCamera cam{};
+    CHECK(geo.draw_primitives(0, cam, (const CaliperGeomDraw*)draws, 2, 0));
+
+    // Widened into a v1.2 record: min stride 216, zero tail, intact prefix.
+    CHECK(g_widen.called);
+    CHECK(g_widen.draw_stride ==
+          static_cast<uint32_t>(sizeof(CaliperGeomDrawV1_2)));
+    CHECK(g_widen.uv_alloc == 0);
+    CHECK(g_widen.uv_offset == 0);
+    CHECK(g_widen.texture == 0);
+    CHECK(std::memcmp(&g_widen.base, &draws[0], sizeof(CaliperGeomDraw)) == 0);
 }
 
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);

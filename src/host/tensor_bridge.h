@@ -15,6 +15,7 @@
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/geometry_v1.h>
 #include <caliper/services/geometry_v1_1.h>
+#include <caliper/services/geometry_v1_2.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -107,6 +108,12 @@ public:
                                           uint32_t draw_count,
                                           uint32_t draw_stride,
                                           uint32_t clear_rgba);
+    bool             geom_draw_primitives_v1_2(CaliperTextureId view,
+                                          const CaliperGeomCamera* cam,
+                                          const CaliperGeomDrawV1_2* draws,
+                                          uint32_t draw_count,
+                                          uint32_t draw_stride,
+                                          uint32_t clear_rgba);
 
 private:
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
@@ -140,6 +147,16 @@ private:
     // update_texture and update_texture_from_alloc so the shape gate is
     // written once; logs "update: ..." and returns false on a mismatch.
     bool desc_matches_entry(const Entry& e, const CaliperTensor& t) const;
+
+    // Shared validation for both draw_primitives entry points. `v12` is the
+    // single revision axis: it selects the minimum stride (192 vs 216) and the
+    // color-mode ceiling (VERTEX_RGBA vs TEXTURE) — the v1.1 and v1.2 records
+    // are otherwise validated identically.
+    bool geom_draw_primitives_impl(CaliperTextureId view,
+                                   const CaliperGeomCamera* cam,
+                                   const void* draws, uint32_t draw_count,
+                                   uint32_t draw_stride, bool v12,
+                                   uint32_t clear_rgba);
 
     // Imported external allocations (v1.2): public CaliperAllocId -> the
     // renderer-internal id + its byte size (for the host-side bounds check).

@@ -507,6 +507,11 @@ struct PrimStub : GeomStub {
         return prim_return;
     }
 };
+
+struct TexturedPrimStub : PrimStub {
+    using PrimStub::PrimStub;
+    bool supports_geometry_textured() const override { return true; }
+};
 } // namespace
 
 TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
@@ -521,6 +526,10 @@ TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
     TensorBridge b3(p);
     CHECK((b3.geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS) != 0u);
     CHECK((b3.geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) != 0u);
+    CHECK((b3.geom_caps() & CALIPER_GEOM_CAP_TEXTURED) == 0u);
+    TexturedPrimStub t("vulkan");
+    TensorBridge b4(t);
+    CHECK((b4.geom_caps() & CALIPER_GEOM_CAP_TEXTURED) != 0u);
 }
 
 TEST_CASE("geom views: lifecycle, wrong-door release, update refusal") {
@@ -704,4 +713,70 @@ TEST_CASE("geom v1_1: primitive entry points are inert without renderer support"
     CaliperGeomCamera cam{};
     CaliperGeomDraw d{};
     CHECK_FALSE(b.geom_draw_primitives(1, &cam, &d, 1, sizeof(d), 0u));
+}
+
+TEST_CASE("geom v1_2: textured draws validate UV and texture sources atomically") {
+    TexturedPrimStub g("vulkan");
+    TensorBridge b(g);
+    uint64_t dummy = 42;
+    CaliperAllocId a = b.import_allocation(&dummy, 4096,
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a != 0);
+    std::vector<float> pixels(16, 0.5f);
+    CaliperTensor td = f32_2d(pixels.data(), 4, 4);
+    CaliperTextureId texture = b.texture_from_tensor_mapped(
+        &td, CALIPER_CMAP_MAGMA, 0.f, 1.f, 0);
+    REQUIRE(texture != 0);
+    CaliperTextureId view = b.geom_create_view_ex(64, 64, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam{};
+
+    CaliperGeomDrawV1_2 d{};
+    d.base.pos_alloc = a;
+    d.base.vertex_count = 3;
+    d.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.model[0] = d.base.model[5] = d.base.model[10] = d.base.model[15] = 1.f;
+    d.uv_alloc = a;
+    d.uv_offset = 128;
+    d.texture = texture;
+
+    CHECK(b.geom_draw_primitives_v1_2(view, &cam, &d, 1, sizeof(d), 0u));
+    REQUIRE(g.prims.size() == 1);
+    REQUIRE(g.prims[0].draws.size() == 1);
+    CHECK(g.prims[0].draws[0].uv_alloc == 1u);
+    CHECK(g.prims[0].draws[0].uv_offset == 128u);
+    CHECK(g.prims[0].draws[0].texture == 1u);
+    CHECK(g.prims[0].draws[0].attr_alloc == 0u);
+
+    // A v1.1 caller cannot expose the v1.2 tail or request COLOR_TEXTURE.
+    CHECK_FALSE(b.geom_draw_primitives(view, &cam, &d.base, 1,
+                                       sizeof(CaliperGeomDraw), 0u));
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &d, 1,
+                                            sizeof(CaliperGeomDraw), 0u));
+
+    CaliperGeomDrawV1_2 bad = d;
+    bad.uv_alloc = 999;
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.uv_offset = 2;
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.uv_offset = 4080; // 3 * vec2 exceeds the 4096-byte allocation
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.texture = 999;
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &bad, 1, sizeof(bad), 0u));
+    bad = d; bad.texture = view;
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // One invalid record refuses the whole frame before the renderer sees it.
+    CaliperGeomDrawV1_2 pair[2] = {d, d};
+    pair[1].texture = 999;
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, pair, 2,
+                                            sizeof(pair[0]), 0u));
+    CHECK(g.prims.size() == 1);
+
+    b.release_texture(texture);
+    CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &d, 1, sizeof(d), 0u));
+    CHECK(g.prims.size() == 1);
 }
