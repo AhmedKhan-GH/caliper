@@ -259,10 +259,30 @@ if(WIN32)
         DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.frag"
                 glslang-standalone
         COMMENT "Compiling points.frag -> SPIR-V header")
+    add_custom_command(
+        OUTPUT "${CALIPER_SPV_DIR}/geom_vert_spv.h"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
+        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+                --vn kGeomVertSpv -o "${CALIPER_SPV_DIR}/geom_vert_spv.h"
+                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.vert"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.vert"
+                glslang-standalone
+        COMMENT "Compiling geom.vert -> SPIR-V header")
+    add_custom_command(
+        OUTPUT "${CALIPER_SPV_DIR}/geom_frag_spv.h"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
+        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+                --vn kGeomFragSpv -o "${CALIPER_SPV_DIR}/geom_frag_spv.h"
+                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.frag"
+        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.frag"
+                glslang-standalone
+        COMMENT "Compiling geom.frag -> SPIR-V header")
     add_custom_target(caliper_shaders DEPENDS
         "${CALIPER_SPV_DIR}/colormap_spv.h"
         "${CALIPER_SPV_DIR}/points_vert_spv.h"
-        "${CALIPER_SPV_DIR}/points_frag_spv.h")
+        "${CALIPER_SPV_DIR}/points_frag_spv.h"
+        "${CALIPER_SPV_DIR}/geom_vert_spv.h"
+        "${CALIPER_SPV_DIR}/geom_frag_spv.h")
 
     add_library(caliper_vulkan_backend STATIC
         src/host/renderer/vulkan_renderer.cpp
