@@ -47,6 +47,7 @@
 #include "../cuda_driver.h"
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_OPAQUE_WIN32
 #include <caliper/services/geometry_v1_1.h>        // CALIPER_GEOM_* topology/mode/flag ids
+#include <caliper/services/geometry_v1_2.h>
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
@@ -86,6 +87,7 @@ extern "C" __declspec(dllimport) int __stdcall DuplicateHandle(
 // kGeomShaderSrc; std140 params block byte-matches PrimParams above).
 #include <geom_vert_spv.h>
 #include <geom_frag_spv.h>
+#include <geom_tex_frag_spv.h>
 
 namespace caliper_host {
 
@@ -140,8 +142,9 @@ struct PrimParams {
     uint32_t use_index, vertex_count, color_mode, shade_mode;
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
+    uint32_t uv_base, pad0, pad1, pad2;
 };
-static_assert(sizeof(PrimParams) == 160, "geom.vert std140 params layout");
+static_assert(sizeof(PrimParams) == 176, "geom.vert std140 params layout");
 
 // Column-major 4x4 multiply out = a*b. Transcribed VERBATIM from
 // metal_renderer.mm mat4_mul_cm so both backends premultiply mvp with an
@@ -771,6 +774,9 @@ public:
     bool supports_geometry_primitives() const override {
         return supports_external_import();
     }
+    bool supports_geometry_textured() const override {
+        return supports_external_import();
+    }
 
     // Like geom_create_view, plus flags. flags==0 is byte-for-byte the color-only
     // view geom_create_view builds (usable by draw_primitives without depth).
@@ -931,6 +937,8 @@ public:
             const ImportedAlloc* idx = nullptr;
             const ImportedAlloc* nrm = nullptr;
             const ImportedAlloc* attr = nullptr;
+            const ImportedAlloc* uv = nullptr;
+            const Tex* texture = nullptr;
             uint32_t consumed = 0;
             VkPipeline pipe = VK_NULL_HANDLE;
             int lut_slot = -1;
@@ -949,7 +957,7 @@ public:
             // — the renderer must never index its caches out of range).
             if (d.topology > CALIPER_GEOM_TOPO_TRIANGLE_STRIP)
                 return dev_bail("primitives: topology out of range");
-            if (d.color_mode > CALIPER_GEOM_COLOR_VERTEX_RGBA)
+            if (d.color_mode > CALIPER_GEOM_COLOR_TEXTURE)
                 return dev_bail("primitives: color_mode out of range");
             if (d.shade_mode > CALIPER_GEOM_SHADE_LAMBERT)
                 return dev_bail("primitives: shade_mode out of range");
@@ -1026,7 +1034,8 @@ public:
 
             // Attributes: required + bounds-checked when color_mode != FLAT;
             // COLORMAP additionally needs a resolved LUT (the bridge fills it).
-            if (d.color_mode != CALIPER_GEOM_COLOR_FLAT) {
+            if (d.color_mode == CALIPER_GEOM_COLOR_COLORMAP ||
+                d.color_mode == CALIPER_GEOM_COLOR_VERTEX_RGBA) {
                 auto ait = imported_.find(d.attr_alloc);
                 if (ait == imported_.end()) return dev_bail("primitives: unknown attr alloc");
                 e.attr = &ait->second;
@@ -1043,12 +1052,38 @@ public:
                 }
             }
 
+            if (d.color_mode == CALIPER_GEOM_COLOR_TEXTURE) {
+                auto uit = imported_.find(d.uv_alloc);
+                if (uit == imported_.end())
+                    return dev_bail("primitives: unknown uv alloc");
+                e.uv = &uit->second;
+                if (d.uv_offset % 4 != 0)
+                    return dev_bail("primitives: uv offset misaligned");
+                if (d.vertex_count > UINT64_MAX / 8u)
+                    return dev_bail("primitives: uv byte overflow");
+                if (d.uv_offset > e.uv->size ||
+                    d.vertex_count * 8u > e.uv->size - d.uv_offset)
+                    return dev_bail("primitives: uvs out of bounds");
+                if (d.uv_offset / 4 > UINT32_MAX)
+                    return dev_bail("primitives: uv base exceeds 32 bits");
+
+                auto tit = textures_.find(d.texture);
+                if (tit == textures_.end() || tit->second.fb != VK_NULL_HANDLE ||
+                    d.texture == view_tex)
+                    return dev_bail("primitives: bad sampled texture");
+                if (tit->second.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    return dev_bail("primitives: sampled texture not shader-readable");
+                e.texture = &tit->second;
+            }
+
             // Depth flags on a depthless view are refused, never ignored (§2.3.7).
             if (d.depth_flags != 0 && !t.has_depth)
                 return dev_bail("primitives: depth flags on depthless view");
 
             // Cached pipeline for this (topology, blend, depth_flags, pass) combo.
-            e.pipe = geom_prim_pipeline(d.topology, d.blend_mode, d.depth_flags, t.has_depth);
+            e.pipe = geom_prim_pipeline(
+                d.topology, d.blend_mode, d.depth_flags, t.has_depth,
+                d.color_mode == CALIPER_GEOM_COLOR_TEXTURE);
             if (e.pipe == VK_NULL_HANDLE) return dev_bail("primitives: pipeline creation failed");
 
             // Params (§4.5): mvp = proj*view*model, plus the double-precision
@@ -1072,6 +1107,7 @@ public:
             e.params.vmax = d.vmax;
             e.params.size_px = d.size_px < 1.f ? 1.f
                              : (d.size_px > point_size_max_ ? point_size_max_ : d.size_px);
+            e.params.uv_base = (uint32_t)(d.uv_offset / 4);
             encs.push_back(e);
         }
 
@@ -1135,7 +1171,7 @@ public:
                 const Enc& e = encs[i];
                 // Absent source (idx/nrm/attr) → bind pos as a harmless
                 // placeholder; the shader never reads it (the v1 trick).
-                VkDescriptorBufferInfo bi[6] = {};
+                VkDescriptorBufferInfo bi[7] = {};
                 bi[0].buffer = e.pos->buf;                    bi[0].range = VK_WHOLE_SIZE;
                 bi[1].buffer = e.idx ? e.idx->buf : e.pos->buf;  bi[1].range = VK_WHOLE_SIZE;
                 bi[2].buffer = e.nrm ? e.nrm->buf : e.pos->buf;  bi[2].range = VK_WHOLE_SIZE;
@@ -1150,9 +1186,11 @@ public:
                 bi[5].buffer = geom_prim_params_.buf;         // dynamic UBO base 0
                 bi[5].offset = 0;
                 bi[5].range  = sizeof(PrimParams);
+                bi[6].buffer = e.uv ? e.uv->buf : e.pos->buf;
+                bi[6].range = VK_WHOLE_SIZE;
 
-                VkWriteDescriptorSet wr[6] = {};
-                for (int b = 0; b < 6; ++b) {
+                VkWriteDescriptorSet wr[8] = {};
+                for (int b = 0; b < 7; ++b) {
                     wr[b] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                     wr[b].dstSet = sets[i];
                     wr[b].dstBinding = (uint32_t)b;
@@ -1162,7 +1200,21 @@ public:
                         ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
                         : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 }
-                vkUpdateDescriptorSets(device_, 6, wr, 0, nullptr);
+                uint32_t write_count = 7;
+                VkDescriptorImageInfo sampled{};
+                if (e.texture != nullptr) {
+                    sampled.sampler = geom_prim_sampler_;
+                    sampled.imageView = e.texture->view;
+                    sampled.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    wr[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                    wr[7].dstSet = sets[i];
+                    wr[7].dstBinding = 7;
+                    wr[7].descriptorCount = 1;
+                    wr[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wr[7].pImageInfo = &sampled;
+                    write_count = 8;
+                }
+                vkUpdateDescriptorSets(device_, write_count, wr, 0, nullptr);
             }
         }
 
@@ -1182,7 +1234,8 @@ public:
             mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
             mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0,
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
                                  1, &mb, 0, nullptr, 0, nullptr);
 
             VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -2351,8 +2404,8 @@ private:
 
         // Set layout: bindings 0-4 storage buffers (pos/idx/nrm/attr/lut),
         // binding 5 a dynamic uniform buffer (params) — all vertex stage.
-        VkDescriptorSetLayoutBinding bindings[6] = {};
-        for (uint32_t i = 0; i < 6; ++i) {
+        VkDescriptorSetLayoutBinding bindings[8] = {};
+        for (uint32_t i = 0; i < 7; ++i) {
             bindings[i].binding = i;
             bindings[i].descriptorType = (i == 5)
                 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
@@ -2360,10 +2413,28 @@ private:
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         }
+        bindings[7].binding = 7;
+        bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[7].descriptorCount = 1;
+        bindings[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        li.bindingCount = 6;
+        li.bindingCount = 8;
         li.pBindings = bindings;
         if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &geom_prim_set_layout_) != VK_SUCCESS) {
+            destroy_geom_prim(); return false;
+        }
+
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sci.magFilter = VK_FILTER_LINEAR;
+        sci.minFilter = VK_FILTER_LINEAR;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.minLod = 0.f;
+        sci.maxLod = 0.f;
+        sci.maxAnisotropy = 1.f;
+        if (vkCreateSampler(device_, &sci, nullptr, &geom_prim_sampler_) != VK_SUCCESS) {
             destroy_geom_prim(); return false;
         }
 
@@ -2384,9 +2455,12 @@ private:
     // LESS_OR_EQUAL when testing (else ALWAYS, so a write-without-test still
     // writes — Metal parity) and write per DEPTH_WRITE. VK_NULL_HANDLE on failure.
     VkPipeline geom_prim_pipeline(uint32_t topology, uint32_t blend,
-                                  uint32_t depth_flags, bool has_depth) {
+                                  uint32_t depth_flags, bool has_depth,
+                                  bool textured) {
         const uint32_t key = (topology & 0x7u) | ((blend & 0x3u) << 3) |
-                             ((depth_flags & 0x3u) << 5) | (has_depth ? (1u << 7) : 0u);
+                             ((depth_flags & 0x3u) << 5) |
+                             (has_depth ? (1u << 7) : 0u) |
+                             (textured ? (1u << 8) : 0u);
         auto hit = geom_prim_pipelines_.find(key);
         if (hit != geom_prim_pipelines_.end()) return hit->second;
 
@@ -2407,8 +2481,8 @@ private:
         if (vkCreateShaderModule(device_, &vmi, nullptr, &vs) != VK_SUCCESS)
             return VK_NULL_HANDLE;
         VkShaderModuleCreateInfo fmi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        fmi.codeSize = sizeof(kGeomFragSpv);
-        fmi.pCode = kGeomFragSpv;
+        fmi.codeSize = textured ? sizeof(kGeomTexFragSpv) : sizeof(kGeomFragSpv);
+        fmi.pCode = textured ? kGeomTexFragSpv : kGeomFragSpv;
         if (vkCreateShaderModule(device_, &fmi, nullptr, &fs) != VK_SUCCESS) {
             vkDestroyShaderModule(device_, vs, nullptr);
             return VK_NULL_HANDLE;
@@ -2518,13 +2592,14 @@ private:
         }
         uint32_t cap = geom_prim_pool_cap_ ? geom_prim_pool_cap_ : 1u;
         while (cap < need_sets) cap *= 2;
-        VkDescriptorPoolSize sizes[2] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5u * cap},
+        VkDescriptorPoolSize sizes[3] = {
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6u * cap},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1u * cap},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1u * cap},
         };
         VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         dpi.maxSets = cap;
-        dpi.poolSizeCount = 2;
+        dpi.poolSizeCount = 3;
         dpi.pPoolSizes = sizes;
         if (vkCreateDescriptorPool(device_, &dpi, nullptr, &geom_prim_pool_) != VK_SUCCESS)
             return false;
@@ -2542,6 +2617,7 @@ private:
         for (auto& kv : geom_prim_pipelines_)
             vkDestroyPipeline(device_, kv.second, nullptr);
         geom_prim_pipelines_.clear();
+        if (geom_prim_sampler_) { vkDestroySampler(device_, geom_prim_sampler_, nullptr); geom_prim_sampler_ = VK_NULL_HANDLE; }
         if (geom_prim_pipe_layout_) { vkDestroyPipelineLayout(device_, geom_prim_pipe_layout_, nullptr); geom_prim_pipe_layout_ = VK_NULL_HANDLE; }
         if (geom_prim_set_layout_) { vkDestroyDescriptorSetLayout(device_, geom_prim_set_layout_, nullptr); geom_prim_set_layout_ = VK_NULL_HANDLE; }
         if (geom_pass_depth_) { vkDestroyRenderPass(device_, geom_pass_depth_, nullptr); geom_pass_depth_ = VK_NULL_HANDLE; }
@@ -2929,6 +3005,7 @@ private:
     VkRenderPass geom_pass_depth_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout geom_prim_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout geom_prim_pipe_layout_ = VK_NULL_HANDLE;
+    VkSampler geom_prim_sampler_ = VK_NULL_HANDLE;
     std::unordered_map<uint32_t, VkPipeline> geom_prim_pipelines_;
     VkDescriptorPool geom_prim_pool_ = VK_NULL_HANDLE;
     uint32_t geom_prim_pool_cap_ = 0;

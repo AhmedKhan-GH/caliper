@@ -17,11 +17,16 @@ layout(std430, set = 0, binding = 1) readonly buffer Idx  { uint  idx[];  };
 layout(std430, set = 0, binding = 2) readonly buffer Nrm  { float nrm[];  };
 layout(std430, set = 0, binding = 3) readonly buffer Attr { uint  attr[]; };
 layout(std430, set = 0, binding = 4) readonly buffer Lut  { uint  lut[];  };
+layout(std430, set = 0, binding = 6) readonly buffer UV   { float uv[];  };
 
 // std140 layout is byte-identical to the Metal PrimParams struct, which is
-// static_assert'ed to 160 bytes; every member below lands at the SAME offset in
+// static_assert'ed to 176 bytes; every member below lands at the SAME offset in
 // std140 (mat4 @0, the three vec4 normal-matrix columns @64/80/96, then the
 // scalar tail packed 4 bytes each from @112). Offsets are noted per member.
+// THREE hand-synced copies of this params layout must move together: this GLSL
+// std140 block; PrimParams in vulkan_renderer.cpp (static_assert 176); and
+// PrimParams in metal_renderer.mm's MSL string (static_assert 176). grep
+// PrimParams when growing.
 layout(std140, set = 0, binding = 5) uniform Params {
     mat4  mvp;          // offset 0
     vec4  nmat0;        // 64  — columns of the 3x3 normal matrix (xyz used)
@@ -39,9 +44,14 @@ layout(std140, set = 0, binding = 5) uniform Params {
     float vmin;         // 148
     float vmax;         // 152
     float size_px;      // 156   (block size 160)
+    uint  uv_base;      // 160
+    uint  pad0;         // 164
+    uint  pad1;         // 168
+    uint  pad2;         // 172   (block size 176)
 } p;
 
 layout(location = 0) out vec4 v_color;
+layout(location = 1) out vec2 v_uv;
 
 // bytes LE, /255.0 — same unpack as points.vert / the Metal unpack_rgba.
 vec4 unpack_rgba(uint packed) {
@@ -60,6 +70,10 @@ void main() {
                    pos[p.pos_base + 3u * vi + 1u],
                    pos[p.pos_base + 3u * vi + 2u]);
     gl_Position = p.mvp * vec4(wp, 1.0);
+    v_uv = p.color_mode == 3u
+        ? vec2(uv[p.uv_base + 2u * vi + 0u],
+               uv[p.uv_base + 2u * vi + 1u])
+        : vec2(0.0);
 
     vec4 c;
     if (p.color_mode == 1u) {
@@ -70,6 +84,8 @@ void main() {
         c = unpack_rgba(lut[uint(t * 255.0 + 0.5)]);
     } else if (p.color_mode == 2u) {
         c = unpack_rgba(attr[p.attr_base + vi]);
+    } else if (p.color_mode == 3u) {
+        c = vec4(1.0);
     } else {
         c = unpack_rgba(p.flat_rgba);
     }

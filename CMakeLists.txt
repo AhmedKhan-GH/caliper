@@ -232,57 +232,37 @@ endif()
 # the in-tree glslang (§16: byte-identical output to the CPU reference).
 if(WIN32)
     set(CALIPER_SPV_DIR "${CMAKE_BINARY_DIR}/generated")
-    add_custom_command(
-        OUTPUT "${CALIPER_SPV_DIR}/colormap_spv.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
-        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
-                --vn kColormapSpv -o "${CALIPER_SPV_DIR}/colormap_spv.h"
-                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/colormap.comp"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/colormap.comp"
-                glslang-standalone
-        COMMENT "Compiling colormap.comp -> SPIR-V header")
-    add_custom_command(
-        OUTPUT "${CALIPER_SPV_DIR}/points_vert_spv.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
-        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
-                --vn kPointsVertSpv -o "${CALIPER_SPV_DIR}/points_vert_spv.h"
-                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.vert"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.vert"
-                glslang-standalone
-        COMMENT "Compiling points.vert -> SPIR-V header")
-    add_custom_command(
-        OUTPUT "${CALIPER_SPV_DIR}/points_frag_spv.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
-        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
-                --vn kPointsFragSpv -o "${CALIPER_SPV_DIR}/points_frag_spv.h"
-                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.frag"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/points.frag"
-                glslang-standalone
-        COMMENT "Compiling points.frag -> SPIR-V header")
-    add_custom_command(
-        OUTPUT "${CALIPER_SPV_DIR}/geom_vert_spv.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
-        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
-                --vn kGeomVertSpv -o "${CALIPER_SPV_DIR}/geom_vert_spv.h"
-                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.vert"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.vert"
-                glslang-standalone
-        COMMENT "Compiling geom.vert -> SPIR-V header")
-    add_custom_command(
-        OUTPUT "${CALIPER_SPV_DIR}/geom_frag_spv.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
-        COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
-                --vn kGeomFragSpv -o "${CALIPER_SPV_DIR}/geom_frag_spv.h"
-                "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.frag"
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/geom.frag"
-                glslang-standalone
-        COMMENT "Compiling geom.frag -> SPIR-V header")
+
+    # One glslang invocation, captured once. NAME is the output header basename,
+    # SRC the shader file under src/host/renderer/shaders, VN the emitted C var.
+    # The flags here are load-bearing: geometry.v1_2's byte-exact contract (§16)
+    # means the generated headers must stay bit-identical, so every shader rule
+    # MUST route through this one function — never a hand-tuned add_custom_command.
+    function(caliper_compile_shader NAME SRC VN)
+        add_custom_command(
+            OUTPUT "${CALIPER_SPV_DIR}/${NAME}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CALIPER_SPV_DIR}"
+            COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+                    --vn ${VN} -o "${CALIPER_SPV_DIR}/${NAME}"
+                    "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/${SRC}"
+            DEPENDS "${CMAKE_SOURCE_DIR}/src/host/renderer/shaders/${SRC}"
+                    glslang-standalone
+            COMMENT "Compiling ${SRC} -> SPIR-V header")
+    endfunction()
+
+    caliper_compile_shader(colormap_spv.h    colormap.comp kColormapSpv)
+    caliper_compile_shader(points_vert_spv.h points.vert   kPointsVertSpv)
+    caliper_compile_shader(points_frag_spv.h points.frag   kPointsFragSpv)
+    caliper_compile_shader(geom_vert_spv.h   geom.vert     kGeomVertSpv)
+    caliper_compile_shader(geom_frag_spv.h   geom.frag     kGeomFragSpv)
+    caliper_compile_shader(geom_tex_frag_spv.h geom_tex.frag kGeomTexFragSpv)
     add_custom_target(caliper_shaders DEPENDS
         "${CALIPER_SPV_DIR}/colormap_spv.h"
         "${CALIPER_SPV_DIR}/points_vert_spv.h"
         "${CALIPER_SPV_DIR}/points_frag_spv.h"
         "${CALIPER_SPV_DIR}/geom_vert_spv.h"
-        "${CALIPER_SPV_DIR}/geom_frag_spv.h")
+        "${CALIPER_SPV_DIR}/geom_frag_spv.h"
+        "${CALIPER_SPV_DIR}/geom_tex_frag_spv.h")
 
     add_library(caliper_vulkan_backend STATIC
         src/host/renderer/vulkan_renderer.cpp
