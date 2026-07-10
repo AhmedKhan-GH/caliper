@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.twin-scope"
+name    = "TwinScope"
+version = "0.2.0"
+summary = "A surface-aware synthetic heat twin on a UV-mapped finned housing: a batched cotangent-Laplacian sim flows heat over the 3-D surface while a small net learns it live. The hero splits physics|belief side by side, drawn zero-copy at texture resolution, with a live textured (v1.2) vs per-vertex (v1.1) toggle exposing the R2 resolution gap, plus honest per-vertex and CPU heatmap fallbacks."
+tag     = "ML"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.tensor_bridge.v1_2", "caliper.geometry.v1_1", "caliper.geometry.v1_2"]

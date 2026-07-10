@@ -167,7 +167,12 @@ inline ThermalSim make_thermal_sim(const SurfaceMesh& mesh, int64_t batch,
 
     // Operators (built on CPU by T6, then moved to device).
     auto Lcpu = cotan_laplacian(mesh);
-    auto Mcpu = vertex_masses(mesh);
+    // Voronoi-third masses are > 0 for every vertex with incident area; the
+    // committed housing is manifold so all M > 0. Clamp before the reciprocal
+    // anyway (T8 hardening) so a degenerate zero-mass vertex on some future
+    // asset yields a finite (large) Minv instead of an inf that would poison
+    // the whole batched step through the Minv broadcast.
+    auto Mcpu = vertex_masses(mesh).clamp_min(1e-8f);
     const double dt_k = stable_dt(Lcpu, Mcpu, cfg.kappa);
     s.dt = dt_k / (1.0 + static_cast<double>(cfg.cooling) * dt_k / 1.8);
 
