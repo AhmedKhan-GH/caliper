@@ -290,6 +290,8 @@ worst case is a working slow path, never a broken one.
 | Vulkan / CUDA (Windows), arbitrary tensor | 0 host copies; 1 in-VRAM copy | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), `alloc_shared` | 0 host copies; **0 in-VRAM copies** (kernels write texture-backed VRAM in place) | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), exportable-pool tensor | 0 host copies; **0 in-VRAM copies** (bridge imports the pool block once; the pass reads it at byte offset) | **Implemented + hardware-verified on NVIDIA** |
+| Metal / MPS (Apple Silicon), imported geometry (`geometry.v1_1` primitives) | 0 host copies; **0 in-VRAM copies** (indexed triangles/lines/points vertex-pulled in place from imported buffers) | **Implemented + byte-exact §9.2 matrix on Apple Silicon** |
+| Vulkan / CUDA (Windows), imported geometry (`geometry.v1_1` primitives) | 0 host copies; **0 in-VRAM copies** (same shader semantics, same CPU references — the 13-row Metal matrix mirrored) | **Implemented + byte-exact §9.2 matrix verified on NVIDIA** |
 | OpenGL / CPU (anywhere) | 1 host staging + 1 upload | Implemented fallback, tested |
 
 On Windows/NVIDIA, both rungs are byte-verified against the CPU reference

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **As of** | 2026-07-03 |
+| **As of** | 2026-07-03 (§2 addendum: 2026-07-09) |
 | **Branch / tip** | `platform/phase-2f` @ `4dde8af`+docs (Phase 2F′; ready to merge to `main`) |
 | **Governing spec** | `PLATFORM.md` (repo root) — decision log D1–D18 |
 | **Execution record** | `docs/superpowers/plans/*` (per-phase plans) + `.superpowers/sdd/progress.md` (ledger) |
@@ -33,6 +33,19 @@ Convert Caliper from a monorepo application into a **platform**: a frozen C-ABI 
 | **2D** | Native coherence | Every applet bridge-native (**zero raw GL anywhere**); **Metal is the macOS default** (GL = frozen fallback); MLScope real-data viz (probe digit + feature maps) |
 | **2E′** | **Flagship** | **GPTScope** — nanoGPT-style char transformer on TinyShakespeare: jobs-trained, metrics-streamed, **live evolving samples**, **per-head attention heatmaps** + hover char-highlight, temperature, perplexity |
 | **2F′** | **Last two services + all-services exemplar** (D18) | `caliper.artifacts.v1` (content-addressed, deduped, run-lineaged checkpoints on DuckDB+blob files) + `caliper.data.v1` (SQL over the host store, results out as **Arrow C streams**); **EmbedScope** — MNIST net with a learned **3-D embedding bottleneck** on live ImPlot3D (blob→10 lobes, renderer-agnostic), the honest consumer of **all 8 services** (Save/Load load-bearing on artifacts; live SQL centroids/misclassified on data). Commits `626af5f..4dde8af` (+docs) |
+
+### ➕ Addendum (2026-07-09): zero-copy geometry, both platforms
+
+Since the 07-03 snapshot the platform grew a new zero-copy class and its
+proof (tracked in `ROADMAP.md`, designed in `GEOMETRY.md`/`ZEROCOPY.md`):
+bridge v1.2 imported allocations (`ExportablePool`, CUDA VMM + Metal
+unified-memory origins), `caliper.geometry.v1` (imported points; flow_scope
+exemplar), GPTScope ThoughtSpace, and **`caliper.geometry.v1_1`** — general
+primitives (indexed triangles/lines/strips, depth, blend modes, Lambert)
+vertex-pulled zero-copy from applet-exported GPU memory, **shipped and
+byte-exact-verified on BOTH backends** (Metal §9.2 matrix on Apple Silicon;
+the full 13-row mirror on Windows/NVIDIA, RTX 500 Ada) with **MeshScope**
+(paint-the-target learned surface) as the run-proven exemplar on both.
 
 ### 🔧 Post-ship fixes (from your hands-on runs — all merged)
 
