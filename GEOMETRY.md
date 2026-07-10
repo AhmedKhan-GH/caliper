@@ -608,7 +608,7 @@ before any implementation.
 |---|---|---|---|
 | R0 | `geometry.v1` instanced points | SHIPPED (both platforms) | particle sims, embeddings — flow_scope, EmbedScope |
 | R1 | `geometry.v1_1` — this spec: indexed tris/lines/strips, depth, blend, fixed shading | **SPEC'D**, phases §10 A–D | any *geometry*: deforming meshes, learned surfaces, twin structure; `mesh_scope` proves live-training viz |
-| R2 | `geometry.v1_2` — textures on meshes (sample a bridge `CaliperTextureId`; `reserved0` slot) | DIRECTIONAL | field data draped on geometry: heatmap-on-terrain, activation-on-surface — the twin's *state painted on its shape* |
+| R2 | `geometry.v1_2` — textures on meshes (sample a bridge `CaliperTextureId`; `reserved0` slot) | SHIPPED — both backends (`feat/geometry-v1_2`; Vulkan run-proven byte-exact on this box; Metal: transcribed + reviewed, hardware verification pending macOS) | field data draped on geometry: heatmap-on-terrain, activation-on-surface — the twin's *state painted on its shape*; TwinScope surface twin is the exemplar |
 | R3 | Instanced transforms from an imported alloc (one mesh × (N,16) f32 model matrices) | DIRECTIONAL | many-part twins at scale: fleets, swarms, articulated repeats — N objects, one draw, still zero-copy |
 | R4 | Host-neutral service layer / second host (Compass, Phase 6 `libcaliper` per PLATFORM.md) | DIRECTIONAL | twins embedded outside the Caliper shell |
 
@@ -627,7 +627,10 @@ the ABI for them:
   renderer reads; the Training-Lab pattern already generalizes.
 
 Sequencing: R1 phases A–D first (§10). R2/R3 are additive revisions in either
-order, each gated on a demonstrated applet need — not built on spec. R4 is
+order, each gated on a demonstrated applet need — not built on spec. R2 shipped
+on `feat/geometry-v1_2` against exactly such a need: the TwinScope surface twin
+(a learned thermal field draped on a heatsink housing at texture resolution)
+is the demonstrated-need exemplar for R2. R3 stays gated/pending. R4 is
 the platform's call (PLATFORM.md Phases 3–6), not geometry's.
 
 ## 12. Resolved design questions (do not relitigate in implementation)

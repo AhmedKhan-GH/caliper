@@ -1,7 +1,7 @@
 # TwinScope v2 — the surface twin (R2 exemplar redirect)
 
 **Date:** 2026-07-10
-**Status:** approved (design). Supersedes §1 (the applet) of
+**Status:** implemented (feat/geometry-v1_2; Metal hardware pass pending). Supersedes §1 (the applet) of
 `2026-07-10-twinscope-twin-exemplar-design.md`; that doc's §3 (R2 contract),
 §4 (R3 contract), and §11-derived invariants remain binding and unchanged.
 The v1_2 implementation contract
