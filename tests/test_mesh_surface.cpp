@@ -145,8 +145,9 @@ TEST_CASE("TargetGrid::brush is local, bounded, and signed") {
     // (exp(-32) with sigma = radius/2).
     auto dx = tg.nodes.select(1, 0) - cx;
     auto dy = tg.nodes.select(1, 1) - cy;
-    auto far = (dx * dx + dy * dy) > (4.f * radius) * (4.f * radius);
-    REQUIRE(tg.grid.index({far}).abs().max().item<float>() < 1e-6f);
+    // "far" is a legacy empty macro on Windows (windef.h) — don't use it as a name.
+    auto far_mask = (dx * dx + dy * dy) > (4.f * radius) * (4.f * radius);
+    REQUIRE(tg.grid.index({far_mask}).abs().max().item<float>() < 1e-6f);
 
     // Signed: negative amp lowers.
     tg.brush(cx, cy, radius, -0.8f);
