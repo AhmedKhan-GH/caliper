@@ -21,6 +21,9 @@ struct HostGeomDraw {
     uint64_t normal_offset = 0;
     uint64_t attr_alloc = 0;
     uint64_t attr_offset = 0;
+    uint64_t uv_alloc = 0;
+    uint64_t uv_offset = 0;
+    uint64_t texture = 0;
     uint32_t topology = 0;
     uint32_t color_mode = 0;
     uint32_t shade_mode = 0;
@@ -124,6 +127,7 @@ public:
         return false;
     }
     virtual bool supports_geometry_primitives() const { return false; }
+    virtual bool supports_geometry_textured() const { return false; }
     virtual uint64_t geom_create_view_ex(int /*w*/, int /*h*/,
                                          uint32_t /*flags*/) { return 0; }
     virtual bool geom_draw_primitives(uint64_t /*view_tex*/,
