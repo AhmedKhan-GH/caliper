@@ -17,10 +17,12 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 
 !!! info "Platform status (honest, stated once)"
     **Points (`v1`):** Metal + Vulkan + GL-fallback ladder. **Primitives
-    (`v1_1`):** Metal shipped; Vulkan pending. On a backend without the path the
-    matching **caps bit is unset and every entry point is inert** — ship your
-    fallback (see the worked example below). This is the degradation ladder, not a
-    bug: absent capability → CPU path, never a wrong image.
+    (`v1_1`):** shipped on **both** backends (Metal and Vulkan), byte-exact
+    against one CPU reference on real hardware on each. On a backend without
+    the path (the GL fallback) the matching **caps bit is unset and every
+    entry point is inert** — ship your fallback (see the worked example
+    below). This is the degradation ladder, not a bug: absent capability →
+    CPU path, never a wrong image.
 
 ```c
 --8<-- "sdk/include/caliper/services/geometry_v1.h"

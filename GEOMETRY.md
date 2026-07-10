@@ -1,18 +1,25 @@
 # GEOMETRY.md — caliper.geometry.v1_1: general primitives from zero-copy tensors
 
-**Status: macOS COMPLETE on `feat/geometry-v1_1`; Vulkan (Phase B) pending.**
-As of 2026-07-09 (later the same day): Phase A (ABI + vend + SDK + host
-tests) green; Phase C (Metal) complete — the point/non-point vertex-fn split
-fixed the `[[point_size]]` pipeline-class bug and the full §9.2 matrix is
-implemented and green on live Metal (13 byte-exact/tolerance rows, 173
-assertions, including the 22-case §2.3 gate battery and stride
-forward-compat); Phase D shipped — `mesh_scope` is the §9.3 learned-surface
-exemplar per `docs/superpowers/specs/2026-07-09-meshscope-learned-surface-design.md`,
+**Status: SHIPPED on BOTH platforms (macOS Metal + Windows Vulkan).**
+As of 2026-07-09: Phase A (ABI + vend + SDK + host tests) green; Phase C
+(Metal) complete — the point/non-point vertex-fn split fixed the
+`[[point_size]]` pipeline-class bug and the full §9.2 matrix is implemented
+and green on live Metal (13 byte-exact/tolerance rows, 173 assertions,
+including the 22-case §2.3 gate battery and stride forward-compat); Phase D
+shipped — `mesh_scope` is the §9.3 learned-surface exemplar per
+`docs/superpowers/specs/2026-07-09-meshscope-learned-surface-design.md`,
 run-verified both ways ("first zero-copy frame drawn (imported geometry, 3
 draws)" on Metal+MPS; honest "fallback (no geometry.v1_1 backend)" under
-`CALIPER_RENDERER=gl`). Remaining before merge: Phase B (Vulkan mirrors of
-every Metal row, on the Windows box) and the S5 doc rows
-(execution plan: `docs/superpowers/specs/2026-07-09-geometry-v1_1-execution-plan.md`).
+`CALIPER_RENDERER=gl`). Phase B (Vulkan, per
+`docs/superpowers/specs/2026-07-09-geometry-v1_1-vulkan-phase-b-design.md`)
+complete on the Windows box (RTX 500 Ada): GLSL twins of the Metal geom
+shader (std140 params byte-matched to `PrimParams`), depth views, pipeline
+cache, per-frame descriptors + dynamic-UBO params ring; ALL 13 Metal §9.2
+rows mirrored against the same CPU references and green on real NVIDIA
+hardware — every drawing row byte-exact first try — plus a portable
+no-CUDA gate-refusal row set; `mesh_scope` run-proven on Vulkan+CUDA (same
+provenance line, zero-copy) and honestly falling back under
+`CALIPER_RENDERER=gl`. v1 `points-imported` rows untouched and green.
 
 This document is the end-to-end design for
 extending the imported-geometry service from "instanced points only" (v1, shipped)

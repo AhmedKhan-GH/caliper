@@ -74,21 +74,21 @@ by design). The next spec to write, per this roadmap's own ordering, is the
 - [x] Merge `feat/geometry-v1_1` → main, caps-gated (`d0b61f1`); 6/6 suites green on merged main; branch deleted
 - [x] Push merged main (origin in sync)
 
-## 4 · geometry.v1_1 — Windows (S4, needs the Windows box)
+## 4 · geometry.v1_1 — Windows (S4, done 2026-07-09, `feat/geometry-v1_1-vulkan`)
 
 Spec: `docs/superpowers/specs/2026-07-09-geometry-v1_1-vulkan-phase-b-design.md`
 (self-contained for a fresh session on that machine; folds the S5 doc rows into
 its acceptance).
 
-- [ ] Vulkan backend: `geom.vert/.frag` SPIR-V, per-frame descriptor pool + dynamic-UBO params ring, depth pass, pipeline cache
-- [ ] Mirror EVERY Metal §9.2 row byte-exact against the same CPU references (D24 verification discipline)
-- [ ] MeshScope run-proven on Windows: zero-copy log line on Vulkan+CUDA; `points-imported` path still green
-- [ ] S5 docs: ZEROCOPY.md primitives row, STATUS.md, GEOMETRY.md status → shipped
+- [x] Vulkan backend: `geom.vert/.frag` SPIR-V, per-frame descriptor pool + dynamic-UBO params ring, depth pass, pipeline cache
+- [x] Mirror EVERY Metal §9.2 row byte-exact against the same CPU references (D24 verification discipline) — all 13 rows green on RTX 500 Ada, every drawing row byte-exact first try; plus a portable no-CUDA gate-refusal set
+- [x] MeshScope run-proven on Windows: zero-copy log line on Vulkan+CUDA; `points-imported` path still green
+- [x] S5 docs: ZEROCOPY.md primitives row, STATUS.md, GEOMETRY.md status → shipped
 
-## 5 · Whitepaper v0.2 (after S4)
+## 5 · Whitepaper v0.2 (done 2026-07-09)
 
-- [ ] Rewrite §4/§9: coordinate-style graphics no longer CPU-array-only — geometry is now a zero-copy class on both ecosystems
-- [ ] Add MeshScope as the geometry exemplar figure; keep the never-claim-unverified discipline
+- [x] Rewrite §4/§9: coordinate-style graphics no longer CPU-array-only — geometry is now a zero-copy class on both ecosystems
+- [x] Add MeshScope as the geometry exemplar figure; keep the never-claim-unverified discipline
 
 ## 6 · The twin exemplar (forcing function for R2/R3)
 
