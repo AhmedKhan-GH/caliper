@@ -1,7 +1,8 @@
-# caliper.geometry.v1 / v1_1 / v1_3
+# caliper.geometry.v1 / v1_1 / v1_2 / v1_3
 
 Service ids `caliper.geometry.v1` (instanced points) and its additive revisions
-`caliper.geometry.v1_1` (general primitives) and `caliper.geometry.v1_3`
+`caliper.geometry.v1_1` (general primitives), `caliper.geometry.v1_2`
+(textures on meshes), and `caliper.geometry.v1_3`
 (instanced transforms). Imported 3-D geometry: an applet
 writes vertices/indices/normals/attributes into device memory, exports them once
 through [`caliper.tensor_bridge.v1_2`](tensor-bridge-v1.md), and the host draws
@@ -19,7 +20,10 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 !!! info "Platform status (honest, stated once)"
     **Points (`v1`):** Metal + Vulkan + GL-fallback ladder. **Primitives
     (`v1_1`):** shipped on **both** backends (Metal and Vulkan), byte-exact
-    against one CPU reference on real hardware on each. **Instanced transforms
+    against one CPU reference on real hardware on each. **Textures on meshes
+    (`v1_2`):** **run-proven byte-exact on both backends** — Vulkan/RTX 500 Ada
+    and Metal/Apple Silicon (both 2026-07-10, the macOS hardware pass), against
+    the same shared CPU reference. **Instanced transforms
     (`v1_3`):** **run-proven byte-exact on both backends** — Metal on Apple
     Silicon and Vulkan/CUDA on Windows (both 2026-07-11), against the same
     shared CPU reference. On a backend without
@@ -35,6 +39,10 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 
 ```c
 --8<-- "sdk/include/caliper/services/geometry_v1_1.h"
+```
+
+```c
+--8<-- "sdk/include/caliper/services/geometry_v1_2.h"
 ```
 
 ```c
@@ -249,6 +257,81 @@ backends' vertex shaders clamp: `vi = min(index[i], vertex_count - 1)`. An
 out-of-range index therefore produces a **wrong-looking but defined** image — never
 an out-of-bounds read or UB. This is the applet's contract: a bad index is a visual
 bug in your data, not a crash.
+
+## caliper.geometry.v1_2 — textures on meshes
+
+Additive revision of v1_1: `CaliperGeomDrawV1_2` = the frozen **192-byte**
+`CaliperGeomDraw` record (`base`) plus an appended **texture tail**
+(`uv_alloc`, `uv_offset`, `texture`), carried by the same `draw_primitives` +
+`draw_stride` slot. No new entry point, `reserved0` still NULL, the v1.1 prefix
+untouched and frozen. `static_assert(sizeof(CaliperGeomDrawV1_2) == 216)` and
+`offsetof(uv_alloc) == 192` pin the tail. Caps bit **2**
+(`CALIPER_GEOM_CAP_TEXTURED`, `1u << 2`) set means `COLOR_TEXTURE` draws are
+live; absent → the textured path is inert and the draw behaves exactly as v1_1.
+
+The host vends both revisions side by side: calls through the v1.1 table accept
+a minimum stride of `192` and cannot request textured colour; calls through the
+v1.2 table accept a minimum stride of `216`. Old binaries keep working while a
+v1.2 caller cannot expose an absent tail (short stride → refused).
+
+### The `COLOR_TEXTURE` color mode
+
+A fourth `color_mode` value, `CALIPER_GEOM_COLOR_TEXTURE` (`3u`), extends the
+v1_1 `FLAT` / `COLORMAP` / `VERTEX_RGBA` set. Each vertex carries a
+`(vertex_count, 2)` f32 UV pair at `(uv_alloc, uv_offset)` — another
+`(alloc, byte offset)` into a bridge-v1.2 import, pulled by the **same** final
+vertex index as positions/normals/attributes — and the fragment samples a
+**bridge `CaliperTextureId`** (`texture`) at that coordinate. The sampled RGBA
+value is the draw colour. `attr_alloc` is ignored under `COLOR_TEXTURE` and
+need not be present.
+
+Sampling is a **fixed** sampler — no configurable materials or sampler state:
+
+- normalized coordinates;
+- bilinear minification and magnification (**linear**);
+- **clamp-to-edge** on U and V (UVs outside `[0, 1]` are defined, not wrapped);
+- base level only, **no mipmaps**.
+
+`SHADE_LAMBERT` multiplies the sampled RGB by the existing
+`0.30 + 0.70 * max(dot(n_vs, headlight), 0.0)` headlight term and leaves alpha
+unchanged; blend and depth modes then apply exactly as in v1_1.
+
+### The render-target-view refusal
+
+`texture` names a **bridge texture**, never a geometry view. Naming any geometry
+view — including the view currently being drawn — is **refused whole-frame**
+(pixels untouched, one `caliper.log.v1` line), not silently sampled. A geometry
+view is never sampleable by construction, which forecloses a read-after-write
+feedback loop against the target you are painting. This is the degradation
+ladder's usual shape: a wrong request refuses, never renders a wrong image.
+
+### Gates and refusals
+
+`COLOR_TEXTURE` adds these to the v1_1 gate set (all before any encoding; any
+failure refuses the **whole frame**):
+
+| Scope | Gate |
+|---|---|
+| Per draw | `uv_alloc` live; `uv_offset % 4 == 0`; `uv_offset + vertex_count·2·sizeof(f32)` overflow-safe and in-bounds |
+| | `texture` resolves to a live tensor-bridge texture entry |
+| | `texture` is **not** a geometry view (including the target view) → refuse |
+
+UV **values** are finite shader inputs like any other imported bytes; values
+outside `[0, 1]` are defined by the clamp-to-edge sampler, not a gate.
+
+### Honest ladder
+
+When caps bit 2 is absent (the GL fallback, or a host vending only v1/v1_1),
+`has_textured()` is false and the textured path is inert — the applet ladders
+down to a per-vertex colour fallback (`COLORMAP` or `VERTEX_RGBA` over the same
+field, the field sampled at vertex resolution instead of texture resolution) and
+says so; never a wrong image, never a false status line. The `caliper::Geometry`
+sugar exposes `has_textured()` (caps bit 2) and a `draw_primitives` overload
+taking `CaliperGeomDrawV1_2*`; seed descriptors so the texture tail is zero over
+the v1_1 defaults (a zero-tail v1_2 record renders byte-identically to the
+equivalent v1_1 draw). **TwinScope's surface twin** — a learned thermal field
+draped on a heatsink housing at texture resolution — is the exemplar: the twin's
+*state painted on its shape*.
 
 ## caliper.geometry.v1_3 — instanced transforms
 
