@@ -415,6 +415,34 @@ TEST_CASE("bake atlas: inter-chart gutter is exactly 6 texels at 256^2") {
 // --------------------------------------------------------------------------
 // Physics on the flat strip.
 // --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// DeviceSparse — the MPS-legal carrier for the sparse operators. libtorch
+// 2.5.1 has no SparseMPS kernels (a sparse .to(kMPS) throws), so on MPS the
+// COO coefficients ride as three dense tensors and mm() spells the product
+// gather + index_add_. Everywhere else it must stay the true sparse tensor.
+// --------------------------------------------------------------------------
+TEST_CASE("DeviceSparse: apply matches the CPU sparse product on every device") {
+    auto mesh = subdivide_midpoint(make_tetrahedron(), 2);
+    auto L = cotan_laplacian(mesh);                       // sparse (V,V), coalesced
+    const int64_t V = mesh.positions.size(0);
+    torch::manual_seed(7);
+    auto x = torch::randn({V, 3});
+    auto ref = torch::mm(L, x);                           // CPU sparse reference
+
+    // CPU carrier keeps the real sparse tensor (fast path unchanged).
+    auto on_cpu = DeviceSparse::to_device(L, torch::kCPU);
+    REQUIRE(on_cpu.S.defined());
+    REQUIRE(on_cpu.S.is_sparse());
+    REQUIRE(torch::allclose(on_cpu.mm(x), ref));
+
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device - skipping MPS half"); return; }
+    auto on_mps = DeviceSparse::to_device(L, torch::kMPS);
+    REQUIRE(!on_mps.S.defined());                         // no sparse tensor on MPS
+    auto got = on_mps.mm(x.to(torch::kMPS)).to(torch::kCPU);
+    REQUIRE(torch::isfinite(got).all().item<bool>());
+    REQUIRE(torch::allclose(got, ref, 1e-4, 1e-5));
+}
+
 TEST_CASE("flat strip relaxes to the analytic linear steady state") {
     const int nx = 20, ny = 2;
     auto strip = make_strip(nx, ny);

@@ -113,6 +113,36 @@ TEST_CASE("duty schedule: deterministic per seed, differs across seeds") {
 }
 
 // --------------------------------------------------------------------------
+// MPS device parity: the sim constructs and steps on MPS, matching the CPU
+// reference. Guards the Apple path that libtorch's missing SparseMPS support
+// would otherwise crash at construction (sparse L .to(kMPS) throws
+// NotImplementedError in torch 2.5.1) — the sim must carry the Laplacian in
+// an MPS-legal form and produce the same physics.
+// --------------------------------------------------------------------------
+TEST_CASE("thermal step: MPS sim constructs and matches the CPU reference") {
+    if (!torch::mps::is_available()) { MESSAGE("no MPS device - skipping"); return; }
+    auto mesh = subdivide_midpoint(make_tetrahedron(), 2);
+    const int64_t B = 4;
+    auto cpu = make_thermal_sim(mesh, B, torch::kCPU, /*seed=*/13);
+    auto mps = make_thermal_sim(mesh, B, torch::kMPS, /*seed=*/13);
+
+    // Same departure from ambient on both devices.
+    torch::manual_seed(31);
+    auto T0 = kAmbient + 5.f * torch::randn({B, cpu.V});
+    cpu.T = T0.clone();
+    mps.T = T0.to(torch::kMPS);
+
+    for (int i = 0; i < 50; ++i) {
+        const double t = static_cast<double>(i) * cpu.dt;
+        cpu.step(t);
+        mps.step(t);
+    }
+    auto back = mps.T.to(torch::kCPU);
+    REQUIRE(torch::isfinite(back).all().item<bool>());
+    REQUIRE(torch::allclose(back, cpu.T, 1e-4, 1e-4));
+}
+
+// --------------------------------------------------------------------------
 // The chasing learner.
 // --------------------------------------------------------------------------
 TEST_CASE("learner: loss decreases on a fixed run, predictions finite/in-bounds") {

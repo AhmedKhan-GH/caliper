@@ -302,10 +302,10 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
     // positions the net is evaluated at (gutter-filled so outside-chart texels
     // read a valid nearby surface point rather than the origin).
     BakeResult bake = bake_matrix(sim_mesh, kTexH, kTexW);
-    auto S_dev = bake.S.to(device);
+    auto S_dev = DeviceSparse::to_device(bake.S, device);  // MPS-legal carrier
     auto gutter_dev = bake.gutter_src.to(device);
     auto texel_pos =
-        torch::mm(S_dev, sim.positions).index_select(0, gutter_dev).contiguous();
+        S_dev.mm(sim.positions).index_select(0, gutter_dev).contiguous();
     auto render_pos = sim.positions.slice(0, 0, V_render).contiguous();
 
     // Pool-backed display allocations (import-once bases stay stable, §exportable
@@ -386,7 +386,7 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
 
     auto bake_field = [&](const torch::Tensor& vertfield) {
         auto col = vertfield.reshape({V_sim, 1});
-        auto tex = torch::mm(S_dev, col).squeeze(1);   // (H*W,)
+        auto tex = S_dev.mm(col).squeeze(1);           // (H*W,)
         return tex.index_select(0, gutter_dev).reshape({kTexH, kTexW});
     };
 

@@ -232,6 +232,44 @@ inline torch::Tensor cotan_laplacian(const SurfaceMesh& mesh) {
 }
 
 // ---------------------------------------------------------------------------
+// DeviceSparse — a device-legal carrier for the sparse operators (L, S).
+// libtorch 2.5.1 has no SparseMPS kernels: a sparse .to(kMPS) throws
+// NotImplementedError. On MPS the COO coefficients ride as three dense
+// tensors and mm() spells the same product as gather + index_add_; every
+// other device keeps the true sparse tensor and defers to torch::mm.
+// ---------------------------------------------------------------------------
+struct DeviceSparse {
+    torch::Tensor S;             // the sparse tensor on device (non-MPS path)
+    torch::Tensor row, col, val; // (nnz,) i64/i64/f32 COO components (MPS path)
+    int64_t rows = 0;
+
+    static DeviceSparse to_device(const torch::Tensor& coo_cpu,
+                                  torch::Device device) {
+        DeviceSparse d;
+        d.rows = coo_cpu.size(0);
+        if (device.is_mps()) {
+            auto c = coo_cpu.coalesce();
+            d.row = c.indices()[0].to(device);
+            d.col = c.indices()[1].to(device);
+            d.val = c.values().to(device);
+        } else {
+            d.S = coo_cpu.to(device);
+        }
+        return d;
+    }
+
+    // (rows, V) · (V, C) -> (rows, C), matching torch::mm(S, dense).
+    torch::Tensor mm(const torch::Tensor& dense) const {
+        if (val.defined()) {
+            auto out = torch::zeros({rows, dense.size(1)}, dense.options());
+            return out.index_add_(0, row,
+                                  val.unsqueeze(1) * dense.index_select(0, col));
+        }
+        return torch::mm(S, dense);
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Voronoi-third vertex masses — dense (V,) f32. Each triangle contributes a
 // third of its area to each of its three vertices (the barycentric / Voronoi
 // lumped-mass approximation): M[v] = (1/3) * sum of incident triangle areas.
