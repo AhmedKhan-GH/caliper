@@ -931,7 +931,7 @@ public:
                 e.params.vmax = d.vmax;
                 e.params.size_px = std::min(std::max(d.size_px, 1.0f), 511.0f);
                 if (d.uv_offset / 4 > UINT32_MAX)
-                    return metal_geom_fail("primitives: uv base exceeds 32 bits");
+                    return metal_geom_fail("uv base exceeds 32 bits");
                 e.params.uv_base = (uint32_t)(d.uv_offset / 4u);
                 encs.push_back(e);
             }
