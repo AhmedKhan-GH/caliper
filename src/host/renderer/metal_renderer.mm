@@ -285,6 +285,11 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
 }
 
 fragment float4 geom_fs(VOut in [[stage_in]]) { return in.color; }
+// geom_tex_fs is also paired with geom_vs_point for textured POINT draws:
+// valid MSL — [[position]]/[[point_size]] are builtins excluded from stage-in
+// matching, and the user varyings (color, uv) are identical in VOut and
+// VOutPoint. Hardware-verified by the gfx row "textured POINT draw renders
+// the sampled texel".
 fragment float4 geom_tex_fs(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]]) {
     constexpr sampler smp(coord::normalized, address::clamp_to_edge,
@@ -931,7 +936,7 @@ public:
                 e.params.vmax = d.vmax;
                 e.params.size_px = std::min(std::max(d.size_px, 1.0f), 511.0f);
                 if (d.uv_offset / 4 > UINT32_MAX)
-                    return metal_geom_fail("primitives: uv base exceeds 32 bits");
+                    return metal_geom_fail("uv base exceeds 32 bits");
                 e.params.uv_base = (uint32_t)(d.uv_offset / 4u);
                 encs.push_back(e);
             }
@@ -1094,6 +1099,12 @@ private:
 
         id<MTLLibrary> lib = geom_library();
         if (lib == nil) return nil;
+        // cls==0 && textured pairs geom_vs_point (VOutPoint) with geom_tex_fs
+        // (VOut stage_in): valid — builtin members are excluded from stage-in
+        // matching and the user varyings agree, so textured POINT draws render
+        // (hardware-verified gfx row "textured POINT draw renders the sampled
+        // texel"). Any genuinely bad pairing still fails closed: nil -> the
+        // caller refuses the whole frame before any encoding.
         id<MTLFunction> vs = [lib newFunctionWithName:
             (cls == 0 ? @"geom_vs_point" : @"geom_vs")];
         id<MTLFunction> fs = [lib newFunctionWithName:

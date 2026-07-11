@@ -103,7 +103,8 @@ struct ThermalSim {
     double dt = 0.0;
     ThermalConfig cfg;
 
-    torch::Tensor L;             // sparse (V,V) f32 — cotan Laplacian
+    DeviceSparse L;              // (V,V) f32 cotan Laplacian — sparse tensor
+                                 // off-MPS, dense COO components on MPS
     torch::Tensor M;             // (V,) f32 — Voronoi-third masses (== A)
     torch::Tensor Minv;          // (V,) f32 — 1/M
     torch::Tensor positions;     // (V,3) f32
@@ -143,7 +144,7 @@ struct ThermalSim {
         auto act = active_intensities(t);                   // (B,K)
         active = act;
         auto Tt = T.t().contiguous();                       // (V,B)
-        auto LT = torch::mm(L, Tt).t();                     // (B,V) = (κL·T layout)
+        auto LT = L.mm(Tt).t();                             // (B,V) = (κL·T layout)
         auto inject = cfg.source_gain * torch::mm(act, gauss_weights);  // (B,V)
         auto loss = cfg.cooling * M * (T - cfg.ambient);    // (B,V), A=M broadcast
         auto rhs = -cfg.kappa * LT + inject - loss;         // (B,V)
@@ -176,7 +177,7 @@ inline ThermalSim make_thermal_sim(const SurfaceMesh& mesh, int64_t batch,
     const double dt_k = stable_dt(Lcpu, Mcpu, cfg.kappa);
     s.dt = dt_k / (1.0 + static_cast<double>(cfg.cooling) * dt_k / 1.8);
 
-    s.L = Lcpu.to(device);
+    s.L = DeviceSparse::to_device(Lcpu, device);
     s.M = Mcpu.to(device);
     s.Minv = (1.0f / Mcpu).to(device);
     s.positions = mesh.positions.to(device, torch::kFloat32).contiguous();

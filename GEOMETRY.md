@@ -614,7 +614,7 @@ before any implementation.
 |---|---|---|---|
 | R0 | `geometry.v1` instanced points | SHIPPED (both platforms) | particle sims, embeddings — flow_scope, EmbedScope |
 | R1 | `geometry.v1_1` — this spec: indexed tris/lines/strips, depth, blend, fixed shading | **SPEC'D**, phases §10 A–D | any *geometry*: deforming meshes, learned surfaces, twin structure; `mesh_scope` proves live-training viz |
-| R2 | `geometry.v1_2` — textures on meshes (sample a bridge `CaliperTextureId`; `reserved0` slot) | SHIPPED — both backends (`feat/geometry-v1_2`; Vulkan run-proven byte-exact on this box; Metal: transcribed + reviewed, hardware verification pending macOS) | field data draped on geometry: heatmap-on-terrain, activation-on-surface — the twin's *state painted on its shape*; TwinScope surface twin is the exemplar |
+| R2 | `geometry.v1_2` — textures on meshes (sample a bridge `CaliperTextureId`; `reserved0` slot) | SHIPPED — byte-exact both backends (`feat/geometry-v1_2`; Vulkan run-proven byte-exact on RTX 500 Ada; Metal run-proven byte-exact on Apple Silicon, 2026-07-10) | field data draped on geometry: heatmap-on-terrain, activation-on-surface — the twin's *state painted on its shape*; TwinScope surface twin is the exemplar |
 | R3 | Instanced transforms from an imported alloc (one mesh × (N,16) f32 model matrices) | DIRECTIONAL | many-part twins at scale: fleets, swarms, articulated repeats — N objects, one draw, still zero-copy |
 | R4 | Host-neutral service layer / second host (Compass, Phase 6 `libcaliper` per PLATFORM.md) | DIRECTIONAL | twins embedded outside the Caliper shell |
 

@@ -25,8 +25,7 @@ reference, honestly degraded):
 
 ```
 images → point clouds → connected shapes → state-on-shapes → populations → other hosts
-(bridge)    (v1)          (v1_1) ✅          (R2/v1_2) ✅*       (R3) ▢        (R4) ▢
-                                                                              * pending macOS
+(bridge)    (v1)          (v1_1) ✅          (R2/v1_2) ✅        (R3) ▢        (R4) ▢
 ```
 
 - **Shipped and merged:** platform spine, `geometry.v1` (points), `v1_1`
@@ -34,8 +33,9 @@ images → point clouds → connected shapes → state-on-shapes → populations
   exemplar, whitepaper v0.2.
 - **On `feat/geometry-v1_2` (final review: READY TO MERGE):** R2
   `geometry.v1_2` (textures-on-meshes) — both backends; Vulkan run-proven
-  byte-exact, Metal transcribed + reviewed. TwinScope v2 surface-twin
-  exemplar, run-proven zero-copy on Vulkan+CUDA, honest GL fallback.
+  byte-exact, Metal run-proven byte-exact on Apple Silicon (macOS hardware
+  pass 2026-07-10). TwinScope v2 surface-twin exemplar, run-proven zero-copy
+  on Vulkan+CUDA and Metal/MPS, honest GL fallback.
 - **Not started:** R3 (populations), R4 (second host), and the strategic
   decisions in §4.
 
@@ -57,7 +57,13 @@ roadmap* rather than true on this one machine.
   call. After merge: delete the branch; the donor
   `codex/twinscope-implementation` may be archived or deleted (it served its
   transcription purpose).
-- [ ] **1.2 macOS hardware pass** (the recorded platform protocol; v1_1 ran
+- [x] **1.2 macOS hardware pass** *(done 2026-07-10, Apple Silicon Metal/MPS —
+  commits `5164f99` compile-gate test fix, `c92da48` DeviceSparse MPS carrier,
+  `f885479` §6.1 log tag, `edddb26` §6.2 varying-integrity row;
+  `caliper_gfx_tests` 43/43 on live Metal, full suite 8/8 ctest, TwinScope v2
+  run-proven zero-copy on MPS. Recorded in the `progress.md` MAC HARDWARE PASS
+  section, which stands in for the never-transferred Windows MAC-PENDING
+  ledger.)* (the recorded platform protocol; v1_1 ran
   this direction in reverse). The MAC-PENDING CHECKLIST in
   `.superpowers/sdd/progress.md` is the acceptance list:
   - Metal build of `feat/geometry-v1_2` (the `.mm` never compiled on the
@@ -76,8 +82,10 @@ roadmap* rather than true on this one machine.
     textured POINT draw (unexercised; document or guard).
 - [ ] **1.3 Reconcile ROADMAP §6 checkboxes.** The roadmap text predates this
   branch: tick the twin-exemplar design doc and the OBJ-loader items (both
-  shipped on the branch); leave R3 and "twin applet on both platforms"
-  unchecked until §1.2 and §2 land.
+  shipped on the branch). "Twin applet ships run-proven on both platforms" is
+  now ticked — the macOS hardware pass (§1.2) run-proved TwinScope v2 zero-copy
+  on Metal/MPS, so both platforms are proven independent of R3. **R3** stays
+  unchecked until §2 lands; this box stays open until then.
 
 ---
 

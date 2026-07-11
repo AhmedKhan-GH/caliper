@@ -161,7 +161,7 @@ and re-record it in `progress.md`.
   copy step and no `build.cmd` — CLion drives the build directly. The Windows
   `configure.cmd`/`build.cmd` wrappers are Windows-only.
 
-- [ ] **1.1** CLion CMake profile configures clean on this Mac with
+- [x] **1.1** CLion CMake profile configures clean on this Mac with
   `CALIPER_HAVE_METAL` defined; record the exact configure/build invocation in
   `progress.md` (close the recipe gap the lost scratch left).
 
@@ -171,18 +171,18 @@ and re-record it in `progress.md`.
 
 The single most likely place to fail: MSL and ObjC++ that no compiler has read.
 
-- [ ] **2.1** `metal_renderer.mm` compiles: the three runtime-MSL strings
+- [x] **2.1** `metal_renderer.mm` compiles: the three runtime-MSL strings
   (`kColormapShaderSrc`, `kPointsShaderSrc`, `kGeomShaderSrc`) and the ObjC++
   encode path build with `-fobjc-arc`. The two Metal `PrimParams` copies
   (§0.3) hit their `static_assert(... == 176)` — a mismatch here is a compile
   error, not a runtime bug.
-- [ ] **2.2** `caliper_gfx_tests` compiles with the `CALIPER_HAVE_METAL` block
+- [x] **2.2** `caliper_gfx_tests` compiles with the `CALIPER_HAVE_METAL` block
   (lines 350–2358) now IN the build for the first time. Transcription typos in
   the Metal twin rows surface here.
-- [ ] **2.3** `caliper_torch_tests` compiles (the MPS `storage_ref`/pool path,
+- [x] **2.3** `caliper_torch_tests` compiles (the MPS `storage_ref`/pool path,
   `exportable_pool.hpp:513–609`, is Apple-guarded and never compiled on
   Windows).
-- [ ] **2.4** `caliper` app links and `caliper_tests` builds — confirm no
+- [x] **2.4** `caliper` app links and `caliper_tests` builds — confirm no
   non-Apple regression leaked in via a shared header.
 
 ---
@@ -193,21 +193,23 @@ Each refusal must fire on live Metal AND leave the target pixels **bit-for-bit
 untouched** (the gate runs before the render encoder exists, so no clear
 happened — `metal_renderer.mm:459` house rule, GEOMETRY.md §6.3).
 
-- [ ] **3.1 uv_base 32-bit refusal.** A textured draw with `uv_offset/4 >
+- [x] **3.1 uv_base 32-bit refusal.** A textured draw with `uv_offset/4 >
   UINT32_MAX` is refused (`metal_renderer.mm:933–934`); the log reads the
   `geom_prims:` line (see §6.1 for the cosmetic on that exact string). Pixels
-  untouched.
-- [ ] **3.2 render-target-view sampling refusal.** A draw naming a
+  untouched. *(Note: not runtime-reachable through the public API — the bridge
+  bounds gate refuses the oversized `uv_offset` first; this is defense-in-depth,
+  verified by inspection, not by a live refusal on this path.)*
+- [x] **3.2 render-target-view sampling refusal.** A draw naming a
   `geom_create_view*` texture (or the current target) as its sampled
   `d.texture` is refused via the `MTLTextureUsageRenderTarget` marker
   (`metal_renderer.mm:867–875`). Confirm on hardware that the marker is
   genuinely unique to view textures (`tex_create_rgba8` sets only
   `ShaderRead|ShaderWrite`, never `RenderTarget`). Pixels untouched.
-- [ ] **3.3 short-`draw_stride` refusal.** A v1.2 submission with a 192-byte
+- [x] **3.3 short-`draw_stride` refusal.** A v1.2 submission with a 192-byte
   stride (the frozen v1.1 prefix, missing the tail) is refused by the host
   validator (§0.1) before any backend work. The Metal gfx row exercising this
   is ~`gfx_main.cpp:2267/2344`.
-- [ ] **3.4 the rest of the gate battery** fires identically to the Vulkan
+- [x] **3.4 the rest of the gate battery** fires identically to the Vulkan
   reference: unknown/released UV alloc, UV misalignment, UV overflow,
   unknown/released texture, mixed valid/invalid multi-draw refuses atomically
   (v1_2 design §Verification rows / row 2). Byte-exact refusal each time.
@@ -224,20 +226,20 @@ diagnose the backend divergence; never loosen the comparison, widen a
 tolerance, or mask a pixel to make a row pass.** The rows exist precisely to
 catch an MSL/std140 divergence the compiled-out `#ifdef` seam (§0.3) cannot.
 
-- [ ] **4.1 texel-center / bilinear / Lambert / uv-offset** (the four donor
+- [x] **4.1 texel-center / bilinear / Lambert / uv-offset** (the four donor
   rows the Vulkan side already passes): exact texel-center samples byte-exact;
   2×2 bilinear center within 1 RGBA8 LSB; Lambert×texture within 2 RGB LSB,
   alpha unchanged; nonzero UV byte offset selects the intended coordinates.
-- [ ] **4.2 clamp-to-edge with out-of-range UVs** (`gfx_main.cpp` ~2121):
+- [x] **4.2 clamp-to-edge with out-of-range UVs** (`gfx_main.cpp` ~2121):
   out-of-`[0,1]` UVs clamp to the nearest edge texel, no bilinear mix.
-- [ ] **4.3 v1.1 draw == v1.2 zero-tail non-textured draw** byte-identical (the
+- [x] **4.3 v1.1 draw == v1.2 zero-tail non-textured draw** byte-identical (the
   additive-compat row): a v1.1-shaped draw and a v1.2 record with a zeroed
   UV/texture tail render bit-identical.
-- [ ] **4.4 refusal purity incl. released-UV-alloc + short-stride** leave pixels
+- [x] **4.4 refusal purity incl. released-UV-alloc + short-stride** leave pixels
   bit-for-bit untouched (this is the row that also covers §3.3).
-- [ ] **4.5 donor-row Metal twins** (the transcribed donor gfx rows) confirmed
+- [x] **4.5 donor-row Metal twins** (the transcribed donor gfx rows) confirmed
   live-green on Metal.
-- [ ] **4.6 full `caliper_gfx_tests` green** on this Mac with the Metal block
+- [x] **4.6 full `caliper_gfx_tests` green** on this Mac with the Metal block
   live; the pre-existing v1 / v1_1 Metal rows still pass (no regression from the
   v1_2 additions).
 
@@ -253,22 +255,22 @@ reports `STREAM_ORDERED` true (§0.2). None of it has run on an Apple GPU. The
 one thing a review cannot settle: **does the device pick actually land on MPS at
 runtime, or silently fall to CPU?**
 
-- [ ] **5.1 device pick lands on MPS.** Confirm `torch::mps::is_available()`
+- [x] **5.1 device pick lands on MPS.** Confirm `torch::mps::is_available()`
   returns true on this box and the logged `device_name` reads **"MPS"** (set at
   `twin_scope.cpp:379,384`), not "CPU". A silent CPU fall makes every zero-copy
   claim below false.
-- [ ] **5.2 STREAM_ORDERED handoff runs.** With MPS selected, the imported
+- [x] **5.2 STREAM_ORDERED handoff runs.** With MPS selected, the imported
   update path (`update_tex`, `twin_scope.cpp:823–831`) takes the zero-copy
   branch: verify the MPS producer-queue handoff orders correctly (the Metal
   `MTLSharedEvent` path, `metal_renderer.mm:1165–1183`) — texels reflect the
   latest sim step, no torn field. This is the MPS analog of the CUDA
   STREAM_ORDERED proof; it has NEVER executed.
-- [ ] **5.3 zero-copy textured split view draws** with an honest provenance
+- [x] **5.3 zero-copy textured split view draws** with an honest provenance
   line (claimed only when that path actually drew — flow_scope discipline). The
   Vulkan+CUDA reference proof: `progress.md:478–479` (`V_render 2430 / V_sim
   28590`, "geometry path OK — imported allocations in place"). Mirror that as
   the Metal proof: a logged/screenshotted status line.
-- [ ] **5.4 honest ladder holds.** `CALIPER_RENDERER=gl` (or MPS zero-copy
+- [x] **5.4 honest ladder holds.** `CALIPER_RENDERER=gl` (or MPS zero-copy
   genuinely unavailable) → per-vertex or heatmap rung with the honest status
   line, never a wrong image (design §9). If MPS is present but the pool import
   fails, the runtime re-eval falls to per-vertex, not to the heatmap.
@@ -304,7 +306,9 @@ the mac session does not hunt.
   helper already supplies the `geom_prims:` category). No other call site is
   affected (verified by grep: only line 934 double-prefixes). Log-only,
   behavior unchanged.
-- [ ] **6.1** fixed and confirmed in the §3.1 refusal log.
+- [x] **6.1** fixed at the only call site (commit `f885479`). *(Not observable
+  in a live refusal log — the §3.1 path is not runtime-reachable through the
+  public API; verified by inspection + grep, as §3.1's note records.)*
 
 ### 6.2 `geom_tex_fs` VOut stage-in unreached by textured POINT draws
 
@@ -326,7 +330,14 @@ the mac session does not hunt.
   `geom_draw_primitives`, ~lines 863/885). Documenting is sufficient if
   pipeline creation fails closed on hardware; guard only if it does something
   worse.
-- [ ] **6.2** verified never-reached, and documented (or guarded) accordingly.
+- [x] **6.2** *(hardware adjudication REVERSED the premise: the
+  `VOutPoint`→`geom_tex_fs` stage-in pairing is valid MSL — builtins are
+  excluded from stage-in matching, user varyings are identical — so a textured
+  POINT draw RENDERS correctly on Metal, it does not fail pipeline creation. No
+  guard added: a guard would break parity with Vulkan, whose shader draws
+  textured points too. Pinned instead by a new gfx row (every rendered point
+  pixel == the sampled texel); Vulkan mirror row pending the Windows Phase-B
+  session. Commit `edddb26`.)*
 
 ---
 
@@ -334,24 +345,32 @@ the mac session does not hunt.
 
 When §2–§6 are all green with artifacts, the following flip — and only then:
 
-- [ ] **7.1 `ROADMAP.md §6`** — line 99 (`Twin applet ships run-proven on both
+- [x] **7.1 `ROADMAP.md §6`** — line 99 (`Twin applet ships run-proven on both
   platforms`) is **the box this pass unlocks**: it currently reads "Metal/MPS
   pass pending macOS"; flip to run-proven both platforms. Line 97 (R2 shipped
   both backends) drops the "hardware verification pending macOS" qualifier.
-- [ ] **7.2 `GEOMETRY.md`** — the R2 row (line 611) drops "Metal: transcribed +
+- [x] **7.2 `GEOMETRY.md`** — the R2 row (line 611) drops "Metal: transcribed +
   reviewed, hardware verification pending macOS" → "byte-exact both backends."
-- [ ] **7.3 `ZEROCOPY.md`** — add the Metal/MPS imported-geometry **textured**
+- [x] **7.3 `ZEROCOPY.md`** — add the Metal/MPS imported-geometry **textured**
   status alongside the existing rows (the primitives rows are at lines 288–294);
   the v1_2 textured path is now "byte-exact verified on Apple Silicon."
-- [ ] **7.4 `.superpowers/sdd/progress.md`** — tick the `## MAC-PENDING
+- [x] **7.4 `.superpowers/sdd/progress.md`** — tick the `## MAC-PENDING
   CHECKLIST` (lines 484–496); record the build recipe (§1.1) and any hardware
-  finding, in the honesty-ledger style of the existing entries.
-- [ ] **7.5 the remaining-work plan §1.2** — mark the macOS hardware pass done;
+  finding, in the honesty-ledger style of the existing entries. *(Note: the
+  MAC-PENDING CHECKLIST at lines 484–496 does NOT exist on this machine — the
+  local `progress.md` is the stale 140-line platform-phase0/1 ledger; the
+  500+-line ledger was Windows-box scratch that never transferred. Recorded
+  instead in a new `## MAC HARDWARE PASS` section appended to the local
+  `progress.md` — build recipe, suite results, run-proofs, the two hardware
+  findings, commits, and this discrepancy.)*
+- [x] **7.5 the remaining-work plan §1.2** — mark the macOS hardware pass done;
   §1.3's "twin applet on both platforms" box is now truthfully checkable.
-- [ ] **7.6 commit** in house style: `docs(specs):` for doc flips, `fix(metal):`
+- [x] **7.6 commit** in house style: `docs(specs):` for doc flips, `fix(metal):`
   for §6 cosmetics, each its own commit; end every message with the
   `Co-Authored-By: Claude Fable 5` trailer. Any code fix rides a full
-  `caliper_gfx_tests` + live re-proof, not a spot check.
+  `caliper_gfx_tests` + live re-proof, not a spot check. *(Code commits
+  `5164f99`/`c92da48`/`f885479`/`edddb26`, each after a full-suite re-run;
+  doc flips land in the `docs(specs):` closeout commit that ticks this box.)*
 
 ---
 
@@ -361,7 +380,7 @@ The §3 tech-debt branch (`fix/r2-tech-debt`, merged the same day) landed applet
 code with `__APPLE__`-guarded branches that **no compiler has seen** — the same
 risk class as §2. The mac session must fold these into the pass:
 
-- [ ] **8.1 Compile gate additions.** New Apple-guarded drain sites, all calling
+- [x] **8.1 Compile gate additions.** New Apple-guarded drain sites, all calling
   `caliper::adapters::detail::mps_synchronize_serialized()` in the mesh_scope
   idiom: `applets/twin_scope/twin_scope.cpp:497-500` (the drain between the
   slot copies and the `ready_slot` flip — commit `335d0b1`),
@@ -369,12 +388,12 @@ risk class as §2. The mac session must fold these into the pass:
   hoisted `sync` lambda call at `applets/field_scope/field_scope.cpp:206-211`.
   These must compile on macOS; they are one-line siblings of code that already
   compiles there, but verify, don't assume.
-- [ ] **8.2 Contract holds on MPS.** The drain-before-publish invariant is now
+- [x] **8.2 Contract holds on MPS.** The drain-before-publish invariant is now
   documented contract (`ZEROCOPY.md`, `geometry_v1.h:66-90`): every worker
   drains its device before flipping `ready_slot`. On MPS the drain is the
   serialized-sync helper — confirm during the §5 TwinScope run that publishes
   are drained (no torn per-vertex COLORMAP frames) with the sim under load.
-- [ ] **8.3 Frame-thread gates behave on Metal.** `14e143a` gated the last two
+- [x] **8.3 Frame-thread gates behave on Metal.** `14e143a` gated the last two
   frame-thread `stream_to_tensor` callers (gpt_scope `upload_mapped`,
   embed_scope `update_or_create`) on STREAM_ORDERED. Metal reports that cap
   unconditionally (`metal_renderer.mm:384`), so on this Mac the gated *fast*
