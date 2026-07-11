@@ -807,3 +807,20 @@ the ceiling. Fixed with **spread headroom** on the tint window so the 50 variant
 the LUT instead of collapsing to its top entry (`e71fce3`). The §4.3 index rule and the
 byte-exact tint row (§8 row B) are unchanged; only the applet-side `vmin`/`vmax` window
 feeding the reduction moved.
+
+**(e) Exemplar revision — the §9 fleet was reverted; `instance_scope` is R3's shipped
+exemplar.** The §9 TwinScope fleet was implemented and run-proven zero-copy on MPS
+(50 housings, ONE instanced draw, live per-variant tint — `40697f1`), then **reverted**
+on user adjudication (`85698f6`). The §9 fleet UX buried the rung's value: a single
+per-housing scalar tint replaced the hero's per-vertex detail in the old split view, and
+even with the (d) spread-headroom fix the unbounded max-statistic saturates any fixed
+window — instancing's point (per-vertex detail across N objects, one draw) was lost, not
+shown. R3's shipped exemplar is instead **`instance_scope`** (`bfe6da9`) — a dedicated
+applet drawing N gems (slider 1–5000, default 1000) in ONE instanced draw from live
+device-tensor poses + tints, run-proven on MPS with the log line "first zero-copy
+instanced frame drawn — 1000 objects, 1 draw call, 0 mesh copies". TwinScope reverts to
+the R2 surface twin (hero-only). What remains in-tree from §9 is applet-independent: the
+per-variant reduction machinery (`predict_batch` + its tests) stays, unused by any
+shipped applet, available to a future population-twin. The byte-exact gfx rows A–E (49/49)
+were never part of the fleet and remain R3's correctness proof, untouched by the swap;
+the v1_3 ABI/backends are likewise untouched.

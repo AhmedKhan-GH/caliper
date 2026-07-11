@@ -28,8 +28,11 @@ What each remaining rung buys, in twin terms:
   an imported `(N,16)` pose tensor = a fleet in one draw, moved per-frame by
   whatever writes the tensor (sim or policy). Also the rung that can draw
   Gaussian-splat captures as instanced primitives.
-- **R2+R3 together ARE the twin demo** (§6) — which is why they're gated on
-  that exemplar's design doc, not built on spec.
+- **R2 and R3 are both gated on the twin exemplar's design doc** (§6) — built
+  against demonstrated need, not on spec. R2's twin demo is TwinScope (the
+  surface twin); R3's population capability ships proven by the `instance_scope`
+  applet + the byte-exact gfx rows (a population *twin* with per-unit state
+  stays a future, R2+R3 combination).
 
 **The competitive wedge, one line:** everyone else moves data to the picture
 (TensorBoard/W&B log-and-poll; rerun.io logs-then-views; Omniverse renders
@@ -95,7 +98,7 @@ its acceptance).
 - [x] Design doc: one concrete twin — learned thermal/stress field over a CAD housing, fleet of ~50 instanced units — TwinScope twin-exemplar design (`0b84c57`), redirected to the v2 surface twin (`e29f000`)
 - [x] Applet-side OBJ loader helper (fills vertex/index tensors; NO ABI growth) — donor OBJ loader + v2 heatsink asset (`071a7f7`); glTF not implemented (OBJ satisfied the exemplar's need)
 - [x] R2 `geometry.v1_2` — textures-on-meshes (the `reserved0` slot): spec → Metal → matrix rows → Vulkan mirror — shipped both backends on `feat/geometry-v1_2` (COLOR_TEXTURE, appended uv/texture draw fields, caps bit 2); byte-exact on both backends — Vulkan run-proven on RTX 500 Ada, Metal run-proven on Apple Silicon (macOS hardware pass 2026-07-10)
-- [x] R3 — instanced transforms from an imported `(N,16)` alloc: spec → backends → rows — shipped on `feat/geometry-v1_3` (`CaliperGeomDrawV1_3`, caps bit 3, `(N,16)` pose + optional `(N,)` tint, one instanced draw). **Metal run-proven byte-exact on Apple Silicon** (gfx rows A–E live incl. a private-storage G14 row) + **TwinScope 50-housing fleet live zero-copy on MPS** with per-draw provenance (2026-07-11). **Vulkan transcribed + reviewed, hardware pass pending the Windows session** (spec: `2026-07-11-geometry-v1_3-vulkan-windows-hardware-pass.md`) — the Metal tick is artifact-verified here, the Vulkan hardware tick waits on that session.
+- [x] R3 — instanced transforms from an imported `(N,16)` alloc: spec → backends → rows — shipped on `feat/geometry-v1_3` (`CaliperGeomDrawV1_3`, caps bit 3, `(N,16)` pose + optional `(N,)` tint, one instanced draw). **Metal run-proven byte-exact on Apple Silicon** (gfx rows A–E live incl. a private-storage G14 row) + **`instance_scope` live zero-copy on MPS** — the dedicated R3 applet, N gems (slider 1–5000, default 1000) in ONE instanced draw with live device-tensor poses + tints, log line "first zero-copy instanced frame drawn — 1000 objects, 1 draw call, 0 mesh copies" and per-draw provenance (2026-07-11; replaces the earlier TwinScope 50-housing fleet exemplar, which was run-proven on MPS then reverted as a UX regression). **Vulkan transcribed + reviewed, hardware pass pending the Windows session** (spec: `2026-07-11-geometry-v1_3-vulkan-windows-hardware-pass.md`) — the Metal tick is artifact-verified here, the Vulkan hardware tick waits on that session.
 - [x] Twin applet ships run-proven on both platforms — the flagship demo — TwinScope v2 surface twin run-proven zero-copy on Vulkan+CUDA and Metal/MPS (GL fallback proven on both)
 
 ## 7 · Strategic (decisions before code)

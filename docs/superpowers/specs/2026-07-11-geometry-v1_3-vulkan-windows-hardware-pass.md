@@ -31,8 +31,11 @@ loosened comparison. Invariants at the bottom never become checkboxes.
 Branch commits: `3d50ce3` (T1 ABI+SDK+vend), `ca3a574` (T2 host gates G1–G12),
 `511cdc0` (T3 Metal backend, run-proven), `d0d86af` + `78416c3` (T4 Vulkan
 transcription + honesty-comment fix), `5403d92`/`40697f1`/`5aa2f73` (T5
-TwinScope fleet + Metal G14 storage-mode fixes). Line anchors below are as of
-`5aa2f73`; re-grep if the tree has moved.
+TwinScope fleet + Metal G14 storage-mode fixes). **The T5 TwinScope fleet was
+subsequently reverted (`85698f6`) as a UX regression; R3's shipped exemplar is
+the dedicated `instance_scope` applet (`bfe6da9`)** — the fleet-independent v1_3
+ABI, host gates, and both backends are untouched by that swap. Line anchors
+below are as of `5aa2f73`; re-grep if the tree has moved.
 
 ### 0.1 Platform-neutral (already compiled AND tested on the Mac — no new risk)
 
@@ -181,20 +184,24 @@ same as the v1_1/v1_2 Vulkan rows.
   path, so the v1 COLORMAP rows are the regression canary).
 - [ ] **4.7** Full suite 100% (all 8 ctest suites).
 
-## 5. TwinScope fleet on Vulkan/CUDA — the run-proof
+## 5. `instance_scope` on Vulkan/CUDA — the run-proof
 
-The applet code is platform-neutral and already run-proven on Metal/MPS
-(50-housing fleet, ONE instanced draw, live tint). On Windows verify:
+R3's shipped exemplar is `instance_scope` (the earlier TwinScope 50-housing
+fleet was reverted as a UX regression — see the design spec's hardware addendum
+(e); TwinScope no longer carries a fleet, it is the R2 surface twin). The applet
+code is platform-neutral and already run-proven on Metal/MPS (N gems, slider
+1–5000, default 1000, ONE instanced draw, live device-tensor poses + tints). On
+Windows verify:
 
-- [ ] **5.1** Device pick lands on CUDA; the fleet renders: the status line
-  `fleet — ONE instanced draw, N=50 housings from imported (50,16) pose +
-  (50,) tint` appears with the Vulkan renderer active, zero-copy provenance
+- [ ] **5.1** Device pick lands on CUDA; `instance_scope` renders: the status
+  line `first zero-copy instanced frame drawn — 1000 objects, 1 draw call, 0
+  mesh copies` appears with the Vulkan renderer active, zero-copy provenance
   line claimed only from the actually-drawn path.
 - [ ] **5.2** Drain-before-publish on the pose/attr path takes the CUDA arm
-  (`torch::cuda::synchronize` idiom) — no torn tints under sim load.
-- [ ] **5.3** Tint toggle (peak-T ↔ peak-|error|) and click-to-promote work
-  (manual); honest ladder: `CALIPER_RENDERER=gl` → the CPU-heatmap rung with
-  the honest line, never a wrong image.
+  (`torch::cuda::synchronize` idiom) — no torn poses/tints under load.
+- [ ] **5.3** The N slider spans 1–5000 live; honest ladder:
+  `CALIPER_RENDERER=gl` (or cap bit 3 absent) → the non-instanced fallback rung
+  with the honest line, never a wrong image.
 
 ## 6. Closeout (which lines flip, and only then)
 
@@ -221,8 +228,8 @@ The applet code is platform-neutral and already run-proven on Metal/MPS
   byte-identical to pre-v1_3 output (Row C is the proof; the v1/v1_1/v1_2
   row battery is the canary).
 - **Honest degradation and provenance:** zero-copy claimed only when the
-  imported instanced path actually drew; cap absent → hero-only + the honest
-  fleet line.
+  imported instanced path actually drew; cap absent → non-instanced fallback +
+  the honest line.
 - **No checkbox without artifacts.** Transcription review (T4) was thorough
   but is NOT a hardware claim — this pass exists because it isn't.
 - Data flows tensors → pixels → ImGui, one way; no new ABI; the frozen 192-
