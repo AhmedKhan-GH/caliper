@@ -18,6 +18,11 @@ layout(std430, set = 0, binding = 2) readonly buffer Nrm  { float nrm[];  };
 layout(std430, set = 0, binding = 3) readonly buffer Attr { uint  attr[]; };
 layout(std430, set = 0, binding = 4) readonly buffer Lut  { uint  lut[];  };
 layout(std430, set = 0, binding = 6) readonly buffer UV   { float uv[];  };
+// v1.3 instance streams (§6.2): binding 8 the (N,16) column-major model
+// matrices as float[]; binding 9 the (N,) per-instance tint scalars bound as
+// uint[] so NaN bit patterns survive to uintBitsToFloat (the binding-3 trick).
+layout(std430, set = 0, binding = 8) readonly buffer Inst     { float im[];    };
+layout(std430, set = 0, binding = 9) readonly buffer InstAttr { uint  iattr[]; };
 
 // std140 layout is byte-identical to the Metal PrimParams struct, which is
 // static_assert'ed to 192 bytes; every member below lands at the SAME offset in
@@ -27,8 +32,9 @@ layout(std430, set = 0, binding = 6) readonly buffer UV   { float uv[];  };
 // std140 block; PrimParams in vulkan_renderer.cpp (static_assert 192); and
 // PrimParams in metal_renderer.mm's MSL string (static_assert 192). grep
 // PrimParams when growing. The v1.3 instance tail (use_instance/inst_base/
-// use_instance_attr/inst_attr_base) is threaded on Metal; the instance-PULL
-// logic in this GLSL body is Vulkan's task (T4) — only the block grew here.
+// use_instance_attr/inst_attr_base) and the instance-PULL body below are the
+// GLSL twin of the run-proven Metal geom_compute (metal_renderer.mm) —
+// transcribed byte-for-byte in float op order; compiled out on macOS.
 layout(std140, set = 0, binding = 5) uniform Params {
     mat4  mvp;          // offset 0
     vec4  nmat0;        // 64  — columns of the 3x3 normal matrix (xyz used)
@@ -75,14 +81,40 @@ void main() {
     vec3 wp = vec3(pos[p.pos_base + 3u * vi + 0u],
                    pos[p.pos_base + 3u * vi + 1u],
                    pos[p.pos_base + 3u * vi + 2u]);
-    gl_Position = p.mvp * vec4(wp, 1.0);
+
+    // v1.3 (§4.1): the per-instance model matrix is applied to the world
+    // position FIRST, then mvp. use_instance==0 takes the EXACT v1.2 expression
+    // (bit-identical — §8 row C). M columns are pulled column-major at
+    // inst_base + 16*gl_InstanceIndex. Mirrors the MSL geom_compute grouping
+    // p.mvp * (M * vec4(wp,1)) — never fold (mvp*M) (§8 byte-load-bearing note).
+    bool inst = (p.use_instance != 0u);
+    uint iid  = uint(gl_InstanceIndex);
+    mat4 M;
+    if (inst) {
+        uint b = p.inst_base + 16u * iid;
+        M = mat4(vec4(im[b +  0u], im[b +  1u], im[b +  2u], im[b +  3u]),   // column 0
+                 vec4(im[b +  4u], im[b +  5u], im[b +  6u], im[b +  7u]),   // column 1
+                 vec4(im[b +  8u], im[b +  9u], im[b + 10u], im[b + 11u]),   // column 2
+                 vec4(im[b + 12u], im[b + 13u], im[b + 14u], im[b + 15u]));  // column 3
+        gl_Position = p.mvp * (M * vec4(wp, 1.0));
+    } else {
+        gl_Position = p.mvp * vec4(wp, 1.0);                 // byte-identical to v1.2
+    }
     v_uv = p.color_mode == 3u
         ? vec2(uv[p.uv_base + 2u * vi + 0u],
                uv[p.uv_base + 2u * vi + 1u])
         : vec2(0.0);
 
     vec4 c;
-    if (p.color_mode == 1u) {
+    if (inst && p.use_instance_attr != 0u) {
+        // §4.3: per-instance tint overrides the color_mode source, looked up
+        // once per instance through the same COLORMAP idx math (LUT at binding
+        // 4). iattr bound as uint[] so NaN bit patterns survive uintBitsToFloat.
+        float v = uintBitsToFloat(iattr[p.inst_attr_base + iid]);
+        float t = (v == v && p.vmax > p.vmin)
+                ? clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0, 1.0) : 0.0;
+        c = unpack_rgba(lut[uint(t * 255.0 + 0.5)]);
+    } else if (p.color_mode == 1u) {
         // attr bound as uint[] so NaN bit patterns survive to uintBitsToFloat.
         float v = uintBitsToFloat(attr[p.attr_base + vi]);
         float t = (v == v && p.vmax > p.vmin)
@@ -100,9 +132,22 @@ void main() {
         vec3 n = normalize(vec3(nrm[p.nrm_base + 3u * vi + 0u],
                                 nrm[p.nrm_base + 3u * vi + 1u],
                                 nrm[p.nrm_base + 3u * vi + 2u]));
-        vec3 nvs = normalize(n.x * p.nmat0.xyz +
-                             n.y * p.nmat1.xyz +
-                             n.z * p.nmat2.xyz);
+        vec3 nvs;
+        if (inst) {
+            // §4.4: instance upper-3x3 (M columns 0/1/2, xyz) applied to n
+            // FIRST, then the per-draw normal matrix — EXACT MSL float order.
+            vec3 ni;
+            ni.x = M[0].x * n.x + M[1].x * n.y + M[2].x * n.z;
+            ni.y = M[0].y * n.x + M[1].y * n.y + M[2].y * n.z;
+            ni.z = M[0].z * n.x + M[1].z * n.y + M[2].z * n.z;
+            nvs = normalize(ni.x * p.nmat0.xyz +
+                            ni.y * p.nmat1.xyz +
+                            ni.z * p.nmat2.xyz);
+        } else {
+            nvs = normalize(n.x * p.nmat0.xyz +
+                            n.y * p.nmat1.xyz +
+                            n.z * p.nmat2.xyz);
+        }
         float lit = 0.30 + 0.70 * max(dot(nvs, vec3(0.0, 0.0, 1.0)), 0.0);
         c.rgb *= lit;   // alpha untouched
     }
