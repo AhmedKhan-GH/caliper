@@ -1021,10 +1021,41 @@ public:
                     use_instance_attr = true;
                 }
                 // G14 (§5.1): every instance upper-3x3 on a LAMBERT-instanced draw
-                // must be rigid+uniform-scale. Metal imported buffers are shared
-                // storage — read contents() directly (no blit), before any encoder.
+                // must be rigid+uniform-scale, read on the host before any encoder.
+                // Shared-storage imports (the gfx-test MTLBuffers) expose contents()
+                // directly. A real device tensor (e.g. a torch MPS buffer) is
+                // PRIVATE storage — contents() is not host-readable — so blit the
+                // N*64-byte matrix range into a shared staging buffer and read from
+                // the host, exactly
+                // as the Vulkan backend does for its device-local imports (§5.1). One
+                // fenced round-trip, off the pixel-critical path (LAMBERT-instanced
+                // draws only); a refusal leaves the view's pixels untouched.
                 if (d.shade_mode == CALIPER_GEOM_SHADE_LAMBERT && use_instance) {
-                    const uint8_t* base = (const uint8_t*)inst.contents + d.instance_offset;
+                    const NSUInteger rigid_bytes = (NSUInteger)n_inst * 64u;
+                    const uint8_t* base = nullptr;
+                    // NB: -[MTLBuffer contents] is only valid for Shared storage;
+                    // on a Private buffer it returns a non-nil garbage pointer, so
+                    // branch on storageMode, not contents.
+                    if (inst.storageMode == MTLStorageModeShared) {
+                        base = (const uint8_t*)inst.contents + d.instance_offset;
+                    } else {
+                        id<MTLBuffer> stage =
+                            [device_ newBufferWithLength:rigid_bytes
+                                                 options:MTLResourceStorageModeShared];
+                        if (stage == nil)
+                            return metal_geom_fail("instance rigidity staging alloc failed");
+                        id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+                        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+                        [blit copyFromBuffer:inst
+                                sourceOffset:d.instance_offset
+                                    toBuffer:stage
+                           destinationOffset:0
+                                        size:rigid_bytes];
+                        [blit endEncoding];
+                        [cb commit];
+                        [cb waitUntilCompleted];
+                        base = (const uint8_t*)stage.contents;
+                    }
                     for (NSUInteger k = 0; k < n_inst; ++k) {
                         const float* mi = (const float*)base + 16u * k;
                         if (!instance_upper3x3_rigid(mi))
