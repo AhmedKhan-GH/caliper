@@ -92,6 +92,10 @@ a:hover { text-decoration: underline; }
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+/* border-radius guarded off .btn: the 2px would square the pill buttons
+ * (--radius-pill) if source order ever put this rule after .btn. */
+:focus-visible:not(.btn) {
   border-radius: 2px;
 }
 
@@ -117,7 +121,8 @@ main > section:first-child { border-top: 0; }
 /* ---------- top bar ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(11, 14, 20, 0.82);
+  background: rgba(11, 14, 20, 0.82); /* fallback for browsers without color-mix() */
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: saturate(140%) blur(10px);
   -webkit-backdrop-filter: saturate(140%) blur(10px);
   border-bottom: 1px solid var(--line);
