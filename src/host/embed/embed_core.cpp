@@ -156,6 +156,12 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
 #endif
             break;
     }
+    if (core->renderer) {
+        // Core-owned diagnostic through log_fn (NOT the applet log service): the
+        // resolved backend. The exe prints its own "[renderer] metal"; the embed
+        // core routes the equivalent through the embedder's sink.
+        core->log(1, std::string("renderer: ") + core->renderer->name());
+    }
     if (!core->renderer) {
         core_destroy_ui_context();
         g_live_core.store(nullptr, std::memory_order_release);  // release the slot
@@ -267,6 +273,11 @@ int caliper_core_attach_canvas(CaliperCore* core, void* native_view,
     core->scale = desc->content_scale > 0.0f ? desc->content_scale : 1.0f;
     core->last_frame_time = now_sec();
     core->last_error.clear();
+    core->log(1, "canvas attached: " + std::to_string(core->canvas_w) + "x" +
+                     std::to_string(core->canvas_h) + " @" +
+                     std::to_string(core->scale) + "x (" +
+                     (mode == HostRenderer::CANVAS_WINDOW ? "window" : "offscreen") +
+                     ")");
     return 1;
 }
 
@@ -417,6 +428,7 @@ int caliper_core_load_applet(CaliperCore* core, const char* manifest_id) {
     core->watchdog.reset();
     core->last_frame_time = now_sec();
     core->last_error.clear();
+    core->log(1, std::string("applet loaded: ") + manifest_id);
     return 1;
 }
 

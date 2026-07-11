@@ -506,6 +506,20 @@ public:
             canvas_layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
             canvas_layer_.framebufferOnly = YES;
             canvas_layer_.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
+            // HiDPI (L2b W2): the host passes w/h in PHYSICAL pixels, so the
+            // layer's contentsScale must be the backing scale for the drawable
+            // to map 1:1 — leaving the CALayer default (1.0) makes a Retina
+            // window composite the physical-size drawable into a point-size
+            // layer and present it quarter-scale / blurry. AppKit does NOT set
+            // contentsScale on a layer-hosting view (unlike a layer-BACKED one),
+            // so we set it from the window the host already parented the view in.
+            CGFloat backing = view.window ? view.window.backingScaleFactor
+                                          : (w > 0 && view.bounds.size.width > 0
+                                                 ? (CGFloat)w / view.bounds.size.width
+                                                 : 1.0);
+            if (backing <= 0.0) backing = 1.0;
+            canvas_layer_.contentsScale = backing;
+            canvas_layer_.frame = view.bounds;
             view.layer = canvas_layer_;
             view.wantsLayer = YES;
         }

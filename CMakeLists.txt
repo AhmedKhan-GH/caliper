@@ -420,6 +420,9 @@ if(CALIPER_BUILD_EXAMPLES)
     # applet (first-ml-applet) — building them here keeps the docs' code honest.
     add_subdirectory(examples/hello)
     add_subdirectory(examples/sine_scope)
+    # embed_host: the second, out-of-tree-style embedder of libcaliper (L2b).
+    # A bare native-window host; NOT an applet, NOT linked into `caliper`.
+    add_subdirectory(examples/embed_host)
     add_dependencies(caliper hello_applet sine_scope)
     list(APPEND _active_applet_libs
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
