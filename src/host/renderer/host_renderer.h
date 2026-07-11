@@ -40,6 +40,13 @@ struct HostGeomDraw {
         0.0f, 0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f,
     };
+    // geometry.v1_3 instance tail, resolved to renderer ids + byte offsets.
+    // All zero -> non-instanced (byte-identical to a v1.2 draw).
+    uint64_t instance_alloc = 0;       // resolved (N,16) f32 pose alloc
+    uint64_t instance_offset = 0;
+    uint64_t instance_count = 0;       // N; 0 -> non-instanced
+    uint64_t instance_attr_alloc = 0;  // resolved (N,) f32 tint alloc; 0 -> none
+    uint64_t instance_attr_offset = 0;
 };
 
 // Host-internal renderer seam (PLATFORM.md §5.4). The ABI never sees this;
@@ -128,6 +135,10 @@ public:
     }
     virtual bool supports_geometry_primitives() const { return false; }
     virtual bool supports_geometry_textured() const { return false; }
+    // geometry.v1_3: true when this backend runs N>1 instanced draws. Default
+    // false -> the bridge never grants CALIPER_GEOM_CAP_INSTANCED. Mirrors
+    // supports_geometry_textured(); no backend grants it yet (T1).
+    virtual bool supports_geometry_instanced() const { return false; }
     virtual uint64_t geom_create_view_ex(int /*w*/, int /*h*/,
                                          uint32_t /*flags*/) { return 0; }
     virtual bool geom_draw_primitives(uint64_t /*view_tex*/,

@@ -16,6 +16,7 @@
 #include <caliper/services/geometry_v1.h>
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
+#include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -114,8 +115,19 @@ public:
                                           uint32_t draw_count,
                                           uint32_t draw_stride,
                                           uint32_t clear_rgba);
+    bool             geom_draw_primitives_v1_3(CaliperTextureId view,
+                                          const CaliperGeomCamera* cam,
+                                          const CaliperGeomDrawV1_3* draws,
+                                          uint32_t draw_count,
+                                          uint32_t draw_stride,
+                                          uint32_t clear_rgba);
 
 private:
+    // The revision axis for the shared draw_primitives validator: selects the
+    // minimum stride (192/216/256), the color-mode ceiling, and whether the
+    // instance tail is read. Replaced the earlier bool v12 (single-axis) — a
+    // second bool was the reviewed defect, do not reintroduce it.
+    enum class GeomRev : uint32_t { V1_1, V1_2, V1_3 };
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
     // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_{metal,
     // opengl3} bind as ImTextureID; §5.4), and this table is keyed by it. The
@@ -148,14 +160,14 @@ private:
     // written once; logs "update: ..." and returns false on a mismatch.
     bool desc_matches_entry(const Entry& e, const CaliperTensor& t) const;
 
-    // Shared validation for both draw_primitives entry points. `v12` is the
-    // single revision axis: it selects the minimum stride (192 vs 216) and the
-    // color-mode ceiling (VERTEX_RGBA vs TEXTURE) — the v1.1 and v1.2 records
-    // are otherwise validated identically.
+    // Shared validation for all draw_primitives entry points. `rev` is the
+    // single revision axis: it selects the minimum stride (192/216/256), the
+    // color-mode ceiling (VERTEX_RGBA vs TEXTURE), and whether the instance
+    // tail is read — the records are otherwise validated identically.
     bool geom_draw_primitives_impl(CaliperTextureId view,
                                    const CaliperGeomCamera* cam,
                                    const void* draws, uint32_t draw_count,
-                                   uint32_t draw_stride, bool v12,
+                                   uint32_t draw_stride, GeomRev rev,
                                    uint32_t clear_rgba);
 
     // Imported external allocations (v1.2): public CaliperAllocId -> the

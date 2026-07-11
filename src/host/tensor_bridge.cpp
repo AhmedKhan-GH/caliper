@@ -464,6 +464,8 @@ uint32_t TensorBridge::geom_caps() const {
         c |= CALIPER_GEOM_CAP_PRIMITIVES;
     if (primitives && renderer_.supports_geometry_textured())
         c |= CALIPER_GEOM_CAP_TEXTURED;
+    if (primitives && renderer_.supports_geometry_instanced())
+        c |= CALIPER_GEOM_CAP_INSTANCED;
     return c;
 }
 
@@ -573,7 +575,7 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
                                         uint32_t draw_stride,
                                         uint32_t clear_rgba) {
     return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
-                                     /*v12=*/false, clear_rgba);
+                                     GeomRev::V1_1, clear_rgba);
 }
 
 bool TensorBridge::geom_draw_primitives_v1_2(
@@ -581,19 +583,31 @@ bool TensorBridge::geom_draw_primitives_v1_2(
         const CaliperGeomDrawV1_2* draws, uint32_t draw_count,
         uint32_t draw_stride, uint32_t clear_rgba) {
     return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
-                                     /*v12=*/true, clear_rgba);
+                                     GeomRev::V1_2, clear_rgba);
+}
+
+bool TensorBridge::geom_draw_primitives_v1_3(
+        CaliperTextureId view, const CaliperGeomCamera* cam,
+        const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
+        uint32_t draw_stride, uint32_t clear_rgba) {
+    return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
+                                     GeomRev::V1_3, clear_rgba);
 }
 
 bool TensorBridge::geom_draw_primitives_impl(
         CaliperTextureId view, const CaliperGeomCamera* cam,
         const void* draws, uint32_t draw_count, uint32_t draw_stride,
-        bool v12, uint32_t clear_rgba) {
-    // The single revision axis: v1.2 records carry the UV/texture tail and may
-    // request COLOR_TEXTURE; v1.1 records do neither.
+        GeomRev rev, uint32_t clear_rgba) {
+    // The single revision axis derives everything: v1.2+ records carry the
+    // UV/texture tail and may request COLOR_TEXTURE; v1.3 additionally carries
+    // the instance tail (read only under V1_3). v1.3 adds no color mode.
     const uint32_t min_stride =
-        v12 ? sizeof(CaliperGeomDrawV1_2) : sizeof(CaliperGeomDraw);
+        rev == GeomRev::V1_3 ? sizeof(CaliperGeomDrawV1_3)
+      : rev == GeomRev::V1_2 ? sizeof(CaliperGeomDrawV1_2)
+                             : sizeof(CaliperGeomDraw);
     const uint32_t max_color =
-        v12 ? CALIPER_GEOM_COLOR_TEXTURE : CALIPER_GEOM_COLOR_VERTEX_RGBA;
+        rev == GeomRev::V1_1 ? CALIPER_GEOM_COLOR_VERTEX_RGBA
+                             : CALIPER_GEOM_COLOR_TEXTURE;
     if (!renderer_.supports_geometry_primitives()) {
         bridge_log("geom_prims: primitives unsupported"); return false;
     }
@@ -644,6 +658,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                              (uint64_t)i * draw_stride;
         const auto* d = reinterpret_cast<const CaliperGeomDraw*>(record);
         const auto* d12 = reinterpret_cast<const CaliperGeomDrawV1_2*>(record);
+        const auto* d13 = reinterpret_cast<const CaliperGeomDrawV1_3*>(record);
         auto reject_i = [i](const char* reason) {
             char msg[128];
             std::snprintf(msg, sizeof msg, "geom_prims: draw %u refused: %s", i, reason);
@@ -746,6 +761,29 @@ bool TensorBridge::geom_draw_primitives_impl(
             }
         }
 
+        // Instance tail (v1.3 only). Resolved into the HostGeomDraw with no
+        // gates in T1 — the G1-G12 instance battery lands in T2 (§10). The
+        // renderer id mirrors how uv_alloc holds a resolved id; an unresolved
+        // alloc stays 0 until T2 refuses it.
+        uint64_t instance_rid = 0;
+        uint64_t instance_attr_rid = 0;
+        if (rev == GeomRev::V1_3) {
+            if (d13->instance_alloc != 0) {
+                auto ma = imported_.find(d13->instance_alloc);
+                if (ma != imported_.end()) instance_rid = ma->second.renderer_id;
+            }
+            if (d13->instance_attr_alloc != 0) {
+                auto ta = imported_.find(d13->instance_attr_alloc);
+                if (ta != imported_.end())
+                    instance_attr_rid = ta->second.renderer_id;
+                // Tint-LUT resolution rule (§3.3): an instanced-tint draw
+                // carries a real LUT regardless of base color_mode, resolved
+                // from the base record's colormap (T2's G12 guarantees it
+                // resolves; here we simply populate it when it does).
+                if (!lut) lut = colormap_lut(d->colormap);
+            }
+        }
+
         uint64_t uv_rid = 0;
         uint64_t texture_rid = 0;
         if (d->color_mode == CALIPER_GEOM_COLOR_TEXTURE) {
@@ -787,6 +825,12 @@ bool TensorBridge::geom_draw_primitives_impl(
         hd.vmax = d->vmax;
         hd.size_px = d->size_px;
         std::memcpy(hd.model, d->model, sizeof(hd.model));
+        hd.instance_alloc = instance_rid;
+        hd.instance_offset = instance_rid ? d13->instance_offset : 0u;
+        hd.instance_count = instance_rid ? d13->instance_count : 0u;
+        hd.instance_attr_alloc = instance_attr_rid;
+        hd.instance_attr_offset =
+            instance_attr_rid ? d13->instance_attr_offset : 0u;
         resolved.push_back(hd);
     }
 
