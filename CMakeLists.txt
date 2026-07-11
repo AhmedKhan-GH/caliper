@@ -285,30 +285,58 @@ if(WIN32)
 endif()
 
 # ============================================================================
-# Main Application (host)
+# libcaliper — the embeddable platform core (R4 / Compass, L1 self-host)
+# ============================================================================
+# The successor of caliper_host_lib for embedders: it aggregates the inner
+# headless layer (caliper_host_lib) with the renderer/bridge/service-vending
+# layer that used to be pinned in the caliper exe — host_services (service
+# registry + vending), tensor_bridge (bridge v1–v1.2 + geometry v1–v1_3), the
+# frozen GL fallback renderer — plus the ordered core lifecycle (core_lifecycle:
+# renderer selection + applet-canvas ImGui context). The caliper exe is now its
+# first embedder.
+#
+# caliper_host_lib stays a renderer-free INNER target so caliper_tests remains
+# headless (l1-survey do-not-touch): the renderer/bridge join the graph only at
+# this layer. Metal/Vulkan backends link in per-OS exactly as they did in the
+# exe. Output name `caliper` -> libcaliper.a (no clash with the `caliper` exe).
+add_library(libcaliper STATIC
+    src/host/host_services.cpp
+    src/host/tensor_bridge.cpp
+    src/host/renderer/gl_renderer.cpp
+    src/host/core_lifecycle.cpp
+)
+# Namespaced alias for the inner headless layer, kept so any consumer can name
+# it as caliper::host_lib (test CMake still links the raw caliper_host_lib).
+add_library(caliper::host_lib ALIAS caliper_host_lib)
+target_include_directories(libcaliper PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(libcaliper
+    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack
+    PRIVATE ${CALIPER_DEPENDENCY_LIBS})
+if(APPLE)
+    target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
+endif()
+if(WIN32)
+    target_link_libraries(libcaliper PUBLIC caliper_vulkan_backend)
+endif()
+set_target_properties(libcaliper PROPERTIES
+    OUTPUT_NAME caliper
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
+# ============================================================================
+# Main Application (host — first embedder of libcaliper)
 # ============================================================================
 
 add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
-    src/host/host_services.cpp
-    src/host/renderer/gl_renderer.cpp
-    src/host/tensor_bridge.cpp
     src/app_paths.cpp
 )
-# TensorBridge (caliper.tensor_bridge.v1 core) lives in the exe link scope, not
-# caliper_host_lib, because it builds on the HostRenderer seam (C4). host_lib
-# stays renderer-free and headless-unit-testable.
 target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 
-# Host links UI libs + platform libs (no DuckDB, no LibTorch)
-target_link_libraries(caliper PRIVATE caliper_host_lib caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
-if(APPLE)
-    target_link_libraries(caliper PRIVATE caliper_metal_backend)
-endif()
-if(WIN32)
-    target_link_libraries(caliper PRIVATE caliper_vulkan_backend)
-endif()
+# The host links the platform core (libcaliper, which PUBLIC-propagates
+# caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
+# libs it uses directly (imgui/glfw/implot chrome).
+target_link_libraries(caliper PRIVATE libcaliper caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
