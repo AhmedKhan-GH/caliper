@@ -54,8 +54,15 @@
 extern "C" {
 #endif
 
-/* Bumped when this ABI changes shape. struct_size on every struct lets the
- * core accept a caller compiled against an older/newer minor without UB. */
+/* Bumped when this ABI grows a field. The struct_size FIRST-member on every
+ * struct is the compatibility gate, and the rule is exact: the core requires
+ * caller->struct_size >= the core's own sizeof(...) and REFUSES otherwise (a
+ * caller built against an OLDER, smaller header is rejected, not silently
+ * misread). Fields are append-only; when the ABI grows, CALIPER_EMBED_API_VERSION
+ * bumps and the new fields land after the old ones, so a caller compiled against
+ * a header at least as new as the core passes the size gate and every field the
+ * core reads is present. Newer-caller / older-core is out of scope in v0 (one
+ * libcaliper per process, built together). */
 #define CALIPER_EMBED_API_VERSION 1
 
 /* Opaque handle. One live instance per process in v0 (see header note). */
@@ -85,9 +92,11 @@ typedef void (*CaliperCrashFn)(void* userdata, const char* applet_id,
 typedef struct CaliperCoreDesc {
     size_t          struct_size;   /* = sizeof(CaliperCoreDesc); FIRST member. */
     CaliperRenderer renderer;      /* backend to embed.                        */
-    const char*     data_dir;      /* app-data root; NULL -> OS default.
-                                    * v0: advisory (see report — remains a
-                                    * process-global path).                    */
+    const char*     data_dir;      /* IGNORED in v0 (reserved): the process
+                                    * app-data path is always used. Threading a
+                                    * per-core data root is a host_services
+                                    * signature change deferred past R4 (the
+                                    * registry is process-global; see report).  */
     const char*     applets_dir;   /* extra applet scan dir; NULL -> default
                                     * discovery (app-data/applets + exe-side). */
     CaliperLogFn    log_fn;        /* NULL -> stderr.                          */
@@ -174,8 +183,10 @@ void caliper_core_event(CaliperCore* core, const CaliperInputEvent* event);
 /* --- Applet control (reuses the loader's manifest discovery) ------------- */
 
 /* Load + launch the applet whose manifest id matches (e.g. "dev.caliper.hello").
- * Returns 1 on success, 0 if unknown/refused/failed (last_error set). Replaces
- * any currently-loaded applet only after a successful launch. */
+ * Returns 1 on success, 0 if unknown/refused/failed (last_error set). A canvas
+ * must be attached FIRST — an applet's launch/first frame touches the renderer's
+ * ImGui backend, so load before attach_canvas is an honest refusal, not a crash.
+ * Replaces any currently-loaded applet only after a successful launch. */
 int  caliper_core_load_applet(CaliperCore* core, const char* manifest_id);
 
 /* Tear down the loaded applet (jobs joined first, then instance). No-op if none

@@ -109,6 +109,11 @@ TEST_CASE("embed/offscreen: load hello, pump, read non-blank pixels, clean shutd
     // Double attach is refused (one canvas per core in v0).
     CHECK(caliper_core_attach_canvas(core, nullptr, &c) == 0);
 
+    // With a canvas attached, an unknown manifest id is an honest refusal
+    // (this is where the unknown-id path is genuinely reached — before a canvas
+    // the W1 gate below refuses first).
+    CHECK(caliper_core_load_applet(core, "dev.caliper.does-not-exist") == 0);
+
     REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello") == 1);
 
     // Pump a few frames: window position settles (FirstUseEver) and the font
@@ -125,12 +130,18 @@ TEST_CASE("embed/offscreen: load hello, pump, read non-blank pixels, clean shutd
     caliper_core_shutdown(core);
 }
 
-TEST_CASE("embed/gate: unknown applet id refuses; read_pixels needs a canvas") {
+TEST_CASE("embed/gate: load before a canvas refuses (W1); read_pixels needs a canvas") {
     CaliperCoreDesc d = base_desc();
     CaliperCore* core = caliper_core_create(&d);
     REQUIRE(core != nullptr);
 
-    CHECK(caliper_core_load_applet(core, "dev.caliper.does-not-exist") == 0);
+    // W1: loading an applet before a canvas is attached is an honest refusal
+    // (the applet's launch + first frame touch the renderer's ImGui backend,
+    // which canvas_init wires). No canvas here — even the fixture id refuses,
+    // and the reason names the canvas so the embedder knows the fix.
+    CHECK(caliper_core_load_applet(core, "dev.caliper.hello") == 0);
+    CHECK(std::string(caliper_core_last_error(core)).find("canvas") !=
+          std::string::npos);
 
     std::vector<uint8_t> px(16, 0);
     CHECK(caliper_core_read_pixels(core, px.data(), 4) == 0);   // no canvas

@@ -17,6 +17,7 @@
 // ===========================================================================
 #include "caliper/embed.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -55,7 +56,15 @@ namespace {
 // One CaliperCore per process in v0 (D5 already binds the process to one
 // libtorch; full de-singletonization is not L2a). This lock makes the refusal
 // honest — a second create() returns NULL while one is live.
-CaliperCore* g_live_core = nullptr;
+//
+// ATOMIC, not a plain pointer (M2): two threads racing caliper_core_create must
+// not BOTH pass the guard and each half-build a core over the shared process
+// globals (ImGui context, service registry). The slot is claimed with a single
+// compare-exchange BEFORE any construction — the loser refuses immediately, and
+// the winner holds a sentinel reservation until it either publishes the real
+// pointer or releases the slot on a build failure.
+std::atomic<CaliperCore*> g_live_core{nullptr};
+CaliperCore* const kCoreReserved = reinterpret_cast<CaliperCore*>(1);
 
 double now_sec() {
     using clock = std::chrono::steady_clock;
@@ -102,7 +111,12 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
         std::fprintf(stderr, "[embed] create: null/short CaliperCoreDesc\n");
         return nullptr;
     }
-    if (g_live_core) {
+    // Claim the one-core-per-process slot atomically BEFORE building anything
+    // (M2). A racing second create sees the CAS fail and refuses; only the
+    // winner proceeds, holding kCoreReserved until it publishes or releases.
+    CaliperCore* expected = nullptr;
+    if (!g_live_core.compare_exchange_strong(expected, kCoreReserved,
+                                             std::memory_order_acq_rel)) {
         // Honest refusal (§4.3): one core per process in v0.
         if (desc->log_fn)
             desc->log_fn(desc->userdata, 2,
@@ -144,6 +158,7 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     }
     if (!core->renderer) {
         core_destroy_ui_context();
+        g_live_core.store(nullptr, std::memory_order_release);  // release the slot
         if (desc->log_fn)
             desc->log_fn(desc->userdata, 2,
                          "caliper_core_create: requested renderer not available "
@@ -187,7 +202,8 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     if (desc->applets_dir && desc->applets_dir[0])
         core->loader->scan(desc->applets_dir);
 
-    g_live_core = core.get();
+    // Publish the real pointer, replacing the sentinel reservation.
+    g_live_core.store(core.get(), std::memory_order_release);
     return core.release();
 }
 
@@ -208,7 +224,9 @@ void caliper_core_shutdown(CaliperCore* core) {
     // ImGui contexts last, AFTER the renderer's ImGui backend is gone.
     core_destroy_ui_context();
 
-    if (g_live_core == core) g_live_core = nullptr;
+    CaliperCore* expected = core;
+    g_live_core.compare_exchange_strong(expected, nullptr,
+                                        std::memory_order_acq_rel);
     delete core;
 }
 
@@ -359,6 +377,13 @@ void caliper_core_event(CaliperCore* core, const CaliperInputEvent* ev) {
 int caliper_core_load_applet(CaliperCore* core, const char* manifest_id) {
     if (!core || !manifest_id) return 0;
     if (!core->loader) { core->fail("load_applet: no loader"); return 0; }
+    // W1: an applet's launch + first frame touch the renderer's ImGui backend
+    // (canvas_init wired it). Loading before a canvas is attached is an honest
+    // refusal — the header contract says attach first — not a deferred crash.
+    if (!core->canvas_ready) {
+        core->fail("load_applet: attach a canvas before loading applets");
+        return 0;
+    }
     int idx = -1;
     for (int i = 0; i < core->loader->count(); ++i)
         if (core->loader->at(i).manifest.id == manifest_id) { idx = i; break; }
