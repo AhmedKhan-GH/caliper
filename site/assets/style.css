@@ -88,6 +88,13 @@ code {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* keyboard focus — accent ring, clearly visible on dark surfaces */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
 .kicker {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
