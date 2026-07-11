@@ -128,6 +128,20 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
         return nullptr;
     }
 
+    // Release the one-core slot if we bail before publishing — by an early
+    // return OR by an exception unwinding out of this function (M2). The CAS
+    // above pinned kCoreReserved; if services_init() or the AppletLoader ctor
+    // (or any step between here and the publish below) throws, this guard puts
+    // the slot back to nullptr — otherwise it stays pinned forever and every
+    // future caliper_core_create() refuses. Disarmed only once the real pointer
+    // is about to be published.
+    struct SlotGuard {
+        bool armed = true;
+        ~SlotGuard() {
+            if (armed) g_live_core.store(nullptr, std::memory_order_release);
+        }
+    } slot_guard;
+
     auto core = std::make_unique<CaliperCore>();
     core->log_fn   = desc->log_fn;
     core->crash_fn = desc->crash_fn;
@@ -164,7 +178,7 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     }
     if (!core->renderer) {
         core_destroy_ui_context();
-        g_live_core.store(nullptr, std::memory_order_release);  // release the slot
+        // slot_guard releases the one-core slot on this return.
         if (desc->log_fn)
             desc->log_fn(desc->userdata, 2,
                          "caliper_core_create: requested renderer not available "
@@ -208,7 +222,9 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     if (desc->applets_dir && desc->applets_dir[0])
         core->loader->scan(desc->applets_dir);
 
-    // Publish the real pointer, replacing the sentinel reservation.
+    // Publish the real pointer, replacing the sentinel reservation. Disarm the
+    // guard first: from here on the slot legitimately holds a live core.
+    slot_guard.armed = false;
     g_live_core.store(core.get(), std::memory_order_release);
     return core.release();
 }
@@ -344,6 +360,10 @@ void caliper_core_frame(CaliperCore* core) {
 
 void caliper_core_event(CaliperCore* core, const CaliperInputEvent* ev) {
     if (!core || !ev) return;
+    // struct_size gate (embed.h promises every struct is size-checked): a caller
+    // built against an older, smaller CaliperInputEvent is dropped rather than
+    // misread field-by-field. Same exact rule as create/attach_canvas.
+    if (ev->struct_size < sizeof(CaliperInputEvent)) return;
     if (!core->canvas_ready) return;   // event before a canvas: no-op, no crash
     ImGuiIO& io = ImGui::GetIO();
     switch (ev->type) {
@@ -399,8 +419,32 @@ int caliper_core_load_applet(CaliperCore* core, const char* manifest_id) {
     for (int i = 0; i < core->loader->count(); ++i)
         if (core->loader->at(i).manifest.id == manifest_id) { idx = i; break; }
     if (idx < 0) {
+        // An unknown id refuses WITHOUT disturbing a running applet — a typo
+        // must not kill the live session. Only a resolvable target proceeds to
+        // the teardown-then-launch arc below.
         core->fail(std::string("load_applet: no applet with id ") + manifest_id);
         return 0;
+    }
+
+    // Tear down the currently-active applet FIRST — same id (a clean restart) or
+    // different id (a swap) — via the exact ordered arc the exe uses
+    // (main.cpp:377 / :403): hard-join every worker (a job may hold a pointer
+    // into applet state — the worker-touching-freed-applet 139 crash class),
+    // THEN destroy the instance. Doing this BEFORE launch fixes two faults the
+    // final review flagged:
+    //   (1) AppletLoader::launch would teardown a same-id Active entry with NO
+    //       cancel_all_and_join first (applet_loader.cpp:133) — the documented
+    //       worker-touching-freed-applet crash;
+    //   (2) the previous order ran cancel_all_and_join AFTER launch, cancelling
+    //       the NEW applet's freshly-scheduled init jobs.
+    // ACCEPTED CONSEQUENCE (documented in embed.h load_applet): if the launch
+    // below fails, the old applet is already gone — a failed load leaves NO
+    // applet, not the previous one. load_applet is called between frames (no
+    // live draw list), so this teardown is immediate, mirroring unload_applet.
+    if (core->active_applet >= 0) {
+        host_job_system().cancel_all_and_join();
+        core->loader->teardown(core->active_applet);
+        core->active_applet = -1;
     }
 
     // Build the CaliperHost prototype exactly as main.cpp::launch_applet does;
@@ -416,14 +460,9 @@ int caliper_core_load_applet(CaliperCore* core, const char* manifest_id) {
     if (!core->loader->launch(idx, proto)) {
         core->fail(std::string("load_applet: launch refused/failed: ") +
                    core->loader->at(idx).status_text);
-        return 0;
+        return 0;   // active_applet stays -1: a failed load leaves NO applet.
     }
 
-    // Replace any previous applet only after a successful launch.
-    if (core->active_applet >= 0 && core->active_applet != idx) {
-        host_job_system().cancel_all_and_join();
-        core->loader->teardown(core->active_applet);
-    }
     core->active_applet = idx;
     core->watchdog.reset();
     core->last_frame_time = now_sec();

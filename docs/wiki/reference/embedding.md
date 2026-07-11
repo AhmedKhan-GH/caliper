@@ -5,8 +5,8 @@ host-neutral services, `HostRenderer` (Metal/Vulkan), the tensor bridge, and
 the geometry ladder — behind a small **C ABI** so a host binary can run the
 applet canvas inside a view it owns *without linking ImGui, torch, or any
 renderer type*. The `caliper` executable is its first embedder; the second
-in-tree embedder is [`examples/embed_host`](https://github.com/) — a ~254-line
-AppKit host that this page mirrors.
+in-tree embedder is `examples/embed_host/` — a ~254-line AppKit host that this
+page mirrors.
 
 This is the **embedder-facing** contract (hosts). It is NOT the applet-facing
 ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](abi.md) + the

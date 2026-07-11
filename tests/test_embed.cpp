@@ -24,10 +24,65 @@
 #include "renderer/host_renderer.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
+#ifdef _WIN32
+#  include <io.h>
+#  define caliper_dup    _dup
+#  define caliper_dup2   _dup2
+#  define caliper_close  _close
+#  define caliper_fileno _fileno
+#  define setenv(k, v, overwrite) _putenv_s(k, v)
+#  define unsetenv(k) _putenv_s(k, "")
+#else
+#  include <unistd.h>
+#  define caliper_dup    dup
+#  define caliper_dup2   dup2
+#  define caliper_close  close
+#  define caliper_fileno fileno
+#endif
+
 namespace {
+
+// Capture C-level stderr for a scope, then restore fd 2. The caliper.log.v1
+// sink writes applet log lines ("hello.on_init" / "hello.on_cleanup") to stderr
+// via fprintf in v0 (embedding.md caveat), so this is how a host-side test
+// observes an applet's lifecycle hooks firing through the ABI. Keep the capture
+// window tight around the load calls so a failing CHECK's text still reaches the
+// real console.
+class StderrTap {
+public:
+    StderrTap() {
+        path_ = (std::filesystem::temp_directory_path() /
+                 "embed_stderr_tap.txt").string();
+        std::fflush(stderr);
+        saved_fd_ = caliper_dup(caliper_fileno(stderr));
+        std::freopen(path_.c_str(), "w", stderr);
+    }
+    std::string drain() {
+        std::fflush(stderr);
+        if (saved_fd_ != -1) {
+            caliper_dup2(saved_fd_, caliper_fileno(stderr));
+            caliper_close(saved_fd_);
+            saved_fd_ = -1;
+        }
+        std::ifstream in(path_);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }
+    ~StderrTap() { drain(); }
+private:
+    std::string path_;
+    int saved_fd_ = -1;
+};
 
 CaliperCoreDesc base_desc() {
     CaliperCoreDesc d{};
@@ -156,6 +211,143 @@ TEST_CASE("embed/gate: load before a canvas refuses (W1); read_pixels needs a ca
     std::vector<uint8_t> px(16, 0);
     CHECK(caliper_core_read_pixels(core, px.data(), 4) == 0);   // no canvas
 
+    caliper_core_shutdown(core);
+}
+
+// ---------------------------------------------------------------------------
+// Reload / swap / failed-load semantics (final-review fix pass). load_applet is
+// teardown-first: any active applet is torn down (workers joined, THEN instance)
+// BEFORE the new launch. These three lock the documented consequences. All need
+// a live offscreen canvas, so they self-skip headless like the pixel case.
+// ---------------------------------------------------------------------------
+namespace {
+int         g_fault_count = 0;
+std::string g_last_fault_id;
+void record_fault(void*, const char* id, const char*) {
+    ++g_fault_count;
+    g_last_fault_id = id ? id : "";
+}
+}  // namespace
+
+TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_init)") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    CaliperCanvasDesc c = offscreen_desc(128, 128);
+    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
+        MESSAGE("no embeddable GPU — skipping same-id restart case: "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello") == 1);
+    caliper_core_frame(core);
+
+    // Reload the SAME id: the running instance is torn down (on_cleanup) and a
+    // fresh one launched (on_init), in that order — a restart, not a no-op or a
+    // carry-over.
+    std::string log;
+    {
+        StderrTap tap;
+        REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello") == 1);
+        log = tap.drain();
+    }
+    auto cleanup_at = log.find("hello.on_cleanup");
+    auto init_at    = log.find("hello.on_init");
+    CHECK(cleanup_at != std::string::npos);
+    CHECK(init_at    != std::string::npos);
+    CHECK(cleanup_at < init_at);   // teardown-first: cleanup precedes reinit
+
+    caliper_core_frame(core);      // the restarted applet still renders
+    caliper_core_unload_applet(core);
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/reload: load a different id after active swaps applets") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    CaliperCanvasDesc c = offscreen_desc(256, 256);
+    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
+        MESSAGE("no embeddable GPU — skipping swap case: "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello") == 1);
+    caliper_core_frame(core);
+
+    // Swap to a DIFFERENT applet: hello is torn down (on_cleanup) and sine-scope
+    // launched. sine-scope schedules init jobs — under the previous cancel-
+    // after-launch order those were killed at birth; teardown-first lets them
+    // survive.
+    std::string log;
+    {
+        StderrTap tap;
+        REQUIRE(caliper_core_load_applet(core, "dev.example.sine-scope") == 1);
+        log = tap.drain();
+    }
+    CHECK(log.find("hello.on_cleanup") != std::string::npos);   // old torn down
+
+    for (int i = 0; i < 8; ++i) caliper_core_frame(core);        // sine runs
+    std::vector<uint8_t> px((size_t)256 * 256 * 4, 0);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), 256 * 4) == 1);
+    CHECK(bright_pixels(px) > 50);                               // sine rasterized
+
+    caliper_core_unload_applet(core);
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet") {
+    g_fault_count = 0;
+    g_last_fault_id.clear();
+
+    CaliperCoreDesc d = base_desc();
+    d.crash_fn = &record_fault;
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    CaliperCanvasDesc c = offscreen_desc(128, 128);
+    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
+        MESSAGE("no embeddable GPU — skipping failed-load case: "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello") == 1);
+    caliper_core_frame(core);
+
+    // Force the NEXT launch to fail cleanly (initialize() returns false). Per
+    // teardown-first semantics the active hello is destroyed BEFORE that launch,
+    // so the refusal leaves NO applet — not the old one, not a phantom index.
+    setenv("CALIPER_HELLO_INIT_FAIL", "1", 1);
+    CHECK(caliper_core_load_applet(core, "dev.caliper.hello") == 0);
+    unsetenv("CALIPER_HELLO_INIT_FAIL");
+
+    // No applet loaded: a frame draws only the clear (no bright pixels) and
+    // fires NO spurious fault callback (the previous order left a dangling
+    // active index that frame() would have surfaced as a crash).
+    caliper_core_frame(core);
+    std::vector<uint8_t> px((size_t)128 * 128 * 4, 0);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), 128 * 4) == 1);
+    CHECK(bright_pixels(px) < 10);
+    CHECK(g_fault_count == 0);
+
+    // The core is still fully usable — a fresh load of a DIFFERENT applet
+    // succeeds and renders. (The init-failed hello entry is itself now marked
+    // Failed by the loader and can't be relaunched — existing loader policy,
+    // orthogonal to the embed teardown-order fix under test here.)
+    REQUIRE(caliper_core_load_applet(core, "dev.example.sine-scope") == 1);
+    for (int i = 0; i < 8; ++i) caliper_core_frame(core);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), 128 * 4) == 1);
+    CHECK(bright_pixels(px) > 50);
+
+    caliper_core_unload_applet(core);
     caliper_core_shutdown(core);
 }
 

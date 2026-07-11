@@ -186,7 +186,18 @@ void caliper_core_event(CaliperCore* core, const CaliperInputEvent* event);
  * Returns 1 on success, 0 if unknown/refused/failed (last_error set). A canvas
  * must be attached FIRST — an applet's launch/first frame touches the renderer's
  * ImGui backend, so load before attach_canvas is an honest refusal, not a crash.
- * Replaces any currently-loaded applet only after a successful launch. */
+ *
+ * TEARDOWN-FIRST SEMANTICS. Any currently-loaded applet is torn down FIRST
+ * (workers joined, then the instance), and only THEN is the new one launched —
+ * so init jobs the new applet schedules are never cancelled by the old one's
+ * teardown. Two consequences follow, both intentional:
+ *   - Reloading the SAME id is a clean RESTART: the running instance is torn
+ *     down (on_cleanup) and a fresh one launched (on_init) — no state carries
+ *     over.
+ *   - A FAILED launch leaves NO applet loaded, not the previous one: once the
+ *     old applet is torn down it is gone even if the new launch is refused.
+ * An UNKNOWN id is the one exception — it refuses up front (0, last_error set)
+ * WITHOUT disturbing a running applet, so a typo cannot kill the live session. */
 int  caliper_core_load_applet(CaliperCore* core, const char* manifest_id);
 
 /* Tear down the loaded applet (jobs joined first, then instance). No-op if none

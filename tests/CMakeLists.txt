@@ -141,8 +141,11 @@ target_compile_definitions(caliper_embed_tests PRIVATE
 set_target_properties(caliper_embed_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 # The offscreen case composites + reads back the hello fixture, so its dylib
-# and manifest must exist in build/applets before the test runs.
-add_dependencies(caliper_embed_tests hello_applet)
+# and manifest must exist in build/applets before the test runs. sine_scope is
+# the SECOND distinct applet the load-different-id-after-active case swaps to
+# (and, being jobs.v1/device.v1-backed, it exercises the "new applet's init jobs
+# survive the old one's teardown" reorder).
+add_dependencies(caliper_embed_tests hello_applet sine_scope)
 if(APPLE)
     set_target_properties(caliper_embed_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
