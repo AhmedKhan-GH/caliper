@@ -560,6 +560,7 @@ public:
         [textures_ removeAllObjects];
         textures_ = nil;
         imported_.clear();
+        geom_prim_inst_staging_ = nil;   // ARC releases the grow-only G14 staging
         cmap_pipeline_ = nil;
         points_pipeline_ = nil;
         geom_lib_ = nil;
@@ -1020,48 +1021,17 @@ public:
                         return metal_geom_fail("instance tint needs colormap");    // G12
                     use_instance_attr = true;
                 }
-                // G14 (§5.1): every instance upper-3x3 on a LAMBERT-instanced draw
-                // must be rigid+uniform-scale, read on the host before any encoder.
-                // Shared-storage imports (the gfx-test MTLBuffers) expose contents()
-                // directly. A real device tensor (e.g. a torch MPS buffer) is
-                // PRIVATE storage — contents() is not host-readable — so blit the
-                // N*64-byte matrix range into a shared staging buffer and read from
-                // the host, exactly
-                // as the Vulkan backend does for its device-local imports (§5.1). One
-                // fenced round-trip, off the pixel-critical path (LAMBERT-instanced
-                // draws only); a refusal leaves the view's pixels untouched.
-                if (d.shade_mode == CALIPER_GEOM_SHADE_LAMBERT && use_instance) {
-                    const NSUInteger rigid_bytes = (NSUInteger)n_inst * 64u;
-                    const uint8_t* base = nullptr;
-                    // NB: -[MTLBuffer contents] is only valid for Shared storage;
-                    // on a Private buffer it returns a non-nil garbage pointer, so
-                    // branch on storageMode, not contents.
-                    if (inst.storageMode == MTLStorageModeShared) {
-                        base = (const uint8_t*)inst.contents + d.instance_offset;
-                    } else {
-                        id<MTLBuffer> stage =
-                            [device_ newBufferWithLength:rigid_bytes
-                                                 options:MTLResourceStorageModeShared];
-                        if (stage == nil)
-                            return metal_geom_fail("instance rigidity staging alloc failed");
-                        id<MTLCommandBuffer> cb = [queue_ commandBuffer];
-                        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-                        [blit copyFromBuffer:inst
-                                sourceOffset:d.instance_offset
-                                    toBuffer:stage
-                           destinationOffset:0
-                                        size:rigid_bytes];
-                        [blit endEncoding];
-                        [cb commit];
-                        [cb waitUntilCompleted];
-                        base = (const uint8_t*)stage.contents;
-                    }
-                    for (NSUInteger k = 0; k < n_inst; ++k) {
-                        const float* mi = (const float*)base + 16u * k;
-                        if (!instance_upper3x3_rigid(mi))
-                            return metal_geom_fail("instanced lambert needs rigid+uniform-scale"); // G14
-                    }
-                }
+                // G14 (§5.1) rigidity is NOT checked per-draw here: it needs the
+                // instance bytes on the host, and a real device tensor (torch MPS
+                // buffer) imports as MTLStorageModePrivate — contents() is not
+                // host-readable — so a private read needs a blit round-trip. Doing
+                // that per draw would fire a fresh alloc + commit + wait for every
+                // LAMBERT-instanced draw. Instead the batched G14 pass runs ONCE
+                // after this metadata gate loop (below), mirroring the Vulkan
+                // reference shape: one grow-only staging buffer, one blit command
+                // buffer for all private draws, one wait, then the comparisons —
+                // and still before any render encoder exists (refusal = pixels
+                // untouched).
 
                 MTLPrimitiveType prim;
                 switch (d.topology) {
@@ -1123,6 +1093,80 @@ public:
                 e.params.use_instance_attr = use_instance_attr ? 1u : 0u;
                 e.params.inst_attr_base = (uint32_t)(d.instance_attr_offset / 4u);
                 encs.push_back(e);
+            }
+
+            // ---- G14 (§5.1): every instance upper-3x3 on a LAMBERT-instanced
+            // draw must be rigid+uniform-scale. Mirrors the Vulkan reference
+            // shape (vulkan_renderer.cpp §5.1): collect ALL such draws first;
+            // shared-storage imports are read via contents() directly (zero-copy,
+            // unified memory), while private-storage imports (real device tensors,
+            // e.g. torch MPS buffers whose contents() is not host-readable) are
+            // batched into ONE grow-only staging buffer, copied by ONE blit
+            // command buffer, and read after ONE waitUntilCompleted — never a
+            // per-draw alloc+commit+wait. Placed after the metadata gate loop and
+            // BEFORE any render encoder exists, so a refusal leaves the view's
+            // pixels bit-untouched. The float-order rigidity check
+            // (instance_upper3x3_rigid) is identical for both storage paths. ----
+            {
+                struct RigidRead {
+                    id<MTLBuffer> inst;
+                    NSUInteger    src_off;
+                    NSUInteger    dst_off;
+                    NSUInteger    n;
+                };
+                std::vector<RigidRead> priv_reads;
+                NSUInteger stage_bytes = 0;
+                for (const EncodedDraw& e : encs) {
+                    if (!(e.use_instance &&
+                          e.params.shade_mode == CALIPER_GEOM_SHADE_LAMBERT))
+                        continue;
+                    if (e.inst.storageMode == MTLStorageModeShared) {
+                        // Zero-copy read straight from unified memory (no blit).
+                        const float* base = (const float*)
+                            ((const uint8_t*)e.inst.contents + e.d->instance_offset);
+                        for (NSUInteger k = 0; k < e.n_inst; ++k)
+                            if (!instance_upper3x3_rigid(base + 16u * k))
+                                return metal_geom_fail("instanced lambert needs rigid+uniform-scale"); // G14
+                    } else {
+                        priv_reads.push_back({e.inst,
+                                              (NSUInteger)e.d->instance_offset,
+                                              stage_bytes, e.n_inst});
+                        stage_bytes += e.n_inst * 64u;
+                    }
+                }
+                if (!priv_reads.empty()) {
+                    // Grow-only member staging buffer (created once, ×2 on demand,
+                    // reused across frames, released in shutdown()).
+                    if (geom_prim_inst_staging_ == nil ||
+                        geom_prim_inst_staging_.length < stage_bytes) {
+                        NSUInteger grow = geom_prim_inst_staging_ ?
+                            geom_prim_inst_staging_.length : 64u;
+                        while (grow < stage_bytes) grow *= 2;
+                        geom_prim_inst_staging_ =
+                            [device_ newBufferWithLength:grow
+                                                 options:MTLResourceStorageModeShared];
+                        if (geom_prim_inst_staging_ == nil)
+                            return metal_geom_fail("instance rigidity staging alloc failed");
+                    }
+                    id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+                    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+                    for (const RigidRead& r : priv_reads)
+                        [blit copyFromBuffer:r.inst
+                                sourceOffset:r.src_off
+                                    toBuffer:geom_prim_inst_staging_
+                           destinationOffset:r.dst_off
+                                        size:r.n * 64u];
+                    [blit endEncoding];
+                    [cb commit];
+                    [cb waitUntilCompleted];
+                    for (const RigidRead& r : priv_reads) {
+                        const float* base = (const float*)
+                            ((const uint8_t*)geom_prim_inst_staging_.contents + r.dst_off);
+                        for (NSUInteger k = 0; k < r.n; ++k)
+                            if (!instance_upper3x3_rigid(base + 16u * k))
+                                return metal_geom_fail("instanced lambert needs rigid+uniform-scale"); // G14
+                    }
+                }
             }
 
             MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1494,6 +1538,11 @@ private:
     // the Metal analog of Vulkan's DuplicateHandle+VkImportMemory. 0 invalid.
     std::unordered_map<uint64_t, id<MTLBuffer>> imported_;
     uint64_t next_import_id_ = 1;
+
+    // Grow-only host-visible G14 rigidity-readback staging (§5.1): one shared
+    // buffer, reused across frames, blit-target for private-storage instance
+    // matrices. The Metal analog of Vulkan's geom_prim_inst_staging_.
+    id<MTLBuffer> geom_prim_inst_staging_ = nil;
 
     uint64_t next_id_ = 1;          // 0 is the invalid id
     const char* last_device_path_ = "";

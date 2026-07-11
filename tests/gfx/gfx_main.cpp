@@ -528,6 +528,28 @@ id<MTLBuffer> device_buffer(const void* src, size_t bytes) {
     return b;
 }
 
+// A PRIVATE-storage MTLBuffer filled from `src` via a one-shot blit from a shared
+// staging buffer. This is how a real device tensor (e.g. a torch MPS buffer)
+// imports: MTLStorageModePrivate, whose contents() is NOT host-readable — so the
+// G14 rigidity gate must blit it back before reading (§5.1). Exercising this path
+// requires a private import; a plain device_buffer() is Shared (unified memory).
+id<MTLBuffer> device_buffer_private(const void* src, size_t bytes) {
+    id<MTLDevice> dev = metal_env().device;
+    id<MTLBuffer> shared = [dev newBufferWithLength:bytes
+                                           options:MTLResourceStorageModeShared];
+    if (src) std::memcpy(shared.contents, src, bytes);
+    id<MTLBuffer> priv = [dev newBufferWithLength:bytes
+                                         options:MTLResourceStorageModePrivate];
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromBuffer:shared sourceOffset:0 toBuffer:priv destinationOffset:0 size:bytes];
+    [blit endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    return priv;
+}
+
 }  // namespace
 
 TEST_CASE("gfx/Metal: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
@@ -2815,6 +2837,104 @@ TEST_CASE("gfx/metal geometry.v1_3: instanced LAMBERT rigid rotations within +/-
     // instance 1: cols 20..27, rows ~13..18 (R_x foreshortens y); sample center rows.
     check_px(23, 15, e1); check_px(24, 16, e1); check_px(25, 15, e1);
 
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row D-priv — the PRIVATE-storage G14 readback path (§5.1). Row D above imports
+// the instance matrices as Shared (unified memory, read zero-copy via contents());
+// this row imports them as MTLStorageModePrivate — exactly how a torch MPS tensor
+// arrives, contents() not host-readable — so the backend must blit the N*64 matrix
+// bytes into its grow-only staging buffer before the rigidity comparison. First a
+// rigid-only private draw renders byte-exact vs the SAME §4.4 CPU reference Row D
+// uses (proving the blit-back reads the right bytes); then a private N=2 buffer
+// whose instance 1 is sheared (m[4]=0.1) must refuse with the G14 reason and leave
+// the view byte-untouched (proving the private readback still refuses before any
+// encoder). Pins the private-blit path ctest never otherwise exercises.
+TEST_CASE("gfx/metal geometry.v1_3: private-storage instanced LAMBERT — blit readback, rigid renders, shear refuses") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const uint32_t stride = sizeof(CaliperGeomDrawV1_3);
+    const float d2r = 3.14159265358979323846f / 180.0f;
+    float ry[9], rx[9]; rot_y3(60.0f*d2r, ry); rot_x3(30.0f*d2r, rx);
+    // Identical instance matrices to Row D so the §4.4 CPU reference is shared verbatim.
+    float inst[2*16];
+    inst_matrix(ry, -0.5f, 0.0f, 0.5f, &inst[0]);
+    inst_matrix(rx,  0.5f, 0.0f, 0.5f, &inst[16]);
+
+    id<MTLBuffer> pos_buf  = device_buffer(kQuad6, sizeof(kQuad6));
+    id<MTLBuffer> nrm_buf  = device_buffer(kQuadN6, sizeof(kQuadN6));
+    id<MTLBuffer> inst_buf = device_buffer_private(inst, sizeof(inst));   // PRIVATE storage
+    REQUIRE((inst_buf.storageMode == MTLStorageModePrivate));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(kQuad6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(kQuadN6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        (__bridge void*)inst_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(nrm_alloc != 0); REQUIRE(inst_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.normal_alloc = nrm_alloc;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = 0xFFB4B4B4u;   // mid-gray 180, opaque (Row D base)
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 2;
+
+    // ---- rigid private draw: succeeds, byte-exact (±2 LSB) vs Row D's reference ----
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    const auto got = bk.readback(view, W, H);
+    REQUIRE(got.size() == (size_t)W*H*4);
+
+    const float wn[3] = {0.f, 0.f, 1.f};
+    int e0 = (int)std::lround(180.0f * instanced_lit(&inst[0],  wn));   // ~117
+    int e1 = (int)std::lround(180.0f * instanced_lit(&inst[16], wn));   // ~163
+    CHECK(e0 != e1);
+    auto check_px = [&](int x, int y, int expect) {
+        uint32_t o = metal_geom_pixel_rgba(got, W, x, y);
+        int r=o&0xFF, g=(o>>8)&0xFF, b=(o>>16)&0xFF, a=(o>>24)&0xFF;
+        CHECK(std::abs(r-expect) <= 2);
+        CHECK(std::abs(g-expect) <= 2);
+        CHECK(std::abs(b-expect) <= 2);
+        CHECK(a == 255);
+    };
+    check_px(7, 15, e0); check_px(8, 16, e0); check_px(6, 13, e0);
+    check_px(23, 15, e1); check_px(24, 16, e1); check_px(25, 15, e1);
+
+    // ---- sheared private draw: instance 1 is non-rigid, G14 refuses; view untouched ----
+    float sheared[2*16];
+    inst_matrix(ry, -0.5f, 0.0f, 0.5f, &sheared[0]);   // instance 0 stays rigid
+    std::memcpy(&sheared[16], kIdentM16, sizeof(kIdentM16));
+    sheared[16 + 4] = 0.1f;                             // instance 1: column1.x shear, > kGeomRigidTol
+    id<MTLBuffer> shear_buf = device_buffer_private(sheared, sizeof(sheared));
+    REQUIRE((shear_buf.storageMode == MTLStorageModePrivate));
+    CaliperAllocId shear_alloc = bk.bridge->import_allocation(
+        (__bridge void*)shear_buf, sizeof(sheared), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(shear_alloc != 0);
+
+    CaliperGeomDrawV1_3 bad = d;              // same N=2 LAMBERT draw over the sheared matrices
+    bad.instance_alloc = shear_alloc;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &bad, 1, stride, 0xFF000000u));
+    const auto after = bk.readback(view, W, H);
+    CHECK(after == got);   // refusal fired before the encoder — every byte is the rigid frame
+
+    bk.bridge->release_allocation(shear_alloc);
     bk.bridge->release_allocation(inst_alloc);
     bk.bridge->release_allocation(nrm_alloc);
     bk.bridge->release_allocation(pos_alloc);
