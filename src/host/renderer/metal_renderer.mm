@@ -15,6 +15,7 @@
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
+#include <caliper/services/geometry_v1_3.h>   // CALIPER_GEOM_RIGID_TOL (G14)
 
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -175,10 +176,14 @@ struct PrimParams {
     float vmin;
     float vmax;
     float size_px;
-    uint uv_base;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint uv_base;             // 160
+    uint use_instance;        // 164 — 0/1 (v1.3 instance tail)
+    uint inst_base;           // 168 — instance_offset / 4
+    uint use_instance_attr;   // 172 — 0/1
+    uint inst_attr_base;      // 176 — instance_attr_offset / 4
+    uint pad0;                // 180
+    uint pad1;                // 184
+    uint pad2;                // 188  (192)
 };
 
 /* Metal validates [[point_size]] against the pipeline's topology class: a
@@ -205,12 +210,14 @@ static inline float4 unpack_rgba(uint packed) {
                   float((packed >> 24) & 0xffu)) / 255.0f;
 }
 
-static inline VOut geom_compute(uint vid,
+static inline VOut geom_compute(uint vid, uint iid,
                                 device const float* pos,
                                 device const uint*  idx,
                                 device const float* nrm,
                                 device const uint*  attr,
                                 device const float* uv,
+                                device const float* im,
+                                device const uint*  iattr,
                                 constant uint*      lut,
                                 constant PrimParams& p)
 {
@@ -220,14 +227,36 @@ static inline VOut geom_compute(uint vid,
     float3 wp = float3(pos[p.pos_base + 3u * vi + 0u],
                        pos[p.pos_base + 3u * vi + 1u],
                        pos[p.pos_base + 3u * vi + 2u]);
-    o.pos = p.mvp * float4(wp, 1.0f);
+
+    // v1.3 (§4.1): the per-instance model matrix is applied to the world
+    // position FIRST, then mvp. use_instance==0 takes the exact v1.2 expression
+    // (bit-identical). M columns are pulled column-major at inst_base + 16*iid.
+    bool inst = (p.use_instance != 0u);
+    float4x4 M;
+    if (inst) {
+        uint b = p.inst_base + 16u * iid;
+        M = float4x4(float4(im[b + 0u], im[b + 1u], im[b + 2u], im[b + 3u]),
+                     float4(im[b + 4u], im[b + 5u], im[b + 6u], im[b + 7u]),
+                     float4(im[b + 8u], im[b + 9u], im[b + 10u], im[b + 11u]),
+                     float4(im[b + 12u], im[b + 13u], im[b + 14u], im[b + 15u]));
+        o.pos = p.mvp * (M * float4(wp, 1.0f));
+    } else {
+        o.pos = p.mvp * float4(wp, 1.0f);
+    }
     o.uv = p.color_mode == 3u
         ? float2(uv[p.uv_base + 2u * vi + 0u],
                  uv[p.uv_base + 2u * vi + 1u])
         : float2(0.0f);
 
     float4 c;
-    if (p.color_mode == 1u) {
+    if (inst && p.use_instance_attr != 0u) {
+        // §4.3: per-instance tint overrides the color_mode source, looked up once
+        // per instance through the same COLORMAP idx math (LUT bound at index 4).
+        float v = as_type<float>(iattr[p.inst_attr_base + iid]);
+        float t = (v == v && p.vmax > p.vmin)
+                ? clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0f, 1.0f) : 0.0f;
+        c = unpack_rgba(lut[(uint)(t * 255.0f + 0.5f)]);
+    } else if (p.color_mode == 1u) {
         float v = as_type<float>(attr[p.attr_base + vi]);
         float t = (v == v && p.vmax > p.vmin)
                 ? clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0f, 1.0f) : 0.0f;
@@ -244,9 +273,22 @@ static inline VOut geom_compute(uint vid,
         float3 n = normalize(float3(nrm[p.nrm_base + 3u * vi + 0u],
                                    nrm[p.nrm_base + 3u * vi + 1u],
                                    nrm[p.nrm_base + 3u * vi + 2u]));
-        float3 nvs = normalize(n.x * p.nmat0.xyz +
-                               n.y * p.nmat1.xyz +
-                               n.z * p.nmat2.xyz);
+        float3 nvs;
+        if (inst) {
+            // §4.4: instance upper-3x3 (M columns 0/1/2, xyz) applied to n first,
+            // then the per-draw normal matrix — EXACT float op order from the spec.
+            float3 ni;
+            ni.x = M[0].x * n.x + M[1].x * n.y + M[2].x * n.z;
+            ni.y = M[0].y * n.x + M[1].y * n.y + M[2].y * n.z;
+            ni.z = M[0].z * n.x + M[1].z * n.y + M[2].z * n.z;
+            nvs = normalize(ni.x * p.nmat0.xyz +
+                            ni.y * p.nmat1.xyz +
+                            ni.z * p.nmat2.xyz);
+        } else {
+            nvs = normalize(n.x * p.nmat0.xyz +
+                            n.y * p.nmat1.xyz +
+                            n.z * p.nmat2.xyz);
+        }
         float lit = 0.30f + 0.70f * max(dot(nvs, float3(0.0f, 0.0f, 1.0f)), 0.0f);
         c.rgb *= lit;
     }
@@ -255,27 +297,33 @@ static inline VOut geom_compute(uint vid,
 }
 
 vertex VOut geom_vs(uint vid [[vertex_id]],
-                    device const float* pos  [[buffer(0)]],
-                    device const uint*  idx  [[buffer(1)]],
-                    device const float* nrm  [[buffer(2)]],
-                    device const uint*  attr [[buffer(3)]],
-                    constant uint*      lut  [[buffer(4)]],
-                    constant PrimParams& p   [[buffer(5)]],
-                    device const float* uv   [[buffer(6)]])
+                    uint iid [[instance_id]],
+                    device const float* pos   [[buffer(0)]],
+                    device const uint*  idx   [[buffer(1)]],
+                    device const float* nrm   [[buffer(2)]],
+                    device const uint*  attr  [[buffer(3)]],
+                    constant uint*      lut   [[buffer(4)]],
+                    constant PrimParams& p    [[buffer(5)]],
+                    device const float* uv    [[buffer(6)]],
+                    device const float* im    [[buffer(7)]],
+                    device const uint*  iattr [[buffer(8)]])
 {
-    return geom_compute(vid, pos, idx, nrm, attr, uv, lut, p);
+    return geom_compute(vid, iid, pos, idx, nrm, attr, uv, im, iattr, lut, p);
 }
 
 vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
-                               device const float* pos  [[buffer(0)]],
-                               device const uint*  idx  [[buffer(1)]],
-                               device const float* nrm  [[buffer(2)]],
-                               device const uint*  attr [[buffer(3)]],
-                               constant uint*      lut  [[buffer(4)]],
-                               constant PrimParams& p   [[buffer(5)]],
-                               device const float* uv   [[buffer(6)]])
+                               uint iid [[instance_id]],
+                               device const float* pos   [[buffer(0)]],
+                               device const uint*  idx   [[buffer(1)]],
+                               device const float* nrm   [[buffer(2)]],
+                               device const uint*  attr  [[buffer(3)]],
+                               constant uint*      lut   [[buffer(4)]],
+                               constant PrimParams& p    [[buffer(5)]],
+                               device const float* uv    [[buffer(6)]],
+                               device const float* im    [[buffer(7)]],
+                               device const uint*  iattr [[buffer(8)]])
 {
-    VOut b = geom_compute(vid, pos, idx, nrm, attr, uv, lut, p);
+    VOut b = geom_compute(vid, iid, pos, idx, nrm, attr, uv, im, iattr, lut, p);
     VOutPoint o;
     o.pos   = b.pos;
     o.size  = p.size_px;
@@ -309,9 +357,10 @@ struct PrimParams {
     uint32_t use_index, vertex_count, color_mode, shade_mode;
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
-    uint32_t uv_base, pad0, pad1, pad2;
+    uint32_t uv_base, use_instance, inst_base, use_instance_attr;   // v1.3 tail
+    uint32_t inst_attr_base, pad0, pad1, pad2;
 };
-static_assert(sizeof(PrimParams) == 176, "MSL primitive params layout");
+static_assert(sizeof(PrimParams) == 192, "MSL primitive params layout");
 
 void mat4_mul_cm(const float* a, const float* b, float* out) {
     for (int c = 0; c < 4; ++c)
@@ -363,6 +412,34 @@ uint32_t topo_class(uint32_t topology) {
 bool metal_geom_fail(const char* reason) {
     std::fprintf(stderr, "[metal] geom_prims: %s\n", reason);
     return false;
+}
+
+// G14 (spec §5.1): an instance upper-3x3 must be orthogonal-up-to-uniform-scale
+// for the §4.4 normal chain (raw-upper-3x3 + normalize) to be exact-compose.
+// c0,c1,c2 are the columns of the upper-3x3 (column-major 4x4: col j at m[4j..]),
+// read as f32 straight from the imported buffer. s̄² = (‖c0‖²+‖c1‖²+‖c2‖²)/3;
+// refuse unless every pair is orthogonal and every column equal-length within
+// CALIPER_GEOM_RIGID_TOL·s̄², and s̄²>0. The float op order is the byte-exact
+// contract shared with Vulkan (T4 transcribes this verbatim).
+bool instance_upper3x3_rigid(const float* m) {
+    const float c0[3] = {m[0], m[1], m[2]};
+    const float c1[3] = {m[4], m[5], m[6]};
+    const float c2[3] = {m[8], m[9], m[10]};
+    const float n0 = c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2];
+    const float n1 = c1[0] * c1[0] + c1[1] * c1[1] + c1[2] * c1[2];
+    const float n2 = c2[0] * c2[0] + c2[1] * c2[1] + c2[2] * c2[2];
+    const float sbar2 = (n0 + n1 + n2) / 3.0f;
+    if (!(sbar2 > 0.0f)) return false;
+    const float tol = CALIPER_GEOM_RIGID_TOL * sbar2;
+    const float d01 = c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2];
+    const float d02 = c0[0] * c2[0] + c0[1] * c2[1] + c0[2] * c2[2];
+    const float d12 = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
+    if (std::fabs(d01) > tol || std::fabs(d02) > tol || std::fabs(d12) > tol)
+        return false;
+    if (std::fabs(n0 - sbar2) > tol || std::fabs(n1 - sbar2) > tol ||
+        std::fabs(n2 - sbar2) > tol)
+        return false;
+    return true;
 }
 
 // Byte extent a tensor addresses: (max linear element index + 1) * elem_size,
@@ -602,6 +679,9 @@ public:
     bool supports_geometry() const override { return supports_external_import(); }
     bool supports_geometry_primitives() const override { return supports_external_import(); }
     bool supports_geometry_textured() const override { return supports_external_import(); }
+    // geometry.v1_3: N>1 instanced draws ride the same imported-MTLBuffer path
+    // as textured meshes, so the gate is identical (mirrors _textured above).
+    bool supports_geometry_instanced() const override { return supports_external_import(); }
 
     // An offscreen render target that is ALSO an ordinary sampled texture: it
     // lives in textures_, so tex_imtexture_id / debug_readback / tex_release
@@ -789,8 +869,12 @@ public:
                 id<MTLBuffer> nrm = nil;
                 id<MTLBuffer> attr = nil;
                 id<MTLBuffer> uv = nil;
+                id<MTLBuffer> inst = nil;    // (N,16) f32 instance matrices (idx 7)
+                id<MTLBuffer> iattr = nil;   // (N,) per-instance tint scalar (idx 8)
                 id<MTLTexture> texture = nil;
                 NSUInteger consumed = 0;
+                NSUInteger n_inst = 1;       // instanceCount (1 == non-instanced)
+                bool use_instance = false;
                 MTLPrimitiveType prim = MTLPrimitiveTypeTriangle;
                 id<MTLRenderPipelineState> pipeline = nil;
                 id<MTLDepthStencilState> depth_state = nil;
@@ -887,6 +971,67 @@ public:
                         return metal_geom_fail("uvs out of bounds");
                 }
 
+                // ---- v1.3 instance tail re-gate (§5/§5.1): G1-G12 against this
+                // renderer's imported_ table, byte-same reasons as the host
+                // battery, plus G14 which executes ONLY here. HostGeomDraw carries
+                // resolved renderer ids + byte offsets (all zero -> non-instanced,
+                // the exact v1.2 path). Every failure returns before the encoder
+                // exists, so the view's pixels are bit-untouched. ----
+                id<MTLBuffer> inst = nil;
+                id<MTLBuffer> iattr = nil;
+                bool use_instance = false;
+                bool use_instance_attr = false;
+                NSUInteger n_inst = 1;
+                if (d.instance_alloc != 0) {
+                    // G1 (cap) is granted upstream; a resolved alloc is instanced.
+                    if (d.instance_count == 0)
+                        return metal_geom_fail("instanced draw needs N>0");        // G2
+                    if (d.instance_count > UINT32_MAX)
+                        return metal_geom_fail("too many instances");              // G3
+                    if (d.instance_offset % 4 != 0)
+                        return metal_geom_fail("instance offset misaligned");      // G4
+                    if (d.instance_offset / 4u > UINT32_MAX)
+                        return metal_geom_fail("instance base exceeds 32 bits");   // G6
+                    inst = lookup_import(d.instance_alloc);
+                    if (inst == nil)
+                        return metal_geom_fail("unknown instance alloc");          // G7
+                    if (d.instance_count > UINT64_MAX / 64u)
+                        return metal_geom_fail("instances byte count overflow");
+                    if (d.instance_offset > inst.length ||
+                        d.instance_count * 64u > inst.length - d.instance_offset)
+                        return metal_geom_fail("instances out of imported bounds"); // G5
+                    use_instance = true;
+                    n_inst = (NSUInteger)d.instance_count;
+                }
+                if (d.instance_attr_alloc != 0) {
+                    if (!use_instance)
+                        return metal_geom_fail("instance attr without instances"); // G8
+                    if (d.instance_attr_offset % 4 != 0)
+                        return metal_geom_fail("instance attr offset misaligned"); // G9
+                    iattr = lookup_import(d.instance_attr_alloc);
+                    if (iattr == nil)
+                        return metal_geom_fail("unknown instance attr alloc");     // G11
+                    if (d.instance_count > UINT64_MAX / 4u)
+                        return metal_geom_fail("instance attr byte count overflow");
+                    if (d.instance_attr_offset > iattr.length ||
+                        d.instance_count * 4u > iattr.length - d.instance_attr_offset)
+                        return metal_geom_fail("instance attr out of imported bounds"); // G10
+                    if (d.lut256 == nullptr)
+                        return metal_geom_fail("instance tint needs colormap");    // G12
+                    use_instance_attr = true;
+                }
+                // G14 (§5.1): every instance upper-3x3 on a LAMBERT-instanced draw
+                // must be rigid+uniform-scale. Metal imported buffers are shared
+                // storage — read contents() directly (no blit), before any encoder.
+                if (d.shade_mode == CALIPER_GEOM_SHADE_LAMBERT && use_instance) {
+                    const uint8_t* base = (const uint8_t*)inst.contents + d.instance_offset;
+                    for (NSUInteger k = 0; k < n_inst; ++k) {
+                        const float* mi = (const float*)base + 16u * k;
+                        if (!instance_upper3x3_rigid(mi))
+                            return metal_geom_fail("instanced lambert needs rigid+uniform-scale"); // G14
+                    }
+                }
+
                 MTLPrimitiveType prim;
                 switch (d.topology) {
                     case CALIPER_GEOM_TOPO_POINTS:         prim = MTLPrimitiveTypePoint; break;
@@ -912,8 +1057,12 @@ public:
                 e.nrm = nrm;
                 e.attr = attr;
                 e.uv = uv;
+                e.inst = inst;
+                e.iattr = iattr;
                 e.texture = texture;
                 e.consumed = (NSUInteger)consumed;
+                e.n_inst = n_inst;
+                e.use_instance = use_instance;
                 e.prim = prim;
                 e.pipeline = pipe;
                 e.depth_state = ds;
@@ -938,6 +1087,10 @@ public:
                 if (d.uv_offset / 4 > UINT32_MAX)
                     return metal_geom_fail("uv base exceeds 32 bits");
                 e.params.uv_base = (uint32_t)(d.uv_offset / 4u);
+                e.params.use_instance = use_instance ? 1u : 0u;
+                e.params.inst_base = (uint32_t)(d.instance_offset / 4u);
+                e.params.use_instance_attr = use_instance_attr ? 1u : 0u;
+                e.params.inst_attr_base = (uint32_t)(d.instance_attr_offset / 4u);
                 encs.push_back(e);
             }
 
@@ -974,8 +1127,14 @@ public:
                             length:256 * sizeof(uint32_t) atIndex:4];
                 [re setVertexBytes:&e.params length:sizeof(e.params) atIndex:5];
                 [re setVertexBuffer:(e.uv != nil ? e.uv : e.pos) offset:0 atIndex:6];
+                // v1.3 instance streams at 7/8; placeholder-bind e.pos when a
+                // stream is unused (the shader's use_instance/_attr guards make
+                // the read harmless), mirroring the idx/nrm/attr trick above.
+                [re setVertexBuffer:(e.inst  != nil ? e.inst  : e.pos) offset:0 atIndex:7];
+                [re setVertexBuffer:(e.iattr != nil ? e.iattr : e.pos) offset:0 atIndex:8];
                 if (e.texture != nil) [re setFragmentTexture:e.texture atIndex:0];
-                [re drawPrimitives:e.prim vertexStart:0 vertexCount:e.consumed];
+                [re drawPrimitives:e.prim vertexStart:0 vertexCount:e.consumed
+                     instanceCount:(e.use_instance ? e.n_inst : 1)];
             }
             [re endEncoding];
             [cb commit];

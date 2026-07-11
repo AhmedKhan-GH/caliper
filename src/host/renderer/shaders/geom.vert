@@ -20,13 +20,15 @@ layout(std430, set = 0, binding = 4) readonly buffer Lut  { uint  lut[];  };
 layout(std430, set = 0, binding = 6) readonly buffer UV   { float uv[];  };
 
 // std140 layout is byte-identical to the Metal PrimParams struct, which is
-// static_assert'ed to 176 bytes; every member below lands at the SAME offset in
+// static_assert'ed to 192 bytes; every member below lands at the SAME offset in
 // std140 (mat4 @0, the three vec4 normal-matrix columns @64/80/96, then the
 // scalar tail packed 4 bytes each from @112). Offsets are noted per member.
 // THREE hand-synced copies of this params layout must move together: this GLSL
-// std140 block; PrimParams in vulkan_renderer.cpp (static_assert 176); and
-// PrimParams in metal_renderer.mm's MSL string (static_assert 176). grep
-// PrimParams when growing.
+// std140 block; PrimParams in vulkan_renderer.cpp (static_assert 192); and
+// PrimParams in metal_renderer.mm's MSL string (static_assert 192). grep
+// PrimParams when growing. The v1.3 instance tail (use_instance/inst_base/
+// use_instance_attr/inst_attr_base) is threaded on Metal; the instance-PULL
+// logic in this GLSL body is Vulkan's task (T4) — only the block grew here.
 layout(std140, set = 0, binding = 5) uniform Params {
     mat4  mvp;          // offset 0
     vec4  nmat0;        // 64  — columns of the 3x3 normal matrix (xyz used)
@@ -44,10 +46,14 @@ layout(std140, set = 0, binding = 5) uniform Params {
     float vmin;         // 148
     float vmax;         // 152
     float size_px;      // 156   (block size 160)
-    uint  uv_base;      // 160
-    uint  pad0;         // 164
-    uint  pad1;         // 168
-    uint  pad2;         // 172   (block size 176)
+    uint  uv_base;            // 160
+    uint  use_instance;       // 164 — 0/1 (v1.3 instance tail)
+    uint  inst_base;          // 168 — instance_offset / 4
+    uint  use_instance_attr;  // 172 — 0/1
+    uint  inst_attr_base;     // 176 — instance_attr_offset / 4
+    uint  pad0;               // 180
+    uint  pad1;               // 184
+    uint  pad2;               // 188   (block size 192)
 } p;
 
 layout(location = 0) out vec4 v_color;

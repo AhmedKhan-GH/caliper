@@ -129,10 +129,13 @@ struct GeomPush {
 static_assert(sizeof(GeomPush) == 88, "points.vert push block layout");
 
 // caliper.geometry.v1_1 per-draw params. Byte-identical to Metal's PrimParams
-// (metal_renderer.mm ~line 273) and to the std140 Params block of geom.vert —
-// same member order, same 160-byte size — so both backends and the shader agree
-// on every offset. Delivered via a dynamic UBO (exceeds Vulkan's 128-B push
-// budget), not push constants.
+// (metal_renderer.mm PrimParams / kGeomShaderSrc) and to the std140 Params
+// block of geom.vert — same member order, same 192-byte size — so both backends
+// and the shader agree on every offset. Delivered via a dynamic UBO (exceeds
+// Vulkan's 128-B push budget), not push constants. The v1.3 instance tail
+// (use_instance/inst_base/use_instance_attr/inst_attr_base) grew the struct in
+// textual lockstep on this box; the Vulkan instance-PULL logic that consumes it
+// is T4 — only the layout grew here to keep the cross-backend seam aligned.
 struct PrimParams {
     float    mvp[16];
     float    nmat0[4];
@@ -142,9 +145,10 @@ struct PrimParams {
     uint32_t use_index, vertex_count, color_mode, shade_mode;
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
-    uint32_t uv_base, pad0, pad1, pad2;
+    uint32_t uv_base, use_instance, inst_base, use_instance_attr;
+    uint32_t inst_attr_base, pad0, pad1, pad2;
 };
-static_assert(sizeof(PrimParams) == 176, "geom.vert std140 params layout");
+static_assert(sizeof(PrimParams) == 192, "geom.vert std140 params layout");
 
 // Column-major 4x4 multiply out = a*b. Transcribed VERBATIM from
 // metal_renderer.mm mat4_mul_cm so both backends premultiply mvp with an

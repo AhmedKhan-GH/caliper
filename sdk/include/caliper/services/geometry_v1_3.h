@@ -12,6 +12,14 @@
 /* caps() bit 3: instanced draws are live. */
 #define CALIPER_GEOM_CAP_INSTANCED (1u << 3)
 
+/* G14 rigidity tolerance (spec §5.1), relative/dimensionless: an instanced
+ * LAMBERT draw is refused unless every instance upper-3x3 is orthogonal-up-to-
+ * uniform-scale within this bound (the §4.4 normal chain is only exact-compose
+ * under that class). Part of the byte-exact contract — pinned here next to the
+ * caps bit, asserted in the G14 gate, never a tunable. Both backends run the
+ * identical comparison in the identical float order against it. */
+#define CALIPER_GEOM_RIGID_TOL 1e-4f
+
 #ifdef __cplusplus
 extern "C" {
 #endif
