@@ -143,6 +143,67 @@ TEST_CASE("thermal step: MPS sim constructs and matches the CPU reference") {
 }
 
 // --------------------------------------------------------------------------
+// Fleet reduction (T5 §9): the worker publishes ONE (B,) per-variant scalar as
+// the instanced draw's tint. peak-T is a plain per-variant amax over vertices;
+// peak-|error| needs the net evaluated across ALL variants at once
+// (predict_batch), which must equal the per-variant predict() loop — batching
+// is pure vectorization, exactly the discipline the batched-step row enforces.
+// --------------------------------------------------------------------------
+TEST_CASE("fleet reduction: per-variant peak-T == CPU amax over vertices (2-variant ref)") {
+    auto mesh = subdivide_midpoint(make_tetrahedron(), 2);
+    const int64_t B = 50;
+    auto sim = make_thermal_sim(mesh, B, torch::kCPU, /*seed=*/5);
+
+    // Known field: variant b, vertex v -> b*100 + v, so the per-variant max is
+    // b*100 + (V-1) — hand-checkable for the two reference variants below.
+    auto vidx = torch::arange(sim.V, torch::kFloat32);          // (V,)
+    auto boff = 100.f * torch::arange(B, torch::kFloat32);      // (B,)
+    sim.T = boff.unsqueeze(1) + vidx.unsqueeze(0);              // (B,V)
+
+    auto peakT = sim.T.amax(/*dim=*/1);                         // (B,)
+    REQUIRE(peakT.dim() == 1);
+    REQUIRE(peakT.size(0) == B);
+    const float vlast = static_cast<float>(sim.V - 1);
+    REQUIRE(peakT[0].item<float>() == doctest::Approx(0.f * 100.f + vlast));
+    REQUIRE(peakT[7].item<float>() == doctest::Approx(7.f * 100.f + vlast));
+    // And equals an explicit per-variant reduction across the whole fleet.
+    for (int64_t b = 0; b < B; ++b)
+        REQUIRE(peakT[b].item<float>() ==
+                doctest::Approx(sim.T[b].max().item<float>()));
+}
+
+TEST_CASE("fleet reduction: predict_batch == per-variant predict loop, peak-|error| shape (B,)") {
+    auto mesh = subdivide_midpoint(make_tetrahedron(), 2);
+    const int64_t B = 50;
+    auto sim = make_thermal_sim(mesh, B, torch::kCPU, /*seed=*/9);
+    ThermalLearner learner(sim, /*seed=*/7, /*lr=*/2e-3f);
+    for (int i = 0; i < 20; ++i) learner.train_step(sim, /*sample_count=*/512);
+
+    const int64_t N = std::min<int64_t>(sim.V, 16);
+    auto pts = sim.positions.slice(0, 0, N).contiguous();       // (N,3)
+
+    auto batched = learner.predict_batch(pts, sim.active);      // (B,N)
+    REQUIRE(batched.dim() == 2);
+    REQUIRE(batched.size(0) == B);
+    REQUIRE(batched.size(1) == N);
+    REQUIRE(torch::isfinite(batched).all().item<bool>());
+
+    // Row b of the batched evaluation must equal the single-variant predict().
+    for (int64_t b = 0; b < B; ++b) {
+        auto one = learner.predict(pts, sim.active[b]);         // (N,)
+        REQUIRE(torch::allclose(one, batched[b], 1e-5, 1e-5));
+    }
+
+    // The published peak-|error| tint derived from it has fleet shape (B,).
+    auto sim_field = sim.T.slice(1, 0, N);                      // (B,N)
+    auto peakErr = (sim_field - batched).abs().amax(/*dim=*/1); // (B,)
+    REQUIRE(peakErr.dim() == 1);
+    REQUIRE(peakErr.size(0) == B);
+    REQUIRE(torch::isfinite(peakErr).all().item<bool>());
+    REQUIRE((peakErr >= 0.f).all().item<bool>());
+}
+
+// --------------------------------------------------------------------------
 // The chasing learner.
 // --------------------------------------------------------------------------
 TEST_CASE("learner: loss decreases on a fixed run, predictions finite/in-bounds") {

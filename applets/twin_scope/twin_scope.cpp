@@ -93,6 +93,14 @@ inline void mode_range(int field, float& vmin, float& vmax) {
     else { vmin = kTempMin; vmax = kTempMax; }
 }
 
+// Fleet tint range (§9): peak-T reads on the same MAGMA temperature scale as
+// the hero; peak-|error| reads on the error span. One helper so the fleet
+// instance LUT can never disagree with the hero's field LUT.
+inline void tint_range(int tint_mode, float& vmin, float& vmax) {
+    if (tint_mode == 1) { vmin = 0.0f; vmax = kErrSpan; }   // peak-|error|
+    else { vmin = kTempMin; vmax = kTempMax; }              // peak-T
+}
+
 // Provenance rungs for the honest status line (§6/§9). ZEROCOPY only when the
 // imported-allocation path actually drew this frame (flow_scope discipline).
 enum Prov { PROV_WAIT, PROV_HEATMAP, PROV_PERVERTEX, PROV_CPU_TEX, PROV_ZEROCOPY };
@@ -169,6 +177,83 @@ bool intersect_triangle(V3 origin, V3 direction, V3 a, V3 b, V3 c,
     return distance > 0.f;
 }
 
+// Ray/sphere intersection (nearest positive root); `dir` is unit-length so `t`
+// is a world distance directly comparable to the mesh ray-cast below.
+bool intersect_sphere(V3 origin, V3 dir, V3 center, float radius, float& t) {
+    const V3 oc = origin - center;
+    const float b = dot(oc, dir);
+    const float c = dot(oc, oc) - radius * radius;
+    const float disc = b * b - c;
+    if (disc < 0.f) return false;
+    const float sq = std::sqrt(disc);
+    const float t0 = -b - sq;
+    t = t0 > 0.f ? t0 : (-b + sq);
+    return t > 0.f;
+}
+
+// Fleet layout (§9 / exemplar §1.4): kVariants housings on a cols×rows grid,
+// uniform-scaled (rigid up to uniform scale — G14 passes), the hero unit
+// (slot 0) at the front-centre. Returns the (kVariants,16) column-major poses
+// (translation in [12..14], uniform scale on the diagonal) plus the world
+// centres + bounding-sphere radius the frame thread ray-casts for
+// click-to-promote, and the full-detail hero-copy stage translation. Pure
+// geometry from the mesh bounds — deterministic, built once at init.
+constexpr int kFleetCols = 10;
+constexpr int kFleetRows = 5;
+static_assert(kFleetCols * kFleetRows == kVariants,
+              "fleet grid must cover exactly kVariants housings");
+
+struct FleetLayout {
+    std::vector<float> pose;                 // kVariants*16 column-major
+    std::array<V3, kVariants> center{};      // world grid centres (pick)
+    float radius = 0.f;                      // per-instance bounding sphere (pick)
+    float scale = 1.f;                       // uniform instance scale
+    V3 hero_stage{0.f, 0.f, 0.f};            // full-detail hero copy translation
+};
+
+FleetLayout build_fleet_layout(const std::vector<float>& positions) {
+    float mnx = 1e30f, mxx = -1e30f, mny = 1e30f, mxy = -1e30f,
+          mnz = 1e30f, mxz = -1e30f;
+    for (size_t i = 0; i + 2 < positions.size(); i += 3) {
+        mnx = std::min(mnx, positions[i]);     mxx = std::max(mxx, positions[i]);
+        mny = std::min(mny, positions[i + 1]); mxy = std::max(mxy, positions[i + 1]);
+        mnz = std::min(mnz, positions[i + 2]); mxz = std::max(mxz, positions[i + 2]);
+    }
+    const float ext_x = mxx - mnx, ext_y = mxy - mny, ext_z = mxz - mnz;
+    const float ext = std::max(std::max(ext_x, ext_y), std::max(ext_z, 1e-3f));
+
+    FleetLayout L;
+    L.scale = 1.0f / ext;                    // ~unit-wide scaled housings
+    const float cell = 1.25f;                // scaled units (~0.25 gap)
+    L.radius = 0.5f * L.scale *
+               std::sqrt(ext_x * ext_x + ext_y * ext_y + ext_z * ext_z);
+
+    auto cell_center = [&](int c, int r) -> V3 {
+        return V3{(c - (kFleetCols - 1) * 0.5f) * cell, 0.f,
+                  (r - (kFleetRows - 1) * 0.5f) * cell};
+    };
+    // slot 0 == front-centre (max +z, mid column); the rest fill front→back.
+    const int fc_c = kFleetCols / 2, fc_r = kFleetRows - 1;
+    std::vector<std::pair<int, int>> order;
+    order.reserve(kVariants);
+    order.emplace_back(fc_c, fc_r);
+    for (int r = kFleetRows - 1; r >= 0; --r)
+        for (int c = 0; c < kFleetCols; ++c)
+            if (!(c == fc_c && r == fc_r)) order.emplace_back(c, r);
+
+    L.pose.assign(static_cast<size_t>(kVariants) * 16, 0.f);
+    for (int i = 0; i < kVariants; ++i) {
+        const V3 t = cell_center(order[i].first, order[i].second);
+        L.center[i] = t;
+        float* m = &L.pose[static_cast<size_t>(i) * 16];
+        m[0] = L.scale; m[5] = L.scale; m[10] = L.scale; m[15] = 1.f;  // col-major
+        m[12] = t.x; m[13] = t.y; m[14] = t.z;                          // translation
+    }
+    const float front_z = (kFleetRows - 1) * 0.5f * cell;
+    L.hero_stage = V3{0.f, 0.f, front_z + 1.4f * cell};
+    return L;
+}
+
 CaliperTensor cpu_field_desc(const float* base, int h, int w) {
     CaliperTensor desc{};
     desc.struct_size = sizeof(desc);
@@ -201,8 +286,10 @@ struct TwinScopeState {
     std::atomic<bool> train_on{true};
     std::atomic<bool> reset_req{false};
     std::atomic<float> learning_rate{2e-3f};
-    std::atomic<int> display_mode{MODE_SPLIT};
+    std::atomic<int> display_mode{MODE_SIM};
     std::atomic<bool> textured_pref{true};   // R2 toggle
+    std::atomic<int> tint_mode{0};           // fleet tint: 0=peak-T, 1=peak-|error| (§9)
+    std::atomic<int> hero_variant{0};        // click-to-promote: which variant drapes the hero
     // Per-source override: <0 → follow the seeded duty schedule; [0,1] → held
     // user duty factor (source has left the cycle, §7). One atomic per source,
     // stored directly where the change happens.
@@ -216,9 +303,16 @@ struct TwinScopeState {
     torch::Tensor positions, normals, uvs, indices, wire_indices;   // render mesh
     torch::Tensor tex_slot[FIELD_COUNT][kSlots];   // (H,W) sim/net/err per slot
     torch::Tensor vert_slot[FIELD_COUNT][kSlots];  // (V_render,) per slot
+    torch::Tensor pose;                            // (kVariants,16) f32 col-major, static
+    torch::Tensor attr_slot[kSlots];               // (kVariants,) per-variant tint per slot
+    std::array<V3, kVariants> pose_center{};       // fleet grid centers (frame-side pick)
+    float pose_radius = 0.f;                        // instance bounding-sphere radius (pick)
+    V3 hero_stage{};                                // full-detail hero copy translation
+    float hero_scale = 1.f;                         // hero copy uniform scale (== fleet scale)
     int ready_slot = -1;
     int display_slot = -1;
-    int published_mode = MODE_SPLIT;
+    int published_mode = MODE_SIM;
+    int published_tint = 0;
     int field_h = 0, field_w = 0;
     int64_t v_render = 0, v_sim = 0;
     bool gpu = false;
@@ -237,12 +331,14 @@ struct TwinScopeState {
     V3 cam_target{0.f, 0.5f, 0.f};
     float model_offset = 2.3f;   // ±x split offset (set from mesh bounds at init)
     float camera_azimuth = 0.9f;
-    float camera_elevation = 0.55f;
-    float camera_distance = 15.0f;
+    float camera_elevation = 0.72f;      // look down onto the fleet grid
+    float camera_distance = 24.0f;       // frame the 50-housing grid + hero
     bool wireframe = false;
     int selected_source = -1;
     int logged_prov = -1;
     bool logged_first_draw = false;
+    bool logged_first_fleet = false;
+    bool logged_no_inst = false;
     std::vector<float> loss_history;
 
     TwinScopeState() {
@@ -330,9 +426,14 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
         wire_cpu.insert(wire_cpu.end(), {a, b, b, c, c, a});
     }
 
+    // Fleet grid poses + pick metadata (static, built once from the mesh bounds).
+    const FleetLayout fleet = build_fleet_layout(state->mesh_cpu.positions);
+
     torch::Tensor positions, normals, uvs, indices, wire_indices;
     torch::Tensor tex_slot[FIELD_COUNT][kSlots];
     torch::Tensor vert_slot[FIELD_COUNT][kSlots];
+    torch::Tensor pose;                        // (kVariants,16) f32 col-major, static
+    torch::Tensor attr_slot[kSlots];           // (kVariants,) per-variant tint per slot
     auto fopt = torch::TensorOptions(device).dtype(torch::kFloat32);
     auto iopt = torch::TensorOptions(device).dtype(torch::kInt32);
     auto allocate = [&] {
@@ -341,6 +442,9 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
         uvs = torch::empty({V_render, 2}, fopt);
         indices = torch::empty({index_count}, iopt);
         wire_indices = torch::empty({static_cast<int64_t>(wire_cpu.size())}, iopt);
+        pose = torch::empty({kVariants, 16}, fopt);
+        for (int s = 0; s < kSlots; ++s)
+            attr_slot[s] = torch::empty({kVariants}, fopt);
         for (int f = 0; f < FIELD_COUNT; ++f)
             for (int s = 0; s < kSlots; ++s) {
                 tex_slot[f][s] = torch::empty({kTexH, kTexW}, fopt);
@@ -360,6 +464,12 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
         {index_count}, torch::kInt32).clone().to(device));
     wire_indices.copy_(torch::from_blob(wire_cpu.data(),
         {static_cast<int64_t>(wire_cpu.size())}, torch::kInt32).clone().to(device));
+    // Fleet poses are static: copied once here. Drained by the FIRST field
+    // publish's sync below (that drain empties the whole enqueue history,
+    // including this copy) before the frame thread ever imports/draws them —
+    // the geometry memory-stability contract's temporal half (§9).
+    pose.copy_(torch::from_blob(const_cast<float*>(fleet.pose.data()),
+        {kVariants, 16}, torch::kFloat32).clone().to(device));
 
     // Publish the immutable geometry + metadata once.
     {
@@ -368,6 +478,12 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
         state->positions = positions; state->normals = normals;
         state->uvs = uvs; state->indices = indices;
         state->wire_indices = wire_indices;
+        state->pose = pose;
+        for (int s = 0; s < kSlots; ++s) state->attr_slot[s] = attr_slot[s];
+        state->pose_center = fleet.center;
+        state->pose_radius = fleet.radius;
+        state->hero_stage = fleet.hero_stage;
+        state->hero_scale = fleet.scale;
         for (int f = 0; f < FIELD_COUNT; ++f)
             for (int s = 0; s < kSlots; ++s) {
                 state->tex_slot[f][s] = tex_slot[f][s];
@@ -464,8 +580,13 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
              now - last_publish >= std::chrono::milliseconds(33))) {
             last_publish = now;
             const int mode = state->display_mode.load();
-            auto T0 = sim.T.select(0, 0);              // (V_sim,)
-            auto s_hero = sim.active.select(0, 0);     // (K,)
+            const int tint = state->tint_mode.load();
+            // Click-to-promote: the picked variant drapes the full-detail hero
+            // (§9, pure applet state — no ABI). Default 0 == the natural hero.
+            const int hero = std::clamp(state->hero_variant.load(), 0,
+                                        static_cast<int>(kVariants) - 1);
+            auto T0 = sim.T.select(0, hero);           // (V_sim,)
+            auto s_hero = sim.active.select(0, hero);  // (K,)
 
             auto sim_texf = bake_field(T0);
             auto net_texf = learner->predict(texel_pos, s_hero).reshape({kTexH, kTexW});
@@ -484,12 +605,28 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
             auto cpuvec = std::make_shared<std::vector<float>>(
                 cpu_ptr, cpu_ptr + static_cast<size_t>(FIELD_COUNT) * kTexH * kTexW);
 
+            // Fleet per-variant tint (§9): ONE (kVariants,) scalar the instanced
+            // draw pulls through the LUT. peak-T is a plain per-variant amax;
+            // peak-|error| needs the net across ALL variants (predict_batch —
+            // batched == the per-variant predict loop, pinned in the twin test
+            // suite) reduced against the sim render field. Enqueued BEFORE the
+            // drain below, so the live attr slot is drained every publish.
+            torch::Tensor attr;
+            if (tint == 1) {
+                auto net_all = learner->predict_batch(render_pos, sim.active); // (B,V_render)
+                auto sim_all = sim.T.slice(1, 0, V_render);                    // (B,V_render)
+                attr = (sim_all - net_all).abs().amax(1).contiguous();         // (B,)
+            } else {
+                attr = sim.T.amax(1).contiguous();                             // (B,) peak-T
+            }
+
             tex_slot[FIELD_SIM][write_slot].copy_(sim_texf);
             tex_slot[FIELD_NET][write_slot].copy_(net_texf);
             tex_slot[FIELD_ERR][write_slot].copy_(err_texf);
             vert_slot[FIELD_SIM][write_slot].copy_(sim_vf);
             vert_slot[FIELD_NET][write_slot].copy_(net_vf);
             vert_slot[FIELD_ERR][write_slot].copy_(err_vf);
+            attr_slot[write_slot].copy_(attr);
             // Drain BEFORE the publish flip (the geometry memory-stability
             // contract's temporal half, geometry_v1.h): the slot copies above
             // are enqueued AFTER the cpu3 sync, so without this they can still
@@ -504,6 +641,7 @@ void twin_job(TwinScopeState* state, const CaliperJobControl* control) {
             state->peak = peak;
             state->loss = loss;
             state->published_mode = mode;   // tag the publish with its mode (§8.d)
+            state->published_tint = tint;   // tag which (kVariants,) tint drew
             state->ready_slot = write_slot;
             for (int s = 0; s < kSlots; ++s)
                 if (s != state->ready_slot && s != state->display_slot) {
@@ -579,7 +717,9 @@ bool TwinScopeApplet::initialize(caliper::Host& host) {
         miny = std::min(miny, p[i + 1]); maxy = std::max(maxy, p[i + 1]);
     }
     state->model_offset = 0.62f * (maxx - minx);
-    state->cam_target = V3{0.f, 0.5f * (miny + maxy), 0.f};
+    // Fleet-centric target: the grid centres on the origin (scaled housings sit
+    // near y=0) with the hero copy staged in front (+z). Frame both.
+    state->cam_target = V3{0.f, 0.2f, 0.6f};
 
     // Single source-site definition, read once for frame-thread picking (the
     // sim owns the same table on the worker — twin_model.h defines it ONCE).
@@ -600,13 +740,17 @@ void TwinScopeApplet::draw_ui() {
     // --- snapshot under the mutex: tensor handles + a shared_ptr, no big copy ---
     torch::Tensor positions, normals, uvs, indices, wire_indices;
     torch::Tensor tex[FIELD_COUNT], vert[FIELD_COUNT];
+    torch::Tensor pose, attr;
     caliper::adapters::ExportablePool* pool = nullptr;
     std::shared_ptr<std::vector<float>> cpu_fields;
-    int h = 0, w = 0, published_mode = MODE_SPLIT;
+    int h = 0, w = 0, published_mode = MODE_SIM, published_tint = 0;
     int64_t v_render = 0, v_sim = 0;
     float loss = 0.f, peak = 0.f, sim_sps = 0.f, train_sps = 0.f;
     int64_t sim_steps = 0, train_steps = 0;
     std::string device_name;
+    std::array<V3, kVariants> pose_center{};
+    float pose_radius = 0.f, hero_scale = 1.f;
+    V3 hero_stage{};
     bool have_field = false;
     {
         std::lock_guard<std::mutex> lock(state->mutex);
@@ -617,14 +761,21 @@ void TwinScopeApplet::draw_ui() {
                 tex[f] = state->tex_slot[f][s];
                 vert[f] = state->vert_slot[f][s];
             }
+            attr = state->attr_slot[s];
             have_field = true;
         }
         positions = state->positions; normals = state->normals;
         uvs = state->uvs; indices = state->indices;
         wire_indices = state->wire_indices;
+        pose = state->pose;
         pool = state->pool.get();
         cpu_fields = state->cpu_fields;
         published_mode = state->published_mode;
+        published_tint = state->published_tint;
+        pose_center = state->pose_center;
+        pose_radius = state->pose_radius;
+        hero_stage = state->hero_stage;
+        hero_scale = state->hero_scale;
         h = state->field_h; w = state->field_w;
         v_render = state->v_render; v_sim = state->v_sim;
         loss = state->loss; peak = state->peak;
@@ -635,6 +786,7 @@ void TwinScopeApplet::draw_ui() {
 
     const bool has_prim = (state->geom_caps & CALIPER_GEOM_CAP_PRIMITIVES) != 0;
     const bool has_textured = state->geometry.has_textured();
+    const bool has_instanced = state->geometry.has_instanced();
     const bool stream_ordered =
         (state->bridge_caps & CALIPER_BRIDGE_CAP_STREAM_ORDERED) != 0;
 
@@ -663,9 +815,9 @@ void TwinScopeApplet::draw_ui() {
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
 
+        // Hero drape field (the full-detail R2 copy shows one field).
         int mode = state->display_mode.load();
-        if (ImGui::RadioButton("split sim|net", mode == MODE_SPLIT))
-            state->display_mode.store(MODE_SPLIT);
+        ImGui::TextUnformatted("hero:");
         ImGui::SameLine();
         if (ImGui::RadioButton("sim", mode == MODE_SIM))
             state->display_mode.store(MODE_SIM);
@@ -675,6 +827,20 @@ void TwinScopeApplet::draw_ui() {
         ImGui::SameLine();
         if (ImGui::RadioButton("|error|", mode == MODE_ERR))
             state->display_mode.store(MODE_ERR);
+        ImGui::SameLine();
+        ImGui::TextUnformatted("|");
+        ImGui::SameLine();
+
+        // Fleet instance tint toggle (§9 / exemplar §1.4) — only meaningful
+        // when the instanced draw is live.
+        int tint = state->tint_mode.load();
+        if (!has_instanced) ImGui::BeginDisabled();
+        ImGui::TextUnformatted("fleet:");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("peak T", tint == 0)) state->tint_mode.store(0);
+        ImGui::SameLine();
+        if (ImGui::RadioButton("peak |error|", tint == 1)) state->tint_mode.store(1);
+        if (!has_instanced) ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
@@ -756,6 +922,10 @@ void TwinScopeApplet::draw_ui() {
         ImGui::Dummy(ImVec2(lw, lh));
         ImGui::SameLine();
         ImGui::Text("MAGMA %.0f–%.0f C", kTempMin, kTempMax);
+        if (has_prim && !has_instanced) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("|  fleet needs instanced geometry (cap absent)");
+        }
     }
 
     // --------------------------- geometry view -------------------------------
@@ -772,17 +942,9 @@ void TwinScopeApplet::draw_ui() {
         state->view_w = desired_w; state->view_h = desired_h;
     }
 
-    // Which fields to draw, and at what ±x offset (published_mode drives it).
-    struct Spec { int field; float offset; };
-    std::vector<Spec> specs;
-    if (published_mode == MODE_SPLIT) {
-        specs.push_back({FIELD_SIM, -state->model_offset});
-        specs.push_back({FIELD_NET, +state->model_offset});
-    } else {
-        const int f = published_mode == MODE_NET ? FIELD_NET
-                    : published_mode == MODE_ERR ? FIELD_ERR : FIELD_SIM;
-        specs.push_back({f, 0.f});
-    }
+    // The full-detail hero drapes ONE field (published_mode selects it).
+    const int hero_field = published_mode == MODE_NET ? FIELD_NET
+                         : published_mode == MODE_ERR ? FIELD_ERR : FIELD_SIM;
 
     // ONE eye computation, used for BOTH the draw and the pick (§8.f).
     const V3 target = state->cam_target;
@@ -794,12 +956,14 @@ void TwinScopeApplet::draw_ui() {
     look_at(eye, target, {0.f, 1.f, 0.f}, camera.view);
     perspective(45.f * kPi / 180.f, aspect, 0.05f, 60.f, camera.proj);
 
-    // Per-half provenance (M1, T8b): count textured halves and how many of
-    // them actually imported zero-copy. ZEROCOPY is claimed only when EVERY
-    // drawn half imported — a fallback on one half drops the honest status to
-    // CPU-staged instead of being masked by an OR across halves.
-    bool textured_drew = false, pervertex_drew = false;
-    int textured_halves = 0, imported_halves = 0;
+    // Draw provenance (honest, post-draw — flow_scope discipline). The scene is
+    // ONE draped hero (R2 textured, else per-vertex fallback) plus, when the
+    // instanced cap is live, ONE instanced draw of the whole 50-housing fleet
+    // (R3). Both go through a SINGLE draw_primitives call so the view clears
+    // once; ZEROCOPY is claimed only for a path that actually drew from an
+    // imported allocation.
+    bool hero_tex_drew = false, hero_pv_drew = false, hero_imported = false;
+    bool fleet_drew = false, fleet_imported = false;
     const bool want_textured = state->textured_pref.load() && has_textured;
 
     if (state->view && pool && positions.defined() && have_field) {
@@ -809,7 +973,10 @@ void TwinScopeApplet::draw_ui() {
         auto uref = pool->to_bridge(state->bridge, uvs);
         auto wref = pool->to_bridge(state->bridge, wire_indices);
 
-        auto set_base = [&](CaliperGeomDraw& b, float offset) {
+        // Common mesh streams + a uniform scale·translation model matrix
+        // (column-major). The fleet leaves this identity — its per-instance
+        // matrices carry the grid transforms.
+        auto set_mesh = [&](CaliperGeomDraw& b) {
             b.pos_alloc = pref->alloc; b.pos_offset = pref->offset;
             b.vertex_count = static_cast<uint64_t>(v_render);
             b.index_alloc = iref->alloc; b.index_offset = iref->offset;
@@ -819,7 +986,10 @@ void TwinScopeApplet::draw_ui() {
             b.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
             b.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
             b.depth_flags = CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE;
-            b.model[12] = offset;
+        };
+        auto set_model = [&](CaliperGeomDraw& b, float scale, V3 t) {
+            b.model[0] = scale; b.model[5] = scale; b.model[10] = scale;
+            b.model[12] = t.x; b.model[13] = t.y; b.model[14] = t.z;
         };
         auto wire_of = [&](const CaliperGeomDraw& surf) {
             CaliperGeomDraw wd = surf;
@@ -832,8 +1002,6 @@ void TwinScopeApplet::draw_ui() {
             wd.flat_rgba = 0x70FFFFFFu;
             return wd;
         };
-
-        // Create-once bridge texture per field (range baked from mode_range).
         auto ensure_tex = [&](int field) -> CaliperTextureId {
             if (state->field_tex[field] == 0 && cpu_fields) {
                 float vmin, vmax; mode_range(field, vmin, vmax);
@@ -844,8 +1012,6 @@ void TwinScopeApplet::draw_ui() {
             }
             return state->field_tex[field];
         };
-        // Update a field texture: zero-copy imported path when STREAM_ORDERED is
-        // present (§8.b), else CPU-staged. Returns true if imported.
         auto update_tex = [&](int field, CaliperTextureId t) -> bool {
             if (stream_ordered) {
                 auto ref = pool->to_bridge(state->bridge, tex[field]);
@@ -865,66 +1031,118 @@ void TwinScopeApplet::draw_ui() {
         };
 
         if (pref && nref && iref) {
-            // ---- textured (v1.2) rung ----
+            // Build the hero draped record as a v1.2 draw (textured when the R2
+            // cap + toggle are on, else per-vertex COLORMAP). This is ALWAYS the
+            // frozen v1.2 prefix, so it slots into a zero-tailed v1.3 record.
+            CaliperGeomDrawV1_2 hero = caliper::geom_draw_v1_2_defaults();
+            set_mesh(hero.base);
+            set_model(hero.base, hero_scale, hero_stage);
+            bool hero_ready = false;
             if (want_textured && uref) {
-                std::vector<CaliperGeomDrawV1_2> draws;
-                for (const Spec& sp : specs) {
-                    const CaliperTextureId ft = ensure_tex(sp.field);
-                    if (ft == 0) continue;
-                    ++textured_halves;
-                    if (update_tex(sp.field, ft)) ++imported_halves;
-                    CaliperGeomDrawV1_2 d = caliper::geom_draw_v1_2_defaults();
-                    set_base(d.base, sp.offset);
-                    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
-                    d.uv_alloc = uref->alloc; d.uv_offset = uref->offset;
-                    d.texture = ft;
+                const CaliperTextureId ft = ensure_tex(hero_field);
+                if (ft != 0) {
+                    hero_imported = update_tex(hero_field, ft);
+                    hero.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+                    hero.uv_alloc = uref->alloc; hero.uv_offset = uref->offset;
+                    hero.texture = ft;
+                    hero_ready = true; hero_tex_drew = true;   // provisional; confirmed by return
+                }
+            }
+            if (!hero_ready) {
+                auto aref = pool->to_bridge(state->bridge, vert[hero_field]);
+                if (aref) {
+                    float vmin, vmax; mode_range(hero_field, vmin, vmax);
+                    hero.base.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+                    hero.base.attr_alloc = aref->alloc;
+                    hero.base.attr_offset = aref->offset;
+                    hero.base.colormap = CALIPER_CMAP_MAGMA;
+                    hero.base.vmin = vmin; hero.base.vmax = vmax;
+                    hero_ready = true; hero_pv_drew = true; hero_imported = true;
+                }
+            }
+
+            // Fleet instance streams (imported, zero-copy). Present only when the
+            // instanced cap is live and the pose imported.
+            std::optional<caliper::adapters::BridgeRef> poseref, attrref;
+            if (has_instanced && pose.defined()) {
+                poseref = pool->to_bridge(state->bridge, pose);
+                if (attr.defined())
+                    attrref = pool->to_bridge(state->bridge, attr);
+            }
+            const bool fleet_ready = poseref.has_value();
+
+            if (has_instanced && (hero_ready || fleet_ready)) {
+                // ONE v1.3 draw call: hero (zero instance tail) + fleet.
+                std::vector<CaliperGeomDrawV1_3> draws;
+                if (hero_ready) {
+                    CaliperGeomDrawV1_3 d = caliper::geom_draw_v1_3_defaults();
+                    d.base = hero;
                     draws.push_back(d);
                     if (state->wireframe && wref) {
-                        CaliperGeomDrawV1_2 wd = caliper::geom_draw_v1_2_defaults();
-                        wd.base = wire_of(d.base);
+                        CaliperGeomDrawV1_3 wd = caliper::geom_draw_v1_3_defaults();
+                        wd.base.base = wire_of(hero.base);
+                        set_model(wd.base.base, hero_scale, hero_stage);
                         draws.push_back(wd);
                     }
                 }
-                if (!draws.empty())
-                    textured_drew = state->geometry.draw_primitives(
-                        state->view, camera, draws.data(),
-                        static_cast<uint32_t>(draws.size()), 0xFF090B0Eu);
-            }
-
-            // ---- per-vertex (v1.1) rung: chosen when textured is off, the cap
-            // is absent, OR the textured draw was refused at runtime (§9). ----
-            if (!textured_drew) {
-                std::vector<CaliperGeomDraw> draws;
-                for (const Spec& sp : specs) {
-                    auto aref = pool->to_bridge(state->bridge, vert[sp.field]);
-                    if (!aref) continue;
-                    float vmin, vmax; mode_range(sp.field, vmin, vmax);
-                    CaliperGeomDraw d = caliper::geom_draw_defaults();
-                    set_base(d, sp.offset);
-                    d.attr_alloc = aref->alloc; d.attr_offset = aref->offset;
-                    d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
-                    d.colormap = CALIPER_CMAP_MAGMA;
-                    d.vmin = vmin; d.vmax = vmax;
+                if (fleet_ready) {
+                    float vmin, vmax; tint_range(published_tint, vmin, vmax);
+                    CaliperGeomDrawV1_3 d = caliper::geom_draw_v1_3_defaults();
+                    set_mesh(d.base.base);           // identity model
+                    // FLAT base + the draw's colormap LUT: the (50,) instance
+                    // attr overrides the color source (§4 tint semantics) — a
+                    // COLORMAP base would demand a per-vertex attr the fleet has
+                    // no use for. Lambert then lights the tinted color.
+                    d.base.base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+                    d.base.base.colormap = CALIPER_CMAP_MAGMA;
+                    d.base.base.vmin = vmin; d.base.base.vmax = vmax;
+                    d.instance_alloc = poseref->alloc;
+                    d.instance_offset = poseref->offset;
+                    d.instance_count = static_cast<uint64_t>(kVariants);
+                    if (attrref) {
+                        d.instance_attr_alloc = attrref->alloc;
+                        d.instance_attr_offset = attrref->offset;
+                    }
                     draws.push_back(d);
-                    if (state->wireframe && wref) draws.push_back(wire_of(d));
                 }
-                if (!draws.empty())
-                    pervertex_drew = state->geometry.draw_primitives(
-                        state->view, camera, draws.data(),
-                        static_cast<uint32_t>(draws.size()), 0xFF090B0Eu);
+                const bool ok = !draws.empty() && state->geometry.draw_primitives(
+                    state->view, camera, draws.data(),
+                    static_cast<uint32_t>(draws.size()), 0xFF090B0Eu);
+                fleet_drew = ok && fleet_ready;
+                fleet_imported = fleet_drew;   // pose (+attr) came from the pool
+                hero_tex_drew = ok && hero_tex_drew;
+                hero_pv_drew = ok && hero_pv_drew;
+                if (!ok) { hero_tex_drew = hero_pv_drew = false; }
+            } else if (hero_ready) {
+                // Honest ladder: no instanced cap -> hero only, via the v1.2/v1.1
+                // draw_primitives overload (never a wrong image).
+                CaliperGeomDrawV1_2 draws[2];
+                uint32_t n = 0;
+                draws[n++] = hero;
+                if (state->wireframe && wref) {
+                    CaliperGeomDrawV1_2 wd = caliper::geom_draw_v1_2_defaults();
+                    wd.base = wire_of(hero.base);
+                    set_model(wd.base, hero_scale, hero_stage);
+                    draws[n++] = wd;
+                }
+                const bool ok = state->geometry.draw_primitives(
+                    state->view, camera, draws, n, 0xFF090B0Eu);
+                hero_tex_drew = ok && hero_tex_drew;
+                hero_pv_drew = ok && hero_pv_drew;
             }
         }
     }
-    const bool geometry_drew = textured_drew || pervertex_drew;
+    const bool geometry_drew = hero_tex_drew || hero_pv_drew || fleet_drew;
 
-    // provenance (honest, post-draw): claimed only for what actually drew.
-    // ZEROCOPY requires that EVERY textured half imported (M1 per-draw): if one
-    // half fell back to CPU staging, the status honestly reports CPU-staged.
-    Prov prov = !geometry_drew ? (cpu_fields ? PROV_HEATMAP : PROV_WAIT)
-              : textured_drew ? (textured_halves > 0 &&
-                                 imported_halves == textured_halves
-                                     ? PROV_ZEROCOPY : PROV_CPU_TEX)
-              : PROV_PERVERTEX;
+    // Provenance: claim ZEROCOPY only for a path that drew from an imported
+    // allocation. The instanced fleet always pulls its pose/attr from the pool,
+    // so a live fleet draw is zero-copy; the hero is zero-copy when its texture
+    // update took the imported handoff (or it drew per-vertex from the pool).
+    Prov prov;
+    if (!geometry_drew) prov = cpu_fields ? PROV_HEATMAP : PROV_WAIT;
+    else if (fleet_drew) prov = fleet_imported ? PROV_ZEROCOPY : PROV_CPU_TEX;
+    else if (hero_tex_drew) prov = hero_imported ? PROV_ZEROCOPY : PROV_CPU_TEX;
+    else prov = PROV_PERVERTEX;
     if (state->logged_prov != prov && state->host) {
         state->logged_prov = prov;
         const char* line =
@@ -935,14 +1153,26 @@ void TwinScopeApplet::draw_ui() {
                                   : "twin-scope: waiting for the first published field";
         state->host->log_info(line);
     }
+    if (fleet_drew && !state->logged_first_fleet && state->host) {
+        state->logged_first_fleet = true;
+        state->host->log_info(
+            "twin-scope: fleet — ONE instanced draw, N=50 housings from imported "
+            "(50,16) pose + (50,) tint");
+    }
+    if (has_prim && !has_instanced && !state->logged_no_inst && state->host) {
+        state->logged_no_inst = true;
+        state->host->log_info(
+            "twin-scope: fleet needs instanced geometry (cap absent) — hero only");
+    }
 
     // ------------------------------ present ----------------------------------
     if (geometry_drew) {
         if (!state->logged_first_draw && state->host) {
             state->logged_first_draw = true;
-            state->host->log_info(("twin-scope: geometry view drawn — " +
-                std::to_string(specs.size()) + " mesh half(s), " +
-                std::string(textured_drew ? "textured v1.2" : "per-vertex v1.1")).c_str());
+            state->host->log_info(("twin-scope: geometry view drawn — hero " +
+                std::string(hero_tex_drew ? "textured v1.2" : "per-vertex v1.1") +
+                (fleet_drew ? " + fleet instanced v1.3 (N=50)"
+                            : " (fleet: no instanced cap)")).c_str());
         }
         ImGui::Image(caliper::Bridge::imtex(state->view),
                      ImVec2(state->view_w / fb_scale, state->view_h / fb_scale));
@@ -957,38 +1187,63 @@ void TwinScopeApplet::draw_ui() {
         }
         if (hovered && io.MouseWheel != 0.f)
             state->camera_distance = std::clamp(
-                state->camera_distance * (1.f - io.MouseWheel * 0.08f), 6.f, 40.f);
+                state->camera_distance * (1.f - io.MouseWheel * 0.08f), 4.f, 60.f);
 
-        // Click → nearest source site toggle; ray cast against the RENDER mesh
-        // (each active ±x offset tested by shifting the ray origin). Same eye.
+        // Left click resolves against BOTH pick targets and the nearer wins
+        // (same eye/ray): the fleet grid (bounding-sphere ray-cast → promote the
+        // hit variant into the hero slot, §9) and the full-detail hero copy
+        // (mesh ray-cast → nearest source-site toggle, the shipped interaction).
         if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             item_size.x > 0.f && item_size.y > 0.f) {
             const float ndc_x = ((io.MousePos.x - item_min.x) / item_size.x) * 2.f - 1.f;
             const float ndc_y = 1.f - ((io.MousePos.y - item_min.y) / item_size.y) * 2.f;
             const V3 ray = cursor_ray(eye, target, 45.f, aspect, ndc_x, ndc_y);
-            float closest = 1e30f; V3 hit_local{};
-            for (const Spec& sp : specs) {
-                const V3 origin = eye - V3{sp.offset, 0.f, 0.f};
-                for (size_t i = 0; i + 2 < state->mesh_cpu.indices.size(); i += 3) {
-                    auto vp = [&](int idx) {
-                        return V3{state->mesh_cpu.positions[idx * 3],
-                                  state->mesh_cpu.positions[idx * 3 + 1],
-                                  state->mesh_cpu.positions[idx * 3 + 2]}; };
-                    const V3 a = vp(state->mesh_cpu.indices[i]);
-                    const V3 b = vp(state->mesh_cpu.indices[i + 1]);
-                    const V3 c = vp(state->mesh_cpu.indices[i + 2]);
-                    float dist, b1, b2;
-                    if (intersect_triangle(origin, ray, a, b, c, dist, b1, b2) &&
-                        dist < closest) {
-                        closest = dist;
-                        hit_local = origin + ray * dist;
-                    }
+
+            // (a) fleet promotion — nearest instance bounding sphere.
+            int hit_var = -1; float fleet_t = 1e30f;
+            if (has_instanced && pose_radius > 0.f) {
+                for (int i = 0; i < kVariants; ++i) {
+                    float t;
+                    if (intersect_sphere(eye, ray, pose_center[i], pose_radius, t) &&
+                        t < fleet_t) { fleet_t = t; hit_var = i; }
                 }
             }
-            if (closest < 1e29f) {
+
+            // (b) hero source pick — ray-cast the hero copy (verts scaled +
+            // translated by its stage transform), then nearest source site.
+            float hero_t = 1e30f; V3 hero_hit_local{};
+            for (size_t i = 0; i + 2 < state->mesh_cpu.indices.size(); i += 3) {
+                auto vp = [&](int idx) {
+                    const V3 local{state->mesh_cpu.positions[idx * 3],
+                                   state->mesh_cpu.positions[idx * 3 + 1],
+                                   state->mesh_cpu.positions[idx * 3 + 2]};
+                    return local * hero_scale + hero_stage; };
+                const V3 a = vp(state->mesh_cpu.indices[i]);
+                const V3 b = vp(state->mesh_cpu.indices[i + 1]);
+                const V3 c = vp(state->mesh_cpu.indices[i + 2]);
+                float dist, b1, b2;
+                if (intersect_triangle(eye, ray, a, b, c, dist, b1, b2) &&
+                    dist < hero_t) {
+                    hero_t = dist;
+                    // Back to the hero's local frame for source matching.
+                    const V3 world = eye + ray * dist;
+                    hero_hit_local = (world - hero_stage) * (1.f / hero_scale);
+                }
+            }
+
+            if (hit_var >= 0 && fleet_t <= hero_t) {
+                if (hit_var != state->hero_variant.load()) {
+                    state->hero_variant.store(hit_var);
+                    if (state->host)
+                        state->host->log_info(
+                            ("twin-scope: promoted fleet variant " +
+                             std::to_string(hit_var) +
+                             " into the hero slot").c_str());
+                }
+            } else if (hero_t < 1e29f) {
                 int nearest = -1; float best = 0.35f * 0.35f;
                 for (int k = 0; k < kSourceCount; ++k) {
-                    const V3 d = hit_local - state->sites_cpu[k];
+                    const V3 d = hero_hit_local - state->sites_cpu[k];
                     const float d2 = dot(d, d);
                     if (d2 < best) { best = d2; nearest = k; }
                 }
@@ -1046,6 +1301,8 @@ void TwinScopeApplet::cleanup() {
         state->uvs = torch::Tensor();
         state->indices = torch::Tensor();
         state->wire_indices = torch::Tensor();
+        state->pose = torch::Tensor();
+        for (int s = 0; s < kSlots; ++s) state->attr_slot[s] = torch::Tensor();
         for (int f = 0; f < FIELD_COUNT; ++f)
             for (int s = 0; s < kSlots; ++s) {
                 state->tex_slot[f][s] = torch::Tensor();
