@@ -93,12 +93,19 @@ inline void mode_range(int field, float& vmin, float& vmax) {
     else { vmin = kTempMin; vmax = kTempMax; }
 }
 
-// Fleet tint range (§9): peak-T reads on the same MAGMA temperature scale as
-// the hero; peak-|error| reads on the error span. One helper so the fleet
-// instance LUT can never disagree with the hero's field LUT.
+// Fleet tint range (§9). The tint is a MAX-statistic (each variant's peak),
+// not a field: the gain is calibrated so hot SPOTS reach kTempMax, so every
+// variant's peak rides at that ceiling and the ±variant_spread intensity
+// spread pushes most PAST it — on the field window all 50 clamp to
+// MAGMA[255] (uniform white-hot, no discrimination). The peak window
+// therefore carries spread headroom: [kTempMin, kTempMax·(1+spread)], so a
+// −spread variant reads mid-ramp and a +spread variant reads near-white.
+// peak-|error| keeps the error span (error is 0-based, not gain-pinned).
+constexpr float kPeakTintMax =
+    kTempMax * (1.0f + twinscope::ThermalConfig{}.variant_spread);  // 140 °C
 inline void tint_range(int tint_mode, float& vmin, float& vmax) {
-    if (tint_mode == 1) { vmin = 0.0f; vmax = kErrSpan; }   // peak-|error|
-    else { vmin = kTempMin; vmax = kTempMax; }              // peak-T
+    if (tint_mode == 1) { vmin = 0.0f; vmax = kErrSpan; }     // peak-|error|
+    else { vmin = kTempMin; vmax = kPeakTintMax; }            // peak-T
 }
 
 // Provenance rungs for the honest status line (§6/§9). ZEROCOPY only when the
@@ -922,6 +929,11 @@ void TwinScopeApplet::draw_ui() {
         ImGui::Dummy(ImVec2(lw, lh));
         ImGui::SameLine();
         ImGui::Text("MAGMA %.0f–%.0f C", kTempMin, kTempMax);
+        if (has_instanced) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("|  fleet peak %.0f–%.0f C", kTempMin,
+                                kPeakTintMax);
+        }
         if (has_prim && !has_instanced) {
             ImGui::SameLine();
             ImGui::TextDisabled("|  fleet needs instanced geometry (cap absent)");
