@@ -20,9 +20,9 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
     **Points (`v1`):** Metal + Vulkan + GL-fallback ladder. **Primitives
     (`v1_1`):** shipped on **both** backends (Metal and Vulkan), byte-exact
     against one CPU reference on real hardware on each. **Instanced transforms
-    (`v1_3`):** Metal **run-proven byte-exact on Apple Silicon**; Vulkan
-    **transcribed + reviewed, hardware pass pending** the Windows session — not
-    claimed verified there. On a backend without
+    (`v1_3`):** **run-proven byte-exact on both backends** — Metal on Apple
+    Silicon and Vulkan/CUDA on Windows (both 2026-07-11), against the same
+    shared CPU reference. On a backend without
     the path (the GL fallback, or a host that doesn't vend the revision) the
     matching **caps bit is unset and every
     entry point is inert** — ship your fallback (see the worked example

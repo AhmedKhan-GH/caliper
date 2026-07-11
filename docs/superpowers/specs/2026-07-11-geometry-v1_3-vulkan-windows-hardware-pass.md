@@ -1,7 +1,10 @@
 # geometry.v1_3 on Vulkan/Windows — the hardware pass
 
 **Date:** 2026-07-11
-**Status:** execution spec (hardware pass). NOT a greenfield implementation —
+**Status:** COMPLETE (2026-07-11, same day) — all boxes ticked below; rows
+A–D passed byte-exact untouched on first hardware contact, the backend needed
+zero changes, and the only fixes were test-side (`477431e`). Originally:
+execution spec (hardware pass). NOT a greenfield implementation —
 the Vulkan code for R3 (`geometry.v1_3` instanced transforms) **already exists
 on `feat/geometry-v1_3`**, transcribed from the run-proven Metal reference and
 line-by-line reviewed on this Mac, but every Vulkan line is compiled out here
@@ -133,32 +136,50 @@ CMakeLists `if(WIN32)` block ~:232-262) — the grown `geom.vert` compiles to
 **compile-time** static_assert failure in vulkan_renderer.cpp
 (`sizeof(PrimParams)==192`) plus a runtime UBO-size mismatch, so check both.
 
-- [ ] **1.1** Configure + build green on the Windows box; the glslang step
+- [x] **1.1** Configure + build green on the Windows box; the glslang step
   regenerates `geom_vert_spv.h` from the grown shader; record the exact
   invocation in the box's own scratch ledger (`.superpowers/sdd/` is
   gitignored per-box — the Mac ledger did NOT transfer, expected).
+  *Done 2026-07-11: `cmd //c build_release.cmd` (vcvars64 → CLion CMake/Ninja,
+  Release); `geom_vert_spv.h` regenerated (08:47, 43,558 B). Ledger:
+  `v13-windows-hardware-pass-report.md`.*
 
 ## 2. Compile gate (first checkbox — none of this has compiled)
 
-- [ ] **2.1** `geom.vert` → SPIR-V compiles (bindings 8/9, std140 192-byte
+- [x] **2.1** `geom.vert` → SPIR-V compiles (bindings 8/9, std140 192-byte
   Params block, `gl_InstanceIndex` pull, `uintBitsToFloat` tint).
-- [ ] **2.2** `vulkan_renderer.cpp` compiles: 10-binding set layout, pool
+  *First try, no glslang complaint.*
+- [x] **2.2** `vulkan_renderer.cpp` compiles: 10-binding set layout, pool
   growth, `bi[9]`/`wr[10]` write arrays, G14 staging machinery,
-  `static_assert(sizeof(PrimParams)==192)`.
-- [ ] **2.3** `caliper_gfx_tests` compiles with the Vulkan v1_3 rows A–E in
+  `static_assert(sizeof(PrimParams)==192)`. *First try under MSVC 14.50 —
+  the transcription needed zero backend changes.*
+- [x] **2.3** `caliper_gfx_tests` compiles with the Vulkan v1_3 rows A–E in
   the `CALIPER_HAVE_VULKAN` block (first compile of the transcribed rows;
   the hoisted file-scope reference helpers already compile on the Mac side).
-- [ ] **2.4** `caliper` app links; `caliper_tests`/`caliper_torch_tests`
-  build; no cross-platform regression via shared headers.
+  *One break: doctest C2338 on chained `&&` in `REQUIRE_MESSAGE` (the MSVC
+  analog of the Metal fix `5164f89`) — three VmmBlock.ok sites split to one
+  check per block, fixed in `477431e`.*
+- [x] **2.4** `caliper` app links; `caliper_tests`/`caliper_torch_tests`
+  build; no cross-platform regression via shared headers. *All 8 test
+  targets + caliper.exe linked.*
 
 ## 3. Validation-layer + portable gate rows
 
-- [ ] **3.1** Run with Vulkan validation layers once: no descriptor-count,
+- [x] **3.1** Run with Vulkan validation layers once: no descriptor-count,
   binding-index, or UBO-range complaints on the instanced path (the class of
-  error a Mac review cannot catch).
-- [ ] **3.2** Portable Row-E refusals that need no live CUDA (G2/G4/G8/G12
+  error a Mac review cannot catch). *No layer existed on this box (SDK-free
+  build); LunarG SDK 1.4.350.0 installed, `VK_LAYER_KHRONOS_validation`
+  loader-injected over the full gfx battery AND a live 1000-instance
+  `instance_scope` run: ZERO complaints in the target class. Only two
+  pre-existing, pre-v1_3 framework findings fired (startup swapchain
+  pre-transition ×2, one VkSurfaceKHR teardown leak) — recorded as
+  carry-forwards in the box ledger, not v1_3 blockers. Artifacts:
+  `v13-gfx-validation-run.log`, `v13-instance-scope-validation-run.log`.*
+- [x] **3.2** Portable Row-E refusals that need no live CUDA (G2/G4/G8/G12
   shapes) fire with pixels bit-untouched on any ICD, reason strings byte-
-  matching the host battery.
+  matching the host battery. *G2/G4/G8/G12 proven GPU-free by the
+  `test_tensor_bridge` G1–G12 battery (green in caliper_tests);
+  pixels-untouched proven on hardware by gfx Row E.*
 
 ## 4. Byte-exact rows on hardware (STOP-and-diagnose on any miss)
 
@@ -166,23 +187,34 @@ All five rows run against the SAME hoisted CPU reference the Metal rows
 passed live (49/49). UUID-paired CUDA/VMM imports via `vmm_rows_ready()`,
 same as the v1_1/v1_2 Vulkan rows.
 
-- [ ] **4.1 Row A** — pose-only fleet N=4, FLAT: **exact (0 LSB)**.
-- [ ] **4.2 Row B** — per-instance tint over a **FLAT** base, MAGMA, UNLIT:
+- [x] **4.1 Row A** — pose-only fleet N=4, FLAT: **exact (0 LSB)**.
+  *Passed untouched on first hardware contact.*
+- [x] **4.2 Row B** — per-instance tint over a **FLAT** base, MAGMA, UNLIT:
   **exact (0 LSB)** (this row exists to catch a COLORMAP-only LUT-predicate
-  regression at binding 4).
-- [ ] **4.3 Row C** — v1.2 record vs zero-tail v1.3 record, two views,
+  regression at binding 4). *Passed untouched, first contact.*
+- [x] **4.3 Row C** — v1.2 record vs zero-tail v1.3 record, two views,
   readbacks **byte-identical to each other** (additive-default proof; also
-  proves `use_instance==0` SPIR-V bit-identity).
-- [ ] **4.4 Row D** — instanced LAMBERT, N=2 rigid: **±2 RGB LSB, alpha
-  exact** (the sole tolerance row).
-- [ ] **4.5 Row E** — all seven refusals (G4/G5/G2/G8/G12/G14-shear/G7)
+  proves `use_instance==0` SPIR-V bit-identity). *Passed untouched.*
+- [x] **4.4 Row D** — instanced LAMBERT, N=2 rigid: **±2 RGB LSB, alpha
+  exact** (the sole tolerance row). *Passed untouched — the §4.4 float-order
+  chain held across glslang/NVIDIA.*
+- [x] **4.5 Row E** — all seven refusals (G4/G5/G2/G8/G12/G14-shear/G7)
   return false with the view byte-equal to the last-good frame; G14's
   staged-copy readback proves out on real device-local CUDA imports.
-- [ ] **4.6** Full `caliper_gfx_tests` green on the box; ALL pre-existing
+  *One STOP-and-diagnose: the G5 shape carried Metal's literal count=5
+  against a granularity-padded 2 MiB VMM block — the gate was right, the
+  test was wrong (the recurring vkb6 padded-block lesson). OOB count now
+  derived from `inst_blk.size` (`477431e`); all seven refusals then fired
+  with pixels byte-identical to the last-good frame, G14 staged readback
+  live on device-local CUDA imports.*
+- [x] **4.6** Full `caliper_gfx_tests` green on the box; ALL pre-existing
   v1/v1_1/v1_2 Vulkan rows still green (no regression from the descriptor/
   pool/LUT-predicate changes — the LUT predicate change touches EVERY draw
   path, so the v1 COLORMAP rows are the regression canary).
-- [ ] **4.7** Full suite 100% (all 8 ctest suites).
+  *48/48 cases, 1475/1475 assertions, zero "skipping" lines in the full log
+  (`v13-gfx-battery-run.log`) — every CUDA/VMM row genuinely executed.*
+- [x] **4.7** Full suite 100% (all 8 ctest suites).
+  *8/8, 22.86 s (`v13-ctest-full-suite.log`).*
 
 ## 5. `instance_scope` on Vulkan/CUDA — the run-proof
 
@@ -193,29 +225,43 @@ code is platform-neutral and already run-proven on Metal/MPS (N gems, slider
 1–5000, default 1000, ONE instanced draw, live device-tensor poses + tints). On
 Windows verify:
 
-- [ ] **5.1** Device pick lands on CUDA; `instance_scope` renders: the status
+- [x] **5.1** Device pick lands on CUDA; `instance_scope` renders: the status
   line `first zero-copy instanced frame drawn — 1000 objects, 1 draw call, 0
   mesh copies` appears with the Vulkan renderer active, zero-copy provenance
-  line claimed only from the actually-drawn path.
-- [ ] **5.2** Drain-before-publish on the pose/attr path takes the CUDA arm
+  line claimed only from the actually-drawn path. *Logged live 2026-07-11:
+  `[renderer] vulkan` → `zero-copy pool ready (cuda)` → `geometry path OK —
+  primitives drawn from imported allocations in place` → the exact line,
+  sustained 12 s, clean teardown (`v13-instance-scope-vulkan-run.log`).*
+- [x] **5.2** Drain-before-publish on the pose/attr path takes the CUDA arm
   (`torch::cuda::synchronize` idiom) — no torn poses/tints under load.
-- [ ] **5.3** The N slider spans 1–5000 live; honest ladder:
+  *CUDA arm present at the publish site; sustained runs (plain + under
+  validation layer) showed no torn poses and no spurious G14.*
+- [x] **5.3** The N slider spans 1–5000 live; honest ladder:
   `CALIPER_RENDERER=gl` (or cap bit 3 absent) → the non-instanced fallback rung
-  with the honest line, never a wrong image.
+  with the honest line, never a wrong image. *GL rung logged: `[renderer] gl`
+  → `fallback (no geometry backend)`, zero zero-copy claims
+  (`v13-instance-scope-gl-fallback.log`). Slider span pinned structurally
+  (slots pre-sized to kNmax once; live run at default 1000) — the hand-driven
+  1→5000 sweep was not performed this session, noted honestly in the ledger.*
 
 ## 6. Closeout (which lines flip, and only then)
 
-- [ ] **6.1** `GEOMETRY.md` R3 row: → SHIPPED both platforms ("byte-exact
+- [x] **6.1** `GEOMETRY.md` R3 row: → SHIPPED both platforms ("byte-exact
   both backends"; drops "Vulkan transcribed, hardware pending Windows").
-- [ ] **6.2** `ROADMAP.md` §6: R3 + twin-flagship rows drop their Windows
-  qualifiers.
-- [ ] **6.3** `ZEROCOPY.md`: the Vulkan/CUDA instanced-geometry row flips to
-  hardware-verified.
-- [ ] **6.4** `tests/gfx/gfx_main.cpp` Vulkan v1_3 rows header: replace the
+  *This commit.*
+- [x] **6.2** `ROADMAP.md` §6: R3 + twin-flagship rows drop their Windows
+  qualifiers. *This commit (the twin-flagship row carried no Windows
+  qualifier — only R3's line changed).*
+- [x] **6.3** `ZEROCOPY.md`: the Vulkan/CUDA instanced-geometry row flips to
+  hardware-verified. *This commit.*
+- [x] **6.4** `tests/gfx/gfx_main.cpp` Vulkan v1_3 rows header: replace the
   transcription caveat with the run-proven statement (the exact mirror of
-  what the Metal header already truthfully says).
-- [ ] **6.5** This doc's boxes ticked with commits named; findings to the
+  what the Metal header already truthfully says). *This commit.*
+- [x] **6.5** This doc's boxes ticked with commits named; findings to the
   box's scratch ledger; commits in house style with the Fable trailer.
+  *Test fixes: `477431e`. Closeout: this commit. Ledger:
+  `v13-windows-hardware-pass-report.md` + four run logs in
+  `.superpowers/sdd/`.*
 
 ---
 

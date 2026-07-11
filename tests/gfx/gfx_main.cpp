@@ -5456,13 +5456,12 @@ TEST_CASE("gfx/geometry.v1_2: textured gate refusals leave the view untouched (c
 
 // ===========================================================================
 // caliper.geometry.v1_3 — instanced transforms (spec §8 rows A-E), Vulkan.
-// TRANSCRIBED from the run-proven Metal rows above; compiled out on the macOS
-// box that authored them (#ifdef _WIN32) — hardware verification of the N>1
-// vkCmdDraw instanceCount path, the per-instance matrix pull / LUT tint, the
-// §4.4 LAMBERT composition, and the G14 staged rigidity readback (§5.1) is
-// PENDING the Windows session. Same shared CPU reference + tolerances as the
-// Metal rows (Row D is the sole ±2-LSB row). Every row is CUDA/VMM-gated by
-// vmm_rows_ready() like the v1_1/v1_2 rows.
+// Live on Vulkan/CUDA (Windows, 2026-07-11): N>1 vkCmdDraw instanceCount,
+// per-instance model matrix + optional per-instance LUT tint, LAMBERT normal
+// composition (§4.4), and the backend re-gate incl. the G14 staged rigidity
+// readback (§5.1) on real device-local CUDA imports. Same shared CPU
+// reference + tolerances as the Metal rows (Row D is the sole ±2-LSB row).
+// Every row is CUDA/VMM-gated by vmm_rows_ready() like the v1_1/v1_2 rows.
 // ===========================================================================
 
 // Row A — pose-only fleet: one ±0.25 quad drawn N=4 at four ±0.5 translations,

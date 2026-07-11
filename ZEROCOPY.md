@@ -344,7 +344,7 @@ worst case is a working slow path, never a broken one.
 | Metal / MPS (Apple Silicon), imported geometry (`geometry.v1_2` textured meshes) | 0 host copies; **0 in-VRAM copies** (sampled texture + UV stream vertex-pulled in place from imported buffers) | **Implemented + byte-exact verified on Apple Silicon** (2026-07-10) |
 | Vulkan / CUDA (Windows), imported geometry (`geometry.v1_2` textured meshes) | 0 host copies; **0 in-VRAM copies** (same shader semantics, same CPU references — the Metal twin rows mirrored) | **Implemented + byte-exact verified on NVIDIA** |
 | Metal / MPS (Apple Silicon), imported geometry (`geometry.v1_3` instanced transforms) | 0 host copies; **0 in-VRAM copies** (imported `(N,16)` poses + `(N,)` attr, one draw; pose/tint pulled by instance index in place from imported buffers) | **Implemented + byte-exact verified on Apple Silicon** (2026-07-11) |
-| Vulkan / CUDA (Windows), imported geometry (`geometry.v1_3` instanced transforms) | 0 host copies; **0 in-VRAM copies** (same shader semantics, same CPU references — the Metal block mirrored) | **Transcribed + reviewed; hardware verification pending (Windows session)** |
+| Vulkan / CUDA (Windows), imported geometry (`geometry.v1_3` instanced transforms) | 0 host copies; **0 in-VRAM copies** (same shader semantics, same CPU references — the Metal block mirrored) | **Implemented + byte-exact verified on NVIDIA** (2026-07-11; gfx 48/48 live, `instance_scope` zero-copy run-proof on CUDA) |
 | OpenGL / CPU (anywhere) | 1 host staging + 1 upload | Implemented fallback, tested |
 
 On Windows/NVIDIA, both rungs are byte-verified against the CPU reference
