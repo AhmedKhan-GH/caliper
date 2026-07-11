@@ -5612,8 +5612,10 @@ TEST_CASE("gfx/geometry.v1_3: zero instance tail is byte-identical to v1.2 (0 LS
     const float attr[3] = { 0.5f, 0.5f, 0.5f };
     VmmBlock pos_blk(sizeof(pos)), idx_blk(sizeof(idx)),
              nrm_blk(sizeof(nrm)), attr_blk(sizeof(attr));
-    REQUIRE_MESSAGE(pos_blk.ok && idx_blk.ok && nrm_blk.ok && attr_blk.ok,
-                    "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(pos_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(idx_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(nrm_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(attr_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
     REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
     REQUIRE(cu->cuMemcpyHtoD(idx_blk.va, idx, sizeof(idx)) == cudadrv::CUDA_SUCCESS);
     REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, nrm, sizeof(nrm)) == cudadrv::CUDA_SUCCESS);
@@ -5687,8 +5689,9 @@ TEST_CASE("gfx/geometry.v1_3: instanced LAMBERT rigid rotations within +/-2 LSB"
     VmmBlock pos_blk(sizeof(kQuad6));
     VmmBlock nrm_blk(sizeof(kQuadN6));
     VmmBlock inst_blk(sizeof(inst));
-    REQUIRE_MESSAGE(pos_blk.ok && nrm_blk.ok && inst_blk.ok,
-                    "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(pos_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(nrm_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(inst_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
     REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, kQuad6, sizeof(kQuad6)) == cudadrv::CUDA_SUCCESS);
     REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, kQuadN6, sizeof(kQuadN6)) == cudadrv::CUDA_SUCCESS);
     REQUIRE(cu->cuMemcpyHtoD(inst_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
@@ -5777,8 +5780,10 @@ TEST_CASE("gfx/geometry.v1_3: instance-gate refusals leave the view untouched") 
     VmmBlock inst_blk(sizeof(inst));
     VmmBlock attr_blk(sizeof(attr));
     VmmBlock nrm_blk(sizeof(nrm6));
-    REQUIRE_MESSAGE(pos_blk.ok && inst_blk.ok && attr_blk.ok && nrm_blk.ok,
-                    "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(pos_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(inst_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(attr_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(nrm_blk.ok,  "VMM alloc/map/export failed on a CUDA machine");
     REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, kQuad6, sizeof(kQuad6)) == cudadrv::CUDA_SUCCESS);
     REQUIRE(cu->cuMemcpyHtoD(inst_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
     REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attr, sizeof(attr)) == cudadrv::CUDA_SUCCESS);
@@ -5823,8 +5828,10 @@ TEST_CASE("gfx/geometry.v1_3: instance-gate refusals leave the view untouched") 
     // (i) G4 — misaligned instance_offset.
     d = make_good(); d.instance_offset = 2;
     CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
-    // (ii) G5 — N*64 overruns the 4-instance (256B) matrix buffer.
-    d = make_good(); d.instance_count = 5;
+    // (ii) G5 — N*64 overruns the REAL (granularity-padded) imported block —
+    // 256 requested bytes became a 2 MiB VMM block, so the count must be
+    // derived (the Metal twin's tight 256B buffer keeps its literal 5).
+    d = make_good(); d.instance_count = inst_blk.size / 64u + 1u;
     CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
     // (iii) G2 — instance_alloc present with instance_count 0.
     d = make_good(); d.instance_count = 0;
