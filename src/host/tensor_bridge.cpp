@@ -761,26 +761,79 @@ bool TensorBridge::geom_draw_primitives_impl(
             }
         }
 
-        // Instance tail (v1.3 only). Resolved into the HostGeomDraw with no
-        // gates in T1 — the G1-G12 instance battery lands in T2 (§10). The
-        // renderer id mirrors how uv_alloc holds a resolved id; an unresolved
-        // alloc stays 0 until T2 refuses it.
+        // Instance tail (v1.3 only) — the G1-G12 host validator battery (§5).
+        // Runs after color_mode/topology otherwise validate; every failure
+        // refuses the whole frame atomically before any backend call, pixels
+        // untouched. G13 (LAMBERT needs normals) is the existing gate above;
+        // G14 (rigidity) executes in each backend re-gate (§5.1 placement), not
+        // here. Resolved renderer ids mirror how uv_alloc holds a resolved id.
         uint64_t instance_rid = 0;
         uint64_t instance_attr_rid = 0;
         if (rev == GeomRev::V1_3) {
-            if (d13->instance_alloc != 0) {
-                auto ma = imported_.find(d13->instance_alloc);
-                if (ma != imported_.end()) instance_rid = ma->second.renderer_id;
+            const bool has_instances = d13->instance_alloc != 0;
+            const bool has_tint = d13->instance_attr_alloc != 0;
+
+            // G1: either instance stream present requires the caps bit live.
+            if ((has_instances || has_tint) &&
+                !renderer_.supports_geometry_instanced()) {
+                reject_i("instanced geometry unsupported"); return false;
             }
-            if (d13->instance_attr_alloc != 0) {
+
+            if (has_instances) {
+                // G2: N>0 with a pose alloc (mirrors the zero-vertices gate).
+                if (d13->instance_count == 0) {
+                    reject_i("instanced draw needs N>0"); return false;
+                }
+                // G3: N bound (Vulkan/Metal instanceCount re-bind to u32).
+                if (d13->instance_count > UINT32_MAX) {
+                    reject_i("too many instances"); return false;
+                }
+                // G4: matrix offset 4-byte aligned.
+                if (d13->instance_offset % 4u != 0u) {
+                    reject_i("instance offset misaligned"); return false;
+                }
+                // G6: matrix byte base / 4 fits a u32 PrimParams base.
+                if (d13->instance_offset / 4u > UINT32_MAX) {
+                    reject_i("instance base exceeds 32 bits"); return false;
+                }
+                // G7: matrix alloc resolves.
+                auto ma = imported_.find(d13->instance_alloc);
+                if (ma == imported_.end()) {
+                    reject_i("unknown instance alloc"); return false;
+                }
+                // G5: 16 f32 = 64 B/instance, overflow-safe + in imported bounds.
+                if (!range_ok(ma->second.size_bytes, d13->instance_offset,
+                              d13->instance_count, 64u, "instances")) {
+                    return false;
+                }
+                instance_rid = ma->second.renderer_id;
+            }
+
+            if (has_tint) {
+                // G8: a tint with nothing to tint is refused, not ignored.
+                if (!has_instances || d13->instance_count == 0) {
+                    reject_i("instance attr without instances"); return false;
+                }
+                // G9: attr offset 4-byte aligned.
+                if (d13->instance_attr_offset % 4u != 0u) {
+                    reject_i("instance attr offset misaligned"); return false;
+                }
+                // G11: attr alloc resolves.
                 auto ta = imported_.find(d13->instance_attr_alloc);
-                if (ta != imported_.end())
-                    instance_attr_rid = ta->second.renderer_id;
-                // Tint-LUT resolution rule (§3.3): an instanced-tint draw
-                // carries a real LUT regardless of base color_mode, resolved
-                // from the base record's colormap (T2's G12 guarantees it
-                // resolves; here we simply populate it when it does).
+                if (ta == imported_.end()) {
+                    reject_i("unknown instance attr alloc"); return false;
+                }
+                // G10: 4 B/instance scalar, overflow-safe + in imported bounds.
+                if (!range_ok(ta->second.size_bytes, d13->instance_attr_offset,
+                              d13->instance_count, 4u, "instance attr")) {
+                    return false;
+                }
+                instance_attr_rid = ta->second.renderer_id;
+                // G12: the tint needs a resolvable colormap. Tint-LUT rule
+                // (§3.3): an instanced-tint draw carries a real LUT regardless
+                // of base color_mode, resolved from the base record's colormap.
                 if (!lut) lut = colormap_lut(d->colormap);
+                if (!lut) { reject_i("instance tint needs colormap"); return false; }
             }
         }
 
