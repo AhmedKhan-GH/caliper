@@ -1,12 +1,13 @@
-# caliper.geometry.v1 / v1_1
+# caliper.geometry.v1 / v1_1 / v1_3
 
-Service ids `caliper.geometry.v1` (instanced points) and its additive revision
-`caliper.geometry.v1_1` (general primitives). Imported 3-D geometry: an applet
+Service ids `caliper.geometry.v1` (instanced points) and its additive revisions
+`caliper.geometry.v1_1` (general primitives) and `caliper.geometry.v1_3`
+(instanced transforms). Imported 3-D geometry: an applet
 writes vertices/indices/normals/attributes into device memory, exports them once
 through [`caliper.tensor_bridge.v1_2`](tensor-bridge-v1.md), and the host draws
 them **in place** — zero copies of the geometry data — into an offscreen view
-texture you show with `ImGui::Image`. This page embeds both headers verbatim; the
-docs build fails if either file moves.
+texture you show with `ImGui::Image`. This page embeds the headers verbatim; the
+docs build fails if any embedded file moves.
 
 Deliberately a **new** service, not a tensor-bridge revision: the bridge's frozen
 identity is "a tensor becomes an image"; cameras and draw calls are a different
@@ -18,8 +19,12 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 !!! info "Platform status (honest, stated once)"
     **Points (`v1`):** Metal + Vulkan + GL-fallback ladder. **Primitives
     (`v1_1`):** shipped on **both** backends (Metal and Vulkan), byte-exact
-    against one CPU reference on real hardware on each. On a backend without
-    the path (the GL fallback) the matching **caps bit is unset and every
+    against one CPU reference on real hardware on each. **Instanced transforms
+    (`v1_3`):** Metal **run-proven byte-exact on Apple Silicon**; Vulkan
+    **transcribed + reviewed, hardware pass pending** the Windows session — not
+    claimed verified there. On a backend without
+    the path (the GL fallback, or a host that doesn't vend the revision) the
+    matching **caps bit is unset and every
     entry point is inert** — ship your fallback (see the worked example
     below). This is the degradation ladder, not a bug: absent capability →
     CPU path, never a wrong image.
@@ -30,6 +35,10 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 
 ```c
 --8<-- "sdk/include/caliper/services/geometry_v1_1.h"
+```
+
+```c
+--8<-- "sdk/include/caliper/services/geometry_v1_3.h"
 ```
 
 ## caliper.geometry.v1 — instanced points
@@ -241,10 +250,53 @@ out-of-range index therefore produces a **wrong-looking but defined** image — 
 an out-of-bounds read or UB. This is the applet's contract: a bad index is a visual
 bug in your data, not a crash.
 
+## caliper.geometry.v1_3 — instanced transforms
+
+Additive revision of v1_1/v1_2: `CaliperGeomDrawV1_3` = the frozen 216-byte
+`CaliperGeomDrawV1_2` record (`base`) plus an appended **instance tail**, carried
+by the same `draw_primitives` + `draw_stride` slot. No new entry point, `reserved0`
+still NULL, the v1.1/v1.2 prefixes untouched. Caps bit **3**
+(`CALIPER_GEOM_CAP_INSTANCED`, `1u << 3`) set means the instance tail is live;
+absent → the tail is inert and the draw behaves exactly as v1_2.
+
+One imported mesh drawn N times in **one call**: an imported `(N,16)` f32
+column-major pose tensor (`instance_alloc`/`instance_offset`, `instance_count = N`)
+supplies each instance's model matrix, pulled by instance index in the vertex
+shader and applied to the world position **first** (`mvp · (M_i · v)`). An optional
+imported `(N,)` f32 per-instance scalar (`instance_attr_alloc`/`instance_attr_offset`)
+tints each unit through the draw's existing `colormap`/`vmin`/`vmax` LUT — same
+index rule as every other COLORMAP path on this page. `instance_attr_alloc == 0`
+leaves coloring to the base `color_mode`.
+
+**Additive default (zero tail == a v1_2 draw).** `instance_count == 0` **or**
+`instance_alloc == 0` takes the exact non-instanced path — same shader code path,
+same draw arity — so a v1_3 record with a zero instance tail is byte-identical at
+the pixel level to the equivalent v1_2 record. Widening a v1_1/v1_2 record up to
+v1_3 (zero tail) draws the same pixels.
+
+**LAMBERT is restricted to rigid + uniform-scale instance transforms**
+(rotation, uniform scale, translation — no shear, no non-uniform scale). Under that
+class the correct normal map is the instance rotation up to a scalar `normalize`
+removes, so the shader composes the instance upper-3×3 with the per-draw normal
+matrix and stays a ±2-LSB tolerance row. Out-of-class instance matrices on a
+LAMBERT-instanced draw are **refused whole-frame** (never silently mis-lit) by gate
+**G14**, whose tolerance is pinned in the header as `CALIPER_GEOM_RIGID_TOL`
+(`1e-4f`) — part of the byte-exact contract, not a tunable. UNLIT instanced draws
+never touch normals and are unrestricted.
+
+**Honest ladder.** When caps bit 3 is absent (GL fallback, or a host vending only
+v1/v1_1/v1_2), `has_instanced()` is false and the instanced path is inert — the
+applet ladders down to a non-instanced fallback (draw the hero unit alone, or N
+plain draws) and says so; never a wrong image, never a false status line. The
+`caliper::Geometry` sugar exposes `has_instanced()` (caps bit 3) and a
+`draw_primitives` overload taking `CaliperGeomDrawV1_3*`; seed descriptors from
+`caliper::geom_draw_v1_3_defaults()` (a zero instance tail over the v1_2 defaults).
+
 ## C++ sugar
 
-`caliper::Geometry` (in `caliper.hpp`) wraps both revisions. Construct it from the
-`Host`; it is falsy when the host vends neither service, and every method
+`caliper::Geometry` (in `caliper.hpp`) wraps every geometry revision. Construct it
+from the
+`Host`; it is falsy when the host vends no geometry service, and every method
 null-guards so it stays inert on hosts without the path. **Frame-thread only**, same
 as `caliper::Bridge`.
 

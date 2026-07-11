@@ -95,7 +95,7 @@ its acceptance).
 - [x] Design doc: one concrete twin — learned thermal/stress field over a CAD housing, fleet of ~50 instanced units — TwinScope twin-exemplar design (`0b84c57`), redirected to the v2 surface twin (`e29f000`)
 - [x] Applet-side OBJ loader helper (fills vertex/index tensors; NO ABI growth) — donor OBJ loader + v2 heatsink asset (`071a7f7`); glTF not implemented (OBJ satisfied the exemplar's need)
 - [x] R2 `geometry.v1_2` — textures-on-meshes (the `reserved0` slot): spec → Metal → matrix rows → Vulkan mirror — shipped both backends on `feat/geometry-v1_2` (COLOR_TEXTURE, appended uv/texture draw fields, caps bit 2); byte-exact on both backends — Vulkan run-proven on RTX 500 Ada, Metal run-proven on Apple Silicon (macOS hardware pass 2026-07-10)
-- [ ] R3 — instanced transforms from an imported `(N,16)` alloc: spec → backends → rows
+- [x] R3 — instanced transforms from an imported `(N,16)` alloc: spec → backends → rows — shipped on `feat/geometry-v1_3` (`CaliperGeomDrawV1_3`, caps bit 3, `(N,16)` pose + optional `(N,)` tint, one instanced draw). **Metal run-proven byte-exact on Apple Silicon** (gfx rows A–E live incl. a private-storage G14 row) + **TwinScope 50-housing fleet live zero-copy on MPS** with per-draw provenance (2026-07-11). **Vulkan transcribed + reviewed, hardware pass pending the Windows session** (spec: `2026-07-11-geometry-v1_3-vulkan-windows-hardware-pass.md`) — the Metal tick is artifact-verified here, the Vulkan hardware tick waits on that session.
 - [x] Twin applet ships run-proven on both platforms — the flagship demo — TwinScope v2 surface twin run-proven zero-copy on Vulkan+CUDA and Metal/MPS (GL fallback proven on both)
 
 ## 7 · Strategic (decisions before code)
