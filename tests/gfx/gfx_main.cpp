@@ -2356,6 +2356,77 @@ TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouc
     bk.bridge->release_allocation(pa);
 }
 
+// Row [v1.2 textured POINT] — a COLOR_TEXTURE draw with TOPO_POINTS pairs the
+// point vertex function (VOutPoint) with the textured fragment function
+// (VOut stage_in). HARDWARE FINDING (macOS pass): this pairing is valid MSL —
+// [[position]]/[[point_size]] are builtins excluded from stage-in matching and
+// the user varyings (color, uv) are identical in both structs — so Metal
+// builds the pipeline and textured points render. This row pins the varying
+// integrity: every rendered point pixel is exactly the sampled texel (a
+// varying misalignment would sample the wrong texel or blend garbage).
+// Vulkan mirror row: pending the Windows Phase-B session.
+TEST_CASE("gfx/metal geometry.v1_2: textured POINT draw renders the sampled texel") {
+    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
+
+    const int W = 16, H = 16;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const float uv[6]  = { 0.25f,0.25f, 0.25f,0.25f, 0.25f,0.25f };   // -> red
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> uv_buf = device_buffer(uv, sizeof(uv));
+    REQUIRE((pos_buf != nil)); REQUIRE((uv_buf != nil));
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId ua = bk.bridge->import_allocation(
+        (__bridge void*)uv_buf, sizeof(uv), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pa != 0); REQUIRE(ua != 0);
+
+    const uint8_t rgba[] = {
+        255,0,0,255,   0,255,0,255,
+        0,0,255,255,   255,255,255,255,
+    };
+    CaliperTensor td = u8_3d(rgba, 2, 2, 4);
+    CaliperTextureId texture = bk.bridge->texture_from_tensor(&td, 0);
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(texture != 0); REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDrawV1_2 d{};
+    d.base.pos_alloc = pa; d.base.vertex_count = 3;
+    d.base.topology = CALIPER_GEOM_TOPO_POINTS;
+    d.base.color_mode = CALIPER_GEOM_COLOR_TEXTURE;
+    d.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.size_px = 4.f;
+    for (int i = 0; i < 4; ++i) d.base.model[i * 4 + i] = 1.f;
+    d.uv_alloc = ua; d.uv_offset = 0; d.texture = texture;
+
+    // All three point vertices sample uv (0.25,0.25) — the pure-red texel.
+    // Over a black clear, every pixel must come out exactly red or exactly
+    // black: any other value means the uv/color varyings misaligned across
+    // the VOutPoint -> geom_tex_fs stage boundary.
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(
+        view, &cam, &d, 1, sizeof(d), 0xFF000000u));
+    const auto img = bk.readback(view, W, H);
+    REQUIRE(img.size() == (size_t)W * H * 4);
+    size_t red_px = 0;
+    for (size_t i = 0; i < img.size(); i += 4) {
+        const bool red = img[i] == 0xFF && img[i+1] == 0x00 &&
+                         img[i+2] == 0x00 && img[i+3] == 0xFF;
+        const bool black = img[i] == 0x00 && img[i+1] == 0x00 &&
+                           img[i+2] == 0x00 && img[i+3] == 0xFF;
+        CHECK((red || black));
+        if (red) ++red_px;
+    }
+    CHECK(red_px >= 1);          // at least one point landed on-screen
+    CHECK(red_px <= 3 * 4 * 4);  // and no more than three 4px points' worth
+
+    bk.bridge->geom_release_view(view);
+    bk.bridge->release_texture(texture);
+    bk.bridge->release_allocation(ua);
+    bk.bridge->release_allocation(pa);
+}
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================
