@@ -304,13 +304,25 @@ add_library(libcaliper STATIC
     src/host/tensor_bridge.cpp
     src/host/renderer/gl_renderer.cpp
     src/host/core_lifecycle.cpp
+    src/host/embed/embed_core.cpp
 )
 # Namespaced alias for the inner headless layer, kept so any consumer can name
 # it as caliper::host_lib (test CMake still links the raw caliper_host_lib).
 add_library(caliper::host_lib ALIAS caliper_host_lib)
-target_include_directories(libcaliper PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+# src/host: internal host headers. include/: the embed C ABI root (caliper/
+# embed.h) — a PUBLIC dir of THIS target ONLY, so embedders (who link
+# libcaliper) can #include <caliper/embed.h> while applets (who link only
+# caliper::sdk = sdk/include, never libcaliper) physically cannot. The embed ABI
+# is off the applet include path by construction.
+target_include_directories(libcaliper PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/host
+    ${CMAKE_SOURCE_DIR}/include)
+# caliper_app_paths: host_services + embed_core resolve caliper::app_data_path
+# through this target (its own comment: "link this TARGET instead of compiling
+# src/app_paths.cpp by path"). PUBLIC so the caliper exe gets it transitively —
+# the exe no longer compiles app_paths.cpp by path (below).
 target_link_libraries(libcaliper
-    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack
+    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths
     PRIVATE ${CALIPER_DEPENDENCY_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
@@ -329,8 +341,10 @@ set_target_properties(libcaliper PROPERTIES
 add_executable(caliper
     src/main.cpp
     src/intro_screen.cpp
-    src/app_paths.cpp
 )
+# app_paths.cpp is no longer compiled by path here: it arrives via
+# libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
+# ODR duplicate of that target's object.
 target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 
 # The host links the platform core (libcaliper, which PUBLIC-propagates

@@ -1,0 +1,199 @@
+/* ===========================================================================
+ * caliper/embed.h — the embed C ABI (libcaliper / Compass R4, L2a)
+ *
+ * This is the SEAM that makes "embeddable" true: the small C ABI a host binary
+ * (Compass's wx chrome, examples/embed_host, the caliper exe eventually) uses
+ * to run the applet canvas — ImGui + HostRenderer + bridge + geometry — inside
+ * a view it owns, WITHOUT linking ImGui, torch, or any renderer type.
+ *
+ * WHO CALLS THIS: embedders (hosts). NOT applets. The applet-facing ABI is
+ * <caliper/abi.h> + the sugar; this header lives on a SEPARATE include root
+ * (top-level include/, a PUBLIC include dir of the libcaliper target only) so
+ * an applet — which links caliper::sdk (sdk/include) and never libcaliper —
+ * physically cannot #include it. An applet embedding a core would be a category
+ * error; the include topology forbids it.
+ *
+ * C, not C++ (mirrors D1, the applet contract): a host built years apart from
+ * libcaliper must still embed it. C++ sugar for host authors can ship later.
+ *
+ * ---------------------------------------------------------------------------
+ * LIFECYCLE & THREADING CONSTRAINTS (design §4.3 — verbatim, an embedder that
+ * ignores these gets crashes the core cannot prevent):
+ *
+ *  - THE CORE NEVER OWNS THE EVENT LOOP. caliper_core_frame() does exactly ONE
+ *    frame and returns: no polling, no sleeping, no vsync wait. The embedder
+ *    calls it from ITS loop (wx idle/timer, a GLFW loop, a CVDisplayLink, ...).
+ *    That is the whole difference between a library and a host.
+ *
+ *  - INPUT CROSSES AS DATA, NOT TOOLKIT TYPES. The embedder translates its own
+ *    GLFW/AppKit/wx events into CaliperInputEvent; the core feeds ImGuiIO. No
+ *    GLFWwindow, NSEvent, or wxEvent ever appears here.
+ *
+ *  - ONE ImGui CONTEXT PER CANVAS, owned by the core. The embedder never
+ *    touches ImGui state; the allocator handoff stays internal.
+ *
+ *  - ONE CaliperCore PER PROCESS in v0 (the one-libtorch-per-process policy,
+ *    D5, already binds the process). caliper_core_create refuses a second live
+ *    core with a NULL return; shut the first down first.
+ *
+ *  - CRASH CONTAINMENT. An applet fault is caught by the core's existing crash
+ *    guard, surfaced through CaliperCoreDesc.crash_fn, and the applet is
+ *    quarantined — the embedder is NOT taken down with it.
+ *
+ *  - FRAME-THREAD DISCIPLINE carries over: call frame()/event()/attach/read
+ *    from ONE thread (the UI thread). Applet torch work runs on jobs threads
+ *    and draws from snapshots; that contract is unchanged and internal.
+ * ===========================================================================*/
+#ifndef CALIPER_EMBED_H
+#define CALIPER_EMBED_H
+
+#include <stddef.h>   /* size_t   */
+#include <stdint.h>   /* uint32_t */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Bumped when this ABI changes shape. struct_size on every struct lets the
+ * core accept a caller compiled against an older/newer minor without UB. */
+#define CALIPER_EMBED_API_VERSION 1
+
+/* Opaque handle. One live instance per process in v0 (see header note). */
+typedef struct CaliperCore CaliperCore;
+
+/* Which HostRenderer backend the core embeds. GL is intentionally ABSENT: its
+ * context ownership is GLFW-coupled chrome (D13, the frozen fallback), never an
+ * embed target. DEFAULT resolves to the platform backend (Metal on Apple,
+ * Vulkan on Windows) honoring CALIPER_RENDERER. A core whose resolved backend
+ * cannot embed refuses at attach_canvas ("embed requires Metal or Vulkan"). */
+typedef enum CaliperRenderer {
+    CALIPER_RENDERER_DEFAULT = 0,
+    CALIPER_RENDERER_METAL   = 1,
+    CALIPER_RENDERER_VULKAN  = 2
+} CaliperRenderer;
+
+/* Core diagnostics sink (renderer pick, refusals, crash text). NOT the applet
+ * log service (caliper.log.v1 stays stderr in v0). NULL -> stderr. */
+typedef void (*CaliperLogFn)(void* userdata, int level, const char* message);
+
+/* Applet-fault callback (§4.3). Fired AFTER the faulting applet is quarantined
+ * and torn down; the core keeps running. applet_id/fault are valid only for the
+ * duration of the call. NULL -> the fault is logged and swallowed. */
+typedef void (*CaliperCrashFn)(void* userdata, const char* applet_id,
+                               const char* fault);
+
+typedef struct CaliperCoreDesc {
+    size_t          struct_size;   /* = sizeof(CaliperCoreDesc); FIRST member. */
+    CaliperRenderer renderer;      /* backend to embed.                        */
+    const char*     data_dir;      /* app-data root; NULL -> OS default.
+                                    * v0: advisory (see report — remains a
+                                    * process-global path).                    */
+    const char*     applets_dir;   /* extra applet scan dir; NULL -> default
+                                    * discovery (app-data/applets + exe-side). */
+    CaliperLogFn    log_fn;        /* NULL -> stderr.                          */
+    CaliperCrashFn  crash_fn;      /* NULL -> log-and-swallow.                 */
+    void*           userdata;      /* passed back to log_fn / crash_fn.        */
+} CaliperCoreDesc;
+
+typedef enum CaliperCanvasMode {
+    CALIPER_CANVAS_WINDOW    = 0,  /* native_view is an NSView* / HWND.        */
+    CALIPER_CANVAS_OFFSCREEN = 1   /* no view; render to a texture, read back. */
+} CaliperCanvasMode;
+
+typedef struct CaliperCanvasDesc {
+    size_t            struct_size; /* = sizeof(CaliperCanvasDesc); FIRST.      */
+    CaliperCanvasMode mode;
+    int               width;       /* physical pixels.                        */
+    int               height;      /* physical pixels.                        */
+    float             content_scale; /* DPI scale (1.0 = 1x); <=0 -> 1.0.     */
+} CaliperCanvasDesc;
+
+typedef enum CaliperEventType {
+    CALIPER_EVENT_MOUSE_MOVE    = 0, /* uses x, y (physical px)               */
+    CALIPER_EVENT_MOUSE_BUTTON  = 1, /* uses button, down                     */
+    CALIPER_EVENT_MOUSE_SCROLL  = 2, /* uses dx, dy                           */
+    CALIPER_EVENT_KEY           = 3, /* uses key (== ImGuiKey), down, mods    */
+    CALIPER_EVENT_TEXT          = 4, /* uses codepoint                        */
+    CALIPER_EVENT_RESIZE        = 5, /* uses width, height (physical px)      */
+    CALIPER_EVENT_CONTENT_SCALE = 6, /* uses scale                            */
+    CALIPER_EVENT_FOCUS         = 7  /* uses focused (0/1)                    */
+} CaliperEventType;
+
+/* Bit flags for CaliperInputEvent.mods (a KEY event's modifier state). */
+enum {
+    CALIPER_MOD_CTRL  = 1 << 0,
+    CALIPER_MOD_SHIFT = 1 << 1,
+    CALIPER_MOD_ALT   = 1 << 2,
+    CALIPER_MOD_SUPER = 1 << 3
+};
+
+/* One toolkit-neutral input event. Only the fields named in the CaliperEventType
+ * comment above are read for a given type; leave the rest zero. */
+typedef struct CaliperInputEvent {
+    size_t           struct_size;  /* = sizeof(CaliperInputEvent); FIRST.     */
+    CaliperEventType type;
+    float            x, y;         /* mouse position (physical px)            */
+    float            dx, dy;       /* scroll delta                            */
+    int              button;       /* 0=left, 1=right, 2=middle               */
+    int              down;         /* 0/1 for button/key press state          */
+    int              key;          /* CaliperKey == ImGuiKey value            */
+    int              mods;         /* CALIPER_MOD_* bitset                     */
+    unsigned int     codepoint;    /* UTF-32 for CALIPER_EVENT_TEXT           */
+    int              width, height;/* CALIPER_EVENT_RESIZE (physical px)      */
+    float            scale;        /* CALIPER_EVENT_CONTENT_SCALE             */
+    int              focused;      /* CALIPER_EVENT_FOCUS                     */
+} CaliperInputEvent;
+
+/* --- Lifecycle ---------------------------------------------------------- */
+
+/* Create the core (ImGui context + renderer + service registry + loader, in
+ * the L1-proven order). Returns NULL and logs on: a second live core, an
+ * unsupported renderer for this OS, or renderer init failure. */
+CaliperCore* caliper_core_create(const CaliperCoreDesc* desc);
+
+/* Tear down: unload the applet, join jobs, close stores, drop the renderer and
+ * ImGui context — the exact reverse order of create (crash-order load-bearing,
+ * see the impl). Safe on NULL. Clears the one-core-per-process lock. */
+void caliper_core_shutdown(CaliperCore* core);
+
+/* Attach the applet canvas. native_view is an NSView* / HWND for CANVAS_WINDOW,
+ * ignored (pass NULL) for CANVAS_OFFSCREEN. Returns 1 on success, 0 on refusal
+ * (backend can't embed, canvas already attached, bad size) — a 0 leaves the
+ * core usable and sets last_error. v0: one canvas per core. */
+int  caliper_core_attach_canvas(CaliperCore* core, void* native_view,
+                                const CaliperCanvasDesc* desc);
+
+/* Pump exactly ONE frame: clear the canvas, run the loaded applet's draw under
+ * the crash guard, composite + present/store. No-op (sets last_error) if no
+ * canvas is attached. Never blocks on the event loop. */
+void caliper_core_frame(CaliperCore* core);
+
+/* Feed one input event into the core's ImGuiIO. No-op before a canvas exists. */
+void caliper_core_event(CaliperCore* core, const CaliperInputEvent* event);
+
+/* --- Applet control (reuses the loader's manifest discovery) ------------- */
+
+/* Load + launch the applet whose manifest id matches (e.g. "dev.caliper.hello").
+ * Returns 1 on success, 0 if unknown/refused/failed (last_error set). Replaces
+ * any currently-loaded applet only after a successful launch. */
+int  caliper_core_load_applet(CaliperCore* core, const char* manifest_id);
+
+/* Tear down the loaded applet (jobs joined first, then instance). No-op if none
+ * is loaded. Call between frames. */
+void caliper_core_unload_applet(CaliperCore* core);
+
+/* --- Offscreen readback (the automatable + byte-compare surface, §7) ----- */
+
+/* Copy the LAST composited frame's pixels to buf as tightly-packed RGBA8,
+ * `stride` bytes per row (>= width*4). Returns 1 on success, 0 if the canvas is
+ * not offscreen, buf is NULL, or stride is too small. */
+int  caliper_core_read_pixels(CaliperCore* core, void* buf, int stride);
+
+/* Human-readable reason for the most recent refusal (empty string if none).
+ * Valid until the next core call. Never NULL for a non-NULL core. */
+const char* caliper_core_last_error(CaliperCore* core);
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
+#endif /* CALIPER_EMBED_H */
