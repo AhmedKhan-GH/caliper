@@ -28,10 +28,10 @@ layout(std430, set = 0, binding = 9) readonly buffer InstAttr { uint  iattr[]; }
 // static_assert'ed to 192 bytes; every member below lands at the SAME offset in
 // std140 (mat4 @0, the three vec4 normal-matrix columns @64/80/96, then the
 // scalar tail packed 4 bytes each from @112). Offsets are noted per member.
-// THREE hand-synced copies of this params layout must move together: this GLSL
-// std140 block; PrimParams in vulkan_renderer.cpp (static_assert 192); and
-// PrimParams in metal_renderer.mm's MSL string (static_assert 192). grep
-// PrimParams when growing. The v1.3 instance tail (use_instance/inst_base/
+// FOUR hand-synced copies of this params layout must move together: this GLSL
+// std140 block; PrimParams in vulkan_renderer.cpp (static_assert 192); and the
+// TWO copies in metal_renderer.mm — the MSL-string struct AND its C++ mirror
+// (static_assert 192). grep PrimParams when growing. The v1.3 instance tail (use_instance/inst_base/
 // use_instance_attr/inst_attr_base) and the instance-PULL body below are the
 // GLSL twin of the run-proven Metal geom_compute (metal_renderer.mm) —
 // transcribed byte-for-byte in float op order; compiled out on macOS.
