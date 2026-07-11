@@ -48,4 +48,10 @@ DataStore& host_data_store();
 // so a pre-renderer/headless call never crashes (the metrics-open pattern).
 class HostRenderer;
 void services_set_renderer(HostRenderer* renderer);
+
+// The HostRenderer currently backing caliper.tensor_bridge.v1 (or nullptr).
+// White-box use (the §7 host-axis byte-compare in caliper_embed_tests): read a
+// bridge texture back with debug_readback_rgba8, which is renderer-side. Not on
+// the applet-facing surface — applets never see the renderer type.
+HostRenderer* services_renderer();
 }

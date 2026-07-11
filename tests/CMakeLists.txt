@@ -131,6 +131,11 @@ add_test(NAME caliper_torch_tests COMMAND caliper_torch_tests)
 add_executable(caliper_embed_tests test_embed.cpp)
 target_link_libraries(caliper_embed_tests PRIVATE
     doctest::doctest libcaliper caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
+# src/host on the include path for the §7 host-axis case: it reaches the process
+# bridge + renderer (white-box) to byte-compare the tensor->texture upload the
+# embed core wired against the shared CPU reference (host_services.h,
+# tensor_bridge.h, renderer/host_renderer.h).
+target_include_directories(caliper_embed_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 target_compile_definitions(caliper_embed_tests PRIVATE
     CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets")
 set_target_properties(caliper_embed_tests PROPERTIES

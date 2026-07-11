@@ -13,6 +13,16 @@
 
 #include <caliper/embed.h>
 
+// White-box internals for the §7 host-axis byte-compare (last case): the embed
+// core wires its renderer into the process bridge at attach, so we drive the
+// SAME public tensor_bridge.v1 service and read the texture back through the
+// renderer, comparing to the shared CPU reference the gfx rows use.
+#include <caliper/tensor.h>
+#include <caliper/services/tensor_bridge_v1.h>
+#include "host_services.h"
+#include "tensor_bridge.h"          // caliper_host::expand_u8_to_rgba8 (shared ref)
+#include "renderer/host_renderer.h"
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -146,5 +156,74 @@ TEST_CASE("embed/gate: load before a canvas refuses (W1); read_pixels needs a ca
     std::vector<uint8_t> px(16, 0);
     CHECK(caliper_core_read_pixels(core, px.data(), 4) == 0);   // no canvas
 
+    caliper_core_shutdown(core);
+}
+
+// ---------------------------------------------------------------------------
+// §7 host-axis byte-compare. The design's ideal is "the gfx matrix produces the
+// SAME bytes under `caliper` and `embed_host`". The exe's on-screen swapchain is
+// not in-process readable, and the embed offscreen canvas composites ImGui draw
+// data (not a raw geometry-texture readback), so a literal end-to-end compare of
+// the two composites is out of this task's honest reach.
+//
+// What IS the rendering seam §7 protects — and what both hosts genuinely share —
+// is the tensor->texture BRIDGE upload. Here we drive it through the renderer the
+// EMBED CORE created and wired (services_set_renderer at attach), via the SAME
+// public caliper.tensor_bridge.v1 service an applet uses, and byte-compare the
+// readback against caliper_host::expand_u8_to_rgba8 — the IDENTICAL CPU reference
+// the gfx rows (mat_u8_direct) assert against with their standalone renderer. If
+// both harnesses reduce to the same bytes vs the same reference, the seam is
+// byte-stable across hosts. DELTA from §7's literal ideal: bridge-upload layer,
+// not the final windowed composite (stated in the L2b report).
+TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact "
+          "vs the shared CPU reference") {
+    using namespace caliper_host;
+
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    const int W = 4, H = 3;
+    CaliperCanvasDesc c = offscreen_desc(W, H);
+    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
+        MESSAGE("no embeddable GPU (offscreen attach failed) — skipping §7 case: "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    // The embed core's renderer is now bound to the process bridge. Reach both
+    // through the same surfaces an applet (service) / the gfx harness (renderer)
+    // would use.
+    auto* bridge =
+        (const CaliperTensorBridgeV1*)services_get(CALIPER_TENSOR_BRIDGE_V1);
+    REQUIRE(bridge != nullptr);
+    HostRenderer* r = services_renderer();
+    REQUIRE(r != nullptr);
+
+    // A deterministic (H,W,4) u8 tensor — a fixed, contiguous pattern.
+    std::vector<uint8_t> src((size_t)H * W * 4);
+    for (size_t i = 0; i < src.size(); ++i) src[i] = (uint8_t)(i * 7 + 3);
+
+    CaliperTensor t{};
+    t.struct_size = sizeof t;
+    t.data = src.data();
+    t.dtype = CALIPER_DT_U8;
+    t.ndim = 3;
+    t.shape[0] = H; t.shape[1] = W; t.shape[2] = 4;
+    t.strides[0] = W * 4; t.strides[1] = 4; t.strides[2] = 1;
+    t.device = CALIPER_DEV_CPU;
+
+    CaliperTextureId id = bridge->texture_from_tensor(&t, 0);
+    REQUIRE(id != 0);
+
+    std::vector<uint8_t> got = r->debug_readback_rgba8(id, W, H);
+    std::vector<uint8_t> ref((size_t)W * H * 4);
+    expand_u8_to_rgba8(src.data(), W, H, 4, ref.data());
+
+    REQUIRE(got.size() == ref.size());
+    CHECK(got == ref);   // byte-exact: the embed-core-wired seam == the CPU ref
+
+    bridge->release_texture(id);
     caliper_core_shutdown(core);
 }
