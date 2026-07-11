@@ -27,6 +27,7 @@ add_executable(caliper_tests
     test_tensor_bridge.cpp
     test_alloc_registry.cpp
     test_obj.cpp
+    test_instance_field.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
@@ -37,6 +38,9 @@ target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk calipe
     caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
+# InstanceScope's pure pose/tint/mesh reference (instance_field.h) is torch-free,
+# so its unit test rides the fast caliper_tests suite.
+target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/instance_scope)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_sources(caliper_tests PRIVATE test_loader.cpp)
