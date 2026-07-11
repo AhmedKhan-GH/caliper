@@ -2056,7 +2056,7 @@ TEST_CASE("gfx/metal geometry.v1_2: UV offset, bilinear texture, and Lambert are
     id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
     id<MTLBuffer> uv_buf = device_buffer(uv_bytes.data(), uv_bytes.size());
     id<MTLBuffer> nrm_buf = device_buffer(nrm, sizeof(nrm));
-    REQUIRE(pos_buf != nil); REQUIRE(uv_buf != nil); REQUIRE(nrm_buf != nil);
+    REQUIRE((pos_buf != nil)); REQUIRE((uv_buf != nil)); REQUIRE((nrm_buf != nil));
     CaliperAllocId pa = bk.bridge->import_allocation(
         (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
     CaliperAllocId ua = bk.bridge->import_allocation(
@@ -2143,7 +2143,7 @@ TEST_CASE("gfx/metal geometry.v1_2: out-of-range UVs clamp to edge texels byte-e
 
     id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
     id<MTLBuffer> uv_buf = device_buffer(uv_bytes.data(), uv_bytes.size());
-    REQUIRE(pos_buf != nil); REQUIRE(uv_buf != nil);
+    REQUIRE((pos_buf != nil)); REQUIRE((uv_buf != nil));
     CaliperAllocId pa = bk.bridge->import_allocation(
         (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
     CaliperAllocId ua = bk.bridge->import_allocation(
@@ -2211,8 +2211,8 @@ TEST_CASE("gfx/metal geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-id
     id<MTLBuffer> idx_buf = device_buffer(idx, sizeof(idx));
     id<MTLBuffer> nrm_buf = device_buffer(nrm, sizeof(nrm));
     id<MTLBuffer> attr_buf = device_buffer(attr, sizeof(attr));
-    REQUIRE(pos_buf != nil); REQUIRE(idx_buf != nil);
-    REQUIRE(nrm_buf != nil); REQUIRE(attr_buf != nil);
+    REQUIRE((pos_buf != nil)); REQUIRE((idx_buf != nil));
+    REQUIRE((nrm_buf != nil)); REQUIRE((attr_buf != nil));
     CaliperAllocId pa = bk.bridge->import_allocation(
         (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
     CaliperAllocId ia = bk.bridge->import_allocation(
@@ -2275,7 +2275,7 @@ TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouc
     const float uv[6]  = { 0.25f,0.25f, 0.25f,0.25f, 0.25f,0.25f };   // -> red
     id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
     id<MTLBuffer> uv_buf = device_buffer(uv, sizeof(uv));
-    REQUIRE(pos_buf != nil); REQUIRE(uv_buf != nil);
+    REQUIRE((pos_buf != nil)); REQUIRE((uv_buf != nil));
     CaliperAllocId pa = bk.bridge->import_allocation(
         (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
     CaliperAllocId ua = bk.bridge->import_allocation(
@@ -2315,7 +2315,7 @@ TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouc
     // (a) uv_alloc released after import.
     {
         id<MTLBuffer> sbuf = device_buffer(uv, sizeof(uv));
-        REQUIRE(sbuf != nil);
+        REQUIRE((sbuf != nil));
         CaliperAllocId sa = bk.bridge->import_allocation(
             (__bridge void*)sbuf, sizeof(uv), CALIPER_ALLOC_HANDLE_MTLBUFFER);
         REQUIRE(sa != 0);
@@ -2355,6 +2355,7 @@ TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouc
     bk.bridge->release_allocation(ua);
     bk.bridge->release_allocation(pa);
 }
+
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================
