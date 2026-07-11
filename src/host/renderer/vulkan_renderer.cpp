@@ -48,6 +48,7 @@
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_OPAQUE_WIN32
 #include <caliper/services/geometry_v1_1.h>        // CALIPER_GEOM_* topology/mode/flag ids
 #include <caliper/services/geometry_v1_2.h>
+#include <caliper/services/geometry_v1_3.h>        // CALIPER_GEOM_RIGID_TOL (G14)
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
@@ -129,10 +130,13 @@ struct GeomPush {
 static_assert(sizeof(GeomPush) == 88, "points.vert push block layout");
 
 // caliper.geometry.v1_1 per-draw params. Byte-identical to Metal's PrimParams
-// (metal_renderer.mm ~line 273) and to the std140 Params block of geom.vert —
-// same member order, same 160-byte size — so both backends and the shader agree
-// on every offset. Delivered via a dynamic UBO (exceeds Vulkan's 128-B push
-// budget), not push constants.
+// (metal_renderer.mm PrimParams / kGeomShaderSrc) and to the std140 Params
+// block of geom.vert — same member order, same 192-byte size — so both backends
+// and the shader agree on every offset. Delivered via a dynamic UBO (exceeds
+// Vulkan's 128-B push budget), not push constants. The v1.3 instance tail
+// (use_instance/inst_base/use_instance_attr/inst_attr_base) grew the struct in
+// textual lockstep on this box; the Vulkan instance-PULL logic that consumes it
+// is T4 — only the layout grew here to keep the cross-backend seam aligned.
 struct PrimParams {
     float    mvp[16];
     float    nmat0[4];
@@ -142,9 +146,10 @@ struct PrimParams {
     uint32_t use_index, vertex_count, color_mode, shade_mode;
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
-    uint32_t uv_base, pad0, pad1, pad2;
+    uint32_t uv_base, use_instance, inst_base, use_instance_attr;
+    uint32_t inst_attr_base, pad0, pad1, pad2;
 };
-static_assert(sizeof(PrimParams) == 176, "geom.vert std140 params layout");
+static_assert(sizeof(PrimParams) == 192, "geom.vert std140 params layout");
 
 // Column-major 4x4 multiply out = a*b. Transcribed VERBATIM from
 // metal_renderer.mm mat4_mul_cm so both backends premultiply mvp with an
@@ -191,6 +196,35 @@ inline void normal_matrix_columns(const float* view_model,
     c0[0] = (float)inv00; c0[1] = (float)inv01; c0[2] = (float)inv02; c0[3] = 0.f;
     c1[0] = (float)inv10; c1[1] = (float)inv11; c1[2] = (float)inv12; c1[3] = 0.f;
     c2[0] = (float)inv20; c2[1] = (float)inv21; c2[2] = (float)inv22; c2[3] = 0.f;
+}
+
+// G14 (spec §5.1): an instance upper-3x3 must be orthogonal-up-to-uniform-scale
+// for the §4.4 normal chain (raw-upper-3x3 + normalize) to be exact-compose.
+// c0,c1,c2 are the columns of the upper-3x3 (column-major 4x4: col j at m[4j..]),
+// read as f32 straight from the staged instance bytes. s̄² = (‖c0‖²+‖c1‖²+‖c2‖²)/3;
+// refuse unless every pair is orthogonal and every column equal-length within
+// CALIPER_GEOM_RIGID_TOL·s̄², and s̄²>0. Transcribed VERBATIM from
+// metal_renderer.mm instance_upper3x3_rigid — the float op order is the
+// byte-exact contract the two backends share.
+inline bool instance_upper3x3_rigid(const float* m) {
+    const float c0[3] = {m[0], m[1], m[2]};
+    const float c1[3] = {m[4], m[5], m[6]};
+    const float c2[3] = {m[8], m[9], m[10]};
+    const float n0 = c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2];
+    const float n1 = c1[0] * c1[0] + c1[1] * c1[1] + c1[2] * c1[2];
+    const float n2 = c2[0] * c2[0] + c2[1] * c2[1] + c2[2] * c2[2];
+    const float sbar2 = (n0 + n1 + n2) / 3.0f;
+    if (!(sbar2 > 0.0f)) return false;
+    const float tol = CALIPER_GEOM_RIGID_TOL * sbar2;
+    const float d01 = c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2];
+    const float d02 = c0[0] * c2[0] + c0[1] * c2[1] + c0[2] * c2[2];
+    const float d12 = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
+    if (std::fabs(d01) > tol || std::fabs(d02) > tol || std::fabs(d12) > tol)
+        return false;
+    if (std::fabs(n0 - sbar2) > tol || std::fabs(n1 - sbar2) > tol ||
+        std::fabs(n2 - sbar2) > tol)
+        return false;
+    return true;
 }
 
 class VulkanRenderer final : public HostRenderer {
@@ -777,6 +811,11 @@ public:
     bool supports_geometry_textured() const override {
         return supports_external_import();
     }
+    // v1.3 caps bit 3: instanced draws need the same imported-alloc machinery
+    // (mirrors supports_geometry_textured / the Metal supports_geometry_instanced).
+    bool supports_geometry_instanced() const override {
+        return supports_external_import();
+    }
 
     // Like geom_create_view, plus flags. flags==0 is byte-for-byte the color-only
     // view geom_create_view builds (usable by draw_primitives without depth).
@@ -938,8 +977,13 @@ public:
             const ImportedAlloc* nrm = nullptr;
             const ImportedAlloc* attr = nullptr;
             const ImportedAlloc* uv = nullptr;
+            const ImportedAlloc* inst = nullptr;   // (N,16) f32 instance matrices (binding 8)
+            const ImportedAlloc* iattr = nullptr;  // (N,) per-instance tint scalar (binding 9)
             const Tex* texture = nullptr;
             uint32_t consumed = 0;
+            uint32_t n_inst = 1;                   // instanceCount (1 == non-instanced)
+            uint64_t inst_offset = 0;              // byte offset of the matrix range (G14 copy src)
+            bool use_instance = false;
             VkPipeline pipe = VK_NULL_HANDLE;
             int lut_slot = -1;
             const uint32_t* lut256 = nullptr;
@@ -1047,8 +1091,6 @@ public:
                     return dev_bail("primitives: attr base exceeds 32 bits");
                 if (d.color_mode == CALIPER_GEOM_COLOR_COLORMAP) {
                     if (d.lut256 == nullptr) return dev_bail("primitives: colormap missing LUT");
-                    e.lut256 = d.lut256;
-                    e.lut_slot = (int)n_lut++;
                 }
             }
 
@@ -1080,6 +1122,71 @@ public:
             if (d.depth_flags != 0 && !t.has_depth)
                 return dev_bail("primitives: depth flags on depthless view");
 
+            // ---- v1.3 instance tail re-gate (§5/§5.1): G1-G12 against this
+            // renderer's imported_ table, byte-same reason CONTENT and THE SAME
+            // ORDER (G2→G3→G4→G6→G7→overflow→G5, then G8→G9→G11→G10→G12) as the
+            // Metal re-gate; the "primitives:" prefix is the established Vulkan
+            // dev_bail convention (spec §5). G14's execution lands after the gate
+            // loop (§5.1). All-zero tail -> the exact v1.2 path. Every failure
+            // returns before any encode, so the view's pixels are bit-untouched. ----
+            bool use_instance = false;
+            bool use_instance_attr = false;
+            uint32_t n_inst = 1;
+            if (d.instance_alloc != 0) {
+                // G1 (cap) is granted upstream; a resolved alloc is instanced.
+                if (d.instance_count == 0)
+                    return dev_bail("primitives: instanced draw needs N>0");           // G2
+                if (d.instance_count > UINT32_MAX)
+                    return dev_bail("primitives: too many instances");                 // G3
+                if (d.instance_offset % 4 != 0)
+                    return dev_bail("primitives: instance offset misaligned");         // G4
+                if (d.instance_offset / 4u > UINT32_MAX)
+                    return dev_bail("primitives: instance base exceeds 32 bits");      // G6
+                auto iit2 = imported_.find(d.instance_alloc);
+                if (iit2 == imported_.end())
+                    return dev_bail("primitives: unknown instance alloc");             // G7
+                e.inst = &iit2->second;
+                if (d.instance_count > UINT64_MAX / 64u)
+                    return dev_bail("primitives: instances byte count overflow");
+                if (d.instance_offset > e.inst->size ||
+                    d.instance_count * 64u > e.inst->size - d.instance_offset)
+                    return dev_bail("primitives: instances out of imported bounds");   // G5
+                use_instance = true;
+                n_inst = (uint32_t)d.instance_count;
+            }
+            if (d.instance_attr_alloc != 0) {
+                if (!use_instance)
+                    return dev_bail("primitives: instance attr without instances");    // G8
+                if (d.instance_attr_offset % 4 != 0)
+                    return dev_bail("primitives: instance attr offset misaligned");     // G9
+                auto ait2 = imported_.find(d.instance_attr_alloc);
+                if (ait2 == imported_.end())
+                    return dev_bail("primitives: unknown instance attr alloc");         // G11
+                e.iattr = &ait2->second;
+                if (d.instance_count > UINT64_MAX / 4u)
+                    return dev_bail("primitives: instance attr byte count overflow");
+                if (d.instance_attr_offset > e.iattr->size ||
+                    d.instance_count * 4u > e.iattr->size - d.instance_attr_offset)
+                    return dev_bail("primitives: instance attr out of imported bounds"); // G10
+                if (d.lut256 == nullptr)
+                    return dev_bail("primitives: instance tint needs colormap");        // G12
+                use_instance_attr = true;
+            }
+            e.use_instance = use_instance;
+            e.n_inst = n_inst;
+            e.inst_offset = d.instance_offset;
+
+            // §6.2: the LUT ring slot is assigned whenever the draw carries a
+            // resolved LUT — COLORMAP base OR an instanced-tint draw (the host
+            // populates d.lut256 for both, §3.3), NOT the old COLORMAP-only
+            // predicate. Leaving the old predicate would make an instanced-tint
+            // over a FLAT/VERTEX_RGBA/TEXTURE base read placeholder garbage at
+            // binding 4 (§8 row B exists to catch exactly that).
+            if (d.lut256 != nullptr) {
+                e.lut256 = d.lut256;
+                e.lut_slot = (int)n_lut++;
+            }
+
             // Cached pipeline for this (topology, blend, depth_flags, pass) combo.
             e.pipe = geom_prim_pipeline(
                 d.topology, d.blend_mode, d.depth_flags, t.has_depth,
@@ -1108,7 +1215,65 @@ public:
             e.params.size_px = d.size_px < 1.f ? 1.f
                              : (d.size_px > point_size_max_ ? point_size_max_ : d.size_px);
             e.params.uv_base = (uint32_t)(d.uv_offset / 4);
+            // v1.3 instance tail (§6.3): 0/1 flags + element bases (byte offset / 4).
+            e.params.use_instance = use_instance ? 1u : 0u;
+            e.params.inst_base = (uint32_t)(d.instance_offset / 4u);
+            e.params.use_instance_attr = use_instance_attr ? 1u : 0u;
+            e.params.inst_attr_base = (uint32_t)(d.instance_attr_offset / 4u);
             encs.push_back(e);
+        }
+
+        // ---- G14 (§5.1): every instance upper-3x3 on a LAMBERT-instanced draw
+        // must be rigid+uniform-scale. Unlike Metal (shared-storage imported
+        // buffers read via contents()), Vulkan's instance matrices live in
+        // device-local imported allocations, so the check needs the bytes on the
+        // host. ONE grow-only host-visible staging buffer + ONE fenced staged-copy
+        // submit covers ALL such draws in the array (never per-draw), placed AFTER
+        // the metadata gate loop and BEFORE any ring/descriptor/encode work — a
+        // refusal here leaves the view's pixels bit-untouched. This is the hot
+        // path's first device-contents read; cost is one fenced round-trip + the
+        // same N*64 bytes the draw itself reads. The identical float-order
+        // comparison (instance_upper3x3_rigid) is transcribed from Metal (§7). ----
+        {
+            struct RigidRead {
+                const ImportedAlloc* inst;
+                uint64_t     src_off;
+                VkDeviceSize dst_off;
+                uint32_t     n;
+            };
+            std::vector<RigidRead> reads;
+            VkDeviceSize stage_bytes = 0;
+            for (const Enc& e : encs) {
+                if (e.use_instance &&
+                    e.params.shade_mode == CALIPER_GEOM_SHADE_LAMBERT) {
+                    reads.push_back({e.inst, e.inst_offset, stage_bytes, e.n_inst});
+                    stage_bytes += (VkDeviceSize)e.n_inst * 64u;
+                }
+            }
+            if (!reads.empty()) {
+                if (!ensure_buffer(geom_prim_inst_staging_, stage_bytes,
+                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, false))
+                    return dev_bail("primitives: instance staging alloc failed");
+                const bool copied = submit_once([&](VkCommandBuffer cb) {
+                    for (const RigidRead& r : reads) {
+                        VkBufferCopy bc{r.src_off, r.dst_off,
+                                        (VkDeviceSize)r.n * 64u};
+                        vkCmdCopyBuffer(cb, r.inst->buf,
+                                        geom_prim_inst_staging_.buf, 1, &bc);
+                    }
+                });
+                if (!copied) return dev_bail("primitives: instance staging copy failed");
+                for (const RigidRead& r : reads) {
+                    const float* base = (const float*)
+                        ((const uint8_t*)geom_prim_inst_staging_.mapped + r.dst_off);
+                    for (uint32_t k = 0; k < r.n; ++k)
+                        if (!instance_upper3x3_rigid(base + 16u * k))
+                            return dev_bail(
+                                "primitives: instanced lambert needs rigid+uniform-scale"); // G14
+                }
+            }
         }
 
         // All gates passed. Size the per-frame rings (grown ×2 on demand; the
@@ -1171,7 +1336,11 @@ public:
                 const Enc& e = encs[i];
                 // Absent source (idx/nrm/attr) → bind pos as a harmless
                 // placeholder; the shader never reads it (the v1 trick).
-                VkDescriptorBufferInfo bi[7] = {};
+                // bi[0..6] -> bindings 0-6; bi[7]/bi[8] -> bindings 8/9 (the v1.3
+                // instance streams). Absent source (idx/nrm/attr/uv/inst/iattr) ->
+                // bind pos as a harmless placeholder; the shader never reads it
+                // (its use_instance/_attr guards make the read harmless — the v1 trick).
+                VkDescriptorBufferInfo bi[9] = {};
                 bi[0].buffer = e.pos->buf;                    bi[0].range = VK_WHOLE_SIZE;
                 bi[1].buffer = e.idx ? e.idx->buf : e.pos->buf;  bi[1].range = VK_WHOLE_SIZE;
                 bi[2].buffer = e.nrm ? e.nrm->buf : e.pos->buf;  bi[2].range = VK_WHOLE_SIZE;
@@ -1188,31 +1357,36 @@ public:
                 bi[5].range  = sizeof(PrimParams);
                 bi[6].buffer = e.uv ? e.uv->buf : e.pos->buf;
                 bi[6].range = VK_WHOLE_SIZE;
+                bi[7].buffer = e.inst  ? e.inst->buf  : e.pos->buf;  bi[7].range = VK_WHOLE_SIZE;
+                bi[8].buffer = e.iattr ? e.iattr->buf : e.pos->buf;  bi[8].range = VK_WHOLE_SIZE;
 
-                VkWriteDescriptorSet wr[8] = {};
-                for (int b = 0; b < 7; ++b) {
+                // Descriptor binding for each buffer-info entry: bindings 0-6 in
+                // order, then instance streams at bindings 8 and 9.
+                const uint32_t buf_binding[9] = {0, 1, 2, 3, 4, 5, 6, 8, 9};
+                VkWriteDescriptorSet wr[10] = {};
+                for (int b = 0; b < 9; ++b) {
                     wr[b] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                     wr[b].dstSet = sets[i];
-                    wr[b].dstBinding = (uint32_t)b;
+                    wr[b].dstBinding = buf_binding[b];
                     wr[b].descriptorCount = 1;
                     wr[b].pBufferInfo = &bi[b];
-                    wr[b].descriptorType = (b == 5)
+                    wr[b].descriptorType = (buf_binding[b] == 5)
                         ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
                         : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 }
-                uint32_t write_count = 7;
+                uint32_t write_count = 9;
                 VkDescriptorImageInfo sampled{};
                 if (e.texture != nullptr) {
                     sampled.sampler = geom_prim_sampler_;
                     sampled.imageView = e.texture->view;
                     sampled.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    wr[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                    wr[7].dstSet = sets[i];
-                    wr[7].dstBinding = 7;
-                    wr[7].descriptorCount = 1;
-                    wr[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wr[7].pImageInfo = &sampled;
-                    write_count = 8;
+                    wr[9] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                    wr[9].dstSet = sets[i];
+                    wr[9].dstBinding = 7;
+                    wr[9].descriptorCount = 1;
+                    wr[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wr[9].pImageInfo = &sampled;
+                    write_count = 10;
                 }
                 vkUpdateDescriptorSets(device_, write_count, wr, 0, nullptr);
             }
@@ -1267,7 +1441,10 @@ public:
                                         1, &dyn);
                 // Indexed draws are issued NON-indexed with index_count vertices;
                 // the shader pulls idx[] and clamps to vertex_count-1 (§4.3).
-                vkCmdDraw(cb, encs[i].consumed, 1, 0, 0);
+                // v1.3 (§6.1): instanceCount = N for instanced draws, else 1 —
+                // gl_InstanceIndex then ranges [0, N) in the vertex shader.
+                vkCmdDraw(cb, encs[i].consumed,
+                          encs[i].use_instance ? encs[i].n_inst : 1u, 0, 0);
             }
             vkCmdEndRenderPass(cb);   // color -> SHADER_READ_ONLY_OPTIMAL
         });
@@ -2403,8 +2580,11 @@ private:
         }
 
         // Set layout: bindings 0-4 storage buffers (pos/idx/nrm/attr/lut),
-        // binding 5 a dynamic uniform buffer (params) — all vertex stage.
-        VkDescriptorSetLayoutBinding bindings[8] = {};
+        // binding 5 a dynamic uniform buffer (params), binding 6 uv — all vertex
+        // stage; binding 7 the sampled texture (fragment). v1.3 (§6.2) adds
+        // bindings 8/9: the readonly instance-matrix + instance-attr SSBOs
+        // (vertex stage). Array grows to 10, bindingCount = 10.
+        VkDescriptorSetLayoutBinding bindings[10] = {};
         for (uint32_t i = 0; i < 7; ++i) {
             bindings[i].binding = i;
             bindings[i].descriptorType = (i == 5)
@@ -2417,8 +2597,14 @@ private:
         bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[7].descriptorCount = 1;
         bindings[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        for (uint32_t i = 8; i < 10; ++i) {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        }
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        li.bindingCount = 8;
+        li.bindingCount = 10;
         li.pBindings = bindings;
         if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &geom_prim_set_layout_) != VK_SUCCESS) {
             destroy_geom_prim(); return false;
@@ -2579,8 +2765,9 @@ private:
         return pipe;
     }
 
-    // Grow the per-frame descriptor pool to hold `need_sets` sets (5 storage + 1
-    // dynamic-uniform each). Reset (not per-set free) each draw call, so the pool
+    // Grow the per-frame descriptor pool to hold `need_sets` sets (8 storage + 1
+    // dynamic-uniform + 1 sampler each — §6.2 grew storage 6u -> 8u for the v1.3
+    // instance streams). Reset (not per-set free) each draw call, so the pool
     // only needs recreating when a frame asks for more sets than ever before.
     bool ensure_geom_prim_pool(uint32_t need_sets) {
         if (geom_prim_pool_ != VK_NULL_HANDLE && geom_prim_pool_cap_ >= need_sets)
@@ -2592,8 +2779,11 @@ private:
         }
         uint32_t cap = geom_prim_pool_cap_ ? geom_prim_pool_cap_ : 1u;
         while (cap < need_sets) cap *= 2;
+        // 8 storage buffers per set: bindings 0-4,6 (pos/idx/nrm/attr/lut/uv)
+        // plus the v1.3 instance streams at 8/9 (§6.2, 6u -> 8u); 1 dynamic UBO
+        // (binding 5); 1 combined image sampler (binding 7).
         VkDescriptorPoolSize sizes[3] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6u * cap},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8u * cap},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1u * cap},
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1u * cap},
         };
@@ -2610,6 +2800,7 @@ private:
     void destroy_geom_prim() {
         destroy_buffer(geom_prim_params_);
         destroy_buffer(geom_prim_lut_);
+        destroy_buffer(geom_prim_inst_staging_);
         if (geom_prim_pool_) {
             vkDestroyDescriptorPool(device_, geom_prim_pool_, nullptr);
             geom_prim_pool_ = VK_NULL_HANDLE; geom_prim_pool_cap_ = 0;
@@ -3011,6 +3202,7 @@ private:
     uint32_t geom_prim_pool_cap_ = 0;
     Buffer geom_prim_params_;         // dynamic-UBO ring
     Buffer geom_prim_lut_;            // colormap LUT ring
+    Buffer geom_prim_inst_staging_;   // grow-only host-visible G14 readback staging (§5.1)
     VkDeviceSize params_slot_ = 256;  // per-draw dynamic-UBO slot stride
 
     // CUDA interop (driver API, loaded at runtime; see cuda_driver.h).

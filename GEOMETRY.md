@@ -615,7 +615,7 @@ before any implementation.
 | R0 | `geometry.v1` instanced points | SHIPPED (both platforms) | particle sims, embeddings — flow_scope, EmbedScope |
 | R1 | `geometry.v1_1` — this spec: indexed tris/lines/strips, depth, blend, fixed shading | **SPEC'D**, phases §10 A–D | any *geometry*: deforming meshes, learned surfaces, twin structure; `mesh_scope` proves live-training viz |
 | R2 | `geometry.v1_2` — textures on meshes (sample a bridge `CaliperTextureId`; `reserved0` slot) | SHIPPED — byte-exact both backends (`feat/geometry-v1_2`; Vulkan run-proven byte-exact on RTX 500 Ada; Metal run-proven byte-exact on Apple Silicon, 2026-07-10) | field data draped on geometry: heatmap-on-terrain, activation-on-surface — the twin's *state painted on its shape*; TwinScope surface twin is the exemplar |
-| R3 | Instanced transforms from an imported alloc (one mesh × (N,16) f32 model matrices) | DIRECTIONAL | many-part twins at scale: fleets, swarms, articulated repeats — N objects, one draw, still zero-copy |
+| R3 | Instanced transforms from an imported alloc (one mesh × (N,16) f32 model matrices) | SHIPPED on-branch (`feat/geometry-v1_3`) — Metal run-proven byte-exact on Apple Silicon 2026-07-11; Vulkan transcribed + reviewed, hardware pass pending Windows (spec: `2026-07-11-geometry-v1_3-vulkan-windows-hardware-pass.md`) | many-part twins at scale: fleets, swarms, articulated repeats — N objects, one draw, still zero-copy; the dedicated `instance_scope` applet (N gems on a slider 1–5000, default 1000) is the exemplar |
 | R4 | Host-neutral service layer / second host (Compass, Phase 6 `libcaliper` per PLATFORM.md) | DIRECTIONAL | twins embedded outside the Caliper shell |
 
 Explicitly NOT on this roadmap, at any stage (§1.2): render-to-tensor,
@@ -636,8 +636,21 @@ Sequencing: R1 phases A–D first (§10). R2/R3 are additive revisions in either
 order, each gated on a demonstrated applet need — not built on spec. R2 shipped
 on `feat/geometry-v1_2` against exactly such a need: the TwinScope surface twin
 (a learned thermal field draped on a heatsink housing at texture resolution)
-is the demonstrated-need exemplar for R2. R3 stays gated/pending. R4 is
-the platform's call (PLATFORM.md Phases 3–6), not geometry's.
+is the demonstrated-need exemplar for R2. R3 shipped on
+`feat/geometry-v1_3` against the same kind of demonstrated need — a population
+of instanced units in one draw — with the platform order inverted this pass
+(Metal-first, user-directed): Metal/MPS run-proven byte-exact on Apple Silicon
+(2026-07-11), Vulkan transcribed + reviewed with the hardware pass pending the
+Windows session. R3's exemplar is **`instance_scope`** — a dedicated applet
+drawing N gems (slider 1–5000, default 1000) in ONE instanced draw from live
+device-tensor poses + tints — and the byte-exact gfx rows A–E (49/49 live)
+remain its correctness proof. R2's twin demo is **TwinScope** (the R2 surface
+twin, hero-only). A future *population* twin — a fleet with per-unit state —
+remains possible, but its first TwinScope incarnation (a 50-housing fleet, run-
+proven zero-copy on MPS) was reverted as a UX regression: a single saturating
+scalar tint replaced the hero's per-vertex detail, and an unbounded max-
+statistic saturates any fixed window (recorded in the design spec's hardware
+addendum). R4 is the platform's call (PLATFORM.md Phases 3–6), not geometry's.
 
 ## 12. Resolved design questions (do not relitigate in implementation)
 

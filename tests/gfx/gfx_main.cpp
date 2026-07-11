@@ -25,8 +25,11 @@
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
 #include <caliper/services/geometry_v1_2.h>
+#include <caliper/services/geometry_v1_3.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -344,6 +347,120 @@ TEST_CASE("gfx/GL: bridge id is the ImGui handle and survives the real ImGui dra
 }
 
 // ===========================================================================
+// caliper.geometry.v1_3 shared CPU reference (spec §8) — backend-agnostic, at
+// FILE SCOPE so BOTH the Metal and Vulkan §8 rows compare against ONE reference
+// (never two copies that could drift). Pure host float; no backend types. The
+// projection is VECTOR-FIRST — p' = mvp·(M·v) — matching the shader grouping
+// p.mvp * (M * vec4(wp,1)); it must NEVER premultiply (mvp·M) into one matrix,
+// which groups the float sums differently and breaks the 0-LSB rows.
+// ===========================================================================
+namespace {
+
+// ±0.25 model-space quad (two triangles, 6 verts, z=0), flat normals (0,0,1).
+// Small enough that four instance translations of ±0.5 land four disjoint 8x8
+// quadrants in a 32x32 view on exact pixel boundaries.
+const float kQuad6[18] = {
+    -0.25f, -0.25f, 0.0f,   0.25f, -0.25f, 0.0f,  -0.25f,  0.25f, 0.0f,
+     0.25f, -0.25f, 0.0f,   0.25f,  0.25f, 0.0f,  -0.25f,  0.25f, 0.0f,
+};
+const float kQuadN6[18] = {
+    0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f,
+    0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f,
+};
+
+// Column-major (T·R) instance matrix: 3x3 rotation `rot` (also column-major,
+// 9 floats) with translation t, packed as the (N,16) f32 the shader pulls.
+void inst_matrix(const float rot9[9], float tx, float ty, float tz, float out16[16]) {
+    out16[0]=rot9[0]; out16[1]=rot9[1]; out16[2]=rot9[2];  out16[3]=0.0f;
+    out16[4]=rot9[3]; out16[5]=rot9[4]; out16[6]=rot9[5];  out16[7]=0.0f;
+    out16[8]=rot9[6]; out16[9]=rot9[7]; out16[10]=rot9[8]; out16[11]=0.0f;
+    out16[12]=tx; out16[13]=ty; out16[14]=tz; out16[15]=1.0f;
+}
+const float kIdent3[9] = {1,0,0, 0,1,0, 0,0,1};
+void rot_x3(float th, float out9[9]) {
+    float c=std::cos(th), s=std::sin(th);
+    out9[0]=1; out9[1]=0; out9[2]=0;   // col0
+    out9[3]=0; out9[4]=c; out9[5]=s;   // col1
+    out9[6]=0; out9[7]=-s; out9[8]=c;  // col2
+}
+void rot_y3(float th, float out9[9]) {
+    float c=std::cos(th), s=std::sin(th);
+    out9[0]=c; out9[1]=0; out9[2]=-s;  // col0
+    out9[3]=0; out9[4]=1; out9[5]=0;   // col1
+    out9[6]=s; out9[7]=0; out9[8]=c;   // col2
+}
+
+// column-major 4x4 * vec4, out = m * v.
+void cm_mat_vec(const float* m, const float* v, float* out) {
+    for (int r = 0; r < 4; ++r)
+        out[r] = m[0*4+r]*v[0] + m[1*4+r]*v[1] + m[2*4+r]*v[2] + m[3*4+r]*v[3];
+}
+
+// The §8 CPU reference, VECTOR-FIRST: p' = mvp · (M · v). It must NEVER
+// premultiply (mvp·M) into one matrix — matrix-matrix-then-vector groups the
+// float sums differently and breaks the 0-LSB rows (§8 byte-load-bearing note).
+void instanced_project(const float* mvp, const float* M, const float* v3, float* ndc3) {
+    float v[4] = {v3[0], v3[1], v3[2], 1.0f};
+    float world[4]; cm_mat_vec(M, v, world);
+    float clip[4];  cm_mat_vec(mvp, world, clip);
+    ndc3[0] = clip[0]/clip[3]; ndc3[1] = clip[1]/clip[3]; ndc3[2] = clip[2]/clip[3];
+}
+
+// The §4.4 normal chain in host float (identity nmat here: view·model == I),
+// returning the Lambert lit factor 0.30 + 0.70·max(nvs.z,0). Instance upper-3x3
+// applied to the world normal FIRST, then the per-draw normal matrix.
+float instanced_lit(const float* M, const float wn[3]) {
+    float ln = std::sqrt(wn[0]*wn[0]+wn[1]*wn[1]+wn[2]*wn[2]);
+    float n[3] = {wn[0]/ln, wn[1]/ln, wn[2]/ln};
+    float ix = M[0]*n[0] + M[4]*n[1] + M[8]*n[2];   // im0.x*n.x+im1.x*n.y+im2.x*n.z
+    float iy = M[1]*n[0] + M[5]*n[1] + M[9]*n[2];
+    float iz = M[2]*n[0] + M[6]*n[1] + M[10]*n[2];
+    // nmat == identity -> nvs = normalize(n_inst)
+    float vl = std::sqrt(ix*ix+iy*iy+iz*iz);
+    float nz = iz/vl;
+    return 0.30f + 0.70f * (nz > 0.0f ? nz : 0.0f);
+}
+
+// Fill the pixel rect covered by a base quad (half-extent hx,hy) under instance
+// matrix M into px/color lists (edges land on integer pixel boundaries for the
+// exact rows). Uses instanced_project so the reference honors vector-first.
+void add_instance_rect(int W, int H, const float* mvp, const float* M,
+                       float hx, float hy, uint32_t color,
+                       std::vector<std::pair<int,int>>& px,
+                       std::vector<uint32_t>& col) {
+    const float corners[4][3] = {{-hx,-hy,0},{hx,-hy,0},{-hx,hy,0},{hx,hy,0}};
+    float xmin=1e9f,xmax=-1e9f,ymin=1e9f,ymax=-1e9f;
+    for (const auto& c : corners) {
+        float n[3]; instanced_project(mvp, M, c, n);
+        xmin=std::min(xmin,n[0]); xmax=std::max(xmax,n[0]);
+        ymin=std::min(ymin,n[1]); ymax=std::max(ymax,n[1]);
+    }
+    int x0   = (int)std::lround((xmin+1.0f)*W*0.5f);
+    int x1   = (int)std::lround((xmax+1.0f)*W*0.5f);
+    int yTop = (int)std::lround((1.0f-ymax)*H*0.5f);   // +y up, no flip (§ndc_for_pixel)
+    int yBot = (int)std::lround((1.0f-ymin)*H*0.5f);
+    for (int y=yTop; y<yBot; ++y)
+        for (int x=x0; x<x1; ++x) { px.emplace_back(x,y); col.push_back(color); }
+}
+
+uint32_t lut_idx_color(const uint32_t* lut, float v, float vmin, float vmax) {
+    float t = (v==v && vmax>vmin)
+            ? std::min(std::max((v-vmin)/(vmax-vmin), 0.0f), 1.0f) : 0.0f;
+    return lut[(uint32_t)(t*255.0f+0.5f)];
+}
+
+// A v1.3 record wrapping a v1.1-shaped base with a zero (or set) instance tail.
+CaliperGeomDrawV1_3 v13_of(const CaliperGeomDraw& base) {
+    CaliperGeomDrawV1_3 d{};
+    d.base.base = base;   // d.base is v1.2; d.base.base is the frozen v1.1 prefix
+    return d;
+}
+
+const float kIdentM16[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+
+}  // namespace
+
+// ===========================================================================
 // Metal run — same matrix (CPU-tensor uploads, staged) + the device paths that
 // nothing had ever executed (compute / blit from a raw MTLBuffer).
 // ===========================================================================
@@ -409,6 +526,28 @@ id<MTLBuffer> device_buffer(const void* src, size_t bytes) {
                                                      options:MTLResourceStorageModeShared];
     if (src) std::memcpy(b.contents, src, bytes);
     return b;
+}
+
+// A PRIVATE-storage MTLBuffer filled from `src` via a one-shot blit from a shared
+// staging buffer. This is how a real device tensor (e.g. a torch MPS buffer)
+// imports: MTLStorageModePrivate, whose contents() is NOT host-readable — so the
+// G14 rigidity gate must blit it back before reading (§5.1). Exercising this path
+// requires a private import; a plain device_buffer() is Shared (unified memory).
+id<MTLBuffer> device_buffer_private(const void* src, size_t bytes) {
+    id<MTLDevice> dev = metal_env().device;
+    id<MTLBuffer> shared = [dev newBufferWithLength:bytes
+                                           options:MTLResourceStorageModeShared];
+    if (src) std::memcpy(shared.contents, src, bytes);
+    id<MTLBuffer> priv = [dev newBufferWithLength:bytes
+                                         options:MTLResourceStorageModePrivate];
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromBuffer:shared sourceOffset:0 toBuffer:priv destinationOffset:0 size:bytes];
+    [blit endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    return priv;
 }
 
 }  // namespace
@@ -2426,6 +2565,496 @@ TEST_CASE("gfx/metal geometry.v1_2: textured POINT draw renders the sampled texe
     bk.bridge->release_texture(texture);
     bk.bridge->release_allocation(ua);
     bk.bridge->release_allocation(pa);
+}
+
+// ===========================================================================
+// caliper.geometry.v1_3 — instanced transforms (spec §8 rows A-E), Metal.
+// Live on Apple Silicon: N>1 drawPrimitives:...instanceCount:, per-instance
+// model matrix + optional per-instance LUT tint, LAMBERT normal composition
+// (§4.4), and the backend re-gate incl. G14 rigidity.
+// ===========================================================================
+// (§8 CPU reference helpers — kQuad6/inst_matrix/instanced_project/
+// instanced_lit/add_instance_rect/lut_idx_color/v13_of/kIdentM16 — are hoisted
+// to the shared file-scope namespace above so this Metal block and the Vulkan
+// block compare against ONE reference.)
+
+// Row A — pose-only fleet: one ±0.25 quad drawn N=4 at four ±0.5 translations,
+// FLAT/UNLIT, no instance tint. Each instance lands a disjoint 8x8 quadrant on
+// exact pixel boundaries; FLAT color is constant, so the whole frame is
+// BYTE-EXACT (0 LSB) against the CPU reference. Proves instanceCount + the
+// per-instance model-matrix pull.
+TEST_CASE("gfx/metal geometry.v1_3: pose-only fleet N=4, FLAT, byte-exact (0 LSB)") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const uint32_t flat = 0xFF3377AAu;
+    const float tt[4][2] = {{-0.5f,-0.5f},{0.5f,-0.5f},{-0.5f,0.5f},{0.5f,0.5f}};
+    float inst[4*16];
+    for (int i = 0; i < 4; ++i) inst_matrix(kIdent3, tt[i][0], tt[i][1], 0.0f, &inst[i*16]);
+
+    id<MTLBuffer> pos_buf  = device_buffer(kQuad6, sizeof(kQuad6));
+    id<MTLBuffer> inst_buf = device_buffer(inst, sizeof(inst));
+    REQUIRE((pos_buf != nil)); REQUIRE((inst_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(kQuad6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        (__bridge void*)inst_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(inst_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = flat; base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 4;
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+
+    float mvp[16]; std::memcpy(mvp, kIdentM16, sizeof(mvp));   // identity cam+model
+    std::vector<std::pair<int,int>> px; std::vector<uint32_t> col;
+    for (int i = 0; i < 4; ++i)
+        add_instance_rect(W, H, mvp, &inst[i*16], 0.25f, 0.25f, flat, px, col);
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, 0xFF000000u, px, col));
+
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row B — per-instance tint over a FLAT base, MAGMA, UNLIT: four instances with
+// distinct scalars at exact quantized LUT indices (0/85/170/255). Base
+// color_mode is FLAT, so this row also proves the index-4 tint-LUT binding rule
+// (§6.2): a COLORMAP-only LUT predicate would read placeholder garbage here.
+// BYTE-EXACT (0 LSB) — the tint path has no normalize.
+TEST_CASE("gfx/metal geometry.v1_3: per-instance tint over FLAT base, MAGMA, byte-exact (0 LSB)") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const float tt[4][2] = {{-0.5f,-0.5f},{0.5f,-0.5f},{-0.5f,0.5f},{0.5f,0.5f}};
+    float inst[4*16];
+    for (int i = 0; i < 4; ++i) inst_matrix(kIdent3, tt[i][0], tt[i][1], 0.0f, &inst[i*16]);
+    const float attr[4] = {0.0f, 1.0f, 2.0f, 3.0f};   // vmin=0, vmax=3 -> idx 0/85/170/255
+    const float vmin = 0.0f, vmax = 3.0f;
+
+    id<MTLBuffer> pos_buf  = device_buffer(kQuad6, sizeof(kQuad6));
+    id<MTLBuffer> inst_buf = device_buffer(inst, sizeof(inst));
+    id<MTLBuffer> attr_buf = device_buffer(attr, sizeof(attr));
+    REQUIRE((pos_buf != nil)); REQUIRE((inst_buf != nil)); REQUIRE((attr_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(kQuad6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        (__bridge void*)inst_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, sizeof(attr), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(inst_alloc != 0); REQUIRE(attr_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_MAGMA);
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;      // FLAT base, tint overrides
+    base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.colormap = CALIPER_CMAP_MAGMA;
+    base.flat_rgba = 0xFF00FF00u;                   // must be ignored by the tint
+    base.vmin = vmin; base.vmax = vmax; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 4;
+    d.instance_attr_alloc = attr_alloc;
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+
+    float mvp[16]; std::memcpy(mvp, kIdentM16, sizeof(mvp));
+    std::vector<std::pair<int,int>> px; std::vector<uint32_t> col;
+    for (int i = 0; i < 4; ++i)
+        add_instance_rect(W, H, mvp, &inst[i*16], 0.25f, 0.25f,
+                          lut_idx_color(lut, attr[i], vmin, vmax), px, col);
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, 0xFF000000u, px, col));
+
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row C — additive-default compat: the same COLORMAP+LAMBERT mesh drawn once as
+// a v1.2 record (stride 216) into view A and once as a v1.3 record with a ZERO
+// instance tail (stride 256) into view B. The two readbacks must be byte-
+// identical to each other (the instance_count==0 == non-instanced contract, §4.2),
+// with a non-triviality guard that the mesh actually rasterized.
+TEST_CASE("gfx/metal geometry.v1_3: zero instance tail is byte-identical to v1.2 (0 LSB)") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const uint32_t idx[3] = {0, 1, 2};
+    const float nrm[9] = { 0.f,0.f,1.f,  0.f,0.f,1.f,  0.f,0.f,1.f };
+    const float attr[3] = { 0.5f, 0.5f, 0.5f };
+    id<MTLBuffer> pos_buf = device_buffer(pos, sizeof(pos));
+    id<MTLBuffer> idx_buf = device_buffer(idx, sizeof(idx));
+    id<MTLBuffer> nrm_buf = device_buffer(nrm, sizeof(nrm));
+    id<MTLBuffer> attr_buf = device_buffer(attr, sizeof(attr));
+    CaliperAllocId pa = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(pos), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId ia = bk.bridge->import_allocation(
+        (__bridge void*)idx_buf, sizeof(idx), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId na = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(nrm), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId aa = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, sizeof(attr), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pa != 0); REQUIRE(ia != 0); REQUIRE(na != 0); REQUIRE(aa != 0);
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pa; base.vertex_count = 3;
+    base.index_alloc = ia; base.index_count = 3;
+    base.normal_alloc = na; base.attr_alloc = aa;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    base.colormap = CALIPER_CMAP_VIRIDIS;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperTextureId va = bk.bridge->geom_create_view_ex(W, H, 0);
+    CaliperTextureId vb = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(va != 0); REQUIRE(vb != 0);
+
+    CaliperGeomDrawV1_2 d12{}; d12.base = base;         // zero uv/texture tail
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(va, &cam, &d12, 1,
+                                sizeof(CaliperGeomDrawV1_2), 0xFF000000u));
+    CaliperGeomDrawV1_3 d13 = v13_of(base);             // zero instance tail
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(vb, &cam, &d13, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+
+    CHECK(bk.readback(va, W, H) == bk.readback(vb, W, H));
+    CHECK(bk.readback(vb, W, H) != geom_ref(W, H, 0xFF000000u, {}, {}));   // non-trivial
+
+    bk.bridge->geom_release_view(vb);
+    bk.bridge->geom_release_view(va);
+    bk.bridge->release_allocation(aa);
+    bk.bridge->release_allocation(na);
+    bk.bridge->release_allocation(ia);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row D — instanced LAMBERT, N=2 rigid rotations + translations. Instance 0:
+// R_y(60°)+T(-0.5) -> normal (sin60,0,cos60), lit=0.30+0.70·0.5=0.65 -> 117.
+// Instance 1: R_x(30°)+T(+0.5) -> normal (0,-sin30,cos30), lit=0.30+0.70·cos30
+// -> ~163. Base FLAT gray 180. Reference is the §4.4 chain in host float; the
+// sole tolerance row (±2 RGB LSB, alpha exact), matching v1.2's Lambert row.
+TEST_CASE("gfx/metal geometry.v1_3: instanced LAMBERT rigid rotations within +/-2 LSB") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const float d2r = 3.14159265358979323846f / 180.0f;
+    float ry[9], rx[9]; rot_y3(60.0f*d2r, ry); rot_x3(30.0f*d2r, rx);
+    // tz=0.5 keeps the rotated quads inside Metal's [0,1] NDC-z clip range
+    // (base quad is at z=0, so rotation about X/Y would otherwise swing part of
+    // it behind the near plane). Screen x/y footprint and the normal are
+    // unaffected by the z translation under the identity orthographic camera.
+    float inst[2*16];
+    inst_matrix(ry, -0.5f, 0.0f, 0.5f, &inst[0]);   // instance 0 -> left region
+    inst_matrix(rx,  0.5f, 0.0f, 0.5f, &inst[16]);  // instance 1 -> right region
+
+    id<MTLBuffer> pos_buf  = device_buffer(kQuad6, sizeof(kQuad6));
+    id<MTLBuffer> nrm_buf  = device_buffer(kQuadN6, sizeof(kQuadN6));
+    id<MTLBuffer> inst_buf = device_buffer(inst, sizeof(inst));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(kQuad6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(kQuadN6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        (__bridge void*)inst_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(nrm_alloc != 0); REQUIRE(inst_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.normal_alloc = nrm_alloc;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = 0xFFB4B4B4u;   // mid-gray 180, opaque
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 2;
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    const auto got = bk.readback(view, W, H);
+    REQUIRE(got.size() == (size_t)W*H*4);
+
+    const float wn[3] = {0.f, 0.f, 1.f};
+    int e0 = (int)std::lround(180.0f * instanced_lit(&inst[0],  wn));   // ~117
+    int e1 = (int)std::lround(180.0f * instanced_lit(&inst[16], wn));   // ~163
+    CHECK(e0 != e1);   // the two instances must be distinctly lit (per-instance normal)
+
+    // Deep-interior samples of each instance footprint (chosen clear of the
+    // foreshortened edges), checked within +/-2 RGB LSB, alpha exact.
+    auto check_px = [&](int x, int y, int expect) {
+        uint32_t o = metal_geom_pixel_rgba(got, W, x, y);
+        int r=o&0xFF, g=(o>>8)&0xFF, b=(o>>16)&0xFF, a=(o>>24)&0xFF;
+        CHECK(std::abs(r-expect) <= 2);
+        CHECK(std::abs(g-expect) <= 2);
+        CHECK(std::abs(b-expect) <= 2);
+        CHECK(a == 255);
+    };
+    // instance 0: cols 6..9, rows 12..19 (R_y foreshortens x only, y clean).
+    check_px(7, 15, e0); check_px(8, 16, e0); check_px(6, 13, e0);
+    // instance 1: cols 20..27, rows ~13..18 (R_x foreshortens y); sample center rows.
+    check_px(23, 15, e1); check_px(24, 16, e1); check_px(25, 15, e1);
+
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row D-priv — the PRIVATE-storage G14 readback path (§5.1). Row D above imports
+// the instance matrices as Shared (unified memory, read zero-copy via contents());
+// this row imports them as MTLStorageModePrivate — exactly how a torch MPS tensor
+// arrives, contents() not host-readable — so the backend must blit the N*64 matrix
+// bytes into its grow-only staging buffer before the rigidity comparison. First a
+// rigid-only private draw renders byte-exact vs the SAME §4.4 CPU reference Row D
+// uses (proving the blit-back reads the right bytes); then a private N=2 buffer
+// whose instance 1 is sheared (m[4]=0.1) must refuse with the G14 reason and leave
+// the view byte-untouched (proving the private readback still refuses before any
+// encoder). Pins the private-blit path ctest never otherwise exercises.
+TEST_CASE("gfx/metal geometry.v1_3: private-storage instanced LAMBERT — blit readback, rigid renders, shear refuses") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const uint32_t stride = sizeof(CaliperGeomDrawV1_3);
+    const float d2r = 3.14159265358979323846f / 180.0f;
+    float ry[9], rx[9]; rot_y3(60.0f*d2r, ry); rot_x3(30.0f*d2r, rx);
+    // Identical instance matrices to Row D so the §4.4 CPU reference is shared verbatim.
+    float inst[2*16];
+    inst_matrix(ry, -0.5f, 0.0f, 0.5f, &inst[0]);
+    inst_matrix(rx,  0.5f, 0.0f, 0.5f, &inst[16]);
+
+    id<MTLBuffer> pos_buf  = device_buffer(kQuad6, sizeof(kQuad6));
+    id<MTLBuffer> nrm_buf  = device_buffer(kQuadN6, sizeof(kQuadN6));
+    id<MTLBuffer> inst_buf = device_buffer_private(inst, sizeof(inst));   // PRIVATE storage
+    REQUIRE((inst_buf.storageMode == MTLStorageModePrivate));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(kQuad6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(kQuadN6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        (__bridge void*)inst_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(nrm_alloc != 0); REQUIRE(inst_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.normal_alloc = nrm_alloc;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = 0xFFB4B4B4u;   // mid-gray 180, opaque (Row D base)
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 2;
+
+    // ---- rigid private draw: succeeds, byte-exact (±2 LSB) vs Row D's reference ----
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    const auto got = bk.readback(view, W, H);
+    REQUIRE(got.size() == (size_t)W*H*4);
+
+    const float wn[3] = {0.f, 0.f, 1.f};
+    int e0 = (int)std::lround(180.0f * instanced_lit(&inst[0],  wn));   // ~117
+    int e1 = (int)std::lround(180.0f * instanced_lit(&inst[16], wn));   // ~163
+    CHECK(e0 != e1);
+    auto check_px = [&](int x, int y, int expect) {
+        uint32_t o = metal_geom_pixel_rgba(got, W, x, y);
+        int r=o&0xFF, g=(o>>8)&0xFF, b=(o>>16)&0xFF, a=(o>>24)&0xFF;
+        CHECK(std::abs(r-expect) <= 2);
+        CHECK(std::abs(g-expect) <= 2);
+        CHECK(std::abs(b-expect) <= 2);
+        CHECK(a == 255);
+    };
+    check_px(7, 15, e0); check_px(8, 16, e0); check_px(6, 13, e0);
+    check_px(23, 15, e1); check_px(24, 16, e1); check_px(25, 15, e1);
+
+    // ---- sheared private draw: instance 1 is non-rigid, G14 refuses; view untouched ----
+    float sheared[2*16];
+    inst_matrix(ry, -0.5f, 0.0f, 0.5f, &sheared[0]);   // instance 0 stays rigid
+    std::memcpy(&sheared[16], kIdentM16, sizeof(kIdentM16));
+    sheared[16 + 4] = 0.1f;                             // instance 1: column1.x shear, > kGeomRigidTol
+    id<MTLBuffer> shear_buf = device_buffer_private(sheared, sizeof(sheared));
+    REQUIRE((shear_buf.storageMode == MTLStorageModePrivate));
+    CaliperAllocId shear_alloc = bk.bridge->import_allocation(
+        (__bridge void*)shear_buf, sizeof(sheared), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(shear_alloc != 0);
+
+    CaliperGeomDrawV1_3 bad = d;              // same N=2 LAMBERT draw over the sheared matrices
+    bad.instance_alloc = shear_alloc;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &bad, 1, stride, 0xFF000000u));
+    const auto after = bk.readback(view, W, H);
+    CHECK(after == got);   // refusal fired before the encoder — every byte is the rigid frame
+
+    bk.bridge->release_allocation(shear_alloc);
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row E — instance-gate refusals leave the view byte-untouched. Draw a known-good
+// N=4 fleet, snapshot; then attempt each of G4/G5/G2/G7/G8/G12/G14 as a single-
+// draw v1.3 call, CHECK_FALSE each, and re-read the view == snapshot after the
+// whole battery (mirrors the v1.1 refusal-purity structure). G14 is the backend-
+// only rigidity gate (host passes it through), so its refusal proves the Metal
+// re-gate runs before any encoder.
+TEST_CASE("gfx/metal geometry.v1_3: instance-gate refusals leave the view untouched") {
+    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+
+    const int W = 32, H = 32;
+    const uint32_t stride = sizeof(CaliperGeomDrawV1_3);
+    const uint32_t flat = 0xFF3377AAu;
+
+    const float tt[4][2] = {{-0.5f,-0.5f},{0.5f,-0.5f},{-0.5f,0.5f},{0.5f,0.5f}};
+    float inst[4*16];
+    for (int i = 0; i < 4; ++i) inst_matrix(kIdent3, tt[i][0], tt[i][1], 0.0f, &inst[i*16]);
+    const float attr[4] = {0.0f, 1.0f, 2.0f, 3.0f};
+    const float nrm6[18] = { 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1 };
+
+    id<MTLBuffer> pos_buf  = device_buffer(kQuad6, sizeof(kQuad6));
+    id<MTLBuffer> inst_buf = device_buffer(inst, sizeof(inst));
+    id<MTLBuffer> attr_buf = device_buffer(attr, sizeof(attr));
+    id<MTLBuffer> nrm_buf  = device_buffer(nrm6, sizeof(nrm6));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, sizeof(kQuad6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        (__bridge void*)inst_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, sizeof(attr), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        (__bridge void*)nrm_buf, sizeof(nrm6), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(inst_alloc != 0);
+    REQUIRE(attr_alloc != 0); REQUIRE(nrm_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    auto make_good = [&]() {
+        CaliperGeomDraw base{};
+        base.pos_alloc = pos_alloc; base.vertex_count = 6;
+        base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        base.flat_rgba = flat; base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+        for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+        CaliperGeomDrawV1_3 d = v13_of(base);
+        d.instance_alloc = inst_alloc; d.instance_count = 4;
+        return d;
+    };
+
+    // ---- known-good frame, snapshot ----
+    CaliperGeomDrawV1_3 good = make_good();
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &good, 1, stride, 0xFF000000u));
+    const std::string good_path = bk.renderer->last_device_path();
+    const auto snap = bk.readback(view, W, H);
+    REQUIRE(snap != geom_ref(W, H, 0xFF000000u, {}, {}));   // non-trivial good frame
+
+    CaliperGeomDrawV1_3 d;
+    // (i) G4 — misaligned instance_offset.
+    d = make_good(); d.instance_offset = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (ii) G5 — N*64 overruns the 4-instance (256B) matrix buffer.
+    d = make_good(); d.instance_count = 5;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (iii) G2 — instance_alloc present with instance_count 0.
+    d = make_good(); d.instance_count = 0;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (v) G8 — instance_attr present with no instances.
+    d = make_good(); d.instance_alloc = 0; d.instance_count = 0;
+    d.instance_attr_alloc = attr_alloc;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (vi) G12 — per-instance tint with no resolvable colormap (FLAT base, bad id).
+    d = make_good(); d.instance_attr_alloc = attr_alloc;
+    d.base.base.colormap = 999;   // unknown colormap -> null LUT
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (vii) G14 — sheared instance matrix on a LAMBERT-instanced draw (backend-only).
+    {
+        float shear[16]; std::memcpy(shear, kIdentM16, sizeof(shear));
+        shear[4] = 0.1f;   // column1.x shear, well above kGeomRigidTol
+        id<MTLBuffer> sh_buf = device_buffer(shear, sizeof(shear));
+        CaliperAllocId sh_alloc = bk.bridge->import_allocation(
+            (__bridge void*)sh_buf, sizeof(shear), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+        REQUIRE(sh_alloc != 0);
+        d = make_good();
+        d.base.base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+        d.base.base.normal_alloc = nrm_alloc;
+        d.instance_alloc = sh_alloc; d.instance_count = 1;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+        bk.bridge->release_allocation(sh_alloc);
+    }
+    // (iv) G7 — a RELEASED instance alloc (mutates the alloc table last).
+    {
+        id<MTLBuffer> dead_buf = device_buffer(inst, sizeof(inst));
+        CaliperAllocId dead = bk.bridge->import_allocation(
+            (__bridge void*)dead_buf, sizeof(inst), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+        REQUIRE(dead != 0);
+        bk.bridge->release_allocation(dead);
+        d = make_good(); d.instance_alloc = dead;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    }
+
+    // the whole battery touched nothing.
+    CHECK(bk.readback(view, W, H) == snap);
+    CHECK(std::string(bk.renderer->last_device_path()) == good_path);
+
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
 }
 #endif  // CALIPER_HAVE_METAL
 
@@ -4823,6 +5452,431 @@ TEST_CASE("gfx/geometry.v1_2: textured gate refusals leave the view untouched (c
     bk.bridge->release_texture(texture);
     bk.bridge->release_allocation(ua);
     bk.bridge->release_allocation(pa);
+}
+
+// ===========================================================================
+// caliper.geometry.v1_3 — instanced transforms (spec §8 rows A-E), Vulkan.
+// TRANSCRIBED from the run-proven Metal rows above; compiled out on the macOS
+// box that authored them (#ifdef _WIN32) — hardware verification of the N>1
+// vkCmdDraw instanceCount path, the per-instance matrix pull / LUT tint, the
+// §4.4 LAMBERT composition, and the G14 staged rigidity readback (§5.1) is
+// PENDING the Windows session. Same shared CPU reference + tolerances as the
+// Metal rows (Row D is the sole ±2-LSB row). Every row is CUDA/VMM-gated by
+// vmm_rows_ready() like the v1_1/v1_2 rows.
+// ===========================================================================
+
+// Row A — pose-only fleet: one ±0.25 quad drawn N=4 at four ±0.5 translations,
+// FLAT/UNLIT, no tint. Four disjoint 8x8 quadrants on exact pixel boundaries;
+// FLAT color is constant, so the whole frame is BYTE-EXACT (0 LSB) against the
+// shared CPU reference. Proves instanceCount + the per-instance matrix pull.
+TEST_CASE("gfx/geometry.v1_3: pose-only fleet N=4, FLAT, byte-exact (0 LSB)") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const uint32_t flat = 0xFF3377AAu;
+    const float tt[4][2] = {{-0.5f,-0.5f},{0.5f,-0.5f},{-0.5f,0.5f},{0.5f,0.5f}};
+    float inst[4*16];
+    for (int i = 0; i < 4; ++i) inst_matrix(kIdent3, tt[i][0], tt[i][1], 0.0f, &inst[i*16]);
+
+    VmmBlock pos_blk(sizeof(kQuad6));
+    VmmBlock inst_blk(sizeof(inst));
+    REQUIRE_MESSAGE(pos_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(inst_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, kQuad6, sizeof(kQuad6)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(inst_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        inst_blk.os_handle, inst_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(inst_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = flat; base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 4;
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+
+    float mvp[16]; std::memcpy(mvp, kIdentM16, sizeof(mvp));   // identity cam+model
+    std::vector<std::pair<int,int>> px; std::vector<uint32_t> col;
+    for (int i = 0; i < 4; ++i)
+        add_instance_rect(W, H, mvp, &inst[i*16], 0.25f, 0.25f, flat, px, col);
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, 0xFF000000u, px, col));
+
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row B — per-instance tint over a FLAT base, MAGMA, UNLIT: four instances with
+// distinct scalars at exact quantized LUT indices (0/85/170/255). Base
+// color_mode is FLAT, so this row also proves the binding-4 tint-LUT rule
+// (§6.2): a COLORMAP-only slot predicate would read placeholder garbage here.
+// BYTE-EXACT (0 LSB) — the tint path has no normalize.
+TEST_CASE("gfx/geometry.v1_3: per-instance tint over FLAT base, MAGMA, byte-exact (0 LSB)") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const float tt[4][2] = {{-0.5f,-0.5f},{0.5f,-0.5f},{-0.5f,0.5f},{0.5f,0.5f}};
+    float inst[4*16];
+    for (int i = 0; i < 4; ++i) inst_matrix(kIdent3, tt[i][0], tt[i][1], 0.0f, &inst[i*16]);
+    const float attr[4] = {0.0f, 1.0f, 2.0f, 3.0f};   // vmin=0, vmax=3 -> idx 0/85/170/255
+    const float vmin = 0.0f, vmax = 3.0f;
+
+    VmmBlock pos_blk(sizeof(kQuad6));
+    VmmBlock inst_blk(sizeof(inst));
+    VmmBlock attr_blk(sizeof(attr));
+    REQUIRE_MESSAGE(pos_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(inst_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE_MESSAGE(attr_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, kQuad6, sizeof(kQuad6)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(inst_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attr, sizeof(attr)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        inst_blk.os_handle, inst_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        attr_blk.os_handle, attr_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(inst_alloc != 0); REQUIRE(attr_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_MAGMA);
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;      // FLAT base, tint overrides
+    base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.colormap = CALIPER_CMAP_MAGMA;
+    base.flat_rgba = 0xFF00FF00u;                   // must be ignored by the tint
+    base.vmin = vmin; base.vmax = vmax; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 4;
+    d.instance_attr_alloc = attr_alloc;
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+
+    float mvp[16]; std::memcpy(mvp, kIdentM16, sizeof(mvp));
+    std::vector<std::pair<int,int>> px; std::vector<uint32_t> col;
+    for (int i = 0; i < 4; ++i)
+        add_instance_rect(W, H, mvp, &inst[i*16], 0.25f, 0.25f,
+                          lut_idx_color(lut, attr[i], vmin, vmax), px, col);
+    CHECK(bk.readback(view, W, H) == geom_ref(W, H, 0xFF000000u, px, col));
+
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row C — additive-default compat: the same COLORMAP+LAMBERT mesh drawn once as
+// a v1.2 record (stride 216) into view A and once as a v1.3 record with a ZERO
+// instance tail (stride 256) into view B. The two readbacks must be byte-
+// identical (the instance_count==0 == non-instanced contract, §4.2), with a
+// non-triviality guard that the mesh actually rasterized.
+TEST_CASE("gfx/geometry.v1_3: zero instance tail is byte-identical to v1.2 (0 LSB)") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const float pos[9] = { -1.f,-1.f,0.5f,  3.f,-1.f,0.5f,  -1.f,3.f,0.5f };
+    const uint32_t idx[3] = {0, 1, 2};
+    const float nrm[9] = { 0.f,0.f,1.f,  0.f,0.f,1.f,  0.f,0.f,1.f };
+    const float attr[3] = { 0.5f, 0.5f, 0.5f };
+    VmmBlock pos_blk(sizeof(pos)), idx_blk(sizeof(idx)),
+             nrm_blk(sizeof(nrm)), attr_blk(sizeof(attr));
+    REQUIRE_MESSAGE(pos_blk.ok && idx_blk.ok && nrm_blk.ok && attr_blk.ok,
+                    "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, pos, sizeof(pos)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(idx_blk.va, idx, sizeof(idx)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, nrm, sizeof(nrm)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attr, sizeof(attr)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pa = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId ia = bk.bridge->import_allocation(
+        idx_blk.os_handle, idx_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId na = bk.bridge->import_allocation(
+        nrm_blk.os_handle, nrm_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId aa = bk.bridge->import_allocation(
+        attr_blk.os_handle, attr_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pa != 0); REQUIRE(ia != 0); REQUIRE(na != 0); REQUIRE(aa != 0);
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pa; base.vertex_count = 3;
+    base.index_alloc = ia; base.index_count = 3;
+    base.normal_alloc = na; base.attr_alloc = aa;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+    base.colormap = CALIPER_CMAP_VIRIDIS;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperTextureId va = bk.bridge->geom_create_view_ex(W, H, 0);
+    CaliperTextureId vb = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(va != 0); REQUIRE(vb != 0);
+
+    CaliperGeomDrawV1_2 d12{}; d12.base = base;         // zero uv/texture tail
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_2(va, &cam, &d12, 1,
+                                sizeof(CaliperGeomDrawV1_2), 0xFF000000u));
+    CaliperGeomDrawV1_3 d13 = v13_of(base);             // zero instance tail
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(vb, &cam, &d13, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+
+    CHECK(bk.readback(va, W, H) == bk.readback(vb, W, H));
+    CHECK(bk.readback(vb, W, H) != geom_ref(W, H, 0xFF000000u, {}, {}));   // non-trivial
+
+    bk.bridge->geom_release_view(vb);
+    bk.bridge->geom_release_view(va);
+    bk.bridge->release_allocation(aa);
+    bk.bridge->release_allocation(na);
+    bk.bridge->release_allocation(ia);
+    bk.bridge->release_allocation(pa);
+}
+
+// Row D — instanced LAMBERT, N=2 rigid rotations + translations. Instance 0:
+// R_y(60°)+T(-0.5) -> normal (sin60,0,cos60), lit=0.30+0.70·0.5=0.65 -> 117.
+// Instance 1: R_x(30°)+T(+0.5) -> normal (0,-sin30,cos30), lit=0.30+0.70·cos30
+// -> ~163. Base FLAT gray 180. Reference is the §4.4 chain in host float; the
+// sole tolerance row (±2 RGB LSB, alpha exact), matching v1.2's Lambert row.
+// This row exercises the backend G14 staged-copy readback on the good path.
+TEST_CASE("gfx/geometry.v1_3: instanced LAMBERT rigid rotations within +/-2 LSB") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const float d2r = 3.14159265358979323846f / 180.0f;
+    float ry[9], rx[9]; rot_y3(60.0f*d2r, ry); rot_x3(30.0f*d2r, rx);
+    // tz=0.5 keeps the rotated quads inside [0,1] NDC-z; screen x/y footprint and
+    // the normal are unaffected by z translation under the identity ortho camera.
+    float inst[2*16];
+    inst_matrix(ry, -0.5f, 0.0f, 0.5f, &inst[0]);   // instance 0 -> left region
+    inst_matrix(rx,  0.5f, 0.0f, 0.5f, &inst[16]);  // instance 1 -> right region
+
+    VmmBlock pos_blk(sizeof(kQuad6));
+    VmmBlock nrm_blk(sizeof(kQuadN6));
+    VmmBlock inst_blk(sizeof(inst));
+    REQUIRE_MESSAGE(pos_blk.ok && nrm_blk.ok && inst_blk.ok,
+                    "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, kQuad6, sizeof(kQuad6)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, kQuadN6, sizeof(kQuadN6)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(inst_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        nrm_blk.os_handle, nrm_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        inst_blk.os_handle, inst_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(nrm_alloc != 0); REQUIRE(inst_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    CaliperGeomDraw base{};
+    base.pos_alloc = pos_alloc; base.vertex_count = 6;
+    base.normal_alloc = nrm_alloc;
+    base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+    base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    base.flat_rgba = 0xFFB4B4B4u;   // mid-gray 180, opaque
+    base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+    for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+    CaliperGeomDrawV1_3 d = v13_of(base);
+    d.instance_alloc = inst_alloc; d.instance_count = 2;
+
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1,
+                                sizeof(CaliperGeomDrawV1_3), 0xFF000000u));
+    CHECK(std::string(bk.renderer->last_device_path()) == "primitives-imported");
+    const auto got = bk.readback(view, W, H);
+    REQUIRE(got.size() == (size_t)W*H*4);
+
+    const float wn[3] = {0.f, 0.f, 1.f};
+    int e0 = (int)std::lround(180.0f * instanced_lit(&inst[0],  wn));   // ~117
+    int e1 = (int)std::lround(180.0f * instanced_lit(&inst[16], wn));   // ~163
+    CHECK(e0 != e1);   // the two instances must be distinctly lit (per-instance normal)
+
+    auto px_at = [&](int x, int y) -> uint32_t {
+        const size_t at = ((size_t)y * W + x) * 4;
+        return (uint32_t)got[at] | ((uint32_t)got[at+1] << 8) |
+               ((uint32_t)got[at+2] << 16) | ((uint32_t)got[at+3] << 24);
+    };
+    // Deep-interior samples of each instance footprint (clear of foreshortened
+    // edges), checked within +/-2 RGB LSB, alpha exact — same points as Metal.
+    auto check_px = [&](int x, int y, int expect) {
+        uint32_t o = px_at(x, y);
+        int r=o&0xFF, g=(o>>8)&0xFF, b=(o>>16)&0xFF, a=(o>>24)&0xFF;
+        CHECK(std::abs(r-expect) <= 2);
+        CHECK(std::abs(g-expect) <= 2);
+        CHECK(std::abs(b-expect) <= 2);
+        CHECK(a == 255);
+    };
+    check_px(7, 15, e0); check_px(8, 16, e0); check_px(6, 13, e0);
+    check_px(23, 15, e1); check_px(24, 16, e1); check_px(25, 15, e1);
+
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Row E — instance-gate refusals leave the view byte-untouched. Draw a known-good
+// N=4 fleet, snapshot; then attempt each of G4/G5/G2/G8/G12/G14/G7 as a single-
+// draw v1.3 call, CHECK_FALSE each, and re-read the view == snapshot after the
+// whole battery. G14 is the backend-only rigidity gate (host passes it through),
+// so its refusal proves the Vulkan staged-copy re-gate runs before any encode.
+TEST_CASE("gfx/geometry.v1_3: instance-gate refusals leave the view untouched") {
+    if (!vmm_rows_ready()) return;
+    Backend bk = vk_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int W = 32, H = 32;
+    const uint32_t stride = sizeof(CaliperGeomDrawV1_3);
+    const uint32_t flat = 0xFF3377AAu;
+
+    const float tt[4][2] = {{-0.5f,-0.5f},{0.5f,-0.5f},{-0.5f,0.5f},{0.5f,0.5f}};
+    float inst[4*16];
+    for (int i = 0; i < 4; ++i) inst_matrix(kIdent3, tt[i][0], tt[i][1], 0.0f, &inst[i*16]);
+    const float attr[4] = {0.0f, 1.0f, 2.0f, 3.0f};
+    const float nrm6[18] = { 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1 };
+
+    VmmBlock pos_blk(sizeof(kQuad6));
+    VmmBlock inst_blk(sizeof(inst));
+    VmmBlock attr_blk(sizeof(attr));
+    VmmBlock nrm_blk(sizeof(nrm6));
+    REQUIRE_MESSAGE(pos_blk.ok && inst_blk.ok && attr_blk.ok && nrm_blk.ok,
+                    "VMM alloc/map/export failed on a CUDA machine");
+    REQUIRE(cu->cuMemcpyHtoD(pos_blk.va, kQuad6, sizeof(kQuad6)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(inst_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(attr_blk.va, attr, sizeof(attr)) == cudadrv::CUDA_SUCCESS);
+    REQUIRE(cu->cuMemcpyHtoD(nrm_blk.va, nrm6, sizeof(nrm6)) == cudadrv::CUDA_SUCCESS);
+    const CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        pos_blk.os_handle, pos_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId inst_alloc = bk.bridge->import_allocation(
+        inst_blk.os_handle, inst_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        attr_blk.os_handle, attr_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    const CaliperAllocId nrm_alloc = bk.bridge->import_allocation(
+        nrm_blk.os_handle, nrm_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(pos_alloc != 0); REQUIRE(inst_alloc != 0);
+    REQUIRE(attr_alloc != 0); REQUIRE(nrm_alloc != 0);
+
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam = identity_cam();
+
+    auto make_good = [&]() {
+        CaliperGeomDraw base{};
+        base.pos_alloc = pos_alloc; base.vertex_count = 6;
+        base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+        base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+        base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+        base.flat_rgba = flat; base.vmin = 0.f; base.vmax = 1.f; base.size_px = 1.f;
+        for (int i = 0; i < 4; ++i) base.model[i*4+i] = 1.f;
+        CaliperGeomDrawV1_3 d = v13_of(base);
+        d.instance_alloc = inst_alloc; d.instance_count = 4;
+        return d;
+    };
+
+    // ---- known-good frame, snapshot ----
+    CaliperGeomDrawV1_3 good = make_good();
+    REQUIRE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &good, 1, stride, 0xFF000000u));
+    const std::string good_path = bk.renderer->last_device_path();
+    const auto snap = bk.readback(view, W, H);
+    REQUIRE(snap != geom_ref(W, H, 0xFF000000u, {}, {}));   // non-trivial good frame
+
+    CaliperGeomDrawV1_3 d;
+    // (i) G4 — misaligned instance_offset.
+    d = make_good(); d.instance_offset = 2;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (ii) G5 — N*64 overruns the 4-instance (256B) matrix buffer.
+    d = make_good(); d.instance_count = 5;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (iii) G2 — instance_alloc present with instance_count 0.
+    d = make_good(); d.instance_count = 0;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (v) G8 — instance_attr present with no instances.
+    d = make_good(); d.instance_alloc = 0; d.instance_count = 0;
+    d.instance_attr_alloc = attr_alloc;
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (vi) G12 — per-instance tint with no resolvable colormap (FLAT base, bad id).
+    d = make_good(); d.instance_attr_alloc = attr_alloc;
+    d.base.base.colormap = 999;   // unknown colormap -> null LUT
+    CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    // (vii) G14 — sheared instance matrix on a LAMBERT-instanced draw (backend
+    // staged-copy rigidity check).
+    {
+        float shear[16]; std::memcpy(shear, kIdentM16, sizeof(shear));
+        shear[4] = 0.1f;   // column1.x shear, well above CALIPER_GEOM_RIGID_TOL
+        VmmBlock sh_blk(sizeof(shear));
+        REQUIRE_MESSAGE(sh_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+        REQUIRE(cu->cuMemcpyHtoD(sh_blk.va, shear, sizeof(shear)) == cudadrv::CUDA_SUCCESS);
+        CaliperAllocId sh_alloc = bk.bridge->import_allocation(
+            sh_blk.os_handle, sh_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(sh_alloc != 0);
+        d = make_good();
+        d.base.base.shade_mode = CALIPER_GEOM_SHADE_LAMBERT;
+        d.base.base.normal_alloc = nrm_alloc;
+        d.instance_alloc = sh_alloc; d.instance_count = 1;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+        bk.bridge->release_allocation(sh_alloc);
+    }
+    // (iv) G7 — a RELEASED instance alloc (mutates the alloc table last).
+    {
+        VmmBlock dead_blk(sizeof(inst));
+        REQUIRE_MESSAGE(dead_blk.ok, "VMM alloc/map/export failed on a CUDA machine");
+        REQUIRE(cu->cuMemcpyHtoD(dead_blk.va, inst, sizeof(inst)) == cudadrv::CUDA_SUCCESS);
+        CaliperAllocId dead = bk.bridge->import_allocation(
+            dead_blk.os_handle, dead_blk.size, CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(dead != 0);
+        bk.bridge->release_allocation(dead);
+        d = make_good(); d.instance_alloc = dead;
+        CHECK_FALSE(bk.bridge->geom_draw_primitives_v1_3(view, &cam, &d, 1, stride, 0xFF000000u));
+    }
+
+    // the whole battery touched nothing.
+    CHECK(bk.readback(view, W, H) == snap);
+    CHECK(std::string(bk.renderer->last_device_path()) == good_path);
+
+    bk.bridge->release_allocation(nrm_alloc);
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
 }
 
 #endif  // _WIN32

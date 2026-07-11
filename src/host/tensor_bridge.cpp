@@ -464,6 +464,8 @@ uint32_t TensorBridge::geom_caps() const {
         c |= CALIPER_GEOM_CAP_PRIMITIVES;
     if (primitives && renderer_.supports_geometry_textured())
         c |= CALIPER_GEOM_CAP_TEXTURED;
+    if (primitives && renderer_.supports_geometry_instanced())
+        c |= CALIPER_GEOM_CAP_INSTANCED;
     return c;
 }
 
@@ -573,7 +575,7 @@ bool TensorBridge::geom_draw_primitives(CaliperTextureId view,
                                         uint32_t draw_stride,
                                         uint32_t clear_rgba) {
     return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
-                                     /*v12=*/false, clear_rgba);
+                                     GeomRev::V1_1, clear_rgba);
 }
 
 bool TensorBridge::geom_draw_primitives_v1_2(
@@ -581,19 +583,31 @@ bool TensorBridge::geom_draw_primitives_v1_2(
         const CaliperGeomDrawV1_2* draws, uint32_t draw_count,
         uint32_t draw_stride, uint32_t clear_rgba) {
     return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
-                                     /*v12=*/true, clear_rgba);
+                                     GeomRev::V1_2, clear_rgba);
+}
+
+bool TensorBridge::geom_draw_primitives_v1_3(
+        CaliperTextureId view, const CaliperGeomCamera* cam,
+        const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
+        uint32_t draw_stride, uint32_t clear_rgba) {
+    return geom_draw_primitives_impl(view, cam, draws, draw_count, draw_stride,
+                                     GeomRev::V1_3, clear_rgba);
 }
 
 bool TensorBridge::geom_draw_primitives_impl(
         CaliperTextureId view, const CaliperGeomCamera* cam,
         const void* draws, uint32_t draw_count, uint32_t draw_stride,
-        bool v12, uint32_t clear_rgba) {
-    // The single revision axis: v1.2 records carry the UV/texture tail and may
-    // request COLOR_TEXTURE; v1.1 records do neither.
+        GeomRev rev, uint32_t clear_rgba) {
+    // The single revision axis derives everything: v1.2+ records carry the
+    // UV/texture tail and may request COLOR_TEXTURE; v1.3 additionally carries
+    // the instance tail (read only under V1_3). v1.3 adds no color mode.
     const uint32_t min_stride =
-        v12 ? sizeof(CaliperGeomDrawV1_2) : sizeof(CaliperGeomDraw);
+        rev == GeomRev::V1_3 ? sizeof(CaliperGeomDrawV1_3)
+      : rev == GeomRev::V1_2 ? sizeof(CaliperGeomDrawV1_2)
+                             : sizeof(CaliperGeomDraw);
     const uint32_t max_color =
-        v12 ? CALIPER_GEOM_COLOR_TEXTURE : CALIPER_GEOM_COLOR_VERTEX_RGBA;
+        rev == GeomRev::V1_1 ? CALIPER_GEOM_COLOR_VERTEX_RGBA
+                             : CALIPER_GEOM_COLOR_TEXTURE;
     if (!renderer_.supports_geometry_primitives()) {
         bridge_log("geom_prims: primitives unsupported"); return false;
     }
@@ -644,6 +658,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                              (uint64_t)i * draw_stride;
         const auto* d = reinterpret_cast<const CaliperGeomDraw*>(record);
         const auto* d12 = reinterpret_cast<const CaliperGeomDrawV1_2*>(record);
+        const auto* d13 = reinterpret_cast<const CaliperGeomDrawV1_3*>(record);
         auto reject_i = [i](const char* reason) {
             char msg[128];
             std::snprintf(msg, sizeof msg, "geom_prims: draw %u refused: %s", i, reason);
@@ -746,6 +761,82 @@ bool TensorBridge::geom_draw_primitives_impl(
             }
         }
 
+        // Instance tail (v1.3 only) — the G1-G12 host validator battery (§5).
+        // Runs after color_mode/topology otherwise validate; every failure
+        // refuses the whole frame atomically before any backend call, pixels
+        // untouched. G13 (LAMBERT needs normals) is the existing gate above;
+        // G14 (rigidity) executes in each backend re-gate (§5.1 placement), not
+        // here. Resolved renderer ids mirror how uv_alloc holds a resolved id.
+        uint64_t instance_rid = 0;
+        uint64_t instance_attr_rid = 0;
+        if (rev == GeomRev::V1_3) {
+            const bool has_instances = d13->instance_alloc != 0;
+            const bool has_tint = d13->instance_attr_alloc != 0;
+
+            // G1: either instance stream present requires the caps bit live.
+            if ((has_instances || has_tint) &&
+                !renderer_.supports_geometry_instanced()) {
+                reject_i("instanced geometry unsupported"); return false;
+            }
+
+            if (has_instances) {
+                // G2: N>0 with a pose alloc (mirrors the zero-vertices gate).
+                if (d13->instance_count == 0) {
+                    reject_i("instanced draw needs N>0"); return false;
+                }
+                // G3: N bound (Vulkan/Metal instanceCount re-bind to u32).
+                if (d13->instance_count > UINT32_MAX) {
+                    reject_i("too many instances"); return false;
+                }
+                // G4: matrix offset 4-byte aligned.
+                if (d13->instance_offset % 4u != 0u) {
+                    reject_i("instance offset misaligned"); return false;
+                }
+                // G6: matrix byte base / 4 fits a u32 PrimParams base.
+                if (d13->instance_offset / 4u > UINT32_MAX) {
+                    reject_i("instance base exceeds 32 bits"); return false;
+                }
+                // G7: matrix alloc resolves.
+                auto ma = imported_.find(d13->instance_alloc);
+                if (ma == imported_.end()) {
+                    reject_i("unknown instance alloc"); return false;
+                }
+                // G5: 16 f32 = 64 B/instance, overflow-safe + in imported bounds.
+                if (!range_ok(ma->second.size_bytes, d13->instance_offset,
+                              d13->instance_count, 64u, "instances")) {
+                    return false;
+                }
+                instance_rid = ma->second.renderer_id;
+            }
+
+            if (has_tint) {
+                // G8: a tint with nothing to tint is refused, not ignored.
+                if (!has_instances || d13->instance_count == 0) {
+                    reject_i("instance attr without instances"); return false;
+                }
+                // G9: attr offset 4-byte aligned.
+                if (d13->instance_attr_offset % 4u != 0u) {
+                    reject_i("instance attr offset misaligned"); return false;
+                }
+                // G11: attr alloc resolves.
+                auto ta = imported_.find(d13->instance_attr_alloc);
+                if (ta == imported_.end()) {
+                    reject_i("unknown instance attr alloc"); return false;
+                }
+                // G10: 4 B/instance scalar, overflow-safe + in imported bounds.
+                if (!range_ok(ta->second.size_bytes, d13->instance_attr_offset,
+                              d13->instance_count, 4u, "instance attr")) {
+                    return false;
+                }
+                instance_attr_rid = ta->second.renderer_id;
+                // G12: the tint needs a resolvable colormap. Tint-LUT rule
+                // (§3.3): an instanced-tint draw carries a real LUT regardless
+                // of base color_mode, resolved from the base record's colormap.
+                if (!lut) lut = colormap_lut(d->colormap);
+                if (!lut) { reject_i("instance tint needs colormap"); return false; }
+            }
+        }
+
         uint64_t uv_rid = 0;
         uint64_t texture_rid = 0;
         if (d->color_mode == CALIPER_GEOM_COLOR_TEXTURE) {
@@ -787,6 +878,12 @@ bool TensorBridge::geom_draw_primitives_impl(
         hd.vmax = d->vmax;
         hd.size_px = d->size_px;
         std::memcpy(hd.model, d->model, sizeof(hd.model));
+        hd.instance_alloc = instance_rid;
+        hd.instance_offset = instance_rid ? d13->instance_offset : 0u;
+        hd.instance_count = instance_rid ? d13->instance_count : 0u;
+        hd.instance_attr_alloc = instance_attr_rid;
+        hd.instance_attr_offset =
+            instance_attr_rid ? d13->instance_attr_offset : 0u;
         resolved.push_back(hd);
     }
 

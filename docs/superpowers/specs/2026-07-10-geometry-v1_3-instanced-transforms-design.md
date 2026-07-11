@@ -755,3 +755,72 @@ verification of T4/T5 is a **separate session** folded into the next mac pass.
   verified on both ecosystems, as prefix-identical additive revisions. `reserved0` stays
   NULL; no new entry points; the frozen 192-byte v1.1 prefix and 216-byte v1.2 record are
   never touched.
+
+---
+
+## Hardware addendum (Mac pass, 2026-07-11)
+
+This section records what execution flipped versus the body above; the body is left
+intact as written (Vulkan-first framing and all). It does **not** rewrite the spec —
+it reconciles it with what hardware proved.
+
+**(a) Platform order inverted (user-directed).** The body assumes a Vulkan-first,
+Windows/NVIDIA run-proof with Metal transcribed (§7). This session ran the opposite,
+by user direction: **Metal-first on Apple Silicon, run-proven**, with **Vulkan the
+transcription**. The Vulkan hardware pass is deferred to a Windows session and has its
+own execution spec — `docs/superpowers/specs/2026-07-11-geometry-v1_3-vulkan-windows-hardware-pass.md`
+(committed `c50fa2c`; do not edit it). Every §7-style "NEVER claim verified" caution
+therefore now applies to **Vulkan**, not Metal. Run-proven on Metal: gfx **49/49** live
+incl. rows A–E plus a dedicated private-storage G14 row; TwinScope's 50-housing fleet
+live zero-copy on MPS with per-draw provenance; the fleet tint window fixed at
+`e71fce3`.
+
+**(b) §5.1's `contents()`-direct read was REVERSED by hardware.** The body (§5.1, end)
+states: "On Metal, shared-storage imported buffers may be read via `contents()`
+directly (no blit)." Hardware refuted this. torch MPS tensors import as
+`MTLStorageModePrivate`, so `contents()` is not host-addressable for the G14 rigidity
+read. Metal G14 was therefore reworked to the **same collect → one-staged-copy →
+compare** shape the Vulkan re-gate uses: a single staging blit of the LAMBERT-instanced
+instance ranges, one fence, then the identical float-order comparison (`5403d92`,
+`5aa2f73`). The correct §5.1 reading for Metal is now "private-storage imported buffers
+are read via a staged blit, same as Vulkan," and this is **pinned by a dedicated
+private-storage gfx row** so a future `contents()`-direct regression is caught byte-exact
+rather than silently re-broken. The refusal-purity and atomicity claims are unchanged —
+the copy still touches only staging, never the view.
+
+**(c) Carry-forwards (honest, future-pass).**
+- `inst_attr_base` lacks a G6-equivalent u32 base guard. The instance-**matrix** base is
+  guarded (G6, both backends); the instance-**attr** base rides the same `PrimParams`
+  u32 slot without its own explicit `offset/4 <= UINT32_MAX` gate. It is **host-level and
+  bounded by G10** (the attr bounds gate) in practice, so no shipped path can overflow it
+  today; a dedicated `inst_attr_base` u32 guard mirroring G6 is a clean future-pass
+  addition on **both** backends. Noted, not a blocker.
+- G5/G10 refusal lines ride `range_ok`'s own sink without the `geom_prims: draw %u
+  refused:` draw-index prefix that the other instance gates carry. Adjudicated **correct**
+  (intentional — `range_ok` is the shared bounds sink and its message names the stream),
+  recorded here so a reviewer does not re-flag it as an inconsistency.
+
+**(d) §9 fleet tint needed a peak-window correction on hardware.** A max-statistic on the
+field window saturated every variant to `MAGMA[255]` (all housings pinned to the LUT
+top), because the peak reduction fed the LUT `vmax` directly and the window's max sat at
+the ceiling. Fixed with **spread headroom** on the tint window so the 50 variants span
+the LUT instead of collapsing to its top entry (`e71fce3`). The §4.3 index rule and the
+byte-exact tint row (§8 row B) are unchanged; only the applet-side `vmin`/`vmax` window
+feeding the reduction moved.
+
+**(e) Exemplar revision — the §9 fleet was reverted; `instance_scope` is R3's shipped
+exemplar.** The §9 TwinScope fleet was implemented and run-proven zero-copy on MPS
+(50 housings, ONE instanced draw, live per-variant tint — `40697f1`), then **reverted**
+on user adjudication (`85698f6`). The §9 fleet UX buried the rung's value: a single
+per-housing scalar tint replaced the hero's per-vertex detail in the old split view, and
+even with the (d) spread-headroom fix the unbounded max-statistic saturates any fixed
+window — instancing's point (per-vertex detail across N objects, one draw) was lost, not
+shown. R3's shipped exemplar is instead **`instance_scope`** (`bfe6da9`) — a dedicated
+applet drawing N gems (slider 1–5000, default 1000) in ONE instanced draw from live
+device-tensor poses + tints, run-proven on MPS with the log line "first zero-copy
+instanced frame drawn — 1000 objects, 1 draw call, 0 mesh copies". TwinScope reverts to
+the R2 surface twin (hero-only). What remains in-tree from §9 is applet-independent: the
+per-variant reduction machinery (`predict_batch` + its tests) stays, unused by any
+shipped applet, available to a future population-twin. The byte-exact gfx rows A–E (49/49)
+were never part of the fleet and remain R3's correctness proof, untouched by the swap;
+the v1_3 ABI/backends are likewise untouched.

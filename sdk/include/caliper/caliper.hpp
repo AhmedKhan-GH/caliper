@@ -15,6 +15,7 @@
 #include <caliper/services/geometry_v1.h>
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
+#include <caliper/services/geometry_v1_3.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -342,7 +343,17 @@ public:
           g11_(static_cast<const CaliperGeometryV1_1*>(
               host.service(CALIPER_GEOMETRY_V1_1))),
           g12_(static_cast<const CaliperGeometryV1_2*>(
-              host.service(CALIPER_GEOMETRY_V1_2))) {
+              host.service(CALIPER_GEOMETRY_V1_2))),
+          g13_(static_cast<const CaliperGeometryV1_3*>(
+              host.service(CALIPER_GEOMETRY_V1_3))) {
+        if (!g12_ && g13_) {
+            // v1_3-only host: the tables are slot-identical, but the v1.3
+            // draw_primitives entry enforces min stride 256 — v1.1/v1.2-shaped
+            // draws must be widened to zero-tailed 256-byte records. Chains
+            // BEFORE the v1_2 tier so both flags set on a v1_3-only host.
+            g12_ = reinterpret_cast<const CaliperGeometryV1_2*>(g13_);
+            widen_v12_draws_ = true;
+        }
         if (!g11_ && g12_) {
             // v1_2-only host: the tables are slot-identical, but the v1.2
             // draw_primitives entry enforces min stride 216 — v1.1-shaped
@@ -363,6 +374,9 @@ public:
     }
     bool has_textured() const {
         return (caps() & CALIPER_GEOM_CAP_TEXTURED) != 0u;
+    }
+    bool has_instanced() const {
+        return (caps() & CALIPER_GEOM_CAP_INSTANCED) != 0u;
     }
 
     CaliperTextureId create_view(uint32_t w, uint32_t h) const {
@@ -392,21 +406,45 @@ public:
                          const CaliperGeomDraw* draws, uint32_t count,
                          uint32_t clear_rgba) const {
         if (!g11_ || !g11_->draw_primitives) return false;
-        if (!widen_v11_draws_)
-            return g11_->draw_primitives(view, &cam, draws, count,
-                                         sizeof(CaliperGeomDraw), clear_rgba);
-        // Widen each frozen 192-byte record into a zero-tailed v1.2 record.
-        std::vector<CaliperGeomDrawV1_2> wide(count);
-        for (uint32_t i = 0; i < count; ++i) wide[i].base = draws[i];
-        return g12_->draw_primitives(view, &cam, wide.data(), count,
-                                     sizeof(CaliperGeomDrawV1_2), clear_rgba);
+        if (widen_v12_draws_) {
+            // v1_3-only host: widen each frozen 192-byte record straight to a
+            // zero-tailed 256-byte v1.3 record (the widest required).
+            std::vector<CaliperGeomDrawV1_3> wide(count);
+            for (uint32_t i = 0; i < count; ++i) wide[i].base.base = draws[i];
+            return g13_->draw_primitives(view, &cam, wide.data(), count,
+                                         sizeof(CaliperGeomDrawV1_3), clear_rgba);
+        }
+        if (widen_v11_draws_) {
+            // Widen each frozen 192-byte record into a zero-tailed v1.2 record.
+            std::vector<CaliperGeomDrawV1_2> wide(count);
+            for (uint32_t i = 0; i < count; ++i) wide[i].base = draws[i];
+            return g12_->draw_primitives(view, &cam, wide.data(), count,
+                                         sizeof(CaliperGeomDrawV1_2), clear_rgba);
+        }
+        return g11_->draw_primitives(view, &cam, draws, count,
+                                     sizeof(CaliperGeomDraw), clear_rgba);
     }
     bool draw_primitives(CaliperTextureId view, const CaliperGeomCamera& cam,
                          const CaliperGeomDrawV1_2* draws, uint32_t count,
                          uint32_t clear_rgba) const {
-        return (g12_ && g12_->draw_primitives)
-                   ? g12_->draw_primitives(view, &cam, draws, count,
-                                           sizeof(CaliperGeomDrawV1_2),
+        if (!g12_ || !g12_->draw_primitives) return false;
+        if (widen_v12_draws_) {
+            // v1_3-only host: widen each 216-byte record into a zero-tailed
+            // 256-byte v1.3 record.
+            std::vector<CaliperGeomDrawV1_3> wide(count);
+            for (uint32_t i = 0; i < count; ++i) wide[i].base = draws[i];
+            return g13_->draw_primitives(view, &cam, wide.data(), count,
+                                         sizeof(CaliperGeomDrawV1_3), clear_rgba);
+        }
+        return g12_->draw_primitives(view, &cam, draws, count,
+                                     sizeof(CaliperGeomDrawV1_2), clear_rgba);
+    }
+    bool draw_primitives(CaliperTextureId view, const CaliperGeomCamera& cam,
+                         const CaliperGeomDrawV1_3* draws, uint32_t count,
+                         uint32_t clear_rgba) const {
+        return (g13_ && g13_->draw_primitives)
+                   ? g13_->draw_primitives(view, &cam, draws, count,
+                                           sizeof(CaliperGeomDrawV1_3),
                                            clear_rgba)
                    : false;
     }
@@ -414,7 +452,9 @@ private:
     const CaliperGeometryV1* g_ = nullptr;
     const CaliperGeometryV1_1* g11_ = nullptr;
     const CaliperGeometryV1_2* g12_ = nullptr;
+    const CaliperGeometryV1_3* g13_ = nullptr;
     bool widen_v11_draws_ = false;
+    bool widen_v12_draws_ = false;
 };
 
 inline CaliperGeomDraw geom_draw_defaults() {
@@ -434,6 +474,12 @@ inline CaliperGeomDrawV1_2 geom_draw_v1_2_defaults() {
     CaliperGeomDrawV1_2 d{};
     d.base = geom_draw_defaults();
     return d;
+}
+
+inline CaliperGeomDrawV1_3 geom_draw_v1_3_defaults() {
+    CaliperGeomDrawV1_3 d{};
+    d.base = geom_draw_v1_2_defaults();
+    return d;   // zero instance tail -> non-instanced (additive default)
 }
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't

@@ -512,6 +512,13 @@ struct TexturedPrimStub : PrimStub {
     using PrimStub::PrimStub;
     bool supports_geometry_textured() const override { return true; }
 };
+
+// geometry.v1_3: grants the instanced cap so the G1-G12 battery is reachable
+// (G1 refuses instanced draws when this is false — mirrors the textured cap).
+struct InstancedPrimStub : PrimStub {
+    using PrimStub::PrimStub;
+    bool supports_geometry_instanced() const override { return true; }
+};
 } // namespace
 
 TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
@@ -779,4 +786,155 @@ TEST_CASE("geom v1_2: textured draws validate UV and texture sources atomically"
     b.release_texture(texture);
     CHECK_FALSE(b.geom_draw_primitives_v1_2(view, &cam, &d, 1, sizeof(d), 0u));
     CHECK(g.prims.size() == 1);
+}
+
+// geometry.v1_3 — the G1-G12 host validator battery (spec §5). Each gate gets a
+// draw that violates exactly that gate; the frame must refuse (return false) and
+// never reach the renderer, and a mixed valid+invalid array must refuse whole.
+TEST_CASE("geom v1_3: instanced draw gate battery G1-G12, atomic refusal") {
+    InstancedPrimStub g("vulkan");
+    TensorBridge b(g);
+    uint64_t dummy = 42;
+    CaliperAllocId a = b.import_allocation(&dummy, 4096,
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+    REQUIRE(a != 0);
+    CHECK((b.geom_caps() & CALIPER_GEOM_CAP_INSTANCED) != 0u);
+    CaliperTextureId view = b.geom_create_view_ex(64, 64, 0);
+    REQUIRE(view != 0);
+    CaliperGeomCamera cam{};
+
+    // A fully valid instanced draw: 3-vertex FLAT triangle, 4 instances (poses
+    // at 256: 4*64=256 B, ends at 512) + a per-instance tint (attrs at 512:
+    // 4*4=16 B). Base is FLAT with colormap 0 (viridis) so §3.3 still resolves a
+    // real LUT for the tint.
+    CaliperGeomDrawV1_3 d{};
+    d.base.base.pos_alloc = a;
+    d.base.base.vertex_count = 3;
+    d.base.base.topology = CALIPER_GEOM_TOPO_TRIANGLES;
+    d.base.base.color_mode = CALIPER_GEOM_COLOR_FLAT;
+    d.base.base.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+    d.base.base.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+    d.base.base.flat_rgba = 0xff204060u;
+    d.base.base.model[0] = d.base.base.model[5] =
+        d.base.base.model[10] = d.base.base.model[15] = 1.f;
+    d.instance_alloc = a;
+    d.instance_offset = 256;
+    d.instance_count = 4;
+    d.instance_attr_alloc = a;
+    d.instance_attr_offset = 512;
+
+    CHECK(b.geom_draw_primitives_v1_3(view, &cam, &d, 1, sizeof(d), 0u));
+    REQUIRE(g.prims.size() == 1);
+    REQUIRE(g.prims[0].draws.size() == 1);
+    CHECK(g.prims[0].draws[0].instance_alloc == 1u);      // renderer import id
+    CHECK(g.prims[0].draws[0].instance_offset == 256u);
+    CHECK(g.prims[0].draws[0].instance_count == 4u);
+    CHECK(g.prims[0].draws[0].instance_attr_alloc == 1u);
+    CHECK(g.prims[0].draws[0].instance_attr_offset == 512u);
+    // §3.3: an instanced-tint draw carries a real LUT even off a FLAT base.
+    CHECK(g.prims[0].draws[0].lut256 != nullptr);
+
+    // A zero-tail v1_3 draw is byte-identical to a non-instanced draw: no gates,
+    // resolves true, instance fields stay zero.
+    CaliperGeomDrawV1_3 plain = d;
+    plain.instance_alloc = 0; plain.instance_offset = 0; plain.instance_count = 0;
+    plain.instance_attr_alloc = 0; plain.instance_attr_offset = 0;
+    CHECK(b.geom_draw_primitives_v1_3(view, &cam, &plain, 1, sizeof(plain), 0u));
+    REQUIRE(g.prims.size() == 2);
+    CHECK(g.prims[1].draws[0].instance_alloc == 0u);
+    CHECK(g.prims[1].draws[0].instance_count == 0u);
+    CHECK(g.prims[1].draws[0].instance_attr_alloc == 0u);
+    CHECK(g.prims[1].draws[0].lut256 == nullptr);         // FLAT, no tint -> null
+
+    const size_t base_prims = g.prims.size();
+
+    // G1 — instanced draw with the cap absent is refused. Uses a plain PrimStub
+    // (no supports_geometry_instanced()); the same record that passed above.
+    {
+        PrimStub noinst("vulkan");
+        TensorBridge b1(noinst);
+        CaliperAllocId a1 = b1.import_allocation(&dummy, 4096,
+                                                 CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(a1 != 0);
+        CHECK((b1.geom_caps() & CALIPER_GEOM_CAP_INSTANCED) == 0u);
+        CaliperTextureId v1 = b1.geom_create_view_ex(64, 64, 0);
+        REQUIRE(v1 != 0);
+        CaliperGeomDrawV1_3 g1 = d;
+        g1.base.base.pos_alloc = a1; g1.instance_alloc = a1; g1.instance_attr_alloc = a1;
+        CHECK_FALSE(b1.geom_draw_primitives_v1_3(v1, &cam, &g1, 1, sizeof(g1), 0u));
+        CHECK(noinst.prims.empty());
+        // attr-only (no pose alloc) still trips G1 when the cap is absent.
+        CaliperGeomDrawV1_3 g1b = g1; g1b.instance_alloc = 0;
+        CHECK_FALSE(b1.geom_draw_primitives_v1_3(v1, &cam, &g1b, 1, sizeof(g1b), 0u));
+        CHECK(noinst.prims.empty());
+    }
+
+    // G2 — instance_alloc set but instance_count == 0.
+    CaliperGeomDrawV1_3 bad = d;
+    bad.instance_count = 0; bad.instance_attr_alloc = 0;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G3 — instance_count exceeds UINT32_MAX.
+    bad = d; bad.instance_count = (uint64_t)UINT32_MAX + 1u; bad.instance_attr_alloc = 0;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G4 — matrix offset misaligned (not a multiple of 4).
+    bad = d; bad.instance_offset = 2; bad.instance_attr_alloc = 0;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G5 — matrices overrun the imported allocation (100*64 = 6400 > 4096).
+    bad = d; bad.instance_offset = 0; bad.instance_count = 100; bad.instance_attr_alloc = 0;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G6 — matrix byte offset / 4 exceeds UINT32_MAX (rides a u32 PrimParams
+    // base). Needs a huge imported alloc so bounds (G5) pass and G6 is reached.
+    {
+        const uint64_t big_off = ((uint64_t)UINT32_MAX + 1u) * 4u;  // /4 == 2^32
+        CaliperAllocId big = b.import_allocation(&dummy, big_off + 64u,
+                                                 CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(big != 0);
+        CaliperGeomDrawV1_3 g6 = d;
+        g6.instance_alloc = big; g6.instance_offset = big_off; g6.instance_count = 1;
+        g6.instance_attr_alloc = 0;
+        CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &g6, 1, sizeof(g6), 0u));
+    }
+
+    // G7 — matrix alloc id does not resolve.
+    bad = d; bad.instance_alloc = 999u; bad.instance_attr_alloc = 0;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G8 — a tint with no instance matrices (a tint with nothing to tint).
+    bad = d; bad.instance_alloc = 0; bad.instance_count = 0;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G9 — attr offset misaligned.
+    bad = d; bad.instance_attr_offset = 2;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G10 — attrs overrun the imported allocation (4092 + 4*4 = 4108 > 4096).
+    bad = d; bad.instance_attr_offset = 4092;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G11 — attr alloc id does not resolve.
+    bad = d; bad.instance_attr_alloc = 999u;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // G12 — an instanced tint whose colormap does not resolve (FLAT base + bad
+    // colormap id, so no LUT is available to carry the tint).
+    bad = d; bad.base.base.colormap = 99;
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
+
+    // No refusal above reached the renderer — the frame count is unchanged.
+    CHECK(g.prims.size() == base_prims);
+
+    // Atomicity: one bad record refuses the whole array before any encode.
+    CaliperGeomDrawV1_3 pair[2] = {d, d};
+    pair[1].instance_attr_alloc = 999u;   // G11 on the second record
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, pair, 2, sizeof(pair[0]), 0u));
+    CHECK(g.prims.size() == base_prims);
+
+    // Released-alloc refusal: a freed pose alloc fails G7, drawing nothing.
+    b.release_allocation(a);
+    CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &d, 1, sizeof(d), 0u));
+    CHECK(g.prims.size() == base_prims);
 }

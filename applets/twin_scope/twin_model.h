@@ -300,6 +300,23 @@ struct ThermalLearner {
         return loss.item<float>();
     }
 
+    // Batched evaluation across variants: points (N,3), s_batch (B,K) ->
+    // (B,N) temperatures in [ambient, ambient+span]. Row b is exactly
+    // predict(points, s_batch[b]); this is pure vectorization for the fleet's
+    // per-variant tint (T5 §9 — one net call for all 50 variants). No grad.
+    torch::Tensor predict_batch(const torch::Tensor& points,
+                                const torch::Tensor& s_batch) {
+        torch::NoGradGuard ng;
+        auto p = points.to(device, torch::kFloat32);            // (N,3)
+        const int64_t N = p.size(0);
+        auto sb = s_batch.to(device, torch::kFloat32);          // (B,K)
+        const int64_t Bn = sb.size(0);
+        auto pos = normalize_pos(p).unsqueeze(0).expand({Bn, N, 3});  // (B,N,3)
+        auto src = sb.unsqueeze(1).expand({Bn, N, K});               // (B,N,K)
+        auto input = torch::cat({pos, src}, 2).reshape({Bn * N, 3 + K});
+        return (ambient + span * net->forward(input)).reshape({Bn, N});
+    }
+
     // Evaluate f_θ at arbitrary 3-D points with source strengths `s` (K,).
     // Returns (N,) temperatures in [ambient, ambient+span]. No grad.
     torch::Tensor predict(const torch::Tensor& points, const torch::Tensor& s) {

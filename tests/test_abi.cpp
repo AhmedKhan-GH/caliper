@@ -12,6 +12,7 @@
 #include <caliper/services/geometry_v1.h>
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
+#include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/caliper.hpp>
@@ -209,6 +210,33 @@ TEST_CASE("geometry v1_2 preserves v1_1 and pins the textured draw tail") {
     CHECK(std::string(CALIPER_GEOMETRY_V1_2) == "caliper.geometry.v1_2");
 }
 
+TEST_CASE("geometry v1_3 preserves v1_2 and pins the instance tail") {
+    static_assert(std::is_standard_layout_v<CaliperGeometryV1_3>);
+    static_assert(std::is_standard_layout_v<CaliperGeomDrawV1_3>);
+    // The whole revision chain pinned in one place.
+    CHECK(sizeof(CaliperGeomDraw) == 192);
+    CHECK(sizeof(CaliperGeomDrawV1_2) == 216);
+    CHECK(sizeof(CaliperGeomDrawV1_3) == 256);
+    CHECK(offsetof(CaliperGeomDrawV1_3, base) == 0);
+    CHECK(offsetof(CaliperGeomDrawV1_3, instance_alloc) == 216);
+    CHECK(offsetof(CaliperGeomDrawV1_3, instance_offset) == 224);
+    CHECK(offsetof(CaliperGeomDrawV1_3, instance_count) == 232);
+    CHECK(offsetof(CaliperGeomDrawV1_3, instance_attr_alloc) == 240);
+    CHECK(offsetof(CaliperGeomDrawV1_3, instance_attr_offset) == 248);
+
+    // Service-table parity: same slots as v1.2 (mirror the v1_2 pins above).
+    CHECK(offsetof(CaliperGeometryV1_3, struct_size) ==
+          offsetof(CaliperGeometryV1_2, struct_size));
+    CHECK(offsetof(CaliperGeometryV1_3, draw_primitives) ==
+          offsetof(CaliperGeometryV1_2, draw_primitives));
+    CHECK(offsetof(CaliperGeometryV1_3, reserved0) ==
+          offsetof(CaliperGeometryV1_2, reserved0));
+    CHECK(sizeof(CaliperGeometryV1_3) == sizeof(CaliperGeometryV1_2));
+
+    CHECK(std::string(CALIPER_GEOMETRY_V1_3) == "caliper.geometry.v1_3");
+    CHECK(CALIPER_GEOM_CAP_INSTANCED == (1u << 3));
+}
+
 namespace {
 // Records what a v1_2-only host actually receives from the Geometry wrapper's
 // v1.1-shaped draw path — proving Task 1's record widening (the v1.2
@@ -276,6 +304,94 @@ TEST_CASE("geometry wrapper widens v1.1 draws on a v1_2-only host") {
     CHECK(g_widen.uv_offset == 0);
     CHECK(g_widen.texture == 0);
     CHECK(std::memcmp(&g_widen.base, &draws[0], sizeof(CaliperGeomDraw)) == 0);
+}
+
+namespace {
+// Records what a v1_3-only host receives from the Geometry wrapper — the true
+// analog of the v1_2 widening capture above, one tier up: both the v1.1-shaped
+// and the v1.2-shaped overloads must arrive as zero-tailed 256-byte records.
+struct GeomWiden13Capture {
+    uint32_t draw_stride = 0;
+    CaliperGeomDrawV1_3 rec{};
+    bool called = false;
+};
+GeomWiden13Capture g_widen13;
+
+uint32_t stub13_caps(void) {
+    return CALIPER_GEOM_CAP_PRIMITIVES | CALIPER_GEOM_CAP_TEXTURED |
+           CALIPER_GEOM_CAP_INSTANCED;
+}
+bool stub13_draw_primitives(CaliperTextureId, const CaliperGeomCamera*,
+                            const CaliperGeomDrawV1_3* draws, uint32_t,
+                            uint32_t draw_stride, uint32_t) {
+    g_widen13.called = true;
+    g_widen13.draw_stride = draw_stride;
+    if (draws) g_widen13.rec = draws[0];
+    return true;
+}
+const CaliperGeometryV1_3 kStubGeom13 = {
+    sizeof(CaliperGeometryV1_3),
+    &stub13_caps,
+    nullptr,   // create_view
+    nullptr,   // release_view
+    nullptr,   // draw_points
+    nullptr,   // create_view_ex
+    &stub13_draw_primitives,
+    nullptr,   // reserved0
+};
+
+// The five appended tail fields must all be zero after widening.
+bool tail13_is_zero(const CaliperGeomDrawV1_3& r) {
+    return r.instance_alloc == 0 && r.instance_offset == 0 &&
+           r.instance_count == 0 && r.instance_attr_alloc == 0 &&
+           r.instance_attr_offset == 0;
+}
+} // namespace
+
+TEST_CASE("geometry wrapper widens v1.1 and v1.2 draws on a v1_3-only host") {
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_GEOMETRY_V1_3, &kStubGeom13);  // v1/v1_1/v1_2 stay NULL
+    caliper::Host host(fx.host());
+    caliper::Geometry geo(host);
+
+    // The v1_3->v1_2->v1_1 fallback chain must WORK, not be disabled.
+    CHECK(geo.has_primitives());
+    CHECK(geo.has_instanced());
+    CaliperGeomCamera cam{};
+
+    SUBCASE("192-byte v1.1-shaped records widen to 256") {
+        g_widen13 = GeomWiden13Capture{};
+        CaliperGeomDraw draws[2];
+        std::memset(draws, 0xA5, sizeof(draws));
+        CHECK(geo.draw_primitives(0, cam, (const CaliperGeomDraw*)draws, 2, 0));
+
+        CHECK(g_widen13.called);
+        CHECK(g_widen13.draw_stride ==
+              static_cast<uint32_t>(sizeof(CaliperGeomDrawV1_3)));
+        // 192-byte prefix intact byte-for-byte; everything after it zero.
+        CHECK(std::memcmp(&g_widen13.rec, &draws[0],
+                          sizeof(CaliperGeomDraw)) == 0);
+        CHECK(g_widen13.rec.base.uv_alloc == 0);
+        CHECK(g_widen13.rec.base.uv_offset == 0);
+        CHECK(g_widen13.rec.base.texture == 0);
+        CHECK(tail13_is_zero(g_widen13.rec));
+    }
+
+    SUBCASE("216-byte v1.2-shaped records widen to 256") {
+        g_widen13 = GeomWiden13Capture{};
+        CaliperGeomDrawV1_2 draws[2];
+        std::memset(draws, 0x5A, sizeof(draws));
+        CHECK(geo.draw_primitives(0, cam,
+                                  (const CaliperGeomDrawV1_2*)draws, 2, 0));
+
+        CHECK(g_widen13.called);
+        CHECK(g_widen13.draw_stride ==
+              static_cast<uint32_t>(sizeof(CaliperGeomDrawV1_3)));
+        // 216-byte prefix intact byte-for-byte; instance tail all-zero.
+        CHECK(std::memcmp(&g_widen13.rec, &draws[0],
+                          sizeof(CaliperGeomDrawV1_2)) == 0);
+        CHECK(tail13_is_zero(g_widen13.rec));
+    }
 }
 
 static_assert(std::is_standard_layout_v<CaliperArtifactsV1>);

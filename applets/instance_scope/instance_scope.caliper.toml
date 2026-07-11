@@ -1,0 +1,14 @@
+[applet]
+id      = "dev.caliper.instance-scope"
+name    = "InstanceScope"
+version = "0.1.0"
+summary = "Instancing, made obvious: a field of N procedural gems bobs and spins in a traveling wave, drawn with ONE instanced draw call and ZERO copies of the mesh. Per-frame rigid (N,16) poses and a (N,) sin-phase tint are recomputed on device and imported zero-copy (caliper.geometry.v1_3); the tint rides a fixed [-1,1] MAGMA window that can never saturate. Falls back to a single non-instanced gem where the instanced path is absent."
+tag     = "GFX"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
+optional = ["caliper.tensor_bridge.v1", "caliper.tensor_bridge.v1_2", "caliper.geometry.v1_1", "caliper.geometry.v1_2", "caliper.geometry.v1_3"]
