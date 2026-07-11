@@ -193,9 +193,39 @@ main > section:first-child { border-top: 0; }
   padding: var(--space-4) var(--space-3) var(--space-2);
 }
 
+/* ---------- mechanism figures ---------- */
+/* mirrors .frame; carries the three technical SVG diagrams. The metal /
+ * vulkan diagrams (760x560) need full content width to keep their labels
+ * legible, which is why the hard-part split below stacks to one column. */
+.mech {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+  overflow-x: auto;               /* narrow screens: scroll, not shrink-to-illegible */
+  -webkit-overflow-scrolling: touch;
+}
+/* keep labels legible: on viewports narrower than the diagram's legible
+ * width the figure scrolls horizontally (mirrors .table-scroll), rather
+ * than scaling the SVG text below the 13px floor. min-width is inert on
+ * desktop where the container is already wider. */
+.mech img { border-radius: 8px; width: 100%; min-width: 680px; }
+.mech--wide img { min-width: 900px; }
+.mech figcaption {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: 1.5;
+  padding: var(--space-4) var(--space-3) var(--space-2);
+}
+.mech--wide { margin-top: var(--space-8); }
+.note .mech { margin-bottom: var(--space-6); }
+
 /* ---------- hard-part split ---------- */
+/* minmax(0,1fr): keep the track from expanding to the diagram's min-width
+ * (grid blowout) so the .mech scrolls internally instead of the page. */
 .split {
-  display: grid; grid-template-columns: repeat(2, 1fr);
+  display: grid; grid-template-columns: minmax(0, 1fr);
   gap: var(--space-6); margin-top: var(--space-12);
 }
 .note {
@@ -203,6 +233,7 @@ main > section:first-child { border-top: 0; }
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   padding: var(--space-8);
+  min-width: 0;
 }
 .note p { max-width: none; }
 .note__label {
