@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img"
+     aria-label="Two data paths compared. The conventional round trip copies a GPU tensor down across the CPU boundary to a NumPy array, encodes it to a PNG or event file on disk, polls and decodes it into a CPU pixel buffer, then uploads it back up across the boundary to a GPU texture in a browser — crossing the PCIe boundary twice. Caliper instead blits the GPU tensor to a GPU texture and draws it with ImGui the same frame, entirely on the GPU.">
+  <!-- ============================================================
+       mech-roundtrip — signal-to-noise flow: only Caliper's on-GPU
+       path glows in accent; the conventional round trip stays muted.
+       Palette: bg #0B0E14, surface #131826, line #2A3245,
+       muted #8B94A7, text #E6EAF2, accent #5EEAD4.
+       ============================================================ -->
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .lane   { fill:#8B94A7; font-size:15px; font-weight:600; letter-spacing:1.5px; }
+    .boxlbl { fill:#E6EAF2; font-size:19px; font-weight:500; }
+    .steplbl{ fill:#8B94A7; font-size:15px; }
+    .foot   { fill:#8B94A7; font-size:15px; }
+    .box       { fill:#131826; stroke:#2A3245; stroke-width:1.25; }
+    .box-glow  { fill:#131826; stroke:#5EEAD4; stroke-width:1.5; }
+    .p-muted   { fill:none; stroke:#8B94A7; stroke-width:1.5; }
+    .p-glow    { fill:none; stroke:#5EEAD4; stroke-width:2.5; }
+    .num-c { fill:#0B0E14; stroke:#5EEAD4; stroke-width:1.25; }
+    .num-t { fill:#5EEAD4; font-size:15px; font-weight:600; }
+  </style>
+  <defs>
+    <marker id="rt-arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#8B94A7"/>
+    </marker>
+    <marker id="rt-arrow-glow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5EEAD4"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="460" fill="#0B0E14"/>
+
+  <!-- ===================== LANE A — conventional ===================== -->
+  <text class="lane" x="24" y="26">THE CONVENTIONAL ROUND TRIP (TENSORBOARD-STYLE)</text>
+
+  <!-- GPU | CPU boundary band (PCIe) -->
+  <rect x="24" y="124" width="1152" height="26" fill="#131826" stroke="#2A3245" stroke-width="1"/>
+  <line x1="24" y1="124" x2="1176" y2="124" stroke="#2A3245" stroke-width="1" stroke-dasharray="2 4"/>
+  <line x1="24" y1="150" x2="1176" y2="150" stroke="#2A3245" stroke-width="1" stroke-dasharray="2 4"/>
+  <text class="steplbl" x="500" y="141" text-anchor="middle">GPU  |  CPU boundary (PCIe)</text>
+
+  <!-- muted path: down (1), across (2,3), up (4) -->
+  <path class="p-muted" d="M140,104 V164" marker-end="url(#rt-arrow-muted)"/>
+  <path class="p-muted" d="M240,198 H352" marker-end="url(#rt-arrow-muted)"/>
+  <path class="p-muted" d="M640,198 H812" marker-end="url(#rt-arrow-muted)"/>
+  <path class="p-muted" d="M940,170 V110" marker-end="url(#rt-arrow-muted)"/>
+
+  <!-- both boundary crossings, marked with bright diamonds -->
+  <path d="M140,127 l10,10 -10,10 -10,-10 z" fill="#0B0E14" stroke="#E6EAF2" stroke-width="1.5"/>
+  <path d="M140,131 l6,6 -6,6 -6,-6 z" fill="#E6EAF2"/>
+  <path d="M940,127 l10,10 -10,10 -10,-10 z" fill="#0B0E14" stroke="#E6EAF2" stroke-width="1.5"/>
+  <path d="M940,131 l6,6 -6,6 -6,-6 z" fill="#E6EAF2"/>
+
+  <!-- boxes -->
+  <rect class="box" x="40"  y="48"  width="200" height="56" rx="8"/>
+  <text class="boxlbl" x="140" y="76"  text-anchor="middle" dominant-baseline="central">GPU tensor</text>
+
+  <rect class="box" x="40"  y="170" width="200" height="56" rx="8"/>
+  <text class="boxlbl" x="140" y="198" text-anchor="middle" dominant-baseline="central">CPU numpy array</text>
+
+  <rect class="box" x="360" y="170" width="280" height="56" rx="8"/>
+  <text class="boxlbl" x="500" y="198" text-anchor="middle" dominant-baseline="central">PNG / event file on disk</text>
+
+  <rect class="box" x="820" y="170" width="240" height="56" rx="8"/>
+  <text class="boxlbl" x="940" y="198" text-anchor="middle" dominant-baseline="central">CPU pixel buffer</text>
+
+  <rect class="box" x="820" y="48"  width="240" height="56" rx="8"/>
+  <text class="boxlbl" x="940" y="68"  text-anchor="middle" dominant-baseline="central">GPU texture</text>
+  <text class="boxlbl" x="940" y="88"  text-anchor="middle" dominant-baseline="central">in a browser</text>
+
+  <!-- step badges + labels -->
+  <text class="steplbl" x="252" y="118" >device&#8594;host copy</text>
+  <circle class="num-c" cx="140" cy="160" r="11"/>
+  <text class="num-t" x="140" y="160" text-anchor="middle" dominant-baseline="central">1</text>
+
+  <text class="steplbl" x="300" y="182" text-anchor="middle">encode</text>
+  <circle class="num-c" cx="300" cy="198" r="11"/>
+  <text class="num-t" x="300" y="198" text-anchor="middle" dominant-baseline="central">2</text>
+
+  <text class="steplbl" x="726" y="182" text-anchor="middle">poll + decode</text>
+  <circle class="num-c" cx="726" cy="198" r="11"/>
+  <text class="num-t" x="726" y="198" text-anchor="middle" dominant-baseline="central">3</text>
+
+  <text class="steplbl" x="828" y="118" text-anchor="end">host&#8594;device upload</text>
+  <circle class="num-c" cx="940" cy="160" r="11"/>
+  <text class="num-t" x="940" y="160" text-anchor="middle" dominant-baseline="central">4</text>
+
+  <text class="foot" x="40" y="252">two bus transfers &#183; encode/decode &#183; filesystem &#183; seconds of latency</text>
+
+  <!-- ===================== divider ===================== -->
+  <line x1="24" y1="274" x2="1176" y2="274" stroke="#2A3245" stroke-width="1"/>
+
+  <!-- ===================== LANE B — Caliper ===================== -->
+  <text class="lane" x="24" y="300">CALIPER</text>
+
+  <!-- GPU band: the whole path stays inside it -->
+  <rect x="24" y="314" width="1152" height="118" rx="10" fill="#0F131E" stroke="#2A3245" stroke-width="1"/>
+  <text class="lane" x="46" y="338" style="letter-spacing:2px">ON THE GPU</text>
+
+  <!-- accent path: the one thing that glows -->
+  <path class="p-glow" d="M290,387 H462" marker-end="url(#rt-arrow-glow)"/>
+  <path class="p-glow" d="M690,387 H862" marker-end="url(#rt-arrow-glow)"/>
+
+  <rect class="box-glow" x="70"  y="358" width="220" height="58" rx="8"/>
+  <text class="boxlbl" x="180" y="387" text-anchor="middle" dominant-baseline="central">GPU tensor</text>
+
+  <rect class="box-glow" x="470" y="358" width="220" height="58" rx="8"/>
+  <text class="boxlbl" x="580" y="387" text-anchor="middle" dominant-baseline="central">GPU texture</text>
+
+  <rect class="box-glow" x="870" y="358" width="220" height="58" rx="8"/>
+  <text class="boxlbl" x="980" y="387" text-anchor="middle" dominant-baseline="central">ImGui draw</text>
+
+  <text class="steplbl" x="380" y="344" text-anchor="middle">GPU blit + colormap</text>
+  <circle class="num-c" cx="380" cy="387" r="11"/>
+  <text class="num-t" x="380" y="387" text-anchor="middle" dominant-baseline="central">1</text>
+
+  <text class="steplbl" x="780" y="344" text-anchor="middle">same frame</text>
+  <circle class="num-c" cx="780" cy="387" r="11"/>
+  <text class="num-t" x="780" y="387" text-anchor="middle" dominant-baseline="central">2</text>
+
+  <text class="foot" x="24" y="452">one on-GPU blit &#183; visible the same frame</text>
+</svg>
