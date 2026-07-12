@@ -17,6 +17,7 @@
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/feed_v1.h>
+#include <caliper/services/export_v1.h>
 #include <caliper/caliper.hpp>
 #include <caliper/fixture_host.h>
 #include <cstddef>
@@ -489,4 +490,30 @@ TEST_CASE("feed v1 layout is frozen (new service, D24 pattern)") {
 
     CHECK(CALIPER_FEED_CAP_LIVE == (1u << 0));
     CHECK(std::string(CALIPER_FEED_V1) == "caliper.feed.v1");
+}
+
+TEST_CASE("export v1 layout is frozen (new service, D24 pattern)") {
+    static_assert(std::is_standard_layout_v<CaliperExportV1>);
+    static_assert(offsetof(CaliperExportV1, struct_size) == 0);
+
+    // Vtable slot order pinned: caps, view_png, begin_sequence, frame,
+    // end_sequence, reserved0 — contiguous fn pointers after struct_size
+    // (padded to pointer alignment). Mirrors the geometry.v1_3 draw signature.
+    CHECK(offsetof(CaliperExportV1, caps) == sizeof(void*));
+    CHECK(offsetof(CaliperExportV1, view_png) ==
+          offsetof(CaliperExportV1, caps) + sizeof(void*));
+    CHECK(offsetof(CaliperExportV1, begin_sequence) ==
+          offsetof(CaliperExportV1, view_png) + sizeof(void*));
+    CHECK(offsetof(CaliperExportV1, frame) ==
+          offsetof(CaliperExportV1, begin_sequence) + sizeof(void*));
+    CHECK(offsetof(CaliperExportV1, end_sequence) ==
+          offsetof(CaliperExportV1, frame) + sizeof(void*));
+    CHECK(offsetof(CaliperExportV1, reserved0) ==
+          offsetof(CaliperExportV1, end_sequence) + sizeof(void*));
+    CHECK(sizeof(CaliperExportV1) ==
+          offsetof(CaliperExportV1, reserved0) + sizeof(void*));
+
+    CHECK(CALIPER_EXPORT_CAP_VIEW_PNG == (1u << 0));
+    CHECK(CALIPER_EXPORT_MAX_DIM == 16384u);
+    CHECK(std::string(CALIPER_EXPORT_V1) == "caliper.export.v1");
 }
