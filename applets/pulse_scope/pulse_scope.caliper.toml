@@ -1,0 +1,13 @@
+[applet]
+id      = "dev.caliper.pulse-scope"
+name    = "PulseScope"
+version = "0.1.0"
+summary = "This machine's own vitals, live: PulseScope enumerates every caliper.feed.v1 channel the host vends (CPU/GPU utilization, memory, thermal state, fan, temperature, power on this Mac) and draws one input-locked strip chart per channel from a job-thread poller. Current value + units, a climbing \"last sample N.N s ago\" staleness label, and a cumulative \"lost M samples\" gap counter make the honest-loss contract visible. No sensors on this host -> one honest line, nothing faked. CPU + ImPlot only: no tensors, no GPU."
+tag     = "Telemetry"
+
+[compat]
+abi_epoch = 2
+min_host  = "0.6.0"
+
+[services]
+required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.feed.v1"]
