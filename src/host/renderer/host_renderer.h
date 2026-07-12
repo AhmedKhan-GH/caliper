@@ -152,6 +152,35 @@ public:
     // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
     virtual void window_hints() = 0;
 
+    // ---- Embed canvas seam (libcaliper R4 L2a) ----------------------------
+    // When libcaliper is EMBEDDED (caliper/embed.h — Compass, embed_host) there
+    // is no GLFW: the host supplies a native child view (NSView*/HWND) or asks
+    // for an OFFSCREEN target, and the applet's ImGui frame is composited by
+    // THIS backend against that surface. NO imgui_impl_glfw is wired — the
+    // embedder feeds ImGuiIO via caliper_core_event; the embed layer sets
+    // io.DisplaySize/DeltaTime BEFORE canvas_new_frame (it owns timing/size).
+    //
+    // These run PARALLEL to init()/new_frame()/render(): a renderer instance is
+    // EITHER the exe's swapchain path OR an embed canvas, never both, so the
+    // swapchain path (and its byte-exact geometry rows) is untouched. Default =
+    // unsupported: GL refuses (embed requires Metal or Vulkan — GL's context is
+    // GLFW-coupled chrome, D13). The frame-order contract matches the swapchain
+    // path: canvas_new_frame CLEARS (opens the pass), canvas_render composites.
+    enum CanvasMode { CANVAS_WINDOW = 0, CANVAS_OFFSCREEN = 1 };
+    virtual bool canvas_supported() const { return false; }
+    // native_view: NSView*/HWND for CANVAS_WINDOW; NULL/ignored for OFFSCREEN.
+    // Inits the ImGui RENDER backend on this device + the canvas target. false
+    // = honest refusal (nothing allocated, no state touched).
+    virtual bool canvas_init(void* /*native_view*/, CanvasMode /*mode*/,
+                             int /*w*/, int /*h*/) { return false; }
+    virtual void canvas_resize(int /*w*/, int /*h*/) {}
+    virtual void canvas_new_frame() {}   // clear target + ImGui render NewFrame
+    virtual void canvas_render() {}       // ImGui::Render + composite/present
+    // Offscreen only: copy the last composited frame to dst (tightly-packed
+    // RGBA8, `stride` bytes/row). false if not offscreen / nothing rendered.
+    virtual bool canvas_read_pixels(uint8_t* /*dst*/, int /*stride*/) { return false; }
+    virtual void canvas_shutdown() {}
+
     // Test-only: copy a texture's pixels back to host RGBA8 (w*h*4 bytes), or
     // empty on failure. GL/Metal read back their handle directly in the gfx
     // harness; Vulkan's CaliperTextureId is an opaque descriptor set, so the

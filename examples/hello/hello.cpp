@@ -10,6 +10,11 @@ public:
     bool on_init(caliper::Host& host) override {
         host_ = &host;
         crash_on_frame_ = std::getenv("CALIPER_HELLO_CRASH") != nullptr;
+        // Test hook: fail launch cleanly (initialize() returns false) so hosts
+        // can exercise the failed-load path without a crash. on_cleanup is NOT
+        // called for a false return (the loader destroys the raw instance), so
+        // this logs nothing.
+        if (std::getenv("CALIPER_HELLO_INIT_FAIL") != nullptr) return false;
         host.log_info("hello.on_init");
         return true;
     }

@@ -1,11 +1,16 @@
 # `libcaliper` — the embeddable platform core (R4), first consumer: Compass
 
 **Date:** 2026-07-11
-**Status:** DESIGN — this is the R4 strategic decision doc ROADMAP §7 deferred
-("platform call, not geometry's"; intent at PLATFORM.md Phase 6). Opening it is
-the owner's call, made 2026-07-11. Nothing here is scheduled for execution;
-this doc exists so the decision is made ONCE, with the trade-offs recorded,
-before any extraction begins.
+**Status:** L1+L2 EXECUTED 2026-07-11 (branch `feat/libcaliper`); L3/Compass
+GATED-PENDING on §5's named-workflow rule. The design below stands as written;
+§6 and §7 now carry per-phase outcomes + commits. What shipped: the embeddable
+`libcaliper` core (L1), the embed C ABI `include/caliper/embed.h` v1 + a second
+in-tree embedder `examples/embed_host` (L2), Metal-proven on Apple Silicon —
+Vulkan/HWND embed is transcribed and compiled-out, pending the next Windows
+session (see the Windows-pass addendum). Originally the R4 strategic decision
+doc ROADMAP §7 deferred ("platform call, not geometry's"; intent at PLATFORM.md
+Phase 6); opening it was the owner's call, made 2026-07-11, so the decision was
+made ONCE with the trade-offs recorded before extraction began.
 **Authority:** PLATFORM.md Phase 6 (`libcaliper` / second host: Compass),
 §7 host-neutral service design rule, D13 (native backends; the Compass-on-GL
 cautionary tale), D5 (one libtorch per process), D1 (in-process C ABI).
@@ -79,6 +84,12 @@ C, not C++: the same longevity/version-skew reasoning as D1. A host binary
 built years apart from libcaliper must still embed it. C++ sugar for host
 authors ships alongside (as `caliper.hpp` does for applets).
 
+**Pinned at L2a as `include/caliper/embed.h` v1 — the header is now the
+authority** (the sketch below stands as the design intent; the shipped names,
+structs, and refusal semantics live in that file). It sits on its own include
+root so an applet, which links `caliper::sdk` and never libcaliper, physically
+cannot `#include` it.
+
 ```c
 /* sketch — names illustrative, the execution spec pins them */
 CaliperCore*  caliper_core_create(const CaliperCoreDesc*);  /* renderer pick,
@@ -151,17 +162,39 @@ Until then, phases L1–L2 below still pay for themselves inside Caliper.
   every applet runs unmodified. This is a pure seam-cutting phase — it
   proves the boundary exists and leaves the tree better even if L2/L3 never
   happen.
+  **DONE 2026-07-11 (`0b6e15b`).** Shipped as an ADDITIVE `libcaliper` target
+  wrapping a renderer-free `caliper_host_lib` (a survey hard constraint beat
+  the brief's rename preference); `core_lifecycle` extracted. Zero behavior
+  change reproduced independently: ctest 8/8, gfx 49/49 byte-exact, both
+  applet run-proofs identical. Review clean.
 - **L2 — the embed ABI + a second in-tree embedder.** Pin the §4.1 C ABI;
   generalize the test fixture host into `examples/embed_host` (a ~200-line
   host: create core, attach canvas to a bare native window, pump frames,
   load one applet). Acceptance: mesh_scope/instance_scope run zero-copy
   under embed_host on both ecosystems — run-proven with the same honest
   provenance lines, byte-exact rows still green.
+  **DONE 2026-07-11.** L2a (`2eae15a`) pinned the ABI as `include/caliper/embed.h`
+  v1 (create / attach_canvas / frame / event / load_applet / read_pixels /
+  shutdown; one core per process; offscreen + window Metal canvas; GL honest
+  refusal; Vulkan/HWND transcribed and compiled-out) + `caliper_embed_tests`.
+  L2b (`a3fd333` / `1bf24a1` / `59bcc51`) added hardenings + `examples/embed_host`
+  (a 254-line AppKit host, no GLFW, five-call tutorial skeleton) + the §7
+  bridge-seam byte-compare case. Live proof: embed_host ran
+  `dev.caliper.instance-scope` and `dev.caliper.mesh-scope` zero-copy on Metal
+  @2x Retina with the honest provenance lines captured; suites 9/9, gfx 49/49
+  byte-exact unregressed. **Honest gaps (v0):** the applet `log.v1` service still
+  writes to process stderr, bypassing `log_fn` (core diagnostics DO route
+  through `log_fn`); `CaliperCoreDesc.data_dir` is IGNORED; the Vulkan/HWND
+  embed paths are transcription only, hardware pending the next Windows session
+  (Windows-pass addendum). **Metal-proven; Vulkan embed pending Windows.**
 - **L3 — Compass itself.** Separate repo, wx chrome, embeds the L2 ABI.
   Gated on §5's named-workflow rule. Acceptance: the same applet binary
   (unmodified, same `.caliperapp`) runs under Caliper AND Compass on both
   OSes; zero-copy provenance in both; the golden-applet wall passes against
   both hosts.
+  **UNSTARTED.** Gate restated: Compass work starts only when a named workflow
+  exists that Caliper's docking shell serves badly (§5). L1+L2 pay for
+  themselves inside Caliper until then.
 
 ## 7. Verification discipline (inherited, restated for hosts)
 
@@ -170,6 +203,14 @@ SAME bytes under `caliper` and `embed_host` (same backend, same machine) —
 a rendering seam that shifts pixels when re-hosted is a broken extraction.
 The honest-ladder and pixels-untouched-on-refusal invariants bind in every
 embedder. No checkbox without artifacts, per house rule.
+
+**Implemented form (L2b, delta):** the shipped §7 case compares the
+bridge-upload seam against the shared CPU reference — the same-bytes bar is
+proven at the point where an imported allocation becomes renderer pixels, NOT
+across the full swapchain composite. Comparing the composited framebuffer under
+`caliper` vs `embed_host` (same backend, same machine) is the stronger ideal
+and remains OPEN. The offscreen `read_pixels` surface exists to automate it;
+the swapchain-composite compare is future work.
 
 ## 8. Out of scope for R4 (stated so nobody relitigates)
 
@@ -187,3 +228,31 @@ wrong.
   remains the rejected strategy that stranded Compass v0.
 - The core never owns the process event loop; the embedder never touches
   ImGui or the renderer directly.
+
+## Windows-pass addendum
+
+L1+L2 shipped Metal-proven on Apple Silicon. The Vulkan/HWND embed paths are
+TRANSCRIBED and compiled-out — the shape is written against the Metal-proven
+seam and the Vulkan v1_1–v1_3 backends already run byte-exact on Windows, but
+NONE of the embed-specific Windows paths have touched hardware. The next
+Windows session (CUDA/RTX 500 Ada box) verifies exactly:
+
+- **HWND window mode** — `caliper_core_attach_canvas` with
+  `CALIPER_CANVAS_WINDOW` against a real `HWND`, HiDPI content-scale honored,
+  first zero-copy frame drawn.
+- **Win32 `embed_host` main** — `examples/embed_host/main_win32.cpp` built and
+  run: create → attach → load → frame/event pump from a Win32 message loop →
+  shutdown, mirroring the AppKit host's five calls, no GLFW.
+- **Vulkan canvas paths, both modes** — offscreen (render-to-texture +
+  `read_pixels`) and window, on the Vulkan `HostRenderer` backend, with the
+  same honest provenance lines as Metal.
+- **Embed tests on the CUDA box** — `caliper_embed_tests` green on Vulkan/CUDA
+  (the create/attach/load/frame/read_pixels/refusal set that runs on Metal).
+- **The §7 bridge-seam case on Vulkan** — the bridge-upload byte-compare
+  against the shared CPU reference, mirrored on Vulkan/CUDA (the same seam
+  proven on Metal, NOT the swapchain composite — that ideal stays open on both
+  backends).
+
+Honest transcription language holds until each row above is artifact-verified
+on the hardware: no checkbox, no "both ecosystems" claim for the embed seam
+until the Windows session run-proves it.

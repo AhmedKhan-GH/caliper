@@ -105,7 +105,10 @@ its acceptance).
 
 - [ ] Telemetry ingestion decision: physical twins need live external data (feed-applet pattern vs. new service) — touches the whitepaper's local-loop claim; positioning call, not an engineering default
 - [ ] Optional second flagship: em-controller (actor-critic RL steering the PIC plasma — design retained in specs, never implemented); slot after the twin exemplar
-- [ ] R4 `libcaliper` second host — platform call (PLATFORM.md Phases 3–6), not geometry's
+- [ ] R4 `libcaliper` second host — platform call (PLATFORM.md Phases 3–6), not geometry's. **L1+L2 shipped** (embeddable core + embed ABI + `embed_host`, Metal-proven; Vulkan embed pending Windows); the box stays unticked because the full R4 call is Compass (L3), gated on a named workflow. Spec: `docs/superpowers/specs/2026-07-11-libcaliper-compass-design.md`.
+    - [x] L1 — `libcaliper` target + `core_lifecycle` extraction, ZERO behavior change (`0b6e15b`; ctest 8/8, gfx 49/49 byte-exact, both applet run-proofs identical)
+    - [x] L2 — embed C ABI `include/caliper/embed.h` v1 + `examples/embed_host` (254-line AppKit host, five calls, no GLFW); `instance_scope`/`mesh_scope` run zero-copy under embed_host on Metal @2x Retina, provenance captured; suites 9/9, gfx 49/49 unregressed (L2a `2eae15a`; L2b `a3fd333`/`1bf24a1`/`59bcc51`). Honest v0 gaps: applet `log.v1` bypasses `log_fn` to stderr, `data_dir` ignored, GL refuses embed, Vulkan/HWND transcribed — Windows session pending
+    - [ ] L3 — Compass (separate repo, wx chrome, embeds the L2 ABI) — UNSTARTED, gated on §5's named-workflow rule
 
 ## Invariants (hold forever, never relitigate)
 

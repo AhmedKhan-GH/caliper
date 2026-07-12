@@ -8,6 +8,7 @@
 #include "intro_screen.h"
 #include "host/applet_loader.h"
 #include "host/host_services.h"
+#include "host/core_lifecycle.h"
 #include "host/job_system.h"
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
@@ -41,24 +42,11 @@ public:
             return false;
         }
 
-        // Renderer seam (PLATFORM.md §5.4): backend hints run before the
-        // window exists; init() runs after. On Apple the default is now Metal
-        // (device-resident tensors, zero CPU staging) — the opengllama migration
-        // retired the last raw-GL applet, clearing the flip gate. CALIPER_RENDERER=gl
-        // selects the frozen GL fallback; off Apple, GL is the only backend.
-        const char* want = std::getenv("CALIPER_RENDERER");
-        bool want_gl = want && std::strcmp(want, "gl") == 0;
-#ifdef __APPLE__
-        if (!want_gl) renderer_ = caliper_host::make_metal_renderer();
-#elif defined(_WIN32)
-        // Windows default is Vulkan (Phase 4: device-resident CUDA tensors
-        // via external-memory interop). Same fallback contract as Metal:
-        // if init() fails (no Vulkan driver, RDP, ...) GL takes over below.
-        if (!want_gl) renderer_ = caliper_host::make_vulkan_renderer();
-#else
-        (void)want_gl;
-#endif
-        if (!renderer_) renderer_ = caliper_host::make_renderer("gl");
+        // Renderer seam (PLATFORM.md §5.4): backend selection (env
+        // CALIPER_RENDERER + platform default, GL fallback) now lives in
+        // libcaliper's core_lifecycle so every embedder gets the same policy.
+        // The host still owns the window and drives init()/the fallback below.
+        renderer_ = caliper_host::core_select_renderer();
 
         // Display asleep / headless-ish states can return NULL here — fall
         // back to a sane default window instead of crashing at startup.
@@ -73,18 +61,10 @@ public:
             wh = (int)((ah / sy) * 0.95f);
         }
 
-        // Host-owned ImGui/ImPlot contexts must exist before the renderer
-        // initializes its ImGui backends. None of these touch GL/Metal.
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImPlot::CreateContext();
-        ImPlot3D::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        // Docking (ImGui docking branch): the applet page hosts a docked
-        // desktop — applet windows tile into a central node + side column.
-        // Persisted per-window/dockspace layout lives in imgui.ini (host-owned).
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        // Applet-canvas ImGui/ImPlot/ImPlot3D contexts + docking flag are
+        // created by libcaliper (core_lifecycle) — they must exist before the
+        // renderer wires its ImGui backend. Host chrome styling follows.
+        caliper_host::core_create_ui_context();
 
         ImGui::StyleColorsDark();
         style_ui();
@@ -431,9 +411,7 @@ public:
         caliper_host::services_shutdown();
         intro_.cleanup();
         renderer_->shutdown();
-        ImPlot3D::DestroyContext();
-        ImPlot::DestroyContext();
-        ImGui::DestroyContext();
+        caliper_host::core_destroy_ui_context();
         if (window_) glfwDestroyWindow(window_);
         glfwTerminate();
     }

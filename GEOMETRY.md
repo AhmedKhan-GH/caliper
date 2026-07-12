@@ -616,7 +616,7 @@ before any implementation.
 | R1 | `geometry.v1_1` — this spec: indexed tris/lines/strips, depth, blend, fixed shading | **SPEC'D**, phases §10 A–D | any *geometry*: deforming meshes, learned surfaces, twin structure; `mesh_scope` proves live-training viz |
 | R2 | `geometry.v1_2` — textures on meshes (sample a bridge `CaliperTextureId`; `reserved0` slot) | SHIPPED — byte-exact both backends (`feat/geometry-v1_2`; Vulkan run-proven byte-exact on RTX 500 Ada; Metal run-proven byte-exact on Apple Silicon, 2026-07-10) | field data draped on geometry: heatmap-on-terrain, activation-on-surface — the twin's *state painted on its shape*; TwinScope surface twin is the exemplar |
 | R3 | Instanced transforms from an imported alloc (one mesh × (N,16) f32 model matrices) | SHIPPED both platforms — byte-exact both backends: Metal run-proven on Apple Silicon 2026-07-11, Vulkan/CUDA run-proven on Windows 2026-07-11 (gfx 48/48 live incl. the G14 staged-readback row; fixing commit `477431e`) | many-part twins at scale: fleets, swarms, articulated repeats — N objects, one draw, still zero-copy; the dedicated `instance_scope` applet (N gems on a slider 1–5000, default 1000) is the exemplar |
-| R4 | Host-neutral service layer / second host (Compass, Phase 6 `libcaliper` per PLATFORM.md) | DIRECTIONAL | twins embedded outside the Caliper shell |
+| R4 | Host-neutral service layer / second host (Compass, Phase 6 `libcaliper` per PLATFORM.md) | L1+L2 shipped (embeddable core, Metal-proven; second host gated) — spec `2026-07-11-libcaliper-compass-design.md` | twins embedded outside the Caliper shell |
 
 Explicitly NOT on this roadmap, at any stage (§1.2): render-to-tensor,
 applet shaders, photoreal/PBR. If a stage seems to need one of these, the

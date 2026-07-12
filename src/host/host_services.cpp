@@ -427,6 +427,8 @@ void services_set_renderer(HostRenderer* renderer) {
     if (!renderer) g_bridge.reset();
 }
 
+HostRenderer* services_renderer() { return g_renderer; }
+
 const void* services_get(const char* id) {
     if (!id) return nullptr;
     if (std::strcmp(id, CALIPER_UI_V1) == 0)     return &kUi;

@@ -472,6 +472,191 @@ public:
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     }
 
+    // ---- Embed canvas seam (libcaliper R4 L2a) ---------------------------
+    // Parallel to init()/new_frame()/render(): a GLFW-free path that composites
+    // the applet's ImGui frame onto an offscreen RGBA8 texture (readable) or a
+    // CAMetalLayer attached to the host's native NSView. Shares device_/queue_/
+    // textures_ with the texture+geometry ops, so the bridge works unchanged.
+    // The ImGui *render* backend (imgui_impl_metal) is wired here; the *platform*
+    // half is NOT (the embedder feeds io via caliper_core_event). Only ONE of
+    // init() / canvas_init() is ever called on a given instance.
+    bool canvas_supported() const override { return true; }
+
+    bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
+        if (w <= 0 || h <= 0) return false;
+        device_ = MTLCreateSystemDefaultDevice();
+        if (device_ == nil) return false;
+        queue_ = [device_ newCommandQueue];
+        if (queue_ == nil) { device_ = nil; return false; }
+
+        canvas_mode_ = mode;
+        canvas_w_ = w;
+        canvas_h_ = h;
+
+        if (mode == CANVAS_OFFSCREEN) {
+            if (!make_canvas_target(w, h)) { queue_ = nil; device_ = nil; return false; }
+        } else {
+            // Window mode: attach a CAMetalLayer to the host's native NSView —
+            // the embed analog of init()'s glfwGetCocoaWindow path, but from a
+            // view the EMBEDDER owns (no GLFW). BGRA8 to match a display layer.
+            NSView* view = (__bridge NSView*)native_view;
+            if (view == nil) { queue_ = nil; device_ = nil; return false; }
+            canvas_layer_ = [CAMetalLayer layer];
+            canvas_layer_.device = device_;
+            canvas_layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            canvas_layer_.framebufferOnly = YES;
+            canvas_layer_.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
+            // HiDPI (L2b W2): the host passes w/h in PHYSICAL pixels, so the
+            // layer's contentsScale must be the backing scale for the drawable
+            // to map 1:1 — leaving the CALayer default (1.0) makes a Retina
+            // window composite the physical-size drawable into a point-size
+            // layer and present it quarter-scale / blurry. AppKit does NOT set
+            // contentsScale on a layer-hosting view (unlike a layer-BACKED one),
+            // so we set it from the window the host already parented the view in.
+            CGFloat backing = view.window ? view.window.backingScaleFactor
+                                          : (w > 0 && view.bounds.size.width > 0
+                                                 ? (CGFloat)w / view.bounds.size.width
+                                                 : 1.0);
+            if (backing <= 0.0) backing = 1.0;
+            canvas_layer_.contentsScale = backing;
+            canvas_layer_.frame = view.bounds;
+            view.layer = canvas_layer_;
+            view.wantsLayer = YES;
+        }
+
+        // Host-owned ImGui/ImPlot contexts already exist (core_create_ui_context);
+        // wire ONLY the Metal render backend. No ImGui_ImplGlfw here.
+        if (!ImGui_ImplMetal_Init(device_)) {
+            canvas_layer_ = nil; canvas_tex_ = nil; queue_ = nil; device_ = nil;
+            return false;
+        }
+
+        textures_ = [NSMutableDictionary dictionary];
+        events_ = [NSMutableDictionary dictionary];
+        pass_desc_ = [MTLRenderPassDescriptor new];
+        canvas_ready_ = true;
+        return true;
+    }
+
+    void canvas_resize(int w, int h) override {
+        if (!canvas_ready_ || w <= 0 || h <= 0) return;
+        canvas_w_ = w;
+        canvas_h_ = h;
+        if (canvas_mode_ == CANVAS_OFFSCREEN)
+            make_canvas_target(w, h);
+        else if (canvas_layer_ != nil)
+            canvas_layer_.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
+    }
+
+    // Start-of-frame: acquire the target, open the render pass with a CLEAR
+    // (== the exe backend's background), then ImGui NewFrame. Mirrors new_frame()
+    // exactly, minus the GLFW platform NewFrame. Anything drawn this frame
+    // (including geom views on separate command buffers) lands on top.
+    void canvas_new_frame() override {
+        if (!canvas_ready_) return;
+        @autoreleasepool {
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            if (canvas_mode_ == CANVAS_OFFSCREEN) {
+                rp.colorAttachments[0].texture = canvas_tex_;
+            } else {
+                canvas_drawable_ = [canvas_layer_ nextDrawable];   // may be nil under load
+                rp.colorAttachments[0].texture =
+                    canvas_drawable_ ? canvas_drawable_.texture : nil;
+            }
+            rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[0].clearColor = MTLClearColorMake(0.05, 0.05, 0.08, 1.0);
+
+            canvas_cmd_ = [queue_ commandBuffer];
+            if (canvas_mode_ == CANVAS_OFFSCREEN || canvas_drawable_ != nil)
+                canvas_enc_ = [canvas_cmd_ renderCommandEncoderWithDescriptor:rp];
+            else
+                canvas_enc_ = nil;   // window with no drawable; keep frame balanced
+
+            ImGui_ImplMetal_NewFrame(rp);
+            ImGui::NewFrame();
+        }
+    }
+
+    void canvas_render() override {
+        @autoreleasepool {
+            ImGui::Render();   // consume the frame regardless (matches render())
+            if (!canvas_ready_) return;
+            if (canvas_enc_ != nil) {
+                ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
+                                               canvas_cmd_, canvas_enc_);
+                [canvas_enc_ endEncoding];
+                if (canvas_mode_ == CANVAS_WINDOW && canvas_drawable_ != nil)
+                    [canvas_cmd_ presentDrawable:canvas_drawable_];
+                [canvas_cmd_ commit];
+                // Offscreen readback must observe THIS frame, so drain it (no
+                // swapchain to pace us). Window mode presents and rides on.
+                if (canvas_mode_ == CANVAS_OFFSCREEN)
+                    [canvas_cmd_ waitUntilCompleted];
+            } else if (canvas_cmd_ != nil) {
+                [canvas_cmd_ commit];   // nothing to draw; flush
+            }
+            canvas_enc_ = nil;
+            canvas_cmd_ = nil;
+            canvas_drawable_ = nil;
+        }
+    }
+
+    bool canvas_read_pixels(uint8_t* dst, int stride) override {
+        if (!canvas_ready_ || canvas_mode_ != CANVAS_OFFSCREEN) return false;
+        if (canvas_tex_ == nil || dst == nullptr) return false;
+        const int w = canvas_w_, h = canvas_h_;
+        const int tight = w * 4;
+        if (stride < tight) return false;
+        @autoreleasepool {
+            const NSUInteger bpr = (NSUInteger)w * 4;
+            id<MTLBuffer> out = [device_ newBufferWithLength:bpr * (NSUInteger)h
+                                                     options:MTLResourceStorageModeShared];
+            if (out == nil) return false;
+            id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+            [blit copyFromTexture:canvas_tex_
+                      sourceSlice:0 sourceLevel:0
+                     sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
+                         toBuffer:out destinationOffset:0
+           destinationBytesPerRow:bpr
+         destinationBytesPerImage:bpr * (NSUInteger)h];
+            [blit endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+            const uint8_t* src = (const uint8_t*)out.contents;
+            for (int y = 0; y < h; ++y)
+                std::memcpy(dst + (size_t)y * (size_t)stride,
+                            src + (size_t)y * (size_t)tight, (size_t)tight);
+            return true;
+        }
+    }
+
+    void canvas_shutdown() override {
+        if (!canvas_ready_) return;
+        ImGui_ImplMetal_Shutdown();
+        [events_ removeAllObjects]; events_ = nil; event_values_.clear();
+        depth_textures_.clear();
+        [textures_ removeAllObjects]; textures_ = nil;
+        imported_.clear();
+        geom_prim_inst_staging_ = nil;
+        cmap_pipeline_ = nil;
+        points_pipeline_ = nil;
+        geom_lib_ = nil;
+        geom_pipelines_.clear();
+        depth_states_.clear();
+        pass_desc_ = nil;
+        canvas_tex_ = nil;
+        canvas_layer_ = nil;
+        canvas_cmd_ = nil;
+        canvas_enc_ = nil;
+        canvas_drawable_ = nil;
+        queue_ = nil;
+        device_ = nil;
+        canvas_ready_ = false;
+    }
+
     bool init(GLFWwindow* window) override {
         window_ = window;
         device_ = MTLCreateSystemDefaultDevice();
@@ -1259,6 +1444,21 @@ public:
     }
 
 private:
+    // Offscreen canvas target: renderable AND host-readable (unified memory).
+    // RGBA8 so canvas_read_pixels hands back RGBA with no swizzle. Rebuilt on
+    // resize; the old texture is ARC-released.
+    bool make_canvas_target(int w, int h) {
+        MTLTextureDescriptor* d =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:(NSUInteger)w
+                                                              height:(NSUInteger)h
+                                                           mipmapped:NO];
+        d.storageMode = MTLStorageModeShared;
+        d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        canvas_tex_ = [device_ newTextureWithDescriptor:d];
+        return canvas_tex_ != nil;
+    }
+
     id<MTLTexture> lookup(uint64_t id) {
         if (id == 0) return nil;
         return textures_[@(id)];
@@ -1524,6 +1724,17 @@ private:
     id<CAMetalDrawable>          drawable_  = nil;
     id<MTLCommandBuffer>         frame_cmd_ = nil;
     id<MTLRenderCommandEncoder>  frame_enc_ = nil;
+
+    // Embed canvas state (L2a). Populated only on the canvas_init() path; the
+    // swapchain members above stay nil there and vice-versa.
+    bool                         canvas_ready_ = false;
+    CanvasMode                   canvas_mode_  = CANVAS_OFFSCREEN;
+    int                          canvas_w_ = 0, canvas_h_ = 0;
+    id<MTLTexture>               canvas_tex_ = nil;    // offscreen target (readable)
+    CAMetalLayer*                canvas_layer_ = nil;  // window mode
+    id<MTLCommandBuffer>         canvas_cmd_ = nil;
+    id<MTLRenderCommandEncoder>  canvas_enc_ = nil;
+    id<CAMetalDrawable>          canvas_drawable_ = nil;
 
     NSMutableDictionary<NSNumber*, id<MTLTexture>>* textures_ = nil;
     std::unordered_map<uint64_t, id<MTLTexture>> depth_textures_;

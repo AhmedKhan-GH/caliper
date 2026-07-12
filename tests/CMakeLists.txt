@@ -122,6 +122,37 @@ endif()
 add_test(NAME caliper_torch_tests COMMAND caliper_torch_tests)
 
 # ---------------------------------------------------------------------------
+# caliper_embed_tests — the embed C ABI (caliper/embed.h) battery (R4 L2a).
+# Links libcaliper (the embeddable core) and drives it as an embedder would:
+# offscreen core -> load the hello fixture -> pump -> read_pixels -> shutdown,
+# plus the refusal gates. Needs a live GPU for the pixel case (self-skips like
+# the gfx suite when none is present); the gate cases are GPU-free.
+# ---------------------------------------------------------------------------
+add_executable(caliper_embed_tests test_embed.cpp)
+target_link_libraries(caliper_embed_tests PRIVATE
+    doctest::doctest libcaliper caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
+# src/host on the include path for the §7 host-axis case: it reaches the process
+# bridge + renderer (white-box) to byte-compare the tensor->texture upload the
+# embed core wired against the shared CPU reference (host_services.h,
+# tensor_bridge.h, renderer/host_renderer.h).
+target_include_directories(caliper_embed_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_compile_definitions(caliper_embed_tests PRIVATE
+    CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets")
+set_target_properties(caliper_embed_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+# The offscreen case composites + reads back the hello fixture, so its dylib
+# and manifest must exist in build/applets before the test runs. sine_scope is
+# the SECOND distinct applet the load-different-id-after-active case swaps to
+# (and, being jobs.v1/device.v1-backed, it exercises the "new applet's init jobs
+# survive the old one's teardown" reorder).
+add_dependencies(caliper_embed_tests hello_applet sine_scope)
+if(APPLE)
+    set_target_properties(caliper_embed_tests PROPERTIES
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+endif()
+add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
+
+# ---------------------------------------------------------------------------
 # Applet learning-core / engine tests. Each is a SEPARATE binary that links
 # only doctest + libtorch and puts one applet's header directory on the include
 # path — keeping torch out of the fast caliper_tests unit suite. The four blocks
