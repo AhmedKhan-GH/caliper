@@ -11,6 +11,9 @@
 #include "artifact_store.h"
 #include "data_store.h"
 #include "tensor_bridge.h"
+#include "renderer/host_renderer.h"  // export.v1 reads the view back off the renderer
+#include "export_service.h"          // export.v1 PNG/sidecar/atomic-write helpers
+#include "host_version.h"            // kHostVersionStr for the export sidecar
 #include "../app_paths.h"   // host_services.cpp compiles into the caliper exe,
                             // which also compiles app_paths.cpp (CMakeLists)
 #include <caliper/services/log_v1.h>
@@ -29,6 +32,7 @@
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
 #include <caliper/services/geometry_v1_3.h>
+#include <caliper/services/export_v1.h>
 #include <caliper/tensor.h>
 #include <imgui.h>
 #include <implot.h>
@@ -37,6 +41,10 @@
 #include <cstring>
 #include <ctime>
 #include <optional>
+#include <filesystem>
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace caliper_host {
 
@@ -415,6 +423,212 @@ const CaliperGeometryV1_3 kGeom13 = {sizeof(CaliperGeometryV1_3),
     &geo_caps, &geo_create_view, &geo_release_view, &geo_draw_points,
     &geo_create_view_ex, &geo_draw_primitives_v13, nullptr};
 
+// --- caliper.export.v1: the terminal sink (PUBLISHING.md §3, Rung E) ---------
+// A veneer by composition: temp geom_create_view_ex(DEPTH) → the EXISTING
+// draw_primitives host path (every gate, every byte-exact behavior reused) →
+// debug_readback_rgba8 (renderer-side) → stb PNG + JSON sidecar → destroy the
+// view. No new render code, no retained draw state. Refusal purity extends to
+// the filesystem (the PNG lands via temp-then-rename, the sidecar after), and
+// caps() tracks the geometry primitives cap so export degrades in lockstep on a
+// headless / no-renderer host.
+#ifndef CALIPER_GIT_COMMIT
+#define CALIPER_GIT_COMMIT "unknown"   // configured in at build time (one CMake line)
+#endif
+
+uint32_t ex_caps(void) {
+    TensorBridge* b = bridge();
+    const bool live = b && (b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES);
+    return live ? CALIPER_EXPORT_CAP_VIEW_PNG : 0u;
+}
+
+// Distinct colormap ids used by the draws, first-seen order. Reads only the
+// frozen v1.1 prefix (color_mode/colormap), so it is safe at ANY draw_stride
+// (v1.1/v1.2/v1.3 records the caller may hand in, stride-widened or not).
+std::vector<int32_t> ex_colormaps(const CaliperGeomDrawV1_3* draws,
+                                  uint32_t count, uint32_t stride) {
+    std::vector<int32_t> out;
+    if (!draws || count == 0 || stride == 0) return out;
+    const auto* p = reinterpret_cast<const uint8_t*>(draws);
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto* d = reinterpret_cast<const CaliperGeomDrawV1_3*>(
+            p + static_cast<size_t>(i) * stride);
+        if (d->base.base.color_mode == CALIPER_GEOM_COLOR_COLORMAP) {
+            const int32_t id = d->base.base.colormap;
+            bool seen = false;
+            for (int32_t s : out) if (s == id) { seen = true; break; }
+            if (!seen) out.push_back(id);
+        }
+    }
+    return out;
+}
+
+// Render one frame to a fresh offscreen (w,h) and read it back TOP-DOWN. Returns
+// false (nothing written, nothing to clean up on the FS — this touches no files)
+// on any gate: no renderer/bridge, primitives cap absent, null cam, bad dims, a
+// draw the geometry gate battery rejects, or a short/failed readback.
+bool ex_render_readback(uint32_t w, uint32_t h, const CaliperGeomCamera* cam,
+                        const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
+                        uint32_t draw_stride, uint32_t clear_rgba,
+                        std::vector<uint8_t>& out_px) {
+    TensorBridge* b = bridge();
+    HostRenderer* r = g_renderer;
+    if (!b || !r || !cam) return false;
+    if (!(b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES)) return false;
+    if (w == 0 || h == 0 || w > CALIPER_EXPORT_MAX_DIM || h > CALIPER_EXPORT_MAX_DIM)
+        return false;
+    CaliperTextureId view = b->geom_create_view_ex(w, h, CALIPER_GEOM_VIEW_DEPTH);
+    if (view == 0) return false;
+    const bool drew = b->geom_draw_primitives_v1_3(view, cam, draws, draw_count,
+                                                   draw_stride, clear_rgba);
+    if (!drew) { b->geom_release_view(view); return false; }
+    out_px = r->debug_readback_rgba8(view, static_cast<int>(w),
+                                     static_cast<int>(h));
+    b->geom_release_view(view);
+    return out_px.size() == static_cast<size_t>(w) * h * 4u;
+}
+
+ExportProvenance ex_provenance(uint32_t w, uint32_t h, uint32_t clear_rgba,
+                               const CaliperGeomCamera* cam,
+                               const CaliperGeomDrawV1_3* draws,
+                               uint32_t draw_count, uint32_t draw_stride,
+                               const char* state_json) {
+    ExportProvenance p;
+    p.version      = kHostVersionStr;
+    p.git_commit   = CALIPER_GIT_COMMIT;
+    p.backend      = (g_renderer && g_renderer->name()) ? g_renderer->name() : "none";
+    p.platform     = export_platform_string();
+    p.timestamp_utc = export_utc_timestamp();
+    p.width        = w;
+    p.height       = h;
+    p.clear_rgba   = clear_rgba;
+    p.draw_count   = draw_count;
+    p.view16       = cam ? cam->view : nullptr;
+    p.proj16       = cam ? cam->proj : nullptr;
+    p.colormaps    = ex_colormaps(draws, draw_count, draw_stride);
+    p.state_json   = state_json;
+    return p;
+}
+
+uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
+                     const CaliperGeomCamera* cam,
+                     const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
+                     uint32_t draw_stride, uint32_t clear_rgba,
+                     const char* state_json) {
+    if (!path) return 0u;
+    std::vector<uint8_t> px;
+    if (!ex_render_readback(w, h, cam, draws, draw_count, draw_stride,
+                            clear_rgba, px))
+        return 0u;
+    // The pixels are in hand; the target file is only ever touched by the atomic
+    // rename below — a refusal above left the disk exactly as it was.
+    if (!export_write_png_atomic(path, px.data(), w, h)) return 0u;
+    const ExportProvenance prov = ex_provenance(w, h, clear_rgba, cam, draws,
+                                                draw_count, draw_stride, state_json);
+    const std::string json = export_build_sidecar_json(prov);
+    if (!export_write_text_atomic(std::string(path) + ".json", json)) return 0u;
+    return 1u;
+}
+
+// One sequence live at a time (v0). Guarded by a mutex so the exemplar's job
+// thread (E2) and the frame thread never race the handle/bookkeeping.
+struct ExportSequence {
+    std::mutex mtx;
+    bool     active = false;
+    uint64_t handle = 0;
+    uint64_t next_handle = 1;
+    std::string dir;
+    std::string state_json;
+    bool        has_state = false;
+    uint32_t w = 0, h = 0;
+    uint32_t frame_count = 0;
+    // Last frame's provenance (a video has a per-frame camera): the sequence
+    // sidecar records the most recent one alongside frame_count.
+    CaliperGeomCamera last_cam{};
+    uint32_t last_clear = 0;
+    uint32_t last_draw_count = 0;
+    std::vector<int32_t> last_colormaps;
+};
+ExportSequence g_seq;
+
+uint64_t ex_begin_sequence(const char* dir, uint32_t w, uint32_t h,
+                           const char* state_json) {
+    if (!dir) return 0u;
+    if (w == 0 || h == 0 || w > CALIPER_EXPORT_MAX_DIM || h > CALIPER_EXPORT_MAX_DIM)
+        return 0u;
+    TensorBridge* b = bridge();
+    if (!b || !(b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES)) return 0u;
+    std::lock_guard<std::mutex> lk(g_seq.mtx);
+    if (g_seq.active) return 0u;   // one at a time (v0)
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) return 0u;
+    g_seq.active = true;
+    g_seq.handle = g_seq.next_handle++;
+    g_seq.dir = dir;
+    g_seq.has_state = state_json != nullptr;
+    g_seq.state_json = state_json ? state_json : "";
+    g_seq.w = w;
+    g_seq.h = h;
+    g_seq.frame_count = 0;
+    return g_seq.handle;
+}
+
+uint32_t ex_frame(uint64_t seq, const CaliperGeomCamera* cam,
+                  const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
+                  uint32_t draw_stride, uint32_t clear_rgba) {
+    std::lock_guard<std::mutex> lk(g_seq.mtx);
+    if (!g_seq.active || seq == 0 || seq != g_seq.handle) return 0u;
+    std::vector<uint8_t> px;
+    if (!ex_render_readback(g_seq.w, g_seq.h, cam, draws, draw_count,
+                            draw_stride, clear_rgba, px))
+        return 0u;
+    char name[32];
+    std::snprintf(name, sizeof(name), "frame_%06u.png", g_seq.frame_count);
+    const std::string frame_path =
+        (std::filesystem::path(g_seq.dir) / name).string();
+    if (!export_write_png_atomic(frame_path, px.data(), g_seq.w, g_seq.h))
+        return 0u;
+    if (cam) g_seq.last_cam = *cam;
+    g_seq.last_clear = clear_rgba;
+    g_seq.last_draw_count = draw_count;
+    g_seq.last_colormaps = ex_colormaps(draws, draw_count, draw_stride);
+    g_seq.frame_count++;
+    return 1u;
+}
+
+void ex_end_sequence(uint64_t seq) {
+    std::lock_guard<std::mutex> lk(g_seq.mtx);
+    if (!g_seq.active || seq == 0 || seq != g_seq.handle) return;
+    ExportProvenance p;
+    p.version       = kHostVersionStr;
+    p.git_commit    = CALIPER_GIT_COMMIT;
+    p.backend       = (g_renderer && g_renderer->name()) ? g_renderer->name() : "none";
+    p.platform      = export_platform_string();
+    p.timestamp_utc = export_utc_timestamp();
+    p.width         = g_seq.w;
+    p.height        = g_seq.h;
+    p.clear_rgba    = g_seq.last_clear;
+    p.draw_count    = g_seq.last_draw_count;
+    p.view16        = g_seq.last_cam.view;
+    p.proj16        = g_seq.last_cam.proj;
+    p.colormaps     = g_seq.last_colormaps;
+    p.state_json    = g_seq.has_state ? g_seq.state_json.c_str() : nullptr;
+    p.is_sequence   = true;
+    p.frame_count   = g_seq.frame_count;
+    const std::string json = export_build_sidecar_json(p);
+    const std::string sidecar =
+        (std::filesystem::path(g_seq.dir) / "sequence.json").string();
+    export_write_text_atomic(sidecar, json);
+    g_seq.active = false;
+    g_seq.handle = 0;
+    g_seq.dir.clear();
+    g_seq.state_json.clear();
+    g_seq.has_state = false;
+}
+
+const CaliperExportV1 kExport = {sizeof(CaliperExportV1), &ex_caps, &ex_view_png,
+    &ex_begin_sequence, &ex_frame, &ex_end_sequence, nullptr};
+
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
                                     CALIPER_METRICS_V1,
@@ -427,7 +641,7 @@ const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_GEOMETRY_V1_2,
                                     CALIPER_GEOMETRY_V1_3,
                                     CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1,
-                                    CALIPER_FEED_V1};
+                                    CALIPER_FEED_V1, CALIPER_EXPORT_V1};
 
 } // namespace
 
@@ -540,6 +754,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_ARTIFACTS_V1) == 0) return &kArtifacts;
     if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
     if (std::strcmp(id, CALIPER_FEED_V1) == 0) return &kFeed;
+    if (std::strcmp(id, CALIPER_EXPORT_V1) == 0) return &kExport;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
 }
 

@@ -20,6 +20,22 @@ if(NOT N EQUAL 0)
 endif()
 
 # ============================================================================
+# Git commit stamp (caliper.export.v1 sidecar — PUBLISHING.md §3). Captured at
+# CONFIGURE time and compiled into libcaliper (CALIPER_GIT_COMMIT), the same way
+# the version string is a compiled-in constant. "unknown" outside a git checkout.
+# ============================================================================
+execute_process(
+    COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse --short=12 HEAD
+    OUTPUT_VARIABLE CALIPER_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE CALIPER_GIT_RC)
+if(NOT CALIPER_GIT_RC EQUAL 0 OR CALIPER_GIT_COMMIT STREQUAL "")
+    set(CALIPER_GIT_COMMIT "unknown")
+endif()
+message(STATUS "caliper.export.v1 git_commit stamp: ${CALIPER_GIT_COMMIT}")
+
+# ============================================================================
 # Build Options (PyTorch-style)
 # ============================================================================
 
@@ -315,11 +331,17 @@ endif()
 # exe. Output name `caliper` -> libcaliper.a (no clash with the `caliper` exe).
 add_library(libcaliper STATIC
     src/host/host_services.cpp
+    src/host/export_service.cpp
     src/host/tensor_bridge.cpp
     src/host/renderer/gl_renderer.cpp
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
 )
+# stb_image_write (vendored, third_party/stb) backs the export.v1 PNG encode;
+# host_services.cpp gets the git_commit stamp for the sidecar (§3).
+target_include_directories(libcaliper PRIVATE ${THIRD_PARTY_DIR}/stb)
+target_compile_definitions(libcaliper PRIVATE
+    CALIPER_GIT_COMMIT="${CALIPER_GIT_COMMIT}")
 # Namespaced alias for the inner headless layer, kept so any consumer can name
 # it as caliper::host_lib (test CMake still links the raw caliper_host_lib).
 add_library(caliper::host_lib ALIAS caliper_host_lib)
