@@ -1,7 +1,8 @@
-// Tests for the macOS telemetry provider behind caliper.feed.v1 (feed spec §4 /
-// T2). The sampling thread is real-sensor-dependent, so the deterministic cases
-// here cover only the LIFECYCLE (start/stop clean, and re-startable across the
-// embed create/shutdown/create cycling that runs services twice) and a NON-FATAL
+// Tests for the platform telemetry providers behind caliper.feed.v1 (feed spec
+// §4 / T2 on macOS; §6.2 on Windows). The sampling thread is
+// real-sensor-dependent, so the deterministic cases here cover only the
+// LIFECYCLE (start/stop clean, and re-startable across the embed
+// create/shutdown/create cycling that runs services twice) and a NON-FATAL
 // live smoke (if the provider vends channels, at least one sample lands per
 // guaranteed channel within a bounded window; skip-with-message otherwise so CI
 // stays green). REQUIRE/CHECK operands are pulled into locals first (MSVC-safe).
@@ -16,14 +17,30 @@
 
 using caliper_host::FeedStore;
 
+#if defined(__APPLE__) || defined(_WIN32)
 #ifdef __APPLE__
 #include "feed_provider_mac.h"
+#else
+#include "feed_provider_win.h"
+#endif
 
 namespace {
 
+#ifdef __APPLE__
 // The channel ids the guaranteed tier must always vend on a Mac.
 const char* const kGuaranteed[] = {
     "sys.cpu.util", "sys.mem.used", "sys.thermal.state", "sys.gpu.util"};
+// Never fails on a Mac (public ProcessInfo API) — always ticks.
+const char* const kAlwaysTicks = "sys.thermal.state";
+#else
+// The channel ids the guaranteed tier must always vend on Windows. Battery and
+// the NVML GPU channels are box-dependent (probe tier), so they are not here.
+const char* const kGuaranteed[] = {"sys.cpu.util", "sys.mem.used"};
+// GetSystemTimes is unconditional on Windows — always ticks.
+const char* const kAlwaysTicks = "sys.cpu.util";
+#endif
+constexpr uint32_t kGuaranteedCount =
+    (uint32_t)(sizeof(kGuaranteed) / sizeof(kGuaranteed[0]));
 
 std::set<std::string> channel_ids(FeedStore& s) {
     std::set<std::string> ids;
@@ -45,7 +62,7 @@ TEST_CASE("feed provider: start registers the guaranteed tier, caps LIVE") {
     uint32_t caps = store.caps();
     uint32_t count = store.channel_count();
     CHECK(caps == CALIPER_FEED_CAP_LIVE);   // >=1 channel => LIVE
-    CHECK(count >= 4u);                       // guaranteed tier is 4 channels
+    CHECK(count >= kGuaranteedCount);
 
     std::set<std::string> ids = channel_ids(store);
     for (const char* id : kGuaranteed) {
@@ -64,10 +81,10 @@ TEST_CASE("feed provider: start/stop cycles cleanly (embed double-cycle), "
     uint32_t count1 = store.channel_count();
     // Let a few ticks land so seq advances.
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    // Snapshot the newest thermal seq (thermal never fails, so it always ticks).
+    // Snapshot the newest seq of the always-ticking channel.
     uint64_t cur = 0;
     CaliperFeedSample buf[64];
-    uint32_t got1 = store.read("sys.thermal.state", buf, 64, &cur);
+    uint32_t got1 = store.read(kAlwaysTicks, buf, 64, &cur);
     uint64_t last_seq_cycle1 = got1 ? buf[got1 - 1].seq : 0;
     caliper_host::feed_provider_stop();
 
@@ -78,7 +95,7 @@ TEST_CASE("feed provider: start/stop cycles cleanly (embed double-cycle), "
     uint32_t count2 = store.channel_count();
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     uint64_t cur2 = last_seq_cycle1;   // resume from where cycle 1 left off
-    uint32_t got2 = store.read("sys.thermal.state", buf, 64, &cur2);
+    uint32_t got2 = store.read(kAlwaysTicks, buf, 64, &cur2);
     uint64_t last_seq_cycle2 = got2 ? buf[got2 - 1].seq : last_seq_cycle1;
     caliper_host::feed_provider_stop();
 
@@ -129,9 +146,9 @@ TEST_CASE("feed provider: live smoke — each guaranteed channel yields a sample
     caliper_host::feed_provider_stop();
 }
 
-#else  // non-Apple: no provider, zero channels (honest degradation, T1 default)
+#else  // no provider on this platform: zero channels (honest degradation, T1)
 
-TEST_CASE("feed provider: absent on non-Apple hosts (zero channels)") {
+TEST_CASE("feed provider: absent on hosts without a provider (zero channels)") {
     FeedStore store;
     uint32_t count = store.channel_count();
     uint32_t caps = store.caps();
