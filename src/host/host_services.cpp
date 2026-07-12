@@ -2,6 +2,10 @@
 #include "job_system.h"
 #include "device_query.h"
 #include "metrics_store.h"
+#include "feed_store.h"
+#ifdef __APPLE__
+#include "feed_provider_mac.h"   // macOS telemetry provider (T2); Apple-only
+#endif
 #include "artifact_store.h"
 #include "data_store.h"
 #include "tensor_bridge.h"
@@ -15,6 +19,7 @@
 #include <caliper/services/metrics_v1_1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
+#include <caliper/services/feed_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
@@ -154,6 +159,28 @@ const char* met_last_error(void) {
 const CaliperMetricsV1_1 kMetrics11 = {sizeof(CaliperMetricsV1_1),
     &met_begin_run, &met_end_run, &met_scalar, &met_histogram,
     &met_image, &met_hparams_json, &met_query, &met_last_error};
+
+// --- caliper.feed.v1: live telemetry ring buffers (feed spec §4) ---
+// One process-wide store, vended for applets AND embedders (feed.v1 is an
+// any-thread service). In T1 the store owns NO provider thread and NO channels:
+// caps() reports 0 (CALIPER_FEED_CAP_LIVE unset) and every read yields nothing
+// until a provider (T2 macOS sensors) or a test registers channels — honest
+// degradation, never fake data. The thunks are trivial forwarders onto
+// FeedStore, which carries the tested per-channel ring / cursor logic.
+FeedStore g_feed;
+
+uint32_t feed_caps(void)          { return g_feed.caps(); }
+uint32_t feed_channel_count(void) { return g_feed.channel_count(); }
+uint32_t feed_channel_info(uint32_t index, CaliperFeedChannelInfo* info) {
+    return g_feed.channel_info(index, info);
+}
+uint32_t feed_read(const char* id, CaliperFeedSample* buf, uint32_t max,
+                   uint64_t* cursor) {
+    return g_feed.read(id, buf, max, cursor);
+}
+const CaliperFeedV1 kFeed = {sizeof(CaliperFeedV1), &feed_caps,
+                             &feed_channel_count, &feed_channel_info,
+                             &feed_read, nullptr};
 
 // --- caliper.artifacts.v1: content-addressed checkpoints (§7.8) ---
 // Same non-fatal-open + no-op-thunks discipline as metrics above, and the
@@ -397,7 +424,8 @@ const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_GEOMETRY_V1_1,
                                     CALIPER_GEOMETRY_V1_2,
                                     CALIPER_GEOMETRY_V1_3,
-                                    CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1};
+                                    CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1,
+                                    CALIPER_FEED_V1};
 
 } // namespace
 
@@ -432,11 +460,31 @@ void services_init() {
     // Route the bridge's acceptance-rule rejections through caliper.log.v1
     // (retires the C4 stderr placeholder inside tensor_bridge.cpp).
     set_bridge_log_sink(&log_impl);
+
+#ifdef __APPLE__
+    // Start the macOS telemetry provider (feed spec §4 / T2): it probes the
+    // sudo-free sensors and registers the readable ones into g_feed, then samples
+    // at 10 Hz. g_feed is a process-lifetime static, so it exists here; the
+    // provider is JOINED in services_shutdown BEFORE any teardown (below). Both
+    // the exe (main.cpp) and the embed core (embed_core.cpp) reach this, and the
+    // start/stop pair survives the embed create/shutdown/create cycling.
+    // Non-Apple hosts have no provider — g_feed keeps zero channels (honest
+    // degradation, the T1 default).
+    feed_provider_start(g_feed);
+#endif
 }
 
 void services_shutdown() {
     // Workers first (they may still be writing metrics/artifacts), then the
     // stores. Flags flip first so any thunk racing the close no-ops.
+#ifdef __APPLE__
+    // Stop + JOIN the telemetry provider before anything else: its thread writes
+    // into g_feed, so it must be joined here (BEFORE teardown, and before g_feed's
+    // own process-exit static dtor). Safe if never started; re-startable on the
+    // next services_init — so the embed create/shutdown/create battery cycles the
+    // provider cleanly, twice, with no lingering thread across a shutdown.
+    feed_provider_stop();
+#endif
     g_jobs.cancel_all_and_join();
     g_metrics_open = false;
     g_artifacts_open = false;
@@ -453,6 +501,8 @@ DataStore& host_data_store() { return g_data; }
 JobSystem& host_job_system() { return g_jobs; }
 
 MetricsStore& host_metrics_store() { return g_metrics; }
+
+FeedStore& host_feed_store() { return g_feed; }
 
 void services_set_renderer(HostRenderer* renderer) {
     g_renderer = renderer;
@@ -486,6 +536,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_GEOMETRY_V1_3) == 0) return &kGeom13;
     if (std::strcmp(id, CALIPER_ARTIFACTS_V1) == 0) return &kArtifacts;
     if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
+    if (std::strcmp(id, CALIPER_FEED_V1) == 0) return &kFeed;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
 }
 

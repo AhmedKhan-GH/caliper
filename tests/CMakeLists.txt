@@ -22,12 +22,15 @@ add_executable(caliper_tests
     test_sugar_services.cpp
     test_mnist_idx.cpp
     test_metrics_store.cpp
+    test_feed_store.cpp
+    test_feed_provider.cpp
     test_artifact_store.cpp
     test_data_store.cpp
     test_tensor_bridge.cpp
     test_alloc_registry.cpp
     test_obj.cpp
     test_instance_field.cpp
+    test_pulse_ring.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
@@ -41,6 +44,9 @@ target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/emb
 # InstanceScope's pure pose/tint/mesh reference (instance_field.h) is torch-free,
 # so its unit test rides the fast caliper_tests suite.
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/instance_scope)
+# PulseScope's pure ring-copy/gap logic (pulse_ring.h) is torch-free + UI-free,
+# so its unit test rides the fast caliper_tests suite (feed spec §5).
+target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/pulse_scope)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_sources(caliper_tests PRIVATE test_loader.cpp)

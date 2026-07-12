@@ -1,9 +1,15 @@
 # `caliper.feed.v1` — telemetry ingestion (physical twins, rung one)
 
 **Date:** 2026-07-12
-**Status:** DESIGN, approved by the owner (strategy call 2026-07-12: telemetry
-becomes a platform service, not a per-applet pattern — closing ROADMAP §7's
-last open decision). Exemplar decision: the v0 physical source is THIS
+**Status:** EXECUTED — §3 (ABI), §4 (host + macOS provider), §5 (`pulse_scope`
+exemplar) all shipped on `feat/feed-v1` (T1 `477f9e5`; T2 `16dd30c` + `b9c1c71`;
+T3 this exemplar+closeout series). The macOS provider is live-verified — 7
+sudo-free channels @10 Hz, run-proven under CPU load — and `pulse_scope` freezes
+the read surface. Follow-ups §6 unchanged (Windows provider, thermal-twin
+flagship, applet-registered sources, Compass pane). Originally DESIGN, approved
+by the owner (strategy call 2026-07-12: telemetry becomes a platform service, not
+a per-applet pattern — closing ROADMAP §7's last open decision). Exemplar
+decision: the v0 physical source is THIS
 machine's own silicon (option (a)); the exemplar applet is a dashboard
 (`pulse_scope`), and the machine-thermal-twin flagship is a NAMED FOLLOW-UP,
 not part of this spec (extract-don't-invent: the service freezes against the
@@ -94,7 +100,10 @@ without breaking this surface.
   close): samples every 100 ms (10 Hz) into the store.
 - **macOS platform provider** (`feed_provider_mac.*`): SUDO-FREE signals
   only. Guaranteed tier (public APIs): CPU utilization (host_processor_info),
-  memory pressure (host_statistics64), thermal pressure state
+  memory USED %-of-total (host_statistics64 — named `sys.mem.used`, NOT
+  "pressure": the kernel's true memory-pressure signal is a different metric
+  and names must not overclaim; T2-review value-honesty ratification),
+  thermal pressure state
   (ProcessInfo.thermalState as 0-3), GPU utilization (IOAccelerator
   PerformanceStatistics — readable unprivileged). Best-effort tier
   (investigate at implementation; include ONLY what reads without privileges

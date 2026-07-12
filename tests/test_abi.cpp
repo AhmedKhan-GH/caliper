@@ -16,6 +16,7 @@
 #include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
+#include <caliper/services/feed_v1.h>
 #include <caliper/caliper.hpp>
 #include <caliper/fixture_host.h>
 #include <cstddef>
@@ -448,4 +449,44 @@ static_assert(std::is_standard_layout_v<ArrowArrayStream>);
 TEST_CASE("abi: phase-2f service ids are fixed") {
     CHECK(std::string(CALIPER_ARTIFACTS_V1) == "caliper.artifacts.v1");
     CHECK(std::string(CALIPER_DATA_V1) == "caliper.data.v1");
+}
+
+TEST_CASE("feed v1 layout is frozen (new service, D24 pattern)") {
+    static_assert(std::is_standard_layout_v<CaliperFeedSample>);
+    static_assert(std::is_standard_layout_v<CaliperFeedChannelInfo>);
+    static_assert(std::is_standard_layout_v<CaliperFeedV1>);
+    static_assert(offsetof(CaliperFeedV1, struct_size) == 0);
+
+    // Sample: 24 B, 8-aligned, seq/t_ns/value/reserved0.
+    CHECK(sizeof(CaliperFeedSample) == 24);
+    CHECK(offsetof(CaliperFeedSample, seq) == 0);
+    CHECK(offsetof(CaliperFeedSample, t_ns) == 8);
+    CHECK(offsetof(CaliperFeedSample, value) == 16);
+    CHECK(offsetof(CaliperFeedSample, reserved0) == 20);
+
+    // ChannelInfo: struct_size-prefixed, fixed char fields, 152 B total.
+    CHECK(sizeof(CaliperFeedChannelInfo) == 152);
+    CHECK(offsetof(CaliperFeedChannelInfo, struct_size) == 0);
+    CHECK(offsetof(CaliperFeedChannelInfo, id) == 4);
+    CHECK(offsetof(CaliperFeedChannelInfo, name) == 68);
+    CHECK(offsetof(CaliperFeedChannelInfo, units) == 132);
+    CHECK(offsetof(CaliperFeedChannelInfo, nominal_hz) == 148);
+
+    // Vtable slot order pinned: caps, channel_count, channel_info, read,
+    // reserved0 — contiguous fn pointers after struct_size (padded to pointer
+    // alignment).
+    CHECK(offsetof(CaliperFeedV1, caps) == sizeof(void*));
+    CHECK(offsetof(CaliperFeedV1, channel_count) ==
+          offsetof(CaliperFeedV1, caps) + sizeof(void*));
+    CHECK(offsetof(CaliperFeedV1, channel_info) ==
+          offsetof(CaliperFeedV1, channel_count) + sizeof(void*));
+    CHECK(offsetof(CaliperFeedV1, read) ==
+          offsetof(CaliperFeedV1, channel_info) + sizeof(void*));
+    CHECK(offsetof(CaliperFeedV1, reserved0) ==
+          offsetof(CaliperFeedV1, read) + sizeof(void*));
+    CHECK(sizeof(CaliperFeedV1) ==
+          offsetof(CaliperFeedV1, reserved0) + sizeof(void*));
+
+    CHECK(CALIPER_FEED_CAP_LIVE == (1u << 0));
+    CHECK(std::string(CALIPER_FEED_V1) == "caliper.feed.v1");
 }
