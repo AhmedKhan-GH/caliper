@@ -76,6 +76,10 @@ extern "C" __declspec(dllimport) int __stdcall DuplicateHandle(
     void* hSourceProcessHandle, void* hSourceHandle,
     void* hTargetProcessHandle, void** lpTargetHandle,
     unsigned long dwDesiredAccess, int bInheritHandle, unsigned long dwOptions);
+// The embed CANVAS_WINDOW path needs the module HINSTANCE for the Win32
+// surface. Same declare-not-include discipline as CloseHandle above (avoids
+// dragging <windows.h> in past volk's Win32 type shims).
+extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t*);
 #endif
 
 // Build-time SPIR-V of shaders/colormap.comp (glslang -V --vn kColormapSpv),
@@ -380,6 +384,196 @@ public:
         device_ = VK_NULL_HANDLE;
         vkDestroyInstance(instance_, nullptr);
         instance_ = VK_NULL_HANDLE;
+    }
+
+    // ---- Embed canvas seam (libcaliper R4 L2a) ---------------------------
+    // Parallel to init()/new_frame()/render(): a GLFW-free path that composites
+    // the applet's ImGui frame onto an offscreen RGBA8 target (readable) or a
+    // swapchain over the host's native HWND. Builds its OWN instance/device here
+    // (init() is never called on this instance), wiring ONLY the ImGui *render*
+    // backend (imgui_impl_vulkan) — never imgui_impl_glfw; the embedder feeds io
+    // via caliper_core_event and owns io.DisplaySize/DeltaTime. Only ONE of
+    // init() / canvas_init() is ever called on a given instance, so the exe
+    // swapchain path (and its byte-exact geometry rows) is untouched.
+    bool canvas_supported() const override { return true; }
+
+    bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
+        if (w <= 0 || h <= 0) return false;
+        // One attach per instance, mutually exclusive with the exe init() path.
+        if (canvas_active_ || device_ != VK_NULL_HANDLE) return false;
+
+        canvas_mode_ = mode;
+        canvas_w_ = w;
+        canvas_h_ = h;
+        canvas_active_ = true;
+        auto fail = [&]() -> bool { canvas_teardown(); return false; };
+
+        // GLFW-free bring-up: explicit instance (no glfwGetRequiredInstance-
+        // Extensions — the embed path never calls glfwInit), then the same
+        // device/pool helpers the exe path uses (they touch no GLFW/surface).
+        if (volkInitialize() != VK_SUCCESS) return fail();
+        if (!create_canvas_instance(mode)) return fail();
+        if (!pick_device_and_queue()) return fail();
+        if (!create_descriptor_pool()) return fail();
+        if (!create_oneshot_pool()) return fail();
+
+        if (mode == CANVAS_WINDOW) {
+            if (native_view == nullptr) return fail();
+            VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+            sci.hinstance = (HINSTANCE)GetModuleHandleW(nullptr);
+            sci.hwnd = (HWND)native_view;
+            if (vkCreateWin32SurfaceKHR(instance_, &sci, nullptr, &surface_) != VK_SUCCESS)
+                return fail();
+            VkBool32 wsi = VK_FALSE;
+            vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queue_family_, surface_, &wsi);
+            if (wsi != VK_TRUE) return fail();
+
+            // Same swapchain/render-pass block as init() (verbatim; wd_ only).
+            wd_.Surface = surface_;
+            const VkFormat fmts[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
+                                     VK_FORMAT_B8G8R8_UNORM,   VK_FORMAT_R8G8B8_UNORM};
+            wd_.SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
+                physical_, surface_, fmts, 4, VK_COLORSPACE_SRGB_NONLINEAR_KHR);
+            const VkPresentModeKHR modes[] = {VK_PRESENT_MODE_FIFO_KHR};
+            wd_.PresentMode = ImGui_ImplVulkanH_SelectPresentMode(physical_, surface_, modes, 1);
+            ImGui_ImplVulkanH_CreateOrResizeWindow(instance_, physical_, device_, &wd_,
+                                                   queue_family_, nullptr, w, h,
+                                                   kMinImageCount, 0);
+            wd_.ClearValue.color.float32[0] = 0.05f;
+            wd_.ClearValue.color.float32[1] = 0.05f;
+            wd_.ClearValue.color.float32[2] = 0.08f;
+            wd_.ClearValue.color.float32[3] = 1.0f;
+        } else {
+            // OFFSCREEN: a dedicated color-only pass + RGBA8 target we composite
+            // into and copy back (adjudication F1; no depth — ImGui needs none
+            // and the exe swapchain pass has none either).
+            if (!ensure_canvas_pass()) return fail();
+            if (!make_canvas_target(w, h)) return fail();
+        }
+
+        // Wire ONLY the ImGui render backend against the pass it will record
+        // into (mismatch = validation error + garbage). No ImGui_ImplGlfw here.
+        ImGui_ImplVulkan_InitInfo ii = {};
+        ii.ApiVersion = VK_API_VERSION_1_1;
+        ii.Instance = instance_;
+        ii.PhysicalDevice = physical_;
+        ii.Device = device_;
+        ii.QueueFamily = queue_family_;
+        ii.Queue = queue_;
+        ii.DescriptorPool = imgui_pool_;
+        ii.MinImageCount = kMinImageCount;
+        ii.ImageCount = (mode == CANVAS_WINDOW) ? wd_.ImageCount : kMinImageCount;
+        ii.PipelineInfoMain.RenderPass =
+            (mode == CANVAS_WINDOW) ? wd_.RenderPass : canvas_pass_;
+        ii.PipelineInfoMain.Subpass = 0;
+        ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        if (!ImGui_ImplVulkan_Init(&ii)) return fail();
+        canvas_imgui_ = true;
+
+        canvas_ready_ = true;
+        return true;
+    }
+
+    void canvas_resize(int w, int h) override {
+        if (!canvas_ready_ || w <= 0 || h <= 0) return;
+        canvas_w_ = w;
+        canvas_h_ = h;
+        if (canvas_mode_ == CANVAS_WINDOW) {
+            rebuild_swapchain_ = true;   // applied at the next canvas_new_frame
+        } else {
+            vkDeviceWaitIdle(device_);
+            make_canvas_target(w, h);    // re-make target + grow readback staging
+        }
+    }
+
+    // Start-of-frame: open the clear (WINDOW: swapchain rebuild if needed — the
+    // CLEAR itself lives in wd_.RenderPass load-op, done in canvas_render;
+    // OFFSCREEN: the clear happens when canvas_pass_ begins in canvas_render),
+    // then the ImGui render-backend NewFrame + ImGui::NewFrame. No GLFW NewFrame
+    // — the embed core already set io.DisplaySize/DeltaTime for this frame.
+    void canvas_new_frame() override {
+        if (!canvas_ready_) return;
+        if (canvas_mode_ == CANVAS_WINDOW) {
+            if (canvas_w_ > 0 && canvas_h_ > 0 &&
+                (rebuild_swapchain_ || wd_.Width != canvas_w_ || wd_.Height != canvas_h_)) {
+                ImGui_ImplVulkan_SetMinImageCount(kMinImageCount);
+                ImGui_ImplVulkanH_CreateOrResizeWindow(instance_, physical_, device_, &wd_,
+                                                       queue_family_, nullptr,
+                                                       canvas_w_, canvas_h_,
+                                                       kMinImageCount, 0);
+                wd_.FrameIndex = 0;
+                rebuild_swapchain_ = false;
+            }
+        }
+        ImGui_ImplVulkan_NewFrame();
+        ImGui::NewFrame();
+    }
+
+    void canvas_render() override {
+        ImGui::Render();                 // consume the frame regardless (matches render())
+        if (!canvas_ready_) return;
+        ImDrawData* dd = ImGui::GetDrawData();
+        if (canvas_mode_ == CANVAS_WINDOW) {
+            const bool minimized = (dd->DisplaySize.x <= 0.0f || dd->DisplaySize.y <= 0.0f);
+            if (!minimized && !rebuild_swapchain_) {
+                frame_render(dd);        // reuse the exe helpers — wd_/queue_ only
+                frame_present();
+            }
+            return;
+        }
+        // OFFSCREEN: composite into canvas_tex_ then copy into the persistent
+        // readback buffer, all drained by submit_once (Metal's waitUntilCompleted
+        // analog) so canvas_read_pixels is a pure memcpy of THIS frame.
+        submit_once([&](VkCommandBuffer cb) {
+            VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+            rp.renderPass = canvas_pass_;
+            rp.framebuffer = canvas_tex_.fb;
+            rp.renderArea.extent = {(uint32_t)canvas_w_, (uint32_t)canvas_h_};
+            VkClearValue clear{};
+            clear.color.float32[0] = 0.05f;   // == exe background (C1 contract)
+            clear.color.float32[1] = 0.05f;
+            clear.color.float32[2] = 0.08f;
+            clear.color.float32[3] = 1.0f;
+            rp.clearValueCount = 1;
+            rp.pClearValues = &clear;
+            vkCmdBeginRenderPass(cb, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            ImGui_ImplVulkan_RenderDrawData(dd, cb);
+            vkCmdEndRenderPass(cb);   // canvas_tex_ -> SHADER_READ_ONLY (finalLayout)
+            barrier(cb, canvas_tex_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy r{};
+            r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.imageExtent = {(uint32_t)canvas_w_, (uint32_t)canvas_h_, 1};  // tight w*4 rows
+            vkCmdCopyImageToBuffer(cb, canvas_tex_.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   canvas_readback_.buf, 1, &r);
+            barrier(cb, canvas_tex_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+        canvas_tex_.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        canvas_have_frame_ = true;
+    }
+
+    bool canvas_read_pixels(uint8_t* dst, int stride) override {
+        if (!canvas_ready_ || canvas_mode_ != CANVAS_OFFSCREEN) return false;
+        if (dst == nullptr || !canvas_have_frame_) return false;
+        const int w = canvas_w_, h = canvas_h_;
+        const int tight = w * 4;
+        if (stride < tight || canvas_readback_.mapped == nullptr) return false;
+        // canvas_render already copied (and drained) the composite into the
+        // host-coherent readback buffer — pure per-row memcpy, tight src -> stride dst.
+        const uint8_t* src = (const uint8_t*)canvas_readback_.mapped;
+        for (int y = 0; y < h; ++y)
+            std::memcpy(dst + (size_t)y * (size_t)stride,
+                        src + (size_t)y * (size_t)tight, (size_t)tight);
+        return true;
+    }
+
+    void canvas_shutdown() override {
+        // Safe when canvas_init was never called or failed (canvas_teardown is
+        // fully handle-guarded; device_ null -> a clean no-op).
+        if (!canvas_active_ && !canvas_ready_) return;
+        canvas_teardown();
     }
 
     // ---- Texture ops ----
@@ -1692,6 +1886,185 @@ private:
         if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS) return false;
         volkLoadInstance(instance_);
         return true;
+    }
+
+    // ---- embed canvas helpers (GLFW-free instance/pass/target/teardown) ----
+    // Explicit instance for the embed path (adjudication F4): the embed layer
+    // never calls glfwInit, so glfwGetRequiredInstanceExtensions would return
+    // null. WINDOW needs the surface + win32-surface extensions; OFFSCREEN is
+    // headless (none). apiVersion 1.1 matches create_instance().
+    bool create_canvas_instance(CanvasMode mode) {
+        std::vector<const char*> exts;
+        if (mode == CANVAS_WINDOW) {
+            exts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+            exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+        }
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        app.pApplicationName = "caliper";
+        app.apiVersion = VK_API_VERSION_1_1;
+        VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+        ci.pApplicationInfo = &app;
+        ci.enabledExtensionCount = (uint32_t)exts.size();
+        ci.ppEnabledExtensionNames = exts.empty() ? nullptr : exts.data();
+        if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS) return false;
+        volkLoadInstance(instance_);
+        return true;
+    }
+
+    // OFFSCREEN render pass: one RGBA8 color attachment, clear-on-load, ends
+    // SHADER_READ_ONLY (a modeled copy of geom_pass_ — color-only, no depth).
+    // Built once, reused across resizes.
+    bool ensure_canvas_pass() {
+        if (canvas_pass_ != VK_NULL_HANDLE) return true;
+        VkAttachmentDescription att{};
+        att.format = VK_FORMAT_R8G8B8A8_UNORM;
+        att.samples = VK_SAMPLE_COUNT_1_BIT;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;   // cleared every frame
+        att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ar{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sp{};
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.colorAttachmentCount = 1;
+        sp.pColorAttachments = &ar;
+        VkSubpassDependency deps[2] = {};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rpi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        rpi.attachmentCount = 1;
+        rpi.pAttachments = &att;
+        rpi.subpassCount = 1;
+        rpi.pSubpasses = &sp;
+        rpi.dependencyCount = 2;
+        rpi.pDependencies = deps;
+        return vkCreateRenderPass(device_, &rpi, nullptr, &canvas_pass_) == VK_SUCCESS;
+    }
+
+    // OFFSCREEN target: RGBA8 color image (COLOR_ATTACHMENT|TRANSFER_SRC),
+    // device-local, framebuffer against canvas_pass_, plus a persistent
+    // host-coherent readback buffer (w*4*h). No ImGui_ImplVulkan_AddTexture —
+    // nothing samples it (adjudication F6). Re-callable for resize.
+    bool make_canvas_target(int w, int h) {
+        destroy_tex(canvas_tex_);
+        canvas_tex_ = Tex{};
+        canvas_tex_.w = w;
+        canvas_tex_.h = h;
+
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = VK_FORMAT_R8G8B8A8_UNORM;
+        ici.extent = {(uint32_t)w, (uint32_t)h, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device_, &ici, nullptr, &canvas_tex_.image) != VK_SUCCESS) {
+            canvas_tex_ = Tex{}; return false;
+        }
+        VkMemoryRequirements mr;
+        vkGetImageMemoryRequirements(device_, canvas_tex_.image, &mr);
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.allocationSize = mr.size;
+        if (!find_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           &mai.memoryTypeIndex) ||
+            vkAllocateMemory(device_, &mai, nullptr, &canvas_tex_.memory) != VK_SUCCESS) {
+            destroy_tex(canvas_tex_); canvas_tex_ = Tex{}; return false;
+        }
+        vkBindImageMemory(device_, canvas_tex_.image, canvas_tex_.memory, 0);
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image = canvas_tex_.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &vci, nullptr, &canvas_tex_.view) != VK_SUCCESS) {
+            destroy_tex(canvas_tex_); canvas_tex_ = Tex{}; return false;
+        }
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fci.renderPass = canvas_pass_;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &canvas_tex_.view;
+        fci.width = (uint32_t)w;
+        fci.height = (uint32_t)h;
+        fci.layers = 1;
+        if (vkCreateFramebuffer(device_, &fci, nullptr, &canvas_tex_.fb) != VK_SUCCESS) {
+            destroy_tex(canvas_tex_); canvas_tex_ = Tex{}; return false;
+        }
+        canvas_tex_.layout = VK_IMAGE_LAYOUT_UNDEFINED;   // first pass clear-loads it
+
+        if (!ensure_buffer(canvas_readback_, (VkDeviceSize)w * h * 4,
+                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, /*external=*/false)) {
+            destroy_tex(canvas_tex_); canvas_tex_ = Tex{}; return false;
+        }
+        return true;
+    }
+
+    // Full canvas unwind — the honest-refusal path for canvas_init AND the
+    // canvas_shutdown body. Every step is handle-guarded so a partial init (or a
+    // never-init'd instance) tears down cleanly with nothing left dangling.
+    void canvas_teardown() {
+        if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+        if (canvas_imgui_) { ImGui_ImplVulkan_Shutdown(); canvas_imgui_ = false; }
+        if (canvas_mode_ == CANVAS_WINDOW && wd_.Swapchain != VK_NULL_HANDLE) {
+            ImGui_ImplVulkanH_DestroyWindow(instance_, device_, &wd_, nullptr);
+            surface_ = VK_NULL_HANDLE;   // destroyed by DestroyWindow
+        }
+        if (surface_ != VK_NULL_HANDLE) {   // surface created but swapchain not
+            vkDestroySurfaceKHR(instance_, surface_, nullptr);
+            surface_ = VK_NULL_HANDLE;
+        }
+        if (device_ != VK_NULL_HANDLE) {
+            destroy_tex(canvas_tex_);
+            canvas_tex_ = Tex{};
+            if (canvas_pass_ != VK_NULL_HANDLE) {
+                vkDestroyRenderPass(device_, canvas_pass_, nullptr);
+                canvas_pass_ = VK_NULL_HANDLE;
+            }
+            destroy_buffer(canvas_readback_);
+        }
+        if (imgui_pool_ != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device_, imgui_pool_, nullptr);
+            imgui_pool_ = VK_NULL_HANDLE;
+        }
+        if (oneshot_pool_ != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(device_, oneshot_pool_, nullptr);
+            oneshot_pool_ = VK_NULL_HANDLE;
+        }
+        if (oneshot_fence_ != VK_NULL_HANDLE) {
+            vkDestroyFence(device_, oneshot_fence_, nullptr);
+            oneshot_fence_ = VK_NULL_HANDLE;
+        }
+        if (device_ != VK_NULL_HANDLE) {
+            vkDestroyDevice(device_, nullptr);
+            device_ = VK_NULL_HANDLE;
+        }
+        if (instance_ != VK_NULL_HANDLE) {
+            vkDestroyInstance(instance_, nullptr);
+            instance_ = VK_NULL_HANDLE;
+        }
+        physical_ = VK_NULL_HANDLE;
+        queue_ = VK_NULL_HANDLE;
+        queue_family_ = UINT32_MAX;
+        canvas_ready_ = false;
+        canvas_active_ = false;
+        canvas_have_frame_ = false;
     }
 
     static bool has_ext(const std::vector<VkExtensionProperties>& v, const char* name) {
@@ -3165,6 +3538,20 @@ private:
     VkDeviceSize storage_buffer_alignment_ = 256;   // minStorageBufferOffsetAlignment
     ImGui_ImplVulkanH_Window wd_{};
     bool rebuild_swapchain_ = false;
+
+    // ---- embed canvas seam (parallel to the exe swapchain path) ----
+    // This instance is EITHER an exe swapchain (init()) OR an embed canvas
+    // (canvas_init()), never both. WINDOW mode reuses surface_/wd_/frame_render/
+    // frame_present; OFFSCREEN uses canvas_pass_ + canvas_tex_ + canvas_readback_.
+    CanvasMode   canvas_mode_ = CANVAS_OFFSCREEN;
+    int          canvas_w_ = 0, canvas_h_ = 0;
+    bool         canvas_active_ = false;      // canvas_init began (not the exe path)
+    bool         canvas_ready_  = false;      // canvas_init fully succeeded
+    bool         canvas_imgui_  = false;      // ImGui_ImplVulkan_Init has run
+    bool         canvas_have_frame_ = false;  // a composite happened since attach
+    Tex          canvas_tex_{};               // OFFSCREEN color target (+ fb)
+    VkRenderPass canvas_pass_ = VK_NULL_HANDLE;  // OFFSCREEN clear-load RGBA8 pass
+    Buffer       canvas_readback_;            // OFFSCREEN persistent host-coherent staging
 
     VkCommandPool oneshot_pool_ = VK_NULL_HANDLE;
     VkFence oneshot_fence_ = VK_NULL_HANDLE;
