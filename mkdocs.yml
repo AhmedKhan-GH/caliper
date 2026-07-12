@@ -42,6 +42,7 @@ nav:
           - caliper.geometry.v1 / v1_1 / v1_2 / v1_3: reference/services/geometry-v1.md
           - caliper.artifacts.v1: reference/services/artifacts-v1.md
           - caliper.data.v1: reference/services/data-v1.md
+          - caliper.feed.v1: reference/services/feed-v1.md
       - C++ sugar: reference/sugar.md
       - Embedding (libcaliper): reference/embedding.md
   - Explanation:
