@@ -116,7 +116,40 @@ C streams (D3), so the host consumes them exactly as an applet would, with
 
 | Candidate | Planes | New machinery | Why it might be first |
 |---|---|---|---|
-| **(a) Run-comparison documents** — open N runs from the metrics store side by side; native tables/plots; annotate; export a report | P2 only (P1 optional garnish) | NONE beyond §3.1 — metrics.v1 + DuckDB already store everything | Cheapest true "consumer"; exercises P2 alone; useful the day it exists; zero applet changes |
+| **(a) Run-comparison documents** — open N runs from the metrics store side by side; native tables/plots; annotate; export a report | P2 only (P1 optional garnish) | §3.1 PLUS a metrics READ surface across the C ABI (see the survey correction below) | Cheapest true "consumer"; exercises P2 alone; useful the day it exists; zero applet changes |
+
+**Survey correction (2026-07-12, C1 groundwork — supersedes the original "(a)
+needs nothing beyond §3.1" claim):** `metrics.v1` is WRITE-ONLY at the ABI
+(`begin_run/scalar/histogram/image/hparams_json`; header immutable); the
+readers (`runs()/scalars()`) are host-private C++ a consumer cannot include,
+and `data.v1.query()` targets a separate `data.duckdb`, not the applet's
+`metrics.duckdb`. So workflow (a) additionally requires ONE of: (i) the data
+service's SQL→Arrow read surface gaining read-only visibility into the
+metrics store (DuckDB ATTACH at the host layer — no new service, one read
+vocabulary, D3-aligned; preferred if the single-writer/attach semantics prove
+out), or (ii) an additive metrics query revision (`metrics.v1_1`: list runs /
+stream scalars). This is C0b in the phasing; C1's live-table gate depends on
+it.
+
+**C0b RESOLUTION (2026-07-12, SHIPPED — option (ii) won):** Option (i) was
+probed same-process and REJECTED on evidence. A read-only `ATTACH
+'metrics.duckdb' (READ_ONLY)` from a second DuckDB instance sees only rows the
+writer has CHECKPOINTed to the file — the live writer's freshly-committed rows
+were invisible across ALL variants (same attach, DETACH+re-attach, a brand-new
+instance) until an explicit writer `CHECKPOINT`. A live metrics writer never
+checkpoints per-scalar, so option (i) cannot satisfy "the table shows live rows
+from the running applet" (C1's acceptance). (The probe also found DuckDB does
+NOT file-lock a second same-process handle here — irrelevant to the verdict,
+but noted so a future OUT-OF-PROCESS Compass knows the checkpoint-visibility
+barrier — not the lock — is the real blocker, and bites cross-process too.)
+Shipped: **`caliper.metrics.v1_1`** — the frozen v1 writer prefix plus one
+`query(sql, out_arrow_stream)` read entry, running SQL against the metrics
+store's OWN live connection (the C0-proven one-connection-one-mutex path, so a
+host UI thread reads rows the instant a worker writes them), reusing
+`data.v1`'s SQL→Arrow producer verbatim. READ-ONLY is ENFORCED here (unlike
+`data.v1`, which does not): the SQL is parsed, not executed, and refused unless
+it is exactly one `SELECT` — the connection is the live writer. Reached by both
+applets and embedders via `caliper_core_get_service`. Commit: `ba1d85b`.
 | **(b) Twin authoring** — property-grid documents that configure a twin (assets, cameras, colormap ranges, per-unit metadata), viewport shows it live, "run in Caliper" hands off | P1+P2+P3 | A config channel INTO applets (P3 semantics per applet; likely a small applet-side convention, zero ABI) | The Adobe-shaped vision; but needs (a)'s plumbing anyway plus P3 conventions |
 | **(c) Dataset/embedding curation** — tables over `data.v1` Arrow streams, filter/label/flag, write back | P2 (+P3 for write-back) | data.v1 write-back semantics (today it's read-oriented) | Real ML utility; blocked on a data.v1 revision — heaviest |
 
