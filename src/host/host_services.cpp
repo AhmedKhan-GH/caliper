@@ -12,6 +12,7 @@
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/metrics_v1_1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
@@ -133,6 +134,26 @@ void met_hparams_json(uint64_t run, const char* json_utf8) {
 const CaliperMetricsV1 kMetrics = {sizeof(CaliperMetricsV1), &met_begin_run,
                                    &met_end_run, &met_scalar, &met_histogram,
                                    &met_image, &met_hparams_json};
+
+// metrics.v1_1 (C0b): the SAME six writers plus the read surface query() — a
+// consumer (Compass via caliper_core_get_service) lists runs / streams scalars
+// as Arrow against the store's OWN live connection. Read-only + Arrow ownership
+// enforced inside MetricsStore::query (see metrics_v1_1.h). No-ops on the
+// unopened store, the same discipline as the writers above.
+bool met_query(const char* sql, struct ArrowArrayStream* out) {
+    return g_metrics_open && g_metrics.query(sql ? sql : "", out);
+}
+const char* met_last_error(void) {
+    // metrics.v1_1 promises never-NULL; the store's error is thread-local, so a
+    // thread-local holder honors "valid until the next metrics.v1_1 call on the
+    // same thread" (mirrors data.v1's last_error).
+    static thread_local std::string held;
+    held = g_metrics_open ? g_metrics.last_error() : "metrics store is not open";
+    return held.c_str();
+}
+const CaliperMetricsV1_1 kMetrics11 = {sizeof(CaliperMetricsV1_1),
+    &met_begin_run, &met_end_run, &met_scalar, &met_histogram,
+    &met_image, &met_hparams_json, &met_query, &met_last_error};
 
 // --- caliper.artifacts.v1: content-addressed checkpoints (§7.8) ---
 // Same non-fatal-open + no-op-thunks discipline as metrics above, and the
@@ -368,6 +389,7 @@ const CaliperGeometryV1_3 kGeom13 = {sizeof(CaliperGeometryV1_3),
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
                                     CALIPER_METRICS_V1,
+                                    CALIPER_METRICS_V1_1,
                                     CALIPER_TENSOR_BRIDGE_V1,
                                     CALIPER_TENSOR_BRIDGE_V1_1,
                                     CALIPER_TENSOR_BRIDGE_V1_2,
@@ -454,6 +476,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_JOBS_V1) == 0)   return &kJobs;
     if (std::strcmp(id, CALIPER_DEVICE_V1) == 0) return &kDevice;
     if (std::strcmp(id, CALIPER_METRICS_V1) == 0) return &kMetrics;
+    if (std::strcmp(id, CALIPER_METRICS_V1_1) == 0) return &kMetrics11;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1) == 0) return &kBridge;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_1) == 0) return &kBridge11;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_2) == 0) return &kBridge12;

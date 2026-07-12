@@ -1,7 +1,7 @@
 #include "data_store.h"
+#include "duckdb_arrow_stream.h"   // shared SQL→Arrow producer (also metrics.v1_1)
 
 #include <duckdb.hpp>
-#include <duckdb/common/arrow/arrow_converter.hpp>
 
 #include <cctype>
 #include <mutex>
@@ -34,54 +34,6 @@ std::string sql_quote(const std::string& s) {
     }
     out += "'";
     return out;
-}
-
-// The ArrowArrayStream producer: owns a fully materialized result, so the
-// stream outlives the DataStore call and never touches the connection.
-struct StreamState {
-    duckdb::unique_ptr<duckdb::MaterializedQueryResult> result;
-    duckdb::ClientProperties props;
-    std::string error;  // last get_next/get_schema failure, for get_last_error
-};
-
-int stream_get_schema(ArrowArrayStream* self, ArrowSchema* out) {
-    auto* st = static_cast<StreamState*>(self->private_data);
-    try {
-        duckdb::ArrowConverter::ToArrowSchema(out, st->result->types,
-                                              st->result->names, st->props);
-        return 0;
-    } catch (const std::exception& e) {
-        st->error = e.what();
-        return EIO;
-    }
-}
-
-int stream_get_next(ArrowArrayStream* self, ArrowArray* out) {
-    auto* st = static_cast<StreamState*>(self->private_data);
-    try {
-        auto chunk = st->result->Fetch();
-        if (!chunk || chunk->size() == 0) {
-            out->release = nullptr;  // spec: released empty array = stream end
-            return 0;
-        }
-        duckdb::ArrowConverter::ToArrowArray(*chunk, out, st->props, {});
-        return 0;
-    } catch (const std::exception& e) {
-        st->error = e.what();
-        return EIO;
-    }
-}
-
-const char* stream_get_last_error(ArrowArrayStream* self) {
-    auto* st = static_cast<StreamState*>(self->private_data);
-    return st->error.empty() ? nullptr : st->error.c_str();
-}
-
-void stream_release(ArrowArrayStream* self) {
-    if (!self->release) return;
-    delete static_cast<StreamState*>(self->private_data);
-    self->private_data = nullptr;
-    self->release = nullptr;  // spec: release must null itself
 }
 
 }  // namespace
@@ -139,16 +91,10 @@ bool DataStore::query(const std::string& sql, ArrowArrayStream* out) {
         return false;
     }
 
-    auto* st = new StreamState;
-    st->result.reset(static_cast<duckdb::MaterializedQueryResult*>(
-        result.release()));
-    st->props = impl_->con->context->GetClientProperties();
-
-    out->get_schema     = &stream_get_schema;
-    out->get_next       = &stream_get_next;
-    out->get_last_error = &stream_get_last_error;
-    out->release        = &stream_release;
-    out->private_data   = st;
+    arrow_stream::fill(
+        duckdb::unique_ptr<duckdb::MaterializedQueryResult>(
+            static_cast<duckdb::MaterializedQueryResult*>(result.release())),
+        impl_->con->context->GetClientProperties(), out);
     return true;
 }
 

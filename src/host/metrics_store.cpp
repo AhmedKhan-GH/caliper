@@ -1,11 +1,19 @@
 #include "metrics_store.h"
+#include "duckdb_arrow_stream.h"   // shared SQL→Arrow producer (also data.v1)
 
 #include <duckdb.hpp>
 
 #include <mutex>
+#include <string>
 #include <unordered_set>
 
 namespace caliper_host {
+namespace {
+// Each thread sees the error of ITS last failing query() (the metrics.v1_1
+// last_error contract, mirroring data.v1); a shared string would let one
+// thread's failure overwrite another's mid-read.
+thread_local std::string t_query_error;
+}  // namespace
 
 // All state (connection + prepared statements + mutex) lives here so no DuckDB
 // type escapes into the header. One connection, one mutex — every public method
@@ -289,6 +297,46 @@ std::vector<std::pair<int64_t, double>> MetricsStore::scalars(
     }
     return out;
 }
+
+bool MetricsStore::query(const std::string& sql, ArrowArrayStream* out) {
+    if (!out) { t_query_error = "null output stream"; return false; }
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->con) { t_query_error = "metrics store is not open"; return false; }
+
+    // READ-ONLY ENFORCEMENT (metrics.v1_1). The connection is the LIVE writer,
+    // so anything other than a lone SELECT would corrupt the store. Parse (do
+    // NOT execute) and require exactly one SELECT statement — this catches
+    // statement chaining ("SELECT 1; DROP TABLE runs", which DuckDB's Query()
+    // would otherwise run to completion) and string-literal edge cases a naive
+    // prefix check would miss. data.v1 does NOT enforce this; metrics.v1_1 does
+    // by design (see metrics_v1_1.h).
+    try {
+        auto stmts = impl_->con->ExtractStatements(sql);
+        if (stmts.size() != 1 ||
+            stmts[0]->type != duckdb::StatementType::SELECT_STATEMENT) {
+            t_query_error =
+                "metrics.v1_1.query accepts a single read-only SELECT statement";
+            return false;
+        }
+    } catch (const std::exception& e) {
+        t_query_error = std::string("parse error: ") + e.what();
+        return false;
+    }
+
+    auto result = impl_->con->Query(sql);   // materializes fully
+    if (!result || result->HasError()) {
+        t_query_error = result ? result->GetError() : "query failed";
+        return false;
+    }
+
+    arrow_stream::fill(
+        duckdb::unique_ptr<duckdb::MaterializedQueryResult>(
+            static_cast<duckdb::MaterializedQueryResult*>(result.release())),
+        impl_->con->context->GetClientProperties(), out);
+    return true;
+}
+
+std::string MetricsStore::last_error() const { return t_query_error; }
 
 std::vector<HistogramInfo> MetricsStore::histograms(uint64_t run,
                                                     const std::string& tag) {

@@ -20,8 +20,10 @@
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/metrics_v1.h>   // v1.1 get_service: the Compass case
+#include <caliper/services/metrics_v1_1.h> // C0b: the metrics READ surface (Arrow)
 #include <caliper/services/jobs_v1.h>      // v1.1 get_service: cross-thread producer
 #include <caliper/services/log_v1.h>       // v1.1 log routing
+#include <caliper/arrow_c.h>               // C0b: drain metrics.v1_1 Arrow streams
 #include "host_services.h"
 #include "metrics_store.h"          // caliper_host::host_metrics_store() (reader)
 #include "tensor_bridge.h"          // caliper_host::expand_u8_to_rgba8 (shared ref)
@@ -520,6 +522,124 @@ TEST_CASE("embed/get_service: the Compass case — a host thread reads metrics.v
     CHECK(rows.size() == (size_t)N);        // all streamed rows became visible
 
     caliper_core_shutdown(core);            // joins the worker (cancel_all_and_join)
+}
+
+// ===========================================================================
+// C0b — the metrics READ surface across the ABI (caliper.metrics.v1_1). The
+// PURE-ABI Compass path: a host reads runs/scalars through get_service +
+// metrics.v1_1.query (Arrow C stream), NOT the host-private MetricsStore. This
+// is what an out-of-tree consumer (Compass) can actually reach. GPU-free.
+// ===========================================================================
+namespace {
+// Drain a metrics.v1_1 (step BIGINT, value DOUBLE) Arrow stream into a vector.
+// Returns false if the stream schema/rows can't be read (never throws here).
+bool drain_step_value(ArrowArrayStream* st,
+                      std::vector<std::pair<int64_t, double>>& out) {
+    ArrowSchema schema = {};
+    if (st->get_schema(st, &schema) != 0) { st->release(st); return false; }
+    if (schema.release) schema.release(&schema);
+    for (;;) {
+        ArrowArray array = {};
+        if (st->get_next(st, &array) != 0) { st->release(st); return false; }
+        if (!array.release) break;                      // end of stream (spec)
+        const ArrowArray* cs = array.children[0];
+        const ArrowArray* cv = array.children[1];
+        const int64_t* sp = (const int64_t*)cs->buffers[1];
+        const double*  vp = (const double*)cv->buffers[1];
+        for (int64_t i = 0; i < array.length; i++)
+            out.emplace_back(sp[cs->offset + i], vp[cv->offset + i]);
+        array.release(&array);
+    }
+    st->release(st);
+    return true;
+}
+}  // namespace
+
+TEST_CASE("embed/metrics.v1_1: a host reads runs+scalars via the ABI (Arrow) "
+          "while a jobs.v1 worker streams them; non-SELECT refused") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* metrics = (const CaliperMetricsV1*)caliper_core_get_service(core, CALIPER_METRICS_V1);
+    auto* reader  = (const CaliperMetricsV1_1*)caliper_core_get_service(core, CALIPER_METRICS_V1_1);
+    auto* jobs    = (const CaliperJobsV1*)caliper_core_get_service(core, CALIPER_JOBS_V1);
+    REQUIRE(metrics != nullptr);
+    REQUIRE(reader != nullptr);
+    REQUIRE(jobs != nullptr);
+
+    // v1_1 vends the SAME process-static table an applet would get.
+    bool same_as_applet_table =
+        ((const void*)reader == caliper_host::services_get(CALIPER_METRICS_V1_1));
+    CHECK(same_as_applet_table);
+
+    uint64_t run = metrics->begin_run("compass", "arrow-stream");
+    if (run == 0) {   // metrics store failed to open on this box: nothing to read
+        MESSAGE("metrics store not open — skipping the metrics.v1_1 Arrow case");
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    const int N = 200;
+    ScalarStream s{metrics, run, N};
+    uint64_t jid = jobs->submit("stream-scalars", &stream_scalars, &s);
+    REQUIRE(jid != 0);
+
+    // Host-thread reader loop, purely through the ABI: query() a fresh Arrow
+    // stream each pass and drain it, racing the worker's writes. Bounded/
+    // deterministic (the writer always produces N) — no sleep, no is_running.
+    const std::string sql =
+        "SELECT step, value FROM scalars WHERE run = " + std::to_string(run) +
+        " AND tag = 'loss' ORDER BY step";
+    size_t prev = 0; bool shrank = false, torn = false; int guard = 0;
+    std::vector<std::pair<int64_t, double>> rows;
+    do {
+        rows.clear();
+        ArrowArrayStream st = {};
+        REQUIRE(reader->query(sql.c_str(), &st) == true);
+        REQUIRE(drain_step_value(&st, rows) == true);
+        if (rows.size() < prev) shrank = true;
+        prev = rows.size();
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (rows[i].first != (int64_t)i || rows[i].second != (double)i) torn = true;
+        ++guard;
+    } while (rows.size() < (size_t)N && guard < 1000000);
+
+    metrics->end_run(run);
+
+    CHECK(shrank == false);              // monotonic visibility under the race
+    CHECK(torn == false);                // no torn / partial rows
+    CHECK(rows.size() == (size_t)N);     // all streamed rows became visible
+
+    // List runs through the ABI too (the runs-browser query).
+    {
+        ArrowArrayStream st = {};
+        REQUIRE(reader->query("SELECT COUNT(*) FROM runs", &st) == true);
+        ArrowSchema sc = {}; REQUIRE(st.get_schema(&st, &sc) == 0);
+        if (sc.release) sc.release(&sc);
+        ArrowArray a = {}; REQUIRE(st.get_next(&st, &a) == 0);
+        REQUIRE(a.release != nullptr);
+        int64_t n_runs = ((const int64_t*)a.children[0]->buffers[1])[a.children[0]->offset];
+        CHECK(n_runs >= 1);
+        a.release(&a);
+        ArrowArray end = {}; st.get_next(&st, &end);   // drain to end
+        st.release(&st);
+    }
+
+    // Read-only ENFORCED across the ABI: a write is refused, the stream is never
+    // filled, last_error explains, and the store is untouched (run still there).
+    {
+        ArrowArrayStream st = {};
+        CHECK(reader->query("DROP TABLE runs", &st) == false);
+        CHECK(st.release == nullptr);
+        CHECK(std::string(reader->last_error()).empty() == false);
+
+        ArrowArrayStream st2 = {};
+        REQUIRE(reader->query("SELECT COUNT(*) FROM runs", &st2) == true);
+        st2.release(&st2);   // the runs table survived the refused DROP
+    }
+
+    caliper_core_shutdown(core);         // joins the worker (cancel_all_and_join)
 }
 
 // ===========================================================================
