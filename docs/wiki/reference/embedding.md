@@ -15,9 +15,9 @@ applet physically cannot `#include` it — embedding a core from inside an apple
 is a category error the include topology forbids.
 
 !!! note "Status (v0)"
-    L1+L2 shipped 2026-07-11 (branch `feat/libcaliper`), **Metal-proven** on
-    Apple Silicon. The Vulkan/HWND embed paths are transcribed and compiled-out,
-    **pending the next Windows session**. Design + phase outcomes:
+    L1+L2 shipped 2026-07-11 (branch `feat/libcaliper`), **run-proven on both
+    ecosystems** — Metal on Apple Silicon and Vulkan/HWND on Windows (RTX 500
+    Ada, 2026-07-11). Design + phase outcomes:
     `docs/superpowers/specs/2026-07-11-libcaliper-compass-design.md`.
 
 ## The five calls
@@ -89,9 +89,12 @@ paints applet pixels.
 - **The applet `caliper.log.v1` service bypasses `log_fn`** and writes to process
   stderr in v0. Core diagnostics (renderer pick, refusals, crash text) DO route
   through `log_fn`; applet log lines do not.
-- **Metal-proven; Vulkan embed pending Windows.** The embed paths are run-proven
-  on Metal (Apple Silicon). The Vulkan/HWND paths are transcribed and
-  compiled-out — no embed-specific Windows path has touched hardware yet.
+- **`CALIPER_CANVAS_WINDOW` has no ctest coverage.** The windowed canvas is
+  run-proven live on both OSes — Metal (Apple Silicon) and Vulkan/HWND (Windows,
+  RTX 500 Ada) — but there is no automated coverage of window mode on either;
+  the live `embed_host` run stays the ritual. Automated byte-exactness rides the
+  OFFSCREEN `read_pixels` battery (the §7 host-axis byte-compare), green on both
+  backends.
 - **GL is not an embed target.** GL's context ownership is GLFW-coupled chrome
   (D13, the frozen fallback); a core whose resolved backend is GL refuses at
   `attach_canvas` ("embed requires Metal or Vulkan").

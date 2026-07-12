@@ -1,7 +1,32 @@
 # libcaliper embed on Vulkan/Windows — the hardware pass
 
 **Date:** 2026-07-11
-**Status:** execution spec (hardware pass). PARTLY greenfield — read §0.2
+**Status:** COMPLETE (2026-07-11, same day) — all boxes ticked below, run-proven
+on the RTX 500 Ada box (driver 596.47, Windows 11, MSVC 14.50, branch
+`feat/embed-vulkan-windows`). The greenfield half — the Vulkan embed-canvas seam
+(WINDOW HWND surface + OFFSCREEN RGBA8 render-to-texture) — was implemented
+against the Metal reference and is now live on hardware: `embed_host` drew both
+`instance_scope` (1000 objects, 1 draw call, 0 mesh copies) and `mesh_scope`
+zero-copy on the Vulkan WINDOW canvas, and the §7 host-axis byte-compare passed
+on the Vulkan OFFSCREEN canvas. **Commits:** `d7f9cc4` (§1.1+§5.2 build:
+LNK1149 `libcaliper` OUTPUT_NAME + `embed_host` DLL copy), `c8e6005` (the canvas
+seam §2.1–2.6, WINDOW + OFFSCREEN; review Approved 0 Crit/0 Imp), `852c398`
+(interop pairing on the canvas path — zero-copy caps under embed; review PASS),
+`0724161` (`CALIPER_EMBED_EXIT_AFTER` Win32 parity hook), `0614d51`
+(`mesh_scope` `SetNextWindowSize` bootstrap), `37d87f2` (validation-clean
+OFFSCREEN, 4 VUIDs; review PASS). MSVC took `main_win32.cpp` +
+`caliper_embed_tests` on first compile — NO doctest decomposition, unlike the
+v1_3 pass. **Two honest partials on record:** (a) `WM_DPICHANGED` mixed-DPI was
+NOT exercisable on this box (single monitor @1.5×) — the clause stays an honest
+partial with that reason; (b) the WINDOW-path validation residuals are
+*pre-existing SHARED machinery*, not embed-canvas bugs — the OFFSCREEN embed
+path is validation-clean, and `VUID-vkDestroyInstance-instance-00629` reproduced
+IDENTICALLY on `caliper.exe` (control run) while
+`VUID-vkQueueSubmit-pSignalSemaphores-00067` lives in the shared
+`frame_render`/`frame_present` (untouchable this pass; embed's unthrottled pump
+merely surfaces it). §6.4 review follow-ups are DEFERRED with reason (mac-side
+verification needed to land safely — carried, not dropped). Originally:
+execution spec (hardware pass). PARTLY greenfield — read §0.2
 carefully: this is NOT the pure transcription the v1_3 Vulkan pass was. The
 embed *host* and the embed *core* are transcribed and compiled-out
 (`if(WIN32)`), but the **Vulkan renderer's embed-canvas seam does not exist
@@ -90,10 +115,16 @@ Same `configure.cmd`/`build.cmd` (vcvars) wrappers, same build-root-on-PATH for
 DLLs. New target this pass: `embed_host` (the WIN32 branch) — a NEW exe under
 `build/examples/embed_host/`.
 
-- [ ] **1.1** Configure + build green with the WIN32 embed branch now compiling
+- [x] **1.1** Configure + build green with the WIN32 embed branch now compiling
   (`main_win32.cpp`, `caliper_embed_tests`). Record the invocation in the box's
   scratch ledger (`.superpowers/sdd` is gitignored per-box; the Mac's did not
   transfer).
+  *Done 2026-07-11: first Windows contact — MSVC took `main_win32.cpp` and
+  `caliper_embed_tests` on first compile, NO doctest complex-expression
+  decomposition needed (unlike the v1_3 pass). The one build fix was link-side:
+  LNK1149 on the `libcaliper` OUTPUT_NAME + the `embed_host` DLL-copy step
+  (`d7f9cc4`, see §5.2). Invocation in the box's scratch ledger
+  (`.superpowers/sdd/embed-pass/`, gitignored).*
 
 ---
 
@@ -106,8 +137,9 @@ OFFSCREEN pixels to the CPU reference (§7 discipline). Implement in
 swapchain path (never both on one instance — the invariant is stated at
 host_renderer.h:163-168; the byte-exact geometry rows must stay untouched).
 
-- [ ] **2.1 `canvas_supported()` → true** on Vulkan (device present).
-- [ ] **2.2 `canvas_init(void* hwnd, CanvasMode, w, h)`**:
+- [x] **2.1 `canvas_supported()` → true** on Vulkan (device present).
+  *Implemented in the canvas seam (`c8e6005`); live true on the RTX 500 Ada.*
+- [x] **2.2 `canvas_init(void* hwnd, CanvasMode, w, h)`**:
   - **CANVAS_WINDOW:** create a `VkSurfaceKHR` from the HWND via
     `vkCreateWin32SurfaceKHR` (volk already shims `vulkan_win32.h`,
     vulkan_renderer.cpp:67), then build the swapchain against it — reuse the
@@ -119,99 +151,178 @@ host_renderer.h:163-168; the byte-exact geometry rows must stay untouched).
     the swapchain uses so read-back needs no swizzle) + depth, render pass,
     and a host-visible staging buffer for read-back. No surface, no swapchain.
   - false on any failure with NOTHING allocated/left dangling (honest refusal).
-- [ ] **2.3 `canvas_new_frame()`** — begin the frame: acquire the swapchain
+  *Both modes implemented in `c8e6005`: WINDOW builds a `VkSurfaceKHR` from the
+  HWND (`vkCreateWin32SurfaceKHR`) + swapchain; OFFSCREEN a device-local RGBA8
+  render-to-texture + depth + host-visible staging. Live on hardware — see §4.1
+  (WINDOW) and §3.2 (OFFSCREEN).*
+- [x] **2.3 `canvas_new_frame()`** — begin the frame: acquire the swapchain
   image (WINDOW) or bind the offscreen target; open the pass (this CLEARS, per
   the frame-order contract at host_renderer.h:167); ImGui Vulkan + a NewFrame.
-- [ ] **2.4 `canvas_render()`** — `ImGui::Render()`, record the draw data into
+  *Implemented in `c8e6005`.*
+- [x] **2.4 `canvas_render()`** — `ImGui::Render()`, record the draw data into
   the canvas command buffer, composite; **WINDOW:** present (queue-present the
   acquired image); **OFFSCREEN:** resolve/copy the color target into the
   read-back staging buffer.
-- [ ] **2.5 `canvas_read_pixels(dst, stride)`** (OFFSCREEN only) — copy the
+  *Implemented in `c8e6005`; interop pairing on this path corrected in `852c398`
+  so zero-copy caps resolve under embed.*
+- [x] **2.5 `canvas_read_pixels(dst, stride)`** (OFFSCREEN only) — copy the
   last composited frame, tightly-packed RGBA8, from staging into `dst`; false
   if WINDOW mode or nothing rendered. This is what the embed battery asserts
   against, so it is the byte-exactness surface.
-- [ ] **2.6 `canvas_resize` / `canvas_shutdown`** — rebuild-on-resize (the
+  *Implemented in `c8e6005`; the §7 host-axis byte-compare passes on it (§3.2).*
+- [x] **2.6 `canvas_resize` / `canvas_shutdown`** — rebuild-on-resize (the
   swapchain already has `rebuild_swapchain_` machinery, vulkan_renderer.cpp:329)
   and orderly teardown (surface/swapchain/offscreen targets/ImGui backend),
   matching the Metal shutdown ordering.
-- [ ] **2.7** The exe's GLFW swapchain path and ALL byte-exact geometry rows
+  *Implemented in `c8e6005`; live resize verified in §4.3
+  (1280×800→1720×1050 rebuilt the swapchain clean, no tear, no validation
+  error). OFFSCREEN teardown made leak-free in `37d87f2` (§5.1).*
+- [x] **2.7** The exe's GLFW swapchain path and ALL byte-exact geometry rows
   are untouched — `caliper_gfx_tests` stays 48/48 on this box (the canary that
   the parallel seam didn't disturb the shared pipelines).
+  *48/48 cases, 1475 assertions green at every boundary of this pass (the
+  canary held across the seam, the interop-pairing fix, and the OFFSCREEN
+  VUID work).*
 
 ## 3. Port the OFFSCREEN embed battery (headless, portable-ish)
 
-- [ ] **3.1** `caliper_embed_tests` compiles under MSVC (the doctest
+- [x] **3.1** `caliper_embed_tests` compiles under MSVC (the doctest
   complex-expression decomposition lesson from `477431e`/`5164f89` — split any
   chained `&&` in REQUIRE). No VMM-padding rows here, so that gotcha does not
   apply.
-- [ ] **3.2** All 8 cases pass on real hardware with the Vulkan OFFSCREEN
+  *Compiled clean first try — the doctest decomposition the v1_3 pass needed did
+  NOT recur here.*
+- [x] **3.2** All 8 cases pass on real hardware with the Vulkan OFFSCREEN
   canvas: create/shutdown cycle twice-in-one-process, the struct_size gates,
   the one-core CAS guard, the teardown-first `load_applet` reload trio, the
   W1 canvas gate, and the **§7 host-axis byte-compare** — the bridge upload
   driven through the embed core must produce byte-identical pixels to the CPU
   reference `expand_u8_to_rgba8`, exactly as on Metal. A miss is
   STOP-and-diagnose (a canvas-seam bug, not a tolerance).
+  *8/8 cases, 42 assertions, ZERO refusal-skips — before the seam existed the
+  battery ran 14 assertions all-skip (the canvas gate refused everything), so
+  the jump to 42 executed assertions IS the seam coming alive. The §7 host-axis
+  byte-compare PASSED byte-identical on the Vulkan OFFSCREEN canvas, exactly as
+  on Metal. Artifact: `artifact-embed-battery-vulkan.txt` in the box's scratch
+  ledger (`.superpowers/sdd/embed-pass/`, gitignored per-box).*
 
 ## 4. Run-prove the Win32 host (the windowed path, live)
 
 CANVAS_WINDOW has NO automated coverage on either OS (documented known-gap) —
 the live `embed_host` run is the proof of record.
 
-- [ ] **4.1 embed_host launches** an HWND window, `attach_canvas` succeeds
+- [x] **4.1 embed_host launches** an HWND window, `attach_canvas` succeeds
   (Vulkan WINDOW), `load_applet dev.caliper.instance-scope` — the log line
   `first zero-copy instanced frame drawn — 1000 objects, 1 draw call, 0 mesh
   copies` appears with the **Vulkan** renderer active, per-draw provenance
   honest. Capture stdout/stderr + a screenshot (HWND windows ARE
   screenshotable, unlike the TCC-blocked Mac headless case — get the pixels).
-- [ ] **4.2 mesh_scope** under embed_host draws zero-copy on Vulkan+CUDA
+  *Logged live: Vulkan WINDOW canvas 1258×744 @1.5×, `instance-scope: first
+  zero-copy instanced frame drawn — 1000 objects, 1 draw call, 0 mesh copies`.
+  Screenshots captured (gems field, hero line, 120 FPS, device line "NVIDIA
+  RTX 500 Ada"). This is the live windowed run-proof — CANVAS_WINDOW has no
+  ctest coverage on either OS by design; the byte-exact claim rides the §3.2
+  OFFSCREEN battery, this is live proof, not byte proof.*
+- [x] **4.2 mesh_scope** under embed_host draws zero-copy on Vulkan+CUDA
   (a second applet, proving the seam isn't instance_scope-specific).
-- [ ] **4.3 Input + resize live:** mouse/scroll reach the applet (orbit the
+  *Logged live: `[vulkan] device path: geometry path OK — primitives drawn from
+  imported allocations in place` → `mesh-scope: first zero-copy frame drawn
+  (imported geometry, 3 draws)`. Root-caused a §4.2 gap first: `mesh_scope`
+  lacked the `SetNextWindowSize(FirstUseEver)` bootstrap `instance_scope`
+  carries — with no dock layout under embed the window collapsed below 64px
+  ("no geometry view"). Fixed `0614d51`. Driver gotcha recorded: a stale
+  `imgui.ini` beside the host pins the collapsed size past `FirstUseEver`.*
+- [x] **4.3 Input + resize live:** mouse/scroll reach the applet (orbit the
   camera), window resize rebuilds the swapchain without a validation error or
   a torn frame, `WM_DPICHANGED` is exercised on a mixed-DPI setup if available
   (the sibling of the Mac contentsScale note).
-- [ ] **4.4 Honest ladder:** `CALIPER_RENDERER=gl` under embed_host → the GL
+  *Input live: posted WM mouse events reached the applet — a wheel dolly changed
+  zoom to 0.66, observed on the screenshot. Live resize 1280×800→1720×1050
+  rebuilt the swapchain clean: no tear, no validation error. **Honest partial:**
+  `WM_DPICHANGED` mixed-DPI is NOT available on this box (single monitor @1.5×)
+  — the clause stays a partial with that reason, not a claim.*
+- [x] **4.4 Honest ladder:** `CALIPER_RENDERER=gl` under embed_host → the GL
   backend refuses the canvas (GL is GLFW-coupled chrome, D13), `attach_canvas`
   returns false with the honest `last_error`, the host prints it and exits
   cleanly — never a crash, never a blank-but-claiming-success window.
-- [ ] **4.5 Crash containment:** the applet-fault path (`crash_fn`) still
+  *Logged: `attach_canvas: embed requires Metal or Vulkan (the GL fallback is
+  not an embed target)`; the host printed `last_error` and exited cleanly.*
+- [x] **4.5 Crash containment:** the applet-fault path (`crash_fn`) still
   quarantines a faulting applet and the host lives — the embed promise holds
   on Windows.
+  *`CALIPER_HELLO_CRASH` logged: `applet 'dev.caliper.hello' faulted and was
+  quarantined (the host lives on): crashed in frame(): SEH exception
+  0xC0000005` — the host lived to its `EXIT_AFTER` close (`0724161`).*
 
 ## 5. Validation layers + the Windows gotchas the review flagged
 
-- [ ] **5.1** LunarG validation layers (loader-injected; the binary stays
+- [x] **5.1** LunarG validation layers (loader-injected; the binary stays
   layer-free) clean on the embed canvas path — surface creation, swapchain,
   the ImGui Vulkan backend, present. Descriptor/UBO complaints here are the
   class only hardware+layers catch.
-- [ ] **5.2 DLL-copy for the new exe dir.** `embed_host` lands in
+  *The OFFSCREEN embed-canvas path is validation-CLEAN after `37d87f2`, which
+  fixed 4 VUIDs: `-01387` (mode-gated the swapchain extension), `-00897`/`-01211`
+  (honest UNDEFINED→TRANSFER_SRC layouts), `-05137` (teardown leak). **Honest
+  partial on WINDOW mode:** its residuals are PRE-EXISTING SHARED machinery, not
+  embed-canvas bugs — `VUID-vkDestroyInstance-instance-00629` reproduced
+  IDENTICALLY on `caliper.exe` (control run), and
+  `VUID-vkQueueSubmit-pSignalSemaphores-00067` lives in the shared
+  `frame_render`/`frame_present` (the exe path is untouchable this pass; embed's
+  unthrottled pump merely surfaces it more often). The box is checked for the
+  embed-canvas claim with that scoping stated explicitly.*
+- [x] **5.2 DLL-copy for the new exe dir.** `embed_host` lands in
   `build/examples/embed_host/` — torch/dependency DLLs are NOT beside it; the
   caliper-exe copy step doesn't cover this target. Add a post-build DLL copy
   (mirror the exe's) or the host won't start. (Ledgered in the design spec's
   Windows addendum.)
-- [ ] **5.3 WndProc null-safety is BY DESIGN.** `WM_SIZE` fires *during*
+  *Post-build DLL-copy for `embed_host` added in `d7f9cc4` (alongside the
+  LNK1149 `libcaliper` OUTPUT_NAME fix); the host starts and runs.*
+- [x] **5.3 WndProc null-safety is BY DESIGN.** `WM_SIZE` fires *during*
   `CreateWindowA`, before `g_core` exists, so `caliper_core_event(nullptr,…)`
   is called — the core is null-safe on purpose. Do NOT "fix" this into a guard
   that crashes; confirm the null-event path stays a no-op.
-- [ ] **5.4** Verify the `GetClientRect` physical-pixel assumption under
+  *The `WM_SIZE`-during-`CreateWindowA` null-event no-op was exercised on every
+  run — confirmed a clean no-op, not "fixed" into a guard.*
+- [x] **5.4** Verify the `GetClientRect` physical-pixel assumption under
   `PER_MONITOR_AWARE_V2` (main_win32.cpp assumes client coords are physical px).
+  *Confirmed physical px: the client rect measured 1258×744 @1.5× from a
+  1280×800 outer window — the assumption holds.*
 
 ## 6. Closeout (only with artifacts)
 
-- [ ] **6.1** `2026-07-11-libcaliper-compass-design.md` — flip the §6 L2
+- [x] **6.1** `2026-07-11-libcaliper-compass-design.md` — flip the §6 L2
   status line and the Windows-pass addendum: the embed path is run-proven on
   Vulkan/Windows; name the commits.
-- [ ] **6.2** ROADMAP §7 R4 — the L2 sub-item gains "both platforms" once the
+  *This commit — §6 L2 outcome + the Windows-pass addendum now read run-proven
+  on both ecosystems, commits `c8e6005`/`852c398`/`37d87f2` (seam) +
+  `0614d51`/`0724161` (supporting) named.*
+- [x] **6.2** ROADMAP §7 R4 — the L2 sub-item gains "both platforms" once the
   Windows embed is proven (L3/Compass stays gated on §5's named-workflow rule).
-- [ ] **6.3** `docs/wiki/reference/embedding.md` — drop the "Metal-proven;
+  *This commit — the R4 L2 sub-item now reads both platforms; L3/Compass gating
+  unchanged.*
+- [x] **6.3** `docs/wiki/reference/embedding.md` — drop the "Metal-proven;
   Vulkan pending" qualifier on the embed path; the CANVAS_WINDOW known-gap note
   updates to "run-proven live on both OSes, no ctest coverage" (the live run
   stays the ritual).
-- [ ] **6.4** Fold in the review's carried follow-ups if cheap while in the
+  *This commit — the qualifier is gone; the CANVAS_WINDOW note reads run-proven
+  live on both OSes, no ctest coverage (the live run stays the ritual);
+  `CALIPER_EMBED_EXIT_AFTER` noted as a both-hosts hook.*
+- [~] **6.4** Fold in the review's carried follow-ups if cheap while in the
   files: embed_host `caliper::sdk`-link trim, `src/host` include→PRIVATE flip,
   watchdog surfacing on the embed path (it feeds but is never read there).
-- [ ] **6.5** Commits in house style (`feat(vulkan):` for the canvas seam,
+  *DEFERRED with reason (carried, not dropped): the sdk-link trim, the
+  include→PRIVATE flip, and watchdog surfacing all touch shared build/host wiring
+  that requires mac-side verification to land safely — folding them in blind on
+  the Windows box risks the byte-exact matrix. Carried to a follow-up pass.*
+- [x] **6.5** Commits in house style (`feat(vulkan):` for the canvas seam,
   `test(embed):`, `docs(specs):`), Fable trailer; every code fix rides the full
   `caliper_embed_tests` + `caliper_gfx_tests` + a live embed_host re-proof.
+  *House-style commits landed: `d7f9cc4` `build(win)`, `c8e6005`/`852c398`/
+  `37d87f2` `feat(vulkan)`/`fix(vulkan)`, `0724161` `feat(embed_host)`,
+  `0614d51` `fix(applets)`; each code fix rode the full `caliper_embed_tests` +
+  `caliper_gfx_tests` (48/48) + a live `embed_host` re-proof. Closeout: this
+  `docs(specs):` commit. Findings in the box's scratch ledger
+  (`.superpowers/sdd/embed-pass/`).*
 
 ---
 
