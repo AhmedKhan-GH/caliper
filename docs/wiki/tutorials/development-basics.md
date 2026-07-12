@@ -114,6 +114,16 @@ CALIPER_AUTOLAUNCH=dev.example.my-applet ./build/caliper
 #    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI)
 ```
 
+!!! warning "`--clean-first` on a single applet target prunes its siblings"
+    The applet list is a `CONFIGURE_DEPENDS` glob, so **all** applets are
+    configured but only the target you name gets built. A partial
+    `cmake --build build --target my_applet --clean-first` cleans the whole
+    build tree first, then rebuilds only `my_applet` — leaving the other
+    applets' dylibs and manifests missing from `build/applets/` until a full
+    `cmake --build build` restores them. If the launcher suddenly shows only
+    one card, this is why: rebuild without `--clean-first`, or build the
+    default target to bring every applet back.
+
 In CLion the same works via the CMake tool window — reload the project once
 after creating the folder, then the `my_applet` target exists.
 

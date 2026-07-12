@@ -22,12 +22,18 @@ review texts.
   `display_mode{MODE_SPLIT}`, `:221 published_mode = MODE_SPLIT`). The enum
   value is load-bearing again. The ledger entry is retired as overtaken by
   events; no code change.
-- **REAL, remove:** `model_offset` (`twin_scope.cpp:238` declaration, `:581`
-  assignment) is write-only — grep shows no read anywhere in the file, in
-  the restored pre-fleet version too. Delete the member and the assignment.
-  Verify with a fresh grep in the diff, and confirm the split view still
-  renders (it positions halves through other state): the run-proof is the
-  existing autolaunch line `geometry view drawn — 2 mesh half(s)`.
+- **ALSO STALE — retired at execution (2026-07-12):** this spec originally
+  ordered `model_offset` deleted as write-only, based on a TRUNCATED grep
+  (`| head` ate the read sites). The implementer's fresh grep found it READ
+  at `twin_scope.cpp:779-780` and consumed at `:877/:903/:971` — it is the
+  sole mechanism positioning the split-view halves; deleting it would have
+  collapsed both halves onto x=0, a silent visual regression the
+  `2 mesh half(s)` run-proof would NOT catch (two draws, coincident). The
+  implementer refused the destructive edit per the anomaly-stop rule —
+  correctly. §1.1 therefore retires with ZERO code changes: both of its
+  halves (MODE_SPLIT dead; model_offset unused) were findings against the
+  deleted fleet version, overtaken by the revert. Lesson recorded: debt
+  entries must be re-anchored with UNTRUNCATED searches before execution.
 
 ### 1.2 `inst_attr_base` u32 guard (the one real gate gap)
 
