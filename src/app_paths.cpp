@@ -51,7 +51,21 @@ fs::path compute_app_data_dir() {
 
 } // anonymous namespace
 
+// Embed v1.1 override root. Empty => no override (the OS default is used). The
+// caliper exe never sets this, so its default path resolution is unchanged.
+namespace {
+std::string g_override_root;   // "" = unset
+}
+
+void set_app_data_dir_override(const std::string& dir) {
+    if (dir.empty()) { g_override_root.clear(); return; }
+    std::error_code ec;
+    fs::create_directories(dir, ec);   // best-effort, mirrors compute_app_data_dir
+    g_override_root = fs::path(dir).string();
+}
+
 const std::string& app_data_dir() {
+    if (!g_override_root.empty()) return g_override_root;
     // Computed once and cached. The directory is created on first call.
     static const std::string cached = compute_app_data_dir().string();
     return cached;

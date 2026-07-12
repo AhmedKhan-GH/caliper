@@ -138,9 +138,22 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     struct SlotGuard {
         bool armed = true;
         ~SlotGuard() {
-            if (armed) g_live_core.store(nullptr, std::memory_order_release);
+            if (armed) {
+                // Restore the default app-data root if data_dir routing was armed
+                // for a create that then bailed — otherwise a failed create would
+                // leak its per-core root into the next one.
+                caliper::set_app_data_dir_override("");
+                g_live_core.store(nullptr, std::memory_order_release);
+            }
         }
     } slot_guard;
+
+    // v1.1 (§3.3): route CaliperCoreDesc.data_dir into the app-data root BEFORE
+    // the stores open (services_init) and the loader scans, so metrics/artifacts/
+    // applet-data land under the embedder's directory. NULL/empty => the OS
+    // default is used, byte-for-byte as before (the caliper exe passes NULL).
+    if (desc->data_dir && desc->data_dir[0])
+        caliper::set_app_data_dir_override(desc->data_dir);
 
     auto core = std::make_unique<CaliperCore>();
     core->log_fn   = desc->log_fn;
@@ -245,6 +258,11 @@ void caliper_core_shutdown(CaliperCore* core) {
     core->renderer.reset();
     // ImGui contexts last, AFTER the renderer's ImGui backend is gone.
     core_destroy_ui_context();
+
+    // Restore the default app-data root: the stores are closed, and the next
+    // core (NULL data_dir) must resolve the OS default again — the override is
+    // tied to this core's lifetime.
+    caliper::set_app_data_dir_override("");
 
     CaliperCore* expected = core;
     g_live_core.compare_exchange_strong(expected, nullptr,

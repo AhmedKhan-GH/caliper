@@ -520,3 +520,51 @@ TEST_CASE("embed/get_service: the Compass case — a host thread reads metrics.v
 
     caliper_core_shutdown(core);            // joins the worker (cancel_all_and_join)
 }
+
+// ===========================================================================
+// v1.1 — data_dir routing (§3.3). A non-NULL data_dir roots the stores under
+// the embedder's directory; NULL keeps the OS default byte-for-byte.
+// ===========================================================================
+TEST_CASE("embed/data_dir: a per-core data_dir roots the stores under it; "
+          "NULL keeps the default") {
+    namespace fs = std::filesystem;
+    // A temp root distinct from the default app-data. Cleaned up front so a
+    // stale prior run cannot mask the "landed under root" assertion (portable:
+    // no getpid, the Windows box reruns this battery).
+    fs::path root = fs::temp_directory_path() / "caliper_embed_datadir_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+
+    // --- data_dir set: the metrics store must land UNDER root ---
+    CaliperCoreDesc d = base_desc();
+    std::string root_str = root.string();
+    d.data_dir = root_str.c_str();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    // Drive a metrics write so the store is exercised (opened at create).
+    auto* metrics = (const CaliperMetricsV1*)caliper_core_get_service(core, CALIPER_METRICS_V1);
+    REQUIRE(metrics != nullptr);
+    uint64_t run = metrics->begin_run("proj", "r0");
+    metrics->scalar(run, "loss", 0, 1.0);
+    metrics->end_run(run);
+
+    bool db_under_root = fs::exists(root / "metrics.duckdb");
+    caliper_core_shutdown(core);
+    CHECK(db_under_root);   // routed under the embedder's directory, not default
+
+    // --- data_dir NULL: the default root is used, and the override did NOT leak ---
+    CaliperCoreDesc d2 = base_desc();
+    d2.data_dir = nullptr;
+    CaliperCore* core2 = caliper_core_create(&d2);
+    REQUIRE(core2 != nullptr);
+
+    // After a shut-down override, path resolution is back to the OS default:
+    // the resolved metrics path must NOT sit under the temp root.
+    std::string def_path = caliper::app_data_path("metrics.duckdb");
+    bool default_restored = (def_path.find(root_str) == std::string::npos);
+    CHECK(default_restored);
+
+    caliper_core_shutdown(core2);
+    fs::remove_all(root, ec);
+}

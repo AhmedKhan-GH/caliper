@@ -23,4 +23,13 @@ const std::string& app_data_dir();
 // Convenience: returns app_data_dir() / filename.
 std::string app_data_path(const std::string& filename);
 
+// Override the app-data root (embed v1.1: CaliperCoreDesc.data_dir routing).
+// While set, app_data_dir()/app_data_path() resolve UNDER `dir` (created if
+// missing) instead of the OS default, so an embedder's metrics/artifacts/
+// applet-data land under its own per-project root. Pass "" to restore the OS
+// default. NOT used by the caliper exe (it never overrides), so the default
+// behavior is byte-for-byte unchanged. Set once on the create thread before
+// the stores open; not intended for concurrent mutation.
+void set_app_data_dir_override(const std::string& dir);
+
 } // namespace caliper

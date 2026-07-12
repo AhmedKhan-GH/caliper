@@ -92,11 +92,13 @@ typedef void (*CaliperCrashFn)(void* userdata, const char* applet_id,
 typedef struct CaliperCoreDesc {
     size_t          struct_size;   /* = sizeof(CaliperCoreDesc); FIRST member. */
     CaliperRenderer renderer;      /* backend to embed.                        */
-    const char*     data_dir;      /* IGNORED in v0 (reserved): the process
-                                    * app-data path is always used. Threading a
-                                    * per-core data root is a host_services
-                                    * signature change deferred past R4 (the
-                                    * registry is process-global; see report).  */
+    const char*     data_dir;      /* v1.1: per-core app-data root. NON-NULL
+                                    * routes metrics/artifacts/applet-data under
+                                    * this directory (created if missing) — a
+                                    * document app's per-project root. NULL keeps
+                                    * the OS default byte-for-byte (the caliper
+                                    * exe passes NULL). Valid for one live core;
+                                    * restored on shutdown (one core per process).*/
     const char*     applets_dir;   /* extra applet scan dir; NULL -> default
                                     * discovery (app-data/applets + exe-side). */
     CaliperLogFn    log_fn;        /* NULL -> stderr.                          */
