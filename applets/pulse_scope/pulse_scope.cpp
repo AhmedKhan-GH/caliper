@@ -95,8 +95,8 @@ struct PulseState {
     uint64_t          job_id = 0;
     std::atomic<bool> stop{false};
 
-    // frame-thread knob (atomic; torn reads harmless).
-    std::atomic<float> window_s{60.0f};
+    // frame-thread knob — touched only from draw_ui (draw-thread-only).
+    float window_s = 60.0f;
 
     std::mutex mtx;                 // guards everything below
     int64_t    epoch_ns = 0;        // first t_ns ever seen; the shared axis origin
@@ -258,10 +258,10 @@ void PulseScopeApplet::draw_ui() {
         return;
     }
 
-    float window = st->window_s.load();
+    float window = st->window_s;
     ImGui::SetNextItemWidth(240);
     if (ImGui::SliderFloat("window (s)", &window, 5.0f, 200.0f, "%.0f"))
-        st->window_s.store(window);
+        st->window_s = window;
     ImGui::SameLine();
     ImGui::TextDisabled("%zu channels   ·   %.0f FPS",
                         snap.size(), ImGui::GetIO().Framerate);
