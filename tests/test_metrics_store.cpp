@@ -6,6 +6,8 @@
 
 #include "metrics_store.h"
 
+#include <caliper/arrow_c.h>
+
 #include <algorithm>
 #include <filesystem>
 #ifdef _WIN32
@@ -247,6 +249,179 @@ TEST_CASE("metrics_store: delete_run removes the run and all its series") {
     // deleted run id is inert for future writes, not resurrected
     store.scalar(b, "loss", 1, 3.0);
     CHECK(store.scalars(b, "loss").empty());
+}
+
+// ---------------------------------------------------------------------------
+// caliper.metrics.v1_1 read surface: query() streams metric rows out as Arrow C
+// streams against THIS store's live connection, with READ-ONLY enforced (only a
+// lone SELECT is accepted — the connection is the live writer). TDD: written
+// before the implementation.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Drain an ArrowArrayStream of one BIGINT (int64, format "l") column + one
+// DOUBLE (format "g") column into vectors — the (step, value) shape a Compass
+// scalars query returns.
+struct StepValue {
+    std::vector<int64_t> step;
+    std::vector<double>  value;
+    int64_t schema_children = -1;
+};
+
+StepValue drain_i64_f64(ArrowArrayStream* stream) {
+    StepValue out;
+    ArrowSchema schema = {};
+    REQUIRE(stream->get_schema(stream, &schema) == 0);
+    out.schema_children = schema.n_children;
+    if (schema.release) schema.release(&schema);
+
+    for (;;) {
+        ArrowArray array = {};
+        REQUIRE(stream->get_next(stream, &array) == 0);
+        if (!array.release) break;   // end of stream (spec)
+        REQUIRE(array.n_children >= 2);
+        const ArrowArray* cs = array.children[0];
+        const ArrowArray* cv = array.children[1];
+        const int64_t* sp = static_cast<const int64_t*>(cs->buffers[1]);
+        const double*  vp = static_cast<const double*>(cv->buffers[1]);
+        for (int64_t i = 0; i < array.length; i++) {
+            out.step.push_back(sp[cs->offset + i]);
+            out.value.push_back(vp[cv->offset + i]);
+        }
+        array.release(&array);
+    }
+    stream->release(stream);
+    CHECK(stream->release == nullptr);   // release must null itself (spec)
+    return out;
+}
+
+// Count rows of a single-column BIGINT result (e.g. SELECT COUNT(*)).
+int64_t drain_single_i64(ArrowArrayStream* stream) {
+    ArrowSchema schema = {};
+    REQUIRE(stream->get_schema(stream, &schema) == 0);
+    if (schema.release) schema.release(&schema);
+    int64_t v = -1;
+    for (;;) {
+        ArrowArray array = {};
+        REQUIRE(stream->get_next(stream, &array) == 0);
+        if (!array.release) break;
+        if (array.length > 0)
+            v = static_cast<const int64_t*>(array.children[0]->buffers[1])
+                    [array.children[0]->offset];
+        array.release(&array);
+    }
+    stream->release(stream);
+    return v;
+}
+
+}  // namespace
+
+TEST_CASE("metrics.v1_1: query streams scalar rows out as Arrow, matching writes") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t run = store.begin_run("compass", "q");
+    REQUIRE(run != 0);
+    for (int64_t s = 0; s < 6; ++s) store.scalar(run, "loss", s, static_cast<double>(s) * 0.5);
+
+    ArrowArrayStream stream = {};
+    REQUIRE(store.query(
+        "SELECT step, value FROM scalars WHERE run = " + std::to_string(run) +
+        " AND tag = 'loss' ORDER BY step", &stream));
+
+    StepValue got = drain_i64_f64(&stream);
+    CHECK(got.schema_children == 2);
+    REQUIRE(got.step.size() == 6);
+    for (int i = 0; i < 6; ++i) {
+        CHECK(got.step[i] == i);
+        CHECK(got.value[i] == doctest::Approx(i * 0.5));
+    }
+}
+
+TEST_CASE("metrics.v1_1: query lists runs (id round-trips through Arrow)") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t a = store.begin_run("exp", "alpha");
+    uint64_t b = store.begin_run("exp", "beta");
+    (void)a; (void)b;
+
+    ArrowArrayStream stream = {};
+    REQUIRE(store.query("SELECT COUNT(*) FROM runs", &stream));
+    CHECK(drain_single_i64(&stream) == 2);
+}
+
+TEST_CASE("metrics.v1_1: a WITH/CTE SELECT is accepted (read-only)") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t run = store.begin_run("exp", "cte");
+    for (int64_t s = 0; s < 4; ++s) store.scalar(run, "loss", s, 1.0);
+
+    ArrowArrayStream stream = {};
+    REQUIRE(store.query(
+        "WITH s AS (SELECT * FROM scalars) SELECT COUNT(*) FROM s", &stream));
+    CHECK(drain_single_i64(&stream) == 4);
+}
+
+TEST_CASE("metrics.v1_1: non-SELECT is refused and the store is left intact") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t run = store.begin_run("exp", "ro");
+    store.scalar(run, "loss", 0, 1.0);
+
+    // Each of these must be refused WITHOUT mutating the store (the connection
+    // is the live writer — a leak here corrupts metrics). Note: a read-only
+    // introspection PRAGMA (e.g. `PRAGMA database_list`) is NOT here — DuckDB's
+    // parser rewrites it into a read-only SELECT, so it is legitimately a read;
+    // setter pragmas parse to PRAGMA_STATEMENT and ARE rejected. Only a
+    // SELECT_STATEMENT is accepted, and no SELECT can mutate data.
+    for (const char* bad : {
+             "INSERT INTO scalars VALUES (1,'x',0,0)",
+             "UPDATE runs SET name = 'hacked'",
+             "DELETE FROM scalars",
+             "DROP TABLE runs",
+             "CREATE TABLE evil(x INT)",
+             "ALTER TABLE runs RENAME TO pwned"}) {
+        ArrowArrayStream s = {};
+        CHECK_FALSE(store.query(bad, &s));
+        CHECK(s.release == nullptr);            // stream never filled
+        CHECK_FALSE(store.last_error().empty());
+    }
+
+    // The run, its scalar, and the schema all survived every refusal.
+    auto runs = store.runs();
+    REQUIRE(runs.size() == 1);
+    CHECK(runs[0].name == "ro");
+    CHECK(store.scalars(run, "loss").size() == 1);
+}
+
+TEST_CASE("metrics.v1_1: statement chaining cannot smuggle a write past SELECT") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    uint64_t run = store.begin_run("exp", "chain");
+    store.scalar(run, "loss", 0, 1.0);
+
+    // DuckDB's Query() runs every statement and returns the last result, so a
+    // naive "starts with SELECT" gate would execute the DROP. Parse-based
+    // enforcement refuses the whole multi-statement string.
+    ArrowArrayStream s = {};
+    CHECK_FALSE(store.query("SELECT 1; DROP TABLE runs", &s));
+    CHECK(s.release == nullptr);
+    CHECK_FALSE(store.last_error().empty());
+    CHECK(store.runs().size() == 1);            // runs table still there
+}
+
+TEST_CASE("metrics.v1_1: bad SQL fails with a reason, no crash; unopened is inert") {
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    ArrowArrayStream s = {};
+    CHECK_FALSE(store.query("SELECT FROM nonsense syntax", &s));
+    CHECK(s.release == nullptr);
+    CHECK_FALSE(store.last_error().empty());
+
+    MetricsStore closed;
+    ArrowArrayStream s2 = {};
+    CHECK_FALSE(closed.query("SELECT 1", &s2));   // never opened
+    CHECK(s2.release == nullptr);
+    CHECK_FALSE(closed.last_error().empty());
 }
 
 TEST_CASE("metrics_store: clear_all empties history but never reuses ids") {

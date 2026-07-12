@@ -11,6 +11,13 @@
 //
 // No DuckDB type appears in this header: the connection lives behind a pimpl,
 // so consumers of caliper_host_lib never pull in <duckdb.hpp>.
+//
+// ArrowArrayStream (the ABI's own tabular type, from the vendored spec header)
+// is the only non-primitive type here — it backs the caliper.metrics.v1_1 read
+// surface (query()), which streams metric rows out exactly as caliper.data.v1
+// does, but against THIS store's live connection.
+#include <caliper/arrow_c.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -83,6 +90,22 @@ public:
     // Step-ascending (ORDER BY step) list of (step, value) pairs.
     std::vector<std::pair<int64_t, double>> scalars(uint64_t run, const std::string& tag);
     std::vector<HistogramInfo> histograms(uint64_t run, const std::string& tag);
+
+    // --- read surface across the ABI (backs caliper.metrics.v1_1) ---
+
+    // Run SQL against THIS store's live connection; on success fill *out with a
+    // live Arrow C stream (caller drains and releases). Serialized on the same
+    // mutex as every write, so a host UI thread may query while an applet worker
+    // streams scalars in — reads are immediately consistent with those writes
+    // (unlike a separate read-only DuckDB instance, which only sees checkpointed
+    // state). READ-ONLY ENFORCED: the SQL is parsed (not executed) and refused
+    // unless it is exactly one SELECT statement — the connection is the live
+    // WRITER, so an INSERT/DROP slipping through would corrupt the store. On
+    // refusal or failure *out is untouched and last_error() explains.
+    bool query(const std::string& sql, ArrowArrayStream* out);
+
+    // The error of this thread's last failing query() ("" if none yet).
+    std::string last_error() const;
 
 private:
     struct Impl;

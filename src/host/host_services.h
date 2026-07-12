@@ -1,8 +1,22 @@
 #pragma once
 #include <set>
 #include <string>
+#include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log sink)
 
 namespace caliper_host {
+
+// Applet log routing (embed v1.1, §3.3 — the ledgered de-singletonization).
+// caliper.log.v1 was a process-wide stderr singleton. Install a sink and every
+// log.v1 line is delivered to it INSTEAD of stderr; pass nullptr to restore the
+// built-in timestamped stderr writer (the caliper exe path, which never installs
+// a sink — unchanged). Set once at create on the frame thread; the embed core
+// installs it when the embedder provides a log_fn and clears it at shutdown
+// AFTER joining workers, so the read on worker threads (log.v1 is callable from
+// workers) is ordered by thread create/join — no lock needed (mirrors the
+// existing set_bridge_log_sink pattern).
+void set_applet_log_sink(void (*sink)(void* userdata, CaliperLogLevel level,
+                                      const char* message_utf8),
+                         void* userdata);
 // Host-side service registry (PLATFORM.md §6b). Call services_init() once
 // after the ImGui/ImPlot/ImPlot3D contexts exist; tables are static and live
 // for the process lifetime (the ABI's pointer-validity guarantee).

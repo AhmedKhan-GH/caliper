@@ -19,15 +19,23 @@
 // renderer, comparing to the shared CPU reference the gfx rows use.
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/metrics_v1.h>   // v1.1 get_service: the Compass case
+#include <caliper/services/metrics_v1_1.h> // C0b: the metrics READ surface (Arrow)
+#include <caliper/services/jobs_v1.h>      // v1.1 get_service: cross-thread producer
+#include <caliper/services/log_v1.h>       // v1.1 log routing
+#include <caliper/arrow_c.h>               // C0b: drain metrics.v1_1 Arrow streams
 #include "host_services.h"
+#include "metrics_store.h"          // caliper_host::host_metrics_store() (reader)
 #include "tensor_bridge.h"          // caliper_host::expand_u8_to_rgba8 (shared ref)
 #include "renderer/host_renderer.h"
+#include "app_paths.h"              // caliper::app_data_path (data_dir routing)
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -417,5 +425,374 @@ TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact
     CHECK(got == ref);   // byte-exact: the embed-core-wired seam == the CPU ref
 
     bridge->release_texture(id);
+    caliper_core_shutdown(core);
+}
+
+// ===========================================================================
+// v1.1 — get_service for hosts (the P2/P3 "consumer" surface). These cases are
+// GPU-FREE (metrics/jobs need no renderer), so they run on headless CI too.
+// ===========================================================================
+
+TEST_CASE("embed/get_service: known ids vend the process table; unknown/null refuse") {
+    // NULL core -> NULL (no create needed; the contract is checkable up front).
+    CHECK(caliper_core_get_service(nullptr, CALIPER_METRICS_V1) == nullptr);
+
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    // No canvas attached: metrics/jobs are frame-thread-independent and vend now.
+    const void* metrics = caliper_core_get_service(core, CALIPER_METRICS_V1);
+    const void* jobs    = caliper_core_get_service(core, CALIPER_JOBS_V1);
+    CHECK(metrics != nullptr);
+    CHECK(jobs != nullptr);
+
+    // The SAME process-static table an applet gets via CaliperHost.get_service.
+    bool same_as_applet_table = (metrics == caliper_host::services_get(CALIPER_METRICS_V1));
+    CHECK(same_as_applet_table);
+
+    // Unknown id and NULL id -> NULL, never UB.
+    CHECK(caliper_core_get_service(core, "does.not.exist.v1") == nullptr);
+    CHECK(caliper_core_get_service(core, nullptr) == nullptr);
+
+    caliper_core_shutdown(core);
+}
+
+// The load-bearing Compass case: a non-frame (host UI) thread queries metrics.v1
+// rows in a bounded loop WHILE a jobs.v1 worker thread streams them in — the wx
+// UI reading a live run. Asserts monotonic visibility (row count never shrinks)
+// and no torn reads (every visible (step,value) pair is coherent). Deterministic:
+// the reader drains until all N rows are visible (the writer always produces N),
+// bounded by a guard — no sleep, no is_running race.
+namespace {
+struct ScalarStream { const CaliperMetricsV1* m; uint64_t run; int n; };
+void stream_scalars(void* user, const CaliperJobControl*) {
+    ScalarStream* s = (ScalarStream*)user;
+    for (int i = 0; i < s->n; ++i)
+        s->m->scalar(s->run, "loss", (int64_t)i, (double)i);
+}
+}  // namespace
+
+TEST_CASE("embed/get_service: the Compass case — a host thread reads metrics.v1 "
+          "rows while a jobs.v1 worker streams them") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* metrics = (const CaliperMetricsV1*)caliper_core_get_service(core, CALIPER_METRICS_V1);
+    auto* jobs    = (const CaliperJobsV1*)caliper_core_get_service(core, CALIPER_JOBS_V1);
+    REQUIRE(metrics != nullptr);
+    REQUIRE(jobs != nullptr);
+
+    uint64_t run = metrics->begin_run("compass", "stream");
+    if (run == 0) {   // metrics store failed to open on this box: no rows to read
+        MESSAGE("metrics store not open — skipping the Compass streaming case");
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    const int N = 200;
+    ScalarStream s{metrics, run, N};
+    uint64_t jid = jobs->submit("stream-scalars", &stream_scalars, &s);
+    REQUIRE(jid != 0);
+
+    // Reader loop on THIS (non-frame) thread, racing the worker's writes.
+    caliper_host::MetricsStore& store = caliper_host::host_metrics_store();
+    size_t prev = 0;
+    bool shrank = false;
+    bool torn = false;
+    int guard = 0;
+    std::vector<std::pair<int64_t, double>> rows;
+    do {
+        rows = store.scalars(run, "loss");
+        if (rows.size() < prev) shrank = true;
+        prev = rows.size();
+        for (size_t i = 0; i < rows.size(); ++i) {
+            bool step_ok  = (rows[i].first  == (int64_t)i);
+            bool value_ok = (rows[i].second == (double)i);
+            if (!step_ok || !value_ok) torn = true;
+        }
+        ++guard;
+    } while (rows.size() < (size_t)N && guard < 1000000);
+
+    metrics->end_run(run);
+
+    CHECK(shrank == false);                 // monotonic visibility under the race
+    CHECK(torn == false);                   // no torn / partial rows
+    CHECK(rows.size() == (size_t)N);        // all streamed rows became visible
+
+    caliper_core_shutdown(core);            // joins the worker (cancel_all_and_join)
+}
+
+// ===========================================================================
+// C0b — the metrics READ surface across the ABI (caliper.metrics.v1_1). The
+// PURE-ABI Compass path: a host reads runs/scalars through get_service +
+// metrics.v1_1.query (Arrow C stream), NOT the host-private MetricsStore. This
+// is what an out-of-tree consumer (Compass) can actually reach. GPU-free.
+// ===========================================================================
+namespace {
+// Drain a metrics.v1_1 (step BIGINT, value DOUBLE) Arrow stream into a vector.
+// Returns false if the stream schema/rows can't be read (never throws here).
+bool drain_step_value(ArrowArrayStream* st,
+                      std::vector<std::pair<int64_t, double>>& out) {
+    ArrowSchema schema = {};
+    if (st->get_schema(st, &schema) != 0) { st->release(st); return false; }
+    if (schema.release) schema.release(&schema);
+    for (;;) {
+        ArrowArray array = {};
+        if (st->get_next(st, &array) != 0) { st->release(st); return false; }
+        if (!array.release) break;                      // end of stream (spec)
+        const ArrowArray* cs = array.children[0];
+        const ArrowArray* cv = array.children[1];
+        const int64_t* sp = (const int64_t*)cs->buffers[1];
+        const double*  vp = (const double*)cv->buffers[1];
+        for (int64_t i = 0; i < array.length; i++)
+            out.emplace_back(sp[cs->offset + i], vp[cv->offset + i]);
+        array.release(&array);
+    }
+    st->release(st);
+    return true;
+}
+}  // namespace
+
+TEST_CASE("embed/metrics.v1_1: a host reads runs+scalars via the ABI (Arrow) "
+          "while a jobs.v1 worker streams them; non-SELECT refused") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* metrics = (const CaliperMetricsV1*)caliper_core_get_service(core, CALIPER_METRICS_V1);
+    auto* reader  = (const CaliperMetricsV1_1*)caliper_core_get_service(core, CALIPER_METRICS_V1_1);
+    auto* jobs    = (const CaliperJobsV1*)caliper_core_get_service(core, CALIPER_JOBS_V1);
+    REQUIRE(metrics != nullptr);
+    REQUIRE(reader != nullptr);
+    REQUIRE(jobs != nullptr);
+
+    // v1_1 vends the SAME process-static table an applet would get.
+    bool same_as_applet_table =
+        ((const void*)reader == caliper_host::services_get(CALIPER_METRICS_V1_1));
+    CHECK(same_as_applet_table);
+
+    uint64_t run = metrics->begin_run("compass", "arrow-stream");
+    if (run == 0) {   // metrics store failed to open on this box: nothing to read
+        MESSAGE("metrics store not open — skipping the metrics.v1_1 Arrow case");
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    const int N = 200;
+    ScalarStream s{metrics, run, N};
+    uint64_t jid = jobs->submit("stream-scalars", &stream_scalars, &s);
+    REQUIRE(jid != 0);
+
+    // Host-thread reader loop, purely through the ABI: query() a fresh Arrow
+    // stream each pass and drain it, racing the worker's writes. Bounded/
+    // deterministic (the writer always produces N) — no sleep, no is_running.
+    const std::string sql =
+        "SELECT step, value FROM scalars WHERE run = " + std::to_string(run) +
+        " AND tag = 'loss' ORDER BY step";
+    size_t prev = 0; bool shrank = false, torn = false; int guard = 0;
+    std::vector<std::pair<int64_t, double>> rows;
+    do {
+        rows.clear();
+        ArrowArrayStream st = {};
+        REQUIRE(reader->query(sql.c_str(), &st) == true);
+        REQUIRE(drain_step_value(&st, rows) == true);
+        if (rows.size() < prev) shrank = true;
+        prev = rows.size();
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (rows[i].first != (int64_t)i || rows[i].second != (double)i) torn = true;
+        ++guard;
+    } while (rows.size() < (size_t)N && guard < 1000000);
+
+    metrics->end_run(run);
+
+    CHECK(shrank == false);              // monotonic visibility under the race
+    CHECK(torn == false);                // no torn / partial rows
+    CHECK(rows.size() == (size_t)N);     // all streamed rows became visible
+
+    // List runs through the ABI too (the runs-browser query).
+    {
+        ArrowArrayStream st = {};
+        REQUIRE(reader->query("SELECT COUNT(*) FROM runs", &st) == true);
+        ArrowSchema sc = {}; REQUIRE(st.get_schema(&st, &sc) == 0);
+        if (sc.release) sc.release(&sc);
+        ArrowArray a = {}; REQUIRE(st.get_next(&st, &a) == 0);
+        REQUIRE(a.release != nullptr);
+        int64_t n_runs = ((const int64_t*)a.children[0]->buffers[1])[a.children[0]->offset];
+        CHECK(n_runs >= 1);
+        a.release(&a);
+        ArrowArray end = {}; st.get_next(&st, &end);   // drain to end
+        st.release(&st);
+    }
+
+    // Read-only ENFORCED across the ABI: a write is refused, the stream is never
+    // filled, last_error explains, and the store is untouched (run still there).
+    {
+        ArrowArrayStream st = {};
+        CHECK(reader->query("DROP TABLE runs", &st) == false);
+        CHECK(st.release == nullptr);
+        CHECK(std::string(reader->last_error()).empty() == false);
+
+        ArrowArrayStream st2 = {};
+        REQUIRE(reader->query("SELECT COUNT(*) FROM runs", &st2) == true);
+        st2.release(&st2);   // the runs table survived the refused DROP
+    }
+
+    caliper_core_shutdown(core);         // joins the worker (cancel_all_and_join)
+}
+
+// ===========================================================================
+// v1.1 — data_dir routing (§3.3). A non-NULL data_dir roots the stores under
+// the embedder's directory; NULL keeps the OS default byte-for-byte.
+// ===========================================================================
+TEST_CASE("embed/data_dir: a per-core data_dir roots the stores under it; "
+          "NULL keeps the default") {
+    namespace fs = std::filesystem;
+    // A temp root distinct from the default app-data. Cleaned up front so a
+    // stale prior run cannot mask the "landed under root" assertion (portable:
+    // no getpid, the Windows box reruns this battery).
+    fs::path root = fs::temp_directory_path() / "caliper_embed_datadir_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+
+    // --- data_dir set: the metrics store must land UNDER root ---
+    CaliperCoreDesc d = base_desc();
+    std::string root_str = root.string();
+    d.data_dir = root_str.c_str();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    // Drive a metrics write so the store is exercised (opened at create).
+    auto* metrics = (const CaliperMetricsV1*)caliper_core_get_service(core, CALIPER_METRICS_V1);
+    REQUIRE(metrics != nullptr);
+    uint64_t run = metrics->begin_run("proj", "r0");
+    metrics->scalar(run, "loss", 0, 1.0);
+    metrics->end_run(run);
+
+    bool db_under_root = fs::exists(root / "metrics.duckdb");
+    caliper_core_shutdown(core);
+    CHECK(db_under_root);   // routed under the embedder's directory, not default
+
+    // --- data_dir NULL: the default root is used, and the override did NOT leak ---
+    CaliperCoreDesc d2 = base_desc();
+    d2.data_dir = nullptr;
+    CaliperCore* core2 = caliper_core_create(&d2);
+    REQUIRE(core2 != nullptr);
+
+    // After a shut-down override, path resolution is back to the OS default:
+    // the resolved metrics path must NOT sit under the temp root.
+    std::string def_path = caliper::app_data_path("metrics.duckdb");
+    bool default_restored = (def_path.find(root_str) == std::string::npos);
+    CHECK(default_restored);
+
+    caliper_core_shutdown(core2);
+    fs::remove_all(root, ec);
+}
+
+// ===========================================================================
+// v1.1 — log.v1 routing (§3.3). An installed log_fn captures applet log lines
+// (tagged "[applet] ") that were stderr-only in v0; with NO log_fn the caliper
+// exe path stays stderr, unchanged.
+// ===========================================================================
+namespace {
+std::mutex  g_log_mu;
+std::string g_log_capture;
+void capture_log_fn(void*, int /*level*/, const char* msg) {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    g_log_capture += (msg ? msg : "");
+    g_log_capture += "\n";
+}
+std::string drain_log_capture() {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    return g_log_capture;
+}
+void reset_log_capture() {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    g_log_capture.clear();
+}
+}  // namespace
+
+TEST_CASE("embed/log: with log_fn installed, a log.v1 line reaches the sink "
+          "tagged, NOT raw stderr") {
+    reset_log_capture();
+    CaliperCoreDesc d = base_desc();
+    d.log_fn = &capture_log_fn;
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* log = (const CaliperLogV1*)caliper_core_get_service(core, CALIPER_LOG_V1);
+    REQUIRE(log != nullptr);
+
+    // Drive log.v1 directly (GPU-free): the applet-facing service an applet uses.
+    std::string err;
+    {
+        StderrTap tap;
+        log->log(CALIPER_LOG_INFO, "compass-log-probe");
+        err = tap.drain();
+    }
+    std::string cap = drain_log_capture();
+    bool reached_sink       = cap.find("compass-log-probe") != std::string::npos;
+    bool tagged_applet      = cap.find("[applet] compass-log-probe") != std::string::npos;
+    bool absent_from_stderr = err.find("compass-log-probe") == std::string::npos;
+    CHECK(reached_sink);
+    CHECK(tagged_applet);
+    CHECK(absent_from_stderr);
+
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/log: without log_fn, log.v1 still writes stderr (exe path unchanged)") {
+    CaliperCoreDesc d = base_desc();   // no log_fn: the caliper exe configuration
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* log = (const CaliperLogV1*)caliper_core_get_service(core, CALIPER_LOG_V1);
+    REQUIRE(log != nullptr);
+
+    std::string err;
+    {
+        StderrTap tap;
+        log->log(CALIPER_LOG_WARN, "compass-stderr-probe");
+        err = tap.drain();
+    }
+    bool on_stderr = err.find("compass-stderr-probe") != std::string::npos;
+    CHECK(on_stderr);   // the built-in stderr writer, exactly as v0 / the exe
+
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
+          "not stderr") {
+    reset_log_capture();
+    CaliperCoreDesc d = base_desc();
+    d.log_fn = &capture_log_fn;
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    CaliperCanvasDesc c = offscreen_desc(128, 128);
+    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
+        MESSAGE("no embeddable GPU — skipping applet-log routing case: "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    // hello.on_init logs "hello.on_init" through caliper.log.v1 (host.log_info).
+    std::string err;
+    {
+        StderrTap tap;
+        int loaded = caliper_core_load_applet(core, "dev.caliper.hello");
+        REQUIRE(loaded == 1);
+        caliper_core_frame(core);
+        err = tap.drain();
+    }
+    std::string cap = drain_log_capture();
+    bool applet_line_at_sink = cap.find("hello.on_init") != std::string::npos;
+    bool applet_line_off_stderr = err.find("hello.on_init") == std::string::npos;
+    CHECK(applet_line_at_sink);       // reached the embedder's log pane
+    CHECK(applet_line_off_stderr);    // no longer leaks to raw stderr
+
+    caliper_core_unload_applet(core);
     caliper_core_shutdown(core);
 }

@@ -12,6 +12,7 @@
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/metrics_v1_1.h>
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/tensor_bridge_v1.h>
@@ -41,9 +42,21 @@ void set_bridge_log_sink(void (*sink)(CaliperLogLevel, const char*));
 namespace {
 
 // --- caliper.log.v1: timestamped console lines (console panel = later) ---
+// Installable sink (embed v1.1): when set, log.v1 lines route here instead of
+// stderr. A plain pointer, not atomic: it is installed at core create (before
+// any applet/worker exists) and cleared at shutdown AFTER workers join, so the
+// worker-thread reads are ordered by thread create/join (same discipline as
+// g_bridge's log sink). NULL => the built-in stderr writer below.
+void (*g_applet_log_sink)(void*, CaliperLogLevel, const char*) = nullptr;
+void*  g_applet_log_userdata = nullptr;
+
 // Reentrant time formatting: the docs promise log() is callable from applet
 // worker threads, and plain std::localtime shares a static buffer.
 void log_impl(CaliperLogLevel level, const char* msg) {
+    if (g_applet_log_sink) {   // embedder installed a sink: route, don't touch stderr
+        g_applet_log_sink(g_applet_log_userdata, level, msg ? msg : "");
+        return;
+    }
     static const char* kTag[] = {"DEBUG", "INFO ", "WARN ", "ERROR"};
     int idx = (level >= 0 && level <= 3) ? (int)level : 1;
     std::time_t t = std::time(nullptr);
@@ -121,6 +134,26 @@ void met_hparams_json(uint64_t run, const char* json_utf8) {
 const CaliperMetricsV1 kMetrics = {sizeof(CaliperMetricsV1), &met_begin_run,
                                    &met_end_run, &met_scalar, &met_histogram,
                                    &met_image, &met_hparams_json};
+
+// metrics.v1_1 (C0b): the SAME six writers plus the read surface query() — a
+// consumer (Compass via caliper_core_get_service) lists runs / streams scalars
+// as Arrow against the store's OWN live connection. Read-only + Arrow ownership
+// enforced inside MetricsStore::query (see metrics_v1_1.h). No-ops on the
+// unopened store, the same discipline as the writers above.
+bool met_query(const char* sql, struct ArrowArrayStream* out) {
+    return g_metrics_open && g_metrics.query(sql ? sql : "", out);
+}
+const char* met_last_error(void) {
+    // metrics.v1_1 promises never-NULL; the store's error is thread-local, so a
+    // thread-local holder honors "valid until the next metrics.v1_1 call on the
+    // same thread" (mirrors data.v1's last_error).
+    static thread_local std::string held;
+    held = g_metrics_open ? g_metrics.last_error() : "metrics store is not open";
+    return held.c_str();
+}
+const CaliperMetricsV1_1 kMetrics11 = {sizeof(CaliperMetricsV1_1),
+    &met_begin_run, &met_end_run, &met_scalar, &met_histogram,
+    &met_image, &met_hparams_json, &met_query, &met_last_error};
 
 // --- caliper.artifacts.v1: content-addressed checkpoints (§7.8) ---
 // Same non-fatal-open + no-op-thunks discipline as metrics above, and the
@@ -356,6 +389,7 @@ const CaliperGeometryV1_3 kGeom13 = {sizeof(CaliperGeometryV1_3),
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
                                     CALIPER_METRICS_V1,
+                                    CALIPER_METRICS_V1_1,
                                     CALIPER_TENSOR_BRIDGE_V1,
                                     CALIPER_TENSOR_BRIDGE_V1_1,
                                     CALIPER_TENSOR_BRIDGE_V1_2,
@@ -429,6 +463,12 @@ void services_set_renderer(HostRenderer* renderer) {
 
 HostRenderer* services_renderer() { return g_renderer; }
 
+void set_applet_log_sink(void (*sink)(void*, CaliperLogLevel, const char*),
+                         void* userdata) {
+    g_applet_log_sink = sink;
+    g_applet_log_userdata = userdata;
+}
+
 const void* services_get(const char* id) {
     if (!id) return nullptr;
     if (std::strcmp(id, CALIPER_UI_V1) == 0)     return &kUi;
@@ -436,6 +476,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_JOBS_V1) == 0)   return &kJobs;
     if (std::strcmp(id, CALIPER_DEVICE_V1) == 0) return &kDevice;
     if (std::strcmp(id, CALIPER_METRICS_V1) == 0) return &kMetrics;
+    if (std::strcmp(id, CALIPER_METRICS_V1_1) == 0) return &kMetrics11;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1) == 0) return &kBridge;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_1) == 0) return &kBridge11;
     if (std::strcmp(id, CALIPER_TENSOR_BRIDGE_V1_2) == 0) return &kBridge12;

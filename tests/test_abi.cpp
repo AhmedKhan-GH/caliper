@@ -6,6 +6,7 @@
 #include <caliper/services/device_v1.h>
 #include <caliper/tensor.h>
 #include <caliper/services/metrics_v1.h>
+#include <caliper/services/metrics_v1_1.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
@@ -235,6 +236,45 @@ TEST_CASE("geometry v1_3 preserves v1_2 and pins the instance tail") {
 
     CHECK(std::string(CALIPER_GEOMETRY_V1_3) == "caliper.geometry.v1_3");
     CHECK(CALIPER_GEOM_CAP_INSTANCED == (1u << 3));
+}
+
+TEST_CASE("metrics v1_1 is an additive, prefix-compatible superset of v1 (C0b)") {
+    static_assert(std::is_standard_layout_v<CaliperMetricsV1_1>);
+    static_assert(std::is_standard_layout_v<CaliperMetricsV1>);
+
+    // Frozen v1 writer prefix: struct_size + the six writers land at the exact
+    // same offsets in v1_1 (a v1 consumer casting a v1_1 table reads them
+    // unchanged). offsetof each, slot for slot.
+    CHECK(offsetof(CaliperMetricsV1_1, struct_size) ==
+          offsetof(CaliperMetricsV1, struct_size));
+    CHECK(offsetof(CaliperMetricsV1_1, begin_run) ==
+          offsetof(CaliperMetricsV1, begin_run));
+    CHECK(offsetof(CaliperMetricsV1_1, end_run) ==
+          offsetof(CaliperMetricsV1, end_run));
+    CHECK(offsetof(CaliperMetricsV1_1, scalar) ==
+          offsetof(CaliperMetricsV1, scalar));
+    CHECK(offsetof(CaliperMetricsV1_1, histogram) ==
+          offsetof(CaliperMetricsV1, histogram));
+    CHECK(offsetof(CaliperMetricsV1_1, image) ==
+          offsetof(CaliperMetricsV1, image));
+    CHECK(offsetof(CaliperMetricsV1_1, hparams_json) ==
+          offsetof(CaliperMetricsV1, hparams_json));
+
+    // The read tail follows the frozen prefix contiguously — a padding or
+    // reordering surprise in query()/last_error() would slip past a prefix-only
+    // check, so pin both new slots and the total size.
+    CHECK(offsetof(CaliperMetricsV1_1, query) ==
+          offsetof(CaliperMetricsV1, hparams_json) + sizeof(void*));
+    CHECK(offsetof(CaliperMetricsV1_1, last_error) ==
+          offsetof(CaliperMetricsV1_1, query) + sizeof(void*));
+    CHECK(sizeof(CaliperMetricsV1)   == 56);
+    CHECK(sizeof(CaliperMetricsV1_1) == 72);
+    CHECK(sizeof(CaliperMetricsV1_1) ==
+          offsetof(CaliperMetricsV1_1, last_error) + sizeof(void*));
+
+    CHECK(std::string(CALIPER_METRICS_V1_1) == "caliper.metrics.v1_1");
+    // Prefix parity in the id vocabulary too: v1_1 keeps the v1 dotted stem.
+    CHECK(std::string(CALIPER_METRICS_V1_1).rfind("caliper.metrics.v1", 0) == 0);
 }
 
 namespace {

@@ -65,6 +65,24 @@ extern "C" {
  * libcaliper per process, built together). */
 #define CALIPER_EMBED_API_VERSION 1
 
+/* ---------------------------------------------------------------------------
+ * v1.1 — the "consumer" pass (docs/superpowers/specs/2026-07-12-compass-
+ * consumer-design.md §3). ALL additive; every v1 struct is byte-stable and no
+ * struct grew a member, so CALIPER_EMBED_API_VERSION stays 1 (the size gate is
+ * about struct fields; v1.1's additions are a new free function plus semantics
+ * activated on EXISTING reserved fields). A v1 caller links and runs unchanged.
+ *
+ * HONESTY REGISTER (what v1.1 changed against the v0 gaps):
+ *   - get_service           ADDED  — caliper_core_get_service: a host consumes
+ *                                     the applets' service tables (P2/P3).
+ *   - data_dir gap          CLOSED — CaliperCoreDesc.data_dir now roots the
+ *                                     stores (was reserved/ignored in v0).
+ *   - log-singleton gap     CLOSED — applet caliper.log.v1 lines route to
+ *                                     CaliperLogFn (was stderr-only in v0).
+ *   - one-core-per-process  REMAINS — create still refuses a second live core.
+ *   - one-canvas-per-core   REMAINS — attach_canvas still refuses a second.
+ * ------------------------------------------------------------------------- */
+
 /* Opaque handle. One live instance per process in v0 (see header note). */
 typedef struct CaliperCore CaliperCore;
 
@@ -79,8 +97,16 @@ typedef enum CaliperRenderer {
     CALIPER_RENDERER_VULKAN  = 2
 } CaliperRenderer;
 
-/* Core diagnostics sink (renderer pick, refusals, crash text). NOT the applet
- * log service (caliper.log.v1 stays stderr in v0). NULL -> stderr. */
+/* Diagnostics sink. NULL -> stderr. Receives BOTH streams, distinguishable by a
+ * prefix on the message (v1.1):
+ *   - CORE diagnostics (renderer pick, refusals, crash text) arrive UNtagged.
+ *   - APPLET caliper.log.v1 lines arrive tagged "[applet] " (v1.1 routes the
+ *     applet log service here when this callback is set — it was stderr-only in
+ *     v0; a host surfaces them in a native Log pane, not stderr).
+ * `level` is the CaliperLogLevel value (0=DEBUG..3=ERROR). `message` is valid
+ * only for the call. Called from the frame thread for core lines, and from any
+ * thread for applet log lines (log.v1 is worker-callable) — a host sink that
+ * touches shared UI state must marshal to its UI thread itself. */
 typedef void (*CaliperLogFn)(void* userdata, int level, const char* message);
 
 /* Applet-fault callback (§4.3). Fired AFTER the faulting applet is quarantined
@@ -92,11 +118,13 @@ typedef void (*CaliperCrashFn)(void* userdata, const char* applet_id,
 typedef struct CaliperCoreDesc {
     size_t          struct_size;   /* = sizeof(CaliperCoreDesc); FIRST member. */
     CaliperRenderer renderer;      /* backend to embed.                        */
-    const char*     data_dir;      /* IGNORED in v0 (reserved): the process
-                                    * app-data path is always used. Threading a
-                                    * per-core data root is a host_services
-                                    * signature change deferred past R4 (the
-                                    * registry is process-global; see report).  */
+    const char*     data_dir;      /* v1.1: per-core app-data root. NON-NULL
+                                    * routes metrics/artifacts/applet-data under
+                                    * this directory (created if missing) — a
+                                    * document app's per-project root. NULL keeps
+                                    * the OS default byte-for-byte (the caliper
+                                    * exe passes NULL). Valid for one live core;
+                                    * restored on shutdown (one core per process).*/
     const char*     applets_dir;   /* extra applet scan dir; NULL -> default
                                     * discovery (app-data/applets + exe-side). */
     CaliperLogFn    log_fn;        /* NULL -> stderr.                          */
@@ -214,6 +242,61 @@ int  caliper_core_read_pixels(CaliperCore* core, void* buf, int stride);
 /* Human-readable reason for the most recent refusal (empty string if none).
  * Valid until the next core call. Never NULL for a non-NULL core. */
 const char* caliper_core_last_error(CaliperCore* core);
+
+/* --- Service consumption (v1.1) — the host becomes a CONSUMER, not just a
+ * picture-in-picture embedder ------------------------------------------------
+ *
+ * Returns the SAME service table an applet receives via CaliperHost.get_service
+ * for `id` (the applets' own vocabulary: "caliper.metrics.v1", "caliper.jobs.v1",
+ * "caliper.artifacts.v1", "caliper.data.v1", ...). Cast the result to the matching
+ * Caliper<Name>V1 struct from the caliper/services headers and call its thunks
+ * as an applet would — no renderer/torch/ImGui type crosses the seam (D3: the
+ * interchange is C ABI + CaliperTensor + Arrow C streams). C++ hosts may use the
+ * caliper.hpp sugar.
+ *
+ * Returns NULL for an unknown id or a NULL core. The pointer is a process-static
+ * table (embed.h's pointer-validity guarantee): valid from create until
+ * caliper_core_shutdown, after which — like every other call here — the
+ * CaliperCore* is dead and must not be used.
+ *
+ * THREADING CONTRACT (§3.2 — VERIFIED against the implementations, not assumed;
+ * an embedder that ignores it gets data races the core cannot prevent). Two
+ * classes:
+ *
+ *  - ANY-THREAD services — call from any thread, including a host UI thread that
+ *    is NOT the caliper_core_frame() thread, concurrently with an applet's
+ *    worker writes:
+ *      * caliper.metrics.v1   — MetricsStore holds ONE DuckDB connection under
+ *                               ONE mutex; every writer AND reader (runs/
+ *                               scalars/histograms) takes it, so host-thread
+ *                               reads racing applet-thread writes serialize
+ *                               (verified: metrics_store.cpp — lock_guard on
+ *                               every method).
+ *      * caliper.artifacts.v1 — same one-connection-one-mutex model; put/
+ *                               path_of/exists/by_run all lock (artifact_store
+ *                               .cpp). path_of returns a thread_local buffer,
+ *                               valid until the next artifacts call ON THAT
+ *                               THREAD.
+ *      * caliper.data.v1      — one mutex over query/register/open_dataset
+ *                               (data_store.cpp); last_error() is thread-local
+ *                               (each thread sees ITS last failing call).
+ *      * caliper.jobs.v1      — cross-thread BY DESIGN (submit/cancel/is_running
+ *                               /progress over the process JobSystem).
+ *      * caliper.device.v1    — reads an immutable negotiated-at-startup record.
+ *      * caliper.log.v1       — reentrant; callable from worker threads (routes
+ *                               to log_fn when installed, else stderr — below).
+ *
+ *  - FRAME-THREAD-ONLY services — call ONLY from the thread that calls
+ *    caliper_core_frame(); they touch the renderer / the single ImGui context:
+ *      * caliper.tensor_bridge.v1 / v1.1 / v1.2  (GPU upload, draw-adjacent)
+ *      * caliper.geometry.v1 ... v1.3            (GPU draw)
+ *      * caliper.ui.v1                           (the ImGui/ImPlot contexts —
+ *                                                 meaningless to a host anyway)
+ *
+ * P3 caveat (D5, one torch per process, never the host's): a host pushes
+ * PARAMETERS; an APPLET's worker produces device tensors. The bridge's host-side
+ * use is CPU-staged uploads on the frame thread only. */
+const void* caliper_core_get_service(CaliperCore* core, const char* id);
 
 #ifdef __cplusplus
 }  /* extern "C" */
