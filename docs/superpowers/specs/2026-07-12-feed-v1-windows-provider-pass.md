@@ -1,7 +1,9 @@
 # feed.v1 Windows provider — the hardware pass
 
 **Date:** 2026-07-12
-**Status:** execution spec for the next Windows-box session. GREENFIELD on the
+**Status:** EXECUTED 2026-07-12 on the box (`553f7eb` + closeout; run-proof
+§4 all ticked, closeout §5 ticked except the whitepaper sentence riding the
+next whitepaper touch). Original scope below, unchanged. GREENFIELD on the
 provider (nothing Windows-specific exists), but the hard parts are already
 frozen and proven: the feed.v1 ABI, the FeedStore, the lifecycle seam, and the
 exemplar all shipped platform-neutral on `main` (`e30ac1e`) — this pass writes
@@ -109,30 +111,41 @@ pass untouched — they are the canary that no shared code moved.
 
 ## 4. Run-proof (the pass's acceptance, all by artifacts)
 
-- [ ] **4.1** Full suite green on the box (all ctest suites incl. embed).
-- [ ] **4.2** Exe log line `[feed] Windows provider: N channels live (...)`
-  with the verified list; `pulse_scope` via autolaunch shows them moving.
-- [ ] **4.3** THE LOAD PROOF: parallel build heats the box —
-  `sys.cpu.util` pins high in the captured periodic summary lines; if NVML
-  landed, `sys.gpu.temp` visibly climbs during a gfx-test run.
-- [ ] **4.4** `embed_host` (Win32/HWND) run: channels enumerate through the
-  embed path (`CALIPER_EMBED_APPLETS` env per the box ledger).
-- [ ] **4.5** caps honesty: on this box bit 0 lights; the non-Apple
-  zero-channel test is updated to be non-Windows-zero-channel (or gated
-  appropriately) — keep the degradation contract exact on Linux/other.
+- [x] **4.1** Full suite green on the box (all ctest suites incl. embed) —
+  9/9 at `553f7eb` (embed double-cycle exercises the provider's
+  start/stop/start on Windows).
+- [x] **4.2** Exe log line landed verbatim: `[feed] Windows provider: 6
+  channels live (cpu=1 mem=1 gpu=1 gputemp=1 gpupower=1 power=1) @ 10 Hz`;
+  `pulse_scope` via autolaunch: all 6 fresh, 0 gaps (pass report).
+- [x] **4.3** THE LOAD PROOF: DuckDB static-lib parallel rebuild pinned
+  `sys.cpu.util` at 90–93% across ~26 consecutive summaries (idle 1–5%);
+  NVML landed and `sys.gpu.temp` climbed 45→54 °C (util 13→48%) during
+  back-to-back gfx-test runs. Artifacts: `caliper-probes/load_capture{,2}.log`
+  + pass report.
+- [x] **4.4** `embed_host.exe dev.caliper.pulse-scope` (Win32/HWND, Vulkan):
+  `pulse-scope: on_init — 6 channel(s) enumerated (caps 0x1)`, summaries
+  fresh/0-gaps through the embed path (`CALIPER_EMBED_APPLETS` env).
+- [x] **4.5** caps honesty: bit 0 lights on this box (0x1 both paths); the
+  zero-channel test re-gated to hosts-without-a-provider (non-Apple,
+  non-Windows) — degradation contract exact on Linux/other.
 
 ## 5. Closeout (only with artifacts)
 
-- [ ] **5.1** wiki `feed-v1.md` platform table: Windows row flips from
-  "pending/inert" to the verified channel list (scoped as THIS box's set,
-  the same honesty wording the macOS row uses).
-- [ ] **5.2** feed spec §6.2 follow-up ticked with commits; ROADMAP §7 line
-  gains the Windows clause.
-- [ ] **5.3** Whitepaper: the "Windows provider pending" sentence updates
-  (markdown + tex + rebuilt PDF ride the next whitepaper touch if not this
-  pass — do not hold the pass on LaTeX).
-- [ ] **5.4** Commits in house style, Fable trailer; box scratch ledger
-  records the probe evidence.
+- [x] **5.1** wiki `feed-v1.md` platform table: Windows row flipped to
+  live/verified with the 6-channel table scoped as THIS box's set (NVML
+  channels exist only with the NVIDIA driver; battery absent on desktops),
+  same honesty wording as the macOS row.
+- [x] **5.2** feed spec §4 DEFERRED bullet + §6.2 follow-up ticked with
+  commits (`553f7eb` + this closeout); ROADMAP §7 line gained the Windows
+  clause.
+- [ ] **5.3** Whitepaper: the "Windows provider pending" sentence rides the
+  next whitepaper touch (markdown + tex + rebuilt PDF together — the pass
+  is not held on LaTeX, per this spec).
+- [x] **5.4** Commits in house style, Fable trailer (`553f7eb` + this
+  closeout); box scratch ledger records the probe evidence
+  (`.superpowers/sdd/feed-v1-windows-provider-pass-report.md`: NVML rc-999
+  RTD3 rate, the 364 W junk read, enforced-limit values, battery Rate sign
+  carry-forward).
 
 ## Invariants (hold forever)
 

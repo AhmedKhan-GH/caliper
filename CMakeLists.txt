@@ -197,6 +197,13 @@ else()
     if(UNIX)
         target_link_libraries(caliper_host_lib PRIVATE ${CMAKE_DL_LIBS})
     endif()
+    if(WIN32)
+        target_sources(caliper_host_lib PRIVATE
+            src/host/feed_provider_win.cpp)   # caliper.feed.v1 Windows sensor provider (§6.2)
+        # powrprof backs CallNtPowerInformation (sys.power.battery). PUBLIC so
+        # consumers of the static lib (the exe, the test binary) link it too.
+        target_link_libraries(caliper_host_lib PUBLIC powrprof)
+    endif()
 endif()
 set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)

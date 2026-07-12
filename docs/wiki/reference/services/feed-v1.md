@@ -23,7 +23,7 @@ display name, units, a nominal rate hint). A **sample** is
 across channels** so a reader can align series on one timeline.
 
 - **`caps()`** — bit 0 (`CALIPER_FEED_CAP_LIVE`) is set **iff** at least one
-  channel is registered on this host. No provider (Windows v0) or no channels →
+  channel is registered on this host. No provider (Linux v0) or no channels →
   `0`, and every read yields nothing. Honest degradation, never fake data.
 - **`channel_count()` / `channel_info(index, info)`** — enumerate the channels
   this host actually vends. **Enumerate dynamically**; never assume a fixed set
@@ -61,7 +61,7 @@ surface (`reserved0` holds the slot).
 | Platform | Provider | caps | Channels |
 |---|---|---|---|
 | **macOS (Apple Silicon)** | **live, verified** | `LIVE` | 7 (below) |
-| **Windows** | **pending** (deferred, feed spec §4) | `0` (inert) | none |
+| **Windows** | **live, verified** (feed spec §6.2) | `LIVE` | 6 (below) |
 | Linux | none yet | `0` (inert) | none |
 
 The macOS provider is **privilege-honest**: every signal is sudo-free; a channel
@@ -78,8 +78,26 @@ Verified live on this box (M-series, macOS 26), guaranteed + best-effort tiers:
 | `sys.temp.battery` | Battery Temperature | `degC` | userland AppleSMC |
 | `sys.power.battery` | Battery Power | `W` | IOPMPowerSource |
 
+The Windows provider is privilege-honest the same way: every signal reads
+**without elevation**; a channel that would need admin or a kernel driver does
+not exist rather than half-existing (so CPU temperature and fan RPM are absent
+— Windows has no unprivileged path to them). Verified live on this box
+(RTX 500 Ada laptop, Windows 11), guaranteed + probe tiers:
+
+| Channel id | Name | Units | Notes |
+|---|---|---|---|
+| `sys.cpu.util` | CPU Utilization | `%` | `GetSystemTimes` deltas |
+| `sys.mem.used` | Memory Used | `%` | `GlobalMemoryStatusEx` `dwMemoryLoad` (**used**, the same non-overclaiming name) |
+| `sys.gpu.util` | GPU Utilization | `%` | NVML, runtime-loaded from the driver's `nvml.dll` — RTD3-parked ticks fail and are skipped, loss visible |
+| `sys.gpu.temp` | GPU Temperature | `degC` | NVML — the box's only privilege-free temperature |
+| `sys.gpu.power` | GPU Power | `W` | NVML, gated against the device-reported enforced power limit (wake-transition junk reads) |
+| `sys.power.battery` | Battery Power | `W` | `CallNtPowerInformation`, negative = discharge (same convention as macOS); absent on desktop boxes |
+
+The NVML channels are this box's set: no NVIDIA driver → no GPU channels
+(fail-closed probe at start, never a linked SDK).
+
 Whatever is unavailable is simply **not a channel** — never a faked value; a
-consumer displays whatever enumerates. On Windows in v0 every entry point is
+consumer displays whatever enumerates. On Linux in v0 every entry point is
 inert and consumers degrade honestly (one line, nothing drawn).
 
 ## The exemplar
