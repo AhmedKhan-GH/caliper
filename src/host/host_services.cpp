@@ -525,7 +525,15 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     const ExportProvenance prov = ex_provenance(w, h, clear_rgba, cam, draws,
                                                 draw_count, draw_stride, state_json);
     const std::string json = export_build_sidecar_json(prov);
-    if (!export_write_text_atomic(std::string(path) + ".json", json)) return 0u;
+    if (!export_write_text_atomic(std::string(path) + ".json", json)) {
+        // Refusal purity extends to the filesystem: 0 must mean the disk is
+        // exactly as it was, and a PNG without its sidecar is a screenshot,
+        // not a figure (PUBLISHING.md invariant) — roll the PNG back rather
+        // than orphan it. (E1-review LOW finding.)
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        return 0u;
+    }
     return 1u;
 }
 
