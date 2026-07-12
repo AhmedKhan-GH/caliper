@@ -1,8 +1,10 @@
 # Watching Models Learn: Eliminating the Round Trip Between Training and Seeing
 
-**Whitepaper draft — v0.2** *(v0.1 + §4/§9 geometry rewrite: coordinate-style
-graphics are no longer CPU-array-only — `caliper.geometry.v1_1` makes meshes,
-lines, and point clouds a zero-copy class on both ecosystems)*
+**Whitepaper draft — v0.3** *(v0.2 + the completed graphics ladder: textures on
+meshes (`geometry.v1_2`, R2) and instanced populations (`geometry.v1_3`, R3)
+are byte-exact zero-copy on both ecosystems, and the platform core is now
+extractable as an embeddable library (`libcaliper`, R4) — Metal-proven,
+Vulkan embed pending)*
 *Ahmed Khan · July 2026*
 
 > **One-sentence thesis.** Every mainstream tool for looking inside a neural
@@ -170,7 +172,7 @@ flowchart LR
     T["Live training state<br/>(weights, activations,<br/>embeddings — on GPU)"] --> D["Derive, per step:<br/>projections · PCA · statistics<br/>entropy · argmax · norms<br/>(torch ops, still on GPU)"]
 
     D -->|"image-like result"| TEX["tensor_bridge<br/>→ GPU texture"]
-    D -->|"vertices · indices ·<br/>per-vertex state"| GEO["geometry.v1_1<br/>meshes, lines, point clouds —<br/>drawn zero-copy, in place"]
+    D -->|"vertices · indices ·<br/>per-vertex state"| GEO["geometry (R0–R3)<br/>points · meshes · textures-on-meshes ·<br/>instanced populations — zero-copy, in place"]
     D -->|"small coordinates"| P3["ImPlot3D<br/>glyph clouds, 3-D scatters<br/>(CPU-array route)"]
     D -->|"series / scalars"| P2["ImPlot<br/>curves, scatters, bars"]
     D -->|"tokens / labels"| TXT["Styled text grids<br/>(colored predictions)"]
@@ -202,6 +204,22 @@ flowchart LR
   the exemplar of the geometry class, joined by FlowScope (a million-particle
   flow field, points drawn from the tensor the simulation writes) and
   GPTScope's ThoughtSpace (the residual stream as a live 3-D constellation).
+- **TwinScope — a digital twin's state painted on its shape.** A
+  subdivided-mesh cotangent-Laplacian heat simulation runs over a CAD heatsink
+  housing while a live MLP chases the field; the learned and simulated
+  temperature is draped on the geometry at texture resolution, decoupling the
+  shape (loaded once) from the state re-painted every optimizer step —
+  textures-on-meshes (`geometry.v1_2`), byte-exact zero-copy on both ecosystems
+  (Vulkan/RTX 500 Ada and Metal/Apple Silicon, 2026-07-10).
+- **instance_scope — populations in one draw.** One mesh times an imported
+  `(N,16)` device pose tensor (plus an optional per-instance tint) renders *N*
+  objects — a slider from 1 to 5,000 — in a *single* instanced draw call, the
+  poses and tints written live on the GPU: "1,000 objects, 1 draw call, 0 mesh
+  copies," run-proven byte-exact on both ecosystems (Metal 2026-07-11;
+  Vulkan/CUDA 2026-07-11, `geometry.v1_3`). With it the graphics ladder is
+  complete — images → points → connected shapes → state-on-shapes →
+  populations, every rung byte-exact on both hardware ecosystems behind one
+  frozen additive C ABI (prefix-identical 192/216/256-byte draw records).
 - **Per-step surfaces.** Convolution kernels and projection matrices update
   ~8 times per second — every optimizer step, not every eval — because the
   cost of showing a tensor no longer includes a trip through the CPU.
@@ -423,8 +441,12 @@ adversarial sizes (non-multiple-of-16, ragged shapes), NaN inputs, and
 degenerate ranges — in an automated windowed test harness, per backend, every
 CI run, including on real NVIDIA hardware. The stream-ordered path adds a
 burst test: eight overlapping updates ordered only by semaphores must land
-byte-exact. Failure modes are designed to be loud: acceptance violations log
-and reject rather than render a plausible-but-wrong image.
+byte-exact. Reading device buffers back for these comparisons is itself
+platform-shaped: torch MPS tensors import as *private-storage* Metal buffers
+whose bytes the host cannot read directly, so the gate stages them through a
+blit — the same shape the discrete-VRAM Vulkan path already required. Failure
+modes are designed to be loud: acceptance violations log and reject rather than
+render a plausible-but-wrong image.
 
 ---
 
@@ -438,9 +460,10 @@ states its limits is a paper whose claims can be trusted.)*
   floor persists only for memory born unshareable.
 - The v1 contract requires contiguous, offset-0 tensors; views are rejected,
   not repaired.
-- Dense outputs (heatmaps, feature maps, attention grids) and geometry
-  (point clouds, lines, indexed meshes — `caliper.geometry.v1_1`) both ride
-  zero-copy paths, byte-exact-verified on both ecosystems; small derived
+- Dense outputs (heatmaps, feature maps, attention grids) and the full
+  geometry ladder (point clouds, lines, indexed meshes, textures-on-meshes,
+  and instanced populations — `caliper.geometry.v1` through `v1_3`, R0–R3) all
+  ride zero-copy paths, byte-exact-verified on both ecosystems; small derived
   series (curves, scatters, glyph clouds) still flow through plotting
   libraries as CPU arrays — kilobytes, and the routes compose freely.
 - Geometry appearance is a fixed menu (flat / colormap / per-vertex color;
@@ -472,6 +495,15 @@ training. Per-step, in-the-loop observation makes *training dynamics*
 anatomy) a first-class observable. The platform's applet model means a new
 visualization is a new derivation over live state — a torch op and a draw
 call — not a new pipeline.
+
+On the platform's own trajectory: the core that does all of this — the applet
+contract, the host-neutral services, and the zero-copy renderer with its
+completed geometry ladder — is now extractable as an embeddable library
+(`libcaliper`) behind a small C ABI, so a second host can vend the same applets
+without owning the machinery. A GLFW-free native host already runs the applets
+zero-copy on Apple Silicon (Metal/MPS); the Windows/NVIDIA embedding path is
+written but its hardware verification is pending the next Windows session, and
+a full sibling host remains a design-gated future, not a claim.
 
 ---
 

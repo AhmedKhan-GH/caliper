@@ -1,8 +1,10 @@
 % ============================================================================
 % Watching Models Learn — the Caliper whitepaper, LaTeX edition
-% Source of truth: WHITEPAPER.md v0.1 (branch feat/zerocopy-arbitrary-cuda),
-% with the appendices realized and §6.5 covering the bridge-v1.2 exportable
-% pool (hardware-verified July 2026).
+% Source of truth: WHITEPAPER.md v0.3 (branch main), with the appendices
+% realized, §6.5 covering the bridge-v1.2 exportable pool, and §4/§9 carrying
+% the completed geometry ladder R0-R3 (textures-on-meshes + instanced
+% populations) plus the libcaliper embed core (R4) — all hardware-verified
+% July 2026.
 % Build: any LaTeX with TikZ (pdflatex/xelatex/tectonic), no shell-escape.
 % ============================================================================
 \documentclass[11pt]{article}
@@ -63,7 +65,7 @@
 \large Eliminating the Round Trip Between Training and Seeing\\[5pt]
 \normalsize A whitepaper on the Caliper platform and its zero-copy tensor path}
 \author{Ahmed Khan}
-\date{July 2026 --- draft v0.1 (\LaTeX{} edition)}
+\date{July 2026 --- draft v0.3 (\LaTeX{} edition)}
 
 \begin{document}
 \maketitle
@@ -346,6 +348,25 @@ arrays, and the routes compose freely.}
         across a scatter plot as they specialize; a logit lens renders ``when
         does the model decide?'' as a colored text grid; generated samples
         evolve from gibberish to iambic cadence over three minutes.
+  \item \textbf{Geometry, live and zero-copy --- the completed ladder.} A
+        network's \emph{output} can be a solid, not just an image: MeshScope
+        draws a learned 2-D surface --- Lambert-lit, loss-colored, wireframe
+        overlay --- straight from the GPU memory the optimizer writes, with zero
+        copies of the geometry ever made; paint the target with the mouse and
+        the net visibly chases the edit. On that base the ladder now runs to its
+        top rungs. \textbf{TwinScope} drapes a live cotangent-Laplacian heat
+        field (an MLP chasing a simulation) over a CAD heatsink housing at
+        texture resolution --- state painted on a twin's shape
+        (\texttt{geometry.v1\_2}, textures-on-meshes). \textbf{instance\_scope}
+        renders one mesh times an imported \texttt{(N,16)} device pose tensor
+        (optional per-instance tint) as $N$ objects on a 1--5{,}000 slider in a
+        \emph{single} instanced draw --- ``1{,}000 objects, 1 draw call, 0 mesh
+        copies'' (\texttt{geometry.v1\_3}, instanced populations). Every rung
+        --- images $\rightarrow$ points $\rightarrow$ connected shapes
+        $\rightarrow$ state-on-shapes $\rightarrow$ populations --- is
+        byte-exact zero-copy on \emph{both} ecosystems (Metal/Apple Silicon and
+        Vulkan/CUDA on an RTX~500 Ada; the v1\_2 rungs 2026-07-10, the v1\_3
+        rungs 2026-07-11), behind one frozen additive C ABI.
   \item \textbf{Per-step surfaces.} Convolution kernels and projection
         matrices update ${\sim}8$ times per second --- every optimizer step,
         not every eval --- because the cost of showing a tensor no longer
@@ -737,7 +758,11 @@ every CI run, including on real NVIDIA hardware. The stream-ordered path adds
 a burst test: eight overlapping updates ordered only by semaphores must land
 byte-exact. The imported-allocation path (\S\ref{sec:pool}) adds rows that
 must read back byte-exact \emph{at nonzero byte offsets} through an imported
-block. Failure modes are designed to be loud: acceptance violations log and
+block. Reading device buffers back for these comparisons is itself
+platform-shaped: torch MPS tensors import as \emph{private-storage} Metal
+buffers whose bytes the host cannot read directly, so the gate stages them
+through a blit --- the same shape the discrete-VRAM Vulkan path already
+required. Failure modes are designed to be loud: acceptance violations log and
 reject rather than render a plausible-but-wrong image.
 
 % ============================================================================
@@ -753,10 +778,13 @@ a paper that states its limits is a paper whose claims can be trusted.}
         removes it}; the floor persists only for memory born unshareable.
   \item The v1 contract requires contiguous, offset-0 tensors; views are
         rejected, not repaired.
-  \item Dense outputs (heatmaps, feature maps, attention grids) are where the
-        zero-copy path matters; coordinate-style graphics (point clouds,
-        curves) flow through plotting libraries as small CPU arrays ---
-        kilobytes, and the two routes compose freely.
+  \item Dense outputs (heatmaps, feature maps, attention grids) and the full
+        geometry ladder (point clouds, lines, indexed meshes,
+        textures-on-meshes, instanced populations --- \texttt{geometry.v1}
+        through \texttt{v1\_3}, R0--R3) all ride zero-copy paths, byte-exact on
+        both ecosystems; only small derived series (curves, scatters, glyph
+        clouds) still flow through plotting libraries as CPU arrays ---
+        kilobytes, and the routes compose freely.
   \item The OpenGL fallback stages through the CPU by design; it exists so
         the worst case is slow, not broken.
   \item Same-frame visualization does not by itself accelerate training; its
@@ -784,6 +812,15 @@ dynamics} (representation reorganization, head specialization timing,
 loss-spike anatomy) a first-class observable. The platform's applet model
 means a new visualization is a new derivation over live state --- a torch op
 and a draw call --- not a new pipeline.
+
+On the platform's own trajectory: the core that does all of this --- the applet
+contract, the host-neutral services, and the zero-copy renderer with its
+completed geometry ladder --- is now extractable as an embeddable library
+(\texttt{libcaliper}) behind a small C ABI, so a second host can vend the same
+applets without owning the machinery. A GLFW-free native host already runs the
+applets zero-copy on Apple Silicon (Metal/MPS); the Windows/NVIDIA embedding
+path is written but its hardware verification is pending the next Windows
+session, and a full sibling host remains a design-gated future, not a claim.
 
 % ============================================================================
 \appendix
