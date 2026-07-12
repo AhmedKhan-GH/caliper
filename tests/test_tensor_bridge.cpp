@@ -919,6 +919,21 @@ TEST_CASE("geom v1_3: instanced draw gate battery G1-G12, atomic refusal") {
     bad = d; bad.instance_attr_alloc = 999u;
     CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &bad, 1, sizeof(bad), 0u));
 
+    // G15 — attr byte offset / 4 exceeds UINT32_MAX (rides a u32 PrimParams
+    // base, the instance-attr twin of G6). Huge attr alloc so bounds (G10)
+    // pass and the base check is the one that fires; matrices stay on the
+    // small valid alloc so their gates (G6 et al.) pass too.
+    {
+        const uint64_t attr_big_off = ((uint64_t)UINT32_MAX + 1u) * 4u;  // /4 == 2^32
+        CaliperAllocId attr_big = b.import_allocation(&dummy, attr_big_off + 16u,
+                                                      CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
+        REQUIRE(attr_big != 0);
+        CaliperGeomDrawV1_3 g15 = d;
+        g15.instance_attr_alloc = attr_big;
+        g15.instance_attr_offset = attr_big_off;
+        CHECK_FALSE(b.geom_draw_primitives_v1_3(view, &cam, &g15, 1, sizeof(g15), 0u));
+    }
+
     // G12 — an instanced tint whose colormap does not resolve (FLAT base + bad
     // colormap id, so no LUT is available to carry the tint).
     bad = d; bad.base.base.colormap = 99;

@@ -761,12 +761,16 @@ bool TensorBridge::geom_draw_primitives_impl(
             }
         }
 
-        // Instance tail (v1.3 only) — the G1-G12 host validator battery (§5).
-        // Runs after color_mode/topology otherwise validate; every failure
-        // refuses the whole frame atomically before any backend call, pixels
-        // untouched. G13 (LAMBERT needs normals) is the existing gate above;
-        // G14 (rigidity) executes in each backend re-gate (§5.1 placement), not
-        // here. Resolved renderer ids mirror how uv_alloc holds a resolved id.
+        // Instance tail (v1.3 only) — the G1-G12 host validator battery (§5),
+        // plus G15 (attr base u32 twin of G6, below). Runs after
+        // color_mode/topology otherwise validate; every failure refuses the
+        // whole frame atomically before any backend call, pixels untouched.
+        // G13 (LAMBERT needs normals) is the existing gate above; G14
+        // (rigidity) executes in each backend re-gate (§5.1 placement), not
+        // here. Backend re-gate parity for G15 is deferred symmetrically —
+        // neither Metal nor Vulkan re-checks the attr base today (as neither
+        // re-checks the matrix base G6); each picks it up on its next natural
+        // pass. Resolved renderer ids mirror how uv_alloc holds a resolved id.
         uint64_t instance_rid = 0;
         uint64_t instance_attr_rid = 0;
         if (rev == GeomRev::V1_3) {
@@ -827,6 +831,11 @@ bool TensorBridge::geom_draw_primitives_impl(
                 if (!range_ok(ta->second.size_bytes, d13->instance_attr_offset,
                               d13->instance_count, 4u, "instance attr")) {
                     return false;
+                }
+                // G15: attr byte base / 4 fits a u32 PrimParams base — the
+                // instance-attr twin of G6 (inst_attr_base = attr_offset / 4).
+                if (d13->instance_attr_offset / 4u > UINT32_MAX) {
+                    reject_i("instance attr base exceeds 32 bits"); return false;
                 }
                 instance_attr_rid = ta->second.renderer_id;
                 // G12: the tint needs a resolvable colormap. Tint-LUT rule
