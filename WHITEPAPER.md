@@ -1,11 +1,12 @@
 # Watching Models Learn: Eliminating the Round Trip Between Training and Seeing
 
-**Whitepaper draft — v0.3** *(v0.2 + the completed graphics ladder: textures on
-meshes (`geometry.v1_2`, R2) and instanced populations (`geometry.v1_3`, R3)
-are byte-exact zero-copy on both ecosystems, and the platform core is now
-extractable as an embeddable library (`libcaliper`, R4) — Metal-proven,
-Vulkan embed pending)*
-*Ahmed Khan · July 2026*
+**Whitepaper draft — v0.4** *(v0.3 + the telemetry rung: `caliper.feed.v1`
+opens the physical-twin ladder — host-owned sensor providers behind a
+pull-based C ABI, live-verified on macOS (7 sudo-free channels @10 Hz) with
+`pulse_scope` as its dashboard exemplar; and the `libcaliper` embed core is now
+run-proven on both ecosystems (Metal/macOS and Vulkan/Windows HWND), no longer
+Vulkan-pending)*
+*Ahmed Khan · 2026-07-12*
 
 > **One-sentence thesis.** Every mainstream tool for looking inside a neural
 > network while it trains copies the data off the GPU, through the CPU, usually
@@ -220,6 +221,18 @@ flowchart LR
   complete — images → points → connected shapes → state-on-shapes →
   populations, every rung byte-exact on both hardware ecosystems behind one
   frozen additive C ABI (prefix-identical 192/216/256-byte draw records).
+- **pulse_scope — the machine watching itself (telemetry, live).** The
+  physical-twin ladder opens with an *input* rung: `caliper.feed.v1` lets the
+  *host* own telemetry providers behind a pull-based C ABI — named channels of
+  timestamped, sequence-numbered samples, read through caller-held cursors,
+  with data loss surfaced as sequence gaps rather than hidden silently. On
+  macOS the provider is live-verified: seven sudo-free channels at 10 Hz (CPU
+  and GPU utilization, memory used, thermal state, fan rpm, battery temperature
+  and power). pulse_scope draws them as input-locked strip charts of the
+  machine's own vitals — run-proven under CPU load (the CPU pinned at 100%, the
+  fan climbing 3,949 → 6,413 rpm in the captured data) — and it is
+  host-neutral: the same binary runs under Caliper and under the embed host. It
+  is deliberately a dashboard: no model rides the feed yet (§10).
 - **Per-step surfaces.** Convolution kernels and projection matrices update
   ~8 times per second — every optimizer step, not every eval — because the
   cost of showing a tensor no longer includes a trip through the CPU.
@@ -477,6 +490,14 @@ states its limits is a paper whose claims can be trusted.)*
 - Single-machine, in-process by design. Remote/cluster training is a
   different problem (and largely re-introduces the round trip that
   distributed tooling rightly accepts); this paper claims the local loop.
+- The local-loop claim, scoped honestly: the loop is local *from ingestion
+  onward*. When a feed carries real-world telemetry (§4), the sensor's own
+  transport latency is upstream of the loop and never hidden — samples carry
+  their acquisition timestamp, and staleness and loss are surfaced in the UI,
+  not smoothed over. The current feed exemplar is a dashboard; no model learns
+  from the feed yet. The Windows telemetry provider is likewise pending — its
+  capability bit stays unset there until a provider pass ships with artifacts,
+  the same per-platform honesty the rest of the system uses.
 
 ---
 
@@ -500,10 +521,20 @@ On the platform's own trajectory: the core that does all of this — the applet
 contract, the host-neutral services, and the zero-copy renderer with its
 completed geometry ladder — is now extractable as an embeddable library
 (`libcaliper`) behind a small C ABI, so a second host can vend the same applets
-without owning the machinery. A GLFW-free native host already runs the applets
-zero-copy on Apple Silicon (Metal/MPS); the Windows/NVIDIA embedding path is
-written but its hardware verification is pending the next Windows session, and
-a full sibling host remains a design-gated future, not a claim.
+without owning the machinery. A GLFW-free native host (`embed_host`) now runs
+the applets zero-copy on *both* ecosystems — Metal/MPS on Apple Silicon and
+Vulkan into a Windows HWND (2026-07-12 Windows pass) — so the embedding path is
+run-proven, no longer platform-pending. The embed ABI's v1.1 revision turned
+embedders from mere renderers into *consumers*: a host can now pull the
+applets' own service tables (`get_service`) and read a metrics surface as
+SQL → Arrow, proven by Compass, an external wxWidgets host (Compass itself is
+unpublished). A full sibling host remains a design-gated future, not a claim.
+
+And the telemetry rung points at the flagship it was built for: the
+machine-thermal-twin — a small model learning this machine's thermal response
+live from the same `feed.v1` samples, its prediction drawn against the measured
+truth the way TwinScope drapes a simulated field on a shape. That is the named
+next step, not a claim made here.
 
 ---
 

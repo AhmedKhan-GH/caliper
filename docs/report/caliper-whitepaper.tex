@@ -1,10 +1,11 @@
 % ============================================================================
 % Watching Models Learn — the Caliper whitepaper, LaTeX edition
-% Source of truth: WHITEPAPER.md v0.3 (branch main), with the appendices
+% Source of truth: WHITEPAPER.md v0.4 (branch main), with the appendices
 % realized, §6.5 covering the bridge-v1.2 exportable pool, and §4/§9 carrying
 % the completed geometry ladder R0-R3 (textures-on-meshes + instanced
 % populations) plus the libcaliper embed core (R4) — all hardware-verified
-% July 2026.
+% July 2026. v0.4 adds the telemetry rung (caliper.feed.v1 + pulse_scope, §4/§9)
+% and updates the embed core to run-proven on both ecosystems (§10).
 % Build: any LaTeX with TikZ (pdflatex/xelatex/tectonic), no shell-escape.
 % ============================================================================
 \documentclass[11pt]{article}
@@ -65,7 +66,7 @@
 \large Eliminating the Round Trip Between Training and Seeing\\[5pt]
 \normalsize A whitepaper on the Caliper platform and its zero-copy tensor path}
 \author{Ahmed Khan}
-\date{July 2026 --- draft v0.3 (\LaTeX{} edition)}
+\date{2026-07-12 --- draft v0.4 (\LaTeX{} edition)}
 
 \begin{document}
 \maketitle
@@ -367,6 +368,21 @@ arrays, and the routes compose freely.}
         byte-exact zero-copy on \emph{both} ecosystems (Metal/Apple Silicon and
         Vulkan/CUDA on an RTX~500 Ada; the v1\_2 rungs 2026-07-10, the v1\_3
         rungs 2026-07-11), behind one frozen additive C ABI.
+  \item \textbf{pulse\_scope --- the machine watching itself (telemetry,
+        live).} The physical-twin ladder opens with an \emph{input} rung:
+        \texttt{caliper.feed.v1} lets the \emph{host} own telemetry providers
+        behind a pull-based C ABI --- named channels of timestamped,
+        sequence-numbered samples read through caller-held cursors, with data
+        loss surfaced as sequence gaps rather than hidden silently. On macOS
+        the provider is live-verified: seven sudo-free channels at 10\,Hz (CPU
+        and GPU utilization, memory used, thermal state, fan rpm, battery
+        temperature and power). \texttt{pulse\_scope} draws them as
+        input-locked strip charts of the machine's own vitals --- run-proven
+        under CPU load (the CPU pinned at 100\%, the fan climbing
+        $3{,}949 \rightarrow 6{,}413$~rpm in the captured data) --- and it is
+        host-neutral: the same binary runs under Caliper and under the embed
+        host. It is deliberately a dashboard: no model rides the feed yet
+        (\S10).
   \item \textbf{Per-step surfaces.} Convolution kernels and projection
         matrices update ${\sim}8$ times per second --- every optimizer step,
         not every eval --- because the cost of showing a tensor no longer
@@ -793,6 +809,15 @@ a paper that states its limits is a paper whose claims can be trusted.}
         different problem (and largely re-introduces the round trip that
         distributed tooling rightly accepts); this paper claims the local
         loop.
+  \item The local-loop claim, scoped honestly: the loop is local \emph{from
+        ingestion onward}. When a feed carries real-world telemetry (\S4), the
+        sensor's own transport latency is upstream of the loop and never
+        hidden --- samples carry their acquisition timestamp, and staleness
+        and loss are surfaced in the UI, not smoothed over. The current feed
+        exemplar is a dashboard; no model learns from the feed yet. The Windows
+        telemetry provider is likewise pending --- its capability bit stays
+        unset there until a provider pass ships with artifacts, the same
+        per-platform honesty the rest of the system uses.
 \end{itemize}
 
 % ============================================================================
@@ -817,10 +842,22 @@ On the platform's own trajectory: the core that does all of this --- the applet
 contract, the host-neutral services, and the zero-copy renderer with its
 completed geometry ladder --- is now extractable as an embeddable library
 (\texttt{libcaliper}) behind a small C ABI, so a second host can vend the same
-applets without owning the machinery. A GLFW-free native host already runs the
-applets zero-copy on Apple Silicon (Metal/MPS); the Windows/NVIDIA embedding
-path is written but its hardware verification is pending the next Windows
-session, and a full sibling host remains a design-gated future, not a claim.
+applets without owning the machinery. A GLFW-free native host
+(\texttt{embed\_host}) now runs the applets zero-copy on \emph{both} ecosystems
+--- Metal/MPS on Apple Silicon and Vulkan into a Windows HWND (2026-07-12
+Windows pass) --- so the embedding path is run-proven, no longer
+platform-pending. The embed ABI's v1.1 revision turned embedders from mere
+renderers into \emph{consumers}: a host can now pull the applets' own service
+tables (\texttt{get\_service}) and read a metrics surface as
+SQL~$\rightarrow$~Arrow, proven by Compass, an external wxWidgets host (Compass
+itself is unpublished). A full sibling host remains a design-gated future, not
+a claim.
+
+And the telemetry rung points at the flagship it was built for: the
+machine-thermal-twin --- a small model learning this machine's thermal response
+live from the same \texttt{feed.v1} samples, its prediction drawn against the
+measured truth the way TwinScope drapes a simulated field on a shape. That is
+the named next step, not a claim made here.
 
 % ============================================================================
 \appendix
