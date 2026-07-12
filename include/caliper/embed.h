@@ -215,6 +215,61 @@ int  caliper_core_read_pixels(CaliperCore* core, void* buf, int stride);
  * Valid until the next core call. Never NULL for a non-NULL core. */
 const char* caliper_core_last_error(CaliperCore* core);
 
+/* --- Service consumption (v1.1) — the host becomes a CONSUMER, not just a
+ * picture-in-picture embedder ------------------------------------------------
+ *
+ * Returns the SAME service table an applet receives via CaliperHost.get_service
+ * for `id` (the applets' own vocabulary: "caliper.metrics.v1", "caliper.jobs.v1",
+ * "caliper.artifacts.v1", "caliper.data.v1", ...). Cast the result to the matching
+ * Caliper<Name>V1 struct from the caliper/services headers and call its thunks
+ * as an applet would — no renderer/torch/ImGui type crosses the seam (D3: the
+ * interchange is C ABI + CaliperTensor + Arrow C streams). C++ hosts may use the
+ * caliper.hpp sugar.
+ *
+ * Returns NULL for an unknown id or a NULL core. The pointer is a process-static
+ * table (embed.h's pointer-validity guarantee): valid from create until
+ * caliper_core_shutdown, after which — like every other call here — the
+ * CaliperCore* is dead and must not be used.
+ *
+ * THREADING CONTRACT (§3.2 — VERIFIED against the implementations, not assumed;
+ * an embedder that ignores it gets data races the core cannot prevent). Two
+ * classes:
+ *
+ *  - ANY-THREAD services — call from any thread, including a host UI thread that
+ *    is NOT the caliper_core_frame() thread, concurrently with an applet's
+ *    worker writes:
+ *      * caliper.metrics.v1   — MetricsStore holds ONE DuckDB connection under
+ *                               ONE mutex; every writer AND reader (runs/
+ *                               scalars/histograms) takes it, so host-thread
+ *                               reads racing applet-thread writes serialize
+ *                               (verified: metrics_store.cpp — lock_guard on
+ *                               every method).
+ *      * caliper.artifacts.v1 — same one-connection-one-mutex model; put/
+ *                               path_of/exists/by_run all lock (artifact_store
+ *                               .cpp). path_of returns a thread_local buffer,
+ *                               valid until the next artifacts call ON THAT
+ *                               THREAD.
+ *      * caliper.data.v1      — one mutex over query/register/open_dataset
+ *                               (data_store.cpp); last_error() is thread-local
+ *                               (each thread sees ITS last failing call).
+ *      * caliper.jobs.v1      — cross-thread BY DESIGN (submit/cancel/is_running
+ *                               /progress over the process JobSystem).
+ *      * caliper.device.v1    — reads an immutable negotiated-at-startup record.
+ *      * caliper.log.v1       — reentrant; callable from worker threads (routes
+ *                               to log_fn when installed, else stderr — below).
+ *
+ *  - FRAME-THREAD-ONLY services — call ONLY from the thread that calls
+ *    caliper_core_frame(); they touch the renderer / the single ImGui context:
+ *      * caliper.tensor_bridge.v1 / v1.1 / v1.2  (GPU upload, draw-adjacent)
+ *      * caliper.geometry.v1 ... v1.3            (GPU draw)
+ *      * caliper.ui.v1                           (the ImGui/ImPlot contexts —
+ *                                                 meaningless to a host anyway)
+ *
+ * P3 caveat (D5, one torch per process, never the host's): a host pushes
+ * PARAMETERS; an APPLET's worker produces device tensors. The bridge's host-side
+ * use is CPU-staged uploads on the frame thread only. */
+const void* caliper_core_get_service(CaliperCore* core, const char* id);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

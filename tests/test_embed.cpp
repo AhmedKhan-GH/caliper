@@ -19,9 +19,14 @@
 // renderer, comparing to the shared CPU reference the gfx rows use.
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
+#include <caliper/services/metrics_v1.h>   // v1.1 get_service: the Compass case
+#include <caliper/services/jobs_v1.h>      // v1.1 get_service: cross-thread producer
+#include <caliper/services/log_v1.h>       // v1.1 log routing
 #include "host_services.h"
+#include "metrics_store.h"          // caliper_host::host_metrics_store() (reader)
 #include "tensor_bridge.h"          // caliper_host::expand_u8_to_rgba8 (shared ref)
 #include "renderer/host_renderer.h"
+#include "app_paths.h"              // caliper::app_data_path (data_dir routing)
 
 #include <cstdint>
 #include <cstdio>
@@ -418,4 +423,100 @@ TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact
 
     bridge->release_texture(id);
     caliper_core_shutdown(core);
+}
+
+// ===========================================================================
+// v1.1 — get_service for hosts (the P2/P3 "consumer" surface). These cases are
+// GPU-FREE (metrics/jobs need no renderer), so they run on headless CI too.
+// ===========================================================================
+
+TEST_CASE("embed/get_service: known ids vend the process table; unknown/null refuse") {
+    // NULL core -> NULL (no create needed; the contract is checkable up front).
+    CHECK(caliper_core_get_service(nullptr, CALIPER_METRICS_V1) == nullptr);
+
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    // No canvas attached: metrics/jobs are frame-thread-independent and vend now.
+    const void* metrics = caliper_core_get_service(core, CALIPER_METRICS_V1);
+    const void* jobs    = caliper_core_get_service(core, CALIPER_JOBS_V1);
+    CHECK(metrics != nullptr);
+    CHECK(jobs != nullptr);
+
+    // The SAME process-static table an applet gets via CaliperHost.get_service.
+    bool same_as_applet_table = (metrics == caliper_host::services_get(CALIPER_METRICS_V1));
+    CHECK(same_as_applet_table);
+
+    // Unknown id and NULL id -> NULL, never UB.
+    CHECK(caliper_core_get_service(core, "does.not.exist.v1") == nullptr);
+    CHECK(caliper_core_get_service(core, nullptr) == nullptr);
+
+    caliper_core_shutdown(core);
+}
+
+// The load-bearing Compass case: a non-frame (host UI) thread queries metrics.v1
+// rows in a bounded loop WHILE a jobs.v1 worker thread streams them in — the wx
+// UI reading a live run. Asserts monotonic visibility (row count never shrinks)
+// and no torn reads (every visible (step,value) pair is coherent). Deterministic:
+// the reader drains until all N rows are visible (the writer always produces N),
+// bounded by a guard — no sleep, no is_running race.
+namespace {
+struct ScalarStream { const CaliperMetricsV1* m; uint64_t run; int n; };
+void stream_scalars(void* user, const CaliperJobControl*) {
+    ScalarStream* s = (ScalarStream*)user;
+    for (int i = 0; i < s->n; ++i)
+        s->m->scalar(s->run, "loss", (int64_t)i, (double)i);
+}
+}  // namespace
+
+TEST_CASE("embed/get_service: the Compass case — a host thread reads metrics.v1 "
+          "rows while a jobs.v1 worker streams them") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* metrics = (const CaliperMetricsV1*)caliper_core_get_service(core, CALIPER_METRICS_V1);
+    auto* jobs    = (const CaliperJobsV1*)caliper_core_get_service(core, CALIPER_JOBS_V1);
+    REQUIRE(metrics != nullptr);
+    REQUIRE(jobs != nullptr);
+
+    uint64_t run = metrics->begin_run("compass", "stream");
+    if (run == 0) {   // metrics store failed to open on this box: no rows to read
+        MESSAGE("metrics store not open — skipping the Compass streaming case");
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    const int N = 200;
+    ScalarStream s{metrics, run, N};
+    uint64_t jid = jobs->submit("stream-scalars", &stream_scalars, &s);
+    REQUIRE(jid != 0);
+
+    // Reader loop on THIS (non-frame) thread, racing the worker's writes.
+    caliper_host::MetricsStore& store = caliper_host::host_metrics_store();
+    size_t prev = 0;
+    bool shrank = false;
+    bool torn = false;
+    int guard = 0;
+    std::vector<std::pair<int64_t, double>> rows;
+    do {
+        rows = store.scalars(run, "loss");
+        if (rows.size() < prev) shrank = true;
+        prev = rows.size();
+        for (size_t i = 0; i < rows.size(); ++i) {
+            bool step_ok  = (rows[i].first  == (int64_t)i);
+            bool value_ok = (rows[i].second == (double)i);
+            if (!step_ok || !value_ok) torn = true;
+        }
+        ++guard;
+    } while (rows.size() < (size_t)N && guard < 1000000);
+
+    metrics->end_run(run);
+
+    CHECK(shrank == false);                 // monotonic visibility under the race
+    CHECK(torn == false);                   // no torn / partial rows
+    CHECK(rows.size() == (size_t)N);        // all streamed rows became visible
+
+    caliper_core_shutdown(core);            // joins the worker (cancel_all_and_join)
 }

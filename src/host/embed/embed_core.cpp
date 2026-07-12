@@ -492,3 +492,16 @@ int caliper_core_read_pixels(CaliperCore* core, void* buf, int stride) {
 const char* caliper_core_last_error(CaliperCore* core) {
     return core ? core->last_error.c_str() : "";
 }
+
+// ---------------------------------------------------------------------------
+// service consumption (v1.1) — vend from the SAME process registry an applet
+// gets. embed_core already builds the CaliperHost proto's get_service as a
+// thunk over services_get() (load_applet above); this is that same registry,
+// exposed to the host directly. No new state, no per-core table: the service
+// registry is process-global (host note: one core per process in v0), and the
+// tables are process-static, so the returned pointer is valid until shutdown.
+// ---------------------------------------------------------------------------
+const void* caliper_core_get_service(CaliperCore* core, const char* id) {
+    if (!core || !id) return nullptr;
+    return services_get(id);   // NULL for unknown ids (services_get contract)
+}
