@@ -3,6 +3,9 @@
 #include "device_query.h"
 #include "metrics_store.h"
 #include "feed_store.h"
+#ifdef __APPLE__
+#include "feed_provider_mac.h"   // macOS telemetry provider (T2); Apple-only
+#endif
 #include "artifact_store.h"
 #include "data_store.h"
 #include "tensor_bridge.h"
@@ -457,11 +460,31 @@ void services_init() {
     // Route the bridge's acceptance-rule rejections through caliper.log.v1
     // (retires the C4 stderr placeholder inside tensor_bridge.cpp).
     set_bridge_log_sink(&log_impl);
+
+#ifdef __APPLE__
+    // Start the macOS telemetry provider (feed spec §4 / T2): it probes the
+    // sudo-free sensors and registers the readable ones into g_feed, then samples
+    // at 10 Hz. g_feed is a process-lifetime static, so it exists here; the
+    // provider is JOINED in services_shutdown BEFORE any teardown (below). Both
+    // the exe (main.cpp) and the embed core (embed_core.cpp) reach this, and the
+    // start/stop pair survives the embed create/shutdown/create cycling.
+    // Non-Apple hosts have no provider — g_feed keeps zero channels (honest
+    // degradation, the T1 default).
+    feed_provider_start(g_feed);
+#endif
 }
 
 void services_shutdown() {
     // Workers first (they may still be writing metrics/artifacts), then the
     // stores. Flags flip first so any thunk racing the close no-ops.
+#ifdef __APPLE__
+    // Stop + JOIN the telemetry provider before anything else: its thread writes
+    // into g_feed, so it must be joined here (BEFORE teardown, and before g_feed's
+    // own process-exit static dtor). Safe if never started; re-startable on the
+    // next services_init — so the embed create/shutdown/create battery cycles the
+    // provider cleanly, twice, with no lingering thread across a shutdown.
+    feed_provider_stop();
+#endif
     g_jobs.cancel_all_and_join();
     g_metrics_open = false;
     g_artifacts_open = false;

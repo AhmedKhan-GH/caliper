@@ -179,8 +179,14 @@ target_link_libraries(caliper_host_lib
 # linked (D11). The Metal/Foundation frameworks flow PUBLIC so consumers of
 # caliper_host_lib (the caliper executable, the test binary) link them too.
 if(APPLE)
-    target_sources(caliper_host_lib PRIVATE src/host/device_query_apple.mm)
-    target_link_libraries(caliper_host_lib PUBLIC "-framework Metal" "-framework Foundation")
+    target_sources(caliper_host_lib PRIVATE
+        src/host/device_query_apple.mm
+        src/host/feed_provider_mac.mm)   # caliper.feed.v1 macOS sensor provider (T2)
+    # IOKit backs the feed provider's GPU/SMC/power reads; Foundation carries
+    # NSProcessInfo (thermal state). Both flow PUBLIC so consumers (the exe, the
+    # test binary) link them too.
+    target_link_libraries(caliper_host_lib PUBLIC
+        "-framework Metal" "-framework Foundation" "-framework IOKit")
 else()
     # Real CUDA detection (Phase 4) via the runtime-loaded driver API — still
     # no ML framework and no CUDA toolkit linked (D11). Machines without an
