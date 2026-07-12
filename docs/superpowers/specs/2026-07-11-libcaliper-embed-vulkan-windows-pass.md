@@ -263,7 +263,8 @@ the live `embed_host` run is the proof of record.
   *The OFFSCREEN embed-canvas path is validation-CLEAN after `37d87f2`, which
   fixed 4 VUIDs: `-01387` (mode-gated the swapchain extension), `-00897`/`-01211`
   (honest UNDEFINED→TRANSFER_SRC layouts), `-05137` (teardown leak). **Honest
-  partial on WINDOW mode:** its residuals are PRE-EXISTING SHARED machinery, not
+  partial on WINDOW mode:** its residuals (4 error lines in the run artifact —
+  2 VUID classes ×2 each) are PRE-EXISTING SHARED machinery, not
   embed-canvas bugs — `VUID-vkDestroyInstance-instance-00629` reproduced
   IDENTICALLY on `caliper.exe` (control run), and
   `VUID-vkQueueSubmit-pSignalSemaphores-00067` lives in the shared
