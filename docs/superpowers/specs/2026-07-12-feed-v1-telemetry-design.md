@@ -115,10 +115,12 @@ without breaking this surface.
 - **Deterministic test provider** (`feed_store` API, no thread): tests inject
   exact samples/sequences — the battery never depends on real sensors or
   timing.
-- **Windows provider: DEFERRED.** caps bit 0 unset on Windows in v0 → every
-  entry point inert, applets degrade honestly (the register). Its own pass
-  later (LibreHardwareMonitor-class investigation needed; transcription-
-  honest per house protocol).
+- **Windows provider: SHIPPED** (2026-07-12, its own pass —
+  `2026-07-12-feed-v1-windows-provider-pass.md`, `553f7eb`): 6 admin-free
+  channels live on the box (cpu/mem/battery + NVML gpu util/temp/power,
+  runtime-loaded). The LibreHardwareMonitor-class question resolved honestly:
+  CPU temp / fan RPM are kernel-driver-gated on Windows, so those channels
+  DO NOT EXIST (probe refusals recorded in the pass report).
 - Vend: `kFeed` in host_services.cpp, registered in `kIds` + `service()`;
   reachable by applets AND embedders (embed.h thread rules already say
   services documented any-thread are host-thread-safe — feed.v1 documents
@@ -147,7 +149,11 @@ refusals, MSVC-safe assertions.
    temperature response of this Mac live; measured|predicted split like
    TwinScope; assimilation story; whitepaper local-loop restatement lands
    with it.
-2. Windows provider pass (caps bit flips there only with artifacts).
+2. Windows provider pass — **EXECUTED 2026-07-12** (`553f7eb` + closeout;
+   spec `2026-07-12-feed-v1-windows-provider-pass.md`): the caps bit flipped
+   WITH artifacts — 6 admin-free channels @ 10 Hz live-verified on the
+   RTX 500 Ada box, load-proven (cpu 90%+ under a parallel build, gpu.temp
+   45→54 °C under gfx runs), embed path enumerating through `embed_host`.
 3. Applet-registered/external sources (serial/UDP/MQTT) — needs real
    hardware demand (`reserved0` holds the slot).
 4. Compass telemetry pane (native wx strip charts over the same reads).
