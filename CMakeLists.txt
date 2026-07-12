@@ -331,8 +331,13 @@ if(WIN32)
     target_link_libraries(libcaliper PUBLIC caliper_vulkan_backend)
 endif()
 set_target_properties(libcaliper PROPERTIES
-    OUTPUT_NAME caliper
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+# OUTPUT_NAME caliper collides with caliper.exe's import lib on MSVC (LNK1149:
+# both would be caliper.lib in the build root). Windows keeps the target name
+# (libcaliper.lib); Unix keeps the mac-proven libcaliper.a spelling via prefix.
+if(NOT WIN32)
+    set_target_properties(libcaliper PROPERTIES OUTPUT_NAME caliper)
+endif()
 
 # ============================================================================
 # Main Application (host — first embedder of libcaliper)
