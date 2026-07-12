@@ -65,6 +65,24 @@ extern "C" {
  * libcaliper per process, built together). */
 #define CALIPER_EMBED_API_VERSION 1
 
+/* ---------------------------------------------------------------------------
+ * v1.1 — the "consumer" pass (docs/superpowers/specs/2026-07-12-compass-
+ * consumer-design.md §3). ALL additive; every v1 struct is byte-stable and no
+ * struct grew a member, so CALIPER_EMBED_API_VERSION stays 1 (the size gate is
+ * about struct fields; v1.1's additions are a new free function plus semantics
+ * activated on EXISTING reserved fields). A v1 caller links and runs unchanged.
+ *
+ * HONESTY REGISTER (what v1.1 changed against the v0 gaps):
+ *   - get_service           ADDED  — caliper_core_get_service: a host consumes
+ *                                     the applets' service tables (P2/P3).
+ *   - data_dir gap          CLOSED — CaliperCoreDesc.data_dir now roots the
+ *                                     stores (was reserved/ignored in v0).
+ *   - log-singleton gap     CLOSED — applet caliper.log.v1 lines route to
+ *                                     CaliperLogFn (was stderr-only in v0).
+ *   - one-core-per-process  REMAINS — create still refuses a second live core.
+ *   - one-canvas-per-core   REMAINS — attach_canvas still refuses a second.
+ * ------------------------------------------------------------------------- */
+
 /* Opaque handle. One live instance per process in v0 (see header note). */
 typedef struct CaliperCore CaliperCore;
 
@@ -79,8 +97,16 @@ typedef enum CaliperRenderer {
     CALIPER_RENDERER_VULKAN  = 2
 } CaliperRenderer;
 
-/* Core diagnostics sink (renderer pick, refusals, crash text). NOT the applet
- * log service (caliper.log.v1 stays stderr in v0). NULL -> stderr. */
+/* Diagnostics sink. NULL -> stderr. Receives BOTH streams, distinguishable by a
+ * prefix on the message (v1.1):
+ *   - CORE diagnostics (renderer pick, refusals, crash text) arrive UNtagged.
+ *   - APPLET caliper.log.v1 lines arrive tagged "[applet] " (v1.1 routes the
+ *     applet log service here when this callback is set — it was stderr-only in
+ *     v0; a host surfaces them in a native Log pane, not stderr).
+ * `level` is the CaliperLogLevel value (0=DEBUG..3=ERROR). `message` is valid
+ * only for the call. Called from the frame thread for core lines, and from any
+ * thread for applet log lines (log.v1 is worker-callable) — a host sink that
+ * touches shared UI state must marshal to its UI thread itself. */
 typedef void (*CaliperLogFn)(void* userdata, int level, const char* message);
 
 /* Applet-fault callback (§4.3). Fired AFTER the faulting applet is quarantined

@@ -41,9 +41,21 @@ void set_bridge_log_sink(void (*sink)(CaliperLogLevel, const char*));
 namespace {
 
 // --- caliper.log.v1: timestamped console lines (console panel = later) ---
+// Installable sink (embed v1.1): when set, log.v1 lines route here instead of
+// stderr. A plain pointer, not atomic: it is installed at core create (before
+// any applet/worker exists) and cleared at shutdown AFTER workers join, so the
+// worker-thread reads are ordered by thread create/join (same discipline as
+// g_bridge's log sink). NULL => the built-in stderr writer below.
+void (*g_applet_log_sink)(void*, CaliperLogLevel, const char*) = nullptr;
+void*  g_applet_log_userdata = nullptr;
+
 // Reentrant time formatting: the docs promise log() is callable from applet
 // worker threads, and plain std::localtime shares a static buffer.
 void log_impl(CaliperLogLevel level, const char* msg) {
+    if (g_applet_log_sink) {   // embedder installed a sink: route, don't touch stderr
+        g_applet_log_sink(g_applet_log_userdata, level, msg ? msg : "");
+        return;
+    }
     static const char* kTag[] = {"DEBUG", "INFO ", "WARN ", "ERROR"};
     int idx = (level >= 0 && level <= 3) ? (int)level : 1;
     std::time_t t = std::time(nullptr);
@@ -428,6 +440,12 @@ void services_set_renderer(HostRenderer* renderer) {
 }
 
 HostRenderer* services_renderer() { return g_renderer; }
+
+void set_applet_log_sink(void (*sink)(void*, CaliperLogLevel, const char*),
+                         void* userdata) {
+    g_applet_log_sink = sink;
+    g_applet_log_userdata = userdata;
+}
 
 const void* services_get(const char* id) {
     if (!id) return nullptr;

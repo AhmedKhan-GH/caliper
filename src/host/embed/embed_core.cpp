@@ -37,6 +37,7 @@
 #include "renderer/host_renderer.h"
 
 #include <caliper/abi.h>
+#include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log routing)
 
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
@@ -102,6 +103,22 @@ struct CaliperCore {
     }
     void fail(const std::string& why) { last_error = why; log(2, why); }
 };
+
+// Applet log.v1 sink (embed v1.1, §3.3): route each applet log line to the
+// embedder's log_fn, TAGGED "[applet] " so a host can tell applet lines apart
+// from core diagnostics (core->log delivers those UNtagged). Installed at create
+// only when the embedder provided a log_fn; the caliper exe installs nothing and
+// keeps stderr. `ud` is the CaliperCore*; it is only dereferenced while the sink
+// is installed, which is strictly between create (this core alive) and shutdown's
+// post-join clear — no worker can call it after log_fn is gone.
+static void embed_applet_log_sink(void* ud, CaliperLogLevel level,
+                                  const char* msg) {
+    CaliperCore* core = static_cast<CaliperCore*>(ud);
+    if (!core->log_fn) return;
+    std::string tagged = "[applet] ";
+    tagged += (msg ? msg : "");
+    core->log_fn(core->userdata, static_cast<int>(level), tagged.c_str());
+}
 
 // ---------------------------------------------------------------------------
 // create / shutdown
@@ -235,6 +252,13 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     if (desc->applets_dir && desc->applets_dir[0])
         core->loader->scan(desc->applets_dir);
 
+    // Route applet log.v1 lines to the embedder's log_fn (§3.3). Installed here,
+    // AFTER every fallible create step, so no failure path can leave a sink
+    // pointing at a half-built core; cleared in shutdown after workers join. No
+    // log_fn -> no sink -> stderr, exactly as the caliper exe runs.
+    if (core->log_fn)
+        set_applet_log_sink(&embed_applet_log_sink, core.get());
+
     // Publish the real pointer, replacing the sentinel reservation. Disarm the
     // guard first: from here on the slot legitimately holds a live core.
     slot_guard.armed = false;
@@ -258,6 +282,13 @@ void caliper_core_shutdown(CaliperCore* core) {
     core->renderer.reset();
     // ImGui contexts last, AFTER the renderer's ImGui backend is gone.
     core_destroy_ui_context();
+
+    // Detach the applet log sink LAST, once no applet code can run again: workers
+    // were joined above, and the loader's close_all() ran on_cleanup on THIS
+    // (shutdown) thread with core->log_fn still valid — so the applet's cleanup
+    // log lines still reached the embedder. Clear it before the core is freed
+    // (the sink trampoline holds this core pointer). No log_fn -> never installed.
+    set_applet_log_sink(nullptr, nullptr);
 
     // Restore the default app-data root: the stores are closed, and the next
     // core (NULL data_dir) must resolve the OS default again — the override is

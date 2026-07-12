@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -567,4 +568,111 @@ TEST_CASE("embed/data_dir: a per-core data_dir roots the stores under it; "
 
     caliper_core_shutdown(core2);
     fs::remove_all(root, ec);
+}
+
+// ===========================================================================
+// v1.1 — log.v1 routing (§3.3). An installed log_fn captures applet log lines
+// (tagged "[applet] ") that were stderr-only in v0; with NO log_fn the caliper
+// exe path stays stderr, unchanged.
+// ===========================================================================
+namespace {
+std::mutex  g_log_mu;
+std::string g_log_capture;
+void capture_log_fn(void*, int /*level*/, const char* msg) {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    g_log_capture += (msg ? msg : "");
+    g_log_capture += "\n";
+}
+std::string drain_log_capture() {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    return g_log_capture;
+}
+void reset_log_capture() {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    g_log_capture.clear();
+}
+}  // namespace
+
+TEST_CASE("embed/log: with log_fn installed, a log.v1 line reaches the sink "
+          "tagged, NOT raw stderr") {
+    reset_log_capture();
+    CaliperCoreDesc d = base_desc();
+    d.log_fn = &capture_log_fn;
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* log = (const CaliperLogV1*)caliper_core_get_service(core, CALIPER_LOG_V1);
+    REQUIRE(log != nullptr);
+
+    // Drive log.v1 directly (GPU-free): the applet-facing service an applet uses.
+    std::string err;
+    {
+        StderrTap tap;
+        log->log(CALIPER_LOG_INFO, "compass-log-probe");
+        err = tap.drain();
+    }
+    std::string cap = drain_log_capture();
+    bool reached_sink       = cap.find("compass-log-probe") != std::string::npos;
+    bool tagged_applet      = cap.find("[applet] compass-log-probe") != std::string::npos;
+    bool absent_from_stderr = err.find("compass-log-probe") == std::string::npos;
+    CHECK(reached_sink);
+    CHECK(tagged_applet);
+    CHECK(absent_from_stderr);
+
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/log: without log_fn, log.v1 still writes stderr (exe path unchanged)") {
+    CaliperCoreDesc d = base_desc();   // no log_fn: the caliper exe configuration
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    auto* log = (const CaliperLogV1*)caliper_core_get_service(core, CALIPER_LOG_V1);
+    REQUIRE(log != nullptr);
+
+    std::string err;
+    {
+        StderrTap tap;
+        log->log(CALIPER_LOG_WARN, "compass-stderr-probe");
+        err = tap.drain();
+    }
+    bool on_stderr = err.find("compass-stderr-probe") != std::string::npos;
+    CHECK(on_stderr);   // the built-in stderr writer, exactly as v0 / the exe
+
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
+          "not stderr") {
+    reset_log_capture();
+    CaliperCoreDesc d = base_desc();
+    d.log_fn = &capture_log_fn;
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    CaliperCanvasDesc c = offscreen_desc(128, 128);
+    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
+        MESSAGE("no embeddable GPU — skipping applet-log routing case: "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    // hello.on_init logs "hello.on_init" through caliper.log.v1 (host.log_info).
+    std::string err;
+    {
+        StderrTap tap;
+        int loaded = caliper_core_load_applet(core, "dev.caliper.hello");
+        REQUIRE(loaded == 1);
+        caliper_core_frame(core);
+        err = tap.drain();
+    }
+    std::string cap = drain_log_capture();
+    bool applet_line_at_sink = cap.find("hello.on_init") != std::string::npos;
+    bool applet_line_off_stderr = err.find("hello.on_init") == std::string::npos;
+    CHECK(applet_line_at_sink);       // reached the embedder's log pane
+    CHECK(applet_line_off_stderr);    // no longer leaks to raw stderr
+
+    caliper_core_unload_applet(core);
+    caliper_core_shutdown(core);
 }
