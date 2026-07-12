@@ -535,19 +535,18 @@ public:
             rp.pClearValues = &clear;
             vkCmdBeginRenderPass(cb, &rp, VK_SUBPASS_CONTENTS_INLINE);
             ImGui_ImplVulkan_RenderDrawData(dd, cb);
-            vkCmdEndRenderPass(cb);   // canvas_tex_ -> SHADER_READ_ONLY (finalLayout)
-            barrier(cb, canvas_tex_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            vkCmdEndRenderPass(cb);   // canvas_pass_ finalLayout -> TRANSFER_SRC_OPTIMAL
+            // No barrier needed: the render pass finalLayout + deps[1] already
+            // transitioned the target to TRANSFER_SRC and ordered it before this
+            // transfer read. Next frame re-clears from UNDEFINED, so no restore.
             VkBufferImageCopy r{};
             r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             r.imageExtent = {(uint32_t)canvas_w_, (uint32_t)canvas_h_, 1};  // tight w*4 rows
             vkCmdCopyImageToBuffer(cb, canvas_tex_.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    canvas_readback_.buf, 1, &r);
-            barrier(cb, canvas_tex_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
-        canvas_tex_.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        canvas_tex_.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         canvas_have_frame_ = true;
     }
 
@@ -1909,8 +1908,11 @@ private:
     }
 
     // OFFSCREEN render pass: one RGBA8 color attachment, clear-on-load, ends
-    // SHADER_READ_ONLY (a modeled copy of geom_pass_ — color-only, no depth).
-    // Built once, reused across resizes.
+    // TRANSFER_SRC_OPTIMAL — the target is copied to the readback buffer right
+    // after the pass and is never sampled (usage is COLOR_ATTACHMENT|TRANSFER_SRC,
+    // no SAMPLED). SHADER_READ_ONLY layouts here would trip
+    // VUID-vkCmdBeginRenderPass-initialLayout-00897. Built once, reused across
+    // resizes.
     bool ensure_canvas_pass() {
         if (canvas_pass_ != VK_NULL_HANDLE) return true;
         VkAttachmentDescription att{};
@@ -1921,25 +1923,28 @@ private:
         att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;   // cleared every frame
-        att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        att.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;  // copied out next
         VkAttachmentReference ar{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkSubpassDescription sp{};
         sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         sp.colorAttachmentCount = 1;
         sp.pColorAttachments = &ar;
+        // Honest sync for the write->copy chain: the prior frame's copy (TRANSFER
+        // read) must finish before this frame clears; the color write must finish
+        // (and transition to TRANSFER_SRC) before the copy reads.
         VkSubpassDependency deps[2] = {};
         deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
         deps[0].dstSubpass = 0;
-        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
         deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         deps[1].srcSubpass = 0;
         deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
         deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
         deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         VkRenderPassCreateInfo rpi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
         rpi.attachmentCount = 1;
         rpi.pAttachments = &att;
@@ -2017,7 +2022,32 @@ private:
     // canvas_shutdown body. Every step is handle-guarded so a partial init (or a
     // never-init'd instance) tears down cleanly with nothing left dangling.
     void canvas_teardown() {
-        if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+        if (device_ != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(device_);
+            // Shared GPU resources the bridge/geometry paths may have created on
+            // THIS device (tex_upload/debug_readback staging, imported allocs,
+            // geometry + compute pipelines, LUT). The canvas path builds its own
+            // device and never runs the exe shutdown(), so it must free them here
+            // or they leak at vkDestroyDevice (VUID-vkDestroyDevice-device-05137 —
+            // e.g. the §7 bridge-upload staging buffer). Freed BEFORE ImGui
+            // shutdown because destroy_tex releases ImGui descriptor sets.
+            for (auto& kv : textures_) destroy_tex(kv.second);
+            textures_.clear();
+            for (auto& kv : imported_) {
+                ImportedAlloc& a = kv.second;
+                if (a.buf) vkDestroyBuffer(device_, a.buf, nullptr);
+                if (a.memory) vkFreeMemory(device_, a.memory, nullptr);
+#ifdef _WIN32
+                if (a.handle_dup) CloseHandle((HANDLE)a.handle_dup);
+#endif
+            }
+            imported_.clear();
+            destroy_compute();
+            destroy_geom_prim();
+            destroy_geom();
+            destroy_buffer(staging_);
+            destroy_buffer(lut_buf_);
+        }
         if (canvas_imgui_) { ImGui_ImplVulkan_Shutdown(); canvas_imgui_ = false; }
         if (canvas_mode_ == CANVAS_WINDOW && wd_.Swapchain != VK_NULL_HANDLE) {
             ImGui_ImplVulkanH_DestroyWindow(instance_, device_, &wd_, nullptr);
@@ -2137,7 +2167,17 @@ private:
         }
         if (queue_family_ == UINT32_MAX) return false;
 
-        std::vector<const char*> dev_exts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        // The embed OFFSCREEN canvas creates its instance with NO instance
+        // extensions (no surface), so it must NOT enable VK_KHR_swapchain — that
+        // device extension requires VK_KHR_surface and trips
+        // VUID-vkCreateDevice-ppEnabledExtensionNames-01387. The exe swapchain
+        // path and CANVAS_WINDOW (both surface-backed) still enable it. Interop
+        // (external-memory/timeline) extensions below are enabled regardless —
+        // OFFSCREEN still needs them for zero-copy geometry.
+        const bool offscreen_canvas =
+            canvas_active_ && canvas_mode_ == CANVAS_OFFSCREEN;
+        std::vector<const char*> dev_exts;
+        if (!offscreen_canvas) dev_exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         if (external_memory_ok_) {
             dev_exts.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
             dev_exts.push_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
