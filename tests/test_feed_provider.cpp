@@ -23,7 +23,7 @@ namespace {
 
 // The channel ids the guaranteed tier must always vend on a Mac.
 const char* const kGuaranteed[] = {
-    "sys.cpu.util", "sys.mem.pressure", "sys.thermal.state", "sys.gpu.util"};
+    "sys.cpu.util", "sys.mem.used", "sys.thermal.state", "sys.gpu.util"};
 
 std::set<std::string> channel_ids(FeedStore& s) {
     std::set<std::string> ids;

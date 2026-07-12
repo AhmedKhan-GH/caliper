@@ -243,8 +243,8 @@ void sample_loop() {
                 else warn_once(&g_prov.warned_cpu, "sys.cpu.util");
             }
             if (g_prov.has_mem) {
-                if (sample_mem(&v)) g_prov.store->push("sys.mem.pressure", t, v);
-                else warn_once(&g_prov.warned_mem, "sys.mem.pressure");
+                if (sample_mem(&v)) g_prov.store->push("sys.mem.used", t, v);
+                else warn_once(&g_prov.warned_mem, "sys.mem.used");
             }
             // thermal state never fails (public API)
             g_prov.store->push("sys.thermal.state", t, (float)thermal_state());
@@ -346,7 +346,7 @@ void feed_provider_start(FeedStore& store) {
     struct Reg { bool on; const char* id; const char* name; const char* units; };
     const Reg regs[] = {
         {g_prov.has_cpu,   "sys.cpu.util",     "CPU Utilization",     "%"},
-        {g_prov.has_mem,   "sys.mem.pressure", "Memory Pressure",     "%"},
+        {g_prov.has_mem,   "sys.mem.used", "Memory Used",     "%"},
         {true,             "sys.thermal.state","Thermal State",       ""},
         {g_prov.has_gpu,   "sys.gpu.util",     "GPU Utilization",     "%"},
         {g_prov.has_fan,   "sys.fan.rpm",      "Fan Speed",           "rpm"},

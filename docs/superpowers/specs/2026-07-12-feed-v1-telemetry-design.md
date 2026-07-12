@@ -94,7 +94,10 @@ without breaking this surface.
   close): samples every 100 ms (10 Hz) into the store.
 - **macOS platform provider** (`feed_provider_mac.*`): SUDO-FREE signals
   only. Guaranteed tier (public APIs): CPU utilization (host_processor_info),
-  memory pressure (host_statistics64), thermal pressure state
+  memory USED %-of-total (host_statistics64 — named `sys.mem.used`, NOT
+  "pressure": the kernel's true memory-pressure signal is a different metric
+  and names must not overclaim; T2-review value-honesty ratification),
+  thermal pressure state
   (ProcessInfo.thermalState as 0-3), GPU utilization (IOAccelerator
   PerformanceStatistics — readable unprivileged). Best-effort tier
   (investigate at implementation; include ONLY what reads without privileges

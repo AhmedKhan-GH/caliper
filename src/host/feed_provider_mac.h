@@ -8,7 +8,7 @@
 // entitlements on THIS machine are registered as channels. Everything is probed
 // once at start(); a signal that does not read is simply not a channel, never a
 // faked value. The channel set on this box (Apple M5, macOS 26): the guaranteed
-// tier — sys.cpu.util, sys.mem.pressure, sys.thermal.state, sys.gpu.util — plus
+// tier — sys.cpu.util, sys.mem.used, sys.thermal.state, sys.gpu.util — plus
 // the best-effort tier that verified readable here — sys.fan.rpm and
 // sys.temp.battery (userland AppleSMC), sys.power.battery (IOPMPowerSource).
 //
