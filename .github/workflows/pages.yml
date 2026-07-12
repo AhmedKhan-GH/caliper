@@ -3,7 +3,9 @@ name: Deploy Pages
 on:
   push:
     branches: [main]
-    paths: ['site/**', '.github/workflows/pages.yml']
+    paths: ['site/**', 'docs/wiki/**', 'mkdocs.yml',
+            'docs/report/caliper-whitepaper.pdf', 'sdk/include/**',
+            '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,9 +22,23 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The wiki (MkDocs Material) is served under /docs/ on the same Pages
+      # site; --strict keeps the snippet-embedded headers honest (D15).
+      - run: pip install mkdocs-material
+      - run: mkdocs build --strict
+      # Assemble the Pages artifact: landing page at /, wiki at /docs/,
+      # whitepaper PDF at /whitepaper.pdf.
+      - run: |
+          mkdir -p _pages
+          cp -r site/. _pages/
+          cp -r build/wiki-site _pages/docs
+          cp docs/report/caliper-whitepaper.pdf _pages/whitepaper.pdf
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _pages
       - id: deployment
         uses: actions/deploy-pages@v4
