@@ -100,6 +100,39 @@ add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
 set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx")
 
 # ---------------------------------------------------------------------------
+# caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
+# (host_services vends the export service + the composition reaches its g_bridge/
+# g_renderer) and the Metal backend, and drives the vended service as an embedder
+# would: bind a renderer -> import a quad -> view_png/sequence -> decode the PNG
+# back (stb_image, TEST-ONLY) and byte-compare. The live cases self-skip with no
+# GPU; the sidecar-golden / atomic-write / sugar cases are GPU-free. Own "export"
+# label so `ctest -L gfx` (49/49) is untouched.
+# ---------------------------------------------------------------------------
+add_executable(caliper_export_tests test_export.cpp)
+target_include_directories(caliper_export_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/host
+    ${CMAKE_SOURCE_DIR}/third_party/stb)
+target_link_libraries(caliper_export_tests PRIVATE
+    doctest::doctest libcaliper caliper::sdk caliper::sdk_testing
+    caliper::ui_stack ${CALIPER_DEPENDENCY_LIBS})
+set_target_properties(caliper_export_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_METAL=1)
+    # ObjC++ + ARC so the harness can allocate the MTLBuffers the imported-
+    # geometry path consumes (mirrors caliper_gfx_tests).
+    set_source_files_properties(test_export.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    set_target_properties(caliper_export_tests PROPERTIES
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+endif()
+if(WIN32)
+    target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_VULKAN=1)
+endif()
+add_test(NAME caliper_export_tests COMMAND caliper_export_tests)
+set_tests_properties(caliper_export_tests PROPERTIES LABELS "export")
+
+# ---------------------------------------------------------------------------
 # caliper_torch_tests — the applet-side torch adapter (adapters/torch.hpp).
 # A SEPARATE binary because it links libtorch: keeping torch out of
 # caliper_tests spares the fast unit suite the torch link cost. Registered
