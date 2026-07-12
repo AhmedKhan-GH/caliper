@@ -43,6 +43,13 @@ JobSystem& host_job_system();
 class MetricsStore;
 MetricsStore& host_metrics_store();
 
+// The process-wide feed store backing caliper.feed.v1 (feed spec §4); telemetry
+// providers (T2) push samples in, applets/embedders read them out. In T1 it has
+// no provider thread and no channels — the service is vended but inert (caps 0)
+// until a provider or a test registers channels.
+class FeedStore;
+FeedStore& host_feed_store();
+
 // The process-wide artifact store backing caliper.artifacts.v1 (§7.8).
 // Opened by services_init() under the app data dir; may be unopened if the
 // disk failed (the service is still vended, its thunks no-op).

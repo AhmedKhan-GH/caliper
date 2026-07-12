@@ -158,6 +158,7 @@ add_library(caliper_host_lib STATIC
     src/host/applet_loader.cpp
     src/host/job_system.cpp
     src/host/metrics_store.cpp
+    src/host/feed_store.cpp
     src/host/artifact_store.cpp
     src/host/data_store.cpp
     src/host/sha256.cpp
