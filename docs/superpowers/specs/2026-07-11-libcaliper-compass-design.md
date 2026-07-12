@@ -5,9 +5,10 @@
 GATED-PENDING on §5's named-workflow rule. The design below stands as written;
 §6 and §7 now carry per-phase outcomes + commits. What shipped: the embeddable
 `libcaliper` core (L1), the embed C ABI `include/caliper/embed.h` v1 + a second
-in-tree embedder `examples/embed_host` (L2), Metal-proven on Apple Silicon —
-Vulkan/HWND embed is transcribed and compiled-out, pending the next Windows
-session (see the Windows-pass addendum). Originally the R4 strategic decision
+in-tree embedder `examples/embed_host` (L2), now run-proven on BOTH ecosystems —
+Metal on Apple Silicon and Vulkan/HWND on Windows (RTX 500 Ada, 2026-07-11;
+`c8e6005`/`852c398`/`37d87f2` seam, `0614d51`/`0724161` supporting; see the
+Windows-pass addendum). Originally the R4 strategic decision
 doc ROADMAP §7 deferred ("platform call, not geometry's"; intent at PLATFORM.md
 Phase 6); opening it was the owner's call, made 2026-07-11, so the decision was
 made ONCE with the trade-offs recorded before extraction began.
@@ -182,11 +183,21 @@ Until then, phases L1–L2 below still pay for themselves inside Caliper.
   bridge-seam byte-compare case. Live proof: embed_host ran
   `dev.caliper.instance-scope` and `dev.caliper.mesh-scope` zero-copy on Metal
   @2x Retina with the honest provenance lines captured; suites 9/9, gfx 49/49
-  byte-exact unregressed. **Honest gaps (v0):** the applet `log.v1` service still
-  writes to process stderr, bypassing `log_fn` (core diagnostics DO route
-  through `log_fn`); `CaliperCoreDesc.data_dir` is IGNORED; the Vulkan/HWND
-  embed paths are transcription only, hardware pending the next Windows session
-  (Windows-pass addendum). **Metal-proven; Vulkan embed pending Windows.**
+  byte-exact unregressed. **Windows run-proof (2026-07-11, RTX 500 Ada):** the
+  Vulkan embed-canvas seam was implemented against the Metal reference
+  (`c8e6005` WINDOW HWND surface + OFFSCREEN RGBA8 RTT, `852c398` interop
+  pairing, `37d87f2` validation-clean OFFSCREEN) and run live — `embed_host`
+  (Win32 `main_win32.cpp`) drew both `instance_scope` (1000 objects, 1 draw
+  call, 0 mesh copies) and `mesh_scope` zero-copy on the Vulkan WINDOW canvas,
+  `caliper_embed_tests` 8/8 with the §7 host-axis byte-compare passing on the
+  Vulkan OFFSCREEN canvas, gfx 48/48 unregressed (`0614d51` `mesh_scope`
+  bootstrap, `0724161` `CALIPER_EMBED_EXIT_AFTER` Win32 parity). **Honest gaps
+  (v0):** the applet `log.v1` service still writes to process stderr, bypassing
+  `log_fn` (core diagnostics DO route through `log_fn`); `CaliperCoreDesc.data_dir`
+  is IGNORED; `WM_DPICHANGED` mixed-DPI was not exercisable on the single-monitor
+  box, and the WINDOW-path validation residuals are pre-existing SHARED
+  swapchain machinery (the OFFSCREEN embed path is validation-clean). **Run-proven
+  on both ecosystems — Metal (Apple Silicon) and Vulkan/HWND (Windows).**
 - **L3 — Compass itself.** Separate repo, wx chrome, embeds the L2 ABI.
   Gated on §5's named-workflow rule. Acceptance: the same applet binary
   (unmodified, same `.caliperapp`) runs under Caliper AND Compass on both
@@ -231,28 +242,43 @@ wrong.
 
 ## Windows-pass addendum
 
-L1+L2 shipped Metal-proven on Apple Silicon. The Vulkan/HWND embed paths are
-TRANSCRIBED and compiled-out — the shape is written against the Metal-proven
-seam and the Vulkan v1_1–v1_3 backends already run byte-exact on Windows, but
-NONE of the embed-specific Windows paths have touched hardware. The next
-Windows session (CUDA/RTX 500 Ada box) verifies exactly:
+**RUN-PROVEN 2026-07-11 (RTX 500 Ada, driver 596.47, Windows 11, MSVC 14.50,
+branch `feat/embed-vulkan-windows`).** The Vulkan/HWND embed paths were the
+greenfield half of this pass — the canvas seam did not exist on Vulkan and was
+implemented against the Metal-proven reference, then run live on hardware. The
+pass spec is `2026-07-11-libcaliper-embed-vulkan-windows-pass.md` (all boxes
+ticked). Each row below is now artifact-verified:
 
 - **HWND window mode** — `caliper_core_attach_canvas` with
-  `CALIPER_CANVAS_WINDOW` against a real `HWND`, HiDPI content-scale honored,
-  first zero-copy frame drawn.
+  `CALIPER_CANVAS_WINDOW` against a real `HWND`, physical-pixel client rect
+  (1258×744 @1.5× from a 1280×800 outer window), first zero-copy frame drawn.
+  *Live (`c8e6005`).*
 - **Win32 `embed_host` main** — `examples/embed_host/main_win32.cpp` built and
   run: create → attach → load → frame/event pump from a Win32 message loop →
-  shutdown, mirroring the AppKit host's five calls, no GLFW.
+  shutdown, mirroring the AppKit host's five calls, no GLFW. *Live; DLL-copy +
+  link fix `d7f9cc4`, `CALIPER_EMBED_EXIT_AFTER` Win32 parity `0724161`.*
 - **Vulkan canvas paths, both modes** — offscreen (render-to-texture +
   `read_pixels`) and window, on the Vulkan `HostRenderer` backend, with the
-  same honest provenance lines as Metal.
+  same honest provenance lines as Metal. *Both live (`c8e6005`); `instance_scope`
+  drew "first zero-copy instanced frame — 1000 objects, 1 draw call, 0 mesh
+  copies" and `mesh_scope` drew "first zero-copy frame (imported geometry, 3
+  draws)" on the WINDOW canvas (`0614d51` fixed a `mesh_scope` window-collapse
+  bootstrap gap).*
 - **Embed tests on the CUDA box** — `caliper_embed_tests` green on Vulkan/CUDA
   (the create/attach/load/frame/read_pixels/refusal set that runs on Metal).
+  *8/8 cases, 42 assertions, zero refusal-skips (`852c398` corrected interop
+  pairing so zero-copy caps resolve under embed).*
 - **The §7 bridge-seam case on Vulkan** — the bridge-upload byte-compare
   against the shared CPU reference, mirrored on Vulkan/CUDA (the same seam
   proven on Metal, NOT the swapchain composite — that ideal stays open on both
-  backends).
+  backends). *PASSED byte-identical on the Vulkan OFFSCREEN canvas.*
 
-Honest transcription language holds until each row above is artifact-verified
-on the hardware: no checkbox, no "both ecosystems" claim for the embed seam
-until the Windows session run-proves it.
+**Two honest partials carried:** `WM_DPICHANGED` mixed-DPI was not exercisable
+on this single-monitor @1.5× box; and the WINDOW-path validation residuals are
+PRE-EXISTING SHARED swapchain machinery (`VUID-vkDestroyInstance-instance-00629`
+reproduced identically on `caliper.exe`;
+`VUID-vkQueueSubmit-pSignalSemaphores-00067` lives in the shared frame present),
+NOT embed-canvas bugs — the OFFSCREEN embed path is validation-clean after
+`37d87f2` (4 VUIDs). The §6.4 review follow-ups (sdk-link trim, include→PRIVATE
+flip, watchdog surfacing) are deferred pending mac-side verification. The
+swapchain-composite same-bytes ideal (§7) stays open on both backends.

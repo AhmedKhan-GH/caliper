@@ -404,6 +404,12 @@ void MeshScopeApplet::draw_ui() {
         err_grid = st->err_grid;
     }
 
+    // Give the window room on first use so the 3-D view can bootstrap: without
+    // a view there is no image, so an auto-sizing floating window collapses to
+    // the HUD height and never leaves >=64px for create_view_ex — exactly what
+    // happens under embed_host, where no dock layout sizes us (instance_scope
+    // precedent; docked layouts override this harmlessly).
+    ImGui::SetNextWindowSize(ImVec2(1120, 860), ImGuiCond_FirstUseEver);
     ImGui::Begin("MeshScope: Surface");
 
     // ---- toolbar: controls + honest status (last frame's provenance) ----

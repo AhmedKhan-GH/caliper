@@ -35,3 +35,16 @@ elseif(UNIX)
     set_target_properties(embed_host PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
 endif()
+
+# Windows has no rpath: embed_host lands in its own dir (build/examples/
+# embed_host/), which the caliper-exe DLL-copy step does not cover — without
+# this the host dies 0xc0000135 before main. Mirror of the exe's copy
+# (root CMakeLists "Copying PyTorch DLLs"); spec §5.2 of the Windows pass.
+if(MSVC)
+    file(GLOB TORCH_DLLS "${LIBTORCH_DIR}/lib/*.dll")
+    add_custom_command(TARGET embed_host POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${TORCH_DLLS}
+            $<TARGET_FILE_DIR:embed_host>
+        COMMENT "Copying PyTorch DLLs to embed_host directory")
+endif()

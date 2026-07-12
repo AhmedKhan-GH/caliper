@@ -3,10 +3,11 @@
 // a bare Win32 message loop instead of AppKit. Renderer DEFAULT resolves to
 // Vulkan on Windows.
 //
-// STATUS: TRANSCRIPTION — NOT yet run on Windows hardware. It compiles only on
-// _WIN32 (CMake gates it); the next Windows pass is its first live driver. No
-// hardware/byte-exact claim is made here. The macOS half (main.mm) is the
-// run-proven one; this mirrors its structure so the port is mechanical.
+// STATUS: RUN-PROVEN on Windows hardware (2026-07-11, RTX 500 Ada / driver
+// 596.47, branch feat/embed-vulkan-windows). It compiles only on _WIN32 (CMake
+// gates it); it drew the Vulkan WINDOW canvas live — instance_scope zero-copy
+// instanced (1000 objects, 1 draw call, 0 mesh copies) and mesh_scope. This
+// mirrors the macOS half (main.mm) structure so the two hosts stay in step.
 // ===========================================================================
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -119,6 +120,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Headless run-proof hook (sibling of main.mm's performClose afterDelay):
+    // auto-close after N seconds via the REAL close path (WM_CLOSE -> destroy
+    // -> WM_QUIT -> STEP 5), so teardown is exercised, not skipped.
+    ULONGLONG exit_after_ms = 0;
+    if (const char* s = std::getenv("CALIPER_EMBED_EXIT_AFTER"))
+        exit_after_ms = (ULONGLONG)(atof(s) * 1000.0);
+    const ULONGLONG t0 = GetTickCount64();
+
     // STEP 4: pump from OUR message loop — one frame per iteration, no vsync
     // wait inside the core.
     MSG m{};
@@ -128,6 +137,10 @@ int main(int argc, char** argv) {
             TranslateMessage(&m); DispatchMessage(&m);
         }
         caliper_core_frame(g_core);
+        if (exit_after_ms && GetTickCount64() - t0 >= exit_after_ms) {
+            PostMessage(hwnd, WM_CLOSE, 0, 0);
+            exit_after_ms = 0;  // post once; the close path finishes the job
+        }
     }
 done:
     // STEP 5: tear down.
