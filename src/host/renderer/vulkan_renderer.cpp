@@ -299,18 +299,7 @@ public:
         // (before the first device upload), so the pairing must be settled by
         // the time init() returns. Requires both the Vulkan external-memory
         // extensions AND a CUDA device whose UUID matches this one.
-        interop_ok_ = external_memory_ok_ && ensure_cuda();
-
-        // V4 semaphore pipelining: available when the device also exports
-        // timeline semaphores CUDA can import. Per-texture creation can still
-        // fall back to the synchronous path if a runtime step fails.
-        const cudadrv::Api* cu = cudadrv::api();
-        pipelined_ok_ = interop_ok_ && timeline_ok_ &&
-                        cu && cu->cuImportExternalSemaphore != nullptr;
-        if (interop_ok_)
-            dev_note(pipelined_ok_
-                         ? "sync mode: pipelined (shared timeline semaphores)"
-                         : "sync mode: synchronous (timeline semaphores unavailable)");
+        resolve_interop_pairing();
         return true;
     }
 
@@ -469,6 +458,14 @@ public:
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         if (!ImGui_ImplVulkan_Init(&ii)) return fail();
         canvas_imgui_ = true;
+
+        // Same session-start CUDA interop pairing the exe init() does (spec §3.1):
+        // pick_device_and_queue() only sets external_memory_ok_/timeline_ok_ and
+        // enables the extensions — without this the bridge reads interop_device()
+        // as CPU, geom_caps() is 0, and applets fall back with no zero-copy under
+        // embed. Wired here (post ImGui init, mirroring init()) so caps match the
+        // exe path; the run-proven Metal canvas path pairs interop the same way.
+        resolve_interop_pairing();
 
         canvas_ready_ = true;
         return true;
@@ -2051,6 +2048,7 @@ private:
             vkDestroyFence(device_, oneshot_fence_, nullptr);
             oneshot_fence_ = VK_NULL_HANDLE;
         }
+        release_cuda();   // drop the primary-ctx retain (mirrors exe shutdown()).
         if (device_ != VK_NULL_HANDLE) {
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
@@ -2065,6 +2063,10 @@ private:
         canvas_ready_ = false;
         canvas_active_ = false;
         canvas_have_frame_ = false;
+        // Don't leak interop caps across a failed init -> retry (the embed
+        // battery creates/shuts down twice in one process).
+        interop_ok_ = false;
+        pipelined_ok_ = false;
     }
 
     static bool has_ext(const std::vector<VkExtensionProperties>& v, const char* name) {
@@ -2519,6 +2521,26 @@ private:
     // Retain the primary context of the CUDA device whose UUID matches the
     // Vulkan physical device — the same context torch's runtime uses, so
     // torch device pointers are directly usable by our DtoD copy.
+    // Settle interop_ok_/pipelined_ok_ from the already-resolved Vulkan caps
+    // (external_memory_ok_/timeline_ok_ set by pick_device_and_queue) plus a
+    // UUID-matched CUDA pairing. Shared verbatim by the exe swapchain path
+    // (init()) and the embed canvas path (canvas_init()) so geom_caps() are
+    // identical under both — otherwise embed advertises 0 and applets fall back.
+    void resolve_interop_pairing() {
+        interop_ok_ = external_memory_ok_ && ensure_cuda();
+
+        // V4 semaphore pipelining: available when the device also exports
+        // timeline semaphores CUDA can import. Per-texture creation can still
+        // fall back to the synchronous path if a runtime step fails.
+        const cudadrv::Api* cu = cudadrv::api();
+        pipelined_ok_ = interop_ok_ && timeline_ok_ &&
+                        cu && cu->cuImportExternalSemaphore != nullptr;
+        if (interop_ok_)
+            dev_note(pipelined_ok_
+                         ? "sync mode: pipelined (shared timeline semaphores)"
+                         : "sync mode: synchronous (timeline semaphores unavailable)");
+    }
+
     bool ensure_cuda() {
         if (cuda_ctx_) return true;
         const cudadrv::Api* cu = cudadrv::api();
