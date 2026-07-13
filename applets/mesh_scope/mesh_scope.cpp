@@ -20,6 +20,7 @@
 // ============================================================================
 #include "mesh_scope.h"
 #include "mesh_model.h"
+#include "export_affordance.h"   // export.v1 E2 affordance logic (shared, pure)
 
 #include <caliper/caliper.hpp>
 #include <caliper/adapters/exportable_pool.hpp>
@@ -34,7 +35,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -46,6 +49,13 @@ namespace {
 constexpr int   kSlots = 3;      // triple buffer: write / ready / displayed
 constexpr float kPi    = 3.14159265358979323846f;
 constexpr uint64_t kResetSeed = 1234;   // reproducible re-init on the reset button
+
+// export.v1 E2 affordances: figure at 4K, record at 720p @ 30 fps for 10 s
+// (== 300 frames). Both re-use THIS frame's draws with a re-framed camera.
+constexpr uint32_t kExportFigW = 3840, kExportFigH = 2160;
+constexpr uint32_t kRecW = 1280, kRecH = 720;
+constexpr double   kRecFps = 30.0, kRecSeconds = 10.0;
+constexpr int      kSelftestWarmupFrames = 90;   // ~1.5 s before the headless self-test fires
 
 // Read-only viewer flags for the fallback plot — it is a heatmap you look at,
 // not a widget you drive (the recurring "input-lock read-only plots" rule).
@@ -178,6 +188,19 @@ struct MeshScopeState {
     bool  zero_copy_frame = false;
     bool  logged_first_draw = false;
     const char* frame_status = "initializing";
+
+    // export.v1 E2 (frame-thread-only; capture runs INLINE — see
+    // export_affordance.h threading note — so no atomics needed).
+    caliper::Export export_svc;
+    bool export_figure_req = false;
+    bool record_req = false;
+    bool recording = false;
+    uint64_t rec_seq = 0;
+    uint32_t rec_written = 0, rec_target = 0;
+    int64_t rec_last_ms = 0;
+    std::string rec_dir;
+    bool selftest_done = false;
+    int  selftest_frames = 0;
 };
 
 namespace {
@@ -371,6 +394,7 @@ bool MeshScopeApplet::initialize(caliper::Host& host) {
     s_->bridge   = caliper::Bridge(host);
     s_->geometry = caliper::Geometry(host);
     s_->geom_caps = s_->geometry.caps();
+    s_->export_svc = caliper::Export(host);
     host.log_info("mesh-scope: on_init");
     s_->job_id = s_->jobs.submit("mesh_scope: train", &mesh_job_tramp, s_.get());
     return true;
@@ -449,6 +473,34 @@ void MeshScopeApplet::draw_ui() {
                 st->frame_status, (long long)steps, loss, mse);
         ImGui::SameLine();
         ImGui::TextDisabled("   (left-drag: paint · alt: lower · right-drag: orbit · wheel: zoom)");
+
+        // --- export.v1 E2: "Export figure (4K)" + "Record 10 s" -------------
+        ImGui::SameLine();
+        ImGui::TextUnformatted("|");
+        ImGui::SameLine();
+        const bool can_export = st->export_svc.has_view_png();
+        if (!can_export) ImGui::BeginDisabled();
+        if (ImGui::Button("Export figure (4K)")) st->export_figure_req = true;
+        if (!can_export) ImGui::EndDisabled();
+        if (!can_export &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Export unavailable: the geometry primitives cap "
+                              "is absent on this host");
+        ImGui::SameLine();
+        const bool rec_busy = !can_export || st->recording;
+        if (rec_busy) ImGui::BeginDisabled();
+        char rec_label[48];
+        if (st->recording)
+            std::snprintf(rec_label, sizeof(rec_label), "Recording %u/%u",
+                          st->rec_written, st->rec_target);
+        else
+            std::snprintf(rec_label, sizeof(rec_label), "Record 10 s");
+        if (ImGui::Button(rec_label)) st->record_req = true;
+        if (rec_busy) ImGui::EndDisabled();
+        if (!can_export &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Export unavailable: the geometry primitives cap "
+                              "is absent on this host");
     }
     ImGui::EndChild();
 
@@ -469,6 +521,10 @@ void MeshScopeApplet::draw_ui() {
                                                CALIPER_GEOM_VIEW_DEPTH);
         st->view_w = dw; st->view_h = dh;
     }
+
+    // export.v1 E2: a widened copy of EXACTLY the draws that drew this frame,
+    // reused verbatim by the figure/record capture below (§2 immediate-mode).
+    std::vector<CaliperGeomDrawV1_2> export_draws;
 
     st->zero_copy_frame = false;
     st->frame_status =
@@ -545,6 +601,14 @@ void MeshScopeApplet::draw_ui() {
             st->zero_copy_frame =
                 st->geometry.draw_primitives(st->view, cam, draws, 3, 0xff05050au);
             if (!st->zero_copy_frame) st->frame_status = "draw_primitives refused";
+            if (st->zero_copy_frame) {   // widen v1.1 → v1.2 and capture for export
+                export_draws.reserve(3);
+                for (const CaliperGeomDraw& d : draws) {
+                    CaliperGeomDrawV1_2 w = caliper::geom_draw_v1_2_defaults();
+                    w.base = d;
+                    export_draws.push_back(w);
+                }
+            }
             // One-shot provenance line: the log is the artifact that the
             // zero-copy path actually drew (host UI text can't be grepped).
             if (st->zero_copy_frame && !st->logged_first_draw && st->host) {
@@ -639,11 +703,139 @@ void MeshScopeApplet::draw_ui() {
             ImGui::TextDisabled("waiting for the first surface…");
         }
     }
+
+    // ======================= export.v1 E2 capture ==========================
+    // Runs INLINE on the frame thread (threading note in export_affordance.h),
+    // reusing THIS frame's draw arrays + a camera re-framed to the target
+    // aspect. Inert when the primitives cap is absent or this frame drew nothing.
+    {
+        namespace ex = caliper::exportui;
+
+        if (!st->selftest_done) {
+            if (std::getenv("CALIPER_EXPORT_SELFTEST")) {
+                if (st->zero_copy_frame && !export_draws.empty() &&
+                    ++st->selftest_frames >= kSelftestWarmupFrames) {
+                    st->export_figure_req = true;
+                    st->record_req = true;
+                    st->selftest_done = true;
+                }
+            } else {
+                st->selftest_done = true;
+            }
+        }
+
+        const std::string root = st->host ? st->host->data_dir() : "";
+        auto make_cam = [&](uint32_t w, uint32_t h) {
+            const float ce = std::cos(st->cam_el), se = std::sin(st->cam_el);
+            const float ca = std::cos(st->cam_az), sa = std::sin(st->cam_az);
+            const V3 eye{st->cam_dist * ce * ca, st->cam_dist * se,
+                         st->cam_dist * ce * sa};
+            CaliperGeomCamera c{};
+            look_at(eye, {0, 0, 0}, {0, 1, 0}, c.view);
+            perspective(45.f * kPi / 180.f,
+                        static_cast<float>(w) / static_cast<float>(std::max(1u, h)),
+                        0.05f, 50.f, c.proj);
+            return c;
+        };
+        auto state_json = [&] {
+            char b[160];
+            std::snprintf(b, sizeof(b),
+                          "{\"applet\":\"mesh_scope\",\"step\":%lld,"
+                          "\"loss\":%.5f,\"grid_mse\":%.5f}",
+                          static_cast<long long>(steps), loss, mse);
+            return std::string(b);
+        };
+        const auto now_ms = [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+
+        // ---- figure (one-shot, 4K) ----
+        if (st->export_figure_req) {
+            st->export_figure_req = false;
+            if (st->export_svc.has_view_png() && !export_draws.empty()) {
+                std::error_code fec;
+                std::filesystem::create_directories(ex::exports_dir(root), fec);
+                const std::string path = ex::figure_png_path(
+                    root, "mesh_scope_figure", ex::now_stamp());
+                const CaliperGeomCamera c = make_cam(kExportFigW, kExportFigH);
+                const std::string sj = state_json();
+                const bool ok = st->export_svc.view_png(
+                    path.c_str(), kExportFigW, kExportFigH, c, export_draws.data(),
+                    static_cast<uint32_t>(export_draws.size()), 0xff05050au,
+                    sj.c_str());
+                if (st->host)
+                    st->host->log_info(
+                        (ok ? "mesh-scope: exported figure " + path + " (3840x2160)"
+                            : "mesh-scope: figure export REFUSED " + path)
+                            .c_str());
+            }
+        }
+
+        // ---- record start ----
+        if (st->record_req && !st->recording) {
+            st->record_req = false;
+            if (st->export_svc.has_view_png()) {
+                std::error_code fec;
+                std::filesystem::create_directories(ex::exports_dir(root), fec);
+                st->rec_dir =
+                    ex::record_dir_path(root, "mesh_scope_record", ex::now_stamp());
+                const std::string sj = state_json();
+                st->rec_seq = st->export_svc.begin_sequence(
+                    st->rec_dir.c_str(), kRecW, kRecH, sj.c_str());
+                if (st->rec_seq != 0) {
+                    st->recording = true;
+                    st->rec_written = 0;
+                    st->rec_target = ex::frame_budget(kRecSeconds, kRecFps);
+                    st->rec_last_ms = 0;
+                    if (st->host)
+                        st->host->log_info(
+                            ("mesh-scope: recording started " + st->rec_dir +
+                             " (1280x720 @30fps, 10 s)").c_str());
+                } else if (st->host) {
+                    st->host->log_error(
+                        ("mesh-scope: record REFUSED " + st->rec_dir).c_str());
+                }
+            }
+        }
+
+        // ---- record step (wall-clock paced, samples the evolving surface) ----
+        if (st->recording && !export_draws.empty()) {
+            const int64_t t = now_ms();
+            const bool first = st->rec_written == 0;
+            if (ex::capture_due(t, st->rec_last_ms, kRecFps, first)) {
+                const CaliperGeomCamera c = make_cam(kRecW, kRecH);
+                if (st->export_svc.frame(
+                        st->rec_seq, c, export_draws.data(),
+                        static_cast<uint32_t>(export_draws.size()), 0xff05050au)) {
+                    st->rec_last_ms = t;
+                    ++st->rec_written;
+                }
+                if (st->rec_written >= st->rec_target) {
+                    st->export_svc.end_sequence(st->rec_seq);
+                    if (st->host)
+                        st->host->log_info(
+                            ("mesh-scope: recorded " + st->rec_dir + " (" +
+                             std::to_string(st->rec_written) + " frames)").c_str());
+                    st->recording = false;
+                    st->rec_seq = 0;
+                }
+            }
+        }
+    }
+
     ImGui::End();
 }
 
 void MeshScopeApplet::cleanup() {
     auto* st = s_.get();
+    // Finalize an in-flight record so the sequence sidecar is never orphaned.
+    if (st->recording && st->rec_seq != 0) {
+        st->export_svc.end_sequence(st->rec_seq);
+        st->recording = false;
+        st->rec_seq = 0;
+    }
     st->stop.store(true);
     if (st->job_id != 0) {
         st->jobs.request_cancel(st->job_id);

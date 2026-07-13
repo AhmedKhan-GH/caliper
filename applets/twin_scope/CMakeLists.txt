@@ -3,7 +3,8 @@ add_library(twin_scope SHARED
     twin_scope.cpp
 )
 
-target_include_directories(twin_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(twin_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/applets/common)
 target_link_libraries(twin_scope PRIVATE
     caliper::sdk
     caliper::ui_stack

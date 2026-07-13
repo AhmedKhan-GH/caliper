@@ -11,4 +11,4 @@ min_host  = "0.6.0"
 
 [services]
 required = ["caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1", "caliper.device.v1"]
-optional = ["caliper.tensor_bridge.v1", "caliper.tensor_bridge.v1_2", "caliper.geometry.v1_1", "caliper.geometry.v1_2"]
+optional = ["caliper.tensor_bridge.v1", "caliper.tensor_bridge.v1_2", "caliper.geometry.v1_1", "caliper.geometry.v1_2", "caliper.export.v1"]

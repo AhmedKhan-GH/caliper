@@ -31,6 +31,7 @@ add_executable(caliper_tests
     test_obj.cpp
     test_instance_field.cpp
     test_pulse_ring.cpp
+    test_export_affordance.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
@@ -47,6 +48,9 @@ target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/ins
 # PulseScope's pure ring-copy/gap logic (pulse_ring.h) is torch-free + UI-free,
 # so its unit test rides the fast caliper_tests suite (feed spec §5).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/pulse_scope)
+# Export E2 affordance logic (export_affordance.h: frame budget, pacing, path
+# assembly) is torch-free + UI-free, so its unit test rides caliper_tests too.
+target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/common)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_sources(caliper_tests PRIVATE test_loader.cpp)

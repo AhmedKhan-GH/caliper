@@ -3,7 +3,8 @@ add_library(mesh_scope SHARED
     mesh_scope.cpp
 )
 
-target_include_directories(mesh_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(mesh_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/applets/common)
 
 target_link_libraries(mesh_scope PRIVATE
     caliper::sdk
