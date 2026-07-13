@@ -431,8 +431,14 @@ const CaliperGeometryV1_3 kGeom13 = {sizeof(CaliperGeometryV1_3),
 // the filesystem (the PNG lands via temp-then-rename, the sidecar after), and
 // caps() tracks the geometry primitives cap so export degrades in lockstep on a
 // headless / no-renderer host.
+#if defined(__has_include)
+#  if __has_include("caliper_git_commit.h")
+#    include "caliper_git_commit.h"    // BUILD-time stamp (caliper_git_stamp
+                                       // target; "<hash>-dirty" on dirty trees)
+#  endif
+#endif
 #ifndef CALIPER_GIT_COMMIT
-#define CALIPER_GIT_COMMIT "unknown"   // configured in at build time (one CMake line)
+#define CALIPER_GIT_COMMIT "unknown"   // outside the stamped build (bare TU compiles)
 #endif
 
 uint32_t ex_caps(void) {
