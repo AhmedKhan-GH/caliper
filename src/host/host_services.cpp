@@ -537,8 +537,14 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     return 1u;
 }
 
-// One sequence live at a time (v0). Guarded by a mutex so the exemplar's job
-// thread (E2) and the frame thread never race the handle/bookkeeping.
+// One sequence live at a time (v0). The mutex guards this bookkeeping ONLY —
+// the active/handle/frame_count fields and the last-frame provenance — NOT the
+// renderer maps the frames actually render through. Export composes the
+// frame-thread-owned renderer (ex_render_readback → the geometry draw path), so
+// every export entry point MUST be called from the frame thread; the mutex
+// serializes the bookkeeping but does not make export safe against a renderer
+// running on another thread. The E2 exemplars call it inline, on the frame
+// thread, for exactly this reason.
 struct ExportSequence {
     std::mutex mtx;
     bool     active = false;

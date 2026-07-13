@@ -19,6 +19,12 @@
  * no pre-existing file truncated (the PNG is written to a temp name and
  * atomically renamed; the sidecar follows only after the PNG lands).
  *
+ * FRAME-THREAD ONLY: every entry point composes the frame-thread-owned
+ * renderer (offscreen view create → the geometry draw path → readback), so it
+ * carries the same rule as caliper.geometry.v1 — call from the caliper_core_
+ * frame() thread only. Calling from any other thread races the renderer; the
+ * sequence mutex serializes bookkeeping, it does NOT make export any-thread.
+ *
  * Determinism: same draws + camera + clear + (w,h) on the SAME backend →
  * BYTE-IDENTICAL PNG across calls (the readback is deterministic, the byte-exact
  * matrix is built on it, stb PNG encode is deterministic). Cross-backend is NOT
