@@ -15,6 +15,17 @@ machines — byte-exact on both GPU ecosystems, honest degradation
 everywhere. A research paper additionally needs static artifacts, a path
 from Python training loops, and a demo a reviewer can run. Three rungs.
 
+**TRACK SCOPED (owner decision, 2026-07-13):** *"Caliper is meant for
+researchers to build and use to make recorded demos and artifacts."* The
+audience is source-building researchers (consistent with PLATFORM.md D12);
+artifacts leave the machine through `export.v1`. Accordingly: **Rung E is
+the track's deliverable and it is SHIPPED (both ecosystems)**; Rungs P and
+B are PARKED — designed, decisions recorded below, not scheduled. Reopen
+conditions: P if a real Python-loop workflow of the owner's demands it
+(week-one probe: torch-MPS DLPack); B if a real submission or external
+audience materializes. Neither is deleted — the designs stand so reopening
+costs a decision, not a redesign.
+
 ---
 
 ## 1. The target workflow (the definition of done)
@@ -31,8 +42,8 @@ Every rung serves a clause of that sentence. Nothing else is on this track.
 | Rung | What | Status | Exemplar / proof |
 |---|---|---|---|
 | **E — Export** | `caliper.export.v1`: pixel-exact view PNGs at requested resolution, frame sequences, provenance sidecar | **SHIPPED** — **run-proven both ecosystems** (macOS/Metal + Windows/Vulkan incl. the NTFS rename/rollback claims). E1 service+battery (through `7780138`), E2 exemplars+artifacts (`f9c36a2`), E3 docs closeout (`cd03d21` riders), Windows verify pass (`cf196f0` + its closeout) | mesh_scope + twin_scope "Export figure (4K)" / "Record 10 s"; 3840×2160 TwinScope figures + sidecars and finalized 300-frame sequences from live Metal AND Vulkan sessions |
-| **P — Python** | pybind wheel over the embed ABI + DLPack zero-copy ingestion; torch-free libcaliper variant as prerequisite | DESIGNED — gated on E; verify torch-MPS DLPack in week one | notebook trains PyTorch model, live Caliper view, `export.view_png` figure |
-| **B — Bundle** | the reviewer supplement: one signed download, host+applet+assets(+pack) | DESIGNED — demand-driven, builds against the FIRST real submission | a machine that never built Caliper runs the paper demo |
+| **P — Python** | pybind wheel over the embed ABI + DLPack zero-copy ingestion; torch-free libcaliper variant as prerequisite | **PARKED** (owner scoping, 2026-07-13) — design stands; reopen on a real Python-loop need (week-one probe: torch-MPS DLPack) | notebook trains PyTorch model, live Caliper view, `export.view_png` figure |
+| **B — Bundle** | the reviewer supplement: one signed download, host+applet+assets(+pack) | **PARKED** (owner scoping, 2026-07-13) — design stands; reopen on a real submission / external audience | a machine that never built Caliper runs the paper demo |
 
 ## 3. Rung E — export (figures + video)
 
