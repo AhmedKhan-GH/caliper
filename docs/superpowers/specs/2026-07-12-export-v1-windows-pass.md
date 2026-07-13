@@ -1,14 +1,19 @@
 # export.v1 on Windows — the verify pass
 
 **Date:** 2026-07-12
-**Status:** execution spec for the next Windows-box session. NEARLY pure
-verification: `caliper.export.v1` shipped platform-neutral by composition
-(merge `1796a0f` — service, battery, exemplar affordances, build-time git
-stamp), and every piece it composes is ALREADY hardware-proven on the box
-(`geom_create_view_ex` / `draw_primitives` / `debug_readback_rgba8` ran there
-in the v1_3 and embed passes). What has never run on Windows is the export
-veneer itself — and two of its load-bearing claims are genuinely
-platform-sensitive (§2). Protocol: D24, same as every prior box pass.
+**Status:** **EXECUTED on the box** (2026-07-13, RTX 500 Ada laptop,
+Windows 11, driver 596.47) — `cf196f0` (Vulkan battery twins + §2 NTFS
+cases) + the closeout docs commit. Every checkbox below is ticked by a
+run artifact; findings in the box ledger
+(`.superpowers/sdd/export-v1-windows-pass-report.md`). NEARLY pure
+verification as designed: `caliper.export.v1` shipped platform-neutral by
+composition (merge `1796a0f` — service, battery, exemplar affordances,
+build-time git stamp), and every piece it composes was ALREADY
+hardware-proven on the box (`geom_create_view_ex` / `draw_primitives` /
+`debug_readback_rgba8` ran there in the v1_3 and embed passes). The export
+veneer now has, too — both platform-sensitive claims (§2) held on NTFS
+exactly as contracted; zero production-code changes were needed.
+Protocol: D24, same as every prior box pass.
 **Authority:** PUBLISHING.md §3 (Rung E, SHIPPED row — this pass removes its
 "Windows battery pending" qualifier); the execution spec
 `2026-07-12-export-v1-execution.md` (EXECUTED header); the E1/E2/final review
@@ -40,17 +45,23 @@ comparison.
 
 ## 1. Build gate
 
-- [ ] **1.1** Configure+build green via the box wrappers; the
+- [x] **1.1** Configure+build green via the box wrappers; the
   `caliper_git_stamp` step runs under vcvars (`cmake -P` + git on PATH —
   the wrappers already provide git; verify the generated header appears and
   carries the true HEAD, and that a dirty tree stamps `-dirty`).
-- [ ] **1.2** `caliper_export_tests` builds; if the live cases were
+  *(Header matched `rev-parse --short=12`; `-dirty` verified to fire on a
+  dirtied tree and clear on restore.)*
+- [x] **1.2** `caliper_export_tests` builds; if the live cases were
   Apple-gated, land the Vulkan gating edit (test-side only; MSVC REQUIRE
-  discipline per the standing gotcha).
+  discipline per the standing gotcha). *(They were `CALIPER_HAVE_METAL`-gated;
+  the CMake half already defined `CALIPER_HAVE_VULKAN=1` under WIN32 — the
+  test-file half landed in `cf196f0`: VkHostEnv in the gfx-harness pattern,
+  geometry staged via gfx_main's VMM shareable-handle path, all 7 live cases
+  mirrored.)*
 
 ## 2. The two platform-sensitive claims (the real point of this pass)
 
-- [ ] **2.1 Atomic replace-existing rename on NTFS.** The filesystem-purity
+- [x] **2.1 Atomic replace-existing rename on NTFS.** The filesystem-purity
   design writes `<name>.caliper_tmp` then `std::filesystem::rename` over the
   target. POSIX rename atomically replaces; on Windows, `fs::rename` maps to
   `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` in modern MSVC STLs — VERIFY on
@@ -59,49 +70,74 @@ comparison.
   another handle (expect refusal rc 0 with the original intact — record the
   actual behavior; if fs::rename throws/fails non-atomically anywhere, that
   is a STOP-and-diagnose, fix in export_service with the Win32 call, not by
-  loosening the contract).
-- [ ] **2.2 Truncation/refusal purity on NTFS.** The battery's sentinel case
+  loosening the contract). *(Both verified in-battery on the box: the new
+  `_WIN32` case holds the target open with `share=READ, no DELETE` —
+  `export_write_text_atomic` returned false, original byte-identical, temp
+  removed; handle closed → replace succeeded with the new contents. The
+  error_code path fired cleanly; no throw, no partial write, no STOP.)*
+- [x] **2.2 Truncation/refusal purity on NTFS.** The battery's sentinel case
   (pre-existing file byte-identical after a refused export) must RUN there,
   not skip. Plus the E1-review LOW path: sidecar-write failure rolls the PNG
-  back (if the case is Mac-gated, port it).
+  back (if the case is Mac-gated, port it). *(Sentinel ran inside the
+  Vulkan refusal-purity twin — byte-identical after the `pos_alloc==0`
+  refusal. The rollback path had NO test on ANY platform — a new
+  Vulkan-gated case plants a directory at `<png>.json`: view_png returned 0,
+  PNG rolled back, directory untouched. host_services.cpp:534 is now
+  proven, not just reviewed.)*
 
 ## 3. Byte-exactness + determinism on Vulkan
 
-- [ ] **3.1** The decoded-quad row: exported PNG pixels == the CPU reference
+- [x] **3.1** The decoded-quad row: exported PNG pixels == the CPU reference
   on Vulkan (top-down row order — the asymmetric corner checks must pass;
-  a flip here is a backend readback bug, not a test to adjust).
-- [ ] **3.2** Double-export memcmp byte-identity on Vulkan (same draws →
-  identical PNG bytes).
-- [ ] **3.3** Full `caliper_export_tests` green on the box, 0 skipped where
-  hardware is present; full ctest suite green; gfx unregressed.
+  a flip here is a backend readback bug, not a test to adjust). *(Passed —
+  no flip, no adjustment.)*
+- [x] **3.2** Double-export memcmp byte-identity on Vulkan (same draws →
+  identical PNG bytes). *(Passed.)*
+- [x] **3.3** Full `caliper_export_tests` green on the box, 0 skipped where
+  hardware is present; full ctest suite green; gfx unregressed. *(14 cases,
+  84 assertions, 0 failed, 0 skipped — the live Vulkan cases RAN; full
+  10-suite ctest 100%, gfx label green.)*
 
 ## 4. The exemplar run-proof (live, artifacts)
 
-- [ ] **4.1** `CALIPER_EXPORT_SELFTEST=1` autolaunch of twin_scope on
+- [x] **4.1** `CALIPER_EXPORT_SELFTEST=1` autolaunch of twin_scope on
   Vulkan+CUDA: the 3840×2160 figure + sidecar land (sidecar says
   `backend=vulkan platform=windows`, git_commit = the box's HEAD); the
   300-frame sequence completes with a finalized `sequence.json`.
-- [ ] **4.2** mesh_scope figure likewise (draw_count=3, MAGMA colormap id in
-  the sidecar).
-- [ ] **4.3** ffmpeg assembly: if ffmpeg exists on the box, assemble and
+  *(Figure 3840×2160 + sidecar `backend=vulkan platform=windows
+  git_commit=cf196f018b58` = HEAD; 300/300 frames, `frame_count: 300`
+  finalized. Note: PNG encode paces a debug build well under 30 fps —
+  the 10 s budget needs ~60 s wall-clock; `CALIPER_EXIT_AFTER=90` used.)*
+- [x] **4.2** mesh_scope figure likewise (draw_count=3, MAGMA colormap id in
+  the sidecar). *(draw_count=3, colormaps=[1]=`CALIPER_CMAP_MAGMA`; bonus
+  finalized 300-frame record.)*
+- [x] **4.3** ffmpeg assembly: if ffmpeg exists on the box, assemble and
   ffprobe (h264, 300 frames); else record the exact command +
-  UNVERIFIED-TOOLING per house rule.
-- [ ] **4.4** The interrupted-record orphan-guard: kill the app mid-record;
+  UNVERIFIED-TOOLING per house rule. *(No ffmpeg on the box —
+  UNVERIFIED-TOOLING. The command for the produced sequence dir:
+  `ffmpeg -framerate 30 -i frame_%06d.png -pix_fmt yuv420p out.mp4`.)*
+- [x] **4.4** The interrupted-record orphan-guard: kill the app mid-record;
   `sequence.json` must still be finalized with the honest partial
   frame_count (the Mac reviewer verified this accidentally; do it on
-  purpose here).
+  purpose here). *(Done via the real close path (`CALIPER_EXIT_AFTER`
+  firing mid-record): `frame_count: 106` = exactly the 106 frames on disk,
+  sidecar fully formed.)*
 
 ## 5. Closeout (only with artifacts)
 
-- [ ] **5.1** wiki `export-v1.md`: the Windows row flips from
+- [x] **5.1** wiki `export-v1.md`: the Windows row flips from
   "compiles/battery pending" to run-proven with this pass's evidence
-  (fs::rename semantics finding recorded either way).
-- [ ] **5.2** PUBLISHING.md §2 Rung E row + §3 status line: drop the Windows
-  qualifier → "run-proven both ecosystems"; name the commits.
-- [ ] **5.3** The execution spec + this spec: status headers updated,
+  (fs::rename semantics finding recorded either way). *(Platform-status
+  admonition + the POSIX parenthetical both updated.)*
+- [x] **5.2** PUBLISHING.md §2 Rung E row + §3 status line: drop the Windows
+  qualifier → "run-proven both ecosystems"; name the commits. *(`cf196f0`
+  named in both.)*
+- [x] **5.3** The execution spec + this spec: status headers updated,
   commits named; box scratch ledger records the NTFS findings.
-- [ ] **5.4** Commits in house style, Fable trailer; any code fix rides the
-  full battery + a live re-proof.
+  *(`.superpowers/sdd/export-v1-windows-pass-report.md`.)*
+- [x] **5.4** Commits in house style, Fable trailer; any code fix rides the
+  full battery + a live re-proof. *(No code fix was needed — the pass is
+  `cf196f0` + the closeout docs commit.)*
 
 ## Invariants (hold forever)
 

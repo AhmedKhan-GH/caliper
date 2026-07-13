@@ -30,15 +30,17 @@ Every rung serves a clause of that sentence. Nothing else is on this track.
 
 | Rung | What | Status | Exemplar / proof |
 |---|---|---|---|
-| **E — Export** | `caliper.export.v1`: pixel-exact view PNGs at requested resolution, frame sequences, provenance sidecar | **SHIPPED** — macOS/Metal run-proven; Windows/Vulkan compiles, battery pending the box. E1 service+battery (through `7780138`), E2 exemplars+artifacts (`f9c36a2`), E3 docs closeout (`cd03d21` riders + this docs commit) | mesh_scope + twin_scope "Export figure (4K)" / "Record 10 s"; a 3840×2160 TwinScope figure + sidecar and a 300-frame clip from a live Metal session |
+| **E — Export** | `caliper.export.v1`: pixel-exact view PNGs at requested resolution, frame sequences, provenance sidecar | **SHIPPED** — **run-proven both ecosystems** (macOS/Metal + Windows/Vulkan incl. the NTFS rename/rollback claims). E1 service+battery (through `7780138`), E2 exemplars+artifacts (`f9c36a2`), E3 docs closeout (`cd03d21` riders), Windows verify pass (`cf196f0` + its closeout) | mesh_scope + twin_scope "Export figure (4K)" / "Record 10 s"; 3840×2160 TwinScope figures + sidecars and finalized 300-frame sequences from live Metal AND Vulkan sessions |
 | **P — Python** | pybind wheel over the embed ABI + DLPack zero-copy ingestion; torch-free libcaliper variant as prerequisite | DESIGNED — gated on E; verify torch-MPS DLPack in week one | notebook trains PyTorch model, live Caliper view, `export.view_png` figure |
 | **B — Bundle** | the reviewer supplement: one signed download, host+applet+assets(+pack) | DESIGNED — demand-driven, builds against the FIRST real submission | a machine that never built Caliper runs the paper demo |
 
 ## 3. Rung E — export (figures + video)
 
 > **Status (2026-07-12): SHIPPED as `caliper.export.v1`** on `feat/export-v1`
-> (E1 `7780138` → E2 `f9c36a2` → E3 docs closeout), macOS/Metal run-proven,
-> Windows/Vulkan battery pending the box. Wiki:
+> (E1 `7780138` → E2 `f9c36a2` → E3 docs closeout), **run-proven both
+> ecosystems** — macOS/Metal, and Windows/Vulkan via the box verify pass
+> (`cf196f0`: Vulkan battery twins 14/0-skipped, NTFS atomic-replace +
+> held-open refusal + sidecar rollback proven, exemplar artifacts). Wiki:
 > `docs/wiki/reference/services/export-v1.md`. Design below is unchanged and
 > now describes shipped behavior. (The whitepaper's export sentence is not yet
 > written — it rides the next whitepaper touch; noted here so this line stays

@@ -3,8 +3,11 @@
 **Date:** 2026-07-12
 **Status:** **EXECUTED E1–E3** on `feat/export-v1` — E1 service+battery
 (through `7780138`), E2 exemplars+run-proven artifacts (`f9c36a2`), E3 docs
-closeout (`cd03d21` riders + the docs commit). macOS/Metal run-proven;
-Windows/Vulkan compiles, battery pending the box. Design authority:
+closeout (`cd03d21` riders + the docs commit). Run-proven BOTH ecosystems:
+macOS/Metal, and Windows/Vulkan via the box verify pass (`cf196f0` — Vulkan
+battery twins 14/0-skipped, NTFS atomic-replace + held-open refusal +
+sidecar-rollback claims proven, exemplar artifacts; see
+`2026-07-12-export-v1-windows-pass.md`). Design authority:
 PUBLISHING.md §3 (the boundary decision: pixel-exact views + provenance
 sidecar, never figure composition; determinism contract; ImPlot chrome
 excluded). This doc pins the ABI, the composition, and the task ladder.
@@ -102,8 +105,8 @@ makes that honest.
   sequence writes N frames + finalized sidecar. Metal-gated live cases +
   platform-neutral logic split per house pattern; MSVC-safe. Windows note:
   the composition is backend-neutral (Vulkan implements every piece) —
-  compiled but unproven there; the next Windows pass runs the battery
-  (honesty register in header + wiki).
+  RUN-PROVEN there by the box verify pass (`cf196f0`: Vulkan battery twins,
+  0 skipped with hardware present; honesty register updated in header + wiki).
 - **E2 — the exemplar affordance + the demo clip.** mesh_scope AND
   twin_scope gain "Export figure (4K)" + "Record 10 s" (button → job-thread
   capture using the SAME spec arrays they draw with; files + log line with
@@ -116,7 +119,8 @@ makes that honest.
 - **E3 — docs closeout + branch close.** wiki `export-v1.md` (header
   embed, the ffmpeg line, the ImPlot-excluded/metrics-goes-SQL split,
   per-platform honesty); PUBLISHING.md §2 table: Rung E → SHIPPED
-  (macOS-proven, Windows battery pending the box); final review; merge+push.
+  (macOS-proven; the Windows qualifier dropped by the box verify pass,
+  `cf196f0`); final review; merge+push.
 
 ## 6. Out of scope (from PUBLISHING.md §7, restated)
 

@@ -22,12 +22,20 @@ add scope with zero claim.
     sequence). The E2 exemplars produced real artifacts from a live session — a
     3840×2160 TwinScope figure + sidecar (`backend=metal`) and a 300-frame
     twin_scope sequence assembled into a 10 s clip via the documented ffmpeg
-    line. **Windows / Vulkan:** **compiles**, and the composition is
-    backend-neutral (Vulkan implements every piece the path reuses), but the
-    battery is **unproven there** — the next Windows pass runs it. Two things
-    are explicitly pending that box: the live battery, and the
-    replace-existing semantics of `std::filesystem::rename` over a pre-existing
-    target (the atomicity claim below is verified on POSIX). When the geometry
+    line. **Windows / Vulkan:** **run-proven.** The full battery ran live on
+    the Vulkan box (RTX 500 Ada, Windows 11) — 14 cases, 0 skipped: the same
+    decoded-quad byte-exactness, double-export byte-identity, and refusal
+    purity (sentinel byte-identical after a refused export), plus the
+    NTFS-specific claims verified on the box, not from docs:
+    `std::filesystem::rename` **atomically replaces** a pre-existing target
+    (`MoveFileExW(MOVEFILE_REPLACE_EXISTING)` semantics confirmed); a target
+    held open without `FILE_SHARE_DELETE` makes the rename **fail cleanly**
+    (refusal, temp removed, original byte-identical); and a sidecar-write
+    failure **rolls the PNG back** rather than orphaning it. The E2 exemplars
+    reproduced on Vulkan: a 3840×2160 figure + sidecar
+    (`backend=vulkan platform=windows`) and a finalized 300-frame sequence
+    from each of twin_scope and mesh_scope, plus a deliberate mid-record kill
+    whose `sequence.json` finalized with the honest partial count. When the geometry
     primitives cap is absent (headless, or a host without the renderer path) the
     export cap bit is unset and **every entry point is inert** — no file is ever
     written. This is the degradation ladder, not a bug.
@@ -109,8 +117,9 @@ its sidecar would violate the invariant above). Export refuses for the same
 reasons `draw_primitives` does — missing gate/renderer, `cam == NULL`, `w`/`h` of
 `0` or `> CALIPER_EXPORT_MAX_DIM` (16384), an unwritable path, a readback
 failure, or any draw the geometry gate battery rejects — with the **same reason
-strings**. (The atomic-rename-over-existing-file guarantee is verified on POSIX;
-its Windows equivalent is pending the box — see the platform status above.)
+strings**. (The atomic-rename-over-existing-file guarantee is verified on POSIX
+**and on NTFS** — including the held-open-handle refusal and the
+sidecar-failure PNG rollback; see the platform status above.)
 
 ## Determinism contract, and its scope
 
