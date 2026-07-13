@@ -1,10 +1,13 @@
 # `caliper.export.v1` — execution spec (Rung E of PUBLISHING.md)
 
 **Date:** 2026-07-12
-**Status:** execution spec, ready. Design authority: PUBLISHING.md §3 (the
-boundary decision: pixel-exact views + provenance sidecar, never figure
-composition; determinism contract; ImPlot chrome excluded). This doc pins
-the ABI, the composition, and the task ladder. Branch: `feat/export-v1`.
+**Status:** **EXECUTED E1–E3** on `feat/export-v1` — E1 service+battery
+(through `7780138`), E2 exemplars+run-proven artifacts (`f9c36a2`), E3 docs
+closeout (`cd03d21` riders + the docs commit). macOS/Metal run-proven;
+Windows/Vulkan compiles, battery pending the box. Design authority:
+PUBLISHING.md §3 (the boundary decision: pixel-exact views + provenance
+sidecar, never figure composition; determinism contract; ImPlot chrome
+excluded). This doc pins the ABI, the composition, and the task ladder.
 
 ---
 
