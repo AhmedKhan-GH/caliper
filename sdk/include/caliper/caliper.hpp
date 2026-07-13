@@ -16,6 +16,7 @@
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
 #include <caliper/services/geometry_v1_3.h>
+#include <caliper/services/export_v1.h>
 
 #include <imgui.h>
 #include <implot.h>
@@ -481,6 +482,101 @@ inline CaliperGeomDrawV1_3 geom_draw_v1_3_defaults() {
     d.base = geom_draw_v1_2_defaults();
     return d;   // zero instance tail -> non-instanced (additive default)
 }
+
+// caliper.export.v1 sugar (PUBLISHING.md §3). Mirrors caliper::Geometry's
+// draw_primitives overload set: the export ABI carries only v1.3 records, so
+// v1.1/v1.2-shaped draws are widened to zero-tailed 256-byte records with the
+// SAME idiom Geometry uses (base.base = ...), then passed at stride 256. The
+// caller hands the same arrays it draws with; state_json is copied verbatim
+// into the sidecar (nullptr -> null).
+class Export {
+public:
+    Export() = default;
+    explicit Export(const Host& host)
+        : e_(static_cast<const CaliperExportV1*>(
+              host.service(CALIPER_EXPORT_V1))) {}
+
+    explicit operator bool() const { return e_ != nullptr; }
+
+    uint32_t caps() const { return (e_ && e_->caps) ? e_->caps() : 0u; }
+    bool has_view_png() const {
+        return (caps() & CALIPER_EXPORT_CAP_VIEW_PNG) != 0u;
+    }
+
+    // v1.3 records: passed straight through at stride 256 (no copy).
+    bool view_png(const char* path, uint32_t w, uint32_t h,
+                  const CaliperGeomCamera& cam,
+                  const CaliperGeomDrawV1_3* draws, uint32_t count,
+                  uint32_t clear_rgba, const char* state_json = nullptr) const {
+        return (e_ && e_->view_png)
+                   ? e_->view_png(path, w, h, &cam, draws, count,
+                                  sizeof(CaliperGeomDrawV1_3), clear_rgba,
+                                  state_json) != 0u
+                   : false;
+    }
+    // v1.2 records: widen each into a zero-tailed 256-byte v1.3 record.
+    bool view_png(const char* path, uint32_t w, uint32_t h,
+                  const CaliperGeomCamera& cam,
+                  const CaliperGeomDrawV1_2* draws, uint32_t count,
+                  uint32_t clear_rgba, const char* state_json = nullptr) const {
+        if (!e_ || !e_->view_png) return false;
+        std::vector<CaliperGeomDrawV1_3> wide(count);
+        for (uint32_t i = 0; i < count; ++i) wide[i].base = draws[i];
+        return e_->view_png(path, w, h, &cam, wide.data(), count,
+                            sizeof(CaliperGeomDrawV1_3), clear_rgba,
+                            state_json) != 0u;
+    }
+    // v1.1 records: widen the frozen 192-byte prefix straight to v1.3.
+    bool view_png(const char* path, uint32_t w, uint32_t h,
+                  const CaliperGeomCamera& cam,
+                  const CaliperGeomDraw* draws, uint32_t count,
+                  uint32_t clear_rgba, const char* state_json = nullptr) const {
+        if (!e_ || !e_->view_png) return false;
+        std::vector<CaliperGeomDrawV1_3> wide(count);
+        for (uint32_t i = 0; i < count; ++i) wide[i].base.base = draws[i];
+        return e_->view_png(path, w, h, &cam, wide.data(), count,
+                            sizeof(CaliperGeomDrawV1_3), clear_rgba,
+                            state_json) != 0u;
+    }
+
+    // Frame sequences (0 handle = refusal).
+    uint64_t begin_sequence(const char* dir, uint32_t w, uint32_t h,
+                            const char* state_json = nullptr) const {
+        return (e_ && e_->begin_sequence)
+                   ? e_->begin_sequence(dir, w, h, state_json) : 0u;
+    }
+    bool frame(uint64_t seq, const CaliperGeomCamera& cam,
+               const CaliperGeomDrawV1_3* draws, uint32_t count,
+               uint32_t clear_rgba) const {
+        return (e_ && e_->frame)
+                   ? e_->frame(seq, &cam, draws, count,
+                               sizeof(CaliperGeomDrawV1_3), clear_rgba) != 0u
+                   : false;
+    }
+    bool frame(uint64_t seq, const CaliperGeomCamera& cam,
+               const CaliperGeomDrawV1_2* draws, uint32_t count,
+               uint32_t clear_rgba) const {
+        if (!e_ || !e_->frame) return false;
+        std::vector<CaliperGeomDrawV1_3> wide(count);
+        for (uint32_t i = 0; i < count; ++i) wide[i].base = draws[i];
+        return e_->frame(seq, &cam, wide.data(), count,
+                         sizeof(CaliperGeomDrawV1_3), clear_rgba) != 0u;
+    }
+    bool frame(uint64_t seq, const CaliperGeomCamera& cam,
+               const CaliperGeomDraw* draws, uint32_t count,
+               uint32_t clear_rgba) const {
+        if (!e_ || !e_->frame) return false;
+        std::vector<CaliperGeomDrawV1_3> wide(count);
+        for (uint32_t i = 0; i < count; ++i) wide[i].base.base = draws[i];
+        return e_->frame(seq, &cam, wide.data(), count,
+                         sizeof(CaliperGeomDrawV1_3), clear_rgba) != 0u;
+    }
+    void end_sequence(uint64_t seq) const {
+        if (e_ && e_->end_sequence) e_->end_sequence(seq);
+    }
+private:
+    const CaliperExportV1* e_ = nullptr;
+};
 
 // Snapshot of caliper.device.v1 (§7.3). Defaults to CPU when the host doesn't
 // vend the service; name is host-owned (valid for the process lifetime).

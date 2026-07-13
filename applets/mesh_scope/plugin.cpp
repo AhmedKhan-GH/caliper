@@ -25,4 +25,4 @@ CALIPER_APPLET(MeshScopePlugin,
     .tag      = "ML",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_DEVICE_V1,
                  CALIPER_TENSOR_BRIDGE_V1, CALIPER_TENSOR_BRIDGE_V1_2,
-                 CALIPER_GEOMETRY_V1_1})
+                 CALIPER_GEOMETRY_V1_1, CALIPER_EXPORT_V1})

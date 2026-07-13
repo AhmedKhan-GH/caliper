@@ -24,6 +24,7 @@
 #include "twin_scope.h"
 #include "twin_model.h"
 #include "twin_surface.h"
+#include "export_affordance.h"   // export.v1 E2 affordance logic (shared, pure)
 
 #include <caliper/adapters/exportable_pool.hpp>
 #include <caliper/adapters/obj.hpp>
@@ -41,7 +42,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -78,6 +81,14 @@ constexpr float kPi = caliper::adapters::kOrbitPi;
 constexpr float kTempMin = kAmbient;      // 22 °C
 constexpr float kTempMax = 100.0f;        // legible ceiling (calibrated gain, below)
 constexpr float kErrSpan = 25.0f;         // |sim − net| °C
+
+// export.v1 E2 affordances: the figure renders at 4K; the record clip runs at
+// 720p @ 30 fps for 10 s (== 300 frames). Both re-use THIS frame's draw arrays
+// (§2 immediate-mode) with a camera re-framed to the target aspect.
+constexpr uint32_t kExportFigW = 3840, kExportFigH = 2160;
+constexpr uint32_t kRecW = 1280, kRecH = 720;
+constexpr double   kRecFps = 30.0, kRecSeconds = 10.0;
+constexpr int      kSelftestWarmupFrames = 90;   // ~1.5 s before the headless self-test fires
 
 // Display modes. published_mode (§8.d) carries the mode that SELECTED a publish;
 // draw_ui keys both the drawn-field set and each field's LUT on it.
@@ -244,6 +255,19 @@ struct TwinScopeState {
     int logged_prov = -1;
     bool logged_first_draw = false;
     std::vector<float> loss_history;
+
+    // export.v1 E2 (frame-thread-only). The capture runs INLINE on the frame
+    // thread — see the threading note in export_affordance.h — so no atomics.
+    caliper::Export export_svc;
+    bool export_figure_req = false;   // "Export figure (4K)" one-shot
+    bool record_req = false;          // "Record 10 s" latch → recording
+    bool recording = false;
+    uint64_t rec_seq = 0;
+    uint32_t rec_written = 0, rec_target = 0;
+    int64_t rec_last_ms = 0;
+    std::string rec_dir;
+    bool selftest_done = false;       // CALIPER_EXPORT_SELFTEST headless run-proof
+    int  selftest_frames = 0;
 
     TwinScopeState() {
         for (auto& v : src_override) v.store(-1.f);
@@ -563,6 +587,7 @@ bool TwinScopeApplet::initialize(caliper::Host& host) {
     state->geometry = caliper::Geometry(host);
     state->bridge_caps = state->bridge.caps();
     state->geom_caps = state->geometry.caps();
+    state->export_svc = caliper::Export(host);
 
     const std::string asset = resolve_asset(host);
     std::string error;
@@ -709,6 +734,34 @@ void TwinScopeApplet::draw_ui() {
             for (int k = 0; k < kSourceCount; ++k) state->src_override[k].store(-1.f);
             state->selected_source = -1;
         }
+
+        // --- export.v1 E2: "Export figure (4K)" + "Record 10 s" --------------
+        ImGui::SameLine();
+        ImGui::TextUnformatted("|");
+        ImGui::SameLine();
+        const bool can_export = state->export_svc.has_view_png();
+        if (!can_export) ImGui::BeginDisabled();
+        if (ImGui::Button("Export figure (4K)")) state->export_figure_req = true;
+        if (!can_export) ImGui::EndDisabled();
+        if (!can_export &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Export unavailable: the geometry primitives cap "
+                              "is absent on this host");
+        ImGui::SameLine();
+        const bool rec_busy = !can_export || state->recording;
+        if (rec_busy) ImGui::BeginDisabled();
+        char rec_label[48];
+        if (state->recording)
+            std::snprintf(rec_label, sizeof(rec_label), "Recording %u/%u",
+                          state->rec_written, state->rec_target);
+        else
+            std::snprintf(rec_label, sizeof(rec_label), "Record 10 s");
+        if (ImGui::Button(rec_label)) state->record_req = true;
+        if (rec_busy) ImGui::EndDisabled();
+        if (!can_export &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Export unavailable: the geometry primitives cap "
+                              "is absent on this host");
     }
     ImGui::EndChild();
 
@@ -802,6 +855,10 @@ void TwinScopeApplet::draw_ui() {
     int textured_halves = 0, imported_halves = 0;
     const bool want_textured = state->textured_pref.load() && has_textured;
 
+    // export.v1 E2: a widened copy of EXACTLY the draws that drew this frame,
+    // reused verbatim by the figure/record capture below (§2 immediate-mode).
+    std::vector<CaliperGeomDrawV1_2> export_draws;
+
     if (state->view && pool && positions.defined() && have_field) {
         auto pref = pool->to_bridge(state->bridge, positions);
         auto nref = pool->to_bridge(state->bridge, normals);
@@ -889,6 +946,7 @@ void TwinScopeApplet::draw_ui() {
                     textured_drew = state->geometry.draw_primitives(
                         state->view, camera, draws.data(),
                         static_cast<uint32_t>(draws.size()), 0xFF090B0Eu);
+                if (textured_drew) export_draws = draws;   // capture for export
             }
 
             // ---- per-vertex (v1.1) rung: chosen when textured is off, the cap
@@ -912,6 +970,15 @@ void TwinScopeApplet::draw_ui() {
                     pervertex_drew = state->geometry.draw_primitives(
                         state->view, camera, draws.data(),
                         static_cast<uint32_t>(draws.size()), 0xFF090B0Eu);
+                if (pervertex_drew) {   // widen v1.1 → v1.2 and capture for export
+                    export_draws.clear();
+                    export_draws.reserve(draws.size());
+                    for (const CaliperGeomDraw& d : draws) {
+                        CaliperGeomDrawV1_2 w = caliper::geom_draw_v1_2_defaults();
+                        w.base = d;
+                        export_draws.push_back(w);
+                    }
+                }
             }
         }
     }
@@ -1023,11 +1090,139 @@ void TwinScopeApplet::draw_ui() {
     } else {
         ImGui::TextDisabled("waiting for the first synthetic surface heat field");
     }
+
+    // ======================= export.v1 E2 capture ==========================
+    // Runs INLINE on the frame thread (threading note in export_affordance.h),
+    // reusing THIS frame's draw arrays + a camera re-framed to the target
+    // aspect. Inert when the primitives cap is absent (buttons disabled) or
+    // when this frame drew nothing.
+    {
+        namespace ex = caliper::exportui;
+
+        // Headless run-proof hook: CALIPER_EXPORT_SELFTEST fires one figure +
+        // one record after a short warmup, once the field is live.
+        if (!state->selftest_done) {
+            if (std::getenv("CALIPER_EXPORT_SELFTEST")) {
+                if (geometry_drew && !export_draws.empty() &&
+                    ++state->selftest_frames >= kSelftestWarmupFrames) {
+                    state->export_figure_req = true;
+                    state->record_req = true;
+                    state->selftest_done = true;
+                }
+            } else {
+                state->selftest_done = true;   // no env → never self-fire
+            }
+        }
+
+        const std::string root = state->host ? state->host->data_dir() : "";
+        auto make_cam = [&](uint32_t w, uint32_t h) {
+            CaliperGeomCamera c{};
+            look_at(eye, target, {0.f, 1.f, 0.f}, c.view);
+            perspective(45.f * kPi / 180.f,
+                        static_cast<float>(w) / static_cast<float>(std::max(1u, h)),
+                        0.05f, 60.f, c.proj);
+            return c;
+        };
+        auto state_json = [&] {
+            char b[160];
+            std::snprintf(b, sizeof(b),
+                          "{\"applet\":\"twin_scope\",\"published_mode\":%d,"
+                          "\"peak_c\":%.2f,\"loss\":%.5f}",
+                          published_mode, peak, loss);
+            return std::string(b);
+        };
+        const auto now_ms = [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+
+        // ---- figure (one-shot, 4K) ----
+        if (state->export_figure_req) {
+            state->export_figure_req = false;
+            if (state->export_svc.has_view_png() && !export_draws.empty()) {
+                std::error_code fec;
+                std::filesystem::create_directories(ex::exports_dir(root), fec);
+                const std::string path = ex::figure_png_path(
+                    root, "twin_scope_figure", ex::now_stamp());
+                const CaliperGeomCamera c = make_cam(kExportFigW, kExportFigH);
+                const std::string sj = state_json();
+                const bool ok = state->export_svc.view_png(
+                    path.c_str(), kExportFigW, kExportFigH, c, export_draws.data(),
+                    static_cast<uint32_t>(export_draws.size()), 0xFF090B0Eu,
+                    sj.c_str());
+                if (state->host)
+                    state->host->log_info(
+                        (ok ? "twin-scope: exported figure " + path + " (3840x2160)"
+                            : "twin-scope: figure export REFUSED " + path)
+                            .c_str());
+            }
+        }
+
+        // ---- record start ----
+        if (state->record_req && !state->recording) {
+            state->record_req = false;
+            if (state->export_svc.has_view_png()) {
+                std::error_code fec;
+                std::filesystem::create_directories(ex::exports_dir(root), fec);
+                state->rec_dir =
+                    ex::record_dir_path(root, "twin_scope_record", ex::now_stamp());
+                const std::string sj = state_json();
+                state->rec_seq = state->export_svc.begin_sequence(
+                    state->rec_dir.c_str(), kRecW, kRecH, sj.c_str());
+                if (state->rec_seq != 0) {
+                    state->recording = true;
+                    state->rec_written = 0;
+                    state->rec_target = ex::frame_budget(kRecSeconds, kRecFps);
+                    state->rec_last_ms = 0;
+                    if (state->host)
+                        state->host->log_info(
+                            ("twin-scope: recording started " + state->rec_dir +
+                             " (1280x720 @30fps, 10 s)").c_str());
+                } else if (state->host) {
+                    state->host->log_error(
+                        ("twin-scope: record REFUSED " + state->rec_dir).c_str());
+                }
+            }
+        }
+
+        // ---- record step (wall-clock paced, samples the evolving field) ----
+        if (state->recording && !export_draws.empty()) {
+            const int64_t t = now_ms();
+            const bool first = state->rec_written == 0;
+            if (ex::capture_due(t, state->rec_last_ms, kRecFps, first)) {
+                const CaliperGeomCamera c = make_cam(kRecW, kRecH);
+                if (state->export_svc.frame(
+                        state->rec_seq, c, export_draws.data(),
+                        static_cast<uint32_t>(export_draws.size()), 0xFF090B0Eu)) {
+                    state->rec_last_ms = t;
+                    ++state->rec_written;
+                }
+                if (state->rec_written >= state->rec_target) {
+                    state->export_svc.end_sequence(state->rec_seq);
+                    if (state->host)
+                        state->host->log_info(
+                            ("twin-scope: recorded " + state->rec_dir + " (" +
+                             std::to_string(state->rec_written) + " frames)")
+                                .c_str());
+                    state->recording = false;
+                    state->rec_seq = 0;
+                }
+            }
+        }
+    }
+
     ImGui::End();
 }
 
 void TwinScopeApplet::cleanup() {
     auto* state = state_.get();
+    // Finalize an in-flight record so the sequence sidecar is never orphaned.
+    if (state->recording && state->rec_seq != 0) {
+        state->export_svc.end_sequence(state->rec_seq);
+        state->recording = false;
+        state->rec_seq = 0;
+    }
     state->stop.store(true);
     if (state->job_id) {
         state->jobs.request_cancel(state->job_id);
