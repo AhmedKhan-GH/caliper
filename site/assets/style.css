@@ -256,21 +256,6 @@ main > section:first-child { border-top: 0; }
 .matrix tbody tr:last-child th, .matrix tbody tr:last-child td { border-bottom: 0; }
 .check { color: var(--accent); font-weight: 700; margin-right: var(--space-1); }
 
-.provenance {
-  margin-top: var(--space-12);
-  border-left: 2px solid var(--accent);
-  padding: var(--space-2) 0 var(--space-2) var(--space-6);
-}
-.provenance p {
-  font-family: var(--font-mono); font-size: var(--text-lg);
-  color: var(--text); max-width: 60ch; line-height: 1.5;
-}
-.provenance cite {
-  display: block; margin-top: var(--space-3);
-  font-style: normal; font-family: var(--font-sans);
-  font-size: var(--text-sm); color: var(--muted);
-}
-
 /* ---------- footer ---------- */
 #links {
   border-top: 1px solid var(--line);
@@ -304,6 +289,5 @@ main > section:first-child { border-top: 0; }
   .hero { padding-block: var(--space-16) var(--space-16); }
   h1, .hero h1 { font-size: var(--text-3xl); }
   h2 { font-size: var(--text-xl); }
-  .provenance p { font-size: var(--text-base); }
   .footer__inner { gap: var(--space-8); }
 }
