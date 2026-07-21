@@ -1,4 +1,4 @@
-site_name: Caliper Platform
+site_name: Caliper Framework
 docs_dir: docs/wiki
 site_dir: build/wiki-site
 theme:
