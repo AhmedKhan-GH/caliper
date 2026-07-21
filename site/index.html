@@ -78,44 +78,9 @@
       </div>
     </section>
 
-    <section id="proof" class="wrap">
-      <div class="prose">
-        <h2>Byte-exact, both backends, on real hardware</h2>
-        <p>The zero-copy geometry service shipped as an additive ladder — points, then indexed meshes, then textures on meshes, then instanced transforms. Each rung draws vertex-pulled in place from imported device allocations, and each is verified byte-identical to the same CPU reference on both platforms' real silicon (Apple Silicon and an RTX 500 Ada).</p>
-      </div>
-      <div class="table-scroll">
-        <table class="matrix">
-          <thead>
-            <tr>
-              <th scope="col">Geometry rung</th>
-              <th scope="col">Metal / MPS (Apple Silicon)</th>
-              <th scope="col">Vulkan / CUDA (Windows/NVIDIA)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row">R0 — <code>geometry.v1</code> instanced points</th>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact</td>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact</td>
-            </tr>
-            <tr>
-              <th scope="row">R1 — <code>geometry.v1_1</code> indexed triangles / lines / strips</th>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact (13-row conformance matrix)</td>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact (13-row matrix mirrored)</td>
-            </tr>
-            <tr>
-              <th scope="row">R2 — <code>geometry.v1_2</code> textures on meshes</th>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact</td>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact</td>
-            </tr>
-            <tr>
-              <th scope="row">R3 — <code>geometry.v1_3</code> instanced transforms</th>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact</td>
-              <td><span class="check" aria-hidden="true">✓</span> Shipped, byte-exact (48/48 rendering conformance tests live)</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <section id="proof" class="wrap prose">
+      <h2>Byte-exact, both backends, on real hardware</h2>
+      <p>The bar for "it works" is not a screenshot — it is bit-for-bit identity. Every GPU rendering path is read back and byte-compared to a single CPU reference implementation, the same reference on both backends, on real silicon every CI run: Apple Silicon for Metal / MPS, an NVIDIA RTX 500 Ada for Vulkan / CUDA. A path ships only once it reads back identical to that reference.</p>
     </section>
   </main>
 

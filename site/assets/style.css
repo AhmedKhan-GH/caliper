@@ -180,9 +180,9 @@ main > section:first-child { border-top: 0; }
   -webkit-overflow-scrolling: touch;
 }
 /* keep labels legible: on viewports narrower than the diagram's legible
- * width the figure scrolls horizontally (mirrors .table-scroll), rather
- * than scaling the SVG text below the 13px floor. min-width is inert on
- * desktop where the container is already wider. */
+ * width the figure scrolls horizontally, rather than scaling the SVG text
+ * below the 13px floor. min-width is inert on desktop where the container
+ * is already wider. */
 .mech img { border-radius: 0; width: 100%; min-width: 680px; }
 .mech--wide img { min-width: 900px; }
 .mech figcaption {
@@ -215,27 +215,6 @@ main > section:first-child { border-top: 0; }
   letter-spacing: 0.02em; color: var(--accent);
   margin-bottom: var(--space-4);
 }
-
-/* ---------- proof matrix ---------- */
-.table-scroll { margin-top: var(--space-12); overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.matrix {
-  width: 100%; border-collapse: collapse; min-width: 620px;
-  font-family: var(--font-mono); font-size: var(--text-sm);
-}
-.matrix th, .matrix td {
-  text-align: left; padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--line); vertical-align: top;
-}
-.matrix thead th {
-  color: var(--muted); font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.06em; font-size: var(--text-xs);
-  border-bottom: 1px solid var(--line);
-}
-.matrix tbody th { color: var(--text); font-weight: 500; line-height: 1.45; }
-.matrix tbody th code { white-space: normal; }
-.matrix td { color: var(--muted); }
-.matrix tbody tr:last-child th, .matrix tbody tr:last-child td { border-bottom: 0; }
-.check { color: var(--accent); font-weight: 700; margin-right: var(--space-1); }
 
 /* ---------- footer ---------- */
 #links {
