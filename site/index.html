@@ -23,8 +23,6 @@
       <a class="brand" href="#hero">Caliper</a>
       <nav class="topnav" aria-label="Sections">
         <a href="#problem">Problem</a>
-        <a href="#hard-part">Hard part</a>
-        <a href="#proof">Proof</a>
         <a href="docs/">Docs</a>
       </nav>
       <a class="btn btn--ghost topbar__cta" href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
@@ -51,36 +49,6 @@
         <img src="assets/mech-roundtrip.svg" alt="Flow diagram. The conventional round trip copies a GPU tensor down across the PCIe boundary to a CPU NumPy array, encodes it to a PNG or event file on disk, polls and decodes it into a CPU pixel buffer, then uploads it back up across the boundary to a GPU texture in a browser — crossing the CPU boundary twice. Caliper instead performs one on-GPU blit from tensor to texture and draws it with ImGui the same frame, never leaving the GPU." width="1200" height="460">
         <figcaption>Everyone else crosses the CPU boundary twice; Caliper never leaves the GPU.</figcaption>
       </figure>
-    </section>
-
-    <section id="hard-part" class="wrap">
-      <div class="prose">
-        <h2>Why nobody had already deleted it</h2>
-        <p>Three walls each independently force the CPU round trip. The <strong>API wall</strong>: compute frameworks speak CUDA/MPS, renderers speak Vulkan/Metal — the external-memory escape hatches are recent, platform-specific, and rarely used outside game engines. The <strong>process wall</strong>: standard tooling puts the viewer in a separate process, and once you serialize GPU-resident data the round trip is already lost. The <strong>correctness wall</strong>: sharing memory between a framework that is still writing and a renderer that is reading is a race by default; getting it wrong renders yesterday's bytes instead of crashing politely. The contribution is crossing all three at once, portably, behind a C contract small enough to freeze. And the bar for "it works" is not a screenshot — it is <strong>byte-exact</strong>: every GPU rendering path must read back identical to a single CPU reference implementation, tested per backend on real hardware every CI run.</p>
-      </div>
-      <div class="split">
-        <article class="note">
-          <p class="note__label">Apple Silicon (Metal / MPS)</p>
-          <figure class="mech">
-            <img src="assets/mech-metal.svg" alt="Zero-copy path on Apple Silicon. Inside one pool of unified physical RAM, a torch MPS tensor's storage is the same object as an id-of-MTLBuffer. Training kernels write that buffer; the handoff to the renderer is a pointer cast moving zero bytes, and non-contiguous tensors or views are rejected; a GPU blit encoder turns the buffer into an MTLTexture with a colormap applied on-GPU; ImGui draws it as pixels the same frame." width="760" height="560">
-            <figcaption>The tensor's storage already is the MTLBuffer — the handoff is a pointer cast, zero bytes moved.</figcaption>
-          </figure>
-          <p>Unified memory means CPU and GPU share one pool of physical RAM, so a PyTorch MPS tensor's storage <em>already is</em> an <code>MTLBuffer</code> — the object Metal renders from. The handoff is a pointer cast plus safety rules: the frozen struct has no storage-offset channel, so the adapter rejects non-contiguous tensors and views rather than silently addressing the wrong texels. Zero host copies, one on-GPU blit.</p>
-        </article>
-        <article class="note">
-          <p class="note__label">Windows/NVIDIA (Vulkan / CUDA)</p>
-          <figure class="mech">
-            <img src="assets/mech-vulkan.svg" alt="Zero-copy path on Windows and NVIDIA. System RAM is never touched — no host staging, no PCIe round trip. Everything stays inside device-local VRAM: training kernels write a torch CUDA tensor; a shared buffer is exported by Vulkan and imported by CUDA; one cuMemcpyDtoD copies the tensor into the shared buffer inside VRAM; a compute colormap pass turns the buffer into a VkImage; ImGui draws it as pixels the same frame; CUDA and Vulkan synchronize on a shared timeline semaphore with no CPU sync on the hot path." width="760" height="560">
-            <figcaption>The allocation itself is shared inside VRAM — one in-VRAM hop at most, system RAM never touched.</figcaption>
-          </figure>
-          <p>Discrete GPUs separate VRAM from system RAM, so zero-copy means keep the data in VRAM and make both APIs share the allocation. The renderer exports (Vulkan external memory, opaque Win32 handle) and CUDA imports — because torch's caching allocator can't export. Device pairing is UUID-driven; a hybrid-GPU mismatch disables interop rather than corrupting. CUDA VMM blocks pad up to the driver's ~2 MiB allocation granularity, so bounds are derived from the padded size, not the tensor's. Synchronization is GPU-ordered by a shared timeline semaphore — no CPU thread waits on the hot path.</p>
-        </article>
-      </div>
-    </section>
-
-    <section id="proof" class="wrap prose">
-      <h2>Byte-exact, both backends, on real hardware</h2>
-      <p>The bar for "it works" is not a screenshot — it is bit-for-bit identity. Every GPU rendering path is read back and byte-compared to a single CPU reference implementation, the same reference on both backends, on real silicon every CI run: Apple Silicon for Metal / MPS, an NVIDIA RTX 500 Ada for Vulkan / CUDA. A path ships only once it reads back identical to that reference.</p>
     </section>
   </main>
 
