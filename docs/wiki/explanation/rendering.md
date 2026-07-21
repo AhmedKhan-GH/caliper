@@ -23,13 +23,15 @@ API (PLATFORM.md §5.4 discussion).
 
 | Backend | Selection | Status | Notes |
 |---------|-----------|--------|-------|
-| **Metal** | default (macOS) | **Shipping default** | Full app parity; `tensor_bridge.v1` colormaps MPS buffers on-GPU (zero CPU staging), §16 pixel-exact (C5). Apple-only translation unit. |
-| **OpenGL 3.3 core** | `CALIPER_RENDERER=gl` | **Frozen fallback** | The retained escape hatch; `tensor_bridge.v1` CPU-stages onto it. The only backend off Apple. |
+| **Metal** | default (macOS) | **Shipping default (macOS)** | Full app parity; `tensor_bridge.v1` colormaps MPS buffers on-GPU (zero CPU staging), §16 pixel-exact (C5). Apple-only translation unit. |
+| **Vulkan (CUDA interop)** | default (Windows) | **Shipping default (Windows)** | Phase 4: device-resident CUDA tensors via external-memory interop — the Vulkan side exports, CUDA imports, synchronized by a shared timeline semaphore. Pixel-exact verified on NVIDIA hardware (`CALIPER_VULKAN_SELFTEST=1`, both rungs byte-identical to the CPU reference); folding that proof into the `ctest` gfx harness as a Vulkan env is the remaining CI wiring. Windows-only translation unit. |
+| **OpenGL 3.3 core** | `CALIPER_RENDERER=gl` | **Frozen fallback** | The retained escape hatch; `tensor_bridge.v1` CPU-stages onto it. Also the runtime fallback on both platforms when the native backend fails to init (no driver, RDP, ...). |
 
-`main.cpp` does the env-driven selection between two factories
-(`make_renderer("gl")` and `make_metal_renderer()`): on macOS the default is
-Metal and `CALIPER_RENDERER=gl` selects the frozen GL fallback; if the Metal
-backend fails to init it still falls back to GL.
+`core_select_renderer()` (`src/host/core_lifecycle.cpp`) does the env-driven
+selection between the three factories (`make_metal_renderer()`,
+`make_vulkan_renderer()`, `make_renderer("gl")`): the default is Metal on macOS
+and Vulkan on Windows, `CALIPER_RENDERER=gl` selects the frozen GL fallback on
+either, and if the native backend fails to init the host still falls back to GL.
 
 ### Why Metal is now the default
 
@@ -55,5 +57,6 @@ Applets never issue graphics calls (§6c). They describe *what* to draw in ImGui
 terms and hand *tensors* to the bridge; the host owns the window, the contexts,
 and every actual GPU call. A tensor becomes a texture through
 [`caliper.tensor_bridge.v1`](../reference/services/tensor-bridge-v1.md) — the one
-place the backend difference (device compute/blit on Metal vs CPU-staged on GL)
-lives, and it is invisible to the applet, which runs identical code on both.
+place the backend difference (device compute/blit on Metal and Vulkan vs
+CPU-staged on GL) lives, and it is invisible to the applet, which runs identical
+code on every backend.
