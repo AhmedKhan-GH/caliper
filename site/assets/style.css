@@ -1,14 +1,13 @@
 /* Caliper landing page — dark engineering design system.
  *
- * Tokens on :root are fixed by the Task 4 brief and match the Task 3
- * placeholder SVG palette. One accent hue (teal), reserved for actions,
- * emphasis, and the proof-matrix checks. Inter for prose, JetBrains Mono
- * for labels / code / the matrix. Complete and readable with JS disabled;
- * reveal.js only enhances with scroll fade-in.
+ * One accent hue (teal), reserved for actions, emphasis, and the
+ * proof-matrix checks. Inter for prose, JetBrains Mono for labels / code /
+ * the matrix. Sharp edges throughout — no rounded corners; 1px borders
+ * carry structure rather than shadows or blur. Fully static, no JavaScript.
  */
 
 :root {
-  /* palette — fixed by brief, matches placeholder SVGs */
+  /* palette — fixed by brief, matches mech diagram SVGs */
   --bg: #0B0E14;
   --surface: #131826;
   --line: #2A3245;
@@ -36,9 +35,9 @@
   --space-5: 20px;  --space-6: 24px;  --space-8: 32px;  --space-12: 48px;
   --space-16: 64px; --space-20: 80px; --space-24: 96px; --space-32: 128px;
 
-  /* shape */
-  --radius-card: 12px;
-  --radius-pill: 980px;
+  /* shape — sharp edges everywhere; no rounded corners */
+  --radius-card: 0;
+  --radius-pill: 0;
   --tap-min: 44px;
 
   /* layout */
@@ -79,7 +78,7 @@ code {
   color: var(--accent);
   background: var(--accent-soft);
   padding: 0.1em 0.36em;
-  border-radius: 5px;
+  border-radius: 0;
   white-space: nowrap;
 }
 
@@ -92,11 +91,7 @@ a:hover { text-decoration: underline; }
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-}
-/* border-radius guarded off .btn: the 2px would square the pill buttons
- * (--radius-pill) if source order ever put this rule after .btn. */
-:focus-visible:not(.btn) {
-  border-radius: 2px;
+  border-radius: 0;
 }
 
 .kicker {
@@ -121,10 +116,7 @@ main > section:first-child { border-top: 0; }
 /* ---------- top bar ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(11, 14, 20, 0.82); /* fallback for browsers without color-mix() */
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: saturate(140%) blur(10px);
-  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  background: var(--bg);           /* flat, opaque — no backdrop blur */
   border-bottom: 1px solid var(--line);
 }
 .topbar__inner {
@@ -174,24 +166,6 @@ main > section:first-child { border-top: 0; }
   display: flex; flex-wrap: wrap; gap: var(--space-4);
   margin-top: var(--space-8);
 }
-.hero__figure { margin-top: var(--space-20); }
-
-/* ---------- framed figures ---------- */
-.frame {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  padding: var(--space-3);
-  overflow: hidden;
-}
-.frame img { border-radius: 8px; width: 100%; }
-.frame figcaption {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  color: var(--muted);
-  line-height: 1.5;
-  padding: var(--space-4) var(--space-3) var(--space-2);
-}
 
 /* ---------- mechanism figures ---------- */
 /* mirrors .frame; carries the three technical SVG diagrams. The metal /
@@ -209,7 +183,7 @@ main > section:first-child { border-top: 0; }
  * width the figure scrolls horizontally (mirrors .table-scroll), rather
  * than scaling the SVG text below the 13px floor. min-width is inert on
  * desktop where the container is already wider. */
-.mech img { border-radius: 8px; width: 100%; min-width: 680px; }
+.mech img { border-radius: 0; width: 100%; min-width: 680px; }
 .mech--wide img { min-width: 900px; }
 .mech figcaption {
   font-family: var(--font-mono);
@@ -297,18 +271,6 @@ main > section:first-child { border-top: 0; }
   font-size: var(--text-sm); color: var(--muted);
 }
 
-/* ---------- gallery ---------- */
-.gallery {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
-  gap: var(--space-6); margin-top: var(--space-12);
-}
-.gallery__item { display: flex; flex-direction: column; }
-.gallery__item img { width: 100%; }
-.gallery__name {
-  display: block; font-weight: 600; color: var(--accent);
-  letter-spacing: 0.02em; margin-bottom: var(--space-2);
-}
-
 /* ---------- footer ---------- */
 #links {
   border-top: 1px solid var(--line);
@@ -326,15 +288,9 @@ main > section:first-child { border-top: 0; }
 .footer__links a { color: var(--text); font-size: var(--text-sm); }
 .footer__links a:hover { color: var(--accent); text-decoration: none; }
 
-/* ---------- scroll reveal (JS-only; page is complete without it) ---------- */
-.reveal-on [data-reveal] {
-  opacity: 0; transform: translateY(14px);
-  transition: opacity .6s ease, transform .6s ease;
-}
-.reveal-on [data-reveal].is-visible { opacity: 1; transform: none; }
+/* ---------- reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .reveal-on [data-reveal] { opacity: 1; transform: none; transition: none; }
 }
 
 /* ---------- responsive ---------- */
@@ -348,7 +304,6 @@ main > section:first-child { border-top: 0; }
   .hero { padding-block: var(--space-16) var(--space-16); }
   h1, .hero h1 { font-size: var(--text-3xl); }
   h2 { font-size: var(--text-xl); }
-  .hero__figure { margin-top: var(--space-12); }
   .provenance p { font-size: var(--text-base); }
   .footer__inner { gap: var(--space-8); }
 }
