@@ -33,8 +33,8 @@
     <section id="hero" class="hero wrap">
       <p class="kicker">Native C++ &middot; Metal &middot; Vulkan</p>
       <h1>GPU tensors become pixels without ever touching the CPU — byte-exact on Metal and Vulkan.</h1>
-      <p class="lead">Caliper is a native C++ desktop framework for watching a neural network's internal state the same frame the GPU computes it.</p>
-      <p class="hero__sub">Every mainstream tool copies the tensor off the GPU, through the CPU, onto disk, and back onto a GPU to draw it. Caliper deletes that round trip and proves the result pixel-exact against a CPU reference on both hardware ecosystems that matter — Apple Silicon and Windows/NVIDIA.</p>
+      <p class="lead">Caliper is a native C++ framework for watching a neural network, computing its graphics straight from the tensors in VRAM.</p>
+      <p class="hero__sub">Every other tool copies tensors off the GPU and back again to draw them. Caliper never leaves the GPU, and proves the result pixel-exact against a CPU reference on Apple Silicon and Windows/NVIDIA.</p>
       <div class="cta-row">
         <a class="btn btn--primary" href="https://github.com/AhmedKhan-GH/caliper">View on GitHub</a>
         <a class="btn btn--ghost" href="whitepaper.pdf">Read the whitepaper (PDF)</a>
