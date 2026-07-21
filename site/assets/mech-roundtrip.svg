@@ -41,8 +41,8 @@
 
   <!-- muted path: down (1), across (2,3), up (4) -->
   <path class="p-muted" d="M140,104 V164" marker-end="url(#rt-arrow-muted)"/>
-  <path class="p-muted" d="M240,198 H352" marker-end="url(#rt-arrow-muted)"/>
-  <path class="p-muted" d="M640,198 H812" marker-end="url(#rt-arrow-muted)"/>
+  <path class="p-muted" d="M240,198 H322" marker-end="url(#rt-arrow-muted)"/>
+  <path class="p-muted" d="M670,198 H812" marker-end="url(#rt-arrow-muted)"/>
   <path class="p-muted" d="M940,170 V110" marker-end="url(#rt-arrow-muted)"/>
 
   <!-- both boundary crossings, marked with bright diamonds -->
@@ -58,7 +58,7 @@
   <rect class="box" x="40"  y="170" width="200" height="56" rx="0"/>
   <text class="boxlbl" x="140" y="198" text-anchor="middle" dominant-baseline="central">CPU numpy array</text>
 
-  <rect class="box" x="360" y="170" width="280" height="56" rx="0"/>
+  <rect class="box" x="330" y="170" width="340" height="56" rx="0"/>
   <text class="boxlbl" x="500" y="198" text-anchor="middle" dominant-baseline="central">PNG / event file on disk</text>
 
   <rect class="box" x="820" y="170" width="240" height="56" rx="0"/>
@@ -73,13 +73,13 @@
   <circle class="num-c" cx="140" cy="160" r="11"/>
   <text class="num-t" x="140" y="160" text-anchor="middle" dominant-baseline="central">1</text>
 
-  <text class="steplbl" x="300" y="182" text-anchor="middle">encode</text>
-  <circle class="num-c" cx="300" cy="198" r="11"/>
-  <text class="num-t" x="300" y="198" text-anchor="middle" dominant-baseline="central">2</text>
+  <text class="steplbl" x="285" y="182" text-anchor="middle">encode</text>
+  <circle class="num-c" cx="285" cy="198" r="11"/>
+  <text class="num-t" x="285" y="198" text-anchor="middle" dominant-baseline="central">2</text>
 
-  <text class="steplbl" x="726" y="182" text-anchor="middle">poll + decode</text>
-  <circle class="num-c" cx="726" cy="198" r="11"/>
-  <text class="num-t" x="726" y="198" text-anchor="middle" dominant-baseline="central">3</text>
+  <text class="steplbl" x="745" y="182" text-anchor="middle">poll + decode</text>
+  <circle class="num-c" cx="745" cy="198" r="11"/>
+  <text class="num-t" x="745" y="198" text-anchor="middle" dominant-baseline="central">3</text>
 
   <text class="steplbl" x="828" y="118" text-anchor="end">host&#8594;device upload</text>
   <circle class="num-c" cx="940" cy="160" r="11"/>
