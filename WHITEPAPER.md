@@ -152,7 +152,7 @@ independently forces the CPU round trip in existing tools:
 
 Each wall has a known workaround; the contribution is an architecture in which
 all three are crossed *at once*, portably, behind a contract small enough to
-freeze. That is why the answer is a platform and not a patch to TensorBoard.
+freeze. That is why the answer is a framework and not a patch to TensorBoard.
 
 ---
 
@@ -513,11 +513,11 @@ often people look.
 For **research**: most interpretability is post-hoc — artifacts of finished
 training. Per-step, in-the-loop observation makes *training dynamics*
 (representation reorganization, head specialization timing, loss-spike
-anatomy) a first-class observable. The platform's applet model means a new
+anatomy) a first-class observable. The framework's applet model means a new
 visualization is a new derivation over live state — a torch op and a draw
 call — not a new pipeline.
 
-On the platform's own trajectory: the core that does all of this — the applet
+On the framework's own trajectory: the core that does all of this — the applet
 contract, the host-neutral services, and the zero-copy renderer with its
 completed geometry ladder — is now extractable as an embeddable library
 (`libcaliper`) behind a small C ABI, so a second host can vend the same applets

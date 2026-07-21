@@ -2,7 +2,7 @@
 
 Every applet ships a `caliper.toml` manifest. The host parses it before loading
 any code: it declares the applet's identity, the ABI epoch it was built against,
-an optional minimum host version, and the platform services it needs. Parsing is
+an optional minimum host version, and the framework services it needs. Parsing is
 strict about required fields and their formats, and lenient about everything
 else — unknown keys and tables are ignored so newer manifests keep loading on
 older hosts (forward compatibility).

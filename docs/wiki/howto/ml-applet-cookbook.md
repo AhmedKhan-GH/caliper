@@ -89,7 +89,7 @@ overhead, not compute. The knob died.)
 
 ## 3. The device-resident pull (the USP pattern)
 
-The platform's reason to exist: tensors go from training memory to pixels
+The framework's reason to exist: tensors go from training memory to pixels
 **without CPU staging**. Worker side — build *display tensors* on the
 training device and hand over **handles** (refcount bumps, no data moves):
 

@@ -20,7 +20,7 @@ you would keep any code that runs without a net.
 
 **Cancellation is cooperative.** `request_cancel(job)` sets a flag; it does not
 interrupt your function. Your job must poll `ctl->cancelled(ctl)` in its inner
-loop and return promptly when it reads true. The platform contract (PLATFORM.md
+loop and return promptly when it reads true. The framework contract (PLATFORM.md
 §16) is that a well-behaved job honours cancel within **≤ 100 ms** — this is a
 *tested guarantee*, not advice, and the exemplar's teardown relies on it (below).
 A job that ignores `cancelled()` and runs for a minute is a bug in the applet,

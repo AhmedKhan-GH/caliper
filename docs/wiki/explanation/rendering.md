@@ -5,7 +5,7 @@
 Caliper's USP is GPU-resident visualization, so the renderer must speak the API
 the tensors actually live in. OpenGL cannot: it is deprecated on macOS (capped at
 4.1) with no path to MPS memory, so every Mac tensor would take a CPU round-trip
-on its way to becoming a texture — a copy in the hottest loop the platform owns.
+on its way to becoming a texture — a copy in the hottest loop the framework owns.
 The answer (PLATFORM.md §5.4) is to keep graphics **out of the contract
 entirely**: applets render only through ImGui/ImPlot, textures cross the boundary
 as an opaque [`CaliperTextureId`](../reference/services/tensor-bridge-v1.md), and

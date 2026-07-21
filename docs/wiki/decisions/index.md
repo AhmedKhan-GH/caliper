@@ -1,6 +1,6 @@
 # Decisions
 
-This is the platform decision log, mirroring `PLATFORM.md` §18.
+This is the framework decision log, mirroring `PLATFORM.md` §18.
 
 !!! note "Source of truth"
     `PLATFORM.md` §18 remains the source of truth for these decisions until dedicated ADR files start landing here. This page is a convenience mirror; on any discrepancy, the spec wins.

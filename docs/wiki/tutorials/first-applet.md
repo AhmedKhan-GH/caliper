@@ -6,7 +6,7 @@ This walks the **hello** applet — the smallest complete Caliper applet on ABI
 epoch 2. It is the canonical starting point: one manifest, one macro, three
 lifecycle methods. Once it makes sense, open `applets/embed_scope/` — **the
 exemplar** — and copy from there. EmbedScope demonstrates every idiom the
-platform has: probing optional services (the same binary runs with or without
+framework has: probing optional services (the same binary runs with or without
 each), training off the frame thread via
 [`caliper.jobs.v1`](../reference/services/jobs-v1.md), the host-negotiated
 device via [`caliper.device.v1`](../reference/services/device-v1.md), streaming
@@ -18,7 +18,7 @@ inherits the Runs dashboard for free), GPU-resident visualization across
 over [`caliper.data.v1`](../reference/services/data-v1.md) — all eight
 services in one applet, with an ImPlot3D embedding cloud as the centerpiece.
 
-Earlier exemplars that drove the platform's architecture (SignalScope,
+Earlier exemplars that drove the framework's architecture (SignalScope,
 MLScope, GPTScope) are archived under `applets/legacy-dev/` — not built or
 loaded, kept for history and code reference.
 
@@ -51,7 +51,7 @@ examples/hello/
 
 The host reads `hello.caliper.toml` **before it loads any of your code**. It
 declares who the applet is, which ABI epoch it was compiled against, and which
-platform services it needs to run:
+framework services it needs to run:
 
 ```toml
 [applet]

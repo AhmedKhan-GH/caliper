@@ -1,6 +1,6 @@
 # caliper.tensor_bridge.v1
 
-Service id `caliper.tensor_bridge.v1` — the platform's USP, productized: a
+Service id `caliper.tensor_bridge.v1` — the framework's USP, productized: a
 `CaliperTensor` becomes a live texture this frame, GPU-resident on the native
 backends (PLATFORM.md §7.4). This page embeds the header verbatim; the docs
 build fails if the file moves.
@@ -12,7 +12,7 @@ build fails if the file moves.
 ## Semantics
 
 The bridge turns a `CaliperTensor` into a live texture **this frame**. It is the
-platform's reason to exist: on the native backends the tensor's device memory
+framework's reason to exist: on the native backends the tensor's device memory
 *becomes* the texture with no CPU round-trip; the ABI never names a graphics API,
 so the renderer stays swappable forever (see [Rendering](../../explanation/rendering.md)).
 

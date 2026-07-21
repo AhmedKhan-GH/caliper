@@ -80,7 +80,7 @@ belongs in `caliper.jobs` rather than the frame loop (PLATFORM.md §15). The fla
 **latches** — it stays raised until the applet is relaunched, and a later fast
 frame does *not* clear it — so the evidence of a stall doesn't scroll away the
 instant the applet recovers. The point is observability, not punishment: the
-applet keeps running and nothing is torn down, but the platform's threading rule
+applet keeps running and nothing is torn down, but the framework's threading rule
 ("keep `frame()` cheap; push slow work to jobs") becomes something you can see
 instead of a convention you have to remember.
 

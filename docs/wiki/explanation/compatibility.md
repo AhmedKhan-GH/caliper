@@ -16,7 +16,7 @@ struct CaliperHost {
 };
 ```
 
-## Growth rules (the platform's constitution)
+## Growth rules (the framework's constitution)
 
 These four rules are what let the contract grow for years without breaking a single shipped applet:
 

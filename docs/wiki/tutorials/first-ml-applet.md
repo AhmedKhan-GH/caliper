@@ -132,7 +132,7 @@ CMake links. The exemplar's `ensure_dataset` + `mnist_path` are the
 copy-paste source — including the sibling-cache trick (reuse another
 applet's MNIST download rather than duplicating 11 MB).
 
-## Stage 6 — the rest of the platform, one line each
+## Stage 6 — the rest of the framework, one line each
 
 Each remaining service is a small delta from here, and the exemplar shows
 all of them finished:

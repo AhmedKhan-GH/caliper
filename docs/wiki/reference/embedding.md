@@ -1,6 +1,6 @@
 # Embedding Caliper (libcaliper)
 
-`libcaliper` is the platform core — applet loader, service registry, the
+`libcaliper` is the framework core — applet loader, service registry, the
 host-neutral services, `HostRenderer` (Metal/Vulkan), the tensor bridge, and
 the geometry ladder — behind a small **C ABI** so a host binary can run the
 applet canvas inside a view it owns *without linking ImGui, torch, or any

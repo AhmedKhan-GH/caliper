@@ -11,7 +11,7 @@ Service id `caliper.device.v1` — the host's negotiated compute device (PLATFOR
 **The host negotiates; the applet maps.** The host detects one compute device
 and vends it through this service. The applet reads the `kind` and maps it to
 *its own framework's* device — the host stays framework-agnostic. This is a hard
-platform rule (PLATFORM.md D11): **the host never links torch, DuckDB-for-ML, or
+architectural rule (PLATFORM.md D11): **the host never links torch, DuckDB-for-ML, or
 any ML framework.** On Apple the detection is Metal-API-only; CUDA detection
 lands with real hardware in Phase 4.
 
