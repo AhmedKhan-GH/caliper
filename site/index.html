@@ -24,7 +24,6 @@
       <nav class="topnav" aria-label="Sections">
         <a href="#problem">Problem</a>
         <a href="#hard-part">Hard part</a>
-        <a href="#built">Built</a>
         <a href="#proof">Proof</a>
         <a href="docs/">Docs</a>
       </nav>
@@ -75,42 +74,6 @@
             <figcaption>The allocation itself is shared inside VRAM — one in-VRAM hop at most, system RAM never touched.</figcaption>
           </figure>
           <p>Discrete GPUs separate VRAM from system RAM, so zero-copy means keep the data in VRAM and make both APIs share the allocation. The renderer exports (Vulkan external memory, opaque Win32 handle) and CUDA imports — because torch's caching allocator can't export. Device pairing is UUID-driven; a hybrid-GPU mismatch disables interop rather than corrupting. CUDA VMM blocks pad up to the driver's ~2 MiB allocation granularity, so bounds are derived from the padded size, not the tensor's. Synchronization is GPU-ordered by a shared timeline semaphore — no CPU thread waits on the hot path.</p>
-        </article>
-      </div>
-    </section>
-
-    <section id="built" class="wrap">
-      <h2>What's actually built</h2>
-      <div class="cards">
-        <article class="card">
-          <p class="card__index">01</p>
-          <h3>The applet contract</h3>
-          <p class="muted">One C descriptor export at ABI epoch 2; new services add without breaking existing applets.</p>
-        </article>
-        <article class="card">
-          <p class="card__index">02</p>
-          <h3>Eight host-neutral services</h3>
-          <p class="muted">ui, log, device, tensor_bridge, jobs, metrics, data, artifacts — negotiated by id, versioned, never breaking.</p>
-        </article>
-        <article class="card">
-          <p class="card__index">03</p>
-          <h3>The HostRenderer seam</h3>
-          <p class="muted">One internal interface, three backends: zero-copy Metal, Vulkan/CUDA interop, and a CPU-staged OpenGL fallback.</p>
-        </article>
-        <article class="card">
-          <p class="card__index">04</p>
-          <h3>The tensor bridge</h3>
-          <p class="muted">A GPU tensor becomes an <code>ImGui::Image</code> the same frame — no CPU staging on native backends.</p>
-        </article>
-        <article class="card">
-          <p class="card__index">05</p>
-          <h3>The geometry ladder (R0–R3)</h3>
-          <p class="muted">Points, meshes, textured meshes, instanced transforms — all vertex-pulled in place from device tensors.</p>
-        </article>
-        <article class="card">
-          <p class="card__index">06</p>
-          <h3>The verification wall</h3>
-          <p class="muted">Every GPU path is byte-compared to a single CPU reference, per backend, every CI run.</p>
         </article>
       </div>
     </section>
