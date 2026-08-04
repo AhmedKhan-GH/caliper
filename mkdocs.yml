@@ -8,7 +8,7 @@ theme:
   favicon: assets/mark.svg
   font: false
   palette:
-    scheme: slate
+    scheme: default
     primary: custom
     accent: custom
   features:

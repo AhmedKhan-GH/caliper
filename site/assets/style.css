@@ -1,18 +1,26 @@
 :root {
-  --bg: #0b0e14;
-  --surface: #0f131e;
-  --surface-raised: #131826;
-  --text: #e6eaf2;
-  --text-soft: #c4cbd6;
-  --muted: #8b94a7;
-  --faint: #656f84;
-  --line: #2a3245;
-  --line-strong: #4a556d;
-  --accent: #5eead4;
-  --accent-ink: #071412;
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --surface-raised: #e7ebef;
+  --text: #151821;
+  --text-soft: #303744;
+  --muted: #596474;
+  --faint: #737e8c;
+  --line: #b2bac5;
+  --line-strong: #737e8c;
+  --accent: #a63d2d;
+  --accent-hover: #7f291f;
+  --accent-ink: #ffffff;
+  --compute: #285a96;
+  --inverse: #191a20;
+  --inverse-soft: #c1c6d0;
+  --inverse-line: #687180;
+  --inverse-accent: #ff937d;
+  --inverse-compute: #8fc6ff;
   --font-sans: Arial, "Helvetica Neue", Helvetica, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --container: 74rem;
+  color-scheme: light;
 }
 
 *,
@@ -124,7 +132,7 @@ p {
   top: 0;
   z-index: 50;
   border-bottom: 1px solid var(--line-strong);
-  background: rgba(11, 14, 20, 0.97);
+  background: rgba(243, 245, 247, 0.97);
 }
 
 .header-inner {
@@ -146,6 +154,8 @@ p {
 }
 
 .wordmark img {
+  width: auto;
+  height: 26px;
   flex: none;
 }
 
@@ -168,7 +178,7 @@ p {
 .site-nav a:hover,
 .footer-compact a:hover,
 .text-link:hover {
-  color: var(--accent);
+  color: var(--compute);
 }
 
 .button {
@@ -194,8 +204,8 @@ p {
 
 .button--primary:hover {
   color: var(--accent-ink);
-  border-color: #8bf4e4;
-  background: #8bf4e4;
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
 }
 
 .button--quiet:hover {
@@ -212,7 +222,7 @@ p {
 .section-label,
 .platform-label {
   margin-bottom: 1.1rem;
-  color: var(--text-soft);
+  color: var(--accent);
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 600;
@@ -224,7 +234,7 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  color: var(--accent);
+  color: var(--compute);
   font-size: 0.84rem;
   font-weight: 600;
 }
@@ -274,9 +284,9 @@ p {
 }
 
 .system-strip {
-  color: var(--text);
+  color: #fff;
   border-block: 1px solid var(--line-strong);
-  background: var(--surface);
+  background: var(--inverse);
 }
 
 .system-flow {
@@ -302,7 +312,7 @@ p {
 }
 
 .flow-label {
-  color: var(--accent);
+  color: var(--inverse-compute);
   font-family: var(--font-mono);
   font-size: 0.63rem;
   letter-spacing: 0.1em;
@@ -310,7 +320,7 @@ p {
 }
 
 .system-flow strong {
-  color: var(--text);
+  color: #fff;
   font-size: 0.9rem;
   font-weight: 500;
 }
@@ -319,9 +329,13 @@ p {
   display: grid;
   width: 4rem;
   place-items: center;
-  color: var(--muted);
-  border-inline: 1px solid var(--line);
+  color: var(--inverse-soft);
+  border-inline: 1px solid var(--inverse-line);
   font-family: var(--font-mono);
+}
+
+.system-flow > div:last-child .flow-label {
+  color: var(--inverse-accent);
 }
 
 .home-section,
@@ -511,7 +525,7 @@ figcaption {
 
 .site-footer {
   border-top: 1px solid var(--line-strong);
-  background: var(--surface);
+  background: var(--inverse);
 }
 
 .footer-compact {
@@ -523,9 +537,17 @@ figcaption {
 }
 
 .footer-compact > span {
-  color: var(--muted);
+  color: var(--inverse-soft);
   font-family: var(--font-mono);
   font-size: 0.68rem;
+}
+
+.footer-compact a {
+  color: #fff;
+}
+
+.footer-compact a:hover {
+  color: var(--inverse-compute);
 }
 
 @media (max-width: 850px) {
@@ -571,27 +593,28 @@ figcaption {
   }
 
   .header-inner {
+    flex-wrap: wrap;
     min-height: 3.7rem;
-    gap: 1rem;
+    padding-block: 0.65rem;
+    gap: 0.55rem 1rem;
   }
 
   .wordmark img {
-    width: 23px;
+    width: auto;
     height: 23px;
   }
 
   .site-nav {
+    width: 100%;
     min-width: 0;
+    padding-top: 0.55rem;
+    justify-content: space-between;
+    border-top: 1px solid var(--line);
     gap: 0.8rem;
   }
 
   .site-nav a {
     font-size: 0.64rem;
-  }
-
-  .site-nav a:first-child,
-  .site-nav a:last-child {
-    display: none;
   }
 
   .home-hero {
@@ -620,7 +643,7 @@ figcaption {
   .flow-arrow {
     width: 100%;
     height: 2rem;
-    border-block: 1px solid var(--line);
+    border-block: 1px solid var(--inverse-line);
     border-inline: 0;
     font-size: 0;
   }
@@ -665,7 +688,7 @@ figcaption {
     content: "Scroll diagram horizontally →";
     display: block;
     margin-bottom: 0.75rem;
-    color: var(--faint);
+    color: var(--muted);
     font-family: var(--font-mono);
     font-size: 0.62rem;
     letter-spacing: 0.04em;
@@ -673,12 +696,12 @@ figcaption {
   }
 
   .mechanism img {
-    width: 680px;
+    width: 960px;
     max-width: none;
   }
 
   .platform-grid figure img {
-    width: 640px;
+    width: 760px;
     max-width: none;
   }
 
