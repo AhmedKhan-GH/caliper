@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
     paths: ['site/**', 'docs/wiki/**', 'mkdocs.yml',
-            'docs/report/caliper-whitepaper.pdf', 'sdk/include/**',
-            '.github/workflows/pages.yml']
+            'sdk/include/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,13 +28,11 @@ jobs:
       # site; --strict keeps the snippet-embedded headers honest (D15).
       - run: pip install mkdocs-material
       - run: mkdocs build --strict
-      # Assemble the Pages artifact: landing page at /, wiki at /docs/,
-      # whitepaper PDF at /whitepaper.pdf.
+      # Assemble the Pages artifact: landing page at /, wiki at /docs/.
       - run: |
           mkdir -p _pages
           cp -r site/. _pages/
           cp -r build/wiki-site _pages/docs
-          cp docs/report/caliper-whitepaper.pdf _pages/whitepaper.pdf
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
