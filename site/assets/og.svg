@@ -1,39 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#f3f5f7"/>
-  <g stroke="#e7ebef" stroke-width="1">
+  <rect width="1200" height="630" fill="#C7CCCF"/>
+  <g stroke="#B5BCBF" stroke-width="1">
     <path d="M80 0v630M160 0v630M240 0v630M320 0v630M400 0v630M480 0v630M560 0v630M640 0v630M720 0v630M800 0v630M880 0v630M960 0v630M1040 0v630M1120 0v630"/>
     <path d="M0 80h1200M0 160h1200M0 240h1200M0 320h1200M0 400h1200M0 480h1200M0 560h1200"/>
   </g>
 
   <g transform="translate(72 44)">
     <image href="mark.svg" width="34" height="30"/>
-    <text x="50" y="24" fill="#151821" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Caliper</text>
+    <text x="50" y="24" fill="#171A1B" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Caliper</text>
   </g>
-  <path d="M72 96h1056" stroke="#737e8c"/>
+  <path d="M72 96h1056" stroke="#4F595E"/>
 
-  <text x="72" y="170" fill="#a63d2d" font-family="SFMono-Regular, Consolas, monospace" font-size="13" font-weight="600" letter-spacing="2">CALIPER / MPS / CUDA / METAL / VULKAN</text>
-  <text x="72" y="230" fill="#151821" font-family="Arial, Helvetica, sans-serif" font-size="52" font-weight="500" letter-spacing="-1.5">
+  <text x="72" y="170" fill="#30363A" font-family="SFMono-Regular, Consolas, monospace" font-size="13" font-weight="600" letter-spacing="2">CALIPER / MPS / CUDA / METAL / VULKAN</text>
+  <text x="72" y="230" fill="#171A1B" font-family="Arial, Helvetica, sans-serif" font-size="52" font-weight="500" letter-spacing="-1.5">
     <tspan x="72" dy="0">Render graphics from</tspan>
     <tspan x="72" dy="61">GPU-resident</tspan>
     <tspan x="72" dy="61">tensors.</tspan>
   </text>
 
-  <text x="760" y="222" fill="#303744" font-family="Arial, Helvetica, sans-serif" font-size="22">
+  <text x="760" y="222" fill="#353C3F" font-family="Arial, Helvetica, sans-serif" font-size="22">
     <tspan x="760" dy="0">MPS and CUDA tensors become</tspan>
     <tspan x="760" dy="34">live ImGui graphics without</tspan>
     <tspan x="760" dy="34">a CPU round trip.</tspan>
   </text>
-  <rect x="760" y="342" width="10" height="10" fill="#a63d2d"/>
-  <text x="786" y="352" fill="#596474" font-family="SFMono-Regular, Consolas, monospace" font-size="13">SOURCE AVAILABLE · NO PACKAGED RELEASE</text>
+  <rect x="760" y="342" width="10" height="10" fill="#84271F"/>
+  <text x="786" y="352" fill="#4C565A" font-family="SFMono-Regular, Consolas, monospace" font-size="13">SOURCE AVAILABLE · NO PACKAGED RELEASE</text>
 
-  <rect y="470" width="1200" height="160" fill="#191a20" stroke="#737e8c"/>
-  <path d="M400 470v160M800 470v160" stroke="#687180"/>
+  <rect y="470" width="1200" height="160" fill="#24292B" stroke="#4F595E"/>
+  <path d="M400 470v160M800 470v160" stroke="#707A7E"/>
   <g font-family="SFMono-Regular, Consolas, monospace" font-size="12" letter-spacing="1.5">
-    <text x="72" y="522" fill="#8fc6ff">TENSOR INPUT</text>
-    <text x="472" y="522" fill="#8fc6ff">GPU PATH</text>
-    <text x="872" y="522" fill="#ff937d">FRAME OUTPUT</text>
+    <text x="72" y="522" fill="#C1C7CA">TENSOR INPUT</text>
+    <text x="472" y="522" fill="#C1C7CA">GPU PATH</text>
+    <text x="872" y="522" fill="#C1C7CA">FRAME OUTPUT</text>
   </g>
-  <g fill="#f6f7f9" font-family="Arial, Helvetica, sans-serif" font-size="18">
+  <g fill="#EDF0F1" font-family="Arial, Helvetica, sans-serif" font-size="18">
     <text x="72" y="564">MPS   CUDA</text>
     <text x="472" y="564">Metal   Vulkan</text>
     <text x="872" y="564">ImGui   ImPlot   ImPlot3D</text>

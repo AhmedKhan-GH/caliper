@@ -3,33 +3,33 @@
   <!-- ============================================================
        mech-metal — the identity IS the mechanism: tensor storage and
        MTLBuffer are one box, not two. Only the vertical data path
-       glows in accent. Left: schematic. Right: numbered steps.
+       reads in bright steel. Left: schematic. Right: numbered steps.
        ============================================================ -->
   <style>
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .plane-t { fill:#F6F7F9; font-size:15px; font-weight:600; letter-spacing:1.5px; }
-    .plane-s { fill:#C1C6D0; font-size:13px; }
-    .boxlbl  { fill:#F6F7F9; font-size:16px; font-weight:500; }
-    .boxlbl2 { fill:#C1C6D0; font-size:13px; }
-    .steplbl { fill:#F6F7F9; font-size:14px; font-weight:500; }
-    .stepsub { fill:#C1C6D0; font-size:12px; }
-    .foot    { fill:#C1C6D0; font-size:12px; }
-    .box      { fill:#22242C; stroke:#687180; stroke-width:1.25; }
-    .box-glow { fill:#22242C; stroke:#8FC6FF; stroke-width:1.75; }
-    .p-glow   { fill:none; stroke:#8FC6FF; stroke-width:2.5; }
-    .num-c { fill:#191A20; stroke:#FF937D; stroke-width:1.25; }
-    .num-t { fill:#FF937D; font-size:14px; font-weight:600; }
+    .plane-t { fill:#EDF0F1; font-size:15px; font-weight:600; letter-spacing:1.5px; }
+    .plane-s { fill:#C1C7CA; font-size:13px; }
+    .boxlbl  { fill:#EDF0F1; font-size:16px; font-weight:500; }
+    .boxlbl2 { fill:#C1C7CA; font-size:13px; }
+    .steplbl { fill:#EDF0F1; font-size:14px; font-weight:500; }
+    .stepsub { fill:#C1C7CA; font-size:12px; }
+    .foot    { fill:#C1C7CA; font-size:12px; }
+    .box      { fill:#303638; stroke:#707A7E; stroke-width:1.25; }
+    .box-glow { fill:#303638; stroke:#DDE1DF; stroke-width:1.75; }
+    .p-glow   { fill:none; stroke:#DDE1DF; stroke-width:2.5; }
+    .num-c { fill:#24292B; stroke:#BFC6C3; stroke-width:1.25; }
+    .num-t { fill:#BFC6C3; font-size:14px; font-weight:600; }
   </style>
   <defs>
     <marker id="m-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#8FC6FF"/>
+      <path d="M0 0 L10 5 L0 10 z" fill="#DDE1DF"/>
     </marker>
   </defs>
 
-  <rect width="760" height="560" fill="#191A20"/>
+  <rect width="760" height="560" fill="#24292B"/>
 
   <!-- ================= schematic: the unified-memory plane ================= -->
-  <rect x="20" y="48" width="424" height="452" rx="0" fill="#22242C" stroke="#687180" stroke-width="1.25"/>
+  <rect x="20" y="48" width="424" height="452" rx="0" fill="#303638" stroke="#707A7E" stroke-width="1.25"/>
   <text class="plane-t" x="40" y="80">UNIFIED MEMORY</text>
   <text class="plane-s" x="40" y="100">one pool of physical RAM (CPU + GPU)</text>
 
@@ -40,7 +40,7 @@
   <!-- the identity box: tensor storage == MTLBuffer (accent = on the path) -->
   <rect class="box-glow" x="64" y="120" width="336" height="88" rx="0"/>
   <text class="boxlbl"  x="232" y="147" text-anchor="middle" dominant-baseline="central">torch MPS tensor storage</text>
-  <text class="boxlbl"  x="232" y="171" text-anchor="middle" dominant-baseline="central" fill="#8FC6FF">= id&lt;MTLBuffer&gt;</text>
+  <text class="boxlbl"  x="232" y="171" text-anchor="middle" dominant-baseline="central" fill="#DDE1DF">= id&lt;MTLBuffer&gt;</text>
   <text class="boxlbl2" x="232" y="191" text-anchor="middle" dominant-baseline="central">the same object</text>
 
   <rect class="box" x="102" y="266" width="260" height="56" rx="0"/>
@@ -92,7 +92,7 @@
   <text class="steplbl" x="506" y="380">&#8212; pixels this frame</text>
 
   <!-- ================= sync footnote ================= -->
-  <line x1="20" y1="504" x2="740" y2="504" stroke="#687180" stroke-width="1"/>
+  <line x1="20" y1="504" x2="740" y2="504" stroke="#707A7E" stroke-width="1"/>
   <text class="foot" x="20" y="524">handoff sync: v1 drain (torch::mps::synchronize) or per-texture MTLSharedEvent riding torch's own</text>
   <text class="foot" x="20" y="540">stream queue (bridge v1.1) &#8212; CPU never waits on the hot path.</text>
 </svg>

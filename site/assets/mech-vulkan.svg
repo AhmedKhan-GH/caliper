@@ -3,40 +3,40 @@
   <!-- ============================================================
        mech-vulkan — the data never leaves VRAM. System RAM is drawn
        deliberately inert (dashed, dimmed). Only the in-VRAM data path
-       glows in accent. Left: schematic. Right: numbered steps.
+       reads in bright steel. Left: schematic. Right: numbered steps.
        ============================================================ -->
   <style>
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .plane-t { fill:#F6F7F9; font-size:15px; font-weight:600; letter-spacing:1.5px; }
-    .ghost-t { fill:#C1C6D0; font-size:14px; font-weight:600; letter-spacing:1.5px; }
-    .ghost-s { fill:#8D96A5; font-size:12px; }
-    .boxlbl  { fill:#F6F7F9; font-size:16px; font-weight:500; }
-    .boxlbl2 { fill:#C1C6D0; font-size:13px; }
-    .steplbl { fill:#F6F7F9; font-size:13px; font-weight:500; }
-    .stepsub { fill:#C1C6D0; font-size:12px; }
-    .foot    { fill:#C1C6D0; font-size:12px; }
-    .box      { fill:#22242C; stroke:#687180; stroke-width:1.25; }
-    .box-glow { fill:#22242C; stroke:#8FC6FF; stroke-width:1.75; }
-    .p-glow   { fill:none; stroke:#8FC6FF; stroke-width:2.5; }
-    .num-c { fill:#191A20; stroke:#FF937D; stroke-width:1.25; }
-    .num-t { fill:#FF937D; font-size:13px; font-weight:600; }
+    .plane-t { fill:#EDF0F1; font-size:15px; font-weight:600; letter-spacing:1.5px; }
+    .ghost-t { fill:#C1C7CA; font-size:14px; font-weight:600; letter-spacing:1.5px; }
+    .ghost-s { fill:#929B9F; font-size:12px; }
+    .boxlbl  { fill:#EDF0F1; font-size:16px; font-weight:500; }
+    .boxlbl2 { fill:#C1C7CA; font-size:13px; }
+    .steplbl { fill:#EDF0F1; font-size:13px; font-weight:500; }
+    .stepsub { fill:#C1C7CA; font-size:12px; }
+    .foot    { fill:#C1C7CA; font-size:12px; }
+    .box      { fill:#303638; stroke:#707A7E; stroke-width:1.25; }
+    .box-glow { fill:#303638; stroke:#DDE1DF; stroke-width:1.75; }
+    .p-glow   { fill:none; stroke:#DDE1DF; stroke-width:2.5; }
+    .num-c { fill:#24292B; stroke:#BFC6C3; stroke-width:1.25; }
+    .num-t { fill:#BFC6C3; font-size:13px; font-weight:600; }
   </style>
   <defs>
     <marker id="v-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#8FC6FF"/>
+      <path d="M0 0 L10 5 L0 10 z" fill="#DDE1DF"/>
     </marker>
   </defs>
 
-  <rect width="760" height="560" fill="#191A20"/>
+  <rect width="760" height="560" fill="#24292B"/>
 
   <!-- ================= ghosted plane: SYSTEM RAM — never touched ================= -->
   <rect x="20" y="40" width="380" height="58" rx="0" fill="none"
-        stroke="#687180" stroke-width="1.25" stroke-dasharray="5 5"/>
+        stroke="#707A7E" stroke-width="1.25" stroke-dasharray="5 5"/>
   <text class="ghost-t" x="40" y="66">SYSTEM RAM &#8212; NEVER TOUCHED</text>
   <text class="ghost-s" x="40" y="86">no host staging, no PCIe round trip</text>
 
   <!-- ================= active plane: VRAM (device-local) ================= -->
-  <rect x="20" y="114" width="380" height="392" rx="0" fill="#22242C" stroke="#687180" stroke-width="1.25"/>
+  <rect x="20" y="114" width="380" height="392" rx="0" fill="#303638" stroke="#707A7E" stroke-width="1.25"/>
   <text class="plane-t" x="40" y="142">VRAM (device-local)</text>
 
   <!-- accent data path down the plane -->
@@ -110,7 +110,7 @@
   <text class="steplbl" x="454" y="412">pixels this frame</text>
 
   <!-- sync relationship -->
-  <line x1="432" y1="434" x2="742" y2="434" stroke="#687180" stroke-width="1"/>
+  <line x1="432" y1="434" x2="742" y2="434" stroke="#707A7E" stroke-width="1"/>
   <text class="stepsub" x="432" y="452">sync: shared timeline semaphore</text>
   <text class="stepsub" x="432" y="466">(VK_KHR_timeline_semaphore &#8596;</text>
   <text class="stepsub" x="432" y="480">cuImportExternalSemaphore): CUDA signals</text>
@@ -118,6 +118,6 @@
   <text class="stepsub" x="432" y="508">GPU-waits &#8212; no CPU sync on the hot path.</text>
 
   <!-- ================= footnote (full width) ================= -->
-  <line x1="20" y1="520" x2="740" y2="520" stroke="#687180" stroke-width="1"/>
+  <line x1="20" y1="520" x2="740" y2="520" stroke="#707A7E" stroke-width="1"/>
   <text class="foot" x="20" y="540">Device pairing is UUID-driven; the whole path stays device-local &#8212; system RAM is never on it.</text>
 </svg>

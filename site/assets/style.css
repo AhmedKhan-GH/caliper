@@ -1,22 +1,21 @@
 :root {
-  --bg: #f3f5f7;
-  --surface: #ffffff;
-  --surface-raised: #e7ebef;
-  --text: #151821;
-  --text-soft: #303744;
-  --muted: #596474;
-  --faint: #737e8c;
-  --line: #b2bac5;
-  --line-strong: #737e8c;
-  --accent: #a63d2d;
-  --accent-hover: #7f291f;
-  --accent-ink: #ffffff;
-  --compute: #285a96;
-  --inverse: #191a20;
-  --inverse-soft: #c1c6d0;
-  --inverse-line: #687180;
-  --inverse-accent: #ff937d;
-  --inverse-compute: #8fc6ff;
+  --bg: #c7cccf;
+  --surface: #e3e6e7;
+  --surface-raised: #aeb5b8;
+  --text: #171a1b;
+  --text-soft: #353c3f;
+  --muted: #4c565a;
+  --faint: #626c71;
+  --line: #687277;
+  --line-strong: #4f595e;
+  --accent: #30363a;
+  --accent-hover: #171a1c;
+  --accent-ink: #f2f4f4;
+  --signal: #84271f;
+  --panel: #24292b;
+  --panel-text: #edf0f1;
+  --panel-soft: #c1c7ca;
+  --panel-line: #707a7e;
   --font-sans: Arial, "Helvetica Neue", Helvetica, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --container: 74rem;
@@ -132,7 +131,7 @@ p {
   top: 0;
   z-index: 50;
   border-bottom: 1px solid var(--line-strong);
-  background: rgba(243, 245, 247, 0.97);
+  background: rgba(199, 204, 207, 0.97);
 }
 
 .header-inner {
@@ -178,7 +177,7 @@ p {
 .site-nav a:hover,
 .footer-compact a:hover,
 .text-link:hover {
-  color: var(--compute);
+  color: var(--accent-hover);
 }
 
 .button {
@@ -234,7 +233,7 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  color: var(--compute);
+  color: var(--accent);
   font-size: 0.84rem;
   font-weight: 600;
 }
@@ -280,13 +279,13 @@ p {
   display: inline-block;
   width: 0.5rem;
   height: 0.5rem;
-  background: var(--accent);
+  background: var(--signal);
 }
 
 .system-strip {
-  color: #fff;
+  color: var(--panel-text);
   border-block: 1px solid var(--line-strong);
-  background: var(--inverse);
+  background: var(--panel);
 }
 
 .system-flow {
@@ -312,7 +311,7 @@ p {
 }
 
 .flow-label {
-  color: var(--inverse-compute);
+  color: var(--panel-soft);
   font-family: var(--font-mono);
   font-size: 0.63rem;
   letter-spacing: 0.1em;
@@ -320,7 +319,7 @@ p {
 }
 
 .system-flow strong {
-  color: #fff;
+  color: var(--panel-text);
   font-size: 0.9rem;
   font-weight: 500;
 }
@@ -329,13 +328,13 @@ p {
   display: grid;
   width: 4rem;
   place-items: center;
-  color: var(--inverse-soft);
-  border-inline: 1px solid var(--inverse-line);
+  color: var(--panel-soft);
+  border-inline: 1px solid var(--panel-line);
   font-family: var(--font-mono);
 }
 
 .system-flow > div:last-child .flow-label {
-  color: var(--inverse-accent);
+  color: var(--panel-text);
 }
 
 .home-section,
@@ -525,7 +524,7 @@ figcaption {
 
 .site-footer {
   border-top: 1px solid var(--line-strong);
-  background: var(--inverse);
+  background: var(--panel);
 }
 
 .footer-compact {
@@ -537,17 +536,17 @@ figcaption {
 }
 
 .footer-compact > span {
-  color: var(--inverse-soft);
+  color: var(--panel-soft);
   font-family: var(--font-mono);
   font-size: 0.68rem;
 }
 
 .footer-compact a {
-  color: #fff;
+  color: var(--panel-text);
 }
 
 .footer-compact a:hover {
-  color: var(--inverse-compute);
+  color: var(--panel-soft);
 }
 
 @media (max-width: 850px) {
@@ -643,7 +642,7 @@ figcaption {
   .flow-arrow {
     width: 100%;
     height: 2rem;
-    border-block: 1px solid var(--inverse-line);
+    border-block: 1px solid var(--panel-line);
     border-inline: 0;
     font-size: 0;
   }

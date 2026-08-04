@@ -1,42 +1,42 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img"
      aria-label="Two data paths compared. The conventional round trip copies a GPU tensor down across the CPU boundary to a NumPy array, encodes it to a PNG or event file on disk, polls and decodes it into a CPU pixel buffer, then uploads it back up across the boundary to a GPU texture in a browser — crossing the PCIe boundary twice. Caliper instead blits the GPU tensor to a GPU texture and draws it with ImGui the same frame, entirely on the GPU.">
   <!-- ============================================================
-       mech-roundtrip — signal-to-noise flow: only Caliper's on-GPU
-       path glows in accent; the conventional round trip stays muted.
-       Palette: graphite #191A20, surface #22242C, line #687180,
-       muted #C1C6D0, text #F6F7F9, compute #8FC6FF, signal #FF937D.
+       mech-roundtrip — signal-to-noise flow: Caliper's on-GPU path
+       reads in bright steel; the conventional round trip stays muted.
+       Palette: graphite #24292B, surface #303638, line #707A7E,
+       muted #C1C7CA, text #EDF0F1, active #DDE1DF, measure #BFC6C3.
        ============================================================ -->
   <style>
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .lane   { fill:#C1C6D0; font-size:15px; font-weight:600; letter-spacing:1.5px; }
-    .boxlbl { fill:#F6F7F9; font-size:19px; font-weight:500; }
-    .steplbl{ fill:#C1C6D0; font-size:15px; }
-    .foot   { fill:#C1C6D0; font-size:15px; }
-    .box       { fill:#22242C; stroke:#687180; stroke-width:1.25; }
-    .box-glow  { fill:#22242C; stroke:#8FC6FF; stroke-width:1.5; }
-    .p-muted   { fill:none; stroke:#8D96A5; stroke-width:1.5; }
-    .p-glow    { fill:none; stroke:#8FC6FF; stroke-width:2.5; }
-    .num-c { fill:#191A20; stroke:#FF937D; stroke-width:1.25; }
-    .num-t { fill:#FF937D; font-size:15px; font-weight:600; }
+    .lane   { fill:#C1C7CA; font-size:15px; font-weight:600; letter-spacing:1.5px; }
+    .boxlbl { fill:#EDF0F1; font-size:19px; font-weight:500; }
+    .steplbl{ fill:#C1C7CA; font-size:15px; }
+    .foot   { fill:#C1C7CA; font-size:15px; }
+    .box       { fill:#303638; stroke:#707A7E; stroke-width:1.25; }
+    .box-glow  { fill:#303638; stroke:#DDE1DF; stroke-width:1.5; }
+    .p-muted   { fill:none; stroke:#929B9F; stroke-width:1.5; }
+    .p-glow    { fill:none; stroke:#DDE1DF; stroke-width:2.5; }
+    .num-c { fill:#24292B; stroke:#BFC6C3; stroke-width:1.25; }
+    .num-t { fill:#BFC6C3; font-size:15px; font-weight:600; }
   </style>
   <defs>
     <marker id="rt-arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#8D96A5"/>
+      <path d="M0 0 L10 5 L0 10 z" fill="#929B9F"/>
     </marker>
     <marker id="rt-arrow-glow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#8FC6FF"/>
+      <path d="M0 0 L10 5 L0 10 z" fill="#DDE1DF"/>
     </marker>
   </defs>
 
-  <rect width="1200" height="460" fill="#191A20"/>
+  <rect width="1200" height="460" fill="#24292B"/>
 
   <!-- ===================== LANE A — conventional ===================== -->
   <text class="lane" x="24" y="26">THE CONVENTIONAL ROUND TRIP (TENSORBOARD-STYLE)</text>
 
   <!-- GPU | CPU boundary band (PCIe) -->
-  <rect x="24" y="124" width="1152" height="26" fill="#22242C" stroke="#687180" stroke-width="1"/>
-  <line x1="24" y1="124" x2="1176" y2="124" stroke="#687180" stroke-width="1" stroke-dasharray="2 4"/>
-  <line x1="24" y1="150" x2="1176" y2="150" stroke="#687180" stroke-width="1" stroke-dasharray="2 4"/>
+  <rect x="24" y="124" width="1152" height="26" fill="#303638" stroke="#707A7E" stroke-width="1"/>
+  <line x1="24" y1="124" x2="1176" y2="124" stroke="#707A7E" stroke-width="1" stroke-dasharray="2 4"/>
+  <line x1="24" y1="150" x2="1176" y2="150" stroke="#707A7E" stroke-width="1" stroke-dasharray="2 4"/>
   <text class="steplbl" x="500" y="141" text-anchor="middle">GPU  |  CPU boundary (PCIe)</text>
 
   <!-- muted path: down (1), across (2,3), up (4) -->
@@ -46,10 +46,10 @@
   <path class="p-muted" d="M1000,170 V110" marker-end="url(#rt-arrow-muted)"/>
 
   <!-- both boundary crossings, marked with bright diamonds -->
-  <path d="M140,127 l10,10 -10,10 -10,-10 z" fill="#191A20" stroke="#F6F7F9" stroke-width="1.5"/>
-  <path d="M140,131 l6,6 -6,6 -6,-6 z" fill="#F6F7F9"/>
-  <path d="M1000,127 l10,10 -10,10 -10,-10 z" fill="#191A20" stroke="#F6F7F9" stroke-width="1.5"/>
-  <path d="M1000,131 l6,6 -6,6 -6,-6 z" fill="#F6F7F9"/>
+  <path d="M140,127 l10,10 -10,10 -10,-10 z" fill="#24292B" stroke="#EDF0F1" stroke-width="1.5"/>
+  <path d="M140,131 l6,6 -6,6 -6,-6 z" fill="#EDF0F1"/>
+  <path d="M1000,127 l10,10 -10,10 -10,-10 z" fill="#24292B" stroke="#EDF0F1" stroke-width="1.5"/>
+  <path d="M1000,131 l6,6 -6,6 -6,-6 z" fill="#EDF0F1"/>
 
   <!-- boxes -->
   <rect class="box" x="40"  y="48"  width="200" height="56" rx="0"/>
@@ -88,13 +88,13 @@
   <text class="foot" x="40" y="252">two bus transfers &#183; encode/decode &#183; filesystem &#183; seconds of latency</text>
 
   <!-- ===================== divider ===================== -->
-  <line x1="24" y1="274" x2="1176" y2="274" stroke="#687180" stroke-width="1"/>
+  <line x1="24" y1="274" x2="1176" y2="274" stroke="#707A7E" stroke-width="1"/>
 
   <!-- ===================== LANE B — Caliper ===================== -->
   <text class="lane" x="24" y="300">CALIPER</text>
 
   <!-- GPU band: the whole path stays inside it -->
-  <rect x="24" y="314" width="1152" height="118" rx="0" fill="#22242C" stroke="#687180" stroke-width="1"/>
+  <rect x="24" y="314" width="1152" height="118" rx="0" fill="#303638" stroke="#707A7E" stroke-width="1"/>
   <text class="lane" x="46" y="338" style="letter-spacing:2px">ON THE GPU</text>
 
   <!-- accent path: the one thing that glows -->
