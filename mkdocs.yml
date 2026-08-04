@@ -1,12 +1,22 @@
 site_name: Caliper Framework
+site_url: https://ahmedkhan-gh.github.io/caliper/docs/
 docs_dir: docs/wiki
 site_dir: build/wiki-site
 theme:
   name: material
+  logo: assets/mark.svg
+  favicon: assets/mark.svg
+  font: false
+  palette:
+    scheme: slate
+    primary: custom
+    accent: custom
   features:
     - navigation.sections
     - content.code.copy
     - search.suggest
+extra_css:
+  - stylesheets/caliper.css
 markdown_extensions:
   - admonition
   - toc:

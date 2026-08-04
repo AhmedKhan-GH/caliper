@@ -2,6 +2,9 @@
 
 *Adapted from `PLATFORM.md` §6b (growth rules) and §14 (versioning policy). The spec is the source of truth.*
 
+!!! note "Current scope"
+    The ABI and service negotiation described here are implemented. Runtime-pack download and side-by-side distribution remain planned; the current loader does not download dependencies.
+
 The host is a **service registry, not a struct of fields**. Applets obtain capabilities by name through a single extension point:
 
 ```c
@@ -36,7 +39,7 @@ Every moving part has its own scheme, so a change in one rarely forces a change 
 | **Services** | id suffix `.v1`, `.v2` | never — old ids keep working alongside new | as needed |
 | **Host app** | semver | UI/features; never silently drops epochs/services (deprecation window ≥ 2 releases) | monthly-ish |
 | **Applets** | semver, theirs | their business entirely | theirs |
-| **Runtime packs** | upstream version + platform | n/a (side-by-side installs; one per process per session) | tracks upstream |
+| **Runtime packs (planned)** | upstream version + platform | n/a (side-by-side installs; one per process per session) | tracks upstream |
 
 ## Negotiation at load
 
@@ -46,10 +49,9 @@ Every check happens **before `dlopen`**, in order. The first failure renders a r
 2. epoch supported
 3. `min_host` satisfied
 4. required services available
-5. runtime packs resolvable (download prompt)
-6. *then* `dlopen`
-7. descriptor sanity — id / version / epoch agree with the manifest
-8. `create` / `initialize`
+5. *then* `dlopen`
+6. descriptor sanity — id / version / epoch agree with the manifest
+7. `create` / `initialize`
 
 !!! note "Why epochs, not a rolling ABI"
     The UI-stack pin (the exact imgui/implot commits) *is* part of the epoch, because applets write raw ImGui against those headers. Bumping the pin is therefore an epoch bump — rare, CI-flagged, and the cost is an applet rebuild, not a silent break. See the [Architecture](architecture.md) overview and `PLATFORM.md` §9.

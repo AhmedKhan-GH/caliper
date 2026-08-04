@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0b0e14"/>
+  <g stroke="#131826" stroke-width="1">
+    <path d="M80 0v630M160 0v630M240 0v630M320 0v630M400 0v630M480 0v630M560 0v630M640 0v630M720 0v630M800 0v630M880 0v630M960 0v630M1040 0v630M1120 0v630"/>
+    <path d="M0 80h1200M0 160h1200M0 240h1200M0 320h1200M0 400h1200M0 480h1200M0 560h1200"/>
+  </g>
+
+  <g transform="translate(72 45)">
+    <rect x="1" y="1" width="30" height="30" fill="#0b0e14" stroke="#4a556d" stroke-width="2"/>
+    <path d="M8 7v18M8 8h16v10H13v7" fill="none" stroke="#5eead4" stroke-width="2"/>
+    <text x="46" y="24" fill="#e6eaf2" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Caliper</text>
+  </g>
+  <path d="M72 96h1056" stroke="#4a556d"/>
+
+  <text x="72" y="170" fill="#c4cbd6" font-family="SFMono-Regular, Consolas, monospace" font-size="13" font-weight="600" letter-spacing="2">CALIPER / C++ / METAL / VULKAN</text>
+  <text x="72" y="230" fill="#e6eaf2" font-family="Arial, Helvetica, sans-serif" font-size="52" font-weight="500" letter-spacing="-1.5">
+    <tspan x="72" dy="0">A native framework for</tspan>
+    <tspan x="72" dy="61">machine-learning</tspan>
+    <tspan x="72" dy="61">instrumentation.</tspan>
+  </text>
+
+  <text x="760" y="222" fill="#c4cbd6" font-family="Arial, Helvetica, sans-serif" font-size="22">
+    <tspan x="760" dy="0">C++ applets, host services, and</tspan>
+    <tspan x="760" dy="34">GPU-resident tensor views in</tspan>
+    <tspan x="760" dy="34">one desktop frame loop.</tspan>
+  </text>
+  <rect x="760" y="342" width="10" height="10" fill="#5eead4"/>
+  <text x="786" y="352" fill="#8b94a7" font-family="SFMono-Regular, Consolas, monospace" font-size="13">SOURCE AVAILABLE · NO PACKAGED RELEASE</text>
+
+  <rect y="470" width="1200" height="160" fill="#0f131e" stroke="#4a556d"/>
+  <path d="M400 470v160M800 470v160" stroke="#2a3245"/>
+  <g font-family="SFMono-Regular, Consolas, monospace" font-size="12" letter-spacing="1.5">
+    <text x="72" y="522" fill="#5eead4">APPLETS</text>
+    <text x="472" y="522" fill="#5eead4">HOST SERVICES</text>
+    <text x="872" y="522" fill="#5eead4">FRAME OUTPUT</text>
+  </g>
+  <g fill="#e6eaf2" font-family="Arial, Helvetica, sans-serif" font-size="18">
+    <text x="72" y="564">ML compute   Instruments</text>
+    <text x="472" y="564">Jobs   Metrics   Tensor bridge</text>
+    <text x="872" y="564">ImGui   ImPlot   ImPlot3D</text>
+  </g>
+</svg>

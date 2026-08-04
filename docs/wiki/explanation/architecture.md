@@ -2,6 +2,9 @@
 
 *Adapted from `PLATFORM.md` §5.1–5.3. The spec is the source of truth.*
 
+!!! warning "Planned topology"
+    The layer and repository split below is the target architecture. The current repository still contains the host, SDK headers, examples, and in-tree applets together. Separate SDK releases, runtime packs, an applet registry, and packaged host binaries are not currently published.
+
 Caliper is four layers with a single dependency rule: **arrows point down only.**
 
 ## Layers

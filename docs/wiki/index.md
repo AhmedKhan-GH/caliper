@@ -1,30 +1,38 @@
 # Caliper Framework
 
-Caliper is a desktop framework for **ML-native, GPU-resident visualization running in the same frame loop as training**. Applets are shared libraries the host loads at runtime over a small, frozen C ABI; the host owns the window, the rendering backend, and the ImGui/ImPlot contexts, while each applet renders its own UI and drives its own compute.
+Caliper is a native C++ host and SDK for building in-process machine-learning visualization applets. The host owns rendering and the desktop frame loop; applets provide UI and compute through ABI epoch 2 and named service tables.
 
-The framework's reason to exist is the tensor bridge: weights, activations, and saliency maps that live on the GPU (CUDA or MPS) become an `ImGui::Image` *this frame* — no TensorBoard round-trip, no PNG encode, no Python, and on the native backends no CPU staging. That capability is preserved by keeping applets in-process and productized as the `caliper.tensor_bridge.v1` service.
+On supported Metal/MPS and Vulkan/CUDA paths, accepted dense tensors and geometry can render without CPU staging. OpenGL is a CPU-staged fallback, and chart-style views may use small CPU arrays.
 
-**EmbedScope** (`applets/embed_scope/`) is *the* exemplar — the framework's showcase and the template to copy: a small MNIST net with a **3-D embedding bottleneck** whose test-set embeddings are drawn as a live ImPlot3D scatter (renderer-agnostic, so it works on both Metal and GL) that splits from one blob into ten colored lobes *while training runs*. It exercises **every service** — training off the frame thread via `caliper.jobs.v1` on the host-negotiated device, scalars to the `caliper.metrics.v1` Runs dashboard, hover-a-point digit textures through `caliper.tensor_bridge.v1`, model Save/Load through `caliper.artifacts.v1` (Load skips training), and live SQL over the embedding table through `caliper.data.v1` (class centroids, misclassified counts). No private hooks; every capability it uses is one an out-of-tree applet has.
+!!! warning "Development status"
+    Current host: **0.6.0** · SDK: **0.1.0** · ABI epoch: **2**. Build Caliper from source. The repository does not currently publish packaged binaries, separate SDK releases, runtime packs, or an applet registry.
 
-Earlier exemplars that drove the architecture — **GPTScope** (the Phase-2 flagship mini-GPT on TinyShakespeare), MLScope, and SignalScope — are archived under `applets/legacy-dev/` (not built or loaded); Ahmed's own applets (CircuitNet, OpenGllama, RepNet Demo) are archived under `applets/legacy/` awaiting their own repositories in Phase 3.
+## Choose a path
 
-This wiki is the docs-as-code companion to `PLATFORM.md` (the governing spec at the repo root). It is organized along the [Diátaxis](https://diataxis.fr/) axes — learning, tasks, information, and understanding.
+- **[Development basics](tutorials/development-basics.md)** — understand the host, applet, and build model.
+- **[Your first applet](tutorials/first-applet.md)** — build the smallest ABI-epoch-2 UI applet.
+- **[Your first ML applet](tutorials/first-ml-applet.md)** — add jobs, metrics, device selection, and tensor views.
+- **[Embedding Caliper](reference/embedding.md)** — inspect the embeddable host interface.
+- **[ABI and services](reference/abi.md)** — read the contract and service reference.
 
-## What's here
+## Backend behavior
 
-- **[Tutorials](tutorials/first-applet.md)** — learning-oriented, start-to-finish walkthroughs. Begin with [your first applet](tutorials/first-applet.md).
-- **How-to guides** — task-oriented recipes: [port a v1 applet](howto/port-v1-applet.md) to the epoch-2 ABI, or [debug an applet](howto/debug-an-applet.md) (attach LLDB, tail the log).
-- **Reference** — the frozen contract and its neighbors: the [ABI (epoch 2)](reference/abi.md), the [manifest (`caliper.toml`)](reference/manifest.md), the contractual [refusal messages](reference/refusals.md), the service tables ([`caliper.ui.v1`](reference/services/ui-v1.md), [`caliper.log.v1`](reference/services/log-v1.md)), and the [C++ sugar](reference/sugar.md) layer.
-- **Explanation** — the why behind the design: the [architecture](explanation/architecture.md) (layers and the frame loop), [compatibility & epochs](explanation/compatibility.md) (how the contract grows without breaking applets), and the [trust model](explanation/trust-model.md).
-- **[Decisions](decisions/index.md)** — the decision log, mirroring `PLATFORM.md` §18.
+| Backend | Current behavior |
+|---|---|
+| **Metal / MPS** | macOS default. Accepted MPS buffers are processed by Metal without host staging. |
+| **Vulkan / CUDA** | Windows default. Device-local external-memory interop; some paths make one device-to-device copy inside VRAM. |
+| **OpenGL 3.3** | Compatibility fallback. Tensor uploads are CPU-staged inside the host. |
 
-## How this wiki stays true
+See [Rendering](explanation/rendering.md) and [`caliper.tensor_bridge.v1`](reference/services/tensor-bridge-v1.md) for the exact backend and acceptance rules.
 
-Three mechanisms, not effort, keep these pages honest:
+## Documentation map
 
-1. Doc updates land in the **same commit** as the change they describe.
-2. Reference pages **embed the real files** (headers, manifests) via `pymdownx.snippets` with `check_paths: true`, so a moved or renamed file breaks the docs build instead of silently orphaning the page.
-3. `mkdocs build --strict` fails the build on any broken link or anchor.
+- **Tutorials** — start-to-finish development paths.
+- **How-to guides** — porting, debugging, and ML applet recipes.
+- **Reference** — ABI, manifest, service tables, adapters, embedding, and C++ sugar.
+- **Explanation** — rendering, compatibility, trust, and the planned architecture.
+- **[Decisions](decisions/index.md)** — the project decision log.
 
-!!! note "Source of truth"
-    `PLATFORM.md` at the repo root remains the governing specification. Where this wiki summarizes it, the spec wins on any discrepancy.
+## Source of truth
+
+Reference pages embed current headers and examples with checked snippets, and `mkdocs build --strict` fails on missing sources, links, or anchors. `PLATFORM.md` is a planning and design specification; where it describes future repository topology or distribution, those parts are not current shipped behavior.

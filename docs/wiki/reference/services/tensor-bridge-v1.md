@@ -26,7 +26,7 @@ misinterprets bytes into a wrong texture. Faithful to the shipped gate:
   built-in LUT, scaling `[vmin,vmax]` → `[0,1]`);
 - **3-D `(H,W,C≤4)` `u8`** → `texture_from_tensor` (direct RGBA/…);
 - **contiguous** (row-major, no gaps);
-- **device CPU or the active backend's device** (e.g. Metal on macOS).
+- **device CPU or the active backend's device** (Metal on macOS, CUDA on Windows).
 
 The applet-side [torch adapter](../../reference/adapters.md) enforces the mirror
 of these rules before the tensor ever reaches the host — rejecting rather than
@@ -50,10 +50,13 @@ differs, and the honest device-path string tells you which ran:
 | Backend | Path | Staging | Status |
 |---------|------|---------|--------|
 | **Metal** (`CALIPER_RENDERER=metal`) | device **compute** (f32 + LUT) / **blit** (u8 HWC) | **zero CPU staging** — the MPS `MTLBuffer` is colormapped on-GPU | §16-verified pixel-exact vs a CPU reference (C5) |
-| **GL** (default) | CPU-staged upload | the *bridge* stages; the applet never touches a pixel | §16-verified pixel-exact; `tex_update_from_device` always returns `false` (frozen fallback) |
+| **Vulkan** (Windows default) | device **compute** / **blit** through Vulkan-CUDA external memory | **zero CPU staging** — one device-to-device copy inside VRAM at most | Hardware self-test verified byte-exact; gfx-harness CI wiring remains pending |
+| **GL** (`CALIPER_RENDERER=gl`) | CPU-staged upload | the *bridge* stages; the applet never touches a pixel | §16-verified pixel-exact; `tex_update_from_device` always returns `false` (frozen fallback) |
 
-The **§16 contract** is proven per backend: `caliper_gfx_tests` uploads known
-tensors, reads the texture back, and compares byte-for-byte. Metal's `compute`
+The **§16 contract** is tested by uploading known tensors, reading the texture
+back, and comparing byte-for-byte. Metal and GL run through
+`caliper_gfx_tests`; Vulkan has the equivalent hardware self-test, with its
+integration into the gfx-harness CI matrix still pending. Metal's `compute`
 path is exact vs the CPU `map_f32_to_rgba8` reference at ragged sizes (4×4, 5×3,
 17×9); the `blit` path is exact vs `expand_u8_to_rgba8`.
 

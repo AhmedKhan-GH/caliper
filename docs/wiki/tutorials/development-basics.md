@@ -8,7 +8,7 @@ loop. Read this before [Your first applet](first-applet.md); read the
 ## The mental model
 
 When your applet runs, **the host is already a living program**: it owns the
-window, the renderer (Metal on macOS, GL fallback), the ImGui/ImPlot/ImPlot3D
+window, the renderer (Metal on macOS, Vulkan on Windows, GL fallback), the ImGui/ImPlot/ImPlot3D
 contexts, the job system, the metrics/artifacts/data stores, and the docked
 desktop. You write **one shared library** that the host loads at runtime.
 Your code contributes exactly three things:
@@ -26,15 +26,15 @@ fighting the model.
 
 ## Where every library comes from
 
-The short answer to "is it using the libraries we have installed?": **yes —
-they're all in (or referenced by) this repo, and the build wires them for
-you.** Nothing needs installing beyond what a clone + CMake configure finds.
+The repository and CMake build wire the project dependencies together. Platform
+toolchains and system prerequisites must still be installed; see the root
+`README.md` before configuring a build.
 
 | Library | Comes from | You link it via | Notes |
 |---|---|---|---|
 | SDK headers (ABI, services, sugar, adapters) | `sdk/include/` in this repo | `caliper::sdk` | Header-only INTERFACE target — nothing compiles into the SDK itself |
 | ImGui (docking) + ImPlot + ImPlot3D + FileDialog | `third_party/` submodules, **pinned** | `caliper::ui_stack` | Compiled once in-tree. **Never bring your own copy** — the pin is part of the ABI (§9 of PLATFORM.md): your applet and the host must agree on ImGui's memory layout byte-for-byte |
-| libtorch | `third_party/libtorch/` (vendored) | `"${TORCH_LIBRARIES}"` + the rpath block | Only applets that do ML link it; the **host never links torch** (D11). Copy the rpath stanza from the exemplar's CMakeLists |
+| libtorch | `third_party/libtorch/` (vendored) | `"${TORCH_LIBRARIES}"` + the rpath block | The current root executable links the configured Torch libraries, and ML applets may link them as well. |
 | curl, zlib | macOS system SDK | `CURL::libcurl`, `ZLIB::ZLIB` | Only if you download/decompress data. Data acquisition is applet business — the host has no downloader |
 | DuckDB | host-internal | **you can't** | Deliberately unreachable. You get its powers through services: `metrics.v1`, `artifacts.v1`, `data.v1`. No DuckDB type ever crosses the ABI |
 
