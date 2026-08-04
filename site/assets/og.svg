@@ -12,17 +12,17 @@
   </g>
   <path d="M72 96h1056" stroke="#4a556d"/>
 
-  <text x="72" y="170" fill="#c4cbd6" font-family="SFMono-Regular, Consolas, monospace" font-size="13" font-weight="600" letter-spacing="2">CALIPER / C++ / METAL / VULKAN</text>
+  <text x="72" y="170" fill="#c4cbd6" font-family="SFMono-Regular, Consolas, monospace" font-size="13" font-weight="600" letter-spacing="2">CALIPER / MPS / CUDA / METAL / VULKAN</text>
   <text x="72" y="230" fill="#e6eaf2" font-family="Arial, Helvetica, sans-serif" font-size="52" font-weight="500" letter-spacing="-1.5">
-    <tspan x="72" dy="0">A native framework for</tspan>
-    <tspan x="72" dy="61">machine-learning</tspan>
-    <tspan x="72" dy="61">instrumentation.</tspan>
+    <tspan x="72" dy="0">Render graphics from</tspan>
+    <tspan x="72" dy="61">GPU-resident</tspan>
+    <tspan x="72" dy="61">tensors.</tspan>
   </text>
 
   <text x="760" y="222" fill="#c4cbd6" font-family="Arial, Helvetica, sans-serif" font-size="22">
-    <tspan x="760" dy="0">C++ applets, host services, and</tspan>
-    <tspan x="760" dy="34">GPU-resident tensor views in</tspan>
-    <tspan x="760" dy="34">one desktop frame loop.</tspan>
+    <tspan x="760" dy="0">MPS and CUDA tensors become</tspan>
+    <tspan x="760" dy="34">live ImGui graphics without</tspan>
+    <tspan x="760" dy="34">a CPU round trip.</tspan>
   </text>
   <rect x="760" y="342" width="10" height="10" fill="#5eead4"/>
   <text x="786" y="352" fill="#8b94a7" font-family="SFMono-Regular, Consolas, monospace" font-size="13">SOURCE AVAILABLE · NO PACKAGED RELEASE</text>
@@ -30,13 +30,13 @@
   <rect y="470" width="1200" height="160" fill="#0f131e" stroke="#4a556d"/>
   <path d="M400 470v160M800 470v160" stroke="#2a3245"/>
   <g font-family="SFMono-Regular, Consolas, monospace" font-size="12" letter-spacing="1.5">
-    <text x="72" y="522" fill="#5eead4">APPLETS</text>
-    <text x="472" y="522" fill="#5eead4">HOST SERVICES</text>
+    <text x="72" y="522" fill="#5eead4">TENSOR INPUT</text>
+    <text x="472" y="522" fill="#5eead4">GPU PATH</text>
     <text x="872" y="522" fill="#5eead4">FRAME OUTPUT</text>
   </g>
   <g fill="#e6eaf2" font-family="Arial, Helvetica, sans-serif" font-size="18">
-    <text x="72" y="564">ML compute   Instruments</text>
-    <text x="472" y="564">Jobs   Metrics   Tensor bridge</text>
+    <text x="72" y="564">MPS   CUDA</text>
+    <text x="472" y="564">Metal   Vulkan</text>
     <text x="872" y="564">ImGui   ImPlot   ImPlot3D</text>
   </g>
 </svg>

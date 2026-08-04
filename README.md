@@ -1,6 +1,6 @@
 # Caliper
 
-Cross-platform machine learning application with ImGui interface supporting CUDA (Windows) and MPS (macOS).
+Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, without CPU staging on its native Metal and Vulkan paths.
 
 ---
 

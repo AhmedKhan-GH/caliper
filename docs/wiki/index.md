@@ -1,8 +1,8 @@
-# Caliper Framework
+# Caliper
 
-Caliper is a native C++ host and SDK for building in-process machine-learning visualization applets. The host owns rendering and the desktop frame loop; applets provide UI and compute through ABI epoch 2 and named service tables.
+Caliper renders live ImGui graphics from GPU-resident tensors. Its Metal/MPS and Vulkan/CUDA paths keep accepted dense tensors and geometry off the CPU staging path; OpenGL remains a CPU-staged fallback.
 
-On supported Metal/MPS and Vulkan/CUDA paths, accepted dense tensors and geometry can render without CPU staging. OpenGL is a CPU-staged fallback, and chart-style views may use small CPU arrays.
+The desktop host owns rendering and the frame loop. C++ applets supply UI and compute through ABI epoch 2 and named service tables.
 
 !!! warning "Development status"
     Current host: **0.6.0** · SDK: **0.1.0** · ABI epoch: **2**. Build Caliper from source. The repository does not currently publish packaged binaries, separate SDK releases, runtime packs, or an applet registry.

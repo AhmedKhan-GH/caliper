@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Caliper — native framework for machine-learning instrumentation</title>
-  <meta name="description" content="Caliper is a native C++ host and applet framework for machine-learning instrumentation, with GPU-resident tensor visualization on Metal and Vulkan.">
+  <title>Caliper — graphics from GPU-resident tensors</title>
+  <meta name="description" content="Caliper renders MPS and CUDA tensors as live ImGui graphics without CPU staging on its native Metal and Vulkan paths.">
   <meta name="theme-color" content="#0b0e14">
   <meta name="color-scheme" content="dark">
   <link rel="canonical" href="https://ahmedkhan-gh.github.io/caliper/">
@@ -13,8 +13,8 @@
 
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Caliper">
-  <meta property="og:title" content="Caliper — native framework for machine-learning instrumentation">
-  <meta property="og:description" content="A C++ host and applet framework with GPU-resident tensor visualization on Metal and Vulkan.">
+  <meta property="og:title" content="Caliper — graphics from GPU-resident tensors">
+  <meta property="og:description" content="Render MPS and CUDA tensors as live ImGui graphics without a CPU round trip.">
   <meta property="og:url" content="https://ahmedkhan-gh.github.io/caliper/">
   <meta property="og:image" content="https://ahmedkhan-gh.github.io/caliper/assets/og.png">
   <meta property="og:image:width" content="1200">
@@ -42,10 +42,10 @@
     <section class="home-hero container" id="hero">
       <div>
         <p class="section-label">Caliper / C++ / Metal / Vulkan</p>
-        <h1>A native framework for machine-learning instrumentation.</h1>
+        <h1>Render graphics from GPU-resident tensors.</h1>
       </div>
       <div class="hero-summary">
-        <p>Caliper hosts C++ applets in the same frame loop as training. Its tensor bridge turns GPU-resident tensors into live ImGui textures on native Metal and Vulkan backends.</p>
+        <p>Caliper turns MPS and CUDA tensors into live ImGui graphics. Its Metal and Vulkan paths keep dense image and geometry views off the CPU staging path.</p>
         <div class="button-row">
           <a class="button button--primary" href="docs/">Documentation</a>
           <a class="button button--quiet" href="https://github.com/AhmedKhan-GH/caliper">View source <span aria-hidden="true">↗</span></a>
@@ -54,16 +54,16 @@
       </div>
     </section>
 
-    <section class="system-strip" aria-label="Caliper system structure">
+    <section class="system-strip" aria-label="Caliper tensor rendering path">
       <div class="container system-flow">
         <div>
-          <span class="flow-label">Applets</span>
-          <strong>ML compute&nbsp;&nbsp; Instruments</strong>
+          <span class="flow-label">Tensor input</span>
+          <strong>MPS&nbsp;&nbsp; CUDA</strong>
         </div>
         <span class="flow-arrow" aria-hidden="true">→</span>
         <div>
-          <span class="flow-label">Host services</span>
-          <strong>Jobs&nbsp;&nbsp; Metrics&nbsp;&nbsp; Tensor bridge</strong>
+          <span class="flow-label">GPU path</span>
+          <strong>Metal&nbsp;&nbsp; Vulkan</strong>
         </div>
         <span class="flow-arrow" aria-hidden="true">→</span>
         <div>
