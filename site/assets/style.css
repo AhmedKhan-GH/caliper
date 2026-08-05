@@ -156,7 +156,6 @@ p {
   width: auto;
   height: 26px;
   flex: none;
-  filter: brightness(0.45);
 }
 
 .site-nav,

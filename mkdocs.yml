@@ -5,7 +5,7 @@ site_dir: build/wiki-site
 theme:
   name: material
   logo: assets/mark.svg
-  favicon: assets/mark.svg
+  favicon: assets/favicon.svg
   font: false
   palette:
     scheme: default
