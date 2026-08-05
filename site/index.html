@@ -73,40 +73,10 @@
       </div>
     </section>
 
-    <section class="home-section container" id="overview">
-      <div class="section-intro">
-        <p class="section-label">01 / Overview</p>
-        <h2>One host, focused applets.</h2>
-        <p>The host owns the window, rendering backend, UI contexts, and frame clock. Applets provide tools and compute through a small C ABI.</p>
-      </div>
-
-      <div class="capability-list">
-        <article>
-          <h3>Applet runtime</h3>
-          <p>Loads shared-library applets, checks their manifests and ABI epoch, and negotiates required services before launch.</p>
-        </article>
-        <article>
-          <h3>Tensor bridge</h3>
-          <p>Turns validated tensor descriptors into opaque texture IDs. Native backends keep dense views off the CPU staging path; the OpenGL fallback stages inside the host.</p>
-        </article>
-        <article>
-          <h3>Shared services</h3>
-          <p>Provides common contracts for jobs, metrics, device selection, artifacts, tabular data, exports, and host telemetry.</p>
-        </article>
-      </div>
-
-      <div class="backend-status" aria-labelledby="backend-status-heading">
-        <h3 id="backend-status-heading">Backend status</h3>
-        <div class="backend-row"><strong>macOS</strong><span>Metal default · GPU-resident MPS tensor path</span></div>
-        <div class="backend-row"><strong>Windows</strong><span>Vulkan default · CUDA external-memory interop</span></div>
-        <div class="backend-row"><strong>Fallback</strong><span>OpenGL 3.3 core · CPU-staged tensor upload</span></div>
-      </div>
-    </section>
-
     <section class="home-section section-rule" id="problem">
       <div class="container information-row">
         <div>
-          <p class="section-label">02 / Frame path</p>
+          <p class="section-label">01 / Frame path</p>
           <h2>Tensor views stay inside the frame loop.</h2>
         </div>
         <div class="information-copy">
@@ -124,7 +94,7 @@
 
     <section class="home-section container" id="how">
       <div class="section-intro">
-        <p class="section-label">03 / Native backends</p>
+        <p class="section-label">02 / Native backends</p>
         <h2>One applet contract, two GPU paths.</h2>
         <p>Graphics APIs stay behind the host renderer. Applets use the same tensor and UI contracts on both platforms.</p>
       </div>
@@ -149,6 +119,36 @@
           </figure>
           <p>Vulkan exports device-local memory for CUDA import and uses a shared timeline semaphore for GPU-side ordering. Device pairing is UUID-based; mismatches disable interop instead of crossing adapters.</p>
         </article>
+      </div>
+    </section>
+
+    <section class="home-section container section-rule" id="overview">
+      <div class="section-intro">
+        <p class="section-label">03 / Overview</p>
+        <h2>One host, focused applets.</h2>
+        <p>The host owns the window, rendering backend, UI contexts, and frame clock. Applets provide tools and compute through a small C ABI.</p>
+      </div>
+
+      <div class="capability-list">
+        <article>
+          <h3>Applet runtime</h3>
+          <p>Loads shared-library applets, checks their manifests and ABI epoch, and negotiates required services before launch.</p>
+        </article>
+        <article>
+          <h3>Tensor bridge</h3>
+          <p>Turns validated tensor descriptors into opaque texture IDs. Native backends keep dense views off the CPU staging path; the OpenGL fallback stages inside the host.</p>
+        </article>
+        <article>
+          <h3>Shared services</h3>
+          <p>Provides common contracts for jobs, metrics, device selection, artifacts, tabular data, exports, and host telemetry.</p>
+        </article>
+      </div>
+
+      <div class="backend-status" aria-labelledby="backend-status-heading">
+        <h3 id="backend-status-heading">Backend status</h3>
+        <div class="backend-row"><strong>macOS</strong><span>Metal default · GPU-resident MPS tensor path</span></div>
+        <div class="backend-row"><strong>Windows</strong><span>Vulkan default · CUDA external-memory interop</span></div>
+        <div class="backend-row"><strong>Fallback</strong><span>OpenGL 3.3 core · CPU-staged tensor upload</span></div>
       </div>
     </section>
 
