@@ -55,10 +55,10 @@ public:
         if (monitor) {
             int ax, ay, aw, ah;
             glfwGetMonitorWorkarea(monitor, &ax, &ay, &aw, &ah);
-            float sx = 1.0f, sy = 1.0f;
-            glfwGetMonitorContentScale(monitor, &sx, &sy);
-            ww = (int)((aw / sx) * 0.95f);
-            wh = (int)((ah / sy) * 0.95f);
+            // GLFW work areas and window sizes are both in screen coordinates.
+            // Dividing by Retina scale here made the window half-sized.
+            ww = (int)(aw * 0.95f);
+            wh = (int)(ah * 0.95f);
         }
 
         // Applet-canvas ImGui/ImPlot/ImPlot3D contexts + docking flag are
