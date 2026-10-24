@@ -1,0 +1,11 @@
+# bench_inproc.py liveness --mode spike --prefix P  (2026-10-24 04:21:32)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+could not create image from window
+could not create image from window
+mode spike: window id 8326
+RESULT {"cmd": "liveness", "mode": "spike", "stall_s": 5.002, "stall_end_s": 5.002, "probes": [{"probe": "runloop-block", "posted_s": 0.51, "handled_s": 5.002, "latency_ms": 4492.3}, {"probe": "close", "posted_s": 3.51, "handled_s": 5.003, "latency_ms": 1493.2}, {"probe": "mouse-move", "posted_s": 0.51, "handled_s": 5.003, "latency_ms": 4493.3}], "window_closed": true, "frames_during_stall": null, "frames_at_1s": null, "frames_at_3s": null, "max_frame_gap_ms": null}
+  probe runloop-block  posted t=0.51s handled t=5.00s (4492.3 ms)
+  probe close          posted t=3.51s handled t=5.00s (1493.2 ms)
+  probe mouse-move     posted t=0.51s handled t=5.00s (4493.3 ms)
+  stall 5.002 s; frames during stall None; screens differ: None
+# exit 0

@@ -1,0 +1,9 @@
+# bench_inproc.py liveness --mode spike  (2026-10-24 02:34:38)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+mode spike: window id 7779
+RESULT {"cmd": "liveness", "mode": "spike", "stall_s": 5.001, "stall_end_s": 5.001, "probes": [{"probe": "runloop-block", "posted_s": 0.501, "handled_s": 5.002, "latency_ms": 4500.9}, {"probe": "close", "posted_s": 3.505, "handled_s": 5.002, "latency_ms": 1497.4}, {"probe": "mouse-move", "posted_s": 0.501, "handled_s": 5.003, "latency_ms": 4501.8}], "window_closed": true, "frames_during_stall": null, "frames_at_1s": null, "frames_at_3s": null, "max_frame_gap_ms": null, "screens": ["python/bench/results/A-liveness-spike-t1s.png", "python/bench/results/A-liveness-spike-t3s.png"], "diff_t1_t3": {"same_shape": true, "w": 1600, "h": 1056, "changed_px": 0, "changed_frac": 0.0, "bbox": null}}
+  probe runloop-block  posted t=0.50s handled t=5.00s (4500.9 ms)
+  probe close          posted t=3.50s handled t=5.00s (1497.4 ms)
+  probe mouse-move     posted t=0.50s handled t=5.00s (4501.8 ms)
+  stall 5.001 s; frames during stall None; screens differ: {'same_shape': True, 'w': 1600, 'h': 1056, 'changed_px': 0, 'changed_frac': 0.0, 'bbox': None}
+# exit 0

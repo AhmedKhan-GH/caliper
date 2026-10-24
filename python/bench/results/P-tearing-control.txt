@@ -1,0 +1,5 @@
+# bench_inproc.py tearing --control  (2026-10-24 04:22:23)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+RESULT {"cmd": "tearing", "size": 2048, "control": true, "iterations": 68688, "snapshots": 68688, "published": 102, "drawn": 599, "checks": 496, "torn": 0, "wrong_content": 16, "ring": {"allocs": 1, "taken": 68688, "published": 8677}, "heatmap_live_apply": true}
+  size 2048 control=True: 68688 iterations, 68688 snapshots, 599 drawn, 496 readbacks: 0 torn, 16 showing a never-published value
+# exit 0

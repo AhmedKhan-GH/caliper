@@ -1,0 +1,19 @@
+# bench_show.py --mode attach --device mps --size 256 --seconds 8  (2026-10-24 04:03:34)
+torch 2.14.1, W 256x256 f32 (0.2 MB), show(W) every step, autoscaled, 8 s per row after 1 s warm-up, load average 4.0 3.8 3.5 (18 cores)
+RESULT {"row": "baseline-A", "steps": 9340, "seconds": 12.656, "steps_per_s": 738.0}
+RESULT {"row": "control-record60", "steps": 9565, "seconds": 8.014, "steps_per_s": 1193.5}
+RESULT {"row": "sampler-60Hz", "steps": 9541, "seconds": 8.015, "steps_per_s": 1190.3, "shows": 9541, "snapshots": 464, "snap_us_med": 33.8, "snap_us_p95": 42.0, "skip_us_med": 2.08, "skip_us_p95": 2.75, "ring": {"taken": 464, "published": 464, "ring_full": 83, "superseded": 0, "skipped": 8994}, "d_mps_MB": 0.0, "d_rss_MB": 0.28, "t_ns": [1258233896131291, 1258241911638541]}
+RESULT {"row": "sampler-off", "steps": 9355, "seconds": 8.002, "steps_per_s": 1169.1, "shows": 9355, "snapshots": 3156, "snap_us_med": 21.2, "snap_us_p95": 26.1, "skip_us_med": 9.96, "skip_us_p95": 13.25, "ring": {"taken": 3156, "published": 3155, "ring_full": 6199, "superseded": 1, "skipped": 0}, "d_mps_MB": 0.0, "d_rss_MB": 0.02, "t_ns": [1258243171945291, 1258251173940625]}
+VIEWER {"row": "sampler-60Hz", "lat_ms_med": 23.13, "lat_ms_p95": 31.15, "lat_n": 395}
+VIEWER {"row": "sampler-off", "lat_ms_med": 3.12, "lat_ms_p95": 4.23, "lat_n": 50}
+RESULT {"row": "baseline-B", "steps": 9485, "seconds": 12.721, "steps_per_s": 745.6}
+load average at the end 4.2 3.9 3.6
+
+attach mps 256x256: baseline mean 741.8 steps/s (A 738.0, B 745.6), commit control 1193.5
+| row | steps/s | % baseline | % control | snapshot us med (p95) | skip us med | snapshots | ring full | latency ms med (p95) [n] | d MPS MB | d RSS MB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| baseline-A | 738.0 | 99.5 | 61.8 | - | - | - | - | - | - | - |
+| control-record60 | 1193.5 | 160.9 | 100.0 | - | - | - | - | - | - | - |
+| sampler-60Hz | 1190.3 | 160.5 | 99.7 | 33.8 (42.0) | 2.08 | 464 | 83 | 23.13 (31.15) [395] | 0.0 | 0.28 |
+| sampler-off | 1169.1 | 157.6 | 98.0 | 21.2 (26.1) | 9.96 | 3156 | 6199 | 3.12 (4.23) [50] | 0.0 | 0.02 |
+| baseline-B | 745.6 | 100.5 | 62.5 | - | - | - | - | - | - | - |

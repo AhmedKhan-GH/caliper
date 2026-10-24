@@ -1,0 +1,16 @@
+# bench_inproc.py snapcost  (2026-10-24 03:06:12)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+RESULT {"size": 256, "device": "mps", "MB": 0.2, "snapshots": 200, "show_us_med": 153.2, "show_us_p95": 194.2, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.45, "path": "compute-imported", "imported": true, "updates": 205, "creates": 1}
+RESULT {"size": 256, "device": "cpu", "MB": 0.2, "snapshots": 200, "show_us_med": 212.6, "show_us_p95": 258.9, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.2, "path": "cpu-staged", "imported": false, "updates": 204, "creates": 1}
+RESULT {"size": 1024, "device": "mps", "MB": 4.0, "snapshots": 200, "show_us_med": 165.0, "show_us_p95": 205.0, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.19, "path": "compute-imported", "imported": true, "updates": 204, "creates": 1}
+RESULT {"size": 1024, "device": "cpu", "MB": 4.0, "snapshots": 200, "show_us_med": 385.1, "show_us_p95": 509.8, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.03, "path": "cpu-staged", "imported": false, "updates": 203, "creates": 1}
+RESULT {"size": 2048, "device": "mps", "MB": 16.0, "snapshots": 200, "show_us_med": 167.2, "show_us_p95": 196.7, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.0, "path": "compute-imported", "imported": true, "updates": 203, "creates": 1}
+RESULT {"size": 2048, "device": "cpu", "MB": 16.0, "snapshots": 200, "show_us_med": 636.0, "show_us_p95": 971.0, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.08, "path": "cpu-staged", "imported": false, "updates": 204, "creates": 1}
+render stats: {'frames': 1693, 'published': 1303, 'drawn': 1223, 'superseded': 80, 'errors': 0} ring {'allocs': 6, 'taken': 1306, 'superseded': 3, 'published': 1303, 'ring_full': 14}
+    256^2 mps   0.2 MB  200 snapshots: show   153.2 us (p95   194.2)  dMPS +0.00 MB  dRSS +0.45 MB  compute-imported imported=True updates=205 creates=1
+    256^2 cpu   0.2 MB  200 snapshots: show   212.6 us (p95   258.9)  dMPS +0.00 MB  dRSS +0.20 MB  cpu-staged imported=False updates=204 creates=1
+   1024^2 mps   4.0 MB  200 snapshots: show   165.0 us (p95   205.0)  dMPS +0.00 MB  dRSS +0.19 MB  compute-imported imported=True updates=204 creates=1
+   1024^2 cpu   4.0 MB  200 snapshots: show   385.1 us (p95   509.8)  dMPS +0.00 MB  dRSS +0.03 MB  cpu-staged imported=False updates=203 creates=1
+   2048^2 mps  16.0 MB  200 snapshots: show   167.2 us (p95   196.7)  dMPS +0.00 MB  dRSS +0.00 MB  compute-imported imported=True updates=203 creates=1
+   2048^2 cpu  16.0 MB  200 snapshots: show   636.0 us (p95   971.0)  dMPS +0.00 MB  dRSS +0.08 MB  cpu-staged imported=False updates=204 creates=1
+# exit 0

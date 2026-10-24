@@ -1,0 +1,8 @@
+# bench_inproc.py clock  (2026-10-24 04:21:31)
+time.monotonic_ns 1259288094027166  native CLOCK_UPTIME_RAW 1259288094027416  time.monotonic_ns 1259288094027500  (native - first = 250 ns, bracketed: True)
+time.monotonic_ns 1259288094028000  native CLOCK_UPTIME_RAW 1259288094028083  time.monotonic_ns 1259288094028166  (native - first = 83 ns, bracketed: True)
+time.monotonic_ns 1259288094028333  native CLOCK_UPTIME_RAW 1259288094028375  time.monotonic_ns 1259288094028416  (native - first = 42 ns, bracketed: True)
+time.monotonic_ns 1259288094028500  native CLOCK_UPTIME_RAW 1259288094028541  time.monotonic_ns 1259288094028583  (native - first = 41 ns, bracketed: True)
+time.monotonic_ns 1259288094028625  native CLOCK_UPTIME_RAW 1259288094028666  time.monotonic_ns 1259288094028708  (native - first = 41 ns, bracketed: True)
+RESULT {"cmd": "clock", "bracketed": true}
+# exit 0

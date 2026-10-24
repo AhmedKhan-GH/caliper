@@ -1,0 +1,17 @@
+03:21:42 viewer pid 5416; CGWindowList windows of that pid: [{'id': 8159, 'bounds': (-135.0, 89.0, 1280.0, 832.0)}]
+03:21:43 t=1.0 s into the trainer's sleep: screencapture -l 8159 -> /Users/ahmed/CLionProjects/caliper-python/python/bench/results/B-liveness-t1.png
+03:21:43 t=1.5 s: SIGUSR1 -> viewer posts move+click on its status window title bar through its own AppKit event queue
+03:21:45 t=3.0 s: screencapture -> /Users/ahmed/CLionProjects/caliper-python/python/bench/results/B-liveness-t3.png
+03:21:45 t=3.5 s: SIGUSR2 -> mouse-move to the window centre
+03:21:46 t=4.5 s: screencapture -> /Users/ahmed/CLionProjects/caliper-python/python/bench/results/B-liveness-t4.5.png
+03:21:51 trainer: SLEEP_END 1255702806292625
+03:21:51 trainer: RESUMED steps=2346 stats={"shows": 4785, "rate_skipped": 4542, "snapshots": 243, "published": 242, "busy_dropped": 0, "pending": 1, "seq": 242, "viewer_seq": 242, "viewer_skipped": 5, "segment": "/clp-5404-v1", "segment_bytes": 12648448}
+03:21:51 png sha256 prefixes t1 ec57407fcb850c1c t3 1c1597ce153e5440 t4.5 9cff0a0f4a398af6 (differ = repainted)
+03:21:51 viewer: stats t=2.0 fps=59.7 frames=120 updates=225 lat_ms_median=21.793 lat_ms_p95=29.455 lat_ms_max=31.552 lat_n=225 skipped=7 client_dropped=0 errors=0 client=alive rss_mb=109.3 footprint_mb=412.9 input_events=61 views=2 W:up
+03:21:51 viewer: input-probe: posted move+click at (1037, 611) pt (status title bar), input_events so far 61
+03:21:51 viewer: stats t=4.0 fps=59.5 frames=120 updates=6 lat_ms_median=29.339 lat_ms_p95=30.194 lat_ms_max=30.423 lat_n=6 skipped=7 client_dropped=0 errors=0 client=alive rss_mb=109.5 footprint_mb=268.4 input_events=76 views=2 W:upd=3,
+03:21:51 viewer: input-probe: posted move to the window centre, input_events so far 143
+03:21:51 viewer: stats t=6.0 fps=59.5 frames=120 updates=0 lat_ms_median=0.000 lat_ms_p95=0.000 lat_ms_max=0.000 lat_n=0 skipped=7 client_dropped=0 errors=0 client=alive rss_mb=109.2 footprint_mb=268.2 input_events=161 views=2 W:upd=0,se
+03:21:51 viewer: stats t=8.1 fps=59.5 frames=120 updates=115 lat_ms_median=22.942 lat_ms_p95=28.371 lat_ms_max=29.557 lat_n=115 skipped=10 client_dropped=0 errors=0 client=alive rss_mb=109.2 footprint_mb=412.5 input_events=161 views=2 W:
+03:21:51 viewer: stats t=10.1 fps=59.5 frames=120 updates=112 lat_ms_median=20.211 lat_ms_p95=29.424 lat_ms_max=31.658 lat_n=112 skipped=14 client_dropped=0 errors=0 client=alive rss_mb=109.2 footprint_mb=412.5 input_events=161 views=2 W
+03:21:51 viewer: stats t=11.2 fps=60.0 frames=70 updates=0 lat_ms_median=0.000 lat_ms_p95=0.000 lat_ms_max=0.000 lat_n=0 skipped=14 client_dropped=0 errors=0 client=alive rss_mb=109.3 footprint_mb=268.2 input_events=161 views=2 W:upd=0,s

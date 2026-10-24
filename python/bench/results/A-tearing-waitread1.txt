@@ -1,0 +1,5 @@
+# bench_inproc.py tearing --wait-read 1  (2026-10-24 02:48:55)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+RESULT {"cmd": "tearing", "size": 2048, "wait_read": true, "control": false, "iterations": 60800, "snapshots": 14999, "published": 87, "drawn": 595, "checks": 456, "torn": 0, "wrong_content": 0, "ring": {"allocs": 1, "taken": 14999, "ring_full": 45801, "superseded": 7377, "published": 7620}}
+  size 2048 wait_read=True control=False: 60800 iterations, 14999 snapshots, 595 drawn, 456 readbacks: 0 torn, 0 showing a never-published value
+# exit 0

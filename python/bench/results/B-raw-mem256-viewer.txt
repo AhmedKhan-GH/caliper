@@ -1,0 +1,7 @@
+[caliper-viewer] info: renderer: metal
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+[caliper-viewer] info: canvas attached: 2560x1600 @2.000000x (window)
+[caliper-viewer] info: live: attached to session 'clp-5032' (client pid 5032)
+[caliper-viewer] ready pid=5034 window=8154 session=clp-5032
+[caliper-viewer] stats t=2.0 fps=60.0 frames=120 updates=8 lat_ms_median=0.527 lat_ms_p95=12.538 lat_ms_max=15.279 lat_n=8 skipped=196 client_dropped=28538 errors=0 client=alive rss_mb=109.0 footprint_mb=264.5 input_events=56 views=1 W:upd=8,seq=1075,skipped=196,dropped=28538,path=compute-imported,imported=1
+[caliper-viewer] stats t=3.8 fps=59.7 frames=108 updates=0 lat_ms_median=0.000 lat_ms_p95=0.000 lat_ms_max=0.000 lat_n=0 skipped=196 client_dropped=28538 errors=0 client=alive rss_mb=109.4 footprint_mb=264.5 input_events=96 views=1 W:upd=0,seq=1075,skipped=196,dropped=28538,path=compute-imported,imported=1

@@ -1,0 +1,43 @@
+# Finding: the `mem` run that grew to 2.5-3.6 GB RSS (pid 86813, 2026-10-24 ~02:46-02:56)
+# Cause: unbounded CPU run-ahead of a sync-free MPS loop. torch queues commands without limit, and
+# no tensor or slot is retained. Repro and control below (same machine, interactive runs).
+
+## What the stuck run did
+`bench_live.py mem --size 2048 --n 200`: loop `W.add_(0.001); live.show(W, rate=0)` until 200
+snapshots were TAKEN, with no sync and no training step. Under the busy-drop policy, show() returns
+in a few us when every free slot holds an unpublished snapshot, so the loop issued W.add_ (16 MB
+read+write each) about 20x faster than the GPU can run them. The two pending snapshots sat behind
+that ever-growing queue, so few completed and the loop never reached 200 snapshots.
+(Before the policy change, the "supersede" policy re-recorded the in-flight slot's event on every
+call. Under the same backlog that never let it complete: 20 published of ~1180 snapshots.)
+
+## Instrumented repro, 2048^2 MPS, rate=0, 6 s, hard 30 s alarm
+t= 1.0 calls=228223 snaps=7 published=5 busy=228216 pending=[(0, False), (2, False)] rss=400MB mps_alloc=16MB drv=1081MB
+t= 2.0 calls=458395 snaps=7 published=5 busy=458388 pending=[(0, False), (2, False)] rss=489MB mps_alloc=16MB drv=1081MB
+t= 3.0 calls=684131 snaps=9 published=7 busy=684122 pending=[(1, False), (0, False)] rss=555MB mps_alloc=16MB drv=1081MB
+t= 4.0 calls=908250 snaps=9 published=7 busy=908241 pending=[(1, False), (0, False)] rss=642MB mps_alloc=16MB drv=1081MB
+t= 5.0 calls=1137822 snaps=9 published=7 busy=1137813 pending=[(1, False), (0, False)] rss=731MB mps_alloc=16MB drv=1081MB
+torch.mps.synchronize() after the loop did not return within the remaining ~24 s (alarm).
+-> torch.mps.current_allocated_memory() constant at 16 MB (W only): no tensor/slot leak.
+-> RSS +~85 MB/s: torch's queue of encoded, not yet executed commands.
+
+## Control: the same loop with NO caliper at all (no show, no viewer)
+start rss=308MB
+t= 1.0 calls=713510 rss=584MB mps_alloc=16MB
+t= 2.0 calls=1343106 rss=827MB mps_alloc=16MB
+t= 3.0 calls=1997417 rss=1080MB mps_alloc=16MB
+(killed by hand at ~3.5 s because the other agent's benchmark had started)
+-> same growth, ~3x faster (+250 MB/s), so the growth is torch MPS's, and show() in the loop slows it.
+
+## Consequences for caliper.live
+* No leak on the live path (snapshot slots are fixed 3 per view; mps_alloc and the viewer's RSS
+  stay flat: B-mem-*.txt).
+* show() provides no back-pressure and must not (training never waits). In a sync-free MPS loop
+  the snapshot completes only when the GPU reaches it, so step-to-screen latency grows with the
+  backlog and the snapshot rate falls. The viewer is unaffected (separate process).
+* Busy-drop (drop the new snapshot when every free slot is in flight) is kept. It guarantees the
+  oldest pending snapshot publishes, while the replaced "supersede" policy starved under the same
+  backlog. It also stops adding 16 MB copies while the GPU lags.
+* Benchmark fix: `mem` now syncs every 10 calls (like any logging loop) and has a 30 s deadline.
+  Every bench mode terminates the viewers it spawned (atexit + its own Popen list) and passes
+  --exit-after as a safety net.

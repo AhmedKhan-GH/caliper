@@ -1,0 +1,10 @@
+# near-free show with no viewer attached (2026-10-24 04:03:13), torch 2.14.1, 100000 calls per row; session clp-24932-59236b
+| call | median us (timed singly) | p99 us | mean us (loop) |
+|---|---|---|---|
+| SessionTransport.attached() | 0.041 | 0.084 | 0.015 |
+| caliper.show(W 1024x1024 mps) | 0.167 | 0.291 | 0.137 |
+| caliper.show(W 1024x1024 mps, rate=0) | 0.167 | 0.292 | 0.138 |
+| caliper.show(W 256x256 cpu) | 0.167 | 0.292 | 0.138 |
+| caliper.series(1.0) | 0.125 | 0.209 | 0.100 |
+
+attached() = False; ring counters after all rows: {}; views created in the session: [] (none: no snapshot, no slot, no GPU work)

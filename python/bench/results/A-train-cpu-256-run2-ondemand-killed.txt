@@ -1,0 +1,6 @@
+# bench_inproc.py train --device cpu --size 256  (2026-10-24 03:04:29)
+device cpu, W 256x256 f32, 10 s per row after 1 s warm-up, torch 2.14.1
+RESULT {"row": "baseline-A", "device": "cpu", "size": 256, "steps": 1641, "seconds": 10.001, "steps_per_s": 164.1}
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+RESULT {"row": "sampler-60Hz", "device": "cpu", "size": 256, "steps": 1573, "seconds": 10.006, "steps_per_s": 157.2, "shows": 1573, "snapshots": 524, "snap_us_med": 66.0, "snap_us_p95": 82.1, "skip_us_med": 2.42, "skip_us_p95": 3.46, "frames": 575, "fps": 57.5, "drawn": 525, "superseded_queue": 0, "errors": 0, "last_error": "", "lat_ms_med": 0.19, "lat_ms_p95": 9.62, "lat_n": 525, "max_frame_gap_ms": 20.4, "ring": {"skipped": 1049, "taken": 524, "published": 524}}
+RESULT {"row": "sampler-off", "device": "cpu", "size": 256, "steps": 1565, "seconds": 10.003, "steps_per_s": 156.5, "shows": 1565, "snapshots": 1565, "snap_us_med": 58.4, "snap_us_p95": 73.5, "skip_us_med": null, "skip_us_p95": null, "frames": 599, "fps": 59.9, "drawn": 599, "superseded_queue": 966, "errors": 0, "last_error": "", "lat_ms_med": 10.43, "lat_ms_p95": 13.33, "lat_n": 599, "max_frame_gap_ms": 33.4, "ring": {"taken": 1565, "published": 1565}}

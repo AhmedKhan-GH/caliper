@@ -1,0 +1,22 @@
+# bench_show.py --mode window --device mps --size 1024 --seconds 8  (2026-10-24 04:00:39)
+torch 2.14.1, W 1024x1024 f32 (4.0 MB), show(W) every step, autoscaled, 8 s per row after 1 s warm-up, load average 3.4 3.8 3.5 (18 cores)
+RESULT {"row": "baseline-A", "steps": 8877, "seconds": 12.537, "steps_per_s": 708.0}
+RESULT {"row": "control-record60", "steps": 9189, "seconds": 8.015, "steps_per_s": 1146.5}
+RESULT {"row": "sampler-60Hz", "steps": 9147, "seconds": 8.015, "steps_per_s": 1141.3, "shows": 9147, "snapshots": 467, "snap_us_med": 61.9, "snap_us_p95": 76.0, "skip_us_med": 2.33, "skip_us_p95": 3.12, "ring": {"taken": 467, "published": 467, "ring_full": 2, "superseded": 0, "skipped": 8678}, "d_mps_MB": 0.0, "d_rss_MB": 0.28, "t_ns": [1258059298581333, 1258067313462541], "frames": 490, "fps": 61.1, "drawn": 434, "errors": 0, "last_error": "", "lat_ms_med": 23.25, "lat_ms_p95": 30.9, "lat_n": 434, "info_lat_ms_med": 22.74, "info_lat_n": 75, "max_frame_gap_ms": 35.1, "path": "compute-imported", "imported": true, "creates": 1}
+RESULT {"row": "sampler-off", "steps": 9110, "seconds": 8.006, "steps_per_s": 1138.0, "shows": 9110, "snapshots": 1567, "snap_us_med": 28.5, "snap_us_p95": 43.8, "skip_us_med": 7.92, "skip_us_p95": 19.71, "ring": {"taken": 1567, "published": 1563, "ring_full": 7543, "superseded": 4, "skipped": 0}, "d_mps_MB": 0.0, "d_rss_MB": 0.02, "t_ns": [1258068562146291, 1258076567895833], "frames": 489, "fps": 61.1, "drawn": 481, "errors": 0, "last_error": "", "lat_ms_med": 9.33, "lat_ms_p95": 14.19, "lat_n": 481, "info_lat_ms_med": 9.17, "info_lat_n": 75, "max_frame_gap_ms": 30.0, "path": "compute-imported", "imported": true, "creates": 1}
+RESULT {"row": "sampler-60Hz+run()", "steps": 9140, "seconds": 8.016, "steps_per_s": 1140.3, "shows": 9140, "snapshots": 468, "snap_us_med": 45.0, "snap_us_p95": 63.7, "skip_us_med": 2.12, "skip_us_p95": 3.08, "ring": {"taken": 468, "published": 468, "ring_full": 4, "superseded": 0, "skipped": 8668}, "d_mps_MB": 0.0, "d_rss_MB": 0.03, "t_ns": [1258077829130166, 1258085845144375], "frames": 490, "fps": 61.1, "drawn": 428, "errors": 0, "last_error": "", "lat_ms_med": 23.52, "lat_ms_p95": 31.34, "lat_n": 428, "info_lat_ms_med": 23.17, "info_lat_n": 76, "max_frame_gap_ms": 29.5, "path": "compute-imported", "imported": true, "creates": 1}
+RESULT {"row": "baseline-B", "steps": 9214, "seconds": 12.707, "steps_per_s": 725.1}
+load average at the end 3.7 3.8 3.5
+
+window mps 1024x1024: baseline mean 716.5 steps/s (A 708.0, B 725.1), commit control 1146.5
+| row | steps/s | % baseline | % control | snapshot us med (p95) | skip us med | snapshots | ring full | latency ms med (p95) [n] | d MPS MB | d RSS MB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| baseline-A | 708.0 | 98.8 | 61.8 | - | - | - | - | - | - | - |
+| control-record60 | 1146.5 | 160.0 | 100.0 | - | - | - | - | - | - | - |
+| sampler-60Hz | 1141.3 | 159.3 | 99.5 | 61.9 (76.0) | 2.33 | 467 | 2 | 23.25 (30.9) [434] | 0.0 | 0.28 |
+| sampler-off | 1138.0 | 158.8 | 99.3 | 28.5 (43.8) | 7.92 | 1567 | 7543 | 9.33 (14.19) [481] | 0.0 | 0.02 |
+| sampler-60Hz+run() | 1140.3 | 159.1 | 99.5 | 45.0 (63.7) | 2.12 | 468 | 4 | 23.52 (31.34) [428] | 0.0 | 0.03 |
+| baseline-B | 725.1 | 101.2 | 63.2 | - | - | - | - | - | - | - |
+  sampler-60Hz: render 61.1 fps, drawn 434, errors 0, max frame gap 35.1 ms, live_view_info latency med 22.74 ms [75], compute-imported imported=True
+  sampler-off: render 61.1 fps, drawn 481, errors 0, max frame gap 30.0 ms, live_view_info latency med 9.17 ms [75], compute-imported imported=True
+  sampler-60Hz+run(): render 61.1 fps, drawn 428, errors 0, max frame gap 29.5 ms, live_view_info latency med 23.17 ms [76], compute-imported imported=True

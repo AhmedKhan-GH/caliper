@@ -1,0 +1,8 @@
+# bench_inproc.py liveness --mode timer-ccall  (2026-10-24 02:35:01)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+mode timer-ccall: window id 7801
+RESULT {"cmd": "liveness", "mode": "timer-ccall", "stall_s": 5.559, "stall_end_s": 5.559, "probes": [{"probe": "runloop-block", "posted_s": 0.505, "handled_s": 5.558, "latency_ms": 5053.5}, {"probe": "mouse-move", "posted_s": 0.505, "handled_s": 5.559, "latency_ms": 5053.5}], "window_closed": false, "frames_during_stall": 334, "frames_at_1s": 128, "frames_at_3s": 246, "max_frame_gap_ms": 31.5, "screens": ["python/bench/results/A-liveness-timer-ccall-t1s.png", "python/bench/results/A-liveness-timer-ccall-t3s.png"], "diff_t1_t3": {"same_shape": true, "w": 1600, "h": 1056, "changed_px": 8436, "changed_frac": 0.00499, "bbox": [32, 132, 1055, 167]}}
+  probe runloop-block  posted t=0.51s handled t=5.56s (5053.5 ms)
+  probe mouse-move     posted t=0.51s handled t=5.56s (5053.5 ms)
+  stall 5.559 s; frames during stall 334; screens differ: {'same_shape': True, 'w': 1600, 'h': 1056, 'changed_px': 8436, 'changed_frac': 0.00499, 'bbox': [32, 132, 1055, 167]}
+# exit 0

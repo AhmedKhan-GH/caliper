@@ -1,0 +1,7 @@
+# Python time.monotonic_ns() vs caliper_live_now_ns() (CLOCK_UPTIME_RAW), same process
+time.get_clock_info('monotonic') = namespace(implementation='mach_absolute_time()', monotonic=True, adjustable=False, resolution=4.166666666666667e-08)
+monotonic_ns 1252227134413416  uptime_raw 1252227134413666  (uptime_raw - monotonic) 250 ns  next monotonic +84 ns
+monotonic_ns 1252227134417416  uptime_raw 1252227134417583  (uptime_raw - monotonic) 167 ns  next monotonic +42 ns
+monotonic_ns 1252227134418583  uptime_raw 1252227134418625  (uptime_raw - monotonic) 42 ns  next monotonic +41 ns
+monotonic_ns 1252227134419041  uptime_raw 1252227134419083  (uptime_raw - monotonic) 42 ns  next monotonic +42 ns
+monotonic_ns 1252227134419375  uptime_raw 1252227134419416  (uptime_raw - monotonic) 41 ns  next monotonic +42 ns

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "caliper"
+version = "0.1.0"
+description = "Live tensor views for PyTorch: caliper.show/points/series/histogram stream GPU snapshots to the Caliper app or an in-process window, zero-copy for MPS tensors"
+requires-python = ">=3.12"
+dependencies = ["numpy"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: MacOS",
+]
+
+[project.optional-dependencies]
+torch = ["torch"]
+test = ["pytest", "torch"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+# Incremental rebuilds: the root CMake builds DuckDB from source, so keep one
+# persistent build tree per wheel tag instead of a throwaway temp dir.
+build-dir = "build/{wheel_tag}"
+cmake.build-type = "Release"
+# Source dir is the repo root (the root CMake uses ${CMAKE_SOURCE_DIR}); only the
+# module and its transitive deps are built, and only the "python" install
+# component (the root's SDK install rules stay out of the wheel).
+build.targets = ["_native", "_live", "caliper_viewer"]
+install.components = ["python"]
+wheel.packages = ["python/caliper"]
+sdist.include = ["python", "pyproject.toml"]
+sdist.exclude = ["build", "dist", ".venv", "cmake-build-*", "site", "dump"]
+
+[tool.scikit-build.cmake.define]
+CALIPER_BUILD_PYTHON = "ON"
+CALIPER_WITH_TORCH = "OFF"
+CALIPER_BUILD_APPLETS = "OFF"
+CALIPER_BUILD_EXAMPLES = "OFF"
+BUILD_TESTS = "OFF"
+USE_CUDA = "OFF"
+# Drop the chrome-only deps (slang, llama.cpp) from the wheel configure.
+CALIPER_WITH_SLANG = "OFF"
+CALIPER_WITH_LLAMA = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]

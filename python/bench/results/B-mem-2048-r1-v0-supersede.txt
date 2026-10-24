@@ -1,0 +1,9 @@
+# caliper.live (B) memory over 200 snapshots of a 2048x2048 f32 MPS tensor (sampler off), 2026-10-24 02:41:39
+trainer torch.mps.current_allocated_memory delta: +0.000 MB  (16777216 -> 16777216 bytes)
+trainer torch.mps.driver_allocated_memory delta:  -0.016 MB
+trainer RSS delta: +0.00 MB (329.7 -> 329.7); phys_footprint delta +0.00 MB
+viewer  RSS delta: +0.31 MB (108.5 -> 108.8); phys_footprint delta +16.00 MB
+show() per snapshot: median 101.7 us, p95 170.9 us
+published 20 superseded 1140 viewer_seq 20
+viewer view path(s): ['compute-imported/imported=1']
+shm segment /clp-86471-v1 bytes 50397184

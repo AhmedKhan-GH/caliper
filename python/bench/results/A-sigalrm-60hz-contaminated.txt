@@ -1,0 +1,23 @@
+# bench_inproc.py sigalrm --hz 60  (2026-10-24 02:47:56)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+RESULT {"test": "time.sleep(2)", "ok": true, "error": null, "detail": {"slept_s": 2.0004}, "seconds": 2.0, "alarms": 120}
+RESULT {"test": "mps training 5 s with show()", "ok": true, "error": null, "detail": {"steps_per_s": 628.0}, "seconds": 9.24, "alarms": 332}
+RESULT {"test": "mps matmuls + torch.mps.synchronize()", "ok": true, "error": null, "detail": {"finite": true}, "seconds": 0.476, "alarms": 2}
+RESULT {"test": "file write/fsync/read 256 MB", "ok": true, "error": null, "detail": {"bytes": 268435456}, "seconds": 0.059, "alarms": 3}
+RESULT {"test": "torch.save/torch.load 256 MB", "ok": true, "error": null, "detail": {"equal": true}, "seconds": 0.54, "alarms": 32}
+RESULT {"test": "subprocess.run(sleep 0.5)", "ok": true, "error": null, "detail": {"rc": -11}, "seconds": 0.012, "alarms": 1}
+RESULT {"test": "socketpair recv (0.5 s wait)", "ok": true, "error": null, "detail": {"recv": 4096}, "seconds": 0.504, "alarms": 30}
+RESULT {"test": "select.select 0.5 s", "ok": true, "error": null, "detail": {"waited_s": 0.501}, "seconds": 0.501, "alarms": 30}
+RESULT {"test": "queue.get(timeout=0.5)", "ok": true, "error": null, "detail": {"empty_after_timeout": true}, "seconds": 0.5, "alarms": 31}
+RESULT {"test": "DataLoader num_workers=2", "ok": false, "error": "TimeoutError: DataLoader(num_workers=2) hung > 30 s under the SIGALRM pump", "detail": null, "seconds": 30.05, "alarms": 1802}
+  time.sleep(2)                            ok    2.000 s  alarms  120  {'slept_s': 2.0004}
+  mps training 5 s with show()             ok    9.240 s  alarms  332  {'steps_per_s': 628.0}
+  mps matmuls + torch.mps.synchronize()    ok    0.476 s  alarms    2  {'finite': True}
+  file write/fsync/read 256 MB             ok    0.059 s  alarms    3  {'bytes': 268435456}
+  torch.save/torch.load 256 MB             ok    0.540 s  alarms   32  {'equal': True}
+  subprocess.run(sleep 0.5)                ok    0.012 s  alarms    1  {'rc': -11}
+  socketpair recv (0.5 s wait)             ok    0.504 s  alarms   30  {'recv': 4096}
+  select.select 0.5 s                      ok    0.501 s  alarms   30  {'waited_s': 0.501}
+  queue.get(timeout=0.5)                   ok    0.500 s  alarms   31  {'empty_after_timeout': True}
+  DataLoader num_workers=2                 FAIL  30.050 s  alarms 1802  TimeoutError: DataLoader(num_workers=2) hung > 30 s under the SIGALRM pump
+# exit 0

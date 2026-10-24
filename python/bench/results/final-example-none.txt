@@ -1,0 +1,18 @@
+device mps, torch 2.14.1, mode none
+baseline, no caliper (4 s)
+control, 60 Hz Event.record only (4 s)
+with caliper, 4 calls per step (15 s)
+
+  no caliper              743.2 steps/s  (100.0 % of no caliper, loss 0.0000)
+  60 Hz Event.record     1200.6 steps/s  (161.5 % of no caliper, loss 0.0000)
+  with caliper            728.5 steps/s  ( 98.0 % of no caliper, loss 0.0000)
+
+per-call cost, median us (p95) [calls]:
+  fc1.weight  snapshot        -           skipped     0.9 (   1.2) [17141]
+  conv1.act   snapshot        -           skipped     0.3 (   0.5) [17141]
+  embedding   snapshot        -           skipped     0.6 (   0.8) [17141]
+  loss        snapshot        -           skipped     0.3 (   0.4) [17141]
+
+session: snapshots 0, published 0, ring full 0, series values 0
+
+session opened implicitly: True, attached: False

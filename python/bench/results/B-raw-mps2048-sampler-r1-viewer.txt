@@ -1,0 +1,12 @@
+[caliper-viewer] info: renderer: metal
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+[caliper-viewer] info: canvas attached: 2560x1600 @2.000000x (window)
+[caliper-viewer] info: live: attached to session 'clp-3992' (client pid 3992)
+[caliper-viewer] ready pid=3993 window=8134 session=clp-3992
+[caliper-viewer] stats t=2.0 fps=59.5 frames=119 updates=100 lat_ms_median=23.480 lat_ms_p95=29.708 lat_ms_max=32.062 lat_n=100 skipped=6 client_dropped=0 errors=0 client=alive rss_mb=108.5 footprint_mb=408.0 input_events=25 views=1 W:upd=100,seq=114,skipped=6,dropped=0,path=compute-imported,imported=1
+[caliper-viewer] stats t=4.0 fps=60.0 frames=121 updates=102 lat_ms_median=19.681 lat_ms_p95=28.559 lat_ms_max=31.857 lat_n=102 skipped=14 client_dropped=0 errors=0 client=alive rss_mb=109.2 footprint_mb=408.3 input_events=39 views=1 W:upd=102,seq=224,skipped=14,dropped=0,path=compute-imported,imported=1
+[caliper-viewer] stats t=6.0 fps=60.0 frames=121 updates=102 lat_ms_median=19.672 lat_ms_p95=29.118 lat_ms_max=33.381 lat_n=102 skipped=24 client_dropped=0 errors=0 client=alive rss_mb=109.2 footprint_mb=408.3 input_events=39 views=1 W:upd=102,seq=336,skipped=24,dropped=0,path=compute-imported,imported=1
+[caliper-viewer] stats t=8.0 fps=59.9 frames=120 updates=101 lat_ms_median=18.990 lat_ms_p95=27.910 lat_ms_max=30.300 lat_n=101 skipped=31 client_dropped=0 errors=0 client=alive rss_mb=108.9 footprint_mb=408.0 input_events=39 views=1 W:upd=101,seq=444,skipped=31,dropped=0,path=compute-imported,imported=1
+[caliper-viewer] stats t=10.1 fps=60.0 frames=121 updates=103 lat_ms_median=19.220 lat_ms_p95=29.691 lat_ms_max=31.082 lat_n=103 skipped=37 client_dropped=0 errors=0 client=alive rss_mb=108.8 footprint_mb=407.9 input_events=39 views=1 W:upd=103,seq=553,skipped=37,dropped=0,path=compute-imported,imported=1
+[caliper-viewer] stats t=12.1 fps=59.5 frames=119 updates=66 lat_ms_median=17.722 lat_ms_p95=26.951 lat_ms_max=31.063 lat_n=66 skipped=41 client_dropped=0 errors=0 client=alive rss_mb=108.8 footprint_mb=407.9 input_events=39 views=1 W:upd=66,seq=623,skipped=41,dropped=0,path=compute-imported,imported=1
+[caliper-viewer] stats t=13.8 fps=59.9 frames=106 updates=0 lat_ms_median=0.000 lat_ms_p95=0.000 lat_ms_max=0.000 lat_n=0 skipped=41 client_dropped=0 errors=0 client=alive rss_mb=108.8 footprint_mb=279.7 input_events=39 views=1 W:upd=0,seq=623,skipped=41,dropped=0,path=compute-imported,imported=1

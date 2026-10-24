@@ -1,0 +1,16 @@
+# bench_inproc.py snapcost  (2026-10-24 02:35:37)
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+RESULT {"size": 256, "device": "mps", "MB": 0.2, "show_us_med": 3.1, "show_us_p95": 12.5, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.41, "path": "compute-imported", "imported": true, "updates": 7, "creates": 1}
+RESULT {"size": 256, "device": "cpu", "MB": 0.2, "show_us_med": 68.7, "show_us_p95": 101.0, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.19, "path": "cpu-staged", "imported": false, "updates": 6, "creates": 1}
+RESULT {"size": 1024, "device": "mps", "MB": 4.0, "show_us_med": 5.7, "show_us_p95": 13.5, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.0, "path": "compute-imported", "imported": true, "updates": 6, "creates": 1}
+RESULT {"size": 1024, "device": "cpu", "MB": 4.0, "show_us_med": 144.0, "show_us_p95": 228.5, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.0, "path": "cpu-staged", "imported": false, "updates": 7, "creates": 1}
+RESULT {"size": 2048, "device": "mps", "MB": 16.0, "show_us_med": 4.3, "show_us_p95": 5.6, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.09, "path": "compute-imported", "imported": true, "updates": 3, "creates": 1}
+RESULT {"size": 2048, "device": "cpu", "MB": 16.0, "show_us_med": 343.2, "show_us_p95": 527.4, "d_mps_alloc_MB": 0.0, "d_rss_MB": 0.05, "path": "cpu-staged", "imported": false, "updates": 12, "creates": 1}
+render stats: {'frames': 137, 'published': 713, 'drawn': 41, 'superseded': 672, 'errors': 0} ring {'allocs': 6, 'taken': 719, 'superseded': 6, 'published': 713, 'ring_full': 601}
+    256^2 mps   0.2 MB  show     3.1 us (p95    12.5)  dMPS +0.00 MB  dRSS +0.41 MB  compute-imported imported=True updates=7 creates=1
+    256^2 cpu   0.2 MB  show    68.7 us (p95   101.0)  dMPS +0.00 MB  dRSS +0.19 MB  cpu-staged imported=False updates=6 creates=1
+   1024^2 mps   4.0 MB  show     5.7 us (p95    13.5)  dMPS +0.00 MB  dRSS +0.00 MB  compute-imported imported=True updates=6 creates=1
+   1024^2 cpu   4.0 MB  show   144.0 us (p95   228.5)  dMPS +0.00 MB  dRSS +0.00 MB  cpu-staged imported=False updates=7 creates=1
+   2048^2 mps  16.0 MB  show     4.3 us (p95     5.6)  dMPS +0.00 MB  dRSS +0.09 MB  compute-imported imported=True updates=3 creates=1
+   2048^2 cpu  16.0 MB  show   343.2 us (p95   527.4)  dMPS +0.00 MB  dRSS +0.05 MB  cpu-staged imported=False updates=12 creates=1
+# exit 0

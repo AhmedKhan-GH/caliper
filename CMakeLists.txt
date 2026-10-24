@@ -617,3 +617,10 @@ if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# The Python extension (caliper-python spike): a nanobind module over the embed
+# C ABI, built by scikit-build-core with CALIPER_WITH_TORCH=OFF so libcaliper
+# lives next to Python's own torch in one process.
+if(CALIPER_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
