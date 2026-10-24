@@ -6,10 +6,12 @@
 // canvas, double attach) that must fail HONESTLY, never crash.
 //
 // One CaliperCore per process (v0), so every case pairs create with shutdown.
-// The pixel case self-skips when no Metal device is present (offscreen attach
-// fails) so a headless CI run stays green, mirroring the gfx suite.
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+// The pixel cases skip when no Metal device is present (offscreen attach
+// fails) — counted and reported as Skipped, a failure under
+// CALIPER_REQUIRE_GPU=1 (gpu_skip.h), mirroring the gfx suite.
+#define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
+#include "gpu_skip.h"
 
 #include <caliper/embed.h>
 
@@ -172,8 +174,9 @@ TEST_CASE("embed/offscreen: load hello, pump, read non-blank pixels, clean shutd
 
     const int W = 256, H = 256;
     CaliperCanvasDesc c = offscreen_desc(W, H);
-    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
-        MESSAGE("no embeddable GPU (offscreen attach failed) — skipping: "
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (offscreen attach failed): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -243,8 +246,9 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
     REQUIRE(core != nullptr);
 
     CaliperCanvasDesc c = offscreen_desc(128, 128);
-    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
-        MESSAGE("no embeddable GPU — skipping same-id restart case: "
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (same-id restart case): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -279,8 +283,9 @@ TEST_CASE("embed/reload: load a different id after active swaps applets") {
     REQUIRE(core != nullptr);
 
     CaliperCanvasDesc c = offscreen_desc(256, 256);
-    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
-        MESSAGE("no embeddable GPU — skipping swap case: "
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (swap case): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -320,8 +325,9 @@ TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet")
     REQUIRE(core != nullptr);
 
     CaliperCanvasDesc c = offscreen_desc(128, 128);
-    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
-        MESSAGE("no embeddable GPU — skipping failed-load case: "
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (failed-load case): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -385,8 +391,9 @@ TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact
 
     const int W = 4, H = 3;
     CaliperCanvasDesc c = offscreen_desc(W, H);
-    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
-        MESSAGE("no embeddable GPU (offscreen attach failed) — skipping §7 case: "
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (offscreen attach failed, §7 case): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -771,8 +778,9 @@ TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
     REQUIRE(core != nullptr);
 
     CaliperCanvasDesc c = offscreen_desc(128, 128);
-    if (!caliper_core_attach_canvas(core, nullptr, &c)) {
-        MESSAGE("no embeddable GPU — skipping applet-log routing case: "
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (applet-log routing case): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -796,3 +804,5 @@ TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
     caliper_core_unload_applet(core);
     caliper_core_shutdown(core);
 }
+
+CALIPER_GPU_TEST_MAIN()

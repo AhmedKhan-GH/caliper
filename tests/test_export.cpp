@@ -2,11 +2,13 @@
 // atomic-write refusal purity, sugar null-degradation) runs everywhere; the live
 // pixel path (quad -> PNG -> decode -> byte-exact vs CPU reference; double-export
 // byte-identity; filesystem refusal purity; sidecar; sequences; sugar widening)
-// is Metal-gated and self-skips with no device. Compiled as ObjC++ on Apple so it
-// can allocate the MTLBuffers the imported-geometry path consumes (mirrors
-// gfx_main.cpp). MSVC-safe: no compound REQUIRE expressions.
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+// is Metal-gated and skips honestly with no device (gpu_skip.h: counted, exit
+// code = Skipped in ctest, a failure under CALIPER_REQUIRE_GPU=1). Compiled as
+// ObjC++ on Apple so it can allocate the MTLBuffers the imported-geometry path
+// consumes (mirrors gfx_main.cpp). MSVC-safe: no compound REQUIRE expressions.
+#define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
+#include "gpu_skip.h"
 
 #include "host_services.h"
 #include "export_service.h"
@@ -379,7 +381,7 @@ struct MetalHostEnv {
     id<MTLDevice> device = nil;
 
     MetalHostEnv() {
-        glfw_ok = (glfwInit() == GLFW_TRUE);
+        glfw_ok = !caliper_test::force_no_gpu() && glfwInit() == GLFW_TRUE;
         if (!glfw_ok) return;
         device = MTLCreateSystemDefaultDevice();
         if (device == nil) return;
@@ -451,13 +453,13 @@ Quad make_topleft_quad(uint32_t flat) {
 }  // namespace
 
 TEST_CASE("export live: caps track the geometry primitives cap when a renderer is bound") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     REQUIRE(export_svc() != nullptr);
     CHECK((export_svc()->caps() & CALIPER_EXPORT_CAP_VIEW_PNG) != 0u);
 }
 
 TEST_CASE("export live: FLAT quad PNG decodes byte-exact to the CPU reference, top-down") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     const uint32_t W = 16, H = 16, flat = 0xFF3377AAu, clear = 0xFF000000u;
     Quad q = make_topleft_quad(flat);
     REQUIRE(q.pos != 0);
@@ -495,7 +497,7 @@ TEST_CASE("export live: FLAT quad PNG decodes byte-exact to the CPU reference, t
 }
 
 TEST_CASE("export live: same draws -> byte-identical PNG across two calls (determinism)") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     const uint32_t W = 16, H = 16;
     Quad q = make_topleft_quad(0xFF11EE55u);
     REQUIRE(q.pos != 0);
@@ -514,7 +516,7 @@ TEST_CASE("export live: same draws -> byte-identical PNG across two calls (deter
 }
 
 TEST_CASE("export live: the sidecar lands next to the PNG with the submitted provenance") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     const uint32_t W = 16, H = 16;
     Quad q = make_topleft_quad(0xFF3377AAu);
     REQUIRE(q.pos != 0);
@@ -539,7 +541,7 @@ TEST_CASE("export live: the sidecar lands next to the PNG with the submitted pro
 }
 
 TEST_CASE("export live: refusal purity — bad dims/path/draw write & truncate nothing") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     const uint32_t W = 16, H = 16;
     Quad q = make_topleft_quad(0xFF3377AAu);
     REQUIRE(q.pos != 0);
@@ -590,7 +592,7 @@ TEST_CASE("export live: refusal purity — bad dims/path/draw write & truncate n
 }
 
 TEST_CASE("export live: a sequence writes N numbered frames + one finalized sidecar") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     const uint32_t W = 16, H = 16;
     Quad q = make_topleft_quad(0xFF3377AAu);
     REQUIRE(q.pos != 0);
@@ -633,7 +635,7 @@ TEST_CASE("export live: a sequence writes N numbered frames + one finalized side
 }
 
 TEST_CASE("export live: the SDK sugar widens a v1.1 draw and produces the same pixels") {
-    if (!env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     const uint32_t W = 16, H = 16, flat = 0xFF3377AAu, clear = 0xFF000000u;
     Quad q = make_topleft_quad(flat);      // q.draw.base.base is the v1.1 record
     REQUIRE(q.pos != 0);
@@ -691,7 +693,7 @@ struct VkHostEnv {
     std::unique_ptr<HostRenderer> renderer;
 
     VkHostEnv() {
-        glfw_ok = (glfwInit() == GLFW_TRUE);
+        glfw_ok = !caliper_test::force_no_gpu() && glfwInit() == GLFW_TRUE;
         if (!glfw_ok) return;
         renderer = make_vulkan_renderer();
         glfwDefaultWindowHints();
@@ -733,9 +735,13 @@ bool vk_cuda_ready() {
 
 // The guard every live Vulkan case opens with (gfx_main's vmm_rows_ready idiom).
 bool vk_live_ready() {
-    if (!env().ok) { MESSAGE("no Vulkan ICD — skipping"); return false; }
-    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return false; }
-    if (!cudadrv::vmm_api()) { MESSAGE("no CUDA VMM driver API — skipping"); return false; }
+    if (!env().ok) { CALIPER_NOTE_NO_GPU("no Vulkan ICD"); return false; }
+    if (!vk_cuda_ready()) {
+        CALIPER_NOTE_NO_GPU("no CUDA interop / not single-GPU"); return false;
+    }
+    if (!cudadrv::vmm_api()) {
+        CALIPER_NOTE_NO_GPU("no CUDA VMM driver API"); return false;
+    }
     return true;
 }
 
@@ -1097,3 +1103,5 @@ TEST_CASE("export live: a sidecar-write failure rolls the PNG back, directory un
     fs::remove_all(sidecar, ec);
 }
 #endif  // CALIPER_HAVE_VULKAN
+
+CALIPER_GPU_TEST_MAIN()

@@ -5,14 +5,30 @@
 //
 // CPU assertions run everywhere. The MPS branch only asserts under
 // torch::mps::is_available(); on a machine without an MPS device those cases
-// report a MESSAGE and pass, so the label stays green rather than red.
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+// skip — counted, reported as Skipped by ctest, and a failure under
+// CALIPER_REQUIRE_GPU=1 (gpu_skip.h). CUDA cases on macOS are not a missing
+// GPU but a platform that never has one: not-applicable, never a failure.
+#define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
+#include "gpu_skip.h"
 
 #include <caliper/adapters/torch.hpp>
 #include <caliper/adapters/exportable_pool.hpp>
 
 #include <torch/torch.h>
+
+// Device gates, with the test-only CALIPER_TEST_FORCE_NO_GPU knob folded in.
+static bool mps_ok() {
+    return !caliper_test::force_no_gpu() && torch::mps::is_available();
+}
+static bool cuda_ok() {
+    return !caliper_test::force_no_gpu() && torch::cuda::is_available();
+}
+#if defined(__APPLE__)
+#define CALIPER_SKIP_NO_CUDA() CALIPER_SKIP_NOT_APPLICABLE("no CUDA on macOS")
+#else
+#define CALIPER_SKIP_NO_CUDA() CALIPER_SKIP_NO_GPU("no CUDA device")
+#endif
 
 // Mirrors the adapter's guard (adapters/torch.hpp): the CUDA cases drive the
 // handoff from a non-default pool stream, which needs the c10 stream API.
@@ -91,10 +107,7 @@ TEST_CASE("ndim > 8 is rejected") {
 }
 
 TEST_CASE("mps tensor -> METAL device, storage().data pointer, matches C5 shape") {
-    if (!torch::mps::is_available()) {
-        MESSAGE("no MPS device — skipping MPS adapter cases");
-        return;
-    }
+    if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     // Contiguous (H,W) f32 on MPS — the exact shape C5 builds a METAL-device
     // CaliperTensor from (ndim=2, shape={h,w}, strides={w,1}).
     torch::Tensor t = torch::arange(20, torch::TensorOptions().dtype(torch::kFloat)
@@ -114,10 +127,7 @@ TEST_CASE("mps tensor -> METAL device, storage().data pointer, matches C5 shape"
 }
 
 TEST_CASE("mps view with nonzero storage_offset is rejected") {
-    if (!torch::mps::is_available()) {
-        MESSAGE("no MPS device — skipping MPS adapter cases");
-        return;
-    }
+    if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     torch::Tensor base = torch::arange(12, torch::TensorOptions().dtype(torch::kFloat)
                                        .device(torch::kMPS)).reshape({3, 4});
     // Row 1 onward: a contiguous slice, but its storage starts at a nonzero
@@ -160,7 +170,7 @@ TEST_CASE("stream_to_tensor: cpu tensor never carries a stream, even when honore
 }
 
 TEST_CASE("stream_to_tensor: mps tensor carries the producer queue when honored; drains when not") {
-    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     torch::Tensor t = torch::ones({4, 4},
         torch::TensorOptions().device(torch::kMPS)) * 2.0f;
 
@@ -175,7 +185,7 @@ TEST_CASE("stream_to_tensor: mps tensor carries the producer queue when honored;
 }
 
 TEST_CASE("stream_to_tensor: cuda tensor carries the producer stream when honored; drains when not") {
-    if (!torch::cuda::is_available()) { MESSAGE("no CUDA device — skipping"); return; }
+    if (!cuda_ok()) CALIPER_SKIP_NO_CUDA();
 #if defined(__APPLE__)
     // Unreachable: Apple torch never reports CUDA. The early return above
     // keeps this TU compiling without the c10 CUDA headers.
@@ -219,7 +229,7 @@ TEST_CASE("stream_to_tensor: cuda tensor carries the producer stream when honore
 }
 
 TEST_CASE("stream_to_tensor: handoff survives a concurrently-encoding training thread") {
-    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     // Regression for the EmbedScope SIGABRT (MPSCore MPSPredicate.mm 'command
     // buffer already committed. State: 4'): the frame thread performs stream
     // handoffs while a worker thread — the training loop — continuously
@@ -250,7 +260,7 @@ TEST_CASE("stream_to_tensor: handoff survives a concurrently-encoding training t
 }
 
 TEST_CASE("synced_to_tensor: drain survives a concurrently-encoding training thread") {
-    if (!torch::mps::is_available()) { MESSAGE("no MPS device — skipping"); return; }
+    if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     // The drain-path twin of the stress case above (the fix backported to main
     // as 8b0a010, kept through the metal-pipelining merge): the frame thread
     // drains via synced_to_tensor — the no-caps / GL-fallback route — while a
@@ -341,7 +351,7 @@ TEST_CASE("mps exportable pool: storage_ref extracts (buffer, size, offset) "
 }
 
 TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training thread") {
-    if (!torch::cuda::is_available()) { MESSAGE("no CUDA device — skipping"); return; }
+    if (!cuda_ok()) CALIPER_SKIP_NO_CUDA();
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
     // CUDA twin of the MPS stress case above (docs/m2a-windows-verification.md
     // T4, finding 2). On MPS the equivalent race SIGABRTed within a few hundred
@@ -375,3 +385,5 @@ TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training threa
     torch::cuda::synchronize();                  // leave the device quiet for other cases
 #endif
 }
+
+CALIPER_GPU_TEST_MAIN()

@@ -70,8 +70,11 @@ add_test(NAME caliper_tests COMMAND caliper_tests)
 # caliper_gfx_tests — windowed, pixel-exact tensor->texture proof (§16).
 # Separate binary because it pulls in the GL renderer (NOT caliper_host_lib):
 # it links the renderer + bridge sources directly into the exe/gfx-test scope.
-# Registered under the "gfx" label so `ctest -L gfx` selects it; it self-skips
-# with a MESSAGE when glfwInit() fails, so a headless CI run stays green.
+# Registered under the "gfx" label so `ctest -L gfx` selects it. Without a
+# GUI/GL context every case skips (gpu_skip.h): counted, and the binary exits
+# 77, which SKIP_RETURN_CODE turns into ctest "Skipped" rather than "Passed".
+# CALIPER_REQUIRE_GPU=1 makes those skips failures on a lane that must have a
+# GPU.
 add_executable(caliper_gfx_tests
     gfx/gfx_main.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
@@ -105,16 +108,17 @@ if(WIN32)
 endif()
 
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
-set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx")
+set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
 # caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
 # (host_services vends the export service + the composition reaches its g_bridge/
 # g_renderer) and the Metal backend, and drives the vended service as an embedder
 # would: bind a renderer -> import a quad -> view_png/sequence -> decode the PNG
-# back (stb_image, TEST-ONLY) and byte-compare. The live cases self-skip with no
-# GPU; the sidecar-golden / atomic-write / sugar cases are GPU-free. Own "export"
-# label so `ctest -L gfx` (49/49) is untouched.
+# back (stb_image, TEST-ONLY) and byte-compare. The live cases skip with no GPU
+# (counted; exit 77 -> ctest "Skipped", gpu_skip.h); the sidecar-golden /
+# atomic-write / sugar cases are GPU-free. Own "export" label so `ctest -L gfx`
+# (49/49) is untouched.
 # ---------------------------------------------------------------------------
 add_executable(caliper_export_tests test_export.cpp)
 target_include_directories(caliper_export_tests PRIVATE
@@ -138,14 +142,15 @@ if(WIN32)
     target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_VULKAN=1)
 endif()
 add_test(NAME caliper_export_tests COMMAND caliper_export_tests)
-set_tests_properties(caliper_export_tests PROPERTIES LABELS "export")
+set_tests_properties(caliper_export_tests PROPERTIES LABELS "export"
+    SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
 # caliper_torch_tests — the applet-side torch adapter (adapters/torch.hpp).
 # A SEPARATE binary because it links libtorch: keeping torch out of
 # caliper_tests spares the fast unit suite the torch link cost. Registered
-# under the "torch" label so `ctest -L torch` selects it; the MPS cases
-# self-skip (MESSAGE + pass) when no MPS device is present, staying green.
+# under the "torch" label so `ctest -L torch` selects it; the MPS cases skip
+# when no MPS device is present (counted; exit 77 -> ctest "Skipped").
 # ---------------------------------------------------------------------------
 add_executable(caliper_torch_tests test_torch_adapter.cpp)
 target_link_libraries(caliper_torch_tests PRIVATE
@@ -167,13 +172,15 @@ if(APPLE)
 endif()
 
 add_test(NAME caliper_torch_tests COMMAND caliper_torch_tests)
+set_tests_properties(caliper_torch_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
 # caliper_embed_tests — the embed C ABI (caliper/embed.h) battery (R4 L2a).
 # Links libcaliper (the embeddable core) and drives it as an embedder would:
 # offscreen core -> load the hello fixture -> pump -> read_pixels -> shutdown,
-# plus the refusal gates. Needs a live GPU for the pixel case (self-skips like
-# the gfx suite when none is present); the gate cases are GPU-free.
+# plus the refusal gates. Needs a live GPU for the pixel cases (skips like the
+# gfx suite when none is present: counted, exit 77 -> ctest "Skipped"); the
+# gate cases are GPU-free.
 # ---------------------------------------------------------------------------
 add_executable(caliper_embed_tests test_embed.cpp)
 target_link_libraries(caliper_embed_tests PRIVATE
@@ -198,6 +205,7 @@ if(APPLE)
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
 endif()
 add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
+set_tests_properties(caliper_embed_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
 # Applet learning-core / engine tests. Each is a SEPARATE binary that links

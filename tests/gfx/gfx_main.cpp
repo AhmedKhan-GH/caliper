@@ -1,7 +1,9 @@
 // caliper_gfx_tests — windowed, pixel-exact proof of the tensor->texture path
 // (PLATFORM.md §16). NOT part of the headless ctest default; registered under
 // the "gfx" label and requires a GUI session. If glfwInit() fails (headless
-// CI), every case is reported skipped so the label stays green rather than red.
+// CI), every case is reported skipped — counted, and the binary exits with the
+// skip code so ctest shows "Skipped", not "Passed" (gpu_skip.h). With
+// CALIPER_REQUIRE_GPU=1 those skips are failures.
 //
 // This runs the SAME §16 matrix on BOTH backends: the GL run and (on Apple, when
 // a Metal device is available) the Metal run. Both compare the GPU readback
@@ -14,8 +16,9 @@
 // then f32+LUT must take the "compute" path and u8 HWC the "blit" path, each
 // pixel-exact vs the identical CPU reference. Readback is test-only: a Metal
 // blit texture->shared-buffer + waitUntilCompleted (never the render path).
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
+#include "../gpu_skip.h"
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -60,7 +63,7 @@ namespace {
 // every env (reverse static-destruction order), avoiding a double-terminate.
 struct GlfwGuard {
     bool ok;
-    GlfwGuard() : ok(glfwInit() == GLFW_TRUE) {}
+    GlfwGuard() : ok(!caliper_test::force_no_gpu() && glfwInit() == GLFW_TRUE) {}
     ~GlfwGuard() { if (ok) glfwTerminate(); }
 };
 GlfwGuard& glfw_guard() { static GlfwGuard g; return g; }
@@ -258,7 +261,7 @@ void mat_alloc_shared(Backend& bk) {
 }
 
 #define REQUIRE_GL() do { \
-    if (!gl_env().ok) { MESSAGE("no GUI/GL context — skipping gfx case"); return; } \
+    if (!gl_env().ok) CALIPER_SKIP_NO_GPU("no GUI/GL context"); \
 } while (0)
 
 }  // namespace
@@ -553,27 +556,27 @@ id<MTLBuffer> device_buffer_private(const void* src, size_t bytes) {
 }  // namespace
 
 TEST_CASE("gfx/Metal: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_f32_viridis(bk);
 }
 TEST_CASE("gfx/Metal: f32 mapped through magma and RdBu is pixel-exact (staged)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_f32_magma_rdbu(bk);
 }
 TEST_CASE("gfx/Metal: 2x3 u8 direct (C=1,3,4) expands pixel-exact (staged)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_u8_direct(bk);
 }
 TEST_CASE("gfx/Metal: update_texture changes the pixels on the GPU (staged)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_update(bk);
 }
 TEST_CASE("gfx/Metal: invalid tensors return id 0") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_invalid(bk);
 }
 TEST_CASE("gfx/Metal: alloc_shared roundtrip — write buffer, update, readback") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_alloc_shared(bk);
 }
 
@@ -583,7 +586,7 @@ TEST_CASE("gfx/Metal: alloc_shared roundtrip — write buffer, update, readback"
 // reference. Sizes deliberately non-multiples of the 16x16 threadgroup to prove
 // the dispatch edge-guard (5x3 -> 1x1 groups, 17x9 -> 2x1 groups).
 TEST_CASE("gfx/Metal: device f32+LUT takes the compute path, pixel-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
 
     for (auto wh : {std::pair<int,int>{4, 4}, {5, 3}, {17, 9}}) {
@@ -619,7 +622,7 @@ TEST_CASE("gfx/Metal: device f32+LUT takes the compute path, pixel-exact") {
 // (a zero vmin would hide a dropped/incorrect subtraction). Pixel-exact vs the
 // identical CPU reference, which uses the same (v-vmin)/(vmax-vmin) math.
 TEST_CASE("gfx/Metal: device f32+LUT compute path is exact with nonzero vmin") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
 
     const int w = 4, h = 4;
@@ -650,7 +653,7 @@ TEST_CASE("gfx/Metal: device f32+LUT compute path is exact with nonzero vmin") {
 
 // u8 RGBA (HWC, C=4) on a METAL-device tensor -> blit -> byte-exact vs CPU ref.
 TEST_CASE("gfx/Metal: device u8 HWC takes the blit path, byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
 
     const int h = 3, w = 5, c = 4;
@@ -682,7 +685,7 @@ TEST_CASE("gfx/Metal: device u8 HWC takes the blit path, byte-exact") {
 // against the tensor extent, so it never reads memory it can't reason about and
 // never faults the GPU.
 TEST_CASE("gfx/Metal: short device buffer is rejected (no GPU fault)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
 
     const int h = 4, w = 4;
@@ -709,7 +712,7 @@ TEST_CASE("gfx/Metal: short device buffer is rejected (no GPU fault)") {
 // caller owns producer quiescence); dropping each buffer's last strong ref
 // mid-flight also exercises command-buffer resource retention (spec §3.2).
 TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
 
     const int w = 17, h = 9, n = w * h;   // non-16-multiple edge sizes
@@ -754,7 +757,7 @@ TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exac
 // TEST only fires after update_texture returns. A renderer that ignores
 // t.stream colormaps the stale bytes (fails); one that orders reads the fresh.
 TEST_CASE("gfx/Metal: non-NULL stream orders the update after the producer queue") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE(bk.renderer->honors_stream_ordered_handoff());
 
@@ -813,7 +816,7 @@ TEST_CASE("gfx/Metal: non-NULL stream orders the update after the producer queue
 // id via ImGui::Image and runs the ACTUAL ImGui_ImplMetal draw path offscreen —
 // the exact call chain that crashed. If it returns, the crash is fixed.
 TEST_CASE("gfx/Metal: bridge id is the ImGui handle and survives the real ImGui draw path") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     @autoreleasepool {
         uint8_t rgba[2 * 2 * 4]; for (int i = 0; i < 16; ++i) rgba[i] = (uint8_t)(i * 15 + 8);
@@ -891,7 +894,7 @@ TEST_CASE("gfx/Metal: bridge id is the ImGui handle and survives the real ImGui 
 // byte offset inside it — no CPU copy of the tensor data. Byte-exact vs the same
 // CPU reference the staged path uses. Then a released alloc must refuse.
 TEST_CASE("gfx/Metal: import in-process MTLBuffer, colormap from a nonzero offset, byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) != 0);
 
@@ -940,7 +943,7 @@ TEST_CASE("gfx/Metal: import in-process MTLBuffer, colormap from a nonzero offse
 // size overclaim (buf shorter than declared) all return 0; an OOB offset on a
 // valid import refuses and leaves pixels untouched.
 TEST_CASE("gfx/Metal: import gates fail closed") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     std::vector<uint8_t> z(1024, 0);
     id<MTLBuffer> buf = device_buffer(z.data(), z.size());
@@ -1027,7 +1030,7 @@ uint32_t metal_geom_pixel_rgba(const std::vector<uint8_t>& px, int w, int x, int
 }  // namespace
 
 TEST_CASE("gfx/metal geometry: imported points byte-exact — colormap extremes at a nonzero offset") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS));
 
@@ -1076,7 +1079,7 @@ TEST_CASE("gfx/metal geometry: imported points byte-exact — colormap extremes 
 }
 
 TEST_CASE("gfx/metal geometry: count 0 clears; gates keep prior pixels; released refuses") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     if ((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_IMPORTED_POINTS) == 0) return;
 
@@ -1124,7 +1127,7 @@ TEST_CASE("gfx/metal geometry: count 0 clears; gates keep prior pixels; released
 }
 
 TEST_CASE("gfx/metal geometry.v1_1: indexed triangles from imported buffers honor depth") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1192,7 +1195,7 @@ TEST_CASE("gfx/metal geometry.v1_1: indexed triangles from imported buffers hono
 // The (-1,-1),(3,-1),(-1,3) trick covers every pixel center unambiguously, so
 // the whole frame is the flat color: identical to geom_ref's clear-only image.
 TEST_CASE("gfx/metal geometry.v1_1: unindexed triangle, FLAT, OPAQUE is byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1240,7 +1243,7 @@ TEST_CASE("gfx/metal geometry.v1_1: unindexed triangle, FLAT, OPAQUE is byte-exa
 // exactly pixel columns/rows 8..23 of a 32x32 view (NDC edges at +/-0.5, which
 // land on integer pixel boundaries — never through a pixel center).
 TEST_CASE("gfx/metal geometry.v1_1: indexed quad pulls u32 indices and LUT extremes at nonzero offsets") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1331,7 +1334,7 @@ TEST_CASE("gfx/metal geometry.v1_1: indexed quad pulls u32 indices and LUT extre
 // the frozen v1 draw_points path given the same buffers. Over a black clear,
 // additive one-pixel points equal the LUT color exactly, matching v1.
 TEST_CASE("gfx/metal geometry.v1_1: additive points via draw_primitives match v1 draw_points byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1391,7 +1394,7 @@ TEST_CASE("gfx/metal geometry.v1_1: additive points via draw_primitives match v1
 // with a near triangle, then a count-0 clear to teal, then a far (z=0.9) DEPTH_TEST
 // triangle: it only draws if the count-0 clear reset depth to 1.0.
 TEST_CASE("gfx/metal geometry.v1_1: draw_count 0 is a pure clear, and clears depth to 1.0") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1458,7 +1461,7 @@ TEST_CASE("gfx/metal geometry.v1_1: draw_count 0 is a pure clear, and clears dep
 // in [16,24)x[16,24). Both readbacks must be byte-identical AND equal the CPU
 // reference (near wins overlap; each quad's non-overlap keeps its own color).
 TEST_CASE("gfx/metal geometry.v1_1: overlapping depth-tested quads are draw-order-independent") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1533,7 +1536,7 @@ TEST_CASE("gfx/metal geometry.v1_1: overlapping depth-tested quads are draw-orde
 // BLEND_ALPHA, no depth. color = 255*(128/255) + 0 = 128 exactly per channel;
 // alpha = 128*1 + 255*(127/255) = 255 exactly -> rect pixel = 0xFF808080.
 TEST_CASE("gfx/metal geometry.v1_1: ALPHA blend equations are byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1592,7 +1595,7 @@ TEST_CASE("gfx/metal geometry.v1_1: ALPHA blend equations are byte-exact") {
 // (Metal/Vulkan diamond-exit endpoint rules differ) by overwriting them with the
 // GPU's own bytes before the compare.
 TEST_CASE("gfx/metal geometry.v1_1: axis-aligned 1-px LINES cross, endpoints masked") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1650,7 +1653,7 @@ TEST_CASE("gfx/metal geometry.v1_1: axis-aligned 1-px LINES cross, endpoints mas
 // (sin60,0,cos60)=(0.8660254,0,0.5) -> lit=0.30+0.70*0.5=0.65 -> round(180*0.65)
 // =117. Alpha stays 255 (Lambert scales rgb only). nmat is identity here.
 TEST_CASE("gfx/metal geometry.v1_1: LAMBERT headlight shading within +/-2 LSB") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1742,7 +1745,7 @@ TEST_CASE("gfx/metal geometry.v1_1: LAMBERT headlight shading within +/-2 LSB") 
 // Reference: blue everywhere, white along the two segments; the 4 line endpoints
 // are masked as in Row G.
 TEST_CASE("gfx/metal geometry.v1_1: wireframe-over-mesh coplanar LESS_OR_EQUAL overlay") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1819,7 +1822,7 @@ TEST_CASE("gfx/metal geometry.v1_1: wireframe-over-mesh coplanar LESS_OR_EQUAL o
 // three pixels; clamp indices {0,1,999} -> 999 clamps to vertex 2, so the image
 // is BYTE-IDENTICAL to the reference. Pins the "defined image, no crash" contract.
 TEST_CASE("gfx/metal geometry.v1_1: out-of-range index values clamp to vertex_count-1, defined image") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -1892,7 +1895,7 @@ TEST_CASE("gfx/metal geometry.v1_1: out-of-range index values clamp to vertex_co
 // last_device_path unchanged). One valid draw = full-viewport triangle: any
 // refusal that leaks would change the frame.
 TEST_CASE("gfx/metal geometry.v1_1: every §2.3 gate refuses the whole frame, pixels untouched") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -2072,7 +2075,7 @@ TEST_CASE("gfx/metal geometry.v1_1: every §2.3 gate refuses the whole frame, pi
 // one call — correct stride addressing must step 208 bytes, not 192, so draw[1]
 // (a different-colored quad) lands only when stepping is right.
 TEST_CASE("gfx/metal geometry.v1_1: draw_stride forward-compat, a grown struct draws identically") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
 
@@ -2180,7 +2183,7 @@ TEST_CASE("gfx/metal geometry.v1_1: draw_stride forward-compat, a grown struct d
 // (within two RGB LSB, alpha untouched). Transcribed byte-for-byte from the
 // donor's Vulkan twin below; runs on mac later.
 TEST_CASE("gfx/metal geometry.v1_2: UV offset, bilinear texture, and Lambert are byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
 
@@ -2263,7 +2266,7 @@ TEST_CASE("gfx/metal geometry.v1_2: UV offset, bilinear texture, and Lambert are
 // deep in an out-of-range corner (|beyond [0,1]| = 0.4375 >> 0.125 = a quarter
 // texel), so clamp-to-edge samples the nearest edge texel with no bilinear mix.
 TEST_CASE("gfx/metal geometry.v1_2: out-of-range UVs clamp to edge texels byte-exact") {
-    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
 
@@ -2337,7 +2340,7 @@ TEST_CASE("gfx/metal geometry.v1_2: out-of-range UVs clamp to edge texels byte-e
 // paths identically and still compares equal. Absolute shader correctness is
 // guarded by the byte-exact rows above.
 TEST_CASE("gfx/metal geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-identical") {
-    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
 
@@ -2405,7 +2408,7 @@ TEST_CASE("gfx/metal geometry.v1_2: v1.1 and v1.2 non-textured draws are byte-id
 // view (the target itself), (c) texture is a released texture id, (d) a v1.2
 // submission with a short (192) draw_stride.
 TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouched (cumulative)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
 
@@ -2505,7 +2508,7 @@ TEST_CASE("gfx/metal geometry.v1_2: textured gate refusals leave the view untouc
 // varying misalignment would sample the wrong texel or blend garbage).
 // Vulkan mirror row: pending the Windows Phase-B session.
 TEST_CASE("gfx/metal geometry.v1_2: textured POINT draw renders the sampled texel") {
-    if (!metal_env().ok) { MESSAGE("no Metal device - skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_TEXTURED));
 
@@ -2584,7 +2587,7 @@ TEST_CASE("gfx/metal geometry.v1_2: textured POINT draw renders the sampled texe
 // BYTE-EXACT (0 LSB) against the CPU reference. Proves instanceCount + the
 // per-instance model-matrix pull.
 TEST_CASE("gfx/metal geometry.v1_3: pose-only fleet N=4, FLAT, byte-exact (0 LSB)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
 
@@ -2639,7 +2642,7 @@ TEST_CASE("gfx/metal geometry.v1_3: pose-only fleet N=4, FLAT, byte-exact (0 LSB
 // (§6.2): a COLORMAP-only LUT predicate would read placeholder garbage here.
 // BYTE-EXACT (0 LSB) — the tint path has no normalize.
 TEST_CASE("gfx/metal geometry.v1_3: per-instance tint over FLAT base, MAGMA, byte-exact (0 LSB)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
 
@@ -2704,7 +2707,7 @@ TEST_CASE("gfx/metal geometry.v1_3: per-instance tint over FLAT base, MAGMA, byt
 // identical to each other (the instance_count==0 == non-instanced contract, §4.2),
 // with a non-triviality guard that the mesh actually rasterized.
 TEST_CASE("gfx/metal geometry.v1_3: zero instance tail is byte-identical to v1.2 (0 LSB)") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
 
@@ -2768,7 +2771,7 @@ TEST_CASE("gfx/metal geometry.v1_3: zero instance tail is byte-identical to v1.2
 // -> ~163. Base FLAT gray 180. Reference is the §4.4 chain in host float; the
 // sole tolerance row (±2 RGB LSB, alpha exact), matching v1.2's Lambert row.
 TEST_CASE("gfx/metal geometry.v1_3: instanced LAMBERT rigid rotations within +/-2 LSB") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
 
@@ -2854,7 +2857,7 @@ TEST_CASE("gfx/metal geometry.v1_3: instanced LAMBERT rigid rotations within +/-
 // the view byte-untouched (proving the private readback still refuses before any
 // encoder). Pins the private-blit path ctest never otherwise exercises.
 TEST_CASE("gfx/metal geometry.v1_3: private-storage instanced LAMBERT — blit readback, rigid renders, shear refuses") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
 
@@ -2948,7 +2951,7 @@ TEST_CASE("gfx/metal geometry.v1_3: private-storage instanced LAMBERT — blit r
 // only rigidity gate (host passes it through), so its refusal proves the Metal
 // re-gate runs before any encoder.
 TEST_CASE("gfx/metal geometry.v1_3: instance-gate refusals leave the view untouched") {
-    if (!metal_env().ok) { MESSAGE("no Metal device — skipping"); return; }
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
     REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_INSTANCED));
 
@@ -3135,30 +3138,30 @@ bool vk_cuda_ready() {
 
 // ---- CPU-staged matrix (portable: runs on any Vulkan ICD, no CUDA) ----------
 TEST_CASE("gfx/Vulkan: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend(); mat_f32_viridis(bk);
 }
 TEST_CASE("gfx/Vulkan: f32 mapped through magma and RdBu is pixel-exact (staged)") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend(); mat_f32_magma_rdbu(bk);
 }
 TEST_CASE("gfx/Vulkan: 2x3 u8 direct (C=1,3,4) expands pixel-exact (staged)") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend(); mat_u8_direct(bk);
 }
 TEST_CASE("gfx/Vulkan: update_texture changes the pixels on the GPU (staged)") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend(); mat_update(bk);
 }
 TEST_CASE("gfx/Vulkan: invalid tensors return id 0") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend(); mat_invalid(bk);
 }
 
 // ---- CUDA device paths (hardware-gated: needs a UUID-paired CUDA device) -----
 TEST_CASE("gfx/Vulkan+CUDA: device f32+LUT takes the compute path, pixel-exact") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
-    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
     const cudadrv::Api* cu = cudadrv::api();
 
@@ -3197,8 +3200,8 @@ TEST_CASE("gfx/Vulkan+CUDA: device f32+LUT takes the compute path, pixel-exact")
 // semaphore (retire + signal/wait). The final readback must equal the LAST
 // write byte-for-byte — a torn or reordered chain would surface a stale mix.
 TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-exact") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
-    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
     const cudadrv::Api* cu = cudadrv::api();
 
@@ -3245,8 +3248,8 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
 // applet's real sizes and prints µs/op so the fix (create-once + update) is
 // justified by measurement, not vibes (D21).
 TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-shaped") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
-    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
     const cudadrv::Api* cu = cudadrv::api();
 
@@ -3298,8 +3301,8 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-sh
 }
 
 TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-exact") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
-    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
     const cudadrv::Api* cu = cudadrv::api();
 
@@ -3407,9 +3410,13 @@ struct VmmBlock {
 // Guard set shared by every v1.2 row: Vulkan ICD + UUID-paired single CUDA GPU
 // + the optional VMM driver table.
 bool vmm_rows_ready() {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return false; }
-    if (!vk_cuda_ready()) { MESSAGE("no CUDA interop / not single-GPU — skipping"); return false; }
-    if (!cudadrv::vmm_api()) { MESSAGE("no CUDA VMM driver API — skipping"); return false; }
+    if (!vk_env().ok) { CALIPER_NOTE_NO_GPU("no Vulkan ICD"); return false; }
+    if (!vk_cuda_ready()) {
+        CALIPER_NOTE_NO_GPU("no CUDA interop / not single-GPU"); return false;
+    }
+    if (!cudadrv::vmm_api()) {
+        CALIPER_NOTE_NO_GPU("no CUDA VMM driver API"); return false;
+    }
     return true;
 }
 
@@ -3734,7 +3741,8 @@ std::vector<uint8_t> geom_ref(int w, int h, uint32_t clear_rgba,
 TEST_CASE("gfx/geometry: imported points byte-exact — colormap extremes at a nonzero offset") {
     if (!vmm_rows_ready()) return;
     Backend bk = vk_backend();
-    if (bk.bridge->geom_caps() == 0) { MESSAGE("no geometry path — skipping"); return; }
+    if (bk.bridge->geom_caps() == 0)
+        CALIPER_SKIP_NOT_APPLICABLE("no geometry path on this backend");
     const cudadrv::Api* cu = cudadrv::api();
 
     const int W = 64, H = 64;
@@ -3792,7 +3800,8 @@ TEST_CASE("gfx/geometry: imported points byte-exact — colormap extremes at a n
 TEST_CASE("gfx/geometry: count 0 clears; gates keep prior pixels; released view refuses") {
     if (!vmm_rows_ready()) return;
     Backend bk = vk_backend();
-    if (bk.bridge->geom_caps() == 0) { MESSAGE("no geometry path — skipping"); return; }
+    if (bk.bridge->geom_caps() == 0)
+        CALIPER_SKIP_NOT_APPLICABLE("no geometry path on this backend");
     const cudadrv::Api* cu = cudadrv::api();
 
     const int W = 32, H = 32;
@@ -4997,10 +5006,10 @@ TEST_CASE("gfx/geometry.v1_1: draw_stride forward-compat, a grown struct draws i
 // ===========================================================================
 
 TEST_CASE("gfx/geometry.v1_1: create_view_ex refuses unknown flags and degenerate sizes (portable)") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend();
     if ((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) == 0) {
-        MESSAGE("no geometry primitives path — skipping"); return;
+        CALIPER_SKIP_NOT_APPLICABLE("no geometry primitives path on this backend");
     }
 
     // Unknown flag bits (only CALIPER_GEOM_VIEW_DEPTH is defined) refuse.
@@ -5031,10 +5040,10 @@ TEST_CASE("gfx/geometry.v1_1: create_view_ex refuses unknown flags and degenerat
 // the last row (nonexistent alloc id) actually exercises the pos_alloc gate
 // itself, with every earlier field left honestly valid.
 TEST_CASE("gfx/geometry.v1_1: portable §2.3 gates refuse draw_primitives, pixels untouched (no CUDA)") {
-    if (!vk_env().ok) { MESSAGE("no Vulkan ICD — skipping"); return; }
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     Backend bk = vk_backend();
     if ((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES) == 0) {
-        MESSAGE("no geometry primitives path — skipping"); return;
+        CALIPER_SKIP_NOT_APPLICABLE("no geometry primitives path on this backend");
     }
 
     const int W = 16, H = 16;
@@ -5887,3 +5896,5 @@ TEST_CASE("gfx/geometry.v1_3: instance-gate refusals leave the view untouched") 
 
 #endif  // _WIN32
 #endif  // CALIPER_HAVE_VULKAN
+
+CALIPER_GPU_TEST_MAIN()
