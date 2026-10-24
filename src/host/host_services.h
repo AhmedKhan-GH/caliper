@@ -75,4 +75,12 @@ void services_set_renderer(HostRenderer* renderer);
 // bridge texture back with debug_readback_rgba8, which is renderer-side. Not on
 // the applet-facing surface — applets never see the renderer type.
 HostRenderer* services_renderer();
+
+// The process TensorBridge behind caliper.tensor_bridge.v1..v1_2 (lazily built
+// on the bound renderer), or nullptr while no renderer is bound. Host-internal:
+// the embed core's built-in tensor views drive it directly so they can reach
+// host-only ops (TensorBridge::set_mapping) that the frozen C tables don't
+// carry. Frame-thread only, like every bridge op.
+class TensorBridge;
+TensorBridge* services_bridge();
 }

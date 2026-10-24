@@ -79,6 +79,39 @@ public:
     // read it without dynamic_cast; GL and other CPU-staged backends default.
     virtual const char* last_device_path() const { return "cpu-staged"; }
 
+    // Block the CALLING thread until the most recent device texture update
+    // (tex_update_from_device / tex_update_from_imported) has completed on the
+    // GPU, so the caller may rewrite the source buffer on return (embed v1.2
+    // views: CALIPER_VIEW_FLAG_WAIT_GPU). No-op when nothing is pending and on
+    // CPU-staged backends, whose uploads are already synchronous. Never on the
+    // default hot path — the device updates themselves stay wait-free (M1/D23).
+    virtual void device_update_wait() {}
+
+    // Live views (src/host/live), additive. A NON-blocking completion probe for
+    // one device texture update: retain_last returns a +1 handle to the most
+    // recent update (NULL when none, or on CPU-staged backends), is_done polls
+    // it without waiting, release drops it. The live viewer holds one handle per
+    // view so it re-claims a shared-memory slot only after its previous GPU read
+    // of that view has retired, without ever blocking its UI thread.
+    virtual void* device_update_retain_last() { return nullptr; }
+    virtual bool device_update_is_done(void* /*handle*/) const { return true; }
+    virtual void device_update_release(void* /*handle*/) {}
+    // Typed live views (src/host/live/live_views*), additive: the same kind of
+    // +1 handle, on the command buffer of the most recent geom_draw_points /
+    // geom_draw_primitives call (NULL when none, or on backends that draw
+    // synchronously). Poll it with device_update_is_done, drop it with
+    // device_update_release. A points view re-reads its payload every frame, so
+    // it keeps one handle per payload on the last frame that drew it and frees
+    // the payload's slot only once that frame retired. Independent of
+    // device_update_retain_last (geometry draws never touch the WAIT_GPU target).
+    virtual void* geom_draw_retain_last() { return nullptr; }
+
+    // The backend's native device (id<MTLDevice> on Metal) once a canvas or
+    // window is up, else NULL. The live viewer creates its shared-memory
+    // MTLBuffers on it, because import_external_allocation refuses a buffer
+    // whose device differs.
+    virtual void* native_device() const { return nullptr; }
+
     // Which device kind this backend imports on its zero-copy path (spec §3.4).
     // The bridge maps this to active_device_ instead of matching on name(),
     // so a new backend never grows a strcmp arm. Metal -> METAL; Vulkan -> CUDA

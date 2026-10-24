@@ -49,6 +49,9 @@
 
 #include <stddef.h>   /* size_t   */
 #include <stdint.h>   /* uint32_t */
+/* v1.2 views: CaliperTensor (the SDK's DLPack-aligned interchange type, pure C;
+ * sdk/include rides libcaliper's PUBLIC caliper::sdk link). */
+#include <caliper/tensor.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -124,7 +127,11 @@ typedef struct CaliperCoreDesc {
                                     * document app's per-project root. NULL keeps
                                     * the OS default byte-for-byte (the caliper
                                     * exe passes NULL). Valid for one live core;
-                                    * restored on shutdown (one core per process).*/
+                                    * restored on shutdown (one core per process).
+                                    * Also holds the ImGui window layout
+                                    * (<data_dir>/imgui.ini); with NULL no layout
+                                    * is persisted and nothing is written to the
+                                    * process's working directory.               */
     const char*     applets_dir;   /* extra applet scan dir; NULL -> default
                                     * discovery (app-data/applets + exe-side). */
     CaliperLogFn    log_fn;        /* NULL -> stderr.                          */
@@ -297,6 +304,111 @@ const char* caliper_core_last_error(CaliperCore* core);
  * PARAMETERS; an APPLET's worker produces device tensors. The bridge's host-side
  * use is CPU-staged uploads on the frame thread only. */
 const void* caliper_core_get_service(CaliperCore* core, const char* id);
+
+/* ---------------------------------------------------------------------------
+ * v1.2 — built-in tensor views (the Python entry point's caliper.show). Additive.
+ * ---------------------------------------------------------------------------
+ * A host hands the core a CaliperTensor and the CORE draws it: a texture made
+ * through the process tensor bridge, plus an ImGui window titled with the view's
+ * name, composited in caliper_core_frame AFTER the loaded applet's draw (so views
+ * work with no applet loaded and alongside one). No ImGui, renderer or texture
+ * type crosses the seam — the caller only names views and passes tensors. Same
+ * name = update the existing view in place. Views are drawn in creation order.
+ *
+ * WHAT IS ACCEPTED (validated here, refused with last_error otherwise; the
+ * Python layer pre-converts everything else into one of these two shapes):
+ *   - 2-D f32 (H,W): colormapped through `colormap` over [vmin, vmax]
+ *     (CaliperColormap: 0 viridis, 1 magma, 2 rdbu; idx = clamp((v-vmin)/
+ *     (vmax-vmin),0,1)*255+0.5, NaN -> idx 0 — the bridge's frozen rule).
+ *   - 3-D u8 (H,W,4) RGBA: shown as-is. C must be 4 (no RGB/gray here).
+ *   Row-major contiguous (strides in ELEMENTS), each dim in 1..16384, device
+ *   CPU or METAL. For a CPU tensor the bytes are read at data + byte_offset.
+ *
+ * TWO DEVICE PATHS, NO SILENT FALLBACK:
+ *   - CPU: CPU-staged upload (path "cpu-staged"). The bytes are copied before
+ *     return; the caller may free/rewrite them immediately.
+ *   - METAL: ZERO-COPY. tensor->data is an in-process id<MTLBuffer> (DLPack's
+ *     kDLMetal `data`: the storage's MTLBuffer object pointer) and byte_offset is
+ *     DLPack's byte_offset (must be a multiple of 4). The view imports the buffer
+ *     (a strong retain — tensor_bridge.v1_2 import_allocation, cached per view
+ *     and re-imported when the buffer pointer changes) and the renderer reads it
+ *     IN PLACE at byte_offset on the GPU (path "compute-imported" for f32,
+ *     "blit-imported" for u8; info.imported = 1). If the device path refuses
+ *     (wrong GPU, buffer shorter than byte_offset + extent, no import cap), the
+ *     call FAILS — the core never quietly downloads a METAL tensor to the host.
+ *   tensor->stream is passed through (a non-NULL MTLCommandQueue* GPU-orders the
+ *   read after that queue's committed work, bridge v1.1 D24); NULL is the normal
+ *   case for a caller that synchronized first.
+ *
+ * SYNC / MEMORY-STABILITY CONTRACT (from tensor_bridge_v1_2.h, verbatim in
+ * spirit): the GPU reads [byte_offset, byte_offset + extent) of the buffer AFTER
+ * this call returns, unless WAIT_GPU is set. So:
+ *   - BEFORE the call the producer must have FINISHED writing those bytes (the
+ *     Python layer snapshots on torch's stream and polls a torch.mps.Event until
+ *     the snapshot completed, never a synchronize; device-side ordering only
+ *     covers producer work committed BEFORE the call).
+ *   - WITHOUT CALIPER_VIEW_FLAG_WAIT_GPU the bytes must not be rewritten until
+ *     the next update of the same view (or the next caliper_core_frame).
+ *   - WITH CALIPER_VIEW_FLAG_WAIT_GPU the call blocks until the renderer's read
+ *     has completed, so on return the caller may rewrite or free the buffer at
+ *     once. The wait is measured: info.last_update_ms includes it.
+ *   The texture is the view's own copy of the pixels; the source buffer is only
+ *   read during the update. A view keeps its last MTLBuffer RETAINED (the import)
+ *   until it is updated from a different buffer or removed.
+ *
+ * MAPPING CHANGES: a different vmin/vmax/colormap on an existing f32 view re-pins
+ * the mapping and re-maps the new tensor into the SAME texture (info.creates does
+ * not move). A different shape/dtype recreates the texture (creates += 1).
+ *
+ * THREADING: FRAME-THREAD ONLY — every function below except
+ * caliper_core_colormap_lut must be called from the thread that calls
+ * caliper_core_frame(), between frames (same class as caliper.tensor_bridge.*).
+ * Views need an attached canvas (the renderer's device exists only after
+ * attach_canvas); view_tensor before attach is an honest refusal. Views are
+ * destroyed (textures and imports released) by caliper_core_shutdown, before the
+ * renderer is torn down.
+ * ------------------------------------------------------------------------- */
+#define CALIPER_EMBED_HAVE_VIEWS 1
+
+enum {
+    CALIPER_VIEW_FLAG_RAW      = 1 << 0,  /* draw the texture 1:1 at canvas (0,0), no window chrome/padding (tests) */
+    CALIPER_VIEW_FLAG_WAIT_GPU = 1 << 1   /* block until the device update completed (safe handoff; measured cost) */
+};
+
+typedef struct CaliperViewDesc {
+    size_t               struct_size;   /* = sizeof(CaliperViewDesc) */
+    const char*          name;          /* view id; same name = update in place */
+    const CaliperTensor* tensor;        /* 2-D f32 (H,W) or 3-D u8 (H,W,4); CPU or METAL */
+    uint64_t             byte_offset;   /* METAL only: byte offset into tensor->data's MTLBuffer (DLPack byte_offset) */
+    int32_t              colormap;      /* CaliperColormap for 2-D f32 (0 viridis, 1 magma, 2 rdbu) */
+    float                vmin, vmax;    /* mapping range for 2-D f32 */
+    uint32_t             flags;         /* CALIPER_VIEW_FLAG_* */
+} CaliperViewDesc;
+
+typedef struct CaliperViewInfo {
+    size_t      struct_size;
+    const char* path;          /* renderer path of the LAST update: "compute-imported", "blit-imported", "compute", "blit", "cpu-staged"; valid until the next core call */
+    int32_t     width, height; /* texture size in texels */
+    int32_t     device;        /* CaliperDeviceKind of the last tensor */
+    uint64_t    updates;       /* number of successful updates */
+    double      last_update_ms;/* CPU wall time of the last view_tensor call (includes the GPU wait when WAIT_GPU) */
+    int32_t     imported;      /* 1 if the last update read an imported MTLBuffer in place (zero-copy), else 0 */
+    uint64_t    creates;       /* texture (re)creations: 1 after the first show, +1 per shape/dtype change; a mapping change does not bump it */
+} CaliperViewInfo;
+
+/* Frame-thread only (same thread as caliper_core_frame). Creates or updates the
+ * named view. Returns 1 on success, 0 with last_error set. A failed FIRST show
+ * leaves no view; a failed update of an existing view keeps its previous pixels. */
+int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc);
+int caliper_core_view_remove(CaliperCore* core, const char* name);    /* 1 if removed */
+int caliper_core_view_count(CaliperCore* core);
+int caliper_core_view_info(CaliperCore* core, const char* name, CaliperViewInfo* out); /* 1 on success */
+/* Test/measurement surface: copy the view's TEXTURE (not the canvas) to buf as tightly
+ * packed RGBA8 (width*height*4 bytes). 1 on success. */
+int caliper_core_view_readback(CaliperCore* core, const char* name, void* buf, size_t buf_bytes);
+/* The built-in 256-entry RGBA8 LUT for a colormap (CPU reference for tests). 1 on success.
+ * Each entry packs r | g<<8 | b<<16 | a<<24. Needs no core; callable from any thread. */
+int caliper_core_colormap_lut(int32_t colormap, uint32_t out256[256]);
 
 #ifdef __cplusplus
 }  /* extern "C" */

@@ -47,6 +47,13 @@ void map_f32_to_rgba8(const float* src, int w, int h,
 //   c==1 -> gray replicated to RGB, a=255;  c==3 -> RGB, a=255;  c==4 -> copy.
 void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst);
 
+// Host-internal diagnostics (embed v1.2 views): the text of the most recent
+// bridge rejection on THIS thread ("" if none since the last clear), so the
+// embed core can put the bridge's own reason into caliper_core_last_error
+// instead of a generic "refused". The log sink still receives every line.
+const char* bridge_last_reject();
+void        bridge_clear_last_reject();
+
 class TensorBridge {
 public:
     explicit TensorBridge(HostRenderer& renderer);
@@ -84,6 +91,15 @@ public:
                                              CaliperAllocId a,
                                              uint64_t offset_bytes,
                                              const CaliperTensor* desc);
+
+    // Host-internal (NOT on any frozen C table — the embed core's built-in
+    // tensor views use it): re-pin a MAPPED texture's colormap/vmin/vmax so the
+    // NEXT update_texture / update_texture_from_alloc maps with the new values,
+    // without recreating the texture. Existing texels are not re-rendered.
+    // false (nothing changed): unknown id, a direct-u8/geometry texture, or an
+    // out-of-range colormap.
+    bool           set_mapping(CaliperTextureId tex, int32_t colormap,
+                               float vmin, float vmax);
 
     // caliper.geometry.v1 (imported 3-D points). Lives on the SAME object as
     // the bridge so views share the texture table (ImGui-drawable ids) and

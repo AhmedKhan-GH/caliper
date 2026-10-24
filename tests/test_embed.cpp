@@ -812,4 +812,569 @@ TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
     caliper_core_shutdown(core);
 }
 
+// ===========================================================================
+// v1.2 — built-in tensor views (caliper_core_view_*). The Python entry point's
+// caliper.show: the core draws a host tensor itself. Byte-exact against the
+// SAME CPU reference the bridge/gfx rows use (map_f32_to_rgba8 + colormap_lut),
+// at two levels — the view's texture (view_readback) and the composited canvas
+// (RAW view + read_pixels). The METAL cases build real MTLBuffers from this
+// plain C++ TU through the ObjC runtime (dlsym — no ObjC compile, no extra link)
+// and prove the zero-copy imported path at a NONZERO byte offset. All GPU cases
+// skip headless like the pixel cases above (gpu_skip.h: counted, Skipped).
+// ===========================================================================
+#ifdef __APPLE__
+#  include <dlfcn.h>
+#endif
+
+namespace {
+
+#ifdef __APPLE__
+// Minimal Metal through the ObjC runtime C API, resolved at run time from the
+// already-loaded Metal + libobjc images (libcaliper's Metal backend links them).
+// objc_msgSend is cast to each exact non-variadic signature (arm64 ABI).
+struct MetalRT {
+    void* (*sel)(const char*) = nullptr;
+    void* msg = nullptr;
+    void* device = nullptr;
+
+    MetalRT() {
+        auto create = (void* (*)())dlsym(RTLD_DEFAULT, "MTLCreateSystemDefaultDevice");
+        sel = (void* (*)(const char*))dlsym(RTLD_DEFAULT, "sel_registerName");
+        msg = dlsym(RTLD_DEFAULT, "objc_msgSend");
+        // CALIPER_TEST_FORCE_NO_GPU=1 reports no device, like the canvas gates.
+        if (create && sel && msg && !caliper_test::force_no_gpu())
+            device = create();   // +1 (create rule)
+    }
+    ~MetalRT() { release(device); }
+    bool ok() const { return device != nullptr; }
+
+    // [device newBufferWithBytes:len:options:MTLResourceStorageModeShared] (+1)
+    void* new_buffer(const void* bytes, size_t len) {
+        using Fn = void* (*)(void*, void*, const void*, unsigned long, unsigned long);
+        return ((Fn)msg)(device, sel("newBufferWithBytes:length:options:"),
+                         bytes, (unsigned long)len, 0ul);
+    }
+    void* contents(void* buf) {
+        using Fn = void* (*)(void*, void*);
+        return ((Fn)msg)(buf, sel("contents"));
+    }
+    void release(void* obj) {
+        if (!obj || !msg) return;
+        using Fn = void (*)(void*, void*);
+        ((Fn)msg)(obj, sel("release"));
+    }
+};
+#endif
+
+CaliperTensor make_tensor(void* data, CaliperDType dt, std::vector<int64_t> shape,
+                          CaliperDeviceKind dev) {
+    CaliperTensor t{};
+    t.struct_size = sizeof t;
+    t.data = data;
+    t.dtype = dt;
+    t.ndim = (int32_t)shape.size();
+    for (int i = 0; i < t.ndim; ++i) t.shape[i] = shape[i];
+    int64_t st = 1;
+    for (int i = t.ndim - 1; i >= 0; --i) { t.strides[i] = st; st *= t.shape[i]; }
+    t.device = dev;
+    return t;
+}
+
+CaliperViewDesc make_view(const char* name, const CaliperTensor* t, uint32_t flags,
+                          int32_t cm = 0, float vmin = 0.0f, float vmax = 1.0f,
+                          uint64_t byte_offset = 0) {
+    CaliperViewDesc d{};
+    d.struct_size = sizeof d;
+    d.name = name;
+    d.tensor = t;
+    d.byte_offset = byte_offset;
+    d.colormap = cm;
+    d.vmin = vmin;
+    d.vmax = vmax;
+    d.flags = flags;
+    return d;
+}
+
+CaliperViewInfo view_info(CaliperCore* core, const char* name, int* ok = nullptr) {
+    CaliperViewInfo vi{};
+    vi.struct_size = sizeof vi;
+    const int r = caliper_core_view_info(core, name, &vi);
+    if (ok) *ok = r;
+    return vi;
+}
+
+std::vector<float> ramp_f32(int W, int H, bool reversed = false) {
+    std::vector<float> v((size_t)W * H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const float r = (float)x / (float)(W - 1);
+            v[(size_t)y * W + x] = reversed ? 1.0f - r : r;
+        }
+    return v;
+}
+
+std::vector<uint8_t> map_ref(const std::vector<float>& v, int W, int H, int32_t cm,
+                             float vmin, float vmax) {
+    std::vector<uint8_t> out((size_t)W * H * 4);
+    caliper_host::map_f32_to_rgba8(v.data(), W, H, caliper_host::colormap_lut(cm),
+                                   vmin, vmax, out.data());
+    return out;
+}
+
+int max_abs_diff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+    if (a.size() != b.size()) return 256;
+    int m = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const int d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
+        if (d > m) m = d;
+    }
+    return m;
+}
+
+std::vector<uint8_t> view_readback(CaliperCore* core, const char* name, int W, int H) {
+    std::vector<uint8_t> px((size_t)W * H * 4, 0);
+    if (!caliper_core_view_readback(core, name, px.data(), px.size())) px.clear();
+    return px;
+}
+
+// Pack f32 values after `junk` bytes of 0xAB filler, as one byte blob.
+std::vector<uint8_t> blob_at(size_t junk, const void* data, size_t bytes) {
+    std::vector<uint8_t> b(junk + bytes, 0xAB);
+    std::memcpy(b.data() + junk, data, bytes);
+    return b;
+}
+
+}  // namespace
+
+TEST_CASE("embed/views: colormap_lut ABI == the bridge's internal LUTs") {
+    for (int32_t cm = 0; cm < 3; ++cm) {
+        uint32_t lut[256] = {};
+        REQUIRE(caliper_core_colormap_lut(cm, lut) == 1);
+        CHECK(std::memcmp(lut, caliper_host::colormap_lut(cm), sizeof lut) == 0);
+        CHECK((lut[0] >> 24) == 0xffu);   // opaque
+    }
+    uint32_t lut[256];
+    CHECK(caliper_core_colormap_lut(3, lut) == 0);
+    CHECK(caliper_core_colormap_lut(-1, lut) == 0);
+}
+
+TEST_CASE("embed/views: RAW f32 ramp (CPU) — texture and canvas byte-exact vs the "
+          "CPU colormap reference") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+    const int W = 64, H = 48;
+    CaliperCanvasDesc c = offscreen_desc(W, H);
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (RAW ramp case): "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    std::vector<float> ramp = ramp_f32(W, H);
+    CaliperTensor t = make_tensor(ramp.data(), CALIPER_DT_F32, {H, W}, CALIPER_DEV_CPU);
+    CaliperViewDesc vd = make_view("ramp", &t, CALIPER_VIEW_FLAG_RAW, 0, 0.0f, 1.0f);
+    REQUIRE_MESSAGE(caliper_core_view_tensor(core, &vd) == 1,
+                    caliper_core_last_error(core));
+    CHECK(caliper_core_view_count(core) == 1);
+
+    int ok = 0;
+    CaliperViewInfo vi = view_info(core, "ramp", &ok);
+    REQUIRE(ok == 1);
+    CHECK(std::string(vi.path) == "cpu-staged");
+    CHECK(vi.imported == 0);
+    CHECK(vi.width == W);
+    CHECK(vi.height == H);
+    CHECK(vi.device == CALIPER_DEV_CPU);
+    CHECK(vi.updates == 1);
+    CHECK(vi.creates == 1);
+
+    const std::vector<uint8_t> ref = map_ref(ramp, W, H, 0, 0.0f, 1.0f);
+
+    // Texture level: byte-exact.
+    CHECK(view_readback(core, "ramp", W, H) == ref);
+
+    // Canvas level: the RAW view composites 1:1 at (0,0), nearest-sampled.
+    caliper_core_frame(core);
+    caliper_core_frame(core);
+    std::vector<uint8_t> px((size_t)W * H * 4, 0);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), W * 4) == 1);
+    const int diff = max_abs_diff(px, ref);
+    MESSAGE("RAW ramp canvas vs reference: max abs diff = " << diff);
+    CHECK(diff == 0);
+
+    caliper_core_shutdown(core);
+}
+
+#ifdef __APPLE__
+TEST_CASE("embed/views: METAL f32 at a nonzero byte_offset is zero-copy "
+          "(compute-imported); re-import, mapping change, in-place rewrite") {
+    MetalRT mt;
+    if (!mt.ok()) CALIPER_SKIP_NO_GPU("no Metal device");
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+    const int W = 64, H = 48;
+    CaliperCanvasDesc c = offscreen_desc(W, H);
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (METAL view case): "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+    const size_t bytes = (size_t)W * H * sizeof(float);
+
+    // Buffer 1: 64 bytes of junk, then the ramp at byte_offset 64.
+    std::vector<float> ramp = ramp_f32(W, H);
+    std::vector<uint8_t> blob1 = blob_at(64, ramp.data(), bytes);
+    void* buf1 = mt.new_buffer(blob1.data(), blob1.size());
+    REQUIRE(buf1 != nullptr);
+
+    CaliperTensor t1 = make_tensor(buf1, CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+    CaliperViewDesc vd = make_view("act", &t1,
+                                   CALIPER_VIEW_FLAG_RAW | CALIPER_VIEW_FLAG_WAIT_GPU,
+                                   0, 0.0f, 1.0f, /*byte_offset=*/64);
+    REQUIRE_MESSAGE(caliper_core_view_tensor(core, &vd) == 1,
+                    caliper_core_last_error(core));
+    CaliperViewInfo vi = view_info(core, "act");
+    CHECK(std::string(vi.path) == "compute-imported");
+    CHECK(vi.imported == 1);
+    CHECK(vi.device == CALIPER_DEV_METAL);
+    CHECK(vi.width == W);
+    CHECK(vi.height == H);
+    CHECK(vi.updates == 1);
+    CHECK(vi.creates == 1);
+    MESSAGE("METAL f32 64x48 view_tensor (create + WAIT_GPU): " << vi.last_update_ms << " ms");
+    CHECK(view_readback(core, "act", W, H) == map_ref(ramp, W, H, 0, 0.0f, 1.0f));
+
+    // The composite from the device path matches too.
+    caliper_core_frame(core);
+    std::vector<uint8_t> px((size_t)W * H * 4, 0);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), W * 4) == 1);
+    CHECK(max_abs_diff(px, map_ref(ramp, W, H, 0, 0.0f, 1.0f)) == 0);
+
+    // Buffer 2 (a DIFFERENT MTLBuffer -> re-import): reversed ramp at offset 128.
+    std::vector<float> rev = ramp_f32(W, H, /*reversed=*/true);
+    std::vector<uint8_t> blob2 = blob_at(128, rev.data(), bytes);
+    void* buf2 = mt.new_buffer(blob2.data(), blob2.size());
+    REQUIRE(buf2 != nullptr);
+    CaliperTensor t2 = make_tensor(buf2, CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+    vd.tensor = &t2;
+    vd.byte_offset = 128;
+    REQUIRE_MESSAGE(caliper_core_view_tensor(core, &vd) == 1,
+                    caliper_core_last_error(core));
+    vi = view_info(core, "act");
+    CHECK(std::string(vi.path) == "compute-imported");
+    CHECK(vi.imported == 1);
+    CHECK(vi.updates == 2);
+    CHECK(vi.creates == 1);            // same shape: texture kept
+    CHECK(view_readback(core, "act", W, H) == map_ref(rev, W, H, 0, 0.0f, 1.0f));
+
+    // Mapping change (vmin/vmax) on the live view: re-pinned, NOT recreated.
+    vd.vmin = 0.25f;
+    vd.vmax = 0.75f;
+    REQUIRE_MESSAGE(caliper_core_view_tensor(core, &vd) == 1,
+                    caliper_core_last_error(core));
+    vi = view_info(core, "act");
+    CHECK(vi.updates == 3);
+    CHECK(vi.creates == 1);
+    CHECK(vi.width == W);
+    CHECK(vi.height == H);
+    CHECK(view_readback(core, "act", W, H) == map_ref(rev, W, H, 0, 0.25f, 0.75f));
+
+    // Colormap change (magma), same texture.
+    vd.colormap = 1;
+    REQUIRE(caliper_core_view_tensor(core, &vd) == 1);
+    vi = view_info(core, "act");
+    CHECK(vi.creates == 1);
+    CHECK(view_readback(core, "act", W, H) == map_ref(rev, W, H, 1, 0.25f, 0.75f));
+
+    // In-place rewrite of the SAME buffer (cached import): the view reads the
+    // buffer at update time, so the new contents show.
+    std::vector<float> fwd = ramp_f32(W, H);
+    std::memcpy((uint8_t*)mt.contents(buf2) + 128, fwd.data(), bytes);
+    REQUIRE(caliper_core_view_tensor(core, &vd) == 1);
+    vi = view_info(core, "act");
+    CHECK(vi.updates == 5);
+    CHECK(view_readback(core, "act", W, H) == map_ref(fwd, W, H, 1, 0.25f, 0.75f));
+
+    // Without WAIT_GPU the call returns before the GPU read; the readback
+    // (same-queue) still observes it. Report both timings for the record.
+    const double waited_ms = vi.last_update_ms;
+    vd.flags = CALIPER_VIEW_FLAG_RAW;
+    REQUIRE(caliper_core_view_tensor(core, &vd) == 1);
+    vi = view_info(core, "act");
+    MESSAGE("METAL f32 64x48 update: WAIT_GPU " << waited_ms << " ms, no-wait "
+            << vi.last_update_ms << " ms");
+    CHECK(view_readback(core, "act", W, H) == map_ref(fwd, W, H, 1, 0.25f, 0.75f));
+
+    // Shape change -> recreate (creates == 2), still zero-copy.
+    CaliperTensor t3 = make_tensor(buf2, CALIPER_DT_F32, {H / 2, W}, CALIPER_DEV_METAL);
+    vd.tensor = &t3;
+    REQUIRE(caliper_core_view_tensor(core, &vd) == 1);
+    vi = view_info(core, "act");
+    CHECK(vi.creates == 2);
+    CHECK(vi.height == H / 2);
+    CHECK(std::string(vi.path) == "compute-imported");
+
+    caliper_core_shutdown(core);   // releases the view's texture + import
+    mt.release(buf1);
+    mt.release(buf2);
+}
+
+TEST_CASE("embed/views: METAL (H,W,4) u8 image takes blit-imported; readback == bytes") {
+    MetalRT mt;
+    if (!mt.ok()) CALIPER_SKIP_NO_GPU("no Metal device");
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+    CaliperCanvasDesc c = offscreen_desc(64, 64);
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (METAL image case): "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+    const int W = 40, H = 24;
+    std::vector<uint8_t> img((size_t)W * H * 4);
+    for (size_t i = 0; i < img.size(); ++i) img[i] = (uint8_t)(i * 7 + 3);
+    std::vector<uint8_t> blob = blob_at(256, img.data(), img.size());
+    void* buf = mt.new_buffer(blob.data(), blob.size());
+    REQUIRE(buf != nullptr);
+
+    CaliperTensor t = make_tensor(buf, CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_METAL);
+    CaliperViewDesc vd = make_view("image", &t, CALIPER_VIEW_FLAG_WAIT_GPU, 0, 0, 1, 256);
+    REQUIRE_MESSAGE(caliper_core_view_tensor(core, &vd) == 1,
+                    caliper_core_last_error(core));
+    CaliperViewInfo vi = view_info(core, "image");
+    CHECK(std::string(vi.path) == "blit-imported");
+    CHECK(vi.imported == 1);
+    CHECK(vi.width == W);
+    CHECK(vi.height == H);
+    CHECK(view_readback(core, "image", W, H) == img);
+
+    // A windowed (non-RAW) view composites without fault.
+    for (int i = 0; i < 2; ++i) caliper_core_frame(core);
+
+    caliper_core_shutdown(core);
+    mt.release(buf);
+}
+#endif  // __APPLE__
+
+#ifdef __APPLE__
+TEST_CASE("embed/views: measured cost at 1024x1024 f32 (CPU-staged vs METAL zero-copy)") {
+    MetalRT mt;
+    if (!mt.ok()) CALIPER_SKIP_NO_GPU("no Metal device");
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+    CaliperCanvasDesc c = offscreen_desc(64, 64);
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (1024x1024 cost case): "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+    const int N = 1024;
+    std::vector<float> v((size_t)N * N);
+    for (size_t i = 0; i < v.size(); ++i) v[i] = (float)(i % 977) / 976.0f;
+    void* buf = mt.new_buffer(v.data(), v.size() * sizeof(float));
+    REQUIRE(buf != nullptr);
+    CaliperTensor tc = make_tensor(v.data(), CALIPER_DT_F32, {N, N}, CALIPER_DEV_CPU);
+    CaliperTensor tm = make_tensor(buf, CALIPER_DT_F32, {N, N}, CALIPER_DEV_METAL);
+    CaliperViewDesc dc = make_view("cpu", &tc, 0);
+    CaliperViewDesc dm = make_view("metal", &tm, CALIPER_VIEW_FLAG_WAIT_GPU);
+    REQUIRE(caliper_core_view_tensor(core, &dc) == 1);   // creates
+    REQUIRE(caliper_core_view_tensor(core, &dm) == 1);
+    double cpu_ms = 0, metal_ms = 0;
+    const int reps = 20;
+    for (int i = 0; i < reps; ++i) {
+        REQUIRE(caliper_core_view_tensor(core, &dc) == 1);
+        cpu_ms += view_info(core, "cpu").last_update_ms;
+        REQUIRE(caliper_core_view_tensor(core, &dm) == 1);
+        metal_ms += view_info(core, "metal").last_update_ms;
+    }
+    CaliperViewInfo vi = view_info(core, "metal");
+    CHECK(std::string(vi.path) == "compute-imported");
+    CHECK(vi.imported == 1);
+    MESSAGE("1024x1024 f32 update, mean of " << reps << ": cpu-staged "
+            << cpu_ms / reps << " ms, metal compute-imported + WAIT_GPU "
+            << metal_ms / reps << " ms");
+    CHECK(view_readback(core, "metal", N, N) == view_readback(core, "cpu", N, N));
+    caliper_core_shutdown(core);
+    mt.release(buf);
+}
+#endif
+
+TEST_CASE("embed/views: windowed view draws (chrome + image) next to nothing else") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+    CaliperCanvasDesc c = offscreen_desc(256, 256);
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (windowed view case): "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+    // Nothing loaded, nothing shown: only the dark clear.
+    caliper_core_frame(core);
+    std::vector<uint8_t> px((size_t)256 * 256 * 4, 0);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), 256 * 4) == 1);
+    CHECK(bright_pixels(px) < 10);
+
+    // A 16x16 ramp in a normal window (magnified, nearest): bright yellow end.
+    std::vector<float> ramp = ramp_f32(16, 16);
+    CaliperTensor t = make_tensor(ramp.data(), CALIPER_DT_F32, {16, 16}, CALIPER_DEV_CPU);
+    CaliperViewDesc vd = make_view("weights", &t, 0);
+    REQUIRE(caliper_core_view_tensor(core, &vd) == 1);
+    for (int i = 0; i < 3; ++i) caliper_core_frame(core);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), 256 * 4) == 1);
+    CHECK(bright_pixels(px) > 200);
+
+    // Removing it returns the canvas to the clear.
+    CHECK(caliper_core_view_remove(core, "weights") == 1);
+    CHECK(caliper_core_view_count(core) == 0);
+    caliper_core_frame(core);
+    REQUIRE(caliper_core_read_pixels(core, px.data(), 256 * 4) == 1);
+    CHECK(bright_pixels(px) < 10);
+
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/views: gates refuse honestly; shutdown with live views is clean") {
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    std::vector<float> f(8 * 8, 0.5f);
+    CaliperTensor tf = make_tensor(f.data(), CALIPER_DT_F32, {8, 8}, CALIPER_DEV_CPU);
+    CaliperViewDesc vd = make_view("v", &tf, 0);
+
+    // Before a canvas: refused, reason names the canvas.
+    CHECK(caliper_core_view_tensor(core, &vd) == 0);
+    CHECK(std::string(caliper_core_last_error(core)).find("canvas") != std::string::npos);
+    CHECK(caliper_core_view_count(core) == 0);
+
+    // Unknown names.
+    CaliperViewInfo vi{};
+    vi.struct_size = sizeof vi;
+    CHECK(caliper_core_view_info(core, "nope", &vi) == 0);
+    CHECK(caliper_core_view_remove(core, "nope") == 0);
+    uint8_t one[4];
+    CHECK(caliper_core_view_readback(core, "nope", one, sizeof one) == 0);
+    // Null core is safe everywhere.
+    CHECK(caliper_core_view_tensor(nullptr, &vd) == 0);
+    CHECK(caliper_core_view_count(nullptr) == 0);
+
+    CaliperCanvasDesc c = offscreen_desc(64, 64);
+    if (caliper_test::force_no_gpu() ||
+        !caliper_core_attach_canvas(core, nullptr, &c)) {
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (the gates case's canvas half): "
+                << caliper_core_last_error(core));
+        caliper_core_shutdown(core);
+        return;
+    }
+
+    // Short struct_size.
+    CaliperViewDesc shortd = vd;
+    shortd.struct_size = sizeof(CaliperViewDesc) - 4;
+    CHECK(caliper_core_view_tensor(core, &shortd) == 0);
+    // Empty name.
+    CaliperViewDesc noname = vd;
+    noname.name = "";
+    CHECK(caliper_core_view_tensor(core, &noname) == 0);
+    // Wrong rank/dtype.
+    std::vector<uint8_t> u(8 * 8 * 4, 0);
+    CaliperTensor t2u8 = make_tensor(u.data(), CALIPER_DT_U8, {8, 32}, CALIPER_DEV_CPU);
+    vd.tensor = &t2u8;
+    CHECK(caliper_core_view_tensor(core, &vd) == 0);
+    CHECK(std::string(caliper_core_last_error(core)).find("want a 2-D f32") != std::string::npos);
+    // Non-contiguous.
+    CaliperTensor tnc = tf;
+    tnc.strides[0] = 16;
+    vd.tensor = &tnc;
+    CHECK(caliper_core_view_tensor(core, &vd) == 0);
+    CHECK(std::string(caliper_core_last_error(core)).find("contiguous") != std::string::npos);
+    // Bad colormap.
+    vd.tensor = &tf;
+    vd.colormap = 7;
+    CHECK(caliper_core_view_tensor(core, &vd) == 0);
+    CHECK(std::string(caliper_core_last_error(core)).find("colormap") != std::string::npos);
+    vd.colormap = 0;
+    CHECK(caliper_core_view_count(core) == 0);   // no failed call left a view
+
+#ifdef __APPLE__
+    MetalRT mt;
+    if (mt.ok()) {
+        std::vector<uint8_t> rgb(8 * 8 * 3, 9);
+        void* buf = mt.new_buffer(rgb.data(), rgb.size());
+        REQUIRE(buf != nullptr);
+        // (H,W,3) u8 on METAL: refused, the reason says RGBA.
+        CaliperTensor t3 = make_tensor(buf, CALIPER_DT_U8, {8, 8, 3}, CALIPER_DEV_METAL);
+        vd.tensor = &t3;
+        CHECK(caliper_core_view_tensor(core, &vd) == 0);
+        CHECK(std::string(caliper_core_last_error(core)).find("RGBA") != std::string::npos);
+        // Misaligned METAL byte_offset.
+        CaliperTensor tm = make_tensor(buf, CALIPER_DT_F32, {4, 4}, CALIPER_DEV_METAL);
+        vd.tensor = &tm;
+        vd.byte_offset = 2;
+        CHECK(caliper_core_view_tensor(core, &vd) == 0);
+        CHECK(std::string(caliper_core_last_error(core)).find("multiple of 4") != std::string::npos);
+        // Window past the buffer end: the import refuses — and nothing falls
+        // back to a host copy, no view is left behind.
+        vd.byte_offset = 4096;
+        CHECK(caliper_core_view_tensor(core, &vd) == 0);
+        CHECK(std::string(caliper_core_last_error(core)).find("import refused") != std::string::npos);
+        CHECK(caliper_core_view_count(core) == 0);
+        vd.byte_offset = 0;
+
+        // A live METAL view held across shutdown.
+        CHECK(caliper_core_view_tensor(core, &vd) == 1);
+        // A failed update of an EXISTING view keeps it (and its pixels).
+        vd.byte_offset = 4096;
+        CHECK(caliper_core_view_tensor(core, &vd) == 0);
+        CHECK(caliper_core_view_count(core) == 1);
+        vd.byte_offset = 0;
+        caliper_core_frame(core);
+        // Shut down with the view live, then drop our buffer.
+        vd.name = "cpu-too";
+        vd.tensor = &tf;
+        CHECK(caliper_core_view_tensor(core, &vd) == 1);
+        CHECK(caliper_core_view_count(core) == 2);
+        caliper_core_frame(core);
+        caliper_core_shutdown(core);
+        mt.release(buf);
+        core = nullptr;
+    }
+#endif
+    if (core) {
+        vd.name = "live";
+        vd.tensor = &tf;
+        CHECK(caliper_core_view_tensor(core, &vd) == 1);
+        caliper_core_frame(core);
+        caliper_core_shutdown(core);   // live view: released before the renderer
+    }
+
+    // A fresh core after a shutdown-with-views works and starts empty.
+    CaliperCore* again = caliper_core_create(&d);
+    REQUIRE(again != nullptr);
+    CHECK(caliper_core_view_count(again) == 0);
+    CaliperCanvasDesc c2 = offscreen_desc(32, 32);
+    if (caliper_core_attach_canvas(again, nullptr, &c2)) {
+        vd.name = "after";
+        vd.tensor = &tf;
+        vd.flags = CALIPER_VIEW_FLAG_RAW;
+        CHECK(caliper_core_view_tensor(again, &vd) == 1);
+        caliper_core_frame(again);
+    }
+    caliper_core_shutdown(again);
+}
+
 CALIPER_GPU_TEST_MAIN()

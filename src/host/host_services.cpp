@@ -821,6 +821,8 @@ void services_set_renderer(HostRenderer* renderer) {
 
 HostRenderer* services_renderer() { return g_renderer; }
 
+TensorBridge* services_bridge() { return bridge(); }
+
 void set_applet_log_sink(void (*sink)(void*, CaliperLogLevel, const char*),
                          void* userdata) {
     g_applet_log_sink = sink;

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace caliper_host {
@@ -98,7 +99,13 @@ const Luts& luts() { static const Luts L; return L; }
 // stderr — a rejection is never a silent misinterpreted texture (§ rules).
 void (*g_log_sink)(CaliperLogLevel, const char*) = nullptr;
 
+// Last rejection text on this thread (bridge ops are frame-thread-only, so in
+// practice one slot); read back by the embed core's views via
+// bridge_last_reject() so last_error carries the bridge's own reason.
+thread_local std::string g_last_reject;
+
 void bridge_log(const char* what) {
+    g_last_reject = what ? what : "";
     if (g_log_sink)
         g_log_sink(CALIPER_LOG_WARN, what);
     else
@@ -149,6 +156,9 @@ bool safe_extent_elems(const CaliperTensor& t, int64_t* out) {
 void set_bridge_log_sink(void (*sink)(CaliperLogLevel, const char*)) {
     g_log_sink = sink;
 }
+
+const char* bridge_last_reject() { return g_last_reject.c_str(); }
+void        bridge_clear_last_reject() { g_last_reject.clear(); }
 
 const uint32_t* colormap_lut(int32_t cm) {
     switch (cm) {
@@ -452,6 +462,19 @@ bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocI
     return renderer_.tex_update_from_imported(e.tex, alloc.renderer_id,
                                               offset_bytes, *desc,
                                               e.colormap, e.vmin, e.vmax);
+}
+
+bool TensorBridge::set_mapping(CaliperTextureId tex, int32_t colormap,
+                               float vmin, float vmax) {
+    auto it = entries_.find(tex);
+    if (it == entries_.end()) { bridge_log("set_mapping: unknown texture"); return false; }
+    Entry& e = it->second;
+    if (e.view || !e.mapped) { bridge_log("set_mapping: not a mapped f32 texture"); return false; }
+    if (colormap_lut(colormap) == nullptr) { bridge_log("set_mapping: bad colormap"); return false; }
+    e.colormap = colormap;
+    e.vmin = vmin;
+    e.vmax = vmax;
+    return true;
 }
 
 // --- caliper.geometry.v1: imported 3-D points into offscreen views ---------

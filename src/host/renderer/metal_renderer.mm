@@ -640,6 +640,8 @@ public:
         depth_textures_.clear();
         [textures_ removeAllObjects]; textures_ = nil;
         imported_.clear();
+        last_update_cb_ = nil;
+        last_geom_cb_ = nil;
         geom_prim_inst_staging_ = nil;
         cmap_pipeline_ = nil;
         points_pipeline_ = nil;
@@ -745,6 +747,8 @@ public:
         [textures_ removeAllObjects];
         textures_ = nil;
         imported_.clear();
+        last_update_cb_ = nil;
+        last_geom_cb_ = nil;
         geom_prim_inst_staging_ = nil;   // ARC releases the grow-only G14 staging
         cmap_pipeline_ = nil;
         points_pipeline_ = nil;
@@ -836,6 +840,37 @@ public:
     }
 
     void release_external_allocation(uint64_t iid) override { imported_.erase(iid); }
+
+    // Embed v1.2 views (CALIPER_VIEW_FLAG_WAIT_GPU): CPU-wait the last device
+    // update's command buffer, then drop the reference (it was retaining the
+    // source buffer + LUT until retirement anyway). nil-safe: no pending update
+    // -> immediate return. Only callers that ASK pay the wait.
+    void device_update_wait() override {
+        if (last_update_cb_ != nil) {
+            [last_update_cb_ waitUntilCompleted];
+            last_update_cb_ = nil;
+        }
+    }
+
+    // Live views: a +1 handle on the most recent update's command buffer, polled
+    // with status (never waited on) and released by the caller.
+    void* device_update_retain_last() override {
+        return last_update_cb_ != nil ? (__bridge_retained void*)last_update_cb_ : nullptr;
+    }
+    bool device_update_is_done(void* h) const override {
+        if (h == nullptr) return true;
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)h;
+        return cb.status >= MTLCommandBufferStatusCompleted;   // Completed or Error
+    }
+    void device_update_release(void* h) override {
+        if (h != nullptr) { id<MTLCommandBuffer> cb = (__bridge_transfer id<MTLCommandBuffer>)h; (void)cb; }
+    }
+    void* native_device() const override { return (__bridge void*)device_; }
+    // Typed live views: +1 handle on the last geometry draw's command buffer
+    // (polled with device_update_is_done, dropped with device_update_release).
+    void* geom_draw_retain_last() override {
+        return last_geom_cb_ != nil ? (__bridge_retained void*)last_geom_cb_ : nullptr;
+    }
 
     // Colormap/blit a texture FROM an imported buffer at a byte offset, with NO
     // data copy (the applet's kernels already wrote the bytes). Guards mirror
@@ -1031,6 +1066,7 @@ public:
                            // sampling; producer (MPS) writes are already CPU-drained
                            // before publish (flow_scope sync contract).
             last_device_path_ = "points-imported";
+            last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;
         }
     }
@@ -1399,6 +1435,7 @@ public:
             [re endEncoding];
             [cb commit];
             last_device_path_ = "primitives-imported";
+            last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;
         }
     }
@@ -1671,6 +1708,7 @@ private:
         // non-`unretained` encoding), so lifetime is free too. Test readbacks
         // retire the queue themselves (debug_readback_rgba8).
         [cb commit];
+        last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "compute-imported" : "compute";
         return true;
@@ -1704,6 +1742,7 @@ private:
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
         [cb commit];   // no CPU wait (M1/D23): same-queue commit order + retention
+        last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "blit-imported" : "blit";
         return true;
@@ -1757,6 +1796,14 @@ private:
 
     uint64_t next_id_ = 1;          // 0 is the invalid id
     const char* last_device_path_ = "";
+    // Most recent device texture-update command buffer (compute/blit, direct or
+    // imported) — what device_update_wait() blocks on. Strong (ARC); cleared by
+    // the wait and on shutdown.
+    id<MTLCommandBuffer> last_update_cb_ = nil;
+    // Most recent geometry draw (geom_draw_points / geom_draw_primitives)
+    // command buffer: what geom_draw_retain_last() hands out. Strong (ARC);
+    // replaced by every draw, cleared on shutdown. Never waited on.
+    id<MTLCommandBuffer> last_geom_cb_ = nil;
 };
 
 }  // namespace
