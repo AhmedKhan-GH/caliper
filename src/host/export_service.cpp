@@ -62,24 +62,47 @@ void append_mat16(const float* m, std::string& out) {
     out += ']';
 }
 
+// Write `n` bytes to `file` (created/truncated); on failure the partial file
+// is removed. The staging half of every atomic write below.
+bool write_file(const fs::path& file, const void* data, size_t n) {
+    {
+        std::ofstream f(file, std::ios::binary | std::ios::trunc);
+        if (!f) return false;
+        if (n) f.write(static_cast<const char*>(data), static_cast<std::streamsize>(n));
+        f.flush();
+        if (f.good()) return true;
+    }
+    std::error_code ec;
+    fs::remove(file, ec);
+    return false;
+}
+
+// Encode tightly-packed top-down RGBA8 to `file` as PNG; on failure the
+// partial file is removed. stb writes row 0 first, and the renderer readback
+// already hands back row 0 = top of the image (stride = w*4).
+bool encode_png_file(const fs::path& file, const uint8_t* rgba, uint32_t w,
+                     uint32_t h) {
+    const int rc = stbi_write_png(file.string().c_str(), static_cast<int>(w),
+                                  static_cast<int>(h), 4, rgba,
+                                  static_cast<int>(w * 4));
+    if (rc != 0) return true;
+    std::error_code ec;
+    fs::remove(file, ec);
+    return false;
+}
+
+fs::path with_suffix(const fs::path& p, const char* suffix) {
+    fs::path out = p;
+    out += suffix;
+    return out;
+}
+
 // Write `bytes` to a sibling temp file then rename onto `path`. Nothing is
 // created AT `path` unless the whole write+rename succeeds.
 bool write_bytes_atomic(const std::string& path, const void* data, size_t n) {
     fs::path target(path);
-    fs::path tmp = target;
-    tmp += ".caliper_tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f) return false;
-        if (n) f.write(static_cast<const char*>(data), static_cast<std::streamsize>(n));
-        f.flush();
-        if (!f.good()) {
-            f.close();
-            std::error_code ec;
-            fs::remove(tmp, ec);
-            return false;
-        }
-    }
+    fs::path tmp = with_suffix(target, ".caliper_tmp");
+    if (!write_file(tmp, data, n)) return false;
     std::error_code ec;
     fs::rename(tmp, target, ec);
     if (ec) {
@@ -159,18 +182,8 @@ bool export_write_png_atomic(const std::string& path,
                              const uint8_t* rgba, uint32_t w, uint32_t h) {
     if (!rgba || w == 0 || h == 0) return false;
     fs::path target(path);
-    fs::path tmp = target;
-    tmp += ".caliper_tmp";
-    // Tightly-packed rows (stride = w*4), top-down: stb writes row 0 first, and
-    // the renderer readback already hands back row 0 = top of the image.
-    const int rc = stbi_write_png(tmp.string().c_str(), static_cast<int>(w),
-                                  static_cast<int>(h), 4, rgba,
-                                  static_cast<int>(w * 4));
-    if (rc == 0) {
-        std::error_code ec;
-        fs::remove(tmp, ec);
-        return false;
-    }
+    fs::path tmp = with_suffix(target, ".caliper_tmp");
+    if (!encode_png_file(tmp, rgba, w, h)) return false;
     std::error_code ec;
     fs::rename(tmp, target, ec);
     if (ec) {
@@ -183,6 +196,51 @@ bool export_write_png_atomic(const std::string& path,
 
 bool export_write_text_atomic(const std::string& path, const std::string& text) {
     return write_bytes_atomic(path, text.data(), text.size());
+}
+
+bool export_write_png_with_sidecar_atomic(const std::string& png_path,
+                                          const uint8_t* rgba, uint32_t w,
+                                          uint32_t h,
+                                          const std::string& sidecar_path,
+                                          const std::string& json) {
+    if (!rgba || w == 0 || h == 0) return false;
+    const fs::path png(png_path), side(sidecar_path);
+    std::error_code ec;
+    // A directory can't be replaced by rename, and must not be set aside as a
+    // "previous PNG" either — refuse before anything moves.
+    if (fs::is_directory(png, ec)) return false;
+    const fs::path png_tmp  = with_suffix(png,  ".caliper_tmp");
+    const fs::path side_tmp = with_suffix(side, ".caliper_tmp");
+    const fs::path png_bak  = with_suffix(png,  ".caliper_bak");
+    auto discard = [&] {
+        std::error_code e;
+        fs::remove(png_tmp, e);
+        fs::remove(side_tmp, e);
+    };
+
+    // Stage both. A failure here has touched nothing the user can see.
+    if (!encode_png_file(png_tmp, rgba, w, h)) return false;
+    if (!write_file(side_tmp, json.data(), json.size())) { discard(); return false; }
+
+    // Commit: previous PNG aside, new PNG in, sidecar in, backup gone. Every
+    // failure path puts the previous PNG back — the E1 fix "rolled back" by
+    // deleting whatever sat at png_path, i.e. the user's last good figure.
+    const bool had_png = fs::exists(png, ec);
+    if (had_png) {
+        fs::rename(png, png_bak, ec);
+        if (ec) { discard(); return false; }
+    }
+    auto restore_previous = [&] {
+        std::error_code e;
+        if (had_png) fs::rename(png_bak, png, e);
+        else         fs::remove(png, e);
+    };
+    fs::rename(png_tmp, png, ec);
+    if (ec) { restore_previous(); discard(); return false; }
+    fs::rename(side_tmp, side, ec);
+    if (ec) { restore_previous(); discard(); return false; }
+    if (had_png) fs::remove(png_bak, ec);
+    return true;
 }
 
 }  // namespace caliper_host

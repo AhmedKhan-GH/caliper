@@ -56,4 +56,18 @@ bool export_write_png_atomic(const std::string& path,
 // Write UTF-8 text atomically (temp + rename); same refusal-purity guarantee.
 bool export_write_text_atomic(const std::string& path, const std::string& text);
 
+// Commit a PNG and its provenance sidecar as a PAIR. Both are staged as
+// sibling temp files first, so an encode/write failure touches nothing the
+// user can see; a previous PNG at `png_path` is set aside (`.caliper_bak`) for
+// the commit and put back if the sidecar's rename fails. false therefore means
+// the disk is exactly as it was — a previous good export included: it is never
+// deleted to roll a new one back. Residual window: the restore-rename itself
+// failing, which leaves the previous PNG intact under `.caliper_bak` rather
+// than lost. A `png_path` that is a directory is refused outright.
+bool export_write_png_with_sidecar_atomic(const std::string& png_path,
+                                          const uint8_t* rgba, uint32_t w,
+                                          uint32_t h,
+                                          const std::string& sidecar_path,
+                                          const std::string& json);
+
 }  // namespace caliper_host

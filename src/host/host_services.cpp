@@ -525,22 +525,19 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     if (!ex_render_readback(w, h, cam, draws, draw_count, draw_stride,
                             clear_rgba, px))
         return 0u;
-    // The pixels are in hand; the target file is only ever touched by the atomic
-    // rename below — a refusal above left the disk exactly as it was.
-    if (!export_write_png_atomic(path, px.data(), w, h)) return 0u;
+    // The pixels are in hand; a refusal above left the disk exactly as it was.
+    // Refusal purity extends to the filesystem: 0 must mean the disk is
+    // exactly as it was, and a PNG without its sidecar is a screenshot, not a
+    // figure (PUBLISHING.md invariant). The pair commit stages both files and
+    // sets a previous PNG aside rather than deleting it — the E1-review fix
+    // "rolled back" with fs::remove(path), which destroyed the previous good
+    // export when the new one's sidecar failed.
     const ExportProvenance prov = ex_provenance(w, h, clear_rgba, cam, draws,
                                                 draw_count, draw_stride, state_json);
     const std::string json = export_build_sidecar_json(prov);
-    if (!export_write_text_atomic(std::string(path) + ".json", json)) {
-        // Refusal purity extends to the filesystem: 0 must mean the disk is
-        // exactly as it was, and a PNG without its sidecar is a screenshot,
-        // not a figure (PUBLISHING.md invariant) — roll the PNG back rather
-        // than orphan it. (E1-review LOW finding.)
-        std::error_code ec;
-        std::filesystem::remove(path, ec);
-        return 0u;
-    }
-    return 1u;
+    return export_write_png_with_sidecar_atomic(path, px.data(), w, h,
+                                                std::string(path) + ".json", json)
+               ? 1u : 0u;
 }
 
 // One sequence live at a time (v0). The mutex guards this bookkeeping ONLY —
@@ -638,7 +635,18 @@ void ex_end_sequence(uint64_t seq) {
     const std::string json = export_build_sidecar_json(p);
     const std::string sidecar =
         (std::filesystem::path(g_seq.dir) / "sequence.json").string();
-    export_write_text_atomic(sidecar, json);
+    if (!export_write_text_atomic(sidecar, json)) {
+        // end_sequence() returns void and the v1 vtable is frozen (export_v1.h
+        // static_asserts), so this can't be a return code: say it where the
+        // applet and the user look (caliper.log.v1), keep the frames — they
+        // are the user's work — and finalize anyway so the next sequence can
+        // begin. A frame folder without sequence.json is not a figure
+        // (PUBLISHING.md); surfacing this as a status is an export v1.1 item.
+        const std::string msg = "[export] sequence sidecar write failed: " +
+                                sidecar + " (" + std::to_string(g_seq.frame_count) +
+                                " frame(s) kept, provenance missing)";
+        log_impl(CALIPER_LOG_ERROR, msg.c_str());
+    }
     g_seq.active = false;
     g_seq.handle = 0;
     g_seq.dir.clear();

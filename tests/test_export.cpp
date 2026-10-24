@@ -169,6 +169,100 @@ TEST_CASE("export atomic write: unwritable path creates nothing, truncates nothi
 }
 
 // ===========================================================================
+// Platform-neutral: the PNG + sidecar PAIR commit. The E1 fix rolled a fresh
+// PNG back with fs::remove when its sidecar failed — which, with a previous
+// export already at that path (the rename had replaced it), deleted the user's
+// last good figure. Both files are now staged first and a previous PNG is set
+// aside and put back, so a refusal leaves the disk exactly as it was, prior
+// export included. The failure is forced the way the live Vulkan case does it:
+// a DIRECTORY at the sidecar path, so the staged write succeeds and the
+// commit rename cannot land.
+// ===========================================================================
+TEST_CASE("export pair commit: a sidecar failure keeps the previous export intact") {
+    const std::string png = tmp_path("pair_prior.png");
+    const std::string sidecar = png + ".json";
+    std::error_code ec;
+    fs::remove_all(sidecar, ec);
+    std::ofstream(png, std::ios::binary) << "PREVIOUS-GOOD-PNG";
+    const auto before = read_file(png);
+    REQUIRE(before.size() == 17);
+    REQUIRE(fs::create_directory(sidecar, ec));
+
+    std::vector<uint8_t> px(4 * 4 * 4, 0x7F);
+    const bool ok = export_write_png_with_sidecar_atomic(png, px.data(), 4, 4,
+                                                         sidecar, "{\"new\":1}\n");
+    CHECK(ok == false);                               // the pair refuses...
+    CHECK(read_file(png) == before);                  // ...the old PNG survives
+    CHECK(fs::is_directory(sidecar));                 // the blocker is untouched
+    CHECK(fs::exists(png + ".caliper_tmp") == false); // no staging leftovers
+    CHECK(fs::exists(png + ".caliper_bak") == false); // backup put back, not kept
+    CHECK(fs::exists(sidecar + ".caliper_tmp") == false);
+
+    fs::remove_all(sidecar, ec);
+    fs::remove(png, ec);
+}
+
+TEST_CASE("export pair commit: with no previous export, a refusal leaves nothing") {
+    const std::string png = tmp_path("pair_fresh.png");
+    const std::string sidecar = png + ".json";
+    std::error_code ec;
+    fs::remove(png, ec);
+    fs::remove_all(sidecar, ec);
+    REQUIRE(fs::create_directory(sidecar, ec));
+
+    std::vector<uint8_t> px(4 * 4 * 4, 0x7F);
+    const bool ok = export_write_png_with_sidecar_atomic(png, px.data(), 4, 4,
+                                                         sidecar, "{}\n");
+    CHECK(ok == false);
+    CHECK(fs::exists(png) == false);                  // no orphan screenshot
+    CHECK(fs::exists(png + ".caliper_tmp") == false);
+    CHECK(fs::exists(png + ".caliper_bak") == false);
+    CHECK(fs::exists(sidecar + ".caliper_tmp") == false);
+    CHECK(fs::is_directory(sidecar));
+
+    // A directory AT the PNG path is refused before anything moves.
+    const std::string dir_png = tmp_path("pair_dir.png");
+    fs::remove_all(dir_png, ec);
+    REQUIRE(fs::create_directory(dir_png, ec));
+    CHECK(export_write_png_with_sidecar_atomic(dir_png, px.data(), 4, 4,
+                                               dir_png + ".json", "{}\n") == false);
+    CHECK(fs::is_directory(dir_png));
+    CHECK(fs::exists(dir_png + ".json") == false);
+    CHECK(fs::exists(dir_png + ".caliper_tmp") == false);
+
+    fs::remove_all(sidecar, ec);
+    fs::remove_all(dir_png, ec);
+}
+
+TEST_CASE("export pair commit: success replaces both files and leaves no backup") {
+    const std::string png = tmp_path("pair_ok.png");
+    const std::string sidecar = png + ".json";
+    std::error_code ec;
+    fs::remove_all(sidecar, ec);
+    std::ofstream(png, std::ios::binary) << "PREVIOUS-GOOD-PNG";
+    std::ofstream(sidecar, std::ios::binary) << "{\"old\":1}\n";
+
+    std::vector<uint8_t> px(4 * 4 * 4, 0x7F);
+    const std::string json = "{\"new\":1}\n";
+    CHECK(export_write_png_with_sidecar_atomic(png, px.data(), 4, 4, sidecar, json)
+          == true);
+    const auto bytes = read_file(png);
+    REQUIRE(bytes.size() > 8);
+    CHECK(bytes[0] == 0x89);                          // a real PNG landed...
+    CHECK(bytes[1] == 'P');
+    CHECK(bytes[2] == 'N');
+    CHECK(bytes[3] == 'G');
+    const auto side = read_file(sidecar);
+    CHECK(std::string(side.begin(), side.end()) == json);   // ...with its sidecar
+    CHECK(fs::exists(png + ".caliper_bak") == false);
+    CHECK(fs::exists(png + ".caliper_tmp") == false);
+    CHECK(fs::exists(sidecar + ".caliper_tmp") == false);
+
+    fs::remove(png, ec);
+    fs::remove(sidecar, ec);
+}
+
+// ===========================================================================
 // Windows-only: the atomic replace-existing rename on NTFS (spec §2.1). The
 // design writes <name>.caliper_tmp then fs::rename over the target, which the
 // MSVC STL maps to MoveFileExW(MOVEFILE_REPLACE_EXISTING). Two NTFS-sensitive
