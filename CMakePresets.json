@@ -4,7 +4,7 @@
     {
       "name": "release",
       "displayName": "Release",
-      "description": "Optimized build against release libtorch (Windows: third_party/libtorch-release; macOS ships release-only libtorch, this de-O0s the host/applets). Use this for training-speed measurements — debug torch/hosts are 10-50x slower.",
+      "description": "Optimized build against release libtorch (Windows: third_party/libtorch-release; macOS ships release-only libtorch, this de-O0s the host/applets). Use this for training-speed measurements \u2014 debug torch/hosts are 10-50x slower.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/cmake-build-release",
       "cacheVariables": {
@@ -15,12 +15,27 @@
     {
       "name": "debug",
       "displayName": "Debug",
-      "description": "Debug host/applets (Windows additionally links the separate debug libtorch, third_party/libtorch-debug — slow at runtime by design)",
+      "description": "Debug host/applets (Windows additionally links the separate debug libtorch, third_party/libtorch-debug \u2014 slow at runtime by design)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/cmake-build-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "release-notorch",
+      "displayName": "Release (torch-free libcaliper)",
+      "description": "Release build of libcaliper + Metal renderer + embed C ABI with NO libtorch (CALIPER_WITH_TORCH=OFF: no download, no torch applets, no torch tests). The configuration the Python extension builds against, so it can share a process with Python's own torch.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-notorch",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTS": "ON",
+        "CALIPER_WITH_TORCH": "OFF",
+        "CALIPER_WITH_SLANG": "OFF",
+        "CALIPER_WITH_LLAMA": "OFF",
+        "USE_CUDA": "OFF"
       }
     }
   ],
@@ -32,6 +47,10 @@
     {
       "name": "debug",
       "configurePreset": "debug"
+    },
+    {
+      "name": "release-notorch",
+      "configurePreset": "release-notorch"
     }
   ],
   "testPresets": [
@@ -43,6 +62,11 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release-notorch",
+      "configurePreset": "release-notorch",
       "output": { "outputOnFailure": true }
     }
   ]

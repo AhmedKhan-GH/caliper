@@ -13,6 +13,19 @@
 
 message(STATUS "Configuring Caliper dependencies...")
 
+# Two link lists come out of this file:
+#   CALIPER_DEPENDENCY_LIBS — everything the caliper exe / gfx + export tests
+#                             link (UI chrome widgets, DuckDB, ...).
+#   CALIPER_CORE_LIBS       — ONLY what libcaliper's own sources + the GL/Metal
+#                             backends need (GL, the Apple frameworks, GLEW,
+#                             GLFW). libcaliper PRIVATE-links this, so an
+#                             embedder that links just libcaliper (embed_host,
+#                             the Python extension) never pulls in the chrome
+#                             widgets, llama.cpp/ggml or slang. DuckDB reaches
+#                             it through caliper_host_lib; imgui/implot/implot3d/
+#                             ImGuiFileDialog through caliper::ui_stack.
+set(CALIPER_CORE_LIBS "")
+
 # Set third-party root directory
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
@@ -74,6 +87,7 @@ find_package(OpenGL REQUIRED)
 if(OpenGL_FOUND)
     message(STATUS "  ✓ OpenGL found")
     list(APPEND CALIPER_DEPENDENCY_LIBS OpenGL::GL)
+    list(APPEND CALIPER_CORE_LIBS OpenGL::GL)
 else()
     message(FATAL_ERROR "OpenGL not found")
 endif()
@@ -81,11 +95,13 @@ endif()
 # Platform-specific frameworks (macOS)
 if(APPLE)
     message(STATUS "  ✓ Adding macOS frameworks")
-    list(APPEND CALIPER_DEPENDENCY_LIBS
+    set(_caliper_apple_frameworks
         "-framework Cocoa"
         "-framework IOKit"
         "-framework CoreVideo"
     )
+    list(APPEND CALIPER_DEPENDENCY_LIBS ${_caliper_apple_frameworks})
+    list(APPEND CALIPER_CORE_LIBS ${_caliper_apple_frameworks})
 endif()
 
 # ============================================================================
@@ -169,6 +185,7 @@ else()
 endif()
 
 list(APPEND CALIPER_DEPENDENCY_LIBS libglew_static)
+list(APPEND CALIPER_CORE_LIBS libglew_static)
 message(STATUS "    ✓ GLEW configured")
 
 # --- GLFW (Window management) ---
@@ -179,6 +196,7 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(${THIRD_PARTY_DIR}/glfw EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS glfw)
+list(APPEND CALIPER_CORE_LIBS glfw)
 message(STATUS "    ✓ GLFW configured")
 
 # --- ImGui (UI library) ---
@@ -278,6 +296,12 @@ list(APPEND CALIPER_DEPENDENCY_LIBS
 message(STATUS "    ✓ DuckDB configured (target: duckdb_static)")
 
 # --- slang (SystemVerilog compiler library) ---
+# No in-tree target links slang::slang today; its configure is ~half of a fresh
+# configure and FetchContent-clones boost_regex + mimalloc. CALIPER_WITH_SLANG=OFF
+# skips it entirely (torch-free / Python-extension builds).
+if(NOT CALIPER_WITH_SLANG)
+    message(STATUS "  Skipping slang: CALIPER_WITH_SLANG=OFF")
+else()
 message(STATUS "  Configuring slang...")
 set(SLANG_INCLUDE_TOOLS OFF CACHE BOOL "" FORCE)
 set(SLANG_INCLUDE_TESTS OFF CACHE BOOL "" FORCE)
@@ -286,6 +310,7 @@ set(SLANG_INCLUDE_PYLIB OFF CACHE BOOL "" FORCE)
 set(SLANG_INCLUDE_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(${THIRD_PARTY_DIR}/slang EXCLUDE_FROM_ALL)
 message(STATUS "    ✓ slang configured (target: slang::slang)")
+endif()  # CALIPER_WITH_SLANG
 
 # --- ImGuiColorTextEdit (Syntax-highlighted text editor widget) ---
 message(STATUS "  Configuring ImGuiColorTextEdit...")
@@ -302,6 +327,18 @@ list(APPEND CALIPER_DEPENDENCY_LIBS imterm)
 message(STATUS "    ✓ ImTerm configured")
 
 # --- llama.cpp (LLM inference) ---
+# Only the opt-in archived opengllama applet links llama (CALIPER_BUILD_OPENGLLAMA,
+# which refuses when this is OFF). CALIPER_WITH_LLAMA=OFF skips the configure AND
+# the patch-apply step (which needs git + the submodule checkout).
+if(NOT CALIPER_WITH_LLAMA)
+    message(STATUS "  Skipping llama.cpp: CALIPER_WITH_LLAMA=OFF")
+    # The ON branch below also provides the root-scope CMAKE_CUDA_ARCHITECTURES
+    # that torch's Caffe2 config needs on Windows CUDA 13+; keep that (untested).
+    if(WIN32 AND USE_CUDA AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13
+       AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+else()
 message(STATUS "  Configuring llama.cpp...")
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -383,6 +420,7 @@ endif()
 add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
 message(STATUS "    ✓ llama.cpp configured")
+endif()  # CALIPER_WITH_LLAMA
 
 # --- ImGuiFileDialog (File open/save dialog for ImGui) ---
 message(STATUS "  Configuring ImGuiFileDialog...")
@@ -477,6 +515,15 @@ endif()
 # ============================================================================
 # Category 4: PyTorch (Large dependency)
 # ============================================================================
+# APPLET-ONLY. libcaliper / the caliper exe / embed_host never link libtorch
+# (D11): TORCH_LIBRARIES is consumed by applets/*, examples/sine_scope and the
+# torch-labelled tests, never appended to CALIPER_DEPENDENCY_LIBS. With
+# CALIPER_WITH_TORCH=OFF the whole category is skipped (no download, no
+# find_package(Torch)) and TORCH_LIBRARIES stays empty.
+if(NOT CALIPER_WITH_TORCH)
+    message(STATUS "Skipping PyTorch (libtorch): CALIPER_WITH_TORCH=OFF (torch-free libcaliper)")
+    set(TORCH_LIBRARIES "")
+else()
 
 message(STATUS "Configuring PyTorch (libtorch)...")
 
@@ -600,8 +647,8 @@ if(WIN32)
     # target so all torch-linking applets inherit it.
     set_property(TARGET torch APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS NOMINMAX)
 
-    # Use Torch's provided libraries
-    list(APPEND CALIPER_DEPENDENCY_LIBS "${TORCH_LIBRARIES}")
+    # TORCH_LIBRARIES is deliberately NOT appended to CALIPER_DEPENDENCY_LIBS:
+    # only applets / torch tests link it (torch-free libcaliper, D11).
 
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
@@ -666,12 +713,14 @@ else()
     find_package(Torch REQUIRED)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
-    # Use Torch's provided libraries
-    list(APPEND CALIPER_DEPENDENCY_LIBS "${TORCH_LIBRARIES}")
+    # TORCH_LIBRARIES is deliberately NOT appended to CALIPER_DEPENDENCY_LIBS:
+    # only applets / torch tests link it (torch-free libcaliper, D11).
 
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
 endif()  # WIN32 vs macOS/Linux
+
+endif()  # CALIPER_WITH_TORCH
 
 # ============================================================================
 # Export dependency list
@@ -683,4 +732,5 @@ endif()  # WIN32 vs macOS/Linux
 message(STATUS "")
 message(STATUS "Dependencies configured successfully:")
 message(STATUS "  Total libraries to link: ${CALIPER_DEPENDENCY_LIBS}")
+message(STATUS "  libcaliper core libs:    ${CALIPER_CORE_LIBS}")
 message(STATUS "")

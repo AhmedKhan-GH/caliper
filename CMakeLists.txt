@@ -91,6 +91,27 @@ endif()
 
 option(BUILD_TESTS "Build tests" OFF)
 
+# ---- Python-entry-point spike (caliper-python) ------------------------------
+# libcaliper (core + Metal renderer + embed ABI) never includes a torch header:
+# its renderers consume raw MTLBuffer / CUDA pointers through CaliperTensor, and
+# only APPLETS (and the applet-side adapter tests) link libtorch. These options
+# make that boundary buildable: OFF skips the libtorch download/find_package and
+# every torch-linking target, so one process can host libcaliper next to a
+# DIFFERENT torch (Python's torch 2.14.1 vs the vendored libtorch 2.5.1).
+option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch applets + adapter tests" ON)
+option(CALIPER_BUILD_APPLETS "Build the applets/* tree (all of them link libtorch today)" ON)
+option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
+# slang + llama.cpp are configured EXCLUDE_FROM_ALL and linked by nothing that
+# libcaliper / the caliper exe / the tests need (only the opt-in opengllama
+# applet links llama). OFF skips their configure (~2/3 of a fresh configure,
+# plus slang's boost_regex/mimalloc network clones).
+option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
+option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
+if(CALIPER_BUILD_APPLETS AND NOT CALIPER_WITH_TORCH)
+    message(STATUS "CALIPER_WITH_TORCH=OFF: applets/* need libtorch, forcing CALIPER_BUILD_APPLETS=OFF")
+    set(CALIPER_BUILD_APPLETS OFF)
+endif()
+
 # ============================================================================
 # Include Dependencies (PyTorch-style architecture)
 # ============================================================================
@@ -358,9 +379,13 @@ target_include_directories(libcaliper PUBLIC
 # through this target (its own comment: "link this TARGET instead of compiling
 # src/app_paths.cpp by path"). PUBLIC so the caliper exe gets it transitively —
 # the exe no longer compiles app_paths.cpp by path (below).
+# PRIVATE = CALIPER_CORE_LIBS (GL/frameworks/GLEW/GLFW only), NOT the exe's full
+# CALIPER_DEPENDENCY_LIBS: a static lib's private deps still propagate as
+# link-only, so the full list would drag the chrome widgets (node editor, text
+# editor, ImTerm) into every embedder, including the Python extension.
 target_link_libraries(libcaliper
     PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths
-    PRIVATE ${CALIPER_DEPENDENCY_LIBS})
+    PRIVATE ${CALIPER_CORE_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
 endif()
@@ -421,6 +446,8 @@ set_target_properties(caliper PROPERTIES
 
 if(MSVC)
     target_compile_options(caliper PRIVATE /W3 /MP /wd4251 /wd4275)
+endif()
+if(MSVC AND CALIPER_WITH_TORCH)
     # LIBTORCH_DIR is the variant-specific dir set by Dependencies.cmake
     # (libtorch-debug / libtorch-release on Windows).
     file(GLOB TORCH_DLLS "${LIBTORCH_DIR}/lib/*.dll")
@@ -450,7 +477,11 @@ endif()
 # Applets (each builds a shared library)
 # ============================================================================
 
-file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
+if(CALIPER_BUILD_APPLETS)
+    file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
+else()
+    set(applet_dirs "")
+endif()
 
 set(_active_applet_libs "")
 foreach(dir ${applet_dirs})
@@ -477,14 +508,19 @@ if(CALIPER_BUILD_EXAMPLES)
     # embeds VERBATIM (dev-basics / first-applet); sine_scope = the ML tutorial
     # applet (first-ml-applet) — building them here keeps the docs' code honest.
     add_subdirectory(examples/hello)
-    add_subdirectory(examples/sine_scope)
     # embed_host: the second, out-of-tree-style embedder of libcaliper (L2b).
     # A bare native-window host; NOT an applet, NOT linked into `caliper`.
     add_subdirectory(examples/embed_host)
-    add_dependencies(caliper hello_applet sine_scope)
+    add_dependencies(caliper hello_applet)
     list(APPEND _active_applet_libs
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}sine_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    # sine_scope links libtorch (the ML tutorial applet): torch builds only.
+    if(CALIPER_WITH_TORCH)
+        add_subdirectory(examples/sine_scope)
+        add_dependencies(caliper sine_scope)
+        list(APPEND _active_applet_libs
+            "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}sine_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    endif()
 endif()
 
 # Opt-in resurrection of the archived GGUF-inference applet (applets/legacy/):
@@ -492,6 +528,9 @@ endif()
 # GPT-OSS). OFF by default — legacy stays archived; flip for inference testing.
 option(CALIPER_BUILD_OPENGLLAMA "Build the archived opengllama applet (GGUF inference via llama.cpp)" OFF)
 if(CALIPER_BUILD_OPENGLLAMA)
+    if(NOT CALIPER_WITH_LLAMA)
+        message(FATAL_ERROR "CALIPER_BUILD_OPENGLLAMA=ON needs llama.cpp: set CALIPER_WITH_LLAMA=ON")
+    endif()
     add_subdirectory(applets/legacy/opengllama)
     add_dependencies(caliper opengllama)
     list(APPEND _active_applet_libs

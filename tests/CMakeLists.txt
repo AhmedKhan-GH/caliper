@@ -155,6 +155,7 @@ set_tests_properties(caliper_export_tests PROPERTIES LABELS "export"
 # under the "torch" label so `ctest -L torch` selects it; the MPS cases skip
 # when no MPS device is present (counted; exit 77 -> ctest "Skipped").
 # ---------------------------------------------------------------------------
+if(CALIPER_WITH_TORCH)   # torch-linking test binaries; closed below
 add_executable(caliper_torch_tests test_torch_adapter.cpp)
 target_link_libraries(caliper_torch_tests PRIVATE
     doctest::doctest caliper::sdk "${TORCH_LIBRARIES}")
@@ -176,6 +177,7 @@ endif()
 
 add_test(NAME caliper_torch_tests COMMAND caliper_torch_tests)
 set_tests_properties(caliper_torch_tests PROPERTIES SKIP_RETURN_CODE 77)
+endif()  # CALIPER_WITH_TORCH (caliper_torch_tests)
 
 # ---------------------------------------------------------------------------
 # caliper_embed_tests — the embed C ABI (caliper/embed.h) battery (R4 L2a).
@@ -186,8 +188,11 @@ set_tests_properties(caliper_torch_tests PROPERTIES SKIP_RETURN_CODE 77)
 # gate cases are GPU-free.
 # ---------------------------------------------------------------------------
 add_executable(caliper_embed_tests test_embed.cpp)
+# libcaliper ONLY (no CALIPER_DEPENDENCY_LIBS): this binary links exactly as a
+# third-party embedder (the Python extension) would, so it proves libcaliper's
+# own link interface is self-sufficient.
 target_link_libraries(caliper_embed_tests PRIVATE
-    doctest::doctest libcaliper caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
+    doctest::doctest libcaliper caliper::sdk)
 # src/host on the include path for the §7 host-axis case: it reaches the process
 # bridge + renderer (white-box) to byte-compare the tensor->texture upload the
 # embed core wired against the shared CPU reference (host_services.h,
@@ -202,8 +207,17 @@ set_target_properties(caliper_embed_tests PROPERTIES
 # the SECOND distinct applet the load-different-id-after-active case swaps to
 # (and, being jobs.v1/device.v1-backed, it exercises the "new applet's init jobs
 # survive the old one's teardown" reorder).
-add_dependencies(caliper_embed_tests hello_applet sine_scope)
-if(APPLE)
+add_dependencies(caliper_embed_tests hello_applet)
+if(CALIPER_WITH_TORCH)
+    add_dependencies(caliper_embed_tests sine_scope)
+else()
+    # Torch-free build: sine_scope (links libtorch) is not built, so the cases
+    # that swap to dev.example.sine-scope compile out (test_embed.cpp guards).
+    target_compile_definitions(caliper_embed_tests PRIVATE CALIPER_TESTS_NO_TORCH_APPLETS=1)
+endif()
+# libtorch rpath only for the torch applets it loads (sine_scope); a torch-free
+# binary carries no reference to the vendored libtorch at all.
+if(APPLE AND CALIPER_WITH_TORCH)
     set_target_properties(caliper_embed_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
 endif()
@@ -216,6 +230,7 @@ set_tests_properties(caliper_embed_tests PROPERTIES SKIP_RETURN_CODE 77)
 # path — keeping torch out of the fast caliper_tests unit suite. The four blocks
 # below were near-verbatim, so they share one helper (§8.f cleanup class).
 # ---------------------------------------------------------------------------
+if(CALIPER_WITH_TORCH)   # applet learning-core tests all link libtorch
 function(add_caliper_torch_model_test name src applet_dir)
     add_executable(${name} ${src})
     target_link_libraries(${name} PRIVATE doctest::doctest "${TORCH_LIBRARIES}")
@@ -262,3 +277,4 @@ add_caliper_torch_model_test(caliper_twin_tests test_twin_thermal.cpp
     "${CMAKE_SOURCE_DIR}/applets/twin_scope")
 
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
+endif()  # CALIPER_WITH_TORCH (applet model tests)

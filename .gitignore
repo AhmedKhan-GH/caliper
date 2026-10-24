@@ -85,3 +85,12 @@ dump
 
 # Local secrets
 .env
+
+# Python package build outputs, the local venv and recordings (caliper-python)
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+media/
+python/bench/results/*.png
