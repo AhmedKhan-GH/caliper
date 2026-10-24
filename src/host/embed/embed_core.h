@@ -1,6 +1,8 @@
 // embed_core.h — the CaliperCore instance struct behind the embed C ABI
-// (caliper/embed.h): the lifecycle, frame and v1.2 tensor-view state that
-// embed_core.cpp operates on. Host-internal: nothing here crosses the C seam.
+// (caliper/embed.h), shared between embed_core.cpp (lifecycle, frame, v1.2
+// tensor views) and src/host/live/ (the live-streaming attach: typed views fed
+// from a training process's shared-memory snapshots). Host-internal: nothing
+// here crosses the C seam.
 #pragma once
 
 #include "caliper/embed.h"
@@ -52,6 +54,16 @@ struct TensorView {
 };
 }  // namespace caliper_embed_views
 
+// Opaque per-core state of the live-streaming attach (src/host/live). Owned by
+// the live module: created by caliper_core_live_attach, destroyed by detach or
+// by caliper_live_shutdown (called from caliper_core_shutdown).
+struct CaliperLiveState;
+// Opaque per-core state of the typed live views (caliper/live_views.h,
+// src/host/live/live_views.cpp): points/series/histogram views and the typed
+// bookkeeping over the v1.2 heatmap/image views. Created lazily by
+// caliper_core_live_apply, destroyed by caliper_live_views_shutdown.
+struct CaliperLiveViewsState;
+
 // The core is a plain struct (opaque to the ABI). It holds ONLY instance state
 // the ABI forces; the service registry, crash guard, colormap LUTs, ImGui
 // context, and GLFW-analog remain process-global exactly as L1 left them (see
@@ -85,9 +97,26 @@ struct CaliperCore {
     std::vector<caliper_embed_views::TensorView> views;
     float tile_x = 8.0f, tile_y = 8.0f, tile_row_h = 0.0f;
 
+    // Live-streaming attach state (src/host/live); null when not attached.
+    CaliperLiveState* live = nullptr;
+    // Typed live views state (caliper/live_views.h); null until the first apply.
+    CaliperLiveViewsState* live_views = nullptr;
+
     void log(int level, const std::string& msg) {
         if (log_fn) log_fn(userdata, level, msg.c_str());
         else std::fprintf(stderr, "[embed] %s\n", msg.c_str());
     }
     void fail(const std::string& why) { last_error = why; log(2, why); }
 };
+
+// Live-module hooks called by embed_core.cpp (defined in src/host/live/
+// live_core.cpp). frame: draw the live typed views into the current ImGui
+// frame, after the v1.2 views. shutdown: release every live GPU resource while
+// the bridge still has its renderer.
+void caliper_live_frame(CaliperCore* core);
+void caliper_live_shutdown(CaliperCore* core);
+// Typed-views hooks (src/host/live/live_views.cpp): draw the points/series/
+// histogram windows after the v1.2 views; release their GPU resources before
+// the v1.2 views are destroyed.
+void caliper_live_views_frame(CaliperCore* core);
+void caliper_live_views_shutdown(CaliperCore* core);

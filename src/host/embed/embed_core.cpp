@@ -274,6 +274,10 @@ void caliper_core_shutdown(CaliperCore* core) {
     // a pointer into applet state, so join before close_all destroys it.
     host_job_system().cancel_all_and_join();
     if (core->loader) core->loader->close_all();
+    // Live-streaming attach (src/host/live): release its GPU resources first,
+    // with the bridge still bound (same discipline as the views below).
+    caliper_live_shutdown(core);
+    caliper_live_views_shutdown(core);
     // v1.2 views: release their bridge textures and MTLBuffer imports while the
     // bridge still has its renderer — the same discipline as the applet
     // teardown above (no GPU resource may outlive the renderer that owns it).
@@ -402,7 +406,11 @@ void caliper_core_frame(CaliperCore* core) {
     // v1.2 built-in tensor views draw AFTER the applet (so they work with no
     // applet loaded and float alongside one). Skipped on a fault frame: the
     // quarantined applet may have left the ImGui window stack mid-Begin.
-    if (alive) views_draw(core);
+    if (alive) {
+        views_draw(core);
+        caliper_live_views_frame(core);   // typed views: points/series/histogram
+        caliper_live_frame(core);         // live session status (src/host/live)
+    }
 
     // Render BEFORE any teardown: the applet's draw list this frame may still
     // reference bridge textures; releasing them before the pass consumes the

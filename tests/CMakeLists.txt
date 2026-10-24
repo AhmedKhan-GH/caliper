@@ -225,6 +225,42 @@ add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
 set_tests_properties(caliper_embed_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
+# caliper_live_tests — the live-streaming attach (src/host/live, include/caliper/
+# live.h): client segments + viewer-side attach driven in ONE process over an
+# offscreen core. Links exactly like caliper_embed_tests. GPU cases skip
+# without a device (counted; exit 77 -> ctest "Skipped", gpu_skip.h).
+# ---------------------------------------------------------------------------
+add_executable(caliper_live_tests test_live.cpp)
+target_link_libraries(caliper_live_tests PRIVATE
+    doctest::doctest libcaliper caliper::sdk)
+target_include_directories(caliper_live_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+set_target_properties(caliper_live_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    set_source_files_properties(test_live.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+endif()
+add_test(NAME caliper_live_tests COMMAND caliper_live_tests)
+set_tests_properties(caliper_live_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+# caliper_live_views_tests — the typed live views (caliper/live_views.h): apply
+# heatmap/image/points/series/histogram snapshots to an offscreen core and read
+# textures/values back. Same link set as caliper_live_tests. GPU cases skip
+# like there (exit 77 -> ctest "Skipped").
+add_executable(caliper_live_views_tests test_live_views.cpp)
+target_link_libraries(caliper_live_views_tests PRIVATE
+    doctest::doctest libcaliper caliper::sdk)
+target_include_directories(caliper_live_views_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+set_target_properties(caliper_live_views_tests PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    set_source_files_properties(test_live_views.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+endif()
+add_test(NAME caliper_live_views_tests COMMAND caliper_live_views_tests)
+set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+# ---------------------------------------------------------------------------
 # Applet learning-core / engine tests. Each is a SEPARATE binary that links
 # only doctest + libtorch and puts one applet's header directory on the include
 # path — keeping torch out of the fast caliper_tests unit suite. The four blocks
