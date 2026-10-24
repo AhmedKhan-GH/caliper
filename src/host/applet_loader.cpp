@@ -99,6 +99,17 @@ int AppletLoader::scan(const std::string& dir) {
             continue;
         }
         entry.manifest = std::move(parsed.manifest);
+        // The id becomes a path under the data root. The parser already
+        // refuses ids outside [a-z0-9.-]; this re-check is the boundary's own
+        // guarantee, independent of where the manifest came from.
+        if (!is_valid_applet_id(entry.manifest.id)) {
+            entry.manifest.name = fname;
+            entry.status = AppletStatus::Failed;
+            entry.status_text = "applet id is not path-safe: " + entry.manifest.id;
+            entries_.push_back(std::move(entry));
+            added++;
+            continue;
+        }
         entry.data_dir = data_root_ + "/" + entry.manifest.id;
 
         const std::string stem =
@@ -162,6 +173,20 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     if (!d->api.create || !d->api.destroy || !d->api.initialize ||
         !d->api.frame || !d->api.cleanup)
         return fail("descriptor function table incomplete");
+
+    // The descriptor's required_services is the binary's own declaration —
+    // the source of truth. negotiate() checked the MANIFEST's list before
+    // dlopen (the fast path); a manifest that under-declares must not let an
+    // applet run against a host missing a service it will call. Same card
+    // text as the manifest refusal. The image stays mapped like every other
+    // post-dlopen failure (close_all never dlcloses).
+    if (d->required_services)
+        for (const char* const* s = d->required_services; *s; ++s)
+            if (!caps_.services.count(*s)) {
+                a.status = AppletStatus::Refused;
+                a.status_text = missing_service_reason(*s);
+                return false;
+            }
 
     std::error_code ec;
     fs::create_directories(a.data_dir, ec);

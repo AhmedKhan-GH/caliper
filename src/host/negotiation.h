@@ -20,5 +20,10 @@ struct Negotiation {
 // Phase 4): epoch supported → min_host satisfied → required services present.
 Negotiation negotiate(const AppletManifest& m, const HostCaps& caps);
 
+// Card text for a required service this host can't vend. One string, two
+// callers: negotiate() for the manifest's list (pre-dlopen) and the loader for
+// the descriptor's list (post-dlopen, the binary's own declaration).
+std::string missing_service_reason(const std::string& svc);
+
 int semver_cmp(const std::string& a, const std::string& b); // <0, 0, >0
 }

@@ -8,7 +8,7 @@ namespace caliper_host {
 // Parsed caliper.toml (PLATFORM.md §10.3). Unknown keys/tables are ignored
 // for forward compatibility; missing required fields are errors.
 struct AppletManifest {
-    std::string id;        // reverse-DNS
+    std::string id;        // reverse-DNS; see is_valid_applet_id
     std::string name;
     std::string version;   // strict x.y.z
     std::string summary;
@@ -28,5 +28,9 @@ struct ManifestResult {
 ManifestResult parse_manifest_text(const std::string& toml_text);
 ManifestResult parse_manifest_file(const std::string& path);
 bool is_valid_semver(const std::string& v);
+// Lowercase reverse-DNS, [a-z0-9.-] only, non-empty dot-separated segments,
+// at most 128 chars. The id doubles as the applet's data folder name, so this
+// is what keeps a crafted manifest ("../../x") inside the data root.
+bool is_valid_applet_id(const std::string& id);
 
 } // namespace caliper_host

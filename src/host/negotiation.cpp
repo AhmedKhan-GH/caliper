@@ -27,12 +27,16 @@ Negotiation negotiate(const AppletManifest& m, const HostCaps& caps) {
     }
     for (const auto& svc : m.required_services) {
         if (!caps.services.count(svc)) {
-            n.reason = "Requires a capability this host doesn't have: " + svc + ".";
+            n.reason = missing_service_reason(svc);
             return n;
         }
     }
     n.ok = true;
     return n;
+}
+
+std::string missing_service_reason(const std::string& svc) {
+    return "Requires a capability this host doesn't have: " + svc + ".";
 }
 
 } // namespace caliper_host

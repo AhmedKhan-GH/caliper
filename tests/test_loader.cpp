@@ -144,3 +144,63 @@ TEST_CASE("loader: fault in frame() quarantines, host survives") {
     unsetenv("CALIPER_HELLO_CRASH");
     // The host (this test process) is alive to assert all of the above.
 }
+
+TEST_CASE("loader: a path-escaping manifest id is a Failed card, never a data dir") {
+    // The id becomes <data_root>/<id>: "../x" would land the applet's sandbox
+    // (and create_directories at launch) outside the data root. Such ids are
+    // refused before any path is built; the card still has a title (fname).
+    caliper::testing::FixtureHost fx;
+    fs::path dir = fs::temp_directory_path() / "caliper-badid";
+    fs::create_directories(dir);
+    const char* ids[] = {"../../caliper-escaped", "a..b", "Dev.Caliper.Hello",
+                         "dev.under_score", "a/b", ".lead", "trail."};
+    int n = 0;
+    for (const char* id : ids) {
+        std::ofstream(dir / ("bad" + std::to_string(n++) + ".caliper.toml")) <<
+            "[applet]\nid=\"" << id << "\"\nname=\"Bad\"\nversion=\"1.0.0\"\n"
+            "[compat]\nabi_epoch=2\n";
+    }
+    AppletLoader L(caps(), CALIPER_TEST_DATA_ROOT);
+    L.scan(dir.string());
+    REQUIRE(L.count() == n);
+    for (int i = 0; i < L.count(); i++) {
+        CAPTURE(L.at(i).manifest.name);
+        CHECK(L.at(i).status == AppletStatus::Failed);
+        CHECK(L.at(i).status_text.find("id") != std::string::npos);
+        CHECK(L.at(i).data_dir.empty());
+        CHECK_FALSE(L.launch(i, *fx.host()));          // Failed is not Ready
+    }
+    // Nothing escaped: the sibling the first id pointed at does not exist.
+    const fs::path escaped =
+        fs::path(CALIPER_TEST_DATA_ROOT).parent_path().parent_path() /
+        "caliper-escaped";
+    CHECK_FALSE(fs::exists(escaped));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("loader: descriptor-required service missing refuses with the friendly card") {
+    // The manifest only admits to ui.v1, but hello's DESCRIPTOR declares
+    // {ui.v1, log.v1} — the binary's own list is the one that must hold. A
+    // host without log.v1 passes the pre-dlopen manifest check (Ready), then
+    // refuses at launch with the same card text negotiate() would have used.
+    caliper::testing::FixtureHost fx;
+    fs::path dir = fs::temp_directory_path() / "caliper-underdeclared";
+    fs::create_directories(dir);
+    fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello"),
+                  dir / lib_name("hello"), fs::copy_options::overwrite_existing);
+    std::ofstream(dir / "hello.caliper.toml") <<
+        "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"0.1.0\"\n"
+        "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
+    AppletLoader L(HostCaps{2, "0.6.0", {"caliper.ui.v1"}}, CALIPER_TEST_DATA_ROOT);
+    L.scan(dir.string());
+    REQUIRE(L.count() == 1);
+    CHECK(L.at(0).status == AppletStatus::Ready);      // manifest list passes
+    CHECK_FALSE(L.launch(0, *fx.host()));              // descriptor list fails
+    CHECK(L.at(0).status == AppletStatus::Refused);
+    CHECK(L.at(0).status_text.find("caliper.log.v1") != std::string::npos);
+    CHECK(L.at(0).status_text.find("Requires a capability") != std::string::npos);
+    CHECK(count_log(fx, "hello.on_init") == 0);        // never initialized
+    L.close_all();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}

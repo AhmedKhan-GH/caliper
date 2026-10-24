@@ -55,6 +55,12 @@ TEST_CASE("manifest: adversarial inputs refuse with a reason") {
         {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n", "abi_epoch"},
         {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=\"two\"\n", "abi_epoch"},
         {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\nmin_host=\"soon\"\n", "semver"},
+        // The id becomes a data-folder name: path escapes and non-[a-z0-9.-]
+        // characters are refused at parse time, before any loader sees them.
+        {"[applet]\nid=\"../../escape\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
+        {"[applet]\nid=\"a..b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
+        {"[applet]\nid=\"Dev.Caliper.X\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
+        {"[applet]\nid=\"a/b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
     };
     for (auto& c : cases) {
         auto r = parse_manifest_text(c.toml);
@@ -77,4 +83,26 @@ TEST_CASE("semver validation") {
     CHECK_FALSE(is_valid_semver("1.0"));
     CHECK_FALSE(is_valid_semver("v1.0.0"));
     CHECK_FALSE(is_valid_semver(""));
+}
+
+TEST_CASE("applet id validation") {
+    CHECK(is_valid_applet_id("dev.caliper.hello"));
+    CHECK(is_valid_applet_id("dev.caliper.embed-scope"));
+    CHECK(is_valid_applet_id("a.b"));
+    CHECK(is_valid_applet_id("x9"));
+    CHECK_FALSE(is_valid_applet_id(""));
+    CHECK_FALSE(is_valid_applet_id("."));
+    CHECK_FALSE(is_valid_applet_id(".."));
+    CHECK_FALSE(is_valid_applet_id("../escape"));
+    CHECK_FALSE(is_valid_applet_id("a..b"));
+    CHECK_FALSE(is_valid_applet_id(".lead"));
+    CHECK_FALSE(is_valid_applet_id("trail."));
+    CHECK_FALSE(is_valid_applet_id("Dev.Caliper"));     // uppercase
+    CHECK_FALSE(is_valid_applet_id("dev.under_score"));
+    CHECK_FALSE(is_valid_applet_id("a/b"));
+    CHECK_FALSE(is_valid_applet_id("a\\b"));
+    CHECK_FALSE(is_valid_applet_id("/abs"));
+    CHECK_FALSE(is_valid_applet_id("a b"));
+    CHECK_FALSE(is_valid_applet_id(std::string(129, 'a')));
+    CHECK(is_valid_applet_id(std::string(128, 'a')));
 }

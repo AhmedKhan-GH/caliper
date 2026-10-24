@@ -18,6 +18,23 @@ bool is_valid_semver(const std::string& v) {
     return part == 2 && digits > 0;
 }
 
+bool is_valid_applet_id(const std::string& id) {
+    if (id.empty() || id.size() > 128) return false;
+    int seg = 0;   // chars in the current dot-separated segment
+    for (char c : id) {
+        if (c == '.') {
+            if (seg == 0) return false;   // leading dot, "..", or "a..b"
+            seg = 0;
+            continue;
+        }
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                        c == '-';
+        if (!ok) return false;            // uppercase, '_', '/', '\\', ...
+        seg++;
+    }
+    return seg > 0;                       // no trailing dot
+}
+
 namespace {
 ManifestResult fail(std::string msg) {
     ManifestResult r; r.error = std::move(msg); return r;
@@ -49,6 +66,9 @@ ManifestResult parse_manifest_text(const std::string& toml_text) {
     };
     if (!req_str("id", r.manifest.id) || r.manifest.id.empty())
         return fail("manifest missing applet.id");
+    if (!is_valid_applet_id(r.manifest.id))
+        return fail("applet.id is not a valid applet id (lowercase reverse-DNS, "
+                    "[a-z0-9.-]): " + r.manifest.id);
     if (!req_str("name", r.manifest.name) || r.manifest.name.empty())
         return fail("manifest missing applet.name");
     if (!req_str("version", r.manifest.version))
