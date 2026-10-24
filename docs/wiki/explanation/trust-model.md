@@ -15,11 +15,11 @@ ships a `caliper.toml` manifest declaring the ABI epoch it was built against, th
 minimum host version it needs, and the services it requires. The host checks that
 manifest **before the `dlopen`**. A wrong-build applet — compiled for an ABI
 epoch this host doesn't speak, or requiring a capability the host can't vend —
-never gets loaded at all. It becomes a friendly card on the landing page ("Built
-for ABI epoch 1; this host speaks 2 — check for an applet update."), not a loader
-crash three frames later. This gate catches the entire class of "wrong build for
-this host" failures cheaply and legibly, before they can turn into undefined
-behaviour.
+never gets loaded at all. It is listed on the landing screen as `REFUSED`, with
+the reason in the Inspector ("Built for ABI epoch 1; this host speaks 2 — check
+for an applet update."), not a loader crash three frames later. This gate
+catches the entire class of "wrong build for this host" failures cheaply and
+legibly, before they can turn into undefined behaviour.
 
 ## Every applet call is guarded
 
@@ -47,10 +47,11 @@ entry point — construction, `frame()`, teardown.
 ## A faulting applet is quarantined
 
 When the guard catches a fault, the host does not retry the call. The faulting
-applet is torn down and **quarantined**: its card shows the named fault, and it
-is not called again for the rest of the session. The host itself survives and
-stays interactive; the failure is contained to the one applet that caused it, and
-the host offers a restart.
+applet is torn down and **quarantined**: the host returns to the landing screen,
+where the applet's row reads `QUARANTINED` and the Inspector names the fault,
+and it is not called again for the rest of the session. The host itself
+survives and stays interactive; the failure is contained to the one applet that
+caused it, and the host offers a restart.
 
 ## Containment, not a sandbox
 
@@ -75,8 +76,9 @@ merely misbehave. The host owns the frame clock and calls each applet's `frame()
 once per frame, so a `frame()` that does heavy work blocks the whole UI thread —
 the window stops responding until it returns. The watchdog makes that visible: it
 times each `frame()`, and when one exceeds the budget (about 250 ms) for three
-consecutive frames, it flags the applet's card with a plain note that long work
-belongs in `caliper.jobs` rather than the frame loop (PLATFORM.md §15). The flag
+consecutive frames, it puts a plain note in the applet's bar at the top of its
+page — `slow: long work belongs in background jobs` — pointing long work to
+`caliper.jobs` rather than the frame loop (PLATFORM.md §15). The flag
 **latches** — it stays raised until the applet is relaunched, and a later fast
 frame does *not* clear it — so the evidence of a stall doesn't scroll away the
 instant the applet recovers. The point is observability, not punishment: the

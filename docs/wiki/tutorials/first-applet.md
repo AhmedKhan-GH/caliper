@@ -150,10 +150,14 @@ tagged SDK release under the *same* target names — nothing else changes.
 
 ## 5. See it in the app
 
-Hello appears on the launcher landing page as a card you can open. The host's
-epoch-2 loader discovers it by reading its `<stem>.caliper.toml` manifest and the
+Hello appears as a row in the landing screen's **Instruments** pane; select it
+and press Enter (or double-click the row) to open it. The host's epoch-2 loader
+discovers it by reading its `<stem>.caliper.toml` manifest and the
 `caliper_applet_descriptor` export — the two signals every applet you build this
-way must ship. If the card is missing, check that both are present (the dylib and
-its manifest sit side by side in `build/applets/`); if the card shows an
-`[unavailable]` line instead, that line is the loader's refusal reason (see the
-[refusal reference](../reference/refusals.md)).
+way must ship. If the row is missing, check that both are present (the dylib and
+its manifest sit side by side in `build/applets/`); if its status is `REFUSED`,
+`FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
+loader's reason under Status (see the
+[refusal reference](../reference/refusals.md)). Esc, or the `esc Home` button,
+returns to the landing screen. [Development basics](development-basics.md#the-landing-screen)
+describes the panes and keys.

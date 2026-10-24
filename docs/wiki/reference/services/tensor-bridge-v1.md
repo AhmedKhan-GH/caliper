@@ -200,8 +200,8 @@ sweep (§6c) is now **empty** — every applet texture crosses as a
    RGBA pixels* and reach the **one** bridge upload path (create-once, then
    `update_texture` in place; recreate only when the text reflows and the size
    changes). The applet issues no raw GL — `tensor_bridge.v1` is now a
-   **required** service (an unmet requirement leaves the card unavailable rather
-   than crashing).
+   **required** service (an unmet requirement lists the applet as `REFUSED`
+   rather than crashing).
 6. **RepNet viz tabs.** Open **repnet_demo**; the **Model** tab's weight/kernel
    heatmaps and the per-lead detail views render through the same bridge upload
    (RdBu/diverging colormap composed to RGBA8, then `texture_from_tensor`). The
@@ -215,13 +215,11 @@ sweep (§6c) is now **empty** — every applet texture crosses as a
    worker-snapshot frame the kernel grid does — no extra bridge calls off the
    frame thread.
 8. **Default-flip expectations.** A **bare** `./build/caliper` launches on
-   **Metal** (macOS default; the startup line prints `[renderer] metal`). One
-   honest consequence: the landing-page 3D background (`IntroScreen`, still raw
-   GL) is **absent** on Metal — you get the plain app shell, cards and launch
-   flow intact. Relaunch with `CALIPER_RENDERER=gl` for the **full landing**
-   (animated 3D backdrop) on the frozen GL fallback; every applet above renders
-   identically on both backends — only where the bridge stages the pixels
-   differs.
+   **Metal** (macOS default; the startup line prints `[renderer] metal`, and the
+   status bar shows `METAL`). The landing screen is drawn with ImGui and is the
+   same on every backend. Relaunch with `CALIPER_RENDERER=gl` to compare against
+   the frozen GL fallback; every applet above renders identically on both
+   backends — only where the bridge stages the pixels differs.
 
 ### Phase-2E′ additions (GPTScope, the flagship)
 
@@ -275,7 +273,7 @@ consumer of the last two services ([`caliper.artifacts.v1`](artifacts-v1.md),
 the 3-D view works on **both** renderers (§6c-clean, no raw GL). These checks are
 the exemplar's live-visual acceptance demo (the machine verification — build
 green, full `ctest` + `caliper_gfx_tests` + torch suites, both renderers headless
-for 10 s, 8 applet cards — is green):
+for 10 s, 8 applets listed — is green):
 
 15. **Blob → lobes, live.** Open **EmbedScope**, click *Train*. The 3-D point
     cloud starts as **one gray blob** and, as training runs, **splits into ten

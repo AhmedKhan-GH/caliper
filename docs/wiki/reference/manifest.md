@@ -14,8 +14,8 @@ older hosts (forward compatibility).
 | `[applet]`  | `id`       | string            | Yes      | Reverse-DNS identity, e.g. `dev.ahmed.circuitnet`. Must be non-empty.    |
 | `[applet]`  | `name`     | string            | Yes      | Human-readable display name. Must be non-empty.                          |
 | `[applet]`  | `version`  | string            | Yes      | Applet version, strict semver `x.y.z` (three numeric parts).            |
-| `[applet]`  | `summary`  | string            | No       | Short one-line description shown in the launcher.                        |
-| `[applet]`  | `tag`      | string            | No       | Free-form category label, e.g. `EDA`.                                    |
+| `[applet]`  | `summary`  | string            | No       | Short one-line description shown in the landing screen's Inspector.      |
+| `[applet]`  | `tag`      | string            | No       | Free-form category label, e.g. `EDA`. Shown in the Instruments table, which sorts by it by default. |
 | `[compat]`  | `abi_epoch`| integer           | Yes      | ABI epoch the applet was built against. Must be an integer ≥ 1.          |
 | `[compat]`  | `min_host` | string            | No       | Minimum host version floor, strict semver `x.y.z`. Omit for no floor.   |
 | `[services]`| `required` | array of strings  | No       | Service IDs the applet cannot run without, e.g. `["caliper.ui.v1"]`.    |
@@ -28,8 +28,9 @@ Notes:
 - **Unknown keys and tables are ignored.** A manifest may carry extra fields
   (e.g. `authors`, or a whole `[future]` table); the host skips them so that
   manifests targeting newer schema revisions still load.
-- Missing or malformed required fields are hard errors: the host surfaces a
-  human-readable reason on the applet's failure card rather than loading it.
+- Missing or malformed required fields are hard errors: the host lists the
+  applet as `FAILED` on the landing screen, under the manifest's file name,
+  with a human-readable reason in the Inspector, rather than loading it.
 
 ## Example
 

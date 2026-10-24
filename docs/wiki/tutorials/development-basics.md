@@ -55,8 +55,8 @@ examples/hello/
 
 - **Manifest**: id (reverse-DNS), name, version, summary, required/optional
   service lists. The `id` and `version` must be **byte-identical** between
-  the manifest and the descriptor in plugin.cpp, or the loader refuses (with
-  a polite card, not a crash). See [manifest reference](../reference/manifest.md).
+  the manifest and the descriptor in plugin.cpp, or the loader refuses (the
+  applet is listed with the reason, not a crash). See [manifest reference](../reference/manifest.md).
 - **The macro**: the `CALIPER_APPLET(...)` at the bottom of your `.cpp`
   generates the epoch-2 C ABI glue — the descriptor plus exception walls on
   every entry point. You never write `extern "C"` yourself.
@@ -72,7 +72,8 @@ examples/hello/
 ### The smallest complete applet, in full
 
 This is everything — all three files. It is **built in this repo** as
-`examples/hello/` (the Hello card in your launcher), and the listings
+`examples/hello/` (the Hello row in the landing screen's Instruments
+pane), and the listings
 below are the actual files, embedded verbatim — they cannot drift from what
 compiles. [Your first applet](first-applet.md) walks this same file line by
 line:
@@ -106,12 +107,13 @@ mkdir applets/my_applet   # + the three files (copy examples/hello/ to start)
 # 2. build — your dylib + manifest land in build/applets/
 cmake --build build --target my_applet -j
 
-# 3. run — it appears as a card in the launcher
+# 3. run — it appears as a row in the landing screen's Instruments pane
 ./build/caliper
 
-# 4. iterate fast — skip the launcher click every rebuild:
+# 4. iterate fast — skip the landing screen every rebuild:
 CALIPER_AUTOLAUNCH=dev.example.my-applet ./build/caliper
-#    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI)
+#    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI;
+#     CALIPER_WINDOW_SIZE=1440x900 fixes the window size for screenshots)
 ```
 
 !!! warning "`--clean-first` on a single applet target prunes its siblings"
@@ -120,9 +122,9 @@ CALIPER_AUTOLAUNCH=dev.example.my-applet ./build/caliper
     `cmake --build build --target my_applet --clean-first` cleans the whole
     build tree first, then rebuilds only `my_applet` — leaving the other
     applets' dylibs and manifests missing from `build/applets/` until a full
-    `cmake --build build` restores them. If the launcher suddenly shows only
-    one card, this is why: rebuild without `--clean-first`, or build the
-    default target to bring every applet back.
+    `cmake --build build` restores them. If the Instruments pane suddenly
+    lists only one applet, this is why: rebuild without `--clean-first`, or
+    build the default target to bring every applet back.
 
 In CLion the same works via the CMake tool window — reload the project once
 after creating the folder, then the `my_applet` target exists.
@@ -135,6 +137,57 @@ pattern. Applet logic that reads services can be unit-tested headlessly.
 **Your data lives at** `~/Library/Application Support/Caliper/data/<your-id>/`
 — the host creates it and hands it to you as `host.data_dir()`. Downloads,
 caches, scratch files go there and nowhere else.
+
+## The landing screen
+
+`./build/caliper` opens on the landing screen: a command bar along the top,
+four docked panes, and a status bar along the bottom. It is drawn with ImGui,
+so it looks the same on Metal, Vulkan and GL.
+
+| Pane | Shows |
+|---|---|
+| **Projects** | No projects yet. It lists the two planned ways in, `F2 Open folder` and `F4 Attach to process`; both buttons are disabled and say "not yet available" on hover. |
+| **Instruments** | Every applet the loader found, one row each: name, id, version, tag and status (`READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`). Click a column header to sort by it; the default is tag, and the choice lasts for the session. Only `READY` rows launch. |
+| **Inspector** | The selected applet's manifest: id, version, tag, ABI epoch, minimum host, required and optional services, binary path, status and summary. The `⏎ Launch` button sits at the bottom; when the applet cannot launch it is disabled, with the reason beside it. |
+| **Activity** | Running jobs with their progress, then the host log, newest first: the renderer chosen, the applet folders scanned, launches, failed launches, quarantines and returns home. |
+
+The status bar shows the backend, the GPU, physical memory, the GPU
+working-set budget, and how many applets are installed and unavailable.
+
+The command bar filters the Instruments table as you type: every
+space-separated term must appear, ignoring case, in the applet's name, id or
+tag. When the filter hides the selected row, the selection moves to the top
+match, so Enter always launches the highlighted row. Each keyboard action also
+has a button in the bar with its key printed on it:
+
+| Key | Button | Action |
+|---|---|---|
+| ⌘K | `⌘K Command` | Focus the command bar. |
+| ↑ / ↓ | `↑` `↓` | Move the selection in Instruments, while Instruments has focus or while you type in the command bar. The buttons are shown when the bar has room. |
+| Esc | `esc Clear` | Clear the filter and move focus to Instruments. |
+| Enter | `⏎ Launch` (Inspector) | Launch the selected applet. Double-clicking a row does the same. |
+| ⌘1–⌘4 | the pane header | Focus Projects, Instruments, Inspector or Activity. Clicking a pane header does the same. |
+
+On Windows and Linux the keys are Ctrl K and Ctrl 1–Ctrl 4, and the buttons
+are labelled that way.
+
+Launching an applet replaces the landing screen with the applet's page. The
+bar at its top holds the `esc Home` button and the applet's name; the status
+bar keeps the backend and GPU and adds the number of running jobs. Esc returns
+to the landing screen only when no text field is being edited and no popup is
+open; otherwise the field or popup gets Esc first. The selection is kept, so
+Home lands on the same row.
+
+The window layout is saved in `imgui.ini` in the app-data folder
+(`~/Library/Application Support/Caliper/imgui.ini` on macOS): the dividers
+between the landing panes, and where an applet's windows are docked. The
+landing panes cannot be undocked or rearranged; only the dividers move. Delete
+the file to return to the default layouts.
+
+The window opens at 95% of the screen's work area.
+`CALIPER_WINDOW_SIZE=<W>x<H>` (screen coordinates, e.g. `1440x900`) sets the
+size exactly, so screenshots and layout checks are reproducible on any
+display; a malformed value is ignored.
 
 ## The rules (each one guards something real)
 

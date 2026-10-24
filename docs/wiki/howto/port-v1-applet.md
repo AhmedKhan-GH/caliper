@@ -216,9 +216,9 @@ This is the distilled recipe used to port **opengllama** (attention heatmaps) an
 - **The manifest must require the bridge.** Add `"caliper.tensor_bridge.v1"` to
   `[services].required` (and `CALIPER_TENSOR_BRIDGE_V1` to the macro's
   `.services`). After the port the applet **cannot render without it**, so it is a
-  hard requirement — negotiation leaves the card unavailable rather than letting
-  it crash. opengllama's manifest moved the bridge from absent to required in
-  exactly this step.
+  hard requirement — negotiation lists the applet as `REFUSED` rather than
+  letting it crash. opengllama's manifest moved the bridge from absent to
+  required in exactly this step.
 
 The applet code is then identical on Metal and GL; the bridge alone decides
 whether the pixels are staged on the device or CPU-staged onto the GL fallback.
@@ -230,9 +230,10 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 nm -gU build/applets/libcircuitnet.dylib | grep caliper_applet_descriptor  # exported
 ls build/applets/circuitnet.caliper.toml                                   # copied
-./build/caliper                                                            # card appears, opens as before
+./build/caliper                                                            # listed in Instruments, opens as before
 ```
 
 The exported `caliper_applet_descriptor` and the copied manifest are the two
-signals the loader needs; if the card is missing, check that both are present and
-that the macro's `id`/`version` match the manifest exactly.
+signals the loader needs; if the applet is missing from the Instruments pane,
+check that both are present and that the macro's `id`/`version` match the
+manifest exactly.

@@ -8,9 +8,9 @@ heatmap. Synthetic data keeps it self-contained (no downloads); the last
 two stages show where real datasets and the remaining services attach.
 
 **SineScope is built in this repo** — `examples/sine_scope/`, the SineScope
-card in your launcher. Every code block below is embedded **verbatim from
-that source file**; the docs build fails if they drift. Run the finished
-thing first if you like:
+row in the landing screen's Instruments pane. Every code block below is
+embedded **verbatim from that source file**; the docs build fails if they
+drift. Run the finished thing first if you like:
 
 ```bash
 cmake --build build --target sine_scope

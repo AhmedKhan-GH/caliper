@@ -44,12 +44,9 @@ cannot run in a Metal-backed host, so the §6c grandfather clause expired there 
 necessity, and **the host's default macOS backend flipped GL→Metal**. Both
 backends stay honest under the same §16 pixel-exact test matrix run per backend.
 
-One honest gap: the landing-page 3D background (`IntroScreen`) is still raw GL,
-so it is absent on Metal — you get the plain app shell instead of the animated
-backdrop. The cards, launch flow, and dashboards are unaffected and behave
-identically on both backends. Restoring the 3D landing on Metal is tracked as the
-intro 2D-migration follow-up in the Phase-2 plan notes; until then it renders
-only under `CALIPER_RENDERER=gl`.
+The host's own screens carry no raw GL either. The landing screen
+(`src/host/ui/landing_screen.cpp`) is drawn entirely with ImGui, so it is
+identical on Metal, Vulkan and GL, as are the launch flow and the dashboards.
 
 ## The pixel-space contract, recapped
 

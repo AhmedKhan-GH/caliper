@@ -33,10 +33,11 @@ dylib:
 
 Use **Run ▸ Attach to Process…**, filter for `caliper`, and pick the running
 host. Set breakpoints in your applet source as usual. Because the applet dylib is
-loaded lazily when you open the applet card, a breakpoint in `on_frame` won't
-bind until the applet is opened in the app — CLion resolves it the moment the
-dylib is mapped in, which is expected. Breakpoints in `on_init` bind at open
-time; to catch very early setup, break in `on_init` and step from there.
+loaded lazily when you launch the applet from the landing screen, a breakpoint in
+`on_frame` won't bind until the applet is opened in the app — CLion resolves it
+the moment the dylib is mapped in, which is expected. Breakpoints in `on_init`
+bind at open time; to catch very early setup, break in `on_init` and step from
+there.
 
 Because the host loads the dylib after startup, prefer *attaching to the running
 process* over launching the host under the debugger — the symbols resolve when
@@ -63,13 +64,16 @@ service is `caliper.log.v1` (declare it in your manifest's `required` list, as t
 hello applet does); the sugar `host.log_info` / `host.log_error` are thin
 wrappers over it.
 
-When the loader turns an applet away, the diagnostic is on the applet's **card**,
-not in the console: the card's description gains an `[unavailable]` line carrying
-the contractual refusal reason (see [refusals](../reference/refusals.md)) — a
-missing or malformed manifest, an `id`/`version` that disagrees with the
-descriptor, an unmet required service, or an ABI-epoch mismatch. The same card
-surface names the fault for applets that crashed and were quarantined. If an
-applet doesn't appear at all, check the two discovery signals side by side in
+When the loader turns an applet away, the diagnostic is on the **landing
+screen**, not in the console. The applet's row in the Instruments pane shows its
+status (`REFUSED`, `FAILED` or `QUARANTINED`), and with the row selected the
+Inspector shows the contractual reason under Status and beside the disabled
+`⏎ Launch` button (see [refusals](../reference/refusals.md)) — a missing or
+malformed manifest, an `id`/`version` that disagrees with the descriptor, an
+unmet required service, or an ABI-epoch mismatch. The same rows name the fault
+for applets that crashed and were quarantined, and the Activity pane logs each
+`launch failed` and `quarantined` event with the applet's name. If an applet
+doesn't appear at all, check the two discovery signals side by side in
 `build/applets/`: the dylib and its `<stem>.caliper.toml`.
 
 ## Where per-applet data lives

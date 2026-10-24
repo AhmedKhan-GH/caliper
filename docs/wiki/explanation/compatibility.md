@@ -24,7 +24,7 @@ struct CaliperHost {
 These four rules are what let the contract grow for years without breaking a single shipped applet:
 
 1. **A published service struct is immutable.** Capability additions ship as a *new id* (`caliper.metrics.v2`) alongside the old one, which keeps working.
-2. **Hosts may provide any set of services.** Applets declare `required_services` (refusal happens at the manifest check, with a friendly card) and probe optional ones at runtime.
+2. **Hosts may provide any set of services.** Applets declare `required_services` (refusal happens at the manifest check, and the landing screen lists the applet as `REFUSED` with the reason) and probe optional ones at runtime.
 3. **`struct_size` is always the first field.** A reader never touches bytes beyond the writer's declared size — this is how new fields get appended without an epoch bump.
 4. **The ABI epoch bumps only for** entry-point changes, `CaliperHost` layout changes, or UI-stack pin changes. Target cadence: at most one per year after stabilization.
 
@@ -43,7 +43,7 @@ Every moving part has its own scheme, so a change in one rarely forces a change 
 
 ## Negotiation at load
 
-Every check happens **before `dlopen`**, in order. The first failure renders a reasoned card (see [Refusal messages](../reference/refusals.md)) instead of a loader crash:
+Every check happens **before `dlopen`**, in order. The first failure becomes the applet's status on the landing screen, with the reason (see [Refusal messages](../reference/refusals.md)), instead of a loader crash:
 
 1. platform binary present
 2. epoch supported

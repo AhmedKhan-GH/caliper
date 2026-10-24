@@ -3,13 +3,14 @@
 Before the host loads any applet code, it runs a pure **negotiation** check over
 the applet's manifest and the host's own capabilities (see
 [Manifest](manifest.md) and [ABI (epoch 2)](abi.md)). If the applet is
-incompatible, negotiation refuses it and the host shows one of the messages
-below on the applet's failure card — no code from the applet is executed.
+incompatible, negotiation refuses it and the landing screen shows one of the
+messages below as the applet's status text — no code from the applet is
+executed.
 
 The checks run in a fixed order (PLATFORM.md §14): **ABI epoch → minimum host
 version → required services**. The first failing check wins, so only one message
-is ever shown. These strings are contractual: the loader and its cards reuse
-them verbatim.
+is ever shown. These strings are contractual: the loader and the landing screen
+reuse them verbatim.
 
 ## Negotiation refusals
 
@@ -60,7 +61,7 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 | `descriptor version disagrees with manifest` | The descriptor's `version` is NULL or differs from the manifest's `version`. | Bump manifest and descriptor to the same version and rebuild. |
 | `descriptor function table incomplete` | One of the required `api` entry points (`create`, `destroy`, `initialize`, `frame`, `cleanup`) is NULL. | Provide all five lifecycle functions; the `CALIPER_APPLET` macro wires them for you. |
 | `create() returned null` | `create()` ran cleanly but returned no instance — the applet declined to construct itself (e.g. an internal precondition failed). | Investigate the applet's `create`; return a valid instance or surface the real error from `initialize` instead. |
-| `initialize() returned false` | `initialize()` ran cleanly but reported failure. The loader then calls `destroy()` on the instance and marks the card Failed. | Check the applet's own logs for why init refused (a required service or resource it couldn't obtain). |
+| `initialize() returned false` | `initialize()` ran cleanly but reported failure. The loader then calls `destroy()` on the instance and marks the applet Failed. | Check the applet's own logs for why init refused (a required service or resource it couldn't obtain). |
 
 ### Quarantined messages
 
@@ -76,11 +77,13 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 and `{manifest_filename}` is the manifest file the applet was scanned from.
 
 !!! note
-    The host now renders these statuses on the landing page. Any applet that is
-    not `Ready`/`Active` keeps its card, but the card body is prefixed with
-    `[unavailable] <reason>` — where `<reason>` is the exact `status_text` from
-    the tables above (the negotiation refusal, `Failed`, or `Quarantined`
-    message) — followed by the applet's normal summary. The card stays visible
-    but will not launch until the cause is fixed, and the text is refreshed each
-    time you return to the landing page so a mid-session quarantine shows up
-    immediately.
+    The landing screen shows these statuses. An applet that is not
+    `Ready`/`Active` keeps its row in the Instruments pane, with `REFUSED`,
+    `FAILED` or `QUARANTINED` in the Status column. With the row selected, the
+    Inspector's Status field shows the exact `status_text` from the tables above
+    (the negotiation refusal, `Failed`, or `Quarantined` message), and the
+    `⏎ Launch` button is disabled with the same text beside it. A launch that
+    fails is also logged in the Activity pane as `launch failed` with the
+    reason, and a quarantine during `frame()` as `quarantined`. The landing
+    screen reads the statuses every frame, so a mid-session quarantine shows up
+    as soon as the host returns to it.
