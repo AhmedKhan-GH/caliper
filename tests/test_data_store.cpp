@@ -102,6 +102,24 @@ TEST_CASE("data_store: bad SQL fails with a reason, no crash") {
     CHECK(stream.release == nullptr);
 }
 
+TEST_CASE("data_store: DuckDB opens with explicit thread and memory limits") {
+    // duckdb_config.h: the data store's own defaults (4 threads, 2GB — the one
+    // store that scans user datasets), not DuckDB's every-core / 80%-of-RAM.
+    // memory_limit reads back as a human string (2GB -> "1.8 GiB"); pin the
+    // shape of it. Read through the existing two-column drain.
+    DataStore store;
+    REQUIRE(store.open(":memory:"));
+    ArrowArrayStream stream = {};
+    REQUIRE(store.query(
+        "SELECT CAST(current_setting('threads') AS INTEGER) AS a, "
+        "CAST(current_setting('memory_limit') LIKE '1.% GiB' AS DOUBLE) AS b",
+        &stream));
+    TwoCol got = drain_i32_f64(&stream);
+    REQUIRE(got.a.size() == 1);
+    CHECK(got.a[0] == 4);
+    CHECK(got.b[0] == 1.0);
+}
+
 TEST_CASE("data_store: register + open a csv dataset round-trips") {
     fs::path csv = fs::temp_directory_path() /
                    ("caliper-data-test-" + std::to_string(::getpid()) + ".csv");

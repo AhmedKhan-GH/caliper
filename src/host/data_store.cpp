@@ -1,5 +1,6 @@
 #include "data_store.h"
 #include "duckdb_arrow_stream.h"   // shared SQL→Arrow producer (also metrics.v1_1)
+#include "duckdb_config.h"         // explicit threads/memory_limit (§11)
 
 #include <duckdb.hpp>
 
@@ -52,7 +53,9 @@ bool DataStore::open(const std::string& path) {
     std::lock_guard<std::mutex> lk(impl_->mu);
     try {
         const char* target = (path == ":memory:") ? nullptr : path.c_str();
-        impl_->db  = std::make_unique<duckdb::DuckDB>(target);
+        duckdb::DBConfig cfg;
+        duckdb_apply_limits(cfg, "DATA", kDataDuckDBLimits);
+        impl_->db  = std::make_unique<duckdb::DuckDB>(target, &cfg);
         impl_->con = std::make_unique<duckdb::Connection>(*impl_->db);
         impl_->opened = true;
         return true;

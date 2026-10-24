@@ -1,5 +1,6 @@
 #include "metrics_store.h"
 #include "duckdb_arrow_stream.h"   // shared SQL→Arrow producer (also data.v1)
+#include "duckdb_config.h"         // explicit threads/memory_limit (§11)
 
 #include <duckdb.hpp>
 
@@ -65,7 +66,9 @@ bool MetricsStore::open(const std::string& path) {
     // file lock) — a failed open must degrade to a no-op service, never
     // terminate the host. Same guard as ArtifactStore/DataStore.
     try {
-        impl_->db  = std::make_unique<duckdb::DuckDB>(target);
+        duckdb::DBConfig cfg;
+        duckdb_apply_limits(cfg, "METRICS", kMetricsDuckDBLimits);
+        impl_->db  = std::make_unique<duckdb::DuckDB>(target, &cfg);
         impl_->con = std::make_unique<duckdb::Connection>(*impl_->db);
     } catch (const std::exception&) {
         impl_->db.reset();

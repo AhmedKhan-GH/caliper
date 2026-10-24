@@ -1,5 +1,6 @@
 #include "artifact_store.h"
 
+#include "duckdb_config.h"   // explicit threads/memory_limit (§11)
 #include "sha256.h"
 
 #include <duckdb.hpp>
@@ -69,7 +70,9 @@ bool ArtifactStore::open(const std::string& root_dir) {
 
     try {
         std::string db_path = (fs::path(root_dir) / "artifacts.duckdb").string();
-        impl_->db  = std::make_unique<duckdb::DuckDB>(db_path.c_str());
+        duckdb::DBConfig cfg;
+        duckdb_apply_limits(cfg, "ARTIFACTS", kArtifactsDuckDBLimits);
+        impl_->db  = std::make_unique<duckdb::DuckDB>(db_path.c_str(), &cfg);
         impl_->con = std::make_unique<duckdb::Connection>(*impl_->db);
     } catch (...) {
         return false;

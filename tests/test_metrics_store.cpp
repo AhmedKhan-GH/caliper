@@ -13,6 +13,9 @@
 #ifdef _WIN32
 #include <process.h>
 #define getpid _getpid
+// POSIX setenv/unsetenv don't exist on MSVC; _putenv_s with "" removes.
+#define setenv(k, v, overwrite) _putenv_s(k, v)
+#define unsetenv(k) _putenv_s(k, "")
 #else
 #include <unistd.h>
 #endif
@@ -434,4 +437,68 @@ TEST_CASE("metrics_store: clear_all empties history but never reuses ids") {
     CHECK(store.scalars(a, "loss").empty());
     uint64_t c = store.begin_run("exp", "after");
     CHECK(c > a);   // artifacts lineage keys on run ids — never reuse them
+}
+
+// ---------------------------------------------------------------------------
+// DuckDB resource limits (duckdb_config.h): the store opens with explicit
+// `threads` / `memory_limit` instead of DuckDB's defaults (every core, 80% of
+// RAM — per instance), and the environment can override them. The limits are
+// read back through the store's own query surface; the memory figure comes
+// back as DuckDB's human-readable string, so only its integer MiB part is
+// pinned (512MB = 488.28 MiB, 256MB = 244.14 MiB).
+// ---------------------------------------------------------------------------
+namespace {
+int64_t setting_threads(MetricsStore& s) {
+    ArrowArrayStream st = {};
+    REQUIRE(s.query("SELECT CAST(current_setting('threads') AS BIGINT)", &st));
+    return drain_single_i64(&st);
+}
+int64_t setting_memory_mib(MetricsStore& s) {
+    ArrowArrayStream st = {};
+    REQUIRE(s.query("SELECT CAST(regexp_extract(current_setting('memory_limit'), "
+                    "'^[0-9]+') AS BIGINT)", &st));
+    return drain_single_i64(&st);
+}
+void clear_duckdb_env() {
+    for (const char* k : {"CALIPER_DUCKDB_THREADS", "CALIPER_DUCKDB_MEMORY_LIMIT",
+                          "CALIPER_DUCKDB_METRICS_THREADS",
+                          "CALIPER_DUCKDB_METRICS_MEMORY_LIMIT"})
+        unsetenv(k);
+}
+}  // namespace
+
+TEST_CASE("metrics_store: DuckDB opens with explicit thread and memory limits") {
+    clear_duckdb_env();
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    CHECK(setting_threads(store) == 2);          // kMetricsDuckDBLimits
+    CHECK(setting_memory_mib(store) == 488);     // 512MB, not 80% of RAM
+}
+
+TEST_CASE("metrics_store: DuckDB limits honor the environment, bad values fall back") {
+    clear_duckdb_env();
+    SUBCASE("global override") {
+        setenv("CALIPER_DUCKDB_THREADS", "1", 1);
+        setenv("CALIPER_DUCKDB_MEMORY_LIMIT", "256MB", 1);
+        MetricsStore store;
+        REQUIRE(store.open(":memory:"));
+        CHECK(setting_threads(store) == 1);
+        CHECK(setting_memory_mib(store) == 244);
+    }
+    SUBCASE("per-store override wins over the global one") {
+        setenv("CALIPER_DUCKDB_THREADS", "1", 1);
+        setenv("CALIPER_DUCKDB_METRICS_THREADS", "3", 1);
+        MetricsStore store;
+        REQUIRE(store.open(":memory:"));
+        CHECK(setting_threads(store) == 3);
+    }
+    SUBCASE("unparsable values fall back to the defaults, the store still opens") {
+        setenv("CALIPER_DUCKDB_THREADS", "lots", 1);
+        setenv("CALIPER_DUCKDB_MEMORY_LIMIT", "a bucket", 1);
+        MetricsStore store;
+        REQUIRE(store.open(":memory:"));
+        CHECK(setting_threads(store) == 2);
+        CHECK(setting_memory_mib(store) == 488);
+    }
+    clear_duckdb_env();
 }
