@@ -146,10 +146,10 @@ so it looks the same on Metal, Vulkan and GL.
 
 | Pane | Shows |
 |---|---|
-| **Projects** | No projects yet. It lists the two planned ways in, `F2 Open folder` and `F4 Attach to process`; both buttons are disabled and say "not yet available" on hover. |
+| **Projects** | No projects yet. It lists two ways in. `F2 Open folder` is disabled and says "not yet available" on hover. `F4 Attach to process` lists the live sessions of training scripts running on this machine in the pane (see [Attaching to a training script](#attaching-to-a-training-script)); the pane header counts them, for example `none yet · 1 live session`. |
 | **Instruments** | Every applet the loader found, one row each: name, id, version, tag and status (`READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`). Click a column header to sort by it; the default is tag, and the choice lasts for the session. Only `READY` rows launch. |
 | **Inspector** | The selected applet's manifest: id, version, tag, ABI epoch, minimum host, required and optional services, binary path, status and summary. The `⏎ Launch` button sits at the bottom; when the applet cannot launch it is disabled, with the reason beside it. For an applet quarantined by a C++ exception, `⌘R Restart` takes the reason's place; after a signal it reads `restart Caliper to reload`. |
-| **Activity** | Running jobs with their progress, then the host log, newest first: the renderer chosen, the applet folders scanned, launches, failed launches, failed jobs, quarantines, restarts and returns home. |
+| **Activity** | Running jobs with their progress, then the host log, newest first: the renderer chosen, the applet folders scanned, launches, failed launches, failed jobs, quarantines, restarts, returns home, and live sessions attached, ended and detached, with any failed attach and its reason. |
 
 The status bar shows the backend, the GPU, physical memory, the GPU
 working-set budget, and how many applets are installed and unavailable.
@@ -168,6 +168,7 @@ has a button in the bar with its key printed on it:
 | Enter | `⏎ Launch` (Inspector) | Launch the selected applet. Double-clicking a row does the same. |
 | ⌘1–⌘4 | the pane header | Focus Projects, Instruments, Inspector or Activity. Clicking a pane header does the same. |
 | ⌘R | `⌘R Restart` (Inspector) | Unload and relaunch the selected applet. Offered only for an applet quarantined by a C++ exception. |
+| F4 | `F4 Attach to process` (Projects) | List the live sessions in Projects. In the list, ↑ / ↓ move the selection, Enter (`⏎ Attach`) attaches, and Esc (`esc Back`) returns to the ways in. |
 
 On Windows and Linux the keys are Ctrl K, Ctrl R and Ctrl 1–Ctrl 4, and the
 buttons are labelled that way.
@@ -178,6 +179,55 @@ bar keeps the backend and GPU and adds the number of running jobs. Esc returns
 to the landing screen only when no text field is being edited and no popup is
 open; otherwise the field or popup gets Esc first. Home lands on the applet's
 row, however it was launched (`CALIPER_AUTOLAUNCH` included).
+
+### Attaching to a training script
+
+A Python script that calls `caliper.show` (or any other view call) opens a
+live session on its first call, and Caliper can attach to it while it runs
+(macOS, Metal renderer; [Watch a PyTorch training run live](live-pytorch.md)
+sets one up). Press F4, or click `F4 Attach to process`, and Projects lists
+the sessions found under `~/Library/Application Support/Caliper/live/`, newest
+first, relisted every second:
+
+| Column | Shows |
+|---|---|
+| **Script** | The script's name |
+| **Pid** | Its process id |
+| **Started** | When the session opened, as a clock time and how long ago |
+| **State** | `running`, `starting` (attach waits for it), `closing`, `viewed by <pid>` (another viewer holds it; one viewer per session) or `protocol v<N>` (another Caliper version) |
+| **Views** | The names of the views the script has shown so far |
+
+Only `running` and `starting` rows attach; the others are faint, and the
+`⏎ Attach` button under the table is disabled with the reason beside it. A
+script that was killed leaves its session file behind; the next listing
+removes it and its shared memory, so its row disappears instead of lingering.
+
+Attaching opens the session's live page, laid out like an applet's page. Each
+view is a window on the docked desktop, tiled on first appearance; move,
+resize or dock them as on the applet page, and the layout is saved the same
+way. The views show the script's newest GPU snapshots, and the page draws at
+up to 60 fps whatever the display's refresh rate; the script never waits for
+Caliper. The bar at the top holds `esc Home`, the script's name and
+its state: a filled diamond and `live` while it runs. The status bar adds the
+script's pid, the number of views, the frame rate and the step-to-screen
+latency.
+
+When the script exits, closes its session or is killed, the views keep their last
+frames: the bar shows an outlined diamond and `SESSION ENDED`, the status bar
+and the window title add `session ended`, and Activity logs `session ended`.
+`esc Home` detaches (the script, if it still runs, stops taking snapshots at
+once and keeps training) and returns to the session list. Activity logs
+`attached` and `detached` with the script and its pid.
+
+`CALIPER_AUTOATTACH=<pid>` attaches to that process's session as soon as it is
+listed, for screenshots and headless checks; `CALIPER_HOME_AFTER=<seconds>`
+goes Home once, that long after the page opened (the applet page honours it
+too).
+[Attach to a running script](../howto/attach-to-a-running-script.md) covers
+the session files, the standalone viewer and what happens when either side
+goes away.
+
+### Jobs and window layout
 
 While any job exists, a **Jobs** tray sits at the bottom right of every page:
 running jobs with their progress and a `cancel` button, then failed jobs, marked

@@ -35,12 +35,16 @@ show(t) ─► SnapshotRing ─┬─► SessionTransport ─► shm segments �
                          └─► WindowTransport ─► render thread (same process) ────────────┘
 ```
 
-The top path is **attach to app** (the viewer is `caliper-viewer` or the
-Caliper app); the bottom one is the **own window**. One `SnapshotRing`
+The top path is **attach to app** (the viewer is the Caliper app, through F4
+Attach to process on its landing screen, or the standalone `caliper-viewer`);
+the bottom one is the **own window**. One `SnapshotRing`
 (`python/caliper/_ring.py`) owns slot choice, the rate limit and event polling
 for both; a transport only allocates slots and receives completed snapshots. On
 the viewer side, `live_core.cpp` reads a `Source` (`src/host/live/live_source.h`);
-today the only `Source` is the shared-memory session.
+today the only `Source` is the shared-memory session. The Caliper app runs
+the same viewer side inside its own window: a hosted embed core borrows the
+app's renderer, so the views draw in the app's frame
+(`src/host/live/live_attach.h`).
 
 ## Sessions
 
@@ -171,8 +175,8 @@ control**, the same loop recording an Event at 60 Hz and taking no snapshot.
 | Window crashes or hangs | Training continues | The script crashes or hangs with it |
 | Limit | One viewer per session | One window per process |
 
-Attach to app survives the script, never freezes, and is what the Caliper app's
-landing will attach to. The own window needs no second process, but AppKit
+Attach to app survives the script, never freezes, and is what the Caliper
+app's landing attaches to. The own window needs no second process, but AppKit
 delivers input only to the main thread, which is the training thread. A 60 Hz
 `SIGALRM` pump handled input within 16 ms (5 s late during a long C call) and
 was disqualified: `DataLoader(num_workers=2)` hangs with any 60 Hz `setitimer`,

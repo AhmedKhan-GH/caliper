@@ -219,7 +219,7 @@ Labels for `points` may move host to device, never device to host.
 
 | Call | Returns | Behaviour |
 |---|---|---|
-| `session(auto_launch=False, viewer_path=None, script_name=None)` | `SessionTransport` | Open the live session, or return the open one. `auto_launch=True` also spawns `caliper-viewer --session <token>` unless a spawned viewer is running or a viewer is attached. `viewer_path` overrides the viewer binary; `script_name` the name viewers show (default: the basename of `sys.argv[0]`) |
+| `session(auto_launch=False, viewer_path=None, script_name=None)` | `SessionTransport` | Open the live session, or return the open one; attach to it from the Caliper app (F4 Attach to process). `auto_launch=True` also spawns `caliper-viewer --session <token>` unless a spawned viewer is running or a viewer is attached. `viewer_path` overrides the viewer binary; `script_name` the name viewers show (default: the basename of `sys.argv[0]`) |
 | `window(width=1280, height=800, title="caliper", *, offscreen=False, fps=60.0, rate=None, activate=True, heartbeat=False)` | `Window` | Open the in-process window and route every call to it; an open window of the same kind is returned as is and any other canvas is replaced. Main thread only |
 | `offscreen(width=256, height=256)` | `Window` | The synchronous offscreen canvas; replaces an open window. Main thread only |
 | `run(fn, *args, **kwargs)` | `fn`'s result | With a window open, run `fn` on a worker thread while the main thread keeps the window interactive; otherwise call `fn` |
@@ -338,7 +338,7 @@ dtype or device reallocates its slots.
 | Variable | Effect |
 |---|---|
 | `CALIPER_SESSION` | `0` stops the first view call from opening a session (default `1`) |
-| `CALIPER_DATA_DIR` | Root of the session files (`<root>/live`) for the script and `caliper-viewer`; also the in-process core's data directory |
+| `CALIPER_DATA_DIR` | Root of the session files (`<root>/live`) for the script, the Caliper app's session list and `caliper-viewer`; also the in-process core's data directory |
 | `CALIPER_VIEWER` | Path of `caliper-viewer` for `auto_launch` and `viewer_executable()` |
 | `CALIPER_PY_LOG` | Non-empty and not `0`: echo the in-process core's log lines to stderr |
 | `CALIPER_PY_LIVE_APPLY` | `0`: in-process heatmaps and images use the embed v1.2 view path (`view_tensor` with `WAIT_GPU` on the frame thread) instead of the typed live views |

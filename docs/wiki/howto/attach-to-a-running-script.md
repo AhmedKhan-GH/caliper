@@ -3,9 +3,10 @@
 A script that calls `caliper.show` (or any other view call) opens a **live
 session** on its first call. A viewer can attach to it at any point while the
 script runs, detach, and attach again; the training loop never waits for it.
-This page covers the viewer side: finding a session, attaching, what the viewer
-shows, detaching, and what happens when either process goes away. The design is
-in [Live streaming](../explanation/live-streaming.md).
+This page covers the viewer side: finding a session, attaching from the
+Caliper app (the usual way) or with the standalone `caliper-viewer`, what each
+shows, detaching, and what happens when either process goes away. The design
+is in [Live streaming](../explanation/live-streaming.md).
 
 Everything here is macOS / Metal, local, same user.
 
@@ -22,7 +23,8 @@ ls ~/Library/Application\ Support/Caliper/live/
 The file is one JSON object with the protocol version, the pid and its start
 time, the session token (`clp-<pid>-<6 hex>` by default), the script name, the
 start time, the view names and the shared-memory segment names. If the script
-sets `CALIPER_DATA_DIR`, start the viewer with the same root (`--data-dir`).
+sets `CALIPER_DATA_DIR`, start the viewer with the same root (`--data-dir`, or
+the same `CALIPER_DATA_DIR` for the Caliper app).
 
 From inside the script, `caliper.session()` returns the open session:
 `.session` is the token and `.session_file` the file's path. From any other
@@ -36,6 +38,39 @@ for s in live.list_sessions():
 
 Each entry also has `alive`, `protocol`, `compatible`, `start_unix_ms` and
 `path`. Listing reclaims stale sessions as a side effect (see below).
+
+## Attach from the Caliper app
+
+On the landing screen, press F4 or click `F4 Attach to process` in the Projects
+pane. Projects lists the sessions, newest first, relisted every second, with
+the script, PID, start time (clock time and how long ago), state and view
+names of each. The states and which ones attach are those of the table below;
+a row that cannot attach is faint, and the `⏎ Attach` button under the table
+is disabled with the reason beside it. Select a row with ↑ / ↓ and press Enter,
+double-click it, or click `⏎ Attach`; Esc or `esc Back` returns to the ways in.
+
+The session's live page opens:
+
+| Part | Shows |
+|---|---|
+| Bar | `esc Home`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
+| Views | One window per view (see [What you see](../tutorials/live-pytorch.md#what-you-see)), tiled into the page on first appearance; move, resize or dock them, and the layout is kept in `imgui.ini` |
+| Status bar | The backend and GPU, then the script's pid, the number of views, and the frame rate and step-to-screen latency over the last second |
+
+The window title reads `Caliper - <script> (pid <pid>)`, with
+` - session ended` appended once the script has gone. The page draws at up to
+60 fps, as `caliper-viewer` does, whatever the display's refresh rate. Activity on the
+landing logs `attached`, `session ended` and `detached` with the script and
+its pid, and `attach failed` with the reason when a session refuses (another
+viewer took it, it closed, or the renderer is not Metal).
+
+For automation, `CALIPER_AUTOATTACH=<pid>` attaches to that process's session
+as soon as the landing lists it, and `CALIPER_HOME_AFTER=<seconds>` detaches
+that long after the page opened:
+
+```sh
+CALIPER_AUTOATTACH=41222 CALIPER_WINDOW_SIZE=1440x900 cmake-build-release/caliper
+```
 
 ## Attach with caliper-viewer
 
@@ -89,7 +124,7 @@ the script's terminal does not close it and it outlives the script.
 | `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` |
 | `--dump-dir <dir>` | With `--headless`: write each view's pixels or values to `<dir>` whenever its sequence number changes |
 
-## What the viewer shows
+## What caliper-viewer shows
 
 The window title reads `caliper: <script> (<pid>)` while attached, with
 ` - starting` or ` - session ended` appended when that applies. One window per
@@ -111,10 +146,12 @@ training is not slowed.
 
 ## Detach
 
-**Detach** in the status window drops the views, releases the viewer's claims
-on the shared slots and clears its heartbeat. The script stops taking snapshots
-at once and keeps training; the viewer returns to the session list, from which
-you can attach again. Closing the viewer window detaches the same way. A series
+In the Caliper app, `esc Home` (or Esc, when no field or popup takes it) drops
+the views, releases the claims on the shared slots and clears the heartbeat,
+then returns to the session list. In `caliper-viewer`, **Detach** in the status
+window does the same. The script stops taking snapshots at once and keeps
+training, and you can attach again from the list. Closing either window
+detaches the same way. A series
 keeps its values in the session while nobody is attached, so after a re-attach
 the loss curve shows the values from before the detach, followed by the new
 ones; values offered while no viewer was attached are not recorded.
@@ -125,12 +162,15 @@ A clean exit, `caliper.close()` or interpreter shutdown closes the session:
 the session file is removed and the shared memory unlinked, without waiting for
 the viewer. The viewer keeps its last frames on screen, adds "session ended" to
 the title and shows "SESSION ENDED" in the status window until you detach or
-close it.
+close it. The Caliper app does the same on its live page: `SESSION ENDED` in
+the bar, `session ended` in the status bar and the title, and a `session ended`
+row in Activity; `esc Home` then returns to the list.
 
-A killed script (SIGKILL, a crash) looks the same in the viewer; in the
-measurement, the viewer kept drawing its last frames at 60 fps after the trainer
-was SIGKILLed. The session file and shared memory are left behind until the next
-listing reclaims them.
+A killed script (SIGKILL, a crash) looks the same in the viewer and in the app;
+in the measurement, the viewer kept drawing its last frames at 60 fps after the
+trainer was SIGKILLed. The session file and shared memory are left behind until
+the next listing reclaims them, which on the app's landing is at most a second
+after you return to it.
 
 ## When the viewer dies
 
@@ -171,16 +211,21 @@ Every listing checks each session file's pid and start time. A file whose
 process is gone, or whose pid now belongs to a different process, is stale: the
 shared-memory names under that session's own `/<token>-` prefix are unlinked,
 the file is removed, and the session is not listed. Any listing does this: the
-viewer's session list (every second), `caliper.live.list_sessions()` and
+Caliper app's landing (every second while it shows), the viewer's session list
+(every second), `caliper.live.list_sessions()` and
 `caliper_live_list_sessions`. A killed script therefore leaks nothing past the
 next listing.
 
 ## From an embed host
 
-The Caliper app's "Attach to process" uses the same calls as `caliper-viewer`,
-from `include/caliper/live.h`. Listing works from any thread; the
-`caliper_core_live_*` calls need an embed core with an attached canvas and run
-on its frame thread:
+The Caliper app's "Attach to process" drives the same live core as
+`caliper-viewer`. The app owns its window and renderer, so it attaches through
+a hosted core that borrows them (`caliper_core_create_hosted`,
+`src/host/embed/embed_core.h`; the session list and the attachment are in
+`src/host/live/live_attach.h`), and the session-row rules are shared with the
+viewer's list. An embed host uses the C calls of `include/caliper/live.h`.
+Listing works from any thread; the `caliper_core_live_*` calls need an embed
+core with an attached canvas and run on its frame thread:
 
 ```c
 #include <caliper/live.h>
@@ -216,7 +261,8 @@ caliper_core_live_detach(core);                 /* release claims, clear the hea
 A host whose window may be hidden must keep its frame timer running:
 `caliper-viewer` holds an `NSProcessInfo` activity
 (`NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical`)
-for that reason. With the user-initiated option alone an occluded viewer
+for that reason, and the Caliper app holds the same one while a session is
+attached (`src/host/live/live_activity.h`). With the user-initiated option alone an occluded viewer
 measured 5 to 11 fps for 10 s while the trainer ran, and a throttled viewer's
 heartbeat can go stale, which stops the script's snapshots while the user is
 still attached.

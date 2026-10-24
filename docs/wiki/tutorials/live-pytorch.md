@@ -106,14 +106,40 @@ handle = caliper.watch(model, gradients=True, include=["conv*", "fc1"])
 handle.remove()          # takes the hooks off again
 ```
 
-## Attach the viewer
+## Attach from Caliper
 
 With no other setup, the script's first call opens a **live session**: shared
 memory plus a session file under
 `~/Library/Application Support/Caliper/live/<pid>.json`. Until a viewer
 attaches, every call returns after a check, with no snapshot and no GPU work.
 
-Start the viewer from another terminal while the script runs:
+`train_show.py --mode app` opens the session before it trains and waits for
+Caliper to attach (two minutes by default, `--wait` to change it):
+
+```sh
+.venv/bin/python examples/python/train_show.py --mode app --seconds 60
+```
+
+Start the Caliper app (`cmake-build-release/caliper`, see
+[Development basics](development-basics.md)) while the script runs, and on its
+landing screen press F4 or click `F4 Attach to process` in the Projects pane.
+Projects lists the live sessions on this machine, refreshed every second: one
+row per script with its name, PID, start time, state and view names. Select
+the row and press Enter, double-click it, or click `⏎ Attach`. Caliper opens
+the session's live page with one window per view, tiled on first appearance;
+the bar at the top names the script and its state, and the status bar shows
+its PID, the number of views, the frame rate and the step-to-screen latency.
+The views update at up to 60 fps and the script never waits for Caliper.
+
+`esc Home` detaches and returns to the session list; training carries on, and
+you can attach again. When the script ends, the page keeps the last frames and
+says `SESSION ENDED`. In your own script nothing extra is needed: run it, then
+attach from Caliper.
+
+## Attach with caliper-viewer
+
+The wheel's `caliper-viewer` is the same viewer without the rest of the app.
+Start it from another terminal while the script runs:
 
 ```sh
 "$(.venv/bin/python -c 'from caliper import live; print(live.viewer_executable())')"
@@ -135,7 +161,7 @@ This is what `train_show.py --mode attach` does:
 .venv/bin/python examples/python/train_show.py --mode attach --seconds 20
 ```
 
-The viewer is a separate process: it stays responsive whatever the training
+Either viewer is a separate process: it stays responsive whatever the training
 loop does, it keeps the last frames when the script exits, and closing it does
 not stop training. [Attach to a running script](../howto/attach-to-a-running-script.md)
 covers listing, detaching and what happens when either side goes away.
