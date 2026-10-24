@@ -54,9 +54,13 @@ target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/com
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_sources(caliper_tests PRIVATE test_loader.cpp)
-add_dependencies(caliper_tests hello_applet)
+# The throwing fixture (a raw descriptor that throws across the ABI) backs the
+# crash guard's exception case; it builds into test-applets, not applets.
+add_subdirectory(fixtures/throwing_applet)
+add_dependencies(caliper_tests hello_applet throwing_applet)
 target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets"
+    CALIPER_TEST_FIXTURES_DIR="${CMAKE_BINARY_DIR}/test-applets"
     CALIPER_TEST_DATA_ROOT="${CMAKE_BINARY_DIR}/test-data"
     CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
