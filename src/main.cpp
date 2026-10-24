@@ -8,6 +8,7 @@
 #include "ui/landing_screen.h"
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
+#include "ui/ui_recovery.h"
 #include "host/applet_loader.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
@@ -18,6 +19,8 @@
 #include "app_paths.h"
 
 #include <string>
+#include <vector>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -194,6 +197,7 @@ public:
                 ctx.loader = &loader_;
                 ctx.renderer_name = renderer_->name();
                 ctx.launch = [this](int i) { launch_applet(i); };
+                ctx.restart = [this](int i) { restart_applet(i); };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Applet) {
                 // Esc goes Home only when it is not cancelling something else:
@@ -359,14 +363,23 @@ public:
                 fi.delta_sec = now - last_frame_time_;
                 last_frame_time_ = now;
 
+                // The UI stacks are checkpointed around the applet's frame
+                // (ui_recovery.h): a throw or fault partway through it leaves
+                // its windows, plots and pushes open, and they are unwound
+                // before the host draws anything more into this frame.
+                const caliper_host::UiCheckpoint ui_checkpoint =
+                    caliper_host::UiCheckpoint::store();
                 double t0 = glfwGetTime();
                 bool alive = loader_.frame(active_applet_, fi);
                 watchdog_.feed((glfwGetTime() - t0) * 1000.0);
 
                 if (!alive) {                 // quarantined mid-frame
+                    ui_checkpoint.recover();
                     go_back = true;
-                    landing_.log("quarantined",
-                                 loader_.at(active_applet_).manifest.name);
+                    // A failed job that caused it goes in Activity first.
+                    note_failed_jobs(caliper_host::host_job_system().views());
+                    const auto& a = loader_.at(active_applet_);
+                    landing_.log("quarantined", a.manifest.name, a.status_text);
                 }
 
                 // Teardown is DEFERRED to after render() (see below): the
@@ -382,11 +395,15 @@ public:
             // plate pinned to the bottom-right of the WORK area, so it sits
             // above the status bar instead of over it; sized to its content,
             // never docked, never saved. Actions are house words, not boxes.
+            // Running jobs first, then failures (kept until cleared, see
+            // note_failed_jobs), then the jobs that finished.
             {
                 auto views = caliper_host::host_job_system().views();
-                if (!views.empty()) {
+                note_failed_jobs(views);
+                if (!views.empty() || !failed_jobs_.empty()) {
                     const ImGuiViewport* vp = ImGui::GetMainViewport();
                     constexpr float inset = 12.0f;
+                    constexpr float bar_w = 240.0f;
                     ImGui::SetNextWindowPos(
                         {vp->WorkPos.x + vp->WorkSize.x - inset,
                          vp->WorkPos.y + vp->WorkSize.y - inset},
@@ -402,19 +419,21 @@ public:
                                      ImGuiWindowFlags_AlwaysAutoResize);
                     ImGui::PopStyleColor();
                     sternbild::label("Jobs");
-                    bool any_done = false;
+                    bool any_done = !failed_jobs_.empty();
                     for (auto& v : views) any_done |= !v.running;
                     if (any_done) {
                         ImGui::SameLine(0.0f, sternbild::metric::gap);
-                        if (sternbild::word_button("clear finished"))
+                        if (sternbild::word_button("clear finished")) {
                             caliper_host::host_job_system().clear_finished();
+                            failed_jobs_.clear();
+                        }
                     }
-                    for (auto& v : views) {
+                    auto job_row = [&](const caliper_host::JobSystem::JobView& v) {
                         ImGui::PushID((int)v.id);
                         ImGui::TextUnformatted(v.label.c_str());
                         // Fixed width: the tray auto-sizes, so a bar sized
                         // from the window width would feed back into it.
-                        ImGui::ProgressBar(v.progress, {240.0f, 0.0f},
+                        ImGui::ProgressBar(v.progress, {bar_w, 0.0f},
                                            v.message.empty() ? nullptr
                                                              : v.message.c_str());
                         if (v.running) {
@@ -423,7 +442,33 @@ public:
                                 caliper_host::host_job_system().request_cancel(v.id);
                         }
                         ImGui::PopID();
+                    };
+                    for (auto& v : views)
+                        if (v.running) job_row(v);
+                    // A failure in place of its bar: the status word in
+                    // capitals, as the Instruments STATUS column writes it,
+                    // in parchment, the strongest ink after bronze (which
+                    // stays for focus and selection; the palette has no red),
+                    // then the reason in secondary, wrapped at the bar's
+                    // width so a long one never widens the tray. Newest first.
+                    for (auto it = failed_jobs_.rbegin(); it != failed_jobs_.rend();
+                         ++it) {
+                        ImGui::PushID((int)it->id);
+                        ImGui::TextUnformatted(it->label.c_str());
+                        const float row_x = ImGui::GetCursorPosX();
+                        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::parchment);
+                        ImGui::TextUnformatted("FAILED");
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine(0.0f, sternbild::metric::pad);
+                        ImGui::PushTextWrapPos(row_x + bar_w);
+                        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+                        ImGui::TextUnformatted(it->reason.c_str());
+                        ImGui::PopStyleColor();
+                        ImGui::PopTextWrapPos();
+                        ImGui::PopID();
                     }
+                    for (auto& v : views)
+                        if (!v.running && !v.failed) job_row(v);
                     ImGui::End();
                 }
             }
@@ -443,6 +488,9 @@ public:
             // landing page (it reads statuses live, so nothing to refresh).
             if (pending_home_ >= 0) {
                 const std::string left = loader_.at(pending_home_).manifest.name;
+                // Joining drops every job entry, failed ones included, so a
+                // failure since the tray last looked is recorded first.
+                note_failed_jobs(caliper_host::host_job_system().views());
                 caliper_host::host_job_system().cancel_all_and_join();
                 loader_.teardown(pending_home_);
                 pending_home_ = -1;
@@ -476,8 +524,7 @@ public:
     }
 
 private:
-    void launch_applet(int idx) {
-        if (idx < 0 || idx >= loader_.count()) return;
+    static CaliperHost host_proto() {
         CaliperHost proto{};
         proto.struct_size  = sizeof(CaliperHost);
         proto.abi_epoch    = 2;
@@ -486,18 +533,72 @@ private:
         proto.get_service = [](const CaliperHost*, const char* id) {
             return caliper_host::services_get(id);
         };
+        return proto;
+    }
+
+    void launch_applet(int idx) {
+        if (idx < 0 || idx >= loader_.count()) return;
         const std::string name = loader_.at(idx).manifest.name;
         landing_.log("launch", name);
-        if (loader_.launch(idx, proto)) {
-            active_applet_ = idx;
-            watchdog_.reset();
-            last_frame_time_ = glfwGetTime();
-            page_ = AppPage::Applet;
-            glfwSetWindowTitle(window_, ("Caliper - " + name).c_str());
+        // Home returns to this row, however the launch came (a row, Enter,
+        // CALIPER_AUTOLAUNCH), so a quarantine lands on its reason.
+        landing_.select(idx);
+        // initialize() runs inside the landing's frame, after its windows
+        // have ended: checkpointed like frame(), in case it throws mid-UI.
+        const auto ui_checkpoint = caliper_host::UiCheckpoint::store();
+        if (loader_.launch(idx, host_proto())) {
+            enter_applet(idx);
         } else {
+            ui_checkpoint.recover();
             // The loader marked the entry Failed with the reason; say it in
             // Activity too, so the attempt is not silent.
             landing_.log("launch failed", name, loader_.at(idx).status_text);
+        }
+    }
+
+    // The Inspector's Restart (C++ exception quarantines only, see
+    // AppletLoader::restartable): unload the stale instance, launch afresh.
+    void restart_applet(int idx) {
+        if (!loader_.restartable(idx)) return;
+        const std::string name = loader_.at(idx).manifest.name;
+        landing_.log("restart", name);
+        landing_.select(idx);
+        const auto ui_checkpoint = caliper_host::UiCheckpoint::store();
+        if (loader_.restart(idx, host_proto())) {
+            enter_applet(idx);
+        } else {
+            ui_checkpoint.recover();
+            landing_.log("restart failed", name, loader_.at(idx).status_text);
+        }
+    }
+
+    void enter_applet(int idx) {
+        active_applet_ = idx;
+        watchdog_.reset();
+        last_frame_time_ = glfwGetTime();
+        page_ = AppPage::Applet;
+        glfwSetWindowTitle(window_,
+                           ("Caliper - " + loader_.at(idx).manifest.name).c_str());
+    }
+
+    // A failed job (JobView::failed) is kept here, for the tray, until the
+    // user clears finished jobs, and written to Activity once. The job
+    // system's own entry does not last that long: going Home joins the
+    // applet's jobs and drops every entry, and a failed applet job is what
+    // quarantines its applet and sends the host Home. Job ids never repeat.
+    void note_failed_jobs(const std::vector<caliper_host::JobSystem::JobView>& views) {
+        for (const auto& v : views) {
+            if (!v.failed) continue;
+            bool known = false;
+            for (const auto& f : failed_jobs_) known |= f.id == v.id;
+            if (known) continue;
+            // JobSystem writes the reason as the message, "failed: <why>".
+            std::string reason = v.message;
+            constexpr const char* kPrefix = "failed: ";
+            if (reason.rfind(kPrefix, 0) == 0) reason.erase(0, std::strlen(kPrefix));
+            if (reason.empty()) reason = "no reason given";
+            landing_.log("job failed", v.label, reason);
+            failed_jobs_.push_back({v.id, v.label, std::move(reason)});
         }
     }
 
@@ -551,6 +652,12 @@ private:
     int active_applet_ = -1;
     int pending_home_ = -1;   // applet idx awaiting post-render teardown (Home)
     double last_frame_time_ = 0.0;
+    struct FailedJob {
+        uint64_t id;
+        std::string label;
+        std::string reason;   // the message without its "failed: " prefix
+    };
+    std::vector<FailedJob> failed_jobs_;   // oldest first; see note_failed_jobs
     bool dock_layout_built_ = false;  // first-run applet dock layout attempted
     bool popup_open_prev_ = false;    // a popup was open at the end of last frame
 };

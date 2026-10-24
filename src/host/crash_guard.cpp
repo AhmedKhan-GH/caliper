@@ -1,5 +1,46 @@
 #include "crash_guard.h"
+#include <cstring>
 #include <exception>
+
+namespace caliper_host {
+namespace {
+// The guard's own fault texts, shared by both platforms' guarded_call and
+// read back by fault_kind_of(): describe() (POSIX) names a contained signal
+// with one of these, the SEH path reports "SEH exception 0x%08lX", and both
+// report a C++ throw as "C++ exception: <what()>" or "C++ exception (non-std
+// type)".
+constexpr const char* kSignalTexts[] = {
+    "SIGSEGV (invalid memory access)",
+    "SIGBUS (bad memory alignment/mapping)",
+    "SIGFPE (arithmetic fault)",
+    "SIGILL (illegal instruction)",
+    "signal",
+};
+constexpr const char* kSehPrefix = "SEH exception 0x";
+constexpr size_t kSehDigits = 8;   // %08lX of a 32-bit exception code
+constexpr const char* kCxxText = "C++ exception";
+
+bool ends_with(const std::string& s, const char* tail) {
+    const size_t n = std::strlen(tail);
+    return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
+}
+} // namespace
+
+FaultKind fault_kind_of(const std::string& fault) {
+    if (fault.empty()) return FaultKind::None;
+    // A signal's text always ends the reason, whatever came before it (a job
+    // label may say anything), so a match there is a signal however much of
+    // the rest reads like an exception.
+    for (const char* t : kSignalTexts)
+        if (ends_with(fault, t)) return FaultKind::Signal;
+    const size_t seh = std::strlen(kSehPrefix) + kSehDigits;
+    if (fault.size() >= seh &&
+        fault.compare(fault.size() - seh, std::strlen(kSehPrefix), kSehPrefix) == 0)
+        return FaultKind::Signal;
+    return fault.find(kCxxText) != std::string::npos ? FaultKind::Exception
+                                                     : FaultKind::Signal;
+}
+} // namespace caliper_host
 
 #ifdef _WIN32
 #include <windows.h>
@@ -45,11 +86,13 @@ GuardResult guarded_call(const std::function<void()>& fn) {
     if (rc == 1) {
         r.ok = false;
         r.fault = fault;
+        r.kind = FaultKind::Exception;
     } else if (rc == 2) {
         r.ok = false;
         char buf[64];
         snprintf(buf, sizeof buf, "SEH exception 0x%08lX", code);
         r.fault = buf;
+        r.kind = FaultKind::Signal;
     }
     return r;
 }
@@ -87,11 +130,11 @@ struct sigaction g_previous[kNumSignals];
 
 const char* describe(int sig) {
     switch (sig) {
-        case SIGSEGV: return "SIGSEGV (invalid memory access)";
-        case SIGBUS:  return "SIGBUS (bad memory alignment/mapping)";
-        case SIGFPE:  return "SIGFPE (arithmetic fault)";
-        case SIGILL:  return "SIGILL (illegal instruction)";
-        default:      return "signal";
+        case SIGSEGV: return kSignalTexts[0];
+        case SIGBUS:  return kSignalTexts[1];
+        case SIGFPE:  return kSignalTexts[2];
+        case SIGILL:  return kSignalTexts[3];
+        default:      return kSignalTexts[4];
     }
 }
 
@@ -251,13 +294,16 @@ GuardResult guarded_call(const std::function<void()>& fn) {
         } catch (const std::exception& e) {
             r.ok = false;
             r.fault = std::string("C++ exception: ") + e.what();
+            r.kind = FaultKind::Exception;
         } catch (...) {
             r.ok = false;
             r.fault = "C++ exception (non-std type)";
+            r.kind = FaultKind::Exception;
         }
     } else {
         r.ok = false;
         r.fault = describe(t_signal);
+        r.kind = FaultKind::Signal;
     }
     t_active = 0;
     return r;

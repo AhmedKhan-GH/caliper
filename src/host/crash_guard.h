@@ -9,10 +9,33 @@ namespace caliper_host {
 // Contained: SIGSEGV/SIGBUS/SIGFPE/SIGILL (SEH on Windows), including a stack
 // overflow (the handler runs on a per-thread alternate stack), and any C++
 // exception escaping fn — reported as "C++ exception: <what()>" on every OS.
+
+// What a failed guarded call was, which decides whether the applet may be
+// restarted in this process (AppletLoader::restart):
+//   Exception  a C++ exception escaped fn. The stack unwound normally and
+//              every destructor on the way ran, so the applet's objects are
+//              as sound as its own exception safety left them, and the
+//              process is unharmed.
+//   Signal     a memory fault, stack overflow or illegal instruction (any SEH
+//              exception on Windows, including a C++ throw MSVC could not
+//              unwind through the C ABI). The jump out skipped every
+//              destructor and memory may be corrupt: nothing of that applet
+//              runs again until the host itself restarts.
+enum class FaultKind { None, Exception, Signal };
+
 struct GuardResult {
     bool ok = true;
     std::string fault;   // e.g. "SIGSEGV (invalid memory access)"; "" when ok
+    FaultKind kind = FaultKind::None;
 };
+
+// The kind of a fault known only by its text: a reason that was passed along
+// as a string, such as a background job's (JobOwner::fault(), "background job
+// \"<label>\": <guard fault>"). Errs toward Signal: Exception only when the
+// text names a C++ exception and does not end in one of the guard's own
+// signal or SEH texts, so no label or what() can make a signal read as an
+// exception. Prefer GuardResult::kind wherever the result itself is at hand.
+FaultKind fault_kind_of(const std::string& fault);
 
 // The signal handlers are installed once, process-wide, by the first call and
 // chain to whatever was installed before them for faults outside a guarded

@@ -201,16 +201,21 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
 
     void* instance = nullptr;
     auto cr = guarded_call([&] { instance = d->api.create(); });
-    if (!cr.ok) { a.status = AppletStatus::Quarantined;
-                  a.status_text = "crashed in create(): " + cr.fault; return false; }
+    if (!cr.ok) {
+        quarantine(a, "crashed in create(): " + cr.fault, cr.kind, nullptr, false);
+        return false;
+    }
     if (!instance) return fail("create() returned null");
 
     bool init_ok = false;
     auto ir = guarded_call([&] {
         init_ok = d->api.initialize(instance, &host_blocks_[idx]);
     });
-    if (!ir.ok) { a.status = AppletStatus::Quarantined;
-                  a.status_text = "crashed in initialize(): " + ir.fault; return false; }
+    if (!ir.ok) {
+        quarantine(a, "crashed in initialize(): " + ir.fault, ir.kind, instance,
+                   false);
+        return false;
+    }
     if (!init_ok) {
         guarded_call([&] { d->api.destroy(instance); });
         return fail("initialize() returned false");
@@ -222,16 +227,29 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     return true;
 }
 
-// A guarded job the instance submitted faulted on its worker. The instance's
-// memory is as suspect as after a fault in frame() — the job ran its code on
-// its state — so it is abandoned the same way: never called again, no
-// cleanup/destroy (§15). Checked here, on the loader's thread, before each
-// call into the instance; the worker only flagged it (JobOwner).
+void AppletLoader::quarantine(AppletEntry& a, const std::string& why,
+                              FaultKind kind, void* instance, bool initialized) {
+    a.status = AppletStatus::Quarantined;
+    a.status_text = why;
+    a.fault_kind = kind;
+    a.instance = nullptr;   // never called again, whatever the kind
+    const bool keep = kind == FaultKind::Exception && instance != nullptr;
+    a.stale_instance = keep ? instance : nullptr;
+    a.stale_initialized = keep && initialized;
+}
+
+// A guarded job the instance submitted faulted on its worker. The job ran its
+// code on the instance's state, so the instance is quarantined exactly as for
+// the same fault in frame(): a signal abandons it (never called again, no
+// cleanup/destroy, §15), an exception keeps it for restart(). Checked here, on
+// the loader's thread, before each call into the instance; the worker only
+// flagged it (JobOwner). The job's GuardResult stayed on its worker and only
+// its text reached the owner, so the kind is read back from the text
+// (fault_kind_of, which errs toward Signal).
 bool AppletLoader::quarantine_if_job_faulted(AppletEntry& a) {
     if (!a.jobs || !a.jobs->faulted()) return false;
-    a.status = AppletStatus::Quarantined;
-    a.status_text = "crashed in " + a.jobs->fault();
-    a.instance = nullptr;
+    const std::string fault = a.jobs->fault();
+    quarantine(a, "crashed in " + fault, fault_kind_of(fault), a.instance, true);
     return true;
 }
 
@@ -244,11 +262,10 @@ bool AppletLoader::frame(int idx, const CaliperFrameInfo& info) {
     JobOwnerScope jobs_scope(a.jobs);
     auto r = guarded_call([&] { a.desc->api.frame(a.instance, &info); });
     if (!r.ok) {
-        // Memory is suspect after a fault: abandon the instance, never call
-        // cleanup/destroy/dlclose on it (§15 honesty).
-        a.status = AppletStatus::Quarantined;
-        a.status_text = "crashed in frame(): " + r.fault;
-        a.instance = nullptr;
+        // Memory is suspect after a signal: abandon the instance, never call
+        // cleanup/destroy/dlclose on it (§15 honesty). An exception unwound
+        // cleanly, so its instance is kept, uncalled, for restart().
+        quarantine(a, "crashed in frame(): " + r.fault, r.kind, a.instance, true);
         return false;
     }
     return true;
@@ -261,17 +278,67 @@ void AppletLoader::teardown(int idx) {
     if (quarantine_if_job_faulted(a)) return;
 
     JobOwnerScope jobs_scope(a.jobs);
-    auto cl = guarded_call([&] { a.desc->api.cleanup(a.instance); });
-    auto de = cl.ok
-        ? guarded_call([&] { a.desc->api.destroy(a.instance); })
-        : cl;
+    void* const instance = a.instance;
+    auto cl = guarded_call([&] { a.desc->api.cleanup(instance); });
+    if (!cl.ok) {
+        // destroy() is still owed after a throw from cleanup(): restart()
+        // pays it. A signal abandons the instance as usual.
+        quarantine(a, "crashed during teardown: " + cl.fault, cl.kind, instance,
+                   false);
+        return;
+    }
+    auto de = guarded_call([&] { a.desc->api.destroy(instance); });
     a.instance = nullptr;
-    if (!cl.ok || !de.ok) {
-        a.status = AppletStatus::Quarantined;
-        a.status_text = "crashed during teardown: " + (cl.ok ? de : cl).fault;
+    if (!de.ok) {
+        quarantine(a, "crashed during teardown: " + de.fault, de.kind, nullptr,
+                   false);
         return;
     }
     a.status = AppletStatus::Ready;
+}
+
+bool AppletLoader::restartable(int idx) const {
+    if (idx < 0 || idx >= count()) return false;
+    const AppletEntry& a = entries_[idx];
+    return a.status == AppletStatus::Quarantined &&
+           a.fault_kind == FaultKind::Exception;
+}
+
+bool AppletLoader::restart(int idx, CaliperHost host_proto) {
+    if (!restartable(idx)) return false;
+    AppletEntry& a = entries_[idx];
+
+    // Unload: release the old instance as teardown() would have, had the
+    // exception not stopped it — cleanup() only if initialize() had
+    // succeeded (as launch() does for an initialize() that returns false),
+    // then destroy(), both guarded. Its jobs were joined when the host went
+    // Home after the quarantine (main.cpp).
+    if (void* const old = a.stale_instance) {
+        const bool initialized = a.stale_initialized;
+        a.stale_instance = nullptr;
+        a.stale_initialized = false;
+        JobOwnerScope jobs_scope(a.jobs);
+        GuardResult r;
+        bool cleaned = !initialized;
+        if (initialized) {
+            r = guarded_call([&] { a.desc->api.cleanup(old); });
+            cleaned = r.ok;
+        }
+        if (cleaned) r = guarded_call([&] { a.desc->api.destroy(old); });
+        if (!r.ok) {
+            // Quarantined again with the new reason. After a throw from
+            // cleanup() the old instance still awaits destroy(), so a later
+            // restart() tries that; after destroy() nothing is left.
+            quarantine(a, "crashed while restarting: " + r.fault, r.kind,
+                       cleaned ? nullptr : old, false);
+            return false;
+        }
+    }
+
+    a.status = AppletStatus::Ready;
+    a.status_text.clear();
+    a.fault_kind = FaultKind::None;
+    return launch(idx, host_proto);
 }
 
 void AppletLoader::close_all() {
@@ -285,7 +352,8 @@ void AppletLoader::close_all() {
         // their global thread pools and allocator state can abort in malloc
         // at teardown. Same policy every mature plugin host converges on.
         // (Quarantined images were already exempt: running destructors in a
-        // corrupted image is worse still.)
+        // corrupted image is worse still. A stale instance kept for restart()
+        // is left with its image.)
         a.handle = nullptr;
         a.desc = nullptr;
     }

@@ -34,6 +34,7 @@ TEST_CASE("guard: normal call passes through, side effects run") {
     auto r = guarded_call([&] { x = 42; });
     CHECK(r.ok);
     CHECK(r.fault.empty());
+    CHECK(r.kind == FaultKind::None);
     CHECK(x == 42);
 }
 
@@ -61,16 +62,44 @@ TEST_CASE("guard: C++ exception is contained and named") {
     CHECK_FALSE(r.ok);
     CHECK(r.fault.find("exception") != std::string::npos);
     CHECK(r.fault.find("applet said no") != std::string::npos);
+    CHECK(r.kind == FaultKind::Exception);
     // And the guard is re-armed: a fault right after is still contained.
     auto f = guarded_call([] { volatile int* p = nullptr; *p = 1; });
     CHECK_FALSE(f.ok);
     CHECK(names_a_fault(f.fault));
+    CHECK(f.kind == FaultKind::Signal);
 }
 
 TEST_CASE("guard: non-std exception is contained") {
     auto r = guarded_call([] { throw 42; });
     CHECK_FALSE(r.ok);
     CHECK(r.fault.find("exception") != std::string::npos);
+    CHECK(r.kind == FaultKind::Exception);
+}
+
+TEST_CASE("guard: fault_kind_of reads a reason's kind, erring toward signal") {
+    // The guard's own texts, bare and as a background job reports them.
+    CHECK(fault_kind_of("") == FaultKind::None);
+    CHECK(fault_kind_of("C++ exception: boom") == FaultKind::Exception);
+    CHECK(fault_kind_of("C++ exception (non-std type)") == FaultKind::Exception);
+    CHECK(fault_kind_of("background job \"train\": C++ exception: no data") ==
+          FaultKind::Exception);
+    CHECK(fault_kind_of("SIGSEGV (invalid memory access)") == FaultKind::Signal);
+    CHECK(fault_kind_of("background job \"train\": SIGBUS (bad memory "
+                        "alignment/mapping)") == FaultKind::Signal);
+    CHECK(fault_kind_of("SEH exception 0xC0000005") == FaultKind::Signal);
+    // MSVC's report of a C++ throw it could not unwind is an SEH code: a
+    // signal, so no in-process restart.
+    CHECK(fault_kind_of("SEH exception 0xE06D7363") == FaultKind::Signal);
+    // An applet chooses its job labels and exception texts. A label that
+    // reads like an exception cannot make a signal restartable, and an
+    // exception whose text ends like a signal errs the safe way.
+    CHECK(fault_kind_of("background job \"C++ exception: x\": SIGSEGV "
+                        "(invalid memory access)") == FaultKind::Signal);
+    CHECK(fault_kind_of("C++ exception: saw SIGILL (illegal instruction)") ==
+          FaultKind::Signal);
+    // Anything the guard never wrote is not trusted as an exception.
+    CHECK(fault_kind_of("crashed") == FaultKind::Signal);
 }
 
 namespace {
@@ -92,6 +121,7 @@ TEST_CASE("guard: stack overflow is contained") {
     auto r = guarded_call([] { (void)g_recurse(0); });
     CHECK_FALSE(r.ok);
     CHECK(names_a_fault(r.fault));
+    CHECK(r.kind == FaultKind::Signal);
     // The guard must still work on this thread afterwards, for an ordinary
     // fault and for a second overflow.
     auto f = guarded_call([] { volatile int* p = nullptr; *p = 1; });
@@ -246,6 +276,152 @@ TEST_CASE("guard: a fault in an applet's background job quarantines the applet")
     }, &ran);
     CHECK(wait_for([&] { return !js.is_running(id); }, 2000));
     CHECK(ran.load());
+    g_test_jobs = nullptr;
+}
+
+TEST_CASE("loader: restart is offered after a C++ exception, refused after a signal") {
+    // A quarantine by exception keeps the instance (the stack unwound, its
+    // destructors ran) and restart() unloads it and launches a fresh one; a
+    // quarantine by signal abandons it and restart() refuses, since memory
+    // the old instance may have corrupted is still this process's.
+    JobSystem js;
+    g_test_jobs = &js;
+    caliper::testing::FixtureHost fx;
+    fx.provide(CALIPER_JOBS_V1, &kTestJobs);
+    CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
+    const HostCaps caps{2, "0.6.0",
+                        {"caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1"}};
+    auto count = [&](const char* line) {
+        int n = 0;
+        for (const auto& l : fx.log_lines()) n += l == line;
+        return n;
+    };
+    auto launch_in = [&](AppletLoader& L, const char* where) {
+        setenv("CALIPER_THROWING_WHERE", where, 1);
+        L.scan(CALIPER_TEST_FIXTURES_DIR);
+        int i = -1;
+        for (int k = 0; k < L.count(); k++)
+            if (L.at(k).manifest.id == "dev.caliper.throwing") i = k;
+        REQUIRE(i >= 0);
+        return i;
+    };
+    // The fresh instance must not fail again: the fixture fails nowhere now.
+    auto restart_ok = [&](AppletLoader& L, int i) {
+        setenv("CALIPER_THROWING_WHERE", "none", 1);
+        REQUIRE(L.restart(i, *fx.host()));
+        CHECK(L.at(i).status == AppletStatus::Active);
+        CHECK(L.at(i).fault_kind == FaultKind::None);
+        CHECK(L.at(i).stale_instance == nullptr);
+        CHECK(L.at(i).status_text.empty());
+        CHECK(L.frame(i, fi));                       // the new instance runs
+        CHECK(L.frame(i, fi));
+    };
+    auto refused = [&](AppletLoader& L, int i) {
+        const std::string why = L.at(i).status_text;
+        setenv("CALIPER_THROWING_WHERE", "none", 1);
+        const int inits = count("throwing.initialize");
+        CHECK_FALSE(L.restartable(i));
+        CHECK_FALSE(L.restart(i, *fx.host()));
+        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status_text == why);           // unchanged
+        CHECK(L.at(i).stale_instance == nullptr);    // abandoned
+        CHECK(count("throwing.initialize") == inits);   // nothing launched
+        CHECK_FALSE(L.frame(i, fi));
+    };
+
+    SUBCASE("exception in frame(): cleanup and destroy, then a fresh instance") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "frame");
+        REQUIRE(L.launch(i, *fx.host()));
+        CHECK_FALSE(L.frame(i, fi));
+        CHECK(L.at(i).fault_kind == FaultKind::Exception);
+        CHECK(L.at(i).instance == nullptr);          // never called again...
+        CHECK(L.at(i).stale_instance != nullptr);    // ...but kept to release
+        CHECK(L.restartable(i));
+        L.teardown(i);                               // the Home path: no-op
+        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(count("throwing.cleanup") == 0);
+        restart_ok(L, i);
+        CHECK(count("throwing.cleanup") == 1);
+        CHECK(count("throwing.destroy") == 1);
+        CHECK(count("throwing.initialize") == 2);
+    }
+    SUBCASE("exception in initialize(): destroy only, then a fresh instance") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "initialize");
+        CHECK_FALSE(L.launch(i, *fx.host()));
+        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).fault_kind == FaultKind::Exception);
+        CHECK(L.restartable(i));
+        restart_ok(L, i);
+        CHECK(count("throwing.cleanup") == 0);       // it never initialized
+        CHECK(count("throwing.destroy") == 1);
+    }
+    SUBCASE("exception thrown by a background job") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "job");
+        REQUIRE(L.launch(i, *fx.host()));
+        CHECK(L.frame(i, fi));                       // submits the job
+        REQUIRE(wait_for([&] { return all_finished(js); }, 2000));
+        CHECK_FALSE(L.frame(i, fi));                 // quarantined here
+        CHECK(L.at(i).fault_kind == FaultKind::Exception);
+        CHECK(L.restartable(i));
+        js.cancel_all_and_join();                    // the Home path
+        restart_ok(L, i);
+        CHECK(count("throwing.cleanup") == 1);
+        CHECK(count("throwing.destroy") == 1);
+    }
+    SUBCASE("memory fault in frame(): refused") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "frame-fault");
+        REQUIRE(L.launch(i, *fx.host()));
+        CHECK_FALSE(L.frame(i, fi));
+        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).fault_kind == FaultKind::Signal);
+        CHECK(names_a_fault(L.at(i).status_text));
+        refused(L, i);
+        CHECK(count("throwing.cleanup") == 0);       // never touched again
+        CHECK(count("throwing.destroy") == 0);
+    }
+    SUBCASE("memory fault in a background job: refused") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "job-fault");
+        REQUIRE(L.launch(i, *fx.host()));
+        CHECK(L.frame(i, fi));
+        REQUIRE(wait_for([&] { return all_finished(js); }, 2000));
+        CHECK_FALSE(L.frame(i, fi));
+        CHECK(L.at(i).fault_kind == FaultKind::Signal);
+        refused(L, i);
+    }
+    SUBCASE("cleanup() throwing while restarting: quarantined again, destroy still owed") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "frame");
+        REQUIRE(L.launch(i, *fx.host()));
+        CHECK_FALSE(L.frame(i, fi));
+        setenv("CALIPER_THROWING_WHERE", "cleanup", 1);
+        CHECK_FALSE(L.restart(i, *fx.host()));
+        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status_text.find("crashed while restarting") !=
+              std::string::npos);
+        CHECK(L.at(i).fault_kind == FaultKind::Exception);
+        CHECK(L.at(i).stale_instance != nullptr);
+        CHECK(count("throwing.destroy") == 0);
+        restart_ok(L, i);                            // destroy only, this time
+        CHECK(count("throwing.cleanup") == 1);
+        CHECK(count("throwing.destroy") == 1);
+    }
+    SUBCASE("a loader entry that is not quarantined is not restartable") {
+        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        const int i = launch_in(L, "none");
+        CHECK_FALSE(L.restartable(i));               // Ready
+        CHECK_FALSE(L.restart(i, *fx.host()));
+        REQUIRE(L.launch(i, *fx.host()));
+        CHECK_FALSE(L.restartable(i));               // Active
+        CHECK_FALSE(L.restartable(-1));
+        CHECK_FALSE(L.restartable(L.count()));
+    }
+    js.cancel_all_and_join();
+    unsetenv("CALIPER_THROWING_WHERE");
     g_test_jobs = nullptr;
 }
 

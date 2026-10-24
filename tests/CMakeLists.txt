@@ -54,6 +54,9 @@ target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/com
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_sources(caliper_tests PRIVATE test_loader.cpp)
+# UI recovery after an applet fault (src/host/ui/ui_recovery.h, header-only):
+# headless ImGui/ImPlot/ImPlot3D contexts handed to the throwing fixture.
+target_sources(caliper_tests PRIVATE test_ui_recovery.cpp)
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)

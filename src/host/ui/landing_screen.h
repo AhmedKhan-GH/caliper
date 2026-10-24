@@ -18,7 +18,9 @@
 //                                 launch)
 //                   Inspector    (the selected applet's manifest: id, version,
 //                                 tag, summary, required / optional services,
-//                                 status text, binary path; ⏎ Launch plate)
+//                                 status text, binary path; ⏎ Launch plate,
+//                                 and ⌘R Restart beside it for an applet
+//                                 quarantined by a C++ exception)
 //                   Activity     (host log: renderer, scans, launches, jobs)
 //   status bar    backend · GPU · memory · applet count (facts, no actions)
 //
@@ -43,6 +45,9 @@ public:
         caliper_host::AppletLoader* loader = nullptr;
         const char* renderer_name = "";          // "metal" / "gl" / "vulkan"
         std::function<void(int)> launch;         // launch applet by loader index
+        // Unload and relaunch a quarantined applet (loader index); offered
+        // only when AppletLoader::restartable says so.
+        std::function<void(int)> restart;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;
@@ -58,6 +63,12 @@ public:
     // Index into the loader of the selected row, or -1. Survives launches so
     // Home returns to the same row.
     int selected_index() const { return selected_; }
+    // Selects a row by loader index (a launch that did not come from a row,
+    // so Home still returns to it); kept in view on the next draw.
+    void select(int index) {
+        selected_ = index;
+        scroll_to_selected_ = true;
+    }
 
 private:
     struct LogLine {
@@ -95,6 +106,7 @@ private:
     int focus_instruments_ = 0;      // frames left to hand focus to the table
     const char* focus_pane_ = nullptr;  // ⌘1–⌘4: pane to focus after the frame
     int pending_launch_ = -1;        // activation, run after the frame is drawn
+    int pending_restart_ = -1;       // Restart, run after the frame like a launch
     int last_frame_ = -1;            // ImGui frame of the previous draw()
     int select_step_ = 0;            // ↑ ↓ buttons: rows to move this frame
     float command_right_w_ = 0.0f;   // right-aligned block, measured last frame

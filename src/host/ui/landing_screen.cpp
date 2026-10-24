@@ -82,9 +82,11 @@ constexpr KeyCap kKeyPane[4] = {{"\xe2\x8c\x98" "1", "Cmd 1", 0x2318},         /
                                 {"\xe2\x8c\x98" "2", "Cmd 2", 0x2318},
                                 {"\xe2\x8c\x98" "3", "Cmd 3", 0x2318},
                                 {"\xe2\x8c\x98" "4", "Cmd 4", 0x2318}};
+constexpr KeyCap kKeyRestart = {"\xe2\x8c\x98R", "Cmd R", 0x2318};             // ⌘R
 #else
 constexpr KeyCap kKeyEnter   = {"ENTER", "ENTER", 0};
 constexpr KeyCap kKeyCommand = {"Ctrl K", "Ctrl K", 0};
+constexpr KeyCap kKeyRestart = {"Ctrl R", "Ctrl R", 0};
 constexpr KeyCap kKeyPane[4] = {{"Ctrl 1", "Ctrl 1", 0}, {"Ctrl 2", "Ctrl 2", 0},
                                 {"Ctrl 3", "Ctrl 3", 0}, {"Ctrl 4", "Ctrl 4", 0}};
 #endif
@@ -397,6 +399,10 @@ void LandingScreen::draw(const Context& ctx) {
     for (int i = 0; i < 4; ++i)
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | pane_keys[i]))
             focus_pane_ = kPanes[i];
+    // ⌘R: the Inspector's Restart, while the selected row offers it.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && ctx.loader &&
+        ctx.loader->restartable(selected_))
+        pending_restart_ = selected_;
 
     draw_dock_space();
     if (begin_pane(kProjects)) draw_projects();
@@ -432,13 +438,20 @@ void LandingScreen::draw(const Context& ctx) {
     }
 
     // Launch after every window of this frame has ended, so the applet's
-    // initialize() never runs inside a half-built landing frame.
+    // initialize() never runs inside a half-built landing frame. A restart
+    // is a launch too (it ends in initialize()), so it waits the same way.
     if (pending_launch_ >= 0) {
         const int i = pending_launch_;
         pending_launch_ = -1;
         if (ctx.loader && ctx.launch && i < ctx.loader->count() &&
             launchable(ctx.loader->at(i)))
             ctx.launch(i);
+    }
+    if (pending_restart_ >= 0) {
+        const int i = pending_restart_;
+        pending_restart_ = -1;
+        if (ctx.loader && ctx.restart && ctx.loader->restartable(i))
+            ctx.restart(i);
     }
 
     if (focus_pane_) {
@@ -1001,7 +1014,10 @@ void LandingScreen::draw_inspector(const Context& ctx) {
     // table or the command line does the same. Disabled when the row cannot
     // launch, with the reason beside it in faint (honesty: a disabled control
     // says why); one line, cut with an ellipsis, since the STATUS row above
-    // carries the full text.
+    // carries the full text. A quarantined applet says instead what brings it
+    // back: after a C++ exception (the stack unwound, nothing is corrupt) a
+    // ⌘R Restart key button that unloads and relaunches it; after a signal
+    // (memory may be corrupt) only a restart of Caliper itself.
     ImGui::SetCursorPosY(table_y + table_h + metric::pad);
     const bool ready = launchable(e);
     const float button_y = ImGui::GetCursorPosY();
@@ -1009,13 +1025,21 @@ void LandingScreen::draw_inspector(const Context& ctx) {
     if (sternbild::primary_button("Launch", ImVec2(0.0f, kPlate), key(kKeyEnter)))
         pending_launch_ = selected_;
     ImGui::EndDisabled();
-    if (!ready) {
+    if (!ready && loader->restartable(selected_)) {
+        // key_button sits on the plate's text baseline, so the two share a
+        // line without any offset here.
+        ImGui::SameLine(0.0f, metric::gap);
+        if (sternbild::key_button(key(kKeyRestart), "Restart"))
+            pending_restart_ = selected_;
+    } else if (!ready) {
         ImGui::SameLine(0.0f, metric::gap);
         const float text_h = ImGui::GetTextLineHeight();
         ImGui::SetCursorPosY(button_y + std::max(0.0f, (kPlate - text_h) * 0.5f));
         const char* reason = e.status == AppletStatus::Active ? "running"
-                             : e.status_text.empty()          ? "not available"
-                                                              : e.status_text.c_str();
+                             : e.status == AppletStatus::Quarantined
+                                 ? "restart Caliper to reload"
+                             : e.status_text.empty() ? "not available"
+                                                     : e.status_text.c_str();
         const ImVec2 at = ImGui::GetCursorScreenPos();
         const float w = std::max(1.0f, ImGui::GetContentRegionAvail().x);
         ImGui::PushStyleColor(ImGuiCol_Text, col::faint);
