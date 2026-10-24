@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 
 #include "metrics_store.h"
+#include "duckdb_sizing.h"
 
 #include <caliper/arrow_c.h>
 
@@ -440,65 +441,194 @@ TEST_CASE("metrics_store: clear_all empties history but never reuses ids") {
 }
 
 // ---------------------------------------------------------------------------
-// DuckDB resource limits (duckdb_config.h): the store opens with explicit
-// `threads` / `memory_limit` instead of DuckDB's defaults (every core, 80% of
-// RAM — per instance), and the environment can override them. The limits are
-// read back through the store's own query surface; the memory figure comes
-// back as DuckDB's human-readable string, so only its integer MiB part is
-// pinned (512MB = 488.28 MiB, 256MB = 244.14 MiB).
+// DuckDB resource limits (duckdb_sizing.h / duckdb_config.h): each store opens
+// with explicit `threads` / `memory_limit` instead of DuckDB's defaults (every
+// core, 80% of RAM — per instance), sized from this machine's RAM and cores
+// between a floor and a ceiling, and the environment can override them. The
+// rule is pinned on synthetic machines; the stores are checked against what
+// the rule computes for THIS machine, never against its actual RAM.
 // ---------------------------------------------------------------------------
 namespace {
+using caliper_host::DuckDBLimits;
+using caliper_host::DuckDBSizing;
+using caliper_host::MachineResources;
+using caliper_host::duckdb_default_limits;
+using caliper_host::duckdb_limits_for;
+using caliper_host::kArtifactsDuckDBLimits;
+using caliper_host::kDataDuckDBLimits;
+using caliper_host::kMetricsDuckDBLimits;
+
+constexpr uint64_t kGiB = 1024ull * 1024 * 1024;
+
+// A computed default is always "<n>MB" (DuckDB MB, 10^6 bytes).
+int64_t limit_mb(const DuckDBLimits& l) { return std::stoll(l.memory_limit); }
+
 int64_t setting_threads(MetricsStore& s) {
     ArrowArrayStream st = {};
     REQUIRE(s.query("SELECT CAST(current_setting('threads') AS BIGINT)", &st));
     return drain_single_i64(&st);
 }
-int64_t setting_memory_mib(MetricsStore& s) {
+// memory_limit reads back as DuckDB's display string ("15.9 GiB");
+// format_bytes renders bytes through the same formatter, so this is exact.
+bool memory_limit_is(MetricsStore& s, int64_t bytes) {
     ArrowArrayStream st = {};
-    REQUIRE(s.query("SELECT CAST(regexp_extract(current_setting('memory_limit'), "
-                    "'^[0-9]+') AS BIGINT)", &st));
-    return drain_single_i64(&st);
+    REQUIRE(s.query("SELECT CAST(current_setting('memory_limit') = format_bytes(" +
+                        std::to_string(bytes) + ") AS BIGINT)",
+                    &st));
+    return drain_single_i64(&st) == 1;
 }
 void clear_duckdb_env() {
     for (const char* k : {"CALIPER_DUCKDB_THREADS", "CALIPER_DUCKDB_MEMORY_LIMIT",
                           "CALIPER_DUCKDB_METRICS_THREADS",
-                          "CALIPER_DUCKDB_METRICS_MEMORY_LIMIT"})
+                          "CALIPER_DUCKDB_METRICS_MEMORY_LIMIT",
+                          "CALIPER_DUCKDB_DATA_THREADS",
+                          "CALIPER_DUCKDB_DATA_MEMORY_LIMIT",
+                          "CALIPER_DUCKDB_ARTIFACTS_THREADS",
+                          "CALIPER_DUCKDB_ARTIFACTS_MEMORY_LIMIT"})
         unsetenv(k);
 }
 }  // namespace
 
+TEST_CASE("duckdb sizing: memory and threads follow the machine, within bounds") {
+    struct Row { const char* name; DuckDBSizing s; };
+    const Row stores[] = {{"metrics", kMetricsDuckDBLimits},
+                          {"artifacts", kArtifactsDuckDBLimits},
+                          {"data", kDataDuckDBLimits}};
+    auto mem = [](const DuckDBSizing& s, const MachineResources& m) {
+        return duckdb_default_limits(s, m).memory_limit;
+    };
+    auto threads = [](const DuckDBSizing& s, const MachineResources& m) {
+        return duckdb_default_limits(s, m).threads;
+    };
+
+    SUBCASE("an unreadable machine gets the floors") {
+        CHECK(mem(kMetricsDuckDBLimits, {}) == "512MB");
+        CHECK(mem(kArtifactsDuckDBLimits, {}) == "256MB");
+        CHECK(mem(kDataDuckDBLimits, {}) == "2000MB");
+        CHECK(threads(kMetricsDuckDBLimits, {}) == 1);
+        CHECK(threads(kArtifactsDuckDBLimits, {}) == 1);
+        CHECK(threads(kDataDuckDBLimits, {}) == 2);
+    }
+    SUBCASE("in between, memory is the store's share of RAM") {
+        const MachineResources mac64{64 * kGiB, 18};
+        CHECK(mem(kDataDuckDBLimits, mac64) == "17179MB");      // 25%
+        CHECK(mem(kMetricsDuckDBLimits, mac64) == "1374MB");    // 2%
+        CHECK(mem(kArtifactsDuckDBLimits, mac64) == "687MB");   // 1%
+    }
+    SUBCASE("a huge machine gets the ceilings") {
+        const MachineResources big{1024 * kGiB, 256};
+        CHECK(mem(kDataDuckDBLimits, big) == "32000MB");
+        CHECK(mem(kMetricsDuckDBLimits, big) == "4000MB");
+        CHECK(mem(kArtifactsDuckDBLimits, big) == "2000MB");
+        CHECK(threads(kDataDuckDBLimits, big) == 16);
+        CHECK(threads(kMetricsDuckDBLimits, big) == 4);
+        CHECK(threads(kArtifactsDuckDBLimits, big) == 2);
+    }
+    SUBCASE("eight cores keep the 2/1/4 threads the fixed limits had") {
+        const MachineResources eight{16 * kGiB, 8};
+        CHECK(threads(kMetricsDuckDBLimits, eight) == 2);
+        CHECK(threads(kArtifactsDuckDBLimits, eight) == 1);
+        CHECK(threads(kDataDuckDBLimits, eight) == 4);
+    }
+    SUBCASE("every size stays in bounds and never shrinks as the machine grows") {
+        for (const Row& r : stores) {
+            CAPTURE(r.name);
+            int64_t prev_mb = 0, prev_threads = 0;
+            for (uint64_t gib = 1; gib <= 2048; gib *= 2) {
+                const unsigned cores = static_cast<unsigned>(gib / 2 + 1);
+                const DuckDBLimits l = duckdb_default_limits(r.s, {gib * kGiB, cores});
+                CHECK(limit_mb(l) >= r.s.memory_floor_mb);
+                CHECK(limit_mb(l) <= r.s.memory_ceiling_mb);
+                CHECK(l.threads >= r.s.threads_floor);
+                CHECK(l.threads <= r.s.threads_ceiling);
+                CHECK(limit_mb(l) >= prev_mb);
+                CHECK(l.threads >= prev_threads);
+                prev_mb = limit_mb(l);
+                prev_threads = l.threads;
+            }
+        }
+    }
+}
+
+TEST_CASE("duckdb sizing: this machine's RAM and cores are read") {
+#if defined(__APPLE__) || defined(__linux__)
+    const MachineResources m = caliper_host::machine_resources();
+    CHECK(m.ram_bytes >= 256ull * 1024 * 1024);   // something real, not 0
+    CHECK(m.cores >= 1u);
+#else
+    MESSAGE("RAM query written for this platform but not exercised here");
+#endif
+}
+
+TEST_CASE("duckdb sizing: overrides win over the computed defaults") {
+    clear_duckdb_env();
+    const DuckDBLimits defaults = duckdb_default_limits(
+        kDataDuckDBLimits, caliper_host::machine_resources());
+    SUBCASE("no override: the computed default") {
+        const DuckDBLimits l = duckdb_limits_for("DATA", defaults);
+        CHECK(l.threads == defaults.threads);
+        CHECK(l.memory_limit == defaults.memory_limit);
+    }
+    SUBCASE("global, then per-store on top") {
+        setenv("CALIPER_DUCKDB_THREADS", "3", 1);
+        setenv("CALIPER_DUCKDB_MEMORY_LIMIT", "1GB", 1);
+        DuckDBLimits l = duckdb_limits_for("DATA", defaults);
+        CHECK(l.threads == 3);
+        CHECK(l.memory_limit == "1GB");
+        setenv("CALIPER_DUCKDB_DATA_THREADS", "5", 1);
+        setenv("CALIPER_DUCKDB_DATA_MEMORY_LIMIT", "40GB", 1);   // above the ceiling
+        l = duckdb_limits_for("DATA", defaults);
+        CHECK(l.threads == 5);
+        CHECK(l.memory_limit == "40GB");          // an override is not clamped
+        // Another store's variables don't leak across.
+        CHECK(duckdb_limits_for("METRICS", defaults).threads == 3);
+    }
+    SUBCASE("an unparsable thread count keeps the computed default") {
+        setenv("CALIPER_DUCKDB_THREADS", "lots", 1);
+        CHECK(duckdb_limits_for("DATA", defaults).threads == defaults.threads);
+    }
+    clear_duckdb_env();
+}
+
 TEST_CASE("metrics_store: DuckDB opens with explicit thread and memory limits") {
     clear_duckdb_env();
+    const DuckDBLimits want = duckdb_default_limits(
+        kMetricsDuckDBLimits, caliper_host::machine_resources());
     MetricsStore store;
     REQUIRE(store.open(":memory:"));
-    CHECK(setting_threads(store) == 2);          // kMetricsDuckDBLimits
-    CHECK(setting_memory_mib(store) == 488);     // 512MB, not 80% of RAM
+    CHECK(setting_threads(store) == want.threads);
+    CHECK(memory_limit_is(store, limit_mb(want) * 1000000));   // not 80% of RAM
 }
 
 TEST_CASE("metrics_store: DuckDB limits honor the environment, bad values fall back") {
     clear_duckdb_env();
+    const DuckDBLimits want = duckdb_default_limits(
+        kMetricsDuckDBLimits, caliper_host::machine_resources());
     SUBCASE("global override") {
         setenv("CALIPER_DUCKDB_THREADS", "1", 1);
         setenv("CALIPER_DUCKDB_MEMORY_LIMIT", "256MB", 1);
         MetricsStore store;
         REQUIRE(store.open(":memory:"));
         CHECK(setting_threads(store) == 1);
-        CHECK(setting_memory_mib(store) == 244);
+        CHECK(memory_limit_is(store, 256000000));
     }
     SUBCASE("per-store override wins over the global one") {
         setenv("CALIPER_DUCKDB_THREADS", "1", 1);
         setenv("CALIPER_DUCKDB_METRICS_THREADS", "3", 1);
+        setenv("CALIPER_DUCKDB_MEMORY_LIMIT", "256MB", 1);
+        setenv("CALIPER_DUCKDB_METRICS_MEMORY_LIMIT", "300MB", 1);
         MetricsStore store;
         REQUIRE(store.open(":memory:"));
         CHECK(setting_threads(store) == 3);
+        CHECK(memory_limit_is(store, 300000000));
     }
     SUBCASE("unparsable values fall back to the defaults, the store still opens") {
         setenv("CALIPER_DUCKDB_THREADS", "lots", 1);
         setenv("CALIPER_DUCKDB_MEMORY_LIMIT", "a bucket", 1);
         MetricsStore store;
         REQUIRE(store.open(":memory:"));
-        CHECK(setting_threads(store) == 2);
-        CHECK(setting_memory_mib(store) == 488);
+        CHECK(setting_threads(store) == want.threads);
+        CHECK(memory_limit_is(store, limit_mb(want) * 1000000));
     }
     clear_duckdb_env();
 }

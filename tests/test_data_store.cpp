@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 
 #include "data_store.h"
+#include "duckdb_sizing.h"
 
 #include <caliper/arrow_c.h>
 
@@ -15,6 +16,7 @@
 #ifdef _WIN32
 #include <process.h>
 #define getpid _getpid
+#define unsetenv(k) _putenv_s(k, "")   // MSVC has no unsetenv; "" removes
 #else
 #include <unistd.h>
 #endif
@@ -103,20 +105,29 @@ TEST_CASE("data_store: bad SQL fails with a reason, no crash") {
 }
 
 TEST_CASE("data_store: DuckDB opens with explicit thread and memory limits") {
-    // duckdb_config.h: the data store's own defaults (4 threads, 2GB — the one
-    // store that scans user datasets), not DuckDB's every-core / 80%-of-RAM.
-    // memory_limit reads back as a human string (2GB -> "1.8 GiB"); pin the
-    // shape of it. Read through the existing two-column drain.
+    // duckdb_sizing.h: the data store's share of THIS machine (25% of RAM in
+    // [2GB, 32GB], cores/2 in [2, 16] — the one store that scans user
+    // datasets), not DuckDB's every-core / 80%-of-RAM. memory_limit reads back
+    // as a display string; format_bytes renders through the same formatter,
+    // so b is an exact comparison. Read through the existing two-column drain.
+    for (const char* k : {"CALIPER_DUCKDB_THREADS", "CALIPER_DUCKDB_MEMORY_LIMIT",
+                          "CALIPER_DUCKDB_DATA_THREADS",
+                          "CALIPER_DUCKDB_DATA_MEMORY_LIMIT"})
+        unsetenv(k);
+    const caliper_host::DuckDBLimits want = caliper_host::duckdb_default_limits(
+        caliper_host::kDataDuckDBLimits, caliper_host::machine_resources());
+    const int64_t want_bytes = std::stoll(want.memory_limit) * 1000000;   // "<n>MB"
     DataStore store;
     REQUIRE(store.open(":memory:"));
     ArrowArrayStream stream = {};
     REQUIRE(store.query(
         "SELECT CAST(current_setting('threads') AS INTEGER) AS a, "
-        "CAST(current_setting('memory_limit') LIKE '1.% GiB' AS DOUBLE) AS b",
+        "CAST(current_setting('memory_limit') = format_bytes(" +
+            std::to_string(want_bytes) + ") AS DOUBLE) AS b",
         &stream));
     TwoCol got = drain_i32_f64(&stream);
     REQUIRE(got.a.size() == 1);
-    CHECK(got.a[0] == 4);
+    CHECK(got.a[0] == want.threads);
     CHECK(got.b[0] == 1.0);
 }
 
