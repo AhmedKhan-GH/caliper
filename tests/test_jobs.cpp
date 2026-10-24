@@ -3,6 +3,8 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <stdexcept>
+#include <string>
 #include <thread>
 using namespace caliper_host;
 using namespace std::chrono;
@@ -129,4 +131,97 @@ TEST_CASE("jobs: concurrent jobs get distinct ids and all finish") {
     CHECK(a != b);
     CHECK(b != c);
     CHECK(wait_until([&] { return done.load() == 3; }, milliseconds(2000)));
+}
+
+TEST_CASE("jobs: a throwing fn fails the job, not the host") {
+    // An exception escaping a std::thread is std::terminate — the whole host
+    // gone for one bad job. The worker must catch it and report it instead.
+    JobSystem js;
+    auto fn = [](void*, const CaliperJobControl* ctl) {
+        ctl->progress(ctl, 0.25f, "about to throw");
+        throw std::runtime_error("boom");
+    };
+    uint64_t id = js.submit("thrower", fn, nullptr);
+    REQUIRE(id != 0);
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    CHECK(js.failed(id));
+    CHECK(js.progress_of(id) == doctest::Approx(0.25f));   // progress kept
+    bool found = false;
+    for (auto& v : js.views())
+        if (v.id == id) {
+            found = true;
+            CHECK(v.failed);
+            CHECK_FALSE(v.running);
+            CHECK(v.message.find("boom") != std::string::npos);
+        }
+    CHECK(found);
+    // The host (this test process) is alive to assert all of the above, and
+    // an unrelated job still runs after the failure.
+    std::atomic<bool> ran{false};
+    auto ok = [](void* user, const CaliperJobControl*) {
+        static_cast<std::atomic<bool>*>(user)->store(true);
+    };
+    uint64_t id2 = js.submit("after", ok, &ran);
+    CHECK(wait_until([&] { return !js.is_running(id2); }, milliseconds(2000)));
+    CHECK(ran.load());
+    CHECK_FALSE(js.failed(id2));
+}
+
+TEST_CASE("jobs: a non-std exception is contained with a generic message") {
+    JobSystem js;
+    auto fn = [](void*, const CaliperJobControl*) { throw 42; };
+    uint64_t id = js.submit("thrower-int", fn, nullptr);
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    CHECK(js.failed(id));
+    bool found = false;
+    for (auto& v : js.views())
+        if (v.id == id) {
+            found = true;
+            CHECK(v.failed);
+            CHECK(v.message.find("exception") != std::string::npos);
+        }
+    CHECK(found);
+}
+
+TEST_CASE("jobs: cancel_all_and_join gives up on a worker that ignores cancel") {
+    // A fn that never polls ctl->cancelled must not hang shutdown forever: the
+    // join is bounded by the deadline, the straggler is detached. Its state is
+    // static so the detached thread has something valid to touch until it
+    // really ends (we wait for that below so the case leaves nothing behind).
+    static std::atomic<bool> s_exited{false};
+    s_exited.store(false);
+    auto fn = [](void* user, const CaliperJobControl*) {
+        std::this_thread::sleep_for(milliseconds(600));   // deaf to cancel
+        static_cast<std::atomic<bool>*>(user)->store(true);
+    };
+    auto t0 = steady_clock::now();
+    {
+        JobSystem js;
+        js.submit("deaf", fn, &s_exited);
+        std::this_thread::sleep_for(milliseconds(20));
+        js.cancel_all_and_join(milliseconds(100));        // must give up ~100ms
+        CHECK_FALSE(s_exited.load());                     // it really was deaf
+    }   // ~JobSystem: nothing left to wait for
+    const auto waited = duration_cast<milliseconds>(steady_clock::now() - t0);
+    CHECK(waited.count() < 450);                          // bounded, not 600+
+    CHECK(wait_until([&] { return s_exited.load(); }, milliseconds(2000)));
+}
+
+TEST_CASE("jobs: finished workers are reaped without clear_finished") {
+    // Until now a finished thread stayed unjoined until the panel's "clear".
+    // submit()/views() now join on the host's behalf; the entry stays listed.
+    JobSystem js;
+    auto fn = [](void*, const CaliperJobControl*) {};
+    uint64_t id = js.submit("quick", fn, nullptr);
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    CHECK(js.reap_finished() == 1);        // the one finished thread, joined
+    CHECK(js.reap_finished() == 0);        // and not twice
+    CHECK(js.views().size() == 1);         // still listed for the panel
+
+    uint64_t id2 = js.submit("quick-2", fn, nullptr);
+    REQUIRE(wait_until([&] { return !js.is_running(id2); }, milliseconds(2000)));
+    (void)js.views();                      // the per-frame call reaps too
+    CHECK(js.reap_finished() == 0);
+    js.clear_finished();                   // still drops them, nothing to join
+    CHECK(js.views().empty());
 }
