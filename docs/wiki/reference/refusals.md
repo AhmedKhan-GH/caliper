@@ -24,6 +24,14 @@ Placeholders in `{braces}` are filled at runtime: `{applet_epoch}` / `{host_epoc
 are integers, `{min_host}` / `{host_version}` are semver strings like `0.6.0`, and
 `{service_id}` is a service id like `caliper.jobs.v1`.
 
+The required-services check runs a second time inside `launch()`. After the
+`dlopen` and the descriptor checks, the loader walks the binary's own
+`required_services` list (set by the `CALIPER_APPLET` macro's `.services`)
+against the host's services. A service missing there gives the same
+`Requires a capability this host doesn't have: {service_id}.` message and the
+same `Refused` status, before `create()` runs; the binary stays mapped. This
+catches a manifest whose `required` list leaves out a service the binary needs.
+
 ## Loader statuses
 
 Negotiation is only the first gate. Once an applet passes it, the **loader**
@@ -36,8 +44,10 @@ statuses:
   missing or unloadable binary, a descriptor that contradicts its manifest, or a
   lifecycle hook that returned an honest "no". Re-launchable once the cause is
   fixed.
-- **Quarantined** — the applet *faulted* (a signal: SIGSEGV/SIGBUS/SIGFPE/SIGILL)
-  while the host held it. Process memory is now suspect, so the loader abandons
+- **Quarantined** — the applet *faulted* (a signal: SIGSEGV/SIGBUS/SIGFPE/SIGILL,
+  including a stack overflow, or a C++ exception escaping an entry point) while
+  the host held it, or a job it submitted faulted. Process memory is now
+  suspect, so the loader abandons
   the instance and **never calls it again this session** — no retry, no
   `cleanup`/`destroy` on the faulted instance, and the dylib is left mapped
   (running static destructors inside a corrupted image is worse than the leak).
@@ -52,6 +62,8 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
 | _(manifest parser text, passed through verbatim)_ | `scan()` could not parse `caliper.toml` — malformed TOML or a missing/invalid required field. The error is whatever the [manifest](manifest.md) parser reported. | Fix the manifest as the message describes; see [Manifest](manifest.md) for the required fields and formats. |
+| `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): {id}` | The parser's own message for an `id` that breaks the [id rules](manifest.md#applet-ids): a character outside `[a-z0-9.-]`, an empty segment (`..`, a leading or trailing dot), or more than 128 characters. | Rename the applet to a lowercase reverse-DNS id, and use the same id in the descriptor. |
+| `applet id is not path-safe: {id}` | The loader's own check of the id, made before it builds the applet's data folder path. The parser refuses the same ids first, so this appears only for a manifest that reached the loader another way. | As above. |
 | `applet binary not found next to {manifest_filename}` | `scan()` found the manifest but no sibling shared library. The loader looks for `<stem>` and `lib<stem>` with the platform extension (`.dylib`/`.so`/`.dll`) beside `<stem>.caliper.toml`. | Ship the compiled applet library next to its manifest, named to match the manifest's stem. |
 | `load failed: {dlerror}` | `dlopen`/`LoadLibrary` failed at `launch()` — a corrupt image, a wrong architecture, or an unresolved dependency. `{dlerror}` is the OS loader's own text. | Rebuild the applet for this platform/arch and make sure its dependencies resolve. |
 | `missing export caliper_applet_descriptor` | The library loaded but does not export the one required symbol. Usually a non-applet library, or one built without `CALIPER_APPLET` / the `CALIPER_EXPORT` visibility attribute. | Build with the SDK's `CALIPER_APPLET` macro (or export the descriptor by hand) so the symbol is visible. |
@@ -67,14 +79,18 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
-| `crashed in create(): {signal}` | The applet faulted inside `create()`. The instance never existed; nothing to clean up. | Fix the fault in the applet's constructor path; restart the host to try again. |
-| `crashed in initialize(): {signal}` | The applet faulted inside `initialize()`. The instance is abandoned — `destroy()` is **not** called on a faulted instance. | Fix the fault in the applet's init path; restart the host. |
-| `crashed in frame(): {signal}` | The applet faulted during a `frame()` call. The instance is abandoned and `frame()` is never called again this session. | Fix the fault in the applet's per-frame path; restart the host. |
-| `crashed during teardown: {signal}` | The applet faulted in `cleanup()` or `destroy()` while shutting down. Teardown stops; the dylib is left mapped. | Fix the fault in the applet's teardown path; restart the host. |
+| `crashed in create(): {fault}` | The applet faulted inside `create()`. The instance never existed; nothing to clean up. | Fix the fault in the applet's constructor path; restart the host to try again. |
+| `crashed in initialize(): {fault}` | The applet faulted inside `initialize()`. The instance is abandoned — `destroy()` is **not** called on a faulted instance. | Fix the fault in the applet's init path; restart the host. |
+| `crashed in frame(): {fault}` | The applet faulted during a `frame()` call. The instance is abandoned and `frame()` is never called again this session. | Fix the fault in the applet's per-frame path; restart the host. |
+| `crashed during teardown: {fault}` | The applet faulted in `cleanup()` or `destroy()` while shutting down. Teardown stops; the dylib is left mapped. | Fix the fault in the applet's teardown path; restart the host. |
+| `crashed in background job "{label}": {fault}` | A job the applet submitted through `caliper.jobs.v1` — from one of its entry points, or from another of its jobs — faulted or threw (see [jobs.v1](services/jobs-v1.md)). The loader quarantines the applet before its next `frame()` or at teardown, whichever comes first; a `frame()` already running finishes. The instance is abandoned with no `cleanup`/`destroy`. | Fix the fault in the job function; restart the host. |
 
-`{signal}` is the crash guard's description of the fault, e.g.
-`SIGSEGV (invalid memory access)`. `{dlerror}` is the platform loader's message,
-and `{manifest_filename}` is the manifest file the applet was scanned from.
+`{fault}` is the crash guard's description of the fault: a signal such as
+`SIGSEGV (invalid memory access)`, `C++ exception: <what()>`, or
+`C++ exception (non-std type)`. `{label}` is the label the job was submitted
+with, `{dlerror}` is the platform loader's message, `{manifest_filename}` is the
+manifest file the applet was scanned from, and `{id}` is the manifest's
+`applet.id`.
 
 !!! note
     The landing screen shows these statuses. An applet that is not
@@ -84,6 +100,7 @@ and `{manifest_filename}` is the manifest file the applet was scanned from.
     (the negotiation refusal, `Failed`, or `Quarantined` message), and the
     `⏎ Launch` button is disabled with the same text beside it. A launch that
     fails is also logged in the Activity pane as `launch failed` with the
-    reason, and a quarantine during `frame()` as `quarantined`. The landing
+    reason, and a quarantine while the applet runs (in `frame()`, or from one
+    of its jobs) as `quarantined`. The landing
     screen reads the statuses every frame, so a mid-session quarantine shows up
     as soon as the host returns to it.

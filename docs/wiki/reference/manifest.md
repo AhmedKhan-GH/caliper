@@ -11,7 +11,7 @@ older hosts (forward compatibility).
 
 | Section     | Key        | Type              | Required | Meaning                                                                 |
 |-------------|------------|-------------------|----------|-------------------------------------------------------------------------|
-| `[applet]`  | `id`       | string            | Yes      | Reverse-DNS identity, e.g. `dev.ahmed.circuitnet`. Must be non-empty.    |
+| `[applet]`  | `id`       | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.ahmed.circuitnet`. See [Applet ids](#applet-ids). |
 | `[applet]`  | `name`     | string            | Yes      | Human-readable display name. Must be non-empty.                          |
 | `[applet]`  | `version`  | string            | Yes      | Applet version, strict semver `x.y.z` (three numeric parts).            |
 | `[applet]`  | `summary`  | string            | No       | Short one-line description shown in the landing screen's Inspector.      |
@@ -31,6 +31,28 @@ Notes:
 - Missing or malformed required fields are hard errors: the host lists the
   applet as `FAILED` on the landing screen, under the manifest's file name,
   with a human-readable reason in the Inspector, rather than loading it.
+- **`[services].required` is checked twice.** Before loading, against this
+  list; after loading, against the binary's own `required_services` (the
+  `CALIPER_APPLET` macro's `.services`). A service the binary requires but the
+  manifest leaves out is still refused when the host lacks it, so keep the two
+  lists the same.
+
+## Applet ids
+
+The `id` names the applet's data folder (`data/<id>/` under the app-data root),
+so it is restricted to a form that is always a single, safe path component:
+
+- only lowercase letters, digits, `.` and `-` (`[a-z0-9.-]`);
+- dot-separated segments, none empty: no leading or trailing dot, no `..`;
+- at most 128 characters.
+
+`dev.ahmed.circuitnet` and `dev.example.sine-scope` are valid;
+`Dev.Ahmed.App` (uppercase), `dev.ahmed.my_app` (underscore), `dev/app`,
+`a..b` and `../../escape` are not. A manifest with an invalid id is listed as
+`FAILED` with the message
+`applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): <id>`
+(see [Refusal messages](refusals.md#failed-messages)), and no data folder is
+created for it.
 
 ## Example
 

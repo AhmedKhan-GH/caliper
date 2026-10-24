@@ -189,6 +189,46 @@ The window opens at 95% of the screen's work area.
 size exactly, so screenshots and layout checks are reproducible on any
 display; a malformed value is ignored.
 
+## Running the tests
+
+The `release` and `debug` presets build the tests (`BUILD_TESTS=ON`):
+
+```bash
+cmake --preset release
+cmake --build --preset release
+ctest --preset release            # prints the output of failing suites
+```
+
+Four suites need a GPU for some of their cases: `caliper_gfx_tests`,
+`caliper_export_tests`, `caliper_embed_tests` and `caliper_torch_tests`. A case
+that finds no device skips and is counted, and the suite prints a summary when
+it ends:
+
+```
+[caliper-tests] skipped 49 of 49 test cases: 49 no GPU, 0 not applicable on this platform -> exit 77 (ctest: Skipped)
+```
+
+A suite that skipped any case for want of a GPU, and had no failures, exits with
+code 77. ctest reports it as `***Skipped`, not `Passed`, and lists it under "The
+following tests did not run"; ctest's own exit status stays 0. Cases that can
+never run on the platform, such as the CUDA cases on macOS, count as *not
+applicable*: the summary reports them, but they leave the suite `Passed`. ctest
+hides the output of suites that did not fail, so run it with `--verbose`, or run
+the test binary directly, to see the summary line.
+
+| Variable | Effect |
+|---|---|
+| `CALIPER_REQUIRE_GPU=1` | A skip for want of a GPU becomes a failure. Set it on a machine or CI lane that must have a GPU, so the device suites cannot pass without testing anything. Not-applicable skips never fail. |
+| `CALIPER_TEST_FORCE_NO_GPU=1` | Test-only. The device suites behave as if there were no GPU, so the skip path can be checked on a machine that has one. |
+
+When you add a device test, skip through `tests/gpu_skip.h`:
+`CALIPER_SKIP_NO_GPU(why)` counts the skip, says why and returns;
+`CALIPER_SKIP_NOT_APPLICABLE(why)` is for a case that never applies on the
+platform; `CALIPER_NOTE_NO_GPU(why)` only counts, for a case that must tidy up
+before it returns. A suite that uses them ends with `CALIPER_GPU_TEST_MAIN()` in
+place of `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`. A bare `MESSAGE` and `return`
+would report the suite as passed.
+
 ## The rules (each one guards something real)
 
 - **No raw GL/Metal/Vulkan calls in applets** (§6c). Draw through

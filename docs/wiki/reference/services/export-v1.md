@@ -1,12 +1,14 @@
-# caliper.export.v1
+# caliper.export.v1 / v1_1
 
 Service id `caliper.export.v1` — the **terminal sink** of the publishing track
-(`PUBLISHING.md` §3, Rung E). Export re-renders a submitted draw list
-**offscreen** at any requested resolution and writes a pixel-exact PNG next to a
-JSON **provenance sidecar**: 4K figures and numbered frame sequences from a live
+(`PUBLISHING.md` §3, Rung E) — and its additive revision `caliper.export.v1_1`,
+which adds `last_error()` (see [below](#caliperexportv1_1-last_error)). Export
+re-renders a submitted draw list **offscreen** at any requested resolution and
+writes a pixel-exact PNG next to a JSON **provenance sidecar**: 4K figures and
+numbered frame sequences from a live
 session, deterministic and stamped. It composes pieces that already ship and are
 already byte-exact tested — it adds **no new render code**. This page embeds the
-header verbatim; the docs build fails if the embedded file moves.
+headers verbatim; the docs build fails if an embedded file moves.
 
 The boundary is deliberate and stated once in `PUBLISHING.md`: Caliper exports
 **pixel-exact view images + a sidecar**, and does **not** compose figures. Axes,
@@ -107,19 +109,45 @@ seed, hparams — whatever the applet chooses) or `null`. A sequence sidecar add
 `frame_count`. This is a house invariant: **a figure without its sidecar is a
 screenshot; Caliper exports figures.**
 
+A sequence's `sequence.json` is written by `end_sequence()`. If that write
+fails, the frames already written are kept, the handle is finalized anyway (so
+the next sequence can begin), and the host logs an ERROR through
+`caliper.log.v1` naming the file, the frame count and the reason:
+
+```
+[export] sequence sidecar write failed: clip_dir/sequence.json (300 frame(s) kept, provenance missing): <reason>
+```
+
+`end_sequence()` returns nothing in v1, so this log line is all a v1 applet
+gets; [`caliper.export.v1_1`](#caliperexportv1_1-last_error)'s `last_error()`
+reports the same text to the applet.
+
 ## Refusal purity extends to the filesystem
 
 A refused export returns `0` and leaves the disk **exactly as it was** — no file
-created, no pre-existing file truncated. The PNG is written to a temp name and
-atomically renamed; the sidecar follows **only after** the PNG lands, and if the
-sidecar write fails the PNG is rolled back rather than orphaned (a PNG without
-its sidecar would violate the invariant above). Export refuses for the same
+created, no pre-existing file truncated, and a **previous export at the same path
+kept**. `view_png` commits the PNG and its sidecar as a pair:
+
+1. Both are written to sibling temp files (`<path>.caliper_tmp`,
+   `<path>.json.caliper_tmp`). A failure here has touched nothing you can see.
+2. A previous PNG at `<path>` is set aside as `<path>.caliper_bak`.
+3. The new PNG is renamed onto `<path>`, then the sidecar onto `<path>.json`.
+4. The backup is removed.
+
+If any step after the first fails, the previous PNG is put back (or the new PNG
+is removed when there was none) and the temp files are removed, so a PNG never
+lands without its sidecar and a good earlier figure is never lost to a failed
+new one. If putting it back fails as well, the previous PNG is left intact at
+`<path>.caliper_bak`. A `path` that is a directory is refused before anything
+moves.
+
+Export refuses for the same
 reasons `draw_primitives` does — missing gate/renderer, `cam == NULL`, `w`/`h` of
 `0` or `> CALIPER_EXPORT_MAX_DIM` (16384), an unwritable path, a readback
 failure, or any draw the geometry gate battery rejects — with the **same reason
 strings**. (The atomic-rename-over-existing-file guarantee is verified on POSIX
-**and on NTFS** — including the held-open-handle refusal and the
-sidecar-failure PNG rollback; see the platform status above.)
+**and on NTFS**, including the held-open-handle refusal; see the platform status
+above. The pair commit with its `.caliper_bak` backup is tested on macOS.)
 
 ## Determinism contract, and its scope
 
@@ -182,6 +210,59 @@ Then assemble the clip with the ffmpeg line above. Because capture re-renders an
 reads back each frame inline, a long high-resolution record paces the UI while it
 runs — the exemplars show a live "Recording N/300" counter; the produced clip is
 correct real-time regardless.
+
+## caliper.export.v1_1 — `last_error()`
+
+An additive revision under the same discipline as `caliper.metrics.v1_1` and
+the [bridge revisions](tensor-bridge-v1.md#additive-revisions-v1_1-and-v1_2):
+`CaliperExportV1_1` repeats the v1 table byte for
+byte, `reserved0` included and still `NULL`, and appends one entry,
+`last_error()`. There is no ABI epoch bump. `caliper.export.v1` is still vended,
+unchanged, so a v1 applet keeps getting the v1 table and the v1 behaviour. The
+host lists both ids, so a manifest may require either; an applet that only wants
+better diagnostics asks for `caliper.export.v1_1` and falls back to v1 when it is
+absent.
+
+```c
+--8<-- "sdk/include/caliper/services/export_v1_1.h"
+```
+
+**What it reports.** `view_png`, `begin_sequence`, `frame` and `end_sequence`
+clear the status when called and set a reason when they fail: a `0` return from
+the first three, or an `end_sequence()` whose `sequence.json` could not be
+written. After any of the four succeeds, `last_error()` returns `""`. `caps()`
+and `last_error()` leave the status alone. The string is host-owned, never
+`NULL`, and valid until the next export call on the same thread — the
+`last_error()` contract of [`caliper.data.v1`](data-v1.md#threading-and-errors)
+and `caliper.metrics.v1_1`. Export is frame-thread only, so in practice there is
+one status.
+
+| Reason | Cause |
+|---|---|
+| `no renderer is bound (caps() is 0)` | A headless host, or no renderer bound yet. |
+| `the geometry primitives path is not live (caps() is 0)` | The backend has no geometry path (the GL fallback). |
+| `export is not live on this host (caps() is 0)` | `begin_sequence` on a host where `caps()` is `0`. |
+| `cam is NULL`, `path is NULL`, `dir is NULL` | A required argument is missing. |
+| `w/h must be 1..16384 (got 0x720)` | A dimension is `0` or above `CALIPER_EXPORT_MAX_DIM`. |
+| `a sequence is already active (one at a time)` | `begin_sequence` while another sequence is open. |
+| `no active sequence has this handle` | `frame` or `end_sequence` with a stale or unknown handle. |
+| `the geometry gates refused the draws (reason logged)` | A draw failed the geometry gates; the gate's own reason is on `caliper.log.v1`. |
+| `could not commit <path> and its sidecar: <reason>` | The pair commit failed; the previous export is kept. |
+| `cannot create <dir>: <reason>`, `could not write <dir>/frame_000012.png: <reason>` | A sequence directory or frame could not be written. |
+| `sequence sidecar write failed: <dir>/sequence.json (N frame(s) kept, provenance missing): <reason>` | `end_sequence` could not write the sequence sidecar. |
+
+The `caliper::Export` sugar wraps v1 and does not expose `last_error()`; take the
+v1_1 table from the host directly:
+
+```cpp
+auto* ex11 = static_cast<const CaliperExportV1_1*>(
+    host.service(CALIPER_EXPORT_V1_1));        // NULL on a host without v1_1
+if (ex11) {
+    ex11->end_sequence(seq);
+    if (*ex11->last_error())                   // "" after a clean finalize
+        host.log_error(ex11->last_error());    // e.g. sequence.json not written
+}
+```
 
 ---
 

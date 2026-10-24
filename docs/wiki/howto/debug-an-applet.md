@@ -76,6 +76,13 @@ for applets that crashed and were quarantined, and the Activity pane logs each
 doesn't appear at all, check the two discovery signals side by side in
 `build/applets/`: the dylib and its `<stem>.caliper.toml`.
 
+A background job that faults or throws prints one line on the host's stderr,
+`[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`, and shows
+`failed: <reason>` as its message in the jobs tray. If the job was submitted from
+one of the applet's entry points, the applet is quarantined as well, with the
+status `crashed in background job "train": <reason>` (see
+[`caliper.jobs.v1`](../reference/services/jobs-v1.md)).
+
 ## Where per-applet data lives
 
 The host hands you a writable directory via `host.data_dir()`, and that is the

@@ -44,7 +44,15 @@ Every method is host-**serialized** internally (one mutex over one DuckDB
 connection, the same sanctioned model as [MetricsStore](metrics-v1.md#thread-callability)),
 so job threads calling `put` concurrently are safe. The store is destroyed
 *after* the host joins its job threads, so a `put` in the last instant before a
-cancel lands cannot fault.
+cancel lands cannot fault — for a job that honours cancel; the join gives up
+after 5 s (see [`caliper.jobs.v1`](jobs-v1.md)).
+
+The artifacts index (`artifacts.duckdb`) opens with its own DuckDB thread count
+and memory limit, sized from the machine's RAM and cores. Override them with
+`CALIPER_DUCKDB_ARTIFACTS_THREADS` and `CALIPER_DUCKDB_ARTIFACTS_MEMORY_LIMIT`,
+or the all-stores `CALIPER_DUCKDB_THREADS` and `CALIPER_DUCKDB_MEMORY_LIMIT`.
+The defaults and the precedence are in
+[`caliper.data.v1`: Resource limits](data-v1.md#resource-limits).
 
 !!! warning "`path_of` returns a host-owned string, valid only until your next call"
     The `const char*` from `path_of` points at **host-owned** backing storage,

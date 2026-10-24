@@ -21,28 +21,54 @@ for an applet update."), not a loader crash three frames later. This gate
 catches the entire class of "wrong build for this host" failures cheaply and
 legibly, before they can turn into undefined behaviour.
 
+Two checks back the manifest up. The applet's `id` names its data folder, so the
+parser accepts only path-safe ids (`[a-z0-9.-]`, see
+[Manifest](../reference/manifest.md)) and the loader checks again before it
+builds the path: a crafted id such as `../../x` cannot reach outside the data
+root. And after the `dlopen`, the loader checks the binary's own list of
+required services against the host, so a manifest that under-declares cannot
+start an applet that will call a service the host does not have.
+
 ## Every applet call is guarded
 
 Manifests catch the predictable failures. They cannot catch a null dereference in
 the applet's frame code. So every call from the host into an applet is wrapped in
 a crash guard:
 
-- **POSIX (macOS, Linux):** a signal trampoline. Before the call, the host installs
-  handlers for `SIGSEGV`, `SIGBUS`, `SIGFPE`, and `SIGILL` and records a jump
-  target with `sigsetjmp`. If the applet faults, the handler `siglongjmp`s back
-  out of the applet call, and the guard returns a failure naming the signal
-  (e.g. `SIGSEGV (invalid memory access)`). The handlers are then restored to
-  whatever they were before, so the guard nests and leaves no global state
-  behind. A fault that somehow fires outside a guarded region restores the
-  default disposition and re-raises, preserving normal crash semantics.
+- **POSIX (macOS, Linux):** a signal trampoline. The first guarded call installs
+  handlers for `SIGSEGV`, `SIGBUS`, `SIGFPE`, and `SIGILL`, once for the whole
+  process. Before each call the guard records a jump target with `sigsetjmp`; if
+  the applet faults, the handler `siglongjmp`s back out of the applet call, and
+  the guard returns a failure naming the signal (e.g.
+  `SIGSEGV (invalid memory access)`). The handler runs on a per-thread alternate
+  signal stack, so a **stack overflow** is contained too. The jump state is per
+  thread, so guarded calls on different threads do not interfere.
+- **Chaining.** A fault outside a guarded region, or on a thread that never
+  guards, is not the guard's to contain: it restores the handler that was
+  installed before it and re-raises, so the fault reaches the default action or
+  an embedder's own crash reporter exactly as if the guard were absent. If
+  another library replaces the handlers after the guard installed them (a test
+  harness, Python's `faulthandler`), the guard re-arms them around each applet
+  call, passes faults outside the call on to that library, and puts its handlers
+  back afterwards. It says so once on stderr:
+  `[guard] another library replaced the SIGSEGV handler; re-arming the guard around each applet call`.
+- **C++ exceptions:** an exception escaping an applet entry point is caught and
+  treated like a signal, reported as `C++ exception: <what()>`, or
+  `C++ exception (non-std type)` for anything not derived from `std::exception`.
+  Applets built with the `CALIPER_APPLET` macro already catch at the ABI
+  boundary; this catches what a hand-written applet lets through.
 - **Windows:** the same shape via structured exception handling — the applet call
   sits inside a `__try/__except (EXCEPTION_EXECUTE_HANDLER)` frame, and a hardware
-  exception is caught and reported by its exception code. *(This path compiles on
+  exception is caught and reported by its exception code; a C++ exception is
+  caught in its own frame beside it and reported by name. *(This path compiles on
   Windows but has not yet been exercised on a Windows host; the POSIX path is the
-  one verified today.)*
+  one verified today. Under `/EHsc`, MSVC may report a C++ throw by its SEH code
+  `0xE06D7363` instead of by name; it is still quarantined.)*
 
 The guard is the containment primitive the loader wraps around every applet
-entry point — construction, `frame()`, teardown.
+entry point — construction, `frame()`, teardown — and the host wraps around every
+job an applet submits through `caliper.jobs.v1` (see
+[Jobs run under the guard](#jobs-run-under-the-guard)).
 
 ## A faulting applet is quarantined
 
@@ -60,7 +86,9 @@ isolation.** By the time a signal fires, the applet has already run arbitrary
 code in the host's address space. It may have corrupted shared heap state, left a
 lock held, or scribbled on memory the host still relies on. `siglongjmp` unwinds
 the stack but runs no C++ destructors, so anything the applet owned is leaked or
-left half-torn-down. That is exactly why a quarantined applet is never resumed
+left half-torn-down. A C++ exception does run destructors as it unwinds, but it
+still leaves the applet's own state wherever the throw interrupted it. That is
+exactly why a quarantined applet is never resumed
 and why the host treats its own memory as suspect afterward and offers a restart
 rather than pretending nothing happened.
 
@@ -86,24 +114,40 @@ applet keeps running and nothing is torn down, but the framework's threading rul
 ("keep `frame()` cheap; push slow work to jobs") becomes something you can see
 instead of a convention you have to remember.
 
-## Jobs run unguarded
+## Jobs run under the guard
 
-The watchdog tells you to push slow work to `caliper.jobs.v1` — so it is worth
-being just as plain about what that thread does *not* get. The crash guard above
-is **UI-thread-only by documented precondition**: the signal trampoline is armed
-around the host's calls into applet `frame()`/`init()`/`cleanup()`, all of which
-run on the frame thread. A job function submitted to `caliper.jobs.v1` runs on a
-**host worker thread**, outside that trampoline, and is therefore **not
-crash-guarded at all.** A null dereference or a bad tensor op inside a job does
-not `siglongjmp` back into a quarantine — it takes the whole process down, host
-and all.
+The watchdog tells you to push slow work to `caliper.jobs.v1`, so the worker
+threads get the same net as the frame thread. The Caliper host runs every job
+function submitted through `caliper.jobs.v1` inside the crash guard, on its
+worker thread. A null dereference, a bad tensor op or an escaping exception
+inside a job fails that job with the guard's reason
+(`failed: SIGSEGV (invalid memory access)` in the jobs tray and on stderr), and
+the host carries on.
 
-This is not an oversight to be fixed later; it is the same trust boundary stated
-from the other side. In-process applets are trusted code, and a worker thread is
-simply that trust without even the best-effort net the UI thread gets. The
-practical rules that follow are small and non-negotiable: keep job code as
-careful as anything that runs without a net; poll `cancelled()` so the host can
-stop it within the ≤ 100 ms contract; and make the object you pass as `user`
-outlive the job (cancel-and-bounded-wait in `on_cleanup`). Real isolation for
-worker code, like everything else here, waits for the out-of-process boundary in
-Phase 6.
+A failed job also quarantines the applet that submitted it, when the host can
+tell which applet that was. The service table is shared by every applet and
+`submit` carries no applet identity, so the host tracks the submitter by
+thread: around each call into an applet (`create`, `initialize`, `frame`,
+`cleanup`, `destroy`) the loader marks that applet as the owner of any job
+submitted during the call, and a job passes its owner on to the jobs it submits.
+When an owned job faults, the worker only records the fault. The loader
+quarantines the applet on its own thread before calling it again — at its next
+`frame()`, or at teardown — with the status
+`crashed in background job "train": SIGSEGV (invalid memory access)`. A job
+submitted from a thread the applet started itself has no owner: it fails, and
+the applet keeps running.
+
+The limits of the section above apply with more force on a worker. The jump
+out of a job that took a signal runs no destructors, so a lock the job held
+stays held, and a bad pointer passed to a host service that reads applet memory
+under its own lock
+(`metrics.v1` `histogram` and `image`, `artifacts.v1` `put`, `feed.v1` reads,
+`log.v1`) leaves that lock held: the next user of the service blocks, and a
+crash becomes a hang. This is the Caliper host's behaviour; `jobs_v1.h` lets
+other hosts, such as the fixture host or an embedder's own, run jobs with no
+guard at all. So the practical rules stay as they were: keep job code as careful
+as anything that runs without a net; poll `cancelled()` so the host can stop it
+within the ≤ 100 ms contract (Home and quit wait at most 5 s, then detach the
+worker); and make the object you pass as `user` outlive the job
+(cancel-and-bounded-wait in `on_cleanup`). Real isolation for worker code, like
+everything else here, waits for the out-of-process boundary in Phase 6.

@@ -34,7 +34,17 @@ Every entry point is callable **from an applet job thread** — which is where
 training lives (never the frame thread). The host serializes writes internally
 (a mutex over one DuckDB connection in v1), so concurrent jobs are safe. The host
 also destroys the metrics store *after* it joins job threads, so a scalar logged
-in the last instant before a cancel lands cannot fault.
+in the last instant before a cancel lands cannot fault — for a job that honours
+cancel; the join gives up after 5 s (see [`caliper.jobs.v1`](jobs-v1.md)).
+
+### Resource limits
+
+The metrics store (`metrics.duckdb`) opens with its own DuckDB thread count and
+memory limit, sized from the machine's RAM and cores. Override them with
+`CALIPER_DUCKDB_METRICS_THREADS` and `CALIPER_DUCKDB_METRICS_MEMORY_LIMIT`, or
+the all-stores `CALIPER_DUCKDB_THREADS` and `CALIPER_DUCKDB_MEMORY_LIMIT`. The
+defaults and the precedence are in
+[`caliper.data.v1`: Resource limits](data-v1.md#resource-limits).
 
 ### v1 image limitation
 

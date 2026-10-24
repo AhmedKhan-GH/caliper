@@ -43,15 +43,17 @@ Every moving part has its own scheme, so a change in one rarely forces a change 
 
 ## Negotiation at load
 
-Every check happens **before `dlopen`**, in order. The first failure becomes the applet's status on the landing screen, with the reason (see [Refusal messages](../reference/refusals.md)), instead of a loader crash:
+The checks run in order, and the first five happen **before `dlopen`**. The first failure becomes the applet's status on the landing screen, with the reason (see [Refusal messages](../reference/refusals.md)), instead of a loader crash:
 
-1. platform binary present
-2. epoch supported
-3. `min_host` satisfied
-4. required services available
-5. *then* `dlopen`
-6. descriptor sanity — id / version / epoch agree with the manifest
-7. `create` / `initialize`
+1. manifest parses, with a valid, path-safe `id`
+2. platform binary present
+3. epoch supported
+4. `min_host` satisfied
+5. required services available (the manifest's list)
+6. *then* `dlopen`
+7. descriptor sanity — id / version / epoch agree with the manifest
+8. required services available (the binary's own list)
+9. `create` / `initialize`
 
 !!! note "Why epochs, not a rolling ABI"
     The UI-stack pin (the exact imgui/implot commits) *is* part of the epoch, because applets write raw ImGui against those headers. Bumping the pin is therefore an epoch bump — rare, CI-flagged, and the cost is an applet rebuild, not a silent break. See the [Architecture](architecture.md) overview and `PLATFORM.md` §9.
