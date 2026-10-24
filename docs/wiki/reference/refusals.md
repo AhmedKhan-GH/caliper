@@ -46,12 +46,21 @@ statuses:
   fixed.
 - **Quarantined** — the applet *faulted* (a signal: SIGSEGV/SIGBUS/SIGFPE/SIGILL,
   including a stack overflow, or a C++ exception escaping an entry point) while
-  the host held it, or a job it submitted faulted. Process memory is now
-  suspect, so the loader abandons
-  the instance and **never calls it again this session** — no retry, no
-  `cleanup`/`destroy` on the faulted instance, and the dylib is left mapped
-  (running static destructors inside a corrupted image is worse than the leak).
-  Recovery is a host restart.
+  the host held it, or a job it submitted faulted. The loader never calls the
+  faulted instance again — no retry — and the dylib stays mapped. What happens
+  next depends on the kind of fault:
+    - **After a C++ exception** the stack unwound normally and the process is
+      unharmed. The loader keeps the instance, uncalled, and the Inspector
+      offers `⌘R Restart`: the loader runs the old instance's `cleanup()` (if
+      its `initialize()` had succeeded) and `destroy()`, both guarded, then
+      launches a fresh one in the same process. Restart reuses the library
+      already loaded, so a rebuilt dylib needs a Caliper restart.
+    - **After a signal** memory may be corrupt. The instance is abandoned with
+      no `cleanup`/`destroy` (running destructors inside a corrupted image is
+      worse than the leak), and the applet stays quarantined until Caliper
+      itself restarts; the Inspector says `restart Caliper to reload`. On
+      Windows every SEH exception counts as a signal, including a C++ throw
+      MSVC could not unwind through the C ABI.
 
 Ordering matters: `scan()` is manifest-first and never `dlopen`s, so parse,
 missing-binary, and negotiation results are all decided before any applet code
@@ -79,11 +88,12 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
-| `crashed in create(): {fault}` | The applet faulted inside `create()`. The instance never existed; nothing to clean up. | Fix the fault in the applet's constructor path; restart the host to try again. |
-| `crashed in initialize(): {fault}` | The applet faulted inside `initialize()`. The instance is abandoned — `destroy()` is **not** called on a faulted instance. | Fix the fault in the applet's init path; restart the host. |
-| `crashed in frame(): {fault}` | The applet faulted during a `frame()` call. The instance is abandoned and `frame()` is never called again this session. | Fix the fault in the applet's per-frame path; restart the host. |
-| `crashed during teardown: {fault}` | The applet faulted in `cleanup()` or `destroy()` while shutting down. Teardown stops; the dylib is left mapped. | Fix the fault in the applet's teardown path; restart the host. |
-| `crashed in background job "{label}": {fault}` | A job the applet submitted through `caliper.jobs.v1` — from one of its entry points, or from another of its jobs — faulted or threw (see [jobs.v1](services/jobs-v1.md)). The loader quarantines the applet before its next `frame()` or at teardown, whichever comes first; a `frame()` already running finishes. The instance is abandoned with no `cleanup`/`destroy`. | Fix the fault in the job function; restart the host. |
+| `crashed in create(): {fault}` | The applet faulted inside `create()`. The instance never existed; nothing to clean up. | Fix the fault in the applet's constructor path, then restart it (see below). |
+| `crashed in initialize(): {fault}` | The applet faulted inside `initialize()`. After a signal the instance is abandoned — `destroy()` is **not** called on it; after an exception it is kept for Restart, which calls `destroy()` (not `cleanup()`, since `initialize()` never succeeded). | Fix the fault in the applet's init path, then restart it. |
+| `crashed in frame(): {fault}` | The applet faulted during a `frame()` call. The instance's `frame()` is never called again; after a signal the instance is abandoned, after an exception it is kept for Restart. | Fix the fault in the applet's per-frame path, then restart it. |
+| `crashed during teardown: {fault}` | The applet faulted in `cleanup()` or `destroy()` while shutting down. Teardown stops; the dylib is left mapped. After an exception in `cleanup()`, the `destroy()` still owed is made by Restart. | Fix the fault in the applet's teardown path, then restart it. |
+| `crashed in background job "{label}": {fault}` | A job the applet submitted through `caliper.jobs.v1` — from one of its entry points, or from another of its jobs — faulted or threw (see [jobs.v1](services/jobs-v1.md)). The loader quarantines the applet before its next `frame()` or at teardown, whichever comes first; a `frame()` already running finishes. A job that threw leaves the applet restartable; a job that took a signal does not. | Fix the fault in the job function, then restart the applet. |
+| `crashed while restarting: {fault}` | Restart's guarded `cleanup()` or `destroy()` of the old instance faulted. The applet is quarantined again with this reason; after a throw from `cleanup()`, a later Restart tries the old instance's `destroy()` again. | Fix the fault in the applet's teardown path; after a signal, restart Caliper. |
 
 `{fault}` is the crash guard's description of the fault: a signal such as
 `SIGSEGV (invalid memory access)`, `C++ exception: <what()>`, or
@@ -92,15 +102,22 @@ with, `{dlerror}` is the platform loader's message, `{manifest_filename}` is the
 manifest file the applet was scanned from, and `{id}` is the manifest's
 `applet.id`.
 
+"Restart it" above means `⌘R Restart` in the Inspector when the fault was a
+C++ exception, and a restart of Caliper when it was a signal (see
+[Loader statuses](#loader-statuses)).
+
 !!! note
     The landing screen shows these statuses. An applet that is not
     `Ready`/`Active` keeps its row in the Instruments pane, with `REFUSED`,
     `FAILED` or `QUARANTINED` in the Status column. With the row selected, the
     Inspector's Status field shows the exact `status_text` from the tables above
     (the negotiation refusal, `Failed`, or `Quarantined` message), and the
-    `⏎ Launch` button is disabled with the same text beside it. A launch that
+    `⏎ Launch` button is disabled. Beside it is the same text for a refused or
+    failed applet, `⌘R Restart` for one quarantined by a C++ exception, and
+    `restart Caliper to reload` for one quarantined by a signal. A launch that
     fails is also logged in the Activity pane as `launch failed` with the
     reason, and a quarantine while the applet runs (in `frame()`, or from one
-    of its jobs) as `quarantined`. The landing
-    screen reads the statuses every frame, so a mid-session quarantine shows up
-    as soon as the host returns to it.
+    of its jobs) as `quarantined`, preceded by a `job failed` row when a job
+    caused it. Restarts are logged as `restart` and `restart failed`. The
+    landing screen reads the statuses every frame, so a mid-session quarantine
+    shows up as soon as the host returns to it.

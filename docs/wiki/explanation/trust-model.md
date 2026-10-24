@@ -63,7 +63,8 @@ a crash guard:
   caught in its own frame beside it and reported by name. *(This path compiles on
   Windows but has not yet been exercised on a Windows host; the POSIX path is the
   one verified today. Under `/EHsc`, MSVC may report a C++ throw by its SEH code
-  `0xE06D7363` instead of by name; it is still quarantined.)*
+  `0xE06D7363` instead of by name; it is still quarantined, as a signal. Every
+  SEH exception counts as a signal, so it is not offered a restart.)*
 
 The guard is the containment primitive the loader wraps around every applet
 entry point — construction, `frame()`, teardown — and the host wraps around every
@@ -73,11 +74,38 @@ job an applet submits through `caliper.jobs.v1` (see
 ## A faulting applet is quarantined
 
 When the guard catches a fault, the host does not retry the call. The faulting
-applet is torn down and **quarantined**: the host returns to the landing screen,
-where the applet's row reads `QUARANTINED` and the Inspector names the fault,
-and it is not called again for the rest of the session. The host itself
-survives and stays interactive; the failure is contained to the one applet that
-caused it, and the host offers a restart.
+applet is **quarantined**: the host returns to the landing screen, where the
+applet's row reads `QUARANTINED` and the Inspector names the fault, and the
+faulted instance is never called again. The host itself survives and stays
+interactive; the failure is contained to the one applet that caused it.
+
+What brings the applet back depends on what the guard caught:
+
+- **A C++ exception.** The stack unwound normally and every destructor on the
+  way ran, so the process is unharmed. The loader keeps the instance, uncalled,
+  and the Inspector offers `⌘R Restart`, which releases the old instance
+  (guarded `cleanup()` if its `initialize()` had succeeded, then `destroy()`)
+  and launches a fresh one in the same process.
+- **A signal.** The jump out skipped every destructor, and the applet may have
+  corrupted memory a fresh instance would inherit. The instance is abandoned,
+  with no `cleanup` or `destroy`, and the Inspector says
+  `restart Caliper to reload`: nothing of that applet runs again until the host
+  itself restarts.
+
+### The UI is unwound after a fault
+
+An applet draws into the host's own ImGui, ImPlot and ImPlot3D contexts, so a
+fault partway through `frame()` (or `initialize()`) can leave its windows,
+tables, tab bars, style and ID pushes, and an open plot behind. Left alone, the
+host's next window would nest inside the applet's and the next plot would find
+the old one still open. So the host records the UI stack sizes before each
+applet frame and launch, and after a call that failed it unwinds back to them
+with ImGui's own error recovery, pops the plot libraries' style and colormap
+pushes, and drops any half-built 2-D or 3-D plot for that frame, before it draws
+anything else. What was unwound is reported in one stderr line, e.g.
+`[ui] unwound after an applet fault: Missing End() x2, Missing PopStyleColor(), ImPlot: missing EndPlot()`,
+and nothing asserts. This is best effort, as ImGui says of its own recovery: a fault
+*inside* an ImGui call can leave that call's state half-written.
 
 ## Containment, not a sandbox
 
@@ -86,11 +114,13 @@ isolation.** By the time a signal fires, the applet has already run arbitrary
 code in the host's address space. It may have corrupted shared heap state, left a
 lock held, or scribbled on memory the host still relies on. `siglongjmp` unwinds
 the stack but runs no C++ destructors, so anything the applet owned is leaked or
-left half-torn-down. A C++ exception does run destructors as it unwinds, but it
-still leaves the applet's own state wherever the throw interrupted it. That is
-exactly why a quarantined applet is never resumed
-and why the host treats its own memory as suspect afterward and offers a restart
-rather than pretending nothing happened.
+left half-torn-down. That is exactly why a quarantined instance is never
+resumed, and why after a signal the host treats its own memory as suspect and
+asks for a Caliper restart rather than pretending nothing happened. A C++
+exception does run destructors as it unwinds, which is what makes an in-process
+restart reasonable after one; but it still leaves the applet's own state
+wherever the throw interrupted it, so the restart makes a fresh instance rather
+than resuming the old one.
 
 Real isolation — where a misbehaving applet genuinely *cannot* corrupt the host —
 requires an address-space boundary, i.e. running applets out-of-process. That is
@@ -135,7 +165,10 @@ quarantines the applet on its own thread before calling it again — at its next
 `frame()`, or at teardown — with the status
 `crashed in background job "train": SIGSEGV (invalid memory access)`. A job
 submitted from a thread the applet started itself has no owner: it fails, and
-the applet keeps running.
+the applet keeps running. As in `frame()`, a job that threw leaves its applet
+restartable with `⌘R Restart`; a job that took a signal does not. In the jobs
+tray the job shows as `FAILED` with its reason until finished jobs are cleared,
+and Activity logs a `job failed` row before the applet's `quarantined` row.
 
 The limits of the section above apply with more force on a worker. The jump
 out of a job that took a signal runs no destructors, so a lock the job held

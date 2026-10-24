@@ -77,11 +77,25 @@ doesn't appear at all, check the two discovery signals side by side in
 `build/applets/`: the dylib and its `<stem>.caliper.toml`.
 
 A background job that faults or throws prints one line on the host's stderr,
-`[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`, and shows
-`failed: <reason>` as its message in the jobs tray. If the job was submitted from
-one of the applet's entry points, the applet is quarantined as well, with the
-status `crashed in background job "train": <reason>` (see
+`[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`, and the jobs
+tray marks it `FAILED` with the reason until you press `clear finished`, even
+after the host has gone Home. Activity logs it as a `job failed` row. If the job
+was submitted from one of the applet's entry points, the applet is quarantined
+as well: Activity's next row is `quarantined`, and the status reads
+`crashed in background job "train": <reason>` (see
 [`caliper.jobs.v1`](../reference/services/jobs-v1.md)).
+
+When a fault interrupts the applet's UI code, the host unwinds whatever the
+applet left open and prints what it closed, e.g.
+`[ui] unwound after an applet fault: Missing End() x2, ImPlot: missing EndPlot()`.
+That line tells you how far the frame got before the fault.
+
+**Trying again.** If the fault was a C++ exception, select the applet and press
+`⌘R Restart` in the Inspector: the host releases the old instance and launches a
+fresh one without restarting Caliper. Restart reuses the library already loaded,
+so it re-runs the same code; it is for checking that the applet recovers, not
+for loading a fix. To run a rebuilt dylib, and after any signal (the Inspector
+then says `restart Caliper to reload`), quit and start Caliper again.
 
 ## Where per-applet data lives
 

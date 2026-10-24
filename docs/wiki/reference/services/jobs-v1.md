@@ -21,8 +21,10 @@ keep any code that runs without a net.
 **A job that faults or throws fails.** Under the Caliper host, a signal
 (`SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL`, including a stack overflow) or a C++
 exception escaping `fn` ends that job and nothing else: `is_running` turns
-`false`, `progress_of` keeps the last reported value, the jobs tray shows the
-reason as the job's message, and the host prints one line on stderr:
+`false`, `progress_of` keeps the last reported value, the jobs tray marks the
+job `FAILED` with the reason (and keeps it there, across Home, until finished
+jobs are cleared), Activity logs a `job failed` row, and the host prints one
+line on stderr:
 
 ```
 [jobs] job #3 "train" failed: SIGSEGV (invalid memory access)
@@ -39,7 +41,7 @@ does:
 
 | Job submitted from | On a fault or exception |
 |---|---|
-| an applet entry point (`create`, `initialize`, `frame`, `cleanup`, `destroy`), or another job submitted from one | The job fails, and the applet is quarantined before the host calls it again: at its next `frame()`, or at teardown. Its status reads `crashed in background job "{label}": {fault}` (see [Refusal messages](../refusals.md#quarantined-messages)). |
+| an applet entry point (`create`, `initialize`, `frame`, `cleanup`, `destroy`), or another job submitted from one | The job fails, and the applet is quarantined before the host calls it again: at its next `frame()`, or at teardown. Its status reads `crashed in background job "{label}": {fault}` (see [Refusal messages](../refusals.md#quarantined-messages)). A job that threw leaves the applet restartable with `⌘R Restart`; a job that took a signal needs a Caliper restart. |
 | a thread the applet started itself | The job fails. The applet keeps running. |
 | an embedder, through `caliper_core_get_service` | The job fails. No applet is quarantined. |
 
