@@ -5,7 +5,9 @@
 #include <implot.h>
 #include <implot3d.h>
 
-#include "intro_screen.h"
+#include "ui/landing_screen.h"
+#include "ui/sternbild_fonts.h"
+#include "ui/sternbild_theme.h"
 #include "host/applet_loader.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
@@ -16,6 +18,7 @@
 #include "app_paths.h"
 
 #include <string>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -61,13 +64,39 @@ public:
             wh = (int)(ah * 0.95f);
         }
 
+        // Dev hook: CALIPER_WINDOW_SIZE=<W>x<H> (e.g. 1440x900, screen
+        // coordinates) overrides the 95%-of-work-area size, so screenshots and
+        // layout checks are reproducible on any display. Malformed values are
+        // ignored and the default stands.
+        if (const char* ws = std::getenv("CALIPER_WINDOW_SIZE")) {
+            int w = 0, h = 0;
+            char tail = 0;
+            if (std::sscanf(ws, "%dx%d%c", &w, &h, &tail) == 2 &&
+                w > 0 && h > 0 && w <= 16384 && h <= 16384) {
+                ww = w;
+                wh = h;
+            }
+        }
+
         // Applet-canvas ImGui/ImPlot/ImPlot3D contexts + docking flag are
         // created by libcaliper (core_lifecycle) — they must exist before the
         // renderer wires its ImGui backend. Host chrome styling follows.
         caliper_host::core_create_ui_context();
 
-        ImGui::StyleColorsDark();
-        style_ui();
+        // imgui.ini lives in the app-data folder, not the working directory:
+        // the landing panes and the applet dock layout persist per user, and
+        // a launch from Finder (cwd "/") or a build dir no longer drops ini
+        // files around. IniFilename is a raw pointer read until shutdown, so
+        // the path string is static.
+        static const std::string ini = caliper::app_data_path("imgui.ini");
+        ImGui::GetIO().IniFilename = ini.c_str();
+
+        // Sternbild house style. Faces first: apply_style() reads the UI font
+        // size, and the first NewFrame() fixes style.FontSizeBase from the
+        // default font. The 1.92 dynamic atlas takes fonts before the backend
+        // exists, so this precedes renderer_->init().
+        sternbild::load_fonts();
+        sternbild::apply_style();
 
         // Backends whose window hints differ (Metal = NO_API, GL = a GL
         // context) cannot share a window, so a failed backend init recreates
@@ -87,31 +116,16 @@ public:
             }
         }
         std::cerr << "[renderer] " << renderer_->name() << std::endl;
+        landing_.log("renderer", renderer_->name());
         caliper_host::services_init();
         // Hand the live renderer to the bridge (caliper.tensor_bridge.v1); it is
         // cleared before renderer teardown in cleanup(). Do this right after the
         // renderer is up so the first applet frame can vend textures.
         caliper_host::services_set_renderer(renderer_.get());
 
-        // IntroScreen is raw-GL end to end (its initialize/render_3d/cleanup all
-        // issue GL). On non-GL backends there is no GL context, so skip init:
-        // every other IntroScreen entry point early-outs when its state is null,
-        // so update()/draw_ui()/cleanup() stay crash-free. The 3D landing bg and
-        // card launcher return with the GL->2D migration (2D). render_3d is
-        // already guarded below; initialize() needs the same guard.
-        if (std::string(renderer_->name()) == "gl") {
-            if (!intro_.initialize()) {
-                std::cerr << "Intro screen init failed" << std::endl;
-                return false;
-            }
-            intro_active_ = true;
-        }
-        // On non-GL backends the launcher must not depend on IntroScreen:
-        // draw_fallback_launcher() renders a plain-ImGui card list instead.
-
         // Scan for applet shared libraries
         std::string applets_dir = caliper::app_data_path("applets");
-        loader_.scan(applets_dir);
+        log_scan(applets_dir, loader_.scan(applets_dir));
 
         // Also scan applets next to the executable (dev + prod)
         {
@@ -130,30 +144,20 @@ public:
             exe_dir = fs::read_symlink("/proc/self/exe", std::error_code{})
                           .parent_path().string();
 #endif
-            if (!exe_dir.empty())
-                loader_.scan((fs::path(exe_dir) / "applets").string());
+            if (!exe_dir.empty()) {
+                const std::string dir = (fs::path(exe_dir) / "applets").string();
+                log_scan(dir, loader_.scan(dir));
+            }
         }
-
-        // Populate intro screen cards from loaded applets
-        std::vector<AppletCard> cards;
-        for (int i = 0; i < loader_.count(); i++) {
-            const auto& e = loader_.at(i);
-            std::string desc = e.manifest.summary;
-            if (e.status != caliper_host::AppletStatus::Ready &&
-                e.status != caliper_host::AppletStatus::Active)
-                desc = "[unavailable] " + e.status_text + "\n\n" + desc;
-            cards.push_back({e.manifest.name, e.manifest.summary, desc,
-                             e.manifest.tag});
-        }
-        intro_.set_applets(std::move(cards));
 
         // Dev hook: CALIPER_AUTOLAUNCH=<manifest id> skips the landing page
-        // and launches that applet immediately — reproduces a card click for
+        // and launches that applet immediately — reproduces a row launch for
         // headless debugging/CI and seeds the future `caliper dev` workflow.
         if (const char* want_id = std::getenv("CALIPER_AUTOLAUNCH")) {
             for (int i = 0; i < loader_.count(); i++) {
                 if (loader_.at(i).manifest.id == want_id) {
                     std::cerr << "[autolaunch] " << want_id << std::endl;
+                    landing_.log("autolaunch", want_id);
                     launch_applet(i);
                     break;
                 }
@@ -184,32 +188,94 @@ public:
             renderer_->new_frame();
 
             if (page_ == AppPage::Landing) {
-                intro_.update(window_);
-                // TODO(2D): dies with the backend flip — IntroScreen issues raw
-                // GL, so it only runs on the GL backend; Metal skips the 3D bg.
-                if (std::string(renderer_->name()) == "gl")
-                    intro_.render_3d(dw, dh);
-            }
-
-            if (page_ == AppPage::Landing) {
-                if (intro_active_) {
-                    intro_.draw_ui(dw, dh);
-                    if (intro_.should_launch()) {
-                        intro_.reset_launch_flag();
-                        launch_applet(intro_.selected_index());
-                    }
-                } else {
-                    // Metal (and any future non-GL backend): the GL-only
-                    // IntroScreen never initialized, so it owns no UI here.
-                    // Reads loader_ live each frame — statuses always fresh.
-                    draw_fallback_launcher();
-                }
+                // The workstation home, identical on every backend. It reads
+                // loader_ live each frame, so statuses are always fresh.
+                LandingScreen::Context ctx;
+                ctx.loader = &loader_;
+                ctx.renderer_name = renderer_->name();
+                ctx.launch = [this](int i) { launch_applet(i); };
+                landing_.draw(ctx);
             } else if (page_ == AppPage::Applet) {
+                // Esc goes Home only when it is not cancelling something else:
+                // a text field being edited (an applet's search box) or an open
+                // popup gets Esc first, as in any desktop app. Both reads are
+                // of the previous frame on purpose: WantTextInput is computed
+                // from last frame's active field, and ImGui closes a popup on
+                // Esc inside NewFrame(), before this code can see it open.
+                const bool esc_free =
+                    !ImGui::GetIO().WantTextInput && !popup_open_prev_ &&
+                    !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
+                                                     ImGuiPopupFlags_AnyPopupLevel);
+                bool go_back = ImGui::IsKeyPressed(ImGuiKey_Escape, false) && esc_free;
+
+                // Dev hook: CALIPER_HOME_AFTER=<sec> forces Home once, N sec
+                // after the applet page opened — reproduces "click Home during
+                // training" headlessly (for the SIGSEGV repro).
+                if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
+                    static double page_t0 = -1.0;
+                    if (page_t0 < 0) page_t0 = glfwGetTime();
+                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                }
+
+                // Applet bar: Home as one key button holding its key, esc
+                // (recognition over recall, nothing printed beside it), the
+                // applet's name as metadata, and the watchdog warning in
+                // bronze, the palette's only accent. The page's one action
+                // lives here; the status bar below carries only facts. The bar
+                // is one frame tall, so a taller frame padding gives it the
+                // landing command bar's height and the key button the same
+                // margins as there.
+                const float bar_pad_y =
+                    (sternbild::metric::command_bar - ImGui::GetFontSize()) * 0.5f;
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                    ImVec2(ImGui::GetStyle().FramePadding.x, bar_pad_y));
+                const bool bar_open = ImGui::BeginMainMenuBar();
+                ImGui::PopStyleVar();
+                if (bar_open) {
+                    if (sternbild::key_button("esc", "Home")) go_back = true;
+                    ImGui::Separator();
+                    ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+                    ImGui::TextUnformatted(
+                        loader_.at(active_applet_).manifest.name.c_str());
+                    ImGui::PopStyleColor();
+                    if (watchdog_.flagged()) {
+                        ImGui::Separator();
+                        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::bronze);
+                        ImGui::TextUnformatted(
+                            "slow: long work belongs in background jobs");
+                        ImGui::PopStyleColor();
+                    }
+                    ImGui::EndMainMenuBar();
+                }
+
+                // Status bar (VS Code): the same persistent strip as the
+                // landing's, so the machine is always in the same place; facts
+                // only, as there (Home is in the applet bar above). Like the
+                // menu bar it is a viewport side bar, drawn before the dock
+                // space that fills what it leaves.
+                sternbild::status_bar_begin();
+                draw_host_status_items(renderer_->name());
+                {
+                    int running = 0;
+                    for (const auto& v : caliper_host::host_job_system().views())
+                        running += v.running ? 1 : 0;
+                    char jobs[48];
+                    if (running == 0)
+                        std::snprintf(jobs, sizeof jobs, "no jobs");
+                    else
+                        std::snprintf(jobs, sizeof jobs,
+                                      running == 1 ? "%d job running"
+                                                   : "%d jobs running",
+                                      running);
+                    sternbild::status_item(jobs);
+                }
+                sternbild::status_bar_end();
+
                 // Docked desktop (applet page only). A passthru dockspace fills
-                // the viewport's work area (below the main menu bar) so the
-                // applet's windows can be docked. The central node stays
-                // transparent while empty, so a full-viewport applet docked
-                // into it looks exactly as before.
+                // the viewport's work area (between the main menu bar and the
+                // status bar) so the applet's windows can be docked. The
+                // central node stays transparent while empty, so a
+                // full-viewport applet docked into it looks exactly as before.
                 ImGuiID dock_id = ImGui::DockSpaceOverViewport(
                     0, ImGui::GetMainViewport(),
                     ImGuiDockNodeFlags_PassthruCentralNode);
@@ -282,30 +348,6 @@ public:
                     dock_layout_built_ = true;
                 }
 
-                bool go_back = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
-
-                // Dev hook: CALIPER_HOME_AFTER=<sec> forces Home once, N sec
-                // after the applet page opened — reproduces "click Home during
-                // training" headlessly (for the SIGSEGV repro).
-                if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
-                    static double page_t0 = -1.0;
-                    if (page_t0 < 0) page_t0 = glfwGetTime();
-                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
-                }
-
-                if (ImGui::BeginMainMenuBar()) {
-                    if (ImGui::MenuItem("< Home")) go_back = true;
-                    ImGui::Separator();
-                    ImGui::TextDisabled("%s",
-                        loader_.at(active_applet_).manifest.name.c_str());
-                    if (watchdog_.flagged()) {
-                        ImGui::Separator();
-                        ImGui::TextColored({1.0f, 0.6f, 0.2f, 1.0f},
-                            "slow: long work belongs in background jobs");
-                    }
-                    ImGui::EndMainMenuBar();
-                }
-
                 double now = glfwGetTime();
                 int ww = 0, wh = 0;
                 glfwGetWindowSize(window_, &ww, &wh);
@@ -321,7 +363,11 @@ public:
                 bool alive = loader_.frame(active_applet_, fi);
                 watchdog_.feed((glfwGetTime() - t0) * 1000.0);
 
-                if (!alive) go_back = true;   // quarantined mid-frame
+                if (!alive) {                 // quarantined mid-frame
+                    go_back = true;
+                    landing_.log("quarantined",
+                                 loader_.at(active_applet_).manifest.name);
+                }
 
                 // Teardown is DEFERRED to after render() (see below): the
                 // applet's draw list THIS frame may reference bridge textures,
@@ -332,31 +378,48 @@ public:
                 if (go_back) pending_home_ = active_applet_;
             }
 
-            // Jobs tray (§7.5): visible on every page while jobs exist.
+            // Jobs tray (§7.5): visible on every page while jobs exist. A
+            // plate pinned to the bottom-right of the WORK area, so it sits
+            // above the status bar instead of over it; sized to its content,
+            // never docked, never saved. Actions are house words, not boxes.
             {
                 auto views = caliper_host::host_job_system().views();
                 if (!views.empty()) {
-                    ImGuiIO& tio = ImGui::GetIO();
+                    const ImGuiViewport* vp = ImGui::GetMainViewport();
+                    constexpr float inset = 12.0f;
                     ImGui::SetNextWindowPos(
-                        {tio.DisplaySize.x - 330.0f, tio.DisplaySize.y - 10.0f},
-                        ImGuiCond_Always, {0.0f, 1.0f});
-                    ImGui::SetNextWindowSize({320.0f, 0.0f});
+                        {vp->WorkPos.x + vp->WorkSize.x - inset,
+                         vp->WorkPos.y + vp->WorkSize.y - inset},
+                        ImGuiCond_Always, {1.0f, 1.0f});
+                    ImGui::SetNextWindowViewport(vp->ID);
+                    ImGui::PushStyleColor(ImGuiCol_WindowBg, sternbild::col::plate);
                     ImGui::Begin("Jobs", nullptr,
-                                 ImGuiWindowFlags_NoResize |
-                                     ImGuiWindowFlags_NoCollapse);
+                                 ImGuiWindowFlags_NoTitleBar |
+                                     ImGuiWindowFlags_NoResize |
+                                     ImGuiWindowFlags_NoCollapse |
+                                     ImGuiWindowFlags_NoDocking |
+                                     ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_AlwaysAutoResize);
+                    ImGui::PopStyleColor();
+                    sternbild::label("Jobs");
                     bool any_done = false;
                     for (auto& v : views) any_done |= !v.running;
-                    if (any_done && ImGui::SmallButton("clear finished"))
-                        caliper_host::host_job_system().clear_finished();
+                    if (any_done) {
+                        ImGui::SameLine(0.0f, sternbild::metric::gap);
+                        if (sternbild::word_button("clear finished"))
+                            caliper_host::host_job_system().clear_finished();
+                    }
                     for (auto& v : views) {
                         ImGui::PushID((int)v.id);
-                        ImGui::Text("%s", v.label.c_str());
-                        ImGui::ProgressBar(v.progress, {-60.0f, 0.0f},
+                        ImGui::TextUnformatted(v.label.c_str());
+                        // Fixed width: the tray auto-sizes, so a bar sized
+                        // from the window width would feed back into it.
+                        ImGui::ProgressBar(v.progress, {240.0f, 0.0f},
                                            v.message.empty() ? nullptr
                                                              : v.message.c_str());
                         if (v.running) {
-                            ImGui::SameLine();
-                            if (ImGui::SmallButton("cancel"))
+                            ImGui::SameLine(0.0f, sternbild::metric::gap);
+                            if (sternbild::word_button("cancel"))
                                 caliper_host::host_job_system().request_cancel(v.id);
                         }
                         ImGui::PopID();
@@ -365,6 +428,11 @@ public:
                 }
             }
 
+            // Sampled after every window of the frame: next frame's Esc test
+            // needs to know a popup was open before NewFrame() closed it.
+            popup_open_prev_ = ImGui::IsPopupOpen(
+                nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+
             renderer_->render(dw, dh);
 
             // Deferred applet teardown — runs ONLY after this frame's draw list
@@ -372,24 +440,16 @@ public:
             // referenced by the Metal pass. Order: hard-join workers (they
             // reference applet state and the applet's own cleanup wait is a
             // timeout, not a join), tear the applet down, then return to the
-            // landing page and refresh the cards.
+            // landing page (it reads statuses live, so nothing to refresh).
             if (pending_home_ >= 0) {
+                const std::string left = loader_.at(pending_home_).manifest.name;
                 caliper_host::host_job_system().cancel_all_and_join();
                 loader_.teardown(pending_home_);
                 pending_home_ = -1;
                 active_applet_ = -1;
                 page_ = AppPage::Landing;
                 glfwSetWindowTitle(window_, "Caliper");
-                std::vector<AppletCard> cards;
-                for (int i = 0; i < loader_.count(); i++) {
-                    const auto& e = loader_.at(i);
-                    std::string desc = e.manifest.summary;
-                    if (e.status != caliper_host::AppletStatus::Ready)
-                        desc = "[unavailable] " + e.status_text + "\n\n" + desc;
-                    cards.push_back({e.manifest.name, e.manifest.summary,
-                                     desc, e.manifest.tag});
-                }
-                intro_.set_applets(std::move(cards));
+                landing_.log("home", left);
             }
         }
     }
@@ -409,7 +469,6 @@ public:
         // Close the DuckDB stores NOW — leaving them to static destructors
         // races DuckDB's globals and aborts in malloc at exit.
         caliper_host::services_shutdown();
-        intro_.cleanup();
         renderer_->shutdown();
         caliper_host::core_destroy_ui_context();
         if (window_) glfwDestroyWindow(window_);
@@ -427,50 +486,45 @@ private:
         proto.get_service = [](const CaliperHost*, const char* id) {
             return caliper_host::services_get(id);
         };
+        const std::string name = loader_.at(idx).manifest.name;
+        landing_.log("launch", name);
         if (loader_.launch(idx, proto)) {
             active_applet_ = idx;
             watchdog_.reset();
             last_frame_time_ = glfwGetTime();
             page_ = AppPage::Applet;
-            glfwSetWindowTitle(window_,
-                ("Caliper - " + loader_.at(idx).manifest.name).c_str());
+            glfwSetWindowTitle(window_, ("Caliper - " + name).c_str());
+        } else {
+            // The loader marked the entry Failed with the reason; say it in
+            // Activity too, so the attempt is not silent.
+            landing_.log("launch failed", name, loader_.at(idx).status_text);
         }
     }
 
-    // Renderer-agnostic launcher for backends where the GL IntroScreen is
-    // inactive. Plain ImGui: name/tag/summary/status + Launch per applet.
-    void draw_fallback_launcher() {
-        ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(vp->WorkPos);
-        ImGui::SetNextWindowSize(vp->WorkSize);
-        ImGui::Begin("##launcher", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                         ImGuiWindowFlags_NoBringToFrontOnFocus);
-        ImGui::TextDisabled("C A L I P E R");
-        ImGui::Separator();
-        if (loader_.count() == 0)
-            ImGui::TextWrapped("No applets found. Drop a dylib + "
-                               "<name>.caliper.toml into the applets folder.");
-        for (int i = 0; i < loader_.count(); i++) {
-            const auto& e = loader_.at(i);
-            const bool ready = e.status == caliper_host::AppletStatus::Ready;
-            ImGui::PushID(i);
-            ImGui::Text("%s", e.manifest.name.c_str());
-            if (!e.manifest.tag.empty()) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("[%s]", e.manifest.tag.c_str());
-            }
-            ImGui::TextWrapped("%s", e.manifest.summary.c_str());
-            if (!ready)
-                ImGui::TextColored({1.0f, 0.55f, 0.35f, 1.0f},
-                                   "[unavailable] %s", e.status_text.c_str());
-            ImGui::BeginDisabled(!ready);
-            if (ImGui::Button("Launch")) launch_applet(i);
-            ImGui::EndDisabled();
-            ImGui::Separator();
-            ImGui::PopID();
-        }
-        ImGui::End();
+    // One Activity line per applet directory scanned, the path written from
+    // the home folder ("~/...") so the OBJECT column shows the part that
+    // differs between the two scan locations.
+    void log_scan(const std::string& dir, int added) {
+        landing_.log("scanned", home_relative(dir),
+                     std::to_string(added) + (added == 1 ? " applet" : " applets"));
+    }
+
+    // `path` with the user's home folder written as "~"; unchanged when it is
+    // not under home or home is unknown.
+    static std::string home_relative(const std::string& path) {
+#ifdef _WIN32
+        const char* home = std::getenv("USERPROFILE");
+#else
+        const char* home = std::getenv("HOME");
+#endif
+        if (!home || !*home) return path;
+        std::string h = home;
+        while (h.size() > 1 && (h.back() == '/' || h.back() == '\\')) h.pop_back();
+        if (path.compare(0, h.size(), h) != 0) return path;
+        if (path.size() == h.size()) return "~";
+        const char next = path[h.size()];
+        if (next != '/' && next != '\\') return path;   // "/Users/ahmedx" is not home
+        return "~" + path.substr(h.size());
     }
 
     // (Re)create the GLFW window for the current renderer and init the backend.
@@ -485,36 +539,10 @@ private:
         return renderer_->init(window_);
     }
 
-    void style_ui() {
-        ImGuiStyle& st = ImGui::GetStyle();
-        st.WindowRounding = 6.0f;
-        st.FrameRounding = 4.0f;
-        st.GrabRounding = 3.0f;
-        st.ScrollbarRounding = 4.0f;
-        st.ItemSpacing = ImVec2(8, 5);
-
-        auto* c = st.Colors;
-        c[ImGuiCol_WindowBg]        = {0.09f, 0.09f, 0.12f, 0.97f};
-        c[ImGuiCol_ChildBg]         = {0.11f, 0.11f, 0.15f, 1.00f};
-        c[ImGuiCol_Header]          = {0.18f, 0.22f, 0.32f, 1.00f};
-        c[ImGuiCol_HeaderHovered]   = {0.26f, 0.30f, 0.42f, 1.00f};
-        c[ImGuiCol_HeaderActive]    = {0.22f, 0.26f, 0.38f, 1.00f};
-        c[ImGuiCol_Button]          = {0.18f, 0.22f, 0.32f, 1.00f};
-        c[ImGuiCol_ButtonHovered]   = {0.28f, 0.32f, 0.44f, 1.00f};
-        c[ImGuiCol_ButtonActive]    = {0.14f, 0.18f, 0.28f, 1.00f};
-        c[ImGuiCol_FrameBg]         = {0.14f, 0.14f, 0.20f, 1.00f};
-        c[ImGuiCol_FrameBgHovered]  = {0.20f, 0.20f, 0.28f, 1.00f};
-        c[ImGuiCol_SliderGrab]      = {0.40f, 0.55f, 0.80f, 1.00f};
-        c[ImGuiCol_SliderGrabActive]= {0.50f, 0.65f, 0.90f, 1.00f};
-        c[ImGuiCol_ScrollbarBg]     = {0.08f, 0.08f, 0.10f, 1.00f};
-        c[ImGuiCol_ScrollbarGrab]   = {0.25f, 0.25f, 0.35f, 1.00f};
-    }
-
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
-    IntroScreen intro_;
-    bool intro_active_ = false;   // GL-only IntroScreen initialized (owns landing UI)
+    LandingScreen landing_;
     caliper_host::AppletLoader loader_{
         caliper_host::HostCaps{2, caliper_host::kHostVersionStr,
                                caliper_host::service_ids()},
@@ -524,6 +552,7 @@ private:
     int pending_home_ = -1;   // applet idx awaiting post-render teardown (Home)
     double last_frame_time_ = 0.0;
     bool dock_layout_built_ = false;  // first-run applet dock layout attempted
+    bool popup_open_prev_ = false;    // a popup was open at the end of last frame
 };
 
 int main() {

@@ -382,12 +382,28 @@ endif()
 
 add_executable(caliper
     src/main.cpp
-    src/intro_screen.cpp
+    # Sternbild house style (SPEC-sternbild.md, workstation revision): colour
+    # tokens + drawing helpers, font loading, and the landing screen that
+    # replaced the GL-only IntroScreen for every renderer backend.
+    src/host/ui/sternbild_theme.cpp
+    src/host/ui/sternbild_fonts.cpp
+    src/host/ui/landing_screen.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
 # ODR duplicate of that target's object.
 target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+
+# House fonts (SIL OFL, in-repo under assets/fonts) ship beside the executable
+# like applets do: <exe dir>/assets/fonts. Dev builds also know the source tree
+# so a stale copy never hides a font edit. The founder's Sternbild Display face
+# is NOT in the repo; sternbild_fonts.cpp loads it from a user path at runtime.
+add_custom_command(TARGET caliper POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:caliper>/assets/fonts"
+    COMMENT "Copying house fonts next to the executable")
+target_compile_definitions(caliper PRIVATE
+    CALIPER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
@@ -399,7 +415,7 @@ if(USE_CUDA)
 endif()
 
 set_target_properties(caliper PROPERTIES
-    CXX_STANDARD 17
+    CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
 )
 
