@@ -68,7 +68,8 @@ private:
 
 // Typed wrapper over caliper.jobs.v1 (§7.5). Falsy when the host doesn't vend
 // the service; every method null-guards its fn pointer so it stays inert (not
-// UB) on a headless/older host. Job fns run UNGUARDED on host worker threads.
+// UB) on a headless/older host. Job fns run on host worker threads, under the
+// Caliper host's crash guard (best effort — see jobs_v1.h).
 class Jobs {
 public:
     Jobs() = default;

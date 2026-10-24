@@ -18,7 +18,9 @@ struct GuardResult {
 // chain to whatever was installed before them for faults outside a guarded
 // region (or on a thread that never guards), so unguarded crashes still reach
 // the default action or an embedder's own reporter. The jump state is
-// thread-local, so guarded regions on different threads do not interfere.
+// thread-local, so guarded regions on different threads do not interfere: the
+// frame thread guards applet entry points while job workers guard applet job
+// fns (JobSystem::submit_guarded), concurrently.
 //
 // PRECONDITION: never nest guarded_call on one thread — t_jmp is a single
 // buffer, so an inner call silently disarms the outer guard for the rest of

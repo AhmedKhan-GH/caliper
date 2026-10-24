@@ -1,5 +1,6 @@
 #include "applet_loader.h"
 #include "crash_guard.h"
+#include "job_system.h"
 #include <algorithm>
 #include <filesystem>
 
@@ -193,6 +194,11 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     host_blocks_[idx] = host_proto;
     host_blocks_[idx].applet_data_dir = a.data_dir.c_str();
 
+    // Jobs submitted from here on (initialize() may start one) are this
+    // instance's: a fault in one quarantines it (quarantine_if_job_faulted).
+    a.jobs = std::make_shared<JobOwner>();
+    JobOwnerScope jobs_scope(a.jobs);
+
     void* instance = nullptr;
     auto cr = guarded_call([&] { instance = d->api.create(); });
     if (!cr.ok) { a.status = AppletStatus::Quarantined;
@@ -216,11 +222,26 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     return true;
 }
 
+// A guarded job the instance submitted faulted on its worker. The instance's
+// memory is as suspect as after a fault in frame() — the job ran its code on
+// its state — so it is abandoned the same way: never called again, no
+// cleanup/destroy (§15). Checked here, on the loader's thread, before each
+// call into the instance; the worker only flagged it (JobOwner).
+bool AppletLoader::quarantine_if_job_faulted(AppletEntry& a) {
+    if (!a.jobs || !a.jobs->faulted()) return false;
+    a.status = AppletStatus::Quarantined;
+    a.status_text = "crashed in " + a.jobs->fault();
+    a.instance = nullptr;
+    return true;
+}
+
 bool AppletLoader::frame(int idx, const CaliperFrameInfo& info) {
     if (idx < 0 || idx >= count()) return false;
     AppletEntry& a = entries_[idx];
     if (a.status != AppletStatus::Active || !a.instance) return false;
+    if (quarantine_if_job_faulted(a)) return false;
 
+    JobOwnerScope jobs_scope(a.jobs);
     auto r = guarded_call([&] { a.desc->api.frame(a.instance, &info); });
     if (!r.ok) {
         // Memory is suspect after a fault: abandon the instance, never call
@@ -237,7 +258,9 @@ void AppletLoader::teardown(int idx) {
     if (idx < 0 || idx >= count()) return;
     AppletEntry& a = entries_[idx];
     if (a.status != AppletStatus::Active || !a.instance) return;
+    if (quarantine_if_job_faulted(a)) return;
 
+    JobOwnerScope jobs_scope(a.jobs);
     auto cl = guarded_call([&] { a.desc->api.cleanup(a.instance); });
     auto de = cl.ok
         ? guarded_call([&] { a.desc->api.destroy(a.instance); })

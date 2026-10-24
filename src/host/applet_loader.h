@@ -2,10 +2,13 @@
 #include "applet_manifest.h"
 #include "negotiation.h"
 #include <caliper/abi.h>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace caliper_host {
+
+class JobOwner;   // job_system.h
 
 enum class AppletStatus {
     Ready,        // negotiated, will dlopen on launch
@@ -25,6 +28,9 @@ struct AppletEntry {
     void* handle = nullptr;
     const CaliperAppletDescriptor* desc = nullptr;
     void* instance = nullptr;
+    // Owner of the guarded jobs this instance submits (fresh per launch): a
+    // fault in one of them quarantines the instance like a fault in frame().
+    std::shared_ptr<JobOwner> jobs;
 };
 
 // Manifest-first loader (PLATFORM.md §14): scan() never dlopens; launch()
@@ -47,6 +53,8 @@ public:
     void close_all();
 
 private:
+    bool quarantine_if_job_faulted(AppletEntry& a);
+
     HostCaps caps_;
     std::string data_root_;
     std::vector<AppletEntry> entries_;

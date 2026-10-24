@@ -2,7 +2,9 @@
 #include "job_system.h"
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -224,4 +226,128 @@ TEST_CASE("jobs: finished workers are reaped without clear_finished") {
     CHECK(js.reap_finished() == 0);
     js.clear_finished();                   // still drops them, nothing to join
     CHECK(js.views().empty());
+}
+
+// ---------------------------------------------------------------------------
+// Guarded jobs (submit_guarded = caliper.jobs.v1's path): applet code under
+// the crash guard. A fault or an exception fails the job with the guard's
+// reason; the host keeps running and later jobs still run. The fault is pinned
+// on the JobOwner in scope at submit time, for the loader to quarantine.
+// ---------------------------------------------------------------------------
+namespace {
+bool names_a_fault(const std::string& text) {
+    // POSIX "SIGSEGV (...)" / "SIGBUS (...)" (macOS arm64 reports either for
+    // a null write); Windows "SEH exception 0x...".
+    return text.find("SIG") != std::string::npos ||
+           text.find("SEH") != std::string::npos;
+}
+std::string message_of(JobSystem& js, uint64_t id) {
+    for (auto& v : js.views())
+        if (v.id == id) return v.message;
+    return {};
+}
+void null_write(void*, const CaliperJobControl*) {
+    volatile int* p = nullptr;
+    *p = 1;
+}
+void mark_ran(void* user, const CaliperJobControl*) {
+    static_cast<std::atomic<bool>*>(user)->store(true);
+}
+} // namespace
+
+TEST_CASE("jobs: an applet job that segfaults fails the job, not the host") {
+    JobSystem js;
+    uint64_t id = js.submit_guarded("segv", &null_write, nullptr);
+    REQUIRE(id != 0);
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    CHECK(js.failed(id));
+    const std::string msg = message_of(js, id);
+    CHECK(msg.rfind("failed: ", 0) == 0);
+    CHECK(names_a_fault(msg));
+    // The host (this test process) is alive, and later jobs — guarded and
+    // host-internal — still run on fresh workers.
+    std::atomic<bool> ran_guarded{false}, ran_host{false};
+    uint64_t g = js.submit_guarded("after-guarded", &mark_ran, &ran_guarded);
+    uint64_t h = js.submit("after-host", &mark_ran, &ran_host);
+    CHECK(wait_until([&] { return !js.is_running(g) && !js.is_running(h); },
+                     milliseconds(2000)));
+    CHECK(ran_guarded.load());
+    CHECK(ran_host.load());
+    CHECK_FALSE(js.failed(g));
+    CHECK_FALSE(js.failed(h));
+}
+
+TEST_CASE("jobs: an applet job that throws fails with the exception named") {
+    JobSystem js;
+    auto fn = [](void*, const CaliperJobControl* ctl) {
+        ctl->progress(ctl, 0.5f, "about to throw");
+        throw std::runtime_error("applet boom");
+    };
+    uint64_t id = js.submit_guarded("thrower", fn, nullptr);
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    CHECK(js.failed(id));
+    CHECK(js.progress_of(id) == doctest::Approx(0.5f));
+    const std::string msg = message_of(js, id);
+    CHECK(msg.find("exception") != std::string::npos);
+    CHECK(msg.find("applet boom") != std::string::npos);
+}
+
+TEST_CASE("jobs: a guarded job's fault is recorded on the owner in scope at submit") {
+    JobSystem js;
+    auto owner = std::make_shared<JobOwner>();
+    uint64_t id = 0;
+    {
+        JobOwnerScope scope(owner);
+        CHECK(JobOwnerScope::current() == owner);
+        id = js.submit_guarded("owned", &null_write, nullptr);
+    }
+    CHECK(JobOwnerScope::current() == nullptr);      // scope restored
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    CHECK(owner->faulted());
+    CHECK(owner->fault().find("background job \"owned\"") != std::string::npos);
+    CHECK(names_a_fault(owner->fault()));
+
+    SUBCASE("a job submitted by an owned job inherits the owner") {
+        auto parent_owner = std::make_shared<JobOwner>();
+        auto parent = [](void* user, const CaliperJobControl*) {
+            auto* sys = static_cast<JobSystem*>(user);
+            sys->submit_guarded("child", &null_write, nullptr);
+        };
+        {
+            JobOwnerScope scope(parent_owner);
+            js.submit_guarded("parent", parent, &js);
+        }
+        CHECK(wait_until([&] { return parent_owner->faulted(); },
+                         milliseconds(2000)));
+        CHECK(parent_owner->fault().find("\"child\"") != std::string::npos);
+    }
+    SUBCASE("outside any scope the job still fails, unattributed") {
+        uint64_t loose = js.submit_guarded("loose", &null_write, nullptr);
+        REQUIRE(wait_until([&] { return !js.is_running(loose); },
+                           milliseconds(2000)));
+        CHECK(js.failed(loose));
+        CHECK(owner->fault().find("\"owned\"") != std::string::npos);  // first wins
+    }
+}
+
+TEST_CASE("jobs: a bad progress message faults outside the message lock") {
+    // ctl->progress copies the applet's string before taking msg_mutex. Were
+    // the copy made under the lock, the guard's siglongjmp would leave the
+    // mutex held: the job's own failure report and every later views() (the
+    // Jobs panel, each frame) would block on it forever.
+    JobSystem js;
+    auto fn = [](void*, const CaliperJobControl* ctl) {
+        ctl->progress(ctl, 0.75f, reinterpret_cast<const char*>(uintptr_t{8}));
+    };
+    uint64_t id = js.submit_guarded("bad-msg", fn, nullptr);
+    REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
+    // views() on a helper thread, so a regression shows up as a failed check
+    // instead of a hung test binary.
+    std::atomic<bool> returned{false};
+    std::thread probe([&] { (void)js.views(); returned.store(true); });
+    const bool ok = wait_until([&] { return returned.load(); }, milliseconds(2000));
+    CHECK(ok);
+    if (ok) probe.join(); else probe.detach();
+    CHECK(js.failed(id));
+    CHECK(names_a_fault(message_of(js, id)));
 }

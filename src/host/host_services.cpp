@@ -248,10 +248,15 @@ const CaliperDataV1 kData = {sizeof(CaliperDataV1), &dat_query,
 
 // --- caliper.jobs.v1: background compute with progress + cancel (§7.5) ---
 // Backed by one process-wide JobSystem; its dtor cancels + joins at shutdown.
+// A jobs.v1 fn is applet (or embedder) code, so it takes the guarded path: a
+// fault or exception fails the job, not the host. The table is shared by
+// every caller, so attribution comes from the loader instead — it has a
+// JobOwnerScope up around each applet entry point, and a fault in a job
+// submitted from inside one quarantines that applet (applet_loader.cpp).
 JobSystem g_jobs;
 
 uint64_t jobs_submit(const char* label, CaliperJobFn fn, void* user) {
-    return g_jobs.submit(label ? label : "(job)", fn, user);
+    return g_jobs.submit_guarded(label ? label : "(job)", fn, user);
 }
 void jobs_cancel(uint64_t id)   { g_jobs.request_cancel(id); }
 bool jobs_running(uint64_t id)  { return g_jobs.is_running(id); }

@@ -1,5 +1,6 @@
 #pragma once
 #include <caliper/services/jobs_v1.h>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -10,12 +11,56 @@
 
 namespace caliper_host {
 
+// The applet a guarded job runs for (submit_guarded). The loader makes one per
+// applet instance and puts it in scope around every call into the instance
+// (JobOwnerScope); a jobs.v1 submit made inside such a call carries it to the
+// worker. A fault there is recorded here, and the loader quarantines the
+// instance on its own thread before calling it again — a worker never touches
+// loader state. Shared ownership: a worker that outlives the instance still
+// writes somewhere valid.
+class JobOwner {
+public:
+    // First fault wins (later ones are still reported per job on stderr).
+    void record_fault(const std::string& label, const std::string& fault);
+    bool faulted() const { return faulted_.load(std::memory_order_acquire); }
+    // e.g. "background job \"train\": SIGSEGV (invalid memory access)"
+    std::string fault() const;
+
+private:
+    mutable std::mutex mu_;
+    std::string fault_;
+    std::atomic<bool> faulted_{false};
+};
+
+// Puts `owner` in scope on this thread for jobs.v1 submissions; restores the
+// previous one on exit (scopes nest). `owner` must outlive the scope — it is
+// held by address, so a per-frame scope costs no refcount traffic.
+class JobOwnerScope {
+public:
+    explicit JobOwnerScope(const std::shared_ptr<JobOwner>& owner);
+    ~JobOwnerScope();
+    JobOwnerScope(const JobOwnerScope&) = delete;
+    JobOwnerScope& operator=(const JobOwnerScope&) = delete;
+
+    // The owner a submission on this thread is attributed to; null outside
+    // any scope (a thread the applet made itself, an embedder's own call).
+    static std::shared_ptr<JobOwner> current();
+
+private:
+    const std::shared_ptr<JobOwner>* prev_;
+};
+
 // Thread-per-job v1 (PLATFORM.md §7.5), the pattern extracted from repnet's
 // train_engine (atomic stop flag polled by the loop; state published under a
-// mutex). Job fns are trusted code on worker threads — NOT crash-guarded
-// (the guard is UI-thread-only, see crash_guard.h preconditions), so a fault
-// in a job still takes the host down. A C++ exception does not: it is caught
-// on the worker, recorded as the job's failure, and surfaced via views().
+// mutex). Two ways in:
+//   submit()          host-internal work: trusted, NOT crash-guarded, so a
+//                     fault in it still takes the host down (fail loudly). A
+//                     C++ exception does not: it is caught on the worker,
+//                     recorded as the job's failure, surfaced via views().
+//   submit_guarded()  caliper.jobs.v1 (applet code): fn runs under the crash
+//                     guard, so a fault or an exception fails the job with the
+//                     guard's reason, and the submitting applet's JobOwner (if
+//                     one was in scope) is told.
 class JobSystem {
 public:
     // Ctor + dtor are out-of-line: member jobs_ holds unique_ptr<Job> and Job
@@ -27,9 +72,11 @@ public:
     ~JobSystem();
 
     uint64_t submit(std::string label, CaliperJobFn fn, void* user);
+    // Attributed to JobOwnerScope::current() on the calling thread.
+    uint64_t submit_guarded(std::string label, CaliperJobFn fn, void* user);
     void     request_cancel(uint64_t id);
     bool     is_running(uint64_t id) const;
-    bool     failed(uint64_t id) const;    // fn threw; message holds the what()
+    bool     failed(uint64_t id) const;    // fn threw/faulted; message says why
     float    progress_of(uint64_t id) const;
 
     struct JobView {
@@ -63,6 +110,8 @@ public:
 
 private:
     struct Job;
+    uint64_t start(std::string label, CaliperJobFn fn, void* user, bool guarded,
+                   std::shared_ptr<JobOwner> owner);
     Job* find(uint64_t id) const;         // caller holds mutex_
     int  reap_finished_locked();          // caller holds mutex_
     mutable std::mutex mutex_;

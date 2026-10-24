@@ -1,10 +1,37 @@
 #include "job_system.h"
+#include "crash_guard.h"
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <exception>
 
 namespace caliper_host {
+
+void JobOwner::record_fault(const std::string& label, const std::string& fault) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (faulted_.load(std::memory_order_relaxed)) return;
+    fault_ = "background job \"" + label + "\": " + fault;
+    faulted_.store(true, std::memory_order_release);   // text first, then flag
+}
+
+std::string JobOwner::fault() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return fault_;
+}
+
+namespace {
+thread_local const std::shared_ptr<JobOwner>* t_owner = nullptr;
+} // namespace
+
+JobOwnerScope::JobOwnerScope(const std::shared_ptr<JobOwner>& owner)
+    : prev_(t_owner) {
+    t_owner = &owner;
+}
+JobOwnerScope::~JobOwnerScope() { t_owner = prev_; }
+
+std::shared_ptr<JobOwner> JobOwnerScope::current() {
+    return t_owner ? *t_owner : nullptr;
+}
 
 // The C control block handed to job fns. ctl is the FIRST member of a
 // standard-layout struct, so the thunks recover the block from the ctl
@@ -41,13 +68,29 @@ void ctl_progress(const CaliperJobControl* ctl, float frac, const char* msg) {
     if (frac > 1.0f) frac = 1.0f;
     b->progress.store(frac);
     if (msg) {
+        // Copy the applet's string BEFORE taking the lock: a bad msg faults
+        // in this copy, and in a guarded job the guard then siglongjmps out —
+        // with msg_mutex held, the job's own failure report and the panel's
+        // views() would both block on it forever.
+        std::string text(msg);
         std::lock_guard<std::mutex> lk(b->msg_mutex);
-        b->message = msg;
+        b->message = std::move(text);
     }
 }
 } // namespace
 
 uint64_t JobSystem::submit(std::string label, CaliperJobFn fn, void* user) {
+    return start(std::move(label), fn, user, /*guarded=*/false, nullptr);
+}
+
+uint64_t JobSystem::submit_guarded(std::string label, CaliperJobFn fn,
+                                   void* user) {
+    return start(std::move(label), fn, user, /*guarded=*/true,
+                 JobOwnerScope::current());
+}
+
+uint64_t JobSystem::start(std::string label, CaliperJobFn fn, void* user,
+                          bool guarded, std::shared_ptr<JobOwner> owner) {
     if (!fn) return 0;
     std::lock_guard<std::mutex> lk(mutex_);
     reap_finished_locked();
@@ -58,9 +101,9 @@ uint64_t JobSystem::submit(std::string label, CaliperJobFn fn, void* user) {
     job->block.ctl.cancelled = &ctl_cancelled;
     job->block.ctl.progress = &ctl_progress;
     Job* raw = job.get();
-    job->thread = std::thread([raw, fn, user] {
-        // A fn that threw: flag it, put the reason where the Jobs panel
-        // already looks (the message), and say so once on stderr.
+    job->thread = std::thread([raw, fn, user, guarded, owner = std::move(owner)] {
+        // A fn that threw or faulted: flag it, put the reason where the Jobs
+        // panel already looks (the message), and say so once on stderr.
         auto fail = [raw](const char* what) {
             {
                 std::lock_guard<std::mutex> lk(raw->block.msg_mutex);
@@ -70,15 +113,31 @@ uint64_t JobSystem::submit(std::string label, CaliperJobFn fn, void* user) {
             std::fprintf(stderr, "[jobs] job #%" PRIu64 " \"%s\" failed: %s\n",
                          raw->id, raw->label.c_str(), what);
         };
-        // Trusted code, not signal-guarded (§15) — but an exception escaping
-        // a std::thread is std::terminate for the whole host, so that much is
-        // contained here: the job fails, the host lives.
-        try {
-            fn(user, &raw->block.ctl);
-        } catch (const std::exception& e) {
-            fail(e.what());
-        } catch (...) {
-            fail("non-std exception");
+        if (guarded) {
+            // Applet code (caliper.jobs.v1): under the crash guard, so a fault
+            // fails this job instead of the host. No host lock is held across
+            // fn — mutex_ is only ever the submitter's, never this thread's,
+            // and the ctl thunks copy applet memory before taking msg_mutex —
+            // so the guard's siglongjmp out of fn strands no lock. Jobs this
+            // fn submits inherit its owner.
+            JobOwnerScope scope(owner);
+            const GuardResult r =
+                guarded_call([&] { fn(user, &raw->block.ctl); });
+            if (!r.ok) {
+                fail(r.fault.c_str());
+                if (owner) owner->record_fault(raw->label, r.fault);
+            }
+        } else {
+            // Trusted host code, not signal-guarded (§15) — but an exception
+            // escaping a std::thread is std::terminate for the whole host, so
+            // that much is contained here: the job fails, the host lives.
+            try {
+                fn(user, &raw->block.ctl);
+            } catch (const std::exception& e) {
+                fail(e.what());
+            } catch (...) {
+                fail("non-std exception");
+            }
         }
         raw->running.store(false);
     });

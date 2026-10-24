@@ -1,5 +1,6 @@
 # throwing_applet — a hand-written epoch-2 descriptor that throws a C++
-# exception INTO the host from a chosen entry point (CALIPER_THROWING_WHERE).
+# exception INTO the host from a chosen entry point (CALIPER_THROWING_WHERE),
+# or from (or faults in) a background job it submits through jobs.v1.
 # The CALIPER_APPLET sugar (hello) catches at the ABI boundary, so it cannot
 # exercise the crash guard's catch(...); this fixture can. It lands in
 # ${CMAKE_BINARY_DIR}/test-applets — beside the tests, never in the host's

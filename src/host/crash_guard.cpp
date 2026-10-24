@@ -144,24 +144,39 @@ void install_handlers() {
 // A library that installs its own handler AFTER ours would silently switch
 // the guard off: a test harness arms one around every case, Python's
 // faulthandler around the interpreter. So each call checks (four reads, no
-// writes in the common case) and, only if displaced, re-arms for the call's
-// duration — the old per-call swap, now the fallback instead of the rule —
-// chaining to the displacer meanwhile and restoring it afterwards.
+// writes in the common case) and, only if displaced, re-arms — the old
+// per-call swap, now the fallback instead of the rule — chaining to the
+// displacer meanwhile and restoring it once no guarded call needs ours.
+//
+// Dispositions are process-wide while guarded calls run on several threads
+// at once (the frame thread and applet job workers), so the re-arm is shared:
+// whoever finds the guard displaced swaps it back in, and only the LAST
+// guarded call out restores the displacer. A per-call restore would pull the
+// guard out from under a call still running on another thread. The mutex is
+// held only inside these two functions, never across fn, so a siglongjmp out
+// of fn cannot strand it.
+std::mutex g_rearm_mu;
+int  g_rearm_depth = 0;                    // guarded calls in flight
+struct sigaction g_rearm_saved[kNumSignals];
+bool g_rearm_swapped[kNumSignals] = {};
+bool g_rearm_warned = false;
+
 struct Rearm {
-    struct sigaction saved[kNumSignals];
-    bool swapped[kNumSignals] = {};
     Rearm() {
-        static bool warned = false;
+        std::lock_guard<std::mutex> lk(g_rearm_mu);
+        ++g_rearm_depth;
         const struct sigaction sa = ours();
         for (int i = 0; i < kNumSignals; i++) {
             struct sigaction cur {};
             if (sigaction(kSignals[i], nullptr, &cur) != 0 || is_ours(cur))
                 continue;
-            sigaction(kSignals[i], &sa, &saved[i]);
-            g_previous[i] = saved[i];
-            swapped[i] = true;
-            if (!warned) {
-                warned = true;
+            // Displaced (again, possibly mid-flight): the newest displacer is
+            // the one to put back when the last guarded call leaves.
+            sigaction(kSignals[i], &sa, &g_rearm_saved[i]);
+            g_previous[i] = g_rearm_saved[i];
+            g_rearm_swapped[i] = true;
+            if (!g_rearm_warned) {
+                g_rearm_warned = true;
                 std::fprintf(stderr,
                              "[guard] another library replaced the %s handler; "
                              "re-arming the guard around each applet call\n",
@@ -170,10 +185,13 @@ struct Rearm {
         }
     }
     ~Rearm() {
+        std::lock_guard<std::mutex> lk(g_rearm_mu);
+        if (--g_rearm_depth > 0) return;
         for (int i = 0; i < kNumSignals; i++) {
-            if (!swapped[i]) continue;
-            sigaction(kSignals[i], &saved[i], nullptr);
+            if (!g_rearm_swapped[i]) continue;
+            sigaction(kSignals[i], &g_rearm_saved[i], nullptr);
             g_previous[i] = g_base_previous[i];
+            g_rearm_swapped[i] = false;
         }
     }
 };
