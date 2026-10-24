@@ -62,33 +62,46 @@ void append_mat16(const float* m, std::string& out) {
     out += ']';
 }
 
+// Every refusal below says why when the caller asked (`why` may be null).
+bool refuse(std::string* why, std::string text) {
+    if (why) *why = std::move(text);
+    return false;
+}
+
 // Write `n` bytes to `file` (created/truncated); on failure the partial file
 // is removed. The staging half of every atomic write below.
-bool write_file(const fs::path& file, const void* data, size_t n) {
+bool write_file(const fs::path& file, const void* data, size_t n,
+                std::string* why) {
     {
         std::ofstream f(file, std::ios::binary | std::ios::trunc);
-        if (!f) return false;
+        if (!f) return refuse(why, "cannot create " + file.string());
         if (n) f.write(static_cast<const char*>(data), static_cast<std::streamsize>(n));
         f.flush();
         if (f.good()) return true;
     }
     std::error_code ec;
     fs::remove(file, ec);
-    return false;
+    return refuse(why, "cannot write " + file.string());
 }
 
 // Encode tightly-packed top-down RGBA8 to `file` as PNG; on failure the
 // partial file is removed. stb writes row 0 first, and the renderer readback
 // already hands back row 0 = top of the image (stride = w*4).
 bool encode_png_file(const fs::path& file, const uint8_t* rgba, uint32_t w,
-                     uint32_t h) {
+                     uint32_t h, std::string* why) {
     const int rc = stbi_write_png(file.string().c_str(), static_cast<int>(w),
                                   static_cast<int>(h), 4, rgba,
                                   static_cast<int>(w * 4));
     if (rc != 0) return true;
     std::error_code ec;
     fs::remove(file, ec);
-    return false;
+    return refuse(why, "cannot write the PNG " + file.string());
+}
+
+std::string rename_failure(const fs::path& from, const fs::path& to,
+                           const std::error_code& ec) {
+    return "cannot rename " + from.string() + " onto " + to.string() + ": " +
+           ec.message();
 }
 
 fs::path with_suffix(const fs::path& p, const char* suffix) {
@@ -99,16 +112,17 @@ fs::path with_suffix(const fs::path& p, const char* suffix) {
 
 // Write `bytes` to a sibling temp file then rename onto `path`. Nothing is
 // created AT `path` unless the whole write+rename succeeds.
-bool write_bytes_atomic(const std::string& path, const void* data, size_t n) {
+bool write_bytes_atomic(const std::string& path, const void* data, size_t n,
+                        std::string* why) {
     fs::path target(path);
     fs::path tmp = with_suffix(target, ".caliper_tmp");
-    if (!write_file(tmp, data, n)) return false;
+    if (!write_file(tmp, data, n, why)) return false;
     std::error_code ec;
     fs::rename(tmp, target, ec);
     if (ec) {
         std::error_code ec2;
         fs::remove(tmp, ec2);
-        return false;
+        return refuse(why, rename_failure(tmp, target, ec));
     }
     return true;
 }
@@ -179,36 +193,40 @@ const char* export_platform_string() {
 }
 
 bool export_write_png_atomic(const std::string& path,
-                             const uint8_t* rgba, uint32_t w, uint32_t h) {
-    if (!rgba || w == 0 || h == 0) return false;
+                             const uint8_t* rgba, uint32_t w, uint32_t h,
+                             std::string* why) {
+    if (!rgba || w == 0 || h == 0) return refuse(why, "no pixels to write");
     fs::path target(path);
     fs::path tmp = with_suffix(target, ".caliper_tmp");
-    if (!encode_png_file(tmp, rgba, w, h)) return false;
+    if (!encode_png_file(tmp, rgba, w, h, why)) return false;
     std::error_code ec;
     fs::rename(tmp, target, ec);
     if (ec) {
         std::error_code ec2;
         fs::remove(tmp, ec2);
-        return false;
+        return refuse(why, rename_failure(tmp, target, ec));
     }
     return true;
 }
 
-bool export_write_text_atomic(const std::string& path, const std::string& text) {
-    return write_bytes_atomic(path, text.data(), text.size());
+bool export_write_text_atomic(const std::string& path, const std::string& text,
+                              std::string* why) {
+    return write_bytes_atomic(path, text.data(), text.size(), why);
 }
 
 bool export_write_png_with_sidecar_atomic(const std::string& png_path,
                                           const uint8_t* rgba, uint32_t w,
                                           uint32_t h,
                                           const std::string& sidecar_path,
-                                          const std::string& json) {
-    if (!rgba || w == 0 || h == 0) return false;
+                                          const std::string& json,
+                                          std::string* why) {
+    if (!rgba || w == 0 || h == 0) return refuse(why, "no pixels to write");
     const fs::path png(png_path), side(sidecar_path);
     std::error_code ec;
     // A directory can't be replaced by rename, and must not be set aside as a
     // "previous PNG" either — refuse before anything moves.
-    if (fs::is_directory(png, ec)) return false;
+    if (fs::is_directory(png, ec))
+        return refuse(why, png.string() + " is a directory");
     const fs::path png_tmp  = with_suffix(png,  ".caliper_tmp");
     const fs::path side_tmp = with_suffix(side, ".caliper_tmp");
     const fs::path png_bak  = with_suffix(png,  ".caliper_bak");
@@ -219,8 +237,11 @@ bool export_write_png_with_sidecar_atomic(const std::string& png_path,
     };
 
     // Stage both. A failure here has touched nothing the user can see.
-    if (!encode_png_file(png_tmp, rgba, w, h)) return false;
-    if (!write_file(side_tmp, json.data(), json.size())) { discard(); return false; }
+    if (!encode_png_file(png_tmp, rgba, w, h, why)) return false;
+    if (!write_file(side_tmp, json.data(), json.size(), why)) {
+        discard();
+        return false;
+    }
 
     // Commit: previous PNG aside, new PNG in, sidecar in, backup gone. Every
     // failure path puts the previous PNG back — the E1 fix "rolled back" by
@@ -228,7 +249,7 @@ bool export_write_png_with_sidecar_atomic(const std::string& png_path,
     const bool had_png = fs::exists(png, ec);
     if (had_png) {
         fs::rename(png, png_bak, ec);
-        if (ec) { discard(); return false; }
+        if (ec) { discard(); return refuse(why, rename_failure(png, png_bak, ec)); }
     }
     auto restore_previous = [&] {
         std::error_code e;
@@ -236,9 +257,19 @@ bool export_write_png_with_sidecar_atomic(const std::string& png_path,
         else         fs::remove(png, e);
     };
     fs::rename(png_tmp, png, ec);
-    if (ec) { restore_previous(); discard(); return false; }
+    if (ec) {
+        const std::string text = rename_failure(png_tmp, png, ec);
+        restore_previous();
+        discard();
+        return refuse(why, text);
+    }
     fs::rename(side_tmp, side, ec);
-    if (ec) { restore_previous(); discard(); return false; }
+    if (ec) {
+        const std::string text = rename_failure(side_tmp, side, ec);
+        restore_previous();
+        discard();
+        return refuse(why, text);
+    }
     if (had_png) fs::remove(png_bak, ec);
     return true;
 }

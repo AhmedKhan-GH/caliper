@@ -18,6 +18,7 @@
 #include <caliper/services/data_v1.h>
 #include <caliper/services/feed_v1.h>
 #include <caliper/services/export_v1.h>
+#include <caliper/services/export_v1_1.h>
 #include <caliper/caliper.hpp>
 #include <caliper/fixture_host.h>
 #include <cstddef>
@@ -516,4 +517,37 @@ TEST_CASE("export v1 layout is frozen (new service, D24 pattern)") {
     CHECK(CALIPER_EXPORT_CAP_VIEW_PNG == (1u << 0));
     CHECK(CALIPER_EXPORT_MAX_DIM == 16384u);
     CHECK(std::string(CALIPER_EXPORT_V1) == "caliper.export.v1");
+}
+
+TEST_CASE("export v1_1 is an additive, prefix-compatible superset of v1") {
+    static_assert(std::is_standard_layout_v<CaliperExportV1_1>);
+
+    // Frozen v1 prefix: struct_size, the five entry points AND reserved0 land
+    // at the exact same offsets in v1_1 (a v1 consumer casting a v1_1 table
+    // reads them unchanged). offsetof each, slot for slot.
+    CHECK(offsetof(CaliperExportV1_1, struct_size) ==
+          offsetof(CaliperExportV1, struct_size));
+    CHECK(offsetof(CaliperExportV1_1, caps) == offsetof(CaliperExportV1, caps));
+    CHECK(offsetof(CaliperExportV1_1, view_png) ==
+          offsetof(CaliperExportV1, view_png));
+    CHECK(offsetof(CaliperExportV1_1, begin_sequence) ==
+          offsetof(CaliperExportV1, begin_sequence));
+    CHECK(offsetof(CaliperExportV1_1, frame) == offsetof(CaliperExportV1, frame));
+    CHECK(offsetof(CaliperExportV1_1, end_sequence) ==
+          offsetof(CaliperExportV1, end_sequence));
+    CHECK(offsetof(CaliperExportV1_1, reserved0) ==
+          offsetof(CaliperExportV1, reserved0));
+
+    // The status tail follows the frozen prefix contiguously; pin the new
+    // slot and the total size.
+    CHECK(offsetof(CaliperExportV1_1, last_error) ==
+          offsetof(CaliperExportV1, reserved0) + sizeof(void*));
+    CHECK(sizeof(CaliperExportV1)   == 56);
+    CHECK(sizeof(CaliperExportV1_1) == 64);
+    CHECK(sizeof(CaliperExportV1_1) ==
+          offsetof(CaliperExportV1_1, last_error) + sizeof(void*));
+
+    CHECK(std::string(CALIPER_EXPORT_V1_1) == "caliper.export.v1_1");
+    // Prefix parity in the id vocabulary too: v1_1 keeps the v1 dotted stem.
+    CHECK(std::string(CALIPER_EXPORT_V1_1).rfind("caliper.export.v1", 0) == 0);
 }

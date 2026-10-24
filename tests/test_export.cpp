@@ -16,6 +16,7 @@
 
 #include <caliper/caliper.hpp>
 #include <caliper/services/export_v1.h>
+#include <caliper/services/export_v1_1.h>
 #include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/fixture_host.h>
@@ -326,6 +327,83 @@ TEST_CASE("export sugar: null host is falsy and inert") {
 }
 
 // ===========================================================================
+// Platform-neutral: export.v1_1 is vended BESIDE v1, and v1 is unchanged.
+// last_error() explains refusals that need no renderer to reach (the live
+// sidecar cases are below, Metal-gated).
+// ===========================================================================
+TEST_CASE("export v1_1: v1 is still offered, unchanged, beside v1_1") {
+    const auto* v1 = static_cast<const CaliperExportV1*>(
+        services_get(CALIPER_EXPORT_V1));
+    const auto* v11 = static_cast<const CaliperExportV1_1*>(
+        services_get(CALIPER_EXPORT_V1_1));
+    REQUIRE(v1 != nullptr);
+    REQUIRE(v11 != nullptr);
+    CHECK((const void*)v1 != (const void*)v11);       // two tables, two ids
+    CHECK(v1->struct_size == sizeof(CaliperExportV1));  // v1 table, v1 size
+    CHECK(v11->struct_size == sizeof(CaliperExportV1_1));
+    // The v1_1 prefix IS the v1 surface: the same thunks, reserved0 still NULL.
+    CHECK(v11->caps == v1->caps);
+    CHECK(v11->view_png == v1->view_png);
+    CHECK(v11->begin_sequence == v1->begin_sequence);
+    CHECK(v11->frame == v1->frame);
+    CHECK(v11->end_sequence == v1->end_sequence);
+    CHECK(v1->reserved0 == nullptr);
+    CHECK(v11->reserved0 == nullptr);
+    CHECK(v11->last_error != nullptr);
+    // Both ids negotiate: a manifest may require either.
+    CHECK(service_ids().count(CALIPER_EXPORT_V1) == 1);
+    CHECK(service_ids().count(CALIPER_EXPORT_V1_1) == 1);
+}
+
+TEST_CASE("export v1_1: last_error names a refusal; never NULL") {
+    const auto* ex = static_cast<const CaliperExportV1_1*>(
+        services_get(CALIPER_EXPORT_V1_1));
+    REQUIRE(ex != nullptr);
+    REQUIRE(ex->last_error() != nullptr);
+
+    CaliperGeomCamera cam{};
+    CHECK(ex->view_png(nullptr, 4, 4, &cam, nullptr, 0, 0, 0u, nullptr) == 0u);
+    CHECK(std::string(ex->last_error()).find("path") != std::string::npos);
+
+    CHECK(ex->begin_sequence(nullptr, 4, 4, nullptr) == 0u);
+    CHECK(std::string(ex->last_error()).find("dir") != std::string::npos);
+
+    CHECK(ex->begin_sequence("/tmp/never", 0, 4, nullptr) == 0u);
+    CHECK(std::string(ex->last_error()).find("w/h") != std::string::npos);
+
+    // A handle no sequence has: frame refuses, end_sequence (void) says so.
+    CHECK(ex->frame(0xDEAD, &cam, nullptr, 0, 0, 0u) == 0u);
+    CHECK(std::string(ex->last_error()).find("handle") != std::string::npos);
+    ex->end_sequence(0xDEAD);
+    CHECK(std::string(ex->last_error()).find("handle") != std::string::npos);
+
+    // caps() is not a status-bearing call: it leaves the last reason alone.
+    (void)ex->caps();
+    CHECK(std::string(ex->last_error()).find("handle") != std::string::npos);
+}
+
+TEST_CASE("export v1_1: the sidecar writer says why it refused") {
+    // The writer behind end_sequence's sequence.json, GPU-free: the reason
+    // last_error() reports comes from here. A directory at the path blocks
+    // the commit rename; a success leaves `why` untouched.
+    const std::string path = tmp_path("why_sequence.json");
+    std::error_code ec;
+    fs::remove_all(path, ec);
+    REQUIRE(fs::create_directory(path, ec));
+    std::string why;
+    CHECK(export_write_text_atomic(path, "{}\n", &why) == false);
+    CHECK(why.find("cannot rename") != std::string::npos);
+    CHECK(why.find(path) != std::string::npos);
+    CHECK(fs::exists(path + ".caliper_tmp") == false);
+
+    fs::remove_all(path, ec);
+    why = "untouched";
+    CHECK(export_write_text_atomic(path, "{}\n", &why) == true);
+    CHECK(why == "untouched");
+    fs::remove(path, ec);
+}
+
+// ===========================================================================
 // Shared live-path helpers. Platform-neutral (no Metal/Vulkan types), used by
 // BOTH the Metal and the Vulkan #ifdef blocks below — hoisted here rather than
 // duplicated. Only compiled when a live backend is present.
@@ -335,6 +413,10 @@ namespace {
 
 const CaliperExportV1* export_svc() {
     return static_cast<const CaliperExportV1*>(services_get(CALIPER_EXPORT_V1));
+}
+const CaliperExportV1_1* export11_svc() {
+    return static_cast<const CaliperExportV1_1*>(
+        services_get(CALIPER_EXPORT_V1_1));
 }
 const CaliperTensorBridgeV1_2* bridge_svc() {
     return static_cast<const CaliperTensorBridgeV1_2*>(
@@ -630,6 +712,93 @@ TEST_CASE("export live: a sequence writes N numbered frames + one finalized side
     // After end_sequence the handle is dead: a frame on it is refused.
     CHECK(export_svc()->frame(h, &cam, &q.draw, 1,
           sizeof(CaliperGeomDrawV1_3), 0xFF000000u) == 0u);
+    bridge_svc()->release_allocation(q.pos);
+    bridge_svc()->release_allocation(q.idx);
+}
+
+TEST_CASE("export v1_1 live: a sequence.json that can't be written is reported") {
+    // end_sequence() is void, so v1 could only log this. A DIRECTORY at
+    // <dir>/sequence.json (the pair-commit tests' trick) makes the sidecar's
+    // rename fail; v1_1's last_error says so, the frames are kept, and the
+    // handle is finalized anyway — the next sequence can begin.
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+    const auto* ex = export11_svc();
+    REQUIRE(ex != nullptr);
+    Quad q = make_topleft_quad(0xFF3377AAu);
+    REQUIRE(q.pos != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const std::string dir = tmp_path("seq_v11_blocked");
+    std::error_code ec; fs::remove_all(dir, ec);
+
+    const uint64_t h = ex->begin_sequence(dir.c_str(), 16, 16, nullptr);
+    REQUIRE(h != 0u);
+    CHECK(std::string(ex->last_error()).empty());
+    CHECK(ex->frame(h, &cam, &q.draw, 1, sizeof(CaliperGeomDrawV1_3),
+                    0xFF000000u) == 1u);
+    CHECK(std::string(ex->last_error()).empty());
+    const fs::path sidecar = fs::path(dir) / "sequence.json";
+    REQUIRE(fs::create_directory(sidecar, ec));
+
+    ex->end_sequence(h);
+    const std::string err = ex->last_error();
+    CHECK(err.find("sequence.json") != std::string::npos);
+    CHECK(err.find("1 frame(s) kept") != std::string::npos);
+    CHECK(fs::exists(fs::path(dir) / "frame_000000.png"));   // the user's work
+    CHECK(fs::is_directory(sidecar));                        // blocker untouched
+    CHECK(fs::exists(fs::path(dir) / "sequence.json.caliper_tmp") == false);
+
+    // Finalized despite the failure: a new sequence begins, and a clean end
+    // reports no error.
+    const std::string dir2 = tmp_path("seq_v11_ok");
+    fs::remove_all(dir2, ec);
+    const uint64_t h2 = ex->begin_sequence(dir2.c_str(), 16, 16, nullptr);
+    REQUIRE(h2 != 0u);
+    CHECK(ex->frame(h2, &cam, &q.draw, 1, sizeof(CaliperGeomDrawV1_3),
+                    0xFF000000u) == 1u);
+    ex->end_sequence(h2);
+    CHECK(std::string(ex->last_error()).empty());
+    CHECK(fs::exists(fs::path(dir2) / "sequence.json"));
+
+    fs::remove_all(dir, ec);
+    fs::remove_all(dir2, ec);
+    bridge_svc()->release_allocation(q.pos);
+    bridge_svc()->release_allocation(q.idx);
+}
+
+TEST_CASE("export v1_1 live: view_png's reasons, and a success clears them") {
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+    const auto* ex = export11_svc();
+    REQUIRE(ex != nullptr);
+    Quad q = make_topleft_quad(0xFF3377AAu);
+    REQUIRE(q.pos != 0);
+    CaliperGeomCamera cam = identity_cam();
+    const std::string png = tmp_path("v11_view.png");
+    const std::string sidecar = png + ".json";
+    std::error_code ec;
+    fs::remove(png, ec);
+    fs::remove_all(sidecar, ec);
+
+    // A gate refusal names the gate.
+    CHECK(ex->view_png(png.c_str(), 0, 16, &cam, &q.draw, 1,
+                       sizeof(CaliperGeomDrawV1_3), 0xFF000000u, nullptr) == 0u);
+    CHECK(std::string(ex->last_error()).find("w/h") != std::string::npos);
+
+    // The pair commit's sidecar failure names the sidecar.
+    REQUIRE(fs::create_directory(sidecar, ec));
+    CHECK(ex->view_png(png.c_str(), 16, 16, &cam, &q.draw, 1,
+                       sizeof(CaliperGeomDrawV1_3), 0xFF000000u, nullptr) == 0u);
+    CHECK(std::string(ex->last_error()).find(sidecar) != std::string::npos);
+    CHECK(fs::exists(png) == false);                  // refusal purity holds
+
+    // Unblocked: success, and no error left over from the call before.
+    fs::remove_all(sidecar, ec);
+    CHECK(ex->view_png(png.c_str(), 16, 16, &cam, &q.draw, 1,
+                       sizeof(CaliperGeomDrawV1_3), 0xFF000000u, nullptr) == 1u);
+    CHECK(std::string(ex->last_error()).empty());
+    CHECK(fs::exists(sidecar));
+
+    fs::remove(png, ec);
+    fs::remove(sidecar, ec);
     bridge_svc()->release_allocation(q.pos);
     bridge_svc()->release_allocation(q.idx);
 }

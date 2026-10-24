@@ -33,6 +33,7 @@
 #include <caliper/services/geometry_v1_2.h>
 #include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/export_v1.h>
+#include <caliper/services/export_v1_1.h>
 #include <caliper/tensor.h>
 #include <imgui.h>
 #include <implot.h>
@@ -452,6 +453,27 @@ uint32_t ex_caps(void) {
     return live ? CALIPER_EXPORT_CAP_VIEW_PNG : 0u;
 }
 
+// export.v1_1 status: why the last view_png / begin_sequence / frame /
+// end_sequence on THIS thread failed, "" after a success. Each of those four
+// clears it on entry and every refusal names itself; the v1 table shares the
+// thunks, so v1 calls keep it current too (unobservable through v1).
+// Thread-local like data.v1's error; export is frame-thread-only, so in
+// practice there is one live slot.
+thread_local std::string t_ex_error;
+
+// Record why, and answer export's refusal value: 0 (a 0 handle, false).
+uint32_t ex_refuse(std::string why) {
+    t_ex_error = std::move(why);
+    return 0u;
+}
+
+const char* ex_last_error(void) { return t_ex_error.c_str(); }
+
+std::string ex_dims_reason(uint32_t w, uint32_t h) {
+    return "w/h must be 1.." + std::to_string(CALIPER_EXPORT_MAX_DIM) +
+           " (got " + std::to_string(w) + "x" + std::to_string(h) + ")";
+}
+
 // Distinct colormap ids used by the draws, first-seen order. Reads only the
 // frozen v1.1 prefix (color_mode/colormap), so it is safe at ANY draw_stride
 // (v1.1/v1.2/v1.3 records the caller may hand in, stride-widened or not).
@@ -483,19 +505,28 @@ bool ex_render_readback(uint32_t w, uint32_t h, const CaliperGeomCamera* cam,
                         std::vector<uint8_t>& out_px) {
     TensorBridge* b = bridge();
     HostRenderer* r = g_renderer;
-    if (!b || !r || !cam) return false;
-    if (!(b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES)) return false;
+    if (!b || !r) return ex_refuse("no renderer is bound (caps() is 0)");
+    if (!(b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES))
+        return ex_refuse("the geometry primitives path is not live (caps() is 0)");
+    if (!cam) return ex_refuse("cam is NULL");
     if (w == 0 || h == 0 || w > CALIPER_EXPORT_MAX_DIM || h > CALIPER_EXPORT_MAX_DIM)
-        return false;
+        return ex_refuse(ex_dims_reason(w, h));
     CaliperTextureId view = b->geom_create_view_ex(w, h, CALIPER_GEOM_VIEW_DEPTH);
-    if (view == 0) return false;
+    if (view == 0) return ex_refuse("could not create the offscreen view");
     const bool drew = b->geom_draw_primitives_v1_3(view, cam, draws, draw_count,
                                                    draw_stride, clear_rgba);
-    if (!drew) { b->geom_release_view(view); return false; }
+    if (!drew) {
+        b->geom_release_view(view);
+        // The gate battery's own reason is on caliper.log.v1, as for
+        // draw_primitives.
+        return ex_refuse("the geometry gates refused the draws (reason logged)");
+    }
     out_px = r->debug_readback_rgba8(view, static_cast<int>(w),
                                      static_cast<int>(h));
     b->geom_release_view(view);
-    return out_px.size() == static_cast<size_t>(w) * h * 4u;
+    if (out_px.size() != static_cast<size_t>(w) * h * 4u)
+        return ex_refuse("the offscreen readback came back short");
+    return true;
 }
 
 ExportProvenance ex_provenance(uint32_t w, uint32_t h, uint32_t clear_rgba,
@@ -525,7 +556,8 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
                      const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
                      uint32_t draw_stride, uint32_t clear_rgba,
                      const char* state_json) {
-    if (!path) return 0u;
+    t_ex_error.clear();
+    if (!path) return ex_refuse("path is NULL");
     std::vector<uint8_t> px;
     if (!ex_render_readback(w, h, cam, draws, draw_count, draw_stride,
                             clear_rgba, px))
@@ -540,9 +572,13 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     const ExportProvenance prov = ex_provenance(w, h, clear_rgba, cam, draws,
                                                 draw_count, draw_stride, state_json);
     const std::string json = export_build_sidecar_json(prov);
-    return export_write_png_with_sidecar_atomic(path, px.data(), w, h,
-                                                std::string(path) + ".json", json)
-               ? 1u : 0u;
+    std::string why;
+    if (!export_write_png_with_sidecar_atomic(path, px.data(), w, h,
+                                              std::string(path) + ".json", json,
+                                              &why))
+        return ex_refuse("could not commit " + std::string(path) +
+                         " and its sidecar: " + why);
+    return 1u;
 }
 
 // One sequence live at a time (v0). The mutex guards this bookkeeping ONLY —
@@ -574,16 +610,21 @@ ExportSequence g_seq;
 
 uint64_t ex_begin_sequence(const char* dir, uint32_t w, uint32_t h,
                            const char* state_json) {
-    if (!dir) return 0u;
+    t_ex_error.clear();
+    if (!dir) return ex_refuse("dir is NULL");
     if (w == 0 || h == 0 || w > CALIPER_EXPORT_MAX_DIM || h > CALIPER_EXPORT_MAX_DIM)
-        return 0u;
+        return ex_refuse(ex_dims_reason(w, h));
     TensorBridge* b = bridge();
-    if (!b || !(b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES)) return 0u;
+    if (!b || !(b->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES))
+        return ex_refuse("export is not live on this host (caps() is 0)");
     std::lock_guard<std::mutex> lk(g_seq.mtx);
-    if (g_seq.active) return 0u;   // one at a time (v0)
+    if (g_seq.active)   // one at a time (v0)
+        return ex_refuse("a sequence is already active (one at a time)");
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
-    if (ec) return 0u;
+    if (ec)
+        return ex_refuse("cannot create " + std::string(dir) + ": " +
+                         ec.message());
     g_seq.active = true;
     g_seq.handle = g_seq.next_handle++;
     g_seq.dir = dir;
@@ -598,8 +639,10 @@ uint64_t ex_begin_sequence(const char* dir, uint32_t w, uint32_t h,
 uint32_t ex_frame(uint64_t seq, const CaliperGeomCamera* cam,
                   const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
                   uint32_t draw_stride, uint32_t clear_rgba) {
+    t_ex_error.clear();
     std::lock_guard<std::mutex> lk(g_seq.mtx);
-    if (!g_seq.active || seq == 0 || seq != g_seq.handle) return 0u;
+    if (!g_seq.active || seq == 0 || seq != g_seq.handle)
+        return ex_refuse("no active sequence has this handle");
     std::vector<uint8_t> px;
     if (!ex_render_readback(g_seq.w, g_seq.h, cam, draws, draw_count,
                             draw_stride, clear_rgba, px))
@@ -608,8 +651,9 @@ uint32_t ex_frame(uint64_t seq, const CaliperGeomCamera* cam,
     std::snprintf(name, sizeof(name), "frame_%06u.png", g_seq.frame_count);
     const std::string frame_path =
         (std::filesystem::path(g_seq.dir) / name).string();
-    if (!export_write_png_atomic(frame_path, px.data(), g_seq.w, g_seq.h))
-        return 0u;
+    std::string why;
+    if (!export_write_png_atomic(frame_path, px.data(), g_seq.w, g_seq.h, &why))
+        return ex_refuse("could not write " + frame_path + ": " + why);
     if (cam) g_seq.last_cam = *cam;
     g_seq.last_clear = clear_rgba;
     g_seq.last_draw_count = draw_count;
@@ -619,8 +663,12 @@ uint32_t ex_frame(uint64_t seq, const CaliperGeomCamera* cam,
 }
 
 void ex_end_sequence(uint64_t seq) {
+    t_ex_error.clear();
     std::lock_guard<std::mutex> lk(g_seq.mtx);
-    if (!g_seq.active || seq == 0 || seq != g_seq.handle) return;
+    if (!g_seq.active || seq == 0 || seq != g_seq.handle) {
+        ex_refuse("no active sequence has this handle");
+        return;
+    }
     ExportProvenance p;
     p.version       = kHostVersionStr;
     p.git_commit    = CALIPER_GIT_COMMIT;
@@ -640,17 +688,19 @@ void ex_end_sequence(uint64_t seq) {
     const std::string json = export_build_sidecar_json(p);
     const std::string sidecar =
         (std::filesystem::path(g_seq.dir) / "sequence.json").string();
-    if (!export_write_text_atomic(sidecar, json)) {
+    std::string why;
+    if (!export_write_text_atomic(sidecar, json, &why)) {
         // end_sequence() returns void and the v1 vtable is frozen (export_v1.h
         // static_asserts), so this can't be a return code: say it where the
-        // applet and the user look (caliper.log.v1), keep the frames — they
-        // are the user's work — and finalize anyway so the next sequence can
-        // begin. A frame folder without sequence.json is not a figure
-        // (PUBLISHING.md); surfacing this as a status is an export v1.1 item.
-        const std::string msg = "[export] sequence sidecar write failed: " +
-                                sidecar + " (" + std::to_string(g_seq.frame_count) +
-                                " frame(s) kept, provenance missing)";
-        log_impl(CALIPER_LOG_ERROR, msg.c_str());
+        // user looks (caliper.log.v1) and where a v1_1 applet can ask
+        // (last_error), keep the frames — they are the user's work — and
+        // finalize anyway so the next sequence can begin. A frame folder
+        // without sequence.json is not a figure (PUBLISHING.md).
+        const std::string text = "sequence sidecar write failed: " + sidecar +
+                                 " (" + std::to_string(g_seq.frame_count) +
+                                 " frame(s) kept, provenance missing): " + why;
+        log_impl(CALIPER_LOG_ERROR, ("[export] " + text).c_str());
+        ex_refuse(text);
     }
     g_seq.active = false;
     g_seq.handle = 0;
@@ -661,6 +711,13 @@ void ex_end_sequence(uint64_t seq) {
 
 const CaliperExportV1 kExport = {sizeof(CaliperExportV1), &ex_caps, &ex_view_png,
     &ex_begin_sequence, &ex_frame, &ex_end_sequence, nullptr};
+
+// export.v1_1: the SAME six v1 slots (reserved0 still NULL) plus last_error()
+// — an applet can finally see a sequence.json that didn't land, or why a call
+// answered 0. v1 stays vended beside it, unchanged.
+const CaliperExportV1_1 kExport11 = {sizeof(CaliperExportV1_1), &ex_caps,
+    &ex_view_png, &ex_begin_sequence, &ex_frame, &ex_end_sequence, nullptr,
+    &ex_last_error};
 
 const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
@@ -674,7 +731,8 @@ const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
                                     CALIPER_GEOMETRY_V1_2,
                                     CALIPER_GEOMETRY_V1_3,
                                     CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1,
-                                    CALIPER_FEED_V1, CALIPER_EXPORT_V1};
+                                    CALIPER_FEED_V1, CALIPER_EXPORT_V1,
+                                    CALIPER_EXPORT_V1_1};
 
 } // namespace
 
@@ -788,6 +846,7 @@ const void* services_get(const char* id) {
     if (std::strcmp(id, CALIPER_DATA_V1) == 0) return &kData;
     if (std::strcmp(id, CALIPER_FEED_V1) == 0) return &kFeed;
     if (std::strcmp(id, CALIPER_EXPORT_V1) == 0) return &kExport;
+    if (std::strcmp(id, CALIPER_EXPORT_V1_1) == 0) return &kExport11;
     return nullptr;   // unknown ids: NULL, never UB (§6b)
 }
 

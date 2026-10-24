@@ -46,15 +46,21 @@ std::string export_utc_timestamp();
 // Compile-time platform tag ("macos" / "windows" / "linux" / "unknown").
 const char* export_platform_string();
 
+// The writers below take an optional `why`: on a false return it says what
+// the filesystem refused (e.g. "cannot rename <tmp> onto <path>: Is a
+// directory"), for export.v1_1's last_error. Untouched on success.
+
 // Encode tightly-packed top-down RGBA8 to a PNG, ATOMICALLY: write a sibling
 // temp file then rename onto `path`. Returns false (leaving `path` untouched,
 // creating nothing at `path`) if the encode or rename fails — the filesystem
 // half of refusal purity. Deterministic (stb PNG's fixed filter/zlib).
 bool export_write_png_atomic(const std::string& path,
-                             const uint8_t* rgba, uint32_t w, uint32_t h);
+                             const uint8_t* rgba, uint32_t w, uint32_t h,
+                             std::string* why = nullptr);
 
 // Write UTF-8 text atomically (temp + rename); same refusal-purity guarantee.
-bool export_write_text_atomic(const std::string& path, const std::string& text);
+bool export_write_text_atomic(const std::string& path, const std::string& text,
+                              std::string* why = nullptr);
 
 // Commit a PNG and its provenance sidecar as a PAIR. Both are staged as
 // sibling temp files first, so an encode/write failure touches nothing the
@@ -68,6 +74,7 @@ bool export_write_png_with_sidecar_atomic(const std::string& png_path,
                                           const uint8_t* rgba, uint32_t w,
                                           uint32_t h,
                                           const std::string& sidecar_path,
-                                          const std::string& json);
+                                          const std::string& json,
+                                          std::string* why = nullptr);
 
 }  // namespace caliper_host
