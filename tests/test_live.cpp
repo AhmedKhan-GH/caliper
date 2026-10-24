@@ -4,7 +4,9 @@
 // the viewer does; the texture readback is byte-exact against the shared CPU
 // colormap reference (map_f32_to_rgba8 + colormap_lut, as test_embed.cpp).
 // A forked child maps a segment by name (plain POSIX, no Metal) to prove a
-// second process sees, and can write, the same pages.
+// second process sees, and can write, the same pages. The live/app cases drive
+// the Caliper app's side (live_attach.h): the session list, and a hosted core
+// inside a host that owns its renderer and ImGui contexts, as main.cpp does.
 //
 // Compiled as ObjC++ with ARC (tests/CMakeLists.txt). GPU cases skip when the
 // offscreen attach fails (headless CI): counted and reported as Skipped, a
@@ -22,6 +24,11 @@
 #include "tensor_bridge.h"   // caliper_host::map_f32_to_rgba8 / colormap_lut (CPU reference)
 #include "live/live_shm.h"     // session-file helpers (fake a dead session's file)
 #include "live/live_source.h"  // the viewer-side Source (claim words, deterministic)
+#include "live/live_attach.h"  // the Caliper app's session list and hosted attachment
+#include "core_lifecycle.h"    // the app-like host: UI contexts, renderer factory
+#include "host_services.h"     // ... and the renderer bound to the tensor bridge
+
+#include <imgui.h>
 
 #include <caliper/live_views.h>
 
@@ -29,6 +36,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1167,6 +1175,313 @@ TEST_CASE("live/series+histogram: one never-claimed slot copied at apply; histog
     REQUIRE(caliper_core_live_view_values(core, "loss", got.data(), got.size(), &count) == 1);
     CHECK(got[0] == 107.0f);
     caliper_core_shutdown(core);
+}
+
+// ===========================================================================
+// live/app: the Caliper app's "Attach to process" (src/host/live/live_attach.h)
+// without a window. The session list over real session files; then the app's
+// own arrangement: a host that owns the renderer, the ImGui contexts and the
+// services (here an offscreen Metal canvas instead of the GLFW window) and
+// attaches through a hosted core, drawing the views inside its own frames.
+// ===========================================================================
+namespace {
+
+// What the Caliper app owns before it attaches (main.cpp initialize): the UI
+// contexts and a renderer bound to the tensor bridge (the stores stay closed:
+// the views need only the bridge). The canvas is offscreen; frame() is the
+// host's frame with the hosted views drawn inside it.
+struct AppHost {
+    std::unique_ptr<caliper_host::HostRenderer> renderer;
+    bool ok = false;
+    int w = 0, h = 0;
+
+    AppHost(int W, int H) : w(W), h(H) {
+        caliper_host::core_create_ui_context();
+        renderer = caliper_host::make_metal_renderer();
+        ok = !caliper_test::force_no_gpu() && renderer &&
+             renderer->canvas_init(nullptr, caliper_host::HostRenderer::CANVAS_OFFSCREEN, W, H);
+        caliper_host::services_set_renderer(renderer.get());
+    }
+    ~AppHost() {
+        // main.cpp cleanup's order: the views went with the attachment, then
+        // the bridge loses the renderer, then the renderer goes.
+        caliper_host::services_set_renderer(nullptr);
+        if (renderer) renderer->canvas_shutdown();
+        renderer.reset();
+        caliper_host::core_destroy_ui_context();
+    }
+    void frame(caliper_live::Attachment& a) {
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        io.DisplaySize = ImVec2((float)w, (float)h);
+        io.DeltaTime = 1.0f / 60.0f;
+        renderer->canvas_new_frame();
+        a.draw(0.0f, 0.0f, (float)w, (float)h, 1.0f);
+        renderer->canvas_render();
+    }
+    // Polls and draws until `want` views updated (a read must retire first).
+    int poll_until(caliper_live::Attachment& a, int want, int max_tries = 200) {
+        int total = 0;
+        for (int i = 0; i < max_tries; ++i) {
+            total += a.poll();
+            frame(a);
+            if (total >= want) return total;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return total;
+    }
+};
+
+using Ev = caliper_live::Attachment::Event;
+
+}  // namespace
+
+TEST_CASE("live/app: the session list shows script, pid, start time and views; relists once a "
+          "second; a killed script's row is reclaimed") {
+    const std::string s = test_session("a");
+    CaliperLiveClientDesc d{};
+    d.struct_size = sizeof d;
+    d.session = s.c_str();
+    d.script = "train_demo.py";
+    const uint64_t before = caliper_live::unix_ms();
+    CaliperLiveClient* c = caliper_live_client_open(&d);
+    REQUIRE(c != nullptr);
+    CaliperLiveViewDesc hv = heatmap_desc("fc1.weight", 8, 8);
+    CaliperLiveSegment* seg = caliper_live_client_add_view(c, &hv);
+    REQUIRE(seg != nullptr);
+    CaliperLiveViewDesc sv{};
+    sv.struct_size = sizeof sv;
+    sv.name = "loss";
+    sv.kind = CALIPER_LIVE_KIND_SERIES;
+    sv.dtype = CALIPER_DT_F32;
+    sv.ndim = 1;
+    sv.shape[0] = 256;
+    CaliperLiveSegment* loss = caliper_live_client_add_view(c, &sv);
+    REQUIRE(loss != nullptr);
+
+    caliper_live::SessionList list;   // the default root: this binary's private one
+    CHECK(list.root() == g_root.dir);
+    REQUIRE(list.refresh());
+    CHECK(list.error().empty());
+    const int i = list.find(s);
+    REQUIRE(i >= 0);
+    const caliper_live::SessionEntry& e = list.sessions()[(size_t)i];
+    CHECK(e.script == "train_demo.py");
+    CHECK(e.pid == (int32_t)getpid());
+    CHECK(list.find_pid((int32_t)getpid()) >= 0);
+    CHECK(e.start_unix_ms >= before);
+    CHECK(e.start_unix_ms <= caliper_live::unix_ms());
+    REQUIRE(e.views.size() == 2);
+    CHECK(e.views[0] == "fc1.weight");
+    CHECK(e.views[1] == "loss");
+    CHECK(caliper_live::view_names(e) == "fc1.weight, loss");
+    CHECK(caliper_live::session_state(e) == caliper_live::SessionState::Running);
+    CHECK(caliper_live::state_text(e) == "running");
+    CHECK(caliper_live::can_attach(e));
+    CHECK(caliper_live::clock_time(e.start_unix_ms).size() == 8);   // "HH:MM:SS"
+    CHECK(caliper_live::age_text(e.start_unix_ms).find("s ago") != std::string::npos);
+
+    // A view goes: the row shows it at the next listing, not before (relists
+    // at most once a second unless forced).
+    REQUIRE(caliper_live_client_remove_view(c, loss) == 1);
+    CHECK_FALSE(list.refresh());
+    CHECK(list.sessions()[(size_t)list.find(s)].views.size() == 2);
+    REQUIRE(list.refresh(/*force=*/true));
+    REQUIRE(list.find(s) >= 0);
+    CHECK(list.sessions()[(size_t)list.find(s)].views == std::vector<std::string>{"fc1.weight"});
+
+    // A SIGKILLed script's session file (dead pid): the next listing removes
+    // it instead of showing a row that cannot attach.
+    caliper_live::SessionFile f;
+    f.protocol = (int32_t)CALIPER_LIVE_PROTOCOL_VERSION;
+    f.pid = dead_pid();
+    f.proc_start_us = 1;
+    f.session = test_session("k");
+    f.script = "killed.py";
+    f.start_unix_ms = caliper_live::unix_ms();
+    f.views = {"w"};
+    f.segments = {"/" + f.session + "-ctl"};
+    const std::string killed = live_dir() + "/" + std::to_string(f.pid) + ".json";
+    REQUIRE(caliper_live::write_session_file(killed, f, nullptr));
+    REQUIRE(list.refresh(true));
+    CHECK(list.find(f.session) < 0);
+    CHECK(access(killed.c_str(), F_OK) != 0);
+    CHECK(list.find(s) >= 0);
+
+    // The script closes: its row goes.
+    caliper_live_client_close(c);
+    REQUIRE(list.refresh(true));
+    CHECK(list.find(s) < 0);
+
+    // The row rules every state, on synthetic entries.
+    caliper_live::SessionEntry x;
+    x.protocol = (int32_t)CALIPER_LIVE_PROTOCOL_VERSION;
+    x.alive = true;
+    CHECK(caliper_live::view_names(x) == "none yet");
+    x.viewer_pid = 4242;
+    CHECK(caliper_live::state_text(x) == "viewed by 4242");
+    CHECK_FALSE(caliper_live::can_attach(x));
+    x.viewer_pid = 0;
+    x.alive = false;
+    CHECK(caliper_live::state_text(x) == "closing");
+    CHECK_FALSE(caliper_live::can_attach(x));
+    x.starting = true;
+    CHECK(caliper_live::state_text(x) == "starting");
+    CHECK(caliper_live::can_attach(x));
+    x.protocol = 1;
+    CHECK(caliper_live::state_text(x) == "protocol v1");
+    CHECK_FALSE(caliper_live::can_attach(x));
+    CHECK(caliper_live::clock_time(0) == "-");
+    CHECK(caliper_live::age_text(0).empty());
+}
+
+TEST_CASE("live/app: attach through a hosted core, views live, session ended keeps the last "
+          "frames, detach") {
+    const int W = 64, H = 48;
+    AppHost host(160, 120);
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+
+    const std::string s = test_session("h");
+    CaliperLiveClientDesc d{};
+    d.struct_size = sizeof d;
+    d.session = s.c_str();
+    d.script = "train_demo.py";
+    CaliperLiveClient* c = caliper_live_client_open(&d);
+    REQUIRE(c != nullptr);
+    CaliperLiveViewDesc v = heatmap_desc("w", H, W);
+    CaliperLiveSegment* seg = caliper_live_client_add_view(c, &v);
+    REQUIRE(seg != nullptr);
+    CaliperLiveSegmentInfo info = seg_info(seg);
+    auto* base = (uint8_t*)info.host_ptr;
+    auto publish = [&](const std::vector<float>& vals) {
+        int busy = 0;
+        const int slot = caliper_live_segment_acquire(seg, &busy);
+        REQUIRE(slot >= 0);
+        std::memcpy(base + info.slot_offset[slot], vals.data(), vals.size() * 4);
+        CaliperLivePublish p = pub(0, 0, 0.0f, 1.0f);
+        REQUIRE(caliper_live_segment_publish(seg, slot, &p) == 1);
+    };
+    const std::vector<float> ramp = ramp_f32(W, H);
+    publish(ramp);
+
+    caliper_live::Attachment a;
+    std::string err;
+    // A refused attach (unknown token) leaves nothing behind: no core, no event.
+    CHECK_FALSE(a.attach(host.renderer.get(), "no-such-sess", &err));
+    CHECK(err.find("no live session") != std::string::npos);
+    CHECK_FALSE(a.attached());
+    CHECK(a.take_events().empty());
+
+    REQUIRE_MESSAGE(a.attach(host.renderer.get(), s, &err), err);
+    CHECK(a.take_events() == std::vector<Ev>{Ev::Attached});
+    CHECK_FALSE(a.attach(host.renderer.get(), s, &err));   // one session at a time
+    CHECK(err.find("already attached") != std::string::npos);
+    // The hosted core holds the one-core-per-process slot like any core.
+    {
+        caliper_live::Attachment b;
+        CHECK_FALSE(b.attach(host.renderer.get(), s, &err));
+        CHECK(err.find("one per process") != std::string::npos);
+        CaliperCoreDesc cd{};
+        cd.struct_size = sizeof cd;
+        cd.renderer = CALIPER_RENDERER_DEFAULT;
+        CHECK(caliper_core_create(&cd) == nullptr);
+    }
+    CHECK(a.status().attached);
+    CHECK(a.status().alive);
+    CHECK(a.status().script == "train_demo.py");
+    CHECK(a.status().pid == (int32_t)getpid());
+    CHECK(a.status().session == s);
+
+    // The host's frames apply the snapshot: byte-exact through the app's path.
+    REQUIRE(host.poll_until(a, 1) >= 1);
+    CHECK(a.status().views == 1);
+    CHECK(caliper_live_client_attached(c) == 1);   // the heartbeat reached the script
+    CHECK(readback(a.core(), "w", W, H) == map_ref(ramp, W, H, 0, 0.0f, 1.0f));
+
+    // Training never waits on the app. With the host not polling at all (a
+    // stalled frame loop), the script's snapshots publish at once...
+    const auto t0 = std::chrono::steady_clock::now();
+    int taken = 0;
+    for (int k = 0; k < 200; ++k) {
+        int busy = 0;
+        const int slot = caliper_live_segment_acquire(seg, &busy);
+        REQUIRE(slot >= 0);
+        CaliperLivePublish p = pub(0, 0, 0.0f, 1.0f);
+        taken += caliper_live_segment_publish(seg, slot, &p);
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(taken == 200);
+    CHECK(ms < 50.0);
+    MESSAGE("200 snapshots published with the host stalled in " << ms << " ms");
+    // ...and once every slot is taken (the published one, the host's claim and
+    // one whose GPU copy is still in flight), the next is dropped at once, not
+    // waited for.
+    {
+        int busy = 0;
+        const int inflight = caliper_live_segment_acquire(seg, &busy);
+        REQUIRE(inflight >= 0);
+        CHECK(caliper_live_segment_acquire(seg, &busy) == -1);
+        CHECK(busy == 1);
+        caliper_live_segment_abandon(seg, inflight);
+    }
+
+    // A second picture, then the script goes away (closes, as a dying one's
+    // segments go): one Ended event, the last frame stays drawn and readable.
+    const std::vector<float> rev = ramp_f32(W, H, 1.0f, /*reversed=*/true);
+    publish(rev);
+    REQUIRE(host.poll_until(a, 1) >= 1);
+    CHECK(readback(a.core(), "w", W, H) == map_ref(rev, W, H, 0, 0.0f, 1.0f));
+    caliper_live_client_close(c);
+    for (int k = 0; k < 4; ++k) {
+        a.poll();
+        host.frame(a);
+    }
+    CHECK(a.take_events() == std::vector<Ev>{Ev::Ended});
+    CHECK_FALSE(a.status().alive);
+    CHECK(a.status().attached);
+    CHECK(caliper_core_view_count(a.core()) == 1);
+    CHECK(readback(a.core(), "w", W, H) == map_ref(rev, W, H, 0, 0.0f, 1.0f));
+    for (int k = 0; k < 4; ++k) {   // still drawing, and ended only once
+        a.poll();
+        host.frame(a);
+    }
+    CHECK(a.take_events().empty());
+
+    // Detach: views released while the renderer is still bound; the core and
+    // its one-core slot are gone.
+    a.detach();
+    CHECK(a.take_events() == std::vector<Ev>{Ev::Detached});
+    CHECK_FALSE(a.attached());
+    CHECK(a.core() == nullptr);
+    CHECK_FALSE(a.status().attached);
+    a.detach();   // idempotent, no second event
+    CHECK(a.take_events().empty());
+}
+
+TEST_CASE("live/app: detach clears the heartbeat at once; the script keeps running") {
+    AppHost host(96, 96);
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    const std::string s = test_session("j");
+    CaliperLiveClient* c = open_client(s);
+    REQUIRE(c != nullptr);
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach(host.renderer.get(), s, &err), err);
+    a.poll();
+    host.frame(a);
+    CHECK(caliper_live_client_attached(c) == 1);
+    a.detach();
+    CHECK(caliper_live_client_attached(c) == 0);
+    CHECK(a.take_events() == std::vector<Ev>{Ev::Attached, Ev::Detached});
+    // The script is untouched: it is still listed and a viewer may attach again.
+    caliper_live::SessionList list;
+    REQUIRE(list.refresh(true));
+    REQUIRE(list.find(s) >= 0);
+    CHECK(caliper_live::can_attach(list.sessions()[(size_t)list.find(s)]));
+    REQUIRE_MESSAGE(a.attach(host.renderer.get(), s, &err), err);
+    a.detach();
+    caliper_live_client_close(c);
 }
 
 CALIPER_GPU_TEST_MAIN()

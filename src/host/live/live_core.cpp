@@ -28,6 +28,7 @@
 #include "caliper/live_views.h"
 
 #include "embed/embed_core.h"
+#include "live/live_attach.h"   // the session-row text the picker shares with the app
 #include "live/live_shm.h"
 #include "live/live_source.h"
 
@@ -38,7 +39,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <ctime>
 #include <string>
 #include <vector>
 
@@ -519,27 +519,6 @@ const char* kind_name(uint32_t k) {
     }
 }
 
-std::string clock_of(uint64_t unix_ms) {
-    if (!unix_ms) return "-";
-    const time_t s = (time_t)(unix_ms / 1000);
-    struct tm tmv{};
-    localtime_r(&s, &tmv);
-    char b[32];
-    std::strftime(b, sizeof b, "%H:%M:%S", &tmv);
-    return b;
-}
-
-std::string age_of(uint64_t unix_ms) {
-    if (!unix_ms) return "";
-    const uint64_t now = caliper_live::unix_ms();
-    const uint64_t s = now > unix_ms ? (now - unix_ms) / 1000 : 0;
-    char b[32];
-    if (s < 60) std::snprintf(b, sizeof b, "%llus ago", (unsigned long long)s);
-    else if (s < 3600) std::snprintf(b, sizeof b, "%llum ago", (unsigned long long)(s / 60));
-    else std::snprintf(b, sizeof b, "%lluh ago", (unsigned long long)(s / 3600));
-    return b;
-}
-
 void draw_picker(CaliperCore* core, CaliperLiveState* L, float lw, float lh) {
     ImGui::SetNextWindowPos(ImVec2(lw * 0.5f, lh * 0.4f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(720.0f, lw - 16.0f), 320.0f), ImGuiCond_FirstUseEver);
@@ -563,18 +542,21 @@ void draw_picker(CaliperCore* core, CaliperLiveState* L, float lw, float lh) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(e.script.c_str());
                 ImGui::TableNextColumn(); ImGui::Text("%d", e.pid);
-                ImGui::TableNextColumn(); ImGui::Text("%s (%s)", clock_of(e.start_unix_ms).c_str(),
-                                                      age_of(e.start_unix_ms).c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%s (%s)", caliper_live::clock_time(e.start_unix_ms).c_str(),
+                            caliper_live::age_text(e.start_unix_ms).c_str());
                 ImGui::TableNextColumn(); ImGui::Text("%d", e.view_count);
                 ImGui::TableNextColumn();
-                const bool compatible = e.protocol == (int32_t)CALIPER_LIVE_PROTOCOL_VERSION;
-                if (!compatible) ImGui::TextDisabled("protocol v%d", e.protocol);
-                else if (e.starting) ImGui::TextUnformatted("starting");
-                else if (!e.alive) ImGui::TextDisabled("closing");
-                else if (e.viewer_pid) ImGui::Text("viewed by %d", e.viewer_pid);
-                else ImGui::TextUnformatted("running");
+                // The state and the attach rule are the app's too (live_source.h).
+                const caliper_live::SessionState state = caliper_live::session_state(e);
+                const std::string word = caliper_live::state_text(e);
+                if (state == caliper_live::SessionState::Incompatible ||
+                    state == caliper_live::SessionState::Closing)
+                    ImGui::TextDisabled("%s", word.c_str());
+                else
+                    ImGui::TextUnformatted(word.c_str());
                 ImGui::TableNextColumn();
-                const bool can = compatible && (e.alive || e.starting) && !e.viewer_pid;
+                const bool can = caliper_live::can_attach(e);
                 ImGui::BeginDisabled(!can);
                 ImGui::PushID(e.session.c_str());
                 if (ImGui::SmallButton("Attach")) L->attach_request = e.session;
@@ -834,7 +816,9 @@ void caliper_live_frame(CaliperCore* core) {
             L->fps_frames = 0;
         }
     }
-    if (core->canvas_mode == caliper_host::HostRenderer::CANVAS_OFFSCREEN) return;   // tests: no chrome
+    // No chrome for tests (offscreen) or a hosted core: the host (the Caliper
+    // app's live page) draws its own bar and status line from the status calls.
+    if (core->hosted || core->canvas_mode == caliper_host::HostRenderer::CANVAS_OFFSCREEN) return;
 
     const float lw = (float)core->canvas_w / core->scale;
     const float lh = (float)core->canvas_h / core->scale;

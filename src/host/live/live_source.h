@@ -11,6 +11,8 @@
 // reuse every line of live_core.cpp.
 #pragma once
 
+#include "caliper/live.h"   // CALIPER_LIVE_PROTOCOL_VERSION
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -130,7 +132,29 @@ struct SessionEntry {
     int32_t     viewer_pid = 0;
     bool        alive = false;      // the process runs and its session is open
     bool        starting = false;   // the process runs, its control segment is not there yet
+    std::vector<std::string> views; // view names, from the session file
 };
 bool list_sessions(const std::string& root, std::vector<SessionEntry>* out, std::string* err);
+
+// What a listed session offers a viewer choosing one to attach to. One rule for
+// caliper-viewer's picker and the Caliper app's session list (live_attach.h).
+enum class SessionState {
+    Running,        // alive, nobody attached: attach
+    Starting,       // its control segment is not initialised yet: attach and wait
+    Closing,        // the script is closing its session
+    Viewed,         // another viewer holds it (one viewer per session)
+    Incompatible    // written by another protocol version
+};
+inline SessionState session_state(const SessionEntry& e) {
+    if (e.protocol != (int32_t)CALIPER_LIVE_PROTOCOL_VERSION) return SessionState::Incompatible;
+    if (e.starting) return SessionState::Starting;
+    if (!e.alive) return SessionState::Closing;
+    if (e.viewer_pid) return SessionState::Viewed;
+    return SessionState::Running;
+}
+inline bool can_attach(const SessionEntry& e) {
+    const SessionState s = session_state(e);
+    return s == SessionState::Running || s == SessionState::Starting;
+}
 
 }  // namespace caliper_live

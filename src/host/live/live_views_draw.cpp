@@ -123,8 +123,8 @@ void place(CaliperCore* core, View& v, ImVec2 content) {
         core->tile_y = gap;
         core->tile_row_h = 0.0f;
     }
-    v.pos_x = core->tile_x;
-    v.pos_y = core->tile_y;
+    v.pos_x = core->area_x + core->tile_x;   // a hosted core tiles into the host's work area
+    v.pos_y = core->area_y + core->tile_y;
     v.size_x = ww;
     v.size_y = wh;
     core->tile_x += ww + gap;

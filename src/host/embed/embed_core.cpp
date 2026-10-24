@@ -270,6 +270,12 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
 
 void caliper_core_shutdown(CaliperCore* core) {
     if (!core) return;
+    // A hosted core owns none of what the teardown below destroys (the host's
+    // renderer, contexts and stores): it only releases its own views.
+    if (core->hosted) {
+        caliper_core_destroy_hosted(core);
+        return;
+    }
     // Teardown reverses create (main.cpp:397-417). Workers FIRST: a job may hold
     // a pointer into applet state, so join before close_all destroys it.
     host_job_system().cancel_all_and_join();
@@ -316,6 +322,58 @@ void caliper_core_shutdown(CaliperCore* core) {
     CaliperCore* expected = core;
     g_live_core.compare_exchange_strong(expected, nullptr,
                                         std::memory_order_acq_rel);
+    delete core;
+}
+
+// ---------------------------------------------------------------------------
+// hosted core (embed_core.h): the Caliper app's live page. The app owns the
+// window, the renderer, the UI contexts and the stores, exactly as before it
+// had a core; the core borrows the renderer for the view layer and nothing else.
+// ---------------------------------------------------------------------------
+CaliperCore* caliper_core_create_hosted(HostRenderer* renderer) {
+    if (!renderer) return nullptr;
+    CaliperCore* expected = nullptr;
+    if (!g_live_core.compare_exchange_strong(expected, kCoreReserved,
+                                             std::memory_order_acq_rel)) {
+        std::fprintf(stderr, "[embed] create_hosted refused: a core is already "
+                             "live (one per process in v0)\n");
+        return nullptr;
+    }
+    auto* core = new CaliperCore();
+    core->hosted = true;
+    core->renderer.reset(renderer);   // borrowed: released, not deleted, at destroy
+    core->canvas_ready = true;        // the host's window is the canvas
+    core->canvas_mode = HostRenderer::CANVAS_WINDOW;
+    core->last_frame_time = now_sec();
+    g_live_core.store(core, std::memory_order_release);
+    return core;
+}
+
+void caliper_core_hosted_frame(CaliperCore* core, float x, float y, float w, float h,
+                               float scale) {
+    if (!core || !core->hosted) return;
+    // The placement rules read the canvas size in physical px and the scale;
+    // the host's work area stands in for the canvas.
+    core->scale = scale > 0.0f ? scale : 1.0f;
+    core->area_x = x;
+    core->area_y = y;
+    core->canvas_w = std::max(1, (int)(w * core->scale));
+    core->canvas_h = std::max(1, (int)(h * core->scale));
+    views_draw(core);
+    caliper_live_views_frame(core);   // typed views: points/series/histogram
+    caliper_live_frame(core);         // live bookkeeping (no chrome when hosted)
+}
+
+void caliper_core_destroy_hosted(CaliperCore* core) {
+    if (!core || !core->hosted) return;
+    // Shutdown's view discipline: the live attach first, then the typed views,
+    // then the v1.2 views, all while the host keeps the renderer bound.
+    caliper_live_shutdown(core);
+    caliper_live_views_shutdown(core);
+    views_destroy_all(core);
+    (void)core->renderer.release();   // the host's; it outlives this core
+    CaliperCore* expected = core;
+    g_live_core.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
     delete core;
 }
 
@@ -370,6 +428,11 @@ int caliper_core_attach_canvas(CaliperCore* core, void* native_view,
 // ---------------------------------------------------------------------------
 void caliper_core_frame(CaliperCore* core) {
     if (!core) return;
+    if (core->hosted) {
+        core->fail("frame: a hosted core draws inside its host's frame "
+                   "(caliper_core_hosted_frame)");
+        return;
+    }
     if (!core->canvas_ready) {
         core->fail("frame: no canvas attached");
         return;
@@ -441,6 +504,7 @@ void caliper_core_event(CaliperCore* core, const CaliperInputEvent* ev) {
     // misread field-by-field. Same exact rule as create/attach_canvas.
     if (ev->struct_size < sizeof(CaliperInputEvent)) return;
     if (!core->canvas_ready) return;   // event before a canvas: no-op, no crash
+    if (core->hosted) return;          // the host feeds its own window's input
     ImGuiIO& io = ImGui::GetIO();
     switch (ev->type) {
         case CALIPER_EVENT_MOUSE_MOVE:
@@ -678,8 +742,8 @@ void place_view(CaliperCore* core, TensorView& v, ImVec2 img) {
         core->tile_y = gap;
         core->tile_row_h = 0.0f;
     }
-    v.pos_x = core->tile_x;
-    v.pos_y = core->tile_y;
+    v.pos_x = core->area_x + core->tile_x;   // a hosted core tiles into the host's work area
+    v.pos_y = core->area_y + core->tile_y;
     v.size_x = ww;
     v.size_y = wh;
     core->tile_x += ww + gap;

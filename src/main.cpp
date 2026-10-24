@@ -16,12 +16,14 @@
 #include "host/host_version.h"
 #include "host/frame_watchdog.h"
 #include "host/renderer/host_renderer.h"
+#include "host/live/live_attach.h"
 #include "app_paths.h"
 
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -36,6 +38,7 @@
 enum class AppPage {
     Landing,
     Applet,
+    Live,     // an attached training script's views (F4 Attach to process)
 };
 
 class CaliperApp {
@@ -167,6 +170,13 @@ public:
             }
         }
 
+        // Dev hook: CALIPER_AUTOATTACH=<pid> attaches to that process's live
+        // session as soon as the landing lists it (F4, then Enter on its row),
+        // for screenshots and headless checks of the live page. Once: a
+        // session that cannot attach is left alone.
+        if (const char* aa = std::getenv("CALIPER_AUTOATTACH"))
+            autoattach_pid_ = std::atoi(aa);
+
         return true;
     }
 
@@ -183,7 +193,15 @@ public:
         while (!glfwWindowShouldClose(window_)) {
             if (exit_after > 0.0 && glfwGetTime() - t0 >= exit_after)
                 glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            if (page_ == AppPage::Live) wait_for_live_frame();
             glfwPollEvents();
+
+            // An attached session: claim and apply the newest completed
+            // snapshot of every view before the frame draws them (the live
+            // core's order: poll, then frame). Never waits on the script.
+            if (page_ == AppPage::Live) live_.poll();
+            if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
+            note_live_events();
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
@@ -198,19 +216,13 @@ public:
                 ctx.renderer_name = renderer_->name();
                 ctx.launch = [this](int i) { launch_applet(i); };
                 ctx.restart = [this](int i) { restart_applet(i); };
+                ctx.sessions = &sessions_;
+                ctx.attach = [this](const std::string& s) { attach_session(s); };
                 landing_.draw(ctx);
+            } else if (page_ == AppPage::Live) {
+                draw_live_page();
             } else if (page_ == AppPage::Applet) {
-                // Esc goes Home only when it is not cancelling something else:
-                // a text field being edited (an applet's search box) or an open
-                // popup gets Esc first, as in any desktop app. Both reads are
-                // of the previous frame on purpose: WantTextInput is computed
-                // from last frame's active field, and ImGui closes a popup on
-                // Esc inside NewFrame(), before this code can see it open.
-                const bool esc_free =
-                    !ImGui::GetIO().WantTextInput && !popup_open_prev_ &&
-                    !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
-                                                     ImGuiPopupFlags_AnyPopupLevel);
-                bool go_back = ImGui::IsKeyPressed(ImGuiKey_Escape, false) && esc_free;
+                bool go_back = esc_home_pressed();
 
                 // Dev hook: CALIPER_HOME_AFTER=<sec> forces Home once, N sec
                 // after the applet page opened — reproduces "click Home during
@@ -225,17 +237,8 @@ public:
                 // (recognition over recall, nothing printed beside it), the
                 // applet's name as metadata, and the watchdog warning in
                 // bronze, the palette's only accent. The page's one action
-                // lives here; the status bar below carries only facts. The bar
-                // is one frame tall, so a taller frame padding gives it the
-                // landing command bar's height and the key button the same
-                // margins as there.
-                const float bar_pad_y =
-                    (sternbild::metric::command_bar - ImGui::GetFontSize()) * 0.5f;
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                    ImVec2(ImGui::GetStyle().FramePadding.x, bar_pad_y));
-                const bool bar_open = ImGui::BeginMainMenuBar();
-                ImGui::PopStyleVar();
-                if (bar_open) {
+                // lives here; the status bar below carries only facts.
+                if (begin_page_bar()) {
                     if (sternbild::key_button("esc", "Home")) go_back = true;
                     ImGui::Separator();
                     ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
@@ -480,6 +483,17 @@ public:
 
             renderer_->render(dw, dh);
 
+            // Deferred detach (esc Home on the live page), for the same reason
+            // as the applet teardown below: the views' textures and imports are
+            // released only after the frame that drew them has been rendered.
+            if (pending_detach_) {
+                pending_detach_ = false;
+                live_.detach();
+                note_live_events();   // "detached"
+                page_ = AppPage::Landing;
+                glfwSetWindowTitle(window_, "Caliper");
+            }
+
             // Deferred applet teardown — runs ONLY after this frame's draw list
             // has been rendered, so no just-released bridge texture is still
             // referenced by the Metal pass. Order: hard-join workers (they
@@ -510,6 +524,9 @@ public:
         // writes land safely.
         caliper_host::host_job_system().cancel_all_and_join();
         loader_.close_all();
+        // An attached session's views go while the bridge still has the
+        // renderer; the loop ended after rendering the last frame that drew them.
+        live_.detach();
         // Applets are torn down first (they may release bridge textures while the
         // renderer is still live); THEN drop the renderer from the bridge before
         // renderer teardown, so no bridge thunk touches a destroyed renderer.
@@ -579,6 +596,212 @@ private:
         page_ = AppPage::Applet;
         glfwSetWindowTitle(window_,
                            ("Caliper - " + loader_.at(idx).manifest.name).c_str());
+    }
+
+    // Esc goes Home (applet and live pages) only when it is not cancelling
+    // something else: a text field being edited (an applet's search box) or an
+    // open popup gets Esc first, as in any desktop app. Both reads are of the
+    // previous frame on purpose: WantTextInput is computed from last frame's
+    // active field, and ImGui closes a popup on Esc inside NewFrame(), before
+    // this code can see it open.
+    bool esc_home_pressed() const {
+        const bool esc_free =
+            !ImGui::GetIO().WantTextInput && !popup_open_prev_ &&
+            !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
+                                             ImGuiPopupFlags_AnyPopupLevel);
+        return ImGui::IsKeyPressed(ImGuiKey_Escape, false) && esc_free;
+    }
+
+    // The page bar of the applet and live pages: a main menu bar one frame
+    // tall, so a taller frame padding gives it the landing command bar's
+    // height and its key button the same margins as there. EndMainMenuBar()
+    // when it returns true.
+    static bool begin_page_bar() {
+        const float bar_pad_y =
+            (sternbild::metric::command_bar - ImGui::GetFontSize()) * 0.5f;
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                            ImVec2(ImGui::GetStyle().FramePadding.x, bar_pad_y));
+        const bool open = ImGui::BeginMainMenuBar();
+        ImGui::PopStyleVar();
+        return open;
+    }
+
+    // ---- Live page (F4 Attach to process) ---------------------------------
+
+    // The landing's Attach (and CALIPER_AUTOATTACH): attach through a hosted
+    // core over this window's renderer and open the live page. A refusal (the
+    // session went, another viewer holds it, no Metal device) stays on the
+    // landing and says why in Activity.
+    void attach_session(const std::string& token) {
+        const int i = sessions_.find(token);
+        const caliper_live::SessionEntry* e = i >= 0 ? &sessions_.sessions()[(size_t)i] : nullptr;
+        std::string script = e && !e->script.empty() ? e->script : token;
+        std::string err;
+        if (!live_.attach(renderer_.get(), token, &err)) {
+            landing_.log("attach failed", script, err);
+            return;
+        }
+        const auto& st = live_.status();
+        live_script_ = st.script.empty() ? script : st.script;
+        live_pid_ = st.pid ? st.pid : (e ? e->pid : 0);
+        live_frame_t_ = 0.0;
+        page_ = AppPage::Live;
+        set_live_title();
+        note_live_events();   // "attached"
+    }
+
+    void autoattach() {
+        sessions_.refresh();
+        const int i = sessions_.find_pid(autoattach_pid_);
+        if (i < 0) return;
+        const caliper_live::SessionEntry& e = sessions_.sessions()[(size_t)i];
+        if (!caliper_live::can_attach(e)) return;
+        autoattach_pid_ = 0;
+        const std::string token = e.session;
+        std::cerr << "[autoattach] " << token << std::endl;
+        landing_.log("autoattach", token);
+        attach_session(token);
+    }
+
+    // The attachment's transitions as Activity rows (and one stderr line
+    // each, like [autoattach], for headless runs): attached; session ended
+    // (the script exited or died, and the page keeps its last frames);
+    // detached (esc Home).
+    void note_live_events() {
+        using Event = caliper_live::Attachment::Event;
+        for (const Event ev : live_.take_events()) {
+            const std::string pid = "pid " + std::to_string(live_pid_);
+            const char* what = "";
+            switch (ev) {
+                case Event::Attached:
+                    what = "attached";
+                    landing_.log(what, live_script_, pid);
+                    break;
+                case Event::Ended:
+                    what = "session ended";
+                    landing_.log(what, live_script_, pid + " exited; last frames kept");
+                    set_live_title();
+                    break;
+                case Event::Detached:
+                    what = "detached";
+                    landing_.log(what, live_script_, pid);
+                    break;
+            }
+            std::cerr << "[live] " << what << ": " << live_script_ << " (" << pid << ")"
+                      << std::endl;
+        }
+    }
+
+    void set_live_title() {
+        std::string t = "Caliper - " + live_script_ + " (pid " + std::to_string(live_pid_) + ")";
+        if (live_.attached() && !live_.status().alive && !live_.status().pending)
+            t += " - session ended";
+        glfwSetWindowTitle(window_, t.c_str());
+    }
+
+    // The live page draws at up to 60 fps, like caliper-viewer's 60 Hz timer:
+    // instead of drawing at the display's rate (120 Hz on ProMotion), the loop
+    // waits out the rest of each 1/60 s for events, so attaching costs the
+    // training script's GPU no more than the standalone viewer does.
+    void wait_for_live_frame() {
+        constexpr double kFrame = 1.0 / 60.0;
+        const double next = live_frame_t_ + kFrame;
+        for (double t = glfwGetTime(); t < next; t = glfwGetTime())
+            glfwWaitEventsTimeout(next - t);
+        live_frame_t_ = glfwGetTime();
+    }
+
+    // The live page: the session's views as windows on a docked desktop like
+    // the applet page's (they tile into the work area on first appearance and
+    // can be moved, resized or docked; the layout persists in imgui.ini), under
+    // the same page bar and status bar. esc Home detaches after the frame.
+    void draw_live_page() {
+        const auto& st = live_.status();
+        bool go_back = esc_home_pressed();
+        // Dev hook: CALIPER_HOME_AFTER=<sec>, as on the applet page: Home once,
+        // N sec after the live page opened (a headless detach).
+        if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
+            static double page_t0 = -1.0;
+            if (page_t0 < 0) page_t0 = glfwGetTime();
+            if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+        }
+
+        // Page bar: esc Home, the script, then its state. The live diamond is
+        // filled and breathes while the script runs and is outlined once it
+        // has gone (SPEC §6.5); SESSION ENDED is in capitals, in parchment, as
+        // the jobs tray writes FAILED (bronze stays for focus and selection).
+        if (begin_page_bar()) {
+            if (sternbild::key_button("esc", "Home")) go_back = true;
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+            ImGui::TextUnformatted(live_script_.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+            const bool running = st.alive && !st.pending;
+            ImGui::Dummy(ImVec2(8.0f, ImGui::GetFrameHeight()));
+            {
+                const ImVec2 mn = ImGui::GetItemRectMin();
+                const ImVec2 mx = ImGui::GetItemRectMax();
+                const float phase = (float)std::fmod(ImGui::GetTime(), 2.4) / 2.4f;
+                const float alpha = running ? 0.725f + 0.275f * std::cos(phase * 6.2831853f)
+                                            : 1.0f;
+                sternbild::diamond(ImGui::GetWindowDrawList(),
+                                   ImVec2(std::floor((mn.x + mx.x) * 0.5f),
+                                          std::floor((mn.y + mx.y) * 0.5f)),
+                                   4.0f,
+                                   sternbild::with_alpha(sternbild::col::parchment,
+                                                         (int)(255.0f * alpha)),
+                                   running);
+            }
+            if (st.pending && st.alive) {
+                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+                ImGui::TextUnformatted("waiting for the session to start");
+                ImGui::PopStyleColor();
+            } else if (!st.alive) {
+                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::parchment);
+                ImGui::TextUnformatted("SESSION ENDED");
+                ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+                ImGui::TextUnformatted("the script has exited; its last frames stay");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+                ImGui::TextUnformatted("live");
+                ImGui::PopStyleColor();
+            }
+            ImGui::EndMainMenuBar();
+        }
+
+        // Status bar: the machine, then the session's facts.
+        sternbild::status_bar_begin();
+        draw_host_status_items(renderer_->name());
+        {
+            char text[64];
+            std::snprintf(text, sizeof text, "pid %d", live_pid_);
+            sternbild::status_item(text);
+            std::snprintf(text, sizeof text, st.views == 1 ? "%d view" : "%d views", st.views);
+            sternbild::status_item(text);
+            if (st.fps > 0.0) {
+                std::snprintf(text, sizeof text, "%.0f fps", st.fps);
+                sternbild::status_item(text);
+            }
+            if (st.latency_ms > 0.0) {
+                std::snprintf(text, sizeof text, "%.0f ms to screen", st.latency_ms);
+                sternbild::status_item(text);
+            }
+            if (!st.alive) sternbild::status_item("session ended");
+        }
+        sternbild::status_bar_end();
+
+        // Its own dock space id, so the applet page's docked layout never
+        // shows through on this page (and the reverse).
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::DockSpaceOverViewport(ImGui::GetID("caliper_live_dockspace"), vp,
+                                     ImGuiDockNodeFlags_PassthruCentralNode);
+        live_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
+                   ImGui::GetIO().DisplayFramebufferScale.x);
+
+        if (go_back) pending_detach_ = true;
     }
 
     // A failed job (JobView::failed) is kept here, for the tray, until the
@@ -660,6 +883,15 @@ private:
     std::vector<FailedJob> failed_jobs_;   // oldest first; see note_failed_jobs
     bool dock_layout_built_ = false;  // first-run applet dock layout attempted
     bool popup_open_prev_ = false;    // a popup was open at the end of last frame
+    // F4 Attach to process: the live sessions the landing lists, the one
+    // attached session (hosted core) and what Activity names it by.
+    caliper_live::SessionList sessions_;
+    caliper_live::Attachment live_;
+    std::string live_script_;
+    int32_t live_pid_ = 0;
+    bool pending_detach_ = false;     // esc Home on the live page: detach after render
+    double live_frame_t_ = 0.0;       // start of the live page's current frame
+    int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
 };
 
 int main() {

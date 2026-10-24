@@ -1,6 +1,6 @@
 """Train a tiny CNN and watch it live in Caliper.
 
-    .venv/bin/python examples/python/train_show.py [--mode window|attach|none]
+    .venv/bin/python examples/python/train_show.py [--mode window|app|attach|none]
                                                    [--seconds 20] [--cpu]
 
 Synthetic data (no downloads): 28x28 images with one Gaussian blob whose
@@ -19,8 +19,10 @@ the tensor's device (at most 60 per second per view), nothing reads back.
 Modes:
   window  caliper.window() + caliper.run(train): the in-process window, training on a
           worker thread so the main thread keeps the window interactive.
+  app     caliper.session(): the live session, waiting (--wait seconds) for the
+          Caliper app to attach to it (F4 Attach to process on the landing screen).
   attach  caliper.session(auto_launch=True): the live session and a caliper-viewer
-          process attached to it (the "attach to app" route).
+          process attached to it (the same route, with the standalone viewer).
   none    no explicit transport: the first call opens the session and nothing attaches,
           so every call is the near-free unattached path.
 
@@ -33,6 +35,7 @@ that were skipped (rate limit / nothing attached).
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import sys
 import time
@@ -138,12 +141,14 @@ def run_phases(tr: Trainer, args) -> list:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=("window", "attach", "none"), default="window")
+    ap.add_argument("--mode", choices=("window", "app", "attach", "none"), default="window")
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--baseline", type=float, default=4.0)
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--linger", type=float, default=3.0,
                     help="window mode: keep the window open this long after training")
+    ap.add_argument("--wait", type=float, default=120.0,
+                    help="app mode: how long to wait for the Caliper app to attach")
     args = ap.parse_args()
 
     use_mps = not args.cpu and torch.backends.mps.is_available()
@@ -151,18 +156,26 @@ def main() -> int:
     print(f"device {device}, torch {torch.__version__}, mode {args.mode}")
     tr = Trainer(device)
 
-    if args.mode == "attach":
+    if args.mode in ("app", "attach"):
         try:
             from caliper.live import SessionTransport  # noqa: F401
         except ImportError as e:
-            print(f"attach mode needs the live session transport (caliper.live.SessionTransport): "
+            print(f"{args.mode} mode needs the live session transport (caliper.live.SessionTransport): "
                   f"{e}", file=sys.stderr)
             return 2
-        sess = caliper.session(auto_launch=True)
-        print(f"session {sess.session}: waiting for the viewer to attach")
-        if not sess.wait_attached(15.0):
-            print("the viewer did not attach within 15 s", file=sys.stderr)
-            return 3
+        if args.mode == "app":
+            sess = caliper.session()
+            print(f"session {sess.session} (pid {os.getpid()}): in Caliper, press F4 "
+                  f"(Attach to process) and Enter on this script's row", flush=True)
+            if not sess.wait_attached(args.wait):
+                print(f"Caliper did not attach within {args.wait:.0f} s", file=sys.stderr)
+                return 3
+        else:
+            sess = caliper.session(auto_launch=True)
+            print(f"session {sess.session}: waiting for the viewer to attach")
+            if not sess.wait_attached(15.0):
+                print("the viewer did not attach within 15 s", file=sys.stderr)
+                return 3
         rows = run_phases(tr, args)
     elif args.mode == "window":
         caliper.window(1280, 800, title="caliper: train_show")

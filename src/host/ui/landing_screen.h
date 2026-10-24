@@ -10,9 +10,12 @@
 //                 the line's actions as key buttons: ⌘K Command, ↑ ↓, esc Clear
 //   dock space    four panes in ImGui docking, first-run layout built with
 //                 DockBuilder and persisted in the app-data imgui.ini:
-//                   Projects     (empty state; F2 Open folder / F4 Attach
-//                                 key buttons, disabled with the reason "not
-//                                 yet available")
+//                   Projects     (empty state; F2 Open folder disabled with
+//                                 the reason "not yet available"; F4 Attach
+//                                 to process opens the live sessions of
+//                                 training scripts here: script, pid, start
+//                                 time, state, views; ↑↓ select, Enter /
+//                                 double-click attach, esc back)
 //                   Instruments  (installed applets: name, id, version, tag,
 //                                 status; ↑↓ select, Enter / double-click
 //                                 launch)
@@ -21,7 +24,8 @@
 //                                 status text, binary path; ⏎ Launch plate,
 //                                 and ⌘R Restart beside it for an applet
 //                                 quarantined by a C++ exception)
-//                   Activity     (host log: renderer, scans, launches, jobs)
+//                   Activity     (host log: renderer, scans, launches, jobs,
+//                                 live sessions attached, ended, detached)
 //   status bar    backend · GPU · memory · applet count (facts, no actions)
 //
 // Patterns named in the implementation: status bar (VS Code / JetBrains),
@@ -36,6 +40,7 @@
 #include <vector>
 
 namespace caliper_host { class AppletLoader; struct AppletEntry; }
+namespace caliper_live { class SessionList; }
 
 class LandingScreen {
 public:
@@ -48,6 +53,11 @@ public:
         // Unload and relaunch a quarantined applet (loader index); offered
         // only when AppletLoader::restartable says so.
         std::function<void(int)> restart;
+        // F4 Attach to process: the live sessions (relisted once a second
+        // while the landing is drawn) and attach-by-token. Null when the build
+        // has no live sessions; the F4 button then says why.
+        caliper_live::SessionList* sessions = nullptr;
+        std::function<void(const std::string&)> attach;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;
@@ -81,7 +91,8 @@ private:
     // One frame, top to bottom (landing_screen.cpp).
     void draw_command_bar();
     void draw_dock_space();
-    void draw_projects();
+    void draw_projects(const Context& ctx);
+    void draw_sessions(const Context& ctx);   // Projects in attach mode (F4)
     void draw_instruments(const Context& ctx);
     void draw_inspector(const Context& ctx);
     void draw_inspector_rows(const caliper_host::AppletEntry& e);
@@ -107,6 +118,15 @@ private:
     const char* focus_pane_ = nullptr;  // ⌘1–⌘4: pane to focus after the frame
     int pending_launch_ = -1;        // activation, run after the frame is drawn
     int pending_restart_ = -1;       // Restart, run after the frame like a launch
+    // F4 Attach to process: Projects lists the live sessions instead of the
+    // ways in. The selection is the session token, so a relist keeps it.
+    bool attach_mode_ = false;
+    bool open_sessions_ = false;     // F4 / the button: enter attach mode after the frame
+    std::string session_selected_;
+    std::string pending_attach_;     // Enter / double-click: attach after the frame
+    bool scroll_to_session_ = false;
+    bool projects_focused_ = false;  // Projects had focus last frame (owns Esc then)
+    int focus_projects_ = 0;         // frames left to hand focus to Projects
     int last_frame_ = -1;            // ImGui frame of the previous draw()
     int select_step_ = 0;            // ↑ ↓ buttons: rows to move this frame
     float command_right_w_ = 0.0f;   // right-aligned block, measured last frame

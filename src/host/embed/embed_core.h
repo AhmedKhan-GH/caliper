@@ -102,6 +102,13 @@ struct CaliperCore {
     // Typed live views state (caliper/live_views.h); null until the first apply.
     CaliperLiveViewsState* live_views = nullptr;
 
+    // A hosted core (caliper_core_create_hosted, below): `renderer` is the
+    // host's, borrowed (released, never deleted, at destroy); there is no
+    // loader; the host draws the chrome. Views tile into the host's work area,
+    // whose top-left (logical points) is (area_x, area_y); 0 for every other core.
+    bool  hosted = false;
+    float area_x = 0.0f, area_y = 0.0f;
+
     void log(int level, const std::string& msg) {
         if (log_fn) log_fn(userdata, level, msg.c_str());
         else std::fprintf(stderr, "[embed] %s\n", msg.c_str());
@@ -120,3 +127,21 @@ void caliper_live_shutdown(CaliperCore* core);
 // the v1.2 views are destroyed.
 void caliper_live_views_frame(CaliperCore* core);
 void caliper_live_views_shutdown(CaliperCore* core);
+
+// ---- Hosted core (host-internal; the Caliper app's live page) ---------------
+// For a host that already owns the window, the renderer (bound to the tensor
+// bridge), the ImGui contexts and the services: the core borrows `renderer`
+// and has no loader and no canvas of its own; its views draw inside the
+// host's ImGui frame, and the caliper_core_live_* / view calls work on it as
+// on any core. It holds the one-core-per-process slot like any core: null when
+// the slot is taken or `renderer` is null. Frame-thread only.
+CaliperCore* caliper_core_create_hosted(caliper_host::HostRenderer* renderer);
+// Inside the host's ImGui frame: the v1.2 views, the typed live views and the
+// live bookkeeping, tiled into the work area (x, y, w, h in logical points;
+// `scale` physical px per point). No chrome.
+void caliper_core_hosted_frame(CaliperCore* core, float x, float y, float w, float h,
+                               float scale);
+// Releases every view's GPU resources while the renderer is still bound (after
+// the host rendered the last frame that drew them), gives the renderer back
+// and frees the slot. Never touches the host's contexts or services.
+void caliper_core_destroy_hosted(CaliperCore* core);

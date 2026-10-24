@@ -512,6 +512,7 @@ bool list_sessions(const std::string& root, std::vector<SessionEntry>* out, std:
         e.protocol = f.protocol;
         e.start_unix_ms = f.start_unix_ms;
         e.view_count = (int32_t)f.views.size();
+        e.views = f.views;
         if (f.protocol == (int32_t)CALIPER_LIVE_PROTOCOL_VERSION) {
             const CtlPeek c = peek_ctl(f.session);
             e.alive = c.ok && c.client_pid == f.pid && c.state == CALIPER_LIVE_SESSION_OPEN;

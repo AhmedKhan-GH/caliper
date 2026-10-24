@@ -45,6 +45,8 @@
 #include <caliper/live.h>
 #include <caliper/live_views.h>
 
+#include "live/live_activity.h"
+
 #include <mach/mach.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -349,7 +351,7 @@ static void mouse_xy(NSView* v, NSEvent* e, float* x, float* y) {
 @property(nonatomic, strong) NSWindow* window;
 @property(nonatomic, strong) CanvasView* view;
 @property(nonatomic, strong) NSTimer* pump;
-@property(nonatomic, strong) id activity;
+@property(nonatomic, assign) void* activity;   // caliper_live::begin_viewer_activity
 @property(nonatomic, assign) double t0;
 @property(nonatomic, assign) double lastStats;
 @end
@@ -500,15 +502,11 @@ static void mouse_xy(NSView* v, NSEvent* e, float* x, float* y) {
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
-    // A hidden or occluded window must keep its 60 Hz tick: App Nap would
-    // throttle the timer, the heartbeat would go stale and the client would
-    // stop snapshotting while the user is still attached. UserInitiated alone
-    // was not enough (an occluded viewer measured 5 to 11 fps for 10 s while
-    // the trainer ran); LatencyCritical keeps the timer at 60 Hz.
-    self.activity = [[NSProcessInfo processInfo]
-        beginActivityWithOptions:(NSActivityUserInitiatedAllowingIdleSystemSleep |
-                                  NSActivityLatencyCritical)
-                          reason:@"caliper live session viewer"];
+    // A hidden or occluded window must keep its 60 Hz tick (live_activity.h:
+    // App Nap would let the heartbeat go stale and the client would stop
+    // snapshotting while the user is still attached). The Caliper app's live
+    // page holds the same activity.
+    self.activity = caliper_live::begin_viewer_activity("caliper live session viewer");
 
     // A private data root: the viewer persists nothing, and the default root
     // would share DuckDB stores with a running Caliper app. (The session
@@ -566,7 +564,8 @@ static void mouse_xy(NSView* v, NSEvent* e, float* x, float* y) {
         std::error_code ec;
         std::filesystem::remove_all(_dataDir, ec);
     }
-    if (self.activity) [[NSProcessInfo processInfo] endActivity:self.activity];
+    caliper_live::end_viewer_activity(self.activity);
+    self.activity = nullptr;
 }
 @end
 

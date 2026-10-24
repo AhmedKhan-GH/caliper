@@ -28,6 +28,7 @@
 #include "device_query.h"
 #include "host_services.h"
 #include "job_system.h"
+#include "live/live_attach.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>   // DockBuilder*, SetKeyOwner, GetActiveID
@@ -355,7 +356,11 @@ void LandingScreen::draw(const Context& ctx) {
     // a click. Asked on two frames: a pane docked on the first frame can take
     // focus back on the next.
     const int frame = ImGui::GetFrameCount();
-    if (last_frame_ < 0 || frame - last_frame_ > 1) focus_instruments_ = 2;
+    if (last_frame_ < 0 || frame - last_frame_ > 1) {
+        focus_instruments_ = 2;
+        // Home from a live page returns to the session list it attached from.
+        if (attach_mode_) focus_projects_ = 2;
+    }
     last_frame_ = frame;
 
     if (selected_ >= (ctx.loader ? ctx.loader->count() : 0)) selected_ = -1;
@@ -403,9 +408,13 @@ void LandingScreen::draw(const Context& ctx) {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && ctx.loader &&
         ctx.loader->restartable(selected_))
         pending_restart_ = selected_;
+    // F4: Attach to process, the Projects way in, from anywhere on the landing.
+    if (ctx.sessions && ctx.attach && ImGui::IsKeyPressed(ImGuiKey_F4, false) &&
+        !any_popup_open())
+        open_sessions_ = true;
 
     draw_dock_space();
-    if (begin_pane(kProjects)) draw_projects();
+    if (begin_pane(kProjects)) draw_projects(ctx);
     ImGui::End();
     // The table owns the arrows and Enter (SetKeyOwner in draw_instruments);
     // NoNavInputs keeps ImGui's nav cursor from also moving in this pane.
@@ -453,11 +462,30 @@ void LandingScreen::draw(const Context& ctx) {
         if (ctx.loader && ctx.restart && ctx.loader->restartable(i))
             ctx.restart(i);
     }
+    // F4 or its button: Projects lists the live sessions, freshly listed, and
+    // takes the keys. An attach waits for the end of the frame like a launch:
+    // the live page opens on the next frame, never inside this one.
+    if (open_sessions_) {
+        open_sessions_ = false;
+        attach_mode_ = true;
+        focus_projects_ = 2;
+        if (ctx.sessions) ctx.sessions->refresh(/*force=*/true);
+    }
+    if (!pending_attach_.empty()) {
+        const std::string session = std::move(pending_attach_);
+        pending_attach_.clear();
+        if (ctx.attach) ctx.attach(session);
+    }
 
     if (focus_pane_) {
         ImGui::SetWindowFocus(focus_pane_);
         focus_pane_ = nullptr;
         focus_instruments_ = 0;   // an explicit ⌘n wins over the default
+        focus_projects_ = 0;
+    } else if (focus_projects_ > 0) {
+        ImGui::SetWindowFocus(kProjects);
+        --focus_projects_;
+        focus_instruments_ = 0;
     } else if (focus_instruments_ > 0) {
         ImGui::SetWindowFocus(kInstruments);
         --focus_instruments_;
@@ -542,13 +570,14 @@ void LandingScreen::draw_command_bar() {
     // Esc cancels the line in one press: clear the filter and leave the field
     // for the table (ImGui's own Esc only reverts the edit). With the field
     // idle, Esc still clears a standing filter, so one key always returns to
-    // the full list.
+    // the full list. While the session list has the keys, its Esc (back to
+    // the ways in) is the only one.
     if (esc && was_active) {
         command_.clear();
         command_active_ = false;
         focus_instruments_ = std::max(focus_instruments_, 1);
     } else if (esc && !command_.empty() && !ImGui::GetIO().WantTextInput &&
-               !any_popup_open()) {
+               !any_popup_open() && !projects_focused_) {
         command_.clear();
     }
 
@@ -776,22 +805,43 @@ void LandingScreen::draw_dock_space() {
 // ways in (Bloomberg numbered menus, VS Code Welcome; landing/final): number,
 // the way in as a key button holding its function key, and the command-line
 // words, so the eventual paths are learnable now (progressive disclosure,
-// Hick: two choices). None works yet, so each button is disabled, faint, and
-// says why on hover (honesty: never a silent dead control), and the words
-// are faint too.
-void LandingScreen::draw_projects() {
-    pane_header(kProjects, "none yet", kKeyPane[0]);
+// Hick: two choices). F4 Attach to process works: it turns the pane into the
+// list of live sessions (draw_sessions). F2 Open folder waits for the project
+// model, so its button is disabled, faint, and says why on hover (honesty:
+// never a silent dead control); the command-line words stay faint, since the
+// command line does not take them yet.
+void LandingScreen::draw_projects(const Context& ctx) {
+    if (attach_mode_ && ctx.sessions) {
+        draw_sessions(ctx);
+        return;
+    }
+    projects_focused_ = false;
+
+    // The sessions are listed (once a second) while the menu shows too, so the
+    // pane can say a script is waiting to be attached to.
+    int live = 0;
+    if (ctx.sessions) {
+        ctx.sessions->refresh();
+        for (const auto& e : ctx.sessions->sessions()) live += caliper_live::can_attach(e);
+    }
+    char subtitle[64];
+    std::snprintf(subtitle, sizeof subtitle,
+                  live == 1 ? "none yet \xc2\xb7 %d live session"
+                            : "none yet \xc2\xb7 %d live sessions", live);
+    pane_header(kProjects, live > 0 ? subtitle : "none yet", kKeyPane[0]);
 
     struct WayIn {
         const char* n;
         const char* key;
         const char* action;
         const char* command;
+        bool attach;          // F4: the live sessions
     };
     static const WayIn ways[] = {
-        {"1", "F2", "Open folder", "open <folder>"},
-        {"2", "F4", "Attach to process", "attach <pid>"},
+        {"1", "F2", "Open folder", "open <folder>", false},
+        {"2", "F4", "Attach to process", "attach <pid>", true},
     };
+    const bool can_list = ctx.sessions && ctx.attach;
     ImFont* mono = sternbild::fonts().mono;
     // A way-in row is its key button and the cell padding around it. The
     // button reports its text line to the row, so the words after it share
@@ -814,11 +864,198 @@ void LandingScreen::draw_projects() {
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + text_dy);
             cell_text(w.n, mono, font_size::mono, col::faint, true);
             ImGui::TableNextColumn();
-            sternbild::key_button(w.key, w.action, false, "not yet available");
+            if (w.attach) {
+                if (sternbild::key_button(w.key, w.action, can_list,
+                                          "live sessions are not available in this build"))
+                    open_sessions_ = true;
+            } else {
+                sternbild::key_button(w.key, w.action, false, "not yet available");
+            }
             ImGui::TableNextColumn();
             cell_text(w.command, mono, font_size::mono, col::faint);
         }
         sternbild::end_table();
+    }
+}
+
+// Projects in attach mode (F4): the live sessions of training scripts on this
+// machine, read from their session files (<app data>/live/<pid>.json) and
+// relisted once a second, as a dense table like Instruments: script, pid, start
+// time, state and the views it shows. The live core's listing rules apply: a
+// killed script's row is reclaimed (its file and shared memory go) at the next
+// listing, and a closing or already-viewed one stays, marked, and cannot be
+// attached. ↑↓ move, Enter or a double click attaches, esc goes back to the
+// ways in; under the table the ⏎ Attach plate (disabled with the reason beside
+// it when the row cannot attach) and the esc Back key button.
+void LandingScreen::draw_sessions(const Context& ctx) {
+    caliper_live::SessionList& list = *ctx.sessions;
+    list.refresh();
+    const auto& rows = list.sessions();
+    {
+        char subtitle[64];
+        const int n = (int)rows.size();
+        std::snprintf(subtitle, sizeof subtitle,
+                      n == 1 ? "attach to process \xc2\xb7 %d session"
+                             : "attach to process \xc2\xb7 %d sessions", n);
+        pane_header(kProjects, subtitle, kKeyPane[0]);
+    }
+    ImFont* ui = sternbild::fonts().ui;
+    ImFont* mono = sternbild::fonts().mono;
+
+    // The selection follows the token, so a relist that reorders or drops rows
+    // keeps it; with none, the first row that can attach takes it.
+    int sel = list.find(session_selected_);
+    if (sel < 0 && !rows.empty()) {
+        sel = 0;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (caliper_live::can_attach(rows[i])) {
+                sel = (int)i;
+                break;
+            }
+        }
+    }
+
+    // Keys while this pane has focus, claimed like the Instruments table's so
+    // ImGui's nav cursor does not also act on them; the command bar leaves its
+    // Esc to this pane (projects_focused_).
+    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    projects_focused_ = focused;
+    bool attach = false;
+    bool back = false;
+    if (focused && !any_popup_open()) {
+        const ImGuiID owner = ImGui::GetID("##session_keys");
+        for (const ImGuiKey k : {ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_Enter,
+                                 ImGuiKey_KeypadEnter, ImGuiKey_Escape})
+            ImGui::SetKeyOwner(k, owner);
+        int step = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) step += 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) step -= 1;
+        if (step != 0 && !rows.empty()) {
+            sel = std::clamp(sel + step, 0, (int)rows.size() - 1);
+            scroll_to_session_ = true;
+        }
+        attach = ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+        back = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    }
+
+    // The footer is the plate and a padding above and below it, as in the
+    // Inspector; the table takes the rest of the pane.
+    constexpr float kPlate = 24.0f;   // primary_button's documented height
+    const float footer_h = kPlate + 2.0f * metric::pad;
+    const float table_y = ImGui::GetCursorPosY();
+    const float table_h =
+        std::max(metric::row * 2.0f, ImGui::GetContentRegionAvail().y - footer_h);
+    if (sternbild::begin_table("##sessions", 5, ImVec2(0.0f, table_h),
+                               ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Script", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn(">Pid", ImGuiTableColumnFlags_WidthFixed, 56.0f);
+        ImGui::TableSetupColumn("Started", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Views", ImGuiTableColumnFlags_WidthStretch);
+        sternbild::table_header_row();
+
+        for (int i = 0; i < (int)rows.size(); ++i) {
+            const caliper_live::SessionEntry& e = rows[(size_t)i];
+            const bool selected = i == sel;
+            const bool can = caliper_live::can_attach(e);
+            ImGui::PushID(e.session.c_str());
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, metric::row);
+
+            ImGui::TableNextColumn();
+            const float cell_x = ImGui::GetCursorPosX();
+            bool double_clicked = false;
+            if (sternbild::table_row_selectable("##row", selected, &double_clicked)) sel = i;
+            if (double_clicked && can) {
+                sel = i;
+                attach = true;
+            }
+            if (selected && scroll_to_session_) {
+                const ImVec2 clip_min = ImGui::GetWindowDrawList()->GetClipRectMin();
+                const ImVec2 clip_max = ImGui::GetWindowDrawList()->GetClipRectMax();
+                if (ImGui::GetItemRectMin().y < clip_min.y ||
+                    ImGui::GetItemRectMax().y > clip_max.y)
+                    ImGui::SetScrollHereY(0.5f);
+            }
+
+            // A row that cannot attach recedes to faint, like an instrument
+            // that cannot launch; its STATE says why.
+            const ImU32 ink = can ? col::parchment : col::faint;
+            const ImU32 meta = can ? col::secondary : col::faint;
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(cell_x);
+            cell_text(e.script.empty() ? e.session.c_str() : e.script.c_str(), ui,
+                      font_size::ui, sternbild::row_text(selected, ink));
+            ImGui::TableNextColumn();
+            cell_text(std::to_string(e.pid).c_str(), mono, font_size::mono,
+                      sternbild::row_text(selected, ink), true);
+            ImGui::TableNextColumn();
+            const std::string started = caliper_live::clock_time(e.start_unix_ms) + "  " +
+                                        caliper_live::age_text(e.start_unix_ms);
+            cell_text(started.c_str(), mono, font_size::mono,
+                      sternbild::row_text(selected, meta));
+            ImGui::TableNextColumn();
+            cell_text(caliper_live::state_text(e).c_str(), ui, font_size::ui,
+                      sternbild::row_text(selected, meta));
+            ImGui::TableNextColumn();
+            cell_text(caliper_live::view_names(e).c_str(), mono, font_size::mono,
+                      sternbild::row_text(selected, meta));
+            ImGui::PopID();
+        }
+        if (rows.empty())
+            empty_row(list.error().empty()
+                          ? "No live sessions. A script opens one on its first "
+                            "caliper.show(), and it is listed here while it runs."
+                          : list.error().c_str());
+        sternbild::end_table();
+    }
+    scroll_to_session_ = false;
+    session_selected_ = sel >= 0 ? rows[(size_t)sel].session : std::string();
+
+    // Footer: ⏎ Attach, disabled with the reason beside it when the selected
+    // row cannot attach, then esc Back.
+    ImGui::SetCursorPosY(table_y + table_h + metric::pad);
+    const caliper_live::SessionEntry* cur = sel >= 0 ? &rows[(size_t)sel] : nullptr;
+    const bool can = cur && caliper_live::can_attach(*cur);
+    const float button_y = ImGui::GetCursorPosY();
+    ImGui::BeginDisabled(!can);
+    if (sternbild::primary_button("Attach", ImVec2(0.0f, kPlate), key(kKeyEnter)))
+        attach = true;
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.0f, metric::gap);
+    if (sternbild::key_button(key(kKeyEscape), "Back")) back = true;
+    if (!can) {
+        const char* reason = "no session to attach to";
+        if (cur) {
+            switch (caliper_live::session_state(*cur)) {
+                case caliper_live::SessionState::Viewed:
+                    reason = "another viewer is attached (one per session)";
+                    break;
+                case caliper_live::SessionState::Closing:
+                    reason = "the script is closing its session";
+                    break;
+                case caliper_live::SessionState::Incompatible:
+                    reason = "written by another Caliper version";
+                    break;
+                default:
+                    break;
+            }
+        }
+        ImGui::SameLine(0.0f, metric::gap);
+        const float text_h = ImGui::GetTextLineHeight();
+        ImGui::SetCursorPosY(button_y + std::max(0.0f, (kPlate - text_h) * 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_Text, col::faint);
+        ImGui::TextUnformatted(reason);
+        ImGui::PopStyleColor();
+    }
+
+    if (attach && can) pending_attach_ = cur->session;
+    if (back) {
+        attach_mode_ = false;
+        projects_focused_ = false;
+        focus_projects_ = 0;
+        focus_instruments_ = std::max(focus_instruments_, 1);
     }
 }
 
