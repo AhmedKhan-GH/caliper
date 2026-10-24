@@ -33,10 +33,12 @@ nav:
       - Development basics: tutorials/development-basics.md
       - Your first applet: tutorials/first-applet.md
       - Your first ML applet: tutorials/first-ml-applet.md
+      - Watch PyTorch training live: tutorials/live-pytorch.md
   - How-to:
       - Port a v1 applet: howto/port-v1-applet.md
       - Debug an applet: howto/debug-an-applet.md
       - ML applet cookbook: howto/ml-applet-cookbook.md
+      - Attach to a running script: howto/attach-to-a-running-script.md
   - Reference:
       - ABI (epoch 2): reference/abi.md
       - Manifest (caliper.toml): reference/manifest.md
@@ -58,9 +60,11 @@ nav:
           - caliper.feed.v1: reference/services/feed-v1.md
       - C++ sugar: reference/sugar.md
       - Embedding (libcaliper): reference/embedding.md
+      - Python API (caliper): reference/python-api.md
   - Explanation:
       - Architecture: explanation/architecture.md
       - Rendering: explanation/rendering.md
+      - Live streaming: explanation/live-streaming.md
       - Compatibility & epochs: explanation/compatibility.md
       - Trust model: explanation/trust-model.md
   - Decisions: decisions/index.md
