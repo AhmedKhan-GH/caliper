@@ -60,6 +60,9 @@ void label(const char* text) {
 ImU32 confidence(float p) {
     return p >= 0.3f ? sternbild::col::parchment : p >= 0.1f ? sternbild::col::secondary : sternbild::col::faint;
 }
+// The model's own next word, wherever a layer already holds it: a teal lighter than the palette's, to read
+// on the blue probability shade.
+constexpr ImU32 kAnswer = IM_COL32(0x7f, 0xe0, 0xd2, 255);
 constexpr const char* kKinds[] = {"Ablate J-space", "Remove words", "Swap two words", "Inject word"};
 constexpr const char* kKindIds[] = {"ablate", "remove", "swap", "inject"};
 } // namespace
@@ -265,6 +268,28 @@ TracePane::Ask TracePane::controls(bool can_send, bool tracing) {
         ImGui::PopStyleColor();
         ImGui::SameLine();
     }
+    {
+        ImGui::SameLine(0, style.ItemSpacing.x * 3);
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float h = ImGui::GetTextLineHeight(), y = at.y + ImGui::GetStyle().FramePadding.y;
+        auto* legend = ImGui::GetWindowDrawList();
+        for (int i = 0; i < 5; ++i)
+            legend->AddRectFilled(point(at.x + i * 9, y + 2), point(at.x + i * 9 + 8, y + h - 2),
+                                  sternbild::with_alpha(sternbild::col::vehicle, 18 + i * 47));
+        ImGui::Dummy(ImVec2(46, 1));
+        ImGui::SameLine(); faint("probability");
+        ImGui::SameLine(0, style.ItemSpacing.x * 2);
+        ImGui::PushStyleColor(ImGuiCol_Text, kAnswer);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("next word");
+        ImGui::PopStyleColor();
+        if (runs_[1].positions() > 0) {
+            ImGui::SameLine(0, style.ItemSpacing.x * 2);
+            ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::cat);
+            ImGui::TextUnformatted("changed by the intervention");
+            ImGui::PopStyleColor();
+        }
+    }
     const bool both = runs_[0].positions() > 0 && runs_[1].positions() > 0;
     if (both) {
         ImGui::SameLine(0, style.ItemSpacing.x * 4);
@@ -428,11 +453,16 @@ void TracePane::grid(float width, float height) {
             const size_t at = layer < 0 ? static_cast<size_t>(p) * r.k : r.at(p, layer);
             const int32_t id = layer < 0 ? r.output[at] : ids[at];
             const float prob = layer < 0 ? r.oprob[at] : probs[at];
-            if (differs(p, layer))
-                list->AddRectFilled(point(x + 1, y + 1), point(x + cell - 1, y + row - 1), sternbild::with_alpha(sternbild::col::cat, 90));
+            // Shade: the word's probability. Rose: the intervened run's word differs from the intact run's.
+            const ImU32 fill = differs(p, layer) ? sternbild::with_alpha(sternbild::col::cat, 150)
+                : sternbild::with_alpha(sternbild::col::vehicle, static_cast<int>(18 + 190 * std::clamp(prob, 0.0f, 1.0f)));
+            list->AddRectFilled(point(x + 1, y + 1), point(x + cell - 1, y + row - 1), fill);
             const std::string shown = display_word(word(id));
             const ImVec4 clip(x + 3, y, x + cell - 3, y + row);
-            list->AddText(font, font_size, point(x + 4, y + 3), confidence(prob), shown.c_str(), nullptr, 0, &clip);
+            // Teal: the word the model outputs at this position, wherever a layer already holds it.
+            const bool answer = id == r.output[static_cast<size_t>(p) * r.k];
+            list->AddText(font, font_size, point(x + 4, y + 3), answer ? kAnswer : sternbild::col::parchment,
+                          shown.c_str(), nullptr, 0, &clip);
         }
         // The token at this position, under its column; generated tokens in the primary ink.
         const float y = origin.y + rows * row + 3;
@@ -512,6 +542,8 @@ void TracePane::side_list(float width, float height, Ask& ask, bool can_send) {
     const auto& ids = jacobian_ ? r.jlens : r.logit;
     const auto& probs = jacobian_ ? r.jprob : r.lprob;
     const float row_label = ImGui::CalcTextSize("Out").x + 10;
+    const float start = ImGui::GetCursorPosX(), limit = start + ImGui::GetContentRegionAvail().x;
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
     for (int layer = -1; layer < static_cast<int>(r.layers.size()); ++layer) {
         const int shown_layer = layer < 0 ? -1 : static_cast<int>(r.layers.size()) - 1 - layer;
         ImGui::PushID(layer);
@@ -519,16 +551,20 @@ void TracePane::side_list(float width, float height, Ask& ask, bool can_send) {
         if (shown_layer < 0) ImGui::TextUnformatted("Out");
         else ImGui::Text("%d", r.layers[shown_layer]);
         ImGui::PopStyleColor();
+        float x = start + row_label;
+        const int32_t answer = r.output[static_cast<size_t>(p) * r.k];
         for (int rank = 0; rank < r.k; ++rank) {
             const size_t at = shown_layer < 0 ? static_cast<size_t>(p) * r.k + rank : r.at(p, shown_layer, rank);
             const int32_t id = shown_layer < 0 ? r.output[at] : ids[at];
             const float prob = shown_layer < 0 ? r.oprob[at] : probs[at];
             const std::string text_shown = display_word(word(id));
-            const float w = ImGui::CalcTextSize(text_shown.c_str()).x;
-            ImGui::SameLine(rank == 0 ? row_label : 0);
-            if (rank > 0 && ImGui::GetContentRegionAvail().x < w + 4) break;
+            const float w = std::min(ImGui::CalcTextSize(text_shown.c_str()).x, limit - start - row_label);
+            if (rank > 0 && x + w > limit) break;
+            ImGui::SameLine(x);
+            x += w + gap;
             ImGui::PushID(rank);
-            ImGui::PushStyleColor(ImGuiCol_Text, shown_layer == cursor_layer_ ? sternbild::col::bronze : confidence(prob));
+            ImGui::PushStyleColor(ImGuiCol_Text, shown_layer == cursor_layer_ ? sternbild::col::bronze
+                                                 : id == answer ? kAnswer : confidence(prob));
             if (ImGui::Selectable(text_shown.c_str(), false, 0, ImVec2(w, 0))) ImGui::OpenPopup("##trace.word");
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%.1f%%", prob * 100);

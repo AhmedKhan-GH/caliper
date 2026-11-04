@@ -866,9 +866,12 @@ struct Inspector::Impl {
         if (lo == hi) { lo -= 0.5f; hi += 0.5f; }
         caliper_host::map_f32_to_rgba8(values.data(), width, height,
             caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS), lo, hi, rgba.data());
-        sample.texture = renderer->tex_create_rgba8(width, height);
-        if (sample.texture && !renderer->tex_upload_rgba8(sample.texture, rgba.data(), width, height))
-            release_sample(sample);
+        // Mipmapped, so a sample drawn smaller than it is (an older one while the next is on its way, or
+        // the whole-tensor map) averages instead of shimmering.
+        sample.texture = renderer->tex_create_rgba8_mipmapped(width, height);
+        if (sample.texture && renderer->tex_upload_rgba8(sample.texture, rgba.data(), width, height))
+            renderer->tex_generate_mipmaps(sample.texture);
+        else release_sample(sample);
         sample.texture_dirty = false;
     }
     void make_values_texture(Values& v, bool vector) {
@@ -944,9 +947,9 @@ struct Inspector::Impl {
     }
     // The whole tensor as one mipmapped texture, the shown window picked out by
     // texture coordinates, so zoom and pan only move coordinates. Drawn smaller
-    // than its cells, the mipmaps average the cells under each pixel; larger,
-    // cells are sampled nearest so they stay sharp squares, then get a grid
-    // and their values.
+    // than its cells, the mipmaps average the cells under each pixel; from 8
+    // pixels a cell, cells are sampled nearest so they stay sharp squares, then
+    // get a grid and their values.
     void paint_values(Values& v, Geometry::Window shown, Geometry::Rect picture, bool vector) {
         if (picture.width <= 0 || picture.height <= 0 || !v.complete() || !(shown.rows > 0) || !(shown.cols > 0)) return;
         ImDrawList* list = ImGui::GetWindowDrawList();
@@ -963,7 +966,9 @@ struct Inspector::Impl {
             const ImVec2 uv1 = vector ? point((shown.row + shown.rows) / rows, 1)
                                       : point((shown.col + shown.cols) / cols, (shown.row + shown.rows) / rows);
             const auto& platform = ImGui::GetPlatformIO();
-            const bool sharp = cell * std::max(1.0f, ImGui::GetIO().DisplayFramebufferScale.x) >= 2 &&
+            // Sampled nearest, a cell of 2 to 8 pixels comes out a pixel wider or narrower than its
+            // neighbours and the field beats into moire; below 8 pixels a cell blends with its neighbours.
+            const bool sharp = cell * std::max(1.0f, ImGui::GetIO().DisplayFramebufferScale.x) >= 8 &&
                                platform.DrawCallback_SetSamplerNearest && platform.DrawCallback_SetSamplerLinear;
             if (sharp) list->AddCallback(platform.DrawCallback_SetSamplerNearest, nullptr);
             list->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(v.texture)), a, b, uv0, uv1);
