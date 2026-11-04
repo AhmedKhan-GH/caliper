@@ -524,7 +524,12 @@ TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an i
         Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
                {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
     for (int i = 0; i < 5; ++i) ui.frame();
+    // Trace takes Model 3D's place through the switch in its toolbar, and gives it back.
+    CHECK(ui.captured.find("Fit Focus selected Trace") != std::string::npos);
+    ui.activate("Model 3D###caliper.inspector.model3d", "Trace");
+    ui.frame();
     REQUIRE(ImGui::FindWindowByName(trace_window) != nullptr);
+    CHECK(ui.captured.find("Fit Focus selected") == std::string::npos);
     ui.activate(trace_window, "Trace");
     auto plain = ui.request("trace");
     CHECK(plain["interventions"].get<Array>().empty());

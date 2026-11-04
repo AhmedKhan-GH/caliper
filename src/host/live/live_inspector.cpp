@@ -206,6 +206,8 @@ struct Inspector::Impl {
     std::string queued_op, queued_purpose;
     Object queued_fields;
     TracePane trace_pane;
+    // Model 3D and Trace share a dock place without tabs; only the one shown is drawn.
+    bool show_trace = false;
     Model3D model3d;
     caliper_host::HostRenderer* renderer = nullptr;
     Sample detail, overview;
@@ -1252,7 +1254,7 @@ struct Inspector::Impl {
     void trace_view(float x, float y, float w, float h) {
         place_window(kTracePane, x, y, w, h);
         if (begin_pane(kTracePane, "Trace", "Jacobian lens")) {
-            if (sternbild::word_button("Model 3D")) ImGui::SetWindowFocus(kModel3DPane);
+            if (sternbild::word_button("Model 3D")) show_trace = false;
             const auto ask = trace_pane.draw(can_control() && queued_op.empty(), active.op == "trace");
             if (ask.op == "stop") stop();
             else if (ask.op == "trace") {
@@ -1450,6 +1452,13 @@ struct Inspector::Impl {
             }
             layout_built = true; reset_layout = false;
         }
+        // A layout saved before the Trace pane existed: give Trace Model 3D's place, keeping the rest.
+        if (supports("trace")) {
+            const ImGuiWindowSettings* saved = ImGui::FindWindowSettingsByID(ImHashStr(kTracePane));
+            const ImGuiWindow* model3d_window = ImGui::FindWindowByName(kModel3DPane);
+            if ((!saved || !saved->DockId) && model3d_window && model3d_window->DockId)
+                ImGui::DockBuilderDockWindow(kTracePane, model3d_window->DockId);
+        }
         ImGui::DockSpace(dock, ImVec2(0, 0), ImGuiDockNodeFlags_NoUndocking | ImGuiDockNodeFlags_NoWindowMenuButton |
                                              ImGuiDockNodeFlags_NoTabBar);
         ImGui::End();
@@ -1477,10 +1486,11 @@ struct Inspector::Impl {
                 ImGui::SetWindowSize("Model 3D###caliper.inspector.model3d", point(r.width, r.height));
             }
             model3d.offer_trace = supports("trace");
-            const std::string clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
-            if (model3d.trace_clicked) { model3d.trace_clicked = false; ImGui::SetWindowFocus(kTracePane); }
-            if (supports("trace"))
-                draw_window([&](float a,float b,float c,float d) { trace_view(a,b,c,d); }, windows.model3d);
+            if (!supports("trace")) show_trace = false;
+            std::string clicked;
+            if (show_trace) draw_window([&](float a,float b,float c,float d) { trace_view(a,b,c,d); }, windows.model3d);
+            else clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
+            if (model3d.trace_clicked) { model3d.trace_clicked = false; show_trace = true; }
             if (!clicked.empty()) {
                 select(clicked, true);
                 ImGui::SetWindowCollapsed("Tensor###caliper.inspector.tensor", false);
