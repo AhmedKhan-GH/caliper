@@ -52,6 +52,25 @@ Rect fit(double rows, double cols, Rect bounds) {
             bounds.y + (bounds.height - height) * 0.5, width, height};
 }
 
+AxisLabels axis_labels(Rect picture, double first_row_width, double last_row_width,
+                       double column_width, double line_height, double gap) {
+    picture = valid_rect(picture);
+    const auto extent = [](double value) {
+        return std::isfinite(value) && value > 0 ? value : 0;
+    };
+    first_row_width = extent(first_row_width); last_row_width = extent(last_row_width);
+    column_width = extent(column_width); line_height = extent(line_height); gap = extent(gap);
+    if (picture.width <= 0 || picture.height <= 0 || line_height <= 0) return {};
+    AxisLabels labels;
+    labels.first_row = {picture.x - gap - first_row_width, picture.y, first_row_width, line_height};
+    labels.last_row = {picture.x - gap - last_row_width,
+                       picture.y + picture.height - line_height, last_row_width, line_height};
+    // Tiny one-row matrices cannot accommodate both endpoint labels.
+    if (picture.height < line_height * 2) labels.last_row.height = 0;
+    labels.columns = {picture.x, picture.y + picture.height + gap, column_width, line_height};
+    return labels;
+}
+
 Region clamp(Region region, int64_t rows, int64_t cols) {
     rows = dimension(rows); cols = dimension(cols);
     region.rows = std::clamp<int64_t>(region.rows, 1, rows);

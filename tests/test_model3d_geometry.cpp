@@ -96,8 +96,9 @@ TEST_CASE("model3d uses one element scale and horizontal vector strips") {
     CHECK(matrix[1] == doctest::Approx(3.5));
     CHECK(matrix[1] / matrix[0] == doctest::Approx(3584.0 / 1024));
     const auto embedding = panel_size(tensor("embedding", {248320, 1024}));
-    CHECK(embedding[0] == matrix[0]);
-    CHECK(embedding[1] == doctest::Approx(242.5));
+    CHECK(embedding[0] == doctest::Approx(16));
+    CHECK(embedding[1] == doctest::Approx(15.15625));
+    CHECK(embedding[0] * embedding[1] == doctest::Approx(242.5));
     const auto norm = panel_size(tensor("norm", {1024}));
     CHECK(norm[0] == matrix[0]);
     CHECK(norm[1] == doctest::Approx(element_unit));
@@ -105,21 +106,21 @@ TEST_CASE("model3d uses one element scale and horizontal vector strips") {
     CHECK(bias[0] == doctest::Approx(16 * element_unit));
     CHECK(bias[1] == norm[1]);
     const auto conv = panel_size(tensor("conv", {6144, 4, 1}));
-    CHECK(conv[0] == doctest::Approx(element_unit));
-    CHECK(conv[1] == doctest::Approx(24));
+    CHECK(conv[0] == doctest::Approx(0.125));
+    CHECK(conv[1] == doctest::Approx(0.1875));
+    CHECK(conv[0] * conv[1] == doctest::Approx(24 * element_unit));
     CHECK(panel_size(tensor("invalid", {-1}))[0] == 0);
     CHECK(panel_size(Tensor{})[0] == 0);
 }
 
-TEST_CASE("model3d packs all320 real Qwen shapes without changing dimensions") {
+TEST_CASE("model3d packs all320 real Qwen shapes with true area and one tied embedding") {
     const auto tensors = qwen_shapes();
     REQUIRE(tensors.size() == 320);
     const Scene scene = layout(tensors);
-    REQUIRE(scene.panels.size() == 321); // one linked output alias; no second weight
-    REQUIRE(scene.groups.size() == 27);
-    CHECK(scene.groups.front().label == "Embedding");
+    REQUIRE(scene.panels.size() == 320);
+    REQUIRE(scene.groups.size() == 26);
+    CHECK(scene.groups.front().label == "Embedding / output (tied)");
     CHECK(scene.groups[25].label == "Final norm");
-    CHECK(scene.groups.back().label == "Output (tied)");
     int linear = 0, full = 0;
     for (size_t i = 1; i <= 24; ++i) {
         const Group& group = scene.groups[i];
@@ -129,13 +130,16 @@ TEST_CASE("model3d packs all320 real Qwen shapes without changing dimensions") {
         if (group.layer_type == "full_attention") ++full;
     }
     CHECK(linear == 18); CHECK(full == 6);
-    REQUIRE(scene.panels.back().output_alias);
-    CHECK(scene.panels.back().tensor == 0);
-    CHECK(scene.panels.back().width == scene.panels.front().width);
-    CHECK(scene.panels.back().height == scene.panels.front().height);
+    CHECK(scene.panels.front().tensor == 0);
+    CHECK(scene.panels.front().row_blocks == 16);
+    CHECK(std::count_if(scene.panels.begin(), scene.panels.end(), [](const Panel& p) { return p.tensor == 0; }) == 1);
     for (const Panel& panel : scene.panels) {
+        CHECK_FALSE(panel.output_alias);
         const auto expected = panel_size(tensors[panel.tensor]);
         CHECK(panel.width == expected[0]); CHECK(panel.height == expected[1]);
+        const Tensor& t = tensors[panel.tensor];
+        CHECK(panel.width * panel.height == doctest::Approx(static_cast<double>(t.rows) * t.cols * element_unit * element_unit));
+        CHECK(panel.row_blocks == row_blocks(t));
         const Group& group = scene.groups[panel.group];
         for (Vec3 p : corners(panel)) {
             CHECK(p.x >= group.bounds.x - 1e-9);
@@ -154,6 +158,46 @@ TEST_CASE("model3d packs all320 real Qwen shapes without changing dimensions") {
             CHECK_FALSE((overlap_x && overlap_y));
         }
     }
+}
+
+TEST_CASE("model3d equal row folds preserve coordinates and bounded thumbnail atlases") {
+    const Tensor embedding = tensor("embedding", {248320, 1024});
+    CHECK(row_blocks(embedding) == 16);
+    CHECK(embedding.rows / row_blocks(embedding) == 15520);
+    const auto e = thumbnail_shape(embedding);
+    CHECK(e[0] == 2048); CHECK(e[1] == 8);
+    const Tensor conv = tensor("conv", {6144, 4, 1});
+    CHECK(row_blocks(conv) == 128);
+    CHECK(conv.rows / row_blocks(conv) == 192);
+    const auto c = thumbnail_shape(conv);
+    CHECK(c[0] == 2048); CHECK(c[1] == 1);
+    for (const Tensor& t : qwen_shapes()) {
+        const int blocks = row_blocks(t);
+        CHECK(blocks >= 1); CHECK(blocks <= 128);
+        CHECK(t.rows % blocks == 0);
+        const auto shape = thumbnail_shape(t);
+        CHECK(shape[0] >= 1); CHECK(shape[0] <= 2048);
+        CHECK(shape[1] >= 1); CHECK(shape[1] <= 128);
+        CHECK(shape[0] * shape[1] <= 128 * 128);
+        if (t.shape.size() > 1) {
+            CHECK(shape[0] % blocks == 0);
+            CHECK(shape[0] / blocks <= 128);
+            CHECK(shape[1] * blocks <= 128);
+            // Each block gets the same strata, so folding moves samples but
+            // does not invent rows or cross a block boundary.
+            const int per_block = shape[0] / blocks;
+            const int64_t block_rows = t.rows / blocks;
+            for (int b = 0; b < blocks; ++b) {
+                const int64_t first = ((2LL * b * per_block + 1) * t.rows) / (2LL * shape[0]);
+                const int64_t last = ((2LL * (b + 1) * per_block - 1) * t.rows) / (2LL * shape[0]);
+                CHECK(first >= b * block_rows);
+                CHECK(last < (b + 1) * block_rows);
+            }
+        } else { CHECK(shape[0] <= 128); CHECK(shape[1] == 1); }
+    }
+    CHECK(row_blocks(tensor("prime", {257, 1})) == 1);
+    CHECK(row_blocks(tensor("vector", {248320})) == 1);
+    CHECK(thumbnail_shape(Tensor{})[0] == 0);
 }
 
 TEST_CASE("model3d layer order and legacy metadata inference are deterministic") {
@@ -183,14 +227,86 @@ TEST_CASE("model3d fit projects every bounding corner at wide and narrow aspects
             for (Vec3 corner : corners(panel)) {
                 const auto p = project(corner, camera, aspect, viewport);
                 CHECK(p.visible);
-                CHECK(p.x >= viewport.x); CHECK(p.x <= viewport.x + viewport.width);
-                CHECK(p.y >= viewport.y); CHECK(p.y <= viewport.y + viewport.height);
+                CHECK(p.x >= viewport.x + viewport.width * 0.069);
+                CHECK(p.x <= viewport.x + viewport.width * 0.931);
+                CHECK(p.y >= viewport.y + viewport.height * 0.069);
+                CHECK(p.y <= viewport.y + viewport.height * 0.931);
                 CHECK(p.depth >= 0); CHECK(p.depth <= 1);
             }
         }
     }
     const Camera empty = fit(Scene{}, 0);
     CHECK(std::isfinite(empty.distance)); CHECK(empty.distance > 0);
+}
+
+TEST_CASE("model3d default fit separates every layer and permits panel picking") {
+    const Scene scene = layout(qwen_shapes());
+    for (const Rect viewport : {Rect{0, 0, 600, 400}, Rect{13, 21, 1600, 900}, Rect{0, 0, 300, 400}}) {
+        const double aspect = viewport.width / viewport.height;
+        const Camera camera = fit(scene, aspect);
+        CHECK(camera.azimuth == doctest::Approx(1.5));
+        CHECK(camera.elevation == doctest::Approx(1.15));
+        double previous_bottom = -std::numeric_limits<double>::infinity();
+        int layers = 0;
+        for (size_t i = 0; i < scene.groups.size(); ++i) {
+            const Group& group = scene.groups[i];
+            Panel frame;
+            frame.center = {group.bounds.x + group.bounds.width * 0.5,
+                            group.bounds.y + group.bounds.height * 0.5, group.z};
+            frame.width = group.bounds.width; frame.height = group.bounds.height;
+            double top = std::numeric_limits<double>::infinity(), bottom = -top;
+            double left = top, right = -top;
+            for (Vec3 corner : corners(frame)) {
+                const auto p = project(corner, camera, aspect, viewport);
+                REQUIRE(p.visible);
+                top = std::min(top, p.y); bottom = std::max(bottom, p.y);
+                left = std::min(left, p.x); right = std::max(right, p.x);
+            }
+            CHECK(top > previous_bottom + 0.5);
+            if (group.layer_index >= 0) CHECK(right - left >= 32 * viewport.height / 400);
+            previous_bottom = bottom;
+            const auto witness = std::max_element(scene.panels.begin(), scene.panels.end(), [&](const Panel& a, const Panel& b) {
+                const double area_a = a.group == static_cast<int>(i) ? a.width * a.height : -1;
+                const double area_b = b.group == static_cast<int>(i) ? b.width * b.height : -1;
+                return area_a < area_b;
+            });
+            REQUIRE(witness != scene.panels.end());
+            const auto pixel = project(witness->center, camera, aspect, viewport);
+            REQUIRE(pixel.visible);
+            const Hit hit = hit_test(scene, camera, viewport, pixel.x, pixel.y);
+            REQUIRE(hit.panel >= 0);
+            CHECK(scene.panels[static_cast<size_t>(hit.panel)].group == static_cast<int>(i));
+            if (group.layer_index >= 0) ++layers;
+        }
+        CHECK(layers == 24);
+    }
+}
+
+TEST_CASE("model3d focus includes the complete folded tensor with viewport margin") {
+    const auto tensors = qwen_shapes();
+    const Scene scene = layout(tensors);
+    for (size_t index = 0; index < scene.panels.size(); ++index) {
+        const Tensor& t = tensors[scene.panels[index].tensor];
+        if (t.role != "embedding" && t.role != "final_norm" &&
+            t.name.find("conv1d") == std::string::npos &&
+            t.name.find("down_proj") == std::string::npos &&
+            t.name.find("in_proj_qkv") == std::string::npos) continue;
+        for (const Rect viewport : {Rect{0, 0, 320, 600}, Rect{17, 29, 600, 400}, Rect{0, 0, 1600, 900}}) {
+            for (const std::array<double, 2> angles : {std::array<double, 2>{1.35, 0.8}, {0.8, -0.4}, {2.2, 0.35}}) {
+                Camera previous = fit(scene, viewport.width / viewport.height);
+                previous.azimuth = angles[0]; previous.elevation = angles[1];
+                const Camera camera = focus(scene, index, viewport.width / viewport.height, previous);
+                for (Vec3 corner : corners(scene.panels[index])) {
+                    const auto p = project(corner, camera, viewport.width / viewport.height, viewport);
+                    CHECK(p.visible);
+                    CHECK(p.x >= viewport.x + viewport.width * 0.069);
+                    CHECK(p.x <= viewport.x + viewport.width * 0.931);
+                    CHECK(p.y >= viewport.y + viewport.height * 0.069);
+                    CHECK(p.y <= viewport.y + viewport.height * 0.931);
+                }
+            }
+        }
+    }
 }
 
 TEST_CASE("model3d projection agrees with renderer matrices and top-left UV") {

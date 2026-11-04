@@ -350,3 +350,11 @@ foreach(geometry IN ITEMS tensor model3d)
     target_compile_features(caliper_${geometry}_geometry_tests PRIVATE cxx_std_17)
     add_test(NAME caliper_${geometry}_geometry_tests COMMAND caliper_${geometry}_geometry_tests)
 endforeach()
+
+add_executable(caliper_model3d_presentation_tests test_model3d_presentation.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/live/model3d_presentation.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/live/model3d_geometry.cpp)
+target_include_directories(caliper_model3d_presentation_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_model3d_presentation_tests PRIVATE doctest::doctest)
+target_compile_features(caliper_model3d_presentation_tests PRIVATE cxx_std_17)
+add_test(NAME caliper_model3d_presentation_tests COMMAND caliper_model3d_presentation_tests)

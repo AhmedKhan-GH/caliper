@@ -1,6 +1,7 @@
 #include "live/live_model3d.h"
 
 #include "live/live_views_state.h"
+#include "live/model3d_presentation.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"
 #include "ui/sternbild_theme.h"
@@ -40,6 +41,7 @@ constexpr float coordinates[] = {
 constexpr uint64_t outline_offset = 6 * 3 * sizeof(float);
 constexpr size_t max_tensors = 10000;
 constexpr int max_thumbnail_side = 128;
+constexpr int max_sample_side = 2048;
 constexpr int max_target_side = 4096;
 constexpr int resize_tolerance = 8;
 
@@ -83,7 +85,88 @@ bool full_attention(const std::string& type) {
     return type == "full_attention" || type == "full";
 }
 
+bool inside(Rect rect, double x, double y) {
+    return rect.width > 0 && rect.height > 0 && x >= rect.x && y >= rect.y &&
+           x < rect.x + rect.width && y < rect.y + rect.height;
+}
+
+std::string group_label(const model3d::Group& group) {
+    if (group.layer_index < 0) return group.label;
+    char label[48];
+    std::snprintf(label, sizeof label, "Layer %02d%s", group.layer_index,
+                  full_attention(group.layer_type) ? "  FULL" : "");
+    return label;
+}
+
 } // namespace
+
+bool model3d::thumbnail_atlas(const Tensor& tensor, int rows, int cols,
+                              const std::vector<float>& values, ThumbnailAtlas* output) {
+    if (!output || rows < 1 || cols < 1 || rows > max_sample_side || cols > max_thumbnail_side ||
+        static_cast<size_t>(rows) * cols > max_thumbnail_side * max_thumbnail_side ||
+        values.size() != static_cast<size_t>(rows) * cols ||
+        !std::all_of(values.begin(), values.end(), [](float v) { return std::isfinite(v); })) return false;
+    ThumbnailAtlas atlas;
+    if (tensor.shape.size() == 1) {
+        if (values.size() > max_thumbnail_side) return false;
+        atlas.width = static_cast<int>(values.size()); atlas.height = 1; atlas.values = values;
+    } else {
+        const int blocks = model3d::row_blocks(tensor);
+        if (blocks < 1 || blocks > max_thumbnail_side || (blocks == 1 && rows > max_thumbnail_side)) return false;
+        const int block_width = std::min(cols, max_thumbnail_side / blocks);
+        atlas.width = block_width * blocks;
+        atlas.height = std::min(max_thumbnail_side, (rows + blocks - 1) / blocks);
+        atlas.values.resize(static_cast<size_t>(atlas.width) * atlas.height);
+        for (int y = 0; y < atlas.height; ++y) for (int x = 0; x < atlas.width; ++x) {
+            const int block = x / block_width;
+            const int source_row = std::min(rows - 1,
+                static_cast<int>((static_cast<int64_t>(2 * (block * atlas.height + y) + 1) * rows) /
+                                 (2 * blocks * atlas.height)));
+            const int source_col = std::min(cols - 1,
+                ((2 * (x % block_width) + 1) * cols) / (2 * block_width));
+            atlas.values[static_cast<size_t>(y) * atlas.width + x] = values[static_cast<size_t>(source_row) * cols + source_col];
+        }
+    }
+    *output = std::move(atlas);
+    return true;
+}
+
+std::array<model3d::FrameBand, 4> model3d::frame_bands(const Panel& panel, const Camera& camera,
+                                                     Rect viewport, double pixel_width) {
+    std::array<FrameBand, 4> result{};
+    if (!(panel.width > 0 && panel.height > 0 && viewport.width > 0 && viewport.height > 0 && pixel_width > 0) ||
+        !std::isfinite(panel.width) || !std::isfinite(panel.height) || !std::isfinite(pixel_width) ||
+        !std::isfinite(panel.center.x) || !std::isfinite(panel.center.y) || !std::isfinite(panel.center.z)) return result;
+    const double aspect = viewport.width / viewport.height;
+    const auto derivative = [&](Vec3 center, bool x_axis) {
+        const double probe = std::max(1e-8, (x_axis ? panel.width : panel.height) * .001);
+        Vec3 a = center, b = center;
+        if (x_axis) { a.x -= probe; b.x += probe; }
+        else { a.y -= probe; b.y += probe; }
+        const auto pa = model3d::project(a, camera, aspect, viewport);
+        const auto pb = model3d::project(b, camera, aspect, viewport);
+        return std::array<double, 2>{(pb.x - pa.x) / (2 * probe), (pb.y - pa.y) / (2 * probe)};
+    };
+    const auto thickness = [&](Vec3 center, bool vertical) {
+        const auto dx = derivative(center, true), dy = derivative(center, false);
+        const double tangent = vertical ? std::hypot(dy[0], dy[1]) : std::hypot(dx[0], dx[1]);
+        const double scale = tangent > 1e-10 ? std::fabs(dx[0] * dy[1] - dx[1] * dy[0]) / tangent : 0;
+        const double extent = vertical ? panel.width : panel.height;
+        const double wanted = std::isfinite(scale) && scale > 1e-10 ? pixel_width / scale : extent * .1;
+        return std::clamp(wanted, extent * 1e-6, extent * .2);
+    };
+    const double left = panel.center.x - panel.width * .5, right = panel.center.x + panel.width * .5;
+    const double top = panel.center.y + panel.height * .5, bottom = panel.center.y - panel.height * .5;
+    const double tx0 = thickness({left, panel.center.y, panel.center.z}, true);
+    const double tx1 = thickness({right, panel.center.y, panel.center.z}, true);
+    const double ty0 = thickness({panel.center.x, top, panel.center.z}, false);
+    const double ty1 = thickness({panel.center.x, bottom, panel.center.z}, false);
+    result[0] = {{left + tx0 * .5, panel.center.y, panel.center.z}, tx0, panel.height};
+    result[1] = {{right - tx1 * .5, panel.center.y, panel.center.z}, tx1, panel.height};
+    result[2] = {{panel.center.x, top - ty0 * .5, panel.center.z}, panel.width, ty0};
+    result[3] = {{panel.center.x, bottom + ty1 * .5, panel.center.z}, panel.width, ty1};
+    return result;
+}
 
 struct Model3D::Impl {
     struct Thumbnail {
@@ -99,10 +182,18 @@ struct Model3D::Impl {
     std::map<std::string, Thumbnail> thumbnails;
     model3d::Scene scene;
     model3d::Camera camera;
+    Rect viewport, label_column;
+    enum class Framing { Fit, Focus, Manual };
+    Framing framing = Framing::Fit;
+    std::string focused;
+    double framed_aspect = 0, rendered_aspect = 0;
+    bool framing_pending = true;
+    std::vector<float> fold_positions;
     HostRenderer* renderer = nullptr;
-    uint64_t position_buffer = 0, uv_buffer = 0, target = 0;
+    uint64_t position_buffer = 0, uv_buffer = 0, fold_buffer = 0, target = 0;
     int target_width = 0, target_height = 0;
-    bool visible = false, dirty = true, fit_pending = true, dragged = false;
+    bool visible = false, dirty = true, folds_dirty = true, dragged = false, click_armed = false;
+    unsigned drag_armed = 0; // Left and middle presses must originate in the scene.
     bool failed = false, imports_failed = false;
     std::string selected, output_label = "Output (tied)";
 
@@ -113,6 +204,7 @@ struct Model3D::Impl {
             if (target) renderer->tex_release(target);
             if (position_buffer) renderer->release_external_allocation(position_buffer);
             if (uv_buffer) renderer->release_external_allocation(uv_buffer);
+            if (fold_buffer) renderer->release_external_allocation(fold_buffer);
             for (auto& entry : thumbnails) {
                 if (entry.second.texture) renderer->tex_release(entry.second.texture);
                 entry.second.texture = 0;
@@ -120,9 +212,11 @@ struct Model3D::Impl {
             }
         }
         renderer = nullptr;
-        position_buffer = uv_buffer = target = 0;
+        position_buffer = uv_buffer = fold_buffer = target = 0;
         target_width = target_height = 0;
         failed = imports_failed = false;
+        folds_dirty = true;
+        rendered_aspect = 0;
     }
 
     bool bind_renderer(HostRenderer* next) {
@@ -134,25 +228,38 @@ struct Model3D::Impl {
         if (!renderer || !renderer->supports_geometry_primitives() ||
             !renderer->supports_geometry_textured() || !renderer->supports_external_import()) return false;
         if (renderer->interop_device() != CALIPER_DEV_METAL) return false;
-        if (position_buffer && uv_buffer) return true;
         if (imports_failed) return false;
-        imports_failed = true;
-        void* pos = caliper_live_views::metal_new_shared_buffer(renderer->native_device(), positions, sizeof positions);
-        void* uv = caliper_live_views::metal_new_shared_buffer(renderer->native_device(), coordinates, sizeof coordinates);
-        if (pos && uv) {
-            position_buffer = renderer->import_external_allocation(pos, sizeof positions, CALIPER_ALLOC_HANDLE_MTLBUFFER);
-            uv_buffer = renderer->import_external_allocation(uv, sizeof coordinates, CALIPER_ALLOC_HANDLE_MTLBUFFER);
-        }
-        // The renderer retains successful imports, including in-flight draws.
-        caliper_live_views::metal_release(pos);
-        caliper_live_views::metal_release(uv);
         if (!position_buffer || !uv_buffer) {
-            if (position_buffer) renderer->release_external_allocation(position_buffer);
-            if (uv_buffer) renderer->release_external_allocation(uv_buffer);
-            position_buffer = uv_buffer = 0;
-            return false;
+            imports_failed = true;
+            void* pos = caliper_live_views::metal_new_shared_buffer(renderer->native_device(), positions, sizeof positions);
+            void* uv = caliper_live_views::metal_new_shared_buffer(renderer->native_device(), coordinates, sizeof coordinates);
+            if (pos && uv) {
+                position_buffer = renderer->import_external_allocation(pos, sizeof positions, CALIPER_ALLOC_HANDLE_MTLBUFFER);
+                uv_buffer = renderer->import_external_allocation(uv, sizeof coordinates, CALIPER_ALLOC_HANDLE_MTLBUFFER);
+            }
+            // The renderer retains successful imports, including in-flight draws.
+            caliper_live_views::metal_release(pos);
+            caliper_live_views::metal_release(uv);
+            if (!position_buffer || !uv_buffer) {
+                if (position_buffer) renderer->release_external_allocation(position_buffer);
+                if (uv_buffer) renderer->release_external_allocation(uv_buffer);
+                position_buffer = uv_buffer = 0;
+                return false;
+            }
+            imports_failed = false;
         }
-        imports_failed = false;
+        if (folds_dirty) {
+            if (fold_buffer) renderer->release_external_allocation(fold_buffer);
+            fold_buffer = 0;
+            folds_dirty = false;
+            if (!fold_positions.empty()) {
+                const size_t bytes = fold_positions.size() * sizeof(float);
+                void* buffer = caliper_live_views::metal_new_shared_buffer(renderer->native_device(), fold_positions.data(), bytes);
+                if (buffer) fold_buffer = renderer->import_external_allocation(buffer, bytes, CALIPER_ALLOC_HANDLE_MTLBUFFER);
+                caliper_live_views::metal_release(buffer);
+                if (!fold_buffer) { imports_failed = true; return false; }
+            }
+        }
         return true;
     }
 
@@ -193,7 +300,19 @@ struct Model3D::Impl {
         output_label = label;
         if (changed) {
             scene = model3d::layout(tensors, output_label);
-            fit_pending = true;
+            fold_positions.clear();
+            for (const Panel& panel : scene.panels) {
+                for (int block = 1; block < panel.row_blocks; ++block) {
+                    const float x = static_cast<float>(panel.center.x - panel.width * .5 + panel.width * block / panel.row_blocks);
+                    fold_positions.insert(fold_positions.end(), {x, static_cast<float>(panel.center.y + panel.height * .5), static_cast<float>(panel.center.z),
+                        x, static_cast<float>(panel.center.y - panel.height * .5), static_cast<float>(panel.center.z)});
+                }
+            }
+            folds_dirty = true;
+            imports_failed = false;
+            framing = Framing::Fit;
+            focused.clear();
+            framing_pending = true;
         }
         dirty = true;
     }
@@ -201,12 +320,10 @@ struct Model3D::Impl {
     bool set_thumbnail(const std::string& name, int rows, int cols,
                        const std::vector<float>& values, double minimum, double maximum, uint64_t revision) {
         const auto found = indices.find(name);
-        if (found == indices.end() || rows < 1 || cols < 1 || rows > max_thumbnail_side ||
-            cols > max_thumbnail_side || values.size() != static_cast<size_t>(rows * cols) ||
-            !std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum ||
-            !std::all_of(values.begin(), values.end(), [](float v) { return std::isfinite(v); })) return false;
+        if (found == indices.end() || !std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum) return false;
         const ModelTensor& tensor = tensors[found->second];
-        if (tensor.shape.size() == 1 && values.size() > max_thumbnail_side) return false;
+        model3d::ThumbnailAtlas atlas;
+        if (!model3d::thumbnail_atlas(tensor, rows, cols, values, &atlas)) return false;
         Thumbnail& item = thumbnails[name];
         if (revision < tensor.revision) {
             item.requested = false;
@@ -215,13 +332,12 @@ struct Model3D::Impl {
         item.minimum = minimum;
         item.maximum = maximum;
         item.revision = revision;
-        // Vectors retain their Nx1 wire layout but occupy a horizontal strip.
-        item.width = tensor.shape.size() == 1 ? rows * cols : cols;
-        item.height = tensor.shape.size() == 1 ? 1 : rows;
-        item.rgba.resize(values.size() * 4);
-        caliper_host::map_f32_to_rgba8(values.data(), item.width, item.height,
-            caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS), static_cast<float>(minimum),
-            static_cast<float>(maximum), item.rgba.data());
+        item.width = atlas.width; item.height = atlas.height;
+        item.rgba.resize(atlas.values.size() * 4);
+        float lo = static_cast<float>(minimum), hi = static_cast<float>(maximum);
+        if (lo == hi) { lo -= 0.5f; hi += 0.5f; }
+        caliper_host::map_f32_to_rgba8(atlas.values.data(), item.width, item.height,
+            caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS), lo, hi, item.rgba.data());
         item.requested = true;
         item.failed = false;
         item.upload = true;
@@ -299,10 +415,19 @@ struct Model3D::Impl {
             target_height = height;
             dirty = true;
         }
+        if (std::fabs(aspect - rendered_aspect) > 1e-8) dirty = true;
         if (!dirty) return !failed;
         upload_thumbnails();
         std::vector<HostGeomDraw> draws;
-        draws.reserve(scene.panels.size() * 2 + scene.groups.size() * 2);
+        draws.reserve(scene.panels.size() * 2 + scene.groups.size() * 6);
+        const auto strong_frame = [&](const Panel& panel, uint32_t color, double pixels) {
+            for (const auto& band : model3d::frame_bands(panel, camera, viewport, pixels)) {
+                if (!(band.width > 0 && band.height > 0)) continue;
+                auto draw = base_draw(band.center, band.width, band.height, false, color);
+                draw.depth_flags = CALIPER_GEOM_DEPTH_TEST;
+                draws.push_back(draw);
+            }
+        };
         for (const Panel& panel : scene.panels) {
             if (panel.tensor >= tensors.size()) continue;
             const ModelTensor& tensor = tensors[panel.tensor];
@@ -315,43 +440,57 @@ struct Model3D::Impl {
             }
             draws.push_back(draw);
         }
-        // Group boundaries provide a stable language for attention kinds:
-        // linear-attention layers have one frame, full-attention layers two.
+        // Fold marks share one retained position buffer and one depth-tested
+        // draw, rather than adding a separate draw for every block boundary.
+        if (fold_buffer && !fold_positions.empty()) {
+            HostGeomDraw folds;
+            folds.pos_alloc = fold_buffer;
+            folds.vertex_count = fold_positions.size() / 3;
+            folds.topology = CALIPER_GEOM_TOPO_LINES;
+            folds.color_mode = CALIPER_GEOM_COLOR_FLAT;
+            folds.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+            folds.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+            folds.depth_flags = CALIPER_GEOM_DEPTH_TEST;
+            folds.flat_rgba = sternbild::col::rule;
+            draws.push_back(folds);
+        }
         for (const auto& group : scene.groups) {
             Vec3 center{group.bounds.x + group.bounds.width * .5,
                         group.bounds.y + group.bounds.height * .5, group.z};
-            draws.push_back(base_draw(center, group.bounds.width, group.bounds.height, true, sternbild::col::rule));
-            if (full_attention(group.layer_type))
-                draws.push_back(base_draw(center, group.bounds.width * .98, group.bounds.height * .98,
-                                          true, sternbild::col::secondary));
+            draws.push_back(base_draw(center, group.bounds.width, group.bounds.height, true,
+                                      full_attention(group.layer_type) ? sternbild::col::parchment : sternbild::col::rule));
+            if (full_attention(group.layer_type)) {
+                Panel outline;
+                outline.center = center; outline.width = group.bounds.width; outline.height = group.bounds.height;
+                strong_frame(outline, sternbild::col::parchment, 2.5);
+            }
         }
         for (const Panel& panel : scene.panels) {
             if (panel.tensor >= tensors.size()) continue;
             const ModelTensor& tensor = tensors[panel.tensor];
             if (!tensor.edited && tensor.name != selected) continue;
             draws.push_back(base_draw(panel.center, panel.width, panel.height, true,
-                                     tensor.edited ? sternbild::col::bronze : sternbild::col::parchment));
+                                     sternbild::col::bronze));
+            strong_frame(panel, sternbild::col::bronze, 2.0);
         }
         const auto matrices = model3d::matrices(camera, aspect);
         failed = !renderer->geom_draw_primitives(target, matrices.view.data(), matrices.projection.data(),
                     draws.empty() ? nullptr : draws.data(), static_cast<uint32_t>(draws.size()), sternbild::col::deep);
         dirty = false;
+        rendered_aspect = aspect;
         return !failed;
     }
 
-    void labels(ImDrawList* draw_list, const Rect& viewport, double aspect) const {
-        draw_list->PushClipRect(ImVec2(static_cast<float>(viewport.x), static_cast<float>(viewport.y)),
-            ImVec2(static_cast<float>(viewport.x + viewport.width), static_cast<float>(viewport.y + viewport.height)), true);
-        for (const auto& group : scene.groups) {
-            const Vec3 anchor{group.bounds.x, group.bounds.y + group.bounds.height, group.z};
-            const auto point = model3d::project(anchor, camera, aspect, viewport);
-            if (!point.visible) continue;
-            std::string label = group.label;
-            const char* kind = attention_label(group.layer_type);
-            if (*kind) label += std::string("  ") + kind;
-            draw_list->AddText(ImVec2(static_cast<float>(point.x + 3), static_cast<float>(point.y - ImGui::GetTextLineHeight())),
+    void labels(ImDrawList* draw_list, const Rect& column) const {
+        draw_list->PushClipRect(ImVec2(static_cast<float>(column.x), static_cast<float>(column.y)),
+            ImVec2(static_cast<float>(column.x + column.width), static_cast<float>(column.y + column.height)), true);
+        for (const auto& label : model3d::label_layout(scene, camera, viewport, column, ImGui::GetTextLineHeight())) {
+            if (label.group >= scene.groups.size()) continue;
+            const auto& group = scene.groups[label.group];
+            const auto text = group_label(group);
+            draw_list->AddText(ImVec2(static_cast<float>(label.bounds.x), static_cast<float>(label.bounds.y)),
                               full_attention(group.layer_type) ? sternbild::col::parchment : sternbild::col::secondary,
-                              label.c_str());
+                              text.c_str());
         }
         draw_list->PopClipRect();
     }
@@ -362,31 +501,47 @@ struct Model3D::Impl {
         ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_FirstUseEver);
         std::string clicked;
-        if (!ImGui::Begin("Model 3D###caliper.inspector.model3d")) { ImGui::End(); return clicked; }
-        visible = true;
         int linear = 0, full = 0;
         for (const auto& group : scene.groups) {
             if (full_attention(group.layer_type)) ++full;
             else if (*attention_label(group.layer_type)) ++linear;
         }
-        if (ImGui::Button("Fit")) fit_pending = true;
+        char counts[96];
+        std::snprintf(counts, sizeof counts, "%zu tensors  %d linear attention  %d full attention", tensors.size(), linear, full);
+        // A pane like the inspector's others: its header strip, no scrolling
+        // (the wheel zooms the scene).
+        if (!ImGui::Begin("Model 3D###caliper.inspector.model3d", nullptr,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            click_armed = false; drag_armed = 0; ImGui::End(); return clicked;
+        }
+        visible = true;
+        sternbild::pane_header("Model 3D", tensors.empty() ? nullptr : counts, nullptr,
+                               ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
+        if (sternbild::word_button("Fit")) {
+            framing = Framing::Fit; focused.clear(); framing_pending = true;
+        }
         ImGui::SameLine();
         const auto selected_panel = std::find_if(scene.panels.begin(), scene.panels.end(), [&](const Panel& panel) {
             return panel.tensor < tensors.size() && tensors[panel.tensor].name == selected && !panel.output_alias;
         });
         ImGui::BeginDisabled(selected_panel == scene.panels.end());
-        if (ImGui::Button("Focus selected")) {
-            const size_t index = static_cast<size_t>(selected_panel - scene.panels.begin());
-            const double aspect = std::max(1.0f, ImGui::GetContentRegionAvail().x) /
-                                  std::max(1.0f, ImGui::GetContentRegionAvail().y);
-            camera = model3d::focus(scene, index, aspect, camera);
-            fit_pending = false;
-            dirty = true;
+        if (sternbild::word_button("Focus selected")) {
+            // Toolbar items and the label column still change the available
+            // viewport. Frame only after their final rectangles are known.
+            focused = selected; framing = Framing::Focus; framing_pending = true;
         }
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::Text("%zu tensors  %d Linear  %d Full", tensors.size(), linear, full);
-        ImGui::TextUnformatted("Linear: single frame   Full: double frame");
+        {
+            const char* legend = "Bold frame: full attention   Bronze: selected or edited   Drag to orbit, wheel to zoom";
+            ImGui::SameLine();
+            const float width = ImGui::CalcTextSize(legend).x;
+            const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width;
+            if (x > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(x);
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::faint);
+            ImGui::TextUnformatted(legend);
+            ImGui::PopStyleColor();
+        }
         if (tensors.empty()) {
             ImGui::TextUnformatted("Waiting for tensors");
             ImGui::End(); return clicked;
@@ -397,46 +552,75 @@ struct Model3D::Impl {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         if (available.x < 4 || available.y < 4) { ImGui::End(); return clicked; }
         const ImVec2 origin = ImGui::GetCursorScreenPos();
-        const Rect viewport{origin.x, origin.y, available.x, available.y};
+        double label_width = 0;
+        for (const auto& group : scene.groups)
+            label_width = std::max(label_width, static_cast<double>(ImGui::CalcTextSize(group_label(group).c_str()).x));
+        const auto layout = model3d::viewport_layout({origin.x, origin.y, available.x, available.y}, label_width + 4);
+        viewport = layout.scene;
+        if (viewport.width < 4 || viewport.height < 4) { ImGui::End(); return clicked; }
         const double aspect = viewport.width / viewport.height;
-        if (fit_pending) {
-            camera = model3d::fit(scene, aspect, camera.azimuth, camera.elevation);
-            fit_pending = false;
+        const auto frame_camera = [&] {
+            if (!framing_pending && std::fabs(aspect - framed_aspect) <= 1e-8) return;
+            if (framing == Framing::Fit) camera = model3d::fit(scene, aspect);
+            else if (framing == Framing::Focus) {
+                const auto panel = std::find_if(scene.panels.begin(), scene.panels.end(), [&](const Panel& p) {
+                    return p.tensor < tensors.size() && tensors[p.tensor].name == focused;
+                });
+                if (panel != scene.panels.end())
+                    camera = model3d::focus(scene, static_cast<size_t>(panel - scene.panels.begin()), aspect, camera);
+                else { framing = Framing::Fit; camera = model3d::fit(scene, aspect); }
+            }
+            framing_pending = false; framed_aspect = aspect;
             dirty = true;
-        }
-        ImGui::InvisibleButton("##model3d.viewport", available,
+        };
+        frame_camera();
+        label_column = model3d::column_beside_stack(scene, camera, viewport, layout.labels);
+        ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(viewport.x), static_cast<float>(viewport.y)));
+        ImGui::InvisibleButton("##model3d.viewport", ImVec2(static_cast<float>(viewport.width), static_cast<float>(viewport.height)),
             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-        const bool hovered = ImGui::IsItemHovered();
-        const bool active = ImGui::IsItemActive();
         ImGuiIO& io = ImGui::GetIO();
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) dragged = false;
-        if (active && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4) || ImGui::IsMouseDown(ImGuiMouseButton_Middle)) dragged = true;
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Middle) || io.KeyShift)
+        const bool hovered = ImGui::IsItemHovered() && !inside(label_column, io.MousePos.x, io.MousePos.y);
+        const bool active = ImGui::IsItemActive();
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            click_armed = hovered && !io.KeyShift;
+            dragged = false;
+            drag_armed = (drag_armed & ~1u) | (hovered ? 1u : 0u);
+        }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+            drag_armed = (drag_armed & ~2u) | (hovered ? 2u : 0u);
+        const bool left_drag = (drag_armed & 1u) && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4);
+        const bool middle_drag = (drag_armed & 2u) && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0);
+        if (active && (left_drag || middle_drag) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+            dragged = true;
+            if (middle_drag || io.KeyShift)
                 camera = model3d::pan(camera, io.MouseDelta.x, io.MouseDelta.y, viewport.height);
             else if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
                 camera = model3d::orbit(camera, io.MouseDelta.x, io.MouseDelta.y);
+            framing = Framing::Manual;
             dirty = true;
         }
         if (hovered && io.MouseWheel != 0) {
             camera = model3d::zoom(camera, io.MouseWheel);
+            framing = Framing::Manual;
             dirty = true;
         }
         if (ImGui::IsWindowFocused() && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
-            camera = model3d::fit(scene, aspect, camera.azimuth, camera.elevation);
-            dirty = true;
+            framing = Framing::Fit; focused.clear(); framing_pending = true;
+            frame_camera();
         }
+        label_column = model3d::column_beside_stack(scene, camera, viewport, layout.labels);
         if (supported) {
             const float scale = std::max(0.25f, std::max(io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y));
-            const int physical_width = std::clamp(static_cast<int>(available.x * scale), 1, max_target_side);
-            const int physical_height = std::clamp(static_cast<int>(available.y * scale), 1, max_target_side);
+            const int physical_width = std::clamp(static_cast<int>(viewport.width * scale), 1, max_target_side);
+            const int physical_height = std::clamp(static_cast<int>(viewport.height * scale), 1, max_target_side);
             if (render(physical_width, physical_height, aspect) && target) {
-                ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(target)), origin,
-                    ImVec2(origin.x + available.x, origin.y + available.y));
-                labels(ImGui::GetWindowDrawList(), viewport, aspect);
+                ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(target)),
+                    ImVec2(static_cast<float>(viewport.x), static_cast<float>(viewport.y)),
+                    ImVec2(static_cast<float>(viewport.x + viewport.width), static_cast<float>(viewport.y + viewport.height)));
             }
         }
-        if (hovered && !active) {
+        labels(ImGui::GetWindowDrawList(), label_column);
+        if (hovered && !active && !inside(label_column, io.MousePos.x, io.MousePos.y)) {
             const auto hit = model3d::hit_test(scene, camera, viewport, io.MousePos.x, io.MousePos.y);
             if (hit.panel >= 0 && static_cast<size_t>(hit.panel) < scene.panels.size()) {
                 const Panel& panel = scene.panels[static_cast<size_t>(hit.panel)];
@@ -444,19 +628,24 @@ struct Model3D::Impl {
                     const ModelTensor& tensor = tensors[panel.tensor];
                     const auto thumbnail = thumbnails.find(tensor.name);
                     ImGui::BeginTooltip();
-                    ImGui::TextUnformatted(panel.output_alias ? panel.label.c_str() : tensor.name.c_str());
-                    if (panel.output_alias) ImGui::Text("Shared with %s", tensor.name.c_str());
+                    ImGui::TextUnformatted(tensor.name.c_str());
+                    if (tensor.tied) ImGui::TextUnformatted("Embedding and output (tied)");
                     ImGui::TextUnformatted(dimensions(tensor).c_str());
+                    if (panel.row_blocks > 1)
+                        ImGui::Text("%d row blocks, %lld rows per block", panel.row_blocks,
+                                    static_cast<long long>(tensor.rows / panel.row_blocks));
                     if (thumbnail != thumbnails.end() && !thumbnail->second.rgba.empty())
                         ImGui::Text("Sample range %.6g to %.6g", thumbnail->second.minimum, thumbnail->second.maximum);
                     else ImGui::TextUnformatted("Sample pending");
                     if (tensor.edited) ImGui::TextUnformatted("Edited");
                     ImGui::EndTooltip();
-                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !dragged && !io.KeyShift)
+                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && click_armed && !dragged && !io.KeyShift)
                         clicked = tensor.name;
                 }
             }
         }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) { click_armed = false; drag_armed &= ~1u; }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) drag_armed &= ~2u;
         ImGui::End();
         return clicked;
     }
@@ -481,5 +670,6 @@ std::string Model3D::draw(HostRenderer* renderer, float x, float y, float width,
                          const std::string& selected) {
     return impl_->draw(renderer, x, y, width, height, selected);
 }
+model3d::ViewState Model3D::view_state() const { return {impl_->camera, impl_->viewport, impl_->label_column}; }
 
 } // namespace caliper_live

@@ -24,9 +24,9 @@ For a separate review executable that leaves the existing app binary in place:
 
 ```sh
 cmake -S . -B cmake-build-notorch \
-  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$PWD/cmake-build-notorch/review-bin"
+  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$PWD/cmake-build-notorch/review3-bin"
 cmake --build cmake-build-notorch --target caliper -j8
-./cmake-build-notorch/review-bin/caliper
+./cmake-build-notorch/review3-bin/caliper
 ```
 
 Select **Attach** beside `qwen_inspector.py`, or use F4. Enter a prompt and press
@@ -38,8 +38,7 @@ its heatmap and controls. Enter **Row** and **Col**, press **Read**,
 then use **Set**, **Zero row**, **Zero column**, **Scale row**, **Scale column**,
 or **Revert tensor**. Edits are applied to the same model used for the next
 Generate. Stop generation before editing. The embedding is shared with the
-output layer and is listed once in the tree, with an additional tied-output panel
-in Model 3D.
+output layer and is drawn once in Model 3D, marked **Embedding / output (tied)**.
 
 The Tensor window fits each image with square element geometry and empty space
 around it. A vector has a plot of the full vector above a shallow strip of
@@ -52,18 +51,31 @@ the whole matrix or resets the vector strip; **Cells** zooms around Row/Col. At 
 the exact coordinate and value. The colour scale reports the sampled region's
 range. Window resizing requests new samples at the displayed resolution.
 
-Model 3D uses a shared element scale and stacks layer groups in order. Linear
-attention has a single group frame; full attention has a double frame, with text
-labels for both. The final norm and tied output are labelled. Left-drag orbits,
-middle-drag or Shift-drag pans, the wheel zooms, and **F** or **Fit** fits the model.
-The embedding is much larger than the other tensors; **Focus selected** helps
-inspect a small panel at its real scale. Hover gives its name, shape, and sampled
-range. Clicking selects it in the tree and Tensor window. Active edits use the
-theme's accent outline. **Reset layout** in Model restores the four-pane layout.
+Model 3D uses a shared element scale and stacks layer groups in order, with
+each layer's tensors arranged in a wide row. Tall
+matrices fold into equal row blocks side by side, with fold boundaries marked.
+The embedding uses 16 blocks of 15,520 rows: its area is unchanged, but its long
+dimension no longer overwhelms the layer stack. Narrow convolution matrices
+fold too. Rank-one tensors remain thin strips.
 
-A host started before these changes still attaches and supplies legacy overviews.
-Restart that host when convenient to enable region sampling and advertised
-inspector capabilities. Do not start another model host while one is running.
+**F** or **Fit** restores an oblique view of the whole stack. Layer labels occupy
+a column beside the stack; labels that would collide are omitted, with full-attention
+and embedding/final-norm labels taking priority. Full-attention layers have a
+stronger depth-tested neutral frame and a **FULL** label. The accent colour is reserved for
+selection and edits. Tensor names appear on hover.
+
+Left-drag orbits, middle-drag or Shift-drag pans, and the wheel zooms.
+**Focus selected** frames the complete tensor with a margin, using the drawing
+area after reserving the label column. Fit and Focus adapt to window resizing
+until the camera is moved manually. Hover gives the tensor's name, shape, fold
+information, and sampled range. Clicking selects it in the tree and opens the
+Tensor window. **Reset layout** in Model restores the four-pane layout.
+
+A host without the `tensor_regions` capability still attaches and supplies
+legacy overviews. Restart that older host when convenient to enable region
+sampling and advertised inspector capabilities. The 3D framing and folding
+changes work with an existing region-capable host; no restart is needed.
+Do not start another model host while one is running.
 
 The default folder is
 `~/PycharmProjects/weight-space/models/Qwen3.5-0.8B`. `--model` accepts another
@@ -92,7 +104,9 @@ cmake --build --preset release-notorch -j8
   2,048 per side and 131,072 values total. These are samples, not averages;
   coarse samples can miss outliers. Exact cells are returned when the region
   fits the sample budget. 3D textures are fetched lazily, at most 128 × 128
-  each. Vectors are N × 1 on the wire; higher ranks flatten all dimensions
+  each. Folded textures request a tall source sample (for example 2,048 × 8)
+  and rearrange its row blocks into the bounded texture. Vectors are N × 1
+  on the wire; higher ranks flatten all dimensions
   before the last into rows. Ranges are sample ranges, not whole-tensor extrema.
 - Each generation is one user message with a fresh cache. Thinking uses the
   tokenizer's `enable_thinking` option; `<|im_end|>` ends generation. Generated
@@ -210,11 +224,11 @@ Transport and backend-double tests do not require Metal:
 ```
 
 The CMake test targets also include `caliper_tensor_geometry_tests`,
-`caliper_model3d_geometry_tests`, `caliper_live_inspector_tests`,
+`caliper_model3d_geometry_tests`, `caliper_model3d_presentation_tests`, `caliper_live_inspector_tests`,
 `caliper_live_model3d_tests`, and `caliper_request_discovery_tests`. Geometry,
 camera projection/picking, region scheduling, thumbnail caching, and discovery
 run without a GPU. The 3D geometry fixture includes all 320 Qwen tensor shapes
-and the tied output alias. Rendering appearance and interactive GPU performance
+with the tied output sharing the embedding panel. Rendering appearance and interactive GPU performance
 still require an app window outside the sandbox.
 
 Backend doubles test edit and cancellation logic; they do not validate MLX

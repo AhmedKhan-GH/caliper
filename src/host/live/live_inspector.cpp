@@ -8,6 +8,7 @@
 
 #include <crude_json.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <implot.h>
 
 #include <algorithm>
@@ -86,6 +87,48 @@ Object region_fields(Geometry::Region r) {
             {"rows", static_cast<double>(r.rows)}, {"cols", static_cast<double>(r.cols)}};
 }
 ImVec2 point(double x, double y) { return ImVec2(static_cast<float>(x), static_cast<float>(y)); }
+// The four panes, docked into one dockspace like the landing screen's panes.
+constexpr const char* kInferencePane = "Inference###caliper.inspector.inference";
+constexpr const char* kModelPane = "Model###caliper.inspector.model";
+constexpr const char* kModel3DPane = "Model 3D###caliper.inspector.model3d";
+constexpr const char* kTensorPane = "Tensor###caliper.inspector.tensor";
+
+// A pane: a window whose pane_header strip replaces the title bar, bronze while
+// the pane has focus. Its tables and output scroll inside it, never the pane.
+bool begin_pane(const char* window, const char* title, const char* subtitle) {
+    const bool open = ImGui::Begin(window, nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if (open) sternbild::pane_header(title, subtitle, nullptr, ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
+    return open;
+}
+// A form label on the line of the field after it, in the secondary ink.
+void field_label(const char* text) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+    ImGui::TextUnformatted(text);
+    ImGui::PopStyleColor();
+}
+void faint_text(const char* text) {
+    ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::faint);
+    ImGui::TextUnformatted(text);
+    ImGui::PopStyleColor();
+}
+// Text on the current line, right-aligned to the content edge when there is room.
+void right_text(const char* text, ImU32 colour = sternbild::col::secondary) {
+    ImGui::SameLine();
+    const float width = ImGui::CalcTextSize(text).x;
+    const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width;
+    if (x > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(x);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, colour);
+    ImGui::TextUnformatted(text);
+    ImGui::PopStyleColor();
+}
+std::string layer_kind(const std::string& type) {
+    if (type.find("full") != std::string::npos) return "full attention";
+    if (type.find("linear") != std::string::npos) return "linear attention";
+    return {};
+}
+
 int layer_from_name(const std::string& name) {
     const auto start = name.find(".layers.");
     if (start == std::string::npos) return -1;
@@ -117,7 +160,7 @@ struct Inspector::Impl {
     Geometry::Region last_region;
     bool region_ready = false, detail_needed = false, overview_needed = false;
     bool dragging = false, scroll_selected = false, open_selected_group = false;
-    bool force_layout = false, reset_layout = true;
+    bool force_layout = false, reset_layout = true, docked = false, layout_built = false;
     double detail_due = 0;
     std::string detail_name;
     ImVec2 drag_origin;
@@ -471,14 +514,9 @@ struct Inspector::Impl {
         if (name.empty()) return;
         const auto it = std::find_if(tensors.begin(), tensors.end(), [&](const Tensor& t) { return t.name == name; });
         if (it == tensors.end()) { model3d.thumbnail_failed(name); return; }
-        Geometry::Target size = it->vector() ? Geometry::Target{1, 128} : Geometry::Target{128, 128};
+        const auto shape = model3d::thumbnail_shape(*it);
+        const Geometry::Target size{shape[1], shape[0]};
         if (!request_sample(name, "thumbnail", {0, 0, it->rows, it->cols}, size)) model3d.thumbnail_failed(name);
-    }
-    void status() const {
-        if (!alive) ImGui::TextUnformatted("Session ended");
-        else if (!ready) ImGui::TextUnformatted("Connecting");
-        else if (!active.op.empty() && active.op != "generate") ImGui::TextUnformatted("Working");
-        if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
     }
     void generate() {
         if (send("generate", {{"prompt", prompt}, {"max_new_tokens", static_cast<double>(max_new_tokens)},
@@ -491,42 +529,65 @@ struct Inspector::Impl {
         }
     }
     void place_window(const char*, float x, float y, float w, float h) {
+        if (docked) return;   // the dockspace places the panes
         ImGui::SetNextWindowPos(ImVec2(x, y), force_layout ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(w, h), force_layout ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
     }
+    const char* connection() const {
+        if (!alive) return "session ended";
+        if (!ready) return "connecting";
+        if (active.op == "generate") return "generating";
+        if (!active.op.empty() && !background()) return "working";   // thumbnails load quietly
+        return "ready";
+    }
     void inference(float x, float y, float w, float h) {
-        place_window("Inference###caliper.inspector.inference", x, y, w, h);
-        if (ImGui::Begin("Inference###caliper.inspector.inference")) {
-            status();
-            ImGui::TextUnformatted("Prompt");
-            ImGui::InputTextMultiline("##prompt", prompt, sizeof prompt, ImVec2(-1, 110));
-            if (ImGui::BeginTable("settings", 2, ImGuiTableFlags_SizingStretchSame)) {
-                ImGui::TableNextColumn(); ImGui::TextUnformatted("Max new tokens"); ImGui::SetNextItemWidth(-1);
-                ImGui::InputInt("##max_new_tokens", &max_new_tokens);
-                max_new_tokens = std::clamp(max_new_tokens, 1, 1024);
-                ImGui::TableNextColumn(); ImGui::TextUnformatted("Temperature"); ImGui::SetNextItemWidth(-1);
-                ImGui::InputFloat("##temperature", &temperature, 0, 0, "%.2f");
-                temperature = std::isfinite(temperature) ? std::clamp(temperature, 0.0f, 2.0f) : 0.7f;
-                ImGui::TableNextColumn(); ImGui::TextUnformatted("Top p"); ImGui::SetNextItemWidth(-1);
-                ImGui::InputFloat("##top_p", &top_p, 0, 0, "%.2f");
-                top_p = std::isfinite(top_p) ? std::clamp(top_p, 0.0f, 1.0f) : 0.9f;
-                ImGui::TableNextColumn(); ImGui::TextUnformatted("Top k"); ImGui::SetNextItemWidth(-1);
-                ImGui::InputInt("##top_k", &top_k);
-                top_k = std::clamp(top_k, 0, 1000);
-                ImGui::EndTable();
-            }
+        place_window(kInferencePane, x, y, w, h);
+        if (begin_pane(kInferencePane, "Inference", connection())) {
+            if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
+            field_label("Prompt");
+            const float prompt_height = std::clamp(ImGui::GetContentRegionAvail().y * 0.22f, 72.0f, 200.0f);
+            ImGui::InputTextMultiline("##prompt", prompt, sizeof prompt, ImVec2(-FLT_MIN, prompt_height));
+            // Two label-field pairs per row, the labels in one column so the
+            // fields line up (form layout, Bloomberg-style dense settings).
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
+            const float label_width = ImGui::CalcTextSize("Max new tokens").x + style.ItemSpacing.x;
+            const float field_width = std::max(40.0f, half - label_width - style.ItemSpacing.x);
+            const float second = ImGui::GetCursorPosX() + half + style.ItemSpacing.x;
+            auto pair = [&](const char* label, float column) {
+                if (column > 0) ImGui::SameLine(column);
+                const float start = ImGui::GetCursorPosX();
+                field_label(label);
+                ImGui::SameLine(start + label_width);
+                ImGui::SetNextItemWidth(field_width);
+            };
+            pair("Max new tokens", 0);
+            ImGui::InputInt("##max_new_tokens", &max_new_tokens, 0, 0);
+            max_new_tokens = std::clamp(max_new_tokens, 1, 1024);
+            pair("Temperature", second);
+            ImGui::InputFloat("##temperature", &temperature, 0, 0, "%.2f");
+            temperature = std::isfinite(temperature) ? std::clamp(temperature, 0.0f, 2.0f) : 0.7f;
+            pair("Top p", 0);
+            ImGui::InputFloat("##top_p", &top_p, 0, 0, "%.2f");
+            top_p = std::isfinite(top_p) ? std::clamp(top_p, 0.0f, 1.0f) : 0.9f;
+            pair("Top k", second);
+            ImGui::InputInt("##top_k", &top_k, 0, 0);
+            top_k = std::clamp(top_k, 0, 1000);
             ImGui::Checkbox("Thinking", &thinking);
+            ImGui::Spacing();
             ImGui::BeginDisabled(!can_control() || prompt[0] == '\0');
-            if (ImGui::Button("Generate")) generate();
+            if (sternbild::primary_button("Generate")) generate();
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(active.op != "generate" || stop_requested || !channel.connected());
-            if (ImGui::Button("Stop")) stop();
+            if (sternbild::word_button("Stop")) stop();
             ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::Text("%d tokens  %.1f tokens/s", tokens, tokens_per_second);
-            if (!generation_status.empty()) ImGui::TextUnformatted(generation_status.c_str());
-            ImGui::Separator();
+            char stats[64];
+            std::snprintf(stats, sizeof stats, "%d tokens  %.1f tokens/s", tokens, tokens_per_second);
+            right_text(stats);
+            if (!generation_status.empty()) faint_text(generation_status.c_str());
+            ImGui::Spacing();
+            field_label("Output");
             if (ImGui::BeginChild("output", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
                 const bool at_end = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1;
                 ImGui::PushTextWrapPos(0);
@@ -540,26 +601,36 @@ struct Inspector::Impl {
         ImGui::End();
     }
     void model_tree(float x, float y, float w, float h) {
-        place_window("Model###caliper.inspector.model", x, y, w, h);
-        if (ImGui::Begin("Model###caliper.inspector.model")) {
-            if (!supports("generate")) status();
-            if (!model.empty()) ImGui::TextUnformatted(model.c_str());
-            double total_bytes = 0;
-            for (const auto& t : tensors) total_bytes += t.bytes;
-            ImGui::Text("%zu tensors  %s", tensors.size(), byte_size(total_bytes).c_str());
-            if (ImGui::SmallButton("Reset layout")) reset_layout = true;
-            ImGui::SetNextItemWidth(-80);
+        place_window(kModelPane, x, y, w, h);
+        double total_bytes = 0;
+        std::set<std::string> dtypes;
+        for (const auto& t : tensors) { total_bytes += t.bytes; dtypes.insert(t.dtype); }
+        if (begin_pane(kModelPane, "Model", supports("generate") ? nullptr : connection())) {
+            if (!supports("generate") && !error.empty()) ImGui::TextWrapped("%s", error.c_str());
+            if (!model.empty()) {
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(model.c_str());
+                char summary[96];
+                std::snprintf(summary, sizeof summary, "%zu tensors  %s%s%s", tensors.size(), byte_size(total_bytes).c_str(),
+                              dtypes.size() == 1 ? "  " : "", dtypes.size() == 1 ? dtypes.begin()->c_str() : "");
+                right_text(summary);
+            }
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float words = ImGui::CalcTextSize("Refresh").x + ImGui::CalcTextSize("Reset layout").x +
+                                4 * style.FramePadding.x + 2 * style.ItemSpacing.x;
+            ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - words));
             ImGui::InputTextWithHint("##filter", "Filter tensors", filter, sizeof filter);
             ImGui::SameLine();
             ImGui::BeginDisabled(!can_control());
-            if (ImGui::Button("Refresh")) want_list = true;
+            if (sternbild::word_button("Refresh")) want_list = true;
             ImGui::EndDisabled();
-            if (ImGui::BeginTable("tensors", 4, ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
-                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV, ImVec2(0, 0))) {
-                ImGui::TableSetupColumn("Tensor", ImGuiTableColumnFlags_WidthStretch, 3);
-                ImGui::TableSetupColumn("Shape", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-                ImGui::TableSetupColumn("Dtype", ImGuiTableColumnFlags_WidthStretch, 1);
-                ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 1);
+            ImGui::SameLine();
+            if (sternbild::word_button("Reset layout")) reset_layout = true;
+            if (ImGui::BeginTable("tensors", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit, ImVec2(0, 0))) {
+                ImGui::TableSetupColumn("Tensor", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Shape", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("[248320, 1024]").x);
+                ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("485.0 MiB").x);
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableHeadersRow();
                 std::vector<std::string> groups;
@@ -575,6 +646,14 @@ struct Inspector::Impl {
                     if (filter[0] || (open_selected_group && tensor() && tensor()->group == group))
                         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                     const bool open = ImGui::TreeNodeEx(group.c_str(), ImGuiTreeNodeFlags_SpanAllColumns);
+                    std::string kind;
+                    for (const auto& t : tensors) if (t.group == group && !t.layer_type.empty()) { kind = layer_kind(t.layer_type); break; }
+                    if (!kind.empty()) {
+                        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 2);
+                        ImGui::PushStyleColor(ImGuiCol_Text, kind == "full attention" ? sternbild::col::parchment : sternbild::col::faint);
+                        ImGui::TextUnformatted(kind.c_str());
+                        ImGui::PopStyleColor();
+                    }
                     if (open) {
                         for (const auto& t : tensors) {
                             if (t.group != group || (filter[0] && t.name.find(filter) == std::string::npos)) continue;
@@ -583,13 +662,14 @@ struct Inspector::Impl {
                             std::string label = t.name;
                             const auto prefix = label.find(group + ".");
                             if (prefix != std::string::npos) label.erase(0, prefix + group.size() + 1);
+                            for (const char* common : {"language_model.model.", "model."})
+                                if (label.rfind(common, 0) == 0) { label.erase(0, std::strlen(common)); break; }
                             ImGui::BeginDisabled(!can_control());
                             if (ImGui::Selectable(label.c_str(), selected == t.name, ImGuiSelectableFlags_SpanAllColumns)) select(t.name);
                             ImGui::EndDisabled();
                             if (scroll_selected && selected == t.name) { ImGui::SetScrollHereY(0.5f); scroll_selected = false; }
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%.0f values", t.name.c_str(), t.size);
                             ImGui::TableNextColumn(); ImGui::TextUnformatted(t.shape_label.c_str());
-                            ImGui::TableNextColumn(); ImGui::TextUnformatted(t.dtype.c_str());
                             ImGui::TableNextColumn(); ImGui::TextUnformatted(byte_size(t.bytes).c_str());
                             ImGui::PopID();
                         }
@@ -758,15 +838,21 @@ struct Inspector::Impl {
         paint_image(detail, region, picture, t.vector());
         auto* list = ImGui::GetWindowDrawList();
         const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
-        char axis[100];
-        if (t.vector()) std::snprintf(axis, sizeof axis, "Index %lld to %lld", static_cast<long long>(region.row), static_cast<long long>(region.row + region.rows - 1));
-        else std::snprintf(axis, sizeof axis, "Column %lld to %lld", static_cast<long long>(region.col), static_cast<long long>(region.col + region.cols - 1));
-        list->AddText(point(detail_bounds.x, detail_bounds.y + detail_bounds.height + 3), text, axis);
-        if (!t.vector()) {
-            std::snprintf(axis, sizeof axis, "Row %lld", static_cast<long long>(region.row));
-            list->AddText(point(detail_bounds.x, detail_bounds.y - ImGui::GetTextLineHeight()), text, axis);
-            std::snprintf(axis, sizeof axis, "%lld", static_cast<long long>(region.row + region.rows - 1));
-            list->AddText(point(detail_bounds.x, detail_bounds.y + detail_bounds.height - ImGui::GetTextLineHeight()), text, axis);
+        char columns[100];
+        if (t.vector()) {
+            std::snprintf(columns, sizeof columns, "Index %lld to %lld", static_cast<long long>(region.row), static_cast<long long>(region.row + region.rows - 1));
+            list->AddText(point(detail_bounds.x, detail_bounds.y + detail_bounds.height + 3), text, columns);
+        } else {
+            char first_row[64], last_row[64];
+            std::snprintf(first_row, sizeof first_row, "Row %lld", static_cast<long long>(region.row));
+            std::snprintf(last_row, sizeof last_row, "%lld", static_cast<long long>(region.row + region.rows - 1));
+            std::snprintf(columns, sizeof columns, "Column %lld to %lld", static_cast<long long>(region.col), static_cast<long long>(region.col + region.cols - 1));
+            const auto labels = Geometry::axis_labels(picture, ImGui::CalcTextSize(first_row).x,
+                ImGui::CalcTextSize(last_row).x, ImGui::CalcTextSize(columns).x, ImGui::GetTextLineHeight());
+            list->AddText(point(labels.first_row.x, labels.first_row.y), text, first_row);
+            if (region.rows > 1 && labels.last_row.height > 0)
+                list->AddText(point(labels.last_row.x, labels.last_row.y), text, last_row);
+            list->AddText(point(labels.columns.x, labels.columns.y), text, columns);
         }
         if (layout.elongated) {
             Sample& sample = overview.values.empty() ? detail : overview;
@@ -803,88 +889,170 @@ struct Inspector::Impl {
         if (!ImGui::IsItemActive()) dragging = false;
     }
     void tensor_view(float x, float y, float w, float h) {
-        place_window("Tensor###caliper.inspector.tensor", x, y, w, h);
-        if (ImGui::Begin("Tensor###caliper.inspector.tensor")) {
-            const Tensor* t = tensor();
-            if (!t) ImGui::TextUnformatted("Select a tensor");
-            else {
-                ImGui::TextWrapped("%s", t->name.c_str());
-                ImGui::Text("%s  %s  %s", t->shape_label.c_str(), t->dtype.c_str(), byte_size(t->bytes).c_str());
-                if (t->tied) ImGui::TextUnformatted("Shared with the output layer");
-                ImGui::Text("Rows %lld  Columns %lld", static_cast<long long>(t->rows), static_cast<long long>(t->cols));
-                if (!supports("tensor_regions")) ImGui::TextUnformatted("Overview only: restart the host to enable region sampling.");
-                ImGui::BeginDisabled(!can_control());
-                if (ImGui::Button("Fit tensor")) {
-                    if (t->vector()) region_ready = false;
-                    else { region = {0, 0, t->rows, t->cols}; region_ready = true; }
-                    detail_needed = supports("tensor_regions"); detail_due = 0;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cells")) {
-                    const auto extent = ImGui::GetContentRegionAvail();
-                    Geometry::Region cells;
-                    cells.rows = t->vector() ? std::max(1, static_cast<int>(extent.x / Geometry::strip_height)) : 12;
-                    cells.cols = t->vector() ? 1 : std::max(1, static_cast<int>(extent.x / Geometry::strip_height));
-                    cells.row = row - cells.rows / 2; cells.col = col - cells.cols / 2;
-                    region = Geometry::clamp(cells, t->rows, t->cols); region_ready = true;
-                    detail_needed = supports("tensor_regions"); detail_due = 0;
-                }
-                ImGui::EndDisabled();
-                const auto available = ImGui::GetContentRegionAvail();
-                const double image_height = std::clamp(static_cast<double>(available.y) - 225.0, t->vector() ? 130.0 : 140.0, 330.0);
-                const auto start = ImGui::GetCursorScreenPos();
-                const Geometry::Rect image_area{start.x + (t->vector() ? 0 : 32), start.y + 18,
-                    std::max(20.0, static_cast<double>(available.x) - (t->vector() ? 85 : 115)), std::max(20.0, image_height - 42)};
-                tensor_picture(*t, image_area);
-                color_scale(detail, {start.x + available.x - 78, start.y + 18, 78, image_height - 18});
-                ImGui::SetCursorScreenPos(start);
-                ImGui::Dummy(ImVec2(available.x, static_cast<float>(image_height)));
-                if (!detail.values.empty()) ImGui::Text("Region: %d x %d sampled values%s", detail.rows, detail.cols, detail.exact ? " (exact cells)" : "");
-                else ImGui::TextUnformatted("Loading region");
-                ImGui::TextUnformatted("Wheel to zoom; drag to pan. Select cells or use Row and Col.");
-                ImGui::BeginDisabled(!can_control());
-                const float input_width = std::max(80.0f, (ImGui::GetContentRegionAvail().x - 100) * 0.5f);
-                ImGui::SetNextItemWidth(input_width);
-                if (ImGui::InputInt("Row", &row)) have_value = false;
-                ImGui::SameLine(); ImGui::SetNextItemWidth(input_width);
-                if (ImGui::InputInt("Col", &col)) have_value = false;
-                row = std::clamp(row, 0, static_cast<int>(t->rows - 1)); col = std::clamp(col, 0, static_cast<int>(t->cols - 1));
-                ImGui::BeginDisabled(!supports("read_weight"));
-                if (ImGui::Button("Read")) send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}});
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                if (have_value) ImGui::Text("(%d, %d) = %.9g", value_row, value_col, read_value);
-                else ImGui::TextUnformatted("Value not read");
-                ImGui::SetNextItemWidth(input_width);
-                ImGui::InputDouble("Value", &value, 0, 0, "%.9g");
-                ImGui::SameLine();
-                ImGui::BeginDisabled(!supports("edit_weight") || !std::isfinite(value));
-                if (ImGui::Button("Set")) edit("set", value);
-                ImGui::EndDisabled();
-                ImGui::SetNextItemWidth(input_width);
-                ImGui::InputDouble("Scale", &factor, 0, 0, "%.6g");
-                ImGui::BeginDisabled(!supports("edit_weight"));
-                if (ImGui::Button("Zero row")) edit("zero_row", 0);
-                ImGui::SameLine();
-                if (ImGui::Button("Zero column")) edit("zero_column", 0);
-                ImGui::BeginDisabled(!std::isfinite(factor));
-                if (ImGui::Button("Scale row")) edit("scale_row", factor);
-                ImGui::SameLine();
-                if (ImGui::Button("Scale column")) edit("scale_column", factor);
-                ImGui::EndDisabled();
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                ImGui::BeginDisabled(!supports("revert_tensor"));
-                if (ImGui::Button("Revert tensor")) send("revert_tensor", {{"name", selected}});
-                ImGui::EndDisabled();
-                ImGui::EndDisabled();
-                if (active.op == "generate") ImGui::TextUnformatted("Stop generation to edit weights.");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Edits");
-                if (edits.empty()) ImGui::TextUnformatted("No edits");
-                else for (const auto& edit : edits) ImGui::TextWrapped("%s", edit.c_str());
+        place_window(kTensorPane, x, y, w, h);
+        const Tensor* t = tensor();
+        std::string subtitle = t ? t->name : std::string("none selected");
+        for (const char* prefix : {"language_model.model.", "model."})
+            if (subtitle.rfind(prefix, 0) == 0) { subtitle.erase(0, std::strlen(prefix)); break; }
+        if (begin_pane(kTensorPane, "Tensor", subtitle.c_str())) {
+            if (!t) faint_text("Select a tensor in Model or Model 3D.");
+            else tensor_body(*t);
+        }
+        ImGui::End();
+    }
+    void tensor_body(const Tensor& t) {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        char facts[160];
+        std::snprintf(facts, sizeof facts, "%s  %s  %s", t.shape_label.c_str(), t.dtype.c_str(), byte_size(t.bytes).c_str());
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(facts);
+        if (t.tied) { ImGui::SameLine(0, style.ItemSpacing.x * 3); faint_text("Shared with the output layer"); }
+        if (!supports("tensor_regions")) faint_text("Overview only: restart the host to enable region sampling.");
+
+        ImGui::BeginDisabled(!can_control());
+        if (sternbild::word_button("Fit tensor")) {
+            if (t.vector()) region_ready = false;
+            else { region = {0, 0, t.rows, t.cols}; region_ready = true; }
+            detail_needed = supports("tensor_regions"); detail_due = 0;
+        }
+        ImGui::SameLine();
+        if (sternbild::word_button("Cells")) {
+            const auto extent = ImGui::GetContentRegionAvail();
+            Geometry::Region cells;
+            cells.rows = t.vector() ? std::max(1, static_cast<int>(extent.x / Geometry::strip_height)) : 12;
+            cells.cols = t.vector() ? 1 : std::max(1, static_cast<int>(extent.x / Geometry::strip_height));
+            cells.row = row - cells.rows / 2; cells.col = col - cells.cols / 2;
+            region = Geometry::clamp(cells, t.rows, t.cols); region_ready = true;
+            detail_needed = supports("tensor_regions"); detail_due = 0;
+        }
+        ImGui::EndDisabled();
+        char sampled[96];
+        if (!detail.values.empty())
+            std::snprintf(sampled, sizeof sampled, "Region: %d x %d sampled values%s", detail.rows, detail.cols, detail.exact ? " (exact cells)" : "");
+        else std::snprintf(sampled, sizeof sampled, "Loading region");
+        right_text(sampled, sternbild::col::faint);
+
+        // The picture takes every line the edit bar below does not need; the
+        // row labels sit in the margin on its left, the colour scale on its right.
+        const float row_height = ImGui::GetFrameHeightWithSpacing();
+        const float edit_height = 4 * row_height + style.ItemSpacing.y * 2 + 1;
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const float picture_height = std::max(140.0f, available.y - edit_height);
+        const ImVec2 start = ImGui::GetCursorScreenPos();
+        const double line = ImGui::GetTextLineHeight();
+        const double label_room = t.vector() ? 0 : ImGui::CalcTextSize("Row 248320").x + style.ItemSpacing.x;
+        const double scale_room = ImGui::CalcTextSize("-0.0000000").x + 24;
+        const Geometry::Rect image_area{start.x + label_room, start.y + line + 4,
+            std::max(20.0, available.x - label_room - scale_room - style.ItemSpacing.x),
+            std::max(20.0, picture_height - 2 * line - 12)};
+        tensor_picture(t, image_area);
+        color_scale(detail, {start.x + available.x - scale_room + style.ItemSpacing.x, start.y + line + 4,
+                             scale_room - style.ItemSpacing.x, picture_height - line - 8});
+        ImGui::SetCursorScreenPos(start);
+        ImGui::Dummy(ImVec2(available.x, picture_height));
+
+        // Edit bar: fixed-width fields with their labels before them.
+        ImGui::Separator();
+        const float number_width = ImGui::CalcTextSize("00000000").x + 2 * style.FramePadding.x;
+        const float value_width = ImGui::CalcTextSize("-0.000000000").x + 2 * style.FramePadding.x;
+        const float group_gap = style.ItemSpacing.x * 4;
+        ImGui::BeginDisabled(!can_control());
+        field_label("Row"); ImGui::SameLine(); ImGui::SetNextItemWidth(number_width);
+        if (ImGui::InputInt("##row", &row, 0, 0)) have_value = false;
+        ImGui::SameLine(); field_label("Col"); ImGui::SameLine(); ImGui::SetNextItemWidth(number_width);
+        if (ImGui::InputInt("##col", &col, 0, 0)) have_value = false;
+        row = std::clamp(row, 0, static_cast<int>(t.rows - 1)); col = std::clamp(col, 0, static_cast<int>(t.cols - 1));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!supports("read_weight"));
+        if (sternbild::word_button("Read")) send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}});
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        if (have_value) ImGui::Text("(%d, %d) = %.9g", value_row, value_col, read_value);
+        else faint_text("Value not read");
+
+        field_label("Value"); ImGui::SameLine(); ImGui::SetNextItemWidth(value_width);
+        ImGui::InputDouble("##value", &value, 0, 0, "%.9g");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!supports("edit_weight") || !std::isfinite(value));
+        if (sternbild::word_button("Set")) edit("set", value);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, group_gap); field_label("Scale"); ImGui::SameLine(); ImGui::SetNextItemWidth(number_width);
+        ImGui::InputDouble("##scale", &factor, 0, 0, "%.6g");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!supports("edit_weight") || !std::isfinite(factor));
+        if (sternbild::word_button("Scale row")) edit("scale_row", factor);
+        ImGui::SameLine();
+        if (sternbild::word_button("Scale column")) edit("scale_column", factor);
+        ImGui::EndDisabled();
+
+        ImGui::BeginDisabled(!supports("edit_weight"));
+        if (sternbild::word_button("Zero row")) edit("zero_row", 0);
+        ImGui::SameLine();
+        if (sternbild::word_button("Zero column")) edit("zero_column", 0);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, group_gap);
+        ImGui::BeginDisabled(!supports("revert_tensor"));
+        if (sternbild::word_button("Revert tensor")) send("revert_tensor", {{"name", selected}});
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        if (active.op == "generate") { ImGui::SameLine(0, group_gap); faint_text("Stop generation to edit weights."); }
+
+        field_label("Edits"); ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        if (edits.empty()) faint_text("No edits");
+        else {
+            ImGui::Text("%zu", edits.size());
+            ImGui::SameLine();
+            ImGui::TextUnformatted(edits.back().c_str());
+            if (edits.size() > 1 && ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                for (const auto& line_text : edits) ImGui::TextUnformatted(line_text.c_str());
+                ImGui::EndTooltip();
             }
         }
+    }
+    // The panes share one dockspace over the live page's work area, as the
+    // landing screen's do: Model left, Model 3D over Tensor in the centre,
+    // Inference right, with no tab bars, and splitters that keep the user's
+    // proportions between runs. The tiling is built on first use, when a pane
+    // has never been docked here, and on Reset layout.
+    void dock_host(float x, float y, float width, float height) {
+        ImGui::SetNextWindowPos(ImVec2(x, y));
+        ImGui::SetNextWindowSize(ImVec2(width, height));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::Begin("##caliper.inspector.host", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground);
+        ImGui::PopStyleVar(3);
+        const ImGuiID dock = ImGui::GetID("caliper.inspector.dockspace");
+        if (!layout_built || reset_layout) {
+            bool rebuild = reset_layout || !ImGui::DockBuilderGetNode(dock) || ImGui::DockBuilderGetNode(dock)->IsEmpty();
+            for (const char* pane : {kModelPane, kModel3DPane, kTensorPane, kInferencePane}) {
+                const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(pane));
+                if (!settings || settings->DockId == 0) rebuild = true;
+            }
+            if (rebuild) {
+                ImGui::DockBuilderRemoveNode(dock);
+                ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
+                ImGui::DockBuilderSetNodeSize(dock, ImVec2(width, height));
+                ImGuiID left = 0, rest = 0, right = 0, centre = 0, top = 0, bottom = 0;
+                ImGui::DockBuilderSplitNode(dock, ImGuiDir_Left, 0.20f, &left, &rest);
+                ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, &right, &centre);
+                ImGui::DockBuilderSplitNode(centre, ImGuiDir_Up, 0.50f, &top, &bottom);
+                ImGui::DockBuilderDockWindow(kModelPane, left);
+                ImGui::DockBuilderDockWindow(kModel3DPane, top);
+                ImGui::DockBuilderDockWindow(kTensorPane, bottom);
+                ImGui::DockBuilderDockWindow(kInferencePane, right);
+                ImGui::DockBuilderFinish(dock);
+            }
+            layout_built = true; reset_layout = false;
+        }
+        ImGui::DockSpace(dock, ImVec2(0, 0), ImGuiDockNodeFlags_NoUndocking | ImGuiDockNodeFlags_NoWindowMenuButton |
+                                             ImGuiDockNodeFlags_NoTabBar);
         ImGui::End();
     }
     void draw(float x, float y, float width, float height, caliper_host::HostRenderer* current_renderer) {
@@ -892,7 +1060,10 @@ struct Inspector::Impl {
         if (renderer != current_renderer) {
             clear_samples(); renderer = current_renderer; detail_needed = overview_needed = true;
         }
-        force_layout = reset_layout; reset_layout = false;
+        docked = (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
+        if (docked) dock_host(x, y, width, height);
+        force_layout = !docked && reset_layout;
+        if (!docked) reset_layout = false;
         const auto windows = Geometry::window_layout({x, y, width, height});
         auto draw_window = [](auto function, Geometry::Rect r) {
             function(static_cast<float>(r.x), static_cast<float>(r.y), static_cast<float>(r.width), static_cast<float>(r.height));

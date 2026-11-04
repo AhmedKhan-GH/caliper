@@ -98,7 +98,7 @@ struct Ui {
     std::string captured;
     int errors = 0;
     Json initial_sample;
-    bool vector_fixture = false;
+    bool vector_fixture = false, embedding_fixture = false;
 
     Ui() {
         ImGui::CreateContext();
@@ -198,6 +198,12 @@ struct Ui {
                 {"sample_rows", static_cast<double>(samples)}, {"sample_cols", 1.0},
                 {"values", std::move(values)}, {"row_indices", std::move(indices)}, {"col_indices", Array{0.0}},
                 {"region", region}, {"edited", edited}, {"revision", edited ? 1.0 : 0.0}, {"edits", std::move(edits)}});
+        } else if (embedding_fixture) {
+            const Json& region = req["region"];
+            peer.reply(req, Object{{"name", "block.weight"}, {"rows", 248320.0}, {"cols", 1024.0},
+                {"sample_rows", 1.0}, {"sample_cols", 1.0}, {"values", Array{0.25}},
+                {"row_indices", Array{region["row"]}}, {"col_indices", Array{region["col"]}},
+                {"region", region}, {"edited", false}, {"revision", 0.0}, {"edits", Array{}}});
         } else {
             peer.reply(req, Object{{"name", "block.weight"}, {"rows", 4.0}, {"cols", 3.0},
                 {"sample_rows", 2.0}, {"sample_cols", 2.0},
@@ -212,17 +218,21 @@ struct Ui {
         REQUIRE(peer.outgoing.empty());
         frame(); // Consume the final chunk after the peer flushed it.
     }
-    void connect(bool regions = false, bool vector = false) {
-        vector_fixture = vector;
+    void connect(bool regions = false, bool vector = false, bool embedding = false) {
+        vector_fixture = vector; embedding_fixture = embedding;
         auto hello = request("hello");
         Array capabilities{"generate", "list_tensors", "show_tensor", "read_weight", "edit_weight", "revert_tensor"};
         if (regions) capabilities.push_back("tensor_regions");
         peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", std::move(capabilities)}});
         auto list = request("list_tensors");
         peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
-            Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", vector ? Array{1024.0} : Array{4.0, 3.0}},
-                {"dtype", "float32"}, {"bytes", vector ? 4096.0 : 48.0}, {"size", vector ? 1024.0 : 12.0},
-                {"rows", vector ? 1024.0 : 4.0}, {"cols", vector ? 1.0 : 3.0}, {"tied", true}}
+            Object{{"name", "block.weight"}, {"group", "Block"},
+                {"shape", vector ? Array{1024.0} : embedding ? Array{248320.0, 1024.0} : Array{4.0, 3.0}},
+                {"dtype", "float32"}, {"bytes", vector ? 4096.0 : embedding ? 1017118720.0 : 48.0},
+                {"size", vector ? 1024.0 : embedding ? 254279680.0 : 12.0},
+                {"rows", vector ? 1024.0 : embedding ? 248320.0 : 4.0},
+                {"cols", vector ? 1.0 : embedding ? 1024.0 : 3.0}, {"tied", true},
+                {"role", embedding ? "embedding" : "weight"}}
         }}});
         initial_sample = request("show_tensor");
         overview(initial_sample);
@@ -269,7 +279,7 @@ TEST_CASE("inspector widgets stream, stop and edit through the request channel")
     ui.peer.reply(read, Object{{"name", "block.weight"}, {"row", 0.0}, {"col", 0.0}, {"value", 0.125}});
     ui.frame();
     CHECK(ui.captured.find("(0, 0) = 0.125") != std::string::npos);
-    ui.input(tensor_window, "Value", "0.5");
+    ui.input(tensor_window, "##value", "0.5");
     ui.activate(tensor_window, "Set");
     auto edit = ui.request("edit_weight");
     CHECK(edit["action"].get<std::string>() == "set");
@@ -356,5 +366,25 @@ TEST_CASE("inspector vector detail uses square strip cells and a separate full-r
     CHECK(plot["target"]["height"].get<double>() > visible);
     ui.overview(plot);
     CHECK(ui.captured.find("exact cells") != std::string::npos);
+    CHECK(ui.errors == 0);
+}
+
+TEST_CASE("inspector requests folded embedding thumbnails within the small atlas budget") {
+    Ui ui;
+    ui.connect(true, false, true);
+    const auto whole_overview = ui.request("show_tensor");
+    CHECK(whole_overview["region"]["rows"].get<double>() == 248320);
+    CHECK(whole_overview["region"]["cols"].get<double>() == 1024);
+    ui.overview(whole_overview);
+
+    const auto thumbnail = ui.request("show_tensor");
+    CHECK(thumbnail["name"].get<std::string>() == "block.weight");
+    CHECK(thumbnail["region"]["row"].get<double>() == 0);
+    CHECK(thumbnail["region"]["col"].get<double>() == 0);
+    CHECK(thumbnail["region"]["rows"].get<double>() == 248320);
+    CHECK(thumbnail["region"]["cols"].get<double>() == 1024);
+    // Sixteen equal row blocks become a 128 x 128 texture after reflow.
+    CHECK(thumbnail["target"]["height"].get<double>() == 2048);
+    CHECK(thumbnail["target"]["width"].get<double>() == 8);
     CHECK(ui.errors == 0);
 }

@@ -13,7 +13,9 @@ namespace {
 constexpr double pi = 3.14159265358979323846;
 constexpr double half_fov = pi / 8.0;
 constexpr double panel_gap = 0.25;
-constexpr double layer_pitch = 4.0;
+constexpr double default_azimuth = 1.5;
+constexpr double default_elevation = 1.15;
+constexpr double fit_fraction = 0.86;
 constexpr double epsilon = 1e-10;
 
 Vec3 add(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
@@ -34,8 +36,8 @@ Camera valid(Camera camera) {
     if (!finite(camera.target)) camera.target = {};
     if (!std::isfinite(camera.radius) || camera.radius <= 0) camera.radius = 1;
     if (!std::isfinite(camera.distance) || camera.distance <= 0) camera.distance = camera.radius * 3;
-    if (!std::isfinite(camera.azimuth)) camera.azimuth = 1.1;
-    if (!std::isfinite(camera.elevation)) camera.elevation = 0.35;
+    if (!std::isfinite(camera.azimuth)) camera.azimuth = default_azimuth;
+    if (!std::isfinite(camera.elevation)) camera.elevation = default_elevation;
     camera.elevation = std::clamp(camera.elevation, -1.55, 1.55);
     return camera;
 }
@@ -59,18 +61,47 @@ Frame frame(Camera input) {
     f.far_z = std::max(f.near_z * 2, camera.distance + camera.radius * 1.5);
     return f;
 }
-Camera fit_bounds(Vec3 minimum, Vec3 maximum, double aspect, double azimuth, double elevation) {
+Camera fit_points(const std::vector<Vec3>& points, double aspect, double azimuth, double elevation) {
     Camera camera;
+    if (points.empty()) return camera;
+    Vec3 minimum = points.front(), maximum = points.front();
+    for (Vec3 p : points) {
+        minimum.x = std::min(minimum.x, p.x); maximum.x = std::max(maximum.x, p.x);
+        minimum.y = std::min(minimum.y, p.y); maximum.y = std::max(maximum.y, p.y);
+        minimum.z = std::min(minimum.z, p.z); maximum.z = std::max(maximum.z, p.z);
+    }
     camera.target = mul(add(minimum, maximum), 0.5);
     camera.radius = std::max(length(sub(maximum, minimum)) * 0.5, element_unit);
     camera.azimuth = azimuth;
     camera.elevation = elevation;
-    const double horizontal_half_fov = std::atan(std::tan(half_fov) * valid_aspect(aspect));
-    const double limiting_half_fov = std::min(half_fov, horizontal_half_fov);
-    // A sphere around the bounding box fits for every orbit orientation. The
-    // margin keeps both the panels and their projected outlines off the edge.
-    camera.distance = camera.radius / std::sin(limiting_half_fov) * 1.08;
+    camera = valid(camera);
+    const Frame basis = frame(camera);
+    const double vertical = std::tan(half_fov) * fit_fraction;
+    const double horizontal = vertical * valid_aspect(aspect);
+    camera.distance = element_unit;
+    // Solve the perspective inequalities for each real corner. A bounding
+    // sphere wastes most of a tall stack's viewport and hides its layers.
+    for (Vec3 p : points) {
+        const Vec3 relative = sub(p, camera.target);
+        const double depth = dot(relative, basis.forward);
+        camera.distance = std::max({camera.distance,
+            std::fabs(dot(relative, basis.right)) / horizontal - depth,
+            std::fabs(dot(relative, basis.up)) / vertical - depth,
+            -depth + camera.radius * 0.02});
+    }
     return valid(camera);
+}
+std::array<int64_t, 2> dimensions(const Tensor& tensor) {
+    if (tensor.rows > 0 && tensor.cols > 0) return {tensor.rows, tensor.cols};
+    if (tensor.shape.empty()) return {0, 0};
+    if (tensor.shape.size() == 1) return {tensor.shape.front(), 1};
+    int64_t rows = 1;
+    for (size_t i = 0; i + 1 < tensor.shape.size(); ++i) {
+        if (tensor.shape[i] <= 0 || rows > std::numeric_limits<int64_t>::max() / tensor.shape[i]) return {0, 0};
+        rows *= tensor.shape[i];
+    }
+    return tensor.shape.back() > 0 ? std::array<int64_t, 2>{rows, tensor.shape.back()}
+                                  : std::array<int64_t, 2>{0, 0};
 }
 bool ends_with(const std::string& value, const char* suffix) {
     const std::string tail(suffix);
@@ -108,7 +139,7 @@ std::string type_of(const Tensor& tensor) {
 struct Bucket {
     std::string label, layer_type;
     int layer_index = -1;
-    std::vector<std::pair<size_t, bool>> tensors;
+    std::vector<size_t> tensors;
 };
 using Key = std::pair<int, int>;
 void grow(Scene& scene, Vec3 point, bool& first) {
@@ -127,29 +158,47 @@ bool inside(Rect viewport, double x, double y) {
 }
 } // namespace
 
+int row_blocks(const Tensor& tensor) {
+    if (tensor.shape.size() == 1) return 1;
+    const auto shape = dimensions(tensor);
+    if (shape[0] <= 0 || shape[1] <= 0 || static_cast<long double>(shape[0]) / shape[1] <= 8) return 1;
+    int best = 1;
+    long double best_ratio = std::numeric_limits<long double>::infinity();
+    for (int blocks = 1; blocks <= 128 && blocks <= shape[0]; ++blocks) {
+        if (shape[0] % blocks != 0) continue;
+        const long double ratio = std::fabs(std::log(static_cast<long double>(shape[1]) * blocks * blocks / shape[0]));
+        if (ratio < best_ratio) { best = blocks; best_ratio = ratio; }
+    }
+    return best;
+}
+
+std::array<int, 2> thumbnail_shape(const Tensor& tensor, int side) {
+    const auto shape = dimensions(tensor);
+    if (shape[0] <= 0 || shape[1] <= 0) return {0, 0};
+    if (tensor.shape.size() == 1) return {static_cast<int>(std::min<int64_t>(shape[0], std::clamp(side, 1, 128))), 1};
+    const int blocks = row_blocks(tensor);
+    side = std::clamp(side, blocks, 128);
+    const int rows = blocks * static_cast<int>(std::min<int64_t>({shape[0] / blocks, side, 2048 / blocks}));
+    const int cols = static_cast<int>(std::min<int64_t>(shape[1], side / blocks));
+    return {rows, cols};
+}
+
 std::array<double, 2> panel_size(const Tensor& tensor) {
     if (tensor.shape.size() == 1) {
         return tensor.shape.front() > 0
             ? std::array<double, 2>{tensor.shape.front() * element_unit, element_unit}
             : std::array<double, 2>{0, 0};
     }
-    double rows = static_cast<double>(tensor.rows), cols = static_cast<double>(tensor.cols);
-    if ((rows <= 0 || cols <= 0) && !tensor.shape.empty()) {
-        rows = 1;
-        for (size_t i = 0; i + 1 < tensor.shape.size(); ++i) {
-            if (tensor.shape[i] <= 0) return {0, 0};
-            rows *= static_cast<double>(tensor.shape[i]);
-        }
-        cols = static_cast<double>(tensor.shape.back());
-    }
-    if (!(rows > 0 && cols > 0) || !std::isfinite(rows) || !std::isfinite(cols)) return {0, 0};
-    return {cols * element_unit, rows * element_unit};
+    const auto shape = dimensions(tensor);
+    if (shape[0] <= 0 || shape[1] <= 0) return {0, 0};
+    const int blocks = row_blocks(tensor);
+    return {static_cast<double>(shape[1]) * blocks * element_unit,
+            static_cast<double>(shape[0] / blocks) * element_unit};
 }
 
 Scene layout(const std::vector<Tensor>& tensors, const std::string& output_label) {
     std::map<Key, Bucket> buckets;
-    size_t tied_embedding = tensors.size();
-    bool have_output = false;
+    (void)output_label; // A tied output is marked on the embedding itself.
     for (size_t i = 0; i < tensors.size(); ++i) {
         const Tensor& tensor = tensors[i];
         const auto size = panel_size(tensor);
@@ -158,8 +207,7 @@ Scene layout(const std::vector<Tensor>& tensors, const std::string& output_label
         Key key{1, 0};
         std::string label = tensor.group.empty() ? "Model" : tensor.group;
         if (embedding(tensor)) {
-            key = {0, 0}; label = "Embedding";
-            if (tensor.tied) tied_embedding = i;
+            key = {0, 0}; label = tensor.tied ? "Embedding / output (tied)" : "Embedding";
         } else if (layer >= 0) {
             key = {2, layer};
             std::ostringstream name;
@@ -168,18 +216,13 @@ Scene layout(const std::vector<Tensor>& tensors, const std::string& output_label
         } else if (final_norm(tensor)) {
             key = {3, 0}; label = "Final norm";
         } else if (output(tensor)) {
-            key = {4, 0}; label = "Output"; have_output = true;
+            key = {4, 0}; label = "Output";
         }
         Bucket& bucket = buckets[key];
         bucket.label = label;
         bucket.layer_index = layer;
         if (bucket.layer_type.empty()) bucket.layer_type = type_of(tensor);
-        bucket.tensors.emplace_back(i, false);
-    }
-    if (tied_embedding < tensors.size() && !have_output) {
-        Bucket& bucket = buckets[{4, 0}];
-        bucket.label = output_label;
-        bucket.tensors.emplace_back(tied_embedding, true);
+        bucket.tensors.push_back(i);
     }
 
     Scene scene;
@@ -187,46 +230,92 @@ Scene layout(const std::vector<Tensor>& tensors, const std::string& output_label
     for (auto& entry : buckets) {
         Bucket& bucket = entry.second;
         std::sort(bucket.tensors.begin(), bucket.tensors.end(), [&](auto a, auto b) {
-            return tensors[a.first].name < tensors[b.first].name;
+            return tensors[a].name < tensors[b].name;
         });
-        double area = 0, max_width = 0;
-        for (auto item : bucket.tensors) {
-            const auto size = panel_size(tensors[item.first]);
-            area += size[0] * size[1];
-            max_width = std::max(max_width, size[0]);
-        }
-        const double shelf_width = std::max(max_width, std::sqrt(area) * 1.35);
         const int group_index = static_cast<int>(scene.groups.size());
-        const double z = group_index * layer_pitch;
         const size_t begin = scene.panels.size();
-        double x = 0, y = 0, row_height = 0, used_width = 0;
+        double x = 0, used_height = 0, used_width = 0;
         for (auto item : bucket.tensors) {
-            const Tensor& tensor = tensors[item.first];
+            const Tensor& tensor = tensors[item];
             const auto size = panel_size(tensor);
-            if (x > 0 && x + size[0] > shelf_width) {
-                x = 0; y += row_height + panel_gap; row_height = 0;
-            }
             Panel panel;
-            panel.tensor = item.first;
-            panel.label = item.second ? output_label : tensor.name;
-            panel.center = {x + size[0] * 0.5, -(y + size[1] * 0.5), z};
+            panel.tensor = item;
+            panel.label = tensor.name;
+            panel.center = {x + size[0] * 0.5, 0, 0};
             panel.width = size[0]; panel.height = size[1];
-            panel.group = group_index; panel.output_alias = item.second;
+            panel.group = group_index; panel.row_blocks = row_blocks(tensor);
             scene.panels.push_back(std::move(panel));
             used_width = std::max(used_width, x + size[0]);
-            row_height = std::max(row_height, size[1]);
+            used_height = std::max(used_height, size[1]);
             x += size[0] + panel_gap;
         }
-        const double used_height = y + row_height;
+        double z = 0;
+        if (!scene.groups.empty()) {
+            const Group& previous = scene.groups.back();
+            // A broad, single row per layer makes each layer readable in the
+            // overview. Start with close projected spacing, then account for
+            // perspective below instead of shrinking every card for a large
+            // uniform gap.
+            const double ce = std::cos(default_elevation), se = std::sin(default_elevation);
+            const double ca = std::cos(default_azimuth), sa = std::sin(default_azimuth);
+            const double previous_extent = previous.bounds.height * ce + previous.bounds.width * se * ca;
+            const double current_extent = used_height * ce + used_width * se * ca;
+            z = previous.z + (0.5 * (previous_extent + current_extent) + 0.25) / (se * sa);
+        }
         for (size_t i = begin; i < scene.panels.size(); ++i) {
             Panel& panel = scene.panels[i];
             panel.center.x -= used_width * 0.5;
-            panel.center.y += used_height * 0.5;
+            panel.center.z = z;
             for (Vec3 point : corners(panel)) grow(scene, point, first);
         }
         scene.groups.push_back({bucket.label, bucket.layer_type, bucket.layer_index, z,
                                 {-used_width * 0.5, -used_height * 0.5, used_width, used_height}});
     }
+
+    // Perspective changes the apparent height of a plane along the stack.
+    // Relax only colliding gaps in the standard overview, rather than using
+    // the worst case as every layer's pitch. The reference height is modest;
+    // larger windows inherit more separation while all element areas stay true.
+    const Rect reference{0, 0, 600, 400};
+    auto vertical_bounds = [&](const Group& group, const Camera& camera, double z_offset = 0.0) {
+        Panel frame_panel;
+        frame_panel.center = {group.bounds.x + group.bounds.width * 0.5,
+                              group.bounds.y + group.bounds.height * 0.5, group.z + z_offset};
+        frame_panel.width = group.bounds.width;
+        frame_panel.height = group.bounds.height;
+        std::array<double, 2> result{std::numeric_limits<double>::infinity(),
+                                   -std::numeric_limits<double>::infinity()};
+        for (Vec3 corner : corners(frame_panel)) {
+            const Projection p = project(corner, camera, reference.width / reference.height, reference);
+            result[0] = std::min(result[0], p.y);
+            result[1] = std::max(result[1], p.y);
+        }
+        return result;
+    };
+    for (int iteration = 0; iteration < 20 && scene.groups.size() > 1; ++iteration) {
+        const Camera camera = fit(scene, reference.width / reference.height);
+        double bottom = vertical_bounds(scene.groups.front(), camera)[1];
+        bool changed = false;
+        for (size_t i = 1; i < scene.groups.size(); ++i) {
+            auto extent = vertical_bounds(scene.groups[i], camera);
+            const double missing = bottom + 0.75 - extent[0];
+            if (missing > 0.001) {
+                const double rate = vertical_bounds(scene.groups[i], camera, 1.0)[0] - extent[0];
+                const double shift = missing / std::max(0.01, rate) * 1.05;
+                for (size_t j = i; j < scene.groups.size(); ++j) scene.groups[j].z += shift;
+                for (Panel& panel : scene.panels)
+                    if (panel.group >= static_cast<int>(i)) panel.center.z += shift;
+                extent = vertical_bounds(scene.groups[i], camera);
+                changed = true;
+            }
+            bottom = extent[1];
+        }
+        first = true;
+        for (const Panel& panel : scene.panels) for (Vec3 point : corners(panel)) grow(scene, point, first);
+        if (!changed) break;
+    }
+    first = true;
+    for (const Panel& panel : scene.panels) for (Vec3 point : corners(panel)) grow(scene, point, first);
     return scene;
 }
 
@@ -239,16 +328,21 @@ std::array<Vec3, 4> corners(const Panel& panel) {
 }
 
 Camera fit(const Scene& scene, double aspect, double azimuth, double elevation) {
-    if (scene.panels.empty()) return fit_bounds({-0.5, -0.5, -0.5}, {0.5, 0.5, 0.5}, aspect, azimuth, elevation);
-    return fit_bounds(scene.minimum, scene.maximum, aspect, azimuth, elevation);
+    if (scene.panels.empty()) return fit_points({{-0.5, -0.5, -0.5}, {0.5, 0.5, 0.5}}, aspect, azimuth, elevation);
+    std::vector<Vec3> points;
+    points.reserve(scene.panels.size() * 4);
+    for (const Panel& panel : scene.panels) {
+        const auto c = corners(panel);
+        points.insert(points.end(), c.begin(), c.end());
+    }
+    return fit_points(points, aspect, azimuth, elevation);
 }
 
 Camera focus(const Scene& scene, size_t panel, double aspect, const Camera& previous) {
     if (panel >= scene.panels.size()) return valid(previous);
     const Panel& p = scene.panels[panel];
-    return fit_bounds({p.center.x - p.width * 0.5, p.center.y - p.height * 0.5, p.center.z},
-                      {p.center.x + p.width * 0.5, p.center.y + p.height * 0.5, p.center.z},
-                      aspect, previous.azimuth, previous.elevation);
+    const auto c = corners(p);
+    return fit_points(std::vector<Vec3>(c.begin(), c.end()), aspect, previous.azimuth, previous.elevation);
 }
 
 Matrices matrices(const Camera& camera, double aspect) {

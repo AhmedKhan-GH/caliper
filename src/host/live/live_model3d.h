@@ -11,6 +11,20 @@ namespace caliper_live {
 
 using ModelTensor = model3d::Tensor;
 
+namespace model3d {
+// A small row-major atlas. Folded row blocks run from left to right; both
+// output sides stay at most 128 pixels, including legacy thumbnail replies.
+struct ThumbnailAtlas { int width = 0, height = 0; std::vector<float> values; };
+bool thumbnail_atlas(const Tensor& tensor, int rows, int cols,
+                     const std::vector<float>& values, ThumbnailAtlas* output);
+struct ViewState { Camera camera; Rect viewport, labels; };
+struct FrameBand { Vec3 center; double width = 0, height = 0; };
+// Coplanar, contained quad bands for a frame of approximately pixel_width.
+// Edge-on projections use bounded thickness rather than widening the panel.
+std::array<FrameBand, 4> frame_bands(const Panel& panel, const Camera& camera,
+                                    Rect viewport, double pixel_width);
+} // namespace model3d
+
 // Owns only bounded thumbnail samples, render resources and a camera. Requests
 // remain in the inspector's serial scheduler; this class never opens a socket.
 class Model3D {
@@ -34,6 +48,8 @@ public:
     // keeps the UI testable and explicitly reports missing renderer support.
     std::string draw(caliper_host::HostRenderer* renderer, float x, float y,
                      float width, float height, const std::string& selected);
+    // The camera and exact drawing/picking viewport, available without a GPU.
+    model3d::ViewState view_state() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

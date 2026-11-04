@@ -51,6 +51,47 @@ TEST_CASE("invalid and fractional fit inputs stay finite") {
     square_cells(fractional, 7, 13);
 }
 
+TEST_CASE("matrix axis labels follow the fitted picture edges through letterboxing") {
+    const tg::Rect area{117, 229, 600, 400};
+    for (const auto shape : std::array<std::array<double, 2>, 2>{{{{3584, 1024}}, {{1024, 3584}}}}) {
+        const auto picture = tg::fit(shape[0], shape[1], area);
+        const auto labels = tg::axis_labels(picture, 35, 28, 140, 14, 4);
+        CHECK(labels.first_row.x + labels.first_row.width + 4 == doctest::Approx(picture.x));
+        CHECK(labels.first_row.y == doctest::Approx(picture.y));
+        CHECK(labels.last_row.x + labels.last_row.width + 4 == doctest::Approx(picture.x));
+        CHECK(labels.last_row.y + labels.last_row.height == doctest::Approx(picture.y + picture.height));
+        CHECK(labels.columns.x == doctest::Approx(picture.x));
+        CHECK(labels.columns.y == doctest::Approx(picture.y + picture.height + 4));
+        CHECK_FALSE(overlap(labels.first_row, picture));
+        CHECK_FALSE(overlap(labels.last_row, picture));
+        CHECK_FALSE(overlap(labels.columns, picture));
+        if (shape[0] > shape[1]) CHECK(labels.first_row.x > area.x + 100);
+        else CHECK(labels.first_row.y > area.y + 100);
+    }
+}
+
+TEST_CASE("embedding viewport axes remain beside its own picture after cropping") {
+    const tg::Rect area{713, 641, 1170, 300};
+    const auto layout = tg::view_layout(248320, 1024, false, area);
+    REQUIRE(layout.elongated);
+    const tg::Region region{10000, 100, 400, 600};
+    const auto picture = tg::fit(region.rows, region.cols, layout.detail);
+    const auto labels = tg::axis_labels(picture, 63, 35, 120, 16, 5);
+    CHECK(labels.first_row.x + 63 + 5 == doctest::Approx(picture.x));
+    CHECK(labels.first_row.y == doctest::Approx(picture.y));
+    CHECK(labels.last_row.x + 35 + 5 == doctest::Approx(picture.x));
+    CHECK(labels.last_row.y + 16 == doctest::Approx(picture.y + picture.height));
+    CHECK(labels.columns.x == doctest::Approx(picture.x));
+    CHECK(labels.columns.y == doctest::Approx(picture.y + picture.height + 5));
+    CHECK(labels.first_row.x > layout.detail.x + 100);
+
+    const auto tiny = tg::axis_labels({12, 34, 300, 8}, 35, 14, 120, 16);
+    CHECK(tiny.last_row.height == 0);
+    const auto invalid = tg::axis_labels({}, 35, 14, 120, 16);
+    CHECK(invalid.first_row.height == 0);
+    CHECK(invalid.columns.height == 0);
+}
+
 TEST_CASE("initial regions retain ordinary shapes and crop elongated shapes") {
     const tg::Rect area{0, 0, 600, 400};
     auto matrix = tg::initial_region(3584, 1024, area, false);

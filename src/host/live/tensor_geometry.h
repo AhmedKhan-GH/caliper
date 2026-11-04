@@ -16,6 +16,7 @@ struct Region {
 struct Cell { int64_t row = -1, col = -1; bool valid = false; };
 struct Target { int width = 1, height = 1; };
 struct ViewLayout { Rect overview, detail, plot, strip; bool elongated = false; };
+struct AxisLabels { Rect first_row, last_row, columns; };
 struct Windows { Rect inference, tree, model3d, tensor; };
 constexpr int max_target_side = 2048;
 constexpr int max_samples = 131072;
@@ -23,6 +24,10 @@ constexpr double strip_height = 24;
 
 // All drawing/hit-testing code consumes these same pure geometry decisions.
 Rect fit(double rows, double cols, Rect bounds);
+// Text is measured by the caller; labels follow the fitted picture, including
+// the empty space introduced by fitting a matrix into its allocated rectangle.
+AxisLabels axis_labels(Rect picture, double first_row_width, double last_row_width,
+                       double column_width, double line_height, double gap = 4);
 Region clamp(Region region, int64_t rows, int64_t cols);
 Region initial_region(int64_t rows, int64_t cols, Rect bounds, bool vector);
 // factor below one zooms in; the anchor cell stays at the same relative point.

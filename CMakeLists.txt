@@ -370,8 +370,17 @@ add_library(libcaliper STATIC
     # Reuse the small JSON implementation already vendored with the node editor.
     # The request panels also ship in the viewer, which does not link the editor.
     third_party/imgui-node-editor/crude_json.cpp
+    # Sternbild house style (SPEC-sternbild.md, workstation revision): colour
+    # tokens + drawing helpers and font loading. Here rather than in the app so
+    # the live inspector's panes, drawn by the app and the viewer alike, use
+    # the same pane headers and buttons as the landing screen.
+    src/host/ui/sternbild_theme.cpp
+    src/host/ui/sternbild_fonts.cpp
     ${CALIPER_LIVE_SOURCES}
 )
+# Dev builds find the house fonts in the source tree too (sternbild_fonts.cpp).
+set_source_files_properties(src/host/ui/sternbild_fonts.cpp PROPERTIES
+    COMPILE_DEFINITIONS "CALIPER_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\"")
 if(APPLE)
     foreach(_src ${CALIPER_LIVE_SOURCES})
         if(_src MATCHES "\\.mm$")
@@ -444,11 +453,8 @@ endif()
 
 add_executable(caliper
     src/main.cpp
-    # Sternbild house style (SPEC-sternbild.md, workstation revision): colour
-    # tokens + drawing helpers, font loading, and the landing screen that
-    # replaced the GL-only IntroScreen for every renderer backend.
-    src/host/ui/sternbild_theme.cpp
-    src/host/ui/sternbild_fonts.cpp
+    # The landing screen that replaced the GL-only IntroScreen for every
+    # renderer backend. The house style it draws with is in libcaliper.
     src/host/ui/landing_screen.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via

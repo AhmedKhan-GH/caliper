@@ -828,6 +828,8 @@ bool primary_button(const char* label, ImVec2 size_arg, const char* key) {
 
     const ImVec2 text_pos(pos.x + ImFloor((size.x - run.width) * 0.5f), pos.y + text_y);
     draw_key_run(dl, text_pos, run, key, label, label_end, font_size::ui, key_ink, ink);
+    // Logged like an ImGui::Button label, so log captures (ImGui::LogToBuffer) see it.
+    if (g.LogEnabled) ImGui::LogRenderedText(&text_pos, label, label_end);
     ImGui::PopFont();
     return pressed;
 }
@@ -866,6 +868,7 @@ bool word_button(const char* label) {
     const ImVec2 text_pos(ImFloor(pos.x), ImFloor(pos.y + st.FramePadding.y));
     dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), text_pos,
                 disabled ? col::faint : styled(col::parchment), label, label_end);
+    if (g.LogEnabled) ImGui::LogRenderedText(&text_pos, label, label_end);
 
     // The underline is the link vocabulary: parchment under the pointer,
     // bronze under keyboard focus, at baseline + 2.
