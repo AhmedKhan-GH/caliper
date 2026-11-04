@@ -31,6 +31,7 @@
 #include "live/live_attach.h"   // the session-row text the picker shares with the app
 #include "live/live_shm.h"
 #include "live/live_source.h"
+#include "live/live_inspector.h"
 
 #include <imgui.h>
 
@@ -72,6 +73,7 @@ struct CaliperLiveState {
     // ---- attached --------------------------------------------------------
     bool                    attached = false;
     std::unique_ptr<Source> source;          // null while pending
+    std::unique_ptr<caliper_live::Inspector> inspector;
     std::string             session;
     std::string             script;
     uint64_t                start_ms = 0;
@@ -815,6 +817,15 @@ void caliper_live_frame(CaliperCore* core) {
             L->fps_t0 = t;
             L->fps_frames = 0;
         }
+    }
+    // Script controls share the live desktop in both the app and viewer.
+    // Offscreen consumers keep their existing rendering behavior.
+    if (L->attached && core->canvas_mode != caliper_host::HostRenderer::CANVAS_OFFSCREEN) {
+        if (!L->inspector) L->inspector = std::make_unique<caliper_live::Inspector>();
+        L->inspector->poll(L->session, L->client_alive);
+        const float width = (float)core->canvas_w / core->scale;
+        const float height = (float)core->canvas_h / core->scale;
+        L->inspector->draw(core->area_x, core->area_y, width, height);
     }
     // No chrome for tests (offscreen) or a hosted core: the host (the Caliper
     // app's live page) draws its own bar and status line from the status calls.

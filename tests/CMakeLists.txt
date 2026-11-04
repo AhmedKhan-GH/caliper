@@ -314,3 +314,19 @@ add_caliper_torch_model_test(caliper_twin_tests test_twin_thermal.cpp
 
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
 endif()  # CALIPER_WITH_TORCH (applet model tests)
+
+if(APPLE)
+    add_executable(caliper_live_requests_tests test_live_requests.cpp
+        ${CMAKE_SOURCE_DIR}/src/host/live/live_requests.cpp)
+    target_include_directories(caliper_live_requests_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+    target_link_libraries(caliper_live_requests_tests PRIVATE doctest::doctest)
+    target_compile_features(caliper_live_requests_tests PRIVATE cxx_std_17)
+    add_test(NAME caliper_live_requests_tests COMMAND caliper_live_requests_tests)
+
+    add_executable(caliper_live_inspector_tests test_live_inspector.cpp)
+    target_include_directories(caliper_live_inspector_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/imgui-node-editor)
+    target_link_libraries(caliper_live_inspector_tests PRIVATE
+        doctest::doctest libcaliper caliper::sdk)
+    add_test(NAME caliper_live_inspector_tests COMMAND caliper_live_inspector_tests)
+endif()

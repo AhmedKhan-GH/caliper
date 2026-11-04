@@ -181,6 +181,7 @@ class SessionTransport:
         self._views: dict[str, _View] = {}
         self._viewer: subprocess.Popen | None = None
         self._viewer_log = None
+        self._request_server = None
         self._lock = threading.Lock()
         self.opened_ns = time.monotonic_ns()
         _OPEN.add(self)
@@ -231,6 +232,9 @@ class SessionTransport:
         """Remove the session file and unlink the shared memory. Never blocks
         on the viewer (it keeps what it received and shows "session ended").
         Tensors handed out by alloc() keep their pages until they are freed."""
+        if self._request_server is not None:
+            self._request_server.close()
+            self._request_server = None
         with self._lock:
             self._views.clear()
             if not self._client.closed:
@@ -248,6 +252,19 @@ class SessionTransport:
 
     def __exit__(self, *exc):
         self.close()
+
+    def request_server(self, capabilities=()):
+        """Offer optional local controls; call server.serve(handler) on your worker.
+
+        The server is closed with this session. See caliper.requests.
+        """
+        if self.closed:
+            raise RuntimeError("caliper live session is closed")
+        if self._request_server is not None:
+            raise RuntimeError("this session already has a request server")
+        from .requests import RequestServer
+        self._request_server = RequestServer(self.session, capabilities)
+        return self._request_server
 
     # -- Transport (caliper/_ring.py) -------------------------------------------
     # attached() is bound per instance in __init__ (Client.attached).
