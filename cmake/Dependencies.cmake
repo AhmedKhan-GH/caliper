@@ -220,13 +220,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot3d EXCLUDE_FRO
 list(APPEND CALIPER_DEPENDENCY_LIBS implot3d)
 message(STATUS "    ✓ ImPlot3D configured")
 
-# --- ImGuizmo (view cube for the inspector's 3D model view) ---
-message(STATUS "  Configuring ImGuizmo...")
-set(IMGUIZMO_SRC_DIR "${THIRD_PARTY_DIR}/ImGuizmo")
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imguizmo EXCLUDE_FROM_ALL)
-list(APPEND CALIPER_DEPENDENCY_LIBS imguizmo)
-message(STATUS "    ✓ ImGuizmo configured")
-
 # --- imgui-node-editor (Blueprints-style node graph editor) ---
 message(STATUS "  Configuring imgui-node-editor...")
 set(IMGUI_NODE_EDITOR_SRC_DIR "${THIRD_PARTY_DIR}/imgui-node-editor")
