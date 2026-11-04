@@ -12,6 +12,7 @@
 #include <implot.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -82,6 +83,47 @@ struct Sample {
     uint64_t revision = 0, texture = 0;
     bool texture_dirty = true;
 };
+// Every value of a tensor, fetched once in whole rows (tensor_values), so
+// zoom and pan redraw from one mipmapped texture without asking the host.
+struct Values {
+    std::string name;
+    int rows = 0, cols = 0, loaded = 0;
+    uint64_t revision = 0, texture = 0;
+    std::vector<float> data;
+    double minimum = 0, maximum = 1;
+    bool texture_dirty = true;
+    bool complete() const { return !name.empty() && rows > 0 && loaded == rows; }
+};
+// A texture side every Metal GPU supports, and the most values kept (64 MB):
+// every tensor of the 0.8B model but the embedding.
+constexpr int kMaxValueSide = 16384;
+constexpr int64_t kMaxValues = int64_t{1} << 24;
+
+bool decode_base64(const std::string& text, std::vector<uint8_t>& out) {
+    static const auto table = [] {
+        std::array<int8_t, 256> t{}; t.fill(-1);
+        const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i) t[static_cast<uint8_t>(alphabet[i])] = static_cast<int8_t>(i);
+        return t;
+    }();
+    if (text.size() % 4) return false;
+    out.clear(); out.reserve(text.size() / 4 * 3);
+    for (size_t i = 0; i < text.size(); i += 4) {
+        uint32_t n = 0; int padding = 0;
+        for (size_t k = 0; k < 4; ++k) {
+            const char c = text[i + k];
+            if (c == '=' && i + 4 == text.size() && k >= 2) { ++padding; n <<= 6; continue; }
+            const int v = table[static_cast<uint8_t>(c)];
+            if (v < 0 || padding) return false;
+            n = n << 6 | static_cast<uint32_t>(v);
+        }
+        out.push_back(static_cast<uint8_t>(n >> 16));
+        if (padding < 2) out.push_back(static_cast<uint8_t>(n >> 8));
+        if (padding < 1) out.push_back(static_cast<uint8_t>(n));
+    }
+    return true;
+}
+
 Object region_fields(Geometry::Region r) {
     return {{"row", static_cast<double>(r.row)}, {"col", static_cast<double>(r.col)},
             {"rows", static_cast<double>(r.rows)}, {"cols", static_cast<double>(r.cols)}};
@@ -155,7 +197,15 @@ struct Inspector::Impl {
     Model3D model3d;
     caliper_host::HostRenderer* renderer = nullptr;
     Sample detail, overview;
-    Geometry::Region region, drag_region;
+    Values values, incoming;
+    bool values_needed = false, values_stale = false;
+    std::string values_failed;
+    // The view: a continuous camera, the window it sees, and the whole cells
+    // that window touches (what a region request samples).
+    Geometry::Camera camera, drag_camera;
+    Geometry::Window window;
+    Geometry::Rect view_bounds;
+    Geometry::Region region;
     Geometry::Target target, last_target, overview_target;
     Geometry::Region last_region;
     bool region_ready = false, detail_needed = false, overview_needed = false;
@@ -168,16 +218,32 @@ struct Inspector::Impl {
     std::string detail_name;
     ImVec2 drag_origin;
 
-    ~Impl() { release_sample(detail); release_sample(overview); }
+    ~Impl() { release_sample(detail); release_sample(overview); release_values(values); }
     void release_sample(Sample& sample) {
         if (sample.texture && renderer) renderer->tex_release(sample.texture);
         sample.texture = 0;
+    }
+    void release_values(Values& v) {
+        if (v.texture && renderer) renderer->tex_release(v.texture);
+        v.texture = 0; v.texture_dirty = true;
+    }
+    bool uses_values(const Tensor& t) const {
+        return supports("tensor_values") && t.name != values_failed && t.rows <= kMaxValueSide &&
+               t.cols <= kMaxValueSide && static_cast<int64_t>(t.rows) * t.cols <= kMaxValues;
+    }
+    bool values_shown() const { return values.complete() && values.name == selected; }
+    // Whether the Tensor pane still waits for data; thumbnails wait behind it.
+    bool view_waiting() const {
+        const Tensor* t = tensor();
+        if (!t || !region_ready) return false;
+        if (uses_values(*t)) return values_needed;
+        return detail_needed || (overview_needed && supports("tensor_regions"));
     }
     void clear_samples() {
         release_sample(detail); release_sample(overview);
         detail = {}; overview = {};
     }
-    bool background() const { return active.op == "show_tensor"; }
+    bool background() const { return active.op == "show_tensor" || active.op == "tensor_values"; }
     bool can_control() const {
         return ready && alive && channel.connected() && queued_op.empty() &&
                (!active.id || background());
@@ -229,6 +295,39 @@ struct Inspector::Impl {
         if (active.id) { queued_op = op; queued_fields = std::move(fields); return true; }
         return issue(op, std::move(fields));
     }
+    void request_values(const Tensor& t) {
+        if (incoming.name != t.name || incoming.rows != t.rows || incoming.cols != t.cols) {
+            incoming = {}; incoming.name = t.name; incoming.rows = t.rows; incoming.cols = t.cols;
+            incoming.data.assign(static_cast<size_t>(t.rows) * t.cols, 0.0f);
+        }
+        issue("tensor_values", {{"name", t.name}, {"row", static_cast<double>(incoming.loaded)}}, "values", t.name);
+    }
+    // One reply: whole rows from where the last ended, bfloat16 bits or float32.
+    bool read_values(const Json& result) {
+        if (string(field(result, "name")) != incoming.name || integer(field(result, "rows")) != incoming.rows ||
+            integer(field(result, "cols")) != incoming.cols || integer(field(result, "row"), -1) != incoming.loaded) return false;
+        const int count = integer(field(result, "count"));
+        if (count < 1 || count > incoming.rows - incoming.loaded) return false;
+        const std::string encoding = string(field(result, "encoding"));
+        const size_t width = encoding == "bfloat16" ? 2 : encoding == "float32" ? 4 : 0;
+        const size_t cells = static_cast<size_t>(count) * incoming.cols;
+        std::vector<uint8_t> bytes;
+        if (!width || !decode_base64(string(field(result, "data")), bytes) || bytes.size() != cells * width) return false;
+        const uint64_t revision = static_cast<uint64_t>(integer(field(result, "revision")));
+        if (incoming.loaded == 0) incoming.revision = revision;
+        else if (revision != incoming.revision) { incoming.loaded = 0; return true; }   // edited meanwhile: start over
+        float* out = incoming.data.data() + static_cast<size_t>(incoming.loaded) * incoming.cols;
+        for (size_t i = 0; i < cells; ++i) {
+            const uint8_t* b = bytes.data() + i * width;
+            const uint32_t bits = width == 2 ? static_cast<uint32_t>(b[0] | b[1] << 8) << 16
+                                             : static_cast<uint32_t>(b[0] | b[1] << 8 | b[2] << 16) | static_cast<uint32_t>(b[3]) << 24;
+            float v; std::memcpy(&v, &bits, sizeof v);
+            if (!std::isfinite(v)) return false;
+            out[i] = v;
+        }
+        incoming.loaded += count;
+        return true;
+    }
     bool request_sample(const std::string& name, const char* purpose,
                         Geometry::Region wanted, Geometry::Target size) {
         Object fields{{"name", name}};
@@ -265,6 +364,8 @@ struct Inspector::Impl {
         selected = name;
         row = col = 0; have_value = false; cell_selected = false; focus_after_read = false;
         clear_samples();
+        release_values(values); values = {}; incoming = {};
+        values_needed = true; values_stale = false; values_failed.clear();
         region_ready = false; detail_needed = true; overview_needed = true; detail_due = 0;
         edits.clear();
         open_selected_group = scroll_selected = true;
@@ -316,7 +417,7 @@ struct Inspector::Impl {
         model3d.set_tensors(scene);
         if (!tensor()) {
             if (tensors.empty()) selected.clear(); else select(tensors.front().name);
-        } else { detail_needed = overview_needed = true; detail_due = 0; }
+        } else { detail_needed = overview_needed = true; detail_due = 0; values_needed = true; incoming = {}; }
         return true;
     }
     bool parse_sample(const Json& result, const Pending& request, Sample& sample) {
@@ -419,6 +520,10 @@ struct Inspector::Impl {
             if (completed.purpose == "thumbnail") {
                 model3d.thumbnail_failed(completed.name); return;
             }
+            if (op == "tensor_values") {   // fall back to region requests for this tensor
+                values_failed = completed.name; values_needed = false; incoming = {};
+                detail_needed = overview_needed = true; detail_due = 0;
+            }
             error = string(field(reply, "error"));
             if (op == "generate") { generation_status = "Generation failed"; stop_requested = false; }
             return;
@@ -449,6 +554,15 @@ struct Inspector::Impl {
                     release_sample(detail); detail = std::move(sample); read_edits(result);
                 }
             }
+        } else if (op == "tensor_values") {
+            if (completed.name != selected || incoming.name != selected) return;
+            if (!read_values(result)) { protocol_error("Invalid tensor values from script"); return; }
+            if (incoming.complete()) {
+                const auto range = std::minmax_element(incoming.data.begin(), incoming.data.end());
+                incoming.minimum = *range.first; incoming.maximum = *range.second;
+                release_values(values); values = std::move(incoming); incoming = {};
+                values_needed = values_stale = false;
+            }
         } else if (op == "read_weight") {
             if (completed.name != selected) return;
             const Json& v = field(result, "value");
@@ -465,6 +579,7 @@ struct Inspector::Impl {
             if (completed.name == selected) {
                 have_value = false; read_edits(result);
                 detail_needed = overview_needed = true; detail_due = 0;
+                values_needed = values_stale = true; incoming = {};
             }
         }
     }
@@ -492,16 +607,21 @@ struct Inspector::Impl {
             if (active.id) error = "Connection ended; the operation was not retried";
             else if (visible && error.empty()) error = alive ? channel.error() : "Session ended";
             if (active.purpose == "thumbnail") model3d.thumbnail_failed(active.name);
+            if (active.op == "tensor_values") { incoming = {}; values_needed = true; }
             active = {};
             stop_requested = false;
             want_list = false; queued_op.clear(); queued_fields.clear();
             retry_at = now + 1.0;
         }
         if (!idle()) return;
+        const Tensor* shown = tensor();
+        const bool whole = shown && uses_values(*shown);
+        if (!whole) values_needed = false;
         if (!queued_op.empty()) {
             const std::string op = std::move(queued_op); Object fields = std::move(queued_fields);
             queued_op.clear(); queued_fields.clear(); issue(op.c_str(), std::move(fields));
         } else if (want_list) { want_list = false; issue("list_tensors"); }
+        else if (whole) { if (values_needed) request_values(*shown); }
         else if (tensor() && region_ready && detail_needed && now >= detail_due) {
             if (request_sample(selected, "detail", region, target)) {
                 detail_needed = false; last_region = region; last_target = target;
@@ -512,8 +632,7 @@ struct Inspector::Impl {
         }
     }
     void thumbnails() {
-        if (!idle() || !queued_op.empty() ||
-            (region_ready && (detail_needed || (overview_needed && supports("tensor_regions"))))) return;
+        if (!idle() || !queued_op.empty() || view_waiting()) return;
         const std::string name = model3d.next_thumbnail();
         if (name.empty()) return;
         const auto it = std::find_if(tensors.begin(), tensors.end(), [&](const Tensor& t) { return t.name == name; });
@@ -707,74 +826,126 @@ struct Inspector::Impl {
             release_sample(sample);
         sample.texture_dirty = false;
     }
-    ImU32 heat_color(double value, const Sample& sample) const {
-        const double span = sample.maximum - sample.minimum;
-        const double amount = span > 0 ? (value - sample.minimum) / span : 0.5;
+    void make_values_texture(Values& v, bool vector) {
+        if (!renderer || !v.complete() || !v.texture_dirty) return;
+        release_values(v);
+        const int width = vector ? v.rows : v.cols, height = vector ? v.cols : v.rows;
+        std::vector<uint8_t> rgba(v.data.size() * 4);
+        float lo = static_cast<float>(v.minimum), hi = static_cast<float>(v.maximum);
+        if (lo == hi) { lo -= 0.5f; hi += 0.5f; }
+        caliper_host::map_f32_to_rgba8(v.data.data(), width, height,
+            caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS), lo, hi, rgba.data());
+        v.texture = renderer->tex_create_rgba8_mipmapped(width, height);
+        if (v.texture && renderer->tex_upload_rgba8(v.texture, rgba.data(), width, height)) renderer->tex_generate_mipmaps(v.texture);
+        else release_values(v);
+        v.texture_dirty = false;
+    }
+    static ImU32 heat_color(double value, double minimum, double maximum) {
+        const double span = maximum - minimum;
+        const double amount = span > 0 ? (value - minimum) / span : 0.5;
         const int index = std::clamp(static_cast<int>(amount * 255 + 0.5), 0, 255);
         return caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS)[index];
     }
-    void paint_image(Sample& sample, Geometry::Region shown, Geometry::Rect picture, bool vector, bool crisp = false) {
-        if (picture.width <= 0 || picture.height <= 0 || sample.values.empty() || shown.rows <= 0 || shown.cols <= 0 ||
+    // A cell's value written inside it when it fits, in the ink that reads on its colour.
+    static void cell_text(ImDrawList* list, ImVec2 a, ImVec2 b, double value, ImU32 fill) {
+        char text[32];
+        std::snprintf(text, sizeof text, "%.3g", value);
+        const ImVec2 size = ImGui::CalcTextSize(text);
+        if (b.x - a.x < size.x + 6 || b.y - a.y < size.y + 4) return;
+        const ImVec4 rgb = ImGui::ColorConvertU32ToFloat4(fill);
+        const bool light = 0.2126f * rgb.x + 0.7152f * rgb.y + 0.0722f * rgb.z > 0.5f;
+        list->AddText(point((a.x + b.x - size.x) * 0.5, (a.y + b.y - size.y) * 0.5),
+                      light ? sternbild::col::deep : sternbild::col::parchment, text);
+    }
+    void paint_image(Sample& sample, Geometry::Window shown, Geometry::Rect picture, bool vector, bool crisp = false) {
+        if (picture.width <= 0 || picture.height <= 0 || sample.values.empty() || !(shown.rows > 0) || !(shown.cols > 0) ||
             sample.region.rows <= 0 || sample.region.cols <= 0) return;
         ImDrawList* list = ImGui::GetWindowDrawList();
         make_texture(sample, vector);
+        // Tensor coordinates to the picture: rows run down a matrix and along a vector's strip.
+        const auto at = [&](double r, double c) {
+            return point(picture.x + (vector ? (r - shown.row) / shown.rows : (c - shown.col) / shown.cols) * picture.width,
+                         picture.y + (vector ? (c - shown.col) / shown.cols : (r - shown.row) / shown.rows) * picture.height);
+        };
+        const auto& region = sample.region;
+        list->PushClipRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), true);
         if (sample.texture && renderer && !crisp) {
-            // The sample's own region, placed where it lies in the shown region
-            // and clipped to the picture: a sample from before a zoom or pan
-            // stays in place, shrunk or enlarged, until the next one arrives,
-            // instead of the picture going blank.
-            const auto at = [&](int64_t index, int64_t origin, int64_t extent) {
-                return static_cast<double>(index - origin) / static_cast<double>(extent);
-            };
-            const auto& r = sample.region;
-            const double ax = vector ? at(r.row, shown.row, shown.rows) : at(r.col, shown.col, shown.cols);
-            const double bx = vector ? at(r.row + r.rows, shown.row, shown.rows) : at(r.col + r.cols, shown.col, shown.cols);
-            const double ay = vector ? at(r.col, shown.col, shown.cols) : at(r.row, shown.row, shown.rows);
-            const double by = vector ? at(r.col + r.cols, shown.col, shown.cols) : at(r.row + r.rows, shown.row, shown.rows);
-            list->PushClipRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), true);
+            // The sample's own region, placed where it lies in the shown window:
+            // a sample from before a zoom or pan stays in place, shrunk or
+            // enlarged, until the next one arrives.
             list->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(sample.texture)),
-                point(picture.x + ax * picture.width, picture.y + ay * picture.height),
-                point(picture.x + bx * picture.width, picture.y + by * picture.height));
-            list->PopClipRect();
+                           at(region.row, region.col), at(region.row + region.rows, region.col + region.cols));
         } else {
             // The CPU fixture takes the same rectangles and colormap as the
             // texture path; a normal app frame draws a single textured quad.
-            list->PushClipRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), true);
             for (int r = 0; r < sample.rows; ++r) for (int c = 0; c < sample.cols; ++c) {
-                const double row0 = sample.region.row + static_cast<double>(r) * sample.region.rows / sample.rows;
-                const double col0 = sample.region.col + static_cast<double>(c) * sample.region.cols / sample.cols;
-                const double row1 = sample.region.row + static_cast<double>(r + 1) * sample.region.rows / sample.rows;
-                const double col1 = sample.region.col + static_cast<double>(c + 1) * sample.region.cols / sample.cols;
-                const double ax = vector ? (row0 - shown.row) / shown.rows : (col0 - shown.col) / shown.cols;
-                const double bx = vector ? (row1 - shown.row) / shown.rows : (col1 - shown.col) / shown.cols;
-                const double ay = vector ? (col0 - shown.col) / shown.cols : (row0 - shown.row) / shown.rows;
-                const double by = vector ? (col1 - shown.col) / shown.cols : (row1 - shown.row) / shown.rows;
-                const ImVec2 a = point(picture.x + ax * picture.width, picture.y + ay * picture.height);
-                const ImVec2 b = point(picture.x + bx * picture.width, picture.y + by * picture.height);
+                const double row0 = region.row + static_cast<double>(r) * region.rows / sample.rows;
+                const double col0 = region.col + static_cast<double>(c) * region.cols / sample.cols;
+                const double row1 = region.row + static_cast<double>(r + 1) * region.rows / sample.rows;
+                const double col1 = region.col + static_cast<double>(c + 1) * region.cols / sample.cols;
+                const ImVec2 a = at(row0, col0), b = at(row1, col1);
                 const double cell_value = sample.values[r * sample.cols + c];
-                const ImU32 fill = heat_color(cell_value, sample);
+                const ImU32 fill = heat_color(cell_value, sample.minimum, sample.maximum);
                 list->AddRectFilled(a, b, fill);
                 // Zoomed in far enough, cells get a grid and then their values,
                 // like a spreadsheet, so a zoom shows as cells growing.
-                if (crisp && b.x - a.x >= 12 && b.y - a.y >= 12)
-                    list->AddRect(a, b, sternbild::with_alpha(sternbild::col::deep, 160));
-                char text[32];
-                std::snprintf(text, sizeof text, "%.3g", cell_value);
-                const ImVec2 size = crisp ? ImGui::CalcTextSize(text) : ImVec2(0, 0);
-                if (crisp && b.x - a.x >= size.x + 6 && b.y - a.y >= size.y + 4) {
-                    const ImVec4 rgb = ImGui::ColorConvertU32ToFloat4(fill);
-                    const bool light = 0.2126f * rgb.x + 0.7152f * rgb.y + 0.0722f * rgb.z > 0.5f;
-                    list->AddText(point((a.x + b.x - size.x) * 0.5, (a.y + b.y - size.y) * 0.5),
-                                  light ? sternbild::col::deep : sternbild::col::parchment, text);
-                }
+                if (crisp && b.x - a.x >= 12 && b.y - a.y >= 12) list->AddRect(a, b, sternbild::with_alpha(sternbild::col::deep, 160));
+                if (crisp) cell_text(list, a, b, cell_value, fill);
             }
-            list->PopClipRect();
         }
+        list->PopClipRect();
         list->AddRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height),
                       ImGui::GetColorU32(ImGuiCol_Border));
     }
-    void color_scale(const Sample& sample, Geometry::Rect area) {
-        if (sample.values.empty()) return;
+    // The whole tensor as one mipmapped texture, the shown window picked out by
+    // texture coordinates, so zoom and pan only move coordinates. Drawn smaller
+    // than its cells, the mipmaps average the cells under each pixel; larger,
+    // cells are sampled nearest so they stay sharp squares, then get a grid
+    // and their values.
+    void paint_values(Values& v, Geometry::Window shown, Geometry::Rect picture, bool vector) {
+        if (picture.width <= 0 || picture.height <= 0 || !v.complete() || !(shown.rows > 0) || !(shown.cols > 0)) return;
+        ImDrawList* list = ImGui::GetWindowDrawList();
+        make_values_texture(v, vector);
+        const ImVec2 a = point(picture.x, picture.y), b = point(picture.x + picture.width, picture.y + picture.height);
+        const double left = vector ? shown.row : shown.col, top = vector ? shown.col : shown.row;
+        const double cell = std::min(picture.width / (vector ? shown.rows : shown.cols),
+                                     picture.height / (vector ? shown.cols : shown.rows));
+        list->PushClipRect(a, b, true);
+        const bool textured = v.texture && renderer;
+        if (textured) {
+            const double rows = v.rows, cols = v.cols;
+            const ImVec2 uv0 = vector ? point(shown.row / rows, 0) : point(shown.col / cols, shown.row / rows);
+            const ImVec2 uv1 = vector ? point((shown.row + shown.rows) / rows, 1)
+                                      : point((shown.col + shown.cols) / cols, (shown.row + shown.rows) / rows);
+            const auto& platform = ImGui::GetPlatformIO();
+            const bool sharp = cell * std::max(1.0f, ImGui::GetIO().DisplayFramebufferScale.x) >= 2 &&
+                               platform.DrawCallback_SetSamplerNearest && platform.DrawCallback_SetSamplerLinear;
+            if (sharp) list->AddCallback(platform.DrawCallback_SetSamplerNearest, nullptr);
+            list->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(v.texture)), a, b, uv0, uv1);
+            if (sharp) list->AddCallback(platform.DrawCallback_SetSamplerLinear, nullptr);
+        }
+        // Whole cells in view: squares without a renderer (the CPU fixture),
+        // and a grid and values over the texture once they are large.
+        const Geometry::Region cells = Geometry::cover(shown, v.rows, v.cols);
+        const bool squares = !textured && cells.rows * cells.cols <= 65536;
+        if (squares || cell >= 12) {
+            for (int64_t r = cells.row; r < cells.row + cells.rows; ++r) for (int64_t c = cells.col; c < cells.col + cells.cols; ++c) {
+                const ImVec2 p0 = point(picture.x + ((vector ? r : c) - left) * cell, picture.y + ((vector ? c : r) - top) * cell);
+                const ImVec2 p1 = point(p0.x + cell, p0.y + cell);
+                const double value = v.data[static_cast<size_t>(r) * v.cols + c];
+                const ImU32 fill = heat_color(value, v.minimum, v.maximum);
+                if (squares) list->AddRectFilled(p0, p1, fill);
+                if (cell >= 12) {
+                    list->AddRect(p0, p1, sternbild::with_alpha(sternbild::col::deep, 160));
+                    cell_text(list, p0, p1, value, fill);
+                }
+            }
+        }
+        list->PopClipRect();
+        list->AddRect(a, b, ImGui::GetColorU32(ImGuiCol_Border));
+    }
+    void color_scale(double minimum, double maximum, bool known, Geometry::Rect area) {
+        if (!known || area.height < 40) return;
         auto* list = ImGui::GetWindowDrawList();
         const double height = std::max(30.0, area.height - 34);
         const auto* lut = caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS);
@@ -783,19 +954,21 @@ struct Inspector::Impl {
             list->AddRectFilled(point(area.x, y0), point(area.x + 12, y1), lut[255 - i * 2]);
         }
         char high[32], low[32];
-        std::snprintf(high, sizeof high, "%.5g", sample.maximum);
-        std::snprintf(low, sizeof low, "%.5g", sample.minimum);
+        std::snprintf(high, sizeof high, "%.5g", maximum);
+        std::snprintf(low, sizeof low, "%.5g", minimum);
         list->AddText(point(area.x + 16, area.y), ImGui::GetColorU32(ImGuiCol_Text), high);
         list->AddText(point(area.x + 16, area.y + height - ImGui::GetTextLineHeight()), ImGui::GetColorU32(ImGuiCol_Text), low);
         list->AddText(point(area.x, area.y + height + 4), ImGui::GetColorU32(ImGuiCol_Text), "Value");
     }
-    void request_detail(Geometry::Region next, Geometry::Target size, bool immediately = false) {
+    // The whole cells in view, for a region request after the view settles.
+    void request_detail(Geometry::Region next, Geometry::Target size) {
         const Tensor* t = tensor(); if (!t) return;
         next = Geometry::clamp(next, t->rows, t->cols);
         const bool changed = region != next || target.width != size.width || target.height != size.height;
         region = next; target = size;
-        if (supports("tensor_regions") && (last_region != region || last_target.width != size.width || last_target.height != size.height)) {
-            if (!detail_needed || changed) detail_due = immediately || detail.values.empty() ? 0 : seconds() + 0.05;
+        if (supports("tensor_regions") && !uses_values(*t) &&
+            (last_region != region || last_target.width != size.width || last_target.height != size.height)) {
+            if (!detail_needed || changed) detail_due = detail.values.empty() ? 0 : seconds() + 0.05;
             detail_needed = true;
         }
     }
@@ -810,50 +983,62 @@ struct Inspector::Impl {
             ImGui::SetTooltip("(%lld, %lld)\nClick to select, double-click to zoom in", static_cast<long long>(cell.row), static_cast<long long>(cell.col));
         }
     }
-    void tensor_picture(const Tensor& t, Geometry::Rect allocated) {
-        const auto layout = Geometry::view_layout(t.rows, t.cols, t.vector(), allocated);
-        const Geometry::Rect detail_bounds = t.vector() ? layout.strip : layout.detail;
+    void show_value_hover(const Values& v, Geometry::Cell cell) {
+        if (!cell.valid || cell.row >= v.rows || cell.col >= v.cols) return;
+        ImGui::SetTooltip("(%lld, %lld)\n%.9g", static_cast<long long>(cell.row), static_cast<long long>(cell.col),
+                          v.data[static_cast<size_t>(cell.row) * v.cols + cell.col]);
+    }
+    void tensor_picture(const Tensor& t, Geometry::Rect allocated, Geometry::Rect minimap) {
+        const bool vector = t.vector();
+        const auto layout = Geometry::view_layout(t.rows, t.cols, vector, allocated);
+        const Geometry::Rect bounds = vector ? layout.strip : layout.detail;
+        view_bounds = bounds;
         if (!region_ready) {
-            region = Geometry::initial_region(t.rows, t.cols, detail_bounds, t.vector());
+            camera = Geometry::initial_camera(t.rows, t.cols, vector, bounds);
             region_ready = true; detail_needed = true; detail_due = 0;
         }
-        Geometry::Rect picture = t.vector() ? Geometry::fit(region.cols, region.rows, detail_bounds)
-                                             : Geometry::fit(region.rows, region.cols, detail_bounds);
+        camera = Geometry::clamp(camera, t.rows, t.cols, vector, bounds);
+        const auto shot = Geometry::shoot(camera, t.rows, t.cols, vector, bounds);
+        window = shot.window;
+        const Geometry::Rect picture = shot.picture;
+        const Geometry::Region cells = Geometry::cover(window, t.rows, t.cols);
+        const bool whole_values = uses_values(t), shown_values = values_shown();
         const float scale = std::max(1.0f, ImGui::GetIO().DisplayFramebufferScale.x);
-        auto size = Geometry::sampling_target(region, picture, scale, t.vector());
-        if (t.vector()) std::swap(size.width, size.height);
-        request_detail(region, size);
-        // Zoomed into a matrix, a minimap of the whole tensor in the picture's
-        // corner shows where the view is (the elongated embedding keeps its
-        // overview strip beside the picture instead).
-        const Geometry::Region whole{0, 0, t.rows, t.cols};
-        const bool zoomed = !t.vector() && !layout.elongated && (region.rows < t.rows || region.cols < t.cols);
-        const Geometry::Rect minimap = zoomed ? minimap_rect(t, picture) : Geometry::Rect{};
-        if (supports("tensor_regions") && (layout.elongated || t.vector() || zoomed)) {
-            auto size = t.vector()
-                ? Geometry::sampling_target(whole, {layout.plot.x, layout.plot.y, layout.plot.width, 1}, scale, true)
-                : Geometry::sampling_target(whole, layout.elongated ? layout.overview : minimap, scale, false);
-            if (t.vector()) std::swap(size.width, size.height);
-            if (size.width != overview_target.width || size.height != overview_target.height) {
-                overview_target = size; overview_needed = true;
+        auto size = Geometry::sampling_target(cells, picture, scale, vector);
+        if (vector) std::swap(size.width, size.height);
+        request_detail(cells, size);
+        // Without whole values, an averaged sample of the whole tensor serves
+        // the minimap, the embedding's strip and the vector plot.
+        const Geometry::Region whole_cells{0, 0, t.rows, t.cols};
+        const Geometry::Window whole{0, 0, static_cast<double>(t.rows), static_cast<double>(t.cols)};
+        if (!whole_values && supports("tensor_regions") && (layout.elongated || vector || minimap.width > 0)) {
+            auto overview_size = vector
+                ? Geometry::sampling_target(whole_cells, {layout.plot.x, layout.plot.y, layout.plot.width, 1}, scale, true)
+                : Geometry::sampling_target(whole_cells, layout.elongated ? layout.overview : minimap, scale, false);
+            if (vector) std::swap(overview_size.width, overview_size.height);
+            if (overview_size.width != overview_target.width || overview_size.height != overview_target.height) {
+                overview_target = overview_size; overview_needed = true;
             }
         } else overview_needed = false;
         if (!supports("tensor_regions")) {
             overview_needed = false;
             if (detail.name == selected && !detail.values.empty()) detail_needed = false;
         }
-        if (t.vector() && layout.plot.width > 0 && layout.plot.height > 0) {
+        if (vector && layout.plot.width > 0 && layout.plot.height > 0) {
             ImGui::SetCursorScreenPos(point(layout.plot.x, layout.plot.y));
             if (ImPlot::BeginPlot("##vector.values", point(layout.plot.width, layout.plot.height), ImPlotFlags_NoLegend)) {
                 ImPlot::SetupAxes("Index", "Value", ImPlotAxisFlags_Lock, ImPlotAxisFlags_AutoFit);
                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, t.rows, ImPlotCond_Always);
-                const Sample& values = overview.values.empty() ? detail : overview;
-                if (!values.values.empty()) {
-                    std::vector<double> indices(values.row_indices.begin(), values.row_indices.end());
-                    ImPlot::PlotLine("Value", indices.data(), values.values.data(), static_cast<int>(indices.size()));
+                if (shown_values) ImPlot::PlotLine("Value", values.data.data(), values.rows);
+                else {
+                    const Sample& line = overview.values.empty() ? detail : overview;
+                    if (!line.values.empty()) {
+                        std::vector<double> indices(line.row_indices.begin(), line.row_indices.end());
+                        ImPlot::PlotLine("Value", indices.data(), line.values.data(), static_cast<int>(indices.size()));
+                    }
                 }
                 const ImVec2 pos = ImPlot::GetPlotPos(), extent = ImPlot::GetPlotSize();
-                const auto band = Geometry::selection_rect({region.col, region.row, region.cols, region.rows},
+                const auto band = Geometry::selection_rect(Geometry::Window{window.col, window.row, window.cols, window.rows},
                     t.cols, t.rows, {pos.x, pos.y, extent.x, extent.y});
                 auto* draw = ImPlot::GetPlotDrawList();
                 draw->PushClipRect(pos, ImVec2(pos.x + extent.x, pos.y + extent.y), true);
@@ -865,117 +1050,109 @@ struct Inspector::Impl {
                 ImPlot::EndPlot();
             }
         }
-        // Cells of six pixels or more are drawn as crisp squares (then with a
-        // grid, then with their values) rather than a smoothed texture.
-        const double cell_px = t.vector() ? picture.width / std::max<int64_t>(1, region.rows)
-                                          : std::min(picture.width / std::max<int64_t>(1, region.cols),
-                                                     picture.height / std::max<int64_t>(1, region.rows));
-        // While a new region is on its way, the averaged whole-tensor overview
-        // fills whatever the last detail sample does not cover.
-        if (!overview.values.empty() && overview.name == t.name && detail.region != region)
-            paint_image(overview, region, picture, t.vector());
-        paint_image(detail, region, picture, t.vector(), detail.exact && cell_px >= 6 && detail.region == region);
         auto* list = ImGui::GetWindowDrawList();
         const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
+        const double cell_px = camera.cell;
+        if (shown_values) paint_values(values, window, picture, vector);
+        else if (whole_values) {
+            list->AddRectFilled(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), sternbild::col::plate);
+            char loading[48];
+            std::snprintf(loading, sizeof loading, "Loading values %d%%", incoming.rows ? incoming.loaded * 100 / incoming.rows : 0);
+            const ImVec2 extent = ImGui::CalcTextSize(loading);
+            list->AddText(point(picture.x + (picture.width - extent.x) * 0.5, picture.y + (picture.height - extent.y) * 0.5),
+                          sternbild::col::faint, loading);
+        } else {
+            // While a new region is on its way, the averaged whole-tensor overview
+            // fills whatever the last detail sample does not cover. Cells of six
+            // points or more are crisp squares rather than a smoothed texture.
+            if (!overview.values.empty() && overview.name == t.name && detail.region != region)
+                paint_image(overview, window, picture, vector);
+            paint_image(detail, window, picture, vector, detail.exact && cell_px >= 6 && detail.region == region);
+        }
         // The selected cell: its row and column shaded, the cell outlined in
-        // bronze (at least five pixels, so it shows zoomed out too).
-        const bool row_in = row >= region.row && row < region.row + region.rows;
-        const bool col_in = t.vector() || (col >= region.col && col < region.col + region.cols);
+        // bronze (at least five points, so it shows zoomed out too).
+        const bool row_in = row + 1 > window.row && row < window.row + window.rows;
+        const bool col_in = vector || (col + 1 > window.col && col < window.col + window.cols);
         if (cell_selected && (row_in || col_in)) {
             list->PushClipRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), true);
             const ImU32 shade = sternbild::with_alpha(sternbild::col::bronze, 40);
-            if (t.vector()) {
-                const double x0 = picture.x + (row - region.row) * picture.width / region.rows;
-                const double x1 = x0 + picture.width / region.rows, cx = (x0 + x1) * 0.5, hw = std::max(2.5, (x1 - x0) * 0.5);
+            if (vector) {
+                const double x0 = picture.x + (row - window.row) * cell_px, cx = x0 + cell_px * 0.5, hw = std::max(2.5, cell_px * 0.5);
                 if (row_in) list->AddRect(point(cx - hw, picture.y), point(cx + hw, picture.y + picture.height), sternbild::col::bronze, 0, 0, 2.0f);
             } else {
-                const double y0 = picture.y + (row - region.row) * picture.height / region.rows, y1 = y0 + picture.height / region.rows;
-                const double x0 = picture.x + (col - region.col) * picture.width / region.cols, x1 = x0 + picture.width / region.cols;
+                const double y0 = picture.y + (row - window.row) * cell_px, y1 = y0 + cell_px;
+                const double x0 = picture.x + (col - window.col) * cell_px, x1 = x0 + cell_px;
                 if (row_in) list->AddRectFilled(point(picture.x, y0), point(picture.x + picture.width, y1), shade);
                 if (col_in) list->AddRectFilled(point(x0, picture.y), point(x1, picture.y + picture.height), shade);
                 if (row_in && col_in) {
-                    const double cx = (x0 + x1) * 0.5, cy = (y0 + y1) * 0.5;
-                    const double hw = std::max(2.5, (x1 - x0) * 0.5), hh = std::max(2.5, (y1 - y0) * 0.5);
-                    list->AddRect(point(cx - hw, cy - hh), point(cx + hw, cy + hh), sternbild::col::bronze, 0, 0, 2.0f);
+                    const double cx = (x0 + x1) * 0.5, cy = (y0 + y1) * 0.5, half = std::max(2.5, cell_px * 0.5);
+                    list->AddRect(point(cx - half, cy - half), point(cx + half, cy + half), sternbild::col::bronze, 0, 0, 2.0f);
                 }
             }
             list->PopClipRect();
         }
         char columns[100];
-        if (t.vector()) {
-            std::snprintf(columns, sizeof columns, "Index %lld to %lld", static_cast<long long>(region.row), static_cast<long long>(region.row + region.rows - 1));
-            list->AddText(point(detail_bounds.x, detail_bounds.y + detail_bounds.height + 3), text, columns);
+        if (vector) {
+            std::snprintf(columns, sizeof columns, "Index %lld to %lld", static_cast<long long>(cells.row), static_cast<long long>(cells.row + cells.rows - 1));
+            list->AddText(point(picture.x, bounds.y + bounds.height + 3), text, columns);
         } else {
             char first_row[64], last_row[64];
-            std::snprintf(first_row, sizeof first_row, "Row %lld", static_cast<long long>(region.row));
-            std::snprintf(last_row, sizeof last_row, "%lld", static_cast<long long>(region.row + region.rows - 1));
-            std::snprintf(columns, sizeof columns, "Column %lld to %lld", static_cast<long long>(region.col), static_cast<long long>(region.col + region.cols - 1));
+            std::snprintf(first_row, sizeof first_row, "Row %lld", static_cast<long long>(cells.row));
+            std::snprintf(last_row, sizeof last_row, "%lld", static_cast<long long>(cells.row + cells.rows - 1));
+            std::snprintf(columns, sizeof columns, "Column %lld to %lld", static_cast<long long>(cells.col), static_cast<long long>(cells.col + cells.cols - 1));
             const auto labels = Geometry::axis_labels(picture, ImGui::CalcTextSize(first_row).x,
                 ImGui::CalcTextSize(last_row).x, ImGui::CalcTextSize(columns).x, ImGui::GetTextLineHeight());
             list->AddText(point(labels.first_row.x, labels.first_row.y), text, first_row);
-            if (region.rows > 1 && labels.last_row.height > 0)
+            if (cells.rows > 1 && labels.last_row.height > 0)
                 list->AddText(point(labels.last_row.x, labels.last_row.y), text, last_row);
             list->AddText(point(labels.columns.x, labels.columns.y), text, columns);
         }
-        if (layout.elongated) {
-            Sample& sample = overview.values.empty() ? detail : overview;
-            const Geometry::Region whole{0, 0, t.rows, t.cols};
-            paint_image(sample, whole, layout.overview, false);
-            const auto selection = Geometry::selection_rect(region, t.rows, t.cols, layout.overview);
-            list->AddRect(point(selection.x, selection.y), point(selection.x + selection.width, selection.y + selection.height),
-                          ImGui::GetColorU32(ImGuiCol_PlotLines), 0.0f, 2.0f, ImDrawFlags_None);
-            ImGui::SetCursorScreenPos(point(layout.overview.x, layout.overview.y));
-            ImGui::InvisibleButton("##overview", point(std::max(1.0, layout.overview.width), std::max(1.0, layout.overview.height)));
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Whole tensor\nClick to move the visible region");
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-                    request_detail(Geometry::overview_region(region, t.rows, t.cols, layout.overview,
-                                    ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y), size, true);
-            }
-        }
         const auto mouse = ImGui::GetIO().MousePos;
-        if (zoomed && minimap.width > 0 && minimap.height > 0) {
-            list->AddRectFilled(point(minimap.x - 4, minimap.y - 4), point(minimap.x + minimap.width + 4, minimap.y + minimap.height + 4),
-                                sternbild::with_alpha(sternbild::col::deep, 235));
-            if (!overview.values.empty() && overview.name == t.name) paint_image(overview, whole, minimap, false);
-            else list->AddRectFilled(point(minimap.x, minimap.y), point(minimap.x + minimap.width, minimap.y + minimap.height), sternbild::col::plate);
-            auto view = Geometry::selection_rect(region, t.rows, t.cols, minimap);
+        // The whole tensor beside the picture, the view framed in bronze: the
+        // embedding's true-aspect strip, or a matrix's minimap. Click or drag
+        // in it to move the view.
+        const Geometry::Rect map = layout.elongated ? layout.overview : minimap;
+        if (map.width > 0 && map.height > 0) {
+            if (shown_values) paint_values(values, whole, map, false);
+            else if (!overview.values.empty() && overview.name == t.name) paint_image(overview, whole, map, false);
+            else if (!layout.elongated) list->AddRectFilled(point(map.x, map.y), point(map.x + map.width, map.y + map.height), sternbild::col::plate);
+            else paint_image(detail, whole, map, false);
+            const auto view = Geometry::selection_rect(window, t.rows, t.cols, map);
             const double cx = view.x + view.width * 0.5, cy = view.y + view.height * 0.5;
             const double hw = std::max(2.0, view.width * 0.5), hh = std::max(2.0, view.height * 0.5);
             list->AddRect(point(cx - hw, cy - hh), point(cx + hw, cy + hh), sternbild::col::bronze, 0, 0, 1.5f);
-            list->AddRect(point(minimap.x, minimap.y), point(minimap.x + minimap.width, minimap.y + minimap.height), sternbild::col::rule);
-            ImGui::SetCursorScreenPos(point(minimap.x, minimap.y));
-            ImGui::InvisibleButton("##minimap", point(minimap.width, minimap.height));
+            list->AddRect(point(map.x, map.y), point(map.x + map.width, map.y + map.height), sternbild::col::rule);
+            ImGui::SetCursorScreenPos(point(map.x, map.y));
+            ImGui::InvisibleButton("##overview", point(std::max(1.0, map.width), std::max(1.0, map.height)));
             if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("Whole tensor: click or drag to move the view");
             if (ImGui::IsItemActive())
-                request_detail(Geometry::overview_region(region, t.rows, t.cols, minimap, mouse.x, mouse.y), size, true);
+                camera = Geometry::centre_on(camera, t.rows, t.cols, vector, bounds,
+                                             Geometry::hit_test(whole_cells, map, mouse.x, mouse.y, false));
         }
-        ImGui::SetCursorScreenPos(point(detail_bounds.x, detail_bounds.y));
-        ImGui::InvisibleButton("##tensor.picture", point(std::max(1.0, detail_bounds.width), std::max(1.0, detail_bounds.height)),
+        ImGui::SetCursorScreenPos(point(bounds.x, bounds.y));
+        ImGui::InvisibleButton("##tensor.picture", point(std::max(1.0, bounds.width), std::max(1.0, bounds.height)),
                                ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-        const auto cell = Geometry::hit_test(region, picture, mouse.x, mouse.y, t.vector());
+        auto cell = Geometry::hit_test(window, picture, mouse.x, mouse.y, vector);
+        if (cell.valid) { cell.row = std::min<int64_t>(cell.row, t.rows - 1); cell.col = std::min<int64_t>(cell.col, t.cols - 1); }
         const bool picture_hovered = ImGui::IsItemHovered();
+        // The wheel zooms continuously about the pointer; every view comes
+        // from the same camera, so nothing waits on whole cells or the host.
+        if (picture_hovered && ImGui::GetIO().MouseWheel != 0)
+            camera = Geometry::zoom(camera, t.rows, t.cols, vector, bounds, std::pow(1.25, ImGui::GetIO().MouseWheel), mouse.x, mouse.y);
         if (picture_hovered && cell.valid) {
-            show_hover(detail, cell);
-            if (ImGui::GetIO().MouseWheel != 0)
-                request_detail(Geometry::zoom(region, t.rows, t.cols, std::pow(0.8, ImGui::GetIO().MouseWheel), cell), size, true);
+            if (shown_values) show_value_hover(values, cell); else show_hover(detail, cell);
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 // Zoom until cells are large enough to show their values.
-                const double side = 60;
-                Geometry::Region cells;
-                cells.rows = t.vector() ? std::max<int64_t>(1, static_cast<int64_t>(picture.width / side))
-                                        : std::max<int64_t>(1, static_cast<int64_t>(detail_bounds.height / side));
-                cells.cols = t.vector() ? 1 : std::max<int64_t>(1, static_cast<int64_t>(detail_bounds.width / side));
-                cells.row = cell.row - cells.rows / 2; cells.col = cell.col - cells.cols / 2;
-                request_detail(Geometry::clamp(cells, t.rows, t.cols), size, true);
+                camera.cell = std::max(camera.cell, 60.0);
+                camera = Geometry::centre_on(camera, t.rows, t.cols, vector, bounds, cell);
             }
         }
         // A press then release on the same cell without a drag selects it; a
-        // drag (four pixels, or the middle button) pans.
-        if (ImGui::IsItemActivated()) { press_cell = cell; drag_region = region; drag_origin = mouse; dragging = false; }
+        // drag (four points, or the middle button) pans.
+        if (ImGui::IsItemActivated()) { press_cell = cell; drag_camera = camera; drag_origin = mouse; dragging = false; }
         if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0))) {
             dragging = true;
-            request_detail(Geometry::pan(drag_region, t.rows, t.cols, mouse.x - drag_origin.x, mouse.y - drag_origin.y, picture, t.vector()), size, true);
+            camera = Geometry::pan(drag_camera, t.rows, t.cols, vector, bounds, mouse.x - drag_origin.x, mouse.y - drag_origin.y);
         }
         if (ImGui::IsItemDeactivated()) {
             if (!dragging && press_cell.valid && cell.valid && cell.row == press_cell.row && cell.col == press_cell.col) select_cell(cell);
@@ -983,16 +1160,15 @@ struct Inspector::Impl {
         }
         if (picture_hovered) ImGui::SetMouseCursor(dragging ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
     }
-    static Geometry::Rect minimap_rect(const Tensor& t, Geometry::Rect picture) {
-        const double width = std::min(200.0, picture.width * 0.28), height = std::min(130.0, picture.height * 0.4);
-        Geometry::Rect r = Geometry::fit(t.rows, t.cols, {0, 0, width, height});
-        r.width = std::max(r.width, 10.0); r.height = std::max(r.height, 10.0);
-        r.x = picture.x + picture.width - r.width - 10; r.y = picture.y + 10;
-        return r;
-    }
     void select_cell(Geometry::Cell cell) {
         row = static_cast<int>(cell.row); col = static_cast<int>(cell.col);
         cell_selected = true; have_value = false;
+        if (values_shown() && !values_stale) {   // every value is here already
+            value_row = row; value_col = col;
+            read_value = value = values.data[static_cast<size_t>(row) * values.cols + col];
+            have_value = true; focus_value = true;
+            return;
+        }
         if (supports("read_weight") && send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}}))
             focus_after_read = true;
     }
@@ -1020,32 +1196,28 @@ struct Inspector::Impl {
         ImGui::BeginDisabled(!can_control());
         if (sternbild::word_button("Fit tensor")) {
             if (t.vector()) region_ready = false;
-            else { region = {0, 0, t.rows, t.cols}; region_ready = true; }
-            detail_needed = supports("tensor_regions"); detail_due = 0;
+            else camera = {};   // the smallest cell: the whole tensor
         }
         ImGui::SameLine();
         if (sternbild::word_button("Cells")) {
-            const auto extent = ImGui::GetContentRegionAvail();
-            Geometry::Region cells;
-            cells.rows = t.vector() ? std::max(1, static_cast<int>(extent.x / Geometry::strip_height)) : 12;
-            cells.cols = t.vector() ? 1 : std::max(1, static_cast<int>(extent.x / Geometry::strip_height));
-            cells.row = row - cells.rows / 2; cells.col = col - cells.cols / 2;
-            region = Geometry::clamp(cells, t.rows, t.cols); region_ready = true;
-            detail_needed = supports("tensor_regions"); detail_due = 0;
+            camera.cell = std::max(camera.cell, 60.0);
+            camera = Geometry::centre_on(camera, t.rows, t.cols, t.vector(), view_bounds, {row, col, true});
         }
         ImGui::EndDisabled();
         char sampled[200];
-        const double magnification = t.vector() ? static_cast<double>(t.rows) / std::max<int64_t>(1, region.rows)
-            : std::min(static_cast<double>(t.rows) / std::max<int64_t>(1, region.rows),
-                       static_cast<double>(t.cols) / std::max<int64_t>(1, region.cols));
-        if (!detail.values.empty())
+        const double magnification = camera.cell / Geometry::fit_cell(t.rows, t.cols, t.vector(), view_bounds);
+        if (uses_values(t)) {
+            if (values_shown()) std::snprintf(sampled, sizeof sampled, "Zoom %.3gx%s", magnification, values_stale ? "   Updating" : "");
+            else std::snprintf(sampled, sizeof sampled, "Loading values");
+        } else if (!detail.values.empty())
             std::snprintf(sampled, sizeof sampled, "Zoom %.3gx   Region: %d x %d sampled values%s", magnification,
                           detail.rows, detail.cols, detail.exact ? " (exact cells)" : "");
         else std::snprintf(sampled, sizeof sampled, "Loading region");
         right_text(sampled, sternbild::col::faint);
 
         // The picture takes every line the edit bar below does not need; the
-        // row labels sit in the margin on its left, the colour scale on its right.
+        // row labels sit in the margin on its left. A matrix's minimap and the
+        // colour scale stack in a column on its right, so neither covers it.
         const float row_height = ImGui::GetFrameHeightWithSpacing();
         const float edit_height = 4 * row_height + style.ItemSpacing.y * 2 + 1;
         const ImVec2 available = ImGui::GetContentRegionAvail();
@@ -1054,12 +1226,23 @@ struct Inspector::Impl {
         const double line = ImGui::GetTextLineHeight();
         const double label_room = t.vector() ? 0 : ImGui::CalcTextSize("Row 248320").x + style.ItemSpacing.x;
         const double scale_room = ImGui::CalcTextSize("-0.0000000").x + 24;
+        const bool has_minimap = !t.vector() && !Geometry::view_layout(t.rows, t.cols, false, {0, 0, 1, 1}).elongated;
+        const double side = has_minimap ? std::max(scale_room, 168.0) : scale_room;
         const Geometry::Rect image_area{start.x + label_room, start.y + line + 4,
-            std::max(20.0, available.x - label_room - scale_room - style.ItemSpacing.x),
+            std::max(20.0, available.x - label_room - side - style.ItemSpacing.x),
             std::max(20.0, picture_height - 2 * line - 12)};
-        tensor_picture(t, image_area);
-        color_scale(detail, {start.x + available.x - scale_room + style.ItemSpacing.x, start.y + line + 4,
-                             scale_room - style.ItemSpacing.x, picture_height - line - 8});
+        const double side_x = start.x + available.x - side + style.ItemSpacing.x, side_width = side - style.ItemSpacing.x;
+        double side_y = start.y + line + 4;
+        Geometry::Rect minimap{};
+        if (has_minimap) {
+            minimap = Geometry::fit(t.rows, t.cols, {side_x, side_y, side_width, std::min(120.0, image_area.height * 0.4)});
+            minimap.x = side_x; minimap.y = side_y;
+            side_y += minimap.height + line;
+        }
+        tensor_picture(t, image_area, minimap);
+        const bool known = values_shown() || !detail.values.empty();
+        color_scale(values_shown() ? values.minimum : detail.minimum, values_shown() ? values.maximum : detail.maximum, known,
+                    {side_x, side_y, side_width, start.y + picture_height - 4 - side_y});
         ImGui::SetCursorScreenPos(start);
         ImGui::Dummy(ImVec2(available.x, picture_height));
 
@@ -1174,7 +1357,7 @@ struct Inspector::Impl {
     void draw(float x, float y, float width, float height, caliper_host::HostRenderer* current_renderer) {
         if (!visible) return;
         if (renderer != current_renderer) {
-            clear_samples(); renderer = current_renderer; detail_needed = overview_needed = true;
+            clear_samples(); release_values(values); renderer = current_renderer; detail_needed = overview_needed = true;
         }
         docked = (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
         if (docked) dock_host(x, y, width, height);

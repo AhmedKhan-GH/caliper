@@ -80,65 +80,6 @@ Region clamp(Region region, int64_t rows, int64_t cols) {
     return region;
 }
 
-Region initial_region(int64_t rows, int64_t cols, Rect bounds, bool vector) {
-    rows = dimension(rows); cols = dimension(cols);
-    bounds = valid_rect(bounds);
-    Region result{0, 0, rows, cols};
-    if (vector) {
-        // Start with a local strip whose cells can occupy the modest strip
-        // height. The value plot supplies context over the whole vector.
-        const double cell_size = std::min(strip_height, bounds.height);
-        result.rows = cell_size > 0
-            ? rounded(std::floor(bounds.width / cell_size), 1, rows) : 1;
-        return result;
-    }
-    const long double ratio = static_cast<long double>(rows) / cols;
-    const double viewport_ratio = bounds.width > 0 && bounds.height > 0
-        ? bounds.height / bounds.width : 1;
-    // Ordinary matrices start with their whole shape fitted. Extreme shapes
-    // start at a readable local region; their overview still fits all cells.
-    if (ratio > 8)
-        result.rows = rounded(static_cast<long double>(cols) * viewport_ratio, 1, rows);
-    else if (ratio < 0.125L)
-        result.cols = rounded(static_cast<long double>(rows) / viewport_ratio, 1, cols);
-    return result;
-}
-
-Region zoom(Region region, int64_t rows, int64_t cols, double factor, Cell anchor) {
-    region = clamp(region, rows, cols);
-    if (!std::isfinite(factor) || factor <= 0) return region;
-    const long double ar = anchor.valid
-        ? std::clamp<long double>(anchor.row + 0.5L, region.row, static_cast<long double>(region.row) + region.rows)
-        : region.row + region.rows * 0.5L;
-    const long double ac = anchor.valid
-        ? std::clamp<long double>(anchor.col + 0.5L, region.col, static_cast<long double>(region.col) + region.cols)
-        : region.col + region.cols * 0.5L;
-    const long double fr = (ar - region.row) / region.rows;
-    const long double fc = (ac - region.col) / region.cols;
-    Region result = region;
-    result.rows = rounded(region.rows * static_cast<long double>(factor), 1, dimension(rows));
-    result.cols = rounded(region.cols * static_cast<long double>(factor), 1, dimension(cols));
-    result.row = rounded(ar - fr * result.rows, 0, dimension(rows) - result.rows);
-    result.col = rounded(ac - fc * result.cols, 0, dimension(cols) - result.cols);
-    return result;
-}
-
-Region pan(Region region, int64_t rows, int64_t cols, double dx, double dy,
-           Rect picture, bool vector) {
-    region = clamp(region, rows, cols);
-    picture = valid_rect(picture);
-    if (picture.width <= 0 || picture.height <= 0) return region;
-    if (!std::isfinite(dx)) dx = 0;
-    if (!std::isfinite(dy)) dy = 0;
-    const long double dr = vector ? -dx * static_cast<long double>(region.rows) / picture.width
-                                  : -dy * static_cast<long double>(region.rows) / picture.height;
-    const long double dc = vector ? -dy * static_cast<long double>(region.cols) / picture.height
-                                  : -dx * static_cast<long double>(region.cols) / picture.width;
-    region.row = rounded(region.row + dr, 0, dimension(rows) - region.rows);
-    region.col = rounded(region.col + dc, 0, dimension(cols) - region.cols);
-    return region;
-}
-
 Cell hit_test(Region region, Rect picture, double x, double y, bool vector) {
     picture = valid_rect(picture);
     if (region.row < 0 || region.col < 0 || region.rows <= 0 || region.cols <= 0 ||
@@ -152,23 +93,136 @@ Cell hit_test(Region region, Rect picture, double x, double y, bool vector) {
     return {region.row + dr, region.col + dc, true};
 }
 
-Region overview_region(Region current, int64_t rows, int64_t cols,
-                       Rect overview, double x, double y) {
-    current = clamp(current, rows, cols);
-    const Cell picked = hit_test({0, 0, dimension(rows), dimension(cols)}, overview, x, y, false);
-    if (!picked.valid) return current;
-    current.row = rounded(picked.row + 0.5L - current.rows * 0.5L, 0, dimension(rows) - current.rows);
-    current.col = rounded(picked.col + 0.5L - current.cols * 0.5L, 0, dimension(cols) - current.cols);
-    return current;
+namespace {
+// Display extents: a vector is one row of N cells.
+double display_width(int64_t rows, int64_t cols, bool vector) { return static_cast<double>(dimension(vector ? rows : cols)); }
+double display_height(int64_t rows, int64_t cols, bool vector) { return vector ? 1.0 : static_cast<double>(dimension(rows)); }
+bool usable(Rect bounds) { return bounds.width > 0 && bounds.height > 0; }
+} // namespace
+
+double fit_cell(int64_t rows, int64_t cols, bool vector, Rect bounds) {
+    bounds = valid_rect(bounds);
+    if (!usable(bounds)) return 1;
+    return std::min(bounds.width / display_width(rows, cols, vector),
+                    bounds.height / display_height(rows, cols, vector));
 }
 
-Rect selection_rect(Region region, int64_t rows, int64_t cols, Rect overview) {
-    region = clamp(region, rows, cols);
+Camera initial_camera(int64_t rows, int64_t cols, bool vector, Rect bounds) {
+    bounds = valid_rect(bounds);
+    const double width = display_width(rows, cols, vector), height = display_height(rows, cols, vector);
+    Camera camera{0, 0, fit_cell(rows, cols, vector, bounds)};
+    if (usable(bounds)) {
+        if (vector) camera.cell = std::max(camera.cell, std::min(strip_height, bounds.height));
+        else if (height > width * 8) camera.cell = bounds.width / width;
+        else if (width > height * 8) camera.cell = bounds.height / height;
+    }
+    // The first cell at the top left; clamp moves the centre in from there.
+    return clamp(camera, rows, cols, vector, bounds);
+}
+
+Camera clamp(Camera camera, int64_t rows, int64_t cols, bool vector, Rect bounds) {
+    bounds = valid_rect(bounds);
+    const double width = display_width(rows, cols, vector), height = display_height(rows, cols, vector);
+    const double low = fit_cell(rows, cols, vector, bounds);
+    if (!std::isfinite(camera.cell) || camera.cell <= 0) camera.cell = low;
+    camera.cell = std::clamp(camera.cell, low, std::max(low, max_cell));
+    const double seen_x = usable(bounds) ? std::min(width, bounds.width / camera.cell) : width;
+    const double seen_y = usable(bounds) ? std::min(height, bounds.height / camera.cell) : height;
+    if (!std::isfinite(camera.x)) camera.x = 0;
+    if (!std::isfinite(camera.y)) camera.y = 0;
+    camera.x = std::clamp(camera.x, seen_x * 0.5, width - seen_x * 0.5);
+    camera.y = std::clamp(camera.y, seen_y * 0.5, height - seen_y * 0.5);
+    return camera;
+}
+
+Shot shoot(Camera camera, int64_t rows, int64_t cols, bool vector, Rect bounds) {
+    bounds = valid_rect(bounds);
+    camera = clamp(camera, rows, cols, vector, bounds);
+    const double width = display_width(rows, cols, vector), height = display_height(rows, cols, vector);
+    const double seen_x = usable(bounds) ? std::min(width, bounds.width / camera.cell) : width;
+    const double seen_y = usable(bounds) ? std::min(height, bounds.height / camera.cell) : height;
+    const double left = camera.x - seen_x * 0.5, top = camera.y - seen_y * 0.5;
+    Shot shot;
+    shot.picture = {bounds.x + (bounds.width - seen_x * camera.cell) * 0.5,
+                    bounds.y + (bounds.height - seen_y * camera.cell) * 0.5,
+                    seen_x * camera.cell, seen_y * camera.cell};
+    if (!usable(bounds)) shot.picture = {bounds.x, bounds.y, 0, 0};
+    shot.window = vector ? Window{left, 0, seen_x, 1} : Window{top, left, seen_y, seen_x};
+    return shot;
+}
+
+Camera zoom(Camera camera, int64_t rows, int64_t cols, bool vector, Rect bounds,
+            double factor, double x, double y) {
+    bounds = valid_rect(bounds);
+    camera = clamp(camera, rows, cols, vector, bounds);
+    if (!std::isfinite(factor) || factor <= 0 || !usable(bounds)) return camera;
+    const Shot before = shoot(camera, rows, cols, vector, bounds);
+    const Rect p = before.picture;
+    if (!std::isfinite(x)) x = p.x + p.width * 0.5;
+    if (!std::isfinite(y)) y = p.y + p.height * 0.5;
+    x = std::clamp(x, p.x, p.x + p.width); y = std::clamp(y, p.y, p.y + p.height);
+    // The display cell under the pointer, before and after.
+    const double left = camera.x - p.width / camera.cell * 0.5, top = camera.y - p.height / camera.cell * 0.5;
+    const double under_x = left + (x - p.x) / camera.cell, under_y = top + (y - p.y) / camera.cell;
+    Camera next = camera;
+    next.cell = clamp({camera.x, camera.y, camera.cell * factor}, rows, cols, vector, bounds).cell;
+    const Shot after = shoot({0, 0, next.cell}, rows, cols, vector, bounds);
+    next.x = under_x - (x - after.picture.x) / next.cell + after.picture.width / next.cell * 0.5;
+    next.y = under_y - (y - after.picture.y) / next.cell + after.picture.height / next.cell * 0.5;
+    return clamp(next, rows, cols, vector, bounds);
+}
+
+Camera pan(Camera start, int64_t rows, int64_t cols, bool vector, Rect bounds, double dx, double dy) {
+    start = clamp(start, rows, cols, vector, bounds);
+    if (std::isfinite(dx)) start.x -= dx / start.cell;
+    if (std::isfinite(dy)) start.y -= dy / start.cell;
+    return clamp(start, rows, cols, vector, bounds);
+}
+
+Camera frame(Window window, int64_t rows, int64_t cols, bool vector, Rect bounds) {
+    bounds = valid_rect(bounds);
+    const double left = vector ? window.row : window.col, top = vector ? 0 : window.row;
+    const double width = std::max(1e-9, vector ? window.rows : window.cols);
+    const double height = std::max(1e-9, vector ? 1 : window.rows);
+    Camera camera{left + width * 0.5, top + height * 0.5, 0};
+    if (usable(bounds)) camera.cell = std::min(bounds.width / width, bounds.height / height);
+    return clamp(camera, rows, cols, vector, bounds);
+}
+
+Camera centre_on(Camera camera, int64_t rows, int64_t cols, bool vector, Rect bounds, Cell cell) {
+    if (!cell.valid) return clamp(camera, rows, cols, vector, bounds);
+    camera.x = (vector ? cell.row : cell.col) + 0.5;
+    camera.y = vector ? 0.5 : cell.row + 0.5;
+    return clamp(camera, rows, cols, vector, bounds);
+}
+
+Region cover(Window window, int64_t rows, int64_t cols) {
+    // A hair of tolerance, so a window that ends on a cell edge does not
+    // touch the next cell through rounding.
+    constexpr long double slack = 1e-6L;
+    const int64_t row0 = rounded(std::floor(window.row + slack), 0, dimension(rows) - 1);
+    const int64_t col0 = rounded(std::floor(window.col + slack), 0, dimension(cols) - 1);
+    const int64_t row1 = rounded(std::ceil(static_cast<long double>(window.row) + window.rows - slack), row0 + 1, dimension(rows));
+    const int64_t col1 = rounded(std::ceil(static_cast<long double>(window.col) + window.cols - slack), col0 + 1, dimension(cols));
+    return {row0, col0, row1 - row0, col1 - col0};
+}
+
+Cell hit_test(Window window, Rect picture, double x, double y, bool vector) {
+    picture = valid_rect(picture);
+    if (!inside(picture, x, y) || !(window.rows > 0) || !(window.cols > 0)) return {};
+    const long double fx = (x - picture.x) / picture.width, fy = (y - picture.y) / picture.height;
+    const long double row = window.row + (vector ? fx : fy) * window.rows;
+    const long double col = window.col + (vector ? fy : fx) * window.cols;
+    if (!std::isfinite(row) || !std::isfinite(col) || row < 0 || col < 0) return {};
+    return {static_cast<int64_t>(std::floor(row)), static_cast<int64_t>(std::floor(col)), true};
+}
+
+Rect selection_rect(Window window, int64_t rows, int64_t cols, Rect overview) {
     overview = valid_rect(overview);
     const double x_scale = overview.width / dimension(cols);
     const double y_scale = overview.height / dimension(rows);
-    return {overview.x + region.col * x_scale, overview.y + region.row * y_scale,
-            region.cols * x_scale, region.rows * y_scale};
+    return {overview.x + window.col * x_scale, overview.y + window.row * y_scale,
+            window.cols * x_scale, window.rows * y_scale};
 }
 
 Target sampling_target(Region region, Rect picture, double framebuffer_scale, bool vector) {

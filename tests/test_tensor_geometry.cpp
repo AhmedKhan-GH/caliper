@@ -92,82 +92,34 @@ TEST_CASE("embedding viewport axes remain beside its own picture after cropping"
     CHECK(invalid.columns.height == 0);
 }
 
-TEST_CASE("initial regions retain ordinary shapes and crop elongated shapes") {
-    const tg::Rect area{0, 0, 600, 400};
-    auto matrix = tg::initial_region(3584, 1024, area, false);
-    CHECK(matrix == tg::Region{0, 0, 3584, 1024});
-    auto embedding = tg::initial_region(248320, 1024, area, false);
-    CHECK(embedding.row == 0); CHECK(embedding.col == 0);
-    CHECK(embedding.cols == 1024); CHECK(embedding.rows == 683);
-    CHECK(embedding.rows < 248320);
-    auto wide = tg::initial_region(16, 12000, area, false);
-    CHECK(wide.rows == 16); CHECK(wide.cols == 24);
-    auto vector = tg::initial_region(1024, 1, area, true);
-    CHECK(vector == tg::Region{0, 0, 25, 1});
-}
-
-TEST_CASE("default vector region fills the modest strip with square cells") {
-    const tg::Rect bounds{17, 29, 600, 400};
-    for (int64_t count : {int64_t{1024}, int64_t{16}}) {
-        const auto layout = tg::view_layout(count, 1, true, bounds);
-        const auto region = tg::initial_region(count, 1, layout.strip, true);
-        const auto picture = tg::fit(region.cols, region.rows, layout.strip);
-        CHECK(region.rows == (count == 1024 ? 25 : 16));
-        CHECK(picture.height == doctest::Approx(tg::strip_height));
-        square_cells(picture, region.cols, region.rows);
-        contained(picture, layout.strip);
-    }
-    CHECK(tg::initial_region(1024, 1, {0, 0, 0, 0}, true).rows == 1);
-    CHECK(tg::initial_region(1024, 1, {0, 0, 1, 24}, true).rows == 1);
-}
-
-TEST_CASE("zoom preserves a cell anchor and clamps at tensor edges") {
-    const tg::Region source{100, 200, 100, 200};
-    const tg::Cell anchor{125, 250, true};
-    const auto closer = tg::zoom(source, 1000, 2000, 0.5, anchor);
-    CHECK(closer.rows == 50); CHECK(closer.cols == 100);
-    CHECK(closer.row == 113); CHECK(closer.col == 225);
-    const auto one = tg::zoom(closer, 1000, 2000, 0.0001, anchor);
-    CHECK(one.rows == 1); CHECK(one.cols == 1);
-    CHECK(one.row == anchor.row); CHECK(one.col == anchor.col);
-    const auto whole = tg::zoom(source, 1000, 2000, 1000, anchor);
-    CHECK(whole == tg::Region{0, 0, 1000, 2000});
-    CHECK(tg::zoom(source, 1000, 2000, 0, anchor) == source);
-    CHECK(tg::clamp({-5, 9000, 5000, -2}, 1000, 2000) == tg::Region{0, 1999, 1000, 1});
-}
-
-TEST_CASE("pan and hit testing use the same matrix and vector coordinates") {
-    const tg::Region source{100, 200, 10, 20};
+TEST_CASE("hit testing a whole-cell region uses matrix and vector coordinates") {
+    const tg::Region matrix{102, 198, 10, 20};
     const tg::Rect picture{10, 20, 400, 200};
-    const auto matrix = tg::pan(source, 1000, 2000, 40, -40, picture, false);
-    CHECK(matrix == tg::Region{102, 198, 10, 20});
     auto cell = tg::hit_test(matrix, picture, 20, 30, false);
     REQUIRE(cell.valid); CHECK(cell.row == 102); CHECK(cell.col == 198);
     cell = tg::hit_test(matrix, picture, 409.9, 219.9, false);
     REQUIRE(cell.valid); CHECK(cell.row == 111); CHECK(cell.col == 217);
     CHECK_FALSE(tg::hit_test(matrix, picture, 410, 100, false).valid);
     CHECK_FALSE(tg::hit_test(matrix, picture, 20, 220, false).valid);
-    const tg::Region vector{100, 0, 20, 1};
-    const auto shifted = tg::pan(vector, 1024, 1, -40, 0, {10, 20, 400, 20}, true);
-    CHECK(shifted == tg::Region{102, 0, 20, 1});
-    cell = tg::hit_test(shifted, {10, 20, 400, 20}, 100, 25, true);
+    cell = tg::hit_test(tg::Region{102, 0, 20, 1}, {10, 20, 400, 20}, 100, 25, true);
     REQUIRE(cell.valid); CHECK(cell.row == 106); CHECK(cell.col == 0);
-    // Using total drag from its starting region lets several small pointer
-    // movements eventually cross a cell boundary at high magnification.
-    CHECK(tg::pan(vector, 1024, 1, -12, 0, {0, 0, 480, 24}, true).row == 101);
 }
 
 TEST_CASE("overview selection and recentering preserve true embedding bounds") {
     const tg::Rect overview = tg::fit(248320, 1024, {0, 0, 72, 400});
-    const tg::Region region{10000, 0, 1024, 1024};
-    const auto selected = tg::selection_rect(region, 248320, 1024, overview);
+    const tg::Window window{10000, 0, 1024, 1024};
+    const auto selected = tg::selection_rect(window, 248320, 1024, overview);
     contained(selected, overview);
     CHECK(selected.width == doctest::Approx(overview.width));
     CHECK(selected.height / overview.height == doctest::Approx(1024.0 / 248320));
-    const auto centered = tg::overview_region(region, 248320, 1024, overview,
-                                               overview.x + overview.width / 2, 200);
-    CHECK(centered.row >= 123648); CHECK(centered.row <= 123649); CHECK(centered.col == 0);
-    CHECK(tg::overview_region(region, 248320, 1024, overview, 0, 200) == region);
+    // A click in the strip centres the view on the picked row, at the same zoom.
+    const tg::Rect bounds{0, 0, 400, 400};
+    const auto camera = tg::frame(window, 248320, 1024, false, bounds);
+    const auto picked = tg::hit_test(tg::Region{0, 0, 248320, 1024}, overview, overview.x + overview.width / 2, 200, false);
+    const auto centred = tg::shoot(tg::centre_on(camera, 248320, 1024, false, bounds, picked), 248320, 1024, false, bounds);
+    CHECK(centred.window.rows == doctest::Approx(1024)); CHECK(centred.window.col == doctest::Approx(0));
+    CHECK(centred.window.row + 512 == doctest::Approx(picked.row + 0.5));
+    CHECK(picked.row >= 124159); CHECK(picked.row <= 124160);
 }
 
 TEST_CASE("sampling follows physical resolution and respects cell and frame budgets") {
@@ -218,4 +170,84 @@ TEST_CASE("inspector window layout stays within its work area without overlap") 
             for (size_t j = i + 1; j < all.size(); ++j) CHECK_FALSE(overlap(all[i], all[j]));
         CHECK(windows.tensor.width > windows.inference.width);
     }
+}
+
+TEST_CASE("a zoomed camera fills the bounds wherever the tensor reaches past them") {
+    const tg::Rect bounds{10, 20, 900, 300};
+    // down_proj: 1024 x 3584 is wider than the bounds' shape, so it starts
+    // whole, letterboxed top and bottom, with square cells.
+    auto camera = tg::initial_camera(1024, 3584, false, bounds);
+    auto shot = tg::shoot(camera, 1024, 3584, false, bounds);
+    CHECK(shot.window.rows == doctest::Approx(1024)); CHECK(shot.window.cols == doctest::Approx(3584));
+    CHECK(shot.picture.width == doctest::Approx(900)); CHECK(shot.picture.height < 300);
+    square_cells(shot.picture, shot.window.rows, shot.window.cols);
+    contained(shot.picture, bounds);
+    // Four times closer the rows reach past the bounds too: the picture is
+    // the whole bounds, still with square cells.
+    camera = tg::zoom(camera, 1024, 3584, false, bounds, 4, 460, 170);
+    shot = tg::shoot(camera, 1024, 3584, false, bounds);
+    CHECK(shot.picture.width == doctest::Approx(900)); CHECK(shot.picture.height == doctest::Approx(300));
+    square_cells(shot.picture, shot.window.rows, shot.window.cols);
+    CHECK(shot.window.cols == doctest::Approx(3584 / 4.0));
+    CHECK(camera.cell == doctest::Approx(4 * 900 / 3584.0));
+    // A matrix narrower than the bounds at this zoom keeps its true width.
+    const auto narrow = tg::shoot(tg::frame({0, 0, 16, 16}, 64, 16, false, bounds), 64, 16, false, bounds);
+    CHECK(narrow.window.cols == doctest::Approx(16));
+    CHECK(narrow.picture.height == doctest::Approx(300)); CHECK(narrow.picture.width == doctest::Approx(300));
+}
+
+TEST_CASE("camera zoom keeps the pointed cell under the pointer and is continuous") {
+    const tg::Rect bounds{0, 0, 800, 400};
+    auto camera = tg::initial_camera(2048, 2048, false, bounds);
+    const double x = 500, y = 120;
+    // While the picture is narrower than the bounds it stays centred, so the
+    // anchor holds along the sides the picture fills: here rows at once,
+    // columns from the fourth step.
+    for (double step : {1.03, 1.03, 1.5, 7.0, 1.001}) {
+        const auto before = tg::shoot(camera, 2048, 2048, false, bounds);
+        const auto under = tg::hit_test(before.window, before.picture, x, y, false);
+        camera = tg::zoom(camera, 2048, 2048, false, bounds, step, x, y);
+        const auto shot = tg::shoot(camera, 2048, 2048, false, bounds);
+        const auto cell = tg::hit_test(shot.window, shot.picture, x, y, false);
+        REQUIRE(cell.valid); CHECK(cell.row == under.row);
+        if (before.picture.width == doctest::Approx(800)) CHECK(cell.col == under.col);
+    }
+    CHECK(tg::shoot(camera, 2048, 2048, false, bounds).picture.width == doctest::Approx(800));
+    // A tiny trackpad step still changes the zoom: nothing rounds to whole cells.
+    const double cell = camera.cell;
+    CHECK(tg::zoom(camera, 2048, 2048, false, bounds, 1.001, x, y).cell > cell);
+    // Limits: never past the fit, never past max_cell.
+    CHECK(tg::zoom(camera, 2048, 2048, false, bounds, 1e-6, x, y).cell == doctest::Approx(tg::fit_cell(2048, 2048, false, bounds)));
+    CHECK(tg::zoom(camera, 2048, 2048, false, bounds, 1e6, x, y).cell == doctest::Approx(tg::max_cell));
+}
+
+TEST_CASE("camera pan, cover and centring stay inside the tensor") {
+    const tg::Rect bounds{0, 0, 400, 200};
+    auto camera = tg::frame({100, 200, 10, 20}, 1000, 2000, false, bounds);
+    auto shot = tg::shoot(camera, 1000, 2000, false, bounds);
+    CHECK(shot.window.row == doctest::Approx(100)); CHECK(shot.window.col == doctest::Approx(200));
+    CHECK(tg::cover(shot.window, 1000, 2000) == tg::Region{100, 200, 10, 20});
+    camera = tg::pan(camera, 1000, 2000, false, bounds, 40, -40);   // 20 points a cell
+    shot = tg::shoot(camera, 1000, 2000, false, bounds);
+    CHECK(shot.window.row == doctest::Approx(102)); CHECK(shot.window.col == doctest::Approx(198));
+    CHECK(tg::cover({101.5, 3.25, 2, 0.5}, 1000, 2000) == tg::Region{101, 3, 3, 1});
+    camera = tg::pan(camera, 1000, 2000, false, bounds, 1e9, 1e9);
+    shot = tg::shoot(camera, 1000, 2000, false, bounds);
+    CHECK(shot.window.row == doctest::Approx(0)); CHECK(shot.window.col == doctest::Approx(0));
+    camera = tg::centre_on(camera, 1000, 2000, false, bounds, {999, 1999, true});
+    shot = tg::shoot(camera, 1000, 2000, false, bounds);
+    CHECK(shot.window.row + shot.window.rows == doctest::Approx(1000));
+    CHECK(shot.window.col + shot.window.cols == doctest::Approx(2000));
+    // Vectors run along x in a strip of square cells.
+    const tg::Rect strip{0, 0, 480, 24};
+    const auto vector = tg::initial_camera(1024, 1, true, strip);
+    shot = tg::shoot(vector, 1024, 1, true, strip);
+    CHECK(vector.cell == doctest::Approx(24)); CHECK(shot.window.rows == doctest::Approx(20));
+    CHECK(shot.window.cols == doctest::Approx(1)); CHECK(shot.window.row == doctest::Approx(0));
+    const auto cell = tg::hit_test(shot.window, shot.picture, 100, 12, true);
+    REQUIRE(cell.valid); CHECK(cell.row == 4); CHECK(cell.col == 0);
+    // An embedding starts filling the bounds' width from its first row.
+    const auto embedding = tg::shoot(tg::initial_camera(248320, 1024, false, bounds), 248320, 1024, false, bounds);
+    CHECK(embedding.window.cols == doctest::Approx(1024)); CHECK(embedding.window.row == doctest::Approx(0));
+    CHECK(embedding.picture.width == doctest::Approx(400)); CHECK(embedding.picture.height == doctest::Approx(200));
 }

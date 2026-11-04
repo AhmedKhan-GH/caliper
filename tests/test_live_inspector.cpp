@@ -387,3 +387,83 @@ TEST_CASE("inspector requests folded embedding thumbnails within the small atlas
     CHECK(thumbnail["target"]["width"].get<double>() == 8);
     CHECK(ui.errors == 0);
 }
+
+namespace {
+std::string base64(const std::string& bytes) {
+    static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        uint32_t n = static_cast<uint8_t>(bytes[i]) << 16;
+        if (i + 1 < bytes.size()) n |= static_cast<uint8_t>(bytes[i + 1]) << 8;
+        if (i + 2 < bytes.size()) n |= static_cast<uint8_t>(bytes[i + 2]);
+        out += alphabet[n >> 18 & 63]; out += alphabet[n >> 12 & 63];
+        out += i + 1 < bytes.size() ? alphabet[n >> 6 & 63] : '=';
+        out += i + 2 < bytes.size() ? alphabet[n & 63] : '=';
+    }
+    return out;
+}
+// Rows of a 4 x 3 tensor as bfloat16 bits: the top half of each float32.
+std::string bfloat16_rows(int first, int count) {
+    std::string bytes;
+    for (int i = first * 3; i < (first + count) * 3; ++i) {
+        const float value = 0.25f * static_cast<float>(i) - 1.0f;
+        uint32_t bits; std::memcpy(&bits, &value, sizeof bits);
+        bytes += static_cast<char>(bits >> 16 & 255); bytes += static_cast<char>(bits >> 24 & 255);
+    }
+    return base64(bytes);
+}
+} // namespace
+
+TEST_CASE("inspector fetches whole values once, then zooms and selects without the host") {
+    Ui ui;
+    auto hello = ui.request("hello");
+    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"list_tensors", "show_tensor", "read_weight",
+        "edit_weight", "tensor_regions", "tensor_values"}}});
+    auto list = ui.request("list_tensors");
+    ui.peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
+        Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "bfloat16"},
+               {"bytes", 24.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
+    // Whole rows, each reply continuing where the last ended.
+    auto first = ui.request("tensor_values");
+    CHECK(first["row"].get<double>() == 0);
+    ui.peer.reply(first, Object{{"name", "block.weight"}, {"rows", 4.0}, {"cols", 3.0}, {"row", 0.0}, {"count", 3.0},
+        {"encoding", "bfloat16"}, {"data", bfloat16_rows(0, 3)}, {"revision", 0.0}});
+    auto second = ui.request("tensor_values");
+    CHECK(second["row"].get<double>() == 3);
+    ui.peer.reply(second, Object{{"name", "block.weight"}, {"rows", 4.0}, {"cols", 3.0}, {"row", 3.0}, {"count", 1.0},
+        {"encoding", "bfloat16"}, {"data", bfloat16_rows(3, 1)}, {"revision", 0.0}});
+    for (int i = 0; i < 5; ++i) ui.frame();
+    CHECK(ui.captured.find("Zoom 1x") != std::string::npos);
+
+    // Zoom and click in the picture: the view and the value come from the
+    // values held here. The only request is the 3D view's thumbnail.
+    ImGuiWindow* window = ImGui::FindWindowByName(tensor_window);
+    REQUIRE(window != nullptr);
+    auto& io = ImGui::GetIO();
+    const ImVec2 at(window->Pos.x + window->Size.x * 0.45f, window->Pos.y + window->Size.y * 0.4f);
+    io.AddMousePosEvent(at.x, at.y);
+    ui.frame();
+    io.AddMouseWheelEvent(0, 1);
+    ui.frame(); ui.frame();
+    // Zoomed in (a 4 x 3 tensor stops at max_cell), the hovered cell's exact value decoded from bfloat16.
+    CHECK(ui.captured.find("Zoom 1x") == std::string::npos);
+    CHECK(ui.captured.find("Zoom 1.") != std::string::npos);
+    CHECK(ui.captured.find("(1, 1)\n0\n") != std::string::npos);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true); ui.frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false); ui.frame();
+    int region_requests = 0;
+    for (int i = 0; i < 30; ++i) {
+        ui.frame();
+        while (!ui.peer.requests.empty()) {
+            Json request = std::move(ui.peer.requests.front()); ui.peer.requests.pop_front();
+            const auto op = request["op"].get<std::string>();
+            CHECK(op == "show_tensor");
+            ++region_requests;
+            ui.overview(request);
+        }
+    }
+    CHECK(region_requests <= 1);
+    CHECK(ui.captured.find("(1, 1) = 0") != std::string::npos);
+    CHECK(ui.captured.find("Value not read") == std::string::npos);
+    CHECK(ui.errors == 0);
+}
