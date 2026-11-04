@@ -140,12 +140,29 @@ def test_manifest_matrix_layout_sample_indices_and_reconnect_history():
     assert (norm["rows"], norm["cols"], norm["group"]) == (3, 1, "Layer 03")
     shown = call("show_tensor", name=embedding["name"])
     assert shown["sample_rows"] <= 128 and shown["sample_cols"] <= 128
-    sample = large[np.ix_(shown["row_indices"], shown["col_indices"])]
-    np.testing.assert_array_equal(np.array(shown["values"]).reshape(sample.shape), sample)
-    assert shown["min"] == sample.min() and shown["max"] == sample.max()
+    sample = box_means(large, shown["region"], shown["sample_rows"], shown["sample_cols"])
+    np.testing.assert_allclose(np.array(shown["values"]).reshape(sample.shape), sample, rtol=1e-6)
+    assert shown["min"] == np.float32(sample.min()) and shown["max"] == np.float32(sample.max())
     host.edit(dict(name=norm["name"], action="set", row=2, col=0, value=9))
     assert call("read_weight", name=norm["name"], row=2, col=0)["value"] == 9
     assert len(call("show_tensor", name=norm["name"])["edits"]) == 1
+
+
+def box_means(a, region, sample_rows, sample_cols):
+    """Each bin's mean by plain loops, independent of the host's chunked reduceat."""
+    a = np.asarray(a, dtype=np.float64).reshape(-1, a.shape[-1]) if np.ndim(a) > 1 else np.asarray(a, dtype=np.float64)[:, None]
+    r, c, h, w = region["row"], region["col"], region["rows"], region["cols"]
+    rs = [r + (i * h) // sample_rows for i in range(sample_rows + 1)]
+    cs = [c + (j * w) // sample_cols for j in range(sample_cols + 1)]
+    return np.array([[a[rs[i]:rs[i + 1], cs[j]:cs[j + 1]].mean() for j in range(sample_cols)] for i in range(sample_rows)])
+
+
+def test_area_samples_are_bin_means_across_chunks(monkeypatch):
+    monkeypatch.setattr(example, "CHUNK_CELLS", 50)   # several chunks, with bins that end mid-way
+    data = np.random.default_rng(0).normal(size=(103, 29)).astype(np.float32)
+    region = dict(row=7, col=3, rows=90, cols=25)
+    got = example.area_sample(lambda r0, r1: data[r0:r1, 3:28], region, 13, 6)
+    np.testing.assert_allclose(got, box_means(data, region, 13, 6), rtol=1e-6)
 
 
 def test_region_uses_bin_centres_in_tensor_coordinates():
@@ -158,8 +175,9 @@ def test_region_uses_bin_centres_in_tensor_coordinates():
     assert shown["row_indices"] == [13, 17]
     assert shown["col_indices"] == [6, 8, 10]
     assert (shown["sample_rows"], shown["sample_cols"], shown["exact"]) == (2, 3, False)
-    np.testing.assert_array_equal(np.array(shown["values"]).reshape(2, 3),
-                                  weight[np.ix_([13, 17], [6, 8, 10])])
+    # Rows 11-14 and 15-19, columns 5-6, 7-8 and 9-11: each value the mean of its bin, not one cell.
+    expected = [[weight[r0:r1, c0:c1].mean() for c0, c1 in ((5, 7), (7, 9), (9, 12))] for r0, r1 in ((11, 15), (15, 20))]
+    np.testing.assert_allclose(np.array(shown["values"]).reshape(2, 3), expected, rtol=1e-6)
 
 
 def test_single_cells_and_terminal_region_are_exact():

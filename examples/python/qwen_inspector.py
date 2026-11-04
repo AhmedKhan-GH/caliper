@@ -31,6 +31,8 @@ MAX_UNDO_BYTES = 64 * 1024 * 1024
 MAX_UNDO_EDITS = 512
 MAX_SAMPLE_SIDE = 2048
 MAX_SAMPLES = 131072
+# Cells read per step while averaging a region (64 MB as float32).
+CHUNK_CELLS = 1 << 24
 
 
 class Cancelled(Exception):
@@ -61,11 +63,40 @@ def matrix_shape(shape):
     return math.prod(shape[:-1]), shape[-1]
 
 
+def area_sample(read, region, sample_rows, sample_cols):
+    """The mean of the cells under each sample: what a pixel covering several cells should show.
+
+    Taking one cell per pixel aliases a field of weights into moire stripes once a pixel covers many cells;
+    a box filter does not. Bin i of n over a length L covers [floor(i L / n), floor((i + 1) L / n)), the
+    same bins whose centres sample_plan returns. `read(r0, r1)` returns rows r0..r1 of the region's columns
+    as a float32 array; whole bins are read about CHUNK_CELLS cells at a time, so a large tensor is never
+    held at once.
+    """
+    height, width = region["rows"], region["cols"]
+    row_starts = [(i * height) // sample_rows for i in range(sample_rows)] + [height]
+    col_starts = np.array([(j * width) // sample_cols for j in range(sample_cols)])
+    col_counts = np.diff(np.append(col_starts, width))
+    out = np.empty((sample_rows, sample_cols), dtype=np.float64)
+    per_chunk = max(1, CHUNK_CELLS // max(1, width))
+    i = 0
+    while i < sample_rows:
+        j = i + 1
+        while j < sample_rows and row_starts[j + 1] - row_starts[i] <= per_chunk:
+            j += 1
+        block = read(region["row"] + row_starts[i], region["row"] + row_starts[j])
+        sums = np.add.reduceat(block, col_starts, axis=1, dtype=np.float64)
+        sums = np.add.reduceat(sums, np.array(row_starts[i:j]) - row_starts[i], axis=0)
+        counts = np.diff(np.array(row_starts[i:j + 1]))[:, None] * col_counts[None, :]
+        out[i:j] = sums / counts
+        i = j
+    return out.astype(np.float32)
+
+
 def sample_plan(rows, cols, request):
     """A bounded, evenly spaced grid in an exact tensor-coordinate region.
 
     A target measures display pixels in wire orientation: width is columns,
-    height is rows. Samples are the original cells nearest each bin's centre.
+    height is rows. Indices are each bin's centre cell; show_tensor averages each bin (area_sample).
     The returned region remains unchanged when the sample budget is reduced.
     """
     region = request.get("region", dict(row=0, col=0, rows=rows, cols=cols))
@@ -203,11 +234,18 @@ class Inspector:
             name, weight = self._weight(request)
             rows, cols = matrix_shape(weight.shape)
             region, row_indices, col_indices = sample_plan(rows, cols, request)
-            # Broadcast the index arrays on MLX first. Neither a whole tensor
-            # nor an oversized region is copied to NumPy to draw its sample.
             matrix = weight.reshape(rows, cols)
-            sample = np.array(matrix[self.mx.array(row_indices)[:, None],
-                                     self.mx.array(col_indices)[None, :]].astype(self.mx.float32))
+            col0, width = region["col"], region["cols"]
+
+            def read(r0, r1):
+                return np.array(matrix[r0:r1, col0:col0 + width].astype(self.mx.float32))
+
+            if len(row_indices) == region["rows"] and len(col_indices) == width:
+                sample = read(region["row"], region["row"] + region["rows"])     # every cell, exactly
+            else:
+                # Each sample is the mean of the cells it covers, read a chunk
+                # at a time, so a downsampled view does not alias.
+                sample = area_sample(read, region, len(row_indices), len(col_indices))
             if not np.isfinite(sample).all():
                 raise ValueError("sample contains non-finite weights")
             return dict(name=name, rows=rows, cols=cols,
