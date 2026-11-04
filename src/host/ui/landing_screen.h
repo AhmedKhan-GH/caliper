@@ -35,6 +35,8 @@
 // overview first / details on demand (Shneiderman), honest disabled actions.
 // ============================================================================
 
+#include "live/request_discovery.h"
+
 #include <functional>
 #include <string>
 #include <vector>
@@ -81,6 +83,9 @@ public:
     }
 
 private:
+    std::vector<caliper_live::RequestEntry> live_controls_;
+    double live_controls_refresh_sec_ = -1.0;
+
     struct LogLine {
         double time_sec = 0.0;   // wall clock at log(), seconds since the epoch
         std::string event;
@@ -92,6 +97,7 @@ private:
     void draw_command_bar();
     void draw_dock_space();
     void draw_projects(const Context& ctx);
+    void draw_live_controls(const Context& ctx);
     void draw_sessions(const Context& ctx);   // Projects in attach mode (F4)
     void draw_instruments(const Context& ctx);
     void draw_inspector(const Context& ctx);

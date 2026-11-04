@@ -829,6 +829,7 @@ void LandingScreen::draw_projects(const Context& ctx) {
                   live == 1 ? "none yet \xc2\xb7 %d live session"
                             : "none yet \xc2\xb7 %d live sessions", live);
     pane_header(kProjects, live > 0 ? subtitle : "none yet", kKeyPane[0]);
+    draw_live_controls(ctx);
 
     struct WayIn {
         const char* n;
@@ -876,6 +877,55 @@ void LandingScreen::draw_projects(const Context& ctx) {
         }
         sternbild::end_table();
     }
+}
+
+// Request offers are read independently of the controller socket: the owner
+// may already have an attached app. Keep that row visible with its busy state.
+void LandingScreen::draw_live_controls(const Context& ctx) {
+    const double now = ImGui::GetTime();
+    if (!ctx.sessions) {
+        live_controls_.clear();
+        return;
+    }
+    if (live_controls_refresh_sec_ < 0 || now - live_controls_refresh_sec_ >= 1.0) {
+        live_controls_ = caliper_live::discover_request_entries(ctx.sessions->sessions());
+        live_controls_refresh_sec_ = now;
+    }
+    if (live_controls_.empty()) return;
+    ImGui::TextUnformatted("Live scripts");
+    const float desired = metric::row * (1.0f + static_cast<float>(std::min<size_t>(live_controls_.size(), 4))) + 2.0f;
+    const float height = std::max(1.0f, std::min(desired, ImGui::GetContentRegionAvail().y));
+    if (sternbild::begin_table("##live_controls", 4, ImVec2(0, height), ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Script", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Controls", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+        sternbild::table_header_row();
+        for (const auto& entry : live_controls_) {
+            const auto& session = entry.session;
+            ImGui::PushID(session.session.c_str());
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, metric::row);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(session.script.empty() ? session.session.c_str() : session.script.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Process %d", session.pid);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(entry.offer == caliper_live::RequestOffer::Inspector ? "Inspector" : "Controls");
+            ImGui::TableNextColumn();
+            const std::string state = caliper_live::state_text(session);
+            ImGui::TextUnformatted(state.c_str());
+            ImGui::TableNextColumn();
+            const bool can_attach = ctx.attach && caliper_live::can_attach(session);
+            ImGui::BeginDisabled(!can_attach);
+            if (ImGui::SmallButton("Attach")) pending_attach_ = session.session;
+            ImGui::EndDisabled();
+            if (!can_attach && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", ctx.attach ? state.c_str() : "Live sessions are unavailable");
+            ImGui::PopID();
+        }
+        sternbild::end_table();
+    }
+    ImGui::Spacing();
 }
 
 // Projects in attach mode (F4): the live sessions of training scripts on this

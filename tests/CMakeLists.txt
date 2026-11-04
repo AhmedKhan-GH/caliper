@@ -329,4 +329,24 @@ if(APPLE)
     target_link_libraries(caliper_live_inspector_tests PRIVATE
         doctest::doctest libcaliper caliper::sdk)
     add_test(NAME caliper_live_inspector_tests COMMAND caliper_live_inspector_tests)
+
+    add_executable(caliper_live_model3d_tests test_live_model3d.cpp)
+    target_link_libraries(caliper_live_model3d_tests PRIVATE
+        doctest::doctest libcaliper caliper::sdk)
+    add_test(NAME caliper_live_model3d_tests COMMAND caliper_live_model3d_tests)
+
+    add_executable(caliper_request_discovery_tests test_request_discovery.cpp)
+    target_link_libraries(caliper_request_discovery_tests PRIVATE
+        doctest::doctest libcaliper caliper::sdk)
+    add_test(NAME caliper_request_discovery_tests COMMAND caliper_request_discovery_tests)
 endif()
+
+# Geometry and picking are CPU-only, independent of a graphics device.
+foreach(geometry IN ITEMS tensor model3d)
+    add_executable(caliper_${geometry}_geometry_tests test_${geometry}_geometry.cpp
+        ${CMAKE_SOURCE_DIR}/src/host/live/${geometry}_geometry.cpp)
+    target_include_directories(caliper_${geometry}_geometry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+    target_link_libraries(caliper_${geometry}_geometry_tests PRIVATE doctest::doctest)
+    target_compile_features(caliper_${geometry}_geometry_tests PRIVATE cxx_std_17)
+    add_test(NAME caliper_${geometry}_geometry_tests COMMAND caliper_${geometry}_geometry_tests)
+endforeach()

@@ -7,6 +7,7 @@
 #include <imgui_internal.h>
 #include <implot.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <deque>
@@ -28,7 +29,7 @@ constexpr const char* tensor_window = "Tensor###caliper.inspector.tensor";
 
 struct Peer {
     int listener = -1, socket = -1;
-    std::string token, path, incoming;
+    std::string token, path, incoming, outgoing;
     std::deque<Json> requests;
 
     Peer() {
@@ -49,12 +50,22 @@ struct Peer {
         if (listener >= 0) ::close(listener);
         unlink(path.c_str());
     }
+    void flush() {
+        while (socket >= 0 && !outgoing.empty()) {
+            const auto n = ::send(socket, outgoing.data(), outgoing.size(), 0);
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+            REQUIRE(n > 0);
+            outgoing.erase(0, static_cast<size_t>(n));
+        }
+    }
     void pump() {
         if (socket < 0) {
             socket = accept(listener, nullptr, nullptr);
             if (socket < 0) return;
             fcntl(socket, F_SETFL, O_NONBLOCK);
         }
+        flush();
         char bytes[8192];
         for (;;) {
             const auto n = recv(socket, bytes, sizeof bytes, 0);
@@ -68,8 +79,8 @@ struct Peer {
         }
     }
     void send(const Json& message) {
-        const std::string bytes = message.dump() + "\n";
-        REQUIRE(::send(socket, bytes.data(), bytes.size(), 0) == static_cast<ssize_t>(bytes.size()));
+        outgoing += message.dump() + "\n";
+        flush();
     }
     void reply(const Json& request, Json result) {
         send(Object{{"id", request["id"]}, {"done", true}, {"result", std::move(result)}});
@@ -77,6 +88,7 @@ struct Peer {
     void disconnect() {
         if (socket >= 0) ::close(socket);
         socket = -1;
+        outgoing.clear();
     }
 };
 
@@ -85,6 +97,8 @@ struct Ui {
     std::unique_ptr<caliper_live::Inspector> inspector;
     std::string captured;
     int errors = 0;
+    Json initial_sample;
+    bool vector_fixture = false;
 
     Ui() {
         ImGui::CreateContext();
@@ -132,12 +146,22 @@ struct Ui {
         peer.pump();
     }
     Json request(const char* op) {
-        for (int i = 0; i < 30 && peer.requests.empty(); ++i) frame();
-        REQUIRE_FALSE(peer.requests.empty());
-        Json result = std::move(peer.requests.front()); peer.requests.pop_front();
-        REQUIRE(result.is_object());
-        CHECK(result["op"].get<std::string>() == op);
-        return result;
+        for (int tries = 0; tries < 100; ++tries) {
+            for (int i = 0; i < 30 && peer.requests.empty(); ++i) frame();
+            REQUIRE_FALSE(peer.requests.empty());
+            Json result = std::move(peer.requests.front()); peer.requests.pop_front();
+            REQUIRE(result.is_object());
+            const auto received = result["op"].get<std::string>();
+            // Lazy previews may be outstanding when a manual control is used.
+            // Complete those tiny reads and observe the queued action next.
+            if (received == "show_tensor" && std::string(op) != "show_tensor") {
+                overview(result); continue;
+            }
+            CHECK(received == op);
+            return result;
+        }
+        FAIL("request did not reach the front of the serial scheduler");
+        return {};
     }
     void activate(const char* window_name, const char* label) {
         ImGuiWindow* window = ImGui::FindWindowByName(window_name);
@@ -158,23 +182,50 @@ struct Ui {
     void overview(const Json& req, bool edited = false) {
         Array edits;
         if (edited) edits.push_back(Object{{"id", 1.0}, {"name", "block.weight"}, {"description", "Set (0, 0) to 0.5"}});
-        peer.reply(req, Object{{"name", "block.weight"}, {"rows", 4.0}, {"cols", 3.0},
-            {"sample_rows", 2.0}, {"sample_cols", 2.0},
-            {"values", Array{0.125, 0.25, -0.5, 1.0}},
-            {"row_indices", Array{0.0, 3.0}}, {"col_indices", Array{0.0, 2.0}},
-            {"min", -0.5}, {"max", 1.0}, {"edits", std::move(edits)}});
+        if (vector_fixture) {
+            const Json& region = req.contains("region") ? req["region"] : Json(Object{
+                {"row", 0.0}, {"col", 0.0}, {"rows", 1024.0}, {"cols", 1.0}});
+            const int first = static_cast<int>(region["row"].get<double>());
+            const int count = static_cast<int>(region["rows"].get<double>());
+            const int target = req.contains("target") ? static_cast<int>(req["target"]["height"].get<double>()) : 128;
+            const int samples = std::min(count, target);
+            Array indices, values;
+            for (int i = 0; i < samples; ++i) {
+                const int index = first + (samples == 1 ? 0 : i * (count - 1) / (samples - 1));
+                indices.push_back(static_cast<double>(index)); values.push_back(0.125 + index * 0.001);
+            }
+            peer.reply(req, Object{{"name", "block.weight"}, {"rows", 1024.0}, {"cols", 1.0},
+                {"sample_rows", static_cast<double>(samples)}, {"sample_cols", 1.0},
+                {"values", std::move(values)}, {"row_indices", std::move(indices)}, {"col_indices", Array{0.0}},
+                {"region", region}, {"edited", edited}, {"revision", edited ? 1.0 : 0.0}, {"edits", std::move(edits)}});
+        } else {
+            peer.reply(req, Object{{"name", "block.weight"}, {"rows", 4.0}, {"cols", 3.0},
+                {"sample_rows", 2.0}, {"sample_cols", 2.0},
+                {"values", Array{0.125, 0.25, -0.5, 1.0}},
+                {"row_indices", Array{0.0, 3.0}}, {"col_indices", Array{0.0, 2.0}},
+                {"min", -0.5}, {"max", 1.0}, {"edits", std::move(edits)},
+                {"region", Object{{"row", 0.0}, {"col", 0.0}, {"rows", 4.0}, {"cols", 3.0}}},
+                {"edited", edited}, {"revision", edited ? 1.0 : 0.0}});
+        }
         frame();
+        for (int i = 0; i < 30 && !peer.outgoing.empty(); ++i) frame();
+        REQUIRE(peer.outgoing.empty());
+        frame(); // Consume the final chunk after the peer flushed it.
     }
-    void connect() {
+    void connect(bool regions = false, bool vector = false) {
+        vector_fixture = vector;
         auto hello = request("hello");
-        peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{
-            "generate", "list_tensors", "show_tensor", "read_weight", "edit_weight", "revert_tensor"}}});
+        Array capabilities{"generate", "list_tensors", "show_tensor", "read_weight", "edit_weight", "revert_tensor"};
+        if (regions) capabilities.push_back("tensor_regions");
+        peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", std::move(capabilities)}});
         auto list = request("list_tensors");
         peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
-            Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}},
-                {"dtype", "float32"}, {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}, {"tied", true}}
+            Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", vector ? Array{1024.0} : Array{4.0, 3.0}},
+                {"dtype", "float32"}, {"bytes", vector ? 4096.0 : 48.0}, {"size", vector ? 1024.0 : 12.0},
+                {"rows", vector ? 1024.0 : 4.0}, {"cols", vector ? 1.0 : 3.0}, {"tied", true}}
         }}});
-        overview(request("show_tensor"));
+        initial_sample = request("show_tensor");
+        overview(initial_sample);
         frame();
     }
 };
@@ -185,7 +236,7 @@ TEST_CASE("inspector widgets stream, stop and edit through the request channel")
     ui.connect();
     CHECK(ui.captured.find("Test model") != std::string::npos);
     CHECK(ui.captured.find("Shared with the output layer") != std::string::npos);
-    CHECK(ui.captured.find("Overview: 2 x 2 sampled values") != std::string::npos);
+    CHECK(ui.captured.find("Region: 2 x 2 sampled values") != std::string::npos);
     CHECK(ui.captured.find("Max new tokens") != std::string::npos);
 
     ui.activate(inference_window, "Generate");
@@ -256,5 +307,54 @@ TEST_CASE("inspector reports disconnect without replaying generation") {
     ui.activate(inference_window, "Generate");
     ui.frame();
     CHECK(ui.peer.requests.empty());
+    CHECK(ui.errors == 0);
+}
+
+TEST_CASE("inspector requests visible region pixels and prioritizes manual generation") {
+    Ui ui;
+    ui.connect(true);
+    const auto& region = ui.initial_sample["region"];
+    CHECK(region["row"].get<double>() == 0);
+    CHECK(region["col"].get<double>() == 0);
+    CHECK(region["rows"].get<double>() == 4);
+    CHECK(region["cols"].get<double>() == 3);
+    const auto& target = ui.initial_sample["target"];
+    CHECK(target["width"].get<double>() == 3);
+    CHECK(target["height"].get<double>() == 4);
+    CHECK(ui.captured.find("Overview only") == std::string::npos);
+    CHECK(ui.captured.find("Reset layout") != std::string::npos);
+
+    // Leave a passive overview/thumbnail in flight. Generate stays available,
+    // and its request is issued immediately when that passive read completes.
+    const auto passive = ui.request("show_tensor");
+    ui.activate(inference_window, "Generate");
+    CHECK(ui.peer.requests.empty());
+    ui.overview(passive);
+    const auto generation = ui.request("generate");
+    CHECK(generation["prompt"].is_string());
+    ui.peer.reply(generation, Object{{"tokens", 1.0}, {"tokens_per_second", 5.0}, {"cancelled", false}});
+    ui.frame();
+    CHECK(ui.captured.find("Complete") != std::string::npos);
+    CHECK(ui.errors == 0);
+}
+
+TEST_CASE("inspector vector detail uses square strip cells and a separate full-range plot") {
+    Ui ui;
+    ui.connect(true, true);
+    const double visible = ui.initial_sample["region"]["rows"].get<double>();
+    CHECK(visible > 1);
+    CHECK(visible < 1024);
+    CHECK(ui.initial_sample["region"]["cols"].get<double>() == 1);
+    CHECK(ui.initial_sample["target"]["width"].get<double>() == 1);
+    CHECK(ui.initial_sample["target"]["height"].get<double>() == visible);
+
+    const auto plot = ui.request("show_tensor");
+    CHECK(plot["region"]["row"].get<double>() == 0);
+    CHECK(plot["region"]["rows"].get<double>() == 1024);
+    CHECK(plot["region"]["cols"].get<double>() == 1);
+    CHECK(plot["target"]["width"].get<double>() == 1);
+    CHECK(plot["target"]["height"].get<double>() > visible);
+    ui.overview(plot);
+    CHECK(ui.captured.find("exact cells") != std::string::npos);
     CHECK(ui.errors == 0);
 }

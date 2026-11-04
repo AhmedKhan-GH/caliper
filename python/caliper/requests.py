@@ -13,6 +13,7 @@ import queue
 import re
 import socket
 import stat
+import tempfile
 import threading
 
 MAX_MESSAGE = 4 * 1024 * 1024
@@ -72,6 +73,8 @@ class RequestServer:
     """
     def __init__(self, session: str, capabilities=()):
         self.path = socket_path(session)
+        self.advertisement_path = str(Path(self.path).with_suffix(".requests.json"))
+        self._advertised = False
         directory = Path(self.path).parent
         directory.mkdir(mode=0o700, exist_ok=True)
         info = directory.lstat()
@@ -80,6 +83,8 @@ class RequestServer:
         self.capabilities = list(capabilities)
         if any(not isinstance(capability, str) for capability in self.capabilities):
             raise TypeError("capabilities must be strings")
+        if len(self.capabilities) > 128 or any(not c or len(c.encode()) > 128 for c in self.capabilities):
+            raise ValueError("capabilities must contain at most 128 names of 1 to 128 bytes")
         self.closed = threading.Event()
         self.jobs = queue.Queue(maxsize=1)
         self.state_lock = threading.Lock()
@@ -93,13 +98,29 @@ class RequestServer:
             os.chmod(self.path, 0o600)
             self.listener.listen(1)
             self.listener.settimeout(0.2)
+            self._publish_advertisement(session)
             self.thread = threading.Thread(target=self._listen, name="caliper requests", daemon=True)
             self.thread.start()
         except BaseException:
             self.listener.close()
+            if self._advertised:
+                Path(self.advertisement_path).unlink(missing_ok=True)
             if bound:
                 Path(self.path).unlink(missing_ok=True)
             raise
+
+    def _publish_advertisement(self, session):
+        # The landing page reads this file without joining the request channel.
+        # Atomic replacement exposes a complete capability list or no list.
+        fd, temporary = tempfile.mkstemp(prefix=f".{session}.requests-", dir=Path(self.path).parent)
+        try:
+            with os.fdopen(fd, "wb") as output:
+                output.write(encode(dict(protocol=1, session=session, pid=os.getpid(),
+                                         capabilities=self.capabilities)))
+            os.replace(temporary, self.advertisement_path)
+            self._advertised = True
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     def _listen(self):
         while not self.closed.is_set():
@@ -194,6 +215,8 @@ class RequestServer:
             peer.close()
         self.listener.close()
         self.thread.join(timeout=1)
+        if self._advertised:
+            Path(self.advertisement_path).unlink(missing_ok=True)
         Path(self.path).unlink(missing_ok=True)
 
     def __enter__(self):

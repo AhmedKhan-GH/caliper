@@ -7,9 +7,12 @@ is the real-model integration check and must run where Metal is available.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import socket
 import sys
 import subprocess
+import tempfile
 import threading
 from types import ModuleType, SimpleNamespace
 
@@ -73,6 +76,8 @@ def inspector(weights=None):
                                 array(np.arange(1, 21, dtype=np.float32).reshape(4, 5))}
     result.model = Model(result.weights)
     result.model_name = "Test model"
+    result.layer_types = ["linear_attention", "linear_attention", "linear_attention", "full_attention"]
+    result.revisions = dict.fromkeys(result.weights, 0)
     result.undo = []
     result.undo_bytes = 0
     result.history = []
@@ -141,6 +146,134 @@ def test_manifest_matrix_layout_sample_indices_and_reconnect_history():
     host.edit(dict(name=norm["name"], action="set", row=2, col=0, value=9))
     assert call("read_weight", name=norm["name"], row=2, col=0)["value"] == 9
     assert len(call("show_tensor", name=norm["name"])["edits"]) == 1
+
+
+def test_region_uses_bin_centres_in_tensor_coordinates():
+    weight = array(np.arange(37 * 23, dtype=np.float32).reshape(37, 23))
+    host = inspector({"weight": weight})
+    shown = host(dict(op="show_tensor", name="weight",
+                      region=dict(row=11, col=5, rows=9, cols=7),
+                      target=dict(width=3, height=2)), lambda _: None, threading.Event())
+    assert shown["region"] == dict(row=11, col=5, rows=9, cols=7)
+    assert shown["row_indices"] == [13, 17]
+    assert shown["col_indices"] == [6, 8, 10]
+    assert (shown["sample_rows"], shown["sample_cols"], shown["exact"]) == (2, 3, False)
+    np.testing.assert_array_equal(np.array(shown["values"]).reshape(2, 3),
+                                  weight[np.ix_([13, 17], [6, 8, 10])])
+
+
+def test_single_cells_and_terminal_region_are_exact():
+    weight = array(np.arange(37 * 23, dtype=np.float32).reshape(37, 23))
+    host = inspector({"weight": weight})
+    call = lambda op, **kw: host(dict(op=op, name="weight", **kw), lambda _: None, threading.Event())
+    shown = call("show_tensor", region=dict(row=36, col=22, rows=1, cols=1),
+                 target=dict(width=100, height=200))
+    assert shown["exact"] and shown["values"] == [weight[36, 22]]
+    assert shown["values"][0] == call("read_weight", row=36, col=22)["value"]
+    shown = call("show_tensor", region=dict(row=35, col=20, rows=2, cols=3),
+                 target=dict(width=3, height=2))
+    assert shown["row_indices"] == [35, 36] and shown["col_indices"] == [20, 21, 22]
+    assert shown["exact"]
+
+
+def test_vector_sampling_preserves_wire_coordinates():
+    host = inspector({"bias": array(np.arange(1024, dtype=np.float32))})
+    shown = host(dict(op="show_tensor", name="bias",
+                      region=dict(row=400, col=0, rows=25, cols=1),
+                      target=dict(width=1, height=25)), lambda _: None, threading.Event())
+    assert (shown["rows"], shown["cols"], shown["sample_rows"], shown["sample_cols"]) == (1024, 1, 25, 1)
+    assert shown["row_indices"] == list(range(400, 425)) and shown["col_indices"] == [0]
+    assert shown["values"] == list(range(400, 425)) and shown["exact"]
+
+
+@pytest.mark.parametrize("rows,cols,target", [
+    (248320, 1024, dict(width=2048, height=2048)),
+    (6144, 1024, dict(width=1500, height=400)),
+    (1024, 1, dict(width=1, height=2048)),
+    (1, 1, dict(width=2048, height=2048)),
+])
+def test_sample_budget_and_indices(rows, cols, target):
+    region, ri, ci = example.sample_plan(rows, cols, dict(target=target))
+    assert region == dict(row=0, col=0, rows=rows, cols=cols)
+    assert len(ri) * len(ci) <= example.MAX_SAMPLES
+    assert 1 <= len(ri) <= min(rows, target["height"])
+    assert 1 <= len(ci) <= min(cols, target["width"])
+    assert ri == sorted(set(ri)) and ci == sorted(set(ci))
+    assert 0 <= ri[0] <= ri[-1] < rows and 0 <= ci[0] <= ci[-1] < cols
+    if min(rows, target["height"]) * min(cols, target["width"]) > example.MAX_SAMPLES:
+        requested_ratio = min(rows, target["height"]) / min(cols, target["width"])
+        assert len(ri) / len(ci) == pytest.approx(requested_ratio, rel=0.01)
+
+
+@pytest.mark.parametrize("arguments", [
+    dict(region=None), dict(region=[]), dict(region={}),
+    dict(region=dict(row=-1, col=0, rows=1, cols=1)),
+    dict(region=dict(row=4, col=0, rows=1, cols=1)),
+    dict(region=dict(row=3, col=0, rows=2, cols=1)),
+    dict(region=dict(row=0, col=0, rows=0, cols=1)),
+    dict(region=dict(row=True, col=0, rows=1, cols=1)),
+    dict(region=dict(row=0, col=0.5, rows=1, cols=1)),
+    dict(target=None), dict(target=[]), dict(target={}),
+    dict(target=dict(width=0, height=1)), dict(target=dict(width=2049, height=1)),
+    dict(target=dict(width=True, height=1)), dict(target=dict(width=1, height=float("nan"))),
+])
+def test_invalid_sampling_requests_do_not_change_model(arguments):
+    host = inspector()
+    name = next(iter(host.weights))
+    before = host.weights[name].copy()
+    with pytest.raises(ValueError):
+        host(dict(op="show_tensor", name=name, **arguments), lambda _: None, threading.Event())
+    np.testing.assert_array_equal(host.weights[name], before)
+    assert host.revisions[name] == 0 and not host.undo
+
+
+def test_large_sample_reply_fits_the_request_frame_budget():
+    from caliper.requests import MAX_MESSAGE, encode
+    # Exercise long float reprs across every finite exponent, plus a full
+    # history. All values are generated on CPU; no MLX import is needed.
+    indices = np.arange(example.MAX_SAMPLES, dtype=np.uint32)
+    exponent = (indices % 254 + 1) << 23
+    mantissa = (indices * np.uint32(2654435761)) & np.uint32(0x7fffff)
+    bits = np.uint32(0x80000000) | exponent | mantissa
+    weight = array(bits.view(np.float32).reshape(512, 256))
+    host = inspector({"weight": weight})
+    host.history = [dict(id=i + 1, name="weight", description="Scale row 248319 by -3.40282347e+38" + " " * 96)
+                    for i in range(512)]
+    result = host(dict(op="show_tensor", name="weight", target=dict(width=2048, height=2048)),
+                  lambda _: None, threading.Event())
+    assert len(result["values"]) == example.MAX_SAMPLES
+    assert len(result["edits"]) == 512
+    assert all(value < 0 and np.isfinite(value) for value in result["values"])
+    assert len(encode(dict(id=1, done=True, result=result))) < MAX_MESSAGE
+
+
+def test_layer_roles_tied_alias_and_active_edit_revisions():
+    host = inspector({"language_model.model.embed_tokens.weight": array([[1., 2.], [3., 4.]]),
+                      "language_model.model.layers.0.mlp.down_proj.weight": array([[1., 2.]]),
+                      "language_model.model.layers.3.self_attn.q_proj.weight": array([[1., 2.]]),
+                      "language_model.model.norm.weight": array([1., 2.])})
+    call = lambda op, **kw: host(dict(op=op, **kw), lambda _: None, threading.Event())
+    manifest = call("list_tensors")
+    tensors = {tensor["name"]: tensor for tensor in manifest["tensors"]}
+    name = manifest["output_alias"]["tensor"]
+    assert tensors[name]["role"] == "embedding" and tensors[name]["tied"]
+    assert tensors["language_model.model.norm.weight"]["role"] == "final_norm"
+    linear = tensors["language_model.model.layers.0.mlp.down_proj.weight"]
+    full = tensors["language_model.model.layers.3.self_attn.q_proj.weight"]
+    assert (linear["layer_index"], linear["layer_type"]) == (0, "linear_attention")
+    assert (full["layer_index"], full["layer_type"]) == (3, "full_attention")
+    assert all(not tensor["edited"] and tensor["revision"] == 0 for tensor in tensors.values())
+    first = call("edit_weight", name=name, action="set", row=0, col=0, value=7)
+    assert first["edited"] and first["revision"] == 1
+    shown = call("show_tensor", name=name)
+    assert shown["edited"] and shown["revision"] == 1
+    assert next(t for t in call("list_tensors")["tensors"] if t["name"] == name)["edited"]
+    reverted = call("revert_tensor", name=name)
+    assert not reverted["edited"] and reverted["revision"] == 2
+    assert reverted["edits"]  # History remains, but it no longer means active edits.
+    assert not call("show_tensor", name=name)["edited"]
+    assert not call("revert_tensor", name=name)["edited"]
+    assert call("show_tensor", name=name)["revision"] == 2
 
 
 @pytest.mark.parametrize("arguments", [
@@ -247,6 +380,79 @@ def test_stop_during_prefill(generation):
     state.prefill_stop = cancelled
     result = host.generate(dict(prompt="Hello"), lambda _: pytest.fail("unexpected token"), cancelled)
     assert result["cancelled"] and result["tokens"] == 0 and state.closed == 1
+
+
+def test_backend_double_over_real_request_channel(generation, monkeypatch):
+    import caliper.requests as transport
+
+    host, state = generation
+    name = next(iter(host.weights))
+    # Use a short, private socket path unrelated to any real live session.
+    # A pytest tmp_path can exceed macOS's Unix-socket path-length limit.
+    with tempfile.TemporaryDirectory(prefix="caliper-wire-", dir="/tmp") as directory:
+        monkeypatch.setattr(transport, "socket_path", lambda _: str(Path(directory) / "host.sock"))
+        with transport.RequestServer("backend-double", example.CAPABILITIES) as server:
+            worker = threading.Thread(target=server.serve, args=(host,), daemon=True)
+            worker.start()
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as controller:
+                    controller.settimeout(3)
+                    controller.connect(server.path)
+                    with controller.makefile("rb") as replies:
+                        serial = 0
+
+                        def request(op, **arguments):
+                            nonlocal serial
+                            serial += 1
+                            controller.sendall(transport.encode(dict(id=serial, op=op, **arguments)))
+                            events = []
+                            while True:
+                                line = replies.readline(transport.MAX_MESSAGE + 1)
+                                assert line.endswith(b"\n") and len(line) <= transport.MAX_MESSAGE
+                                reply = json.loads(line)
+                                assert reply["id"] == serial and "error" not in reply, reply
+                                if reply["done"]:
+                                    return reply["result"], events
+                                events.append(reply["event"])
+
+                        hello, _ = request("hello")
+                        assert hello["protocol"] == 1 and "tensor_regions" in hello["capabilities"]
+                        manifest, _ = request("list_tensors")
+                        assert manifest["tensors"][0]["name"] == name
+                        region = dict(row=0, col=0, rows=2, cols=3)
+                        target = dict(width=3, height=2)
+                        original, _ = request("show_tensor", name=name, region=region, target=target)
+                        assert original["region"] == region and original["exact"]
+                        assert original["values"] == [1., 2., 3., 6., 7., 8.]
+                        assert original["revision"] == 0 and not original["edited"]
+
+                        result, events = request("generate", prompt="Hello", max_new_tokens=3)
+                        assert "".join(event["text"] for event in events) == "text 1text 2text 3"
+                        assert result["tokens"] == 3 and not result["cancelled"]
+
+                        edited, _ = request("edit_weight", name=name, action="set", row=0, col=0, value=0.25)
+                        assert edited["edited"] and edited["revision"] == 1
+                        value, _ = request("read_weight", name=name, row=0, col=0)
+                        assert value["value"] == 0.25 and value["revision"] == 1
+                        changed, _ = request("show_tensor", name=name, region=region, target=target)
+                        assert changed["edited"] and changed["revision"] != original["revision"]
+                        assert changed["values"][0] == 0.25
+                        request("generate", prompt="Hello", max_new_tokens=3)
+                        assert state.calls[-1]["model"] is host.model and state.calls[-1]["weight"] == 0.25
+
+                        reverted, _ = request("revert_tensor", name=name)
+                        assert not reverted["edited"] and reverted["revision"] == 2
+                        restored, _ = request("read_weight", name=name, row=0, col=0)
+                        assert restored["value"] == 1 and restored["revision"] == 2
+                        final, _ = request("show_tensor", name=name, region=region, target=target)
+                        assert final["values"] == original["values"] and not final["edited"]
+                        assert final["revision"] != changed["revision"]
+            finally:
+                server.close()
+                worker.join(timeout=3)
+                assert not worker.is_alive()
+        assert not Path(server.path).exists()
+        assert not Path(server.advertisement_path).exists()
 
 
 @pytest.mark.parametrize("arguments", [dict(max_new_tokens=0), dict(max_new_tokens=1025),

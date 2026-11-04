@@ -825,7 +825,7 @@ void caliper_live_frame(CaliperCore* core) {
         L->inspector->poll(L->session, L->client_alive);
         const float width = (float)core->canvas_w / core->scale;
         const float height = (float)core->canvas_h / core->scale;
-        L->inspector->draw(core->area_x, core->area_y, width, height);
+        L->inspector->draw(core->area_x, core->area_y, width, height, core->renderer.get());
     }
     // No chrome for tests (offscreen) or a hosted core: the host (the Caliper
     // app's live page) draws its own bar and status line from the status calls.

@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
+import json
 import math
 import os
 from pathlib import Path
@@ -23,11 +24,13 @@ import numpy as np
 
 DEFAULT_MODEL = Path.home() / "PycharmProjects/weight-space/models/Qwen3.5-0.8B"
 CAPABILITIES = ["generate", "list_tensors", "show_tensor", "read_weight",
-                "edit_weight", "revert_tensor", "list_edits"]
+                "edit_weight", "revert_tensor", "list_edits", "tensor_regions"]
 MAX_PROMPT_TOKENS = 2048
 MAX_NEW_TOKENS = 1024
 MAX_UNDO_BYTES = 64 * 1024 * 1024
 MAX_UNDO_EDITS = 512
+MAX_SAMPLE_SIDE = 2048
+MAX_SAMPLES = 131072
 
 
 class Cancelled(Exception):
@@ -58,6 +61,39 @@ def matrix_shape(shape):
     return math.prod(shape[:-1]), shape[-1]
 
 
+def sample_plan(rows, cols, request):
+    """A bounded, evenly spaced grid in an exact tensor-coordinate region.
+
+    A target measures display pixels in wire orientation: width is columns,
+    height is rows. Samples are the original cells nearest each bin's centre.
+    The returned region remains unchanged when the sample budget is reduced.
+    """
+    region = request.get("region", dict(row=0, col=0, rows=rows, cols=cols))
+    if not isinstance(region, dict):
+        raise ValueError("region must contain row, col, rows and cols")
+    row = integer(region, "row", high=rows - 1)
+    col = integer(region, "col", high=cols - 1)
+    height = integer(region, "rows", low=1, high=rows - row)
+    width = integer(region, "cols", low=1, high=cols - col)
+    target = request.get("target", dict(width=128, height=128))
+    if not isinstance(target, dict):
+        raise ValueError("target must contain width and height")
+    target_width = integer(target, "width", low=1, high=MAX_SAMPLE_SIDE)
+    target_height = integer(target, "height", low=1, high=MAX_SAMPLE_SIDE)
+    sample_rows, sample_cols = min(height, target_height), min(width, target_width)
+    if sample_rows * sample_cols > MAX_SAMPLES:
+        scale = math.sqrt(MAX_SAMPLES / (sample_rows * sample_cols))
+        sample_rows = max(1, math.floor(sample_rows * scale))
+        sample_cols = max(1, math.floor(sample_cols * scale))
+    # Integer bin centres avoid rounding drift at the final row/column and
+    # return every cell, in order, when the visible region is fully resolved.
+    row_indices = [row + ((2 * i + 1) * height) // (2 * sample_rows)
+                   for i in range(sample_rows)]
+    col_indices = [col + ((2 * i + 1) * width) // (2 * sample_cols)
+                   for i in range(sample_cols)]
+    return dict(row=row, col=col, rows=height, cols=width), row_indices, col_indices
+
+
 @dataclass
 class Undo:
     name: str
@@ -75,12 +111,15 @@ class Inspector:
 
         if not path.is_dir() or not (path / "config.json").is_file():
             raise FileNotFoundError(f"local model folder not found: {path}")
+        config = json.loads((path / "config.json").read_text())
+        self.layer_types = config.get("text_config", config).get("layer_types", [])
         mx.set_cache_limit(128 * 1024 * 1024)
         mx.set_memory_limit(3 * 1024 * 1024 * 1024)
         self.mx = mx
         self.model, self.tokenizer = load(str(path), tokenizer_config={"local_files_only": True})
         self.tokenizer.add_eos_token("<|im_end|>")
         self.weights = dict(tree_flatten(self.model.parameters()))
+        self.revisions = dict.fromkeys(self.weights, 0)
         self.model_name = path.name
         self.undo: list[Undo] = []
         self.undo_bytes = 0
@@ -96,6 +135,25 @@ class Inspector:
 
     def _edits(self, name=None):
         return [edit for edit in self.history if name is None or edit["name"] == name]
+
+    def _status(self, name):
+        return dict(edited=any(patch.name == name for patch in self.undo),
+                    revision=self.revisions[name])
+
+    def _layer_type(self, index):
+        if index < 0:
+            return ""
+        if index < len(self.layer_types):
+            layer_type = self.layer_types[index]
+            if layer_type in ("linear_attention", "full_attention"):
+                return layer_type
+        prefix = f".layers.{index}."
+        names = [name for name in self.weights if prefix in name]
+        if any(".linear_attn." in name for name in names):
+            return "linear_attention"
+        if any(".self_attn." in name for name in names):
+            return "full_attention"
+        return ""
 
     def _record(self, name, description):
         self.history.append(dict(id=self.next_edit, name=name, description=description))
@@ -117,39 +175,56 @@ class Inspector:
             tensors = []
             for name, weight in self.weights.items():
                 layer = re.search(r"\.layers\.(\d+)\.", name)
-                group = f"Layer {int(layer[1]):02d}" if layer else "Model"
+                layer_index = int(layer[1]) if layer else -1
+                group = f"Layer {layer_index:02d}" if layer else "Model"
+                role = "weight"
+                if name.endswith("embed_tokens.weight"):
+                    role = "embedding"
+                elif name.endswith("lm_head.weight"):
+                    role = "output"
+                elif not layer and name.endswith("norm.weight"):
+                    role = "final_norm"
                 rows, cols = matrix_shape(weight.shape)
                 tensors.append(dict(name=name, group=group, shape=list(weight.shape),
                                     dtype=str(weight.dtype).removeprefix("mlx.core."),
                                     size=weight.size, bytes=weight.nbytes, rows=rows, cols=cols,
-                                    tied=self.tied and name.endswith("embed_tokens.weight")))
-            return dict(model=self.model_name, tensors=tensors,
-                        matrix_layout="Vectors: N x 1. Higher ranks: flatten all but last dimension.")
+                                    tied=self.tied and role == "embedding", role=role,
+                                    layer_index=layer_index, layer_type=self._layer_type(layer_index),
+                                    **self._status(name)))
+            result = dict(model=self.model_name, tensors=tensors,
+                          matrix_layout="Vectors: N x 1. Higher ranks: flatten all but last dimension.")
+            embedding = next((tensor for tensor in tensors if tensor["tied"]), None)
+            if embedding:
+                result["output_alias"] = dict(name="Output (tied)", tensor=embedding["name"])
+            return result
         if op == "list_edits":
             return dict(edits=self._edits(), undo_bytes=self.undo_bytes)
         if op == "show_tensor":
             name, weight = self._weight(request)
             rows, cols = matrix_shape(weight.shape)
-            row_step, col_step = max(1, math.ceil(rows / 128)), max(1, math.ceil(cols / 128))
-            row_indices = list(range(0, rows, row_step))
-            col_indices = list(range(0, cols, col_step))
-            # Slice on MLX first: the 248320 x 1024 embedding is never copied
-            # wholesale to float32/NumPy just to draw a small overview.
-            sample = np.array(weight.reshape(rows, cols)[::row_step, ::col_step].astype(self.mx.float32))
+            region, row_indices, col_indices = sample_plan(rows, cols, request)
+            # Broadcast the index arrays on MLX first. Neither a whole tensor
+            # nor an oversized region is copied to NumPy to draw its sample.
+            matrix = weight.reshape(rows, cols)
+            sample = np.array(matrix[self.mx.array(row_indices)[:, None],
+                                     self.mx.array(col_indices)[None, :]].astype(self.mx.float32))
             if not np.isfinite(sample).all():
                 raise ValueError("sample contains non-finite weights")
             return dict(name=name, rows=rows, cols=cols,
                         sample_rows=len(row_indices), sample_cols=len(col_indices),
                         values=sample.reshape(-1).tolist(), row_indices=row_indices,
                         col_indices=col_indices, min=float(sample.min()), max=float(sample.max()),
-                        edits=self._edits(name))
+                        region=region, exact=(len(row_indices) == region["rows"] and
+                                              len(col_indices) == region["cols"]),
+                        edits=self._edits(name), **self._status(name))
         if op == "read_weight":
             name, weight = self._weight(request)
             rows, cols = matrix_shape(weight.shape)
             row = integer(request, "row", high=rows - 1)
             col = integer(request, "col", high=cols - 1)
             return dict(name=name, row=row, col=col,
-                        value=float(weight.reshape(rows, cols)[row, col].item()))
+                        value=float(weight.reshape(rows, cols)[row, col].item()),
+                        **self._status(name))
         if op == "edit_weight":
             return self.edit(request)
         if op == "revert_tensor":
@@ -193,11 +268,12 @@ class Inspector:
         self._replace(name, updated)
         self.undo.append(Undo(name, index, before))
         self.undo_bytes += before.nbytes
+        self.revisions[name] += 1
         actual = float(updated.reshape(rows, cols)[row, col].item())
         if action == "set":
             description = f"Set ({row}, {col}) to {actual:g}"
         self._record(name, description)
-        return dict(name=name, value=actual, edits=self._edits(name))
+        return dict(name=name, value=actual, edits=self._edits(name), **self._status(name))
 
     def revert(self, request):
         name, weight = self._weight(request)
@@ -211,8 +287,10 @@ class Inspector:
             self._replace(name, matrix.reshape(weight.shape))
         self.undo = [patch for patch in self.undo if patch.name != name]
         self.undo_bytes -= sum(patch.before.nbytes for patch in patches)
+        if patches:
+            self.revisions[name] += 1
         self._record(name, "Reverted to original")
-        return dict(name=name, edits=self._edits(name))
+        return dict(name=name, edits=self._edits(name), **self._status(name))
 
     def generate(self, request, emit, cancelled):
         from mlx_lm import stream_generate

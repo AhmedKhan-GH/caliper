@@ -188,3 +188,59 @@ def test_session_owns_request_server():
     assert not os.path.exists(server.path)
     with pytest.raises(RuntimeError, match='closed'):
         session.request_server()
+
+
+def test_capabilities_are_advertised_without_a_controller(server):
+    from pathlib import Path
+
+    path = Path(server.advertisement_path)
+    assert path.stat().st_mode & 0o777 == 0o600
+    metadata = json.loads(path.read_text())
+    assert metadata == dict(protocol=1, session=Path(server.path).stem, pid=os.getpid(),
+                            capabilities=['echo', 'wait'])
+    assert server.peer is None
+    server.close()
+    assert not path.exists()
+
+
+def test_duplicate_server_does_not_remove_original_advertisement(server):
+    from pathlib import Path
+
+    path = Path(server.advertisement_path)
+    before = path.read_bytes()
+    with pytest.raises(OSError):
+        RequestServer(Path(server.path).stem)
+    assert path.read_bytes() == before
+    assert Path(server.path).exists()
+
+
+def test_failed_advertisement_publication_cleans_only_new_socket(monkeypatch):
+    from pathlib import Path
+    from caliper.requests import socket_path
+
+    token = 'test-' + uuid.uuid4().hex[:12]
+    path = Path(socket_path(token))
+    advertisement = path.with_suffix('.requests.json')
+    def fail(*args):
+        raise OSError('publication failed')
+    monkeypatch.setattr(os, 'replace', fail)
+    with pytest.raises(OSError, match='publication failed'):
+        RequestServer(token, ['generate'])
+    assert not path.exists()
+    assert not advertisement.exists()
+    assert not list(path.parent.glob(f'.{token}.requests-*'))
+
+
+def test_thread_start_failure_removes_published_advertisement(monkeypatch):
+    from pathlib import Path
+    from caliper.requests import socket_path
+
+    token = 'test-' + uuid.uuid4().hex[:12]
+    path = Path(socket_path(token))
+    def fail(self):
+        raise RuntimeError('thread failed')
+    monkeypatch.setattr(threading.Thread, 'start', fail)
+    with pytest.raises(RuntimeError, match='thread failed'):
+        RequestServer(token, ['generate'])
+    assert not path.exists()
+    assert not path.with_suffix('.requests.json').exists()
