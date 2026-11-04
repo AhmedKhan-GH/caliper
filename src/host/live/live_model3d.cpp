@@ -533,7 +533,7 @@ struct Model3D::Impl {
         }
         ImGui::EndDisabled();
         {
-            const char* legend = "Bold frame: full attention   Bronze: selected or edited   Drag to orbit, wheel to zoom";
+            const char* legend = "Bold frame: full attention   Bronze: selected or edited   Left drag rotates, right drag moves, wheel zooms";
             ImGui::SameLine();
             const float width = ImGui::CalcTextSize(legend).x;
             const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width;
@@ -577,18 +577,25 @@ struct Model3D::Impl {
         frame_camera();
         label_column = model3d::column_beside_stack(scene, camera, viewport, layout.labels);
         ImGuiIO& io = ImGui::GetIO();
-        // ImGuizmo's view cube in the scene's top-right corner: click a face,
-        // edge or corner to turn the camera to it, or drag it to orbit. It
-        // reads the mouse before the viewport button below, so a press on the
-        // cube is its own (it starts only while no item is active), and draws
-        // on a second channel so it stays above the scene image.
+        // The navigation gizmo in the scene's top-right corner, as in 3D tools'
+        // view navigators: ImGuizmo's view cube rotates (click a face, edge or
+        // corner to turn the camera to it, or drag it to orbit), and the three
+        // buttons under it move the view (drag), zoom it (drag up or down) and
+        // fit the model (click). They read the mouse before the scene's own
+        // button, so a press on them is theirs (the cube starts only while no
+        // item is active), and draw on a second channel above the scene image.
         ImDrawList* scene_list = ImGui::GetWindowDrawList();
         scene_list->ChannelsSplit(2);
         scene_list->ChannelsSetCurrent(1);
         const float cube = std::clamp(static_cast<float>(std::min(viewport.width, viewport.height) * 0.2), 64.0f, 120.0f);
         const ImVec2 cube_min(static_cast<float>(viewport.x + viewport.width) - cube - 8.0f, static_cast<float>(viewport.y) + 8.0f);
-        const bool over_cube = io.MousePos.x >= cube_min.x && io.MousePos.x < cube_min.x + cube &&
-                               io.MousePos.y >= cube_min.y && io.MousePos.y < cube_min.y + cube;
+        const float button = std::clamp(cube * 0.3f, 26.0f, 34.0f), button_gap = 6.0f;
+        const float buttons_width = 3 * button + 2 * button_gap;
+        const ImVec2 buttons_min(cube_min.x + (cube - buttons_width) * 0.5f, cube_min.y + cube + 6.0f);
+        const ImVec2 nav_min(std::min(cube_min.x, buttons_min.x), cube_min.y);
+        const ImVec2 nav_max(std::max(cube_min.x + cube, buttons_min.x + buttons_width), buttons_min.y + button);
+        const bool over_nav = io.MousePos.x >= nav_min.x && io.MousePos.x < nav_max.x &&
+                              io.MousePos.y >= nav_min.y && io.MousePos.y < nav_max.y;
         {
             auto view = model3d::matrices(camera, aspect);
             const auto before = view.view;
@@ -625,12 +632,63 @@ struct Model3D::Impl {
                 }
             }
         }
+        enum Nav { Move, Zoom, FitAll };
+        const char* const nav_ids[3] = {"##model3d.move", "##model3d.zoom", "##model3d.fit"};
+        const char* const nav_tips[3] = {"Move the view: drag", "Zoom: drag up to zoom in, down to zoom out",
+                                         "Fit the whole model"};
+        for (int i = 0; i < 3; ++i) {
+            const ImVec2 at(buttons_min.x + i * (button + button_gap), buttons_min.y);
+            ImGui::SetCursorScreenPos(at);
+            ImGui::InvisibleButton(nav_ids[i], ImVec2(button, button));
+            const bool button_hovered = ImGui::IsItemHovered(), button_active = ImGui::IsItemActive();
+            if (button_hovered || button_active) {
+                ImGui::SetMouseCursor(i == Move ? ImGuiMouseCursor_ResizeAll
+                                      : i == Zoom ? ImGuiMouseCursor_ResizeNS : ImGuiMouseCursor_Hand);
+                if (!button_active) ImGui::SetTooltip("%s", nav_tips[i]);
+            }
+            if (button_active && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+                if (i == Move) camera = model3d::pan(camera, io.MouseDelta.x, io.MouseDelta.y, viewport.height);
+                if (i == Zoom) camera = model3d::zoom(camera, -io.MouseDelta.y * 0.05);
+                if (i != FitAll) { framing = Framing::Manual; dirty = true; }
+            }
+            if (i == FitAll && ImGui::IsItemClicked()) { framing = Framing::Fit; focused.clear(); framing_pending = true; }
+            // A round plate with a line icon, bronze while in use.
+            const ImVec2 c(at.x + button * 0.5f, at.y + button * 0.5f);
+            const float r = button * 0.5f;
+            const ImU32 ink = button_active ? sternbild::col::bronze : button_hovered ? sternbild::col::parchment
+                                                                                       : sternbild::col::secondary;
+            scene_list->AddCircleFilled(c, r, sternbild::with_alpha(button_hovered ? sternbild::col::plate_hover : sternbild::col::plate, 220));
+            scene_list->AddCircle(c, r, button_active ? sternbild::col::bronze : sternbild::col::rule, 0, 1.0f);
+            const float a = r * 0.55f, head = r * 0.18f;
+            if (i == Move) {
+                for (int d = 0; d < 4; ++d) {
+                    const float dx = d == 0 ? 1.f : d == 1 ? -1.f : 0.f, dy = d == 2 ? 1.f : d == 3 ? -1.f : 0.f;
+                    const ImVec2 tip(c.x + dx * a, c.y + dy * a);
+                    scene_list->AddLine(c, tip, ink, 1.5f);
+                    scene_list->AddTriangleFilled(tip, ImVec2(tip.x - dx * head - dy * head, tip.y - dy * head - dx * head),
+                                                  ImVec2(tip.x - dx * head + dy * head, tip.y - dy * head + dx * head), ink);
+                }
+            } else if (i == Zoom) {
+                const ImVec2 lens(c.x - r * 0.12f, c.y - r * 0.12f);
+                scene_list->AddCircle(lens, r * 0.34f, ink, 0, 1.5f);
+                scene_list->AddLine(ImVec2(lens.x + r * 0.24f, lens.y + r * 0.24f), ImVec2(c.x + r * 0.5f, c.y + r * 0.5f), ink, 2.0f);
+                scene_list->AddLine(ImVec2(lens.x - r * 0.16f, lens.y), ImVec2(lens.x + r * 0.16f, lens.y), ink, 1.5f);
+                scene_list->AddLine(ImVec2(lens.x, lens.y - r * 0.16f), ImVec2(lens.x, lens.y + r * 0.16f), ink, 1.5f);
+            } else {
+                const float b = r * 0.48f, l = r * 0.22f;
+                for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) {
+                    const ImVec2 corner(c.x + sx * b, c.y + sy * b);
+                    scene_list->AddLine(corner, ImVec2(corner.x - sx * l, corner.y), ink, 1.5f);
+                    scene_list->AddLine(corner, ImVec2(corner.x, corner.y - sy * l), ink, 1.5f);
+                }
+            }
+        }
         scene_list->ChannelsSetCurrent(0);
         ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(viewport.x), static_cast<float>(viewport.y)));
         ImGui::InvisibleButton("##model3d.viewport", ImVec2(static_cast<float>(viewport.width), static_cast<float>(viewport.height)),
-            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-        const bool cube_busy = over_cube || ImGuizmo::IsUsingViewManipulate();
-        const bool hovered = ImGui::IsItemHovered() && !cube_busy && !inside(label_column, io.MousePos.x, io.MousePos.y);
+            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+        const bool nav_busy = over_nav || ImGuizmo::IsUsingViewManipulate();
+        const bool hovered = ImGui::IsItemHovered() && !nav_busy && !inside(label_column, io.MousePos.x, io.MousePos.y);
         const bool active = ImGui::IsItemActive() && !ImGuizmo::IsUsingViewManipulate();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             click_armed = hovered && !io.KeyShift;
@@ -639,11 +697,15 @@ struct Model3D::Impl {
         }
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
             drag_armed = (drag_armed & ~2u) | (hovered ? 2u : 0u);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            drag_armed = (drag_armed & ~4u) | (hovered ? 4u : 0u);
+        // Left drag rotates (shift+left moves); right or middle drag moves.
         const bool left_drag = (drag_armed & 1u) && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4);
         const bool middle_drag = (drag_armed & 2u) && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0);
-        if (active && (left_drag || middle_drag) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+        const bool right_drag = (drag_armed & 4u) && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 2);
+        if (active && (left_drag || middle_drag || right_drag) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
             dragged = true;
-            if (middle_drag || io.KeyShift)
+            if (middle_drag || right_drag || io.KeyShift)
                 camera = model3d::pan(camera, io.MouseDelta.x, io.MouseDelta.y, viewport.height);
             else if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
                 camera = model3d::orbit(camera, io.MouseDelta.x, io.MouseDelta.y);
@@ -651,7 +713,7 @@ struct Model3D::Impl {
             dirty = true;
         }
         if (hovered && io.MouseWheel != 0) {
-            camera = model3d::zoom(camera, io.MouseWheel);
+            camera = model3d::zoom_at(camera, io.MouseWheel, viewport, io.MousePos.x, io.MousePos.y);
             framing = Framing::Manual;
             dirty = true;
         }
@@ -697,6 +759,7 @@ struct Model3D::Impl {
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) { click_armed = false; drag_armed &= ~1u; }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) drag_armed &= ~2u;
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) drag_armed &= ~4u;
         scene_list->ChannelsMerge();
         ImGui::End();
         return clicked;

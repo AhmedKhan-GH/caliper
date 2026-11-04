@@ -67,6 +67,8 @@ Hit hit_test(const Scene& scene, const Camera& camera, Rect viewport, double x, 
 Camera orbit(Camera camera, double dx, double dy);
 Camera pan(Camera camera, double dx, double dy, double viewport_height);
 Camera zoom(Camera camera, double wheel);
+// Zoom toward the point under (x, y): that point stays under the pointer.
+Camera zoom_at(Camera camera, double wheel, Rect viewport, double x, double y);
 // Top-left, top-right, bottom-right, bottom-left; UV origin is top-left.
 std::array<Vec3, 4> corners(const Panel& panel);
 

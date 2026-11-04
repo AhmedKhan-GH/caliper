@@ -461,4 +461,19 @@ Camera zoom(Camera camera, double wheel) {
                                std::max(1e-7, camera.radius * 1e-5), camera.radius * 1e5);
     return camera;
 }
+
+Camera zoom_at(Camera camera, double wheel, Rect viewport, double x, double y) {
+    camera = valid(camera);
+    Camera zoomed = zoom(camera, wheel);
+    if (!inside(viewport, x, y) || !(viewport.width > 0 && viewport.height > 0)) return zoomed;
+    // The point under the pointer on the plane through the target facing the
+    // camera; moving the target toward it by the zoom's ratio keeps it there.
+    const Frame f = frame(camera);
+    const double nx = ((x - viewport.x) / viewport.width * 2 - 1) * std::tan(half_fov) * (viewport.width / viewport.height);
+    const double ny = (1 - (y - viewport.y) / viewport.height * 2) * std::tan(half_fov);
+    const Vec3 point = add(camera.target, mul(add(mul(f.right, nx), mul(f.up, ny)), camera.distance));
+    const double kept = zoomed.distance / camera.distance;
+    zoomed.target = add(point, mul(sub(camera.target, point), kept));
+    return valid(zoomed);
+}
 } // namespace caliper_live::model3d
