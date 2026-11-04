@@ -129,6 +129,15 @@ Object region_fields(Geometry::Region r) {
             {"rows", static_cast<double>(r.rows)}, {"cols", static_cast<double>(r.cols)}};
 }
 ImVec2 point(double x, double y) { return ImVec2(static_cast<float>(x), static_cast<float>(y)); }
+// 248320 as "248,320".
+std::string grouped(int64_t n) {
+    std::string digits = std::to_string(n < 0 ? -n : n), out;
+    for (size_t i = 0; i < digits.size(); ++i) {
+        if (i && (digits.size() - i) % 3 == 0) out += ',';
+        out += digits[i];
+    }
+    return n < 0 ? "-" + out : out;
+}
 // The four panes, docked into one dockspace like the landing screen's panes.
 constexpr const char* kInferencePane = "Inference###caliper.inspector.inference";
 constexpr const char* kModelPane = "Model###caliper.inspector.model";
@@ -206,6 +215,7 @@ struct Inspector::Impl {
     Geometry::Window window;
     Geometry::Rect view_bounds;
     Geometry::Region region;
+    double scroll_grab = 0;
     Geometry::Target target, last_target, overview_target;
     Geometry::Region last_region;
     bool region_ready = false, detail_needed = false, overview_needed = false;
@@ -988,7 +998,7 @@ struct Inspector::Impl {
         ImGui::SetTooltip("(%lld, %lld)\n%.9g", static_cast<long long>(cell.row), static_cast<long long>(cell.col),
                           v.data[static_cast<size_t>(cell.row) * v.cols + cell.col]);
     }
-    void tensor_picture(const Tensor& t, Geometry::Rect allocated, Geometry::Rect minimap) {
+    void tensor_picture(const Tensor& t, Geometry::Rect allocated, const Geometry::Fold& map) {
         const bool vector = t.vector();
         const auto layout = Geometry::view_layout(t.rows, t.cols, vector, allocated);
         const Geometry::Rect bounds = vector ? layout.strip : layout.detail;
@@ -1008,13 +1018,12 @@ struct Inspector::Impl {
         if (vector) std::swap(size.width, size.height);
         request_detail(cells, size);
         // Without whole values, an averaged sample of the whole tensor serves
-        // the minimap, the embedding's strip and the vector plot.
+        // the map beside the picture and the vector plot.
         const Geometry::Region whole_cells{0, 0, t.rows, t.cols};
-        const Geometry::Window whole{0, 0, static_cast<double>(t.rows), static_cast<double>(t.cols)};
-        if (!whole_values && supports("tensor_regions") && (layout.elongated || vector || minimap.width > 0)) {
+        if (!whole_values && supports("tensor_regions") && (vector || map.scale > 0)) {
             auto overview_size = vector
                 ? Geometry::sampling_target(whole_cells, {layout.plot.x, layout.plot.y, layout.plot.width, 1}, scale, true)
-                : Geometry::sampling_target(whole_cells, layout.elongated ? layout.overview : minimap, scale, false);
+                : Geometry::fold_target(map, t.rows, t.cols, scale);
             if (vector) std::swap(overview_size.width, overview_size.height);
             if (overview_size.width != overview_target.width || overview_size.height != overview_target.height) {
                 overview_target = overview_size; overview_needed = true;
@@ -1108,26 +1117,28 @@ struct Inspector::Impl {
             list->AddText(point(labels.columns.x, labels.columns.y), text, columns);
         }
         const auto mouse = ImGui::GetIO().MousePos;
-        // The whole tensor beside the picture, the view framed in bronze: the
-        // embedding's true-aspect strip, or a matrix's minimap. Click or drag
-        // in it to move the view.
-        const Geometry::Rect map = layout.elongated ? layout.overview : minimap;
-        if (map.width > 0 && map.height > 0) {
-            if (shown_values) paint_values(values, whole, map, false);
-            else if (!overview.values.empty() && overview.name == t.name) paint_image(overview, whole, map, false);
-            else if (!layout.elongated) list->AddRectFilled(point(map.x, map.y), point(map.x + map.width, map.y + map.height), sternbild::col::plate);
-            else paint_image(detail, whole, map, false);
-            const auto view = Geometry::selection_rect(window, t.rows, t.cols, map);
-            const double cx = view.x + view.width * 0.5, cy = view.y + view.height * 0.5;
-            const double hw = std::max(2.0, view.width * 0.5), hh = std::max(2.0, view.height * 0.5);
-            list->AddRect(point(cx - hw, cy - hh), point(cx + hw, cy + hh), sternbild::col::bronze, 0, 0, 1.5f);
-            list->AddRect(point(map.x, map.y), point(map.x + map.width, map.y + map.height), sternbild::col::rule);
-            ImGui::SetCursorScreenPos(point(map.x, map.y));
-            ImGui::InvisibleButton("##overview", point(std::max(1.0, map.width), std::max(1.0, map.height)));
-            if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("Whole tensor: click or drag to move the view");
-            if (ImGui::IsItemActive())
-                camera = Geometry::centre_on(camera, t.rows, t.cols, vector, bounds,
-                                             Geometry::hit_test(whole_cells, map, mouse.x, mouse.y, false));
+        if (map.scale > 0) tensor_map(t, map, bounds);
+        // A tall matrix's rows run far past any pane: a scrollbar along the
+        // picture spans all of them. Drag the thumb, click the track to jump,
+        // or turn the wheel over it to scroll a quarter view at a time.
+        if (layout.tall && layout.scroll.width > 0 && layout.scroll.height > 0) {
+            const auto& track = layout.scroll;
+            const auto thumb = Geometry::scroll_thumb(track, window, t.rows);
+            ImGui::SetCursorScreenPos(point(track.x, track.y));
+            ImGui::InvisibleButton("##rows.scroll", point(track.width, track.height));
+            const bool on_thumb = mouse.y >= thumb.y && mouse.y < thumb.y + thumb.height;
+            if (ImGui::IsItemActivated()) scroll_grab = on_thumb ? mouse.y - (thumb.y + thumb.height * 0.5) : 0;
+            if (ImGui::IsItemActive()) camera.y = Geometry::scroll_centre(track, window, t.rows, mouse.y - scroll_grab);
+            if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0) camera.y -= ImGui::GetIO().MouseWheel * window.rows * 0.25;
+            if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) {
+                const auto at = static_cast<int64_t>(std::clamp((mouse.y - track.y) / track.height, 0.0, 1.0) * (t.rows - 1));
+                ImGui::SetTooltip("Row %s of %s", grouped(at).c_str(), grouped(t.rows).c_str());
+            }
+            const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+            const float round = static_cast<float>(track.width * 0.5);
+            list->AddRectFilled(point(track.x, track.y), point(track.x + track.width, track.y + track.height), sternbild::col::plate, round);
+            list->AddRectFilled(point(thumb.x + 2, thumb.y), point(thumb.x + thumb.width - 2, thumb.y + thumb.height),
+                                hot ? sternbild::col::bronze : sternbild::col::secondary, round);
         }
         ImGui::SetCursorScreenPos(point(bounds.x, bounds.y));
         ImGui::InvisibleButton("##tensor.picture", point(std::max(1.0, bounds.width), std::max(1.0, bounds.height)),
@@ -1159,6 +1170,51 @@ struct Inspector::Impl {
             dragging = false;
         }
         if (picture_hovered) ImGui::SetMouseCursor(dragging ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
+    }
+    // The whole tensor beside the picture with the view framed in bronze. A
+    // tall one folds into the 3D view's equal row blocks, read left to right
+    // as one column. Click or drag in it to move the view.
+    void tensor_map(const Tensor& t, const Geometry::Fold& map, Geometry::Rect bounds) {
+        auto* list = ImGui::GetWindowDrawList();
+        const auto mouse = ImGui::GetIO().MousePos;
+        const bool sampled = !overview.values.empty() && overview.name == t.name;
+        if (values_shown()) make_values_texture(values, false);
+        else if (sampled) make_texture(overview, false);
+        const uint64_t texture = values_shown() ? values.texture : sampled ? overview.texture : 0;
+        for (int b = 0; b < map.blocks; ++b) {
+            const auto block = Geometry::fold_block(map, t.cols, b);
+            const ImVec2 a = point(block.x, block.y), z = point(block.x + block.width, block.y + block.height);
+            // Texture rows are the tensor's rows evenly binned, so a block's
+            // share of them is its share of the texture.
+            const double v0 = static_cast<double>(b) * map.block_rows / t.rows;
+            const double v1 = std::min(1.0, static_cast<double>(b + 1) * map.block_rows / t.rows);
+            if (texture && renderer)
+                list->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(texture)), a, z, point(0, v0), point(1, v1));
+            else list->AddRectFilled(a, z, sternbild::col::plate);
+            list->AddRect(a, z, sternbild::col::rule);
+        }
+        for (const auto& part : Geometry::fold_selection(map, window, t.rows, t.cols)) {
+            const double cx = part.x + part.width * 0.5, cy = part.y + part.height * 0.5;
+            const double hw = std::max(2.0, part.width * 0.5), hh = std::max(2.0, part.height * 0.5);
+            list->AddRect(point(cx - hw, cy - hh), point(cx + hw, cy + hh), sternbild::col::bronze, 0, 0, 1.5f);
+        }
+        if (map.blocks > 1) {
+            char caption[96];
+            std::snprintf(caption, sizeof caption, "%d columns of %s rows", map.blocks, grouped(map.block_rows).c_str());
+            list->AddText(point(map.area.x, map.area.y + map.area.height + 3), sternbild::col::faint, caption);
+        }
+        ImGui::SetCursorScreenPos(point(map.area.x, map.area.y));
+        ImGui::InvisibleButton("##overview", point(std::max(1.0, map.area.width), std::max(1.0, map.area.height)));
+        const auto picked = Geometry::fold_hit(map, t.rows, t.cols, mouse.x, mouse.y);
+        if (ImGui::IsItemHovered() && !ImGui::IsItemActive() && picked.valid) {
+            if (map.blocks > 1) {
+                const int64_t b = picked.row / map.block_rows;
+                ImGui::SetTooltip("Rows %s to %s, column %lld of %d\nClick or drag to move the view",
+                    grouped(b * map.block_rows).c_str(), grouped(std::min<int64_t>(t.rows, (b + 1) * map.block_rows) - 1).c_str(),
+                    static_cast<long long>(b + 1), map.blocks);
+            } else ImGui::SetTooltip("Whole tensor: click or drag to move the view");
+        }
+        if (ImGui::IsItemActive()) camera = Geometry::centre_on(camera, t.rows, t.cols, false, bounds, picked);
     }
     void select_cell(Geometry::Cell cell) {
         row = static_cast<int>(cell.row); col = static_cast<int>(cell.col);
@@ -1205,7 +1261,7 @@ struct Inspector::Impl {
         }
         ImGui::EndDisabled();
         char sampled[200];
-        const double magnification = camera.cell / Geometry::fit_cell(t.rows, t.cols, t.vector(), view_bounds);
+        const double magnification = camera.cell / Geometry::min_cell(t.rows, t.cols, t.vector(), view_bounds);
         if (uses_values(t)) {
             if (values_shown()) std::snprintf(sampled, sizeof sampled, "Zoom %.3gx%s", magnification, values_stale ? "   Updating" : "");
             else std::snprintf(sampled, sizeof sampled, "Loading values");
@@ -1216,7 +1272,7 @@ struct Inspector::Impl {
         right_text(sampled, sternbild::col::faint);
 
         // The picture takes every line the edit bar below does not need; the
-        // row labels sit in the margin on its left. A matrix's minimap and the
+        // row labels sit in the margin on its left. A matrix's map and the
         // colour scale stack in a column on its right, so neither covers it.
         const float row_height = ImGui::GetFrameHeightWithSpacing();
         const float edit_height = 4 * row_height + style.ItemSpacing.y * 2 + 1;
@@ -1226,20 +1282,21 @@ struct Inspector::Impl {
         const double line = ImGui::GetTextLineHeight();
         const double label_room = t.vector() ? 0 : ImGui::CalcTextSize("Row 248320").x + style.ItemSpacing.x;
         const double scale_room = ImGui::CalcTextSize("-0.0000000").x + 24;
-        const bool has_minimap = !t.vector() && !Geometry::view_layout(t.rows, t.cols, false, {0, 0, 1, 1}).elongated;
-        const double side = has_minimap ? std::max(scale_room, 168.0) : scale_room;
+        const bool has_map = !t.vector();
+        const double side = has_map ? std::max(scale_room, 168.0) : scale_room;
         const Geometry::Rect image_area{start.x + label_room, start.y + line + 4,
             std::max(20.0, available.x - label_room - side - style.ItemSpacing.x),
             std::max(20.0, picture_height - 2 * line - 12)};
         const double side_x = start.x + available.x - side + style.ItemSpacing.x, side_width = side - style.ItemSpacing.x;
         double side_y = start.y + line + 4;
-        Geometry::Rect minimap{};
-        if (has_minimap) {
-            minimap = Geometry::fit(t.rows, t.cols, {side_x, side_y, side_width, std::min(120.0, image_area.height * 0.4)});
-            minimap.x = side_x; minimap.y = side_y;
-            side_y += minimap.height + line;
+        Geometry::Fold map{};
+        if (has_map) {
+            const int blocks = model3d::row_blocks(t);
+            map = Geometry::fold(t.rows, t.cols, blocks,
+                {side_x, side_y, side_width, std::min(blocks > 1 ? 200.0 : 120.0, image_area.height * 0.45)});
+            side_y += map.area.height + line * (blocks > 1 ? 2.5 : 1);
         }
-        tensor_picture(t, image_area, minimap);
+        tensor_picture(t, image_area, map);
         const bool known = values_shown() || !detail.values.empty();
         color_scale(values_shown() ? values.minimum : detail.minimum, values_shown() ? values.maximum : detail.maximum, known,
                     {side_x, side_y, side_width, start.y + picture_height - 4 - side_y});
@@ -1253,10 +1310,17 @@ struct Inspector::Impl {
         const float group_gap = style.ItemSpacing.x * 4;
         ImGui::BeginDisabled(!can_control());
         field_label("Row"); ImGui::SameLine(); ImGui::SetNextItemWidth(number_width);
-        if (ImGui::InputInt("##row", &row, 0, 0)) have_value = false;
+        // Enter in Row or Col goes to that cell: the view centres on it and selects it.
+        bool go = ImGui::InputInt("##row", &row, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::IsItemEdited()) have_value = false;
         ImGui::SameLine(); field_label("Col"); ImGui::SameLine(); ImGui::SetNextItemWidth(number_width);
-        if (ImGui::InputInt("##col", &col, 0, 0)) have_value = false;
+        go |= ImGui::InputInt("##col", &col, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::IsItemEdited()) have_value = false;
         row = std::clamp(row, 0, static_cast<int>(t.rows - 1)); col = std::clamp(col, 0, static_cast<int>(t.cols - 1));
+        if (go) {
+            select_cell({row, col, true});
+            camera = Geometry::centre_on(camera, t.rows, t.cols, t.vector(), view_bounds, {row, col, true});
+        }
         ImGui::SameLine();
         ImGui::BeginDisabled(!supports("read_weight"));
         if (sternbild::word_button("Read")) send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}});

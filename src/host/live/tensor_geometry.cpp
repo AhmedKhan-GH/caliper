@@ -107,13 +107,19 @@ double fit_cell(int64_t rows, int64_t cols, bool vector, Rect bounds) {
                     bounds.height / display_height(rows, cols, vector));
 }
 
+double min_cell(int64_t rows, int64_t cols, bool vector, Rect bounds) {
+    bounds = valid_rect(bounds);
+    const double fit = fit_cell(rows, cols, vector, bounds);
+    if (vector || !usable(bounds) || static_cast<long double>(dimension(rows)) <= 8.0L * dimension(cols)) return fit;
+    return std::max(fit, std::min(bounds.width / dimension(cols), strip_height));
+}
+
 Camera initial_camera(int64_t rows, int64_t cols, bool vector, Rect bounds) {
     bounds = valid_rect(bounds);
     const double width = display_width(rows, cols, vector), height = display_height(rows, cols, vector);
-    Camera camera{0, 0, fit_cell(rows, cols, vector, bounds)};
+    Camera camera{0, 0, min_cell(rows, cols, vector, bounds)};
     if (usable(bounds)) {
         if (vector) camera.cell = std::max(camera.cell, std::min(strip_height, bounds.height));
-        else if (height > width * 8) camera.cell = bounds.width / width;
         else if (width > height * 8) camera.cell = bounds.height / height;
     }
     // The first cell at the top left; clamp moves the centre in from there.
@@ -123,7 +129,7 @@ Camera initial_camera(int64_t rows, int64_t cols, bool vector, Rect bounds) {
 Camera clamp(Camera camera, int64_t rows, int64_t cols, bool vector, Rect bounds) {
     bounds = valid_rect(bounds);
     const double width = display_width(rows, cols, vector), height = display_height(rows, cols, vector);
-    const double low = fit_cell(rows, cols, vector, bounds);
+    const double low = min_cell(rows, cols, vector, bounds);
     if (!std::isfinite(camera.cell) || camera.cell <= 0) camera.cell = low;
     camera.cell = std::clamp(camera.cell, low, std::max(low, max_cell));
     const double seen_x = usable(bounds) ? std::min(width, bounds.width / camera.cell) : width;
@@ -217,6 +223,85 @@ Cell hit_test(Window window, Rect picture, double x, double y, bool vector) {
     return {static_cast<int64_t>(std::floor(row)), static_cast<int64_t>(std::floor(col)), true};
 }
 
+Fold fold(int64_t rows, int64_t cols, int blocks, Rect bounds, double gap) {
+    rows = dimension(rows); cols = dimension(cols);
+    bounds = valid_rect(bounds);
+    Fold result;
+    result.blocks = static_cast<int>(std::clamp<int64_t>(blocks, 1, rows));
+    result.block_rows = (rows + result.blocks - 1) / result.blocks;
+    result.gap = result.blocks > 1 && std::isfinite(gap) ? std::max(0.0, gap) : 0;
+    const double gaps = result.gap * (result.blocks - 1);
+    if (!usable(bounds) || bounds.width <= gaps) { result.area = {bounds.x, bounds.y, 0, 0}; return result; }
+    result.scale = std::min((bounds.width - gaps) / (static_cast<double>(cols) * result.blocks),
+                            bounds.height / static_cast<double>(result.block_rows));
+    result.area = {bounds.x, bounds.y, static_cast<double>(cols) * result.blocks * result.scale + gaps,
+                   static_cast<double>(result.block_rows) * result.scale};
+    return result;
+}
+
+Rect fold_block(const Fold& f, int64_t cols, int block) {
+    const double width = static_cast<double>(dimension(cols)) * f.scale;
+    return {f.area.x + block * (width + f.gap), f.area.y, width, f.area.height};
+}
+
+Cell fold_hit(const Fold& f, int64_t rows, int64_t cols, double x, double y) {
+    rows = dimension(rows); cols = dimension(cols);
+    if (!(f.scale > 0) || !std::isfinite(x) || !std::isfinite(y)) return {};
+    const double pitch = cols * f.scale + f.gap;
+    const int block = static_cast<int>(std::clamp(std::floor((x - f.area.x + f.gap * 0.5) / pitch), 0.0, f.blocks - 1.0));
+    const Rect b = fold_block(f, cols, block);
+    const int64_t col = rounded(std::floor(std::clamp((x - b.x) / f.scale, 0.0, cols - 0.5)), 0, cols - 1);
+    const int64_t row = rounded(block * f.block_rows + std::floor(std::clamp((y - b.y) / f.scale, 0.0, f.block_rows - 0.5)), 0, rows - 1);
+    return {row, col, true};
+}
+
+std::vector<Rect> fold_selection(const Fold& f, Window window, int64_t rows, int64_t cols) {
+    std::vector<Rect> result;
+    rows = dimension(rows); cols = dimension(cols);
+    if (!(f.scale > 0)) return result;
+    const double first = std::clamp(window.row, 0.0, static_cast<double>(rows));
+    const double last = std::clamp(window.row + window.rows, first, static_cast<double>(rows));
+    for (int block = 0; block < f.blocks; ++block) {
+        const double top = static_cast<double>(block) * f.block_rows, bottom = top + f.block_rows;
+        const double r0 = std::max(first, top), r1 = std::min(last, bottom);
+        if (r1 <= r0) continue;
+        const Rect b = fold_block(f, cols, block);
+        result.push_back({b.x + window.col * f.scale, b.y + (r0 - top) * f.scale, window.cols * f.scale, (r1 - r0) * f.scale});
+    }
+    return result;
+}
+
+Target fold_target(const Fold& f, int64_t rows, int64_t cols, double framebuffer_scale) {
+    rows = dimension(rows); cols = dimension(cols);
+    const Rect block = fold_block(f, cols, 0);
+    const int per_block = std::max(1, std::min(sample_extent(block.height, framebuffer_scale, f.block_rows),
+                                               max_target_side / std::max(1, f.blocks)));
+    Target target{sample_extent(block.width, framebuffer_scale, cols), per_block * f.blocks};
+    if (target.height > rows) target.height = static_cast<int>(rows);
+    if (static_cast<int64_t>(target.width) * target.height > max_samples)
+        target.width = std::max(1, max_samples / std::max(1, target.height));
+    return target;
+}
+
+Rect scroll_thumb(Rect track, Window window, int64_t rows, double min_thumb) {
+    track = valid_rect(track);
+    const double total = static_cast<double>(dimension(rows));
+    const double height = std::min(track.height, std::max(min_thumb, track.height * std::clamp(window.rows / total, 0.0, 1.0)));
+    const double travel = total - std::clamp(window.rows, 0.0, total);
+    const double at = travel > 0 ? std::clamp(window.row / travel, 0.0, 1.0) : 0;
+    return {track.x, track.y + (track.height - height) * at, track.width, height};
+}
+
+double scroll_centre(Rect track, Window window, int64_t rows, double y, double min_thumb) {
+    track = valid_rect(track);
+    const double total = static_cast<double>(dimension(rows));
+    const Rect thumb = scroll_thumb(track, window, rows, min_thumb);
+    const double free = track.height - thumb.height;
+    const double at = free > 0 && std::isfinite(y) ? std::clamp((y - thumb.height * 0.5 - track.y) / free, 0.0, 1.0) : 0;
+    const double seen = std::clamp(window.rows, 0.0, total);
+    return at * (total - seen) + seen * 0.5;
+}
+
 Rect selection_rect(Window window, int64_t rows, int64_t cols, Rect overview) {
     overview = valid_rect(overview);
     const double x_scale = overview.width / dimension(cols);
@@ -252,21 +337,12 @@ ViewLayout view_layout(int64_t rows, int64_t cols, bool vector, Rect bounds) {
     }
     const long double ratio = static_cast<long double>(rows) / cols;
     result.elongated = ratio > 8 || ratio < 0.125L;
-    if (!result.elongated) return result;
-    if (ratio > 8) {
-        const double width = std::min(72.0, bounds.width * 0.18);
-        const double gap = std::min(8.0, std::max(0.0, bounds.width - width));
-        result.overview = fit(static_cast<double>(rows), static_cast<double>(cols),
-                              {bounds.x, bounds.y, width, bounds.height});
-        result.detail = {bounds.x + width + gap, bounds.y,
-                         std::max(0.0, bounds.width - width - gap), bounds.height};
-    } else {
-        const double height = std::min(56.0, bounds.height * 0.18);
-        const double gap = std::min(8.0, std::max(0.0, bounds.height - height));
-        result.overview = fit(static_cast<double>(rows), static_cast<double>(cols),
-                              {bounds.x, bounds.y, bounds.width, height});
-        result.detail = {bounds.x, bounds.y + height + gap, bounds.width,
-                         std::max(0.0, bounds.height - height - gap)};
+    result.tall = ratio > 8;
+    if (result.tall) {
+        const double track = std::min(scroll_width, bounds.width * 0.1);
+        const double gap = std::min(6.0, bounds.width * 0.02);
+        result.scroll = {bounds.x + bounds.width - track, bounds.y, track, bounds.height};
+        result.detail = {bounds.x, bounds.y, std::max(0.0, bounds.width - track - gap), bounds.height};
     }
     return result;
 }

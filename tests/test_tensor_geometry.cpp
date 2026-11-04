@@ -140,19 +140,18 @@ TEST_CASE("sampling follows physical resolution and respects cell and frame budg
     CHECK(invalid.width == 1); CHECK(invalid.height == 1);
 }
 
-TEST_CASE("view layout separates overview and detail and gives vectors one short strip") {
+TEST_CASE("view layout gives tall matrices a scrollbar and vectors one short strip") {
     const tg::Rect area{11, 22, 600, 400};
     auto embedding = tg::view_layout(248320, 1024, false, area);
-    REQUIRE(embedding.elongated);
-    contained(embedding.overview, area); contained(embedding.detail, area);
-    CHECK_FALSE(overlap(embedding.overview, embedding.detail));
-    square_cells(embedding.overview, 248320, 1024);
-    CHECK(embedding.detail.width > area.width * 0.7);
+    REQUIRE(embedding.tall);
+    contained(embedding.scroll, area); contained(embedding.detail, area);
+    CHECK_FALSE(overlap(embedding.scroll, embedding.detail));
+    CHECK(embedding.scroll.height == area.height);
+    CHECK(embedding.detail.width > area.width * 0.9);
     auto matrix = tg::view_layout(3584, 1024, false, area);
-    CHECK_FALSE(matrix.elongated); CHECK(matrix.detail.width == area.width);
+    CHECK_FALSE(matrix.elongated); CHECK(matrix.detail.width == area.width); CHECK(matrix.scroll.width == 0);
     auto wide = tg::view_layout(16, 12000, false, area);
-    CHECK(wide.elongated); contained(wide.overview, area); contained(wide.detail, area);
-    CHECK_FALSE(overlap(wide.overview, wide.detail));
+    CHECK(wide.elongated); CHECK_FALSE(wide.tall); CHECK(wide.detail.width == area.width);
     auto vector = tg::view_layout(1024, 1, true, area);
     CHECK(vector.strip.height == tg::strip_height);
     CHECK(vector.plot.height > vector.strip.height);
@@ -250,4 +249,68 @@ TEST_CASE("camera pan, cover and centring stay inside the tensor") {
     const auto embedding = tg::shoot(tg::initial_camera(248320, 1024, false, bounds), 248320, 1024, false, bounds);
     CHECK(embedding.window.cols == doctest::Approx(1024)); CHECK(embedding.window.row == doctest::Approx(0));
     CHECK(embedding.picture.width == doctest::Approx(400)); CHECK(embedding.picture.height == doctest::Approx(200));
+}
+
+TEST_CASE("a tall matrix never zooms out past filling the width") {
+    const tg::Rect bounds{0, 0, 900, 500};
+    CHECK(tg::min_cell(248320, 1024, false, bounds) == doctest::Approx(900 / 1024.0));
+    // A one-column matrix stops at strip-wide cells, not pane-wide ones.
+    CHECK(tg::min_cell(24576, 1, false, bounds) == doctest::Approx(tg::strip_height));
+    CHECK(tg::min_cell(1024, 3584, false, bounds) == doctest::Approx(tg::fit_cell(1024, 3584, false, bounds)));
+    const auto camera = tg::zoom(tg::initial_camera(248320, 1024, false, bounds), 248320, 1024, false, bounds, 1e-6, 450, 250);
+    const auto shot = tg::shoot(camera, 248320, 1024, false, bounds);
+    CHECK(shot.picture.width == doctest::Approx(900)); CHECK(shot.picture.height == doctest::Approx(500));
+}
+
+TEST_CASE("the embedding folds into the 3D view's sixteen blocks and keeps its area") {
+    const tg::Rect bounds{1000, 50, 168, 160};
+    const auto f = tg::fold(248320, 1024, 16, bounds);
+    CHECK(f.block_rows == 15520);
+    contained(f.area, bounds);
+    CHECK(f.area.x == 1000); CHECK(f.area.y == 50);
+    CHECK(f.area.width == doctest::Approx(168));
+    double width = 0;
+    for (int b = 0; b < 16; ++b) {
+        const auto block = tg::fold_block(f, 1024, b);
+        contained(block, f.area);
+        square_cells(block, 15520, 1024);
+        if (b) CHECK_FALSE(overlap(block, tg::fold_block(f, 1024, b - 1)));
+        width += block.width;
+    }
+    CHECK(width + 15 * f.gap == doctest::Approx(f.area.width));
+    // Picking: the top of the second block is row 15520; a drag past the
+    // map's edge holds at the last cell.
+    const auto second = tg::fold_block(f, 1024, 1);
+    auto cell = tg::fold_hit(f, 248320, 1024, second.x + f.scale * 0.5, second.y + f.scale * 0.5);
+    REQUIRE(cell.valid); CHECK(cell.row == 15520); CHECK(cell.col == 0);
+    cell = tg::fold_hit(f, 248320, 1024, 1e6, 1e6);
+    REQUIRE(cell.valid); CHECK(cell.row == 248319); CHECK(cell.col == 1023);
+    // A window across a fold shows in both blocks.
+    const auto parts = tg::fold_selection(f, {15000, 0, 1000, 1024}, 248320, 1024);
+    REQUIRE(parts.size() == 2);
+    CHECK(parts[0].height / f.scale == doctest::Approx(520)); CHECK(parts[1].height / f.scale == doctest::Approx(480));
+    CHECK(parts[1].y == doctest::Approx(f.area.y));
+    // Its samples come whole per block and within budget.
+    const auto target = tg::fold_target(f, 248320, 1024, 2);
+    CHECK(target.height % 16 == 0); CHECK(target.height <= tg::max_target_side);
+    CHECK(target.width >= 1); CHECK(target.width * target.height <= tg::max_samples);
+    // One block is a plain minimap.
+    const auto plain = tg::fold(1024, 3584, 1, bounds);
+    CHECK(plain.gap == 0); square_cells(plain.area, 1024, 3584); contained(plain.area, bounds);
+}
+
+TEST_CASE("the row scrollbar's thumb follows the window and drags to any row") {
+    const tg::Rect track{0, 100, 12, 500};
+    const tg::Window top{0, 0, 330, 1024}, bottom{248320 - 330, 0, 330, 1024};
+    auto thumb = tg::scroll_thumb(track, top, 248320);
+    CHECK(thumb.y == doctest::Approx(100)); CHECK(thumb.height == doctest::Approx(16));
+    thumb = tg::scroll_thumb(track, bottom, 248320);
+    CHECK(thumb.y + thumb.height == doctest::Approx(600));
+    CHECK(tg::scroll_centre(track, top, 248320, 0) == doctest::Approx(165));
+    CHECK(tg::scroll_centre(track, top, 248320, 1e9) == doctest::Approx(248320 - 165));
+    const double middle = tg::scroll_centre(track, top, 248320, 350);
+    CHECK(middle == doctest::Approx(124160));
+    // Round trip: the thumb lands where it was dragged.
+    thumb = tg::scroll_thumb(track, {middle - 165, 0, 330, 1024}, 248320);
+    CHECK(thumb.y + thumb.height * 0.5 == doctest::Approx(350));
 }
