@@ -160,6 +160,9 @@ struct Inspector::Impl {
     Geometry::Region last_region;
     bool region_ready = false, detail_needed = false, overview_needed = false;
     bool dragging = false, scroll_selected = false, open_selected_group = false;
+    // A click without a drag selects a cell; its value is read into the edit bar.
+    Geometry::Cell press_cell;
+    bool cell_selected = false, focus_value = false, focus_after_read = false;
     bool force_layout = false, reset_layout = true, docked = false, layout_built = false;
     double detail_due = 0;
     std::string detail_name;
@@ -260,7 +263,7 @@ struct Inspector::Impl {
         }
         if (selected == name) return;
         selected = name;
-        row = col = 0; have_value = false;
+        row = col = 0; have_value = false; cell_selected = false; focus_after_read = false;
         clear_samples();
         region_ready = false; detail_needed = true; overview_needed = true; detail_due = 0;
         edits.clear();
@@ -456,6 +459,7 @@ struct Inspector::Impl {
             value_col = integer(field(result, "col"));
             read_value = value = v.get<double>();
             have_value = true;
+            if (focus_after_read) { focus_value = true; focus_after_read = false; }
         } else if (op == "edit_weight" || op == "revert_tensor") {
             update_edited(completed.name, result, op == "edit_weight");
             if (completed.name == selected) {
@@ -709,23 +713,29 @@ struct Inspector::Impl {
         const int index = std::clamp(static_cast<int>(amount * 255 + 0.5), 0, 255);
         return caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS)[index];
     }
-    bool picture_contains(const Sample& sample, Geometry::Region shown) const {
-        return !sample.values.empty() && shown.row >= sample.region.row && shown.col >= sample.region.col &&
-            shown.row + shown.rows <= sample.region.row + sample.region.rows &&
-            shown.col + shown.cols <= sample.region.col + sample.region.cols;
-    }
-    void paint_image(Sample& sample, Geometry::Region shown, Geometry::Rect picture, bool vector) {
-        if (picture.width <= 0 || picture.height <= 0 || !picture_contains(sample, shown)) return;
+    void paint_image(Sample& sample, Geometry::Region shown, Geometry::Rect picture, bool vector, bool crisp = false) {
+        if (picture.width <= 0 || picture.height <= 0 || sample.values.empty() || shown.rows <= 0 || shown.cols <= 0 ||
+            sample.region.rows <= 0 || sample.region.cols <= 0) return;
         ImDrawList* list = ImGui::GetWindowDrawList();
         make_texture(sample, vector);
-        const double u0 = static_cast<double>(shown.col - sample.region.col) / sample.region.cols;
-        const double v0 = static_cast<double>(shown.row - sample.region.row) / sample.region.rows;
-        const double u1 = static_cast<double>(shown.col + shown.cols - sample.region.col) / sample.region.cols;
-        const double v1 = static_cast<double>(shown.row + shown.rows - sample.region.row) / sample.region.rows;
-        if (sample.texture && renderer) {
+        if (sample.texture && renderer && !crisp) {
+            // The sample's own region, placed where it lies in the shown region
+            // and clipped to the picture: a sample from before a zoom or pan
+            // stays in place, shrunk or enlarged, until the next one arrives,
+            // instead of the picture going blank.
+            const auto at = [&](int64_t index, int64_t origin, int64_t extent) {
+                return static_cast<double>(index - origin) / static_cast<double>(extent);
+            };
+            const auto& r = sample.region;
+            const double ax = vector ? at(r.row, shown.row, shown.rows) : at(r.col, shown.col, shown.cols);
+            const double bx = vector ? at(r.row + r.rows, shown.row, shown.rows) : at(r.col + r.cols, shown.col, shown.cols);
+            const double ay = vector ? at(r.col, shown.col, shown.cols) : at(r.row, shown.row, shown.rows);
+            const double by = vector ? at(r.col + r.cols, shown.col, shown.cols) : at(r.row + r.rows, shown.row, shown.rows);
+            list->PushClipRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), true);
             list->AddImage(static_cast<ImTextureID>(renderer->tex_imtexture_id(sample.texture)),
-                point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height),
-                vector ? point(v0, u0) : point(u0, v0), vector ? point(v1, u1) : point(u1, v1));
+                point(picture.x + ax * picture.width, picture.y + ay * picture.height),
+                point(picture.x + bx * picture.width, picture.y + by * picture.height));
+            list->PopClipRect();
         } else {
             // The CPU fixture takes the same rectangles and colormap as the
             // texture path; a normal app frame draws a single textured quad.
@@ -739,9 +749,24 @@ struct Inspector::Impl {
                 const double bx = vector ? (row1 - shown.row) / shown.rows : (col1 - shown.col) / shown.cols;
                 const double ay = vector ? (col0 - shown.col) / shown.cols : (row0 - shown.row) / shown.rows;
                 const double by = vector ? (col1 - shown.col) / shown.cols : (row1 - shown.row) / shown.rows;
-                list->AddRectFilled(point(picture.x + ax * picture.width, picture.y + ay * picture.height),
-                    point(picture.x + bx * picture.width, picture.y + by * picture.height),
-                    heat_color(sample.values[r * sample.cols + c], sample));
+                const ImVec2 a = point(picture.x + ax * picture.width, picture.y + ay * picture.height);
+                const ImVec2 b = point(picture.x + bx * picture.width, picture.y + by * picture.height);
+                const double cell_value = sample.values[r * sample.cols + c];
+                const ImU32 fill = heat_color(cell_value, sample);
+                list->AddRectFilled(a, b, fill);
+                // Zoomed in far enough, cells get a grid and then their values,
+                // like a spreadsheet, so a zoom shows as cells growing.
+                if (crisp && b.x - a.x >= 12 && b.y - a.y >= 12)
+                    list->AddRect(a, b, sternbild::with_alpha(sternbild::col::deep, 160));
+                char text[32];
+                std::snprintf(text, sizeof text, "%.3g", cell_value);
+                const ImVec2 size = crisp ? ImGui::CalcTextSize(text) : ImVec2(0, 0);
+                if (crisp && b.x - a.x >= size.x + 6 && b.y - a.y >= size.y + 4) {
+                    const ImVec4 rgb = ImGui::ColorConvertU32ToFloat4(fill);
+                    const bool light = 0.2126f * rgb.x + 0.7152f * rgb.y + 0.0722f * rgb.z > 0.5f;
+                    list->AddText(point((a.x + b.x - size.x) * 0.5, (a.y + b.y - size.y) * 0.5),
+                                  light ? sternbild::col::deep : sternbild::col::parchment, text);
+                }
             }
             list->PopClipRect();
         }
@@ -782,7 +807,7 @@ struct Inspector::Impl {
             const auto index = static_cast<size_t>(r - sample.row_indices.begin()) * sample.cols + (c - sample.col_indices.begin());
             ImGui::SetTooltip("(%lld, %lld)\n%.9g", static_cast<long long>(cell.row), static_cast<long long>(cell.col), sample.values[index]);
         } else {
-            ImGui::SetTooltip("(%lld, %lld)\nZoom to cells or use Read for the exact value", static_cast<long long>(cell.row), static_cast<long long>(cell.col));
+            ImGui::SetTooltip("(%lld, %lld)\nClick to select, double-click to zoom in", static_cast<long long>(cell.row), static_cast<long long>(cell.col));
         }
     }
     void tensor_picture(const Tensor& t, Geometry::Rect allocated) {
@@ -798,11 +823,16 @@ struct Inspector::Impl {
         auto size = Geometry::sampling_target(region, picture, scale, t.vector());
         if (t.vector()) std::swap(size.width, size.height);
         request_detail(region, size);
-        if (supports("tensor_regions") && (layout.elongated || t.vector())) {
+        // Zoomed into a matrix, a minimap of the whole tensor in the picture's
+        // corner shows where the view is (the elongated embedding keeps its
+        // overview strip beside the picture instead).
+        const Geometry::Region whole{0, 0, t.rows, t.cols};
+        const bool zoomed = !t.vector() && !layout.elongated && (region.rows < t.rows || region.cols < t.cols);
+        const Geometry::Rect minimap = zoomed ? minimap_rect(t, picture) : Geometry::Rect{};
+        if (supports("tensor_regions") && (layout.elongated || t.vector() || zoomed)) {
             auto size = t.vector()
-                ? Geometry::sampling_target({0, 0, t.rows, t.cols},
-                    {layout.plot.x, layout.plot.y, layout.plot.width, 1}, scale, true)
-                : Geometry::sampling_target({0, 0, t.rows, t.cols}, layout.overview, scale, false);
+                ? Geometry::sampling_target(whole, {layout.plot.x, layout.plot.y, layout.plot.width, 1}, scale, true)
+                : Geometry::sampling_target(whole, layout.elongated ? layout.overview : minimap, scale, false);
             if (t.vector()) std::swap(size.width, size.height);
             if (size.width != overview_target.width || size.height != overview_target.height) {
                 overview_target = size; overview_needed = true;
@@ -835,9 +865,42 @@ struct Inspector::Impl {
                 ImPlot::EndPlot();
             }
         }
-        paint_image(detail, region, picture, t.vector());
+        // Cells of six pixels or more are drawn as crisp squares (then with a
+        // grid, then with their values) rather than a smoothed texture.
+        const double cell_px = t.vector() ? picture.width / std::max<int64_t>(1, region.rows)
+                                          : std::min(picture.width / std::max<int64_t>(1, region.cols),
+                                                     picture.height / std::max<int64_t>(1, region.rows));
+        // While a new region is on its way, the averaged whole-tensor overview
+        // fills whatever the last detail sample does not cover.
+        if (!overview.values.empty() && overview.name == t.name && detail.region != region)
+            paint_image(overview, region, picture, t.vector());
+        paint_image(detail, region, picture, t.vector(), detail.exact && cell_px >= 6 && detail.region == region);
         auto* list = ImGui::GetWindowDrawList();
         const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
+        // The selected cell: its row and column shaded, the cell outlined in
+        // bronze (at least five pixels, so it shows zoomed out too).
+        const bool row_in = row >= region.row && row < region.row + region.rows;
+        const bool col_in = t.vector() || (col >= region.col && col < region.col + region.cols);
+        if (cell_selected && (row_in || col_in)) {
+            list->PushClipRect(point(picture.x, picture.y), point(picture.x + picture.width, picture.y + picture.height), true);
+            const ImU32 shade = sternbild::with_alpha(sternbild::col::bronze, 40);
+            if (t.vector()) {
+                const double x0 = picture.x + (row - region.row) * picture.width / region.rows;
+                const double x1 = x0 + picture.width / region.rows, cx = (x0 + x1) * 0.5, hw = std::max(2.5, (x1 - x0) * 0.5);
+                if (row_in) list->AddRect(point(cx - hw, picture.y), point(cx + hw, picture.y + picture.height), sternbild::col::bronze, 0, 0, 2.0f);
+            } else {
+                const double y0 = picture.y + (row - region.row) * picture.height / region.rows, y1 = y0 + picture.height / region.rows;
+                const double x0 = picture.x + (col - region.col) * picture.width / region.cols, x1 = x0 + picture.width / region.cols;
+                if (row_in) list->AddRectFilled(point(picture.x, y0), point(picture.x + picture.width, y1), shade);
+                if (col_in) list->AddRectFilled(point(x0, picture.y), point(x1, picture.y + picture.height), shade);
+                if (row_in && col_in) {
+                    const double cx = (x0 + x1) * 0.5, cy = (y0 + y1) * 0.5;
+                    const double hw = std::max(2.5, (x1 - x0) * 0.5), hh = std::max(2.5, (y1 - y0) * 0.5);
+                    list->AddRect(point(cx - hw, cy - hh), point(cx + hw, cy + hh), sternbild::col::bronze, 0, 0, 2.0f);
+                }
+            }
+            list->PopClipRect();
+        }
         char columns[100];
         if (t.vector()) {
             std::snprintf(columns, sizeof columns, "Index %lld to %lld", static_cast<long long>(region.row), static_cast<long long>(region.row + region.rows - 1));
@@ -870,23 +933,68 @@ struct Inspector::Impl {
                                     ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y), size, true);
             }
         }
+        const auto mouse = ImGui::GetIO().MousePos;
+        if (zoomed && minimap.width > 0 && minimap.height > 0) {
+            list->AddRectFilled(point(minimap.x - 4, minimap.y - 4), point(minimap.x + minimap.width + 4, minimap.y + minimap.height + 4),
+                                sternbild::with_alpha(sternbild::col::deep, 235));
+            if (!overview.values.empty() && overview.name == t.name) paint_image(overview, whole, minimap, false);
+            else list->AddRectFilled(point(minimap.x, minimap.y), point(minimap.x + minimap.width, minimap.y + minimap.height), sternbild::col::plate);
+            auto view = Geometry::selection_rect(region, t.rows, t.cols, minimap);
+            const double cx = view.x + view.width * 0.5, cy = view.y + view.height * 0.5;
+            const double hw = std::max(2.0, view.width * 0.5), hh = std::max(2.0, view.height * 0.5);
+            list->AddRect(point(cx - hw, cy - hh), point(cx + hw, cy + hh), sternbild::col::bronze, 0, 0, 1.5f);
+            list->AddRect(point(minimap.x, minimap.y), point(minimap.x + minimap.width, minimap.y + minimap.height), sternbild::col::rule);
+            ImGui::SetCursorScreenPos(point(minimap.x, minimap.y));
+            ImGui::InvisibleButton("##minimap", point(minimap.width, minimap.height));
+            if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("Whole tensor: click or drag to move the view");
+            if (ImGui::IsItemActive())
+                request_detail(Geometry::overview_region(region, t.rows, t.cols, minimap, mouse.x, mouse.y), size, true);
+        }
         ImGui::SetCursorScreenPos(point(detail_bounds.x, detail_bounds.y));
         ImGui::InvisibleButton("##tensor.picture", point(std::max(1.0, detail_bounds.width), std::max(1.0, detail_bounds.height)),
                                ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-        const auto mouse = ImGui::GetIO().MousePos;
         const auto cell = Geometry::hit_test(region, picture, mouse.x, mouse.y, t.vector());
-        if (ImGui::IsItemHovered() && cell.valid) {
+        const bool picture_hovered = ImGui::IsItemHovered();
+        if (picture_hovered && cell.valid) {
             show_hover(detail, cell);
             if (ImGui::GetIO().MouseWheel != 0)
                 request_detail(Geometry::zoom(region, t.rows, t.cols, std::pow(0.8, ImGui::GetIO().MouseWheel), cell), size, true);
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                // Zoom until cells are large enough to show their values.
+                const double side = 60;
+                Geometry::Region cells;
+                cells.rows = t.vector() ? std::max<int64_t>(1, static_cast<int64_t>(picture.width / side))
+                                        : std::max<int64_t>(1, static_cast<int64_t>(detail_bounds.height / side));
+                cells.cols = t.vector() ? 1 : std::max<int64_t>(1, static_cast<int64_t>(detail_bounds.width / side));
+                cells.row = cell.row - cells.rows / 2; cells.col = cell.col - cells.cols / 2;
+                request_detail(Geometry::clamp(cells, t.rows, t.cols), size, true);
+            }
         }
-        if (ImGui::IsItemActivated() && cell.valid) {
-            dragging = true; drag_region = region; drag_origin = mouse;
-            row = static_cast<int>(cell.row); col = static_cast<int>(cell.col); have_value = false;
-        }
-        if (dragging && ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)))
+        // A press then release on the same cell without a drag selects it; a
+        // drag (four pixels, or the middle button) pans.
+        if (ImGui::IsItemActivated()) { press_cell = cell; drag_region = region; drag_origin = mouse; dragging = false; }
+        if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0))) {
+            dragging = true;
             request_detail(Geometry::pan(drag_region, t.rows, t.cols, mouse.x - drag_origin.x, mouse.y - drag_origin.y, picture, t.vector()), size, true);
-        if (!ImGui::IsItemActive()) dragging = false;
+        }
+        if (ImGui::IsItemDeactivated()) {
+            if (!dragging && press_cell.valid && cell.valid && cell.row == press_cell.row && cell.col == press_cell.col) select_cell(cell);
+            dragging = false;
+        }
+        if (picture_hovered) ImGui::SetMouseCursor(dragging ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
+    }
+    static Geometry::Rect minimap_rect(const Tensor& t, Geometry::Rect picture) {
+        const double width = std::min(200.0, picture.width * 0.28), height = std::min(130.0, picture.height * 0.4);
+        Geometry::Rect r = Geometry::fit(t.rows, t.cols, {0, 0, width, height});
+        r.width = std::max(r.width, 10.0); r.height = std::max(r.height, 10.0);
+        r.x = picture.x + picture.width - r.width - 10; r.y = picture.y + 10;
+        return r;
+    }
+    void select_cell(Geometry::Cell cell) {
+        row = static_cast<int>(cell.row); col = static_cast<int>(cell.col);
+        cell_selected = true; have_value = false;
+        if (supports("read_weight") && send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}}))
+            focus_after_read = true;
     }
     void tensor_view(float x, float y, float w, float h) {
         place_window(kTensorPane, x, y, w, h);
@@ -926,9 +1034,13 @@ struct Inspector::Impl {
             detail_needed = supports("tensor_regions"); detail_due = 0;
         }
         ImGui::EndDisabled();
-        char sampled[96];
+        char sampled[200];
+        const double magnification = t.vector() ? static_cast<double>(t.rows) / std::max<int64_t>(1, region.rows)
+            : std::min(static_cast<double>(t.rows) / std::max<int64_t>(1, region.rows),
+                       static_cast<double>(t.cols) / std::max<int64_t>(1, region.cols));
         if (!detail.values.empty())
-            std::snprintf(sampled, sizeof sampled, "Region: %d x %d sampled values%s", detail.rows, detail.cols, detail.exact ? " (exact cells)" : "");
+            std::snprintf(sampled, sizeof sampled, "Zoom %.3gx   Region: %d x %d sampled values%s", magnification,
+                          detail.rows, detail.cols, detail.exact ? " (exact cells)" : "");
         else std::snprintf(sampled, sizeof sampled, "Loading region");
         right_text(sampled, sternbild::col::faint);
 
@@ -971,12 +1083,16 @@ struct Inspector::Impl {
         if (have_value) ImGui::Text("(%d, %d) = %.9g", value_row, value_col, read_value);
         else faint_text("Value not read");
 
+        // After a cell is selected and read, the Value field takes the keyboard:
+        // type the new value and press Enter to set it.
         field_label("Value"); ImGui::SameLine(); ImGui::SetNextItemWidth(value_width);
-        ImGui::InputDouble("##value", &value, 0, 0, "%.9g");
+        if (focus_value) { ImGui::SetKeyboardFocusHere(); focus_value = false; }
+        const bool entered = ImGui::InputDouble("##value", &value, 0, 0, "%.9g", ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
         ImGui::BeginDisabled(!supports("edit_weight") || !std::isfinite(value));
-        if (sternbild::word_button("Set")) edit("set", value);
+        const bool set_pressed = sternbild::word_button("Set");
         ImGui::EndDisabled();
+        if ((set_pressed || entered) && supports("edit_weight") && std::isfinite(value)) edit("set", value);
         ImGui::SameLine(0, group_gap); field_label("Scale"); ImGui::SameLine(); ImGui::SetNextItemWidth(number_width);
         ImGui::InputDouble("##scale", &factor, 0, 0, "%.6g");
         ImGui::SameLine();

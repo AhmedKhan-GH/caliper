@@ -279,8 +279,7 @@ TEST_CASE("inspector widgets stream, stop and edit through the request channel")
     ui.peer.reply(read, Object{{"name", "block.weight"}, {"row", 0.0}, {"col", 0.0}, {"value", 0.125}});
     ui.frame();
     CHECK(ui.captured.find("(0, 0) = 0.125") != std::string::npos);
-    ui.input(tensor_window, "##value", "0.5");
-    ui.activate(tensor_window, "Set");
+    ui.input(tensor_window, "##value", "0.5");   // Enter in the Value field sets the weight
     auto edit = ui.request("edit_weight");
     CHECK(edit["action"].get<std::string>() == "set");
     CHECK(edit["value"].get<double>() == 0.5);
