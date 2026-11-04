@@ -8,7 +8,6 @@
 
 #include <caliper/services/geometry_v1_2.h>
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 #include <algorithm>
 #include <array>
@@ -199,6 +198,9 @@ struct Model3D::Impl {
     bool visible = false, dirty = true, folds_dirty = true, dragged = false, click_armed = false;
     unsigned drag_armed = 0; // Left and middle presses must originate in the scene.
     bool failed = false, imports_failed = false;
+    // The axis navigator: an eased swing to an axis view, and whether a press on it became a drag.
+    bool snapping = false, axes_dragged = false;
+    double snap_azimuth = 0, snap_elevation = 0;
     std::string selected, output_label = "Output (tied)";
 
     ~Impl() { release_renderer(); }
@@ -582,17 +584,16 @@ struct Model3D::Impl {
         frame_camera();
         label_column = model3d::column_beside_stack(scene, camera, viewport, layout.labels);
         ImGuiIO& io = ImGui::GetIO();
-        // The navigation gizmo in the scene's top-right corner, as in 3D tools'
-        // view navigators: ImGuizmo's view cube rotates (click a face, edge or
-        // corner to turn the camera to it, or drag it to orbit), and the three
-        // buttons under it move the view (drag), zoom it (drag up or down) and
-        // fit the model (click). They read the mouse before the scene's own
-        // button, so a press on them is theirs (the cube starts only while no
-        // item is active), and draw on a second channel above the scene image.
+        // The navigation gizmo in the scene's top-right corner, drawn in the
+        // house style: an axis navigator (drag it to orbit; click an axis end to
+        // turn the camera to look along it) and, under it, round buttons that
+        // move the view (drag), zoom it (drag up or down) and fit the model
+        // (click). They read the mouse before the scene's own button, so a press
+        // on them is theirs, and draw on a second channel above the scene image.
         ImDrawList* scene_list = ImGui::GetWindowDrawList();
         scene_list->ChannelsSplit(2);
         scene_list->ChannelsSetCurrent(1);
-        const float cube = std::clamp(static_cast<float>(std::min(viewport.width, viewport.height) * 0.2), 64.0f, 120.0f);
+        const float cube = std::clamp(static_cast<float>(std::min(viewport.width, viewport.height) * 0.2), 72.0f, 112.0f);
         const ImVec2 cube_min(static_cast<float>(viewport.x + viewport.width) - cube - 8.0f, static_cast<float>(viewport.y) + 8.0f);
         const float button = std::clamp(cube * 0.3f, 26.0f, 34.0f), button_gap = 6.0f;
         const float buttons_width = 3 * button + 2 * button_gap;
@@ -602,39 +603,87 @@ struct Model3D::Impl {
         const bool over_nav = io.MousePos.x >= nav_min.x && io.MousePos.x < nav_max.x &&
                               io.MousePos.y >= nav_min.y && io.MousePos.y < nav_max.y;
         {
-            auto view = model3d::matrices(camera, aspect);
-            const auto before = view.view;
-            float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-            static const bool styled = [] {
-                // ImGuizmo lightens each face (it ORs the colour with mid grey), so
-                // near-neutral warm, plain and cool tones keep the faces apart
-                // within the palette; the face under the pointer turns bronze.
-                auto& colours = ImGuizmo::GetStyle().Colors;
-                colours[ImGuizmo::DIRECTION_X] = sternbild::to_vec4(IM_COL32(0x40, 0x30, 0x1c, 255));
-                colours[ImGuizmo::DIRECTION_Y] = sternbild::to_vec4(IM_COL32(0x30, 0x30, 0x30, 255));
-                colours[ImGuizmo::DIRECTION_Z] = sternbild::to_vec4(IM_COL32(0x1c, 0x30, 0x44, 255));
-                colours[ImGuizmo::SELECTION] = sternbild::to_vec4(sternbild::col::bronze);
-                return true;
-            }();
-            (void)styled;
-            ImGuizmo::SetDrawlist(scene_list);
-            ImGuizmo::SetOrthographic(false);
-            ImGuizmo::SetRect(static_cast<float>(viewport.x), static_cast<float>(viewport.y),
-                              static_cast<float>(viewport.width), static_cast<float>(viewport.height));
-            ImGuizmo::ViewManipulate(view.view.data(), view.projection.data(), ImGuizmo::ROTATE, ImGuizmo::WORLD, identity,
-                                     static_cast<float>(camera.distance), cube_min, ImVec2(cube, cube),
-                                     sternbild::with_alpha(sternbild::col::plate, 200));
-            if (view.view != before) {
-                // The view's third row is minus the camera's forward axis, the
-                // orbit offset from the target to the eye.
-                const double ox = view.view[2], oy = view.view[6], oz = view.view[10];
-                const double norm = std::sqrt(ox * ox + oy * oy + oz * oz);
-                if (norm > 1e-9) {
-                    camera.elevation = std::asin(std::clamp(oy / norm, -1.0, 1.0));
-                    camera.azimuth = std::atan2(oz, ox);
-                    framing = Framing::Manual;
-                    dirty = true;
+            // A swing to an axis view eases in over a few frames.
+            if (snapping) {
+                const double da = std::remainder(snap_azimuth - camera.azimuth, 2 * 3.14159265358979323846);
+                const double de = snap_elevation - camera.elevation;
+                if (std::fabs(da) < 1e-3 && std::fabs(de) < 1e-3) {
+                    camera.azimuth = snap_azimuth; camera.elevation = snap_elevation; snapping = false;
+                } else { camera.azimuth += da * 0.25; camera.elevation += de * 0.25; }
+                framing = Framing::Manual; dirty = true;
+            }
+            const ImVec2 centre(cube_min.x + cube * 0.5f, cube_min.y + cube * 0.5f);
+            const float radius = cube * 0.5f;
+            const double ce = std::cos(camera.elevation);
+            const double off[3] = {ce * std::cos(camera.azimuth), std::sin(camera.elevation), ce * std::sin(camera.azimuth)};
+            const double fwd[3] = {-off[0], -off[1], -off[2]};
+            double right[3] = {-fwd[2], 0.0, fwd[0]};                 // forward x world up
+            const double rl = std::sqrt(right[0] * right[0] + right[2] * right[2]);
+            if (rl > 1e-9) { right[0] /= rl; right[2] /= rl; } else { right[0] = 1; right[2] = 0; }
+            const double up[3] = {right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2],
+                                  right[0] * fwd[1] - right[1] * fwd[0]};
+            struct End { int axis; int sign; ImVec2 at; double depth; };
+            std::array<End, 6> ends{};
+            for (int axis = 0; axis < 3; ++axis) for (int sign = 0; sign < 2; ++sign) {
+                const double d = sign ? -1.0 : 1.0;
+                const ImVec2 at(centre.x + static_cast<float>(right[axis] * d) * radius * 0.7f,
+                                centre.y - static_cast<float>(up[axis] * d) * radius * 0.7f);
+                ends[axis * 2 + sign] = {axis, sign, at, fwd[axis] * d};
+            }
+            std::sort(ends.begin(), ends.end(), [](const End& a, const End& b) { return a.depth > b.depth; });
+            ImGui::SetCursorScreenPos(cube_min);
+            ImGui::InvisibleButton("##model3d.axes", ImVec2(cube, cube));
+            const bool axes_hovered = ImGui::IsItemHovered(), axes_active = ImGui::IsItemActive();
+            int hovered_end = -1;
+            if (axes_hovered) {
+                float best = 11.0f * 11.0f;
+                for (int i = 0; i < 6; ++i) {
+                    const float dx = io.MousePos.x - ends[i].at.x, dy = io.MousePos.y - ends[i].at.y;
+                    if (dx * dx + dy * dy < best) { best = dx * dx + dy * dy; hovered_end = i; }
                 }
+            }
+            if (axes_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+                camera = model3d::orbit(camera, io.MouseDelta.x, io.MouseDelta.y);
+                snapping = false; axes_dragged = true; framing = Framing::Manual; dirty = true;
+            }
+            if (ImGui::IsItemActivated()) axes_dragged = false;
+            if (ImGui::IsItemDeactivated() && !axes_dragged && hovered_end >= 0) {
+                // Look along the clicked end, from its side toward the model.
+                const int axis = ends[hovered_end].axis;
+                const double d = ends[hovered_end].sign ? -1.0 : 1.0;
+                const double dir[3] = {axis == 0 ? d : 0.0, axis == 1 ? d : 0.0, axis == 2 ? d : 0.0};
+                snap_elevation = std::clamp(std::asin(dir[1]), -1.55, 1.55);
+                snap_azimuth = axis == 1 ? camera.azimuth : std::atan2(dir[2], dir[0]);
+                snapping = true;
+            }
+            static const char* const meaning[3] = {"X: across a layer's tensors", "Y: up the tensors' rows",
+                                                   "Z: through the layers, in order"};
+            if (axes_hovered && !axes_active) {
+                if (hovered_end >= 0) ImGui::SetTooltip("%s\nClick to look along %s%c", meaning[ends[hovered_end].axis],
+                                                        ends[hovered_end].sign ? "-" : "+", "XYZ"[ends[hovered_end].axis]);
+                else ImGui::SetTooltip("Drag to rotate the view\nClick an axis end to look along it");
+            }
+            if (axes_hovered || axes_active) ImGui::SetMouseCursor(hovered_end >= 0 ? ImGuiMouseCursor_Hand : ImGuiMouseCursor_ResizeAll);
+            const ImU32 colours[3] = {sternbild::col::cat, sternbild::col::dog, sternbild::col::vehicle};
+            scene_list->AddCircleFilled(centre, radius, sternbild::with_alpha(axes_hovered || axes_active ? sternbild::col::plate_hover
+                                                                                                          : sternbild::col::plate, 220));
+            scene_list->AddCircle(centre, radius, axes_active ? sternbild::col::bronze : sternbild::col::rule, 0, 1.0f);
+            for (int i = 0; i < 6; ++i) {
+                const End& e = ends[i];
+                const bool far_side = e.depth > 0.05;
+                const ImU32 c = sternbild::with_alpha(colours[e.axis], far_side ? 150 : 255);
+                const bool lit = i == hovered_end;
+                if (!e.sign) scene_list->AddLine(centre, e.at, c, 2.0f);
+                if (!e.sign) {
+                    scene_list->AddCircleFilled(e.at, 8.5f, c);
+                    const char label[2] = {"XYZ"[e.axis], 0};
+                    const ImVec2 size = ImGui::CalcTextSize(label);
+                    scene_list->AddText(ImVec2(e.at.x - size.x * 0.5f, e.at.y - size.y * 0.5f), sternbild::col::deep, label);
+                } else {
+                    scene_list->AddCircleFilled(e.at, 6.0f, sternbild::with_alpha(sternbild::col::deep, 200));
+                    scene_list->AddCircle(e.at, 6.0f, c, 0, 1.5f);
+                }
+                if (lit) scene_list->AddCircle(e.at, e.sign ? 8.0f : 10.5f, sternbild::col::bronze, 0, 2.0f);
             }
         }
         enum Nav { Move, Zoom, FitAll };
@@ -692,9 +741,9 @@ struct Model3D::Impl {
         ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(viewport.x), static_cast<float>(viewport.y)));
         ImGui::InvisibleButton("##model3d.viewport", ImVec2(static_cast<float>(viewport.width), static_cast<float>(viewport.height)),
             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-        const bool nav_busy = over_nav || ImGuizmo::IsUsingViewManipulate();
+        const bool nav_busy = over_nav;
         const bool hovered = ImGui::IsItemHovered() && !nav_busy && !inside(label_column, io.MousePos.x, io.MousePos.y);
-        const bool active = ImGui::IsItemActive() && !ImGuizmo::IsUsingViewManipulate();
+        const bool active = ImGui::IsItemActive();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             click_armed = hovered && !io.KeyShift;
             dragged = false;
