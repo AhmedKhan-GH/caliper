@@ -576,3 +576,25 @@ TEST_CASE("replies with UTF-8 text and unicode escapes parse to UTF-8 strings") 
     CHECK(reply["c"].get<std::string>() == "\xF0\x9F\x98\x80");
     CHECK(reply["d"].get<std::string>() == "\xED\xA0\xBDx\n");
 }
+
+TEST_CASE("the inspector asks for binary samples when offered and draws them") {
+    Ui ui;
+    auto hello = ui.request("hello");
+    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"list_tensors", "show_tensor",
+        "tensor_regions", "sample_data"}}});
+    auto list = ui.request("list_tensors");
+    ui.peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
+        Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
+               {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
+    auto sample = ui.request("show_tensor");
+    CHECK(sample["encoding"].get<std::string>() == "float32");
+    // Two by two values, little-endian float32: 0.125, 0.25, -0.5, 1.
+    std::string bytes;
+    for (float v : {0.125f, 0.25f, -0.5f, 1.0f}) { char b[4]; std::memcpy(b, &v, 4); bytes.append(b, 4); }
+    ui.peer.reply(sample, Object{{"name", "block.weight"}, {"rows", 4.0}, {"cols", 3.0}, {"sample_rows", 2.0},
+        {"sample_cols", 2.0}, {"data", base64(bytes)}, {"row_indices", Array{0.0, 3.0}}, {"col_indices", Array{0.0, 2.0}},
+        {"region", Object{{"row", 0.0}, {"col", 0.0}, {"rows", 4.0}, {"cols", 3.0}}}, {"edited", false}, {"revision", 0.0}});
+    for (int i = 0; i < 4; ++i) ui.frame();
+    CHECK(ui.captured.find("Region: 2 x 2 sampled values") != std::string::npos);
+    CHECK(ui.errors == 0);
+}

@@ -29,7 +29,7 @@ from qwen_jspace import DEFAULT_LENS, Intervention  # noqa: E402
 
 DEFAULT_MODEL = Path.home() / "PycharmProjects/weight-space/models/Qwen3.5-0.8B"
 CAPABILITIES = ["generate", "list_tensors", "show_tensor", "read_weight",
-                "edit_weight", "revert_tensor", "list_edits", "tensor_regions", "tensor_values"]
+                "edit_weight", "revert_tensor", "list_edits", "tensor_regions", "tensor_values", "sample_data"]
 MAX_PROMPT_TOKENS = 2048
 MAX_NEW_TOKENS = 1024
 MAX_UNDO_BYTES = 64 * 1024 * 1024
@@ -271,9 +271,16 @@ class Inspector:
                 sample = area_sample(read, region, len(row_indices), len(col_indices))
             if not np.isfinite(sample).all():
                 raise ValueError("sample contains non-finite weights")
+            # encoding float32 sends the values as little-endian float32 bytes in base64 (data): a JSON
+            # list of 100,000 numbers costs most of a request's time to write and read.
+            encoding = request.get("encoding", "list")
+            if encoding not in ("list", "float32"):
+                raise ValueError("encoding must be list or float32")
+            values = (dict(data=base64.b64encode(sample.astype("<f4").tobytes()).decode("ascii"))
+                      if encoding == "float32" else dict(values=sample.reshape(-1).tolist()))
             return dict(name=name, rows=rows, cols=cols,
                         sample_rows=len(row_indices), sample_cols=len(col_indices),
-                        values=sample.reshape(-1).tolist(), row_indices=row_indices,
+                        **values, row_indices=row_indices,
                         col_indices=col_indices, min=float(sample.min()), max=float(sample.max()),
                         region=region, exact=(len(row_indices) == region["rows"] and
                                               len(col_indices) == region["cols"]),

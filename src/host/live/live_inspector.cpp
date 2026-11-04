@@ -229,7 +229,6 @@ struct Inspector::Impl {
     Geometry::Cell press_cell;
     bool cell_selected = false, focus_value = false, focus_after_read = false;
     bool force_layout = false, reset_layout = true, docked = false, layout_built = false;
-    double detail_due = 0;
     std::string detail_name;
     ImVec2 drag_origin;
 
@@ -348,6 +347,7 @@ struct Inspector::Impl {
     bool request_sample(const std::string& name, const char* purpose,
                         Geometry::Region wanted, Geometry::Target size) {
         Object fields{{"name", name}};
+        if (supports("sample_data")) fields["encoding"] = "float32";
         if (supports("tensor_regions")) {
             fields["region"] = region_fields(wanted);
             fields["target"] = Object{{"width", static_cast<double>(size.width)},
@@ -383,7 +383,7 @@ struct Inspector::Impl {
         clear_samples();
         release_values(values); values = {}; incoming = {};
         values_needed = true; values_stale = false; values_failed.clear();
-        region_ready = false; detail_needed = true; overview_needed = true; detail_due = 0;
+        region_ready = false; detail_needed = true; overview_needed = true;
         edits.clear();
         open_selected_group = scroll_selected = true;
     }
@@ -434,7 +434,7 @@ struct Inspector::Impl {
         model3d.set_tensors(scene);
         if (!tensor()) {
             if (tensors.empty()) selected.clear(); else select(tensors.front().name);
-        } else { detail_needed = overview_needed = true; detail_due = 0; values_needed = true; incoming = {}; }
+        } else { detail_needed = overview_needed = true; values_needed = true; incoming = {}; }
         return true;
     }
     bool parse_sample(const Json& result, const Pending& request, Sample& sample) {
@@ -444,9 +444,11 @@ struct Inspector::Impl {
         const int nr = integer(field(result, "sample_rows")), nc = integer(field(result, "sample_cols"));
         const auto& values = field(result, "values"); const auto& ri = field(result, "row_indices");
         const auto& ci = field(result, "col_indices");
+        // The values come as a list, or as little-endian float32 in base64 (data) from hosts offering sample_data.
+        const bool binary = field(result, "data").is_string();
         if (nr < 1 || nc < 1 || nr > Geometry::max_target_side || nc > Geometry::max_target_side ||
-            static_cast<int64_t>(nr) * nc > Geometry::max_samples || !values.is_array() ||
-            values.get<Array>().size() != static_cast<size_t>(nr * nc) || !ri.is_array() || !ci.is_array() ||
+            static_cast<int64_t>(nr) * nc > Geometry::max_samples || (!binary && !values.is_array()) ||
+            (!binary && values.get<Array>().size() != static_cast<size_t>(nr * nc)) || !ri.is_array() || !ci.is_array() ||
             ri.get<Array>().size() != static_cast<size_t>(nr) || ci.get<Array>().size() != static_cast<size_t>(nc)) return false;
         Sample next; next.name = request.name; next.rows = nr; next.cols = nc;
         const auto& received = field(result, "region");
@@ -455,7 +457,18 @@ struct Inspector::Impl {
                            integer(field(received, "rows")), integer(field(received, "cols"))};
             if (next.region != Geometry::clamp(next.region, it->rows, it->cols)) return false;
         } else next.region = {0, 0, it->rows, it->cols};
-        for (const Json& v : values.get<Array>()) {
+        if (binary) {
+            std::vector<uint8_t> bytes;
+            if (!decode_base64(string(field(result, "data")), bytes) || bytes.size() != static_cast<size_t>(nr) * nc * 4) return false;
+            next.values.resize(static_cast<size_t>(nr) * nc);
+            for (size_t i = 0; i < next.values.size(); ++i) {
+                const uint8_t* b = bytes.data() + 4 * i;
+                const uint32_t bits = static_cast<uint32_t>(b[0] | b[1] << 8 | b[2] << 16) | static_cast<uint32_t>(b[3]) << 24;
+                float v; std::memcpy(&v, &bits, sizeof v);
+                if (!std::isfinite(v)) return false;
+                next.values[i] = v;
+            }
+        } else for (const Json& v : values.get<Array>()) {
             if (!v.is_number() || !std::isfinite(v.get<double>())) return false;
             next.values.push_back(v.get<double>());
         }
@@ -542,7 +555,7 @@ struct Inspector::Impl {
             }
             if (op == "tensor_values") {   // fall back to region requests for this tensor
                 values_failed = completed.name; values_needed = false; incoming = {};
-                detail_needed = overview_needed = true; detail_due = 0;
+                detail_needed = overview_needed = true;
             }
             error = string(field(reply, "error"));
             if (op == "generate") { generation_status = "Generation failed"; stop_requested = false; }
@@ -606,7 +619,7 @@ struct Inspector::Impl {
             update_edited(completed.name, result, op == "edit_weight");
             if (completed.name == selected) {
                 have_value = false; read_edits(result);
-                detail_needed = overview_needed = true; detail_due = 0;
+                detail_needed = overview_needed = true;
                 values_needed = values_stale = true; incoming = {};
             }
         }
@@ -653,7 +666,7 @@ struct Inspector::Impl {
             issue(op.c_str(), std::move(fields), purpose);
         } else if (want_list) { want_list = false; issue("list_tensors"); }
         else if (whole) { if (values_needed) request_values(*shown); }
-        else if (tensor() && region_ready && detail_needed && now >= detail_due) {
+        else if (tensor() && region_ready && detail_needed) {
             if (request_sample(selected, "detail", region, target)) {
                 detail_needed = false; last_region = region; last_target = target;
             }
@@ -992,17 +1005,15 @@ struct Inspector::Impl {
         list->AddText(point(area.x + 16, area.y + height - ImGui::GetTextLineHeight()), ImGui::GetColorU32(ImGuiCol_Text), low);
         list->AddText(point(area.x, area.y + height + 4), ImGui::GetColorU32(ImGuiCol_Text), "Value");
     }
-    // The whole cells in view, for a region request after the view settles.
+    // The whole cells in view, requested while the view moves: one request is in flight at a time, and
+    // when it returns the newest region goes next, so the picture refines as fast as the host answers.
     void request_detail(Geometry::Region next, Geometry::Target size) {
         const Tensor* t = tensor(); if (!t) return;
         next = Geometry::clamp(next, t->rows, t->cols);
-        const bool changed = region != next || target.width != size.width || target.height != size.height;
         region = next; target = size;
         if (supports("tensor_regions") && !uses_values(*t) &&
-            (last_region != region || last_target.width != size.width || last_target.height != size.height)) {
-            if (!detail_needed || changed) detail_due = detail.values.empty() ? 0 : seconds() + 0.05;
+            (last_region != region || last_target.width != size.width || last_target.height != size.height))
             detail_needed = true;
-        }
     }
     void show_hover(const Sample& sample, Geometry::Cell cell) {
         if (!cell.valid || sample.values.empty()) return;
@@ -1027,7 +1038,7 @@ struct Inspector::Impl {
         view_bounds = bounds;
         if (!region_ready) {
             camera = Geometry::initial_camera(t.rows, t.cols, vector, bounds);
-            region_ready = true; detail_needed = true; detail_due = 0;
+            region_ready = true; detail_needed = true;
         }
         camera = Geometry::clamp(camera, t.rows, t.cols, vector, bounds);
         const auto shot = Geometry::shoot(camera, t.rows, t.cols, vector, bounds);

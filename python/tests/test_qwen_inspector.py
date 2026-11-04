@@ -533,3 +533,19 @@ except RuntimeError as exc:
     child = subprocess.run(args, capture_output=True, text=True, timeout=10)
     assert child.returncode == 0, child.stderr
     assert lock.exists() and lock.stat().st_size == 0
+
+
+def test_samples_in_binary_match_the_list():
+    import base64
+    weight = array(np.arange(-40, 40, dtype=np.float32).reshape(8, 10) / 3)
+    host = inspector({"weight": weight})
+    request = dict(op="show_tensor", name="weight", region=dict(row=1, col=2, rows=6, cols=7),
+                   target=dict(width=3, height=4))
+    listed = host(request, lambda _: None, threading.Event())
+    binary = host(dict(request, encoding="float32"), lambda _: None, threading.Event())
+    assert "values" not in binary and "data" not in listed
+    decoded = np.frombuffer(base64.b64decode(binary["data"]), "<f4")
+    assert np.array_equal(decoded, np.array(listed["values"], dtype=np.float32))
+    assert {k: v for k, v in binary.items() if k != "data"} == {k: v for k, v in listed.items() if k != "values"}
+    with pytest.raises(ValueError):
+        host(dict(request, encoding="float16"), lambda _: None, threading.Event())
