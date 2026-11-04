@@ -23,6 +23,10 @@ import sys
 
 import numpy as np
 
+# The J-space module sits beside this script (also when tests load it by path).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from qwen_jspace import DEFAULT_LENS, Intervention  # noqa: E402
+
 DEFAULT_MODEL = Path.home() / "PycharmProjects/weight-space/models/Qwen3.5-0.8B"
 CAPABILITIES = ["generate", "list_tensors", "show_tensor", "read_weight",
                 "edit_weight", "revert_tensor", "list_edits", "tensor_regions", "tensor_values"]
@@ -36,6 +40,10 @@ MAX_SAMPLES = 131072
 CHUNK_CELLS = 1 << 24
 # Raw bytes per tensor_values reply; base64 keeps it under the 4 MB request frame.
 MAX_VALUE_BYTES = 2 * 1024 * 1024
+# Offered with a Jacobian lens: the lens grid while generating, with J-space interventions.
+LENS_CAPABILITIES = ["trace", "tokenize"]
+MAX_INTERVENTIONS = 16
+INTERVENTION_KINDS = {"ablate": (0, 0), "remove": (1, 64), "swap": (2, 2), "inject": (1, 1)}
 
 
 class Cancelled(Exception):
@@ -136,7 +144,7 @@ class Undo:
 
 
 class Inspector:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, lens: Path = DEFAULT_LENS):
         # Imports and all MLX evaluation stay on serve()'s thread. Socket I/O
         # never touches the model, including cancellation and disconnect.
         import mlx.core as mx
@@ -160,6 +168,18 @@ class Inspector:
         self.history: list[dict] = []
         self.next_edit = 1
         self.tied = bool(self.model.language_model.args.tie_word_embeddings)
+        self.lens_path = lens
+        self._jspace = None
+
+    @property
+    def jspace(self):
+        """The Jacobian lens over this model, loaded on first use (48 MB)."""
+        if self._jspace is None:
+            from qwen_jspace import JSpace
+            if not self.lens_path.is_file():
+                raise ValueError(f"no Jacobian lens at {self.lens_path}")
+            self._jspace = JSpace(self.model, self.mx, self.lens_path)
+        return self._jspace
 
     def _weight(self, request):
         name = request.get("name")
@@ -268,6 +288,14 @@ class Inspector:
             return dict(name=name, row=row, col=col,
                         value=float(weight.reshape(rows, cols)[row, col].item()),
                         **self._status(name))
+        if op == "trace":
+            return self.trace(request, emit, cancelled)
+        if op == "tokenize":
+            text = request.get("text")
+            if not isinstance(text, str) or not 0 < len(text) <= 256:
+                raise ValueError("text must contain 1 to 256 characters")
+            ids = self.tokenizer.encode(text, add_special_tokens=False)
+            return dict(ids=ids, words=[self.tokenizer.decode([i]) for i in ids])
         if op == "edit_weight":
             return self.edit(request)
         if op == "revert_tensor":
@@ -362,17 +390,41 @@ class Inspector:
         self._record(name, "Reverted to original")
         return dict(name=name, edits=self._edits(name), **self._status(name))
 
-    def generate(self, request, emit, cancelled):
-        from mlx_lm import stream_generate
-        from mlx_lm.sample_utils import make_sampler
+    def interventions(self, request):
+        """Validated J-space interventions: bands within the lens's layers, token ids within the vocabulary."""
+        items = request.get("interventions", [])
+        if not isinstance(items, list) or len(items) > MAX_INTERVENTIONS:
+            raise ValueError(f"interventions must be a list of at most {MAX_INTERVENTIONS}")
+        layers = self.jspace.source_layers
+        vocabulary = self.jspace.text.embed_tokens.weight.shape[0]
+        result = []
+        for item in items:
+            if not isinstance(item, dict) or item.get("kind") not in INTERVENTION_KINDS:
+                raise ValueError(f"intervention kind must be one of {sorted(INTERVENTION_KINDS)}")
+            kind = item["kind"]
+            first = integer(item, "first", layers[0], low=layers[0], high=layers[-1])
+            last = integer(item, "last", layers[-1], low=first, high=layers[-1])
+            tokens = item.get("tokens", [])
+            least, most = INTERVENTION_KINDS[kind]
+            if (not isinstance(tokens, list) or not least <= len(tokens) <= most
+                    or any(type(t) is not int or not 0 <= t < vocabulary for t in tokens)):
+                raise ValueError(f"{kind} takes {least} to {most} token ids from the vocabulary")
+            if kind == "swap" and tokens[0] == tokens[1]:
+                raise ValueError("swap needs two different tokens")
+            positions = item.get("positions")
+            if positions is not None and (not isinstance(positions, list) or len(positions) > 4096 or
+                                          any(type(i) is not int or i < 0 for i in positions)):
+                raise ValueError("positions must be a list of token positions")
+            result.append(Intervention(kind, first, last, tokens=list(tokens),
+                                       k=integer(item, "k", 10, low=1, high=50),
+                                       strength=number(item, "strength", 1.0, low=-64, high=64),
+                                       positions=positions))
+        return result
 
+    def chat_tokens(self, request):
         prompt = request.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 32768:
             raise ValueError("prompt must contain 1 to 32768 characters")
-        max_tokens = integer(request, "max_new_tokens", 128, low=1, high=MAX_NEW_TOKENS)
-        temperature = number(request, "temperature", 0.7, low=0, high=2)
-        top_p = number(request, "top_p", 0.9, low=0, high=1)
-        top_k = integer(request, "top_k", 20, high=1000)
         thinking = request.get("thinking", False)
         if type(thinking) is not bool:
             raise ValueError("thinking must be true or false")
@@ -381,6 +433,41 @@ class Inspector:
             add_generation_prompt=True, enable_thinking=thinking)
         if len(tokens) > MAX_PROMPT_TOKENS:
             raise ValueError(f"prompt exceeds {MAX_PROMPT_TOKENS} tokens including chat template")
+        return tokens
+
+    def trace(self, request, emit, cancelled):
+        """Generate while streaming the lens grid (qwen_jspace.trace), with any interventions applied."""
+        from mlx_lm.sample_utils import make_sampler
+        from qwen_jspace import trace
+
+        tokens = self.chat_tokens(request)
+        max_tokens = integer(request, "max_new_tokens", 64, high=MAX_NEW_TOKENS)
+        temperature = number(request, "temperature", 0.0, low=0, high=2)
+        top_p = number(request, "top_p", 1.0, low=0, high=1)
+        top_k = integer(request, "top_k", 0, high=1000)
+        k = integer(request, "k", 5, low=1, high=10)
+        seed = integer(request, "seed", 0, high=2**31 - 1)
+        changes = self.interventions(request)
+        # One seed for every run, so an intervened run samples like the intact one until their
+        # distributions differ.
+        self.mx.random.seed(seed)
+        try:
+            return trace(self.jspace, self.tokenizer, tokens, max_new_tokens=max_tokens,
+                         sampler=make_sampler(temp=temperature, top_p=top_p, top_k=top_k), k=k,
+                         interventions=changes, emit=emit, cancelled=cancelled,
+                         eos=set(self.tokenizer.eos_token_ids))
+        finally:
+            self.mx.clear_cache()
+
+    def generate(self, request, emit, cancelled):
+        from mlx_lm import stream_generate
+        from mlx_lm.sample_utils import make_sampler
+
+        max_tokens = integer(request, "max_new_tokens", 128, low=1, high=MAX_NEW_TOKENS)
+        temperature = number(request, "temperature", 0.7, low=0, high=2)
+        top_p = number(request, "top_p", 0.9, low=0, high=1)
+        top_k = integer(request, "top_k", 20, high=1000)
+        tokens = self.chat_tokens(request)
         if cancelled.is_set():
             return dict(tokens=0, tokens_per_second=0.0, cancelled=True)
 
@@ -447,10 +534,11 @@ def run(args):
     from caliper.live import SessionTransport
 
     print(f"Loading {args.model.expanduser()} with mlx-lm", flush=True)
-    inspector = Inspector(args.model.expanduser())
+    inspector = Inspector(args.model.expanduser(), args.lens.expanduser())
     with SessionTransport.open(script_name="qwen_inspector.py", session=args.session,
                                data_dir=args.data_dir) as session:
-        with session.request_server(CAPABILITIES) as server:
+        lens = LENS_CAPABILITIES if inspector.lens_path.is_file() else []
+        with session.request_server(CAPABILITIES + lens) as server:
             def shutdown(signum, frame):
                 # Unwind the generator and both contexts on the model thread.
                 raise KeyboardInterrupt
@@ -467,6 +555,8 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--lens", type=Path, default=DEFAULT_LENS,
+                        help="Jacobian lens for the model as lens.npz (neuronpedia/jacobian-lens, converted)")
     parser.add_argument("--session", help="optional live session token (1 to 20 simple characters)")
     parser.add_argument("--data-dir", help="Caliper session discovery directory")
     args = parser.parse_args()
