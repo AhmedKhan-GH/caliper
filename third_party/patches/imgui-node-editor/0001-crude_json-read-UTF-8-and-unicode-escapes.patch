@@ -1,0 +1,94 @@
+diff --git a/crude_json.cpp b/crude_json.cpp
+index 078427a..beccd61 100644
+--- a/crude_json.cpp
++++ b/crude_json.cpp
+@@ -514,32 +514,52 @@ private:
+ 
+     bool accept_characters(string& result)
+     {
++        // A raw byte is copied as it is, so UTF-8 text passes through; a \u escape is a code point, written as UTF-8.
+         int c;
+-        while (accept_character(c))
++        bool code_point = false;
++        while (accept_character(c, code_point))
+         {
+-            CRUDE_ASSERT(c < 128); // #todo: convert characters > 127 to UTF-8
+-            result.push_back(static_cast<char>(c));
++            if (!code_point || c < 0x80)
++                result.push_back(static_cast<char>(c));
++            else if (c < 0x800)
++            {
++                result.push_back(static_cast<char>(0xC0 | (c >> 6)));
++                result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
++            }
++            else if (c < 0x10000)
++            {
++                result.push_back(static_cast<char>(0xE0 | (c >> 12)));
++                result.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
++                result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
++            }
++            else
++            {
++                result.push_back(static_cast<char>(0xF0 | (c >> 18)));
++                result.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
++                result.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
++                result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
++            }
++            code_point = false;
+         }
+ 
+         return true;
+     }
+ 
+-    bool accept_character(int& c)
++    bool accept_character(int& c, bool& code_point)
+     {
+         auto s = state();
+ 
+         if (accept('\\'))
+         {
+-            return accept_escape(c);
++            return accept_escape(c, code_point);
+         }
+         else if (expect('\"'))
+             return false;
+ 
+-        // #todo: Handle UTF-8 sequences.
+         return s((c = peek()) >= 0) && advance();
+     }
+ 
+-    bool accept_escape(int& c)
++    bool accept_escape(int& c, bool& code_point)
+     {
+         if (accept('\"')) { c = '\"'; return true; }
+         if (accept('\\')) { c = '\\'; return true; }
+@@ -562,6 +582,20 @@ private:
+                 return false;
+ 
+             c = static_cast<int>(v);
++            code_point = true;
++            // A high surrogate and the low one after it are one code point beyond the basic plane.
++            if (c >= 0xD800 && c <= 0xDBFF)
++            {
++                const char* before = m_Cursor;
++                string low;
++                int second = -1;
++                if (accept('\\') && accept('u') && accept_hex(low) && accept_hex(low) && accept_hex(low) && accept_hex(low))
++                    second = static_cast<int>(std::strtol(low.c_str(), nullptr, 16));
++                if (second >= 0xDC00 && second <= 0xDFFF)
++                    c = 0x10000 + ((c - 0xD800) << 10) + (second - 0xDC00);
++                else
++                    m_Cursor = before;   // not a pair: the next escape stands on its own
++            }
+             return true;
+         }
+ 
+@@ -791,7 +825,7 @@ private:
+     int peek() const
+     {
+         if (!eof())
+-            return *m_Cursor;
++            return static_cast<unsigned char>(*m_Cursor);
+         else
+             return -1;
+     }

@@ -559,3 +559,15 @@ TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an i
     CHECK(ui.captured.find("w9") != std::string::npos);                   // the intervened run's words are shown
     CHECK(ui.errors == 0);
 }
+
+TEST_CASE("replies with UTF-8 text and unicode escapes parse to UTF-8 strings") {
+    // Raw UTF-8 bytes (the script sends ensure_ascii=False), escapes in and beyond the basic plane, and a
+    // lone high surrogate followed by an ordinary escape.
+    const Json reply = Json::parse(
+        "{\"a\":\"caf\xC3\xA9 \xE5\x9C\xB0\",\"b\":\"\\u00e9\\u5730\",\"c\":\"\\ud83d\\ude00\",\"d\":\"\\ud83dx\\n\"}");
+    REQUIRE(reply.is_object());
+    CHECK(reply["a"].get<std::string>() == "caf\xC3\xA9 \xE5\x9C\xB0");
+    CHECK(reply["b"].get<std::string>() == "\xC3\xA9\xE5\x9C\xB0");
+    CHECK(reply["c"].get<std::string>() == "\xF0\x9F\x98\x80");
+    CHECK(reply["d"].get<std::string>() == "\xED\xA0\xBDx\n");
+}

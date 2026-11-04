@@ -220,9 +220,49 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/implot3d EXCLUDE_FRO
 list(APPEND CALIPER_DEPENDENCY_LIBS implot3d)
 message(STATUS "    ✓ ImPlot3D configured")
 
+# Apply third_party/patches/<name>/*.patch to the submodule at third_party/<name>, idempotently and
+# atomically: the whole set is reverse-checked first (already applied, as in a dev checkout or on a
+# re-configure: nothing to do), else forward-checked and applied together.
+function(caliper_apply_patches name base)
+    file(GLOB _patches "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/${name}/*.patch")
+    list(SORT _patches)
+    if(NOT _patches)
+        return()
+    endif()
+    set(_reversed ${_patches})
+    list(REVERSE _reversed)
+    execute_process(
+        COMMAND git -C ${THIRD_PARTY_DIR}/${name} apply --reverse --check ${_reversed}
+        RESULT_VARIABLE _applied OUTPUT_QUIET ERROR_QUIET)
+    if(_applied EQUAL 0)
+        message(STATUS "    ${name} patches already applied — skipping")
+        return()
+    endif()
+    execute_process(
+        COMMAND git -C ${THIRD_PARTY_DIR}/${name} apply --check ${_patches}
+        RESULT_VARIABLE _clean OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _clean EQUAL 0)
+        message(FATAL_ERROR
+            "  ${name} patches neither apply cleanly nor are already applied.\n"
+            "  The submodule is likely not at the expected upstream base (${base}).\n"
+            "  Reset it (git -C third_party/${name} checkout ${base}) or "
+            "regenerate the patches — see third_party/patches/${name}/README.md.")
+    endif()
+    execute_process(
+        COMMAND git -C ${THIRD_PARTY_DIR}/${name} apply ${_patches}
+        RESULT_VARIABLE _apply)
+    if(NOT _apply EQUAL 0)
+        message(FATAL_ERROR "  Failed to apply ${name} patches.")
+    endif()
+    list(LENGTH _patches _count)
+    message(STATUS "    applied ${_count} local ${name} patch(es)")
+endfunction()
+
 # --- imgui-node-editor (Blueprints-style node graph editor) ---
 message(STATUS "  Configuring imgui-node-editor...")
 set(IMGUI_NODE_EDITOR_SRC_DIR "${THIRD_PARTY_DIR}/imgui-node-editor")
+# crude_json reads UTF-8 and \u escapes (third_party/patches/imgui-node-editor/README.md).
+caliper_apply_patches(imgui-node-editor 55a7dbf)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui-node-editor EXCLUDE_FROM_ALL)
 list(APPEND CALIPER_DEPENDENCY_LIBS imgui-node-editor)
 message(STATUS "    ✓ imgui-node-editor configured")
@@ -384,38 +424,7 @@ endif()
 # the whole set is reverse-checked first (already-applied dev checkout or a
 # re-configure -> no-op), else forward-checked and applied together (both
 # patches touch llama-model.cpp, so they must land as one transaction).
-file(GLOB _llama_patches "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/llama.cpp/*.patch")
-list(SORT _llama_patches)
-if(_llama_patches)
-    set(_llama_patches_rev ${_llama_patches})
-    list(REVERSE _llama_patches_rev)
-    execute_process(
-        COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply --reverse --check ${_llama_patches_rev}
-        RESULT_VARIABLE _llama_patched OUTPUT_QUIET ERROR_QUIET)
-    if(_llama_patched EQUAL 0)
-        message(STATUS "    llama.cpp patches already applied — skipping")
-    else()
-        execute_process(
-            COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply --check ${_llama_patches}
-            RESULT_VARIABLE _llama_clean OUTPUT_QUIET ERROR_QUIET)
-        if(NOT _llama_clean EQUAL 0)
-            message(FATAL_ERROR
-                "  llama.cpp patches neither apply cleanly nor are already applied.\n"
-                "  The submodule is likely not at the expected upstream base "
-                "(a4107133).\n"
-                "  Reset it (git -C third_party/llama.cpp checkout a4107133) or "
-                "regenerate the patches — see third_party/patches/llama.cpp/README.md.")
-        endif()
-        execute_process(
-            COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply ${_llama_patches}
-            RESULT_VARIABLE _llama_apply)
-        if(NOT _llama_apply EQUAL 0)
-            message(FATAL_ERROR "  Failed to apply llama.cpp patches.")
-        endif()
-        list(LENGTH _llama_patches _llama_npatch)
-        message(STATUS "    applied ${_llama_npatch} local llama.cpp patch(es)")
-    endif()
-endif()
+caliper_apply_patches(llama.cpp a4107133)
 
 add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
