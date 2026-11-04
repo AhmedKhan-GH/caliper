@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Run the local Qwen text model behind Caliper's optional request channel.
+
+Start from the repository with PYTHONPATH=python .venv/bin/python
+examples/python/qwen_inspector.py, then attach to this process in Caliper (F4).
+The model folder is read-only. All edits and undo data live only in this process.
+"""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass
+import fcntl
+import math
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import sys
+
+import numpy as np
+
+DEFAULT_MODEL = Path.home() / "PycharmProjects/weight-space/models/Qwen3.5-0.8B"
+CAPABILITIES = ["generate", "list_tensors", "show_tensor", "read_weight",
+                "edit_weight", "revert_tensor", "list_edits"]
+MAX_PROMPT_TOKENS = 2048
+MAX_NEW_TOKENS = 1024
+MAX_UNDO_BYTES = 64 * 1024 * 1024
+MAX_UNDO_EDITS = 512
+
+
+class Cancelled(Exception):
+    pass
+
+
+def integer(request, name, default=None, *, low=0, high=None):
+    value = request.get(name, default)
+    if type(value) is not int or value < low or (high is not None and value > high):
+        raise ValueError(f"{name} must be an integer between {low} and {high}")
+    return value
+
+
+def number(request, name, default=None, *, low=None, high=None):
+    value = request.get(name, default)
+    if (type(value) not in (float, int) or not math.isfinite(value)
+            or (low is not None and value < low) or (high is not None and value > high)):
+        raise ValueError(f"{name} must be a finite number between {low} and {high}")
+    return float(value)
+
+
+def matrix_shape(shape):
+    """Vectors are N x 1; higher ranks flatten all but the last dimension."""
+    if not shape:
+        return 1, 1
+    if len(shape) == 1:
+        return shape[0], 1
+    return math.prod(shape[:-1]), shape[-1]
+
+
+@dataclass
+class Undo:
+    name: str
+    index: tuple
+    before: np.ndarray
+
+
+class Inspector:
+    def __init__(self, path: Path):
+        # Imports and all MLX evaluation stay on serve()'s thread. Socket I/O
+        # never touches the model, including cancellation and disconnect.
+        import mlx.core as mx
+        from mlx.utils import tree_flatten
+        from mlx_lm import load
+
+        if not path.is_dir() or not (path / "config.json").is_file():
+            raise FileNotFoundError(f"local model folder not found: {path}")
+        mx.set_cache_limit(128 * 1024 * 1024)
+        mx.set_memory_limit(3 * 1024 * 1024 * 1024)
+        self.mx = mx
+        self.model, self.tokenizer = load(str(path), tokenizer_config={"local_files_only": True})
+        self.tokenizer.add_eos_token("<|im_end|>")
+        self.weights = dict(tree_flatten(self.model.parameters()))
+        self.model_name = path.name
+        self.undo: list[Undo] = []
+        self.undo_bytes = 0
+        self.history: list[dict] = []
+        self.next_edit = 1
+        self.tied = bool(self.model.language_model.args.tie_word_embeddings)
+
+    def _weight(self, request):
+        name = request.get("name")
+        if not isinstance(name, str) or name not in self.weights:
+            raise ValueError("unknown tensor name")
+        return name, self.weights[name]
+
+    def _edits(self, name=None):
+        return [edit for edit in self.history if name is None or edit["name"] == name]
+
+    def _record(self, name, description):
+        self.history.append(dict(id=self.next_edit, name=name, description=description))
+        self.next_edit += 1
+        # Undo patches have their own limits. History is a bounded recent list.
+        if len(self.history) > 512:
+            del self.history[:-512]
+
+    def _replace(self, name, array):
+        self.mx.eval(array)
+        self.model.load_weights([(name, array)], strict=False)
+        self.weights[name] = array
+
+    def __call__(self, request, emit, cancelled):
+        op = request["op"]
+        if op == "generate":
+            return self.generate(request, emit, cancelled)
+        if op == "list_tensors":
+            tensors = []
+            for name, weight in self.weights.items():
+                layer = re.search(r"\.layers\.(\d+)\.", name)
+                group = f"Layer {int(layer[1]):02d}" if layer else "Model"
+                rows, cols = matrix_shape(weight.shape)
+                tensors.append(dict(name=name, group=group, shape=list(weight.shape),
+                                    dtype=str(weight.dtype).removeprefix("mlx.core."),
+                                    size=weight.size, bytes=weight.nbytes, rows=rows, cols=cols,
+                                    tied=self.tied and name.endswith("embed_tokens.weight")))
+            return dict(model=self.model_name, tensors=tensors,
+                        matrix_layout="Vectors: N x 1. Higher ranks: flatten all but last dimension.")
+        if op == "list_edits":
+            return dict(edits=self._edits(), undo_bytes=self.undo_bytes)
+        if op == "show_tensor":
+            name, weight = self._weight(request)
+            rows, cols = matrix_shape(weight.shape)
+            row_step, col_step = max(1, math.ceil(rows / 128)), max(1, math.ceil(cols / 128))
+            row_indices = list(range(0, rows, row_step))
+            col_indices = list(range(0, cols, col_step))
+            # Slice on MLX first: the 248320 x 1024 embedding is never copied
+            # wholesale to float32/NumPy just to draw a small overview.
+            sample = np.array(weight.reshape(rows, cols)[::row_step, ::col_step].astype(self.mx.float32))
+            if not np.isfinite(sample).all():
+                raise ValueError("sample contains non-finite weights")
+            return dict(name=name, rows=rows, cols=cols,
+                        sample_rows=len(row_indices), sample_cols=len(col_indices),
+                        values=sample.reshape(-1).tolist(), row_indices=row_indices,
+                        col_indices=col_indices, min=float(sample.min()), max=float(sample.max()),
+                        edits=self._edits(name))
+        if op == "read_weight":
+            name, weight = self._weight(request)
+            rows, cols = matrix_shape(weight.shape)
+            row = integer(request, "row", high=rows - 1)
+            col = integer(request, "col", high=cols - 1)
+            return dict(name=name, row=row, col=col,
+                        value=float(weight.reshape(rows, cols)[row, col].item()))
+        if op == "edit_weight":
+            return self.edit(request)
+        if op == "revert_tensor":
+            return self.revert(request)
+        raise ValueError(f"unknown operation: {op}")
+
+    def edit(self, request):
+        name, weight = self._weight(request)
+        rows, cols = matrix_shape(weight.shape)
+        action = request.get("action")
+        if action not in ("set", "zero_row", "scale_row", "zero_column", "scale_column"):
+            raise ValueError("unknown edit action")
+        row = integer(request, "row", 0, high=rows - 1)
+        col = integer(request, "col", 0, high=cols - 1)
+        value = number(request, "value", 0.0)
+        matrix = weight.reshape(rows, cols)
+        if action == "set":
+            index = (row, col)
+            replacement = self.mx.array(value, dtype=weight.dtype)
+            description = f"Set ({row}, {col}) to {value:g}"
+        elif action.endswith("row"):
+            index = (row, slice(None))
+            replacement = matrix[index] * value if action == "scale_row" else self.mx.zeros_like(matrix[index])
+            description = f"Scale row {row} by {value:g}" if action == "scale_row" else f"Zero row {row}"
+        else:
+            index = (slice(None), col)
+            replacement = matrix[index] * value if action == "scale_column" else self.mx.zeros_like(matrix[index])
+            description = f"Scale column {col} by {value:g}" if action == "scale_column" else f"Zero column {col}"
+        # Check the realized dtype, so a finite input cannot overflow bfloat16
+        # and silently poison subsequent generation.
+        replacement = replacement.astype(weight.dtype)
+        if not bool(self.mx.all(self.mx.isfinite(replacement)).item()):
+            raise ValueError("edit would produce non-finite weights")
+        before = np.array(matrix[index].astype(self.mx.float32))
+        if self.undo_bytes + before.nbytes > MAX_UNDO_BYTES or len(self.undo) >= MAX_UNDO_EDITS:
+            raise ValueError("undo limit reached; revert an edited tensor before making more edits")
+        # MLX assignment replaces this reshaped array handle; it does not
+        # mutate the original weight handle retained by the model.
+        matrix[index] = replacement
+        updated = matrix.reshape(weight.shape)
+        self._replace(name, updated)
+        self.undo.append(Undo(name, index, before))
+        self.undo_bytes += before.nbytes
+        actual = float(updated.reshape(rows, cols)[row, col].item())
+        if action == "set":
+            description = f"Set ({row}, {col}) to {actual:g}"
+        self._record(name, description)
+        return dict(name=name, value=actual, edits=self._edits(name))
+
+    def revert(self, request):
+        name, weight = self._weight(request)
+        patches = [patch for patch in self.undo if patch.name == name]
+        rows, cols = matrix_shape(weight.shape)
+        # Restore in reverse order: intersecting row/column/cell edits recover
+        # the originally loaded tensor exactly, including loader sanitization.
+        for patch in reversed(patches):
+            matrix = self.weights[name].reshape(rows, cols)
+            matrix[patch.index] = self.mx.array(patch.before, dtype=weight.dtype)
+            self._replace(name, matrix.reshape(weight.shape))
+        self.undo = [patch for patch in self.undo if patch.name != name]
+        self.undo_bytes -= sum(patch.before.nbytes for patch in patches)
+        self._record(name, "Reverted to original")
+        return dict(name=name, edits=self._edits(name))
+
+    def generate(self, request, emit, cancelled):
+        from mlx_lm import stream_generate
+        from mlx_lm.sample_utils import make_sampler
+
+        prompt = request.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 32768:
+            raise ValueError("prompt must contain 1 to 32768 characters")
+        max_tokens = integer(request, "max_new_tokens", 128, low=1, high=MAX_NEW_TOKENS)
+        temperature = number(request, "temperature", 0.7, low=0, high=2)
+        top_p = number(request, "top_p", 0.9, low=0, high=1)
+        top_k = integer(request, "top_k", 20, high=1000)
+        thinking = request.get("thinking", False)
+        if type(thinking) is not bool:
+            raise ValueError("thinking must be true or false")
+        tokens = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}], tokenize=True,
+            add_generation_prompt=True, enable_thinking=thinking)
+        if len(tokens) > MAX_PROMPT_TOKENS:
+            raise ValueError(f"prompt exceeds {MAX_PROMPT_TOKENS} tokens including chat template")
+        if cancelled.is_set():
+            return dict(tokens=0, tokens_per_second=0.0, cancelled=True)
+
+        def progress(done, total):
+            if cancelled.is_set():
+                raise Cancelled()
+
+        count, tps, finish = 0, 0.0, "cancelled"
+        # A new generator owns a fresh cache every request, so changed weights
+        # take effect on both prompt processing and decoding immediately.
+        generated = stream_generate(
+            self.model, self.tokenizer, tokens, max_tokens=max_tokens,
+            sampler=make_sampler(temp=temperature, top_p=top_p, top_k=top_k),
+            prefill_step_size=128, prompt_progress_callback=progress)
+        try:
+            for response in generated:
+                if cancelled.is_set():
+                    break
+                count = response.generation_tokens
+                tps = response.generation_tps
+                finish = response.finish_reason or "cancelled"
+                emit(dict(text=response.text, tokens=count, tokens_per_second=tps))
+        except Cancelled:
+            pass
+        finally:
+            # Closing stream_generate synchronizes its MLX stream and drops
+            # its private cache before a weight edit can be admitted.
+            generated.close()
+            self.mx.clear_cache()
+        return dict(tokens=count, tokens_per_second=tps, cancelled=cancelled.is_set(),
+                    finish_reason=finish, peak_memory_bytes=self.mx.get_peak_memory())
+
+
+
+@contextmanager
+def model_lease(lock_path=None):
+    """Only one inspector model per user. This does not inspect other ML jobs."""
+    if lock_path is None:
+        from caliper.requests import socket_path
+        lock_path = Path(socket_path("qwen-inspector")).with_suffix(".lock")
+    else:
+        lock_path = Path(lock_path)
+    directory = lock_path.parent
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise PermissionError("inspector lock directory must be owned by this user with mode 0700")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise PermissionError("inspector lock must be a private file owned by this user")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("another inspector holds the model; attach to that host or use --connect for checks") from None
+        yield
+    finally:
+        os.close(fd)
+        # Keep the empty file: unlinking a lock introduces an inode race.
+
+
+def run(args):
+    from caliper.live import SessionTransport
+
+    print(f"Loading {args.model.expanduser()} with mlx-lm", flush=True)
+    inspector = Inspector(args.model.expanduser())
+    with SessionTransport.open(script_name="qwen_inspector.py", session=args.session,
+                               data_dir=args.data_dir) as session:
+        with session.request_server(CAPABILITIES) as server:
+            def shutdown(signum, frame):
+                # Unwind the generator and both contexts on the model thread.
+                raise KeyboardInterrupt
+            signal.signal(signal.SIGTERM, shutdown)
+            print(f"Ready: pid={os.getpid()} session={session.session}", flush=True)
+            print(f"Socket: {server.path}", flush=True)
+            print("Caliper: F4, select qwen_inspector.py, Attach", flush=True)
+            try:
+                server.serve(inspector)
+            except KeyboardInterrupt:
+                pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--session", help="optional live session token (1 to 20 simple characters)")
+    parser.add_argument("--data-dir", help="Caliper session discovery directory")
+    args = parser.parse_args()
+
+    try:
+        with model_lease():
+            run(args)
+    except Exception as exc:
+        print(f"Inspector failed: {exc}", file=sys.stderr, flush=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

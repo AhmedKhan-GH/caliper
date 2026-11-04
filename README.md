@@ -24,6 +24,15 @@ cmake --build --preset release
 
 ---
 
+## Inspect a local language model
+
+The draft Qwen inspector adds prompt generation, a parameter tree, sampled
+heatmaps, and in-memory weight editing to the live session page. See
+[Run the Qwen inspector](docs/live-requests.md) for setup, controls, limits,
+and the request protocol for other scripts.
+
+---
+
 ## Prerequisites
 
 ### All Platforms

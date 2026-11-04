@@ -16,6 +16,7 @@ classifiers = [
 [project.optional-dependencies]
 torch = ["torch"]
 test = ["pytest", "torch"]
+inspector = ["mlx-lm==0.32.2"]
 
 [tool.scikit-build]
 minimum-version = "0.10"
