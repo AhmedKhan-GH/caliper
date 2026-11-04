@@ -265,6 +265,33 @@ def test_large_sample_reply_fits_the_request_frame_budget():
     assert len(encode(dict(id=1, done=True, result=result))) < MAX_MESSAGE
 
 
+def test_tensor_values_arrive_whole_in_frames_under_the_budget(monkeypatch):
+    import base64
+    from caliper.requests import MAX_MESSAGE, encode
+    weight = array(np.arange(-30, 30, dtype=np.float32).reshape(12, 5) / 7)
+    host = inspector({"weight": weight})
+    monkeypatch.setattr(example, "MAX_VALUE_BYTES", 5 * 4 * 5)       # five rows per reply
+    rows, row = [], 0
+    while row < 12:
+        reply = host(dict(op="tensor_values", name="weight", row=row), lambda _: None, threading.Event())
+        assert (reply["row"], reply["rows"], reply["cols"], reply["encoding"]) == (row, 12, 5, "float32")
+        rows.append(np.frombuffer(base64.b64decode(reply["data"]), "<f4").reshape(reply["count"], 5))
+        row += reply["count"]
+    assert [len(block) for block in rows] == [5, 5, 2]
+    assert np.array_equal(np.concatenate(rows), np.asarray(weight))
+    monkeypatch.undo()
+    wide = array(np.full((600, 1024), -3.4e38, dtype=np.float32))
+    reply = inspector({"weight": wide})(dict(op="tensor_values", name="weight"), lambda _: None, threading.Event())
+    assert reply["count"] == 512 and len(encode(dict(id=1, done=True, result=reply))) < MAX_MESSAGE
+
+
+@pytest.mark.parametrize("arguments", [dict(row=12), dict(row=-1), dict(row=1.5)])
+def test_invalid_value_requests_are_refused(arguments):
+    host = inspector({"weight": array(np.zeros((12, 5), dtype=np.float32))})
+    with pytest.raises(ValueError):
+        host(dict(op="tensor_values", name="weight", **arguments), lambda _: None, threading.Event())
+
+
 def test_layer_roles_tied_alias_and_active_edit_revisions():
     host = inspector({"language_model.model.embed_tokens.weight": array([[1., 2.], [3., 4.]]),
                       "language_model.model.layers.0.mlp.down_proj.weight": array([[1., 2.]]),

@@ -8,6 +8,7 @@ The model folder is read-only. All edits and undo data live only in this process
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
@@ -24,7 +25,7 @@ import numpy as np
 
 DEFAULT_MODEL = Path.home() / "PycharmProjects/weight-space/models/Qwen3.5-0.8B"
 CAPABILITIES = ["generate", "list_tensors", "show_tensor", "read_weight",
-                "edit_weight", "revert_tensor", "list_edits", "tensor_regions"]
+                "edit_weight", "revert_tensor", "list_edits", "tensor_regions", "tensor_values"]
 MAX_PROMPT_TOKENS = 2048
 MAX_NEW_TOKENS = 1024
 MAX_UNDO_BYTES = 64 * 1024 * 1024
@@ -33,6 +34,8 @@ MAX_SAMPLE_SIDE = 2048
 MAX_SAMPLES = 131072
 # Cells read per step while averaging a region (64 MB as float32).
 CHUNK_CELLS = 1 << 24
+# Raw bytes per tensor_values reply; base64 keeps it under the 4 MB request frame.
+MAX_VALUE_BYTES = 2 * 1024 * 1024
 
 
 class Cancelled(Exception):
@@ -255,6 +258,8 @@ class Inspector:
                         region=region, exact=(len(row_indices) == region["rows"] and
                                               len(col_indices) == region["cols"]),
                         edits=self._edits(name), **self._status(name))
+        if op == "tensor_values":
+            return self.values(request)
         if op == "read_weight":
             name, weight = self._weight(request)
             rows, cols = matrix_shape(weight.shape)
@@ -268,6 +273,33 @@ class Inspector:
         if op == "revert_tensor":
             return self.revert(request)
         raise ValueError(f"unknown operation: {op}")
+
+    def values(self, request):
+        """Every value of whole rows from `row` on, as many as fit in one reply.
+
+        The app fetches a tensor this way once and then zooms and pans it on its own, with no request per
+        view. bfloat16 goes as its raw bits, so every value arrives exactly; other types go as float32.
+        """
+        name, weight = self._weight(request)
+        rows, cols = matrix_shape(weight.shape)
+        row = integer(request, "row", 0, high=rows - 1)
+        bfloat16 = weight.dtype == getattr(self.mx, "bfloat16", None)
+        itemsize = 2 if bfloat16 else 4
+        if cols * itemsize > MAX_VALUE_BYTES:
+            raise ValueError("tensor rows are too wide to send whole")
+        count = min(rows - row, MAX_VALUE_BYTES // (cols * itemsize))
+        block = weight.reshape(rows, cols)[row:row + count]
+        if bfloat16:
+            data = np.array(block.view(self.mx.uint16)).astype("<u2")
+            finite = ((data & 0x7F80) != 0x7F80).all()      # an all-ones exponent is inf or NaN
+        else:
+            data = np.array(block.astype(self.mx.float32)).astype("<f4")
+            finite = np.isfinite(data).all()
+        if not finite:
+            raise ValueError("tensor contains non-finite weights")
+        return dict(name=name, rows=rows, cols=cols, row=row, count=count,
+                    encoding="bfloat16" if bfloat16 else "float32",
+                    data=base64.b64encode(data.tobytes()).decode("ascii"), **self._status(name))
 
     def edit(self, request):
         name, weight = self._weight(request)
