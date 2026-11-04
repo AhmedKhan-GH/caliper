@@ -177,7 +177,7 @@ PROTECTED = 10          # the clean run's top outputs that J-space ablation spar
 def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, emit, cancelled, eos):
     """Run tokens through the model and generate, emitting the lens grid as it goes.
 
-    Every event covers positions first .. first + count - 1: their token ids, and for each position and source
+    Every event covers positions first .. first + count - 1 (prompt is the prompt's length): their token ids, and for each position and source
     layer the top k tokens of the J-lens (jlens, jprob) and of the plain logit lens (logit, lprob), then the
     model's own top k at that position (output, oprob). Ids are flat, position-major, then layer, then rank.
     words maps every id not yet sent in this trace to its text.
@@ -201,7 +201,7 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
         out_ids, out_p = js.top(logits.astype(mx.float32), k)
         jl, jp, ll, lp = (np.array(stack(x)) for x in (jl, jp, ll, lp))
         out_ids, out_p = np.array(out_ids), np.array(out_p)
-        emit(dict(first=first, count=len(ids), layers=layers, k=k, tokens=ids,
+        emit(dict(first=first, count=len(ids), prompt=len(tokens), layers=layers, k=k, tokens=ids,
                   jlens=jl.reshape(-1).tolist(), jprob=np.round(jp, 4).reshape(-1).tolist(),
                   logit=ll.reshape(-1).tolist(), lprob=np.round(lp, 4).reshape(-1).tolist(),
                   output=out_ids.reshape(-1).tolist(), oprob=np.round(out_p, 4).reshape(-1).tolist(),

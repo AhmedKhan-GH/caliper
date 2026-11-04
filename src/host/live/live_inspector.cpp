@@ -1,6 +1,7 @@
 #include "live/live_inspector.h"
 #include "live/live_requests.h"
 #include "live/live_model3d.h"
+#include "live/live_trace.h"
 #include "live/tensor_geometry.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"
@@ -143,6 +144,7 @@ constexpr const char* kInferencePane = "Inference###caliper.inspector.inference"
 constexpr const char* kModelPane = "Model###caliper.inspector.model";
 constexpr const char* kModel3DPane = "Model 3D###caliper.inspector.model3d";
 constexpr const char* kTensorPane = "Tensor###caliper.inspector.tensor";
+constexpr const char* kTracePane = "Trace###caliper.inspector.trace";
 
 // A pane: a window whose pane_header strip replaces the title bar, bronze while
 // the pane has focus. Its tables and output scroll inside it, never the pane.
@@ -201,8 +203,9 @@ struct Inspector::Impl {
     int next_id = 1, hello_id = 0, stop_id = 0;
     Pending active;
     bool want_list = false;
-    std::string queued_op;
+    std::string queued_op, queued_purpose;
     Object queued_fields;
+    TracePane trace_pane;
     Model3D model3d;
     caliper_host::HostRenderer* renderer = nullptr;
     Sample detail, overview;
@@ -300,11 +303,13 @@ struct Inspector::Impl {
         if (purpose.empty()) error.clear();
         return true;
     }
-    bool send(const char* op, Object fields = {}) {
+    bool send(const char* op, Object fields = {}, const std::string& purpose = {}) {
         if (!can_control() || !supports(op)) return false;
-        if (active.id) { queued_op = op; queued_fields = std::move(fields); return true; }
-        return issue(op, std::move(fields));
+        if (active.id) { queued_op = op; queued_fields = std::move(fields); queued_purpose = purpose; return true; }
+        return issue(op, std::move(fields), purpose);
     }
+    // A trace request's run: the intact one, or the one with interventions.
+    int trace_run(const Pending& request) const { return request.purpose == "intervened" ? 1 : 0; }
     void request_values(const Tensor& t) {
         if (incoming.name != t.name || incoming.rows != t.rows || incoming.cols != t.cols) {
             incoming = {}; incoming.name = t.name; incoming.rows = t.rows; incoming.cols = t.cols;
@@ -349,7 +354,7 @@ struct Inspector::Impl {
         return issue("show_tensor", std::move(fields), purpose, name, wanted, size);
     }
     void stop() {
-        if (!channel.connected() || active.op != "generate" || stop_requested) return;
+        if (!channel.connected() || (active.op != "generate" && active.op != "trace") || stop_requested) return;
         const int id = next_id++;
         if (channel.send(Json(Object{{"id", static_cast<double>(id)}, {"op", "stop"}}).dump())) {
             stop_id = id;
@@ -511,7 +516,10 @@ struct Inspector::Impl {
         }
         if (id != active.id || id == 0) return; // never apply a delayed reply to a later selection
         if (!boolean(field(reply, "done"))) {
-            if (active.op == "generate") {
+            if (active.op == "trace") {
+                std::string why;
+                if (!trace_pane.event(trace_run(active), field(reply, "event"), why)) { stop(); error = why; }
+            } else if (active.op == "generate") {
                 const Json& event = field(reply, "event");
                 const std::string part = string(field(event, "text"));
                 if (output.size() + part.size() > 1024 * 1024) {
@@ -536,6 +544,8 @@ struct Inspector::Impl {
             }
             error = string(field(reply, "error"));
             if (op == "generate") { generation_status = "Generation failed"; stop_requested = false; }
+            if (op == "trace") { trace_pane.failed(trace_run(completed), error); stop_requested = false; }
+            if (op == "tokenize") { std::string ignored; trace_pane.tokenized(Json(), ignored); }
             return;
         }
         const Json& result = field(reply, "result");
@@ -543,6 +553,12 @@ struct Inspector::Impl {
             metrics(result);
             generation_status = boolean(field(result, "cancelled")) ? "Stopped" : "Complete";
             stop_requested = false;
+        } else if (op == "trace") {
+            trace_pane.finished(trace_run(completed), result);
+            stop_requested = false;
+        } else if (op == "tokenize") {
+            std::string why;
+            if (!trace_pane.tokenized(result, why)) error = why;
         } else if (op == "list_tensors") {
             if (!read_tensors(result)) protocol_error("Invalid tensor list from script");
         } else if (op == "show_tensor") {
@@ -618,9 +634,10 @@ struct Inspector::Impl {
             else if (visible && error.empty()) error = alive ? channel.error() : "Session ended";
             if (active.purpose == "thumbnail") model3d.thumbnail_failed(active.name);
             if (active.op == "tensor_values") { incoming = {}; values_needed = true; }
+            if (active.op == "trace") trace_pane.failed(trace_run(active), "Connection ended");
             active = {};
             stop_requested = false;
-            want_list = false; queued_op.clear(); queued_fields.clear();
+            want_list = false; queued_op.clear(); queued_fields.clear(); queued_purpose.clear();
             retry_at = now + 1.0;
         }
         if (!idle()) return;
@@ -628,8 +645,10 @@ struct Inspector::Impl {
         const bool whole = shown && uses_values(*shown);
         if (!whole) values_needed = false;
         if (!queued_op.empty()) {
-            const std::string op = std::move(queued_op); Object fields = std::move(queued_fields);
-            queued_op.clear(); queued_fields.clear(); issue(op.c_str(), std::move(fields));
+            const std::string op = std::move(queued_op), purpose = std::move(queued_purpose);
+            Object fields = std::move(queued_fields);
+            queued_op.clear(); queued_fields.clear(); queued_purpose.clear();
+            issue(op.c_str(), std::move(fields), purpose);
         } else if (want_list) { want_list = false; issue("list_tensors"); }
         else if (whole) { if (values_needed) request_values(*shown); }
         else if (tensor() && region_ready && detail_needed && now >= detail_due) {
@@ -670,6 +689,7 @@ struct Inspector::Impl {
         if (!alive) return "session ended";
         if (!ready) return "connecting";
         if (active.op == "generate") return "generating";
+        if (active.op == "trace") return "tracing";
         if (!active.op.empty() && !background()) return "working";   // thumbnails load quietly
         return "ready";
     }
@@ -1228,6 +1248,21 @@ struct Inspector::Impl {
         if (supports("read_weight") && send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}}))
             focus_after_read = true;
     }
+    // The Trace pane shares Model 3D's place in the dock; each has a switch to the other.
+    void trace_view(float x, float y, float w, float h) {
+        place_window(kTracePane, x, y, w, h);
+        if (begin_pane(kTracePane, "Trace", "Jacobian lens")) {
+            if (sternbild::word_button("Model 3D")) ImGui::SetWindowFocus(kModel3DPane);
+            const auto ask = trace_pane.draw(can_control() && queued_op.empty(), active.op == "trace");
+            if (ask.op == "stop") stop();
+            else if (ask.op == "trace") {
+                if (send("trace", ask.fields, ask.run == 1 ? "intervened" : "intact")) trace_pane.started(ask.run);
+            } else if (ask.op == "tokenize" && !send("tokenize", ask.fields)) {
+                std::string ignored; trace_pane.tokenized(Json(), ignored);
+            }
+        }
+        ImGui::End();
+    }
     void tensor_view(float x, float y, float w, float h) {
         place_window(kTensorPane, x, y, w, h);
         const Tensor* t = tensor();
@@ -1407,6 +1442,7 @@ struct Inspector::Impl {
                 ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, &right, &centre);
                 ImGui::DockBuilderSplitNode(centre, ImGuiDir_Up, 0.50f, &top, &bottom);
                 ImGui::DockBuilderDockWindow(kModelPane, left);
+                ImGui::DockBuilderDockWindow(kTracePane, top);
                 ImGui::DockBuilderDockWindow(kModel3DPane, top);
                 ImGui::DockBuilderDockWindow(kTensorPane, bottom);
                 ImGui::DockBuilderDockWindow(kInferencePane, right);
@@ -1440,7 +1476,11 @@ struct Inspector::Impl {
                 ImGui::SetWindowPos("Model 3D###caliper.inspector.model3d", point(r.x, r.y));
                 ImGui::SetWindowSize("Model 3D###caliper.inspector.model3d", point(r.width, r.height));
             }
+            model3d.offer_trace = supports("trace");
             const std::string clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
+            if (model3d.trace_clicked) { model3d.trace_clicked = false; ImGui::SetWindowFocus(kTracePane); }
+            if (supports("trace"))
+                draw_window([&](float a,float b,float c,float d) { trace_view(a,b,c,d); }, windows.model3d);
             if (!clicked.empty()) {
                 select(clicked, true);
                 ImGui::SetWindowCollapsed("Tensor###caliper.inspector.tensor", false);

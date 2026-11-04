@@ -46,6 +46,8 @@ public:
     void thumbnail_failed(const std::string& name);
     // Returns the tensor selected by a click, or an empty string. Null renderer
     // keeps the UI testable and explicitly reports missing renderer support.
+    // When offer_trace is set the toolbar shows a Trace switch; a click sets trace_clicked.
+    bool offer_trace = false, trace_clicked = false;
     std::string draw(caliper_host::HostRenderer* renderer, float x, float y,
                      float width, float height, const std::string& selected);
     // The camera and exact drawing/picking viewport, available without a GPU.

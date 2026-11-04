@@ -200,6 +200,7 @@ struct Model3D::Impl {
     bool failed = false, imports_failed = false;
     // The axis navigator: an eased swing to an axis view, and whether a press on it became a drag.
     bool snapping = false, axes_dragged = false;
+    bool offer_trace = false, trace_clicked = false;
     double snap_azimuth = 0, snap_elevation = 0;
     std::string selected, output_label = "Output (tied)";
 
@@ -539,6 +540,10 @@ struct Model3D::Impl {
             focused = selected; framing = Framing::Focus; framing_pending = true;
         }
         ImGui::EndDisabled();
+        if (offer_trace) {
+            ImGui::SameLine();
+            if (sternbild::word_button("Trace")) trace_clicked = true;
+        }
         {
             const char* legend = "Bold frame: full attention   Bronze: selected or edited   Left drag rotates, right drag moves, wheel zooms";
             ImGui::SameLine();
@@ -837,7 +842,10 @@ void Model3D::thumbnail_failed(const std::string& name) {
 }
 std::string Model3D::draw(HostRenderer* renderer, float x, float y, float width, float height,
                          const std::string& selected) {
-    return impl_->draw(renderer, x, y, width, height, selected);
+    impl_->offer_trace = offer_trace;
+    std::string clicked = impl_->draw(renderer, x, y, width, height, selected);
+    if (impl_->trace_clicked) { trace_clicked = true; impl_->trace_clicked = false; }
+    return clicked;
 }
 model3d::ViewState Model3D::view_state() const { return {impl_->camera, impl_->viewport, impl_->label_column}; }
 

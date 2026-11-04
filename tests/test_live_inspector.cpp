@@ -467,3 +467,95 @@ TEST_CASE("inspector fetches whole values once, then zooms and selects without t
     CHECK(ui.captured.find("Value not read") == std::string::npos);
     CHECK(ui.errors == 0);
 }
+
+#include "live/live_trace.h"
+
+namespace {
+constexpr const char* trace_window = "Trace###caliper.inspector.trace";
+// One trace event: positions first.. with tokens, two layers and two words per cell. Words: id n is "w<n>".
+Json trace_event(int first, std::vector<int> tokens, int prompt, int top = 7) {
+    Array ids, jlens, logit, output, probs, cell_probs, out_probs;
+    Object words;
+    for (int t : tokens) { ids.push_back(static_cast<double>(t)); words[std::to_string(t)] = " w" + std::to_string(t); }
+    for (size_t p = 0; p < tokens.size(); ++p) {
+        for (int layer = 0; layer < 2; ++layer)
+            for (int rank = 0; rank < 2; ++rank) {
+                const int id = top + layer + rank * 10;
+                jlens.push_back(static_cast<double>(id)); logit.push_back(static_cast<double>(id + 1));
+                cell_probs.push_back(rank ? 0.1 : 0.6);
+                words[std::to_string(id)] = " w" + std::to_string(id);
+                words[std::to_string(id + 1)] = " w" + std::to_string(id + 1);
+            }
+        output.push_back(static_cast<double>(top)); output.push_back(static_cast<double>(top + 20));
+        out_probs.push_back(0.7); out_probs.push_back(0.2);
+        words[std::to_string(top + 20)] = " w" + std::to_string(top + 20);
+    }
+    return Object{{"first", static_cast<double>(first)}, {"count", static_cast<double>(tokens.size())},
+                  {"prompt", static_cast<double>(prompt)}, {"layers", Array{0.0, 1.0}}, {"k", 2.0},
+                  {"tokens", ids}, {"jlens", jlens}, {"jprob", cell_probs}, {"logit", logit}, {"lprob", cell_probs},
+                  {"output", output}, {"oprob", out_probs}, {"words", words}};
+}
+} // namespace
+
+TEST_CASE("trace events extend a run in order and are refused when they do not fit") {
+    caliper_live::TraceRun run;
+    std::map<int32_t, std::string> words;
+    std::string error;
+    REQUIRE(caliper_live::read_trace_event(trace_event(0, {1, 2}, 2), run, words, error));
+    REQUIRE(caliper_live::read_trace_event(trace_event(2, {3}, 2), run, words, error));
+    CHECK(run.positions() == 3); CHECK(run.prompt == 2); CHECK(run.generated() == 1);
+    CHECK(run.jlens[run.at(2, 1, 1)] == 18); CHECK(words.at(18) == " w18");
+    CHECK_FALSE(caliper_live::read_trace_event(trace_event(5, {4}, 2), run, words, error));   // a gap
+    Json wrong = trace_event(3, {4}, 2);
+    wrong["jlens"] = Array{1.0};
+    CHECK_FALSE(caliper_live::read_trace_event(wrong, run, words, error));                      // a short array
+    CHECK(run.positions() == 3);
+    CHECK(caliper_live::display_word(" Paris") == "Paris");
+    CHECK(caliper_live::display_word("\n\n") == "\\n\\n");
+    CHECK(caliper_live::display_word(" ") == "\xC2\xB7");
+}
+
+TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an intervened one") {
+    Ui ui;
+    auto hello = ui.request("hello");
+    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"list_tensors", "show_tensor", "trace", "tokenize"}}});
+    auto list = ui.request("list_tensors");
+    ui.peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
+        Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
+               {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
+    for (int i = 0; i < 5; ++i) ui.frame();
+    REQUIRE(ImGui::FindWindowByName(trace_window) != nullptr);
+    ui.activate(trace_window, "Trace");
+    auto plain = ui.request("trace");
+    CHECK(plain["interventions"].get<Array>().empty());
+    CHECK(plain["temperature"].get<double>() == 0);
+    ui.peer.send(Object{{"id", plain["id"]}, {"done", false}, {"event", trace_event(0, {1, 2}, 2)}});
+    ui.peer.send(Object{{"id", plain["id"]}, {"done", false}, {"event", trace_event(2, {3}, 2)}});
+    ui.peer.reply(plain, Object{{"tokens", 1.0}, {"finish_reason", "length"}, {"cancelled", false}});
+    for (int i = 0; i < 4; ++i) ui.frame();
+    CHECK(ui.captured.find("Intact  w3") != std::string::npos);            // the answer: the generated token
+    CHECK(ui.captured.find("Position 2 w3") != std::string::npos);        // the side list follows the newest token
+    CHECK(ui.captured.find("w7") != std::string::npos);
+
+    // A J-space ablation, compared with the intact run: two traces, the second carrying the intervention.
+    ui.activate(trace_window, "Add");
+    ui.frame();
+    // The default band (layers 5 to 17) is clamped to this two-layer model.
+    CHECK(ui.captured.find("Ablate J-space, top 10  layers 1 to 1") != std::string::npos);
+    ui.activate(trace_window, "Trace");
+    auto intact = ui.request("trace");
+    CHECK(intact["interventions"].get<Array>().empty());
+    ui.peer.send(Object{{"id", intact["id"]}, {"done", false}, {"event", trace_event(0, {1, 2, 3}, 2)}});
+    ui.peer.reply(intact, Object{{"tokens", 1.0}, {"finish_reason", "length"}});
+    auto intervened = ui.request("trace");
+    REQUIRE(intervened["interventions"].get<Array>().size() == 1);
+    CHECK(intervened["interventions"][0]["kind"].get<std::string>() == "ablate");
+    CHECK(intervened["interventions"][0]["k"].get<double>() == 10);
+    ui.peer.send(Object{{"id", intervened["id"]}, {"done", false}, {"event", trace_event(0, {1, 2, 4}, 2, 9)}});
+    ui.peer.reply(intervened, Object{{"tokens", 1.0}, {"finish_reason", "length"}});
+    for (int i = 0; i < 4; ++i) ui.frame();
+    CHECK(ui.captured.find("Intact  w3") != std::string::npos);
+    CHECK(ui.captured.find("Intervened  w4") != std::string::npos);
+    CHECK(ui.captured.find("w9") != std::string::npos);                   // the intervened run's words are shown
+    CHECK(ui.errors == 0);
+}

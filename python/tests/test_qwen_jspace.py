@@ -162,6 +162,7 @@ def test_trace_streams_every_position_and_stops_at_the_end_token(space):
         n, L, k = e["count"], len(e["layers"]), e["k"]
         assert len(e["jlens"]) == len(e["jprob"]) == len(e["logit"]) == len(e["lprob"]) == n * L * k
         assert len(e["output"]) == len(e["oprob"]) == n * k
+        assert e["prompt"] == len(tokens)
         words.update(e["words"])
         assert all(str(i) in words for i in e["tokens"] + e["jlens"] + e["logit"] + e["output"])
         assert len(encode(dict(id=1, done=False, event=e))) < MAX_MESSAGE
