@@ -340,8 +340,10 @@ fragment float4 geom_fs(VOut in [[stage_in]]) { return in.color; }
 // the sampled texel".
 fragment float4 geom_tex_fs(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]]) {
+    // Trilinear: textures with mip levels (3D panels) are minified without
+    // aliasing; a texture with one level samples it as before.
     constexpr sampler smp(coord::normalized, address::clamp_to_edge,
-                          filter::linear, mip_filter::none);
+                          filter::linear, mip_filter::linear);
     float4 sampled = tex.sample(smp, in.uv);
     sampled.rgb *= in.color.rgb;
     return sampled;
@@ -778,6 +780,33 @@ public:
         uint64_t id = next_id_++;
         textures_[@(id)] = tex;
         return id;
+    }
+
+    uint64_t tex_create_rgba8_mipmapped(int w, int h) override {
+        if (w <= 0 || h <= 0 || device_ == nil) return 0;
+        MTLTextureDescriptor* d =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:(NSUInteger)w
+                                                              height:(NSUInteger)h
+                                                           mipmapped:YES];
+        d.storageMode = MTLStorageModeShared;                  // CPU upload of level 0
+        d.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> tex = [device_ newTextureWithDescriptor:d];
+        if (tex == nil) return 0;
+        uint64_t id = next_id_++;
+        textures_[@(id)] = tex;
+        return id;
+    }
+
+    void tex_generate_mipmaps(uint64_t tex) override {
+        id<MTLTexture> t = lookup(tex);
+        if (t == nil || t.mipmapLevelCount < 2 || queue_ == nil) return;
+        // Same queue as the draws, so every later frame samples the full chain.
+        id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit generateMipmapsForTexture:t];
+        [blit endEncoding];
+        [cb commit];
     }
 
     bool tex_upload_rgba8(uint64_t tex, const void* data, int w, int h) override {

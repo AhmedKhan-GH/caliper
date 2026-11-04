@@ -43,7 +43,10 @@ constexpr uint64_t outline_offset = 6 * 3 * sizeof(float);
 constexpr size_t max_tensors = 10000;
 constexpr int max_thumbnail_side = 128;
 constexpr int max_sample_side = 2048;
-constexpr int max_target_side = 4096;
+constexpr int max_target_side = 8192;
+// The scene renders at twice the drawn size and is filtered down when drawn
+// (2x2 supersampling), which smooths panel edges, frames and fine texture.
+constexpr float supersample = 2.0f;
 constexpr int resize_tolerance = 8;
 
 bool same_layout(const std::vector<ModelTensor>& a, const std::vector<ModelTensor>& b) {
@@ -390,13 +393,15 @@ struct Model3D::Impl {
         for (auto& entry : thumbnails) {
             Thumbnail& item = entry.second;
             if (!item.upload || item.rgba.empty()) continue;
-            const uint64_t texture = renderer->tex_create_rgba8(item.width, item.height);
+            // Mipmapped, so a panel seen from afar is minified without shimmer.
+            const uint64_t texture = renderer->tex_create_rgba8_mipmapped(item.width, item.height);
             if (!texture || !renderer->tex_upload_rgba8(texture, item.rgba.data(), item.width, item.height)) {
                 if (texture) renderer->tex_release(texture);
                 item.upload = false;
                 item.failed = true;
                 continue;
             }
+            renderer->tex_generate_mipmaps(texture);
             // A replacement texture keeps an earlier command buffer's retained
             // sample immutable; do not overwrite pixels still in flight.
             if (item.texture) renderer->tex_release(item.texture);
@@ -723,7 +728,7 @@ struct Model3D::Impl {
         }
         label_column = model3d::column_beside_stack(scene, camera, viewport, layout.labels);
         if (supported) {
-            const float scale = std::max(0.25f, std::max(io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y));
+            const float scale = std::max(0.25f, std::max(io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y)) * supersample;
             const int physical_width = std::clamp(static_cast<int>(viewport.width * scale), 1, max_target_side);
             const int physical_height = std::clamp(static_cast<int>(viewport.height * scale), 1, max_target_side);
             if (render(physical_width, physical_height, aspect) && target) {

@@ -66,6 +66,12 @@ public:
                                   int w, int h) = 0;                // full update
     virtual void tex_release(uint64_t tex) = 0;
     virtual uint64_t tex_imtexture_id(uint64_t tex) = 0;            // for ImGui::Image
+    // A texture with a full mip chain, for images drawn smaller than their
+    // texels (3D panels seen from afar): upload level 0 with tex_upload_rgba8,
+    // then tex_generate_mipmaps. Backends without mipmaps return a plain
+    // texture and ignore the generate call, so callers need no fallback.
+    virtual uint64_t tex_create_rgba8_mipmapped(int w, int h) { return tex_create_rgba8(w, h); }
+    virtual void tex_generate_mipmaps(uint64_t) {}
 
     // Device-resident update: src is a CaliperTensor whose data lives on this
     // backend's device (METAL buffer for metal). Returns false -> caller
