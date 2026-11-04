@@ -132,7 +132,7 @@ target_include_directories(caliper_sdk INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
-# UI stack: pinned imgui/implot/implot3d/ImGuiFileDialog from the monorepo.
+# UI stack: pinned imgui/implot/implot3d/ImGuizmo/ImGuiFileDialog from the monorepo.
 # Moves into the SDK repo at Phase 3; a separate target so the seam is visible.
 add_library(caliper_ui_stack INTERFACE)
 add_library(caliper::ui_stack ALIAS caliper_ui_stack)
@@ -141,10 +141,11 @@ target_include_directories(caliper_ui_stack INTERFACE
     ${THIRD_PARTY_DIR}/imgui/backends
     ${THIRD_PARTY_DIR}/implot
     ${THIRD_PARTY_DIR}/implot3d
+    ${THIRD_PARTY_DIR}/ImGuizmo/src
     ${THIRD_PARTY_DIR}/ImGuiFileDialog
 )
 target_link_libraries(caliper_ui_stack INTERFACE
-    imgui implot implot3d ImGuiFileDialog
+    imgui implot implot3d imguizmo ImGuiFileDialog
 )
 target_compile_definitions(caliper_ui_stack INTERFACE
     IMGUI_IMPL_OPENGL_LOADER_GLEW

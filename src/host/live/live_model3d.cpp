@@ -8,6 +8,7 @@
 
 #include <caliper/services/geometry_v1_2.h>
 #include <imgui.h>
+#include <ImGuizmo.h>
 
 #include <algorithm>
 #include <array>
@@ -575,12 +576,62 @@ struct Model3D::Impl {
         };
         frame_camera();
         label_column = model3d::column_beside_stack(scene, camera, viewport, layout.labels);
+        ImGuiIO& io = ImGui::GetIO();
+        // ImGuizmo's view cube in the scene's top-right corner: click a face,
+        // edge or corner to turn the camera to it, or drag it to orbit. It
+        // reads the mouse before the viewport button below, so a press on the
+        // cube is its own (it starts only while no item is active), and draws
+        // on a second channel so it stays above the scene image.
+        ImDrawList* scene_list = ImGui::GetWindowDrawList();
+        scene_list->ChannelsSplit(2);
+        scene_list->ChannelsSetCurrent(1);
+        const float cube = std::clamp(static_cast<float>(std::min(viewport.width, viewport.height) * 0.2), 64.0f, 120.0f);
+        const ImVec2 cube_min(static_cast<float>(viewport.x + viewport.width) - cube - 8.0f, static_cast<float>(viewport.y) + 8.0f);
+        const bool over_cube = io.MousePos.x >= cube_min.x && io.MousePos.x < cube_min.x + cube &&
+                               io.MousePos.y >= cube_min.y && io.MousePos.y < cube_min.y + cube;
+        {
+            auto view = model3d::matrices(camera, aspect);
+            const auto before = view.view;
+            float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            static const bool styled = [] {
+                // ImGuizmo lightens each face (it ORs the colour with mid grey), so
+                // near-neutral warm, plain and cool tones keep the faces apart
+                // within the palette; the face under the pointer turns bronze.
+                auto& colours = ImGuizmo::GetStyle().Colors;
+                colours[ImGuizmo::DIRECTION_X] = sternbild::to_vec4(IM_COL32(0x40, 0x30, 0x1c, 255));
+                colours[ImGuizmo::DIRECTION_Y] = sternbild::to_vec4(IM_COL32(0x30, 0x30, 0x30, 255));
+                colours[ImGuizmo::DIRECTION_Z] = sternbild::to_vec4(IM_COL32(0x1c, 0x30, 0x44, 255));
+                colours[ImGuizmo::SELECTION] = sternbild::to_vec4(sternbild::col::bronze);
+                return true;
+            }();
+            (void)styled;
+            ImGuizmo::SetDrawlist(scene_list);
+            ImGuizmo::SetOrthographic(false);
+            ImGuizmo::SetRect(static_cast<float>(viewport.x), static_cast<float>(viewport.y),
+                              static_cast<float>(viewport.width), static_cast<float>(viewport.height));
+            ImGuizmo::ViewManipulate(view.view.data(), view.projection.data(), ImGuizmo::ROTATE, ImGuizmo::WORLD, identity,
+                                     static_cast<float>(camera.distance), cube_min, ImVec2(cube, cube),
+                                     sternbild::with_alpha(sternbild::col::plate, 200));
+            if (view.view != before) {
+                // The view's third row is minus the camera's forward axis, the
+                // orbit offset from the target to the eye.
+                const double ox = view.view[2], oy = view.view[6], oz = view.view[10];
+                const double norm = std::sqrt(ox * ox + oy * oy + oz * oz);
+                if (norm > 1e-9) {
+                    camera.elevation = std::asin(std::clamp(oy / norm, -1.0, 1.0));
+                    camera.azimuth = std::atan2(oz, ox);
+                    framing = Framing::Manual;
+                    dirty = true;
+                }
+            }
+        }
+        scene_list->ChannelsSetCurrent(0);
         ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(viewport.x), static_cast<float>(viewport.y)));
         ImGui::InvisibleButton("##model3d.viewport", ImVec2(static_cast<float>(viewport.width), static_cast<float>(viewport.height)),
             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-        ImGuiIO& io = ImGui::GetIO();
-        const bool hovered = ImGui::IsItemHovered() && !inside(label_column, io.MousePos.x, io.MousePos.y);
-        const bool active = ImGui::IsItemActive();
+        const bool cube_busy = over_cube || ImGuizmo::IsUsingViewManipulate();
+        const bool hovered = ImGui::IsItemHovered() && !cube_busy && !inside(label_column, io.MousePos.x, io.MousePos.y);
+        const bool active = ImGui::IsItemActive() && !ImGuizmo::IsUsingViewManipulate();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             click_armed = hovered && !io.KeyShift;
             dragged = false;
@@ -646,6 +697,7 @@ struct Model3D::Impl {
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) { click_armed = false; drag_armed &= ~1u; }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) drag_armed &= ~2u;
+        scene_list->ChannelsMerge();
         ImGui::End();
         return clicked;
     }
