@@ -264,6 +264,20 @@
   .hw .tl-slot { fill: #232220; stroke: var(--rule); }
   .hw .tl-slot.full { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); }
   .hw .tl-slot.lost { fill: none; stroke: var(--faint); stroke-dasharray: 2 2; }
+  .hw .badge { fill: var(--deep); stroke: var(--bronze); stroke-width: 1.2; }
+  .hw .badge-n { font-family: var(--text); font-size: 11px; fill: var(--bronze); }
+  .hw .mono.tiny { font-size: 11px; }
+  .hw .tiny { font-family: var(--text); font-size: 11px; }
+  .hw .tiny.dim { fill: var(--faint); } .hw .tiny.hot { fill: var(--bronze); }
+  .hw .mini { fill: none; stroke: var(--secondary); stroke-width: 1.1; stroke-linejoin: round; }
+  .hw .mini.model { stroke: #3ca99c; stroke-dasharray: 4 3; stroke-width: 1.4; }
+  .hw .mini.faint { stroke: var(--faint); opacity: .7; }
+  .hw .mcp-btn { fill: var(--bronze); stroke: none; }
+  .hw .flagband { fill: rgba(179, 139, 89, .2); }
+  .hw .clockbar { fill: rgba(179, 139, 89, .25); stroke: var(--bronze); }
+  .hw .slot.full { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); }
+  .hw .slot.lost { fill: none; stroke: var(--faint); stroke-dasharray: 2 2; }
+  .hw .nvlink { stroke: #3ca99c; stroke-width: 2; opacity: .7; }
   .soon-item { margin-top: 34px; }
   .soon-text { display: grid; grid-template-columns: 15em minmax(0, 46em); gap: 8px 28px; align-items: baseline; margin-bottom: 18px; }
   .soon-text h3 { margin: 0; font: 15px/1.4 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--parchment); }
@@ -448,7 +462,7 @@
     </g>
   </svg>
   <div class="wrap">
-    <a class="maker" href="https://sternbild.com"><img src="assets/sternbild-seal.svg" alt=""><span>Developed by the Sternbild organization</span></a>
+    <a class="maker" href="https://sternbild.org"><img src="assets/sternbild-seal.svg" alt=""><span>Developed by the Sternbild organization</span></a>
     <img class="hero-mark" src="assets/caliper-mark.svg" alt="Caliper">
     <h1>Caliper</h1>
     <p class="tagline">Machine learning visualization framework</p>
@@ -1771,482 +1785,545 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div class="soon-item">
         <div class="soon-text"><h3>Caliper MCP</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
-<svg class="hw soon-svg" id="soon-mcp" viewBox="0 0 1100 470" role="img" aria-label="Concept: an AI agent asks for a fine-tuning panel; through Caliper MCP it reads the SDK, writes the applet, builds it, attaches it to train.py and captures it, and the panel appears live in Caliper">
-<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-<rect x="16" y="44" width="360" height="410" rx="10" class="pkg"/>
-<text x="34" y="28" class="k">YOUR AGENT</text>
-<text x="358" y="28" class="n dim" text-anchor="end">any MCP client</text>
-<rect x="36" y="64" width="320" height="96" rx="4" class="blk"/>
-<text x="50" y="88" class="mono small" xml:space="preserve">&gt; A panel for my fine-tune: loss</text>
-<text x="50" y="107" class="mono small" xml:space="preserve">  per layer, each head's attention</text>
-<text x="50" y="126" class="mono small" xml:space="preserve">  entropy, and a button that</text>
-<text x="50" y="145" class="mono small" xml:space="preserve">  snapshots the weights.</text>
-<rect x="406" y="44" width="288" height="410" rx="10" class="pkg"/>
-<text x="424" y="28" class="k">CALIPER MCP</text>
-<text x="676" y="28" class="n dim" text-anchor="end">stdio or HTTP</text>
-<rect x="426" y="64" width="248" height="96" rx="4" class="blk"/>
-<text x="442" y="90" class="mono small">caliper://sdk</text>
-<text x="442" y="114" class="n">the SDK headers, docs and</text>
-<text x="442" y="132" class="n">examples, as resources</text>
-<g class="mcp-row" data-i="0"><rect x="36" y="178" width="320" height="44" rx="4" class="blk"/><text x="52" y="205" class="n">Read the SDK interfaces</text><text x="340" y="205" class="n dim st" text-anchor="end">Metrics · ImPlot</text></g>
-<path class="arrow mcp-link" data-i="0" d="M358,200 L424,200" marker-end="url(#stip)"/>
-<g class="mcp-tool" data-i="0"><rect x="426" y="178" width="248" height="44" rx="4" class="blk"/><text x="442" y="205" class="mono small">sdk_reference</text></g>
-<path class="arrow data mcp-link" data-i="0" d="M676,200 L722,200" marker-end="url(#stip-data)"/>
-<g class="mcp-row" data-i="1"><rect x="36" y="232" width="320" height="44" rx="4" class="blk"/><text x="52" y="259" class="n">Write finetune_scope.cpp</text><text x="340" y="259" class="n dim st" text-anchor="end">218 lines</text></g>
-<path class="arrow mcp-link" data-i="1" d="M358,254 L424,254" marker-end="url(#stip)"/>
-<g class="mcp-tool" data-i="1"><rect x="426" y="232" width="248" height="44" rx="4" class="blk"/><text x="442" y="259" class="mono small">write_applet</text></g>
-<path class="arrow data mcp-link" data-i="1" d="M676,254 L722,254" marker-end="url(#stip-data)"/>
-<g class="mcp-row" data-i="2"><rect x="36" y="286" width="320" height="44" rx="4" class="blk"/><text x="52" y="313" class="n">Build with the Metal preset</text><text x="340" y="313" class="n dim st" text-anchor="end">4.1 s</text></g>
-<path class="arrow mcp-link" data-i="2" d="M358,308 L424,308" marker-end="url(#stip)"/>
-<g class="mcp-tool" data-i="2"><rect x="426" y="286" width="248" height="44" rx="4" class="blk"/><text x="442" y="313" class="mono small">build</text></g>
-<path class="arrow data mcp-link" data-i="2" d="M676,308 L722,308" marker-end="url(#stip-data)"/>
-<g class="mcp-row" data-i="3"><rect x="36" y="340" width="320" height="44" rx="4" class="blk"/><text x="52" y="367" class="n">Attach to train.py</text><text x="340" y="367" class="n dim st" text-anchor="end">streaming</text></g>
-<path class="arrow mcp-link" data-i="3" d="M358,362 L424,362" marker-end="url(#stip)"/>
-<g class="mcp-tool" data-i="3"><rect x="426" y="340" width="248" height="44" rx="4" class="blk"/><text x="442" y="367" class="mono small">attach</text></g>
-<path class="arrow data mcp-link" data-i="3" d="M676,362 L722,362" marker-end="url(#stip-data)"/>
-<g class="mcp-row" data-i="4"><rect x="36" y="394" width="320" height="44" rx="4" class="blk"/><text x="52" y="421" class="n">Capture the panel, check it</text><text x="340" y="421" class="n dim st" text-anchor="end">done</text></g>
-<path class="arrow mcp-link" data-i="4" d="M358,416 L424,416" marker-end="url(#stip)"/>
-<g class="mcp-tool" data-i="4"><rect x="426" y="394" width="248" height="44" rx="4" class="blk"/><text x="442" y="421" class="mono small">capture</text></g>
-<path class="arrow data mcp-link" data-i="4" d="M676,416 L722,416" marker-end="url(#stip-data)"/>
-<rect x="724" y="44" width="360" height="410" rx="10" class="pkg"/>
-<text x="742" y="28" class="k">CALIPER</text>
-<text x="1066" y="28" class="n dim" text-anchor="end">the new panel, live</text>
-<rect x="744" y="64" width="320" height="374" rx="4" class="blk frame-off" id="mcp-window"/>
-<g id="mcp-panel">
-<text x="760" y="88" class="k">FINETUNE SCOPE</text>
-<text x="1048" y="88" class="n dim" text-anchor="end">train.py · step 1,240</text>
-<line x1="744" y1="100" x2="1064" y2="100" class="rulefaint"/>
-<text x="760" y="122" class="n dim">loss per layer group</text>
-<line x1="760" y1="130" x2="760" y2="222" class="rulefaint"/><line x1="760" y1="222" x2="1048" y2="222" class="rulefaint"/>
-<polyline class="curve" points="760.0,137.1 766.1,143.2 772.3,144.9 778.4,152.9 784.5,154.2 790.6,159.1 796.8,164.6 802.9,165.3 809.0,171.3 815.1,171.9 821.3,176.8 827.4,179.3 833.5,179.7 839.7,179.5 845.8,185.8 851.9,187.2 858.0,186.6 864.2,186.4 870.3,190.2 876.4,192.8 882.6,190.7 888.7,197.6 894.8,193.9 900.9,198.5 907.1,200.4 913.2,201.6 919.3,201.4 925.4,199.2 931.6,203.8 937.7,202.2 943.8,202.5 950.0,204.8 956.1,204.4 962.2,207.8 968.3,208.4 974.5,208.0 980.6,205.6 986.7,207.6 992.9,208.7 999.0,207.4 1005.1,208.6 1011.2,209.9 1017.4,207.2 1023.5,208.1 1029.6,211.1 1035.7,209.3 1041.9,209.9 1048.0,208.0" stroke="#e8e0d0"/>
-<polyline class="curve" points="760.0,136.0 766.1,140.8 772.3,140.0 778.4,148.3 784.5,149.5 790.6,150.3 796.8,156.7 802.9,157.3 809.0,162.4 815.1,161.0 821.3,162.6 827.4,165.9 833.5,166.0 839.7,171.3 845.8,170.8 851.9,173.2 858.0,174.9 864.2,177.2 870.3,176.3 876.4,177.1 882.6,181.3 888.7,181.4 894.8,186.2 900.9,183.5 907.1,184.9 913.2,183.9 919.3,185.9 925.4,190.1 931.6,190.3 937.7,189.5 943.8,194.2 950.0,192.3 956.1,194.8 962.2,195.7 968.3,196.7 974.5,193.1 980.6,197.5 986.7,197.4 992.9,197.0 999.0,194.7 1005.1,199.9 1011.2,198.1 1017.4,198.0 1023.5,196.4 1029.6,197.1 1035.7,197.2 1041.9,201.1 1048.0,200.6" stroke="#c9a273"/>
-<polyline class="curve" points="760.0,136.9 766.1,140.3 772.3,145.9 778.4,156.3 784.5,161.3 790.6,165.6 796.8,169.9 802.9,172.4 809.0,175.4 815.1,180.7 821.3,185.3 827.4,185.6 833.5,188.5 839.7,189.7 845.8,189.6 851.9,193.1 858.0,196.0 864.2,197.1 870.3,198.3 876.4,203.5 882.6,199.7 888.7,201.6 894.8,202.2 900.9,203.6 907.1,207.0 913.2,207.8 919.3,210.4 925.4,207.9 931.6,212.0 937.7,212.6 943.8,212.3 950.0,213.1 956.1,212.5 962.2,214.7 968.3,215.4 974.5,214.8 980.6,215.5 986.7,214.2 992.9,216.5 999.0,211.7 1005.1,213.5 1011.2,216.5 1017.4,216.1 1023.5,215.7 1029.6,215.7 1035.7,217.4 1041.9,213.1 1048.0,212.4" stroke="#3ca99c"/>
-<polyline class="curve" points="760.0,136.2 766.1,138.6 772.3,143.3 778.4,145.5 784.5,146.2 790.6,148.8 796.8,147.4 802.9,153.4 809.0,156.1 815.1,152.3 821.3,156.6 827.4,160.6 833.5,159.8 839.7,164.5 845.8,163.0 851.9,161.7 858.0,163.8 864.2,166.1 870.3,170.0 876.4,170.6 882.6,173.0 888.7,170.5 894.8,173.0 900.9,172.6 907.1,176.3 913.2,177.9 919.3,175.3 925.4,175.2 931.6,176.9 937.7,178.0 943.8,178.7 950.0,180.0 956.1,183.8 962.2,182.8 968.3,184.5 974.5,187.1 980.6,187.7 986.7,186.8 992.9,187.6 999.0,185.5 1005.1,184.5 1011.2,188.1 1017.4,185.6 1023.5,185.8 1029.6,186.5 1035.7,190.5 1041.9,191.8 1048.0,192.2" stroke="#7aa3d1"/>
-<text x="760" y="248" class="n dim">attention entropy, layer × head</text>
-<rect class="hcell" x="760" y="256" width="17" height="14" fill="#90724c"/>
-<rect class="hcell" x="778" y="256" width="17" height="14" fill="#b48d5b"/>
-<rect class="hcell" x="796" y="256" width="17" height="14" fill="#ceb084"/>
-<rect class="hcell" x="814" y="256" width="17" height="14" fill="#dac097"/>
-<rect class="hcell" x="832" y="256" width="17" height="14" fill="#d1b489"/>
-<rect class="hcell" x="850" y="256" width="17" height="14" fill="#b99463"/>
-<rect class="hcell" x="868" y="256" width="17" height="14" fill="#b68f5e"/>
-<rect class="hcell" x="886" y="256" width="17" height="14" fill="#b89160"/>
-<rect class="hcell" x="904" y="256" width="17" height="14" fill="#92734c"/>
-<rect class="hcell" x="922" y="256" width="17" height="14" fill="#c2a071"/>
-<rect class="hcell" x="940" y="256" width="17" height="14" fill="#d6bb91"/>
-<rect class="hcell" x="958" y="256" width="17" height="14" fill="#d8bd93"/>
-<rect class="hcell" x="976" y="256" width="17" height="14" fill="#d4b78d"/>
-<rect class="hcell" x="994" y="256" width="17" height="14" fill="#bd996a"/>
-<rect class="hcell" x="1012" y="256" width="17" height="14" fill="#8d704b"/>
-<rect class="hcell" x="1030" y="256" width="17" height="14" fill="#97774e"/>
-<rect class="hcell" x="760" y="271" width="17" height="14" fill="#c29f70"/>
-<rect class="hcell" x="778" y="271" width="17" height="14" fill="#dcc39b"/>
-<rect class="hcell" x="796" y="271" width="17" height="14" fill="#e3cca5"/>
-<rect class="hcell" x="814" y="271" width="17" height="14" fill="#c6a477"/>
-<rect class="hcell" x="832" y="271" width="17" height="14" fill="#b99362"/>
-<rect class="hcell" x="850" y="271" width="17" height="14" fill="#c09d6e"/>
-<rect class="hcell" x="868" y="271" width="17" height="14" fill="#b38b59"/>
-<rect class="hcell" x="886" y="271" width="17" height="14" fill="#90724c"/>
-<rect class="hcell" x="904" y="271" width="17" height="14" fill="#a07d52"/>
-<rect class="hcell" x="922" y="271" width="17" height="14" fill="#b58d5b"/>
-<rect class="hcell" x="940" y="271" width="17" height="14" fill="#d4b78d"/>
-<rect class="hcell" x="958" y="271" width="17" height="14" fill="#ccad80"/>
-<rect class="hcell" x="976" y="271" width="17" height="14" fill="#9b7a50"/>
-<rect class="hcell" x="994" y="271" width="17" height="14" fill="#a88355"/>
-<rect class="hcell" x="1012" y="271" width="17" height="14" fill="#91734c"/>
-<rect class="hcell" x="1030" y="271" width="17" height="14" fill="#66543c"/>
-<rect class="hcell" x="760" y="286" width="17" height="14" fill="#d0b388"/>
-<rect class="hcell" x="778" y="286" width="17" height="14" fill="#d5ba90"/>
-<rect class="hcell" x="796" y="286" width="17" height="14" fill="#bc9767"/>
-<rect class="hcell" x="814" y="286" width="17" height="14" fill="#9c7a50"/>
-<rect class="hcell" x="832" y="286" width="17" height="14" fill="#bc9868"/>
-<rect class="hcell" x="850" y="286" width="17" height="14" fill="#a07e52"/>
-<rect class="hcell" x="868" y="286" width="17" height="14" fill="#9b7a50"/>
-<rect class="hcell" x="886" y="286" width="17" height="14" fill="#be9a6a"/>
-<rect class="hcell" x="904" y="286" width="17" height="14" fill="#b58e5d"/>
-<rect class="hcell" x="922" y="286" width="17" height="14" fill="#c9a97c"/>
-<rect class="hcell" x="940" y="286" width="17" height="14" fill="#c3a172"/>
-<rect class="hcell" x="958" y="286" width="17" height="14" fill="#8c6f4a"/>
-<rect class="hcell" x="976" y="286" width="17" height="14" fill="#6c583e"/>
-<rect class="hcell" x="994" y="286" width="17" height="14" fill="#504433"/>
-<rect class="hcell" x="1012" y="286" width="17" height="14" fill="#3d372c"/>
-<rect class="hcell" x="1030" y="286" width="17" height="14" fill="#5e4e39"/>
-<rect class="hcell" x="760" y="301" width="17" height="14" fill="#c8a87b"/>
-<rect class="hcell" x="778" y="301" width="17" height="14" fill="#c19e6f"/>
-<rect class="hcell" x="796" y="301" width="17" height="14" fill="#96764e"/>
-<rect class="hcell" x="814" y="301" width="17" height="14" fill="#b18958"/>
-<rect class="hcell" x="832" y="301" width="17" height="14" fill="#776042"/>
-<rect class="hcell" x="850" y="301" width="17" height="14" fill="#826846"/>
-<rect class="hcell" x="868" y="301" width="17" height="14" fill="#9c7b50"/>
-<rect class="hcell" x="886" y="301" width="17" height="14" fill="#bd9869"/>
-<rect class="hcell" x="904" y="301" width="17" height="14" fill="#ad8757"/>
-<rect class="hcell" x="922" y="301" width="17" height="14" fill="#be9b6b"/>
-<rect class="hcell" x="940" y="301" width="17" height="14" fill="#95754d"/>
-<rect class="hcell" x="958" y="301" width="17" height="14" fill="#776042"/>
-<rect class="hcell" x="976" y="301" width="17" height="14" fill="#5c4d38"/>
-<rect class="hcell" x="994" y="301" width="17" height="14" fill="#2d2b26"/>
-<rect class="hcell" x="1012" y="301" width="17" height="14" fill="#584a36"/>
-<rect class="hcell" x="1030" y="301" width="17" height="14" fill="#62513a"/>
-<rect class="hcell" x="760" y="316" width="17" height="14" fill="#9f7c51"/>
-<rect class="hcell" x="778" y="316" width="17" height="14" fill="#b38b5a"/>
-<rect class="hcell" x="796" y="316" width="17" height="14" fill="#65533b"/>
-<rect class="hcell" x="814" y="316" width="17" height="14" fill="#6c583e"/>
-<rect class="hcell" x="832" y="316" width="17" height="14" fill="#836947"/>
-<rect class="hcell" x="850" y="316" width="17" height="14" fill="#896d49"/>
-<rect class="hcell" x="868" y="316" width="17" height="14" fill="#8e704b"/>
-<rect class="hcell" x="886" y="316" width="17" height="14" fill="#a98455"/>
-<rect class="hcell" x="904" y="316" width="17" height="14" fill="#a88355"/>
-<rect class="hcell" x="922" y="316" width="17" height="14" fill="#a58154"/>
-<rect class="hcell" x="940" y="316" width="17" height="14" fill="#584a36"/>
-<rect class="hcell" x="958" y="316" width="17" height="14" fill="#64533b"/>
-<rect class="hcell" x="976" y="316" width="17" height="14" fill="#483e30"/>
-<rect class="hcell" x="994" y="316" width="17" height="14" fill="#5a4b37"/>
-<rect class="hcell" x="1012" y="316" width="17" height="14" fill="#9f7d51"/>
-<rect class="hcell" x="1030" y="316" width="17" height="14" fill="#b18a58"/>
-<rect class="hcell" x="760" y="331" width="17" height="14" fill="#8d704a"/>
-<rect class="hcell" x="778" y="331" width="17" height="14" fill="#7d6444"/>
-<rect class="hcell" x="796" y="331" width="17" height="14" fill="#7b6344"/>
-<rect class="hcell" x="814" y="331" width="17" height="14" fill="#604f39"/>
-<rect class="hcell" x="832" y="331" width="17" height="14" fill="#836947"/>
-<rect class="hcell" x="850" y="331" width="17" height="14" fill="#95754e"/>
-<rect class="hcell" x="868" y="331" width="17" height="14" fill="#a68254"/>
-<rect class="hcell" x="886" y="331" width="17" height="14" fill="#b38b5a"/>
-<rect class="hcell" x="904" y="331" width="17" height="14" fill="#92734d"/>
-<rect class="hcell" x="922" y="331" width="17" height="14" fill="#816746"/>
-<rect class="hcell" x="940" y="331" width="17" height="14" fill="#6b583e"/>
-<rect class="hcell" x="958" y="331" width="17" height="14" fill="#8c6f4a"/>
-<rect class="hcell" x="976" y="331" width="17" height="14" fill="#8d704b"/>
-<rect class="hcell" x="994" y="331" width="17" height="14" fill="#b79160"/>
-<rect class="hcell" x="1012" y="331" width="17" height="14" fill="#ccad80"/>
-<rect class="hcell" x="1030" y="331" width="17" height="14" fill="#c19f70"/>
-<rect class="hcell" x="760" y="346" width="17" height="14" fill="#5f4f39"/>
-<rect class="hcell" x="778" y="346" width="17" height="14" fill="#735d41"/>
-<rect class="hcell" x="796" y="346" width="17" height="14" fill="#786142"/>
-<rect class="hcell" x="814" y="346" width="17" height="14" fill="#5e4f39"/>
-<rect class="hcell" x="832" y="346" width="17" height="14" fill="#7c6344"/>
-<rect class="hcell" x="850" y="346" width="17" height="14" fill="#a88355"/>
-<rect class="hcell" x="868" y="346" width="17" height="14" fill="#90724c"/>
-<rect class="hcell" x="886" y="346" width="17" height="14" fill="#90724c"/>
-<rect class="hcell" x="904" y="346" width="17" height="14" fill="#6f5b3f"/>
-<rect class="hcell" x="922" y="346" width="17" height="14" fill="#8d704a"/>
-<rect class="hcell" x="940" y="346" width="17" height="14" fill="#95764e"/>
-<rect class="hcell" x="958" y="346" width="17" height="14" fill="#b18958"/>
-<rect class="hcell" x="976" y="346" width="17" height="14" fill="#9b7a50"/>
-<rect class="hcell" x="994" y="346" width="17" height="14" fill="#cdae82"/>
-<rect class="hcell" x="1012" y="346" width="17" height="14" fill="#d7bc92"/>
-<rect class="hcell" x="1030" y="346" width="17" height="14" fill="#c8a77a"/>
-<rect class="hcell" x="760" y="361" width="17" height="14" fill="#6e593f"/>
-<rect class="hcell" x="778" y="361" width="17" height="14" fill="#856a48"/>
-<rect class="hcell" x="796" y="361" width="17" height="14" fill="#6d593f"/>
-<rect class="hcell" x="814" y="361" width="17" height="14" fill="#bc9767"/>
-<rect class="hcell" x="832" y="361" width="17" height="14" fill="#b48c5a"/>
-<rect class="hcell" x="850" y="361" width="17" height="14" fill="#b99463"/>
-<rect class="hcell" x="868" y="361" width="17" height="14" fill="#c6a577"/>
-<rect class="hcell" x="886" y="361" width="17" height="14" fill="#b79160"/>
-<rect class="hcell" x="904" y="361" width="17" height="14" fill="#7b6344"/>
-<rect class="hcell" x="922" y="361" width="17" height="14" fill="#8e714b"/>
-<rect class="hcell" x="940" y="361" width="17" height="14" fill="#a68254"/>
-<rect class="hcell" x="958" y="361" width="17" height="14" fill="#b58e5d"/>
-<rect class="hcell" x="976" y="361" width="17" height="14" fill="#c09c6d"/>
-<rect class="hcell" x="994" y="361" width="17" height="14" fill="#ceb084"/>
-<rect class="hcell" x="1012" y="361" width="17" height="14" fill="#ddc49c"/>
-<rect class="hcell" x="1030" y="361" width="17" height="14" fill="#bb9666"/>
-<rect x="760" y="394" width="150" height="28" rx="3" class="mcp-button"/>
-<text x="835" y="412" class="mcp-button-text" text-anchor="middle">Snapshot weights</text>
-<text x="924" y="412" class="n dim">last at step 1,200</text>
-</g>
-<rect x="744" y="64" width="320" height="374" rx="4" id="mcp-flash"/>
+<svg class="hw" id="soon-mcp" viewBox="0 0 1100 450" role="img" aria-label="Concept: a coding agent reads Caliper's SDK headers, tutorials and an example applet as MCP resources, scaffolds an applet into the project, builds it with the release preset, loads it into the running Caliper app, and gets a capture of the view back as an image to check, with the app's log lines">
+<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="sdtip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+<rect x="16" y="44" width="284" height="390" rx="10" class="pkg"/>
+<text x="34" y="28" class="k">CODING AGENT</text>
+<text x="282" y="28" class="n dim" text-anchor="end">MCP client</text>
+<rect x="36" y="64" width="244" height="92" rx="4" class="blk"/>
+<text x="52" y="86" class="k">REQUEST</text>
+<text x="52" y="108" class="n">“A panel for my fine-tune: loss per</text>
+<text x="52" y="125" class="n">layer, attention entropy per head</text>
+<text x="52" y="142" class="n">and a button that snapshots weights.”</text>
+<rect x="36" y="172" width="244" height="118" rx="4" class="blk"/>
+<text x="52" y="194" class="k">PROJECT</text>
+<text x="52" y="216" class="mono small">applets/finetune_scope/</text>
+<text x="52" y="234" class="mono small">├ finetune_scope.cpp</text>
+<text x="52" y="252" class="mono small">└ CMakeLists.txt</text>
+<text x="52" y="276" class="n dim">the agent writes the panel's code</text>
+<rect x="36" y="308" width="244" height="106" rx="4" class="blk"/>
+<text x="52" y="330" class="k">CHECK</text>
+<rect x="52" y="342" width="92" height="58" rx="2" class="zoomframe"/>
+<polyline class="mini" points="58.0,354.6 60.7,357.5 63.4,359.2 66.1,363.1 68.8,365.2 71.5,367.0 74.2,370.0 76.9,370.7 79.6,371.8 82.3,372.6 85.0,375.8 87.7,376.3 90.4,377.8 93.1,376.5 95.8,377.6 98.5,380.2 101.2,378.0 103.9,378.6 106.6,380.0 109.3,380.5 112.0,382.3 114.7,383.0 117.4,381.8 120.1,383.5 122.8,383.3 125.5,383.4 128.2,384.2 130.9,383.1 133.6,383.3 136.3,382.3"/>
+<rect x="58" y="388" width="9" height="3" fill="#ab8556"/>
+<rect x="58" y="392" width="9" height="3" fill="#be996a"/>
+<rect x="68" y="388" width="9" height="3" fill="#a68254"/>
+<rect x="68" y="392" width="9" height="3" fill="#c09d6e"/>
+<rect x="78" y="388" width="9" height="3" fill="#9c7a50"/>
+<rect x="78" y="392" width="9" height="3" fill="#6f5b3f"/>
+<rect x="88" y="388" width="9" height="3" fill="#e8d3ad"/>
+<rect x="88" y="392" width="9" height="3" fill="#e7d2ac"/>
+<rect x="98" y="388" width="9" height="3" fill="#d5b98f"/>
+<rect x="98" y="392" width="9" height="3" fill="#c6a476"/>
+<rect x="108" y="388" width="9" height="3" fill="#796143"/>
+<rect x="108" y="392" width="9" height="3" fill="#63523b"/>
+<rect x="118" y="388" width="9" height="3" fill="#725d40"/>
+<rect x="118" y="392" width="9" height="3" fill="#3b362c"/>
+<rect x="128" y="388" width="9" height="3" fill="#ccae81"/>
+<rect x="128" y="392" width="9" height="3" fill="#8e704b"/>
+<text x="156" y="362" class="n">the capture comes back</text>
+<text x="156" y="379" class="n">as an image in the tool</text>
+<text x="156" y="396" class="n">result, with the log</text>
+<rect x="330" y="44" width="460" height="390" rx="10" class="pkg"/>
+<text x="348" y="28" class="k">CALIPER MCP</text>
+<text x="772" y="28" class="n dim" text-anchor="end">JSON-RPC 2.0 · stdio or HTTP</text>
+<text x="350" y="80" class="k">RESOURCES</text>
+<text x="770" y="80" class="n dim" text-anchor="end">resources/read</text>
+<rect x="350" y="90" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="109" class="mono small">caliper://sdk/caliper.hpp</text>
+<rect x="350" y="124" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="143" class="mono small">caliper://docs/tutorials/first-ml-applet</text>
+<rect x="350" y="158" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="177" class="mono small">caliper://examples/sine_scope</text>
+<text x="350" y="210" class="n dim">the SDK, a tutorial and a working applet, read before writing</text>
+<text x="350" y="232" class="k">TOOLS</text>
+<text x="770" y="232" class="n dim" text-anchor="end">tools/call</text>
+<rect x="350" y="242" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="261" class="mono small">scaffold_applet(name)</text>
+<text x="756" y="261" class="n dim" text-anchor="end">CMake target from the template</text>
+<rect x="350" y="276" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="295" class="mono small">build(preset)</text>
+<text x="756" y="295" class="n dim" text-anchor="end">cmake --build --preset release</text>
+<rect x="350" y="310" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="329" class="mono small">launch(applet)</text>
+<text x="756" y="329" class="n dim" text-anchor="end">load it into the running app</text>
+<rect x="350" y="344" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="363" class="mono small">capture(view)</text>
+<text x="756" y="363" class="n dim" text-anchor="end">caliper.export · view_png</text>
+<rect x="350" y="378" width="420" height="28" rx="4" class="blk"/>
+<text x="364" y="397" class="mono small">read_log()</text>
+<text x="756" y="397" class="n dim" text-anchor="end">caliper.log.v1 lines</text>
+<text x="560" y="424" class="n dim" text-anchor="middle">tool results carry text and images</text>
+<rect x="820" y="44" width="264" height="390" rx="10" class="pkg"/>
+<text x="838" y="28" class="k">CALIPER</text>
+<text x="1066" y="28" class="n dim" text-anchor="end">macOS or Windows</text>
+<text x="840" y="80" class="k">THE NEW PANEL</text>
+<rect x="840" y="90" width="224" height="150" rx="3" class="zoomframe"/>
+<text x="852" y="108" class="k">FINETUNE SCOPE</text>
+<polyline class="mini" stroke="#e8e0d0" points="852.0,121.5 856.2,127.1 860.4,129.2 864.6,132.9 868.8,138.5 873.0,140.6 877.2,141.0 881.4,144.5 885.6,144.9 889.8,148.4 894.0,150.9 898.2,150.7 902.4,151.5 906.6,154.1 910.8,155.7 915.0,155.8 919.2,154.7 923.4,156.1 927.6,158.6 931.8,158.8 936.0,159.8 940.2,160.4 944.4,158.6 948.6,160.8 952.8,160.0 957.0,160.6 961.2,161.7 965.4,160.3 969.6,162.3 973.8,160.9 978.0,162.7 982.2,161.9 986.4,162.7 990.6,162.6 994.8,160.6 999.0,161.2 1003.2,162.8 1007.4,161.2 1011.6,163.3 1015.8,162.8 1020.0,161.4 1024.2,162.1 1028.4,163.8 1032.6,161.2 1036.8,163.5 1041.0,163.4 1045.2,161.9 1049.4,163.3"/>
+<polyline class="mini" stroke="#c9a273" points="852.0,123.1 856.2,126.8 860.4,129.5 864.6,130.6 868.8,134.0 873.0,135.1 877.2,137.8 881.4,139.5 885.6,139.7 889.8,142.8 894.0,144.0 898.2,144.5 902.4,147.8 906.6,149.1 910.8,148.0 915.0,149.3 919.2,151.9 923.4,153.0 927.6,152.1 931.8,152.3 936.0,155.2 940.2,153.6 944.4,154.4 948.6,155.8 952.8,156.8 957.0,158.3 961.2,158.9 965.4,156.5 969.6,159.1 973.8,158.0 978.0,159.7 982.2,158.3 986.4,159.2 990.6,160.4 994.8,161.0 999.0,159.6 1003.2,161.7 1007.4,161.4 1011.6,160.6 1015.8,159.9 1020.0,160.8 1024.2,161.9 1028.4,160.1 1032.6,162.4 1036.8,163.1 1041.0,162.4 1045.2,162.0 1049.4,163.2"/>
+<polyline class="mini" stroke="#3ca99c" points="852.0,123.5 856.2,125.2 860.4,126.8 864.6,130.2 868.8,131.4 873.0,131.6 877.2,133.1 881.4,135.7 885.6,137.1 889.8,138.9 894.0,141.6 898.2,143.2 902.4,144.4 906.6,142.9 910.8,144.6 915.0,144.8 919.2,148.6 923.4,147.7 927.6,149.0 931.8,149.0 936.0,151.0 940.2,149.7 944.4,153.2 948.6,152.4 952.8,152.4 957.0,152.5 961.2,153.5 965.4,154.1 969.6,154.3 973.8,154.4 978.0,156.5 982.2,155.9 986.4,155.6 990.6,156.1 994.8,157.8 999.0,156.9 1003.2,157.0 1007.4,158.2 1011.6,158.3 1015.8,159.3 1020.0,158.9 1024.2,159.0 1028.4,160.8 1032.6,159.3 1036.8,158.5 1041.0,159.0 1045.2,159.6 1049.4,160.8"/>
+<rect x="852.0" y="180" width="13" height="10" fill="#b58e5d"/>
+<rect x="866.4" y="180" width="13" height="10" fill="#cbab7e"/>
+<rect x="880.8" y="180" width="13" height="10" fill="#d7bc92"/>
+<rect x="895.2" y="180" width="13" height="10" fill="#e7d2ab"/>
+<rect x="909.6" y="180" width="13" height="10" fill="#be9a6b"/>
+<rect x="924.0" y="180" width="13" height="10" fill="#bd9868"/>
+<rect x="938.4" y="180" width="13" height="10" fill="#574936"/>
+<rect x="952.8" y="180" width="13" height="10" fill="#574936"/>
+<rect x="967.2" y="180" width="13" height="10" fill="#423a2e"/>
+<rect x="981.6" y="180" width="13" height="10" fill="#453d2f"/>
+<rect x="996.0" y="180" width="13" height="10" fill="#9a794f"/>
+<rect x="1010.4" y="180" width="13" height="10" fill="#bc9767"/>
+<rect x="1024.8" y="180" width="13" height="10" fill="#d7bb91"/>
+<rect x="1039.2" y="180" width="13" height="10" fill="#e8d3ad"/>
+<rect x="852.0" y="191" width="13" height="10" fill="#ccad81"/>
+<rect x="866.4" y="191" width="13" height="10" fill="#cbac7f"/>
+<rect x="880.8" y="191" width="13" height="10" fill="#ccad81"/>
+<rect x="895.2" y="191" width="13" height="10" fill="#c3a173"/>
+<rect x="909.6" y="191" width="13" height="10" fill="#776042"/>
+<rect x="924.0" y="191" width="13" height="10" fill="#423a2e"/>
+<rect x="938.4" y="191" width="13" height="10" fill="#62513a"/>
+<rect x="952.8" y="191" width="13" height="10" fill="#5a4c37"/>
+<rect x="967.2" y="191" width="13" height="10" fill="#745e41"/>
+<rect x="981.6" y="191" width="13" height="10" fill="#c09d6e"/>
+<rect x="996.0" y="191" width="13" height="10" fill="#c6a577"/>
+<rect x="1010.4" y="191" width="13" height="10" fill="#e1c9a1"/>
+<rect x="1024.8" y="191" width="13" height="10" fill="#cfb185"/>
+<rect x="1039.2" y="191" width="13" height="10" fill="#c6a577"/>
+<rect x="852.0" y="202" width="13" height="10" fill="#e3cca5"/>
+<rect x="866.4" y="202" width="13" height="10" fill="#d4b88d"/>
+<rect x="880.8" y="202" width="13" height="10" fill="#b89261"/>
+<rect x="895.2" y="202" width="13" height="10" fill="#61503a"/>
+<rect x="909.6" y="202" width="13" height="10" fill="#4e4333"/>
+<rect x="924.0" y="202" width="13" height="10" fill="#39342b"/>
+<rect x="938.4" y="202" width="13" height="10" fill="#4c4232"/>
+<rect x="952.8" y="202" width="13" height="10" fill="#9e7c51"/>
+<rect x="967.2" y="202" width="13" height="10" fill="#d0b387"/>
+<rect x="981.6" y="202" width="13" height="10" fill="#e4cda6"/>
+<rect x="996.0" y="202" width="13" height="10" fill="#e3cca5"/>
+<rect x="1010.4" y="202" width="13" height="10" fill="#e0c8a0"/>
+<rect x="1024.8" y="202" width="13" height="10" fill="#ac8656"/>
+<rect x="1039.2" y="202" width="13" height="10" fill="#69563d"/>
+<rect x="852.0" y="213" width="13" height="10" fill="#b18a58"/>
+<rect x="866.4" y="213" width="13" height="10" fill="#6a573d"/>
+<rect x="880.8" y="213" width="13" height="10" fill="#3a352b"/>
+<rect x="895.2" y="213" width="13" height="10" fill="#3d362c"/>
+<rect x="909.6" y="213" width="13" height="10" fill="#63523b"/>
+<rect x="924.0" y="213" width="13" height="10" fill="#8a6e4a"/>
+<rect x="938.4" y="213" width="13" height="10" fill="#b58e5d"/>
+<rect x="952.8" y="213" width="13" height="10" fill="#dec69e"/>
+<rect x="967.2" y="213" width="13" height="10" fill="#e8d3ad"/>
+<rect x="981.6" y="213" width="13" height="10" fill="#d4b78d"/>
+<rect x="996.0" y="213" width="13" height="10" fill="#b08958"/>
+<rect x="1010.4" y="213" width="13" height="10" fill="#725d40"/>
+<rect x="1024.8" y="213" width="13" height="10" fill="#7d6444"/>
+<rect x="1039.2" y="213" width="13" height="10" fill="#2a2925"/>
+<rect x="852" y="226" width="74" height="8" rx="2" class="mcp-btn"/>
+<text x="1052" y="234" class="tiny dim" text-anchor="end">step 1,240</text>
+<line x1="952" y1="240" x2="952" y2="262" class="leader"/>
+<rect x="840" y="276" width="224" height="28" rx="4" class="blk"/>
+<text x="854" y="295" class="mono tiny">build/applets/libfinetune_scope.dylib</text>
+<rect x="840" y="306" width="224" height="104" rx="4" class="blk"/>
+<text x="854" y="329" class="mono small">applet loader</text>
+<text x="854" y="363" class="mono small">caliper.export</text>
+<text x="854" y="397" class="mono small">caliper.log.v1</text>
+<text x="1050" y="329" class="n dim" text-anchor="end">CALIPER_APPLET</text>
+<path class="arrow data" d="M348,117 L284,117" marker-end="url(#sdtip)"/>
+<circle cx="316" cy="117" r="9" class="badge"/><text x="316" y="121" class="badge-n" text-anchor="middle">1</text>
+<path class="arrow data" d="M348,256 L284,256" marker-end="url(#sdtip)"/>
+<circle cx="316" cy="256" r="9" class="badge"/><text x="316" y="260" class="badge-n" text-anchor="middle">2</text>
+<path class="arrow" d="M772,290 L838,290" marker-end="url(#stip)"/>
+<circle cx="805" cy="290" r="9" class="badge"/><text x="805" y="294" class="badge-n" text-anchor="middle">3</text>
+<path class="arrow" d="M772,324 L838,324" marker-end="url(#stip)"/>
+<circle cx="805" cy="324" r="9" class="badge"/><text x="805" y="328" class="badge-n" text-anchor="middle">4</text>
+<path class="arrow data" d="M838,358 L774,358" marker-end="url(#sdtip)"/>
+<circle cx="805" cy="358" r="9" class="badge"/><text x="805" y="362" class="badge-n" text-anchor="middle">5</text>
+<path class="arrow data" d="M838,392 L774,392" marker-end="url(#sdtip)"/>
+<path class="arrow data" d="M348,358 L284,358" marker-end="url(#sdtip)"/>
+<circle cx="316" cy="358" r="9" class="badge"/><text x="316" y="362" class="badge-n" text-anchor="middle">5</text>
 </svg>
         </div>
       </div>
       <div class="soon-item">
         <div class="soon-text"><h3>Caliper Bench</h3><p>Instruments, sensors, test rigs and simulations streaming into Caliper on one clock, beside the models trained on their data, for the physical sciences, engineering and the life sciences.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
-<svg class="hw tl" id="tl-fig" viewBox="0 0 1100 440" role="img" aria-label="Illustrative: a vibration sensor, a spectrometer and a particle simulation stream into Caliper; the two feed channels share the host clock and show lost samples as a gap, the simulation stays on the GPU, and Caliper draws all three live, aligned in time, with a model's prediction over the vibration">
-<defs><marker id="ttip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-<rect x="16" y="44" width="360" height="380" rx="10" class="pkg"/>
+<svg class="hw" id="tl-fig" viewBox="0 0 1100 480" role="img" aria-label="Concept: ROS 2, CAN and OPC UA from robotics and control, and SiLA 2, the MinKNOW API and OME-Zarr from the bio lab, through Bench providers into caliper.feed.v1 channels stamped on one host clock with sequence numbers, and into Caliper views on one time axis: joint positions, motor current against a model, plate-reader growth curves, a microscope frame and nanopore signal">
+<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="sdtip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+<rect x="16" y="44" width="330" height="420" rx="10" class="pkg"/>
 <text x="34" y="28" class="k">SOURCES</text>
-<text x="358" y="28" class="n dim" text-anchor="end">instruments, rigs, simulations</text>
-<rect x="36" y="64" width="320" height="104" rx="4" class="blk"/>
-<text x="52" y="86" class="n">Sensors and test rigs</text><text x="340" y="86" class="n dim" text-anchor="end">vibration</text>
-<polyline id="tl-src-wave" class="tl-wave"/>
-<rect x="36" y="180" width="320" height="104" rx="4" class="blk"/>
-<text x="52" y="202" class="n">Instruments and imaging</text><text x="340" y="202" class="n dim" text-anchor="end">spectrum per frame</text>
-<g id="tl-src-spec"></g>
-<rect x="36" y="296" width="320" height="108" rx="4" class="blk"/>
-<text x="52" y="318" class="n">Simulations</text><text x="340" y="318" class="n dim" text-anchor="end">particles on the GPU</text>
-<g id="tl-src-sim"></g>
-<rect x="406" y="44" width="288" height="380" rx="10" class="pkg"/>
-<text x="424" y="28" class="k">CALIPER HOST</text>
-<text x="676" y="28" class="n dim" text-anchor="end">one clock</text>
-<text x="426" y="92" class="mono small" id="tl-seq-0">feed · seq 48,212</text>
-<g id="tl-ring-0"></g>
-<text x="426" y="208" class="mono small" id="tl-seq-1">feed · seq 9,604</text>
-<g id="tl-ring-1"></g>
-<rect x="426" y="314" width="248" height="70" rx="4" class="blk"/>
-<text x="442" y="340" class="mono small">ExportablePool block</text>
-<text x="442" y="362" class="n dim">drawn in place, no copy</text>
-<text x="550" y="410" class="n dim" text-anchor="middle" id="tl-gap-note">lost samples show as a gap</text>
-<path class="arrow data" d="M358,128 L424,128" marker-end="url(#ttip)"/>
-<path class="arrow data" d="M358,244 L424,244" marker-end="url(#ttip)"/>
-<path class="arrow data" d="M358,350 L424,350" marker-end="url(#ttip)"/>
-<path class="arrow data" d="M676,128 L742,128" marker-end="url(#ttip)"/>
-<path class="arrow data" d="M676,244 L742,244" marker-end="url(#ttip)"/>
-<path class="arrow data" d="M676,350 L742,350" marker-end="url(#ttip)"/>
-<rect x="724" y="44" width="360" height="380" rx="10" class="pkg"/>
-<text x="742" y="28" class="k">CALIPER</text>
-<text x="1066" y="28" class="n dim" text-anchor="end">aligned on the host clock</text>
-<rect x="744" y="64" width="320" height="340" rx="4" class="blk"/>
-<line x1="760" y1="100" x2="1048" y2="100" class="rulefaint"/><line x1="760" y1="160" x2="1048" y2="160" class="rulefaint"/>
-<rect id="tl-anomaly" x="1000" y="100" width="0" height="60" class="tl-anomaly"/>
-<polyline id="tl-view-wave" class="tl-wave"/>
-<polyline id="tl-view-model" class="tl-model"/>
-<text x="760" y="88" class="n dim">vibration, and the model's prediction</text>
-<text x="1048" y="88" class="n tl-flag" text-anchor="end" id="tl-flag"></text>
-<text x="760" y="186" class="n dim">spectrum over time</text>
-<g id="tl-view-spec"></g>
-<text x="760" y="276" class="n dim">particles, coloured by speed</text>
-<g id="tl-view-sim"></g>
-<line x1="1048" y1="96" x2="1048" y2="256" class="tl-now"/>
+<text x="328" y="28" class="n dim" text-anchor="end">robotics and control · bio lab</text>
+<text x="36" y="74" class="k">ROBOTICS AND CONTROL</text>
+<text x="36" y="274" class="k">BIO LAB</text>
+<rect x="36" y="84" width="290" height="42" rx="4" class="blk"/>
+<text x="50" y="102" class="mono small">ROS 2 · DDS</text>
+<text x="50" y="119" class="n dim">/joint_states, /imu</text>
+<rect x="36" y="134" width="290" height="42" rx="4" class="blk"/>
+<text x="50" y="152" class="mono small">CAN · SocketCAN</text>
+<text x="50" y="169" class="n dim">motor controller frames</text>
+<rect x="36" y="184" width="290" height="42" rx="4" class="blk"/>
+<text x="50" y="202" class="mono small">OPC UA</text>
+<text x="50" y="219" class="n dim">PLC tags</text>
+<rect x="36" y="284" width="290" height="42" rx="4" class="blk"/>
+<text x="50" y="302" class="mono small">SiLA 2 · gRPC</text>
+<text x="50" y="319" class="n dim">liquid handlers, plate readers</text>
+<rect x="36" y="334" width="290" height="42" rx="4" class="blk"/>
+<text x="50" y="352" class="mono small">MinKNOW API · gRPC</text>
+<text x="50" y="369" class="n dim">nanopore read signal, live</text>
+<rect x="36" y="384" width="290" height="42" rx="4" class="blk"/>
+<text x="50" y="402" class="mono small">OME-Zarr</text>
+<text x="50" y="419" class="n dim">microscope frames</text>
+<rect x="376" y="44" width="354" height="420" rx="10" class="pkg"/>
+<text x="394" y="28" class="k">BENCH PROVIDERS</text>
+<text x="712" y="28" class="n dim" text-anchor="end">into caliper.feed.v1</text>
+<rect x="396" y="84" width="314" height="42" rx="4" class="blk"/>
+<text x="410" y="102" class="mono small">ros2:/joint_states/position</text>
+<text x="410" y="119" class="n dim">7 values · 500 Hz</text>
+<rect x="620" y="110" width="11" height="11" rx="1" class="slot full"/>
+<rect x="634" y="110" width="11" height="11" rx="1" class="slot full"/>
+<rect x="648" y="110" width="11" height="11" rx="1" class="slot full"/>
+<rect x="662" y="110" width="11" height="11" rx="1" class="slot full"/>
+<rect x="676" y="110" width="11" height="11" rx="1" class="slot full"/>
+<rect x="690" y="110" width="11" height="11" rx="1" class="slot"/>
+<path class="arrow data" d="M328,105 L394,105" marker-end="url(#sdtip)"/>
+<rect x="396" y="134" width="314" height="42" rx="4" class="blk"/>
+<text x="410" y="152" class="mono small">can0:0x181/current</text>
+<text x="410" y="169" class="n dim">1 kHz</text>
+<rect x="620" y="160" width="11" height="11" rx="1" class="slot full"/>
+<rect x="634" y="160" width="11" height="11" rx="1" class="slot full"/>
+<rect x="648" y="160" width="11" height="11" rx="1" class="slot full"/>
+<rect x="662" y="160" width="11" height="11" rx="1" class="slot lost"/>
+<rect x="676" y="160" width="11" height="11" rx="1" class="slot full"/>
+<rect x="690" y="160" width="11" height="11" rx="1" class="slot"/>
+<path class="arrow data" d="M328,155 L394,155" marker-end="url(#sdtip)"/>
+<rect x="396" y="184" width="314" height="42" rx="4" class="blk"/>
+<text x="410" y="202" class="mono small">opcua:ns=2;s=Press.Temp</text>
+<text x="410" y="219" class="n dim">10 Hz</text>
+<rect x="620" y="210" width="11" height="11" rx="1" class="slot full"/>
+<rect x="634" y="210" width="11" height="11" rx="1" class="slot full"/>
+<rect x="648" y="210" width="11" height="11" rx="1" class="slot full"/>
+<rect x="662" y="210" width="11" height="11" rx="1" class="slot full"/>
+<rect x="676" y="210" width="11" height="11" rx="1" class="slot full"/>
+<rect x="690" y="210" width="11" height="11" rx="1" class="slot"/>
+<path class="arrow data" d="M328,205 L394,205" marker-end="url(#sdtip)"/>
+<rect x="396" y="284" width="314" height="42" rx="4" class="blk"/>
+<text x="410" y="302" class="mono small">sila:PlateReader/OD600</text>
+<text x="410" y="319" class="n dim">96 wells · every 10 min</text>
+<rect x="620" y="310" width="11" height="11" rx="1" class="slot full"/>
+<rect x="634" y="310" width="11" height="11" rx="1" class="slot full"/>
+<rect x="648" y="310" width="11" height="11" rx="1" class="slot full"/>
+<rect x="662" y="310" width="11" height="11" rx="1" class="slot full"/>
+<rect x="676" y="310" width="11" height="11" rx="1" class="slot full"/>
+<rect x="690" y="310" width="11" height="11" rx="1" class="slot"/>
+<path class="arrow data" d="M328,305 L394,305" marker-end="url(#sdtip)"/>
+<rect x="396" y="334" width="314" height="42" rx="4" class="blk"/>
+<text x="410" y="352" class="mono small">minknow:ch412/signal</text>
+<text x="410" y="369" class="n dim">4 kHz · pA</text>
+<rect x="620" y="360" width="11" height="11" rx="1" class="slot full"/>
+<rect x="634" y="360" width="11" height="11" rx="1" class="slot full"/>
+<rect x="648" y="360" width="11" height="11" rx="1" class="slot full"/>
+<rect x="662" y="360" width="11" height="11" rx="1" class="slot full"/>
+<rect x="676" y="360" width="11" height="11" rx="1" class="slot full"/>
+<rect x="690" y="360" width="11" height="11" rx="1" class="slot"/>
+<path class="arrow data" d="M328,355 L394,355" marker-end="url(#sdtip)"/>
+<rect x="396" y="384" width="314" height="42" rx="4" class="blk"/>
+<text x="410" y="402" class="mono small">tensor (2048, 2048) uint16</text>
+<text x="410" y="419" class="n dim">caliper.show, per frame</text>
+<path class="arrow data" d="M328,405 L394,405" marker-end="url(#sdtip)"/>
+<text x="396" y="444" class="n dim">each sample: host-clock ns and a sequence number;</text>
+<text x="396" y="460" class="n dim">a gap in the sequence is a lost sample, shown</text>
+<rect x="744" y="84" width="10" height="342" rx="2" class="clockbar"/>
+
+<path class="arrow data" d="M712,105 L742,105" marker-end="url(#sdtip)"/>
+<path class="arrow data" d="M712,155 L742,155" marker-end="url(#sdtip)"/>
+<path class="arrow data" d="M712,205 L742,205" marker-end="url(#sdtip)"/>
+<path class="arrow data" d="M712,305 L742,305" marker-end="url(#sdtip)"/>
+<path class="arrow data" d="M712,355 L742,355" marker-end="url(#sdtip)"/>
+<path class="arrow data" d="M712,405 L742,405" marker-end="url(#sdtip)"/>
+<rect x="770" y="44" width="314" height="420" rx="10" class="pkg"/>
+<text x="788" y="28" class="k">CALIPER</text>
+<text x="1066" y="28" class="n dim" text-anchor="end">one time axis, the host clock</text>
+<rect x="788" y="64" width="278" height="88" rx="4" class="blk"/>
+<text x="802" y="82" class="k">7 JOINT POSITIONS</text>
+<path class="arrow data" d="M756,108 L786,108" marker-end="url(#sdtip)"/>
+<rect x="788" y="164" width="278" height="88" rx="4" class="blk"/>
+<text x="802" y="182" class="k">MOTOR CURRENT</text>
+<path class="arrow data" d="M756,208 L786,208" marker-end="url(#sdtip)"/>
+<rect x="788" y="264" width="278" height="88" rx="4" class="blk"/>
+<text x="802" y="282" class="k">OD600 IN 96 WELLS</text>
+<path class="arrow data" d="M756,308 L786,308" marker-end="url(#sdtip)"/>
+<polyline class="mini" points="802.0,118.0 807.2,119.3 812.4,120.5 817.6,121.7 822.8,122.9 828.0,123.9 833.2,124.8 838.4,125.6 843.6,126.2 848.8,126.6 854.0,126.9 859.2,127.0 864.4,126.9 869.6,126.6 874.8,126.2 880.0,125.6 885.2,124.8 890.4,123.9 895.6,122.9 900.8,121.7 906.0,120.5 911.2,119.3 916.4,118.0 921.6,116.7 926.8,115.5 932.0,114.2 937.2,113.1 942.4,112.1 947.6,111.2 952.8,110.4 958.0,109.8 963.2,109.4 968.4,109.1 973.6,109.0 978.8,109.1 984.0,109.4 989.2,109.8 994.4,110.4 999.6,111.2 1004.8,112.1 1010.0,113.2 1015.2,114.3 1020.4,115.5 1025.6,116.7 1030.8,118.0 1036.0,119.3 1041.2,120.6 1046.4,121.8 1051.6,122.9 1056.8,123.9"/>
+<polyline class="mini" points="802.0,121.4 807.2,122.0 812.4,122.4 817.6,122.7 822.8,122.8 828.0,122.7 833.2,122.4 838.4,122.0 843.6,121.4 848.8,120.6 854.0,119.7 859.2,118.7 864.4,117.5 869.6,116.3 874.8,115.1 880.0,113.8 885.2,112.5 890.4,111.3 895.6,110.0 900.8,108.9 906.0,107.9 911.2,107.0 916.4,106.2 921.6,105.6 926.8,105.2 932.0,104.9 937.2,104.8 942.4,104.9 947.6,105.2 952.8,105.6 958.0,106.2 963.2,107.0 968.4,107.9 973.6,109.0 978.8,110.1 984.0,111.3 989.2,112.5 994.4,113.8 999.6,115.1 1004.8,116.4 1010.0,117.6 1015.2,118.7 1020.4,119.7 1025.6,120.6 1030.8,121.4 1036.0,122.0 1041.2,122.4 1046.4,122.7 1051.6,122.8 1056.8,122.7"/>
+<polyline class="mini" points="802.0,117.8 807.2,117.2 812.4,116.4 817.6,115.5 822.8,114.5 828.0,113.3 833.2,112.1 838.4,110.9 843.6,109.6 848.8,108.3 854.0,107.1 859.2,105.8 864.4,104.7 869.6,103.7 874.8,102.8 880.0,102.0 885.2,101.4 890.4,101.0 895.6,100.7 900.8,100.6 906.0,100.7 911.2,101.0 916.4,101.4 921.6,102.0 926.8,102.8 932.0,103.7 937.2,104.8 942.4,105.9 947.6,107.1 952.8,108.3 958.0,109.6 963.2,110.9 968.4,112.2 973.6,113.4 978.8,114.5 984.0,115.5 989.2,116.4 994.4,117.2 999.6,117.8 1004.8,118.2 1010.0,118.5 1015.2,118.6 1020.4,118.5 1025.6,118.2 1030.8,117.8 1036.0,117.2 1041.2,116.4 1046.4,115.5 1051.6,114.4 1056.8,113.3"/>
+<polyline class="mini" points="802.0,106.7 807.2,105.4 812.4,104.1 817.6,102.9 822.8,101.6 828.0,100.5 833.2,99.5 838.4,98.6 843.6,97.8 848.8,97.2 854.0,96.8 859.2,96.5 864.4,96.4 869.6,96.5 874.8,96.8 880.0,97.2 885.2,97.8 890.4,98.6 895.6,99.5 900.8,100.6 906.0,101.7 911.2,102.9 916.4,104.1 921.6,105.4 926.8,106.7 932.0,108.0 937.2,109.2 942.4,110.3 947.6,111.3 952.8,112.2 958.0,113.0 963.2,113.6 968.4,114.0 973.6,114.3 978.8,114.4 984.0,114.3 989.2,114.0 994.4,113.6 999.6,113.0 1004.8,112.2 1010.0,111.3 1015.2,110.2 1020.4,109.1 1025.6,107.9 1030.8,106.6 1036.0,105.4 1041.2,104.1 1046.4,102.8 1051.6,101.6 1056.8,100.5"/>
+<polyline class="mini" points="802.0,94.4 807.2,93.6 812.4,93.0 817.6,92.6 822.8,92.3 828.0,92.2 833.2,92.3 838.4,92.6 843.6,93.0 848.8,93.6 854.0,94.4 859.2,95.3 864.4,96.4 869.6,97.5 874.8,98.7 880.0,99.9 885.2,101.2 890.4,102.5 895.6,103.8 900.8,105.0 906.0,106.1 911.2,107.1 916.4,108.0 921.6,108.8 926.8,109.4 932.0,109.8 937.2,110.1 942.4,110.2 947.6,110.1 952.8,109.8 958.0,109.4 963.2,108.8 968.4,108.0 973.6,107.1 978.8,106.0 984.0,104.9 989.2,103.7 994.4,102.4 999.6,101.2 1004.8,99.9 1010.0,98.6 1015.2,97.4 1020.4,96.3 1025.6,95.3 1030.8,94.4 1036.0,93.6 1041.2,93.0 1046.4,92.6 1051.6,92.3 1056.8,92.2"/>
+<polyline class="mini" points="802.0,88.4 807.2,88.8 812.4,89.4 817.6,90.2 822.8,91.1 828.0,92.2 833.2,93.3 838.4,94.5 843.6,95.7 848.8,97.0 854.0,98.3 859.2,99.6 864.4,100.8 869.6,101.9 874.8,102.9 880.0,103.8 885.2,104.6 890.4,105.2 895.6,105.6 900.8,105.9 906.0,106.0 911.2,105.9 916.4,105.6 921.6,105.2 926.8,104.6 932.0,103.8 937.2,102.9 942.4,101.8 947.6,100.7 952.8,99.5 958.0,98.2 963.2,97.0 968.4,95.7 973.6,94.4 978.8,93.2 984.0,92.1 989.2,91.1 994.4,90.2 999.6,89.4 1004.8,88.8 1010.0,88.4 1015.2,88.1 1020.4,88.0 1025.6,88.1 1030.8,88.4 1036.0,88.8 1041.2,89.5 1046.4,90.2 1051.6,91.1 1056.8,92.2"/>
+<polyline class="mini" points="802.0,90.3 807.2,91.5 812.4,92.8 817.6,94.1 822.8,95.4 828.0,96.6 833.2,97.7 838.4,98.7 843.6,99.6 848.8,100.4 854.0,101.0 859.2,101.4 864.4,101.7 869.6,101.8 874.8,101.7 880.0,101.4 885.2,101.0 890.4,100.4 895.6,99.6 900.8,98.7 906.0,97.6 911.2,96.5 916.4,95.3 921.6,94.0 926.8,92.8 932.0,91.5 937.2,90.2 942.4,89.0 947.6,87.9 952.8,86.9 958.0,86.0 963.2,85.2 968.4,84.6 973.6,84.2 978.8,83.9 984.0,83.8 989.2,83.9 994.4,84.2 999.6,84.6 1004.8,85.3 1010.0,86.0 1015.2,86.9 1020.4,88.0 1025.6,89.1 1030.8,90.3 1036.0,91.6 1041.2,92.8 1046.4,94.1 1051.6,95.4 1056.8,96.6"/>
+<rect x="973.6" y="190" width="41.6" height="54" class="flagband"/>
+<polyline class="mini" points="802.0,218.8 804.6,220.3 807.2,221.1 809.8,224.8 812.4,223.3 815.0,225.0 817.6,227.1 820.2,226.0 822.8,229.3 825.4,226.7 828.0,225.7 830.6,224.3 833.2,225.3 835.8,222.9 838.4,221.9 841.0,220.0 843.6,218.6 846.2,217.3 848.8,214.3 851.4,210.7 854.0,210.3 856.6,208.0 859.2,206.5 861.8,208.0 864.4,208.9 867.0,207.1 869.6,208.3 872.2,209.7 874.8,212.5 877.4,213.4 880.0,215.7 882.6,218.2 885.2,218.7 887.8,222.3 890.4,224.6 893.0,222.9 895.6,227.7 898.2,227.9 900.8,226.2 903.4,227.8 906.0,228.4 908.6,229.0 911.2,226.1 913.8,225.6 916.4,225.4 919.0,223.3 921.6,222.0 924.2,218.1 926.8,216.9 929.4,213.2 932.0,213.4 934.6,212.3 937.2,210.3 939.8,209.6 942.4,207.0 945.0,209.6 947.6,210.1 950.2,210.7 952.8,209.9 955.4,212.2 958.0,211.9 960.6,216.1 963.2,217.8 965.8,217.7 968.4,218.6 971.0,222.0 973.6,224.1 976.2,216.6 978.8,232.0 981.4,238.4 984.0,230.5 986.6,214.1 989.2,221.0 991.8,233.5 994.4,237.3 997.0,224.2 999.6,208.6 1002.2,214.2 1004.8,229.1 1007.4,228.7 1010.0,212.3 1012.6,201.1 1015.2,213.4 1017.8,210.2 1020.4,210.9 1023.0,206.7 1025.6,206.9 1028.2,208.2 1030.8,207.7 1033.4,210.2 1036.0,211.0 1038.6,212.0 1041.2,215.0 1043.8,215.8 1046.4,216.8 1049.0,219.0 1051.6,222.8 1054.2,224.8 1056.8,223.7 1059.4,227.5"/>
+<polyline class="mini model" points="802.0,218.0 804.6,220.0 807.2,221.9 809.8,223.6 812.4,225.2 815.0,226.4 817.6,227.3 820.2,227.9 822.8,228.0 825.4,227.7 828.0,227.1 830.6,226.1 833.2,224.8 835.8,223.2 838.4,221.3 841.0,219.4 843.6,217.4 846.2,215.4 848.8,213.6 851.4,211.9 854.0,210.4 856.6,209.3 859.2,208.5 861.8,208.1 864.4,208.0 867.0,208.4 869.6,209.2 872.2,210.3 874.8,211.7 877.4,213.4 880.0,215.2 882.6,217.2 885.2,219.2 887.8,221.1 890.4,222.9 893.0,224.6 895.6,225.9 898.2,227.0 900.8,227.7 903.4,228.0 906.0,227.9 908.6,227.4 911.2,226.5 913.8,225.3 916.4,223.8 919.0,222.1 921.6,220.2 924.2,218.2 926.8,216.3 929.4,214.3 932.0,212.6 934.6,211.0 937.2,209.7 939.8,208.8 942.4,208.2 945.0,208.0 947.6,208.2 950.2,208.8 952.8,209.8 955.4,211.1 958.0,212.6 960.6,214.4 963.2,216.3 965.8,218.3 968.4,220.3 971.0,222.2 973.6,223.9 976.2,225.4 978.8,226.6 981.4,227.4 984.0,227.9 986.6,228.0 989.2,227.7 991.8,226.9 994.4,225.9 997.0,224.5 999.6,222.9 1002.2,221.0 1004.8,219.1 1007.4,217.1 1010.0,215.1 1012.6,213.3 1015.2,211.6 1017.8,210.2 1020.4,209.1 1023.0,208.4 1025.6,208.0 1028.2,208.1 1030.8,208.5 1033.4,209.3 1036.0,210.5 1038.6,212.0 1041.2,213.7 1043.8,215.5 1046.4,217.5 1049.0,219.5 1051.6,221.4 1054.2,223.2 1056.8,224.8 1059.4,226.1"/>
+<text x="974" y="187" class="tiny hot">off the model</text><text x="1054" y="248" class="tiny dim" text-anchor="end">dashed: the model</text>
+<polyline class="mini faint" points="802.0,341.9 807.2,341.9 812.4,341.9 817.6,341.9 822.8,341.8 828.0,341.8 833.2,341.7 838.4,341.6 843.6,341.5 848.8,341.4 854.0,341.2 859.2,341.0 864.4,340.7 869.6,340.4 874.8,339.9 880.0,339.3 885.2,338.6 890.4,337.7 895.6,336.5 900.8,335.1 906.0,333.4 911.2,331.4 916.4,329.0 921.6,326.3 926.8,323.2 932.0,319.9 937.2,316.4 942.4,312.8 947.6,309.3 952.8,305.9 958.0,302.7 963.2,299.9 968.4,297.4 973.6,295.2 978.8,293.4 984.0,291.9 989.2,290.7 994.4,289.7 999.6,288.9 1004.8,288.3 1010.0,287.8 1015.2,287.4 1020.4,287.1 1025.6,286.8 1030.8,286.7 1036.0,286.5 1041.2,286.4 1046.4,286.3 1051.6,286.2 1056.8,286.2"/>
+<polyline class="mini faint" points="802.0,341.3 807.2,341.2 812.4,341.0 817.6,340.7 822.8,340.4 828.0,340.1 833.2,339.7 838.4,339.2 843.6,338.5 848.8,337.8 854.0,336.9 859.2,335.8 864.4,334.6 869.6,333.2 874.8,331.5 880.0,329.6 885.2,327.5 890.4,325.1 895.6,322.5 900.8,319.8 906.0,317.0 911.2,314.0 916.4,311.1 921.6,308.3 926.8,305.6 932.0,303.0 937.2,300.6 942.4,298.5 947.6,296.6 952.8,294.9 958.0,293.4 963.2,292.2 968.4,291.1 973.6,290.2 978.8,289.5 984.0,288.9 989.2,288.4 994.4,287.9 999.6,287.6 1004.8,287.3 1010.0,287.0 1015.2,286.9 1020.4,286.7 1025.6,286.6 1030.8,286.5 1036.0,286.4 1041.2,286.3 1046.4,286.2 1051.6,286.2 1056.8,286.2"/>
+<polyline class="mini faint" points="802.0,341.7 807.2,341.7 812.4,341.6 817.6,341.5 822.8,341.4 828.0,341.3 833.2,341.1 838.4,340.9 843.6,340.7 848.8,340.4 854.0,340.1 859.2,339.6 864.4,339.1 869.6,338.5 874.8,337.8 880.0,336.9 885.2,335.9 890.4,334.7 895.6,333.3 900.8,331.7 906.0,329.9 911.2,327.8 916.4,325.6 921.6,323.1 926.8,320.5 932.0,317.7 937.2,314.9 942.4,312.0 947.6,309.2 952.8,306.5 958.0,303.9 963.2,301.5 968.4,299.3 973.6,297.4 978.8,295.6 984.0,294.1 989.2,292.8 994.4,291.7 999.6,290.7 1004.8,289.9 1010.0,289.2 1015.2,288.7 1020.4,288.2 1025.6,287.8 1030.8,287.5 1036.0,287.2 1041.2,287.0 1046.4,286.8 1051.6,286.7 1056.8,286.5"/>
+<polyline class="mini faint" points="802.0,340.8 807.2,340.5 812.4,340.2 817.6,339.8 822.8,339.3 828.0,338.7 833.2,337.9 838.4,337.1 843.6,336.0 848.8,334.8 854.0,333.3 859.2,331.7 864.4,329.7 869.6,327.6 874.8,325.2 880.0,322.6 885.2,319.8 890.4,316.9 895.6,314.0 900.8,311.0 906.0,308.1 911.2,305.3 916.4,302.7 921.6,300.3 926.8,298.2 932.0,296.3 937.2,294.6 942.4,293.2 947.6,292.0 952.8,290.9 958.0,290.0 963.2,289.3 968.4,288.7 973.6,288.2 978.8,287.8 984.0,287.5 989.2,287.2 994.4,287.0 999.6,286.8 1004.8,286.6 1010.0,286.5 1015.2,286.4 1020.4,286.3 1025.6,286.3 1030.8,286.2 1036.0,286.2 1041.2,286.1 1046.4,286.1 1051.6,286.1 1056.8,286.1"/>
+<polyline class="mini faint" points="802.0,341.9 807.2,341.9 812.4,341.9 817.6,341.9 822.8,341.8 828.0,341.8 833.2,341.7 838.4,341.6 843.6,341.5 848.8,341.4 854.0,341.2 859.2,341.0 864.4,340.7 869.6,340.3 874.8,339.8 880.0,339.2 885.2,338.5 890.4,337.5 895.6,336.3 900.8,334.9 906.0,333.2 911.2,331.1 916.4,328.6 921.6,325.9 926.8,322.8 932.0,319.4 937.2,315.9 942.4,312.3 947.6,308.8 952.8,305.4 958.0,302.3 963.2,299.5 968.4,297.1 973.6,295.0 978.8,293.2 984.0,291.7 989.2,290.5 994.4,289.6 999.6,288.8 1004.8,288.2 1010.0,287.7 1015.2,287.3 1020.4,287.0 1025.6,286.8 1030.8,286.6 1036.0,286.5 1041.2,286.4 1046.4,286.3 1051.6,286.2 1056.8,286.2"/>
+<polyline class="mini faint" points="802.0,341.9 807.2,341.8 812.4,341.8 817.6,341.7 822.8,341.7 828.0,341.6 833.2,341.5 838.4,341.4 843.6,341.3 848.8,341.2 854.0,341.0 859.2,340.8 864.4,340.6 869.6,340.3 874.8,340.0 880.0,339.6 885.2,339.1 890.4,338.6 895.6,337.9 900.8,337.1 906.0,336.2 911.2,335.2 916.4,334.0 921.6,332.6 926.8,331.0 932.0,329.3 937.2,327.4 942.4,325.2 947.6,322.9 952.8,320.5 958.0,318.0 963.2,315.4 968.4,312.7 973.6,310.1 978.8,307.6 984.0,305.1 989.2,302.9 994.4,300.7 999.6,298.8 1004.8,297.0 1010.0,295.4 1015.2,294.1 1020.4,292.8 1025.6,291.8 1030.8,290.9 1036.0,290.1 1041.2,289.4 1046.4,288.9 1051.6,288.4 1056.8,288.0"/>
+<polyline class="mini faint" points="802.0,341.8 807.2,341.7 812.4,341.6 817.6,341.5 822.8,341.4 828.0,341.3 833.2,341.1 838.4,341.0 843.6,340.7 848.8,340.4 854.0,340.1 859.2,339.7 864.4,339.1 869.6,338.5 874.8,337.8 880.0,336.9 885.2,335.9 890.4,334.6 895.6,333.2 900.8,331.5 906.0,329.7 911.2,327.6 916.4,325.2 921.6,322.7 926.8,320.0 932.0,317.2 937.2,314.3 942.4,311.4 947.6,308.5 952.8,305.8 958.0,303.2 963.2,300.9 968.4,298.7 973.6,296.8 978.8,295.1 984.0,293.6 989.2,292.4 994.4,291.3 999.6,290.4 1004.8,289.6 1010.0,289.0 1015.2,288.4 1020.4,288.0 1025.6,287.6 1030.8,287.3 1036.0,287.1 1041.2,286.9 1046.4,286.7 1051.6,286.6 1056.8,286.5"/>
+<polyline class="mini faint" points="802.0,341.1 807.2,340.9 812.4,340.7 817.6,340.3 822.8,339.9 828.0,339.5 833.2,338.9 838.4,338.1 843.6,337.2 848.8,336.2 854.0,334.9 859.2,333.4 864.4,331.6 869.6,329.6 874.8,327.3 880.0,324.8 885.2,322.0 890.4,319.1 895.6,316.0 900.8,312.9 906.0,309.8 911.2,306.8 916.4,304.0 921.6,301.4 926.8,299.0 932.0,296.9 937.2,295.1 942.4,293.5 947.6,292.2 952.8,291.1 958.0,290.1 963.2,289.4 968.4,288.7 973.6,288.2 978.8,287.8 984.0,287.4 989.2,287.1 994.4,286.9 999.6,286.7 1004.8,286.6 1010.0,286.5 1015.2,286.4 1020.4,286.3 1025.6,286.2 1030.8,286.2 1036.0,286.2 1041.2,286.1 1046.4,286.1 1051.6,286.1 1056.8,286.1"/>
+<polyline class="mini faint" points="802.0,341.6 807.2,341.6 812.4,341.5 817.6,341.4 822.8,341.2 828.0,341.0 833.2,340.8 838.4,340.6 843.6,340.2 848.8,339.9 854.0,339.4 859.2,338.8 864.4,338.2 869.6,337.4 874.8,336.4 880.0,335.3 885.2,334.0 890.4,332.5 895.6,330.7 900.8,328.8 906.0,326.6 911.2,324.2 916.4,321.7 921.6,318.9 926.8,316.1 932.0,313.3 937.2,310.4 942.4,307.6 947.6,305.0 952.8,302.5 958.0,300.2 963.2,298.2 968.4,296.3 973.6,294.7 978.8,293.3 984.0,292.1 989.2,291.1 994.4,290.2 999.6,289.5 1004.8,288.9 1010.0,288.4 1015.2,287.9 1020.4,287.6 1025.6,287.3 1030.8,287.1 1036.0,286.9 1041.2,286.7 1046.4,286.6 1051.6,286.5 1056.8,286.4"/>
+<polyline class="mini faint" points="802.0,342.0 807.2,342.0 812.4,342.0 817.6,342.0 822.8,342.0 828.0,342.0 833.2,342.0 838.4,341.9 843.6,341.9 848.8,341.9 854.0,341.9 859.2,341.8 864.4,341.8 869.6,341.7 874.8,341.6 880.0,341.5 885.2,341.4 890.4,341.2 895.6,341.0 900.8,340.7 906.0,340.3 911.2,339.9 916.4,339.3 921.6,338.5 926.8,337.6 932.0,336.4 937.2,335.0 942.4,333.3 947.6,331.3 952.8,328.9 958.0,326.2 963.2,323.1 968.4,319.8 973.6,316.3 978.8,312.8 984.0,309.3 989.2,305.9 994.4,302.8 999.6,299.9 1004.8,297.4 1010.0,295.3 1015.2,293.5 1020.4,292.0 1025.6,290.7 1030.8,289.7 1036.0,288.9 1041.2,288.3 1046.4,287.8 1051.6,287.4 1056.8,287.1"/>
+<polyline class="mini faint" points="802.0,341.3 807.2,341.2 812.4,341.1 817.6,340.9 822.8,340.7 828.0,340.5 833.2,340.2 838.4,339.9 843.6,339.5 848.8,339.1 854.0,338.5 859.2,337.9 864.4,337.2 869.6,336.4 874.8,335.5 880.0,334.4 885.2,333.2 890.4,331.9 895.6,330.4 900.8,328.7 906.0,326.9 911.2,324.9 916.4,322.8 921.6,320.6 926.8,318.3 932.0,315.9 937.2,313.5 942.4,311.1 947.6,308.7 952.8,306.4 958.0,304.2 963.2,302.2 968.4,300.3 973.6,298.5 978.8,296.9 984.0,295.5 989.2,294.2 994.4,293.1 999.6,292.1 1004.8,291.2 1010.0,290.4 1015.2,289.8 1020.4,289.2 1025.6,288.7 1030.8,288.3 1036.0,288.0 1041.2,287.7 1046.4,287.4 1051.6,287.2 1056.8,287.0"/>
+<polyline class="mini faint" points="802.0,340.9 807.2,340.7 812.4,340.5 817.6,340.2 822.8,340.0 828.0,339.6 833.2,339.2 838.4,338.8 843.6,338.3 848.8,337.7 854.0,337.1 859.2,336.3 864.4,335.5 869.6,334.6 874.8,333.5 880.0,332.3 885.2,331.0 890.4,329.6 895.6,328.0 900.8,326.3 906.0,324.5 911.2,322.6 916.4,320.6 921.6,318.5 926.8,316.4 932.0,314.2 937.2,312.0 942.4,309.9 947.6,307.8 952.8,305.8 958.0,303.8 963.2,302.0 968.4,300.3 973.6,298.7 978.8,297.2 984.0,295.9 989.2,294.7 994.4,293.6 999.6,292.7 1004.8,291.8 1010.0,291.0 1015.2,290.4 1020.4,289.8 1025.6,289.3 1030.8,288.8 1036.0,288.4 1041.2,288.1 1046.4,287.8 1051.6,287.6 1056.8,287.3"/>
+<rect x="788" y="364" width="134" height="88" rx="4" class="blk"/>
+<text x="802" y="382" class="k">MICROSCOPE</text>
+<rect x="932" y="364" width="134" height="88" rx="4" class="blk"/>
+<text x="946" y="382" class="k">NANOPORE</text>
+<circle cx="890.8" cy="438.8" r="4.9" fill="#ba9464" opacity=".85"/>
+<circle cx="825.9" cy="424.1" r="6.7" fill="#aa8556" opacity=".85"/>
+<circle cx="887.0" cy="393.2" r="3.8" fill="#b58d5c" opacity=".85"/>
+<circle cx="877.5" cy="408.7" r="4.4" fill="#ccad80" opacity=".85"/>
+<circle cx="816.9" cy="430.0" r="3.5" fill="#c5a476" opacity=".85"/>
+<circle cx="832.1" cy="402.3" r="5.1" fill="#c19e6f" opacity=".85"/>
+<circle cx="845.1" cy="413.5" r="5.1" fill="#ae8757" opacity=".85"/>
+<circle cx="827.2" cy="424.8" r="5.6" fill="#c6a578" opacity=".85"/>
+<circle cx="894.5" cy="423.8" r="6.4" fill="#b58e5c" opacity=".85"/>
+<circle cx="883.0" cy="434.1" r="6.6" fill="#ba9464" opacity=".85"/>
+<circle cx="838.8" cy="440.0" r="3.9" fill="#e2cba4" opacity=".85"/>
+<circle cx="898.3" cy="399.0" r="4.0" fill="#d2b58a" opacity=".85"/>
+<circle cx="833.0" cy="397.0" r="6.3" fill="#c09d6e" opacity=".85"/>
+<circle cx="888.2" cy="398.6" r="4.6" fill="#d0b286" opacity=".85"/>
+<circle cx="807.8" cy="402.4" r="5.7" fill="#ddc49b" opacity=".85"/>
+<circle cx="906.7" cy="398.0" r="5.0" fill="#d4b88d" opacity=".85"/>
+<polyline class="mini" points="946.0,418.8 947.8,416.9 949.6,416.4 951.4,416.5 953.2,416.3 955.0,418.3 956.8,418.2 958.6,419.1 960.4,419.2 962.2,419.3 964.0,421.8 965.8,422.4 967.6,422.2 969.4,418.9 971.2,404.0 973.0,402.1 974.8,403.3 976.6,401.5 978.4,402.1 980.2,402.3 982.0,402.0 983.8,419.7 985.6,422.4 987.4,423.0 989.2,420.4 991.0,421.4 992.8,422.6 994.6,421.3 996.4,405.7 998.2,407.1 1000.0,405.1 1001.8,408.6 1003.6,408.2 1005.4,407.8 1007.2,408.5 1009.0,422.3 1010.8,423.1 1012.6,422.7 1014.4,424.6 1016.2,423.9 1018.0,421.7 1019.8,424.3 1021.6,427.9 1023.4,428.1 1025.2,426.4 1027.0,428.4 1028.8,428.3 1030.6,427.6 1032.4,427.9 1034.2,427.2 1036.0,428.4 1037.8,425.8 1039.6,426.9 1041.4,427.4 1043.2,425.6 1045.0,427.0 1046.8,423.5 1048.6,421.9 1050.4,424.8 1052.2,423.7"/>
+<path class="arrow data" d="M756,408 L786,408" marker-end="url(#sdtip)"/>
 </svg>
         </div>
       </div>
       <div class="soon-item">
         <div class="soon-text"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold, with experts who work alongside your team to take the model to production.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
-<svg class="hw soon-svg" id="soon-cloud" viewBox="0 0 1100 490" role="img" aria-label="Concept: Caliper on your machine streams views of a model sharded across dedicated GPU nodes in Caliper Cloud, and sends prompts, interventions and camera moves back; below, the free open-source SDK and app for experimenting lead to paid Caliper Cloud, with dedicated compute and experts">
-<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-<rect x="16" y="44" width="340" height="300" rx="10" class="pkg"/>
+<svg class="hw" id="soon-cloud" viewBox="0 0 1100 490" role="img" aria-label="Concept: Caliper on your machine shows a remote model through the lens and a multi-node training run; it sends prompts, interventions and view requests over TLS and receives lens readings, attention, tensor tiles, histograms and metrics reduced on the server; in Caliper Cloud a large model runs tensor parallel across NVLink nodes with residual capture and interventions, and a training run shards with FSDP over InfiniBand; below, the free open-source SDK and app lead to paid Caliper Cloud with dedicated compute and experts">
+<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="sdtip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+<rect x="16" y="44" width="290" height="300" rx="10" class="pkg"/>
 <text x="34" y="28" class="k">YOUR MACHINE</text>
-<text x="338" y="28" class="n dim" text-anchor="end">Caliper, macOS or Windows</text>
-<rect x="36" y="64" width="300" height="260" rx="4" class="blk"/>
-<text x="52" y="88" class="k">TRACE</text>
-<text x="320" y="88" class="n dim" text-anchor="end">remote model</text>
-<line x1="36" y1="100" x2="336" y2="100" class="rulefaint"/>
-<rect class="gcell" data-c="0" data-r="0" data-f="#38332a" x="48" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="1" data-f="#37332a" x="48" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="2" data-f="#2a2925" x="48" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="3" data-f="#473e30" x="48" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="4" data-f="#7f6545" x="48" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="5" data-f="#7f6545" x="48" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="6" data-f="#514534" x="48" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="7" data-f="#c7a779" x="48" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="8" data-f="#c29f71" x="48" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="9" data-f="#d5b98f" x="48" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="10" data-f="#93744d" x="48" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="11" data-f="#b68f5d" x="48" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="12" data-f="#a98455" x="48" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="0" data-r="13" data-f="#e5d0a9" x="48" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="0" data-f="#2a2925" x="71" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="1" data-f="#2a2925" x="71" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="2" data-f="#443c2f" x="71" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="3" data-f="#97774e" x="71" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="4" data-f="#99794f" x="71" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="5" data-f="#5c4d38" x="71" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="6" data-f="#5c4d38" x="71" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="7" data-f="#c3a172" x="71" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="8" data-f="#b48c5a" x="71" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="9" data-f="#c3a173" x="71" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="10" data-f="#91734c" x="71" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="11" data-f="#9c7b50" x="71" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="12" data-f="#d8be94" x="71" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="1" data-r="13" data-f="#cfb085" x="71" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="0" data-f="#2a2925" x="94" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="1" data-f="#7c6344" x="94" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="2" data-f="#61513a" x="94" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="3" data-f="#886c49" x="94" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="4" data-f="#353129" x="94" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="5" data-f="#ae8757" x="94" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="6" data-f="#514534" x="94" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="7" data-f="#bf9c6d" x="94" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="8" data-f="#a58154" x="94" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="9" data-f="#a48053" x="94" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="10" data-f="#c19e6f" x="94" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="11" data-f="#e1c9a1" x="94" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="12" data-f="#bd9969" x="94" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="2" data-r="13" data-f="#bb9666" x="94" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="0" data-f="#343029" x="117" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="1" data-f="#2a2925" x="117" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="2" data-f="#2a2925" x="117" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="3" data-f="#302d27" x="117" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="4" data-f="#302d27" x="117" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="5" data-f="#544735" x="117" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="6" data-f="#725d40" x="117" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="7" data-f="#816746" x="117" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="8" data-f="#c09d6e" x="117" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="9" data-f="#9d7c51" x="117" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="10" data-f="#be996a" x="117" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="11" data-f="#ad8757" x="117" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="12" data-f="#c2a071" x="117" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="3" data-r="13" data-f="#b48d5b" x="117" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="0" data-f="#4c4232" x="140" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="1" data-f="#3b352c" x="140" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="2" data-f="#ad8757" x="140" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="3" data-f="#a38053" x="140" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="4" data-f="#816746" x="140" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="5" data-f="#b58e5d" x="140" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="6" data-f="#dac097" x="140" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="7" data-f="#a48053" x="140" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="8" data-f="#e1caa2" x="140" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="9" data-f="#cfb286" x="140" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="10" data-f="#dbc198" x="140" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="11" data-f="#e8d3ad" x="140" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="12" data-f="#e3cca5" x="140" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="4" data-r="13" data-f="#e8d3ad" x="140" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="0" data-f="#4a4031" x="163" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="1" data-f="#826846" x="163" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="2" data-f="#39342b" x="163" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="3" data-f="#8c6f4a" x="163" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="4" data-f="#8a6e49" x="163" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="5" data-f="#8f724c" x="163" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="6" data-f="#7f6645" x="163" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="7" data-f="#876b48" x="163" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="8" data-f="#6e5a3f" x="163" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="9" data-f="#876c48" x="163" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="10" data-f="#8f714b" x="163" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="11" data-f="#d4b98e" x="163" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="12" data-f="#bc9868" x="163" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="5" data-r="13" data-f="#be996a" x="163" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="0" data-f="#2a2925" x="186" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="1" data-f="#6e5a3f" x="186" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="2" data-f="#826846" x="186" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="3" data-f="#765f42" x="186" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="4" data-f="#504433" x="186" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="5" data-f="#5a4b37" x="186" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="6" data-f="#705b40" x="186" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="7" data-f="#96764e" x="186" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="8" data-f="#7c6444" x="186" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="9" data-f="#b38b59" x="186" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="10" data-f="#a98455" x="186" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="11" data-f="#e3cca5" x="186" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="12" data-f="#e8d3ad" x="186" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="6" data-r="13" data-f="#d6bb91" x="186" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="0" data-f="#2a2925" x="209" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="1" data-f="#7f6645" x="209" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="2" data-f="#353129" x="209" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="3" data-f="#4b4031" x="209" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="4" data-f="#2a2925" x="209" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="5" data-f="#6d593e" x="209" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="6" data-f="#896d49" x="209" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="7" data-f="#9c7a50" x="209" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="8" data-f="#826846" x="209" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="9" data-f="#b7905f" x="209" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="10" data-f="#866b48" x="209" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="11" data-f="#b68f5d" x="209" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="12" data-f="#b08958" x="209" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="7" data-r="13" data-f="#cdae82" x="209" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="0" data-f="#2a2925" x="232" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="1" data-f="#2a2925" x="232" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="2" data-f="#343029" x="232" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="3" data-f="#3a342b" x="232" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="4" data-f="#796243" x="232" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="5" data-f="#816746" x="232" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="6" data-f="#af8857" x="232" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="7" data-f="#b18a58" x="232" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="8" data-f="#bd9969" x="232" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="9" data-f="#cfb185" x="232" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="10" data-f="#b6905f" x="232" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="11" data-f="#ba9464" x="232" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="12" data-f="#e8d3ad" x="232" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="8" data-r="13" data-f="#bd9868" x="232" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="0" data-f="#8d704b" x="255" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="1" data-f="#91734c" x="255" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="2" data-f="#4f4333" x="255" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="3" data-f="#be9a6b" x="255" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="4" data-f="#c9a97c" x="255" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="5" data-f="#bf9b6c" x="255" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="6" data-f="#cdaf83" x="255" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="7" data-f="#dabf96" x="255" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="8" data-f="#b58e5d" x="255" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="9" data-f="#d5ba8f" x="255" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="10" data-f="#dbc299" x="255" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="11" data-f="#e8d3ad" x="255" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="12" data-f="#e8d3ad" x="255" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="9" data-r="13" data-f="#e8d3ad" x="255" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="0" data-f="#3c362c" x="278" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="1" data-f="#755f42" x="278" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="2" data-f="#68553d" x="278" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="3" data-f="#796143" x="278" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="4" data-f="#493f31" x="278" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="5" data-f="#3d362c" x="278" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="6" data-f="#5a4b37" x="278" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="7" data-f="#886d49" x="278" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="8" data-f="#755e41" x="278" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="9" data-f="#ccad81" x="278" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="10" data-f="#c19f70" x="278" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="11" data-f="#cdaf82" x="278" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="12" data-f="#d4b88e" x="278" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="10" data-r="13" data-f="#dfc79f" x="278" y="116" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="0" data-f="#2f2c27" x="301" y="298" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="1" data-f="#2a2925" x="301" y="284" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="2" data-f="#786142" x="301" y="270" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="3" data-f="#806746" x="301" y="256" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="4" data-f="#6e5a3f" x="301" y="242" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="5" data-f="#826846" x="301" y="228" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="6" data-f="#a27f53" x="301" y="214" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="7" data-f="#60503a" x="301" y="200" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="8" data-f="#be9b6b" x="301" y="186" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="9" data-f="#98784f" x="301" y="172" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="10" data-f="#8f714b" x="301" y="158" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="11" data-f="#b68f5d" x="301" y="144" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="12" data-f="#dbc198" x="301" y="130" width="21" height="12" rx="1"/>
-<rect class="gcell" data-c="11" data-r="13" data-f="#c09d6e" x="301" y="116" width="21" height="12" rx="1"/>
-<text x="563" y="128" class="lbl" text-anchor="middle">prompts, interventions, camera</text>
-<path class="arrow" d="M362,144 L762,144" marker-end="url(#stip)"/>
-<text x="563" y="236" class="lbl" text-anchor="middle">tensors, lens readings, frames</text>
-<path class="arrow data" d="M762,252 L362,252" marker-end="url(#stip-data)"/>
-<g id="cloud-packets"></g>
-<rect x="770" y="44" width="314" height="300" rx="10" class="pkg"/>
-<text x="788" y="28" class="k">CALIPER CLOUD</text>
+<text x="288" y="28" class="n dim" text-anchor="end">macOS or Windows</text>
+<rect x="36" y="64" width="250" height="128" rx="4" class="blk"/>
+<text x="50" y="84" class="k">TRACE OF A REMOTE MODEL</text>
+<rect x="50.0" y="176.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="50.0" y="165.5" width="15" height="9" rx="1" fill="#61503a"/>
+<rect x="50.0" y="155.0" width="15" height="9" rx="1" fill="#6f5a3f"/>
+<rect x="50.0" y="144.5" width="15" height="9" rx="1" fill="#856a47"/>
+<rect x="50.0" y="134.0" width="15" height="9" rx="1" fill="#8c6f4a"/>
+<rect x="50.0" y="123.5" width="15" height="9" rx="1" fill="#d5b98e"/>
+<rect x="50.0" y="113.0" width="15" height="9" rx="1" fill="#caaa7e"/>
+<rect x="50.0" y="102.5" width="15" height="9" rx="1" fill="#dbc198"/>
+<rect x="66.2" y="176.0" width="15" height="9" rx="1" fill="#544735"/>
+<rect x="66.2" y="165.5" width="15" height="9" rx="1" fill="#8d704a"/>
+<rect x="66.2" y="155.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="66.2" y="144.5" width="15" height="9" rx="1" fill="#90724c"/>
+<rect x="66.2" y="134.0" width="15" height="9" rx="1" fill="#b79160"/>
+<rect x="66.2" y="123.5" width="15" height="9" rx="1" fill="#94754d"/>
+<rect x="66.2" y="113.0" width="15" height="9" rx="1" fill="#bb9565"/>
+<rect x="66.2" y="102.5" width="15" height="9" rx="1" fill="#ad8757"/>
+<rect x="82.4" y="176.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="82.4" y="165.5" width="15" height="9" rx="1" fill="#3a342b"/>
+<rect x="82.4" y="155.0" width="15" height="9" rx="1" fill="#2f2c27"/>
+<rect x="82.4" y="144.5" width="15" height="9" rx="1" fill="#5e4e39"/>
+<rect x="82.4" y="134.0" width="15" height="9" rx="1" fill="#c29f71"/>
+<rect x="82.4" y="123.5" width="15" height="9" rx="1" fill="#b89160"/>
+<rect x="82.4" y="113.0" width="15" height="9" rx="1" fill="#c19f70"/>
+<rect x="82.4" y="102.5" width="15" height="9" rx="1" fill="#e8d3ad"/>
+<rect x="98.6" y="176.0" width="15" height="9" rx="1" fill="#3a342b"/>
+<rect x="98.6" y="165.5" width="15" height="9" rx="1" fill="#8f714b"/>
+<rect x="98.6" y="155.0" width="15" height="9" rx="1" fill="#796143"/>
+<rect x="98.6" y="144.5" width="15" height="9" rx="1" fill="#ab8556"/>
+<rect x="98.6" y="134.0" width="15" height="9" rx="1" fill="#61503a"/>
+<rect x="98.6" y="123.5" width="15" height="9" rx="1" fill="#bb9565"/>
+<rect x="98.6" y="113.0" width="15" height="9" rx="1" fill="#d2b58a"/>
+<rect x="98.6" y="102.5" width="15" height="9" rx="1" fill="#ad8757"/>
+<rect x="114.8" y="176.0" width="15" height="9" rx="1" fill="#6b583e"/>
+<rect x="114.8" y="165.5" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="114.8" y="155.0" width="15" height="9" rx="1" fill="#62513a"/>
+<rect x="114.8" y="144.5" width="15" height="9" rx="1" fill="#534635"/>
+<rect x="114.8" y="134.0" width="15" height="9" rx="1" fill="#9a7950"/>
+<rect x="114.8" y="123.5" width="15" height="9" rx="1" fill="#bb9666"/>
+<rect x="114.8" y="113.0" width="15" height="9" rx="1" fill="#94754d"/>
+<rect x="114.8" y="102.5" width="15" height="9" rx="1" fill="#e8d3ad"/>
+<rect x="131.0" y="176.0" width="15" height="9" rx="1" fill="#705b40"/>
+<rect x="131.0" y="165.5" width="15" height="9" rx="1" fill="#99794f"/>
+<rect x="131.0" y="155.0" width="15" height="9" rx="1" fill="#b89261"/>
+<rect x="131.0" y="144.5" width="15" height="9" rx="1" fill="#b68f5d"/>
+<rect x="131.0" y="134.0" width="15" height="9" rx="1" fill="#bd9969"/>
+<rect x="131.0" y="123.5" width="15" height="9" rx="1" fill="#e2caa3"/>
+<rect x="131.0" y="113.0" width="15" height="9" rx="1" fill="#e8d3ad"/>
+<rect x="131.0" y="102.5" width="15" height="9" rx="1" fill="#e3cca5"/>
+<rect x="147.2" y="176.0" width="15" height="9" rx="1" fill="#4e4333"/>
+<rect x="147.2" y="165.5" width="15" height="9" rx="1" fill="#2f2d27"/>
+<rect x="147.2" y="155.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="147.2" y="144.5" width="15" height="9" rx="1" fill="#5d4e38"/>
+<rect x="147.2" y="134.0" width="15" height="9" rx="1" fill="#5c4d38"/>
+<rect x="147.2" y="123.5" width="15" height="9" rx="1" fill="#876b48"/>
+<rect x="147.2" y="113.0" width="15" height="9" rx="1" fill="#d1b489"/>
+<rect x="147.2" y="102.5" width="15" height="9" rx="1" fill="#c6a578"/>
+<rect x="163.4" y="176.0" width="15" height="9" rx="1" fill="#67543c"/>
+<rect x="163.4" y="165.5" width="15" height="9" rx="1" fill="#6d593e"/>
+<rect x="163.4" y="155.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="163.4" y="144.5" width="15" height="9" rx="1" fill="#bb9565"/>
+<rect x="163.4" y="134.0" width="15" height="9" rx="1" fill="#c4a375"/>
+<rect x="163.4" y="123.5" width="15" height="9" rx="1" fill="#7b6344"/>
+<rect x="163.4" y="113.0" width="15" height="9" rx="1" fill="#dbc299"/>
+<rect x="163.4" y="102.5" width="15" height="9" rx="1" fill="#c9a97c"/>
+<rect x="179.6" y="176.0" width="15" height="9" rx="1" fill="#2d2b26"/>
+<rect x="179.6" y="165.5" width="15" height="9" rx="1" fill="#8c6f4a"/>
+<rect x="179.6" y="155.0" width="15" height="9" rx="1" fill="#423b2e"/>
+<rect x="179.6" y="144.5" width="15" height="9" rx="1" fill="#836947"/>
+<rect x="179.6" y="134.0" width="15" height="9" rx="1" fill="#c4a274"/>
+<rect x="179.6" y="123.5" width="15" height="9" rx="1" fill="#c3a072"/>
+<rect x="179.6" y="113.0" width="15" height="9" rx="1" fill="#bf9b6c"/>
+<rect x="179.6" y="102.5" width="15" height="9" rx="1" fill="#e8d3ad"/>
+<rect x="195.8" y="176.0" width="15" height="9" rx="1" fill="#5c4c38"/>
+<rect x="195.8" y="165.5" width="15" height="9" rx="1" fill="#594b37"/>
+<rect x="195.8" y="155.0" width="15" height="9" rx="1" fill="#312e28"/>
+<rect x="195.8" y="144.5" width="15" height="9" rx="1" fill="#91734c"/>
+<rect x="195.8" y="134.0" width="15" height="9" rx="1" fill="#95754e"/>
+<rect x="195.8" y="123.5" width="15" height="9" rx="1" fill="#8d704b"/>
+<rect x="195.8" y="113.0" width="15" height="9" rx="1" fill="#93744d"/>
+<rect x="195.8" y="102.5" width="15" height="9" rx="1" fill="#cfb186"/>
+<rect x="212.0" y="176.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="212.0" y="165.5" width="15" height="9" rx="1" fill="#433b2f"/>
+<rect x="212.0" y="155.0" width="15" height="9" rx="1" fill="#7d6444"/>
+<rect x="212.0" y="144.5" width="15" height="9" rx="1" fill="#7a6243"/>
+<rect x="212.0" y="134.0" width="15" height="9" rx="1" fill="#7a6344"/>
+<rect x="212.0" y="123.5" width="15" height="9" rx="1" fill="#ba9463"/>
+<rect x="212.0" y="113.0" width="15" height="9" rx="1" fill="#bc9767"/>
+<rect x="212.0" y="102.5" width="15" height="9" rx="1" fill="#e0c7a0"/>
+<rect x="228.2" y="176.0" width="15" height="9" rx="1" fill="#7f6645"/>
+<rect x="228.2" y="165.5" width="15" height="9" rx="1" fill="#c5a476"/>
+<rect x="228.2" y="155.0" width="15" height="9" rx="1" fill="#cfb185"/>
+<rect x="228.2" y="144.5" width="15" height="9" rx="1" fill="#ceaf83"/>
+<rect x="228.2" y="134.0" width="15" height="9" rx="1" fill="#ba9564"/>
+<rect x="228.2" y="123.5" width="15" height="9" rx="1" fill="#bf9b6b"/>
+<rect x="228.2" y="113.0" width="15" height="9" rx="1" fill="#e8d3ad"/>
+<rect x="228.2" y="102.5" width="15" height="9" rx="1" fill="#e8d3ad"/>
+<rect x="244.4" y="176.0" width="15" height="9" rx="1" fill="#413a2e"/>
+<rect x="244.4" y="165.5" width="15" height="9" rx="1" fill="#38332a"/>
+<rect x="244.4" y="155.0" width="15" height="9" rx="1" fill="#463d30"/>
+<rect x="244.4" y="144.5" width="15" height="9" rx="1" fill="#9a794f"/>
+<rect x="244.4" y="134.0" width="15" height="9" rx="1" fill="#a48053"/>
+<rect x="244.4" y="123.5" width="15" height="9" rx="1" fill="#ba9564"/>
+<rect x="244.4" y="113.0" width="15" height="9" rx="1" fill="#caaa7d"/>
+<rect x="244.4" y="102.5" width="15" height="9" rx="1" fill="#dec59d"/>
+<rect x="260.6" y="176.0" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="260.6" y="165.5" width="15" height="9" rx="1" fill="#2a2925"/>
+<rect x="260.6" y="155.0" width="15" height="9" rx="1" fill="#a78355"/>
+<rect x="260.6" y="144.5" width="15" height="9" rx="1" fill="#b68f5e"/>
+<rect x="260.6" y="134.0" width="15" height="9" rx="1" fill="#c09d6e"/>
+<rect x="260.6" y="123.5" width="15" height="9" rx="1" fill="#776042"/>
+<rect x="260.6" y="113.0" width="15" height="9" rx="1" fill="#94754d"/>
+<rect x="260.6" y="102.5" width="15" height="9" rx="1" fill="#bf9b6b"/>
+<rect x="36" y="204" width="250" height="120" rx="4" class="blk"/>
+<text x="50" y="224" class="k">TRAINING ON 4 NODES</text>
+<polyline class="mini" points="50.0,234.3 54.4,237.8 58.8,244.0 63.2,246.0 67.6,251.4 72.0,254.6 76.4,255.3 80.8,258.6 85.2,260.9 89.6,264.4 94.0,266.2 98.4,269.4 102.8,270.9 107.2,271.1 111.6,272.5 116.0,277.1 120.4,278.4 124.8,277.1 129.2,279.1 133.6,279.7 138.0,283.0 142.4,283.2 146.8,284.9 151.2,283.6 155.6,286.2 160.0,285.8 164.4,285.2 168.8,288.5 173.2,288.3 177.6,288.1 182.0,287.9 186.4,290.4 190.8,291.1 195.2,292.6 199.6,289.9 204.0,293.5 208.4,293.9 212.8,292.3 217.2,292.9 221.6,292.4 226.0,294.2 230.4,292.5 234.8,295.6 239.2,295.2 243.6,293.6 248.0,296.1 252.4,295.4 256.8,293.9 261.2,294.2 265.6,296.0 270.0,296.7"/>
+<polyline class="mini faint" points="50.0,279.3 54.4,279.4 58.8,280.9 63.2,282.2 67.6,281.7 72.0,282.6 76.4,282.4 80.8,282.7 85.2,283.0 89.6,284.1 94.0,283.4 98.4,284.2 102.8,283.9 107.2,283.3 111.6,281.7 116.0,281.2 120.4,281.8 124.8,280.8 129.2,280.0 133.6,279.1 138.0,278.3 142.4,277.5 146.8,277.1 151.2,275.7 155.6,274.6 160.0,274.6 164.4,273.7 168.8,274.0 173.2,274.7 177.6,273.5 182.0,273.4 186.4,274.9 190.8,275.9 195.2,275.4 199.6,276.0 204.0,276.7 208.4,276.7 212.8,278.1 217.2,278.6 221.6,280.9 226.0,280.8 230.4,281.0 234.8,283.1 239.2,283.7 243.6,282.9 248.0,282.9 252.4,284.7 256.8,283.7 261.2,284.7 265.6,283.3 270.0,283.1"/>
+<polyline class="mini faint" points="50.0,275.7 54.4,276.2 58.8,275.3 63.2,275.9 67.6,275.4 72.0,276.0 76.4,275.9 80.8,274.2 85.2,274.3 89.6,274.0 94.0,273.2 98.4,272.1 102.8,271.3 107.2,270.0 111.6,270.2 116.0,268.6 120.4,268.2 124.8,267.1 129.2,266.6 133.6,266.1 138.0,265.6 142.4,265.2 146.8,265.7 151.2,266.0 155.6,265.8 160.0,265.9 164.4,267.1 168.8,267.6 173.2,268.8 177.6,268.3 182.0,268.6 186.4,270.7 190.8,271.9 195.2,272.7 199.6,273.0 204.0,274.0 208.4,273.3 212.8,275.7 217.2,275.7 221.6,276.5 226.0,275.6 230.4,275.4 234.8,276.6 239.2,276.6 243.6,275.5 248.0,274.8 252.4,273.6 256.8,274.7 261.2,273.8 265.6,272.9 270.0,272.0"/>
+<polyline class="mini faint" points="50.0,268.1 54.4,266.7 58.8,266.4 63.2,266.5 67.6,265.9 72.0,265.0 76.4,264.4 80.8,262.4 85.2,262.4 89.6,261.1 94.0,259.9 98.4,259.9 102.8,259.7 107.2,258.0 111.6,257.5 116.0,258.4 120.4,257.9 124.8,257.1 129.2,258.2 133.6,259.1 138.0,259.8 142.4,258.6 146.8,259.5 151.2,261.1 155.6,261.5 160.0,262.4 164.4,263.7 168.8,263.1 173.2,264.6 177.6,266.1 182.0,267.3 186.4,266.9 190.8,267.6 195.2,267.1 199.6,267.5 204.0,267.8 208.4,268.6 212.8,268.4 217.2,267.8 221.6,267.5 226.0,265.7 230.4,265.8 234.8,264.8 239.2,263.3 243.6,263.9 248.0,262.6 252.4,262.5 256.8,260.5 261.2,261.3 265.6,259.0 270.0,258.4"/>
+<polyline class="mini faint" points="50.0,255.1 54.4,255.7 58.8,254.5 63.2,252.8 67.6,253.3 72.0,251.9 76.4,251.3 80.8,249.8 85.2,250.2 89.6,249.4 94.0,250.4 98.4,249.5 102.8,250.4 107.2,249.7 111.6,251.8 116.0,250.8 120.4,252.7 124.8,252.7 129.2,253.6 133.6,255.1 138.0,254.6 142.4,256.5 146.8,257.2 151.2,258.5 155.6,258.7 160.0,258.9 164.4,258.9 168.8,260.0 173.2,259.5 177.6,260.8 182.0,260.2 186.4,259.8 190.8,258.5 195.2,258.3 199.6,258.1 204.0,258.8 208.4,257.3 212.8,255.9 217.2,256.0 221.6,254.5 226.0,253.9 230.4,254.0 234.8,251.3 239.2,251.0 243.6,251.6 248.0,250.4 252.4,250.7 256.8,250.3 261.2,249.9 265.6,250.5 270.0,250.6"/>
+<polyline class="mini faint" points="50.0,243.4 54.4,242.4 58.8,242.8 63.2,242.7 67.6,241.5 72.0,242.4 76.4,241.3 80.8,242.4 85.2,242.5 89.6,243.8 94.0,243.5 98.4,245.6 102.8,246.3 107.2,247.2 111.6,246.9 116.0,247.7 120.4,249.5 124.8,249.8 129.2,249.6 133.6,250.7 138.0,252.2 142.4,252.2 146.8,252.6 151.2,252.8 155.6,252.1 160.0,252.6 164.4,250.6 168.8,251.1 173.2,250.4 177.6,249.5 182.0,248.5 186.4,247.6 190.8,247.7 195.2,247.0 199.6,246.0 204.0,246.0 208.4,244.5 212.8,243.2 217.2,242.1 221.6,242.0 226.0,241.9 230.4,241.8 234.8,243.0 239.2,242.4 243.6,242.6 248.0,242.3 252.4,243.9 256.8,243.9 261.2,244.3 265.6,244.5 270.0,245.2"/>
+<text x="398" y="102" class="lbl" text-anchor="middle">prompts, interventions,</text><text x="398" y="118" class="lbl" text-anchor="middle">view requests</text>
+<path class="arrow" d="M308,130 L488,130" marker-end="url(#stip)"/>
+<text x="398" y="214" class="lbl" text-anchor="middle">lens top-k · attention · tiles</text>
+<text x="398" y="230" class="lbl" text-anchor="middle">histograms · metrics</text>
+<path class="arrow data" d="M488,246 L308,246" marker-end="url(#sdtip)"/>
+<text x="398" y="284" class="n dim" text-anchor="middle">TLS · reduced on the server,</text>
+<text x="398" y="300" class="n dim" text-anchor="middle">not raw tensors</text>
+<rect x="490" y="44" width="594" height="300" rx="10" class="pkg"/>
+<text x="508" y="28" class="k">CALIPER CLOUD</text>
 <text x="1066" y="28" class="n dim" text-anchor="end">dedicated GPU nodes</text>
-<rect x="790" y="64" width="274" height="52" rx="4" class="blk"/>
-<text x="806" y="95" class="mono small">node 1</text>
-<rect class="gpu core" data-g="0" x="868" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="1" x="892" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="2" x="916" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="3" x="940" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="4" x="964" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="5" x="988" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="6" x="1012" y="77" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="7" x="1036" y="77" width="20" height="26" rx="2"/>
-<rect x="790" y="128" width="274" height="52" rx="4" class="blk"/>
-<text x="806" y="159" class="mono small">node 2</text>
-<rect class="gpu core" data-g="8" x="868" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="9" x="892" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="10" x="916" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="11" x="940" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="12" x="964" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="13" x="988" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="14" x="1012" y="141" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="15" x="1036" y="141" width="20" height="26" rx="2"/>
-<rect x="790" y="192" width="274" height="52" rx="4" class="blk"/>
-<text x="806" y="223" class="mono small">node 3</text>
-<rect class="gpu core" data-g="16" x="868" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="17" x="892" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="18" x="916" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="19" x="940" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="20" x="964" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="21" x="988" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="22" x="1012" y="205" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="23" x="1036" y="205" width="20" height="26" rx="2"/>
-<rect x="790" y="256" width="274" height="52" rx="4" class="blk"/>
-<text x="806" y="287" class="mono small">node 4</text>
-<rect class="gpu core" data-g="24" x="868" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="25" x="892" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="26" x="916" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="27" x="940" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="28" x="964" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="29" x="988" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="30" x="1012" y="269" width="20" height="26" rx="2"/>
-<rect class="gpu core" data-g="31" x="1036" y="269" width="20" height="26" rx="2"/>
-<text x="927" y="332" class="n dim" text-anchor="middle">one model, sharded across every GPU</text>
+<text x="510" y="76" class="k">INTERPRETABILITY</text>
+
+<rect x="510" y="88" width="270" height="48" rx="4" class="blk"/>
+<text x="522" y="116" class="mono small">node 1</text>
+<rect x="580" y="98" width="20" height="22" rx="2" class="core on"/>
+<rect x="604" y="98" width="20" height="22" rx="2" class="core on"/>
+<rect x="628" y="98" width="20" height="22" rx="2" class="core"/>
+<rect x="652" y="98" width="20" height="22" rx="2" class="core on"/>
+<rect x="676" y="98" width="20" height="22" rx="2" class="core on"/>
+<rect x="700" y="98" width="20" height="22" rx="2" class="core"/>
+<rect x="724" y="98" width="20" height="22" rx="2" class="core on"/>
+<rect x="748" y="98" width="20" height="22" rx="2" class="core on"/>
+<line x1="580" y1="127" x2="768" y2="127" class="nvlink"/>
+<rect x="510" y="148" width="270" height="48" rx="4" class="blk"/>
+<text x="522" y="176" class="mono small">node 2</text>
+<rect x="580" y="158" width="20" height="22" rx="2" class="core"/>
+<rect x="604" y="158" width="20" height="22" rx="2" class="core on"/>
+<rect x="628" y="158" width="20" height="22" rx="2" class="core on"/>
+<rect x="652" y="158" width="20" height="22" rx="2" class="core"/>
+<rect x="676" y="158" width="20" height="22" rx="2" class="core on"/>
+<rect x="700" y="158" width="20" height="22" rx="2" class="core on"/>
+<rect x="724" y="158" width="20" height="22" rx="2" class="core"/>
+<rect x="748" y="158" width="20" height="22" rx="2" class="core on"/>
+<line x1="580" y1="187" x2="768" y2="187" class="nvlink"/>
+<text x="645" y="214" class="n dim" text-anchor="middle">tensor parallel × 8, pipeline × 2</text><text x="645" y="230" class="n dim" text-anchor="middle">NVLink in a node, InfiniBand between</text>
+<text x="800" y="76" class="k">TRAINING</text>
+<text x="1064" y="76" class="n dim" text-anchor="end">FSDP over 4 nodes</text>
+<rect x="800" y="88" width="264" height="24" rx="3" class="blk"/>
+<text x="810" y="104" class="mono tiny">node 1</text>
+<rect x="864" y="93" width="20" height="14" rx="2" class="core"/>
+<rect x="888" y="93" width="20" height="14" rx="2" class="core on"/>
+<rect x="912" y="93" width="20" height="14" rx="2" class="core on"/>
+<rect x="936" y="93" width="20" height="14" rx="2" class="core on"/>
+<rect x="960" y="93" width="20" height="14" rx="2" class="core"/>
+<rect x="984" y="93" width="20" height="14" rx="2" class="core on"/>
+<rect x="1008" y="93" width="20" height="14" rx="2" class="core on"/>
+<rect x="1032" y="93" width="20" height="14" rx="2" class="core on"/>
+<rect x="800" y="118" width="264" height="24" rx="3" class="blk"/>
+<text x="810" y="134" class="mono tiny">node 2</text>
+<rect x="864" y="123" width="20" height="14" rx="2" class="core on"/>
+<rect x="888" y="123" width="20" height="14" rx="2" class="core on"/>
+<rect x="912" y="123" width="20" height="14" rx="2" class="core on"/>
+<rect x="936" y="123" width="20" height="14" rx="2" class="core"/>
+<rect x="960" y="123" width="20" height="14" rx="2" class="core on"/>
+<rect x="984" y="123" width="20" height="14" rx="2" class="core on"/>
+<rect x="1008" y="123" width="20" height="14" rx="2" class="core on"/>
+<rect x="1032" y="123" width="20" height="14" rx="2" class="core"/>
+<rect x="800" y="148" width="264" height="24" rx="3" class="blk"/>
+<text x="810" y="164" class="mono tiny">node 3</text>
+<rect x="864" y="153" width="20" height="14" rx="2" class="core on"/>
+<rect x="888" y="153" width="20" height="14" rx="2" class="core on"/>
+<rect x="912" y="153" width="20" height="14" rx="2" class="core"/>
+<rect x="936" y="153" width="20" height="14" rx="2" class="core on"/>
+<rect x="960" y="153" width="20" height="14" rx="2" class="core on"/>
+<rect x="984" y="153" width="20" height="14" rx="2" class="core on"/>
+<rect x="1008" y="153" width="20" height="14" rx="2" class="core"/>
+<rect x="1032" y="153" width="20" height="14" rx="2" class="core on"/>
+<rect x="800" y="178" width="264" height="24" rx="3" class="blk"/>
+<text x="810" y="194" class="mono tiny">node 4</text>
+<rect x="864" y="183" width="20" height="14" rx="2" class="core on"/>
+<rect x="888" y="183" width="20" height="14" rx="2" class="core"/>
+<rect x="912" y="183" width="20" height="14" rx="2" class="core on"/>
+<rect x="936" y="183" width="20" height="14" rx="2" class="core on"/>
+<rect x="960" y="183" width="20" height="14" rx="2" class="core on"/>
+<rect x="984" y="183" width="20" height="14" rx="2" class="core"/>
+<rect x="1008" y="183" width="20" height="14" rx="2" class="core on"/>
+<rect x="1032" y="183" width="20" height="14" rx="2" class="core on"/>
+<text x="932" y="214" class="n dim" text-anchor="middle">weights, grads, activations per rank</text>
+<rect x="510" y="242" width="554" height="86" rx="4" class="blk"/>
+<text x="526" y="262" class="k">CALIPER SERVER</text>
+<text x="526" y="286" class="n">residual capture · J-lens readout · interventions, on the model's GPUs</text>
+<text x="526" y="306" class="n">per-rank snapshots reduced to tiles and statistics · sessions · streams</text>
+<line x1="645" y1="234" x2="645" y2="242" class="leader"/>
+<line x1="932" y1="220" x2="932" y2="242" class="leader"/>
 <g class="tier"><rect x="16" y="380" width="500" height="96" rx="6" class="blk"/>
-<text x="36" y="410" class="k">OPEN SOURCE</text><text x="496" y="410" class="n dim" text-anchor="end">free</text>
+<text x="36" y="410" class="k">OPEN SOURCE</text>
+<text x="496" y="410" class="n dim" text-anchor="end">free</text>
 <text x="36" y="438" class="n">The SDK and the app, to <tspan class="em">experiment</tspan> with your own</text>
-<text x="36" y="457" class="n">models on your own GPU.</text></g>
+<text x="36" y="457" class="n">models on your own GPU.</text>
+</g>
 <path class="arrow" d="M520,428 L580,428" marker-end="url(#stip)"/>
 <g class="tier paid"><rect x="584" y="380" width="500" height="96" rx="6" class="blk"/>
-<text x="604" y="410" class="k">CALIPER CLOUD</text><text x="1064" y="410" class="n price" text-anchor="end">paid</text>
+<text x="604" y="410" class="k">CALIPER CLOUD</text>
+<text x="1064" y="410" class="n price" text-anchor="end">paid</text>
 <text x="604" y="438" class="n">Dedicated GPU nodes for the models you cannot run, and</text>
 <text x="604" y="457" class="n"><tspan class="em">experts</tspan> who work with your team to take them to market.</text></g>
 </svg>
@@ -2466,177 +2543,6 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   }
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(fit);
   addEventListener("resize", fit);
-})();
-</script>
-<script>
-// The telemetry figure, illustrative data: a vibration channel and a spectrometer stream through feed rings on the
-// host clock (a few samples go missing now and then, and show as a gap), a particle simulation stays on the GPU,
-// and Caliper draws the three aligned in time, a model's prediction over the vibration flagging where they part.
-(() => {
-  const svg = document.getElementById("tl-fig");
-  if (!svg) return;
-  const NS = "http://www.w3.org/2000/svg", reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const $ = id => svg.getElementById(id);
-  const el = (parent, tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
-  const ramp = v => { v = Math.max(0, Math.min(1, v)); const a = [42, 41, 37], b = [179, 139, 89], c = [232, 211, 173];
-    const [x, y, u] = v < .55 ? [a, b, v / .55] : [b, c, (v - .55) / .45]; return `rgb(${x.map((q, i) => Math.round(q + (y[i] - q) * u)).join(",")})`; };
-
-  // Spectrograms: columns of cells that scroll left.
-  const spec = (g, x0, y0, cols, rows, w, h) => {
-    const cells = [];
-    for (let c = 0; c < cols; c++) { cells.push([]); for (let r = 0; r < rows; r++) cells[c].push(el(g, "rect", { x: x0 + c * w, y: y0 + r * h, width: w - 1, height: h - 1, fill: "#232220" })); }
-    return cells;
-  };
-  const srcSpec = spec($("tl-src-spec"), 52, 214, 24, 6, 12, 10), viewSpec = spec($("tl-view-spec"), 760, 194, 36, 6, 8, 9);
-  const columns = [];
-  // Feed rings: ten slots each.
-  const rings = [0, 1].map(k => [...Array(10)].map((_, i) => el($("tl-ring-" + k), "rect", { x: 426 + i * 25, y: k ? 222 : 106, width: 21, height: 21, rx: 2, class: "tl-slot" })));
-  const seq = [48212, 9604];
-  // Particles in a slow swirl.
-  const P = [...Array(26)].map((_, i) => ({ a: i * 2.4, r: 0.25 + (i % 7) / 9, s: 0.4 + (i % 5) * 0.12 }));
-  const srcDots = P.map(() => el($("tl-src-sim"), "circle", { r: 2.2, fill: "#e8e0d0" }));
-  const viewDots = P.map(() => el($("tl-view-sim"), "circle", { r: 3.2 }));
-
-  const N = 120, wave = [], model = [];
-  let t = 0, last = 0, raf = 0, visible = false, slotAt = [0, 0], tickAcc = 0, spike = -1, flagged = 0;
-  function sample(time) {
-    let v = Math.sin(time * 9) * 0.45 + Math.sin(time * 23) * 0.18 + (Math.random() - 0.5) * 0.12;
-    if (spike > 0) { v += Math.sin(time * 61) * 0.9 * spike; }
-    return v;
-  }
-  for (let i = 0; i < N; i++) { wave.push(sample(i / 40)); model.push(Math.sin(i / 40 * 9) * 0.45 + Math.sin(i / 40 * 23) * 0.18); }
-  const line = (id, data, x0, x1, ym, amp) => $(id).setAttribute("points", data.map((v, i) => `${(x0 + (x1 - x0) * i / (N - 1)).toFixed(1)},${(ym - v * amp).toFixed(1)}`).join(" "));
-
-  function step(dt) {
-    t += dt; tickAcc += dt;
-    // A disturbance now and then, that the model does not expect.
-    if (spike < 0 && Math.random() < dt * 0.18) spike = 1;
-    if (spike > 0) { spike -= dt * 0.7; if (spike <= 0) spike = -1; }
-    const n = Math.max(1, Math.round(dt * 40));
-    for (let k = 0; k < n; k++) {
-      const time = t + k / 40;
-      wave.push(sample(time)); wave.shift();
-      model.push(Math.sin(time * 9) * 0.45 + Math.sin(time * 23) * 0.18); model.shift();
-    }
-    line("tl-src-wave", wave, 52, 340, 132, 26);
-    line("tl-view-wave", wave, 760, 1048, 130, 24);
-    line("tl-view-model", model, 760, 1048, 130, 24);
-    // Where they part, flag it.
-    let worst = 0, at = -1;
-    for (let i = N - 40; i < N; i++) { const d = Math.abs(wave[i] - model[i]); if (d > worst) { worst = d; at = i; } }
-    const band = $("tl-anomaly");
-    if (worst > 0.55) { flagged = 1.2; }
-    flagged = Math.max(0, flagged - dt);
-    band.setAttribute("x", 760 + 288 * (N - 40) / (N - 1)); band.setAttribute("width", flagged > 0 ? 288 * 40 / (N - 1) : 0);
-    $("tl-flag").textContent = flagged > 0 ? "off the prediction" : "";
-    // Spectrum columns at about 12 a second.
-    if (tickAcc > 0.08) {
-      tickAcc = 0;
-      const col = [...Array(6)].map((_, r) => Math.max(0, 0.75 - Math.abs(r - 2.5 - Math.sin(t * 1.3) * 1.6) * 0.3 + (spike > 0 ? 0.35 : 0) + (Math.random() - 0.5) * 0.25));
-      columns.push(col); if (columns.length > 36) columns.shift();
-      const paint = (cells, cols) => cells.forEach((c, ci) => { const src = columns[columns.length - cols + ci]; c.forEach((cell, r) => cell.setAttribute("fill", src ? ramp(src[r]) : "#232220")); });
-      paint(srcSpec, 24); paint(viewSpec, 36);
-      // Feed rings: the next slot fills; once in a while two samples go missing and the gap shows.
-      [0, 1].forEach(k => {
-        const ring = rings[k], i = slotAt[k] % ring.length;
-        const lost = Math.random() < 0.05;
-        ring.forEach((r, j) => { if (j === i) r.setAttribute("class", lost ? "tl-slot lost" : "tl-slot full"); else if (j === (i + 1) % ring.length) r.setAttribute("class", "tl-slot"); });
-        seq[k] += lost ? 3 : 1; slotAt[k]++;
-        $("tl-seq-" + k).textContent = `feed · seq ${seq[k].toLocaleString("en-US")}`;
-      });
-    }
-    // Particles.
-    P.forEach((p, i) => {
-      p.a += dt * p.s * (1 + 0.6 * Math.sin(t * 0.7 + i));
-      const x = Math.cos(p.a) * p.r, y = Math.sin(p.a * 1.3) * p.r * 0.8;
-      srcDots[i].setAttribute("cx", (196 + x * 130).toFixed(1)); srcDots[i].setAttribute("cy", (360 + y * 34).toFixed(1));
-      viewDots[i].setAttribute("cx", (904 + x * 130).toFixed(1)); viewDots[i].setAttribute("cy", (336 + y * 52).toFixed(1));
-      viewDots[i].setAttribute("fill", ramp(0.25 + 0.75 * Math.abs(Math.sin(p.a * 1.7))));
-    });
-  }
-  function frame(now) {
-    raf = 0;
-    const dt = last ? Math.min(0.05, (now - last) / 1000) : 0.016;
-    last = now; step(dt);
-    if (visible && !reduce) raf = requestAnimationFrame(frame);
-  }
-  for (let i = 0; i < 40; i++) step(0.05);
-  new IntersectionObserver(([e]) => { visible = e.isIntersecting; last = 0; if (visible && !raf && !reduce) raf = requestAnimationFrame(frame); }, { threshold: 0.2 }).observe(svg);
-})();
-</script>
-<script>
-// The Coming soon figures, concepts. Caliper MCP: the agent's steps light in turn, each through its tool,
-// and the panel builds in Caliper. Caliper Cloud: the Trace grid fills as views stream in, the GPUs light as a pass
-// sweeps the sharded model.
-(() => {
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const watch = (el, start, stop) => new IntersectionObserver(([e]) => (e.isIntersecting ? start : stop)(), { threshold: 0.2 }).observe(el);
-
-  const mcp = document.getElementById("soon-mcp");
-  if (mcp) {
-    const rows = [...mcp.querySelectorAll(".mcp-row")], tools = [...mcp.querySelectorAll(".mcp-tool")];
-    const links = [...mcp.querySelectorAll(".mcp-link")], panel = mcp.querySelector("#mcp-panel");
-    const frame = mcp.querySelector("#mcp-window"), flash = mcp.querySelector("#mcp-flash");
-    const curves = [...mcp.querySelectorAll(".curve")];
-    curves.forEach(c => { const n = c.getTotalLength(); c.dataset.len = n; c.style.strokeDasharray = n; });
-    // Phase p: step p - 1 is running (1-5); 6 is finished.
-    function set(p) {
-      rows.forEach((r, i) => { r.classList.toggle("hot", i === p - 1); r.classList.toggle("done", i < p - 1); });
-      tools.forEach((t, i) => t.classList.toggle("hot", i === p - 1));
-      links.forEach(l => l.classList.toggle("on", Number(l.dataset.i) === p - 1));
-      panel.style.opacity = p >= 4 ? 1 : 0.1;
-      frame.classList.toggle("live", p >= 4);
-      curves.forEach(c => {
-        c.style.transition = p >= 4 && !reduce ? "stroke-dashoffset 2.6s ease-out" : "none";
-        c.style.strokeDashoffset = p >= 4 ? 0 : c.dataset.len;
-      });
-      if (p === 5 && !reduce) { flash.classList.remove("go"); void flash.getBBox(); flash.classList.add("go"); }
-    }
-    let phase = 0, timer = 0;
-    const tick = () => { phase = phase >= 6 ? 0 : phase + 1; set(phase); timer = setTimeout(tick, phase === 6 ? 4200 : phase === 0 ? 900 : 1500); };
-    if (reduce) set(6);
-    else watch(mcp, () => { if (!timer) tick(); }, () => { clearTimeout(timer); timer = 0; });
-  }
-
-  const cloud = document.getElementById("soon-cloud");
-  if (cloud) {
-    const cells = [...cloud.querySelectorAll(".gcell")], gpus = [...cloud.querySelectorAll(".gpu")];
-    const layer = cloud.querySelector("#cloud-packets");
-    const NS = "http://www.w3.org/2000/svg";
-    const packets = [];
-    for (let i = 0; i < 9; i++) {
-      const r = document.createElementNS(NS, "rect");
-      const up = i >= 6;
-      r.setAttribute("width", up ? 8 : 12); r.setAttribute("height", up ? 4 : 6); r.setAttribute("rx", 1);
-      r.setAttribute("class", up ? "packet up" : "packet");
-      layer.appendChild(r);
-      packets.push({ r, up, u: i / (up ? 3 : 6) });
-    }
-    const order = cells.slice().sort((a, b) => (a.dataset.c - b.dataset.c) || (a.dataset.r - b.dataset.r));
-    let filled = 0, clock = 0, last = 0, raf = 0;
-    function frame(now) {
-      raf = 0;
-      const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
-      last = now; clock += dt;
-      // Views stream in: the grid fills a token column at a time, layer by layer, and starts over when full.
-      const want = Math.floor(clock * 22) % (order.length + 40);
-      if (want < filled) { order.forEach(c => c.style.fill = ""); filled = 0; }
-      while (filled < Math.min(want, order.length)) { const c = order[filled++]; c.style.fill = c.dataset.f; }
-      // A pass sweeps the shards, node by node.
-      const head = (clock * 14) % (gpus.length + 6);
-      gpus.forEach((g, i) => g.classList.toggle("on", i <= head && i > head - 6));
-      packets.forEach(p => {
-        p.u = (p.u + dt * (p.up ? 0.32 : 0.55)) % 1;
-        const x = p.up ? 364 + p.u * 390 : 760 - p.u * 390, y = p.up ? 142 : 249;
-        p.r.setAttribute("x", x.toFixed(1)); p.r.setAttribute("y", y - (p.up ? 0 : 1));
-        p.r.style.opacity = Math.sin(Math.PI * p.u).toFixed(2);
-      });
-      if (visible) raf = requestAnimationFrame(frame);
-    }
-    let visible = false;
-    if (reduce) order.forEach(c => c.style.fill = c.dataset.f);
-    else watch(cloud, () => { visible = true; last = 0; if (!raf) raf = requestAnimationFrame(frame); }, () => { visible = false; });
-  }
 })();
 </script>
 <script>
