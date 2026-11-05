@@ -192,6 +192,25 @@
   .hw .slot.writing { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); }
   .hw .slot.published { stroke: var(--parchment); }
   .hw .slot.claimed { stroke: #3ca99c; }
+  /* The streaming figure, animated: the node, arrow and slot in play light up; the packet carries the snapshot. */
+  .flow-plate { position: relative; }
+  .flow-bar { position: absolute; top: 12px; right: 16px; display: flex; align-items: center; gap: 12px; font: 12.5px/1 var(--text); color: var(--faint); }
+  .flow-plate .tb-play .i-pause, .flow-plate.playing .tb-play .i-play { display: none; }
+  .flow-plate.playing .tb-play .i-pause { display: block; }
+  .hw .blk { transition: stroke .2s, fill .2s; }
+  .hw .blk.on { stroke: var(--bronze-hover); fill: #2c2a25; }
+  .hw .blk.frame.on { stroke: #5cc7b9; }
+  .hw .arrow { transition: stroke .2s, stroke-width .2s; }
+  .hw .arrow.on { stroke: var(--parchment); stroke-width: 1.7; }
+  .hw .arrow.data.on { stroke: var(--bronze-hover); stroke-width: 2.6; }
+  .hw .slot { transition: fill .25s, stroke .25s; }
+  .hw .packet { opacity: 0; transition: opacity .12s; }
+  .hw .packet.go { opacity: 1; }
+  .hw .packet rect { fill: var(--bronze-hover); stroke: var(--deep); stroke-width: 1.5; }
+  .hw .spark { fill: var(--deep); stroke: var(--rule-faint); }
+  .hw .loss { fill: none; stroke: #3ca99c; stroke-width: 1.6; stroke-linejoin: round; }
+  .hw .mono.small.dim { fill: var(--faint); }
+  .snippet pre.code .row.live-py { background: rgba(179, 139, 89, .16); box-shadow: inset 2px 0 var(--bronze); }
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
   .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -382,92 +401,91 @@
     <div class="wrap">
       <div class="label eyebrow">01 · Python streaming</div>
       <h2>Python streaming</h2>
-      <div class="snippet"><div class="snippet-head"><span>Python</span><a href="docs/tutorials/live-pytorch/">live-pytorch</a></div><pre class="code"><code>import caliper
-
-for step in range(steps):
-    x, y = make_batch(64, device)
-    loss = F.cross_entropy(model(x), y)
-    opt.zero_grad(set_to_none=True)
-    loss.backward()
-    opt.step()
-
-    <span class="p">caliper.show</span>(model.fc1.weight, "fc1.weight", cmap="rdbu")     <span class="c"># (64, 784) heatmap</span>
-    <span class="p">caliper.show</span>(acts["conv1"], "conv1.act")                       <span class="c"># (64, 8, 28, 28) -&gt; mosaic</span>
-    <span class="p">caliper.points</span>(acts["hidden"] @ proj, y, "embedding", classes=4)
-    <span class="p">caliper.series</span>(loss.detach(), "loss")
-    <span class="p">caliper.histogram</span>(model.fc1.weight, "fc1.weight.hist")</code></pre></div>
-      <div class="hw-plate">
-    <svg class="hw flow" viewBox="0 0 1100 452" role="img" aria-label="Python streaming: caliper.show queues a GPU copy on torch's MPS stream into a slot of a shared-memory ring and returns; a publisher marks the slot published when its event completes; the viewer process, which writes a heartbeat the script checks, reads the newest published slot in place with a colormap pass and draws it in the ImGui frame">
+      <div class="snippet"><div class="snippet-head"><span>Python</span><a href="docs/tutorials/live-pytorch/">live-pytorch</a></div><pre class="code"><code><span class="row">import caliper</span><span class="row">&nbsp;</span><span class="row">for step in range(steps):</span><span class="row">    x, y = make_batch(64, device)</span><span class="row">    loss = F.cross_entropy(model(x), y)</span><span class="row">    opt.zero_grad(set_to_none=True)</span><span class="row" data-k="compute">    loss.backward()</span><span class="row" data-k="compute">    opt.step()</span><span class="row">&nbsp;</span><span class="row" data-k="show">    <span class="p">caliper.show</span>(model.fc1.weight, "fc1.weight", cmap="rdbu")     <span class="c"># (64, 784) heatmap</span></span><span class="row">    <span class="p">caliper.show</span>(acts["conv1"], "conv1.act")                       <span class="c"># (64, 8, 28, 28) -&gt; mosaic</span></span><span class="row">    <span class="p">caliper.points</span>(acts["hidden"] @ proj, y, "embedding", classes=4)</span><span class="row" data-k="show">    <span class="p">caliper.series</span>(loss.detach(), "loss")</span><span class="row">    <span class="p">caliper.histogram</span>(model.fc1.weight, "fc1.weight.hist")</span></code></pre></div>
+      <div class="hw-plate flow-plate">
+        <div class="flow-bar"><span>Illustrative data</span><button class="tb-play" type="button" aria-label="Play or pause"><svg class="i-play" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5 L10.5 6 L3 10.5 Z"/></svg><svg class="i-pause" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.6" height="9"/><rect x="6.9" y="1.5" width="2.6" height="9"/></svg></button></div>
+    <svg class="hw flow" viewBox="0 0 1100 470" data-slot-y="235,299,363" data-rows="8" data-cols="12" role="img" aria-label="Python streaming, animated with illustrative data: each training step computes the weights; caliper.show queues a GPU copy on torch's MPS stream into a slot of a shared-memory ring and returns; a publisher marks the slot published when its event completes; the viewer process, which writes a heartbeat the script checks, claims the newest published slot, reads it in place with a colormap pass and draws the heatmap and the loss curve in the ImGui frame">
       <defs><marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="tip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-      <rect x="16" y="44" width="340" height="392" rx="10" class="pkg"/>
+      <rect x="16" y="44" width="340" height="402" rx="10" class="pkg"/>
       <text x="34" y="28" class="k" text-anchor="start">TRAINING PROCESS</text>
       <text x="338" y="28" class="n dim" text-anchor="end">Python, torch on MPS</text>
-      <rect x="386" y="44" width="328" height="392" rx="10" class="pkg"/>
+      <rect x="386" y="44" width="328" height="402" rx="10" class="pkg"/>
       <text x="404" y="28" class="k" text-anchor="start">SHARED MEMORY</text>
       <text x="696" y="28" class="n dim" text-anchor="end">POSIX segments, mode 0600</text>
-      <rect x="744" y="44" width="340" height="392" rx="10" class="pkg"/>
+      <rect x="744" y="44" width="340" height="402" rx="10" class="pkg"/>
       <text x="762" y="28" class="k" text-anchor="start">VIEWER PROCESS</text>
       <text x="1066" y="28" class="n dim" text-anchor="end">Caliper app or caliper-viewer</text>
-      <rect x="36" y="64" width="300" height="62" rx="4" class="blk"/>
+      <rect id="n-show" x="36" y="64" width="300" height="62" rx="4" class="blk"/>
       <text x="52" y="88" class="mono" text-anchor="start">caliper.show(W)</text>
       <text x="52" y="108" class="n" text-anchor="start">60 Hz rate limit, then the watcher check</text>
-      <rect x="36" y="150" width="300" height="62" rx="4" class="blk"/>
+      <rect id="n-ring" x="36" y="150" width="300" height="62" rx="4" class="blk"/>
       <text x="52" y="174" class="mono" text-anchor="start">SnapshotRing</text>
       <text x="52" y="194" class="n" text-anchor="start">a free slot of three, or the snapshot drops</text>
-      <rect x="36" y="236" width="300" height="82" rx="4" class="blk hot"/>
+      <rect id="n-torch" x="36" y="236" width="300" height="82" rx="4" class="blk hot"/>
       <text x="52" y="260" class="mono" text-anchor="start">torch MPS stream</text>
       <text x="52" y="280" class="n" text-anchor="start">slot.copy_(W)</text>
       <text x="52" y="298" class="n" text-anchor="start">torch.aminmax(W, out=stats)</text>
-      <rect x="36" y="342" width="300" height="70" rx="4" class="blk"/>
+      <g id="hm-train" class="hm"><rect x="244.00" y="247.00" width="5.87" height="6.70" fill="#312e28"/><rect x="250.67" y="247.00" width="5.87" height="6.70" fill="#534634"/><rect x="257.33" y="247.00" width="5.87" height="6.70" fill="#5c4d38"/><rect x="264.00" y="247.00" width="5.87" height="6.70" fill="#483e30"/><rect x="270.67" y="247.00" width="5.87" height="6.70" fill="#334250"/><rect x="277.33" y="247.00" width="5.87" height="6.70" fill="#364b61"/><rect x="284.00" y="247.00" width="5.87" height="6.70" fill="#2c2f30"/><rect x="290.67" y="247.00" width="5.87" height="6.70" fill="#38332a"/><rect x="297.33" y="247.00" width="5.87" height="6.70" fill="#4d4232"/><rect x="304.00" y="247.00" width="5.87" height="6.70" fill="#453c2f"/><rect x="310.67" y="247.00" width="5.87" height="6.70" fill="#2a2926"/><rect x="317.33" y="247.00" width="5.87" height="6.70" fill="#35495c"/><rect x="244.00" y="254.50" width="5.87" height="6.70" fill="#313c46"/><rect x="250.67" y="254.50" width="5.87" height="6.70" fill="#3a352b"/><rect x="257.33" y="254.50" width="5.87" height="6.70" fill="#7d6545"/><rect x="264.00" y="254.50" width="5.87" height="6.70" fill="#715c40"/><rect x="270.67" y="254.50" width="5.87" height="6.70" fill="#2e2c26"/><rect x="277.33" y="254.50" width="5.87" height="6.70" fill="#36495d"/><rect x="284.00" y="254.50" width="5.87" height="6.70" fill="#374d65"/><rect x="290.67" y="254.50" width="5.87" height="6.70" fill="#2d3234"/><rect x="297.33" y="254.50" width="5.87" height="6.70" fill="#564836"/><rect x="304.00" y="254.50" width="5.87" height="6.70" fill="#6e593f"/><rect x="310.67" y="254.50" width="5.87" height="6.70" fill="#584a36"/><rect x="317.33" y="254.50" width="5.87" height="6.70" fill="#2c2e2e"/><rect x="244.00" y="262.00" width="5.87" height="6.70" fill="#40658e"/><rect x="250.67" y="262.00" width="5.87" height="6.70" fill="#303940"/><rect x="257.33" y="262.00" width="5.87" height="6.70" fill="#4c4132"/><rect x="264.00" y="262.00" width="5.87" height="6.70" fill="#826846"/><rect x="270.67" y="262.00" width="5.87" height="6.70" fill="#63523b"/><rect x="277.33" y="262.00" width="5.87" height="6.70" fill="#313d48"/><rect x="284.00" y="262.00" width="5.87" height="6.70" fill="#3d5e81"/><rect x="290.67" y="262.00" width="5.87" height="6.70" fill="#3c5c7e"/><rect x="297.33" y="262.00" width="5.87" height="6.70" fill="#2f363c"/><rect x="304.00" y="262.00" width="5.87" height="6.70" fill="#836947"/><rect x="310.67" y="262.00" width="5.87" height="6.70" fill="#7f6645"/><rect x="317.33" y="262.00" width="5.87" height="6.70" fill="#5b4c38"/><rect x="244.00" y="269.50" width="5.87" height="6.70" fill="#3e6086"/><rect x="250.67" y="269.50" width="5.87" height="6.70" fill="#416a96"/><rect x="257.33" y="269.50" width="5.87" height="6.70" fill="#2e3337"/><rect x="264.00" y="269.50" width="5.87" height="6.70" fill="#816746"/><rect x="270.67" y="269.50" width="5.87" height="6.70" fill="#95754e"/><rect x="277.33" y="269.50" width="5.87" height="6.70" fill="#584a36"/><rect x="284.00" y="269.50" width="5.87" height="6.70" fill="#344556"/><rect x="290.67" y="269.50" width="5.87" height="6.70" fill="#3e6084"/><rect x="297.33" y="269.50" width="5.87" height="6.70" fill="#39526d"/><rect x="304.00" y="269.50" width="5.87" height="6.70" fill="#312e28"/><rect x="310.67" y="269.50" width="5.87" height="6.70" fill="#856a47"/><rect x="317.33" y="269.50" width="5.87" height="6.70" fill="#9c7b50"/><rect x="244.00" y="277.00" width="5.87" height="6.70" fill="#313c46"/><rect x="250.67" y="277.00" width="5.87" height="6.70" fill="#3e6288"/><rect x="257.33" y="277.00" width="5.87" height="6.70" fill="#3a5572"/><rect x="264.00" y="277.00" width="5.87" height="6.70" fill="#2e2c27"/><rect x="270.67" y="277.00" width="5.87" height="6.70" fill="#8c6f4a"/><rect x="277.33" y="277.00" width="5.87" height="6.70" fill="#a17e52"/><rect x="284.00" y="277.00" width="5.87" height="6.70" fill="#39342b"/><rect x="290.67" y="277.00" width="5.87" height="6.70" fill="#38516b"/><rect x="297.33" y="277.00" width="5.87" height="6.70" fill="#426d9b"/><rect x="304.00" y="277.00" width="5.87" height="6.70" fill="#334150"/><rect x="310.67" y="277.00" width="5.87" height="6.70" fill="#483e30"/><rect x="317.33" y="277.00" width="5.87" height="6.70" fill="#9c7a50"/><rect x="244.00" y="284.50" width="5.87" height="6.70" fill="#3e382d"/><rect x="250.67" y="284.50" width="5.87" height="6.70" fill="#38516b"/><rect x="257.33" y="284.50" width="5.87" height="6.70" fill="#3f638a"/><rect x="264.00" y="284.50" width="5.87" height="6.70" fill="#374d63"/><rect x="270.67" y="284.50" width="5.87" height="6.70" fill="#39342b"/><rect x="277.33" y="284.50" width="5.87" height="6.70" fill="#826846"/><rect x="284.00" y="284.50" width="5.87" height="6.70" fill="#735d41"/><rect x="290.67" y="284.50" width="5.87" height="6.70" fill="#2d3032"/><rect x="297.33" y="284.50" width="5.87" height="6.70" fill="#3d5e82"/><rect x="304.00" y="284.50" width="5.87" height="6.70" fill="#3e6186"/><rect x="310.67" y="284.50" width="5.87" height="6.70" fill="#313c46"/><rect x="317.33" y="284.50" width="5.87" height="6.70" fill="#61513a"/><rect x="244.00" y="292.00" width="5.87" height="6.70" fill="#63513a"/><rect x="250.67" y="292.00" width="5.87" height="6.70" fill="#38332a"/><rect x="257.33" y="292.00" width="5.87" height="6.70" fill="#374c63"/><rect x="264.00" y="292.00" width="5.87" height="6.70" fill="#384f67"/><rect x="270.67" y="292.00" width="5.87" height="6.70" fill="#2d3133"/><rect x="277.33" y="292.00" width="5.87" height="6.70" fill="#433b2f"/><rect x="284.00" y="292.00" width="5.87" height="6.70" fill="#63523b"/><rect x="290.67" y="292.00" width="5.87" height="6.70" fill="#64533b"/><rect x="297.33" y="292.00" width="5.87" height="6.70" fill="#303840"/><rect x="304.00" y="292.00" width="5.87" height="6.70" fill="#3a5571"/><rect x="310.67" y="292.00" width="5.87" height="6.70" fill="#3a5470"/><rect x="317.33" y="292.00" width="5.87" height="6.70" fill="#2d3031"/><rect x="244.00" y="299.50" width="5.87" height="6.70" fill="#4d4232"/><rect x="250.67" y="299.50" width="5.87" height="6.70" fill="#483e30"/><rect x="257.33" y="299.50" width="5.87" height="6.70" fill="#2c2e2e"/><rect x="264.00" y="299.50" width="5.87" height="6.70" fill="#334352"/><rect x="270.67" y="299.50" width="5.87" height="6.70" fill="#35485b"/><rect x="277.33" y="299.50" width="5.87" height="6.70" fill="#2a2925"/><rect x="284.00" y="299.50" width="5.87" height="6.70" fill="#483e30"/><rect x="290.67" y="299.50" width="5.87" height="6.70" fill="#63523b"/><rect x="297.33" y="299.50" width="5.87" height="6.70" fill="#3a342b"/><rect x="304.00" y="299.50" width="5.87" height="6.70" fill="#2c2f2f"/><rect x="310.67" y="299.50" width="5.87" height="6.70" fill="#334251"/><rect x="317.33" y="299.50" width="5.87" height="6.70" fill="#2f383e"/></g>
+      <rect id="n-event" x="36" y="342" width="300" height="70" rx="4" class="blk"/>
       <text x="52" y="366" class="mono" text-anchor="start">torch.mps.Event</text>
       <text x="52" y="386" class="n" text-anchor="start">record(), then a publisher thread</text>
       <text x="52" y="404" class="n" text-anchor="start">polls query() every 2 ms</text>
       <path d="M 186 126 L 186 148" class="arrow" marker-end="url(#tip)"/>
       <path d="M 186 212 L 186 234" class="arrow" marker-end="url(#tip)"/>
       <path d="M 186 318 L 186 340" class="arrow" marker-end="url(#tip)"/>
-      <rect x="406" y="64" width="288" height="62" rx="4" class="blk"/>
+      <text id="t-step" x="52" y="434" class="mono small dim" text-anchor="start">step 1,216 · loss 0.074</text>
+      <rect id="n-ctl" x="406" y="64" width="288" height="62" rx="4" class="blk"/>
       <text x="422" y="88" class="mono" text-anchor="start">/session-ctl</text>
       <text x="422" y="108" class="n" text-anchor="start">view rows, the viewer's heartbeat</text>
       <rect x="406" y="150" width="288" height="262" rx="4" class="blk"/>
       <text x="422" y="174" class="mono" text-anchor="start">/session-v1</text>
       <text x="422" y="194" class="n" text-anchor="start">header: published, claimed</text>
-      <rect x="422" y="210" width="196" height="50" rx="3" class="slot writing"/>
-      <rect x="624" y="210" width="54" height="50" rx="3" class="slot writing"/>
+      <rect id="s0" x="422" y="210" width="196" height="50" rx="3" class="slot writing"/>
+      <rect id="s0st" x="624" y="210" width="54" height="50" rx="3" class="slot writing"/>
       <text x="434" y="232" class="mono small" text-anchor="start">slot 0</text>
-      <text x="434" y="250" class="n" text-anchor="start">being written</text>
+      <text id="s0lbl" x="434" y="250" class="n" text-anchor="start">being written</text>
+      <g id="hm-s0" class="hm"><rect x="546.00" y="217.00" width="4.53" height="3.70" fill="#2b2b29"/><rect x="551.33" y="217.00" width="4.53" height="3.70" fill="#40392d"/><rect x="556.67" y="217.00" width="4.53" height="3.70" fill="#60503a"/><rect x="562.00" y="217.00" width="4.53" height="3.70" fill="#2e2c27"/><rect x="567.33" y="217.00" width="4.53" height="3.70" fill="#2e3337"/><rect x="572.67" y="217.00" width="4.53" height="3.70" fill="#323e4a"/><rect x="578.00" y="217.00" width="4.53" height="3.70" fill="#303b44"/><rect x="583.33" y="217.00" width="4.53" height="3.70" fill="#4a4031"/><rect x="588.67" y="217.00" width="4.53" height="3.70" fill="#5c4d38"/><rect x="594.00" y="217.00" width="4.53" height="3.70" fill="#554835"/><rect x="599.33" y="217.00" width="4.53" height="3.70" fill="#2b2925"/><rect x="604.67" y="217.00" width="4.53" height="3.70" fill="#354658"/><rect x="546.00" y="221.50" width="4.53" height="3.70" fill="#374c62"/><rect x="551.33" y="221.50" width="4.53" height="3.70" fill="#40392d"/><rect x="556.67" y="221.50" width="4.53" height="3.70" fill="#7a6243"/><rect x="562.00" y="221.50" width="4.53" height="3.70" fill="#554835"/><rect x="567.33" y="221.50" width="4.53" height="3.70" fill="#343029"/><rect x="572.67" y="221.50" width="4.53" height="3.70" fill="#374c62"/><rect x="578.00" y="221.50" width="4.53" height="3.70" fill="#384f67"/><rect x="583.33" y="221.50" width="4.53" height="3.70" fill="#2b2c2b"/><rect x="588.67" y="221.50" width="4.53" height="3.70" fill="#65543c"/><rect x="594.00" y="221.50" width="4.53" height="3.70" fill="#816746"/><rect x="599.33" y="221.50" width="4.53" height="3.70" fill="#63523b"/><rect x="604.67" y="221.50" width="4.53" height="3.70" fill="#313c45"/><rect x="546.00" y="226.00" width="4.53" height="3.70" fill="#3f638a"/><rect x="551.33" y="226.00" width="4.53" height="3.70" fill="#323f4b"/><rect x="556.67" y="226.00" width="4.53" height="3.70" fill="#4c4232"/><rect x="562.00" y="226.00" width="4.53" height="3.70" fill="#90724c"/><rect x="567.33" y="226.00" width="4.53" height="3.70" fill="#65533b"/><rect x="572.67" y="226.00" width="4.53" height="3.70" fill="#303840"/><rect x="578.00" y="226.00" width="4.53" height="3.70" fill="#385068"/><rect x="583.33" y="226.00" width="4.53" height="3.70" fill="#3b5776"/><rect x="588.67" y="226.00" width="4.53" height="3.70" fill="#2b2a27"/><rect x="594.00" y="226.00" width="4.53" height="3.70" fill="#796143"/><rect x="599.33" y="226.00" width="4.53" height="3.70" fill="#776042"/><rect x="604.67" y="226.00" width="4.53" height="3.70" fill="#38332a"/><rect x="546.00" y="230.50" width="4.53" height="3.70" fill="#3d5d80"/><rect x="551.33" y="230.50" width="4.53" height="3.70" fill="#40668f"/><rect x="556.67" y="230.50" width="4.53" height="3.70" fill="#313d47"/><rect x="562.00" y="230.50" width="4.53" height="3.70" fill="#61503a"/><rect x="567.33" y="230.50" width="4.53" height="3.70" fill="#a48053"/><rect x="572.67" y="230.50" width="4.53" height="3.70" fill="#60503a"/><rect x="578.00" y="230.50" width="4.53" height="3.70" fill="#334250"/><rect x="583.33" y="230.50" width="4.53" height="3.70" fill="#4470a1"/><rect x="588.67" y="230.50" width="4.53" height="3.70" fill="#39536f"/><rect x="594.00" y="230.50" width="4.53" height="3.70" fill="#4e4333"/><rect x="599.33" y="230.50" width="4.53" height="3.70" fill="#9a7950"/><rect x="604.67" y="230.50" width="4.53" height="3.70" fill="#94744d"/><rect x="546.00" y="235.00" width="4.53" height="3.70" fill="#2f383f"/><rect x="551.33" y="235.00" width="4.53" height="3.70" fill="#3d5f82"/><rect x="556.67" y="235.00" width="4.53" height="3.70" fill="#3f638a"/><rect x="562.00" y="235.00" width="4.53" height="3.70" fill="#3d372c"/><rect x="567.33" y="235.00" width="4.53" height="3.70" fill="#7f6645"/><rect x="572.67" y="235.00" width="4.53" height="3.70" fill="#8a6e4a"/><rect x="578.00" y="235.00" width="4.53" height="3.70" fill="#312e28"/><rect x="583.33" y="235.00" width="4.53" height="3.70" fill="#39536e"/><rect x="588.67" y="235.00" width="4.53" height="3.70" fill="#426c9a"/><rect x="594.00" y="235.00" width="4.53" height="3.70" fill="#374d64"/><rect x="599.33" y="235.00" width="4.53" height="3.70" fill="#63523b"/><rect x="604.67" y="235.00" width="4.53" height="3.70" fill="#98784f"/><rect x="546.00" y="239.50" width="4.53" height="3.70" fill="#4e4232"/><rect x="551.33" y="239.50" width="4.53" height="3.70" fill="#344454"/><rect x="556.67" y="239.50" width="4.53" height="3.70" fill="#3c5b7c"/><rect x="562.00" y="239.50" width="4.53" height="3.70" fill="#323f4b"/><rect x="567.33" y="239.50" width="4.53" height="3.70" fill="#413a2e"/><rect x="572.67" y="239.50" width="4.53" height="3.70" fill="#7e6545"/><rect x="578.00" y="239.50" width="4.53" height="3.70" fill="#66543c"/><rect x="583.33" y="239.50" width="4.53" height="3.70" fill="#2c2a26"/><rect x="588.67" y="239.50" width="4.53" height="3.70" fill="#3d5f83"/><rect x="594.00" y="239.50" width="4.53" height="3.70" fill="#3d5d7f"/><rect x="599.33" y="239.50" width="4.53" height="3.70" fill="#323f4c"/><rect x="604.67" y="239.50" width="4.53" height="3.70" fill="#745e41"/><rect x="546.00" y="244.00" width="4.53" height="3.70" fill="#745e41"/><rect x="551.33" y="244.00" width="4.53" height="3.70" fill="#38332a"/><rect x="556.67" y="244.00" width="4.53" height="3.70" fill="#344557"/><rect x="562.00" y="244.00" width="4.53" height="3.70" fill="#39526d"/><rect x="567.33" y="244.00" width="4.53" height="3.70" fill="#2d3134"/><rect x="572.67" y="244.00" width="4.53" height="3.70" fill="#5c4d38"/><rect x="578.00" y="244.00" width="4.53" height="3.70" fill="#66543c"/><rect x="583.33" y="244.00" width="4.53" height="3.70" fill="#68553c"/><rect x="588.67" y="244.00" width="4.53" height="3.70" fill="#2b2b28"/><rect x="594.00" y="244.00" width="4.53" height="3.70" fill="#364a5e"/><rect x="599.33" y="244.00" width="4.53" height="3.70" fill="#354759"/><rect x="604.67" y="244.00" width="4.53" height="3.70" fill="#3c362c"/><rect x="546.00" y="248.50" width="4.53" height="3.70" fill="#463d2f"/><rect x="551.33" y="248.50" width="4.53" height="3.70" fill="#483e30"/><rect x="556.67" y="248.50" width="4.53" height="3.70" fill="#2d3132"/><rect x="562.00" y="248.50" width="4.53" height="3.70" fill="#313d48"/><rect x="567.33" y="248.50" width="4.53" height="3.70" fill="#313d48"/><rect x="572.67" y="248.50" width="4.53" height="3.70" fill="#2b2d2b"/><rect x="578.00" y="248.50" width="4.53" height="3.70" fill="#423a2e"/><rect x="583.33" y="248.50" width="4.53" height="3.70" fill="#554835"/><rect x="588.67" y="248.50" width="4.53" height="3.70" fill="#4d4232"/><rect x="594.00" y="248.50" width="4.53" height="3.70" fill="#2e3437"/><rect x="599.33" y="248.50" width="4.53" height="3.70" fill="#303a43"/><rect x="604.67" y="248.50" width="4.53" height="3.70" fill="#344555"/></g>
       <text x="651" y="240" class="n dim" text-anchor="middle">stats</text>
-      <rect x="422" y="274" width="196" height="50" rx="3" class="slot published"/>
-      <rect x="624" y="274" width="54" height="50" rx="3" class="slot published"/>
+      <rect id="s1" x="422" y="274" width="196" height="50" rx="3" class="slot published"/>
+      <rect id="s1st" x="624" y="274" width="54" height="50" rx="3" class="slot published"/>
       <text x="434" y="296" class="mono small" text-anchor="start">slot 1</text>
-      <text x="434" y="314" class="n" text-anchor="start">published</text>
+      <text id="s1lbl" x="434" y="314" class="n" text-anchor="start">published</text>
+      <g id="hm-s1" class="hm"><rect x="546.00" y="281.00" width="4.53" height="3.70" fill="#3f382d"/><rect x="551.33" y="281.00" width="4.53" height="3.70" fill="#65533b"/><rect x="556.67" y="281.00" width="4.53" height="3.70" fill="#715b40"/><rect x="562.00" y="281.00" width="4.53" height="3.70" fill="#353129"/><rect x="567.33" y="281.00" width="4.53" height="3.70" fill="#334352"/><rect x="572.67" y="281.00" width="4.53" height="3.70" fill="#303941"/><rect x="578.00" y="281.00" width="4.53" height="3.70" fill="#303a43"/><rect x="583.33" y="281.00" width="4.53" height="3.70" fill="#37322a"/><rect x="588.67" y="281.00" width="4.53" height="3.70" fill="#5c4d38"/><rect x="594.00" y="281.00" width="4.53" height="3.70" fill="#504433"/><rect x="599.33" y="281.00" width="4.53" height="3.70" fill="#3d372c"/><rect x="604.67" y="281.00" width="4.53" height="3.70" fill="#313d47"/><rect x="546.00" y="285.50" width="4.53" height="3.70" fill="#323f4c"/><rect x="551.33" y="285.50" width="4.53" height="3.70" fill="#302d27"/><rect x="556.67" y="285.50" width="4.53" height="3.70" fill="#806646"/><rect x="562.00" y="285.50" width="4.53" height="3.70" fill="#463d2f"/><rect x="567.33" y="285.50" width="4.53" height="3.70" fill="#2e3337"/><rect x="572.67" y="285.50" width="4.53" height="3.70" fill="#2f383f"/><rect x="578.00" y="285.50" width="4.53" height="3.70" fill="#334251"/><rect x="583.33" y="285.50" width="4.53" height="3.70" fill="#2a2925"/><rect x="588.67" y="285.50" width="4.53" height="3.70" fill="#6e593f"/><rect x="594.00" y="285.50" width="4.53" height="3.70" fill="#856a47"/><rect x="599.33" y="285.50" width="4.53" height="3.70" fill="#2f2d27"/><rect x="604.67" y="285.50" width="4.53" height="3.70" fill="#2e3336"/><rect x="546.00" y="290.00" width="4.53" height="3.70" fill="#3a5471"/><rect x="551.33" y="290.00" width="4.53" height="3.70" fill="#2d3134"/><rect x="556.67" y="290.00" width="4.53" height="3.70" fill="#574936"/><rect x="562.00" y="290.00" width="4.53" height="3.70" fill="#64523b"/><rect x="567.33" y="290.00" width="4.53" height="3.70" fill="#826847"/><rect x="572.67" y="290.00" width="4.53" height="3.70" fill="#2f363c"/><rect x="578.00" y="290.00" width="4.53" height="3.70" fill="#385069"/><rect x="583.33" y="290.00" width="4.53" height="3.70" fill="#3e6288"/><rect x="588.67" y="290.00" width="4.53" height="3.70" fill="#2e3337"/><rect x="594.00" y="290.00" width="4.53" height="3.70" fill="#896d49"/><rect x="599.33" y="290.00" width="4.53" height="3.70" fill="#8a6d49"/><rect x="604.67" y="290.00" width="4.53" height="3.70" fill="#2f2d27"/><rect x="546.00" y="294.50" width="4.53" height="3.70" fill="#3a5572"/><rect x="551.33" y="294.50" width="4.53" height="3.70" fill="#406792"/><rect x="556.67" y="294.50" width="4.53" height="3.70" fill="#2b2b29"/><rect x="562.00" y="294.50" width="4.53" height="3.70" fill="#7e6545"/><rect x="567.33" y="294.50" width="4.53" height="3.70" fill="#7f6645"/><rect x="572.67" y="294.50" width="4.53" height="3.70" fill="#6b573e"/><rect x="578.00" y="294.50" width="4.53" height="3.70" fill="#39536e"/><rect x="583.33" y="294.50" width="4.53" height="3.70" fill="#3c5c7e"/><rect x="588.67" y="294.50" width="4.53" height="3.70" fill="#3b5979"/><rect x="594.00" y="294.50" width="4.53" height="3.70" fill="#37332a"/><rect x="599.33" y="294.50" width="4.53" height="3.70" fill="#63523b"/><rect x="604.67" y="294.50" width="4.53" height="3.70" fill="#8f724b"/><rect x="546.00" y="299.00" width="4.53" height="3.70" fill="#303a42"/><rect x="551.33" y="299.00" width="4.53" height="3.70" fill="#406790"/><rect x="556.67" y="299.00" width="4.53" height="3.70" fill="#40658e"/><rect x="562.00" y="299.00" width="4.53" height="3.70" fill="#2b2b28"/><rect x="567.33" y="299.00" width="4.53" height="3.70" fill="#64533b"/><rect x="572.67" y="299.00" width="4.53" height="3.70" fill="#7c6444"/><rect x="578.00" y="299.00" width="4.53" height="3.70" fill="#4d4232"/><rect x="583.33" y="299.00" width="4.53" height="3.70" fill="#35475a"/><rect x="588.67" y="299.00" width="4.53" height="3.70" fill="#416893"/><rect x="594.00" y="299.00" width="4.53" height="3.70" fill="#2d3336"/><rect x="599.33" y="299.00" width="4.53" height="3.70" fill="#433b2e"/><rect x="604.67" y="299.00" width="4.53" height="3.70" fill="#7c6444"/><rect x="546.00" y="303.50" width="4.53" height="3.70" fill="#2a2a27"/><rect x="551.33" y="303.50" width="4.53" height="3.70" fill="#39526d"/><rect x="556.67" y="303.50" width="4.53" height="3.70" fill="#3d5d7f"/><rect x="562.00" y="303.50" width="4.53" height="3.70" fill="#33414f"/><rect x="567.33" y="303.50" width="4.53" height="3.70" fill="#2d2b26"/><rect x="572.67" y="303.50" width="4.53" height="3.70" fill="#745e41"/><rect x="578.00" y="303.50" width="4.53" height="3.70" fill="#705b3f"/><rect x="583.33" y="303.50" width="4.53" height="3.70" fill="#3a352b"/><rect x="588.67" y="303.50" width="4.53" height="3.70" fill="#384f68"/><rect x="594.00" y="303.50" width="4.53" height="3.70" fill="#3b5877"/><rect x="599.33" y="303.50" width="4.53" height="3.70" fill="#344657"/><rect x="604.67" y="303.50" width="4.53" height="3.70" fill="#755f42"/><rect x="546.00" y="308.00" width="4.53" height="3.70" fill="#524634"/><rect x="551.33" y="308.00" width="4.53" height="3.70" fill="#2e2c26"/><rect x="556.67" y="308.00" width="4.53" height="3.70" fill="#39546f"/><rect x="562.00" y="308.00" width="4.53" height="3.70" fill="#323e4a"/><rect x="567.33" y="308.00" width="4.53" height="3.70" fill="#2b2a25"/><rect x="572.67" y="308.00" width="4.53" height="3.70" fill="#524534"/><rect x="578.00" y="308.00" width="4.53" height="3.70" fill="#5a4b37"/><rect x="583.33" y="308.00" width="4.53" height="3.70" fill="#453c2f"/><rect x="588.67" y="308.00" width="4.53" height="3.70" fill="#2a2925"/><rect x="594.00" y="308.00" width="4.53" height="3.70" fill="#364b61"/><rect x="599.33" y="308.00" width="4.53" height="3.70" fill="#374d64"/><rect x="604.67" y="308.00" width="4.53" height="3.70" fill="#343029"/><rect x="546.00" y="312.50" width="4.53" height="3.70" fill="#594b37"/><rect x="551.33" y="312.50" width="4.53" height="3.70" fill="#37322a"/><rect x="556.67" y="312.50" width="4.53" height="3.70" fill="#2d2b26"/><rect x="562.00" y="312.50" width="4.53" height="3.70" fill="#364a5f"/><rect x="567.33" y="312.50" width="4.53" height="3.70" fill="#344454"/><rect x="572.67" y="312.50" width="4.53" height="3.70" fill="#2b2d2b"/><rect x="578.00" y="312.50" width="4.53" height="3.70" fill="#4c4132"/><rect x="583.33" y="312.50" width="4.53" height="3.70" fill="#463d2f"/><rect x="588.67" y="312.50" width="4.53" height="3.70" fill="#534735"/><rect x="594.00" y="312.50" width="4.53" height="3.70" fill="#344555"/><rect x="599.33" y="312.50" width="4.53" height="3.70" fill="#374e65"/><rect x="604.67" y="312.50" width="4.53" height="3.70" fill="#313c45"/></g>
       <text x="651" y="304" class="n dim" text-anchor="middle">stats</text>
-      <rect x="422" y="338" width="196" height="50" rx="3" class="slot claimed"/>
-      <rect x="624" y="338" width="54" height="50" rx="3" class="slot claimed"/>
+      <rect id="s2" x="422" y="338" width="196" height="50" rx="3" class="slot claimed"/>
+      <rect id="s2st" x="624" y="338" width="54" height="50" rx="3" class="slot claimed"/>
       <text x="434" y="360" class="mono small" text-anchor="start">slot 2</text>
-      <text x="434" y="378" class="n" text-anchor="start">claimed by the viewer</text>
+      <text id="s2lbl" x="434" y="378" class="n" text-anchor="start">claimed</text>
+      <g id="hm-s2" class="hm"><rect x="546.00" y="345.00" width="4.53" height="3.70" fill="#463d30"/><rect x="551.33" y="345.00" width="4.53" height="3.70" fill="#39342b"/><rect x="556.67" y="345.00" width="4.53" height="3.70" fill="#2c2e2d"/><rect x="562.00" y="345.00" width="4.53" height="3.70" fill="#2d2b26"/><rect x="567.33" y="345.00" width="4.53" height="3.70" fill="#364b61"/><rect x="572.67" y="345.00" width="4.53" height="3.70" fill="#36322a"/><rect x="578.00" y="345.00" width="4.53" height="3.70" fill="#2c2f2f"/><rect x="583.33" y="345.00" width="4.53" height="3.70" fill="#5f4f39"/><rect x="588.67" y="345.00" width="4.53" height="3.70" fill="#2c2b26"/><rect x="594.00" y="345.00" width="4.53" height="3.70" fill="#63523b"/><rect x="599.33" y="345.00" width="4.53" height="3.70" fill="#32404d"/><rect x="604.67" y="345.00" width="4.53" height="3.70" fill="#2d3133"/><rect x="546.00" y="349.50" width="4.53" height="3.70" fill="#2d3032"/><rect x="551.33" y="349.50" width="4.53" height="3.70" fill="#574936"/><rect x="556.67" y="349.50" width="4.53" height="3.70" fill="#846947"/><rect x="562.00" y="349.50" width="4.53" height="3.70" fill="#2a2925"/><rect x="567.33" y="349.50" width="4.53" height="3.70" fill="#2d3133"/><rect x="572.67" y="349.50" width="4.53" height="3.70" fill="#2d3031"/><rect x="578.00" y="349.50" width="4.53" height="3.70" fill="#303a42"/><rect x="583.33" y="349.50" width="4.53" height="3.70" fill="#2b2b29"/><rect x="588.67" y="349.50" width="4.53" height="3.70" fill="#60503a"/><rect x="594.00" y="349.50" width="4.53" height="3.70" fill="#302e27"/><rect x="599.33" y="349.50" width="4.53" height="3.70" fill="#514534"/><rect x="604.67" y="349.50" width="4.53" height="3.70" fill="#2e353a"/><rect x="546.00" y="354.00" width="4.53" height="3.70" fill="#3e6085"/><rect x="551.33" y="354.00" width="4.53" height="3.70" fill="#364b60"/><rect x="556.67" y="354.00" width="4.53" height="3.70" fill="#65533b"/><rect x="562.00" y="354.00" width="4.53" height="3.70" fill="#4e4333"/><rect x="567.33" y="354.00" width="4.53" height="3.70" fill="#2c2b26"/><rect x="572.67" y="354.00" width="4.53" height="3.70" fill="#302d27"/><rect x="578.00" y="354.00" width="4.53" height="3.70" fill="#3e6085"/><rect x="583.33" y="354.00" width="4.53" height="3.70" fill="#374e66"/><rect x="588.67" y="354.00" width="4.53" height="3.70" fill="#443c2f"/><rect x="594.00" y="354.00" width="4.53" height="3.70" fill="#896d49"/><rect x="599.33" y="354.00" width="4.53" height="3.70" fill="#9c7a50"/><rect x="604.67" y="354.00" width="4.53" height="3.70" fill="#5b4c38"/><rect x="546.00" y="358.50" width="4.53" height="3.70" fill="#406792"/><rect x="551.33" y="358.50" width="4.53" height="3.70" fill="#323f4b"/><rect x="556.67" y="358.50" width="4.53" height="3.70" fill="#3e372d"/><rect x="562.00" y="358.50" width="4.53" height="3.70" fill="#493f31"/><rect x="567.33" y="358.50" width="4.53" height="3.70" fill="#8e714b"/><rect x="572.67" y="358.50" width="4.53" height="3.70" fill="#574936"/><rect x="578.00" y="358.50" width="4.53" height="3.70" fill="#2c2e2e"/><rect x="583.33" y="358.50" width="4.53" height="3.70" fill="#3f658d"/><rect x="588.67" y="358.50" width="4.53" height="3.70" fill="#2d3133"/><rect x="594.00" y="358.50" width="4.53" height="3.70" fill="#2e2c27"/><rect x="599.33" y="358.50" width="4.53" height="3.70" fill="#725c40"/><rect x="604.67" y="358.50" width="4.53" height="3.70" fill="#7f6645"/><rect x="546.00" y="363.00" width="4.53" height="3.70" fill="#2e3439"/><rect x="551.33" y="363.00" width="4.53" height="3.70" fill="#344555"/><rect x="556.67" y="363.00" width="4.53" height="3.70" fill="#364b61"/><rect x="562.00" y="363.00" width="4.53" height="3.70" fill="#2d3134"/><rect x="567.33" y="363.00" width="4.53" height="3.70" fill="#91734c"/><rect x="572.67" y="363.00" width="4.53" height="3.70" fill="#4c4132"/><rect x="578.00" y="363.00" width="4.53" height="3.70" fill="#66543c"/><rect x="583.33" y="363.00" width="4.53" height="3.70" fill="#2d3132"/><rect x="588.67" y="363.00" width="4.53" height="3.70" fill="#426b97"/><rect x="594.00" y="363.00" width="4.53" height="3.70" fill="#313e49"/><rect x="599.33" y="363.00" width="4.53" height="3.70" fill="#38332a"/><rect x="604.67" y="363.00" width="4.53" height="3.70" fill="#8e714b"/><rect x="546.00" y="367.50" width="4.53" height="3.70" fill="#2d3132"/><rect x="551.33" y="367.50" width="4.53" height="3.70" fill="#2a2a27"/><rect x="556.67" y="367.50" width="4.53" height="3.70" fill="#3d5d80"/><rect x="562.00" y="367.50" width="4.53" height="3.70" fill="#2f373d"/><rect x="567.33" y="367.50" width="4.53" height="3.70" fill="#61503a"/><rect x="572.67" y="367.50" width="4.53" height="3.70" fill="#96764e"/><rect x="578.00" y="367.50" width="4.53" height="3.70" fill="#62513a"/><rect x="583.33" y="367.50" width="4.53" height="3.70" fill="#3c362c"/><rect x="588.67" y="367.50" width="4.53" height="3.70" fill="#3c5c7d"/><rect x="594.00" y="367.50" width="4.53" height="3.70" fill="#406791"/><rect x="599.33" y="367.50" width="4.53" height="3.70" fill="#37322a"/><rect x="604.67" y="367.50" width="4.53" height="3.70" fill="#65533b"/><rect x="546.00" y="372.00" width="4.53" height="3.70" fill="#473e30"/><rect x="551.33" y="372.00" width="4.53" height="3.70" fill="#2f363c"/><rect x="556.67" y="372.00" width="4.53" height="3.70" fill="#303941"/><rect x="562.00" y="372.00" width="4.53" height="3.70" fill="#32404e"/><rect x="567.33" y="372.00" width="4.53" height="3.70" fill="#2d2b26"/><rect x="572.67" y="372.00" width="4.53" height="3.70" fill="#62513a"/><rect x="578.00" y="372.00" width="4.53" height="3.70" fill="#7c6344"/><rect x="583.33" y="372.00" width="4.53" height="3.70" fill="#38332a"/><rect x="588.67" y="372.00" width="4.53" height="3.70" fill="#313d47"/><rect x="594.00" y="372.00" width="4.53" height="3.70" fill="#2c2e2d"/><rect x="599.33" y="372.00" width="4.53" height="3.70" fill="#2b2a28"/><rect x="604.67" y="372.00" width="4.53" height="3.70" fill="#333029"/><rect x="546.00" y="376.50" width="4.53" height="3.70" fill="#302d27"/><rect x="551.33" y="376.50" width="4.53" height="3.70" fill="#5b4c37"/><rect x="556.67" y="376.50" width="4.53" height="3.70" fill="#433b2f"/><rect x="562.00" y="376.50" width="4.53" height="3.70" fill="#39526d"/><rect x="567.33" y="376.50" width="4.53" height="3.70" fill="#344454"/><rect x="572.67" y="376.50" width="4.53" height="3.70" fill="#344453"/><rect x="578.00" y="376.50" width="4.53" height="3.70" fill="#5d4d38"/><rect x="583.33" y="376.50" width="4.53" height="3.70" fill="#4c4132"/><rect x="588.67" y="376.50" width="4.53" height="3.70" fill="#493f31"/><rect x="594.00" y="376.50" width="4.53" height="3.70" fill="#3c362c"/><rect x="599.33" y="376.50" width="4.53" height="3.70" fill="#364c62"/><rect x="604.67" y="376.50" width="4.53" height="3.70" fill="#2e353a"/></g>
       <text x="651" y="368" class="n dim" text-anchor="middle">stats</text>
-      <rect x="764" y="64" width="300" height="62" rx="4" class="blk"/>
+      <text x="550" y="434" class="n dim" text-anchor="middle">one MTLBuffer per process over the same pages</text>
+      <rect id="n-shm" x="764" y="64" width="300" height="62" rx="4" class="blk"/>
       <text x="780" y="88" class="mono" text-anchor="start">ShmSource</text>
       <text x="780" y="108" class="n" text-anchor="start">heartbeat, newest completed slot</text>
-      <rect x="764" y="168" width="300" height="62" rx="4" class="blk hot"/>
+      <rect id="n-apply" x="764" y="168" width="300" height="62" rx="4" class="blk hot"/>
       <text x="780" y="192" class="mono" text-anchor="start">caliper_core_live_apply</text>
       <text x="780" y="212" class="n" text-anchor="start">colormap pass reads the slot in place</text>
-      <rect x="764" y="272" width="300" height="62" rx="4" class="blk frame"/>
-      <text x="780" y="296" class="mono" text-anchor="start">ImGui frame</text>
-      <text x="780" y="316" class="n" text-anchor="start">up to 60 fps</text>
+      <rect id="n-frame" x="764" y="256" width="300" height="172" rx="4" class="blk frame"/>
+      <text x="780" y="280" class="mono" text-anchor="start">ImGui frame</text>
+      <text id="t-seq" x="1048" y="280" class="n dim" text-anchor="end">seq 152</text>
+      <text x="780" y="304" class="n" text-anchor="start">fc1.weight</text>
+      <g id="hm-view" class="hm"><rect x="780.00" y="312.00" width="10.20" height="11.20" fill="#40392d"/><rect x="791.00" y="312.00" width="10.20" height="11.20" fill="#725c40"/><rect x="802.00" y="312.00" width="10.20" height="11.20" fill="#2a2925"/><rect x="813.00" y="312.00" width="10.20" height="11.20" fill="#2b2b28"/><rect x="824.00" y="312.00" width="10.20" height="11.20" fill="#323f4c"/><rect x="835.00" y="312.00" width="10.20" height="11.20" fill="#35485c"/><rect x="846.00" y="312.00" width="10.20" height="11.20" fill="#2c2f30"/><rect x="857.00" y="312.00" width="10.20" height="11.20" fill="#3a352b"/><rect x="868.00" y="312.00" width="10.20" height="11.20" fill="#2a2a27"/><rect x="879.00" y="312.00" width="10.20" height="11.20" fill="#40392e"/><rect x="890.00" y="312.00" width="10.20" height="11.20" fill="#453c2f"/><rect x="901.00" y="312.00" width="10.20" height="11.20" fill="#303942"/><rect x="780.00" y="324.00" width="10.20" height="11.20" fill="#334250"/><rect x="791.00" y="324.00" width="10.20" height="11.20" fill="#3d362c"/><rect x="802.00" y="324.00" width="10.20" height="11.20" fill="#7b6344"/><rect x="813.00" y="324.00" width="10.20" height="11.20" fill="#5d4d38"/><rect x="824.00" y="324.00" width="10.20" height="11.20" fill="#32404d"/><rect x="835.00" y="324.00" width="10.20" height="11.20" fill="#2f363c"/><rect x="846.00" y="324.00" width="10.20" height="11.20" fill="#384f67"/><rect x="857.00" y="324.00" width="10.20" height="11.20" fill="#2d3234"/><rect x="868.00" y="324.00" width="10.20" height="11.20" fill="#5f4f39"/><rect x="879.00" y="324.00" width="10.20" height="11.20" fill="#524534"/><rect x="890.00" y="324.00" width="10.20" height="11.20" fill="#2d3031"/><rect x="901.00" y="324.00" width="10.20" height="11.20" fill="#40392d"/><rect x="780.00" y="336.00" width="10.20" height="11.20" fill="#313c45"/><rect x="791.00" y="336.00" width="10.20" height="11.20" fill="#33414f"/><rect x="802.00" y="336.00" width="10.20" height="11.20" fill="#62513a"/><rect x="813.00" y="336.00" width="10.20" height="11.20" fill="#8c6f4a"/><rect x="824.00" y="336.00" width="10.20" height="11.20" fill="#3e372c"/><rect x="835.00" y="336.00" width="10.20" height="11.20" fill="#364a5f"/><rect x="846.00" y="336.00" width="10.20" height="11.20" fill="#32404e"/><rect x="857.00" y="336.00" width="10.20" height="11.20" fill="#3b5776"/><rect x="868.00" y="336.00" width="10.20" height="11.20" fill="#443b2f"/><rect x="879.00" y="336.00" width="10.20" height="11.20" fill="#493f31"/><rect x="890.00" y="336.00" width="10.20" height="11.20" fill="#7f6645"/><rect x="901.00" y="336.00" width="10.20" height="11.20" fill="#333029"/><rect x="780.00" y="348.00" width="10.20" height="11.20" fill="#323f4b"/><rect x="791.00" y="348.00" width="10.20" height="11.20" fill="#384f67"/><rect x="802.00" y="348.00" width="10.20" height="11.20" fill="#374d64"/><rect x="813.00" y="348.00" width="10.20" height="11.20" fill="#604f39"/><rect x="824.00" y="348.00" width="10.20" height="11.20" fill="#796243"/><rect x="835.00" y="348.00" width="10.20" height="11.20" fill="#504433"/><rect x="846.00" y="348.00" width="10.20" height="11.20" fill="#313d48"/><rect x="857.00" y="348.00" width="10.20" height="11.20" fill="#3f638a"/><rect x="868.00" y="348.00" width="10.20" height="11.20" fill="#33414f"/><rect x="879.00" y="348.00" width="10.20" height="11.20" fill="#5b4c38"/><rect x="890.00" y="348.00" width="10.20" height="11.20" fill="#544735"/><rect x="901.00" y="348.00" width="10.20" height="11.20" fill="#7b6344"/><rect x="780.00" y="360.00" width="10.20" height="11.20" fill="#2f373d"/><rect x="791.00" y="360.00" width="10.20" height="11.20" fill="#334251"/><rect x="802.00" y="360.00" width="10.20" height="11.20" fill="#35495d"/><rect x="813.00" y="360.00" width="10.20" height="11.20" fill="#2b2a25"/><rect x="824.00" y="360.00" width="10.20" height="11.20" fill="#866b48"/><rect x="835.00" y="360.00" width="10.20" height="11.20" fill="#8d704b"/><rect x="846.00" y="360.00" width="10.20" height="11.20" fill="#2b2d2c"/><rect x="857.00" y="360.00" width="10.20" height="11.20" fill="#334352"/><rect x="868.00" y="360.00" width="10.20" height="11.20" fill="#344658"/><rect x="879.00" y="360.00" width="10.20" height="11.20" fill="#2f383f"/><rect x="890.00" y="360.00" width="10.20" height="11.20" fill="#7a6243"/><rect x="901.00" y="360.00" width="10.20" height="11.20" fill="#725d40"/><rect x="780.00" y="372.00" width="10.20" height="11.20" fill="#604f39"/><rect x="791.00" y="372.00" width="10.20" height="11.20" fill="#3a5775"/><rect x="802.00" y="372.00" width="10.20" height="11.20" fill="#354759"/><rect x="813.00" y="372.00" width="10.20" height="11.20" fill="#354759"/><rect x="824.00" y="372.00" width="10.20" height="11.20" fill="#6c583e"/><rect x="835.00" y="372.00" width="10.20" height="11.20" fill="#63523b"/><rect x="846.00" y="372.00" width="10.20" height="11.20" fill="#8b6f4a"/><rect x="857.00" y="372.00" width="10.20" height="11.20" fill="#313c46"/><rect x="868.00" y="372.00" width="10.20" height="11.20" fill="#3a5572"/><rect x="879.00" y="372.00" width="10.20" height="11.20" fill="#323f4b"/><rect x="890.00" y="372.00" width="10.20" height="11.20" fill="#2a2a27"/><rect x="901.00" y="372.00" width="10.20" height="11.20" fill="#574936"/><rect x="780.00" y="384.00" width="10.20" height="11.20" fill="#5c4d38"/><rect x="791.00" y="384.00" width="10.20" height="11.20" fill="#37322a"/><rect x="802.00" y="384.00" width="10.20" height="11.20" fill="#323f4c"/><rect x="813.00" y="384.00" width="10.20" height="11.20" fill="#32404d"/><rect x="824.00" y="384.00" width="10.20" height="11.20" fill="#303a42"/><rect x="835.00" y="384.00" width="10.20" height="11.20" fill="#443b2f"/><rect x="846.00" y="384.00" width="10.20" height="11.20" fill="#473e30"/><rect x="857.00" y="384.00" width="10.20" height="11.20" fill="#4e4333"/><rect x="868.00" y="384.00" width="10.20" height="11.20" fill="#302d27"/><rect x="879.00" y="384.00" width="10.20" height="11.20" fill="#3b5876"/><rect x="890.00" y="384.00" width="10.20" height="11.20" fill="#39536f"/><rect x="901.00" y="384.00" width="10.20" height="11.20" fill="#2c2f2f"/><rect x="780.00" y="396.00" width="10.20" height="11.20" fill="#2c2a26"/><rect x="791.00" y="396.00" width="10.20" height="11.20" fill="#725d40"/><rect x="802.00" y="396.00" width="10.20" height="11.20" fill="#2f383f"/><rect x="813.00" y="396.00" width="10.20" height="11.20" fill="#2c2f2f"/><rect x="824.00" y="396.00" width="10.20" height="11.20" fill="#35495c"/><rect x="835.00" y="396.00" width="10.20" height="11.20" fill="#534735"/><rect x="846.00" y="396.00" width="10.20" height="11.20" fill="#2d3032"/><rect x="857.00" y="396.00" width="10.20" height="11.20" fill="#2d2b26"/><rect x="868.00" y="396.00" width="10.20" height="11.20" fill="#2a2925"/><rect x="879.00" y="396.00" width="10.20" height="11.20" fill="#364b60"/><rect x="890.00" y="396.00" width="10.20" height="11.20" fill="#354658"/><rect x="901.00" y="396.00" width="10.20" height="11.20" fill="#364a5f"/></g>
+      <text x="930" y="304" class="n" text-anchor="start">loss</text>
+      <rect x="930" y="312" width="118" height="96" rx="2" class="spark"/>
+      <polyline id="loss-line" class="loss" points="934.0,316.0 938.5,329.0 943.0,339.9 947.5,349.2 952.0,357.1 956.5,363.8 961.0,369.4 965.5,374.2 970.0,378.2 974.5,381.6 979.0,384.5 983.5,387.0 988.0,389.0 992.5,390.8 997.0,392.3 1001.5,393.5 1006.0,394.6 1010.5,395.5 1015.0,396.3 1019.5,396.9 1024.0,397.5 1028.5,397.9 1033.0,398.3 1037.5,398.7 1042.0,398.9"/>
       <path d="M 914 126 L 914 166" class="arrow" marker-end="url(#tip)"/>
-      <path d="M 914 230 L 914 270" class="arrow" marker-end="url(#tip)"/>
-      <path d="M 336 270 L 420 235" class="arrow data" marker-end="url(#tip-data)"/>
-      <text x="372" y="240" class="lbl" text-anchor="middle">GPU copy</text>
-      <path d="M 336 377 L 420 300" class="arrow" marker-end="url(#tip)"/>
+      <path d="M 914 230 L 914 254" class="arrow" marker-end="url(#tip)"/>
+      <path id="a-copy" d="M 336 277 L 420 235" class="arrow data" marker-end="url(#tip-data)"/>
+      <text x="368" y="246" class="lbl" text-anchor="middle">GPU copy</text>
+      <path id="a-publish" d="M 336 377 L 420 299" class="arrow" marker-end="url(#tip)"/>
       <text x="366" y="372" class="lbl" text-anchor="middle">publish</text>
-      <path d="M 764 95 L 696 95" class="arrow" marker-end="url(#tip)"/>
+      <path id="a-heartbeat" d="M 764 95 L 696 95" class="arrow" marker-end="url(#tip)"/>
       <text x="730" y="87" class="lbl" text-anchor="middle">heartbeat</text>
-      <path d="M 406 95 L 338 95" class="arrow" marker-end="url(#tip)"/>
+      <path id="a-watched" d="M 406 95 L 338 95" class="arrow" marker-end="url(#tip)"/>
       <text x="372" y="87" class="lbl" text-anchor="middle">watched?</text>
-      <path d="M 678 299 C 722 299, 722 199, 762 199" class="arrow data" marker-end="url(#tip-data)"/>
-      <text x="731" y="262" class="lbl" text-anchor="middle">read</text>
-      <text x="550" y="432" class="n dim" text-anchor="middle">one MTLBuffer per process over the same pages</text>
+      <path id="a-read" d="M 678 363 C 722 363, 722 199, 762 199" class="arrow data" marker-end="url(#tip-data)"/>
+      <text x="733" y="290" class="lbl" text-anchor="middle">read</text>
+      <g id="packet" class="packet"><rect x="-9" y="-6" width="18" height="12" rx="2"/></g>
     </svg>
       </div>
     </div>
@@ -1603,6 +1621,139 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   </div>
 </footer>
 
+<script>
+// The streaming figure, animated with illustrative data: one training step per cycle. The weights are computed,
+// caliper.show takes a snapshot into the next slot of the ring, the publisher marks it published, the viewer
+// claims it and reads it in place, and the frame draws it with the loss so far. The code lines that run light up.
+(() => {
+  const svg = document.querySelector("svg.hw.flow");
+  if (!svg) return;
+  const plate = svg.closest(".flow-plate");
+  const el = id => document.getElementById(id);
+  const ROWS = +svg.dataset.rows, COLS = +svg.dataset.cols;
+  const slotY = svg.dataset.slotY.split(",").map(Number);
+  const rows = { compute: [...document.querySelectorAll('.snippet .row[data-k="compute"]')],
+                 show: [...document.querySelectorAll('.snippet .row[data-k="show"]')] };
+  const cells = id => [...el(id).querySelectorAll("rect")];
+  const hm = { train: cells("hm-train"), view: cells("hm-view"), slot: [0, 1, 2].map(k => cells("hm-s" + k)) };
+  const nodes = ["n-show", "n-ring", "n-torch", "n-event", "n-ctl", "n-shm", "n-apply", "n-frame"].map(el);
+  const arrows = { copy: el("a-copy"), publish: el("a-publish"), watched: el("a-watched"), heartbeat: el("a-heartbeat"), read: el("a-read") };
+  const packet = el("packet"), lossLine = el("loss-line"), stepText = el("t-step"), seqText = el("t-seq");
+
+  // The same pattern and colours as the generator (scripts/site_streaming_figure.py).
+  const target = (r, c) => 0.95 * Math.sin(0.95 * c - 0.7 * r) * Math.exp(-((r - 3.5) ** 2) / 14);
+  const colour = v => {
+    v = Math.max(-1, Math.min(1, v));
+    const base = [42, 41, 37], end = v >= 0 ? [179, 139, 89] : [70, 119, 173], t = Math.abs(v);
+    return `rgb(${base.map((b, i) => Math.round(b + (end[i] - b) * t)).join(",")})`;
+  };
+  const paint = (list, w) => list.forEach((cell, i) => cell.setAttribute("fill", colour(w[i])));
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647 * 2 - 1;
+  const RUN = 28, STEPS_PER_SNAPSHOT = 8;
+  const weightsAt = c => {
+    const a = Math.exp(-c / 7);
+    return Array.from({ length: ROWS * COLS }, (_, i) => target(Math.floor(i / COLS), i % COLS) * (1 - a) + rand() * (0.9 * a + 0.05));
+  };
+  const lossAt = c => 0.035 + 1.15 * Math.exp(-c / 6) + 0.02 * rand();
+
+  // The cycle, in ms: compute, show, slot, copy, publish, claim, read, draw.
+  const PHASES = [["compute", 600], ["show", 300], ["slot", 250], ["copy", 550], ["publish", 350], ["claim", 350], ["read", 450], ["draw", 350]];
+  let cycle = 0, seq = 0, prevW = weightsAt(0), W = prevW, losses = [], slotState = ["", "", ""], slotData = [null, null, null];
+  let t = 0, phaseShown = -1, playing = !matchMedia("(prefers-reduced-motion: reduce)").matches, visible = false, raf = 0, last = 0;
+
+  const setSlot = (k, state) => {
+    slotState[k] = state;
+    for (const id of ["s" + k, "s" + k + "st"]) el(id).setAttribute("class", "slot" + (state ? " " + state : ""));
+    el("s" + k + "lbl").textContent = { writing: "being written", published: "published", claimed: "claimed", "": "free" }[state];
+  };
+  const aim = k => {
+    const y = slotY[k];
+    arrows.copy.setAttribute("d", `M 336 277 L 420 ${y}`);
+    arrows.publish.setAttribute("d", `M 336 377 L 420 ${y}`);
+    arrows.read.setAttribute("d", `M 678 ${y} C 722 ${y}, 722 199, 762 199`);
+  };
+  const along = (path, f) => {
+    const p = path.getPointAtLength(path.getTotalLength() * f);
+    packet.setAttribute("transform", `translate(${p.x} ${p.y})`);
+  };
+  const lit = (ids, arrowNames, rowKey) => {
+    nodes.forEach(n => n.classList.toggle("on", ids.includes(n.id)));
+    Object.entries(arrows).forEach(([name, a]) => a.classList.toggle("on", arrowNames.includes(name)));
+    rows.compute.forEach(r => r.classList.toggle("live-py", rowKey === "compute"));
+    rows.show.forEach(r => r.classList.toggle("live-py", rowKey === "show"));
+  };
+  const drawLoss = () => {
+    lossLine.setAttribute("points", losses.map((l, i) => `${(934 + i * 4.5).toFixed(1)},${(404 - 88 * Math.min(1, l / 1.2)).toFixed(1)}`).join(" "));
+  };
+
+  // Draws the cycle at time t; true once its last phase is done.
+  function frame() {
+    const k = cycle % 3;
+    let at = 0, phase = 0;
+    while (phase < PHASES.length - 1 && t >= at + PHASES[phase][1]) at += PHASES[phase++][1];
+    const name = PHASES[phase][0], f = Math.min(1, (t - at) / PHASES[phase][1]);
+    const entering = phase !== phaseShown;
+    phaseShown = phase;
+    if (name === "compute") {
+      if (entering) {
+        prevW = W; W = weightsAt(cycle); aim(k);
+        const loss = lossAt(cycle);
+        losses.push(loss); if (losses.length > 25) losses.shift();
+        stepText.textContent = `step ${(cycle * STEPS_PER_SNAPSHOT).toLocaleString("en-US")} · loss ${loss.toFixed(3)}`;
+      }
+      paint(hm.train, W.map((w, i) => prevW[i] + (w - prevW[i]) * f));
+      lit(["n-torch"], [], "compute");
+    } else if (name === "show") lit(["n-show", "n-ctl"], ["watched"], "show");
+    else if (name === "slot") { lit(["n-ring"], [], ""); if (entering) setSlot(k, "writing"); }
+    else if (name === "copy") {
+      lit(["n-torch"], ["copy"], "");
+      packet.classList.add("go"); along(arrows.copy, f);
+    } else if (name === "publish") {
+      packet.classList.remove("go");
+      lit(["n-event"], ["publish"], "");
+      if (entering) {                       // the copy has landed: the slot holds this step's weights
+        slotData[k] = W; paint(hm.slot[k], W);
+        slotState.forEach((st, j) => { if (st === "published") setSlot(j, ""); });
+        setSlot(k, "published");
+      }
+    } else if (name === "claim") {
+      lit(["n-shm", "n-ctl"], ["heartbeat"], "");
+      if (entering) { slotState.forEach((st, j) => { if (st === "claimed") setSlot(j, ""); }); setSlot(k, "claimed"); }
+    } else if (name === "read") {
+      lit(["n-apply"], ["read"], "");
+      packet.classList.add("go"); along(arrows.read, f);
+    } else if (name === "draw") {
+      packet.classList.remove("go");
+      lit(["n-frame"], [], "");
+      if (entering) { paint(hm.view, slotData[k]); seqText.textContent = `seq ${++seq}`; drawLoss(); }
+    }
+    return f >= 1 && phase === PHASES.length - 1;
+  }
+
+  function tick(time) {
+    raf = 0;
+    if (!playing || !visible) return;
+    const dt = last ? Math.min(100, time - last) : 0;
+    last = time; t += dt;
+    if (frame()) {
+      t = 0; phaseShown = -1; cycle += 1;
+      if (cycle >= RUN) { cycle = 0; losses = []; seq = 0; seed = 7; }     // a fresh run
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  function run() {
+    plate.classList.toggle("playing", playing);
+    if (playing && visible && !raf) { last = 0; raf = requestAnimationFrame(tick); }
+    if (!playing) { lit([], [], ""); packet.classList.remove("go"); }
+  }
+  // The static figure shows one moment of the cycle; an animated one starts from a free ring.
+  if (playing) { [0, 1, 2].forEach(j => setSlot(j, "")); seqText.textContent = "seq 0"; }
+  plate.querySelector(".tb-play").addEventListener("click", () => { playing = !playing; run(); });
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; run(); }, { threshold: 0.25 }).observe(svg);
+  run();
+})();
+</script>
 <script>
 // The frame traces: play each one, fill in what every lane is doing and the line it is on, and light those lines
 // in the code panels of that backend.
