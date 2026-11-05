@@ -255,11 +255,31 @@
   .platforms dt { font: 12px/1.6 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
   .platforms dd { color: var(--secondary); }
   @media (max-width: 1000px) { .libs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  .soon { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 30px; }
-  .soon-item { padding: 26px 28px 28px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; }
-  .soon-item h3 { margin: 0 0 14px; font: 15px/1.2 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--parchment); }
-  .soon-item p { margin: 0; font-size: 16px; line-height: 1.6; color: var(--secondary); }
-  @media (max-width: 760px) { .soon { grid-template-columns: 1fr; } }
+  .soon-item { margin-top: 34px; }
+  .soon-text { display: grid; grid-template-columns: 15em minmax(0, 46em); gap: 8px 28px; align-items: baseline; margin-bottom: 18px; }
+  .soon-text h3 { margin: 0; font: 15px/1.4 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--parchment); }
+  .soon-text p { margin: 0; font-size: 16px; line-height: 1.6; color: var(--secondary); }
+  @media (max-width: 760px) { .soon-text { grid-template-columns: 1fr; } }
+  .soon-plate { position: relative; }
+  .soon-tag { position: absolute; top: 12px; right: 16px; font: 12.5px/1 var(--text); color: var(--faint); }
+  .hw .mcp-row rect, .hw .mcp-tool rect, .hw .journey rect { transition: stroke .3s; }
+  .hw .mcp-row.hot rect, .hw .mcp-tool.hot rect, .hw .journey.hot rect { stroke: var(--bronze); }
+  .hw .mcp-row .st { transition: fill .3s; }
+  .hw .mcp-row.done .st { fill: #3ca99c; }
+  .hw .mcp-link { opacity: .18; transition: opacity .3s; }
+  .hw .mcp-link.on { opacity: 1; }
+  #mcp-panel { transition: opacity .6s; }
+  #mcp-window { transition: stroke .4s; }
+  #mcp-window.live { stroke: #3ca99c; }
+  .hw .curve { fill: none; stroke-width: 1.6; stroke-linejoin: round; }
+  .hw .mcp-button { fill: var(--bronze); }
+  .hw .mcp-button-text { font-family: var(--text); font-size: 12.5px; fill: var(--deep); }
+  #mcp-flash { fill: #fff; opacity: 0; pointer-events: none; }
+  #mcp-flash.go { animation: soon-flash .7s ease-out; }
+  @keyframes soon-flash { from { opacity: .3; } to { opacity: 0; } }
+  .hw .gcell { fill: #232220; transition: fill .25s; }
+  .hw .packet { fill: var(--bronze); }
+  .hw .packet.up { fill: var(--parchment); }
   @media (max-width: 520px) { .libs { grid-template-columns: 1fr; } }
   .trace-plate { margin-top: 16px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 14px 22px 8px; }
   .trace-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -353,9 +373,9 @@
   .house-url { font: 15px/1 var(--text); letter-spacing: .04em; color: var(--faint); }
   .house:hover .house-url { color: var(--bronze-hover); }
   /* The maker's line at the top of the hero. */
-  .maker { display: inline-flex; align-items: center; gap: 12px; margin: 0 auto 44px; color: var(--faint);
-           font: 12px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; }
-  .maker img { width: 28px; height: 28px; }
+  .maker { display: inline-flex; align-items: center; gap: 16px; margin: 0 auto 44px; color: var(--faint);
+           font: 16px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; }
+  .maker img { width: 40px; height: 40px; }
   .maker:hover { color: var(--parchment); }
   footer .links { display: flex; gap: 22px; flex-wrap: wrap; font: 12px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
   footer a:hover { color: var(--parchment); }
@@ -419,7 +439,7 @@
     <img class="hero-mark" src="assets/caliper-mark.svg" alt="Caliper">
     <h1>Caliper</h1>
     <p class="tagline">Machine learning visualization framework</p>
-    <p class="lede">A native app for watching models train and think, directly from NVIDIA and Apple Silicon.</p>
+    <p class="lede">A native app for interpretability. Observe models from the GPU in real time.</p>
     <div class="actions">
       <a class="btn btn-primary cut" href="docs/">Documentation</a>
       <a class="btn btn-ghost" href="#build">Build from source</a>
@@ -1736,15 +1756,433 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
     <div class="wrap">
       <div class="label eyebrow">06 · Coming soon</div>
       <h2>Coming soon</h2>
-      <div class="soon">
-        <article class="soon-item">
-          <h3>Caliper MCP server</h3>
-          <p>An MCP server for rapid prototyping with your AI agent. Describe the interface your project needs, and your agent builds it on Caliper's SDK.</p>
-        </article>
-        <article class="soon-item">
-          <h3>Caliper Cloud</h3>
-          <p>A paid service for visualizing and interacting with models you cannot run yourself, on our dedicated, highly integrated compute that scales. Experiment with the open-source app for free, then work with our experts to bring your machine learning to market.</p>
-        </article>
+      <div class="soon-item">
+        <div class="soon-text"><h3>Caliper MCP server</h3><p>An MCP server for rapid prototyping with your AI agent. Describe the interface your project needs, and your agent builds it on Caliper's SDK.</p></div>
+        <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
+<svg class="hw soon-svg" id="soon-mcp" viewBox="0 0 1100 470" role="img" aria-label="Concept: an AI agent asks for a fine-tuning panel; through the Caliper MCP server it reads the SDK, writes the applet, builds it, attaches it to train.py and captures it, and the panel appears live in Caliper">
+<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+<rect x="16" y="44" width="360" height="410" rx="10" class="pkg"/>
+<text x="34" y="28" class="k">YOUR AGENT</text>
+<text x="358" y="28" class="n dim" text-anchor="end">any MCP client</text>
+<rect x="36" y="64" width="320" height="96" rx="4" class="blk"/>
+<text x="50" y="88" class="mono small" xml:space="preserve">&gt; A panel for my fine-tune: loss</text>
+<text x="50" y="107" class="mono small" xml:space="preserve">  per layer, each head's attention</text>
+<text x="50" y="126" class="mono small" xml:space="preserve">  entropy, and a button that</text>
+<text x="50" y="145" class="mono small" xml:space="preserve">  snapshots the weights.</text>
+<rect x="406" y="44" width="288" height="410" rx="10" class="pkg"/>
+<text x="424" y="28" class="k">CALIPER MCP SERVER</text>
+<text x="676" y="28" class="n dim" text-anchor="end">stdio or HTTP</text>
+<rect x="426" y="64" width="248" height="96" rx="4" class="blk"/>
+<text x="442" y="90" class="mono small">caliper://sdk</text>
+<text x="442" y="114" class="n">the SDK headers, docs and</text>
+<text x="442" y="132" class="n">examples, as resources</text>
+<g class="mcp-row" data-i="0"><rect x="36" y="178" width="320" height="44" rx="4" class="blk"/><text x="52" y="205" class="n">Read the SDK interfaces</text><text x="340" y="205" class="n dim st" text-anchor="end">Metrics · ImPlot</text></g>
+<path class="arrow mcp-link" data-i="0" d="M358,200 L424,200" marker-end="url(#stip)"/>
+<g class="mcp-tool" data-i="0"><rect x="426" y="178" width="248" height="44" rx="4" class="blk"/><text x="442" y="205" class="mono small">sdk_reference</text></g>
+<path class="arrow data mcp-link" data-i="0" d="M676,200 L722,200" marker-end="url(#stip-data)"/>
+<g class="mcp-row" data-i="1"><rect x="36" y="232" width="320" height="44" rx="4" class="blk"/><text x="52" y="259" class="n">Write finetune_scope.cpp</text><text x="340" y="259" class="n dim st" text-anchor="end">218 lines</text></g>
+<path class="arrow mcp-link" data-i="1" d="M358,254 L424,254" marker-end="url(#stip)"/>
+<g class="mcp-tool" data-i="1"><rect x="426" y="232" width="248" height="44" rx="4" class="blk"/><text x="442" y="259" class="mono small">write_applet</text></g>
+<path class="arrow data mcp-link" data-i="1" d="M676,254 L722,254" marker-end="url(#stip-data)"/>
+<g class="mcp-row" data-i="2"><rect x="36" y="286" width="320" height="44" rx="4" class="blk"/><text x="52" y="313" class="n">Build with the Metal preset</text><text x="340" y="313" class="n dim st" text-anchor="end">4.1 s</text></g>
+<path class="arrow mcp-link" data-i="2" d="M358,308 L424,308" marker-end="url(#stip)"/>
+<g class="mcp-tool" data-i="2"><rect x="426" y="286" width="248" height="44" rx="4" class="blk"/><text x="442" y="313" class="mono small">build</text></g>
+<path class="arrow data mcp-link" data-i="2" d="M676,308 L722,308" marker-end="url(#stip-data)"/>
+<g class="mcp-row" data-i="3"><rect x="36" y="340" width="320" height="44" rx="4" class="blk"/><text x="52" y="367" class="n">Attach to train.py</text><text x="340" y="367" class="n dim st" text-anchor="end">streaming</text></g>
+<path class="arrow mcp-link" data-i="3" d="M358,362 L424,362" marker-end="url(#stip)"/>
+<g class="mcp-tool" data-i="3"><rect x="426" y="340" width="248" height="44" rx="4" class="blk"/><text x="442" y="367" class="mono small">attach</text></g>
+<path class="arrow data mcp-link" data-i="3" d="M676,362 L722,362" marker-end="url(#stip-data)"/>
+<g class="mcp-row" data-i="4"><rect x="36" y="394" width="320" height="44" rx="4" class="blk"/><text x="52" y="421" class="n">Capture the panel, check it</text><text x="340" y="421" class="n dim st" text-anchor="end">done</text></g>
+<path class="arrow mcp-link" data-i="4" d="M358,416 L424,416" marker-end="url(#stip)"/>
+<g class="mcp-tool" data-i="4"><rect x="426" y="394" width="248" height="44" rx="4" class="blk"/><text x="442" y="421" class="mono small">capture</text></g>
+<path class="arrow data mcp-link" data-i="4" d="M676,416 L722,416" marker-end="url(#stip-data)"/>
+<rect x="724" y="44" width="360" height="410" rx="10" class="pkg"/>
+<text x="742" y="28" class="k">CALIPER</text>
+<text x="1066" y="28" class="n dim" text-anchor="end">the new panel, live</text>
+<rect x="744" y="64" width="320" height="374" rx="4" class="blk frame-off" id="mcp-window"/>
+<g id="mcp-panel">
+<text x="760" y="88" class="k">FINETUNE SCOPE</text>
+<text x="1048" y="88" class="n dim" text-anchor="end">train.py · step 1,240</text>
+<line x1="744" y1="100" x2="1064" y2="100" class="rulefaint"/>
+<text x="760" y="122" class="n dim">loss per layer group</text>
+<line x1="760" y1="130" x2="760" y2="222" class="rulefaint"/><line x1="760" y1="222" x2="1048" y2="222" class="rulefaint"/>
+<polyline class="curve" points="760.0,137.1 766.1,143.2 772.3,144.9 778.4,152.9 784.5,154.2 790.6,159.1 796.8,164.6 802.9,165.3 809.0,171.3 815.1,171.9 821.3,176.8 827.4,179.3 833.5,179.7 839.7,179.5 845.8,185.8 851.9,187.2 858.0,186.6 864.2,186.4 870.3,190.2 876.4,192.8 882.6,190.7 888.7,197.6 894.8,193.9 900.9,198.5 907.1,200.4 913.2,201.6 919.3,201.4 925.4,199.2 931.6,203.8 937.7,202.2 943.8,202.5 950.0,204.8 956.1,204.4 962.2,207.8 968.3,208.4 974.5,208.0 980.6,205.6 986.7,207.6 992.9,208.7 999.0,207.4 1005.1,208.6 1011.2,209.9 1017.4,207.2 1023.5,208.1 1029.6,211.1 1035.7,209.3 1041.9,209.9 1048.0,208.0" stroke="#e8e0d0"/>
+<polyline class="curve" points="760.0,136.0 766.1,140.8 772.3,140.0 778.4,148.3 784.5,149.5 790.6,150.3 796.8,156.7 802.9,157.3 809.0,162.4 815.1,161.0 821.3,162.6 827.4,165.9 833.5,166.0 839.7,171.3 845.8,170.8 851.9,173.2 858.0,174.9 864.2,177.2 870.3,176.3 876.4,177.1 882.6,181.3 888.7,181.4 894.8,186.2 900.9,183.5 907.1,184.9 913.2,183.9 919.3,185.9 925.4,190.1 931.6,190.3 937.7,189.5 943.8,194.2 950.0,192.3 956.1,194.8 962.2,195.7 968.3,196.7 974.5,193.1 980.6,197.5 986.7,197.4 992.9,197.0 999.0,194.7 1005.1,199.9 1011.2,198.1 1017.4,198.0 1023.5,196.4 1029.6,197.1 1035.7,197.2 1041.9,201.1 1048.0,200.6" stroke="#c9a273"/>
+<polyline class="curve" points="760.0,136.9 766.1,140.3 772.3,145.9 778.4,156.3 784.5,161.3 790.6,165.6 796.8,169.9 802.9,172.4 809.0,175.4 815.1,180.7 821.3,185.3 827.4,185.6 833.5,188.5 839.7,189.7 845.8,189.6 851.9,193.1 858.0,196.0 864.2,197.1 870.3,198.3 876.4,203.5 882.6,199.7 888.7,201.6 894.8,202.2 900.9,203.6 907.1,207.0 913.2,207.8 919.3,210.4 925.4,207.9 931.6,212.0 937.7,212.6 943.8,212.3 950.0,213.1 956.1,212.5 962.2,214.7 968.3,215.4 974.5,214.8 980.6,215.5 986.7,214.2 992.9,216.5 999.0,211.7 1005.1,213.5 1011.2,216.5 1017.4,216.1 1023.5,215.7 1029.6,215.7 1035.7,217.4 1041.9,213.1 1048.0,212.4" stroke="#3ca99c"/>
+<polyline class="curve" points="760.0,136.2 766.1,138.6 772.3,143.3 778.4,145.5 784.5,146.2 790.6,148.8 796.8,147.4 802.9,153.4 809.0,156.1 815.1,152.3 821.3,156.6 827.4,160.6 833.5,159.8 839.7,164.5 845.8,163.0 851.9,161.7 858.0,163.8 864.2,166.1 870.3,170.0 876.4,170.6 882.6,173.0 888.7,170.5 894.8,173.0 900.9,172.6 907.1,176.3 913.2,177.9 919.3,175.3 925.4,175.2 931.6,176.9 937.7,178.0 943.8,178.7 950.0,180.0 956.1,183.8 962.2,182.8 968.3,184.5 974.5,187.1 980.6,187.7 986.7,186.8 992.9,187.6 999.0,185.5 1005.1,184.5 1011.2,188.1 1017.4,185.6 1023.5,185.8 1029.6,186.5 1035.7,190.5 1041.9,191.8 1048.0,192.2" stroke="#7aa3d1"/>
+<text x="760" y="248" class="n dim">attention entropy, layer × head</text>
+<rect class="hcell" x="760" y="256" width="17" height="14" fill="#90724c"/>
+<rect class="hcell" x="778" y="256" width="17" height="14" fill="#b48d5b"/>
+<rect class="hcell" x="796" y="256" width="17" height="14" fill="#ceb084"/>
+<rect class="hcell" x="814" y="256" width="17" height="14" fill="#dac097"/>
+<rect class="hcell" x="832" y="256" width="17" height="14" fill="#d1b489"/>
+<rect class="hcell" x="850" y="256" width="17" height="14" fill="#b99463"/>
+<rect class="hcell" x="868" y="256" width="17" height="14" fill="#b68f5e"/>
+<rect class="hcell" x="886" y="256" width="17" height="14" fill="#b89160"/>
+<rect class="hcell" x="904" y="256" width="17" height="14" fill="#92734c"/>
+<rect class="hcell" x="922" y="256" width="17" height="14" fill="#c2a071"/>
+<rect class="hcell" x="940" y="256" width="17" height="14" fill="#d6bb91"/>
+<rect class="hcell" x="958" y="256" width="17" height="14" fill="#d8bd93"/>
+<rect class="hcell" x="976" y="256" width="17" height="14" fill="#d4b78d"/>
+<rect class="hcell" x="994" y="256" width="17" height="14" fill="#bd996a"/>
+<rect class="hcell" x="1012" y="256" width="17" height="14" fill="#8d704b"/>
+<rect class="hcell" x="1030" y="256" width="17" height="14" fill="#97774e"/>
+<rect class="hcell" x="760" y="271" width="17" height="14" fill="#c29f70"/>
+<rect class="hcell" x="778" y="271" width="17" height="14" fill="#dcc39b"/>
+<rect class="hcell" x="796" y="271" width="17" height="14" fill="#e3cca5"/>
+<rect class="hcell" x="814" y="271" width="17" height="14" fill="#c6a477"/>
+<rect class="hcell" x="832" y="271" width="17" height="14" fill="#b99362"/>
+<rect class="hcell" x="850" y="271" width="17" height="14" fill="#c09d6e"/>
+<rect class="hcell" x="868" y="271" width="17" height="14" fill="#b38b59"/>
+<rect class="hcell" x="886" y="271" width="17" height="14" fill="#90724c"/>
+<rect class="hcell" x="904" y="271" width="17" height="14" fill="#a07d52"/>
+<rect class="hcell" x="922" y="271" width="17" height="14" fill="#b58d5b"/>
+<rect class="hcell" x="940" y="271" width="17" height="14" fill="#d4b78d"/>
+<rect class="hcell" x="958" y="271" width="17" height="14" fill="#ccad80"/>
+<rect class="hcell" x="976" y="271" width="17" height="14" fill="#9b7a50"/>
+<rect class="hcell" x="994" y="271" width="17" height="14" fill="#a88355"/>
+<rect class="hcell" x="1012" y="271" width="17" height="14" fill="#91734c"/>
+<rect class="hcell" x="1030" y="271" width="17" height="14" fill="#66543c"/>
+<rect class="hcell" x="760" y="286" width="17" height="14" fill="#d0b388"/>
+<rect class="hcell" x="778" y="286" width="17" height="14" fill="#d5ba90"/>
+<rect class="hcell" x="796" y="286" width="17" height="14" fill="#bc9767"/>
+<rect class="hcell" x="814" y="286" width="17" height="14" fill="#9c7a50"/>
+<rect class="hcell" x="832" y="286" width="17" height="14" fill="#bc9868"/>
+<rect class="hcell" x="850" y="286" width="17" height="14" fill="#a07e52"/>
+<rect class="hcell" x="868" y="286" width="17" height="14" fill="#9b7a50"/>
+<rect class="hcell" x="886" y="286" width="17" height="14" fill="#be9a6a"/>
+<rect class="hcell" x="904" y="286" width="17" height="14" fill="#b58e5d"/>
+<rect class="hcell" x="922" y="286" width="17" height="14" fill="#c9a97c"/>
+<rect class="hcell" x="940" y="286" width="17" height="14" fill="#c3a172"/>
+<rect class="hcell" x="958" y="286" width="17" height="14" fill="#8c6f4a"/>
+<rect class="hcell" x="976" y="286" width="17" height="14" fill="#6c583e"/>
+<rect class="hcell" x="994" y="286" width="17" height="14" fill="#504433"/>
+<rect class="hcell" x="1012" y="286" width="17" height="14" fill="#3d372c"/>
+<rect class="hcell" x="1030" y="286" width="17" height="14" fill="#5e4e39"/>
+<rect class="hcell" x="760" y="301" width="17" height="14" fill="#c8a87b"/>
+<rect class="hcell" x="778" y="301" width="17" height="14" fill="#c19e6f"/>
+<rect class="hcell" x="796" y="301" width="17" height="14" fill="#96764e"/>
+<rect class="hcell" x="814" y="301" width="17" height="14" fill="#b18958"/>
+<rect class="hcell" x="832" y="301" width="17" height="14" fill="#776042"/>
+<rect class="hcell" x="850" y="301" width="17" height="14" fill="#826846"/>
+<rect class="hcell" x="868" y="301" width="17" height="14" fill="#9c7b50"/>
+<rect class="hcell" x="886" y="301" width="17" height="14" fill="#bd9869"/>
+<rect class="hcell" x="904" y="301" width="17" height="14" fill="#ad8757"/>
+<rect class="hcell" x="922" y="301" width="17" height="14" fill="#be9b6b"/>
+<rect class="hcell" x="940" y="301" width="17" height="14" fill="#95754d"/>
+<rect class="hcell" x="958" y="301" width="17" height="14" fill="#776042"/>
+<rect class="hcell" x="976" y="301" width="17" height="14" fill="#5c4d38"/>
+<rect class="hcell" x="994" y="301" width="17" height="14" fill="#2d2b26"/>
+<rect class="hcell" x="1012" y="301" width="17" height="14" fill="#584a36"/>
+<rect class="hcell" x="1030" y="301" width="17" height="14" fill="#62513a"/>
+<rect class="hcell" x="760" y="316" width="17" height="14" fill="#9f7c51"/>
+<rect class="hcell" x="778" y="316" width="17" height="14" fill="#b38b5a"/>
+<rect class="hcell" x="796" y="316" width="17" height="14" fill="#65533b"/>
+<rect class="hcell" x="814" y="316" width="17" height="14" fill="#6c583e"/>
+<rect class="hcell" x="832" y="316" width="17" height="14" fill="#836947"/>
+<rect class="hcell" x="850" y="316" width="17" height="14" fill="#896d49"/>
+<rect class="hcell" x="868" y="316" width="17" height="14" fill="#8e704b"/>
+<rect class="hcell" x="886" y="316" width="17" height="14" fill="#a98455"/>
+<rect class="hcell" x="904" y="316" width="17" height="14" fill="#a88355"/>
+<rect class="hcell" x="922" y="316" width="17" height="14" fill="#a58154"/>
+<rect class="hcell" x="940" y="316" width="17" height="14" fill="#584a36"/>
+<rect class="hcell" x="958" y="316" width="17" height="14" fill="#64533b"/>
+<rect class="hcell" x="976" y="316" width="17" height="14" fill="#483e30"/>
+<rect class="hcell" x="994" y="316" width="17" height="14" fill="#5a4b37"/>
+<rect class="hcell" x="1012" y="316" width="17" height="14" fill="#9f7d51"/>
+<rect class="hcell" x="1030" y="316" width="17" height="14" fill="#b18a58"/>
+<rect class="hcell" x="760" y="331" width="17" height="14" fill="#8d704a"/>
+<rect class="hcell" x="778" y="331" width="17" height="14" fill="#7d6444"/>
+<rect class="hcell" x="796" y="331" width="17" height="14" fill="#7b6344"/>
+<rect class="hcell" x="814" y="331" width="17" height="14" fill="#604f39"/>
+<rect class="hcell" x="832" y="331" width="17" height="14" fill="#836947"/>
+<rect class="hcell" x="850" y="331" width="17" height="14" fill="#95754e"/>
+<rect class="hcell" x="868" y="331" width="17" height="14" fill="#a68254"/>
+<rect class="hcell" x="886" y="331" width="17" height="14" fill="#b38b5a"/>
+<rect class="hcell" x="904" y="331" width="17" height="14" fill="#92734d"/>
+<rect class="hcell" x="922" y="331" width="17" height="14" fill="#816746"/>
+<rect class="hcell" x="940" y="331" width="17" height="14" fill="#6b583e"/>
+<rect class="hcell" x="958" y="331" width="17" height="14" fill="#8c6f4a"/>
+<rect class="hcell" x="976" y="331" width="17" height="14" fill="#8d704b"/>
+<rect class="hcell" x="994" y="331" width="17" height="14" fill="#b79160"/>
+<rect class="hcell" x="1012" y="331" width="17" height="14" fill="#ccad80"/>
+<rect class="hcell" x="1030" y="331" width="17" height="14" fill="#c19f70"/>
+<rect class="hcell" x="760" y="346" width="17" height="14" fill="#5f4f39"/>
+<rect class="hcell" x="778" y="346" width="17" height="14" fill="#735d41"/>
+<rect class="hcell" x="796" y="346" width="17" height="14" fill="#786142"/>
+<rect class="hcell" x="814" y="346" width="17" height="14" fill="#5e4f39"/>
+<rect class="hcell" x="832" y="346" width="17" height="14" fill="#7c6344"/>
+<rect class="hcell" x="850" y="346" width="17" height="14" fill="#a88355"/>
+<rect class="hcell" x="868" y="346" width="17" height="14" fill="#90724c"/>
+<rect class="hcell" x="886" y="346" width="17" height="14" fill="#90724c"/>
+<rect class="hcell" x="904" y="346" width="17" height="14" fill="#6f5b3f"/>
+<rect class="hcell" x="922" y="346" width="17" height="14" fill="#8d704a"/>
+<rect class="hcell" x="940" y="346" width="17" height="14" fill="#95764e"/>
+<rect class="hcell" x="958" y="346" width="17" height="14" fill="#b18958"/>
+<rect class="hcell" x="976" y="346" width="17" height="14" fill="#9b7a50"/>
+<rect class="hcell" x="994" y="346" width="17" height="14" fill="#cdae82"/>
+<rect class="hcell" x="1012" y="346" width="17" height="14" fill="#d7bc92"/>
+<rect class="hcell" x="1030" y="346" width="17" height="14" fill="#c8a77a"/>
+<rect class="hcell" x="760" y="361" width="17" height="14" fill="#6e593f"/>
+<rect class="hcell" x="778" y="361" width="17" height="14" fill="#856a48"/>
+<rect class="hcell" x="796" y="361" width="17" height="14" fill="#6d593f"/>
+<rect class="hcell" x="814" y="361" width="17" height="14" fill="#bc9767"/>
+<rect class="hcell" x="832" y="361" width="17" height="14" fill="#b48c5a"/>
+<rect class="hcell" x="850" y="361" width="17" height="14" fill="#b99463"/>
+<rect class="hcell" x="868" y="361" width="17" height="14" fill="#c6a577"/>
+<rect class="hcell" x="886" y="361" width="17" height="14" fill="#b79160"/>
+<rect class="hcell" x="904" y="361" width="17" height="14" fill="#7b6344"/>
+<rect class="hcell" x="922" y="361" width="17" height="14" fill="#8e714b"/>
+<rect class="hcell" x="940" y="361" width="17" height="14" fill="#a68254"/>
+<rect class="hcell" x="958" y="361" width="17" height="14" fill="#b58e5d"/>
+<rect class="hcell" x="976" y="361" width="17" height="14" fill="#c09c6d"/>
+<rect class="hcell" x="994" y="361" width="17" height="14" fill="#ceb084"/>
+<rect class="hcell" x="1012" y="361" width="17" height="14" fill="#ddc49c"/>
+<rect class="hcell" x="1030" y="361" width="17" height="14" fill="#bb9666"/>
+<rect x="760" y="394" width="150" height="28" rx="3" class="mcp-button"/>
+<text x="835" y="412" class="mcp-button-text" text-anchor="middle">Snapshot weights</text>
+<text x="924" y="412" class="n dim">last at step 1,200</text>
+</g>
+<rect x="744" y="64" width="320" height="374" rx="4" id="mcp-flash"/>
+</svg>
+        </div>
+      </div>
+      <div class="soon-item">
+        <div class="soon-text"><h3>Caliper Cloud</h3><p>A paid service for visualizing and interacting with models you cannot run yourself, on our dedicated, highly integrated compute that scales. Experiment with the open-source app for free, then work with our experts to bring your machine learning to market.</p></div>
+        <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
+<svg class="hw soon-svg" id="soon-cloud" viewBox="0 0 1100 490" role="img" aria-label="Concept: Caliper on your machine streams views of a model sharded across dedicated GPU nodes in Caliper Cloud, and sends prompts, interventions and camera moves back; below, open source is free, Caliper Cloud runs what you cannot, and our experts take your machine learning to market">
+<defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+<rect x="16" y="44" width="340" height="300" rx="10" class="pkg"/>
+<text x="34" y="28" class="k">YOUR MACHINE</text>
+<text x="338" y="28" class="n dim" text-anchor="end">Caliper, macOS or Windows</text>
+<rect x="36" y="64" width="300" height="260" rx="4" class="blk"/>
+<text x="52" y="88" class="k">TRACE</text>
+<text x="320" y="88" class="n dim" text-anchor="end">remote model</text>
+<line x1="36" y1="100" x2="336" y2="100" class="rulefaint"/>
+<rect class="gcell" data-c="0" data-r="0" data-f="#38332a" x="48" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="1" data-f="#37332a" x="48" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="2" data-f="#2a2925" x="48" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="3" data-f="#473e30" x="48" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="4" data-f="#7f6545" x="48" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="5" data-f="#7f6545" x="48" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="6" data-f="#514534" x="48" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="7" data-f="#c7a779" x="48" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="8" data-f="#c29f71" x="48" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="9" data-f="#d5b98f" x="48" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="10" data-f="#93744d" x="48" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="11" data-f="#b68f5d" x="48" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="12" data-f="#a98455" x="48" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="0" data-r="13" data-f="#e5d0a9" x="48" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="0" data-f="#2a2925" x="71" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="1" data-f="#2a2925" x="71" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="2" data-f="#443c2f" x="71" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="3" data-f="#97774e" x="71" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="4" data-f="#99794f" x="71" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="5" data-f="#5c4d38" x="71" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="6" data-f="#5c4d38" x="71" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="7" data-f="#c3a172" x="71" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="8" data-f="#b48c5a" x="71" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="9" data-f="#c3a173" x="71" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="10" data-f="#91734c" x="71" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="11" data-f="#9c7b50" x="71" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="12" data-f="#d8be94" x="71" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="1" data-r="13" data-f="#cfb085" x="71" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="0" data-f="#2a2925" x="94" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="1" data-f="#7c6344" x="94" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="2" data-f="#61513a" x="94" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="3" data-f="#886c49" x="94" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="4" data-f="#353129" x="94" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="5" data-f="#ae8757" x="94" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="6" data-f="#514534" x="94" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="7" data-f="#bf9c6d" x="94" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="8" data-f="#a58154" x="94" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="9" data-f="#a48053" x="94" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="10" data-f="#c19e6f" x="94" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="11" data-f="#e1c9a1" x="94" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="12" data-f="#bd9969" x="94" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="2" data-r="13" data-f="#bb9666" x="94" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="0" data-f="#343029" x="117" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="1" data-f="#2a2925" x="117" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="2" data-f="#2a2925" x="117" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="3" data-f="#302d27" x="117" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="4" data-f="#302d27" x="117" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="5" data-f="#544735" x="117" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="6" data-f="#725d40" x="117" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="7" data-f="#816746" x="117" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="8" data-f="#c09d6e" x="117" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="9" data-f="#9d7c51" x="117" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="10" data-f="#be996a" x="117" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="11" data-f="#ad8757" x="117" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="12" data-f="#c2a071" x="117" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="3" data-r="13" data-f="#b48d5b" x="117" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="0" data-f="#4c4232" x="140" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="1" data-f="#3b352c" x="140" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="2" data-f="#ad8757" x="140" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="3" data-f="#a38053" x="140" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="4" data-f="#816746" x="140" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="5" data-f="#b58e5d" x="140" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="6" data-f="#dac097" x="140" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="7" data-f="#a48053" x="140" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="8" data-f="#e1caa2" x="140" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="9" data-f="#cfb286" x="140" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="10" data-f="#dbc198" x="140" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="11" data-f="#e8d3ad" x="140" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="12" data-f="#e3cca5" x="140" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="4" data-r="13" data-f="#e8d3ad" x="140" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="0" data-f="#4a4031" x="163" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="1" data-f="#826846" x="163" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="2" data-f="#39342b" x="163" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="3" data-f="#8c6f4a" x="163" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="4" data-f="#8a6e49" x="163" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="5" data-f="#8f724c" x="163" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="6" data-f="#7f6645" x="163" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="7" data-f="#876b48" x="163" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="8" data-f="#6e5a3f" x="163" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="9" data-f="#876c48" x="163" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="10" data-f="#8f714b" x="163" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="11" data-f="#d4b98e" x="163" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="12" data-f="#bc9868" x="163" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="5" data-r="13" data-f="#be996a" x="163" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="0" data-f="#2a2925" x="186" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="1" data-f="#6e5a3f" x="186" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="2" data-f="#826846" x="186" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="3" data-f="#765f42" x="186" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="4" data-f="#504433" x="186" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="5" data-f="#5a4b37" x="186" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="6" data-f="#705b40" x="186" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="7" data-f="#96764e" x="186" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="8" data-f="#7c6444" x="186" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="9" data-f="#b38b59" x="186" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="10" data-f="#a98455" x="186" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="11" data-f="#e3cca5" x="186" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="12" data-f="#e8d3ad" x="186" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="6" data-r="13" data-f="#d6bb91" x="186" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="0" data-f="#2a2925" x="209" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="1" data-f="#7f6645" x="209" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="2" data-f="#353129" x="209" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="3" data-f="#4b4031" x="209" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="4" data-f="#2a2925" x="209" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="5" data-f="#6d593e" x="209" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="6" data-f="#896d49" x="209" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="7" data-f="#9c7a50" x="209" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="8" data-f="#826846" x="209" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="9" data-f="#b7905f" x="209" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="10" data-f="#866b48" x="209" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="11" data-f="#b68f5d" x="209" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="12" data-f="#b08958" x="209" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="7" data-r="13" data-f="#cdae82" x="209" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="0" data-f="#2a2925" x="232" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="1" data-f="#2a2925" x="232" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="2" data-f="#343029" x="232" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="3" data-f="#3a342b" x="232" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="4" data-f="#796243" x="232" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="5" data-f="#816746" x="232" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="6" data-f="#af8857" x="232" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="7" data-f="#b18a58" x="232" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="8" data-f="#bd9969" x="232" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="9" data-f="#cfb185" x="232" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="10" data-f="#b6905f" x="232" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="11" data-f="#ba9464" x="232" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="12" data-f="#e8d3ad" x="232" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="8" data-r="13" data-f="#bd9868" x="232" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="0" data-f="#8d704b" x="255" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="1" data-f="#91734c" x="255" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="2" data-f="#4f4333" x="255" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="3" data-f="#be9a6b" x="255" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="4" data-f="#c9a97c" x="255" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="5" data-f="#bf9b6c" x="255" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="6" data-f="#cdaf83" x="255" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="7" data-f="#dabf96" x="255" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="8" data-f="#b58e5d" x="255" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="9" data-f="#d5ba8f" x="255" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="10" data-f="#dbc299" x="255" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="11" data-f="#e8d3ad" x="255" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="12" data-f="#e8d3ad" x="255" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="9" data-r="13" data-f="#e8d3ad" x="255" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="0" data-f="#3c362c" x="278" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="1" data-f="#755f42" x="278" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="2" data-f="#68553d" x="278" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="3" data-f="#796143" x="278" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="4" data-f="#493f31" x="278" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="5" data-f="#3d362c" x="278" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="6" data-f="#5a4b37" x="278" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="7" data-f="#886d49" x="278" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="8" data-f="#755e41" x="278" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="9" data-f="#ccad81" x="278" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="10" data-f="#c19f70" x="278" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="11" data-f="#cdaf82" x="278" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="12" data-f="#d4b88e" x="278" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="10" data-r="13" data-f="#dfc79f" x="278" y="116" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="0" data-f="#2f2c27" x="301" y="298" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="1" data-f="#2a2925" x="301" y="284" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="2" data-f="#786142" x="301" y="270" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="3" data-f="#806746" x="301" y="256" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="4" data-f="#6e5a3f" x="301" y="242" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="5" data-f="#826846" x="301" y="228" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="6" data-f="#a27f53" x="301" y="214" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="7" data-f="#60503a" x="301" y="200" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="8" data-f="#be9b6b" x="301" y="186" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="9" data-f="#98784f" x="301" y="172" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="10" data-f="#8f714b" x="301" y="158" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="11" data-f="#b68f5d" x="301" y="144" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="12" data-f="#dbc198" x="301" y="130" width="21" height="12" rx="1"/>
+<rect class="gcell" data-c="11" data-r="13" data-f="#c09d6e" x="301" y="116" width="21" height="12" rx="1"/>
+<text x="563" y="128" class="lbl" text-anchor="middle">prompts, interventions, camera</text>
+<path class="arrow" d="M362,144 L762,144" marker-end="url(#stip)"/>
+<text x="563" y="236" class="lbl" text-anchor="middle">tensors, lens readings, frames</text>
+<path class="arrow data" d="M762,252 L362,252" marker-end="url(#stip-data)"/>
+<g id="cloud-packets"></g>
+<rect x="770" y="44" width="314" height="300" rx="10" class="pkg"/>
+<text x="788" y="28" class="k">CALIPER CLOUD</text>
+<text x="1066" y="28" class="n dim" text-anchor="end">dedicated GPU nodes</text>
+<rect x="790" y="64" width="274" height="52" rx="4" class="blk"/>
+<text x="806" y="95" class="mono small">node 1</text>
+<rect class="gpu core" data-g="0" x="868" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="1" x="892" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="2" x="916" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="3" x="940" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="4" x="964" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="5" x="988" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="6" x="1012" y="77" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="7" x="1036" y="77" width="20" height="26" rx="2"/>
+<rect x="790" y="128" width="274" height="52" rx="4" class="blk"/>
+<text x="806" y="159" class="mono small">node 2</text>
+<rect class="gpu core" data-g="8" x="868" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="9" x="892" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="10" x="916" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="11" x="940" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="12" x="964" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="13" x="988" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="14" x="1012" y="141" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="15" x="1036" y="141" width="20" height="26" rx="2"/>
+<rect x="790" y="192" width="274" height="52" rx="4" class="blk"/>
+<text x="806" y="223" class="mono small">node 3</text>
+<rect class="gpu core" data-g="16" x="868" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="17" x="892" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="18" x="916" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="19" x="940" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="20" x="964" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="21" x="988" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="22" x="1012" y="205" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="23" x="1036" y="205" width="20" height="26" rx="2"/>
+<rect x="790" y="256" width="274" height="52" rx="4" class="blk"/>
+<text x="806" y="287" class="mono small">node 4</text>
+<rect class="gpu core" data-g="24" x="868" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="25" x="892" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="26" x="916" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="27" x="940" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="28" x="964" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="29" x="988" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="30" x="1012" y="269" width="20" height="26" rx="2"/>
+<rect class="gpu core" data-g="31" x="1036" y="269" width="20" height="26" rx="2"/>
+<text x="927" y="332" class="n dim" text-anchor="middle">one model, sharded across every GPU</text>
+<g class="journey" data-i="0"><rect x="16" y="380" width="340" height="96" rx="6" class="blk"/><text x="36" y="410" class="k">OPEN SOURCE</text><text x="36" y="438" class="n">Free. Caliper on your own Mac or PC,</text><text x="36" y="457" class="n">with its GPU and your models.</text></g>
+<path class="arrow" d="M358,428 L378,428" marker-end="url(#stip)"/>
+<g class="journey" data-i="1"><rect x="380" y="380" width="340" height="96" rx="6" class="blk"/><text x="400" y="410" class="k">CALIPER CLOUD</text><text x="400" y="438" class="n">Models you cannot run yourself, on</text><text x="400" y="457" class="n">dedicated compute that scales.</text></g>
+<path class="arrow" d="M722,428 L742,428" marker-end="url(#stip)"/>
+<g class="journey" data-i="2"><rect x="744" y="380" width="340" height="96" rx="6" class="blk"/><text x="764" y="410" class="k">OUR EXPERTS</text><text x="764" y="438" class="n">Work with us to bring your</text><text x="764" y="457" class="n">machine learning to market.</text></g>
+</svg>
+        </div>
       </div>
     </div>
   </section>
@@ -1940,6 +2378,83 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   plate.querySelector(".tb-play").addEventListener("click", () => { playing = !playing; run(); });
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; run(); }, { threshold: 0.25 }).observe(svg);
   run();
+})();
+</script>
+<script>
+// The Coming soon figures, both concepts. The MCP server: the agent's steps light in turn, each through its tool,
+// and the panel builds in Caliper. Caliper Cloud: the Trace grid fills as views stream in, the GPUs light as a pass
+// sweeps the sharded model, and the path below moves from open source to the experts.
+(() => {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const watch = (el, start, stop) => new IntersectionObserver(([e]) => (e.isIntersecting ? start : stop)(), { threshold: 0.2 }).observe(el);
+
+  const mcp = document.getElementById("soon-mcp");
+  if (mcp) {
+    const rows = [...mcp.querySelectorAll(".mcp-row")], tools = [...mcp.querySelectorAll(".mcp-tool")];
+    const links = [...mcp.querySelectorAll(".mcp-link")], panel = mcp.querySelector("#mcp-panel");
+    const frame = mcp.querySelector("#mcp-window"), flash = mcp.querySelector("#mcp-flash");
+    const curves = [...mcp.querySelectorAll(".curve")];
+    curves.forEach(c => { const n = c.getTotalLength(); c.dataset.len = n; c.style.strokeDasharray = n; });
+    // Phase p: step p - 1 is running (1-5); 6 is finished.
+    function set(p) {
+      rows.forEach((r, i) => { r.classList.toggle("hot", i === p - 1); r.classList.toggle("done", i < p - 1); });
+      tools.forEach((t, i) => t.classList.toggle("hot", i === p - 1));
+      links.forEach(l => l.classList.toggle("on", Number(l.dataset.i) === p - 1));
+      panel.style.opacity = p >= 4 ? 1 : 0.1;
+      frame.classList.toggle("live", p >= 4);
+      curves.forEach(c => {
+        c.style.transition = p >= 4 && !reduce ? "stroke-dashoffset 2.6s ease-out" : "none";
+        c.style.strokeDashoffset = p >= 4 ? 0 : c.dataset.len;
+      });
+      if (p === 5 && !reduce) { flash.classList.remove("go"); void flash.getBBox(); flash.classList.add("go"); }
+    }
+    let phase = 0, timer = 0;
+    const tick = () => { phase = phase >= 6 ? 0 : phase + 1; set(phase); timer = setTimeout(tick, phase === 6 ? 4200 : phase === 0 ? 900 : 1500); };
+    if (reduce) set(6);
+    else watch(mcp, () => { if (!timer) tick(); }, () => { clearTimeout(timer); timer = 0; });
+  }
+
+  const cloud = document.getElementById("soon-cloud");
+  if (cloud) {
+    const cells = [...cloud.querySelectorAll(".gcell")], gpus = [...cloud.querySelectorAll(".gpu")];
+    const steps = [...cloud.querySelectorAll(".journey")], layer = cloud.querySelector("#cloud-packets");
+    const NS = "http://www.w3.org/2000/svg";
+    const packets = [];
+    for (let i = 0; i < 9; i++) {
+      const r = document.createElementNS(NS, "rect");
+      const up = i >= 6;
+      r.setAttribute("width", up ? 8 : 12); r.setAttribute("height", up ? 4 : 6); r.setAttribute("rx", 1);
+      r.setAttribute("class", up ? "packet up" : "packet");
+      layer.appendChild(r);
+      packets.push({ r, up, u: i / (up ? 3 : 6) });
+    }
+    const order = cells.slice().sort((a, b) => (a.dataset.c - b.dataset.c) || (a.dataset.r - b.dataset.r));
+    let filled = 0, clock = 0, last = 0, raf = 0, journeyAt = -1;
+    function frame(now) {
+      raf = 0;
+      const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
+      last = now; clock += dt;
+      // Views stream in: the grid fills a token column at a time, layer by layer, and starts over when full.
+      const want = Math.floor(clock * 22) % (order.length + 40);
+      if (want < filled) { order.forEach(c => c.style.fill = ""); filled = 0; }
+      while (filled < Math.min(want, order.length)) { const c = order[filled++]; c.style.fill = c.dataset.f; }
+      // A pass sweeps the shards, node by node.
+      const head = (clock * 14) % (gpus.length + 6);
+      gpus.forEach((g, i) => g.classList.toggle("on", i <= head && i > head - 6));
+      packets.forEach(p => {
+        p.u = (p.u + dt * (p.up ? 0.32 : 0.55)) % 1;
+        const x = p.up ? 364 + p.u * 390 : 760 - p.u * 390, y = p.up ? 142 : 249;
+        p.r.setAttribute("x", x.toFixed(1)); p.r.setAttribute("y", y - (p.up ? 0 : 1));
+        p.r.style.opacity = Math.sin(Math.PI * p.u).toFixed(2);
+      });
+      const at = Math.floor(clock / 2.8) % 3;
+      if (at !== journeyAt) { journeyAt = at; steps.forEach((g, i) => g.classList.toggle("hot", i === at)); }
+      if (visible) raf = requestAnimationFrame(frame);
+    }
+    let visible = false;
+    if (reduce) { order.forEach(c => c.style.fill = c.dataset.f); steps[1].classList.add("hot"); }
+    else watch(cloud, () => { visible = true; last = 0; if (!raf) raf = requestAnimationFrame(frame); }, () => { visible = false; });
+  }
 })();
 </script>
 <script>
