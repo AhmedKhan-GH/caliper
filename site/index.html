@@ -226,14 +226,23 @@
   .dev-item img { width: 22px; height: 22px; border-radius: 5px; background: #f2eee6; }
   .dev-item img.mark { background: none; }
   @media (max-width: 600px) { .dev-row { grid-template-columns: 1fr; gap: 8px; } }
-  .dev-plate { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 30px; padding: 20px 22px 22px;
-               background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; }
-  .dev-fig { margin: 0; min-width: 0; }
-  .dev-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-  .dev-name { font: 12px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--parchment); }
-  .dev-sub { font-size: 13.5px; color: var(--faint); }
-  .dev-shot { display: block; width: 100%; height: auto; border: 1px solid var(--rule-faint); border-radius: 6px; }
   .dev-snippet { margin-top: 20px; }
+  .xp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; margin-top: 8px; }
+  .xp-k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
+  .xp-api { display: grid; grid-template-columns: max-content 1fr; margin: 0; border-top: 1px solid var(--rule-faint); }
+  .xp-api dt, .xp-api dd { margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule-faint); }
+  .xp-api dt { font: 13.5px/1.5 var(--mono); color: var(--parchment); padding-right: 28px; }
+  .xp-api dd { font: 13.5px/1.5 var(--mono); color: var(--secondary); }
+  .xp-table { border-top: 1px solid var(--rule-faint); }
+  .xp-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 9px 0;
+            border-bottom: 1px solid var(--rule-faint); font-size: 14.5px; color: var(--secondary); }
+  .xp-row code { font: 13px/1.5 var(--mono); color: var(--parchment); }
+  .xp-row > code { color: var(--parchment); }
+  .xp-head span { font: 11px/1.6 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--faint); }
+  @media (max-width: 760px) {
+    .xp-api { grid-template-columns: 1fr; } .xp-api dt { border-bottom: 0; padding-bottom: 0; }
+    .xp-row { grid-template-columns: 1fr 1fr; } .xp-row > code { grid-column: 1 / -1; } .xp-head span:first-child { display: none; }
+  }
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
   .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -549,35 +558,61 @@
           <span class="dev-item"><img class="mark" src="assets/caliper-mark.svg" alt="">Caliper geometry · points, lines, meshes, instancing</span>
         </div></div>
       </div>
-      <div class="dev-plate">
-        <figure class="dev-fig">
-          <div class="dev-head"><span class="dev-name">Real-time scale</span><span class="dev-sub">The Embedding window: all 248,320 rows of Qwen3.5-0.8B's embedding table, laid out in 3-D by UMAP and drawn from one GPU buffer as you orbit and zoom</span></div>
-          <img class="dev-shot" src="assets/caliper-embedding.jpg" width="2700" height="1252" loading="lazy"
-            alt="Caliper's Embedding window: Qwen3.5-0.8B's 248,320 token embeddings as a 3-D point cloud coloured by token kind, with words, word pieces, CJK, other scripts and code each forming their own regions, and a legend with counts per kind">
-        </figure>
-        <figure class="dev-fig">
-          <div class="dev-head"><span class="dev-name">Interpretable views</span><span class="dev-sub">The Trajectories window: each token of a run as a path up Qwen3.5-0.8B's 23 lens layers, drawn as the model writes, teal from the layer where the J-lens settles on the next token</span></div>
-          <img class="dev-shot" src="assets/caliper-trajectories.jpg" width="2700" height="1252" loading="lazy"
-            alt="Caliper's Trajectories window: 48 tokens of a run as paths rising through 23 lens layers, one hovered; its tooltip shows the token a followed by celestial, with the J-lens reading heir, heritage, astronom and renowned in the middle layers and celestial from layer 15 on">
-        </figure>
+      <div class="xp">
+        <div class="xp-block">
+          <div class="xp-k">Interfaces</div>
+          <dl class="xp-api">
+            <dt>caliper::Applet</dt><dd>on_init(Host&amp;) &middot; on_frame(const Frame&amp;) &middot; on_cleanup()</dd>
+            <dt>caliper::Device</dt><dd>query(host) &rarr; METAL, CUDA or CPU</dd>
+            <dt>caliper::Bridge</dt><dd>texture_from_tensor_mapped &middot; update_texture &middot; import_allocation &middot; imtex</dd>
+            <dt>caliper::Geometry</dt><dd>create_view &middot; draw_primitives: points, lines, meshes, instancing</dd>
+            <dt>caliper::Jobs</dt><dd>submit &middot; request_cancel &middot; progress_of</dd>
+            <dt>caliper::Metrics</dt><dd>begin_run &middot; scalar &middot; hparams_json &middot; end_run</dd>
+            <dt>caliper::Data</dt><dd>query (SQL to Arrow) &middot; register_dataset &middot; open_dataset</dd>
+            <dt>caliper::Artifacts</dt><dd>put &middot; path_of &middot; exists</dd>
+            <dt>caliper::Export</dt><dd>view_png &middot; begin_sequence &middot; end_sequence</dd>
+          </dl>
+        </div>
+        <div class="xp-block">
+          <div class="xp-k">Torch objects</div>
+          <div class="xp-table" role="table">
+            <div class="xp-row xp-head" role="row"><span role="columnheader"></span><span role="columnheader">macOS &middot; Metal</span><span role="columnheader">Windows &middot; Vulkan + CUDA</span></div>
+            <div class="xp-row" role="row"><code role="rowheader">torch::Device</code><span role="cell"><code>torch::kMPS</code></span><span role="cell"><code>torch::kCUDA</code></span></div>
+            <div class="xp-row" role="row"><code role="rowheader">at::Tensor</code><span role="cell">storage in an <code>id&lt;MTLBuffer&gt;</code></span><span role="cell">storage in CUDA device memory</span></div>
+            <div class="xp-row" role="row"><code role="rowheader">adapters::to_tensor</code><span role="cell"><code>CaliperTensor</code> on <code>CALIPER_DEV_METAL</code></span><span role="cell"><code>CaliperTensor</code> on <code>CALIPER_DEV_CUDA</code></span></div>
+            <div class="xp-row" role="row"><code role="rowheader">adapters::stream_to_tensor</code><span role="cell">ordered after the producer's MPS command queue</span><span role="cell">ordered after the producer's CUDA stream</span></div>
+            <div class="xp-row" role="row"><code role="rowheader">ExportablePool::to_bridge</code><span role="cell">the tensor's <code>MTLBuffer</code>, imported once</span><span role="cell">a <code>cuMemCreate</code> block, imported into Vulkan</span></div>
+            <div class="xp-row" role="row"><code role="rowheader">Bridge::texture_from_tensor_mapped</code><span role="cell">a Metal texture</span><span role="cell">a Vulkan image</span></div>
+          </div>
+        </div>
       </div>
-      <div class="snippet dev-snippet"><div class="snippet-head"><span>C++</span><a href="docs/reference/services/geometry-v1/">geometry-v1</a></div><pre class="code"><code><span class="c">// The embedding table in 3-D: (248320, 3) positions grouped by token kind, imported once.</span>
-auto pos = pool-&gt;<span class="p">to_bridge</span>(bridge, map_xyz);
+      <div class="snippet dev-snippet"><div class="snippet-head"><span>examples/sine_scope/sine_scope.cpp</span><a href="https://github.com/AhmedKhan-GH/caliper/blob/main/examples/sine_scope/sine_scope.cpp">source</a></div><pre class="code"><code><span class="c">// device.v1 -&gt; torch device: METAL means MPS on Apple, CUDA on Windows/Linux.</span>
+auto d = <span class="p">caliper::Device::query</span>(*st-&gt;host);
+torch::Device dev =
+    (d.kind == CALIPER_DEV_CUDA &amp;&amp; torch::cuda::is_available())
+        ? torch::Device(<span class="p">torch::kCUDA</span>)
+    : (d.kind == CALIPER_DEV_METAL) ? torch::Device(<span class="p">torch::kMPS</span>)
+                                    : torch::Device(<span class="p">torch::kCPU</span>);
 
-std::vector&lt;CaliperGeomDraw&gt; draws;
-for (const KindRange&amp; k : kinds) {             <span class="c">// one flat-coloured range per kind</span>
-    CaliperGeomDraw d = caliper::<span class="p">geom_draw_defaults</span>();
-    d.pos_alloc    = pos-&gt;alloc;
-    d.pos_offset   = pos-&gt;offset + k.first * 3 * sizeof(float);
-    d.vertex_count = k.count;
-    d.topology     = <span class="p">CALIPER_GEOM_TOPO_POINTS</span>;
-    d.flat_rgba    = k.colour;
-    d.depth_flags  = <span class="p">CALIPER_GEOM_DEPTH_TEST</span> | CALIPER_GEOM_DEPTH_WRITE;
-    d.size_px      = 2.0f * home_distance / camera_distance;   <span class="c">// points grow as you zoom in</span>
-    draws.push_back(d);
+<span class="c">// … training on dev; then, on the frame thread:</span>
+
+<span class="c">// The weight matrix as pixels — gen-gated rebuild, frame thread only.</span>
+if (st-&gt;bridge &amp;&amp; gen != 0 &amp;&amp; gen != st-&gt;tex_gen &amp;&amp;
+    disp_w.defined()) {
+    if (st-&gt;w_tex) st-&gt;bridge.<span class="p">release_texture</span>(st-&gt;w_tex);
+    auto ct = <span class="p">caliper::adapters::to_tensor</span>(disp_w);
+    st-&gt;w_tex = ct ? st-&gt;bridge.<span class="p">texture_from_tensor_mapped</span>(
+                         &amp;*ct, CALIPER_CMAP_RDBU, -w_max, w_max)
+                   : 0;
+    st-&gt;tex_gen = gen;
 }
-geometry.<span class="p">draw_primitives</span>(view, cam, draws.data(), draws.size(), 0xff0f1112u);
-<span class="p">ImGui::Image</span>(caliper::Bridge::imtex(view), size);</code></pre></div>
+if (st-&gt;w_tex) {
+    ImGui::TextDisabled(&quot;fc1 weights (32x1 as 8x4 blocks, RdBu)&quot;);
+    <span class="p">ImGui::Image</span>(<span class="p">caliper::Bridge::imtex</span>(st-&gt;w_tex), ImVec2(128, 256));
+} else {
+    ImGui::TextDisabled(
+        &quot;tensor_bridge.v1 absent (ok) — no weight heatmap&quot;);
+}</code></pre></div>
     </div>
   </section>
 
