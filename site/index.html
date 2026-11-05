@@ -226,19 +226,14 @@
   .dev-item img { width: 22px; height: 22px; border-radius: 5px; background: #f2eee6; }
   .dev-item img.mark { background: none; }
   @media (max-width: 600px) { .dev-row { grid-template-columns: 1fr; gap: 8px; } }
-  .dev-plate { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 20px 22px 18px;
+  .dev-plate { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 30px; padding: 20px 22px 22px;
                background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; }
-  .dev-tag { position: absolute; top: 14px; right: 18px; font: 12.5px/1 var(--text); color: var(--faint); }
   .dev-fig { margin: 0; min-width: 0; }
   .dev-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .dev-name { font: 12px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--parchment); }
   .dev-sub { font-size: 13.5px; color: var(--faint); }
-  .dev-canvas { display: block; width: 100%; height: auto; aspect-ratio: 560 / 400; background: #0f0e0c; border: 1px solid var(--rule-faint); border-radius: 6px; cursor: grab; }
-  .dev-canvas:active { cursor: grabbing; }
-  .dev-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12.5px; color: var(--faint); }
-  .dev-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 0; }
+  .dev-shot { display: block; width: 100%; height: auto; border: 1px solid var(--rule-faint); border-radius: 6px; }
   .dev-snippet { margin-top: 20px; }
-  @media (max-width: 900px) { .dev-plate { grid-template-columns: 1fr; } }
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
   .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -555,33 +550,33 @@
         </div></div>
       </div>
       <div class="dev-plate">
-        <div class="dev-tag">Illustrative data</div>
         <figure class="dev-fig">
-          <div class="dev-head"><span class="dev-name">Token galaxy</span><span class="dev-sub">the vocabulary's 248,320 embeddings, projected to 3-D</span></div>
-          <canvas class="dev-canvas" id="galaxy" width="560" height="400" aria-label="Illustrative token galaxy: a vocabulary's embeddings as a glowing 3-D point cloud, clustered by token kind, slowly orbiting"></canvas>
-          <div class="dev-legend"><span><i style="background:#e8e0d0"></i>English words</span><span><i style="background:#a39c8c"></i>Word pieces</span><span><i style="background:#c49b68"></i>Code</span><span><i style="background:#3ca99c"></i>Digits</span><span><i style="background:#7aa3d1"></i>Punctuation</span><span><i style="background:#c9806e"></i>CJK</span><span><i style="background:#d8c08a"></i>Names</span></div>
+          <div class="dev-head"><span class="dev-name">Real-time scale</span><span class="dev-sub">The Embedding window: all 248,320 rows of Qwen3.5-0.8B's embedding table, laid out in 3-D by UMAP and drawn from one GPU buffer as you orbit and zoom</span></div>
+          <img class="dev-shot" src="assets/caliper-embedding.jpg" width="2700" height="1252" loading="lazy"
+            alt="Caliper's Embedding window: Qwen3.5-0.8B's 248,320 token embeddings as a 3-D point cloud coloured by token kind, with words, word pieces, CJK, other scripts and code each forming their own regions, and a legend with counts per kind">
         </figure>
         <figure class="dev-fig">
-          <div class="dev-head"><span class="dev-name">Thought trajectories</span><span class="dev-sub">each token's residual stream through 24 layers, read through the J-lens</span></div>
-          <canvas class="dev-canvas" id="trajectories" width="560" height="400" aria-label="Illustrative thought trajectories: a prompt's tokens climbing through 24 layers among faint background paths, each turning teal with its next word once the lens reads it"></canvas>
-          <div class="dev-legend"><span><i style="background:#8f897c"></i>still forming</span><span><i style="background:#3ca99c"></i>next word read</span><span><i style="background:#4b4945"></i>other contexts</span></div>
+          <div class="dev-head"><span class="dev-name">Interpretable views</span><span class="dev-sub">The Trajectories window: each token of a run as a path up Qwen3.5-0.8B's 23 lens layers, drawn as the model writes, teal from the layer where the J-lens settles on the next token</span></div>
+          <img class="dev-shot" src="assets/caliper-trajectories.jpg" width="2700" height="1252" loading="lazy"
+            alt="Caliper's Trajectories window: 48 tokens of a run as paths rising through 23 lens layers, one hovered; its tooltip shows the token a followed by celestial, with the J-lens reading heir, heritage, astronom and renowned in the middle layers and celestial from layer 15 on">
         </figure>
       </div>
-      <div class="snippet dev-snippet"><div class="snippet-head"><span>C++</span><a href="docs/reference/services/geometry-v1/">geometry-v1</a></div><pre class="code"><code><span class="c">// The vocabulary, projected to 3-D on the GPU: (248320, 3) positions and a (248320,)</span>
-<span class="c">// token kind, imported once and drawn in place every frame.</span>
-auto pos  = pool-&gt;<span class="p">to_bridge</span>(bridge, galaxy_xyz);
-auto kind = pool-&gt;<span class="p">to_bridge</span>(bridge, galaxy_kind);
+      <div class="snippet dev-snippet"><div class="snippet-head"><span>C++</span><a href="docs/reference/services/geometry-v1/">geometry-v1</a></div><pre class="code"><code><span class="c">// The embedding table in 3-D: (248320, 3) positions grouped by token kind, imported once.</span>
+auto pos = pool-&gt;<span class="p">to_bridge</span>(bridge, map_xyz);
 
-CaliperGeomDraw stars = caliper::<span class="p">geom_draw_defaults</span>();
-stars.pos_alloc    = pos-&gt;alloc;   stars.pos_offset  = pos-&gt;offset;
-stars.attr_alloc   = kind-&gt;alloc;  stars.attr_offset = kind-&gt;offset;
-stars.vertex_count = 248320;
-stars.topology     = <span class="p">CALIPER_GEOM_TOPO_POINTS</span>;
-stars.color_mode   = CALIPER_GEOM_COLOR_COLORMAP;
-stars.blend_mode   = <span class="p">CALIPER_GEOM_BLEND_ADDITIVE</span>;
-stars.size_px      = 1.5f;
-
-geometry.<span class="p">draw_primitives</span>(view, cam, &amp;stars, 1, 0xff0f1112u);
+std::vector&lt;CaliperGeomDraw&gt; draws;
+for (const KindRange&amp; k : kinds) {             <span class="c">// one flat-coloured range per kind</span>
+    CaliperGeomDraw d = caliper::<span class="p">geom_draw_defaults</span>();
+    d.pos_alloc    = pos-&gt;alloc;
+    d.pos_offset   = pos-&gt;offset + k.first * 3 * sizeof(float);
+    d.vertex_count = k.count;
+    d.topology     = <span class="p">CALIPER_GEOM_TOPO_POINTS</span>;
+    d.flat_rgba    = k.colour;
+    d.depth_flags  = <span class="p">CALIPER_GEOM_DEPTH_TEST</span> | CALIPER_GEOM_DEPTH_WRITE;
+    d.size_px      = 2.0f * home_distance / camera_distance;   <span class="c">// points grow as you zoom in</span>
+    draws.push_back(d);
+}
+geometry.<span class="p">draw_primitives</span>(view, cam, draws.data(), draws.size(), 0xff0f1112u);
 <span class="p">ImGui::Image</span>(caliper::Bridge::imtex(view), size);</code></pre></div>
     </div>
   </section>
@@ -1887,157 +1882,6 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   plate.querySelector(".tb-play").addEventListener("click", () => { playing = !playing; run(); });
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; run(); }, { threshold: 0.25 }).observe(svg);
   run();
-})();
-</script>
-<script>
-// The development section's two canvases, with illustrative data. The token galaxy: a vocabulary's embeddings as a
-// 3-D cloud clustered by token kind, accumulated as light. The thought trajectories: a prompt's tokens climbing the
-// 24 layers among other contexts' paths, each turning teal once the lens reads its next word. Drag to orbit.
-(() => {
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let seed = 3;
-  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const gauss = () => { let u = 0, v = 0; while (!u) u = rand(); while (!v) v = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
-  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
-
-  // Each canvas: its draw function, an orbit the pointer can drag, and a clock that runs while it is on screen.
-  function animate(canvas, draw) {
-    const view = { yaw: 0.5, pitch: 0.32, drag: null, t: 0 };
-    canvas.addEventListener("pointerdown", e => { view.drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
-    canvas.addEventListener("pointermove", e => {
-      if (!view.drag) return;
-      view.yaw += (e.clientX - view.drag[0]) * 0.008;
-      view.pitch = Math.max(-1.2, Math.min(1.2, view.pitch + (e.clientY - view.drag[1]) * 0.006));
-      view.drag = [e.clientX, e.clientY];
-      if (reduce) draw(view);
-    });
-    canvas.addEventListener("pointerup", () => { view.drag = null; });
-    let visible = false, raf = 0, last = 0;
-    const tick = time => {
-      raf = 0;
-      if (!visible) return;
-      const dt = last ? Math.min(60, time - last) : 0;
-      last = time; view.t += dt;
-      if (!view.drag) view.yaw += dt * 0.00012;
-      draw(view);
-      raf = requestAnimationFrame(tick);
-    };
-    new IntersectionObserver(([e]) => {
-      visible = e.isIntersecting;
-      if (visible && !reduce && !raf) { last = 0; raf = requestAnimationFrame(tick); }
-    }, { threshold: 0.1 }).observe(canvas);
-    draw(view);
-  }
-
-  // ---- Token galaxy ----
-  const galaxy = document.getElementById("galaxy");
-  if (galaxy) {
-    const KINDS = [["#e8e0d0", 0.30], ["#a39c8c", 0.26], ["#c49b68", 0.12], ["#3ca99c", 0.05], ["#7aa3d1", 0.06], ["#c9806e", 0.13], ["#d8c08a", 0.08]];
-    const N = 70000, xyz = new Float32Array(N * 3), col = new Float32Array(N * 3);
-    // Each kind: a few elongated clusters on a shell, plus a thin halo between them.
-    const blobs = [];
-    KINDS.forEach(([c, share], k) => {
-      for (let b = 0; b < 3; b++) {
-        const th = rand() * Math.PI * 2, ph = Math.acos(2 * rand() - 1), r = 0.55 + rand() * 0.5;
-        const dir = [gauss(), gauss() * 0.5, gauss()], len = Math.hypot(...dir);
-        blobs.push({ k, share: share / 3, centre: [r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph) * 0.8, r * Math.sin(ph) * Math.sin(th)],
-                     dir: dir.map(v => v / len), stretch: 0.22 + rand() * 0.3, sigma: 0.035 + rand() * 0.05, rgb: hex(c) });
-      }
-    });
-    for (let i = 0; i < N; i++) {
-      let u = rand(), b = blobs[0];
-      for (const x of blobs) { if (u < x.share) { b = x; break; } u -= x.share; }
-      const along = gauss() * b.stretch, halo = rand() < 0.08 ? 3.2 : 1;
-      for (let a = 0; a < 3; a++) xyz[i * 3 + a] = b.centre[a] + b.dir[a] * along + gauss() * b.sigma * halo;
-      col.set(b.rgb, i * 3);
-    }
-    const ctx = galaxy.getContext("2d"), W = galaxy.width, H = galaxy.height;
-    const acc = new Float32Array(W * H * 3), img = ctx.createImageData(W, H);
-    animate(galaxy, view => {
-      acc.fill(0);
-      const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw), cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
-      const f = W * 0.82, ox = W / 2, oy = H / 2;
-      for (let i = 0; i < N; i++) {
-        const x = xyz[i * 3], y = xyz[i * 3 + 1], z = xyz[i * 3 + 2];
-        const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
-        const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp + 2.6;
-        const s = f / z2, px = (ox + x1 * s) | 0, py = (oy - y2 * s) | 0;
-        if (px < 0 || py < 0 || px >= W || py >= H) continue;
-        const w = Math.max(0.05, 0.3 - 0.07 * z2), j = (py * W + px) * 3;      // nearer is brighter, never negative
-        acc[j] += col[i * 3] * w; acc[j + 1] += col[i * 3 + 1] * w; acc[j + 2] += col[i * 3 + 2] * w;
-      }
-      const d = img.data;
-      for (let p = 0, q = 0; p < acc.length; p += 3, q += 4) {
-        d[q] = 15 + 240 * (1 - Math.exp(-acc[p] * 3.2));
-        d[q + 1] = 14 + 240 * (1 - Math.exp(-acc[p + 1] * 3.2));
-        d[q + 2] = 12 + 240 * (1 - Math.exp(-acc[p + 2] * 3.2));
-        d[q + 3] = 255;
-      }
-      ctx.putImageData(img, 0, 0);
-    });
-  }
-
-  // ---- Thought trajectories ----
-  const traj = document.getElementById("trajectories");
-  if (traj) {
-    const L = 24, ctx = traj.getContext("2d"), W = traj.width, H = traj.height;
-    const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-    const ATTRACT = Array.from({ length: 14 }, (_, i) => { const a = i / 14 * Math.PI * 2; return [Math.cos(a) * 0.85, Math.sin(a) * 0.85]; });
-    const path = (lock, a, start) => {
-      const target = ATTRACT[a], wob = [rand() * 6, rand() * 6];
-      return Array.from({ length: L }, (_, l) => {
-        const t = smooth(lock - 7, lock + 1.5, l), drift = 0.18 * (1 - t);
-        return [start[0] * (1 - t) + target[0] * t + Math.sin(l * 0.5 + wob[0]) * drift,
-                start[1] * (1 - t) + target[1] * t + Math.cos(l * 0.45 + wob[1]) * drift];
-      });
-    };
-    const disk = () => { const r = Math.sqrt(rand()) * 0.75, a = rand() * Math.PI * 2; return [Math.cos(a) * r, Math.sin(a) * r]; };
-    const background = Array.from({ length: 320 }, () => path(7 + rand() * 14, Math.floor(rand() * 14), disk()));
-    const PROMPT = [["The", " Moon", 15], [" Moon", " is", 11], [" is", " a", 9], [" a", " natural", 17],
-                    [" natural", " satellite", 13], [" satellite", " of", 10], [" of", " Earth", 19], [" Earth", ".", 14]];
-    const tokens = PROMPT.map(([word, next, lock], i) => ({ word, next, lock, pts: path(lock, (i * 5 + 2) % 14, disk()) }));
-    const CYCLE = 9500, CLIMB = 7000;
-    animate(traj, view => {
-      const cyc = view.t % CYCLE, cursor = reduce ? L - 1 : Math.min(L - 1, (cyc / CLIMB) * (L - 1));
-      const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw), cp = Math.cos(view.pitch * 0.6), sp = Math.sin(view.pitch * 0.6);
-      const f = W * 0.7, ox = W / 2 + 24, oy = H / 2 + 6;
-      const at = (p, l) => {
-        const x = p[0], z = p[1], y = (l / (L - 1)) * 2 - 1;
-        const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
-        const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp + 3.1;
-        return [ox + x1 * f / z2, oy - y2 * f / z2 * 0.95];
-      };
-      ctx.fillStyle = "#0f0e0c"; ctx.fillRect(0, 0, W, H);
-      // The layer axis and the plane the clock is on.
-      ctx.font = "11px 'Source Code Pro', monospace"; ctx.fillStyle = "#6f6a60"; ctx.textAlign = "right";
-      for (const l of [0, 6, 12, 18, 23]) { const p = at([-1.05, 0], l); ctx.fillText(String(l), p[0] - 6, p[1] + 4); }
-      ctx.textAlign = "left"; ctx.fillText("layer", 12, 22);
-      ctx.strokeStyle = "rgba(179, 139, 89, .35)"; ctx.lineWidth = 1; ctx.beginPath();
-      for (let a = 0; a <= 64; a++) { const th = a / 64 * Math.PI * 2, p = at([Math.cos(th) * 1.0, Math.sin(th) * 1.0], cursor); a ? ctx.lineTo(...p) : ctx.moveTo(...p); }
-      ctx.stroke();
-      // Other contexts: faint, whole.
-      ctx.strokeStyle = "rgba(143, 137, 124, .13)"; ctx.beginPath();
-      for (const pts of background) pts.forEach((p, l) => { const q = at(p, l); l ? ctx.lineTo(...q) : ctx.moveTo(...q); });
-      ctx.stroke();
-      // The prompt's tokens, up to the clock: grey while forming, teal once the lens reads the next word.
-      ctx.textAlign = "left"; ctx.font = "12px 'Plex Condensed', sans-serif";
-      for (const tk of tokens) {
-        const top = Math.floor(cursor), frac = cursor - top;
-        const pts = tk.pts.slice(0, top + 1).map((p, l) => at(p, l));
-        if (top < L - 1) { const a = at(tk.pts[top], top), b = at(tk.pts[top + 1], top + 1); pts.push([a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]); }
-        for (let i = 1; i < pts.length; i++) {
-          const read = i >= tk.lock;
-          ctx.strokeStyle = read ? "#3ca99c" : "rgba(193, 186, 170, .75)"; ctx.lineWidth = read ? 2 : 1.3;
-          ctx.beginPath(); ctx.moveTo(...pts[i - 1]); ctx.lineTo(...pts[i]); ctx.stroke();
-        }
-        const head = pts[pts.length - 1], read = cursor >= tk.lock;
-        ctx.fillStyle = read ? "#3ca99c" : "#c1baaa";
-        ctx.beginPath(); ctx.arc(head[0], head[1], 2.6, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = read ? "#e8e0d0" : "#8f897c";            // the token at its head, and its next word once read
-        ctx.fillText(tk.word.trim() + (read ? " → " + tk.next.trim() : ""), head[0] + 6, head[1] - 5);
-      }
-    });
-  }
 })();
 </script>
 <script>
