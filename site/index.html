@@ -1,182 +1,1129 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Caliper — Machine learning visualization from VRAM</title>
-  <meta name="description" content="Caliper validates supported MPS and CUDA tensors, then renders them as live ImGui graphics through native Metal and Vulkan paths.">
-  <meta name="theme-color" content="#c7cccf">
-  <meta name="color-scheme" content="light">
-  <link rel="canonical" href="https://ahmedkhan-gh.github.io/caliper/">
-  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="assets/style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caliper</title>
+<meta name="description" content="Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, without CPU staging on its native Metal and Vulkan paths.">
+<link rel="icon" href="assets/caliper-mark.svg">
+<meta property="og:title" content="Caliper">
+<meta property="og:description" content="Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, without CPU staging on its native Metal and Vulkan paths.">
+<meta property="og:image" content="https://ahmedkhan-gh.github.io/caliper/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  @font-face { font-family: "Sternbild Display"; src: url("assets/fonts/SternbildDisplay-Regular.woff2") format("woff2"); font-display: swap; }
+  @font-face { font-family: "Plex Condensed"; src: url("assets/fonts/IBMPlexSansCondensed-Regular.ttf") format("truetype"); font-display: swap; }
+  @font-face { font-family: "Source Code Pro"; src: url("assets/fonts/SourceCodePro-Regular.ttf") format("truetype"); font-display: swap; }
 
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Caliper">
-  <meta property="og:title" content="Caliper — Machine learning visualization from VRAM">
-  <meta property="og:description" content="Supported MPS and CUDA tensors become live ImGui graphics through native Metal and Vulkan paths.">
-  <meta property="og:url" content="https://ahmedkhan-gh.github.io/caliper/">
-  <meta property="og:image" content="https://ahmedkhan-gh.github.io/caliper/assets/og.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta name="twitter:card" content="summary_large_image">
+  /* The Sternbild palette, as in the Caliper app (sternbild_theme.h). */
+  :root {
+    --deep: #12110f;
+    --ground: #181715;
+    --plate: #201f1c;
+    --plate-hover: #2a2925;
+    --rule: #4b4945;
+    --rule-faint: #2c2b28;
+    --parchment: #e8e0d0;
+    --secondary: #c1baaa;
+    --faint: #8f897c;
+    --bronze: #b38b59;
+    --bronze-hover: #c49b68;
+    --max: 1160px;
+    --display: "Sternbild Display", "Plex Condensed", sans-serif;
+    --text: "Plex Condensed", -apple-system, "Helvetica Neue", sans-serif;
+    --mono: "Source Code Pro", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--ground); color: var(--parchment); font: 17px/1.65 var(--text); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  img { display: block; max-width: 100%; height: auto; }
+  code { font: 0.92em var(--mono); color: var(--parchment); }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 28px; }
+  .caps { font-family: var(--display); text-transform: uppercase; font-weight: normal; }
+
+  /* Corners: the 45-degree cut is kept for what matters, the mark and the primary action, as in the app marks'
+     frames. Everything else, buttons, chips, cards, code and figures, takes a small radius, and the app's own
+     window keeps the desktop's rounded corners. */
+  .cut { --c: 10px; clip-path: polygon(var(--c) 0, calc(100% - var(--c)) 0, 100% var(--c), 100% calc(100% - var(--c)),
+         calc(100% - var(--c)) 100%, var(--c) 100%, 0 calc(100% - var(--c)), 0 var(--c)); }
+
+  /* Buttons: inscriptional caps on a cut plate. One bronze action; the rest ruled. */
+  .btn { --c: 8px; display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px 11px; font: 14px/1 var(--display);
+         letter-spacing: .16em; text-transform: uppercase; cursor: pointer; transition: background .15s, color .15s; }
+  .btn-primary { background: var(--bronze); color: var(--deep); }
+  .btn-primary:hover { background: var(--bronze-hover); }
+  .btn-ghost { color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; }
+  .btn-ghost:hover { background: var(--plate-hover); border-color: var(--faint); }
+  .arrow { font-family: var(--text); letter-spacing: 0; }
+
+  /* Navigation */
+  nav { position: sticky; top: 0; z-index: 20; background: rgba(18, 17, 15, .86); backdrop-filter: blur(12px); border-bottom: 1px solid var(--rule-faint); }
+  nav .wrap { display: flex; align-items: center; gap: 30px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand img { width: 30px; height: 30px; }
+  .brand span { font: 17px/1 var(--display); letter-spacing: .22em; padding-top: 2px; }
+  nav .links { display: flex; gap: 26px; margin-left: auto; color: var(--secondary); font: 13px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
+  nav .links a:hover { color: var(--parchment); }
+  nav .btn { padding: 10px 16px 9px; font-size: 12px; }
+
+  /* Hero, lit like the Loggia opening: a fall of light from above and five beams along the seal's construction
+     rays (0, 18 and 36 degrees either side of the upright), rising from one point. No round light. */
+  header.hero { position: relative; overflow: hidden; padding: 92px 0 0; text-align: center;
+                background: linear-gradient(180deg, var(--deep) 0%, var(--ground) 78%); }
+  header.hero::before { content: ""; position: absolute; inset: 0 0 auto; height: 520px; pointer-events: none;
+                        background: linear-gradient(180deg, rgba(232, 224, 208, .055), rgba(232, 224, 208, 0) 100%); }
+  .aura { position: absolute; left: 50%; top: 0; width: 1600px; height: 980px; transform: translateX(-50%); pointer-events: none; }
+  .hero .wrap { position: relative; }
+  .hero-mark { width: 124px; height: 124px; margin: 0 auto 34px; filter: drop-shadow(0 22px 34px rgba(0, 0, 0, .65)); }
+  .eyebrow { font: 13px/1 var(--display); letter-spacing: .26em; color: var(--bronze); text-transform: uppercase; }
+  h1 { font: clamp(30px, 4.4vw, 54px)/1.14 var(--display); letter-spacing: .07em; text-transform: uppercase; margin: 18px auto 22px; max-width: 980px; font-weight: normal; }
+  .lede { color: var(--secondary); font-size: clamp(17px, 1.9vw, 20px); max-width: 720px; margin: 0 auto 36px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .fine { color: var(--faint); font-size: 14px; margin-top: 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 34px auto 0; }
+  .chip { padding: 6px 13px 5px; border: 1px solid var(--rule); border-radius: 3px; background: var(--plate); font: 12px/1.4 var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--secondary); }
+  /* The screenshot is the real macOS window: rounded like the desktop draws it, with its edge and shadow. */
+  .shot { margin: 64px auto 0; max-width: 1100px; }
+  .shot img { border-radius: 9px; box-shadow: 0 0 0 1px rgba(232, 224, 208, .12), 0 40px 90px rgba(0, 0, 0, .7); }
+  .caption { color: var(--faint); font-size: 14px; margin: 14px auto 0; padding-bottom: 8px; }
+
+  /* Sections: ruled, numbered, one reading column with its figure. */
+  section { padding: 104px 0 0; }
+  section > .wrap { border-top: 1px solid var(--rule-faint); padding-top: 64px; }
+  .label { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  .label::before { content: ""; width: 28px; height: 1px; background: var(--bronze); }
+  h2 { font: clamp(24px, 3vw, 36px)/1.2 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0 0 18px; font-weight: normal; }
+  .intro { color: var(--secondary); max-width: 720px; margin: 0 0 40px; font-size: 18px; }
+  p { margin: 0 0 16px; }
+  .muted { color: var(--secondary); }
+  .two { display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: start; }
+  .link { font: 13px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--bronze); }
+  .link:hover { color: var(--bronze-hover); }
+
+  /* The pipeline figure: three cut plates joined by rules. */
+  .pipeline { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: 12px; }
+  .pipeline .join { align-self: center; }
+  .stage { padding: 22px 14px 18px; background: var(--plate); border: 1px solid var(--rule); border-radius: 6px; text-align: center; display: flex; flex-direction: column; justify-content: center; }
+  .stage .caps { display: block; font-size: 12px; letter-spacing: .22em; color: var(--faint); margin-bottom: 10px; }
+  .stage .v { font-size: 16px; color: var(--parchment); word-spacing: .4em; }
+  .join { width: 28px; height: 1px; background: var(--bronze); position: relative; }
+  .join::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3.5px solid transparent; border-left: 6px solid var(--bronze); border-right: 0; }
+
+  /* The VRAM-path figures: memory as bands, the data path in bronze, the path not taken faint. */
+  .mech-fig { margin: 0 0 72px; }
+  .mech-fig:last-child { margin-bottom: 0; }
+  .mech-head { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 48px; margin-bottom: 22px; align-items: start; }
+  .mech-head .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
+  .mech-head h3 { font: 22px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; }
+  .mech-head p { font-size: 16px; }
+  .hw-plate { background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 22px 22px 14px; overflow-x: auto; }
+  .hw { display: block; width: 100%; min-width: 820px; height: auto; }
+  .hw .pkg { fill: none; stroke: var(--rule); }
+  .hw .pkg.dim, .hw .blk.dim, .hw .mem.dim { opacity: .55; }
+  .hw .die { fill: #1c1b18; stroke: var(--rule); }
+  .hw .blk { fill: var(--plate); stroke: var(--rule); }
+  .hw .blk.hot { stroke: var(--bronze); }
+  .hw .blk.hot-frame { stroke: #3ca99c; }
+  .hw .core { fill: #2e2d29; }
+  .hw .core.on { fill: rgba(179, 139, 89, .42); }
+  .hw .mem { fill: #1f1e1b; stroke: var(--rule); }
+  .hw .memdie { fill: #2a2925; }
+  .hw .bus { stroke: var(--rule); stroke-width: 1; }
+  .hw .lane { stroke: var(--faint); stroke-width: 1; opacity: .7; }
+  .hw .zoom { fill: none; stroke: var(--rule); stroke-dasharray: 2 4; }
+  .hw .zoomframe { fill: #151412; stroke: var(--rule); }
+  .hw .page { fill: #2a2925; }
+  .hw .page.tensor { fill: #b38b59; }
+  .hw .page.shared { fill: url(#hatch); }
+  .hw .hatchbg { fill: rgba(179, 139, 89, .25); }
+  .hw .hatchline { stroke: #b38b59; stroke-width: 2; }
+  .hw .page.texture { fill: #4677ad; }
+  .hw .page.frame { fill: #3ca99c; }
+  .hw .page.commands { fill: var(--parchment); }
+  .hw .bracket { fill: none; stroke: var(--faint); }
+  .hw .leader { stroke: var(--rule); }
+  .hw .rulefaint { stroke: var(--rule); }
+  .hw .t { font-family: var(--display); font-size: 12.5px; letter-spacing: .16em; fill: var(--parchment); }
+  .hw .t.dim { fill: var(--faint); }
+  .hw .n { font-family: var(--text); font-size: 12.5px; fill: var(--secondary); }
+  .hw .k { font-family: var(--display); font-size: 11px; letter-spacing: .24em; fill: var(--faint); }
+  .hw .v { font-family: var(--text); font-size: 17px; fill: var(--parchment); }
+  .hw .v.tensor { fill: #c9a273; }
+  .hw .v.texture { fill: #7aa3d1; }
+  .hw .v.faint { fill: var(--faint); }
+
+  /* Cards */
+  .cards { display: grid; gap: 16px; }
+  .cards.two-up { grid-template-columns: 1fr 1fr; }
+  .cards.three-up { grid-template-columns: repeat(3, 1fr); }
+  .card { padding: 28px 28px 24px; background: var(--plate); border: 1px solid var(--rule); border-radius: 6px; }
+  .card .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
+  .card h3 { font: 20px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0 0 14px; font-weight: normal; }
+  .card p { color: var(--secondary); font-size: 16px; }
+  .card .step { font: 34px/1 var(--display); color: var(--rule); margin-bottom: 18px; }
+
+  /* Booktabs table: no vertical rules, a faint top and bottom, a ruled head. */
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  table { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+  th { text-align: left; font: 12px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--faint); padding: 14px 16px 12px 0; border-bottom: 1px solid var(--rule); font-weight: normal; }
+  td { padding: 13px 16px 12px 0; border-bottom: 1px solid var(--rule-faint); color: var(--secondary); vertical-align: top; }
+  td:first-child { color: var(--parchment); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+
+  pre { margin: 0; padding: 24px 26px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 6px; overflow-x: auto; font: 14px/1.75 var(--mono); color: var(--secondary); }
+  pre .c { color: var(--faint); }
+  pre .p { color: var(--bronze); }
+
+  .closing { text-align: center; padding: 120px 0 110px; }
+  .closing .wrap { border-top: 0; padding-top: 0; }
+  .closing .intro { margin: 0 auto 30px; }
+
+  footer { border-top: 1px solid var(--rule-faint); background: var(--deep); padding: 44px 0 56px; color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 28px; align-items: center; justify-content: space-between; }
+  .house { display: flex; align-items: center; gap: 14px; color: var(--secondary); }
+  .house img { width: 34px; height: 34px; }
+  .house span { font: 14px/1 var(--display); letter-spacing: .28em; }
+  footer .links { display: flex; gap: 22px; flex-wrap: wrap; font: 12px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
+  footer a:hover { color: var(--parchment); }
+
+  @media (max-width: 900px) {
+    .two, .cards.two-up, .cards.three-up, .mech-head { grid-template-columns: 1fr; gap: 28px; }
+    .pipeline { grid-template-columns: 1fr; }
+    .join { width: 1px; height: 22px; margin: 0 auto; }
+    .join::after { right: -3px; top: auto; bottom: -1px; border: 3.5px solid transparent; border-top: 6px solid var(--bronze); border-bottom: 0; }
+    nav .links { display: none; }
+    nav .btn { margin-left: auto; }
+  }
+  @media (max-width: 520px) {
+    header.hero { padding-top: 64px; }
+    section { padding-top: 72px; }
+    .wrap { padding: 0 18px; }
+  }
+</style>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
 
-  <header class="site-header">
-    <div class="container header-inner">
-      <a class="wordmark" href="/caliper/" aria-label="Caliper home">
-        <img src="assets/mark.svg" alt="" width="29" height="26">
-        <span>Caliper</span>
-      </a>
-      <nav class="site-nav" aria-label="Primary navigation">
-        <a href="#overview">Pipeline</a>
-        <a href="docs/">Documentation</a>
-        <a href="https://github.com/AhmedKhan-GH/caliper">GitHub <span aria-hidden="true">↗</span></a>
-      </nav>
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="assets/caliper-mark.svg" alt=""><span>CALIPER</span></a>
+    <div class="links">
+      <a href="#pipeline">Pipeline</a>
+      <a href="#inspector">Inspector</a>
+      <a href="#build">Build</a>
+      <a href="docs/">Documentation</a>
     </div>
-  </header>
+    <a class="btn btn-ghost" href="https://github.com/AhmedKhan-GH/caliper">GitHub <span class="arrow">↗</span></a>
+  </div>
+</nav>
 
-  <main id="main">
-    <section class="home-hero container" id="hero">
+<header class="hero" id="top">
+  <svg class="aura" viewBox="0 0 1600 980" aria-hidden="true">
+    <defs>
+      <linearGradient id="beam" x1="0" y1="1" x2="0" y2="0">
+        <stop offset="0" stop-color="#e8e0d0" stop-opacity=".16"/>
+        <stop offset=".55" stop-color="#e8e0d0" stop-opacity=".045"/>
+        <stop offset="1" stop-color="#e8e0d0" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <!-- Five beams from one point at the horizon, along 0, 18 and 36 degrees either side of the upright. -->
+    <g fill="url(#beam)">
+      <polygon points="800,840 788,0 812,0"/>
+      <polygon points="800,840 527,0 563,0" opacity=".8"/>
+      <polygon points="800,840 1037,0 1073,0" opacity=".8"/>
+      <polygon points="800,840 168,0 212,0" opacity=".55"/>
+      <polygon points="800,840 1388,0 1432,0" opacity=".55"/>
+    </g>
+    <!-- Construction: the horizon and two arcs about the point, drawn at hairline. -->
+    <g fill="none" stroke="#2c2b28" stroke-width="1">
+      <line x1="0" y1="840.5" x2="1600" y2="840.5"/>
+      <path d="M 300 840 A 500 500 0 0 1 1300 840"/>
+      <path d="M 40 840 A 760 760 0 0 1 1560 840" stroke-dasharray="2 6"/>
+    </g>
+  </svg>
+  <div class="wrap">
+    <img class="hero-mark" src="assets/caliper-mark.svg" alt="Caliper">
+    <div class="eyebrow">C++ / Metal / Vulkan</div>
+    <h1>Machine learning visualization from VRAM</h1>
+    <p class="lede">Caliper validates supported MPS and CUDA tensor inputs, then uses Metal or Vulkan to colormap or blit them into live ImGui textures. Imported geometry is drawn from the same device-resident allocation system.</p>
+    <div class="actions">
+      <a class="btn btn-primary cut" href="docs/">Documentation</a>
+      <a class="btn btn-ghost" href="#build">Build from source</a>
+      <a class="btn btn-ghost" href="https://github.com/AhmedKhan-GH/caliper">View source <span class="arrow">↗</span></a>
+    </div>
+    <p class="fine">Source available · no packaged release</p>
+    <div class="chips">
+      <span class="chip">MPS</span><span class="chip">CUDA</span><span class="chip">Metal</span>
+      <span class="chip">Vulkan</span><span class="chip">ImGui</span><span class="chip">ImPlot</span>
+      <span class="chip">ImPlot3D</span>
+    </div>
+    <div class="shot"><img src="assets/inspector.jpg" width="2400" height="1276"
+      alt="The Caliper inspector attached to Qwen3.5-0.8B: the parameter tree, the Trace pane reading every layer through the Jacobian lens while the model writes, the embedding tensor and the inference output"></div>
+    <p class="caption">The live inspector attached to Qwen3.5-0.8B on an Apple M5 Max.</p>
+  </div>
+</header>
+
+<main>
+  <section id="pipeline">
+    <div class="wrap two">
       <div>
-        <p class="section-label">Caliper / C++ / Metal / Vulkan</p>
-        <h1>Machine learning visualization from VRAM</h1>
+        <div class="label eyebrow">01 · Frame path</div>
+        <h2>Tensor views stay inside the frame loop</h2>
+        <p class="muted">For supported inputs on native backends, Caliper hands tensor storage to the renderer without a host-memory round trip. Colormap and blit work remain on the GPU, and ImGui receives the resulting texture in the same frame.</p>
+        <p class="muted">Curve and scatter coordinates may still use small CPU arrays. The device-resident paths cover accepted dense textures and geometry drawn from imported allocations.</p>
+        <a class="link" href="docs/reference/services/tensor-bridge-v1/">Tensor bridge reference →</a>
       </div>
-      <div class="hero-summary">
-        <p>Caliper validates supported MPS and CUDA tensor inputs, then uses Metal or Vulkan to colormap or blit them into live ImGui textures. Imported geometry is drawn from the same device-resident allocation system.</p>
-        <div class="button-row">
-          <a class="button button--primary" href="docs/">Documentation</a>
-          <a class="button button--quiet" href="https://github.com/AhmedKhan-GH/caliper">View source <span aria-hidden="true">↗</span></a>
-        </div>
-        <p class="build-status"><span aria-hidden="true"></span> Source available · no packaged release</p>
+      <div class="pipeline" role="img" aria-label="Tensor input (MPS, CUDA) to GPU path (Metal, Vulkan) to frame output (ImGui, ImPlot, ImPlot3D)">
+        <div class="stage"><span class="caps">Tensor input</span><span class="v">MPS CUDA</span></div>
+        <div class="join"></div>
+        <div class="stage"><span class="caps">GPU path</span><span class="v">Metal Vulkan</span></div>
+        <div class="join"></div>
+        <div class="stage"><span class="caps">Frame output</span><span class="v">ImGui ImPlot ImPlot3D</span></div>
       </div>
-    </section>
-
-    <section class="system-strip" aria-label="Caliper tensor rendering path">
-      <div class="container system-flow">
-        <div>
-          <span class="flow-label">Tensor input</span>
-          <strong>MPS&nbsp;&nbsp; CUDA</strong>
-        </div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div>
-          <span class="flow-label">GPU path</span>
-          <strong>Metal&nbsp;&nbsp; Vulkan</strong>
-        </div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div>
-          <span class="flow-label">Frame output</span>
-          <strong>ImGui&nbsp;&nbsp; ImPlot&nbsp;&nbsp; ImPlot3D</strong>
-        </div>
-      </div>
-    </section>
-
-    <section class="home-section section-rule" id="problem">
-      <div class="container information-row">
-        <div>
-          <p class="section-label">01 / Frame path</p>
-          <h2>Tensor views stay inside the frame loop.</h2>
-        </div>
-        <div class="information-copy">
-          <p>For supported inputs on native backends, Caliper hands tensor storage to the renderer without a host-memory round trip. Colormap and blit work remain on the GPU, and ImGui receives the resulting texture in the same frame.</p>
-          <p>Curve and scatter coordinates may still use small CPU arrays. The device-resident paths cover accepted dense textures and geometry drawn from imported allocations.</p>
-          <a class="text-link" href="docs/reference/services/tensor-bridge-v1/">Tensor bridge reference <span aria-hidden="true">→</span></a>
-        </div>
-      </div>
-
-      <figure class="mechanism container" tabindex="0" role="region" aria-label="Tensor rendering path comparison diagram">
-        <img src="assets/mech-roundtrip.svg" alt="Comparison between a host-staged texture path and Caliper's native path. The host-staged path copies a GPU tensor to a CPU array, encodes and decodes a file, then uploads a texture. Caliper's native path performs the tensor-to-texture work on the GPU and draws it with ImGui in the same frame." width="1200" height="460">
-        <figcaption>Native tensor bridge path compared with a host-staged texture path.</figcaption>
-      </figure>
-    </section>
-
-    <section class="home-section container" id="how">
-      <div class="section-intro">
-        <p class="section-label">02 / Native backends</p>
-        <h2>Native backends use different memory handoffs.</h2>
-        <p>The sequence stays consistent: validate the descriptor, process the data on the active GPU backend, and present the result through ImGui. Storage and synchronization differ by platform.</p>
-      </div>
-
-      <div class="platform-grid">
-        <article>
-          <p class="platform-label">macOS / Metal</p>
-          <h3>Unified-memory path</h3>
-          <figure tabindex="0" role="region" aria-label="Metal and MPS tensor path diagram">
-            <img src="assets/mech-metal.svg" alt="Metal path on Apple silicon. A contiguous MPS tensor is validated, handed to Metal through unified memory, converted to a texture on the GPU, and drawn through ImGui." width="760" height="560">
-            <figcaption>MPS tensor data is colormapped or blitted on the GPU before ImGui draws it.</figcaption>
-          </figure>
-          <p>The Metal renderer is the macOS default. The bridge validates layout and device information before using the buffer; unsupported inputs are rejected instead of reinterpreted.</p>
-        </article>
-
-        <article>
-          <p class="platform-label">Windows / Vulkan</p>
-          <h3>Device-local CUDA interop</h3>
-          <figure tabindex="0" role="region" aria-label="Vulkan and CUDA tensor path diagram">
-            <img src="assets/mech-vulkan.svg" alt="Vulkan and CUDA path on Windows. A CUDA tensor stays in device-local memory, passes through a Vulkan-exported shared buffer and GPU colormap operation, and is drawn through ImGui without system-RAM staging." width="760" height="560">
-            <figcaption>The path remains in device-local memory, with one VRAM copy at most and no system-RAM staging.</figcaption>
-          </figure>
-          <p>Vulkan exports device-local memory for CUDA import. When shared timeline semaphores are available, GPU-side ordering avoids CPU synchronization on the hot path; otherwise the producer is drained before handoff. Device pairing is UUID-based, and mismatches disable interop instead of crossing adapters.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="home-section container section-rule" id="overview">
-      <div class="section-intro">
-        <p class="section-label">03 / Processing pipeline</p>
-        <h2>How input becomes a rendered view.</h2>
-        <p>A DLPack-aligned descriptor carries the device, type, shape, strides, and optional stream. Caliper validates that descriptor before selecting the active renderer path.</p>
-      </div>
-
-      <div class="capability-list">
-        <article>
-          <h3>Validate the descriptor</h3>
-          <p>Checks device compatibility, data type, dimensions, layout, and byte extent before renderer access. Unsupported inputs are rejected rather than reinterpreted.</p>
-        </article>
-        <article>
-          <h3>Process device memory</h3>
-          <p>Accepted 2-D f32 data runs through a LUT colormap; accepted RGBA8 data uses a blit path. Metal and Vulkan perform this work on the GPU, and imported allocations can feed geometry draws.</p>
-        </article>
-        <article>
-          <h3>Present and update</h3>
-          <p>The renderer exposes an opaque texture ID to ImGui, updates the same resource for matching shape and type, and releases it on the frame thread. OpenGL remains a CPU-staged path for CPU inputs.</p>
-        </article>
-      </div>
-
-      <div class="backend-status" aria-labelledby="backend-status-heading">
-        <h3 id="backend-status-heading">Backend status</h3>
-        <div class="backend-row"><strong>macOS</strong><span>Metal default · GPU-resident MPS tensor path</span></div>
-        <div class="backend-row"><strong>Windows</strong><span>Vulkan default · CUDA external-memory interop</span></div>
-        <div class="backend-row"><strong>Fallback</strong><span>OpenGL 3.3 core · CPU-staged tensor upload</span></div>
-      </div>
-    </section>
-
-    <section class="documentation-row section-rule">
-      <div class="container information-row">
-        <div>
-          <p class="section-label">04 / Reference</p>
-          <h2>Documentation</h2>
-        </div>
-        <div class="information-copy">
-          <p>Renderer architecture, tensor and geometry references, backend compatibility, verification, and the project decision log.</p>
-          <div class="reference-links">
-            <a class="text-link" href="docs/">Open documentation <span aria-hidden="true">→</span></a>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="site-footer">
-    <div class="container footer-compact">
-      <span>© 2026 Ahmed Khan</span>
-      <nav aria-label="Footer navigation">
-        <a href="docs/">Documentation</a>
-        <a href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
-        <a href="mailto:emailahmedebadkhan@gmail.com">Contact</a>
-      </nav>
     </div>
-  </footer>
+  </section>
+
+  <section id="backends">
+    <div class="wrap">
+      <div class="label eyebrow">02 · Native backends</div>
+      <h2>Native backends use different memory handoffs</h2>
+      <p class="intro">The sequence stays consistent: validate the descriptor, process the data on the active GPU backend, and present the result through ImGui. Storage and synchronization differ by platform.</p>
+      <figure class="mech-fig">
+        <div class="mech-head">
+          <div><div class="kicker">macOS · Metal</div><h3>Unified-memory path</h3></div>
+          <div class="muted"><p>MPS tensor data is colormapped or blitted on the GPU before ImGui draws it.</p>
+            <p>The Metal renderer is the macOS default. The bridge validates layout and device information before using the buffer; unsupported inputs are rejected instead of reinterpreted.</p></div>
+        </div>
+        <div class="hw-plate">
+    <svg class="hw" viewBox="0 0 1100 584" role="img" aria-label="Apple Silicon: the SoC's CPU, GPU, system level cache and display engine share the LPDDR on the package; in DRAM, torch's tensor buffer is read by Caliper's GPU pass, which writes a texture that ImGui's draw samples into the frame the display engine scans out; nothing is copied">
+      <defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" class="hatchbg"/><line x1="0" y1="0" x2="0" y2="5" class="hatchline"/></pattern></defs>
+      <rect x="16" y="16" width="700" height="470" rx="12" class="pkg"/>
+      <text x="34" y="42" class="k" text-anchor="start">APPLE SILICON PACKAGE</text>
+      <rect x="36" y="58" width="430" height="408" rx="4" class="die"/>
+      <text x="52" y="82" class="k" text-anchor="start">SOC</text>
+      <rect x="52" y="92" width="172" height="128" rx="3" class="blk"/>
+      <text x="64" y="112" class="t" text-anchor="start">CPU</text>
+      <rect x="64" y="124" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="89" y="124" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="114" y="124" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="139" y="124" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="164" y="124" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="189" y="124" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="64" y="149" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="89" y="149" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="114" y="149" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="139" y="149" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="164" y="149" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="189" y="149" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="64" y="174" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="89" y="174" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="114" y="174" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="139" y="174" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="164" y="174" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="189" y="174" width="18" height="18" rx="1.5" class="core"/>
+      <text x="64" y="210" class="n" text-anchor="start">encodes command buffers</text>
+      <rect x="52" y="232" width="172" height="60" rx="3" class="blk dim"/>
+      <text x="64" y="256" class="t dim" text-anchor="start">NEURAL ENGINE</text>
+      <rect x="52" y="304" width="172" height="62" rx="3" class="blk hot-frame"/>
+      <text x="64" y="328" class="t" text-anchor="start">DISPLAY ENGINE</text>
+      <text x="64" y="350" class="n" text-anchor="start">scans the frame out</text>
+      <rect x="240" y="92" width="210" height="274" rx="3" class="blk hot"/>
+      <text x="252" y="112" class="t" text-anchor="start">GPU</text>
+      <rect x="252" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="124" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="252" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="152" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="252" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="180" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="252" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="208" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="252" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="236" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="252" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="264" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="252" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="280" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="308" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="336" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="364" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="392" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <rect x="420" y="292" width="22" height="22" rx="1.5" class="core on"/>
+      <text x="252" y="354" class="n" text-anchor="start">torch's kernels, Caliper's pass</text>
+      <rect x="52" y="378" width="398" height="30" rx="3" class="blk"/>
+      <text x="251" y="398" class="t" text-anchor="middle">SYSTEM LEVEL CACHE</text>
+      <rect x="52" y="418" width="398" height="34" rx="3" class="blk dim"/>
+      <text x="251" y="440" class="t dim" text-anchor="middle">MEMORY CONTROLLERS</text>
+      <rect x="496" y="58" width="204" height="198" rx="4" class="mem"/>
+      <rect x="512" y="88" width="172" height="30" rx="2" class="memdie"/>
+      <rect x="512" y="128" width="172" height="30" rx="2" class="memdie"/>
+      <rect x="512" y="168" width="172" height="30" rx="2" class="memdie"/>
+      <rect x="512" y="208" width="172" height="30" rx="2" class="memdie"/>
+      <text x="598" y="80" class="t" text-anchor="middle">LPDDR</text>
+      <rect x="496" y="268" width="204" height="198" rx="4" class="mem"/>
+      <rect x="512" y="298" width="172" height="30" rx="2" class="memdie"/>
+      <rect x="512" y="338" width="172" height="30" rx="2" class="memdie"/>
+      <rect x="512" y="378" width="172" height="30" rx="2" class="memdie"/>
+      <rect x="512" y="418" width="172" height="30" rx="2" class="memdie"/>
+      <text x="598" y="290" class="t" text-anchor="middle">LPDDR</text>
+      <line x1="466" y1="150" x2="496" y2="150" class="bus"/>
+      <line x1="466" y1="156" x2="496" y2="156" class="bus"/>
+      <line x1="466" y1="162" x2="496" y2="162" class="bus"/>
+      <line x1="466" y1="168" x2="496" y2="168" class="bus"/>
+      <line x1="466" y1="174" x2="496" y2="174" class="bus"/>
+      <line x1="466" y1="360" x2="496" y2="360" class="bus"/>
+      <line x1="466" y1="366" x2="496" y2="366" class="bus"/>
+      <line x1="466" y1="372" x2="496" y2="372" class="bus"/>
+      <line x1="466" y1="378" x2="496" y2="378" class="bus"/>
+      <line x1="466" y1="384" x2="496" y2="384" class="bus"/>
+      <text x="740" y="42" class="k" text-anchor="start">DRAM PAGES</text>
+      <path d="M 700 268 L 736 58 M 700 466 L 736 480" class="zoom"/>
+      <rect x="736" y="52" width="348" height="434" rx="4" class="zoomframe"/>
+      <rect x="746" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="178" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="194" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="210" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="226" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="242" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="274" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="764" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="782" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="800" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="818" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="836" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="854" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="872" y="290" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="746" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="764" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="782" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="800" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="818" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="836" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="854" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="872" y="306" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="746" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="322" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="338" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="370" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="386" width="15" height="13" rx="1.5" class="page commands"/>
+      <rect x="764" y="386" width="15" height="13" rx="1.5" class="page commands"/>
+      <rect x="782" y="386" width="15" height="13" rx="1.5" class="page commands"/>
+      <rect x="800" y="386" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="386" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="386" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="386" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="386" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <path d="M 896 84 L 902 84 L 902 157 L 896 157" class="bracket"/>
+      <line x1="902" y1="120.5" x2="908" y2="120.5" class="leader"/>
+      <text x="916" y="98.5" class="t" text-anchor="start">TENSOR</text>
+      <text x="916" y="115.5" class="n" text-anchor="start">torch's MTLBuffer, 64 MiB</text>
+      <text x="916" y="131.5" class="n" text-anchor="start">written by torch's kernels</text>
+      <text x="916" y="147.5" class="n" text-anchor="start">read by Caliper's pass</text>
+      <path d="M 896 180 L 902 180 L 902 253 L 896 253" class="bracket"/>
+      <line x1="902" y1="216.5" x2="908" y2="216.5" class="leader"/>
+      <text x="916" y="194.5" class="t" text-anchor="start">TEXTURE</text>
+      <text x="916" y="211.5" class="n" text-anchor="start">MTLTexture, 64 MiB</text>
+      <text x="916" y="227.5" class="n" text-anchor="start">written by Caliper's pass</text>
+      <text x="916" y="243.5" class="n" text-anchor="start">sampled by ImGui's draw</text>
+      <path d="M 896 292 L 902 292 L 902 317 L 896 317" class="bracket"/>
+      <line x1="902" y1="304.5" x2="908" y2="304.5" class="leader"/>
+      <text x="916" y="282.5" class="t" text-anchor="start">FRAME</text>
+      <text x="916" y="299.5" class="n" text-anchor="start">the drawable</text>
+      <text x="916" y="315.5" class="n" text-anchor="start">written by ImGui's draw</text>
+      <text x="916" y="331.5" class="n" text-anchor="start">read by the display engine</text>
+      <path d="M 896 388 L 902 388 L 902 397 L 896 397" class="bracket"/>
+      <line x1="902" y1="392.5" x2="908" y2="392.5" class="leader"/>
+      <text x="916" y="386.5" class="t" text-anchor="start">COMMANDS</text>
+      <text x="916" y="403.5" class="n" text-anchor="start">written by the CPU</text>
+      <line x1="16" y1="530" x2="1084" y2="530" class="rulefaint"/>
+      <text x="16.0" y="552" class="k" text-anchor="start">EXAMPLE</text>
+      <text x="16.0" y="578" class="v plain" text-anchor="start">4096 × 4096 f32</text>
+      <line x1="229.6" y1="542" x2="229.6" y2="584" class="rulefaint"/>
+      <text x="245.6" y="552" class="k" text-anchor="start">GPU READS</text>
+      <text x="245.6" y="578" class="v tensor" text-anchor="start">64 MiB</text>
+      <line x1="443.2" y1="542" x2="443.2" y2="584" class="rulefaint"/>
+      <text x="459.2" y="552" class="k" text-anchor="start">GPU WRITES</text>
+      <text x="459.2" y="578" class="v texture" text-anchor="start">64 MiB</text>
+      <line x1="656.8" y1="542" x2="656.8" y2="584" class="rulefaint"/>
+      <text x="672.8" y="552" class="k" text-anchor="start">COPIES</text>
+      <text x="672.8" y="578" class="v plain" text-anchor="start">0</text>
+      <line x1="870.4" y1="542" x2="870.4" y2="584" class="rulefaint"/>
+      <text x="886.4" y="552" class="k" text-anchor="start">CPU TOUCHES</text>
+      <text x="886.4" y="578" class="v plain" text-anchor="start">0 bytes</text>
+    </svg>
+        </div>
+      </figure>
+      <figure class="mech-fig">
+        <div class="mech-head">
+          <div><div class="kicker">Windows · Vulkan + CUDA</div><h3>Device-local CUDA interop</h3></div>
+          <div class="muted"><p>The path remains in device-local memory, with one VRAM copy at most and no system-RAM staging.</p>
+            <p>Vulkan exports device-local memory for CUDA import. When shared timeline semaphores are available, GPU-side ordering avoids CPU synchronization on the hot path; otherwise the producer is drained before handoff.</p></div>
+        </div>
+        <div class="hw-plate">
+    <svg class="hw" viewBox="0 0 1100 604" role="img" aria-label="NVIDIA: the host CPU and system RAM sit across PCIe and only send commands; on the board, the tensor is copied once inside VRAM into a buffer Vulkan exports and CUDA imports, the streaming multiprocessors colormap it into a VkImage that ImGui draws into the swapchain, ordered by a timeline semaphore">
+      <defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" class="hatchbg"/><line x1="0" y1="0" x2="0" y2="5" class="hatchline"/></pattern></defs>
+      <rect x="16" y="16" width="214" height="470" rx="12" class="pkg dim"/>
+      <text x="34" y="42" class="k" text-anchor="start">HOST</text>
+      <rect x="32" y="58" width="182" height="128" rx="3" class="blk dim"/>
+      <text x="44" y="78" class="t" text-anchor="start">CPU</text>
+      <rect x="44" y="90" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="69" y="90" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="94" y="90" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="119" y="90" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="144" y="90" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="169" y="90" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="44" y="115" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="69" y="115" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="94" y="115" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="119" y="115" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="144" y="115" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="169" y="115" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="44" y="140" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="69" y="140" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="94" y="140" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="119" y="140" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="144" y="140" width="18" height="18" rx="1.5" class="core"/>
+      <rect x="169" y="140" width="18" height="18" rx="1.5" class="core"/>
+      <text x="44" y="176" class="n" text-anchor="start">records and submits</text>
+      <rect x="32" y="198" width="182" height="34" rx="3" class="blk dim"/>
+      <text x="123" y="220" class="t dim" text-anchor="middle">PCIE ROOT</text>
+      <rect x="32" y="250" width="182" height="150" rx="4" class="mem dim"/>
+      <text x="123" y="272" class="t" text-anchor="middle">SYSTEM RAM</text>
+      <rect x="46" y="286" width="154" height="26" rx="2" class="memdie"/>
+      <rect x="46" y="322" width="154" height="26" rx="2" class="memdie"/>
+      <rect x="46" y="358" width="154" height="26" rx="2" class="memdie"/>
+      <text x="44" y="420" class="n" text-anchor="start">used only by the OpenGL</text>
+      <text x="44" y="436" class="n" text-anchor="start">fallback, which stages here</text>
+      <line x1="214" y1="205" x2="330" y2="205" class="lane"/>
+      <line x1="214" y1="208" x2="330" y2="208" class="lane"/>
+      <line x1="214" y1="211" x2="330" y2="211" class="lane"/>
+      <line x1="214" y1="214" x2="330" y2="214" class="lane"/>
+      <line x1="214" y1="217" x2="330" y2="217" class="lane"/>
+      <line x1="214" y1="220" x2="330" y2="220" class="lane"/>
+      <line x1="214" y1="223" x2="330" y2="223" class="lane"/>
+      <line x1="214" y1="226" x2="330" y2="226" class="lane"/>
+      <text x="257" y="194" class="k" text-anchor="middle">PCIE</text>
+      <text x="257" y="246" class="n" text-anchor="middle">commands</text>
+      <text x="257" y="262" class="n" text-anchor="middle">only</text>
+      <rect x="300" y="16" width="416" height="470" rx="12" class="pkg"/>
+      <text x="318" y="42" class="k" text-anchor="start">GPU BOARD</text>
+      <rect x="366" y="56" width="76" height="48" rx="3" class="mem"/>
+      <rect x="366" y="398" width="76" height="48" rx="3" class="mem"/>
+      <line x1="386" y1="104" x2="386" y2="128" class="bus"/>
+      <line x1="396" y1="104" x2="396" y2="128" class="bus"/>
+      <line x1="406" y1="104" x2="406" y2="128" class="bus"/>
+      <line x1="416" y1="104" x2="416" y2="128" class="bus"/>
+      <line x1="386" y1="374" x2="386" y2="398" class="bus"/>
+      <line x1="396" y1="374" x2="396" y2="398" class="bus"/>
+      <line x1="406" y1="374" x2="406" y2="398" class="bus"/>
+      <line x1="416" y1="374" x2="416" y2="398" class="bus"/>
+      <rect x="470" y="56" width="76" height="48" rx="3" class="mem"/>
+      <rect x="470" y="398" width="76" height="48" rx="3" class="mem"/>
+      <line x1="490" y1="104" x2="490" y2="128" class="bus"/>
+      <line x1="500" y1="104" x2="500" y2="128" class="bus"/>
+      <line x1="510" y1="104" x2="510" y2="128" class="bus"/>
+      <line x1="520" y1="104" x2="520" y2="128" class="bus"/>
+      <line x1="490" y1="374" x2="490" y2="398" class="bus"/>
+      <line x1="500" y1="374" x2="500" y2="398" class="bus"/>
+      <line x1="510" y1="374" x2="510" y2="398" class="bus"/>
+      <line x1="520" y1="374" x2="520" y2="398" class="bus"/>
+      <rect x="574" y="56" width="76" height="48" rx="3" class="mem"/>
+      <rect x="574" y="398" width="76" height="48" rx="3" class="mem"/>
+      <line x1="594" y1="104" x2="594" y2="128" class="bus"/>
+      <line x1="604" y1="104" x2="604" y2="128" class="bus"/>
+      <line x1="614" y1="104" x2="614" y2="128" class="bus"/>
+      <line x1="624" y1="104" x2="624" y2="128" class="bus"/>
+      <line x1="594" y1="374" x2="594" y2="398" class="bus"/>
+      <line x1="604" y1="374" x2="604" y2="398" class="bus"/>
+      <line x1="614" y1="374" x2="614" y2="398" class="bus"/>
+      <line x1="624" y1="374" x2="624" y2="398" class="bus"/>
+      <text x="508" y="84" class="t" text-anchor="middle">GDDR</text>
+      <text x="508" y="426" class="t" text-anchor="middle">GDDR</text>
+      <rect x="330" y="128" width="356" height="246" rx="4" class="die"/>
+      <text x="344" y="148" class="k" text-anchor="start">GPU</text>
+      <rect x="344" y="158" width="328" height="140" rx="3" class="blk hot"/>
+      <text x="356" y="178" class="t" text-anchor="start">STREAMING MULTIPROCESSORS</text>
+      <rect x="356.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="380.5" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="405.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="429.5" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="454.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="478.5" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="503.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="527.5" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="552.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="576.5" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="601.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="625.5" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="650.0" y="192.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="356.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="380.5" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="405.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="429.5" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="454.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="478.5" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="503.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="527.5" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="552.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="576.5" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="601.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="625.5" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="650.0" y="216.5" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="356.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="380.5" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="405.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="429.5" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="454.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="478.5" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="503.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="527.5" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="552.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="576.5" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="601.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="625.5" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <rect x="650.0" y="241.0" width="18" height="18" rx="1.5" class="core on"/>
+      <text x="356" y="290" class="n" text-anchor="start">torch's kernels, the colormap pass, ImGui's draw</text>
+      <rect x="344" y="306" width="328" height="28" rx="3" class="blk"/>
+      <text x="508" y="325" class="t" text-anchor="middle">L2 CACHE</text>
+      <rect x="344" y="340" width="328" height="26" rx="3" class="blk dim"/>
+      <text x="508" y="358" class="t dim" text-anchor="middle">MEMORY CONTROLLERS</text>
+      <text x="740" y="42" class="k" text-anchor="start">VRAM PAGES</text>
+      <path d="M 716 56 L 736 58 M 716 446 L 736 480" class="zoom"/>
+      <rect x="736" y="52" width="348" height="434" rx="4" class="zoomframe"/>
+      <rect x="746" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="66" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="82" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="98" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="114" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="130" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="764" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="782" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="800" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="818" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="836" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="854" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="872" y="146" width="15" height="13" rx="1.5" class="page tensor"/>
+      <rect x="746" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="162" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="764" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="782" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="800" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="818" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="836" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="854" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="872" y="178" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="746" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="764" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="782" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="800" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="818" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="836" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="854" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="872" y="194" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="746" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="764" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="782" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="800" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="818" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="836" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="854" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="872" y="210" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="746" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="764" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="782" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="800" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="818" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="836" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="854" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="872" y="226" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="746" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="764" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="782" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="800" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="818" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="836" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="854" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="872" y="242" width="15" height="13" rx="1.5" class="page shared"/>
+      <rect x="746" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="258" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="274" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="290" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="306" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="322" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="764" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="782" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="800" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="818" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="836" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="854" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="872" y="338" width="15" height="13" rx="1.5" class="page texture"/>
+      <rect x="746" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="354" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="764" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="782" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="800" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="818" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="836" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="854" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="872" y="370" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="746" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="764" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="782" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="800" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="818" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="836" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="854" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="872" y="386" width="15" height="13" rx="1.5" class="page frame"/>
+      <rect x="746" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="402" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="418" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="434" width="15" height="13" rx="1.5" class="page commands"/>
+      <rect x="764" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="434" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="746" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="764" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="782" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="800" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="818" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="836" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="854" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <rect x="872" y="450" width="15" height="13" rx="1.5" class="page "/>
+      <path d="M 896 84 L 902 84 L 902 157 L 896 157" class="bracket"/>
+      <line x1="902" y1="120.5" x2="908" y2="120.5" class="leader"/>
+      <text x="916" y="98.5" class="t" text-anchor="start">TENSOR</text>
+      <text x="916" y="115.5" class="n" text-anchor="start">torch's CUDA allocator</text>
+      <text x="916" y="131.5" class="n" text-anchor="start">written by torch's kernels</text>
+      <text x="916" y="147.5" class="n" text-anchor="start">copied by cuMemcpyDtoD</text>
+      <path d="M 896 180 L 902 180 L 902 253 L 896 253" class="bracket"/>
+      <line x1="902" y1="216.5" x2="908" y2="216.5" class="leader"/>
+      <text x="916" y="194.5" class="t" text-anchor="start">SHARED BUFFER</text>
+      <text x="916" y="211.5" class="n" text-anchor="start">exported by Vulkan and</text>
+      <text x="916" y="227.5" class="n" text-anchor="start">imported by CUDA: the same</text>
+      <text x="916" y="243.5" class="n" text-anchor="start">pages, in two address spaces</text>
+      <path d="M 896 276 L 902 276 L 902 349 L 896 349" class="bracket"/>
+      <line x1="902" y1="312.5" x2="908" y2="312.5" class="leader"/>
+      <text x="916" y="298.5" class="t" text-anchor="start">VKIMAGE</text>
+      <text x="916" y="315.5" class="n" text-anchor="start">written by the colormap pass</text>
+      <text x="916" y="331.5" class="n" text-anchor="start">sampled by ImGui's draw</text>
+      <path d="M 896 372 L 902 372 L 902 397 L 896 397" class="bracket"/>
+      <line x1="902" y1="384.5" x2="908" y2="384.5" class="leader"/>
+      <text x="916" y="370.5" class="t" text-anchor="start">SWAPCHAIN</text>
+      <text x="916" y="387.5" class="n" text-anchor="start">written by ImGui's draw</text>
+      <text x="916" y="403.5" class="n" text-anchor="start">then presented</text>
+      <path d="M 896 436 L 902 436 L 902 445 L 896 445" class="bracket"/>
+      <line x1="902" y1="440.5" x2="908" y2="440.5" class="leader"/>
+      <text x="916" y="426.5" class="t" text-anchor="start">SEMAPHORE</text>
+      <text x="916" y="443.5" class="n" text-anchor="start">timeline value: CUDA</text>
+      <text x="916" y="459.5" class="n" text-anchor="start">signals, Vulkan waits</text>
+      <line x1="16" y1="530" x2="1084" y2="530" class="rulefaint"/>
+      <text x="16.0" y="552" class="k" text-anchor="start">EXAMPLE</text>
+      <text x="16.0" y="578" class="v plain" text-anchor="start">4096 × 4096 f32</text>
+      <line x1="229.6" y1="542" x2="229.6" y2="584" class="rulefaint"/>
+      <text x="245.6" y="552" class="k" text-anchor="start">OVER PCIE</text>
+      <text x="245.6" y="578" class="v plain" text-anchor="start">0 bytes</text>
+      <line x1="443.2" y1="542" x2="443.2" y2="584" class="rulefaint"/>
+      <text x="459.2" y="552" class="k" text-anchor="start">COPY IN VRAM</text>
+      <text x="459.2" y="578" class="v tensor" text-anchor="start">64 MiB, 0 with alloc_shared</text>
+      <line x1="656.8" y1="542" x2="656.8" y2="584" class="rulefaint"/>
+      <text x="672.8" y="552" class="k" text-anchor="start">GPU WRITES</text>
+      <text x="672.8" y="578" class="v texture" text-anchor="start">64 MiB</text>
+      <line x1="870.4" y1="542" x2="870.4" y2="584" class="rulefaint"/>
+      <text x="886.4" y="552" class="k" text-anchor="start">HOST-STAGED, OVER PCIE</text>
+      <text x="886.4" y="578" class="v faint" text-anchor="start">64 MiB each way</text>
+    </svg>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <section id="processing">
+    <div class="wrap">
+      <div class="label eyebrow">03 · Processing pipeline</div>
+      <h2>How input becomes a rendered view</h2>
+      <p class="intro">A DLPack-aligned descriptor carries the device, type, shape, strides, and optional stream. Caliper validates that descriptor before selecting the active renderer path.</p>
+      <div class="cards three-up">
+        <div class="card"><div class="step">1</div><h3>Validate the descriptor</h3>
+          <p>Checks device compatibility, data type, dimensions, layout, and byte extent before renderer access. Unsupported inputs are rejected rather than reinterpreted.</p></div>
+        <div class="card"><div class="step">2</div><h3>Process device memory</h3>
+          <p>Accepted 2-D f32 data runs through a LUT colormap; accepted RGBA8 data uses a blit path. Metal and Vulkan perform this work on the GPU.</p></div>
+        <div class="card"><div class="step">3</div><h3>Present and update</h3>
+          <p>The renderer exposes an opaque texture ID to ImGui, updates the same resource for matching shape and type, and releases it on the frame thread.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="inspector">
+    <div class="wrap">
+      <div class="label eyebrow">04 · Inspector</div>
+      <h2>Inspect a local language model</h2>
+      <p class="intro">Attach to a running model host and read, edit and trace a model in place.</p>
+      <table>
+        <thead><tr><th>Pane</th><th>What it shows</th></tr></thead>
+        <tbody>
+          <tr><td>Model</td><td>Every parameter by layer, with shape and size</td></tr>
+          <tr><td>Model 3D</td><td>All tensors as panels at their true proportions, the embedding folded into equal row blocks</td></tr>
+          <tr><td>Tensor</td><td>A tensor at its true shape, zoomed continuously from the whole matrix to single editable weights</td></tr>
+          <tr><td>Trace</td><td>Each layer read through the Jacobian lens and the logit lens as the model writes, with attention patterns and a playback clock</td></tr>
+          <tr><td>Interventions</td><td>J-space ablation, removed, swapped and injected word directions, compared against the intact run</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="status">
+    <div class="wrap">
+      <div class="label eyebrow">05 · Backend status</div>
+      <h2>Backend status</h2>
+      <table>
+        <thead><tr><th>Platform</th><th>Renderer</th><th>Tensor path</th></tr></thead>
+        <tbody>
+          <tr><td>macOS</td><td>Metal, default</td><td>GPU-resident MPS tensor path</td></tr>
+          <tr><td>Windows</td><td>Vulkan, default</td><td>CUDA external-memory interop</td></tr>
+          <tr><td>Fallback</td><td>OpenGL 3.3 core</td><td>CPU-staged tensor upload</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="build">
+    <div class="wrap two">
+      <div>
+        <div class="label eyebrow">06 · Build</div>
+        <h2>Build from source</h2>
+        <p class="muted">CMake 3.18 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
+        <a class="link" href="https://github.com/AhmedKhan-GH/caliper#prerequisites">Prerequisites →</a>
+      </div>
+<pre><span class="c"># Initialize submodules</span>
+<span class="p">$</span> git submodule update --init --recursive
+
+<span class="c"># Configure (macOS MPS)</span>
+<span class="p">$</span> cmake -B build -DUSE_CUDA=OFF -DUSE_MPS=ON
+
+<span class="c"># Build</span>
+<span class="p">$</span> cmake --build build --config Release -j8
+
+<span class="c"># Run</span>
+<span class="p">$</span> ./build/caliper</pre>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="wrap">
+      <h2>Documentation</h2>
+      <p class="intro">Renderer architecture, tensor and geometry references, backend compatibility, verification, and the project decision log.</p>
+      <a class="btn btn-primary cut" href="docs/">Open documentation</a>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="house"><img src="assets/sternbild-seal.svg" alt=""><span>STERNBILD</span></div>
+    <div class="links">
+      <a href="docs/">Documentation</a>
+      <a href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
+      <a href="mailto:emailahmedebadkhan@gmail.com">Contact</a>
+      <span>© 2026 Ahmed Khan</span>
+    </div>
+  </div>
+</footer>
+
 </body>
 </html>
