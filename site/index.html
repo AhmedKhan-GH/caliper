@@ -274,7 +274,6 @@
   .hw .mini.faint { stroke: var(--faint); opacity: .7; }
   .hw .mcp-btn { fill: var(--bronze); stroke: none; }
   .hw .flagband { fill: rgba(179, 139, 89, .2); }
-  .hw .clockbar { fill: rgba(179, 139, 89, .25); stroke: var(--bronze); }
   .hw .slot.full { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); }
   .hw .slot.lost { fill: none; stroke: var(--faint); stroke-dasharray: 2 2; }
   .hw .nvlink { stroke: #3ca99c; stroke-width: 2; opacity: .7; }
@@ -1947,9 +1946,9 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         </div>
       </div>
       <div class="soon-item">
-        <div class="soon-text"><h3>Caliper Bench</h3><p>Live measurements and telemetry streaming into Caliper on one clock, beside the models trained on them, across the physical sciences and engineering.</p></div>
+        <div class="soon-text"><h3>Caliper Bench</h3><p>Live measurements and telemetry streaming into Caliper, beside the models trained on them, across the physical sciences and engineering.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
-<svg class="hw" id="tl-fig" viewBox="0 0 1100 480" role="img" aria-label="Concept: ROS 2, CAN and OPC UA from robotics and control, and SiLA 2, the MinKNOW API and OME-Zarr from the bio lab, through Bench providers into caliper.feed.v1 channels stamped on one host clock with sequence numbers, and into Caliper views on one time axis: joint positions, motor current against a model, plate-reader growth curves, a microscope frame and nanopore signal">
+<svg class="hw" id="tl-fig" viewBox="0 0 1100 480" role="img" aria-label="Concept: ROS 2, CAN and OPC UA from robotics and control, and SiLA 2, the MinKNOW API and OME-Zarr from the bio lab, through Bench providers into caliper.feed.v1 channels with sequence numbers, and into live Caliper views: joint positions, motor current against a model, plate-reader growth curves, a microscope frame and nanopore signal">
 <defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="sdtip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
 <rect x="16" y="44" width="330" height="420" rx="10" class="pkg"/>
 <text x="34" y="28" class="k">SOURCES</text>
@@ -2031,9 +2030,9 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <text x="410" y="402" class="mono small">tensor (2048, 2048) uint16</text>
 <text x="410" y="419" class="n dim">caliper.show, per frame</text>
 <path class="arrow data" d="M328,405 L394,405" marker-end="url(#sdtip)"/>
-<text x="396" y="444" class="n dim">each sample: host-clock ns and a sequence number;</text>
+<text x="396" y="444" class="n dim">each sample carries a sequence number;</text>
 <text x="396" y="460" class="n dim">a gap in the sequence is a lost sample, shown</text>
-<rect x="744" y="84" width="10" height="342" rx="2" class="clockbar"/>
+<line x1="749" y1="105" x2="749" y2="408" class="bus"/>
 
 <path class="arrow data" d="M712,105 L742,105" marker-end="url(#sdtip)"/>
 <path class="arrow data" d="M712,155 L742,155" marker-end="url(#sdtip)"/>
@@ -2043,7 +2042,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <path class="arrow data" d="M712,405 L742,405" marker-end="url(#sdtip)"/>
 <rect x="770" y="44" width="314" height="420" rx="10" class="pkg"/>
 <text x="788" y="28" class="k">CALIPER</text>
-<text x="1066" y="28" class="n dim" text-anchor="end">one time axis, the host clock</text>
+<text x="1066" y="28" class="n dim" text-anchor="end">live views</text>
 <rect x="788" y="64" width="278" height="88" rx="4" class="blk"/>
 <text x="802" y="82" class="k">7 JOINT POSITIONS</text>
 <path class="arrow data" d="M756,108 L786,108" marker-end="url(#sdtip)"/>
