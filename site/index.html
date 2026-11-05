@@ -173,6 +173,25 @@
   pre.code .p { color: var(--bronze); }
   pre.code .c { color: var(--faint); }
   /* The frame traces: one frame as lanes over time, with the line each lane is on and the arrows between them. */
+  /* Python streaming: the code, then what happens between the two processes. */
+  .snippet { max-width: 860px; margin: 30px 0 20px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 6px; overflow: hidden; }
+  .snippet-head { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px 9px; border-bottom: 1px solid var(--rule-faint);
+                  font: 11px/1.3 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--faint); }
+  .snippet-head a { font: 12px/1.3 var(--mono); letter-spacing: 0; text-transform: none; color: var(--faint); }
+  .snippet-head a:hover { color: var(--bronze); }
+  .hw .mono { font-family: var(--mono); font-size: 13.5px; fill: var(--parchment); }
+  .hw .mono.small { font-size: 12.5px; }
+  .hw .n.dim { fill: var(--faint); }
+  .hw .lbl { font-family: var(--text); font-size: 12px; fill: var(--secondary); paint-order: stroke; stroke: var(--deep); stroke-width: 4px; stroke-linejoin: round; }
+  .hw .blk.frame { stroke: #3ca99c; }
+  .hw .arrow { fill: none; stroke: var(--faint); stroke-width: 1.2; }
+  .hw .arrow.data { stroke: var(--bronze); stroke-width: 1.8; }
+  .hw .tip { fill: var(--faint); }
+  .hw .tip-data { fill: var(--bronze); }
+  .hw .slot { fill: #232220; stroke: var(--rule); }
+  .hw .slot.writing { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); }
+  .hw .slot.published { stroke: var(--parchment); }
+  .hw .slot.claimed { stroke: #3ca99c; }
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
   .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -283,6 +302,7 @@
   <div class="wrap">
     <a class="brand" href="#top"><img src="assets/caliper-mark.svg" alt=""><span>CALIPER</span></a>
     <div class="links">
+      <a href="#python">Python</a>
       <a href="#backends">Backends</a>
       <a href="#libraries">Libraries</a>
       <a href="#build">Build</a>
@@ -340,9 +360,104 @@
 
 <main>
 
+  <section id="python">
+    <div class="wrap">
+      <div class="label eyebrow">01 · Python streaming</div>
+      <h2>Python streaming</h2>
+      <div class="snippet"><div class="snippet-head"><span>Python</span><a href="docs/tutorials/live-pytorch/">live-pytorch</a></div><pre class="code"><code>import caliper
+
+for step in range(steps):
+    x, y = make_batch(64, device)
+    loss = F.cross_entropy(model(x), y)
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+    opt.step()
+
+    <span class="p">caliper.show</span>(model.fc1.weight, "fc1.weight", cmap="rdbu")     <span class="c"># (64, 784) heatmap</span>
+    <span class="p">caliper.show</span>(acts["conv1"], "conv1.act")                       <span class="c"># (64, 8, 28, 28) -&gt; mosaic</span>
+    <span class="p">caliper.points</span>(acts["hidden"] @ proj, y, "embedding", classes=4)
+    <span class="p">caliper.series</span>(loss.detach(), "loss")
+    <span class="p">caliper.histogram</span>(model.fc1.weight, "fc1.weight.hist")</code></pre></div>
+      <div class="hw-plate">
+    <svg class="hw flow" viewBox="0 0 1100 452" role="img" aria-label="Python streaming: caliper.show queues a GPU copy on torch's MPS stream into a slot of a shared-memory ring and returns; a publisher marks the slot published when its event completes; the viewer process, which writes a heartbeat the script checks, reads the newest published slot in place with a colormap pass and draws it in the ImGui frame">
+      <defs><marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="tip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+      <rect x="16" y="44" width="340" height="392" rx="10" class="pkg"/>
+      <text x="34" y="28" class="k" text-anchor="start">TRAINING PROCESS</text>
+      <text x="338" y="28" class="n dim" text-anchor="end">Python, torch on MPS</text>
+      <rect x="386" y="44" width="328" height="392" rx="10" class="pkg"/>
+      <text x="404" y="28" class="k" text-anchor="start">SHARED MEMORY</text>
+      <text x="696" y="28" class="n dim" text-anchor="end">POSIX segments, mode 0600</text>
+      <rect x="744" y="44" width="340" height="392" rx="10" class="pkg"/>
+      <text x="762" y="28" class="k" text-anchor="start">VIEWER PROCESS</text>
+      <text x="1066" y="28" class="n dim" text-anchor="end">Caliper app or caliper-viewer</text>
+      <rect x="36" y="64" width="300" height="62" rx="4" class="blk"/>
+      <text x="52" y="88" class="mono" text-anchor="start">caliper.show(W)</text>
+      <text x="52" y="108" class="n" text-anchor="start">60 Hz rate limit, then the watcher check</text>
+      <rect x="36" y="150" width="300" height="62" rx="4" class="blk"/>
+      <text x="52" y="174" class="mono" text-anchor="start">SnapshotRing</text>
+      <text x="52" y="194" class="n" text-anchor="start">a free slot of three, or the snapshot drops</text>
+      <rect x="36" y="236" width="300" height="82" rx="4" class="blk hot"/>
+      <text x="52" y="260" class="mono" text-anchor="start">torch MPS stream</text>
+      <text x="52" y="280" class="n" text-anchor="start">slot.copy_(W)</text>
+      <text x="52" y="298" class="n" text-anchor="start">torch.aminmax(W, out=stats)</text>
+      <rect x="36" y="342" width="300" height="70" rx="4" class="blk"/>
+      <text x="52" y="366" class="mono" text-anchor="start">torch.mps.Event</text>
+      <text x="52" y="386" class="n" text-anchor="start">record(), then a publisher thread</text>
+      <text x="52" y="404" class="n" text-anchor="start">polls query() every 2 ms</text>
+      <path d="M 186 126 L 186 148" class="arrow" marker-end="url(#tip)"/>
+      <path d="M 186 212 L 186 234" class="arrow" marker-end="url(#tip)"/>
+      <path d="M 186 318 L 186 340" class="arrow" marker-end="url(#tip)"/>
+      <rect x="406" y="64" width="288" height="62" rx="4" class="blk"/>
+      <text x="422" y="88" class="mono" text-anchor="start">/session-ctl</text>
+      <text x="422" y="108" class="n" text-anchor="start">view rows, the viewer's heartbeat</text>
+      <rect x="406" y="150" width="288" height="262" rx="4" class="blk"/>
+      <text x="422" y="174" class="mono" text-anchor="start">/session-v1</text>
+      <text x="422" y="194" class="n" text-anchor="start">header: published, claimed</text>
+      <rect x="422" y="210" width="196" height="50" rx="3" class="slot writing"/>
+      <rect x="624" y="210" width="54" height="50" rx="3" class="slot writing"/>
+      <text x="434" y="232" class="mono small" text-anchor="start">slot 0</text>
+      <text x="434" y="250" class="n" text-anchor="start">being written</text>
+      <text x="651" y="240" class="n dim" text-anchor="middle">stats</text>
+      <rect x="422" y="274" width="196" height="50" rx="3" class="slot published"/>
+      <rect x="624" y="274" width="54" height="50" rx="3" class="slot published"/>
+      <text x="434" y="296" class="mono small" text-anchor="start">slot 1</text>
+      <text x="434" y="314" class="n" text-anchor="start">published</text>
+      <text x="651" y="304" class="n dim" text-anchor="middle">stats</text>
+      <rect x="422" y="338" width="196" height="50" rx="3" class="slot claimed"/>
+      <rect x="624" y="338" width="54" height="50" rx="3" class="slot claimed"/>
+      <text x="434" y="360" class="mono small" text-anchor="start">slot 2</text>
+      <text x="434" y="378" class="n" text-anchor="start">claimed by the viewer</text>
+      <text x="651" y="368" class="n dim" text-anchor="middle">stats</text>
+      <rect x="764" y="64" width="300" height="62" rx="4" class="blk"/>
+      <text x="780" y="88" class="mono" text-anchor="start">ShmSource</text>
+      <text x="780" y="108" class="n" text-anchor="start">heartbeat, newest completed slot</text>
+      <rect x="764" y="168" width="300" height="62" rx="4" class="blk hot"/>
+      <text x="780" y="192" class="mono" text-anchor="start">caliper_core_live_apply</text>
+      <text x="780" y="212" class="n" text-anchor="start">colormap pass reads the slot in place</text>
+      <rect x="764" y="272" width="300" height="62" rx="4" class="blk frame"/>
+      <text x="780" y="296" class="mono" text-anchor="start">ImGui frame</text>
+      <text x="780" y="316" class="n" text-anchor="start">up to 60 fps</text>
+      <path d="M 914 126 L 914 166" class="arrow" marker-end="url(#tip)"/>
+      <path d="M 914 230 L 914 270" class="arrow" marker-end="url(#tip)"/>
+      <path d="M 336 270 L 420 235" class="arrow data" marker-end="url(#tip-data)"/>
+      <text x="372" y="240" class="lbl" text-anchor="middle">GPU copy</text>
+      <path d="M 336 377 L 420 300" class="arrow" marker-end="url(#tip)"/>
+      <text x="366" y="372" class="lbl" text-anchor="middle">publish</text>
+      <path d="M 764 95 L 696 95" class="arrow" marker-end="url(#tip)"/>
+      <text x="730" y="87" class="lbl" text-anchor="middle">heartbeat</text>
+      <path d="M 406 95 L 338 95" class="arrow" marker-end="url(#tip)"/>
+      <text x="372" y="87" class="lbl" text-anchor="middle">watched?</text>
+      <path d="M 678 299 C 722 299, 722 199, 762 199" class="arrow data" marker-end="url(#tip-data)"/>
+      <text x="731" y="262" class="lbl" text-anchor="middle">read</text>
+      <text x="550" y="432" class="n dim" text-anchor="middle">one MTLBuffer per process over the same pages</text>
+    </svg>
+      </div>
+    </div>
+  </section>
+
   <section id="backends">
     <div class="wrap">
-      <div class="label eyebrow">01 · Native backends</div>
+      <div class="label eyebrow">02 · Native backends</div>
       <h2>Native backends</h2>
       <!-- code:call -->
 <div class="code-grid code-call"><details class="code-panel"><summary class="code-head"><span class="code-title">The descriptor</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/sdk/include/caliper/tensor.h#L17-L27">tensor.h · 17–27</a></summary><pre class="code"><code><span class="row" data-file="tensor.h" data-ln="17"><span class="ln">17</span>typedef struct <span class="p">CaliperTensor</span> {</span><span class="row" data-file="tensor.h" data-ln="18"><span class="ln">18</span>    uint32_t          struct_size;</span><span class="row" data-file="tensor.h" data-ln="19"><span class="ln">19</span>    void*             <span class="p">data</span>;            <span class="c">/* device or host pointer */</span></span><span class="row" data-file="tensor.h" data-ln="20"><span class="ln">20</span>    CaliperDType      dtype;</span><span class="row" data-file="tensor.h" data-ln="21"><span class="ln">21</span>    int32_t           ndim;            <span class="c">/* &lt;= 8 */</span></span><span class="row" data-file="tensor.h" data-ln="22"><span class="ln">22</span>    int64_t           shape[8];</span><span class="row" data-file="tensor.h" data-ln="23"><span class="ln">23</span>    int64_t           strides[8];      <span class="c">/* in elements */</span></span><span class="row" data-file="tensor.h" data-ln="24"><span class="ln">24</span>    CaliperDeviceKind <span class="p">device</span>;</span><span class="row" data-file="tensor.h" data-ln="25"><span class="ln">25</span>    int32_t           device_index;</span><span class="row" data-file="tensor.h" data-ln="26"><span class="ln">26</span>    void*             <span class="p">stream</span>;          <span class="c">/* cudaStream_t / MTLCommandQueue* / NULL */</span></span><span class="row" data-file="tensor.h" data-ln="27"><span class="ln">27</span>} <span class="p">CaliperTensor</span>;</span></code></pre></details>
@@ -1388,7 +1503,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
   <section id="libraries">
     <div class="wrap">
-      <div class="label eyebrow">02 · Libraries</div>
+      <div class="label eyebrow">03 · Libraries</div>
       <h2>Libraries</h2>
       <ul class="libs">
         <li><a href="https://github.com/ocornut/imgui"><img src="assets/libs/ocornut.png" alt="" width="28" height="28"><span class="lib-name">Dear ImGui</span><span class="lib-repo">ocornut/imgui</span></a></li>
@@ -1410,7 +1525,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section id="build">
     <div class="wrap two">
       <div>
-        <div class="label eyebrow">03 · Build</div>
+        <div class="label eyebrow">04 · Build</div>
         <h2>Build from source</h2>
         <p class="muted">CMake 3.18 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
         <dl class="platforms">
