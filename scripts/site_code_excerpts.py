@@ -72,13 +72,16 @@ def panel(ref, sha, title, path, ranges, names):
         if rows:
             rows.append('<span class="gap">⋯</span>')
         for i, l in enumerate(chunk):
-            rows.append(f'<span class="ln">{a + i}</span>{highlight(l[indent:], names)}')
+            # Each line carries its file and number, so the page's traces can light up the lines that run.
+            rows.append(f'<span class="row" data-file="{path.split("/")[-1]}" data-ln="{a + i}">'
+                        f'<span class="ln">{a + i}</span>{highlight(l[indent:], names)}</span>')
     # The label lists every range; the link opens the first.
     where = ", ".join(str(a) if a == b else f"{a}–{b}" for a, b in ranges)
     link = f"{REPO}/blob/{sha}/{path}#L{ranges[0][0]}-L{ranges[0][1]}"
-    return (f'<div class="code-panel"><div class="code-head"><span class="code-title">{html.escape(title)}</span>'
-            f'<a class="code-file" href="{link}">{path.split("/")[-1]} · {where}</a></div>'
-            f'<pre class="code"><code>' + "\n".join(rows) + "</code></pre></div>")
+    # Closed by default: the head names the step and links the lines; opening shows them.
+    return (f'<details class="code-panel"><summary class="code-head"><span class="code-title">{html.escape(title)}</span>'
+            f'<a class="code-file" href="{link}">{path.split("/")[-1]} · {where}</a></summary>'
+            f'<pre class="code"><code>' + "".join(rows) + "</code></pre></details>")
 
 
 def main():
