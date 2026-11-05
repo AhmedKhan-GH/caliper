@@ -177,12 +177,6 @@
   .ucs { list-style: none; padding: 0; margin: 30px 0 0; max-width: 720px; border-top: 1px solid var(--rule-faint); }
   .ucs li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--rule-faint); }
   .uc-name { font-size: 16px; color: var(--parchment); }
-  .uc-status { display: inline-flex; align-items: center; gap: 8px; font: 11px/1 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--secondary); }
-  .uc-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-  .uc-status.s-today::before { background: #3ca99c; }
-  .uc-status.s-draft::before { background: var(--bronze); }
-  .uc-status.s-planned { color: var(--faint); }
-  .uc-status.s-planned::before { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
 
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
@@ -356,11 +350,11 @@
       <div class="label eyebrow">01 · Use cases</div>
       <h2>Use cases</h2>
       <ul class="ucs">
-        <li><span class="uc-name">Training dynamics in PyTorch</span><span class="uc-status s-today">Today</span></li>
-        <li><span class="uc-name">Language model interpretability</span><span class="uc-status s-draft">Draft</span></li>
-        <li><span class="uc-name">Learned models beside simulations</span><span class="uc-status s-today">Today</span></li>
-        <li><span class="uc-name">Machine telemetry</span><span class="uc-status s-today">Today</span></li>
-        <li><span class="uc-name">Sensor and test-rig telemetry</span><span class="uc-status s-planned">Planned</span></li>
+        <li><span class="uc-name">Training dynamics in PyTorch</span></li>
+        <li><span class="uc-name">Language model interpretability</span></li>
+        <li><span class="uc-name">Learned models beside simulations</span></li>
+        <li><span class="uc-name">Machine telemetry</span></li>
+        <li><span class="uc-name">Sensor and test-rig telemetry (planned)</span></li>
       </ul>
     </div>
   </section>
