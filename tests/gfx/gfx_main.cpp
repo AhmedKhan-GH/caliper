@@ -3239,6 +3239,18 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
     cu->cuMemFree(buf);
 }
 
+// The direct-image table must resolve on any driver new enough for interop, or
+// the renderer silently stays on the buffer path. Struct sizes pin the hand
+// transcriptions of cuda.h's ABI.
+TEST_CASE("gfx/Vulkan+CUDA: direct-image driver table resolves") {
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    CHECK(cudadrv::direct_api() != nullptr);
+    CHECK(sizeof(cudadrv::Array3dDescriptor) == 40);
+    CHECK(sizeof(cudadrv::ExternalMemoryMipmappedArrayDesc) == 120);
+    CHECK(sizeof(cudadrv::ResourceDesc) == 144);
+    CHECK(sizeof(cudadrv::ExternalSemaphoreWaitParams) == 144);
+}
+
 // W0 of docs/vulkan-update-costs.md: what one tensor update costs by size, on
 // the path the renderer picks. "call" is the frame-thread time inside
 // update_texture; "done" adds the wait for the GPU to finish it; "frame" is

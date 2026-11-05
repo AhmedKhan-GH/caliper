@@ -98,6 +98,33 @@ const VmmApi* load_vmm() {
     return &v;
 }
 
+// Optional direct-image table (D25). Same shape as load_vmm().
+const DirectApi* load_direct() {
+    if (api() == nullptr) return nullptr;
+    void* lib = lib_open();
+    if (!lib) return nullptr;
+
+    static DirectApi d{};
+    struct Entry { void** slot; const char* name; };
+    const Entry entries[] = {
+        {(void**)&d.cuModuleLoadData,                        "cuModuleLoadData"},
+        {(void**)&d.cuModuleUnload,                          "cuModuleUnload"},
+        {(void**)&d.cuModuleGetFunction,                     "cuModuleGetFunction"},
+        {(void**)&d.cuLaunchKernel,                          "cuLaunchKernel"},
+        {(void**)&d.cuExternalMemoryGetMappedMipmappedArray, "cuExternalMemoryGetMappedMipmappedArray"},
+        {(void**)&d.cuMipmappedArrayGetLevel,                "cuMipmappedArrayGetLevel"},
+        {(void**)&d.cuMipmappedArrayDestroy,                 "cuMipmappedArrayDestroy"},
+        {(void**)&d.cuSurfObjectCreate,                      "cuSurfObjectCreate"},
+        {(void**)&d.cuSurfObjectDestroy,                     "cuSurfObjectDestroy"},
+        {(void**)&d.cuWaitExternalSemaphoresAsync,           "cuWaitExternalSemaphoresAsync"},
+    };
+    for (const Entry& e : entries) {
+        *e.slot = lib_sym(lib, e.name);
+        if (*e.slot == nullptr) return nullptr;
+    }
+    return &d;
+}
+
 }  // namespace
 
 const Api* api() {
@@ -108,6 +135,11 @@ const Api* api() {
 const VmmApi* vmm_api() {
     static const VmmApi* v = load_vmm();
     return v;
+}
+
+const DirectApi* direct_api() {
+    static const DirectApi* d = load_direct();
+    return d;
 }
 
 }  // namespace cudadrv
