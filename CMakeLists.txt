@@ -366,8 +366,11 @@ file(GLOB CALIPER_LIVE_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/src/host/live/*.cpp
     ${CMAKE_SOURCE_DIR}/src/host/live/*.mm)
 list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "viewer_main\\.mm$")
-if(NOT APPLE)
-    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "\\.mm$")
+if(APPLE)
+    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "live_unsupported\\.cpp$")
+else()
+    # The session code is macOS-only so far; live_unsupported.cpp stands in.
+    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "\\.mm$|live_core\\.cpp$|live_attach\\.cpp$")
 endif()
 add_library(libcaliper STATIC
     src/host/host_services.cpp
