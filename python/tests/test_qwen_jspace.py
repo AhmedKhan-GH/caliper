@@ -177,6 +177,31 @@ def test_trace_streams_every_position_and_stops_at_the_end_token(space):
     assert result["tokens"] == 0 and result["finish_reason"] == "stop"
 
 
+def test_trace_places_every_position_in_one_plane_fitted_on_the_prompt(space):
+    import base64
+    from mlx_lm.sample_utils import make_sampler
+    _, js = space
+    tokens = list(range(1, 71))
+    events = []
+    trace(js, Tokenizer(), tokens, max_new_tokens=4, sampler=make_sampler(temp=0.0), k=3, interventions=[],
+          emit=events.append, cancelled=threading.Event(), eos=set())
+    planes = []
+    for e in events:
+        plane = np.frombuffer(base64.b64decode(e["plane"]), dtype="<f4").reshape(e["count"], len(e["layers"]), 2)
+        assert np.isfinite(plane).all() and np.abs(plane).max() <= 1.5
+        planes.append(plane)
+    placed = np.concatenate(planes)
+    assert placed.shape == (len(tokens) + 4, 3, 2)
+    # The prompt (but its first position) spans about [-1, 1] in both coordinates.
+    spread = np.percentile(np.abs(placed[1:len(tokens)]), 99, axis=(0, 1))
+    assert (spread > 0.5).all()
+    # A one-token prompt has nothing to fit on and sends no plane.
+    events.clear()
+    trace(js, Tokenizer(), [5], max_new_tokens=1, sampler=make_sampler(temp=0.0), k=3, interventions=[],
+          emit=events.append, cancelled=threading.Event(), eos=set())
+    assert events and all("plane" not in e for e in events)
+
+
 @pytest.mark.parametrize("item", [dict(kind="erase"), dict(kind="ablate", first=2, last=1),
                                   dict(kind="ablate", last=3), dict(kind="remove"),
                                   dict(kind="remove", tokens=[VOCAB]), dict(kind="swap", tokens=[4, 4]),

@@ -213,6 +213,44 @@ ATTENTION_BYTES = 1_500_000 # attention bytes per event, so a reply stays under 
 BATCHED_READOUT_BYTES = 256 * 1024 * 1024   # logits read out in one unembedding when they fit
 
 
+class TrajectoryPlane:
+    """One plane for a whole run, in which each position's residual stream after every lens layer has a place.
+
+    Fitted once, on the prompt: at each layer the residuals are centred on the prompt's mean there and normalised,
+    and one PCA of all those layers gives the two coordinates, scaled so the prompt spans about [-1, 1]. Positions
+    written afterwards are placed in the same plane as they arrive, so a path never moves once drawn.
+    """
+
+    FIT_POSITIONS = 512     # prompt positions the fit samples at most
+
+    @classmethod
+    def rows(cls, positions):
+        """The prompt positions to fit on: all but the first, where the attention sink sits, sampled evenly."""
+        rows = np.arange(1 if positions > 2 else 0, positions)
+        if len(rows) > cls.FIT_POSITIONS:
+            rows = rows[np.linspace(0, len(rows) - 1, cls.FIT_POSITIONS).astype(int)]
+        return rows
+
+    def __init__(self, stream):
+        """stream: float32 [layers, positions, d], the prompt rows to fit on."""
+        self.mean = stream.mean(axis=1, keepdims=True)
+        flat = self._unit(stream).reshape(-1, stream.shape[2])
+        self.centre = flat.mean(0)
+        flat = flat - self.centre
+        _, vectors = np.linalg.eigh(flat.T @ flat)
+        self.basis = vectors[:, ::-1][:, :2].T.copy()                       # [2, d]: the two largest components
+        self.scale = max(float(np.percentile(np.abs(flat @ self.basis.T), 99)), 1e-12)
+
+    def _unit(self, stream):
+        centred = stream - self.mean
+        return centred / np.maximum(np.linalg.norm(centred, axis=2, keepdims=True), 1e-12)
+
+    def place(self, stream):
+        """float32 [layers, n, d] to float32 [n, layers, 2], within [-1.5, 1.5]."""
+        plane = (self._unit(stream) - self.centre) @ self.basis.T / self.scale
+        return np.clip(plane, -1.5, 1.5).transpose(1, 0, 2).astype(np.float32)
+
+
 def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, emit, cancelled, eos,
           attention=False, run_to_max=False):
     """Run tokens through the model and generate, emitting the lens grid as it goes.
@@ -228,6 +266,9 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
     (attention_layers): for each of its positions, layer and head, the softmax weights over the keys (the first
     keys positions), as bytes 0-255 of weight, base64. keys is 0 when the context is longer than
     MAX_ATTENTION_KEYS. The model's linear-attention layers form no such weights.
+
+    plane places each position's residual after every source layer in the run's TrajectoryPlane, fitted on the
+    prompt: float32 [count, layers, 2], base64. A prompt too short to fit on sends none.
     """
     mx = js.mx
     layers = js.source_layers
@@ -242,6 +283,10 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
         return {str(i): tokenizer.decode([i]) for i in sorted(new)}
 
     def send(first, ids, captured, logits):
+        placed = dict()
+        if plane is not None:
+            stream = np.stack([np.array(captured[l].astype(mx.float32)) for l in layers])
+            placed = dict(plane=base64.b64encode(plane.place(stream).astype("<f4").tobytes()).decode("ascii"))
         vocabulary = js.text.embed_tokens.weight.shape[0]
         if len(ids) * 2 * len(layers) * vocabulary * 4 <= BATCHED_READOUT_BYTES:
             # A few positions (each generated token): every layer through both lenses as one unembedding.
@@ -274,7 +319,7 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
                 keys, data = 0, b""
             pattern = dict(attention_layers=attention_layers, heads=heads, keys=keys,
                            attention=base64.b64encode(data).decode("ascii"))
-        emit(dict(first=first, count=len(ids), prompt=len(tokens), layers=layers, k=k, tokens=ids, **pattern,
+        emit(dict(first=first, count=len(ids), prompt=len(tokens), layers=layers, k=k, tokens=ids, **pattern, **placed,
                   jlens=jl.reshape(-1).tolist(), jprob=np.round(jp, 4).reshape(-1).tolist(),
                   logit=ll.reshape(-1).tolist(), lprob=np.round(lp, 4).reshape(-1).tolist(),
                   output=out_ids.reshape(-1).tolist(), oprob=np.round(out_p, 4).reshape(-1).tolist(),
@@ -312,6 +357,11 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
         attended[index] = weights
 
     logits = js.forward(mx.array([tokens]), cache, visit, attend if attention_layers else None)
+    rows = TrajectoryPlane.rows(len(tokens))
+    plane = None
+    if len(rows) > 1:
+        picked = mx.array(rows)
+        plane = TrajectoryPlane(np.stack([np.array(captured[l][picked].astype(mx.float32)) for l in layers]))
     chunk = TRACE_CHUNK
     if attention_layers and len(tokens) <= MAX_ATTENTION_KEYS:
         chunk = max(1, min(TRACE_CHUNK, ATTENTION_BYTES // (len(attention_layers) * heads * len(tokens))))

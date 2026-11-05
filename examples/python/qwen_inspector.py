@@ -29,7 +29,8 @@ from qwen_jspace import DEFAULT_LENS, Intervention  # noqa: E402
 
 DEFAULT_MODEL = Path.home() / "PycharmProjects/weight-space/models/Qwen3.5-0.8B"
 CAPABILITIES = ["generate", "list_tensors", "show_tensor", "read_weight",
-                "edit_weight", "revert_tensor", "list_edits", "tensor_regions", "tensor_values", "sample_data"]
+                "edit_weight", "revert_tensor", "list_edits", "tensor_regions", "tensor_values", "sample_data",
+                "embedding_map", "decode"]
 MAX_PROMPT_TOKENS = 2048
 MAX_NEW_TOKENS = 1024
 MAX_UNDO_BYTES = 64 * 1024 * 1024
@@ -40,10 +41,34 @@ MAX_SAMPLES = 131072
 CHUNK_CELLS = 1 << 24
 # Raw bytes per tensor_values reply; base64 keeps it under the 4 MB request frame.
 MAX_VALUE_BYTES = 2 * 1024 * 1024
-# Offered with a Jacobian lens: the lens grid while generating, with J-space interventions.
-LENS_CAPABILITIES = ["trace", "tokenize"]
+# Offered with a Jacobian lens: the lens grid while generating, with J-space interventions; trajectories:
+# each trace event places its positions in the run's trajectory plane.
+LENS_CAPABILITIES = ["trace", "tokenize", "trajectories"]
 MAX_INTERVENTIONS = 16
 INTERVENTION_KINDS = {"ablate": (0, 0), "remove": (1, 64), "swap": (2, 2), "inject": (1, 1)}
+# The embedding map: every row of the embedding table placed in 3-D, cached per model in the app's data folder.
+MAP_DIR = Path(os.environ.get("CALIPER_DATA_DIR") or Path.home() / "Library/Application Support/Caliper") / "maps"
+KIND_NAMES = ["Words", "Word pieces", "Punctuation and symbols", "Digits", "CJK", "Other scripts", "Whitespace",
+              "Code and mixed"]
+MAX_DECODE = 512
+
+
+def token_kind(text):
+    """The kind of a token, from its decoded text: an index into KIND_NAMES."""
+    t = text.strip()
+    if not t:
+        return 6
+    if any("\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af" for ch in t):
+        return 4
+    if t.isdigit():
+        return 3
+    if all(not ch.isalnum() for ch in t):
+        return 2
+    if any(ord(ch) > 127 and ch.isalpha() for ch in t):
+        return 5
+    if t.isascii() and t.isalpha():
+        return 0 if text.startswith(" ") else 1
+    return 7
 
 
 class Cancelled(Exception):
@@ -303,6 +328,15 @@ class Inspector:
                 raise ValueError("text must contain 1 to 256 characters")
             ids = self.tokenizer.encode(text, add_special_tokens=False)
             return dict(ids=ids, words=[self.tokenizer.decode([i]) for i in ids])
+        if op == "embedding_map":
+            return self.embedding_map(emit)
+        if op == "decode":
+            ids = request.get("ids")
+            vocabulary = self.model.language_model.model.embed_tokens.weight.shape[0]
+            if (not isinstance(ids, list) or not 0 < len(ids) <= MAX_DECODE
+                    or not all(type(i) in (int, float) and i == int(i) and 0 <= i < vocabulary for i in ids)):
+                raise ValueError(f"ids must be 1 to {MAX_DECODE} token ids")
+            return dict(words={str(int(i)): self.tokenizer.decode([int(i)]) for i in ids})
         if op == "edit_weight":
             return self.edit(request)
         if op == "revert_tensor":
@@ -335,6 +369,49 @@ class Inspector:
         return dict(name=name, rows=rows, cols=cols, row=row, count=count,
                     encoding="bfloat16" if bfloat16 else "float32",
                     data=base64.b64encode(data.tobytes()).decode("ascii"), **self._status(name))
+
+    def embedding_map(self, emit):
+        """Every row of the embedding table placed in 3-D, with each token's kind.
+
+        The rows are normalised, reduced to 50 principal components and laid out by UMAP, which keeps each
+        row's nearest neighbours near it (PCA alone, at 3 components, keeps 3% of the variance and shows one
+        blob). Without umap-learn the 3 principal components are sent instead, and method says so. The layout
+        is computed once per model and cached in MAP_DIR; positions go as int16 over [-1, 1], kinds as bytes.
+        """
+        weight = self.model.language_model.model.embed_tokens.weight
+        rows, width = weight.shape
+        cache = MAP_DIR / f"{self.model_name}-{rows}x{width}.npz"
+        if cache.is_file():
+            stored = np.load(cache)
+            xyz, kinds, method = stored["xyz"], stored["kinds"], str(stored["method"])
+        else:
+            emit(dict(status="Reading the embedding table"))
+            if weight.dtype == getattr(self.mx, "bfloat16", None):
+                bits = np.array(weight.view(self.mx.uint16)).astype(np.uint32) << 16
+                table = bits.view(np.float32)
+            else:
+                table = np.array(weight.astype(self.mx.float32))
+            table = table / np.maximum(np.linalg.norm(table, axis=1, keepdims=True), 1e-12)
+            table -= table.mean(0)
+            values, vectors = np.linalg.eigh(table.T @ table / rows)
+            reduced = table @ vectors[:, ::-1][:, :50]
+            del table
+            kinds = np.array([token_kind(self.tokenizer.decode([i])) for i in range(rows)], dtype=np.uint8)
+            try:
+                import umap
+                emit(dict(status=f"Laying out {rows:,} rows with UMAP (once per model, about two minutes)"))
+                xyz = umap.UMAP(n_components=3, n_neighbors=15, min_dist=0.1).fit_transform(reduced)
+                method = "umap"
+            except ImportError:
+                xyz, method = reduced[:, :3], "pca"
+            xyz = xyz - np.median(xyz, axis=0)
+            xyz = np.clip(xyz / np.percentile(np.linalg.norm(xyz, axis=1), 99.5), -1, 1).astype(np.float32)
+            MAP_DIR.mkdir(parents=True, exist_ok=True)
+            np.savez(cache, xyz=xyz, kinds=kinds, method=method)
+        positions = np.round(xyz * 32767).astype("<i2")
+        return dict(count=int(rows), method=method, kind_names=KIND_NAMES,
+                    positions=base64.b64encode(positions.tobytes()).decode("ascii"),
+                    kinds=base64.b64encode(kinds.astype(np.uint8).tobytes()).decode("ascii"))
 
     def edit(self, request):
         name, weight = self._weight(request)
