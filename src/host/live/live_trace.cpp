@@ -303,10 +303,12 @@ void TracePane::playback() {
     const TraceRun& r = display();
     const int index = &r == &runs_[0] ? 0 : 1;
     if (index != played_) {
-        // Another run on show: a fresh one plays from its start, one switched to is shown whole.
-        revealed_ = r.running && r.generated() == 0 ? 0 : 1e18;
+        // Another run on show: one the user switched to is shown whole; one that began streaming (the
+        // intervened run after the intact one) plays from its start.
+        revealed_ = picked_ ? 1e18 : 0;
         played_ = index;
     }
+    picked_ = false;
     if (speed_ >= kMaxSpeed) revealed_ = 1e18;
     else if (!paused_) revealed_ += ImGui::GetIO().DeltaTime * std::pow(10.0, static_cast<double>(speed_));
     // Never ahead of the computation: at the edge, the view is live.
@@ -320,6 +322,7 @@ TracePane::Ask TracePane::generate(const Object& settings) {
     const bool intervened = !interventions_.empty();
     second_pending_ = intervened && compare_;
     shown_ = intervened ? 1 : 0;
+    // The first run to stream plays first: the intact one when comparing.
     played_ = intervened && compare_ ? 0 : shown_;
     cursor_position_ = cursor_layer_ = -1;
     follow_ = true;
@@ -425,12 +428,12 @@ TracePane::Ask TracePane::controls(bool, bool tracing) {
         ImGui::SameLine();
         for (int i = 0; i < 2; ++i) {
             ImGui::PushStyleColor(ImGuiCol_Text, shown_ == i ? sternbild::col::bronze : sternbild::col::secondary);
-            if (sternbild::word_button(i == 0 ? "Intact" : "Intervened")) shown_ = i;
+            if (sternbild::word_button(i == 0 ? "Intact" : "Intervened")) { shown_ = i; picked_ = true; }
             ImGui::PopStyleColor();
             ImGui::SameLine();
         }
     }
-    const TraceRun& r = runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_];
+    const TraceRun& r = display();
     if (r.heads > 0) {
         ImGui::SameLine(0, style.ItemSpacing.x * 4);
         label("Attention heads");
@@ -532,13 +535,14 @@ void TracePane::answers() {
     for (int i = 0; i < 2; ++i) {
         const TraceRun& r = runs_[i];
         if (r.positions() == 0 && !r.running) continue;
-        const std::vector<int32_t> generated(r.tokens.begin() + std::min(r.prompt, r.positions()), r.tokens.end());
+        // The answer as far as the clock has reached it.
+        const std::string answer = revealed_answer(i);
         label(i == 0 ? "Intact" : "Intervened");
         ImGui::SameLine();
         ImGui::PushTextWrapPos(0);
         if (!r.error.empty()) faint(r.error.c_str());
-        else if (generated.empty()) faint(r.running ? "..." : "No tokens");
-        else ImGui::TextUnformatted(text(generated).c_str());
+        else if (answer.empty()) faint(r.running || r.generated() > 0 ? "..." : "No tokens");
+        else ImGui::TextUnformatted(answer.c_str());
         ImGui::PopTextWrapPos();
     }
 }
@@ -558,7 +562,7 @@ bool TracePane::differs(int position, int layer) const {
 // Layers up the side (the highest on top, the model's output above them), token positions across, each cell
 // its residual's top lens word. The intervened run marks cells whose word differs from the intact run's.
 void TracePane::grid(float width, float height) {
-    const TraceRun& r = runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_];
+    const TraceRun& r = display();
     if (r.positions() == 0) {
         ImGui::BeginChild("##trace.grid", ImVec2(width, height));
         faint(r.running ? "Reading the prompt" : "Generate in the Inference pane to read every layer through the lens");
@@ -737,7 +741,7 @@ void TracePane::grid(float width, float height) {
 // column. Click a word to remove or inject its direction.
 void TracePane::side_list(float width, float height, Ask& ask, bool can_send) {
     ImGui::BeginChild("##trace.side", ImVec2(width, height), ImGuiChildFlags_Borders);
-    const TraceRun& r = runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_];
+    const TraceRun& r = display();
     if (r.positions() == 0 || cursor_position_ < 0 || cursor_position_ >= r.positions()) { ImGui::EndChild(); return; }
     const int p = cursor_position_;
     ImGui::Text("Position %d", p);

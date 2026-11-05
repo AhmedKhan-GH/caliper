@@ -642,3 +642,52 @@ TEST_CASE("the playback clock shows the prompt's layers together, then each toke
     CHECK(playback_positions(1e18, 2, 4, 6) == 6);                    // full speed: everything
     CHECK(playback_shows(1e18, 2, 4, 5, -1));
 }
+
+TEST_CASE("slowed down, the Trace pane and the Output reveal a finished generation a layer at a time") {
+    Ui ui;
+    auto hello = ui.request("hello");
+    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"generate", "list_tensors", "show_tensor", "trace"}}});
+    auto list = ui.request("list_tensors");
+    ui.peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
+        Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
+               {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
+    for (int i = 0; i < 3; ++i) ui.frame();
+    ui.activate("Model 3D###caliper.inspector.model3d", "Trace");
+    ui.frame();
+    // The speed slider, moved with the keyboard to its slow end (Shift steps a tenth of the range).
+    ImGuiWindow* trace = ImGui::FindWindowByName(trace_window);
+    REQUIRE(trace != nullptr);
+    ImGui::FocusWindow(trace);
+    ImGui::ActivateItemByID(trace->GetID("##trace.speed"));
+    ui.frame();
+    auto& io = ImGui::GetIO();
+    for (int i = 0; i < 14; ++i) {
+        io.AddKeyEvent(ImGuiMod_Shift, true); io.AddKeyEvent(ImGuiKey_LeftArrow, true); ui.frame();
+        io.AddKeyEvent(ImGuiKey_LeftArrow, false); io.AddKeyEvent(ImGuiMod_Shift, false); ui.frame();
+    }
+    io.AddKeyEvent(ImGuiKey_Enter, true); ui.frame(); io.AddKeyEvent(ImGuiKey_Enter, false); ui.frame();
+    CHECK(ui.captured.find("s per layer") != std::string::npos);
+    // A whole generation arrives at once: two prompt tokens, then three generated ones.
+    ui.activate(inference_window, "Generate");
+    auto run = ui.request("trace");
+    ui.peer.send(Object{{"id", run["id"]}, {"done", false}, {"event", trace_event(0, {1, 2}, 2)}});
+    for (int t = 3; t <= 5; ++t)
+        ui.peer.send(Object{{"id", run["id"]}, {"done", false}, {"event", trace_event(t - 1, {t}, 2)}});
+    ui.peer.reply(run, Object{{"tokens", 3.0}, {"finish_reason", "length"}});
+    for (int i = 0; i < 4; ++i) ui.frame();
+    CHECK(ui.captured.find("Complete") != std::string::npos);           // the computation is done
+    CHECK(ui.captured.find(" w3 w4 w5") == std::string::npos);          // the view is not
+    // Back to full speed: everything shows at once.
+    ImGui::FocusWindow(trace);
+    ImGui::ActivateItemByID(trace->GetID("##trace.speed"));
+    ui.frame();
+    for (int i = 0; i < 14; ++i) {
+        io.AddKeyEvent(ImGuiMod_Shift, true); io.AddKeyEvent(ImGuiKey_RightArrow, true); ui.frame();
+        io.AddKeyEvent(ImGuiKey_RightArrow, false); io.AddKeyEvent(ImGuiMod_Shift, false); ui.frame();
+    }
+    io.AddKeyEvent(ImGuiKey_Enter, true); ui.frame(); io.AddKeyEvent(ImGuiKey_Enter, false); ui.frame();
+    for (int i = 0; i < 3; ++i) ui.frame();
+    CHECK(ui.captured.find("Full speed") != std::string::npos);
+    CHECK(ui.captured.find(" w3 w4 w5") != std::string::npos);
+    CHECK(ui.errors == 0);
+}

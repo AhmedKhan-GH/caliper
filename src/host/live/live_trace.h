@@ -112,7 +112,11 @@ private:
     bool paused_ = false;
     double revealed_ = 1e18;
     int played_ = 0;
-    const TraceRun& display() const { return runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_]; }
+    bool picked_ = false;        // the user chose the run on show (Intact / Intervened)
+    // The run on show: the chosen one, or the other while the chosen one has nothing yet.
+    const TraceRun& display() const {
+        return runs_[shown_].positions() > 0 || runs_[1 - shown_].positions() == 0 ? runs_[shown_] : runs_[1 - shown_];
+    }
     double total_steps(const TraceRun& r) const;
     bool revealed(const TraceRun& r, int position, int layer) const;   // layer -1 is the output row
     int revealed_positions(const TraceRun& r) const;
