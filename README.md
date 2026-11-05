@@ -10,19 +10,17 @@ Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, with
 # 1. Initialize submodules
 git submodule update --init --recursive
 
-# 2. Configure (Windows CUDA)
-cmake -B build -DUSE_CUDA=ON -DUSE_MPS=OFF
+# 2. Configure and build (the applets download LibTorch)
+cmake --preset release
+cmake --build --preset release
 
-# 2. Configure (macOS MPS)
-cmake -B build -DUSE_CUDA=OFF -DUSE_MPS=ON
-
-# 3. Build
-cmake --build build --config Release -j8
-
-# 4. Run
-.\build\caliper.exe          # Windows
-./build/caliper              # macOS
+# 3. Run
+./cmake-build-release/caliper            # macOS
+.\cmake-build-release\caliper.exe        # Windows
 ```
+
+`--preset release-notorch` builds the host without LibTorch or the applets, into
+`cmake-build-notorch/`. The presets need CMake 3.25 or later.
 
 ---
 
@@ -55,13 +53,15 @@ cmake --build build --config Release -j8
 | Option | Default | Description |
 |--------|---------|-------------|
 | `USE_CUDA` | ON (Windows), OFF (macOS) | Enable NVIDIA CUDA support |
-| `USE_MPS` | ON (macOS), OFF (Windows) | Enable Apple Silicon GPU |
+| `CALIPER_WITH_TORCH` | ON | Download and link LibTorch for the applets and adapter tests |
+| `CALIPER_BUILD_APPLETS` | ON | Build `applets/`; forced OFF without LibTorch |
+| `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension |
 | `BUILD_TESTS` | OFF | Build test suite |
 
 **Examples:**
 ```bash
-cmake -B build -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Debug
-cmake -B build -DBUILD_TESTS=ON
+cmake --preset debug -DBUILD_TESTS=ON
+cmake --preset release-notorch
 ```
 
 ---

@@ -1526,7 +1526,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div>
         <div class="label eyebrow">04 · Build</div>
         <h2>Build from source</h2>
-        <p class="muted">CMake 3.18 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
+        <p class="muted">CMake 3.25 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
         <dl class="platforms">
           <dt>macOS</dt><dd>Metal, default · MPS tensors on the GPU</dd>
           <dt>Windows</dt><dd>Vulkan, default · CUDA tensors through external memory</dd>
@@ -1537,14 +1537,12 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <pre><span class="c"># Initialize submodules</span>
 <span class="p">$</span> git submodule update --init --recursive
 
-<span class="c"># Configure (macOS MPS)</span>
-<span class="p">$</span> cmake -B build -DUSE_CUDA=OFF -DUSE_MPS=ON
-
-<span class="c"># Build</span>
-<span class="p">$</span> cmake --build build --config Release -j8
+<span class="c"># Configure and build; the applets download LibTorch</span>
+<span class="p">$</span> cmake --preset release
+<span class="p">$</span> cmake --build --preset release
 
 <span class="c"># Run</span>
-<span class="p">$</span> ./build/caliper</pre>
+<span class="p">$</span> ./cmake-build-release/caliper</pre>
     </div>
   </section>
 
