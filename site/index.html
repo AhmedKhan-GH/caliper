@@ -173,20 +173,14 @@
   pre.code .p { color: var(--bronze); }
   pre.code .c { color: var(--faint); }
   /* The frame traces: one frame as lanes over time, with the line each lane is on and the arrows between them. */
-  /* Use cases: cards grouped by field, each marked with its status. */
-  .uc-group { margin-top: 44px; }
-  .uc-group-title { font: 13px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--bronze); margin: 0 0 16px; font-weight: normal; }
-  .ucs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  .ucs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .uc { display: flex; flex-direction: column; padding: 20px 20px 18px; background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 6px; }
-  .uc h3 { font: 17px/1.3 var(--display); letter-spacing: .08em; text-transform: uppercase; margin: 14px 0 10px; font-weight: normal; }
-  .uc p { color: var(--secondary); font-size: 15px; line-height: 1.6; margin: 0 0 16px; flex: 1; }
-  .uc-uses { font: 12px/1.5 var(--mono); color: var(--faint); }
-  .uc-status { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; font: 11px/1 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--secondary); }
+  /* Use cases: name and status. */
+  .ucs { list-style: none; padding: 0; margin: 30px 0 0; max-width: 720px; border-top: 1px solid var(--rule-faint); }
+  .ucs li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--rule-faint); }
+  .uc-name { font-size: 16px; color: var(--parchment); }
+  .uc-status { display: inline-flex; align-items: center; gap: 8px; font: 11px/1 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--secondary); }
   .uc-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
   .uc-status.s-today::before { background: #3ca99c; }
   .uc-status.s-draft::before { background: var(--bronze); }
-  .uc-status.s-progress::before { background: none; box-shadow: inset 0 0 0 1.5px var(--bronze); }
   .uc-status.s-planned { color: var(--faint); }
   .uc-status.s-planned::before { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
 
@@ -202,8 +196,7 @@
   .platforms dt { font: 12px/1.6 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
   .platforms dd { color: var(--secondary); }
   @media (max-width: 1000px) { .libs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 900px) { .ucs, .ucs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 520px) { .libs, .ucs, .ucs.two { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) { .libs { grid-template-columns: 1fr; } }
   .trace-plate { margin-top: 16px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 14px 22px 8px; }
   .trace-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
   .trace-bar .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
@@ -362,33 +355,13 @@
     <div class="wrap">
       <div class="label eyebrow">01 · Use cases</div>
       <h2>Use cases</h2>
-      <div class="uc-group">
-        <h3 class="uc-group-title">Research</h3>
-        <div class="ucs">
-          <article class="uc"><span class="uc-status s-draft">Draft</span><h3>Read and steer a language model</h3><p>Each layer&#x27;s residual stream read through the Jacobian lens and the logit lens as the model writes, with every full-attention pattern. Ablate J-space, or remove, swap and inject word directions across layers, and compare against the intact run token by token.</p><span class="uc-uses">Trace pane · interventions · MLX model host</span></article>
-          <article class="uc"><span class="uc-status s-draft">Draft</span><h3>Edit weights in place</h3><p>Read, set or zero a row or column, scale a tensor or change single weights at their true position in the matrix, then generate again to see what changed.</p><span class="uc-uses">Tensor pane · request channel</span></article>
-          <article class="uc"><span class="uc-status s-progress">In progress</span><h3>Reproduce interpretability results</h3><p>Induction and previous-token heads in GPT-2 small (Olsson et al., 2022), and a truth direction probed and steered in Qwen2.5-1.5B (Marks and Tegmark, 2024), drawn live from the script that computes them.</p><span class="uc-uses">caliper.show · caliper.points</span></article>
-          <article class="uc"><span class="uc-status s-today">Today</span><h3>Watch training dynamics</h3><p>Weights, activations, gradients and embeddings streamed from a PyTorch loop at 98 to 99 percent of the speed without Caliper: classes separating in a bottleneck, attention heads taking on roles, the loss as it falls.</p><span class="uc-uses">caliper.show · caliper.points · caliper.watch</span></article>
-          <article class="uc"><span class="uc-status s-today">Today</span><h3>Learned models beside the physics</h3><p>A heat twin of a finned housing with the physics and the learned model side by side, plasma fields and million-particle flows drawn as the simulation steps.</p><span class="uc-uses">TwinScope · FieldScope · FlowScope · geometry service</span></article>
-          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Reinforcement learning on a live simulation</h3><p>An actor-critic controller steering the particle-in-cell plasma, with its policy and the field drawn in the same frame.</p><span class="uc-uses">jobs service · geometry service</span></article>
-        </div>
-      </div>
-      <div class="uc-group">
-        <h3 class="uc-group-title">Engineering</h3>
-        <div class="ucs two">
-          <article class="uc"><span class="uc-status s-today">Today</span><h3>Machine telemetry</h3><p>CPU, GPU, memory, thermal, fan and power channels sampled at 10 Hz on macOS and Windows, timestamped on one clock and drawn as strip charts. Dropped samples show as gaps.</p><span class="uc-uses">feed service · PulseScope</span></article>
-          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Sensors and test rigs</h3><p>Serial, UDP and MQTT sources registered beside the machine&#x27;s own channels, so lab instruments, rigs and embedded controllers stream onto the same timeline as the models watching them.</p><span class="uc-uses">feed service</span></article>
-          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Live hardware twins</h3><p>A model that learns a machine&#x27;s response while it runs, starting with this computer&#x27;s utilization-to-temperature response, with measured and predicted drawn side by side.</p><span class="uc-uses">feed service · jobs service · twin pattern</span></article>
-          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Telemetry in native tools</h3><p>The same channels and Caliper views shown inside Compass, a native desktop app, through the embedding API.</p><span class="uc-uses">embedding API · feed service</span></article>
-        </div>
-      </div>
-      <div class="uc-group">
-        <h3 class="uc-group-title">Building on Caliper</h3>
-        <div class="ucs two">
-          <article class="uc"><span class="uc-status s-today">Today</span><h3>Write an instrument</h3><p>A C++ applet trains on the jobs service and hands device tensors to the tensor bridge; the host draws them with ImGui in the same frame, on Metal or on Vulkan with CUDA.</p><span class="uc-uses">applet SDK · tensor bridge</span></article>
-          <article class="uc"><span class="uc-status s-today">Today</span><h3>Embed in another program</h3><p>Five C calls from a program&#x27;s own event loop put a Caliper canvas in an AppKit or Win32 window, running an applet or a single tensor view.</p><span class="uc-uses">embedding API</span></article>
-        </div>
-      </div>
+      <ul class="ucs">
+        <li><span class="uc-name">Training dynamics in PyTorch</span><span class="uc-status s-today">Today</span></li>
+        <li><span class="uc-name">Language model interpretability</span><span class="uc-status s-draft">Draft</span></li>
+        <li><span class="uc-name">Learned models beside simulations</span><span class="uc-status s-today">Today</span></li>
+        <li><span class="uc-name">Machine telemetry</span><span class="uc-status s-today">Today</span></li>
+        <li><span class="uc-name">Sensor and test-rig telemetry</span><span class="uc-status s-planned">Planned</span></li>
+      </ul>
     </div>
   </section>
 
