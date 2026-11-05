@@ -107,13 +107,6 @@
   .link:hover { color: var(--bronze-hover); }
 
   /* The pipeline figure: three cut plates joined by rules. */
-  .pipeline { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: 12px; }
-  .pipeline .join { align-self: center; }
-  .stage { padding: 22px 14px 18px; background: var(--plate); border: 1px solid var(--rule); border-radius: 6px; text-align: center; display: flex; flex-direction: column; justify-content: center; }
-  .stage .caps { display: block; font-size: 12px; letter-spacing: .22em; color: var(--faint); margin-bottom: 10px; }
-  .stage .v { font-size: 16px; color: var(--parchment); word-spacing: .4em; }
-  .join { width: 28px; height: 1px; background: var(--bronze); position: relative; }
-  .join::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3.5px solid transparent; border-left: 6px solid var(--bronze); border-right: 0; }
 
   /* The VRAM-path figures: memory as bands, the data path in bronze, the path not taken faint. */
   .mech-fig { margin: 0 0 72px; }
@@ -180,6 +173,48 @@
   pre.code .p { color: var(--bronze); }
   pre.code .c { color: var(--faint); }
   /* The frame traces: one frame as lanes over time, with the line each lane is on and the arrows between them. */
+  /* Use cases: cards grouped by field, each marked with its status. */
+  .uc-group { margin-top: 44px; }
+  .uc-group-title { font: 13px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--bronze); margin: 0 0 16px; font-weight: normal; }
+  .ucs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .ucs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .uc { display: flex; flex-direction: column; padding: 20px 20px 18px; background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 6px; }
+  .uc h3 { font: 17px/1.3 var(--display); letter-spacing: .08em; text-transform: uppercase; margin: 14px 0 10px; font-weight: normal; }
+  .uc p { color: var(--secondary); font-size: 15px; line-height: 1.6; margin: 0 0 16px; flex: 1; }
+  .uc-uses { font: 12px/1.5 var(--mono); color: var(--faint); }
+  .uc-status { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; font: 11px/1 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--secondary); }
+  .uc-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .uc-status.s-today::before { background: #3ca99c; }
+  .uc-status.s-draft::before { background: var(--bronze); }
+  .uc-status.s-progress::before { background: none; box-shadow: inset 0 0 0 1.5px var(--bronze); }
+  .uc-status.s-planned { color: var(--faint); }
+  .uc-status.s-planned::before { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
+
+  /* Libraries: a card per project, filtered by group. */
+  .lib-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 30px 0 22px; }
+  .lib-filter { appearance: none; display: inline-flex; align-items: center; gap: 9px; padding: 8px 13px 7px; border: 1px solid var(--rule); border-radius: 4px;
+                background: var(--plate); color: var(--secondary); font: 12px/1 var(--display); letter-spacing: .16em; text-transform: uppercase; cursor: pointer; }
+  .lib-filter .count { font: 11px/1 var(--mono); letter-spacing: 0; color: var(--faint); }
+  .lib-filter:hover { background: var(--plate-hover); color: var(--parchment); }
+  .lib-filter[aria-pressed="true"] { border-color: var(--bronze); color: var(--parchment); }
+  .lib-filter[aria-pressed="true"] .count { color: var(--bronze); }
+  .libs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .lib { display: grid; grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: auto auto 1fr auto; column-gap: 14px; padding: 16px 16px 14px;
+         background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 6px; transition: border-color .15s, background .15s; }
+  .lib:hover { border-color: var(--rule); background: var(--plate-hover); }
+  .lib[hidden] { display: none; }
+  .lib img { grid-row: 1 / 3; width: 40px; height: 40px; border-radius: 8px; background: #f2eee6; }
+  .lib-name { font-size: 15.5px; line-height: 1.3; color: var(--parchment); align-self: end; }
+  .lib-repo { font: 11.5px/1.5 var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-use { grid-column: 1 / -1; font-size: 14px; line-height: 1.5; color: var(--secondary); margin-top: 12px; }
+  .lib-pin { grid-column: 1 / -1; font: 11.5px/1.4 var(--mono); color: var(--faint); margin-top: 10px; }
+  .platforms { display: grid; grid-template-columns: 6.5em 1fr; margin: 4px 0 20px; border-top: 1px solid var(--rule-faint); }
+  .platforms dt, .platforms dd { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--rule-faint); font-size: 15px; }
+  .platforms dt { font: 12px/1.6 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
+  .platforms dd { color: var(--secondary); }
+  @media (max-width: 1000px) { .libs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 900px) { .ucs, .ucs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .libs, .ucs, .ucs.two { grid-template-columns: 1fr; } }
   .trace-plate { margin-top: 16px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 14px 22px 8px; }
   .trace-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
   .trace-bar .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
@@ -238,20 +273,8 @@
   @media (max-width: 720px) { .trace-plate { padding: 12px 14px 6px; } .tb-note { margin-left: 0; } }
 
   /* Cards */
-  .cards { display: grid; gap: 16px; }
-  .cards.two-up { grid-template-columns: 1fr 1fr; }
-  .cards.three-up { grid-template-columns: repeat(3, 1fr); }
-  .card { padding: 28px 28px 24px; background: var(--plate); border: 1px solid var(--rule); border-radius: 6px; }
-  .card .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
-  .card h3 { font: 20px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0 0 14px; font-weight: normal; }
-  .card p { color: var(--secondary); font-size: 16px; }
-  .card .step { font: 34px/1 var(--display); color: var(--rule); margin-bottom: 18px; }
 
   /* Booktabs table: no vertical rules, a faint top and bottom, a ruled head. */
-  table { width: 100%; border-collapse: collapse; font-size: 16px; }
-  table { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-  th { text-align: left; font: 12px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--faint); padding: 14px 16px 12px 0; border-bottom: 1px solid var(--rule); font-weight: normal; }
-  td { padding: 13px 16px 12px 0; border-bottom: 1px solid var(--rule-faint); color: var(--secondary); vertical-align: top; }
   td:first-child { color: var(--parchment); white-space: nowrap; }
   tr:last-child td { border-bottom: 0; }
 
@@ -272,10 +295,7 @@
   footer a:hover { color: var(--parchment); }
 
   @media (max-width: 900px) {
-    .two, .cards.two-up, .cards.three-up, .mech-head, .code-grid { grid-template-columns: 1fr; gap: 28px; }
-    .pipeline { grid-template-columns: 1fr; }
-    .join { width: 1px; height: 22px; margin: 0 auto; }
-    .join::after { right: -3px; top: auto; bottom: -1px; border: 3.5px solid transparent; border-top: 6px solid var(--bronze); border-bottom: 0; }
+    .two, .mech-head, .code-grid { grid-template-columns: 1fr; gap: 28px; }
     nav .links { display: none; }
     nav .btn { margin-left: auto; }
   }
@@ -292,8 +312,9 @@
   <div class="wrap">
     <a class="brand" href="#top"><img src="assets/caliper-mark.svg" alt=""><span>CALIPER</span></a>
     <div class="links">
-      <a href="#pipeline">Pipeline</a>
-      <a href="#inspector">Inspector</a>
+      <a href="#use-cases">Use cases</a>
+      <a href="#backends">Backends</a>
+      <a href="#libraries">Libraries</a>
       <a href="#build">Build</a>
       <a href="docs/">Documentation</a>
     </div>
@@ -328,7 +349,7 @@
   <div class="wrap">
     <img class="hero-mark" src="assets/caliper-mark.svg" alt="Caliper">
     <h1>Caliper</h1>
-    <p class="tagline">Zero-copy tensor machine learning visualization framework</p>
+    <p class="tagline">Machine learning visualization framework</p>
     <p class="lede">Caliper validates supported MPS and CUDA tensor inputs, then uses Metal or Vulkan to colormap or blit them into live ImGui textures. Imported geometry is drawn from the same device-resident allocation system.</p>
     <div class="actions">
       <a class="btn btn-primary cut" href="docs/">Documentation</a>
@@ -348,21 +369,37 @@
 </header>
 
 <main>
-  <section id="pipeline">
-    <div class="wrap two">
-      <div>
-        <div class="label eyebrow">01 · Frame path</div>
-        <h2>Tensor views stay inside the frame loop</h2>
-        <p class="muted">For supported inputs on native backends, Caliper hands tensor storage to the renderer without a host-memory round trip. Colormap and blit work remain on the GPU, and ImGui receives the resulting texture in the same frame.</p>
-        <p class="muted">Curve and scatter coordinates may still use small CPU arrays. The device-resident paths cover accepted dense textures and geometry drawn from imported allocations.</p>
-        <a class="link" href="docs/reference/services/tensor-bridge-v1/">Tensor bridge reference →</a>
+  <section id="use-cases">
+    <div class="wrap">
+      <div class="label eyebrow">01 · Use cases</div>
+      <h2>Research and engineering use cases</h2>
+      <p class="intro">What Caliper is used for now, and what it is being built toward.</p>
+      <div class="uc-group">
+        <h3 class="uc-group-title">Research</h3>
+        <div class="ucs">
+          <article class="uc"><span class="uc-status s-draft">Draft</span><h3>Read and steer a language model</h3><p>Each layer&#x27;s residual stream read through the Jacobian lens and the logit lens as the model writes, with every full-attention pattern. Ablate J-space, or remove, swap and inject word directions across layers, and compare against the intact run token by token.</p><span class="uc-uses">Trace pane · interventions · MLX model host</span></article>
+          <article class="uc"><span class="uc-status s-draft">Draft</span><h3>Edit weights in place</h3><p>Read, set or zero a row or column, scale a tensor or change single weights at their true position in the matrix, then generate again to see what changed.</p><span class="uc-uses">Tensor pane · request channel</span></article>
+          <article class="uc"><span class="uc-status s-progress">In progress</span><h3>Reproduce interpretability results</h3><p>Induction and previous-token heads in GPT-2 small (Olsson et al., 2022), and a truth direction probed and steered in Qwen2.5-1.5B (Marks and Tegmark, 2024), drawn live from the script that computes them.</p><span class="uc-uses">caliper.show · caliper.points</span></article>
+          <article class="uc"><span class="uc-status s-today">Today</span><h3>Watch training dynamics</h3><p>Weights, activations, gradients and embeddings streamed from a PyTorch loop at 98 to 99 percent of the speed without Caliper: classes separating in a bottleneck, attention heads taking on roles, the loss as it falls.</p><span class="uc-uses">caliper.show · caliper.points · caliper.watch</span></article>
+          <article class="uc"><span class="uc-status s-today">Today</span><h3>Learned models beside the physics</h3><p>A heat twin of a finned housing with the physics and the learned model side by side, plasma fields and million-particle flows drawn as the simulation steps.</p><span class="uc-uses">TwinScope · FieldScope · FlowScope · geometry service</span></article>
+          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Reinforcement learning on a live simulation</h3><p>An actor-critic controller steering the particle-in-cell plasma, with its policy and the field drawn in the same frame.</p><span class="uc-uses">jobs service · geometry service</span></article>
+        </div>
       </div>
-      <div class="pipeline" role="img" aria-label="Tensor input (MPS, CUDA) to GPU path (Metal, Vulkan) to frame output (ImGui, ImPlot, ImPlot3D)">
-        <div class="stage"><span class="caps">Tensor input</span><span class="v">MPS CUDA</span></div>
-        <div class="join"></div>
-        <div class="stage"><span class="caps">GPU path</span><span class="v">Metal Vulkan</span></div>
-        <div class="join"></div>
-        <div class="stage"><span class="caps">Frame output</span><span class="v">ImGui ImPlot ImPlot3D</span></div>
+      <div class="uc-group">
+        <h3 class="uc-group-title">Engineering</h3>
+        <div class="ucs two">
+          <article class="uc"><span class="uc-status s-today">Today</span><h3>Machine telemetry</h3><p>CPU, GPU, memory, thermal, fan and power channels sampled at 10 Hz on macOS and Windows, timestamped on one clock and drawn as strip charts. Dropped samples show as gaps.</p><span class="uc-uses">feed service · PulseScope</span></article>
+          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Sensors and test rigs</h3><p>Serial, UDP and MQTT sources registered beside the machine&#x27;s own channels, so lab instruments, rigs and embedded controllers stream onto the same timeline as the models watching them.</p><span class="uc-uses">feed service</span></article>
+          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Live hardware twins</h3><p>A model that learns a machine&#x27;s response while it runs, starting with this computer&#x27;s utilization-to-temperature response, with measured and predicted drawn side by side.</p><span class="uc-uses">feed service · jobs service · twin pattern</span></article>
+          <article class="uc"><span class="uc-status s-planned">Planned</span><h3>Telemetry in native tools</h3><p>The same channels and Caliper views shown inside Compass, a native desktop app, through the embedding API.</p><span class="uc-uses">embedding API · feed service</span></article>
+        </div>
+      </div>
+      <div class="uc-group">
+        <h3 class="uc-group-title">Building on Caliper</h3>
+        <div class="ucs two">
+          <article class="uc"><span class="uc-status s-today">Today</span><h3>Write an instrument</h3><p>A C++ applet trains on the jobs service and hands device tensors to the tensor bridge; the host draws them with ImGui in the same frame, on Metal or on Vulkan with CUDA.</p><span class="uc-uses">applet SDK · tensor bridge</span></article>
+          <article class="uc"><span class="uc-status s-today">Today</span><h3>Embed in another program</h3><p>Five C calls from a program&#x27;s own event loop put a Caliper canvas in an AppKit or Win32 window, running an applet or a single tensor view.</p><span class="uc-uses">embedding API</span></article>
+        </div>
       </div>
     </div>
   </section>
@@ -1414,61 +1451,57 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
     </div>
   </section>
 
-  <section id="processing">
+  <section id="libraries">
     <div class="wrap">
-      <div class="label eyebrow">03 · Processing pipeline</div>
-      <h2>How input becomes a rendered view</h2>
-      <p class="intro">A DLPack-aligned descriptor carries the device, type, shape, strides, and optional stream. Caliper validates that descriptor before selecting the active renderer path.</p>
-      <div class="cards three-up">
-        <div class="card"><div class="step">1</div><h3>Validate the descriptor</h3>
-          <p>Checks device compatibility, data type, dimensions, layout, and byte extent before renderer access. Unsupported inputs are rejected rather than reinterpreted.</p></div>
-        <div class="card"><div class="step">2</div><h3>Process device memory</h3>
-          <p>Accepted 2-D f32 data runs through a LUT colormap; accepted RGBA8 data uses a blit path. Metal and Vulkan perform this work on the GPU.</p></div>
-        <div class="card"><div class="step">3</div><h3>Present and update</h3>
-          <p>The renderer exposes an opaque texture ID to ImGui, updates the same resource for matching shape and type, and releases it on the frame thread.</p></div>
+      <div class="label eyebrow">03 · Libraries</div>
+      <h2>Libraries</h2>
+      <p class="intro">The open-source projects and system APIs Caliper is built on. Each card links to its repository.</p>
+      <div class="lib-filters" role="group" aria-label="Filter libraries"><button type="button" class="lib-filter" data-group="all" aria-pressed="true">All<span class="count">29</span></button><button type="button" class="lib-filter" data-group="interface" aria-pressed="false">Interface<span class="count">6</span></button><button type="button" class="lib-filter" data-group="graphics" aria-pressed="false">Graphics<span class="count">6</span></button><button type="button" class="lib-filter" data-group="data" aria-pressed="false">Data<span class="count">6</span></button><button type="button" class="lib-filter" data-group="ml" aria-pressed="false">Machine learning<span class="count">4</span></button><button type="button" class="lib-filter" data-group="tooling" aria-pressed="false">Build and tooling<span class="count">7</span></button></div>
+      <div class="libs">
+        <a class="lib" data-group="interface" href="https://github.com/ocornut/imgui"><img src="assets/libs/ocornut.png" alt="" width="40" height="40"><span class="lib-name">Dear ImGui</span><span class="lib-repo">ocornut/imgui</span><span class="lib-use">Every panel, in the app and in applets</span><span class="lib-pin">MIT · 1.92.9 WIP</span></a>
+        <a class="lib" data-group="interface" href="https://github.com/epezent/implot"><img src="assets/libs/epezent.png" alt="" width="40" height="40"><span class="lib-name">ImPlot</span><span class="lib-repo">epezent/implot</span><span class="lib-use">Plots: loss curves, series, histograms</span><span class="lib-pin">MIT · 0.18 WIP</span></a>
+        <a class="lib" data-group="interface" href="https://github.com/brenocq/implot3d"><img src="assets/libs/brenocq.png" alt="" width="40" height="40"><span class="lib-name">ImPlot3D</span><span class="lib-repo">brenocq/implot3d</span><span class="lib-use">3-D point clouds and fallback geometry</span><span class="lib-pin">MIT · 0.4</span></a>
+        <a class="lib" data-group="interface" href="https://github.com/glfw/glfw"><img src="assets/libs/glfw.png" alt="" width="40" height="40"><span class="lib-name">GLFW</span><span class="lib-repo">glfw/glfw</span><span class="lib-use">Windows, input and the event loop</span><span class="lib-pin">zlib · 3.5.0</span></a>
+        <a class="lib" data-group="interface" href="https://github.com/IBM/plex"><img src="assets/libs/ibm.png" alt="" width="40" height="40"><span class="lib-name">IBM Plex Sans Condensed</span><span class="lib-repo">IBM/plex</span><span class="lib-use">Interface type</span><span class="lib-pin">OFL 1.1 · 1.3</span></a>
+        <a class="lib" data-group="interface" href="https://github.com/adobe-fonts/source-code-pro"><img src="assets/libs/adobe-fonts.png" alt="" width="40" height="40"><span class="lib-name">Source Code Pro</span><span class="lib-repo">adobe-fonts/source-code-pro</span><span class="lib-use">Monospace type</span><span class="lib-pin">OFL 1.1 · 2.042</span></a>
+        <a class="lib" data-group="graphics" href="https://developer.apple.com/metal/"><img src="assets/libs/apple.png" alt="" width="40" height="40"><span class="lib-name">Metal</span><span class="lib-repo">developer.apple.com/metal</span><span class="lib-use">The macOS renderer: compute colormap, shared events</span><span class="lib-pin">System framework</span></a>
+        <a class="lib" data-group="graphics" href="https://github.com/KhronosGroup/Vulkan-Headers"><img src="assets/libs/khronosgroup.png" alt="" width="40" height="40"><span class="lib-name">Vulkan-Headers</span><span class="lib-repo">KhronosGroup/Vulkan-Headers</span><span class="lib-use">The Windows renderer&#x27;s API</span><span class="lib-pin">SDK 1.3.290.0</span></a>
+        <a class="lib" data-group="graphics" href="https://github.com/zeux/volk"><img src="assets/libs/zeux.png" alt="" width="40" height="40"><span class="lib-name">volk</span><span class="lib-repo">zeux/volk</span><span class="lib-use">Loads Vulkan at run time, no SDK needed</span><span class="lib-pin">SDK 1.3.290.0</span></a>
+        <a class="lib" data-group="graphics" href="https://github.com/KhronosGroup/glslang"><img src="assets/libs/khronosgroup.png" alt="" width="40" height="40"><span class="lib-name">glslang</span><span class="lib-repo">KhronosGroup/glslang</span><span class="lib-use">Compiles the colormap shader to SPIR-V at build time</span><span class="lib-pin">SDK 1.3.290.0</span></a>
+        <a class="lib" data-group="graphics" href="https://docs.nvidia.com/cuda/cuda-driver-api/"><img src="assets/libs/nvidia.png" alt="" width="40" height="40"><span class="lib-name">CUDA driver API</span><span class="lib-repo">docs.nvidia.com/cuda</span><span class="lib-use">Imports Vulkan memory and semaphores; loaded from the driver</span><span class="lib-pin">System library</span></a>
+        <a class="lib" data-group="graphics" href="https://github.com/nigels-com/glew"><img src="assets/libs/nigels-com.png" alt="" width="40" height="40"><span class="lib-name">GLEW</span><span class="lib-repo">nigels-com/glew</span><span class="lib-use">OpenGL loader for the fallback renderer</span><span class="lib-pin">BSD / MIT · 2.3.1</span></a>
+        <a class="lib" data-group="data" href="https://github.com/duckdb/duckdb"><img src="assets/libs/duckdb.png" alt="" width="40" height="40"><span class="lib-name">DuckDB</span><span class="lib-repo">duckdb/duckdb</span><span class="lib-use">Metrics, artifacts and SQL data stores</span><span class="lib-pin">MIT · 1.5.2</span></a>
+        <a class="lib" data-group="data" href="https://arrow.apache.org/docs/format/CDataInterface.html"><img src="assets/libs/apache.png" alt="" width="40" height="40"><span class="lib-name">Arrow C Data Interface</span><span class="lib-repo">arrow.apache.org</span><span class="lib-use">Table exchange for the data service</span><span class="lib-pin">Specification</span></a>
+        <a class="lib" data-group="data" href="https://github.com/dmlc/dlpack"><img src="assets/libs/dmlc.png" alt="" width="40" height="40"><span class="lib-name">DLPack</span><span class="lib-repo">dmlc/dlpack</span><span class="lib-use">The tensor descriptor the Python package exchanges with torch</span><span class="lib-pin">Apache-2.0 · 0.8</span></a>
+        <a class="lib" data-group="data" href="https://github.com/marzer/tomlplusplus"><img src="assets/libs/marzer.png" alt="" width="40" height="40"><span class="lib-name">toml++</span><span class="lib-repo">marzer/tomlplusplus</span><span class="lib-use">Applet manifests</span><span class="lib-pin">3.4.0</span></a>
+        <a class="lib" data-group="data" href="https://github.com/nothings/stb"><img src="assets/libs/nothings.png" alt="" width="40" height="40"><span class="lib-name">stb</span><span class="lib-repo">nothings/stb</span><span class="lib-use">PNG export</span><span class="lib-pin">Public domain</span></a>
+        <a class="lib" data-group="data" href="https://github.com/thedmd/imgui-node-editor"><img src="assets/libs/thedmd.png" alt="" width="40" height="40"><span class="lib-name">crude_json</span><span class="lib-repo">thedmd/imgui-node-editor</span><span class="lib-use">The live inspector&#x27;s request channel</span><span class="lib-pin">Public domain · patched</span></a>
+        <a class="lib" data-group="ml" href="https://github.com/pytorch/pytorch"><img src="assets/libs/pytorch.png" alt="" width="40" height="40"><span class="lib-name">PyTorch</span><span class="lib-repo">pytorch/pytorch</span><span class="lib-use">LibTorch in applets; torch tensors in the Python package</span><span class="lib-pin">LibTorch 2.5.1</span></a>
+        <a class="lib" data-group="ml" href="https://github.com/ml-explore/mlx-lm"><img src="assets/libs/ml-explore.png" alt="" width="40" height="40"><span class="lib-name">MLX LM</span><span class="lib-repo">ml-explore/mlx-lm</span><span class="lib-use">Runs the model host for the inspector</span><span class="lib-pin">0.32.2 · optional</span></a>
+        <a class="lib" data-group="ml" href="https://github.com/numpy/numpy"><img src="assets/libs/numpy.png" alt="" width="40" height="40"><span class="lib-name">NumPy</span><span class="lib-repo">numpy/numpy</span><span class="lib-use">Array results from the Python package</span></a>
+        <a class="lib" data-group="ml" href="https://github.com/ggml-org/llama.cpp"><img src="assets/libs/ggml-org.png" alt="" width="40" height="40"><span class="lib-name">llama.cpp</span><span class="lib-repo">ggml-org/llama.cpp</span><span class="lib-use">GGUF inference for the archived OpenGLlama applet</span><span class="lib-pin">MIT · opt-in build</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/wjakob/nanobind"><img src="assets/libs/wjakob.png" alt="" width="40" height="40"><span class="lib-name">nanobind</span><span class="lib-repo">wjakob/nanobind</span><span class="lib-use">Python bindings for the native module</span><span class="lib-pin">2 or later</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/scikit-build/scikit-build-core"><img src="assets/libs/scikit-build.png" alt="" width="40" height="40"><span class="lib-name">scikit-build-core</span><span class="lib-repo">scikit-build/scikit-build-core</span><span class="lib-use">Builds the Python wheel with CMake</span><span class="lib-pin">0.10 or later</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/curl/curl"><img src="assets/libs/curl.png" alt="" width="40" height="40"><span class="lib-name">libcurl</span><span class="lib-repo">curl/curl</span><span class="lib-use">Dataset downloads in GPTScope and EmbedScope</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/madler/zlib"><img src="assets/libs/madler.png" alt="" width="40" height="40"><span class="lib-name">zlib</span><span class="lib-repo">madler/zlib</span><span class="lib-use">MNIST decompression</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/doctest/doctest"><img src="assets/libs/doctest.png" alt="" width="40" height="40"><span class="lib-name">doctest</span><span class="lib-repo">doctest/doctest</span><span class="lib-use">C++ unit tests</span><span class="lib-pin">2.4.11</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/pytest-dev/pytest"><img src="assets/libs/pytest-dev.png" alt="" width="40" height="40"><span class="lib-name">pytest</span><span class="lib-repo">pytest-dev/pytest</span><span class="lib-use">Python tests</span></a>
+        <a class="lib" data-group="tooling" href="https://github.com/squidfunk/mkdocs-material"><img src="assets/libs/squidfunk.png" alt="" width="40" height="40"><span class="lib-name">Material for MkDocs</span><span class="lib-repo">squidfunk/mkdocs-material</span><span class="lib-use">The documentation site</span></a>
       </div>
-    </div>
-  </section>
-
-  <section id="inspector">
-    <div class="wrap">
-      <div class="label eyebrow">04 · Inspector</div>
-      <h2>Inspect a local language model</h2>
-      <p class="intro">Attach to a running model host and read, edit and trace a model in place.</p>
-      <table>
-        <thead><tr><th>Pane</th><th>What it shows</th></tr></thead>
-        <tbody>
-          <tr><td>Model</td><td>Every parameter by layer, with shape and size</td></tr>
-          <tr><td>Model 3D</td><td>All tensors as panels at their true proportions, the embedding folded into equal row blocks</td></tr>
-          <tr><td>Tensor</td><td>A tensor at its true shape, zoomed continuously from the whole matrix to single editable weights</td></tr>
-          <tr><td>Trace</td><td>Each layer read through the Jacobian lens and the logit lens as the model writes, with attention patterns and a playback clock</td></tr>
-          <tr><td>Interventions</td><td>J-space ablation, removed, swapped and injected word directions, compared against the intact run</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section id="status">
-    <div class="wrap">
-      <div class="label eyebrow">05 · Backend status</div>
-      <h2>Backend status</h2>
-      <table>
-        <thead><tr><th>Platform</th><th>Renderer</th><th>Tensor path</th></tr></thead>
-        <tbody>
-          <tr><td>macOS</td><td>Metal, default</td><td>GPU-resident MPS tensor path</td></tr>
-          <tr><td>Windows</td><td>Vulkan, default</td><td>CUDA external-memory interop</td></tr>
-          <tr><td>Fallback</td><td>OpenGL 3.3 core</td><td>CPU-staged tensor upload</td></tr>
-        </tbody>
-      </table>
     </div>
   </section>
 
   <section id="build">
     <div class="wrap two">
       <div>
-        <div class="label eyebrow">06 · Build</div>
+        <div class="label eyebrow">04 · Build</div>
         <h2>Build from source</h2>
         <p class="muted">CMake 3.18 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
+        <dl class="platforms">
+          <dt>macOS</dt><dd>Metal, default · MPS tensors on the GPU</dd>
+          <dt>Windows</dt><dd>Vulkan, default · CUDA tensors through external memory</dd>
+          <dt>Fallback</dt><dd>OpenGL 3.3 core · CPU-staged upload</dd>
+        </dl>
         <a class="link" href="https://github.com/AhmedKhan-GH/caliper#prerequisites">Prerequisites →</a>
       </div>
 <pre><span class="c"># Initialize submodules</span>
@@ -1506,6 +1539,16 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   </div>
 </footer>
 
+<script>
+// The library filter.
+(() => {
+  const filters = [...document.querySelectorAll(".lib-filter")], libs = [...document.querySelectorAll(".lib")];
+  filters.forEach(f => f.addEventListener("click", () => {
+    filters.forEach(x => x.setAttribute("aria-pressed", x === f));
+    libs.forEach(l => { l.hidden = f.dataset.group !== "all" && l.dataset.group !== f.dataset.group; });
+  }));
+})();
+</script>
 <script>
 // The frame traces: play each one, fill in what every lane is doing and the line it is on, and light those lines
 // in the code panels of that backend.
