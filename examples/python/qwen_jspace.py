@@ -186,6 +186,13 @@ def attention_weights(attention, x, cache, offset):
     return mx.softmax(scores, axis=-1)[0]
 
 
+def end_ban(mx, vocabulary, eos):
+    """Added to logits, makes the end tokens impossible: 0 everywhere but -inf at each of eos."""
+    ban = np.zeros(vocabulary, dtype=np.float32)
+    ban[sorted(eos)] = -np.inf
+    return mx.array(ban)
+
+
 def project_out(mx, x, V):
     """x minus its projection onto the span of V's columns: x - V V^+ x."""
     pinv = mx.linalg.pinv(V, stream=mx.cpu)
@@ -207,13 +214,15 @@ BATCHED_READOUT_BYTES = 256 * 1024 * 1024   # logits read out in one unembedding
 
 
 def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, emit, cancelled, eos,
-          attention=False):
+          attention=False, run_to_max=False):
     """Run tokens through the model and generate, emitting the lens grid as it goes.
 
     Every event covers positions first .. first + count - 1 (prompt is the prompt's length): their token ids, and
     for each position and source layer the top k tokens of the J-lens (jlens, jprob) and of the plain logit lens
     (logit, lprob), then the model's own top k at that position (output, oprob). Ids are flat, position-major,
     then layer, then rank. words maps every id not yet sent in this trace to its text.
+
+    run_to_max bans the end tokens (eos), so the model writes until max_new_tokens.
 
     With attention, each event also carries the attention patterns of the full-attention layers
     (attention_layers): for each of its positions, layer and head, the softmax weights over the keys (the first
@@ -314,11 +323,14 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
 
     count, finish = 0, "length"
     position = len(tokens)
+    banned = end_ban(mx, js.text.embed_tokens.weight.shape[0], eos) if run_to_max else None
     for _ in range(max_new_tokens):
         if cancelled.is_set():
             finish = "cancelled"
             break
         last = logits[:, -1, :].astype(mx.float32)
+        if banned is not None:
+            last = last + banned
         token = int(sampler(last - mx.logsumexp(last, axis=-1, keepdims=True)).item())
         if token in eos:
             finish = "stop"

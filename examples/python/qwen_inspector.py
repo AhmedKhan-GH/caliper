@@ -455,8 +455,9 @@ class Inspector:
         k = integer(request, "k", 5, low=1, high=10)
         seed = integer(request, "seed", 0, high=2**31 - 1)
         attention = request.get("attention", False)
-        if type(attention) is not bool:
-            raise ValueError("attention must be true or false")
+        run_to_max = request.get("run_to_max", False)
+        if type(attention) is not bool or type(run_to_max) is not bool:
+            raise ValueError("attention and run_to_max must be true or false")
         changes = self.interventions(request)
         # One seed for every run, so an intervened run samples like the intact one until their
         # distributions differ.
@@ -465,7 +466,7 @@ class Inspector:
             return trace(self.jspace, self.tokenizer, tokens, max_new_tokens=max_tokens,
                          sampler=make_sampler(temp=temperature, top_p=top_p, top_k=top_k), k=k,
                          interventions=changes, emit=emit, cancelled=cancelled,
-                         eos=set(self.tokenizer.eos_token_ids), attention=attention)
+                         eos=set(self.tokenizer.eos_token_ids), attention=attention, run_to_max=run_to_max)
         finally:
             self.mx.clear_cache()
 
@@ -478,6 +479,16 @@ class Inspector:
         top_p = number(request, "top_p", 0.9, low=0, high=1)
         top_k = integer(request, "top_k", 20, high=1000)
         tokens = self.chat_tokens(request)
+        run_to_max = request.get("run_to_max", False)
+        if type(run_to_max) is not bool:
+            raise ValueError("run_to_max must be true or false")
+        processors = []
+        if run_to_max:
+            # The end tokens banned, the model writes until max_new_tokens.
+            from qwen_jspace import end_ban
+            banned = end_ban(self.mx, self.model.language_model.model.embed_tokens.weight.shape[0],
+                             set(self.tokenizer.eos_token_ids))
+            processors = [lambda _, logits: logits + banned]
         if cancelled.is_set():
             return dict(tokens=0, tokens_per_second=0.0, cancelled=True)
 
@@ -490,7 +501,7 @@ class Inspector:
         # take effect on both prompt processing and decoding immediately.
         generated = stream_generate(
             self.model, self.tokenizer, tokens, max_tokens=max_tokens,
-            sampler=make_sampler(temp=temperature, top_p=top_p, top_k=top_k),
+            sampler=make_sampler(temp=temperature, top_p=top_p, top_k=top_k), logits_processors=processors,
             prefill_step_size=128, prompt_progress_callback=progress)
         try:
             for response in generated:

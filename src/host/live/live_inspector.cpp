@@ -251,7 +251,7 @@ struct Inspector::Impl {
     char prompt[16384] = "Write one sentence about the Moon.";
     int max_new_tokens = 128, top_k = 40;
     float temperature = 0.7f, top_p = 0.9f;
-    bool thinking = false;
+    bool thinking = false, run_to_max = false;
     int tokens = 0;
     double tokens_per_second = 0;
 
@@ -677,7 +677,7 @@ struct Inspector::Impl {
     void generate() {
         Object settings{{"prompt", prompt}, {"max_new_tokens", static_cast<double>(max_new_tokens)},
                         {"temperature", static_cast<double>(temperature)}, {"top_p", static_cast<double>(top_p)},
-                        {"top_k", static_cast<double>(top_k)}, {"thinking", thinking}};
+                        {"top_k", static_cast<double>(top_k)}, {"thinking", thinking}, {"run_to_max", run_to_max}};
         if (supports("trace")) {
             const auto ask = trace_pane.generate(settings);
             if (send("trace", ask.fields, ask.run == 1 ? "intervened" : "intact")) {
@@ -742,6 +742,10 @@ struct Inspector::Impl {
             ImGui::InputInt("##top_k", &top_k, 0, 0);
             top_k = std::clamp(top_k, 0, 1000);
             ImGui::Checkbox("Thinking", &thinking);
+            ImGui::SameLine(0, style.ItemSpacing.x * 3);
+            ImGui::Checkbox("Run to max tokens", &run_to_max);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Bans the end-of-turn tokens, so the model writes until Max new tokens");
             ImGui::Spacing();
             ImGui::BeginDisabled(!can_control() || prompt[0] == '\0');
             if (sternbild::primary_button("Generate")) generate();

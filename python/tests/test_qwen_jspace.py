@@ -230,3 +230,23 @@ def test_trace_streams_the_attention_patterns_of_full_attention_layers(space):
     gate = mx.split(attn.q_proj(x).reshape(1, len(tokens), attn.num_attention_heads, -1), 2, axis=-1)[1]
     mine = attn.o_proj(out * mx.sigmoid(gate.reshape(1, len(tokens), -1)))
     assert np.abs(f64(mine) - f64(fused)).max() <= 0.02 * np.abs(f64(fused)).max()
+
+
+def test_run_to_max_bans_the_end_tokens(space):
+    from mlx_lm.sample_utils import make_sampler
+    _, js = space
+    tokens = list(range(1, 9))
+    events = []
+    trace(js, Tokenizer(), tokens, max_new_tokens=6, sampler=make_sampler(temp=0.0), k=2, interventions=[],
+          emit=events.append, cancelled=threading.Event(), eos=set())
+    first = events[1]["tokens"][0]                    # the greedy first token
+    # With that token as the end, the run stops at once; banned, it writes all six.
+    events.clear()
+    stopped = trace(js, Tokenizer(), tokens, max_new_tokens=6, sampler=make_sampler(temp=0.0), k=2,
+                    interventions=[], emit=events.append, cancelled=threading.Event(), eos={first})
+    assert stopped["tokens"] == 0 and stopped["finish_reason"] == "stop"
+    events.clear()
+    full = trace(js, Tokenizer(), tokens, max_new_tokens=6, sampler=make_sampler(temp=0.0), k=2,
+                 interventions=[], emit=events.append, cancelled=threading.Event(), eos={first}, run_to_max=True)
+    assert full["tokens"] == 6 and full["finish_reason"] == "length"
+    assert first not in [e["tokens"][0] for e in events[1:]]
