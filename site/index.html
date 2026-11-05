@@ -190,22 +190,13 @@
   .uc-status.s-planned { color: var(--faint); }
   .uc-status.s-planned::before { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
 
-  /* Libraries: a card per core library, with a line where Caliper calls it. */
-  .libs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .lib { display: grid; grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: auto auto auto 1fr auto; column-gap: 14px; padding: 16px 16px 14px;
-         background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 6px; }
-  .lib img { grid-row: 1 / 3; width: 40px; height: 40px; border-radius: 8px; background: #f2eee6; }
-  .lib-name { font-size: 15.5px; line-height: 1.3; color: var(--parchment); align-self: end; }
-  .lib-name:hover { color: var(--bronze-hover); }
+  /* Libraries: logo, name and repository. */
+  .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
+  .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
+  .libs img { grid-row: 1 / 3; align-self: center; width: 28px; height: 28px; border-radius: 6px; background: #f2eee6; }
+  .lib-name { font-size: 15px; line-height: 1.3; color: var(--parchment); }
   .lib-repo { font: 11.5px/1.5 var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lib-use { grid-column: 1 / -1; font-size: 14px; line-height: 1.5; color: var(--secondary); margin-top: 12px; }
-  .lib-code { grid-column: 1 / -1; align-self: start; display: block; margin-top: 12px; padding: 9px 11px 8px; background: var(--deep);
-              border: 1px solid var(--rule-faint); border-radius: 4px; }
-  .lib-code code { display: block; font: 11.5px/1.55 var(--mono); color: var(--secondary); overflow-wrap: anywhere; }
-  .lib-where { display: block; margin-top: 6px; font: 11px/1.3 var(--mono); color: var(--faint); }
-  .lib-code:hover { border-color: var(--rule); }
-  .lib-code:hover .lib-where { color: var(--bronze); }
-  .lib-pin { grid-column: 1 / -1; font: 11.5px/1.4 var(--mono); color: var(--faint); margin-top: 12px; }
+  .libs a:hover .lib-name { color: var(--bronze-hover); }
   .platforms { display: grid; grid-template-columns: 6.5em 1fr; margin: 4px 0 20px; border-top: 1px solid var(--rule-faint); }
   .platforms dt, .platforms dd { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--rule-faint); font-size: 15px; }
   .platforms dt { font: 12px/1.6 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
@@ -370,8 +361,7 @@
   <section id="use-cases">
     <div class="wrap">
       <div class="label eyebrow">01 · Use cases</div>
-      <h2>Research and engineering use cases</h2>
-      <p class="intro">What Caliper is used for now, and what it is being built toward.</p>
+      <h2>Use cases</h2>
       <div class="uc-group">
         <h3 class="uc-group-title">Research</h3>
         <div class="ucs">
@@ -405,8 +395,7 @@
   <section id="backends">
     <div class="wrap">
       <div class="label eyebrow">02 · Native backends</div>
-      <h2>Native backends use different memory handoffs</h2>
-      <p class="intro">The sequence stays consistent: validate the descriptor, process the data on the active GPU backend, and present the result through ImGui. Storage and synchronization differ by platform.</p>
+      <h2>Native backends</h2>
       <!-- code:call -->
 <div class="code-grid code-call"><details class="code-panel"><summary class="code-head"><span class="code-title">The descriptor</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/sdk/include/caliper/tensor.h#L17-L27">tensor.h · 17–27</a></summary><pre class="code"><code><span class="row" data-file="tensor.h" data-ln="17"><span class="ln">17</span>typedef struct <span class="p">CaliperTensor</span> {</span><span class="row" data-file="tensor.h" data-ln="18"><span class="ln">18</span>    uint32_t          struct_size;</span><span class="row" data-file="tensor.h" data-ln="19"><span class="ln">19</span>    void*             <span class="p">data</span>;            <span class="c">/* device or host pointer */</span></span><span class="row" data-file="tensor.h" data-ln="20"><span class="ln">20</span>    CaliperDType      dtype;</span><span class="row" data-file="tensor.h" data-ln="21"><span class="ln">21</span>    int32_t           ndim;            <span class="c">/* &lt;= 8 */</span></span><span class="row" data-file="tensor.h" data-ln="22"><span class="ln">22</span>    int64_t           shape[8];</span><span class="row" data-file="tensor.h" data-ln="23"><span class="ln">23</span>    int64_t           strides[8];      <span class="c">/* in elements */</span></span><span class="row" data-file="tensor.h" data-ln="24"><span class="ln">24</span>    CaliperDeviceKind <span class="p">device</span>;</span><span class="row" data-file="tensor.h" data-ln="25"><span class="ln">25</span>    int32_t           device_index;</span><span class="row" data-file="tensor.h" data-ln="26"><span class="ln">26</span>    void*             <span class="p">stream</span>;          <span class="c">/* cudaStream_t / MTLCommandQueue* / NULL */</span></span><span class="row" data-file="tensor.h" data-ln="27"><span class="ln">27</span>} <span class="p">CaliperTensor</span>;</span></code></pre></details>
 <details class="code-panel"><summary class="code-head"><span class="code-title">The call, from an applet</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/applets/gpt_scope/gpt_scope.cpp#L451-L451">gpt_scope.cpp · 451, 455–456, 1388</a></summary><pre class="code"><code><span class="row" data-file="gpt_scope.cpp" data-ln="451"><span class="ln">451</span>return caliper::adapters::<span class="p">stream_to_tensor</span>(dev_t, bridge.caps());</span><span class="gap">⋯</span><span class="row" data-file="gpt_scope.cpp" data-ln="455"><span class="ln">455</span>if (id != 0) { bridge.<span class="p">update_texture</span>(id, &amp;*ct); return id; }</span><span class="row" data-file="gpt_scope.cpp" data-ln="456"><span class="ln">456</span>id = bridge.<span class="p">texture_from_tensor_mapped</span>(&amp;*ct, cmap, vmin, vmax, 0);</span><span class="gap">⋯</span><span class="row" data-file="gpt_scope.cpp" data-ln="1388"><span class="ln">1388</span><span class="p">ImGui::Image</span>(caliper::Bridge::imtex(st-&gt;head_tex), ImVec2(side, side));</span></code></pre></details></div>
@@ -1452,22 +1441,21 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section id="libraries">
     <div class="wrap">
       <div class="label eyebrow">03 · Libraries</div>
-      <h2>Core libraries</h2>
-      <p class="intro">The libraries and system APIs Caliper's own code is written against, each with a line where Caliper calls it.</p>
-      <div class="libs">
-        <div class="lib"><img src="assets/libs/ocornut.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/ocornut/imgui">Dear ImGui</a><span class="lib-repo">ocornut/imgui</span><span class="lib-use">Every panel in the app and in applets</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/applets/gpt_scope/gpt_scope.cpp#L1388"><code>ImGui::Image(caliper::Bridge::imtex(st-⁠&gt;head_tex), ImVec2(side, side));</code><span class="lib-where">gpt_scope.cpp:1388</span></a><span class="lib-pin">MIT · 1.92.9 WIP</span></div>
-        <div class="lib"><img src="assets/libs/epezent.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/epezent/implot">ImPlot</a><span class="lib-repo">epezent/implot</span><span class="lib-use">Plots in the app and in applets</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/applets/embed_scope/embed_scope.cpp#L826"><code>if (!loss.empty()) ImPlot::PlotLine(&quot;loss&quot;, loss.data(), (int)loss.size());</code><span class="lib-where">embed_scope.cpp:826</span></a><span class="lib-pin">MIT · 0.18 WIP</span></div>
-        <div class="lib"><img src="assets/libs/brenocq.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/brenocq/implot3d">ImPlot3D</a><span class="lib-repo">brenocq/implot3d</span><span class="lib-use">3-D point clouds and fallback geometry</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/applets/embed_scope/embed_scope.cpp#L911"><code>ImPlot3D::PlotScatter(&quot;live batch&quot;, st-⁠&gt;lbx.data(),</code><span class="lib-where">embed_scope.cpp:911</span></a><span class="lib-pin">MIT · 0.4</span></div>
-        <div class="lib"><img src="assets/libs/glfw.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/glfw/glfw">GLFW</a><span class="lib-repo">glfw/glfw</span><span class="lib-use">Windows, input and the event loop</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/src/host/renderer/metal_renderer.mm#L699"><code>glfwGetFramebufferSize(window_, &amp;w, &amp;h);</code><span class="lib-where">metal_renderer.mm:699</span></a><span class="lib-pin">zlib · 3.5.0</span></div>
-        <div class="lib"><img src="assets/libs/apple.png" alt="" width="40" height="40"><a class="lib-name" href="https://developer.apple.com/metal/">Metal</a><span class="lib-repo">developer.apple.com/metal</span><span class="lib-use">The macOS renderer and its compute colormap</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/src/host/renderer/metal_renderer.mm#L1703"><code>[enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];</code><span class="lib-where">metal_renderer.mm:1703</span></a><span class="lib-pin">System framework</span></div>
-        <div class="lib"><img src="assets/libs/khronosgroup.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/KhronosGroup/Vulkan-Headers">Vulkan</a><span class="lib-repo">KhronosGroup/Vulkan-Headers</span><span class="lib-use">The Windows renderer, loaded at run time through volk</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/src/host/renderer/vulkan_renderer.cpp#L3293"><code>vkCmdDispatch(cb, (p.w + 15) / 16, (p.h + 15) / 16, 1);</code><span class="lib-where">vulkan_renderer.cpp:3293</span></a><span class="lib-pin">SDK 1.3.290.0</span></div>
-        <div class="lib"><img src="assets/libs/nvidia.png" alt="" width="40" height="40"><a class="lib-name" href="https://docs.nvidia.com/cuda/cuda-driver-api/">CUDA driver API</a><span class="lib-repo">docs.nvidia.com/cuda</span><span class="lib-use">Shares VRAM and semaphores with Vulkan</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/src/host/renderer/vulkan_renderer.cpp#L2673"><code>if (cu-⁠&gt;cuImportExternalMemory(&amp;io.ext, &amp;hd) != cudadrv::CUDA_SUCCESS) {</code><span class="lib-where">vulkan_renderer.cpp:2673</span></a><span class="lib-pin">Loaded from the driver</span></div>
-        <div class="lib"><img src="assets/libs/pytorch.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/pytorch/pytorch">PyTorch</a><span class="lib-repo">pytorch/pytorch</span><span class="lib-use">LibTorch in applets; the adapter turns tensors into descriptors</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/sdk/include/caliper/adapters/torch.hpp#L143"><code>out.data = t.data_ptr();</code><span class="lib-where">torch.hpp:143</span></a><span class="lib-pin">LibTorch 2.5.1</span></div>
-        <div class="lib"><img src="assets/libs/dmlc.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/dmlc/dlpack">DLPack</a><span class="lib-repo">dmlc/dlpack</span><span class="lib-use">How the Python package takes tensors from torch</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/python/src/_native.mm#L241"><code>auto* m = static_cast&lt;DLManagedTensor*&gt;(PyCapsule_GetPointer(o, &quot;dltensor&quot;));</code><span class="lib-where">_native.mm:241</span></a><span class="lib-pin">Apache-2.0 · 0.8</span></div>
-        <div class="lib"><img src="assets/libs/wjakob.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/wjakob/nanobind">nanobind</a><span class="lib-repo">wjakob/nanobind</span><span class="lib-use">The Python package&#x27;s native modules</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/python/src/_live.mm#L457"><code>NB_MODULE(_live, m) {</code><span class="lib-where">_live.mm:457</span></a><span class="lib-pin">2 or later</span></div>
-        <div class="lib"><img src="assets/libs/duckdb.png" alt="" width="40" height="40"><a class="lib-name" href="https://github.com/duckdb/duckdb">DuckDB</a><span class="lib-repo">duckdb/duckdb</span><span class="lib-use">Metrics, artifacts and the SQL data store</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/src/host/data_store.cpp#L78"><code>auto r = impl_-⁠&gt;con-⁠&gt;Query(sql);</code><span class="lib-where">data_store.cpp:78</span></a><span class="lib-pin">MIT · 1.5.2</span></div>
-        <div class="lib"><img src="assets/libs/apache.png" alt="" width="40" height="40"><a class="lib-name" href="https://arrow.apache.org/docs/format/CDataInterface.html">Arrow C Data Interface</a><span class="lib-repo">arrow.apache.org</span><span class="lib-use">Tables returned by the data service</span><a class="lib-code" href="https://github.com/AhmedKhan-GH/caliper/blob/891dc3d203514c0458cec043db0ff4526951f89f/sdk/include/caliper/services/data_v1.h#L26"><code>bool (*query)(const char* sql_utf8, struct ArrowArrayStream* out);</code><span class="lib-where">data_v1.h:26</span></a><span class="lib-pin">Specification</span></div>
-      </div>
+      <h2>Libraries</h2>
+      <ul class="libs">
+        <li><a href="https://github.com/ocornut/imgui"><img src="assets/libs/ocornut.png" alt="" width="28" height="28"><span class="lib-name">Dear ImGui</span><span class="lib-repo">ocornut/imgui</span></a></li>
+        <li><a href="https://github.com/epezent/implot"><img src="assets/libs/epezent.png" alt="" width="28" height="28"><span class="lib-name">ImPlot</span><span class="lib-repo">epezent/implot</span></a></li>
+        <li><a href="https://github.com/brenocq/implot3d"><img src="assets/libs/brenocq.png" alt="" width="28" height="28"><span class="lib-name">ImPlot3D</span><span class="lib-repo">brenocq/implot3d</span></a></li>
+        <li><a href="https://github.com/glfw/glfw"><img src="assets/libs/glfw.png" alt="" width="28" height="28"><span class="lib-name">GLFW</span><span class="lib-repo">glfw/glfw</span></a></li>
+        <li><a href="https://developer.apple.com/metal/"><img src="assets/libs/apple.png" alt="" width="28" height="28"><span class="lib-name">Metal</span><span class="lib-repo">developer.apple.com/metal</span></a></li>
+        <li><a href="https://github.com/KhronosGroup/Vulkan-Headers"><img src="assets/libs/khronosgroup.png" alt="" width="28" height="28"><span class="lib-name">Vulkan</span><span class="lib-repo">KhronosGroup/Vulkan-Headers</span></a></li>
+        <li><a href="https://docs.nvidia.com/cuda/cuda-driver-api/"><img src="assets/libs/nvidia.png" alt="" width="28" height="28"><span class="lib-name">CUDA driver API</span><span class="lib-repo">docs.nvidia.com/cuda</span></a></li>
+        <li><a href="https://github.com/pytorch/pytorch"><img src="assets/libs/pytorch.png" alt="" width="28" height="28"><span class="lib-name">PyTorch</span><span class="lib-repo">pytorch/pytorch</span></a></li>
+        <li><a href="https://github.com/dmlc/dlpack"><img src="assets/libs/dmlc.png" alt="" width="28" height="28"><span class="lib-name">DLPack</span><span class="lib-repo">dmlc/dlpack</span></a></li>
+        <li><a href="https://github.com/wjakob/nanobind"><img src="assets/libs/wjakob.png" alt="" width="28" height="28"><span class="lib-name">nanobind</span><span class="lib-repo">wjakob/nanobind</span></a></li>
+        <li><a href="https://github.com/duckdb/duckdb"><img src="assets/libs/duckdb.png" alt="" width="28" height="28"><span class="lib-name">DuckDB</span><span class="lib-repo">duckdb/duckdb</span></a></li>
+        <li><a href="https://arrow.apache.org/docs/format/CDataInterface.html"><img src="assets/libs/apache.png" alt="" width="28" height="28"><span class="lib-name">Arrow C Data Interface</span><span class="lib-repo">arrow.apache.org</span></a></li>
+      </ul>
     </div>
   </section>
 
@@ -1501,7 +1489,6 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section class="closing">
     <div class="wrap">
       <h2>Documentation</h2>
-      <p class="intro">Renderer architecture, tensor and geometry references, backend compatibility, verification, and the project decision log.</p>
       <a class="btn btn-primary cut" href="docs/">Open documentation</a>
     </div>
   </section>
