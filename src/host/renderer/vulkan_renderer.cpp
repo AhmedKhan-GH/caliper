@@ -1811,7 +1811,7 @@ public:
     bool dev_bail(const char* why) { dev_note(why); return false; }
 
 private:
-    static constexpr uint32_t kMinImageCount = 2;
+    static constexpr uint32_t kMinImageCount = 3;
     // One geometry.v1_1 LUT ring slot: 256 RGBA8 entries = 1 KB, a multiple of
     // minStorageBufferOffsetAlignment (256) so slot i at i*kLutSlot is bindable.
     static constexpr VkDeviceSize kLutSlot = 256 * sizeof(uint32_t);
