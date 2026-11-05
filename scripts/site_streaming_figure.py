@@ -17,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-W, H = 1100, 470
+W, H = 1100, 560
 ROWS, COLS = 8, 12
 SLOT_Y = [210 + 64 * k for k in range(3)]          # top of each slot; the arrows meet a slot at its middle
 out = []
@@ -62,13 +62,15 @@ def colour(v):
 def heatmap(ident, x, y, w, h, noise):
     rng = random.Random(ident)
     cw, ch = w / COLS, h / ROWS
-    cells = []
+    cells, values = [], []
     for r in range(ROWS):
         for c in range(COLS):
             v = target(r, c) * (1 - noise) + rng.uniform(-1, 1) * noise
+            values.append(v)
             cells.append(f'<rect x="{x + c * cw:.2f}" y="{y + r * ch:.2f}" width="{cw - 0.8:.2f}" height="{ch - 0.8:.2f}" '
                          f'fill="{colour(v)}"/>')
     out.append(f'<g id="{ident}" class="hm">' + "".join(cells) + "</g>")
+    return values
 
 
 out.append('<defs>'
@@ -80,7 +82,7 @@ out.append('<defs>'
 for x, w, title, sub in ((16, 340, "TRAINING PROCESS", "Python, torch on MPS"),
                          (386, 328, "SHARED MEMORY", "POSIX segments, mode 0600"),
                          (744, 340, "VIEWER PROCESS", "Caliper app or caliper-viewer")):
-    rect(x, 44, w, 402, "pkg", 10)
+    rect(x, 44, w, 492, "pkg", 10)
     text(x + 18, 28, title, "k")
     text(x + w - 18, 28, sub, "n dim", "end")
 
@@ -92,7 +94,7 @@ heatmap("hm-train", 244, 247, 80, 60, 0.12)
 node(36, 342, 300, 70, "torch.mps.Event", ["record(), then a publisher thread", "polls query() every 2 ms"], ident="n-event")
 for y0, y1 in ((126, 150), (212, 236), (318, 342)):
     arrow(f"M 186 {y0} L 186 {y1 - 2}")
-text(52, 434, "step 1,216 · loss 0.074", "mono small dim", ident="t-step")
+text(52, 524, "step 1,216 · loss 0.074", "mono small dim", ident="t-step")
 
 # Shared memory: the control table and one view's segment with its three slots.
 node(406, 64, 288, 62, "/session-ctl", ["view rows, the viewer's heartbeat"], ident="n-ctl")
@@ -107,20 +109,40 @@ for k, (state, label) in enumerate((("writing", "being written"), ("published", 
     text(434, y + 40, label, "n", ident=f"s{k}lbl")
     heatmap(f"hm-s{k}", 546, y + 7, 64, 36, (0.15, 0.25, 0.35)[k])
     text(651, y + 30, "stats", "n dim", "middle")
-text(550, 434, "one MTLBuffer per process over the same pages", "n dim", "middle")
+text(550, 524, "one MTLBuffer per process over the same pages", "n dim", "middle")
 
 # Viewer process, top to bottom; the frame shows what the viewer draws.
 node(764, 64, 300, 62, "ShmSource", ["heartbeat, newest completed slot"], ident="n-shm")
 node(764, 168, 300, 62, "caliper_core_live_apply", ["colormap pass reads the slot in place"], "blk hot", ident="n-apply")
-rect(764, 256, 300, 172, "blk frame", ident="n-frame")
+# The frame draws what the script's calls make: the weights as a heatmap, and graphics derived from tensors on the
+# GPU: the weights' histogram, the hidden layer projected to 3-D points, the loss series.
+rect(764, 256, 300, 270, "blk frame", ident="n-frame")
 text(780, 280, "ImGui frame", "mono")
 text(1048, 280, "seq 152", "n dim", "end", ident="t-seq")
-text(780, 304, "fc1.weight", "n")
-heatmap("hm-view", 780, 312, 132, 96, 0.35)
-text(930, 304, "loss", "n")
-rect(930, 312, 118, 96, "spark", 2)
+text(780, 302, "fc1.weight", "n")
+view = heatmap("hm-view", 780, 310, 132, 92, 0.35)
+text(930, 302, "fc1.weight.hist", "n")
+rect(930, 310, 118, 92, "spark", 2)
+counts = [0] * 20
+for v in view:
+    counts[min(19, int((max(-1, min(1, v)) + 1) / 2 * 20))] += 1
+out.append('<g id="hist">' + "".join(
+    f'<rect x="{934 + i * 5.5:.1f}" y="{398 - 80 * n / max(counts):.1f}" width="4.6" height="{80 * n / max(counts):.1f}" class="bar"/>'
+    for i, n in enumerate(counts)) + "</g>")
+text(780, 420, "embedding", "n")
+rect(780, 428, 132, 86, "spark", 2)
+rng = random.Random("emb")
+points = []
+for i in range(40):
+    k = i % 4
+    cx, cy = (-1, 1, -1, 1)[k] * 0.55, (-1, -1, 1, 1)[k] * 0.5
+    px, py = 846 + (cx + rng.uniform(-0.25, 0.25)) * 54, 471 + (cy + rng.uniform(-0.25, 0.25)) * 36
+    points.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.4" class="pt c{k}"/>')
+out.append('<g id="emb">' + "".join(points) + "</g>")
+text(930, 420, "loss", "n")
+rect(930, 428, 118, 86, "spark", 2)
 out.append('<polyline id="loss-line" class="loss" points="'
-           + " ".join(f"{934 + i * 4.5:.1f},{404 - 88 * (0.04 + 0.96 * math.exp(-i / 6)):.1f}" for i in range(25)) + '"/>')
+           + " ".join(f"{934 + i * 4.5:.1f},{510 - 78 * (0.04 + 0.96 * math.exp(-i / 6)):.1f}" for i in range(25)) + '"/>')
 for y0, y1 in ((126, 168), (230, 256)):
     arrow(f"M 914 {y0} L 914 {y1 - 2}")
 

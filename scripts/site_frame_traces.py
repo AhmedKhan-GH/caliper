@@ -116,7 +116,7 @@ METAL = {
     "memory": [
         ("TENSOR", "torch's MTLBuffer, f32", "raw", [(0.4, 5.0, 0, 1, "blend"), (12.4, 20.0, 1, 2, "blend")]),
         ("TEXTURE", "MTLTexture, colormapped", "cmap", [(5.15, 5.75, 0, 1, "wipe")]),
-        ("ON SCREEN", "the drawable, from vsync", "cmap", [(VSYNC, VSYNC, 0, 1, "swap")]),
+        ("ON SCREEN", "the drawable: texture, surface, histogram", "screen", [(VSYNC, VSYNC, 0, 1, "swap")]),
     ],
     # (from buffer, to buffer, label, from ms, to ms): the step that moves the data, lit while it runs.
     "links": [(0, 1, "cmap_f32", 5.15, 5.75), (1, 2, "ImGui draw", 6.4, 7.5)],
@@ -204,7 +204,7 @@ NVIDIA = {
         ("TENSOR", "torch's CUDA memory, f32", "raw", [(0.3, 4.6, 0, 1, "blend"), (10.9, 20.0, 1, 2, "blend")]),
         ("SHARED BUFFER", "exported by Vulkan, f32", "raw", [(4.6, 4.95, 0, 1, "wipe")]),
         ("VKIMAGE", "colormapped", "cmap", [(5.05, 5.6, 0, 1, "wipe")]),
-        ("ON SCREEN", "swapchain, from vsync", "cmap", [(VSYNC, VSYNC, 0, 1, "swap")]),
+        ("ON SCREEN", "swapchain: texture, surface, histogram", "screen", [(VSYNC, VSYNC, 0, 1, "swap")]),
     ],
     "links": [(0, 1, "copy", 4.6, 4.95), (1, 2, "colormap", 5.05, 5.6), (2, 3, "draw", 6.45, 7.6)],
     "arrows": [
@@ -323,21 +323,36 @@ def svg(tr, refs):
     out.append(f'<text x="0" y="{MY + 27}" class="lane-sub">illustrative values</text>')
     boxes = tr["memory"]
     gap = 90 if len(boxes) <= 3 else 64
-    bw = (X1 - X0 - gap * (len(boxes) - 1)) / len(boxes)
-    for m, (title, sub, kind, _) in enumerate(boxes):
-        bx = X0 + m * (bw + gap)
-        hw, hh = bw - 24, MEM_H - 52
+    # The screen is wider: it draws the texture and two graphics derived from the same values.
+    weights = [1.75 if kind == "screen" else 1.0 for _, _, kind, _ in boxes]
+    unit = (X1 - X0 - gap * (len(boxes) - 1)) / sum(weights)
+    lefts, widths, at = [], [], X0
+    for w in weights:
+        lefts.append(at); widths.append(w * unit); at += w * unit + gap
+    hh = MEM_H - 52
+    for m, (title, sub, kind, writes) in enumerate(boxes):
+        bx, bw = lefts[m], widths[m]
+        hw = (bw - 24) * (0.46 if kind == "screen" else 1.0)
         cw, ch = hw / MEM_COLS, hh / MEM_ROWS
         cells = "".join(f'<rect x="{bx + 12 + c * cw:.2f}" y="{MY + 42 + r * ch:.2f}" width="{cw - 0.8:.2f}" height="{ch - 0.8:.2f}"/>'
                         for r in range(MEM_ROWS) for c in range(MEM_COLS))
+        derived = ""
+        if kind == "screen":
+            # A height-field surface of the values (wire per row and per column) and their histogram.
+            sx, sw = bx + 12 + hw + 14, bw - 24 - hw - 14
+            surface = "".join('<polyline class="wire"/>' for _ in range(MEM_ROWS + MEM_COLS))
+            bars = "".join(f'<rect class="bar" x="{sx + i * sw / 16:.2f}" y="{MY + 42 + hh:.2f}" width="{sw / 16 - 1.2:.2f}" height="0"/>'
+                           for i in range(16))
+            derived = (f'<g class="surface" data-x="{sx:.2f}" data-y="{MY + 42}" data-w="{sw:.2f}" data-h="{hh * 0.62:.2f}">{surface}</g>'
+                       f'<g class="hist" data-y="{MY + 42 + hh:.2f}" data-h="{hh * 0.3:.2f}">{bars}</g>')
         tag = (f'<text x="{bx + bw - 12:.2f}" y="{MY + 20}" class="mem-tag" text-anchor="end"></text>'
-               if any(w[4] == "swap" for w in boxes[m][3]) else "")
+               if any(w[4] == "swap" for w in writes) else "")
         out.append(f'<g class="mem" data-m="{m}" data-kind="{kind}"><rect x="{bx:.2f}" y="{MY}" width="{bw:.2f}" '
                    f'height="{MEM_H}" rx="5" class="box"/><text x="{bx + 12:.2f}" y="{MY + 20}" class="mem-name">'
                    f'{html.escape(title)}</text><text x="{bx + 12:.2f}" y="{MY + 35}" class="mem-sub">{html.escape(sub)}</text>'
-                   f'{tag}<g class="cells">{cells}</g></g>')
+                   f'{tag}<g class="cells">{cells}</g>{derived}</g>')
     for i, (a, b, label, _, _) in enumerate(tr["links"]):
-        xa, xb, ym = X0 + a * (bw + gap) + bw + 6, X0 + b * (bw + gap) - 6, MY + 42 + (MEM_H - 52) / 2
+        xa, xb, ym = lefts[a] + widths[a] + 6, lefts[b] - 6, MY + 42 + hh / 2
         out.append(f'<g class="mem-link" data-k="{i}"><path d="M {xa:.2f} {ym:.2f} L {xb:.2f} {ym:.2f}" '
                    f'marker-end="url(#arrow-{n})"/><text x="{(xa + xb) / 2:.2f}" y="{ym - 9:.2f}" text-anchor="middle" '
                    f'class="mem-l">{html.escape(label)}</text></g>')
