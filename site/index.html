@@ -165,7 +165,8 @@
   .code-title::before { content: ""; position: absolute; left: 1px; top: 3px; width: 5px; height: 5px; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: rotate(-45deg); transition: transform .15s; }
   .code-panel[open] .code-title::before { transform: rotate(45deg); top: 1px; }
   .code-title { font: 11px/1.3 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--secondary); }
-  .code-file { font: 12px/1.3 var(--mono); color: var(--faint); white-space: nowrap; }
+  .code-title { flex: 0 1 auto; }
+  .code-file { flex: 1 1 0; min-width: 8em; font: 12px/1.3 var(--mono); color: var(--faint); text-align: right; }
   .code-file:hover { color: var(--bronze); }
   pre.code { margin: 0; padding: 14px 16px 16px; border: 0; border-radius: 0; background: none; font: 12.5px/1.65 var(--mono); color: var(--secondary); overflow-x: auto; }
   pre.code .ln { display: inline-block; width: 3.4em; color: #5d5a53; user-select: none; }
@@ -173,6 +174,63 @@
   pre.code .gap { display: block; padding-left: 3.4em; color: var(--faint); }
   pre.code .p { color: var(--bronze); }
   pre.code .c { color: var(--faint); }
+  /* The frame traces: one frame as lanes over time, with the line each lane is on and the arrows between them. */
+  .trace-plate { margin-top: 16px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 14px 22px 8px; }
+  .trace-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .trace-bar .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+  .tb-play { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border: 1px solid var(--rule); border-radius: 4px; background: var(--plate); cursor: pointer; }
+  .tb-play:hover { background: var(--plate-hover); border-color: var(--faint); }
+  .tb-play svg { width: 12px; height: 12px; fill: var(--parchment); }
+  .tb-play .i-pause, .trace.playing .tb-play .i-play { display: none; }
+  .trace.playing .tb-play .i-pause { display: block; }
+  .trace-bar input[type=range] { flex: 1 1 220px; min-width: 160px; accent-color: var(--bronze); }
+  .trace-bar output { font: 13px/1 var(--mono); color: var(--parchment); min-width: 5.6em; }
+  .tb-speed { display: flex; align-items: center; gap: 8px; font: 13px/1 var(--text); color: var(--faint); }
+  .tb-speed select { font: 13px var(--mono); color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; padding: 4px 6px; }
+  .tb-note { margin-left: auto; font: 13px/1.3 var(--text); color: var(--faint); }
+  .trace-scroll { overflow-x: auto; }
+  .trace-svg { display: block; width: 100%; min-width: 900px; height: auto; }
+  .trace-svg .grid { stroke: var(--rule-faint); }
+  .trace-svg .tick { font-family: var(--mono); font-size: 11px; fill: var(--faint); }
+  .trace-svg .vsync { stroke: #3ca99c; stroke-dasharray: 3 4; }
+  .trace-svg .band { fill: rgba(232, 224, 208, .035); stroke: var(--rule); stroke-dasharray: 2 3; }
+  .trace-svg .band-l { font-family: var(--mono); font-size: 11px; fill: var(--faint); }
+  .trace-svg .vsync-l { font-family: var(--display); font-size: 10px; letter-spacing: .22em; fill: #3ca99c; }
+  .trace-svg .lane-name { font-family: var(--display); font-size: 11px; letter-spacing: .16em; fill: var(--parchment); }
+  .trace-svg .lane-sub { font-family: var(--text); font-size: 12.5px; fill: var(--faint); }
+  .trace-svg .track { fill: #1a1916; }
+  .trace-svg .seg { cursor: pointer; }
+  .trace-svg .seg rect { transition: fill .12s, stroke .12s; }
+  .trace-svg .k-torch rect { fill: #34322d; }
+  .trace-svg .k-torch.on rect { fill: #5a564c; }
+  .trace-svg .k-caliper rect { fill: rgba(179, 139, 89, .26); stroke: rgba(179, 139, 89, .75); }
+  .trace-svg .k-caliper.on rect { fill: #b38b59; stroke: #d2ab78; }
+  .trace-svg .k-wait rect { stroke: var(--rule); }
+  .trace-svg .k-wait.on rect { stroke: var(--parchment); }
+  .trace-svg .hatch { stroke: #4b4945; stroke-width: 2; }
+  .trace-svg .k-screen rect { fill: rgba(60, 169, 156, .14); stroke: rgba(60, 169, 156, .5); }
+  .trace-svg .k-screen.on rect { fill: rgba(60, 169, 156, .34); stroke: #3ca99c; }
+  .trace-svg .seglab { font-family: var(--text); font-size: 12px; fill: var(--secondary); pointer-events: none; }
+  .trace-svg .on .seglab { fill: var(--parchment); }
+  .trace-svg .k-caliper.on .seglab { fill: var(--deep); }
+  .trace-svg .flow { opacity: .22; transition: opacity .2s; }
+  .trace-svg .flow.fired { opacity: 1; }
+  .trace-svg .flow path { fill: none; stroke: var(--parchment); stroke-width: 1.2; }
+  .trace-svg .tip { fill: var(--parchment); }
+  .trace-svg .al, .trace-svg .now-l, .trace-svg .now-c { paint-order: stroke; stroke: var(--deep); stroke-width: 5px; stroke-linejoin: round; }
+  .trace-svg .al { font-family: var(--text); font-size: 12px; fill: var(--parchment); }
+  .trace-svg .now-l .lbl { font-family: var(--text); font-size: 13px; fill: var(--parchment); }
+  .trace-svg .now-l .lbl.idle { fill: var(--faint); }
+  .trace-svg .now-l .where { font-family: var(--mono); font-size: 11.5px; fill: var(--faint); }
+  .trace-svg .now-c { font-family: var(--mono); font-size: 12px; fill: var(--secondary); }
+  .trace-svg .now-a[href]:hover .now-c { fill: var(--bronze-hover); }
+  .trace-svg .playhead line { stroke: var(--bronze); stroke-width: 1.5; }
+  .trace-svg .playhead path { fill: var(--bronze); }
+  pre.code .row.live-metal, pre.code .row.live-nvidia { background: rgba(179, 139, 89, .16); box-shadow: inset 2px 0 var(--bronze); }
+  pre.code .row.live-metal .ln, pre.code .row.live-nvidia .ln { color: var(--bronze); }
+  .code-panel.live-metal > .code-head .code-title, .code-panel.live-nvidia > .code-head .code-title { color: var(--bronze); }
+  .code-panel.live-metal > .code-head .code-title::after, .code-panel.live-nvidia > .code-head .code-title::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 10px; border-radius: 50%; background: var(--bronze); vertical-align: 2px; }
+  @media (max-width: 720px) { .trace-plate { padding: 12px 14px 6px; } .tb-note { margin-left: 0; } }
 
   /* Cards */
   .cards { display: grid; gap: 16px; }
@@ -672,6 +730,138 @@
       <text x="886.4" y="578" class="v plain" text-anchor="start">0 bytes</text>
     </svg>
         </div>
+        <!-- trace:metal -->
+    <div class="trace trace-plate" data-trace="metal">
+      <div class="trace-bar"><span class="k">Frame trace · 60 Hz</span><button class="tb-play" type="button" aria-label="Play or pause"><svg class="i-play" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5 L10.5 6 L3 10.5 Z"/></svg><svg class="i-pause" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.6" height="9"/><rect x="6.9" y="1.5" width="2.6" height="9"/></svg></button><input type="range" min="0" max="28400" step="10" aria-label="Position in the frame"><output>0.00 ms</output><label class="tb-speed">Speed <select><option value="120">fast</option><option value="400" selected>normal</option><option value="1400">slow</option></select></label><span class="tb-note">Order from the code · durations schematic</span></div>
+      <div class="trace-scroll"><svg class="trace-svg" viewBox="0 0 1100 416" role="img" aria-label="Metal, one frame: the frame thread hands torch&#x27;s tensor to Caliper&#x27;s command queue, which waits on a shared event torch&#x27;s queue signals, colormaps the buffer in place, and draws the frame that the display shows at the next vsync; the training thread blocks only on its own reads">
+      <defs><pattern id="wait-metal" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch"/></pattern><marker id="arrow-metal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker></defs>
+      <rect x="296.44" y="32" width="294.76" height="384" class="band"/>
+      <text x="301.44" y="14" class="band-l">×8</text>
+      <line x1="212.0" y1="32" x2="212.0" y2="416" class="grid"/>
+      <text x="212.0" y="26" class="tick" text-anchor="middle">0</text>
+      <line x1="357.85" y1="32" x2="357.85" y2="416" class="grid"/>
+      <text x="357.85" y="26" class="tick" text-anchor="middle">3</text>
+      <line x1="480.66" y1="32" x2="480.66" y2="416" class="grid"/>
+      <text x="480.66" y="26" class="tick" text-anchor="middle">3.5</text>
+      <line x1="654.14" y1="32" x2="654.14" y2="416" class="grid"/>
+      <text x="654.14" y="26" class="tick" text-anchor="middle">6</text>
+      <line x1="715.55" y1="32" x2="715.55" y2="416" class="grid"/>
+      <text x="715.55" y="26" class="tick" text-anchor="middle">8</text>
+      <line x1="776.96" y1="32" x2="776.96" y2="416" class="grid"/>
+      <text x="776.96" y="26" class="tick" text-anchor="middle">10</text>
+      <line x1="838.37" y1="32" x2="838.37" y2="416" class="grid"/>
+      <text x="838.37" y="26" class="tick" text-anchor="middle">12</text>
+      <line x1="899.77" y1="32" x2="899.77" y2="416" class="grid"/>
+      <text x="899.77" y="26" class="tick" text-anchor="middle">14</text>
+      <line x1="961.18" y1="32" x2="961.18" y2="416" class="grid"/>
+      <text x="961.18" y="26" class="tick" text-anchor="middle">16</text>
+      <line x1="1022.59" y1="32" x2="1022.59" y2="416" class="grid"/>
+      <text x="1022.59" y="26" class="tick" text-anchor="middle">18</text>
+      <line x1="1084.0" y1="32" x2="1084.0" y2="416" class="grid"/>
+      <text x="1084.0" y="26" class="tick" text-anchor="middle">20 ms</text>
+      <line x1="212.0" y1="14" x2="212.0" y2="416" class="vsync"/>
+      <line x1="981.65" y1="14" x2="981.65" y2="416" class="vsync"/>
+      <text x="987.65" y="14" class="vsync-l">VSYNC</text>
+      <text x="0" y="54" class="lane-name">TRAINING THREAD</text>
+      <text x="0" y="71" class="lane-sub">CPU · gpt_scope train_job</text>
+      <rect x="212" y="44" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="130" class="lane-name">FRAME THREAD</text>
+      <text x="0" y="147" class="lane-sub">CPU · Caliper host</text>
+      <rect x="212" y="120" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="206" class="lane-name">TORCH&#x27;S QUEUE</text>
+      <text x="0" y="223" class="lane-sub">GPU · MTLCommandQueue</text>
+      <rect x="212" y="196" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="282" class="lane-name">CALIPER&#x27;S QUEUE</text>
+      <text x="0" y="299" class="lane-sub">GPU · MTLCommandQueue</text>
+      <rect x="212" y="272" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="358" class="lane-name">DISPLAY</text>
+      <text x="0" y="375" class="lane-sub">scan-out</text>
+      <rect x="212" y="348" width="872" height="24" rx="3" class="track"/>
+      <g class="flow" data-j="0"><path d="M 382.41 142 L 382.41 198" marker-end="url(#arrow-metal)"/></g>
+      <g class="flow" data-j="1"><path d="M 480.66 142 L 623.44 198" marker-end="url(#arrow-metal)"/></g>
+      <g class="flow" data-j="2"><path d="M 574.0 142 L 578.92 274" marker-end="url(#arrow-metal)"/></g>
+      <g class="flow" data-j="3"><path d="M 628.04 218 L 628.04 274" marker-end="url(#arrow-metal)"/></g>
+      <g class="flow" data-j="4"><path d="M 666.42 142 L 666.42 274" marker-end="url(#arrow-metal)"/></g>
+      <g class="flow" data-j="5"><path d="M 700.2 294 L 981.65 350" marker-end="url(#arrow-metal)"/><text x="847.925" y="326.0" class="al">present</text></g>
+      <g class="flow" data-j="6"><path d="M 741.65 198 L 743.18 66" marker-end="url(#arrow-metal)"/></g>
+      <g class="flow" data-j="7"><path d="M 835.3 198 L 841.44 66" marker-end="url(#arrow-metal)"/></g>
+      <g class="seg k-torch" data-i="0"><title>forward: torch queues the kernels
+gpt_scope.cpp:1006  auto logits = model-&gt;forward(xb);</title><rect x="212.0" y="47" width="67.55" height="18" rx="2.5"/><text x="218.0" y="60" class="seglab">forward</text></g>
+      <g class="seg k-torch" data-i="1"><title>backward: torch queues the kernels
+gpt_scope.cpp:1009  loss.backward();</title><rect x="279.55" y="47" width="331.6" height="18" rx="2.5"/><text x="285.55" y="60" class="seglab">backward</text></g>
+      <g class="seg k-wait" data-i="2"><title>blocks until the GPU is done: grad norms copied to the CPU
+gpt_scope.cpp:1018  auto gn = acc.sqrt().to(torch::kCPU).contiguous();</title><rect x="611.15" y="47" width="132.03" height="18" rx="2.5" fill="url(#wait-metal)"/><text x="617.15" y="60" class="seglab">waits: grad norms</text></g>
+      <g class="seg k-torch" data-i="3"><title>optimizer step: torch queues the kernels
+gpt_scope.cpp:1021  opt.step();</title><rect x="743.18" y="47" width="30.71" height="18" rx="2.5"/></g>
+      <g class="seg k-wait" data-i="4"><title>blocks until the GPU is done: the loss read back
+gpt_scope.cpp:1023  const float l = loss.item&lt;float&gt;();</title><rect x="773.89" y="47" width="67.55" height="18" rx="2.5" fill="url(#wait-metal)"/><text x="779.89" y="60" class="seglab">waits: loss</text></g>
+      <g class="seg k-torch" data-i="5"><title>next step: forward
+gpt_scope.cpp:1006  auto logits = model-&gt;forward(xb);</title><rect x="841.44" y="47" width="67.55" height="18" rx="2.5"/><text x="847.44" y="60" class="seglab">forward</text></g>
+      <g class="seg k-torch" data-i="6"><title>next step: backward
+gpt_scope.cpp:1009  loss.backward();</title><rect x="908.99" y="47" width="73.69" height="18" rx="2.5"/><text x="914.99" y="60" class="seglab">backward</text></g>
+      <g class="seg k-wait" data-i="7"><title>next step: blocks until the GPU is done
+gpt_scope.cpp:1018  auto gn = acc.sqrt().to(torch::kCPU).contiguous();</title><rect x="982.68" y="47" width="101.32" height="18" rx="2.5" fill="url(#wait-metal)"/><text x="988.68" y="60" class="seglab">waits: grad norms</text></g>
+      <g class="seg k-caliper" data-i="8"><title>new_frame: the next drawable and the frame&#x27;s command buffer
+metal_renderer.mm:703  drawable_ = [layer_ nextDrawable];   // may be nil under load
+metal_renderer.mm:711  frame_cmd_ = [queue_ commandBuffer];</title><rect x="236.56" y="123" width="15.36" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="9"><title>the applet&#x27;s draw_ui builds its widgets
+gpt_scope.cpp:1302  ImGui::Text(&quot;selected: layer %d, head %d — attention (rows attend to cols)&quot;,</title><rect x="251.92" y="123" width="56.8" height="18" rx="2.5"/><text x="257.91999999999996" y="136" class="seglab">applet UI</text></g>
+      <g class="seg k-caliper" data-i="10"><title>to_tensor: the MPS storage&#x27;s MTLBuffer becomes the descriptor&#x27;s data
+torch.hpp:152  out.data = t.storage().mutable_data();   // the MTLBuffer bridge pointer
+torch.hpp:153  out.device = CALIPER_DEV_METAL;</title><rect x="308.72" y="123" width="49.13" height="18" rx="2.5"/><text x="314.72" y="136" class="seglab">tensor</text></g>
+      <g class="seg k-caliper" data-i="11"><title>stream_to_tensor: commit torch&#x27;s pending kernels and take its queue
+torch.hpp:216  void* queue = detail::mps_commit_and_get_queue();
+torch.hpp:87  torch::mps::commit();   // enqueue-not-drain, atomic with the peek</title><rect x="357.85" y="123" width="49.12" height="18" rx="2.5"/><text x="363.85" y="136" class="seglab">commit</text></g>
+      <g class="seg k-caliper" data-i="12"><title>update_texture: the descriptor&#x27;s pointer is cast to id&lt;MTLBuffer&gt;
+metal_renderer.mm:812  id&lt;MTLBuffer&gt; src = (__bridge id&lt;MTLBuffer&gt;)t.data;
+gpt_scope.cpp:455  if (id != 0) { bridge.update_texture(id, &amp;*ct); return id; }</title><rect x="406.97" y="123" width="36.85" height="18" rx="2.5"/><text x="412.97" y="136" class="seglab">cast</text></g>
+      <g class="seg k-caliper" data-i="13"><title>order_after_producer: signal v queued on torch&#x27;s queue, a wait for v encoded
+metal_renderer.mm:1658  [sig encodeSignalEvent:ev value:v];
+metal_renderer.mm:1659  [sig commit];</title><rect x="443.82" y="123" width="61.41" height="18" rx="2.5"/><text x="449.82" y="136" class="seglab">order</text></g>
+      <g class="seg k-caliper" data-i="14"><title>the colormap pass encoded and committed, with no CPU wait
+metal_renderer.mm:1703  [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];
+metal_renderer.mm:1696  [enc setBuffer:src offset:(NSUInteger)src_offset atIndex:0];</title><rect x="505.23" y="123" width="73.69" height="18" rx="2.5"/><text x="511.23" y="136" class="seglab">encode</text></g>
+      <g class="seg k-caliper" data-i="15"><title>the applet draws the texture with ImGui::Image
+gpt_scope.cpp:1388  ImGui::Image(caliper::Bridge::imtex(st-&gt;head_tex), ImVec2(side, side));</title><rect x="578.92" y="123" width="62.94" height="18" rx="2.5"/><text x="584.92" y="136" class="seglab">applet UI</text></g>
+      <g class="seg k-caliper" data-i="16"><title>render: ImGui&#x27;s draw encoded, the drawable presented, the frame committed
+metal_renderer.mm:728  ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
+metal_renderer.mm:731  [frame_cmd_ presentDrawable:drawable_];</title><rect x="641.86" y="123" width="24.56" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="17"><title>next frame: new_frame
+metal_renderer.mm:703  drawable_ = [layer_ nextDrawable];   // may be nil under load
+metal_renderer.mm:711  frame_cmd_ = [queue_ commandBuffer];</title><rect x="1007.24" y="123" width="15.35" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="18"><title>next frame: the applet&#x27;s draw_ui
+gpt_scope.cpp:1302  ImGui::Text(&quot;selected: layer %d, head %d — attention (rows attend to cols)&quot;,</title><rect x="1022.59" y="123" width="61.41" height="18" rx="2.5"/><text x="1028.5900000000001" y="136" class="seglab">applet UI</text></g>
+      <g class="seg k-torch" data-i="19"><title>torch&#x27;s kernels committed before the handoff: forward, start of backward</title><rect x="224.28" y="199" width="399.16" height="18" rx="2.5"/><text x="230.28" y="212" class="seglab">torch&#x27;s kernels</text></g>
+      <g class="seg k-caliper" data-i="20"><title>signal v: runs once everything committed before it has finished
+metal_renderer.mm:1658  [sig encodeSignalEvent:ev value:v];</title><rect x="623.44" y="199" width="4.6" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="21"><title>torch&#x27;s kernels: rest of backward, grad norms</title><rect x="628.04" y="199" width="113.61" height="18" rx="2.5"/><text x="634.04" y="212" class="seglab">torch&#x27;s kernels</text></g>
+      <g class="seg k-torch" data-i="22"><title>torch&#x27;s kernels: optimizer step</title><rect x="752.39" y="199" width="82.91" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="23"><title>torch&#x27;s kernels: next step</title><rect x="850.65" y="199" width="233.35" height="18" rx="2.5"/><text x="856.65" y="212" class="seglab">torch&#x27;s kernels</text></g>
+      <g class="seg k-wait" data-i="24"><title>the colormap command buffer waits for event v, on the GPU
+metal_renderer.mm:1660  [cb encodeWaitForEvent:ev value:v];</title><rect x="578.92" y="275" width="49.12" height="18" rx="2.5" fill="url(#wait-metal)"/></g>
+      <g class="seg k-caliper" data-i="25"><title>cmap_f32 reads the tensor&#x27;s MTLBuffer and writes the texture
+metal_renderer.mm:73  float v = src[gid.y * p.sy + gid.x * p.sx];
+metal_renderer.mm:83  dst.write(c, gid);</title><rect x="628.04" y="275" width="18.42" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="26"><title>ImGui&#x27;s draw samples the texture into the drawable
+metal_renderer.mm:728  ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),</title><rect x="666.42" y="275" width="33.78" height="18" rx="2.5"/></g>
+      <g class="seg k-screen" data-i="27"><title>the previous frame on screen</title><rect x="212.0" y="351" width="769.65" height="18" rx="2.5"/><text x="218.0" y="364" class="seglab">previous frame</text></g>
+      <g class="seg k-screen" data-i="28"><title>this frame on screen from the vsync after its present
+metal_renderer.mm:731  [frame_cmd_ presentDrawable:drawable_];</title><rect x="981.65" y="351" width="102.35" height="18" rx="2.5"/><text x="987.65" y="364" class="seglab">this frame</text></g>
+      <text x="212" y="86" class="now-l" data-lane="0"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="0" target="_blank" rel="noopener"><text x="212" y="104" class="now-c"></text></a>
+      <text x="212" y="162" class="now-l" data-lane="1"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="1" target="_blank" rel="noopener"><text x="212" y="180" class="now-c"></text></a>
+      <text x="212" y="238" class="now-l" data-lane="2"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="2" target="_blank" rel="noopener"><text x="212" y="256" class="now-c"></text></a>
+      <text x="212" y="314" class="now-l" data-lane="3"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="3" target="_blank" rel="noopener"><text x="212" y="332" class="now-c"></text></a>
+      <text x="212" y="390" class="now-l" data-lane="4"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="4" target="_blank" rel="noopener"><text x="212" y="408" class="now-c"></text></a>
+      <g class="playhead"><line x1="0" y1="14" x2="0" y2="416"/><path d="M -5 12 L 5 12 L 0 19 Z"/></g>
+      </svg></div>
+      <script type="application/json" class="trace-data">{"name":"metal","base":"https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/","T":20.0,"x0":212,"x1":1084,"W":1100,"start":3.45,"scope":["call","metal"],"bands":[[2.75,3.95,8]],"lanes":5,"segs":[{"l":0,"a":0.0,"b":2.2,"label":"forward: torch queues the kernels","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1006,"code":"auto logits = model->forward(xb);"}]},{"l":0,"a":2.2,"b":4.6,"label":"backward: torch queues the kernels","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1009,"code":"loss.backward();"}]},{"l":0,"a":4.6,"b":8.9,"label":"blocks until the GPU is done: grad norms copied to the CPU","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1018,"code":"auto gn = acc.sqrt().to(torch::kCPU).contiguous();"}]},{"l":0,"a":8.9,"b":9.9,"label":"optimizer step: torch queues the kernels","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1021,"code":"opt.step();"}]},{"l":0,"a":9.9,"b":12.1,"label":"blocks until the GPU is done: the loss read back","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1023,"code":"const float l = loss.item<float>();"}]},{"l":0,"a":12.1,"b":14.3,"label":"next step: forward","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1006,"code":"auto logits = model->forward(xb);"}]},{"l":0,"a":14.3,"b":16.7,"label":"next step: backward","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1009,"code":"loss.backward();"}]},{"l":0,"a":16.7,"b":20.0,"label":"next step: blocks until the GPU is done","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1018,"code":"auto gn = acc.sqrt().to(torch::kCPU).contiguous();"}]},{"l":1,"a":0.8,"b":1.3,"label":"new_frame: the next drawable and the frame's command buffer","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":703,"code":"drawable_ = [layer_ nextDrawable];   // may be nil under load"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":711,"code":"frame_cmd_ = [queue_ commandBuffer];"}]},{"l":1,"a":1.3,"b":2.8,"label":"the applet's draw_ui builds its widgets","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1302,"code":"ImGui::Text(\"selected: layer %d, head %d — attention (rows attend to cols)\","}]},{"l":1,"a":2.8,"b":3.0,"label":"to_tensor: the MPS storage's MTLBuffer becomes the descriptor's data","refs":[{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":152,"code":"out.data = t.storage().mutable_data();   // the MTLBuffer bridge pointer"},{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":153,"code":"out.device = CALIPER_DEV_METAL;"},{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":451,"code":"return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());"}]},{"l":1,"a":3.0,"b":3.2,"label":"stream_to_tensor: commit torch's pending kernels and take its queue","refs":[{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":216,"code":"void* queue = detail::mps_commit_and_get_queue();"},{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":87,"code":"torch::mps::commit();   // enqueue-not-drain, atomic with the peek"},{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":218,"code":"out->stream = queue;"},{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":451,"code":"return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());"}]},{"l":1,"a":3.2,"b":3.35,"label":"update_texture: the descriptor's pointer is cast to id<MTLBuffer>","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":812,"code":"id<MTLBuffer> src = (__bridge id<MTLBuffer>)t.data;"},{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":455,"code":"if (id != 0) { bridge.update_texture(id, &*ct); return id; }"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":816,"code":"return colormap_compute_from(tex, dst, src, 0, t, lut256, vmin, vmax,"}]},{"l":1,"a":3.35,"b":3.6,"label":"order_after_producer: signal v queued on torch's queue, a wait for v encoded","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1658,"code":"[sig encodeSignalEvent:ev value:v];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1659,"code":"[sig commit];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1660,"code":"[cb encodeWaitForEvent:ev value:v];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1655,"code":"id<MTLCommandBuffer> sig = [producer commandBuffer];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1693,"code":"if (t.stream != nullptr) order_after_producer(tex, cb, t.stream);"}]},{"l":1,"a":3.6,"b":3.9,"label":"the colormap pass encoded and committed, with no CPU wait","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1703,"code":"[enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1696,"code":"[enc setBuffer:src offset:(NSUInteger)src_offset atIndex:0];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1699,"code":"[enc setTexture:dst atIndex:0];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1710,"code":"[cb commit];"}]},{"l":1,"a":3.9,"b":5.6,"label":"the applet draws the texture with ImGui::Image","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1388,"code":"ImGui::Image(caliper::Bridge::imtex(st->head_tex), ImVec2(side, side));"}]},{"l":1,"a":5.6,"b":6.4,"label":"render: ImGui's draw encoded, the drawable presented, the frame committed","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":728,"code":"ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":731,"code":"[frame_cmd_ presentDrawable:drawable_];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":732,"code":"[frame_cmd_ commit];"}]},{"l":1,"a":17.5,"b":18.0,"label":"next frame: new_frame","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":703,"code":"drawable_ = [layer_ nextDrawable];   // may be nil under load"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":711,"code":"frame_cmd_ = [queue_ commandBuffer];"}]},{"l":1,"a":18.0,"b":20.0,"label":"next frame: the applet's draw_ui","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1302,"code":"ImGui::Text(\"selected: layer %d, head %d — attention (rows attend to cols)\","}]},{"l":2,"a":0.4,"b":5.0,"label":"torch's kernels committed before the handoff: forward, start of backward","refs":[]},{"l":2,"a":5.0,"b":5.15,"label":"signal v: runs once everything committed before it has finished","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1658,"code":"[sig encodeSignalEvent:ev value:v];"}]},{"l":2,"a":5.15,"b":8.85,"label":"torch's kernels: rest of backward, grad norms","refs":[]},{"l":2,"a":9.2,"b":11.9,"label":"torch's kernels: optimizer step","refs":[]},{"l":2,"a":12.4,"b":20.0,"label":"torch's kernels: next step","refs":[]},{"l":3,"a":3.9,"b":5.15,"label":"the colormap command buffer waits for event v, on the GPU","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":1660,"code":"[cb encodeWaitForEvent:ev value:v];"}]},{"l":3,"a":5.15,"b":5.75,"label":"cmap_f32 reads the tensor's MTLBuffer and writes the texture","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":73,"code":"float v = src[gid.y * p.sy + gid.x * p.sx];"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":83,"code":"dst.write(c, gid);"},{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":66,"code":"kernel void cmap_f32(device const float*  src  [[buffer(0)]],"}]},{"l":3,"a":6.4,"b":7.5,"label":"ImGui's draw samples the texture into the drawable","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":728,"code":"ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),"}]},{"l":4,"a":0.0,"b":16.666666666666668,"label":"the previous frame on screen","refs":[]},{"l":4,"a":16.666666666666668,"b":20.0,"label":"this frame on screen from the vsync after its present","refs":[{"f":"metal_renderer.mm","p":"src/host/renderer/metal_renderer.mm","ln":731,"code":"[frame_cmd_ presentDrawable:drawable_];"}]}],"arrows":[3.1,3.5,3.88,5.15,6.4,7.5,8.85,11.9]}</script>
+    </div>
+    <!-- /trace:metal -->
         <!-- code:metal -->
 <div class="code-grid code-metal"><details class="code-panel"><summary class="code-head"><span class="code-title">Tensor to descriptor</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/sdk/include/caliper/adapters/torch.hpp#L148-L156">torch.hpp · 148–156</a></summary><pre class="code"><code><span class="row" data-file="torch.hpp" data-ln="148"><span class="ln">148</span>if (t.is_mps()) {</span><span class="row" data-file="torch.hpp" data-ln="149"><span class="ln">149</span>    <span class="c">// No offset channel in CaliperTensor and the bridge casts this pointer</span></span><span class="row" data-file="torch.hpp" data-ln="150"><span class="ln">150</span>    <span class="c">// straight to id&lt;MTLBuffer&gt;; a nonzero offset would mis-address texels.</span></span><span class="row" data-file="torch.hpp" data-ln="151"><span class="ln">151</span>    if (t.<span class="p">storage_offset</span>() != 0) return std::nullopt;</span><span class="row" data-file="torch.hpp" data-ln="152"><span class="ln">152</span>    out.data = t.storage().<span class="p">mutable_data</span>();   <span class="c">// the MTLBuffer bridge pointer</span></span><span class="row" data-file="torch.hpp" data-ln="153"><span class="ln">153</span>    out.device = <span class="p">CALIPER_DEV_METAL</span>;</span><span class="row" data-file="torch.hpp" data-ln="154"><span class="ln">154</span>    out.device_index = static_cast&lt;int32_t&gt;(t.device().index());</span><span class="row" data-file="torch.hpp" data-ln="155"><span class="ln">155</span>    return out;</span><span class="row" data-file="torch.hpp" data-ln="156"><span class="ln">156</span>}</span></code></pre></details>
 <details class="code-panel"><summary class="code-head"><span class="code-title">The buffer, not a copy</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/src/host/renderer/metal_renderer.mm#L806-L821">metal_renderer.mm · 806–821</a></summary><pre class="code"><code><span class="row" data-file="metal_renderer.mm" data-ln="806"><span class="ln">806</span>bool tex_update_from_device(uint64_t tex, const CaliperTensor&amp; t,</span><span class="row" data-file="metal_renderer.mm" data-ln="807"><span class="ln">807</span>                            const uint32_t* lut256,</span><span class="row" data-file="metal_renderer.mm" data-ln="808"><span class="ln">808</span>                            float vmin, float vmax) override {</span><span class="row" data-file="metal_renderer.mm" data-ln="809"><span class="ln">809</span>    id&lt;MTLTexture&gt; dst = lookup(tex);</span><span class="row" data-file="metal_renderer.mm" data-ln="810"><span class="ln">810</span>    if (dst == nil) return false;</span><span class="row" data-file="metal_renderer.mm" data-ln="811"><span class="ln">811</span>    if (t.device != CALIPER_DEV_METAL || t.data == nullptr) return false;</span><span class="row" data-file="metal_renderer.mm" data-ln="812"><span class="ln">812</span>    id&lt;MTLBuffer&gt; src = (<span class="p">__bridge id&lt;MTLBuffer&gt;</span>)t.data;</span><span class="row" data-file="metal_renderer.mm" data-ln="813"><span class="ln">813</span>    if (src == nil) return false;</span><span class="row" data-file="metal_renderer.mm" data-ln="814"><span class="ln">814</span></span><span class="row" data-file="metal_renderer.mm" data-ln="815"><span class="ln">815</span>    if (t.dtype == CALIPER_DT_F32 &amp;&amp; lut256 != nullptr)</span><span class="row" data-file="metal_renderer.mm" data-ln="816"><span class="ln">816</span>        return <span class="p">colormap_compute_from</span>(tex, dst, src, 0, t, lut256, vmin, vmax,</span><span class="row" data-file="metal_renderer.mm" data-ln="817"><span class="ln">817</span>                                     <span class="c">/*imported=*/</span>false);</span><span class="row" data-file="metal_renderer.mm" data-ln="818"><span class="ln">818</span>    if (t.dtype == CALIPER_DT_U8)</span><span class="row" data-file="metal_renderer.mm" data-ln="819"><span class="ln">819</span>        return <span class="p">blit_u8_from</span>(tex, dst, src, 0, t, <span class="c">/*imported=*/</span>false);</span><span class="row" data-file="metal_renderer.mm" data-ln="820"><span class="ln">820</span>    return false;</span><span class="row" data-file="metal_renderer.mm" data-ln="821"><span class="ln">821</span>}</span></code></pre></details>
@@ -1060,6 +1250,155 @@
       <text x="886.4" y="578" class="v faint" text-anchor="start">64 MiB each way</text>
     </svg>
         </div>
+        <!-- trace:nvidia -->
+    <div class="trace trace-plate" data-trace="nvidia">
+      <div class="trace-bar"><span class="k">Frame trace · 60 Hz</span><button class="tb-play" type="button" aria-label="Play or pause"><svg class="i-play" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5 L10.5 6 L3 10.5 Z"/></svg><svg class="i-pause" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.6" height="9"/><rect x="6.9" y="1.5" width="2.6" height="9"/></svg></button><input type="range" min="0" max="37600" step="10" aria-label="Position in the frame"><output>0.00 ms</output><label class="tb-speed">Speed <select><option value="120">fast</option><option value="400" selected>normal</option><option value="1400">slow</option></select></label><span class="tb-note">Order from the code · durations schematic</span></div>
+      <div class="trace-scroll"><svg class="trace-svg" viewBox="0 0 1100 416" role="img" aria-label="NVIDIA, one frame: the frame thread enqueues an in-VRAM copy and a timeline signal on torch&#x27;s CUDA stream, submits a colormap pass that waits for that value on Caliper&#x27;s Vulkan queue, and submits the frame, which waits for the pass and is presented at the next vsync">
+      <defs><pattern id="wait-nvidia" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch"/></pattern><marker id="arrow-nvidia" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker></defs>
+      <rect x="275.78" y="32" width="376.86" height="384" class="band"/>
+      <text x="280.78" y="14" class="band-l">×13</text>
+      <rect x="683.95" y="32" width="90.44" height="384" class="band"/>
+      <text x="688.95" y="14" class="band-l">×3</text>
+      <line x1="212.0" y1="32" x2="212.0" y2="416" class="grid"/>
+      <text x="212.0" y="26" class="tick" text-anchor="middle">0</text>
+      <line x1="351.15" y1="32" x2="351.15" y2="416" class="grid"/>
+      <text x="351.15" y="26" class="tick" text-anchor="middle">3</text>
+      <line x1="501.89" y1="32" x2="501.89" y2="416" class="grid"/>
+      <text x="501.89" y="26" class="tick" text-anchor="middle">3.5</text>
+      <line x1="694.38" y1="32" x2="694.38" y2="416" class="grid"/>
+      <text x="694.38" y="26" class="tick" text-anchor="middle">5.5</text>
+      <line x1="729.17" y1="32" x2="729.17" y2="416" class="grid"/>
+      <text x="729.17" y="26" class="tick" text-anchor="middle">6</text>
+      <line x1="763.96" y1="32" x2="763.96" y2="416" class="grid"/>
+      <text x="763.96" y="26" class="tick" text-anchor="middle">6.5</text>
+      <line x1="805.7" y1="32" x2="805.7" y2="416" class="grid"/>
+      <text x="805.7" y="26" class="tick" text-anchor="middle">8</text>
+      <line x1="852.09" y1="32" x2="852.09" y2="416" class="grid"/>
+      <text x="852.09" y="26" class="tick" text-anchor="middle">10</text>
+      <line x1="898.47" y1="32" x2="898.47" y2="416" class="grid"/>
+      <text x="898.47" y="26" class="tick" text-anchor="middle">12</text>
+      <line x1="944.85" y1="32" x2="944.85" y2="416" class="grid"/>
+      <text x="944.85" y="26" class="tick" text-anchor="middle">14</text>
+      <line x1="991.23" y1="32" x2="991.23" y2="416" class="grid"/>
+      <text x="991.23" y="26" class="tick" text-anchor="middle">16</text>
+      <line x1="1037.62" y1="32" x2="1037.62" y2="416" class="grid"/>
+      <text x="1037.62" y="26" class="tick" text-anchor="middle">18</text>
+      <line x1="1084.0" y1="32" x2="1084.0" y2="416" class="grid"/>
+      <text x="1084.0" y="26" class="tick" text-anchor="middle">20 ms</text>
+      <line x1="212.0" y1="14" x2="212.0" y2="416" class="vsync"/>
+      <line x1="1006.7" y1="14" x2="1006.7" y2="416" class="vsync"/>
+      <text x="1012.7" y="14" class="vsync-l">VSYNC</text>
+      <text x="0" y="54" class="lane-name">TRAINING THREAD</text>
+      <text x="0" y="71" class="lane-sub">CPU · gpt_scope train_job</text>
+      <rect x="212" y="44" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="130" class="lane-name">FRAME THREAD</text>
+      <text x="0" y="147" class="lane-sub">CPU · Caliper host</text>
+      <rect x="212" y="120" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="206" class="lane-name">TORCH&#x27;S STREAM</text>
+      <text x="0" y="223" class="lane-sub">GPU · CUDA stream</text>
+      <rect x="212" y="196" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="282" class="lane-name">CALIPER&#x27;S QUEUE</text>
+      <text x="0" y="299" class="lane-sub">GPU · VkQueue</text>
+      <rect x="212" y="272" width="872" height="24" rx="3" class="track"/>
+      <text x="0" y="358" class="lane-name">DISPLAY</text>
+      <text x="0" y="375" class="lane-sub">swapchain</text>
+      <rect x="212" y="348" width="872" height="24" rx="3" class="track"/>
+      <g class="flow" data-j="0"><path d="M 450.64 142 L 666.55 198" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="flow" data-j="1"><path d="M 495.86 142 L 674.67 198" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="flow" data-j="2"><path d="M 631.53 142 L 637.56 274" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="flow" data-j="3"><path d="M 676.99 218 L 676.99 274" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="flow" data-j="4"><path d="M 757.0 142 L 760.48 274" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="flow" data-j="5"><path d="M 796.43 294 L 1006.7 350" marker-end="url(#arrow-nvidia)"/><text x="908.565" y="326.0" class="al">present</text></g>
+      <g class="flow" data-j="6"><path d="M 810.34 198 L 812.66 66" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="flow" data-j="7"><path d="M 861.36 198 L 866.0 66" marker-end="url(#arrow-nvidia)"/></g>
+      <g class="seg k-torch" data-i="0"><title>forward: torch queues the kernels
+gpt_scope.cpp:1006  auto logits = model-&gt;forward(xb);</title><rect x="212.0" y="47" width="41.74" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="1"><title>backward: torch queues the kernels
+gpt_scope.cpp:1009  loss.backward();</title><rect x="253.74" y="47" width="368.75" height="18" rx="2.5"/><text x="259.74" y="60" class="seglab">backward</text></g>
+      <g class="seg k-wait" data-i="2"><title>blocks until the GPU is done: grad norms copied to the CPU
+gpt_scope.cpp:1018  auto gn = acc.sqrt().to(torch::kCPU).contiguous();</title><rect x="622.49" y="47" width="190.17" height="18" rx="2.5" fill="url(#wait-nvidia)"/><text x="628.49" y="60" class="seglab">waits: grad norms</text></g>
+      <g class="seg k-torch" data-i="3"><title>optimizer step: torch queues the kernels
+gpt_scope.cpp:1021  opt.step();</title><rect x="812.66" y="47" width="16.23" height="18" rx="2.5"/></g>
+      <g class="seg k-wait" data-i="4"><title>blocks until the GPU is done: the loss read back
+gpt_scope.cpp:1023  const float l = loss.item&lt;float&gt;();</title><rect x="828.89" y="47" width="37.11" height="18" rx="2.5" fill="url(#wait-nvidia)"/></g>
+      <g class="seg k-torch" data-i="5"><title>next step: forward
+gpt_scope.cpp:1006  auto logits = model-&gt;forward(xb);</title><rect x="866.0" y="47" width="41.74" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="6"><title>next step: backward
+gpt_scope.cpp:1009  loss.backward();</title><rect x="907.74" y="47" width="48.71" height="18" rx="2.5"/></g>
+      <g class="seg k-wait" data-i="7"><title>next step: blocks until the GPU is done
+gpt_scope.cpp:1018  auto gn = acc.sqrt().to(torch::kCPU).contiguous();</title><rect x="956.45" y="47" width="127.55" height="18" rx="2.5" fill="url(#wait-nvidia)"/><text x="962.45" y="60" class="seglab">waits: grad norms</text></g>
+      <g class="seg k-caliper" data-i="8"><title>new_frame: ImGui&#x27;s Vulkan frame begins
+vulkan_renderer.cpp:330  ImGui_ImplVulkan_NewFrame();</title><rect x="230.55" y="123" width="6.96" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="9"><title>the applet&#x27;s draw_ui builds its widgets
+gpt_scope.cpp:1302  ImGui::Text(&quot;selected: layer %d, head %d — attention (rows attend to cols)&quot;,</title><rect x="237.51" y="123" width="53.34" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="10"><title>to_tensor: the CUDA tensor&#x27;s device address becomes the descriptor&#x27;s data
+torch.hpp:162  out.data = t.data_ptr();
+torch.hpp:163  out.device = CALIPER_DEV_CUDA;</title><rect x="284.82" y="123" width="54.27" height="18" rx="2.5"/><text x="290.82" y="136" class="seglab">tensor</text></g>
+      <g class="seg k-caliper" data-i="11"><title>stream_to_tensor: torch&#x27;s current CUDA stream goes in the descriptor
+torch.hpp:228  out-&gt;stream = (void*)at::cuda::getCurrentCUDAStream(
+gpt_scope.cpp:451  return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());</title><rect x="339.09" y="123" width="42.21" height="18" rx="2.5"/><text x="345.09" y="136" class="seglab">stream</text></g>
+      <g class="seg k-caliper" data-i="12"><title>update_texture: retire this texture&#x27;s last update, a host wait only if it is still running
+vulkan_renderer.cpp:3389  if (!retire(dst)) return dev_bail(&quot;pipelined: retire timed out&quot;);
+gpt_scope.cpp:455  if (id != 0) { bridge.update_texture(id, &amp;*ct); return id; }</title><rect x="381.3" y="123" width="45.22" height="18" rx="2.5"/><text x="387.3" y="136" class="seglab">retire</text></g>
+      <g class="seg k-caliper" data-i="13"><title>the in-VRAM copy enqueued on torch&#x27;s stream
+vulkan_renderer.cpp:3425  cu-&gt;cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, stream)</title><rect x="426.52" y="123" width="45.22" height="18" rx="2.5"/><text x="432.52" y="136" class="seglab">copy</text></g>
+      <g class="seg k-caliper" data-i="14"><title>the semaphore signal, base+1, enqueued on torch&#x27;s stream
+vulkan_renderer.cpp:3430  if (cu-&gt;cuSignalExternalSemaphoresAsync(&amp;io.cuda_sem, &amp;sp, 1, stream)
+vulkan_renderer.cpp:3429  sp.params.fence.value = base + 1;</title><rect x="471.74" y="123" width="45.23" height="18" rx="2.5"/><text x="477.74" y="136" class="seglab">signal</text></g>
+      <g class="seg k-caliper" data-i="15"><title>the colormap pass recorded into this texture&#x27;s command buffer
+vulkan_renderer.cpp:3440  record_cmap_body(io.cb, dst, make_push(dst, t, vmin, vmax), io.set);</title><rect x="516.97" y="123" width="60.3" height="18" rx="2.5"/><text x="522.97" y="136" class="seglab">record</text></g>
+      <g class="seg k-caliper" data-i="16"><title>vkQueueSubmit: wait for base+1, signal base+2, no fence
+vulkan_renderer.cpp:3460  if (vkQueueSubmit(queue_, 1, &amp;si, VK_NULL_HANDLE) != VK_SUCCESS)
+vulkan_renderer.cpp:3448  tsi.pWaitSemaphoreValues = &amp;wait_val;</title><rect x="577.27" y="123" width="60.29" height="18" rx="2.5"/><text x="583.27" y="136" class="seglab">submit</text></g>
+      <g class="seg k-caliper" data-i="17"><title>the applet draws the texture with ImGui::Image
+gpt_scope.cpp:1388  ImGui::Image(caliper::Bridge::imtex(st-&gt;head_tex), ImVec2(side, side));</title><rect x="637.56" y="123" width="49.87" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="18"><title>frame_render: acquire a swapchain image, wait for its frame&#x27;s fence
+vulkan_renderer.cpp:2245  VkResult err = vkAcquireNextImageKHR(device_, wd_.Swapchain, UINT64_MAX,
+vulkan_renderer.cpp:2252  vkWaitForFences(device_, 1, &amp;fd-&gt;Fence, VK_TRUE, UINT64_MAX);</title><rect x="687.43" y="123" width="17.39" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="19"><title>ImGui&#x27;s draw recorded into the frame&#x27;s command buffer
+vulkan_renderer.cpp:2266  ImGui_ImplVulkan_RenderDrawData(dd, fd-&gt;CommandBuffer);</title><rect x="704.82" y="123" width="41.74" height="18" rx="2.5"/><text x="710.82" y="136" class="seglab">record</text></g>
+      <g class="seg k-caliper" data-i="20"><title>vkQueueSubmit: wait for the image and for base+2
+vulkan_renderer.cpp:2296  if (vkQueueSubmit(queue_, 1, &amp;si, fd-&gt;Fence) == VK_SUCCESS)
+vulkan_renderer.cpp:2276  for (const auto&amp; pw : pending_frame_waits_) {</title><rect x="746.56" y="123" width="13.92" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="21"><title>vkQueuePresentKHR: queued behind render-complete
+vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</title><rect x="760.48" y="123" width="10.43" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="22"><title>next frame: new_frame
+vulkan_renderer.cpp:330  ImGui_ImplVulkan_NewFrame();</title><rect x="1026.02" y="123" width="6.96" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="23"><title>next frame: the applet&#x27;s draw_ui
+gpt_scope.cpp:1302  ImGui::Text(&quot;selected: layer %d, head %d — attention (rows attend to cols)&quot;,</title><rect x="1032.98" y="123" width="51.02" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="24"><title>torch&#x27;s kernels launched before the handoff: forward, start of backward</title><rect x="218.96" y="199" width="447.59" height="18" rx="2.5"/><text x="224.96" y="212" class="seglab">torch&#x27;s kernels</text></g>
+      <g class="seg k-caliper" data-i="25"><title>cuMemcpyDtoDAsync: the tensor into the shared buffer, inside VRAM
+vulkan_renderer.cpp:3425  cu-&gt;cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, stream)</title><rect x="666.55" y="199" width="8.12" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="26"><title>the timeline semaphore reaches base+1
+vulkan_renderer.cpp:3430  if (cu-&gt;cuSignalExternalSemaphoresAsync(&amp;io.cuda_sem, &amp;sp, 1, stream)</title><rect x="674.67" y="199" width="3" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="27"><title>torch&#x27;s kernels: rest of backward, grad norms</title><rect x="676.99" y="199" width="133.35" height="18" rx="2.5"/><text x="682.99" y="212" class="seglab">torch&#x27;s kernels</text></g>
+      <g class="seg k-torch" data-i="28"><title>torch&#x27;s kernels: optimizer step</title><rect x="817.3" y="199" width="44.06" height="18" rx="2.5"/></g>
+      <g class="seg k-torch" data-i="29"><title>torch&#x27;s kernels: next step</title><rect x="872.96" y="199" width="211.04" height="18" rx="2.5"/><text x="878.96" y="212" class="seglab">torch&#x27;s kernels</text></g>
+      <g class="seg k-wait" data-i="30"><title>the colormap submit waits for base+1, on the GPU
+vulkan_renderer.cpp:3448  tsi.pWaitSemaphoreValues = &amp;wait_val;</title><rect x="637.56" y="275" width="39.43" height="18" rx="2.5" fill="url(#wait-nvidia)"/></g>
+      <g class="seg k-caliper" data-i="31"><title>colormap.comp reads the shared buffer, writes the VkImage, signals base+2
+colormap.comp:27  float v = src[gid.y * p.sy + gid.x * p.sx];
+colormap.comp:42  imageStore(dst, ivec2(gid), c);</title><rect x="676.99" y="275" width="24.35" height="18" rx="2.5"/></g>
+      <g class="seg k-caliper" data-i="32"><title>ImGui&#x27;s draw samples the VkImage into the swapchain image
+vulkan_renderer.cpp:2266  ImGui_ImplVulkan_RenderDrawData(dd, fd-&gt;CommandBuffer);</title><rect x="760.48" y="275" width="35.95" height="18" rx="2.5"/></g>
+      <g class="seg k-screen" data-i="33"><title>the previous frame on screen</title><rect x="212.0" y="351" width="794.7" height="18" rx="2.5"/><text x="218.0" y="364" class="seglab">previous frame</text></g>
+      <g class="seg k-screen" data-i="34"><title>this frame on screen from the vsync after its present
+vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</title><rect x="1006.7" y="351" width="77.3" height="18" rx="2.5"/><text x="1012.7" y="364" class="seglab">this frame</text></g>
+      <text x="212" y="86" class="now-l" data-lane="0"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="0" target="_blank" rel="noopener"><text x="212" y="104" class="now-c"></text></a>
+      <text x="212" y="162" class="now-l" data-lane="1"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="1" target="_blank" rel="noopener"><text x="212" y="180" class="now-c"></text></a>
+      <text x="212" y="238" class="now-l" data-lane="2"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="2" target="_blank" rel="noopener"><text x="212" y="256" class="now-c"></text></a>
+      <text x="212" y="314" class="now-l" data-lane="3"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="3" target="_blank" rel="noopener"><text x="212" y="332" class="now-c"></text></a>
+      <text x="212" y="390" class="now-l" data-lane="4"><tspan class="lbl"></tspan><tspan class="where" dx="12"></tspan></text>
+      <a class="now-a" data-lane="4" target="_blank" rel="noopener"><text x="212" y="408" class="now-c"></text></a>
+      <g class="playhead"><line x1="0" y1="14" x2="0" y2="416"/><path d="M -5 12 L 5 12 L 0 19 Z"/></g>
+      </svg></div>
+      <script type="application/json" class="trace-data">{"name":"nvidia","base":"https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/","T":20.0,"x0":212,"x1":1084,"W":1100,"start":3.45,"scope":["call","nvidia"],"bands":[[2.75,4.0,13],[5.35,6.65,3]],"lanes":5,"segs":[{"l":0,"a":0.0,"b":1.8,"label":"forward: torch queues the kernels","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1006,"code":"auto logits = model->forward(xb);"}]},{"l":0,"a":1.8,"b":3.9,"label":"backward: torch queues the kernels","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1009,"code":"loss.backward();"}]},{"l":0,"a":3.9,"b":8.3,"label":"blocks until the GPU is done: grad norms copied to the CPU","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1018,"code":"auto gn = acc.sqrt().to(torch::kCPU).contiguous();"}]},{"l":0,"a":8.3,"b":9.0,"label":"optimizer step: torch queues the kernels","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1021,"code":"opt.step();"}]},{"l":0,"a":9.0,"b":10.6,"label":"blocks until the GPU is done: the loss read back","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1023,"code":"const float l = loss.item<float>();"}]},{"l":0,"a":10.6,"b":12.4,"label":"next step: forward","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1006,"code":"auto logits = model->forward(xb);"}]},{"l":0,"a":12.4,"b":14.5,"label":"next step: backward","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1009,"code":"loss.backward();"}]},{"l":0,"a":14.5,"b":20.0,"label":"next step: blocks until the GPU is done","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1018,"code":"auto gn = acc.sqrt().to(torch::kCPU).contiguous();"}]},{"l":1,"a":0.8,"b":1.1,"label":"new_frame: ImGui's Vulkan frame begins","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":330,"code":"ImGui_ImplVulkan_NewFrame();"}]},{"l":1,"a":1.1,"b":2.8,"label":"the applet's draw_ui builds its widgets","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1302,"code":"ImGui::Text(\"selected: layer %d, head %d — attention (rows attend to cols)\","}]},{"l":1,"a":2.78,"b":2.96,"label":"to_tensor: the CUDA tensor's device address becomes the descriptor's data","refs":[{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":162,"code":"out.data = t.data_ptr();"},{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":163,"code":"out.device = CALIPER_DEV_CUDA;"},{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":451,"code":"return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());"}]},{"l":1,"a":2.96,"b":3.1,"label":"stream_to_tensor: torch's current CUDA stream goes in the descriptor","refs":[{"f":"torch.hpp","p":"sdk/include/caliper/adapters/torch.hpp","ln":228,"code":"out->stream = (void*)at::cuda::getCurrentCUDAStream("},{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":451,"code":"return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());"}]},{"l":1,"a":3.1,"b":3.25,"label":"update_texture: retire this texture's last update, a host wait only if it is still running","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3389,"code":"if (!retire(dst)) return dev_bail(\"pipelined: retire timed out\");"},{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":455,"code":"if (id != 0) { bridge.update_texture(id, &*ct); return id; }"}]},{"l":1,"a":3.25,"b":3.4,"label":"the in-VRAM copy enqueued on torch's stream","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3425,"code":"cu->cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, stream)"}]},{"l":1,"a":3.4,"b":3.55,"label":"the semaphore signal, base+1, enqueued on torch's stream","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3430,"code":"if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3429,"code":"sp.params.fence.value = base + 1;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3428,"code":"cudadrv::ExternalSemaphoreSignalParams sp{};"}]},{"l":1,"a":3.55,"b":3.75,"label":"the colormap pass recorded into this texture's command buffer","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3440,"code":"record_cmap_body(io.cb, dst, make_push(dst, t, vmin, vmax), io.set);"}]},{"l":1,"a":3.75,"b":3.95,"label":"vkQueueSubmit: wait for base+1, signal base+2, no fence","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3460,"code":"if (vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS)"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3448,"code":"tsi.pWaitSemaphoreValues = &wait_val;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3450,"code":"tsi.pSignalSemaphoreValues = &signal_val;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3445,"code":"uint64_t wait_val = base + 1, signal_val = base + 2;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3454,"code":"si.pWaitSemaphores = &io.timeline;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3459,"code":"si.pSignalSemaphores = &io.timeline;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3447,"code":"tsi.waitSemaphoreValueCount = 1;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3449,"code":"tsi.signalSemaphoreValueCount = 1;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3446,"code":"VkTimelineSemaphoreSubmitInfoKHR tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3451,"code":"VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3452,"code":"si.pNext = &tsi;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3453,"code":"si.waitSemaphoreCount = 1;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3455,"code":"si.pWaitDstStageMask = &wait_stage;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3456,"code":"si.commandBufferCount = 1;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3457,"code":"si.pCommandBuffers = &io.cb;"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3458,"code":"si.signalSemaphoreCount = 1;"}]},{"l":1,"a":3.95,"b":5.4,"label":"the applet draws the texture with ImGui::Image","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1388,"code":"ImGui::Image(caliper::Bridge::imtex(st->head_tex), ImVec2(side, side));"}]},{"l":1,"a":5.4,"b":5.65,"label":"frame_render: acquire a swapchain image, wait for its frame's fence","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2245,"code":"VkResult err = vkAcquireNextImageKHR(device_, wd_.Swapchain, UINT64_MAX,"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2252,"code":"vkWaitForFences(device_, 1, &fd->Fence, VK_TRUE, UINT64_MAX);"}]},{"l":1,"a":5.65,"b":6.25,"label":"ImGui's draw recorded into the frame's command buffer","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2266,"code":"ImGui_ImplVulkan_RenderDrawData(dd, fd->CommandBuffer);"}]},{"l":1,"a":6.25,"b":6.45,"label":"vkQueueSubmit: wait for the image and for base+2","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2296,"code":"if (vkQueueSubmit(queue_, 1, &si, fd->Fence) == VK_SUCCESS)"},{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2276,"code":"for (const auto& pw : pending_frame_waits_) {"}]},{"l":1,"a":6.45,"b":6.6,"label":"vkQueuePresentKHR: queued behind render-complete","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2309,"code":"VkResult err = vkQueuePresentKHR(queue_, &pi);"}]},{"l":1,"a":17.5,"b":17.8,"label":"next frame: new_frame","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":330,"code":"ImGui_ImplVulkan_NewFrame();"}]},{"l":1,"a":17.8,"b":20.0,"label":"next frame: the applet's draw_ui","refs":[{"f":"gpt_scope.cpp","p":"applets/gpt_scope/gpt_scope.cpp","ln":1302,"code":"ImGui::Text(\"selected: layer %d, head %d — attention (rows attend to cols)\","}]},{"l":2,"a":0.3,"b":4.6,"label":"torch's kernels launched before the handoff: forward, start of backward","refs":[]},{"l":2,"a":4.6,"b":4.95,"label":"cuMemcpyDtoDAsync: the tensor into the shared buffer, inside VRAM","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3425,"code":"cu->cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, stream)"}]},{"l":2,"a":4.95,"b":5.05,"label":"the timeline semaphore reaches base+1","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3430,"code":"if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)"}]},{"l":2,"a":5.05,"b":8.2,"label":"torch's kernels: rest of backward, grad norms","refs":[]},{"l":2,"a":8.5,"b":10.4,"label":"torch's kernels: optimizer step","refs":[]},{"l":2,"a":10.9,"b":20.0,"label":"torch's kernels: next step","refs":[]},{"l":3,"a":3.95,"b":5.05,"label":"the colormap submit waits for base+1, on the GPU","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":3448,"code":"tsi.pWaitSemaphoreValues = &wait_val;"}]},{"l":3,"a":5.05,"b":5.6,"label":"colormap.comp reads the shared buffer, writes the VkImage, signals base+2","refs":[{"f":"colormap.comp","p":"src/host/renderer/shaders/colormap.comp","ln":27,"code":"float v = src[gid.y * p.sy + gid.x * p.sx];"},{"f":"colormap.comp","p":"src/host/renderer/shaders/colormap.comp","ln":42,"code":"imageStore(dst, ivec2(gid), c);"}]},{"l":3,"a":6.45,"b":7.6,"label":"ImGui's draw samples the VkImage into the swapchain image","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2266,"code":"ImGui_ImplVulkan_RenderDrawData(dd, fd->CommandBuffer);"}]},{"l":4,"a":0.0,"b":16.666666666666668,"label":"the previous frame on screen","refs":[]},{"l":4,"a":16.666666666666668,"b":20.0,"label":"this frame on screen from the vsync after its present","refs":[{"f":"vulkan_renderer.cpp","p":"src/host/renderer/vulkan_renderer.cpp","ln":2309,"code":"VkResult err = vkQueuePresentKHR(queue_, &pi);"}]}],"arrows":[3.33,3.48,3.93,5.05,6.4,7.6,8.2,10.4]}</script>
+    </div>
+    <!-- /trace:nvidia -->
         <!-- code:nvidia -->
 <div class="code-grid code-nvidia"><details class="code-panel"><summary class="code-head"><span class="code-title">Tensor to descriptor</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/sdk/include/caliper/adapters/torch.hpp#L157-L166">torch.hpp · 157–166</a></summary><pre class="code"><code><span class="row" data-file="torch.hpp" data-ln="157"><span class="ln">157</span>if (t.is_cuda()) {</span><span class="row" data-file="torch.hpp" data-ln="158"><span class="ln">158</span>    <span class="c">// Unlike MPS there is no buffer-object cast: data_ptr() IS the device</span></span><span class="row" data-file="torch.hpp" data-ln="159"><span class="ln">159</span>    <span class="c">// address (storage offset already applied), and the Vulkan backend</span></span><span class="row" data-file="torch.hpp" data-ln="160"><span class="ln">160</span>    <span class="c">// copies from it in-VRAM (ZEROCOPY.md). Contiguity was enforced above;</span></span><span class="row" data-file="torch.hpp" data-ln="161"><span class="ln">161</span>    <span class="c">// views with a nonzero storage offset are therefore fine here.</span></span><span class="row" data-file="torch.hpp" data-ln="162"><span class="ln">162</span>    out.data = t.<span class="p">data_ptr</span>();</span><span class="row" data-file="torch.hpp" data-ln="163"><span class="ln">163</span>    out.device = <span class="p">CALIPER_DEV_CUDA</span>;</span><span class="row" data-file="torch.hpp" data-ln="164"><span class="ln">164</span>    out.device_index = static_cast&lt;int32_t&gt;(t.device().index());</span><span class="row" data-file="torch.hpp" data-ln="165"><span class="ln">165</span>    return out;</span><span class="row" data-file="torch.hpp" data-ln="166"><span class="ln">166</span>}</span></code></pre></details>
 <details class="code-panel"><summary class="code-head"><span class="code-title">Vulkan allocates, exportable</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/src/host/renderer/vulkan_renderer.cpp#L2380-L2388">vulkan_renderer.cpp · 2380–2388</a></summary><pre class="code"><code><span class="row" data-file="vulkan_renderer.cpp" data-ln="2380"><span class="ln">2380</span>VkMemoryRequirements mr;</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2381"><span class="ln">2381</span>vkGetBufferMemoryRequirements(device_, b.buf, &amp;mr);</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2382"><span class="ln">2382</span><span class="p">VkExportMemoryAllocateInfo</span> xmai{VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2383"><span class="ln">2383</span>xmai.handleTypes = <span class="p">VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT</span>;</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2384"><span class="ln">2384</span>VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2385"><span class="ln">2385</span>if (external) mai.pNext = &amp;xmai;</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2386"><span class="ln">2386</span>mai.allocationSize = mr.size;</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2387"><span class="ln">2387</span>if (!find_mem_type(mr.memoryTypeBits, props, &amp;mai.memoryTypeIndex) ||</span><span class="row" data-file="vulkan_renderer.cpp" data-ln="2388"><span class="ln">2388</span>    <span class="p">vkAllocateMemory</span>(device_, &amp;mai, nullptr, &amp;b.memory) != VK_SUCCESS) {</span></code></pre></details>
@@ -1162,5 +1501,106 @@
   </div>
 </footer>
 
+<script>
+// The frame traces: play each one, fill in what every lane is doing and the line it is on, and light those lines
+// in the code panels of that backend.
+(() => {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  for (const root of document.querySelectorAll(".trace")) {
+    const d = JSON.parse(root.querySelector(".trace-data").textContent);
+    const svg = root.querySelector("svg.trace-svg");
+    const segs = [...svg.querySelectorAll(".seg")];
+    const flows = [...svg.querySelectorAll(".flow")];
+    const head = svg.querySelector(".playhead");
+    const range = root.querySelector("input[type=range]");
+    const out = root.querySelector("output");
+    const speed = root.querySelector("select");
+    const lanes = [...Array(d.lanes)].map((_, i) => ({
+      lbl: svg.querySelector(`.now-l[data-lane="${i}"] .lbl`),
+      where: svg.querySelector(`.now-l[data-lane="${i}"] .where`),
+      link: svg.querySelector(`.now-a[data-lane="${i}"]`),
+      code: svg.querySelector(`.now-a[data-lane="${i}"] .now-c`),
+      seg: -2,
+    }));
+    const live = "live-" + d.name;
+    const rows = d.scope.flatMap(s => [...document.querySelectorAll(`.code-${s} .row`)])
+      .map(r => ({r, key: r.dataset.file + ":" + r.dataset.ln, panel: r.closest(".code-panel")}));
+    const panels = [...new Set(rows.map(x => x.panel))];
+    // The time axis is piecewise linear (the generator's axis()): u is the drawn position, t the trace time.
+    const u = t => t + d.bands.reduce((v, [a, b, k]) => v + (k - 1) * Math.max(0, Math.min(t, b) - a), 0);
+    const ts = [0, ...d.bands.flatMap(([a, b]) => [a, b]), d.T], us = ts.map(u), U = us[us.length - 1];
+    const tOf = v => {
+      let i = 0;
+      while (i < us.length - 2 && v > us[i + 1]) i++;
+      return ts[i] + (v - us[i]) * (ts[i + 1] - ts[i]) / (us[i + 1] - us[i]);
+    };
+    const x = t => d.x0 + (d.x1 - d.x0) * u(t) / U;
+    let t = d.start, v = u(t), playing = !reduce, visible = false, raf = 0, last = 0, hold = 0;
+
+    function draw() {
+      head.setAttribute("transform", `translate(${x(t)} 0)`);
+      range.value = Math.round(v * 1000);
+      out.textContent = t.toFixed(2) + " ms";
+      const now = Array(d.lanes).fill(-1);
+      d.segs.forEach((s, i) => {
+        const on = s.a <= t && t < s.b;
+        segs[i].classList.toggle("on", on);
+        if (on) now[s.l] = i;
+      });
+      d.arrows.forEach((a, j) => flows[j].classList.toggle("fired", t >= a));
+      const keys = new Set();
+      now.forEach((i, l) => {
+        if (i >= 0) for (const r of d.segs[i].refs) keys.add(r.f + ":" + r.ln);
+        const lane = lanes[l];
+        if (lane.seg === i) return;
+        lane.seg = i;
+        const s = i >= 0 ? d.segs[i] : null, r = s && s.refs[0];
+        lane.lbl.textContent = s ? s.label : "idle";
+        lane.lbl.classList.toggle("idle", !s);
+        lane.where.textContent = r ? `${r.f}:${r.ln}` : "";
+        lane.code.textContent = r ? r.code : "";
+        if (r) lane.link.setAttribute("href", `${d.base}${r.p}#L${r.ln}`);
+        else lane.link.removeAttribute("href");
+      });
+      const lit = new Set();
+      for (const {r, key, panel} of rows) {
+        const on = keys.has(key);
+        r.classList.toggle(live, on);
+        if (on) lit.add(panel);
+      }
+      for (const p of panels) p.classList.toggle(live, lit.has(p));
+    }
+
+    function tick(ts) {
+      raf = 0;
+      if (!playing || !visible) return;
+      const dt = last ? ts - last : 0;
+      last = ts;
+      // speed is real milliseconds per drawn unit, so the stretched bands play slower; hold at the end, then loop.
+      if (v >= U) { hold += dt; if (hold > 1200) { v = 0; hold = 0; } }
+      else v = Math.min(U, v + dt / Number(speed.value));
+      t = tOf(v);
+      draw();
+      raf = requestAnimationFrame(tick);
+    }
+    function run() {
+      root.classList.toggle("playing", playing);
+      if (playing && visible && !raf) { last = 0; raf = requestAnimationFrame(tick); }
+    }
+    root.querySelector(".tb-play").addEventListener("click", () => {
+      playing = !playing;
+      if (playing && v >= U) { v = 0; t = 0; }
+      run();
+    });
+    range.addEventListener("input", () => { v = range.value / 1000; t = tOf(v); playing = false; run(); draw(); });
+    segs.forEach((g, i) => g.addEventListener("click", () => {
+      t = (d.segs[i].a + d.segs[i].b) / 2; v = u(t); playing = false; run(); draw();
+    }));
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; run(); }, {threshold: 0.2}).observe(root);
+    draw();
+    run();
+  }
+})();
+</script>
 </body>
 </html>
