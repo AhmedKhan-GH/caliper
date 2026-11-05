@@ -181,8 +181,9 @@ struct Inspector::Impl {
     std::string queued_op, queued_purpose;
     Object queued_fields;
     TracePane trace_pane;
-    // Model 3D and Trace share a dock place without tabs; only the one shown is drawn.
-    bool show_trace = false;
+    // With a lens, Trace has the top of the centre and Model 3D and Tensor share the place under it, without
+    // tabs: only the one shown is drawn. Picking a tensor shows Tensor; its Model 3D switch goes back.
+    bool show_tensor = false;
     double trace_started = 0;
     // The Output follows the run being written.
     int trace_shown = -1;
@@ -684,7 +685,6 @@ struct Inspector::Impl {
                 trace_pane.started(ask.run);
                 output.clear(); tokens = 0; tokens_per_second = 0; trace_started = seconds();
                 generation_status = "Generating"; stop_requested = false; output_changed = true;
-                show_trace = true;
             }
             return;
         }
@@ -837,7 +837,7 @@ struct Inspector::Impl {
                             for (const char* common : {"language_model.model.", "model."})
                                 if (label.rfind(common, 0) == 0) { label.erase(0, std::strlen(common)); break; }
                             ImGui::BeginDisabled(!can_control());
-                            if (ImGui::Selectable(label.c_str(), selected == t.name, ImGuiSelectableFlags_SpanAllColumns)) select(t.name);
+                            if (ImGui::Selectable(label.c_str(), selected == t.name, ImGuiSelectableFlags_SpanAllColumns)) { select(t.name); show_tensor = true; }
                             ImGui::EndDisabled();
                             if (scroll_selected && selected == t.name) { ImGui::SetScrollHereY(0.5f); scroll_selected = false; }
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%.0f values", t.name.c_str(), t.size);
@@ -1270,11 +1270,10 @@ struct Inspector::Impl {
         if (supports("read_weight") && send("read_weight", {{"name", selected}, {"row", static_cast<double>(row)}, {"col", static_cast<double>(col)}}))
             focus_after_read = true;
     }
-    // The Trace pane shares Model 3D's place in the dock; each has a switch to the other.
+    // With a lens, the Trace pane has the top of the centre to itself.
     void trace_view(float x, float y, float w, float h) {
         place_window(kTracePane, x, y, w, h);
         if (begin_pane(kTracePane, "Trace", "Jacobian lens")) {
-            if (sternbild::word_button("Model 3D")) show_trace = false;
             const auto ask = trace_pane.draw(can_control() && queued_op.empty(), active.op == "trace");
             if (ask.op == "stop") stop();
             else if (ask.op == "trace") {
@@ -1294,6 +1293,7 @@ struct Inspector::Impl {
         for (const char* prefix : {"language_model.model.", "model."})
             if (subtitle.rfind(prefix, 0) == 0) { subtitle.erase(0, std::strlen(prefix)); break; }
         if (begin_pane(kTensorPane, "Tensor", subtitle.c_str())) {
+            if (supports("trace") && sternbild::word_button("Model 3D")) show_tensor = false;
             if (!t) faint_text("Select a tensor in Model or Model 3D.");
             else tensor_body(*t);
         }
@@ -1474,12 +1474,22 @@ struct Inspector::Impl {
             }
             layout_built = true; reset_layout = false;
         }
-        // A layout saved before the Trace pane existed: give Trace Model 3D's place, keeping the rest.
-        if (supports("trace")) {
-            const ImGuiWindowSettings* saved = ImGui::FindWindowSettingsByID(ImHashStr(kTracePane));
-            const ImGuiWindow* model3d_window = ImGui::FindWindowByName(kModel3DPane);
-            if ((!saved || !saved->DockId) && model3d_window && model3d_window->DockId)
-                ImGui::DockBuilderDockWindow(kTracePane, model3d_window->DockId);
+        // With a lens, Trace takes Model 3D's place at the top and Model 3D moves under it, beside Tensor;
+        // without one, Model 3D goes back to the top. Either way the rest of a saved layout is kept.
+        // A pane's place: its live window's, or its saved one before the pane is first drawn (a pane that
+        // shares a place may not be drawn at all).
+        auto place_of = [](const char* pane) -> ImGuiID {
+            if (const ImGuiWindow* window = ImGui::FindWindowByName(pane); window && window->DockId) return window->DockId;
+            const ImGuiWindowSettings* saved = ImGui::FindWindowSettingsByID(ImHashStr(pane));
+            return saved ? saved->DockId : 0;
+        };
+        const ImGuiID trace_dock = place_of(kTracePane), model3d_dock = place_of(kModel3DPane),
+                      tensor_dock = place_of(kTensorPane);
+        if (supports("trace") && model3d_dock && tensor_dock) {
+            if (!trace_dock) ImGui::DockBuilderDockWindow(kTracePane, model3d_dock);
+            else if (model3d_dock != tensor_dock) ImGui::DockBuilderDockWindow(kModel3DPane, tensor_dock);
+        } else if (!capabilities.empty() && !supports("trace") && trace_dock && model3d_dock && model3d_dock == tensor_dock) {
+            ImGui::DockBuilderDockWindow(kModel3DPane, trace_dock);
         }
         ImGui::DockSpace(dock, ImVec2(0, 0), ImGuiDockNodeFlags_NoUndocking | ImGuiDockNodeFlags_NoWindowMenuButton |
                                              ImGuiDockNodeFlags_NoTabBar);
@@ -1507,23 +1517,27 @@ struct Inspector::Impl {
             draw_window([&](float a,float b,float c,float d) { inference(a,b,c,d); }, windows.inference);
         if (supports("list_tensors")) {
             draw_window([&](float a,float b,float c,float d) { model_tree(a,b,c,d); }, windows.tree);
-            const auto r = windows.model3d;
+            // With a lens, Model 3D lives under Trace, in Tensor's place.
+            const auto r = supports("trace") ? windows.tensor : windows.model3d;
             if (force_layout) {
                 ImGui::SetWindowPos("Model 3D###caliper.inspector.model3d", point(r.x, r.y));
                 ImGui::SetWindowSize("Model 3D###caliper.inspector.model3d", point(r.width, r.height));
             }
-            model3d.offer_trace = supports("trace");
-            if (!supports("trace")) show_trace = false;
             std::string clicked;
-            if (show_trace) draw_window([&](float a,float b,float c,float d) { trace_view(a,b,c,d); }, windows.model3d);
-            else clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
-            if (model3d.trace_clicked) { model3d.trace_clicked = false; show_trace = true; }
+            if (supports("trace")) {
+                // Trace on top; under it Model 3D, or Tensor once a tensor is picked.
+                draw_window([&](float a,float b,float c,float d) { trace_view(a,b,c,d); }, windows.model3d);
+                if (show_tensor) draw_window([&](float a,float b,float c,float d) { tensor_view(a,b,c,d); }, windows.tensor);
+                else clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
+            } else {
+                clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
+                draw_window([&](float a,float b,float c,float d) { tensor_view(a,b,c,d); }, windows.tensor);
+            }
             if (!clicked.empty()) {
-                select(clicked, true);
+                select(clicked, true); show_tensor = true;
                 ImGui::SetWindowCollapsed("Tensor###caliper.inspector.tensor", false);
                 ImGui::SetWindowFocus("Tensor###caliper.inspector.tensor");
             }
-            draw_window([&](float a,float b,float c,float d) { tensor_view(a,b,c,d); }, windows.tensor);
             thumbnails();
         }
     }
