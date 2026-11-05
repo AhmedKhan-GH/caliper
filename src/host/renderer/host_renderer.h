@@ -223,6 +223,10 @@ public:
         return {};
     }
 
+    // Test-only: keep device updates off the Vulkan direct-image path (D25), so
+    // the gfx suite can still prove the buffer path below it.
+    virtual void debug_force_buffer_path(bool /*force*/) {}
+
     // D24 (docs/metal-pipelining.md §4): true when this backend honors a
     // non-NULL CaliperTensor.stream by GPU-ordering the device update after
     // the producer's stream/queue. Surfaced to applets as bridge-v1.1 caps()

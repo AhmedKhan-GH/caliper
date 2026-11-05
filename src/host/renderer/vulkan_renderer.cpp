@@ -33,6 +33,12 @@
 // elided when the adapter populates CaliperTensor.stream under bridge-v1.1
 // caps (M2a, D24) — the copy+signal then ride the producer's stream.
 //
+// Direct path (D25, docs/vulkan-update-costs.md W2): where it is available,
+// the steps above are replaced by one CUDA kernel, launched on the producer's
+// stream, that reads the tensor in place and writes the VkImage through a
+// surface object = 0 host copies + 0 in-VRAM copies, for any torch tensor. The
+// buffer path above stays as the rung below it, per update and per texture.
+//
 // The frame loop follows imgui's example_glfw_vulkan (the ImGui_ImplVulkanH_
 // helpers); the CLEAR lives in the render pass load-op with the same color as
 // the GL backend's top-of-frame clear (C1 contract).
@@ -85,6 +91,7 @@ extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t*
 // Build-time SPIR-V of shaders/colormap.comp (glslang -V --vn kColormapSpv),
 // byte-identical index math to the CPU reference (§16).
 #include <colormap_spv.h>
+#include <cmap_direct_ptx.h>
 // caliper.geometry.v1 instanced-point shaders (same build-time discipline).
 #include <points_vert_spv.h>
 #include <points_frag_spv.h>
@@ -235,6 +242,8 @@ class VulkanRenderer final : public HostRenderer {
 public:
     const char* name() const override { return "vulkan"; }
     const char* last_device_path() const override { return last_device_path_; }
+
+    void debug_force_buffer_path(bool force) override { force_buffer_path_ = force; }
 
     void device_update_wait() override {
         if (last_update_sem_ == VK_NULL_HANDLE) return;
@@ -686,6 +695,7 @@ public:
     void tex_release(uint64_t tex) override {
         auto it = textures_.find(tex);
         if (it == textures_.end()) return;
+        retire(it->second);        // a direct update runs on CUDA's stream, not this queue
         vkQueueWaitIdle(queue_);   // the texture may be in the in-flight frame
         destroy_tex(it->second);
         textures_.erase(it);
@@ -729,6 +739,13 @@ public:
             return dev_bail("cuMemGetAddressRange failed");
         if (src < base || (src - base) + bytes > alloc)
             return dev_bail("tensor extent exceeds CUDA allocation");
+
+        // D25: the kernel reads the tensor where it lies, so this path needs no
+        // shared buffer at all. Any refusal lands on the buffer path below.
+        if (!force_buffer_path_ && update_direct(dst, t, src, lut256, vmin, vmax)) {
+            dev_note("CUDA interop OK — zero-copy (kernel reads the tensor, writes the image)");
+            return true;
+        }
 
         if (!ensure_shared_buffer(dst, bytes)) return dev_bail("shared-buffer import failed");
 
@@ -1333,6 +1350,10 @@ public:
                     return dev_bail("primitives: bad sampled texture");
                 if (tit->second.layout != tit->second.rest_layout)
                     return dev_bail("primitives: sampled texture not shader-readable");
+                // A direct update has no Vulkan pass for this submit's queue
+                // order to fall behind, so wait for it here.
+                if (!retire(tit->second))
+                    return dev_bail("primitives: sampled texture update timed out");
                 e.texture = &tit->second;
             }
 
@@ -1888,6 +1909,10 @@ private:
         int w = 0, h = 0;
         Interop interop;
         Direct direct;
+        // The timeline value and stream of the last direct update. An update
+        // that follows it on the same stream needs no wait on the timeline.
+        uint64_t direct_value = 0;
+        void* direct_stream = nullptr;
         VkFramebuffer fb = VK_NULL_HANDLE;  // geometry.v1 view render target
         // geometry.v1_1 optional depth attachment (CALIPER_GEOM_VIEW_DEPTH).
         // Device-local D32-float, never sampled, never an id; the framebuffer
@@ -2314,6 +2339,10 @@ private:
 
         // V4: pipelined device updates queued this frame must complete before
         // ImGui samples their textures — GPU-side timeline waits, not fences.
+        // D25: the frame timeline tells a kernel when this frame stops sampling.
+        const uint32_t sig_count = frame_timeline_ ? 2 : 1;
+        const VkSemaphore sig_sems[2] = {rend_done, frame_timeline_};
+        const uint64_t sig_vals[2] = {0, frame_value_ + 1};  // binary: ignored
         std::vector<VkSemaphore> wait_sems{img_acq};
         std::vector<uint64_t> wait_vals{0};                 // binary: ignored
         std::vector<VkPipelineStageFlags> wait_stages{
@@ -2323,23 +2352,24 @@ private:
             wait_vals.push_back(pw.second);
             wait_stages.push_back(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         }
-        uint64_t sig_val = 0;                               // binary: ignored
         VkTimelineSemaphoreSubmitInfoKHR tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
         tsi.waitSemaphoreValueCount = (uint32_t)wait_vals.size();
         tsi.pWaitSemaphoreValues = wait_vals.data();
-        tsi.signalSemaphoreValueCount = 1;
-        tsi.pSignalSemaphoreValues = &sig_val;
+        tsi.signalSemaphoreValueCount = sig_count;
+        tsi.pSignalSemaphoreValues = sig_vals;
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        if (!pending_frame_waits_.empty()) si.pNext = &tsi;
+        if (!pending_frame_waits_.empty() || frame_timeline_) si.pNext = &tsi;
         si.waitSemaphoreCount = (uint32_t)wait_sems.size();
         si.pWaitSemaphores = wait_sems.data();
         si.pWaitDstStageMask = wait_stages.data();
         si.commandBufferCount = 1;
         si.pCommandBuffers = &fd->CommandBuffer;
-        si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores = &rend_done;
-        if (vkQueueSubmit(queue_, 1, &si, fd->Fence) == VK_SUCCESS)
+        si.signalSemaphoreCount = sig_count;
+        si.pSignalSemaphores = sig_sems;
+        if (vkQueueSubmit(queue_, 1, &si, fd->Fence) == VK_SUCCESS) {
             pending_frame_waits_.clear();
+            if (frame_timeline_) ++frame_value_;
+        }
     }
 
     void frame_present() {
@@ -2588,7 +2618,24 @@ private:
         return true;
     }
 
+    void destroy_direct(Direct& d) {
+        const cudadrv::Api* cu = cudadrv::api();
+        const cudadrv::DirectApi* da = cudadrv::direct_api();
+        if (cu && da && (d.surf || d.mip || d.ext)) {
+            cu->cuCtxSetCurrent(cuda_ctx_);
+            if (d.surf) da->cuSurfObjectDestroy(d.surf);
+            if (d.mip) da->cuMipmappedArrayDestroy(d.mip);
+            if (d.ext) cu->cuDestroyExternalMemory(d.ext);
+        }
+        d.surf = 0; d.mip = nullptr; d.ext = nullptr;
+#ifdef _WIN32
+        if (d.win32_handle) CloseHandle((HANDLE)d.win32_handle);
+#endif
+        d.win32_handle = nullptr;
+    }
+
     void destroy_tex(Tex& t) {
+        destroy_direct(t.direct);
         destroy_interop(t.interop);
         if (t.fb) { vkDestroyFramebuffer(device_, t.fb, nullptr); t.fb = VK_NULL_HANDLE; }
         if (t.descset) { ImGui_ImplVulkan_RemoveTexture(t.descset); t.descset = VK_NULL_HANDLE; }
@@ -2699,6 +2746,8 @@ private:
         Interop& io = t.interop;
         if (io.shared.buf != VK_NULL_HANDLE && io.shared.size >= bytes && io.cuda_ptr)
             return true;
+        retire(t);   // a direct update may be in flight on the timeline torn down here
+        t.direct_value = 0;
         destroy_interop(io);
 
         if (!ensure_buffer(io.shared, bytes,
@@ -2806,6 +2855,7 @@ private:
     }
 
     void destroy_compute() {
+        destroy_direct_globals();
         if (cmap_pool_) { vkDestroyDescriptorPool(device_, cmap_pool_, nullptr); cmap_pool_ = VK_NULL_HANDLE; }
         if (cmap_pipeline_) { vkDestroyPipeline(device_, cmap_pipeline_, nullptr); cmap_pipeline_ = VK_NULL_HANDLE; }
         if (cmap_pipe_layout_) { vkDestroyPipelineLayout(device_, cmap_pipe_layout_, nullptr); cmap_pipe_layout_ = VK_NULL_HANDLE; }
@@ -3522,6 +3572,215 @@ private:
         return true;
     }
 
+    // ---- D25 direct update: one kernel, tensor in place, image written --------
+    // One-time setup: the kernels, plus the frame timeline a kernel waits on.
+    // Frames submitted before the timeline existed never signal it, so let them
+    // finish first. Any failure turns the path off for this renderer.
+    bool ensure_direct_globals() {
+        if (direct_module_) return true;
+        if (!direct_available()) return false;
+        const cudadrv::DirectApi* da = cudadrv::direct_api();
+        const cudadrv::Api* cu = cudadrv::api();
+        const auto fail = [&](const char* why) {
+            dev_note(why);
+            direct_failed_ = true;
+            destroy_direct_globals();
+            return false;
+        };
+        cudadrv::CUmodule mod = nullptr;
+        if (da->cuModuleLoadData(&mod, kCmapDirectPtx) != cudadrv::CUDA_SUCCESS)
+            return fail("direct image: PTX did not load, using the buffer path");
+        direct_module_ = mod;
+        if (da->cuModuleGetFunction(&direct_cmap_, mod, "caliper_cmap_f32") != cudadrv::CUDA_SUCCESS ||
+            da->cuModuleGetFunction(&direct_blit_, mod, "caliper_blit_rgba8") != cudadrv::CUDA_SUCCESS)
+            return fail("direct image: kernel lookup failed, using the buffer path");
+
+#ifdef _WIN32
+        VkSemaphoreTypeCreateInfoKHR sti{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR};
+        sti.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR;
+        VkExportSemaphoreCreateInfo esi{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+        esi.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        sti.pNext = &esi;
+        VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        sci.pNext = &sti;
+        VkSemaphore timeline = VK_NULL_HANDLE;
+        if (vkCreateSemaphore(device_, &sci, nullptr, &timeline) != VK_SUCCESS)
+            return fail("direct image: frame timeline failed, using the buffer path");
+        direct_frame_timeline_ = timeline;
+        VkSemaphoreGetWin32HandleInfoKHR gi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR};
+        gi.semaphore = timeline;
+        gi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        HANDLE h = nullptr;
+        if (vkGetSemaphoreWin32HandleKHR(device_, &gi, &h) != VK_SUCCESS)
+            return fail("direct image: frame timeline export failed, using the buffer path");
+        frame_sem_handle_ = h;
+        cudadrv::ExternalSemaphoreHandleDesc sd{};
+        sd.type = cudadrv::kExtSemHandleTypeTimelineOpaqueWin32;
+        sd.handle.win32.handle = h;
+        if (cu->cuImportExternalSemaphore(&cuda_frame_sem_, &sd) != cudadrv::CUDA_SUCCESS)
+            return fail("direct image: frame timeline import failed, using the buffer path");
+        vkQueueWaitIdle(queue_);
+        frame_timeline_ = timeline;
+        frame_value_ = 0;
+        return true;
+#else
+        return fail("direct image: Windows only");
+#endif
+    }
+
+    void destroy_direct_globals() {
+        const cudadrv::Api* cu = cudadrv::api();
+        const cudadrv::DirectApi* da = cudadrv::direct_api();
+        if (cu && cuda_ctx_) cu->cuCtxSetCurrent(cuda_ctx_);
+        if (cuda_frame_sem_ && cu) cu->cuDestroyExternalSemaphore(cuda_frame_sem_);
+        cuda_frame_sem_ = nullptr;
+#ifdef _WIN32
+        if (frame_sem_handle_) CloseHandle((HANDLE)frame_sem_handle_);
+#endif
+        frame_sem_handle_ = nullptr;
+        if (direct_frame_timeline_) vkDestroySemaphore(device_, direct_frame_timeline_, nullptr);
+        direct_frame_timeline_ = VK_NULL_HANDLE;
+        frame_timeline_ = VK_NULL_HANDLE;
+        frame_value_ = 0;
+        if (direct_module_ && da) da->cuModuleUnload(direct_module_);
+        direct_module_ = nullptr;
+        direct_cmap_ = nullptr;
+        direct_blit_ = nullptr;
+    }
+
+    // Import the image's memory into CUDA once and make it a surface.
+    bool ensure_direct_image(Tex& t) {
+        Direct& d = t.direct;
+        if (d.surf) return true;
+        if (!d.exportable || d.broken) return false;
+        d.broken = true;   // cleared below on success; a failed import is not retried
+#ifdef _WIN32
+        const cudadrv::Api* cu = cudadrv::api();
+        const cudadrv::DirectApi* da = cudadrv::direct_api();
+        VkMemoryGetWin32HandleInfoKHR gi{VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR};
+        gi.memory = t.memory;
+        gi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        HANDLE h = nullptr;
+        if (vkGetMemoryWin32HandleKHR(device_, &gi, &h) != VK_SUCCESS) return false;
+        d.win32_handle = h;
+
+        cudadrv::ExternalMemoryHandleDesc hd{};
+        hd.type = cudadrv::kExtMemHandleTypeOpaqueWin32;
+        hd.handle.win32.handle = h;
+        hd.size = d.mem_size;
+        hd.flags = cudadrv::kExtMemDedicated;
+        cudadrv::ExternalMemoryMipmappedArrayDesc md{};
+        md.arrayDesc.Width = (size_t)t.w;
+        md.arrayDesc.Height = (size_t)t.h;
+        md.arrayDesc.Format = cudadrv::kArrayFormatUnsignedInt8;
+        md.arrayDesc.NumChannels = 4;
+        md.arrayDesc.Flags = cudadrv::kArray3dSurfaceLdst;
+        md.numLevels = 1;
+        cudadrv::CUarray level = nullptr;
+        cudadrv::ResourceDesc rd{};
+        rd.resType = cudadrv::kResourceTypeArray;
+        if (cu->cuImportExternalMemory(&d.ext, &hd) != cudadrv::CUDA_SUCCESS ||
+            da->cuExternalMemoryGetMappedMipmappedArray(&d.mip, d.ext, &md) != cudadrv::CUDA_SUCCESS ||
+            da->cuMipmappedArrayGetLevel(&level, d.mip, 0) != cudadrv::CUDA_SUCCESS ||
+            (rd.res.array.hArray = level,
+             da->cuSurfObjectCreate(&d.surf, &rd)) != cudadrv::CUDA_SUCCESS) {
+            destroy_direct(d);
+            dev_note("direct image: CUDA import failed, using the buffer path");
+            return false;
+        }
+        d.broken = false;
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    // Returns false, having enqueued no work that writes the image, whenever the
+    // buffer path should take this update instead. The kernel runs in torch's
+    // context, where a bad read would poison training, so everything it will
+    // touch is checked here. The caller already bounded the tensor's extent
+    // against its allocation; the kernel reads no further than that extent as
+    // long as the shape equals the texture's, which is checked here.
+    bool update_direct(Tex& dst, const CaliperTensor& t, cudadrv::CUdeviceptr src,
+                       const uint32_t* lut256, float vmin, float vmax) {
+        if (!dst.direct.exportable || dst.direct.broken || !direct_available()) return false;
+        const bool is_cmap = (t.dtype == CALIPER_DT_F32 && lut256 != nullptr);
+        const bool is_blit = (t.dtype == CALIPER_DT_U8);
+        long long stride_x = 0, stride_y = 0;
+        if (is_cmap) {
+            if (t.ndim != 2 || (src & 3) != 0) return false;
+            stride_y = (long long)t.strides[0] * 4;
+            stride_x = (long long)t.strides[1] * 4;
+        } else if (is_blit) {
+            if (t.ndim != 3 || t.shape[2] != 4 || t.strides[2] != 1) return false;
+            stride_y = (long long)t.strides[0];
+            stride_x = (long long)t.strides[1];
+        } else {
+            return false;
+        }
+        if (t.shape[0] != dst.h || t.shape[1] != dst.w || stride_x <= 0 || stride_y <= 0)
+            return false;
+
+        if (!ensure_direct_globals() || !ensure_direct_image(dst) ||
+            !ensure_pipeline_objects(dst))
+            return false;
+
+        const cudadrv::Api* cu = cudadrv::api();
+        const cudadrv::DirectApi* da = cudadrv::direct_api();
+        Interop& io = dst.interop;
+        cudadrv::CUstream stream = (cudadrv::CUstream)t.stream;
+        const uint64_t base = io.timeline_value;
+
+        // After anything but a direct update on this stream, wait on the GPU for
+        // that update to finish; it may still be writing this image.
+        if (base != 0 && !(dst.direct_value == base && dst.direct_stream == stream)) {
+            cudadrv::ExternalSemaphoreWaitParams wp{};
+            wp.params.fence.value = base;
+            if (da->cuWaitExternalSemaphoresAsync(&io.cuda_sem, &wp, 1, stream)
+                    != cudadrv::CUDA_SUCCESS)
+                return dev_bail("direct: chain wait failed");
+        }
+        // Frames already submitted may be sampling this image. Most have finished
+        // by now, and only an unfinished one costs the producer's stream a wait.
+        uint64_t frames_done = 0;
+        if (frame_value_ != 0 &&
+            vkGetSemaphoreCounterValueKHR(device_, frame_timeline_, &frames_done) == VK_SUCCESS &&
+            frames_done < frame_value_) {
+            cudadrv::ExternalSemaphoreWaitParams wp{};
+            wp.params.fence.value = frame_value_;
+            if (da->cuWaitExternalSemaphoresAsync(&cuda_frame_sem_, &wp, 1, stream)
+                    != cudadrv::CUDA_SUCCESS)
+                return dev_bail("direct: frame wait failed");
+        }
+
+        const void* src_arg = (const void*)(uintptr_t)src;
+        int w = dst.w, h = dst.h;
+        void* cmap_params[] = {&src_arg, &dst.direct.surf, &w, &h, &stride_x, &stride_y,
+                               &vmin, &vmax, const_cast<uint32_t*>(lut256)};
+        void* blit_params[] = {&src_arg, &dst.direct.surf, &w, &h, &stride_x, &stride_y};
+        if (da->cuLaunchKernel(is_cmap ? direct_cmap_ : direct_blit_,
+                               ((unsigned)w + 15) / 16, ((unsigned)h + 15) / 16, 1,
+                               16, 16, 1, 0, stream,
+                               is_cmap ? cmap_params : blit_params, nullptr)
+                != cudadrv::CUDA_SUCCESS)
+            return dev_bail("direct: kernel launch failed");
+
+        cudadrv::ExternalSemaphoreSignalParams sp{};
+        sp.params.fence.value = base + 1;
+        if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)
+                != cudadrv::CUDA_SUCCESS)
+            return dev_bail("direct: semaphore signal failed");
+
+        io.timeline_value = base + 1;
+        dst.direct_value = io.timeline_value;
+        dst.direct_stream = stream;
+        pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
+        last_update_sem_ = io.timeline;
+        last_update_value_ = io.timeline_value;
+        last_device_path_ = is_cmap ? "direct-cmap" : "direct-blit";
+        return true;
+    }
+
     // ---- V4 pipelined imported update: update_pipelined minus the D2D copy ----
     // The applet already wrote the imported allocation, so CUDA only SIGNALS
     // base+1 on the producer's stream (no cuMemcpyDtoDAsync); the Vulkan pass
@@ -3717,6 +3976,17 @@ private:
     bool timeline_ok_ = false;          // device exports timeline semaphores
     bool pipelined_ok_ = false;         // interop + timeline: V4 pipelining live
     bool direct_failed_ = false;        // D25 kernels or frame timeline failed to set up
+    bool force_buffer_path_ = false;    // test-only
+    cudadrv::CUmodule direct_module_ = nullptr;
+    cudadrv::CUfunction direct_cmap_ = nullptr;
+    cudadrv::CUfunction direct_blit_ = nullptr;
+    // Each frame submission signals ++frame_value_ on this timeline, which CUDA
+    // has imported. frame_timeline_ is null until the direct path first runs.
+    VkSemaphore direct_frame_timeline_ = VK_NULL_HANDLE;
+    VkSemaphore frame_timeline_ = VK_NULL_HANDLE;
+    uint64_t frame_value_ = 0;
+    void* frame_sem_handle_ = nullptr;
+    cudadrv::CUexternalSemaphore cuda_frame_sem_ = nullptr;
     uint8_t device_uuid_[16] = {};
     cudadrv::CUcontext cuda_ctx_ = nullptr;
     cudadrv::CUdevice cuda_dev_ = 0;

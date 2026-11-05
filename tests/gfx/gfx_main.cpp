@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -3136,6 +3137,12 @@ bool vk_cuda_ready() {
 
 }  // namespace
 
+// Keeps a test's device updates on the buffer path, the rung below direct.
+struct ForceBufferPath {
+    ForceBufferPath() { vk_env().renderer->debug_force_buffer_path(true); }
+    ~ForceBufferPath() { vk_env().renderer->debug_force_buffer_path(false); }
+};
+
 // ---- CPU-staged matrix (portable: runs on any Vulkan ICD, no CUDA) ----------
 TEST_CASE("gfx/Vulkan: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
@@ -3163,6 +3170,7 @@ TEST_CASE("gfx/Vulkan+CUDA: device f32+LUT takes the compute path, pixel-exact")
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
+    ForceBufferPath buffer_path;
     const cudadrv::Api* cu = cudadrv::api();
 
     for (auto wh : {std::pair<int,int>{4, 4}, {5, 3}, {17, 9}}) {   // non-16-multiple edges
@@ -3203,6 +3211,7 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
+    ForceBufferPath buffer_path;
     const cudadrv::Api* cu = cudadrv::api();
 
     const int w = 17, h = 9, n = w * h;   // non-16-multiple edge sizes
@@ -3239,6 +3248,280 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
     cu->cuMemFree(buf);
 }
 
+namespace {
+// A torch-shaped CUDA tensor over freshly uploaded host bytes.
+struct CudaTensor {
+    cudadrv::CUdeviceptr buf = 0;
+    CaliperTensor t{};
+    size_t bytes = 0;
+    CudaTensor(const void* src, size_t n) : bytes(n) {
+        const cudadrv::Api* cu = cudadrv::api();
+        REQUIRE(cu->cuMemAlloc(&buf, n) == cudadrv::CUDA_SUCCESS);
+        cu->cuMemcpyHtoD(buf, src, n);
+        t.struct_size = sizeof(t);
+        t.data = (void*)(uintptr_t)buf;
+        t.device = CALIPER_DEV_CUDA;
+    }
+    ~CudaTensor() {
+        vk_env().renderer->device_update_wait();
+        cudadrv::api()->cuCtxSynchronize();
+        cudadrv::api()->cuMemFree(buf);
+    }
+    void f32(int w, int h) {
+        t.dtype = CALIPER_DT_F32; t.ndim = 2;
+        t.shape[0] = h; t.shape[1] = w; t.strides[0] = w; t.strides[1] = 1;
+    }
+    void rgba8(int w, int h) {
+        t.dtype = CALIPER_DT_U8; t.ndim = 3;
+        t.shape[0] = h; t.shape[1] = w; t.shape[2] = 4;
+        t.strides[0] = (int64_t)w * 4; t.strides[1] = 4; t.strides[2] = 1;
+    }
+    void write(const void* src) { cudadrv::api()->cuMemcpyHtoD(buf, src, bytes); }
+};
+
+bool on_direct_path(HostRenderer* r) {
+    return std::string(r->last_device_path()).rfind("direct-", 0) == 0;
+}
+
+// Draw `id` through the real frame loop, so a frame is genuinely in flight.
+void vk_draw_frame(HostRenderer* r, CaliperTextureId id) {
+    r->new_frame();
+    ImGui::GetBackgroundDrawList()->AddImage((ImTextureID)id, ImVec2(0, 0), ImVec2(64, 64));
+    r->render(64, 64);
+}
+}  // namespace
+
+// D25: the kernel's output against the CPU reference, on the inputs where a
+// float pipeline can differ: rounding boundaries, NaN, infinities, denormals,
+// signed zero, and degenerate or inverted ranges. Contraction would fail here.
+TEST_CASE("gfx/Vulkan+CUDA: direct f32 is byte-exact on edge values and ranges") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+
+    const int w = 257, h = 129, n = w * h;   // non-16-multiple edges, both ways
+    std::vector<float> data(n);
+    const float inf = std::numeric_limits<float>::infinity();
+    const float specials[] = {std::numeric_limits<float>::quiet_NaN(), inf, -inf, 0.0f, -0.0f,
+                              std::numeric_limits<float>::denorm_min(),
+                              -std::numeric_limits<float>::denorm_min(),
+                              std::numeric_limits<float>::min(),
+                              std::numeric_limits<float>::max(),
+                              std::numeric_limits<float>::lowest()};
+    uint32_t rng = 12345;
+    for (int i = 0; i < n; ++i) {
+        if (i < 10) { data[i] = specials[i]; continue; }
+        rng = rng * 1664525u + 1013904223u;
+        if (i % 3 == 0) {
+            // Either side of each index's rounding boundary, (k+0.5)/255.
+            const float b = (((float)(rng >> 24) + 0.5f) / 255.0f);
+            data[i] = (i % 2) ? std::nextafter(b, 2.0f) : std::nextafter(b, -1.0f);
+        } else if (i % 3 == 1) {
+            data[i] = (float)(rng >> 8) / 16777216.0f;
+        } else {
+            std::memcpy(&data[i], &rng, 4);   // any bit pattern
+        }
+    }
+    CudaTensor src(data.data(), data.size() * sizeof(float));
+    src.f32(w, h);
+
+    const struct { float vmin, vmax; } ranges[] = {
+        {0.f, 1.f}, {-3.5f, 7.25f}, {2.f, 2.f}, {1.f, 0.f}, {0.f, 1e-30f}, {-inf, inf}, {0.f, inf}};
+    for (const auto& r : ranges) {
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &src.t, CALIPER_CMAP_VIRIDIS, r.vmin, r.vmax, 0);
+        REQUIRE(id != 0);
+        CHECK(std::string(bk.renderer->last_device_path()) == "direct-cmap");
+        std::vector<uint8_t> ref((size_t)n * 4);
+        map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                         r.vmin, r.vmax, ref.data());
+        CHECK(bk.readback(id, w, h) == ref);
+        bk.bridge->release_texture(id);
+    }
+}
+
+TEST_CASE("gfx/Vulkan+CUDA: direct u8 RGBA is byte-exact; other channel counts still work") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+
+    const int w = 33, h = 17;
+    std::vector<uint8_t> rgba((size_t)w * h * 4);
+    for (size_t i = 0; i < rgba.size(); ++i) rgba[i] = (uint8_t)(i * 31 + 7);
+    CudaTensor src(rgba.data(), rgba.size());
+    src.rgba8(w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor(&src.t, 0);
+    REQUIRE(id != 0);
+    CHECK(std::string(bk.renderer->last_device_path()) == "direct-blit");
+    CHECK(bk.readback(id, w, h) == rgba);
+    bk.bridge->release_texture(id);
+}
+
+// Frames really in flight while kernels write: every update is followed by a
+// frame that samples the image, and the next update must wait for it. A
+// deadlock between frame and stream hangs here; a lost ordering fails the bytes.
+TEST_CASE("gfx/Vulkan+CUDA: direct updates interleaved with frames stay in order") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+
+    const int w = 512, h = 300, n = w * h;
+    std::vector<float> data(n);
+    const auto fill = [&](int gen) {
+        for (int i = 0; i < n; ++i) data[i] = (float)((i + gen * 97) % 251);
+    };
+    fill(0);
+    CudaTensor src(data.data(), data.size() * sizeof(float));
+    src.f32(w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &src.t, CALIPER_CMAP_MAGMA, 0.f, 250.f, 0);
+    REQUIRE(id != 0);
+    for (int gen = 1; gen <= 120; ++gen) {
+        fill(gen);
+        src.write(data.data());
+        REQUIRE(bk.bridge->update_texture(id, &src.t));
+        REQUIRE(on_direct_path(bk.renderer));
+        vk_draw_frame(bk.renderer, id);
+        if (gen % 3 == 0) {   // and several updates inside one frame
+            REQUIRE(bk.bridge->update_texture(id, &src.t));
+            REQUIRE(bk.bridge->update_texture(id, &src.t));
+        }
+    }
+    std::vector<uint8_t> ref((size_t)n * 4);
+    map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_MAGMA), 0.f, 250.f, ref.data());
+    CHECK(bk.readback(id, w, h) == ref);
+    bk.bridge->release_texture(id);
+}
+
+// One texture, every writer in turn: each must order after the last and leave
+// the image readable, whichever layout and timeline value it finds.
+TEST_CASE("gfx/Vulkan+CUDA: direct, buffer and CPU-staged updates mix on one texture") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+
+    const int w = 64, h = 48, n = w * h;
+    std::vector<float> data(n);
+    const auto fill = [&](int gen) {
+        for (int i = 0; i < n; ++i) data[i] = (float)((i * 3 + gen * 41) % 251);
+    };
+    fill(0);
+    CudaTensor src(data.data(), data.size() * sizeof(float));
+    src.f32(w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &src.t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+    REQUIRE(id != 0);
+    const auto expect_current = [&]() {
+        std::vector<uint8_t> ref((size_t)n * 4);
+        map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                         0.f, 250.f, ref.data());
+        CHECK(bk.readback(id, w, h) == ref);
+    };
+    expect_current();
+
+    int gen = 0;
+    for (int round = 0; round < 6; ++round) {
+        // Direct, then buffer with no readback between them: only ordering saves it.
+        fill(++gen); src.write(data.data());
+        REQUIRE(bk.bridge->update_texture(id, &src.t));
+        CHECK(on_direct_path(bk.renderer));
+        {
+            ForceBufferPath buffer_path;
+            fill(++gen); src.write(data.data());
+            bk.renderer->device_update_wait();
+            REQUIRE(bk.bridge->update_texture(id, &src.t));
+            CHECK(std::string(bk.renderer->last_device_path()) == "compute");
+        }
+        // Buffer, then direct: the kernel waits for the Vulkan pass.
+        REQUIRE(bk.bridge->update_texture(id, &src.t));
+        CHECK(on_direct_path(bk.renderer));
+        vk_draw_frame(bk.renderer, id);
+        expect_current();
+
+        // CPU-staged, then direct.
+        fill(++gen);
+        CaliperTensor cpu = src.t;
+        cpu.data = data.data();
+        cpu.device = CALIPER_DEV_CPU;
+        REQUIRE(bk.bridge->update_texture(id, &cpu));
+        expect_current();
+        fill(++gen); src.write(data.data());
+        REQUIRE(bk.bridge->update_texture(id, &src.t));
+        CHECK(on_direct_path(bk.renderer));
+        expect_current();
+    }
+    bk.bridge->release_texture(id);
+}
+
+// The kernel runs in torch's context, where a bad read poisons training, so a
+// tensor that does not match its texture must never reach it.
+TEST_CASE("gfx/Vulkan+CUDA: direct refuses tensors it cannot read safely") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    HostRenderer* r = vk_env().renderer.get();
+    const uint32_t* lut = colormap_lut(CALIPER_CMAP_VIRIDIS);
+    const cudadrv::Api* cu = cudadrv::api();
+
+    const int w = 32, h = 32, n = w * h;
+    std::vector<float> data(n, 1.f);
+    CudaTensor src(data.data(), data.size() * sizeof(float));
+    src.f32(w, h);
+    uint64_t tex = r->tex_create_rgba8(w, h);
+    REQUIRE(tex != 0);
+
+    // A sound tensor takes the direct path, so the refusals below mean something.
+    REQUIRE(r->tex_update_from_device(tex, src.t, lut, 0.f, 1.f));
+    CHECK(on_direct_path(r));
+
+    const auto refused = [&](const CaliperTensor& t) {
+        r->tex_update_from_device(tex, t, lut, 0.f, 1.f);
+        CHECK_FALSE(on_direct_path(r));
+        r->device_update_wait();
+        // The context must still be healthy, or torch would be dead too.
+        CHECK(cu->cuCtxSynchronize() == cudadrv::CUDA_SUCCESS);
+    };
+    CaliperTensor smaller = src.t;   // smaller than the texture
+    smaller.shape[0] = h / 2; smaller.shape[1] = w / 2;
+    smaller.strides[0] = w / 2;
+    refused(smaller);
+    CaliperTensor bad_stride = src.t;
+    bad_stride.strides[1] = 0;
+    refused(bad_stride);
+    CaliperTensor negative = src.t;
+    negative.strides[0] = -w;
+    refused(negative);
+    CaliperTensor misaligned = src.t;
+    misaligned.data = (void*)(src.buf + 1);
+    misaligned.shape[0] = h - 1;
+    refused(misaligned);
+
+    // A tensor running past its allocation is refused outright.
+    CaliperTensor too_long = src.t;
+    too_long.strides[0] = w * 4;
+    CHECK_FALSE(r->tex_update_from_device(tex, too_long, lut, 0.f, 1.f));
+    r->tex_release(tex);
+}
+
+// Release must wait out a kernel on CUDA's stream, which vkQueueWaitIdle cannot.
+TEST_CASE("gfx/Vulkan+CUDA: releasing a texture straight after a direct update is safe") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+
+    const int w = 1024, h = 1024, n = w * h;
+    std::vector<float> data(n, 0.5f);
+    CudaTensor src(data.data(), data.size() * sizeof(float));
+    src.f32(w, h);
+    for (int i = 0; i < 40; ++i) {
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &src.t, CALIPER_CMAP_VIRIDIS, 0.f, 1.f, 0);
+        REQUIRE(id != 0);
+        REQUIRE(bk.bridge->update_texture(id, &src.t));
+        bk.bridge->release_texture(id);
+    }
+    CHECK(cudadrv::api()->cuCtxSynchronize() == cudadrv::CUDA_SUCCESS);
+}
+
 // The direct-image table must resolve on any driver new enough for interop, or
 // the renderer silently stays on the buffer path. Struct sizes pin the hand
 // transcriptions of cuda.h's ABI.
@@ -3267,7 +3550,9 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
         return std::chrono::duration<double, std::micro>(b - a).count();
     };
 
+    for (bool buffer : {true, false})
     for (int side : {256, 1024, 2048, 4096}) {
+        vk_env().renderer->debug_force_buffer_path(buffer);
         const int n = side * side;
         const int iters = side >= 2048 ? 60 : 200;
         std::vector<float> data(n);
@@ -3317,6 +3602,7 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
         bk.renderer->device_update_wait();
         bk.bridge->release_texture(id);
         cu->cuMemFree(buf);
+        vk_env().renderer->debug_force_buffer_path(false);
     }
 }
 
@@ -3385,6 +3671,7 @@ TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-e
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
+    ForceBufferPath buffer_path;
     const cudadrv::Api* cu = cudadrv::api();
 
     const int W = 8, H = 8, n = W * H;

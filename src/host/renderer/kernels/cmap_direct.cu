@@ -3,8 +3,10 @@
 // tensor in place and write the texture's VkImage through a surface object.
 //
 // The output must stay BYTE-IDENTICAL to the CPU reference map_f32_to_rgba8
-// (§16), so -fmad=false is load-bearing: a contracted t*255+0.5 rounds
-// differently from the reference. NaN handling matches the reference too.
+// (§16). -fmad=false keeps the arithmetic the reference's, operation for
+// operation. Contracting t*255+0.5 is not known to change an index: a search of
+// every rounding boundary found no input where it does. Never build this with
+// -use_fast_math, which changes the division. NaN handling matches the reference.
 //
 // The host links no toolkit (D11): the build embeds the checked-in PTX. After
 // editing this file, regenerate it from a developer prompt with:

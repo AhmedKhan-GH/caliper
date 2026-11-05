@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Metal is not touched. Everything is behind the Vulkan backend.
-- Output stays byte-identical to `map_f32_to_rgba8`. `-fmad=false` is required.
+- Output stays byte-identical to `map_f32_to_rgba8`. Build the kernels with `-fmad=false` and never `-use_fast_math`.
 - Failure at any rung falls back; never a crash or a wrong image. Each fallback logs once through `dev_note`.
 - "Zero-copy" only names paths with zero copies of the data (§7.4).
 - The kernel runs in torch's context, where a bad read poisons training. Validate shape, strides and alignment against the allocation before launch.
