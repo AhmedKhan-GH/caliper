@@ -278,9 +278,17 @@
 
   footer { border-top: 1px solid var(--rule-faint); background: var(--deep); padding: 44px 0 56px; color: var(--faint); font-size: 14px; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: 28px; align-items: center; justify-content: space-between; }
-  .house { display: flex; align-items: center; gap: 14px; color: var(--secondary); }
-  .house img { width: 34px; height: 34px; }
-  .house span { font: 14px/1 var(--display); letter-spacing: .28em; }
+  .house { display: flex; align-items: center; gap: 20px; color: var(--secondary); }
+  .house img { width: 64px; height: 64px; }
+  .house-text { display: flex; flex-direction: column; gap: 10px; }
+  .house-name { font: 24px/1 var(--display); letter-spacing: .3em; color: var(--parchment); }
+  .house-url { font: 15px/1 var(--text); letter-spacing: .04em; color: var(--faint); }
+  .house:hover .house-url { color: var(--bronze-hover); }
+  /* The maker's line at the top of the hero. */
+  .maker { display: inline-flex; align-items: center; gap: 12px; margin: 0 auto 44px; color: var(--faint);
+           font: 12px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; }
+  .maker img { width: 28px; height: 28px; }
+  .maker:hover { color: var(--parchment); }
   footer .links { display: flex; gap: 22px; flex-wrap: wrap; font: 12px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
   footer a:hover { color: var(--parchment); }
 
@@ -337,6 +345,7 @@
     </g>
   </svg>
   <div class="wrap">
+    <a class="maker" href="https://sternbild.com"><img src="assets/sternbild-seal.svg" alt=""><span>Developed by the Sternbild organization</span></a>
     <img class="hero-mark" src="assets/caliper-mark.svg" alt="Caliper">
     <h1>Caliper</h1>
     <p class="tagline">Machine learning visualization framework</p>
@@ -1556,7 +1565,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
 <footer>
   <div class="wrap">
-    <div class="house"><img src="assets/sternbild-seal.svg" alt=""><span>STERNBILD</span></div>
+    <a class="house" href="https://sternbild.com"><img src="assets/sternbild-seal.svg" alt=""><span class="house-text"><span class="house-name">STERNBILD</span><span class="house-url">sternbild.com</span></span></a>
     <div class="links">
       <a href="docs/">Documentation</a>
       <a href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
