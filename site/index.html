@@ -217,6 +217,23 @@
   .hw .pt.c3 { fill: var(--parchment); }
   .hw .mono.small.dim { fill: var(--faint); }
   .snippet pre.code .row.live-py { background: rgba(179, 139, 89, .16); box-shadow: inset 2px 0 var(--bronze); }
+  /* Cross-platform development: the platforms, two canvas mockups of graphics built from model data, the draw call. */
+  .dev-stack { margin: 28px 0 24px; border-top: 1px solid var(--rule-faint); }
+  .dev-row { display: grid; grid-template-columns: 9em 1fr; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
+  .dev-row .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); }
+  .dev-items { display: flex; flex-wrap: wrap; gap: 10px 26px; }
+  .dev-item { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; color: var(--parchment); }
+  .dev-item img { width: 22px; height: 22px; border-radius: 5px; background: #f2eee6; }
+  .dev-item img.mark { background: none; }
+  @media (max-width: 600px) { .dev-row { grid-template-columns: 1fr; gap: 8px; } }
+  .dev-plate { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 30px; padding: 20px 22px 22px;
+               background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; }
+  .dev-fig { margin: 0; min-width: 0; }
+  .dev-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .dev-name { font: 12px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--parchment); }
+  .dev-sub { font-size: 13.5px; color: var(--faint); }
+  .dev-shot { display: block; width: 100%; height: auto; border: 1px solid var(--rule-faint); border-radius: 6px; }
+  .dev-snippet { margin-top: 20px; }
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
   .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -348,6 +365,7 @@
     <a class="brand" href="#top"><img src="assets/caliper-mark.svg" alt=""><span>CALIPER</span></a>
     <div class="links">
       <a href="#python">Python</a>
+      <a href="#develop">Develop</a>
       <a href="#backends">Backends</a>
       <a href="#libraries">Libraries</a>
       <a href="#build">Build</a>
@@ -514,9 +532,58 @@
     </div>
   </section>
 
+  <section id="develop">
+    <div class="wrap">
+      <div class="label eyebrow">02 · Cross-platform development</div>
+      <h2>Cross-platform development</h2>
+      <div class="dev-stack">
+        <div class="dev-row"><span class="k">Platforms</span><div class="dev-items">
+          <span class="dev-item"><img src="assets/libs/apple.png" alt="">Metal · macOS</span>
+          <span class="dev-item"><img src="assets/libs/khronosgroup.png" alt=""><img src="assets/libs/nvidia.png" alt="">Vulkan + CUDA · Windows</span>
+          <span class="dev-item">OpenGL 3.3 · fallback</span>
+        </div></div>
+        <div class="dev-row"><span class="k">Graphics</span><div class="dev-items">
+          <span class="dev-item"><img src="assets/libs/ocornut.png" alt="">Dear ImGui</span>
+          <span class="dev-item"><img src="assets/libs/epezent.png" alt="">ImPlot</span>
+          <span class="dev-item"><img src="assets/libs/brenocq.png" alt="">ImPlot3D</span>
+          <span class="dev-item"><img class="mark" src="assets/caliper-mark.svg" alt="">Caliper geometry · points, lines, meshes, instancing</span>
+        </div></div>
+      </div>
+      <div class="dev-plate">
+        <figure class="dev-fig">
+          <div class="dev-head"><span class="dev-name">Real-time scale</span><span class="dev-sub">The Embedding window: all 248,320 rows of Qwen3.5-0.8B's embedding table, laid out in 3-D by UMAP and drawn from one GPU buffer as you orbit and zoom</span></div>
+          <img class="dev-shot" src="assets/caliper-embedding.jpg" width="2700" height="1252" loading="lazy"
+            alt="Caliper's Embedding window: Qwen3.5-0.8B's 248,320 token embeddings as a 3-D point cloud coloured by token kind, with words, word pieces, CJK, other scripts and code each forming their own regions, and a legend with counts per kind">
+        </figure>
+        <figure class="dev-fig">
+          <div class="dev-head"><span class="dev-name">Interpretable views</span><span class="dev-sub">The Trajectories window: each token of a run as a path up Qwen3.5-0.8B's 23 lens layers, drawn as the model writes, teal from the layer where the J-lens settles on the next token</span></div>
+          <img class="dev-shot" src="assets/caliper-trajectories.jpg" width="2700" height="1252" loading="lazy"
+            alt="Caliper's Trajectories window: 48 tokens of a run as paths rising through 23 lens layers, one hovered; its tooltip shows the token a followed by celestial, with the J-lens reading heir, heritage, astronom and renowned in the middle layers and celestial from layer 15 on">
+        </figure>
+      </div>
+      <div class="snippet dev-snippet"><div class="snippet-head"><span>C++</span><a href="docs/reference/services/geometry-v1/">geometry-v1</a></div><pre class="code"><code><span class="c">// The embedding table in 3-D: (248320, 3) positions grouped by token kind, imported once.</span>
+auto pos = pool-&gt;<span class="p">to_bridge</span>(bridge, map_xyz);
+
+std::vector&lt;CaliperGeomDraw&gt; draws;
+for (const KindRange&amp; k : kinds) {             <span class="c">// one flat-coloured range per kind</span>
+    CaliperGeomDraw d = caliper::<span class="p">geom_draw_defaults</span>();
+    d.pos_alloc    = pos-&gt;alloc;
+    d.pos_offset   = pos-&gt;offset + k.first * 3 * sizeof(float);
+    d.vertex_count = k.count;
+    d.topology     = <span class="p">CALIPER_GEOM_TOPO_POINTS</span>;
+    d.flat_rgba    = k.colour;
+    d.depth_flags  = <span class="p">CALIPER_GEOM_DEPTH_TEST</span> | CALIPER_GEOM_DEPTH_WRITE;
+    d.size_px      = 2.0f * home_distance / camera_distance;   <span class="c">// points grow as you zoom in</span>
+    draws.push_back(d);
+}
+geometry.<span class="p">draw_primitives</span>(view, cam, draws.data(), draws.size(), 0xff0f1112u);
+<span class="p">ImGui::Image</span>(caliper::Bridge::imtex(view), size);</code></pre></div>
+    </div>
+  </section>
+
   <section id="backends">
     <div class="wrap">
-      <div class="label eyebrow">02 · Native backends</div>
+      <div class="label eyebrow">03 · Native backends</div>
       <h2>Native backends</h2>
       <!-- code:call -->
 <div class="code-grid code-call"><details class="code-panel"><summary class="code-head"><span class="code-title">The descriptor</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/8ac9c5bf9e579fba9410178777451ec5a358f678/sdk/include/caliper/tensor.h#L17-L27">tensor.h · 17–27</a></summary><pre class="code"><code><span class="row" data-file="tensor.h" data-ln="17"><span class="ln">17</span>typedef struct <span class="p">CaliperTensor</span> {</span><span class="row" data-file="tensor.h" data-ln="18"><span class="ln">18</span>    uint32_t          struct_size;</span><span class="row" data-file="tensor.h" data-ln="19"><span class="ln">19</span>    void*             <span class="p">data</span>;            <span class="c">/* device or host pointer */</span></span><span class="row" data-file="tensor.h" data-ln="20"><span class="ln">20</span>    CaliperDType      dtype;</span><span class="row" data-file="tensor.h" data-ln="21"><span class="ln">21</span>    int32_t           ndim;            <span class="c">/* &lt;= 8 */</span></span><span class="row" data-file="tensor.h" data-ln="22"><span class="ln">22</span>    int64_t           shape[8];</span><span class="row" data-file="tensor.h" data-ln="23"><span class="ln">23</span>    int64_t           strides[8];      <span class="c">/* in elements */</span></span><span class="row" data-file="tensor.h" data-ln="24"><span class="ln">24</span>    CaliperDeviceKind <span class="p">device</span>;</span><span class="row" data-file="tensor.h" data-ln="25"><span class="ln">25</span>    int32_t           device_index;</span><span class="row" data-file="tensor.h" data-ln="26"><span class="ln">26</span>    void*             <span class="p">stream</span>;          <span class="c">/* cudaStream_t / MTLCommandQueue* / NULL */</span></span><span class="row" data-file="tensor.h" data-ln="27"><span class="ln">27</span>} <span class="p">CaliperTensor</span>;</span></code></pre></details>
@@ -1579,7 +1646,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
   <section id="libraries">
     <div class="wrap">
-      <div class="label eyebrow">03 · Libraries</div>
+      <div class="label eyebrow">04 · Libraries</div>
       <h2>Libraries</h2>
       <ul class="libs">
         <li><a href="https://github.com/ocornut/imgui"><img src="assets/libs/ocornut.png" alt="" width="28" height="28"><span class="lib-name">Dear ImGui</span><span class="lib-repo">ocornut/imgui</span></a></li>
@@ -1601,7 +1668,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section id="build">
     <div class="wrap two">
       <div>
-        <div class="label eyebrow">04 · Build</div>
+        <div class="label eyebrow">05 · Build</div>
         <h2>Build from source</h2>
         <p class="muted">CMake 3.25 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
         <dl class="platforms">
