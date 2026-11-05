@@ -109,7 +109,16 @@ for k, (state, label) in enumerate((("writing", "being written"), ("published", 
     text(434, y + 40, label, "n", ident=f"s{k}lbl")
     heatmap(f"hm-s{k}", 546, y + 7, 64, 36, (0.15, 0.25, 0.35)[k])
     text(651, y + 30, "stats", "n dim", "middle")
-text(550, 524, "one MTLBuffer per process over the same pages", "n dim", "middle")
+# The ring's key: what each slot state means, in the slots' own colours.
+for i, (state, line) in enumerate((("writing", "being written: the GPU copy is filling it"),
+                                   ("published", "published: the newest snapshot, drawn next"),
+                                   ("claimed", "claimed: the viewer is reading it for a frame"),
+                                   ("", "free: the next copy can land here"))):
+    y = 430 + i * 18
+    rect(422, y - 9, 14, 10, "slot " + state if state else "slot", 2)
+    text(444, y, line, "n")
+text(422, 504, "none free: the new snapshot is dropped, never waited for", "n dim")
+text(550, 526, "one MTLBuffer per process over the same pages", "n dim", "middle")
 
 # Viewer process, top to bottom; the frame shows what the viewer draws.
 node(764, 64, 300, 62, "ShmSource", ["heartbeat, newest completed slot"], ident="n-shm")
