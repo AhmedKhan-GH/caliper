@@ -203,6 +203,7 @@ TRACE_CHUNK = 64        # prompt positions read out per step: 64 x 248k float32 
 PROTECTED = 10          # the clean run's top outputs that J-space ablation spares, as in the paper
 MAX_ATTENTION_KEYS = 1024   # attention is sent while the context is at most this long
 ATTENTION_BYTES = 1_500_000 # attention bytes per event, so a reply stays under the 4 MB request frame
+BATCHED_READOUT_BYTES = 256 * 1024 * 1024   # logits read out in one unembedding when they fit
 
 
 def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, emit, cancelled, eos,
@@ -232,14 +233,25 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
         return {str(i): tokenizer.decode([i]) for i in sorted(new)}
 
     def send(first, ids, captured, logits):
-        jl, jp, ll, lp = [], [], [], []
-        for layer in layers:
-            a, b = js.top(js.readout(layer, captured[layer]), k)
-            c, d = js.top(js.readout(layer, captured[layer], jacobian=False), k)
-            jl.append(a); jp.append(b); ll.append(c); lp.append(d)
-        stack = lambda parts: mx.stack(parts, axis=1)               # [n, layers, k]
+        vocabulary = js.text.embed_tokens.weight.shape[0]
+        if len(ids) * 2 * len(layers) * vocabulary * 4 <= BATCHED_READOUT_BYTES:
+            # A few positions (each generated token): every layer through both lenses as one unembedding.
+            transported = [captured[l].astype(mx.float32) @ js.J[l].T for l in layers]
+            stream = mx.stack(transported + [captured[l].astype(mx.float32) for l in layers])   # [2 layers, n, d]
+            logits_all = js.unembed(stream.astype(js.text.embed_tokens.weight.dtype)).astype(mx.float32)
+            top_ids, top_p = js.top(logits_all, k)                                            # [2 layers, n, k]
+            jl, ll = top_ids[:len(layers)].transpose(1, 0, 2), top_ids[len(layers):].transpose(1, 0, 2)
+            jp, lp = top_p[:len(layers)].transpose(1, 0, 2), top_p[len(layers):].transpose(1, 0, 2)
+        else:
+            # A prompt chunk: a layer at a time, so its logits stay small.
+            jl, jp, ll, lp = [], [], [], []
+            for layer in layers:
+                a, b = js.top(js.readout(layer, captured[layer]), k)
+                c, d = js.top(js.readout(layer, captured[layer], jacobian=False), k)
+                jl.append(a); jp.append(b); ll.append(c); lp.append(d)
+            jl, jp, ll, lp = (mx.stack(x, axis=1) for x in (jl, jp, ll, lp))                 # [n, layers, k]
         out_ids, out_p = js.top(logits.astype(mx.float32), k)
-        jl, jp, ll, lp = (np.array(stack(x)) for x in (jl, jp, ll, lp))
+        jl, jp, ll, lp = (np.array(x) for x in (jl, jp, ll, lp))
         out_ids, out_p = np.array(out_ids), np.array(out_p)
         pattern = dict()
         if attention_layers:
