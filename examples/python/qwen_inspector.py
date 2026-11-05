@@ -454,6 +454,9 @@ class Inspector:
         top_k = integer(request, "top_k", 0, high=1000)
         k = integer(request, "k", 5, low=1, high=10)
         seed = integer(request, "seed", 0, high=2**31 - 1)
+        attention = request.get("attention", False)
+        if type(attention) is not bool:
+            raise ValueError("attention must be true or false")
         changes = self.interventions(request)
         # One seed for every run, so an intervened run samples like the intact one until their
         # distributions differ.
@@ -462,7 +465,7 @@ class Inspector:
             return trace(self.jspace, self.tokenizer, tokens, max_new_tokens=max_tokens,
                          sampler=make_sampler(temp=temperature, top_p=top_p, top_k=top_k), k=k,
                          interventions=changes, emit=emit, cancelled=cancelled,
-                         eos=set(self.tokenizer.eos_token_ids))
+                         eos=set(self.tokenizer.eos_token_ids), attention=attention)
         finally:
             self.mx.clear_cache()
 

@@ -510,6 +510,27 @@ TEST_CASE("trace events extend a run in order and are refused when they do not f
     wrong["jlens"] = Array{1.0};
     CHECK_FALSE(caliper_live::read_trace_event(wrong, run, words, error));                      // a short array
     CHECK(run.positions() == 3);
+    // Attention for two layers and two heads over three keys: per position, layer, head, key.
+    caliper_live::TraceRun attended;
+    Json with_attention = trace_event(0, {1}, 1);
+    std::string bytes;
+    for (int v : {255, 0, 0, 51, 204, 0, 0, 255, 0, 128, 127, 0}) bytes += static_cast<char>(v);
+    with_attention["attention_layers"] = Array{3.0, 7.0};
+    with_attention["heads"] = 2.0;
+    with_attention["keys"] = 3.0;
+    with_attention["attention"] = base64(bytes);
+    REQUIRE(caliper_live::read_trace_event(with_attention, attended, words, error));
+    CHECK(attended.weight(0, 0, 0, 0) == doctest::Approx(1.0));
+    CHECK(attended.weight(0, 0, 1, 1) == doctest::Approx(0.8));
+    CHECK(attended.weight(0, 0, 0) == doctest::Approx((255 + 51) / 510.0));      // the mean of the heads
+    CHECK(attended.weight(0, 1, 1) == doctest::Approx((255 + 127) / 510.0));
+    CHECK(attended.weight(0, 1, 5) == 0);
+    with_attention = trace_event(1, {2}, 1);
+    with_attention["attention_layers"] = Array{3.0, 7.0};
+    with_attention["heads"] = 2.0;
+    with_attention["keys"] = 3.0;
+    with_attention["attention"] = base64(bytes.substr(0, 9));                     // short
+    CHECK_FALSE(caliper_live::read_trace_event(with_attention, attended, words, error));
     CHECK(caliper_live::display_word(" Paris") == "Paris");
     CHECK(caliper_live::display_word("\n\n") == "\\n\\n");
     CHECK(caliper_live::display_word(" ") == "\xC2\xB7");
@@ -518,7 +539,7 @@ TEST_CASE("trace events extend a run in order and are refused when they do not f
 TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an intervened one") {
     Ui ui;
     auto hello = ui.request("hello");
-    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"list_tensors", "show_tensor", "trace", "tokenize"}}});
+    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"generate", "list_tensors", "show_tensor", "trace", "tokenize"}}});
     auto list = ui.request("list_tensors");
     ui.peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
         Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
@@ -530,15 +551,19 @@ TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an i
     ui.frame();
     REQUIRE(ImGui::FindWindowByName(trace_window) != nullptr);
     CHECK(ui.captured.find("Fit Focus selected") == std::string::npos);
-    ui.activate(trace_window, "Trace");
+    // Generate in the Inference pane runs a trace with its prompt and sampling, attention included.
+    ui.activate(inference_window, "Generate");
     auto plain = ui.request("trace");
     CHECK(plain["interventions"].get<Array>().empty());
-    CHECK(plain["temperature"].get<double>() == 0);
+    CHECK(plain["prompt"].get<std::string>() == "Write one sentence about the Moon.");
+    CHECK(plain["temperature"].get<double>() == doctest::Approx(0.7));
+    CHECK(plain["attention"].get<bool>());
     ui.peer.send(Object{{"id", plain["id"]}, {"done", false}, {"event", trace_event(0, {1, 2}, 2)}});
     ui.peer.send(Object{{"id", plain["id"]}, {"done", false}, {"event", trace_event(2, {3}, 2)}});
     ui.peer.reply(plain, Object{{"tokens", 1.0}, {"finish_reason", "length"}, {"cancelled", false}});
     for (int i = 0; i < 4; ++i) ui.frame();
     CHECK(ui.captured.find("Intact  w3") != std::string::npos);            // the answer: the generated token
+    CHECK(ui.captured.find("Output\n w3") != std::string::npos);          // and the Inference pane's output
     CHECK(ui.captured.find("Position 2 w3") != std::string::npos);        // the side list follows the newest token
     CHECK(ui.captured.find("w7") != std::string::npos);
 
@@ -547,7 +572,7 @@ TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an i
     ui.frame();
     // The default band (layers 5 to 17) is clamped to this two-layer model.
     CHECK(ui.captured.find("Ablate J-space, top 10  layers 1 to 1") != std::string::npos);
-    ui.activate(trace_window, "Trace");
+    ui.activate(inference_window, "Generate");
     auto intact = ui.request("trace");
     CHECK(intact["interventions"].get<Array>().empty());
     ui.peer.send(Object{{"id", intact["id"]}, {"done", false}, {"event", trace_event(0, {1, 2, 3}, 2)}});

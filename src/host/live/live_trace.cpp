@@ -4,6 +4,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -67,6 +68,42 @@ constexpr const char* kKinds[] = {"Ablate J-space", "Remove words", "Swap two wo
 constexpr const char* kKindIds[] = {"ablate", "remove", "swap", "inject"};
 } // namespace
 
+bool decode_base64(const std::string& text, std::vector<uint8_t>& out) {
+    static const auto table = [] {
+        std::array<int8_t, 256> t{}; t.fill(-1);
+        const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i) t[static_cast<uint8_t>(alphabet[i])] = static_cast<int8_t>(i);
+        return t;
+    }();
+    if (text.size() % 4) return false;
+    out.clear(); out.reserve(text.size() / 4 * 3);
+    for (size_t i = 0; i < text.size(); i += 4) {
+        uint32_t n = 0; int padding = 0;
+        for (size_t k = 0; k < 4; ++k) {
+            const char c = text[i + k];
+            if (c == '=' && i + 4 == text.size() && k >= 2) { ++padding; n <<= 6; continue; }
+            const int v = table[static_cast<uint8_t>(c)];
+            if (v < 0 || padding) return false;
+            n = n << 6 | static_cast<uint32_t>(v);
+        }
+        out.push_back(static_cast<uint8_t>(n >> 16));
+        if (padding < 2) out.push_back(static_cast<uint8_t>(n >> 8));
+        if (padding < 1) out.push_back(static_cast<uint8_t>(n));
+    }
+    return true;
+}
+
+float TraceRun::weight(int position, int layer, int key, int head) const {
+    if (position < 0 || position >= positions() || layer < 0 || layer >= static_cast<int>(attention_layers.size()) ||
+        key < 0 || key >= keys[position] || heads <= 0) return 0;
+    const uint8_t* row = attention.data() + attention_at[position] +
+                         static_cast<size_t>(layer) * heads * keys[position];
+    if (head >= 0) return row[static_cast<size_t>(std::min(head, heads - 1)) * keys[position] + key] / 255.0f;
+    float sum = 0;
+    for (int h = 0; h < heads; ++h) sum += row[static_cast<size_t>(h) * keys[position] + key];
+    return sum / (255.0f * heads);
+}
+
 bool read_trace_event(const Json& event, TraceRun& run, std::map<int32_t, std::string>& words, std::string& error) {
     const auto fail = [&](const char* why) { error = why; return false; };
     if (!event.is_object()) return fail("trace event is not an object");
@@ -92,6 +129,24 @@ bool read_trace_event(const Json& event, TraceRun& run, std::map<int32_t, std::s
         !probabilities(field(event, "jprob"), cells, jprob) || !probabilities(field(event, "lprob"), cells, lprob) ||
         !probabilities(field(event, "oprob"), outputs, oprob))
         return fail("trace event arrays do not match its shape");
+    // Attention: count x layers x heads x keys bytes, or keys 0 when none were sent.
+    std::vector<int> attention_layers;
+    int heads = 0, keys = 0;
+    std::vector<uint8_t> attention;
+    if (field(event, "attention").is_string()) {
+        const Json& listed = field(event, "attention_layers");
+        heads = integer(field(event, "heads"), -1);
+        keys = integer(field(event, "keys"), -1);
+        if (!listed.is_array() || listed.get<Array>().size() > 64 || heads < 1 || heads > 128 || keys < 0 || keys > 65536)
+            return fail("trace attention is malformed");
+        for (const Json& v : listed.get<Array>()) attention_layers.push_back(integer(v, -1));
+        if (!decode_base64(field(event, "attention").get<std::string>(), attention) ||
+            attention.size() != static_cast<size_t>(count) * attention_layers.size() * heads * keys)
+            return fail("trace attention does not match its shape");
+        if (run.positions() > 0 && !run.attention_layers.empty() &&
+            (attention_layers != run.attention_layers || heads != run.heads))
+            return fail("trace attention changes the run's shape");
+    }
     const Json& names = field(event, "words");
     std::map<int32_t, std::string> added;
     if (names.is_object()) {
@@ -107,6 +162,14 @@ bool read_trace_event(const Json& event, TraceRun& run, std::map<int32_t, std::s
     append(run.tokens, tokens); append(run.jlens, jlens); append(run.logit, logit); append(run.output, output);
     append(run.jprob, jprob); append(run.lprob, lprob); append(run.oprob, oprob);
     for (auto& [id, text] : added) words[id] = std::move(text);
+    if (!attention_layers.empty()) { run.attention_layers = attention_layers; run.heads = heads; }
+    const size_t per_position = attention_layers.size() * heads * keys;
+    for (int i = 0; i < count; ++i) {
+        run.keys.push_back(keys);
+        run.attention_at.push_back(run.attention.size());
+        if (per_position) run.attention.insert(run.attention.end(), attention.begin() + i * per_position,
+                                               attention.begin() + (i + 1) * per_position);
+    }
     return true;
 }
 
@@ -202,14 +265,29 @@ const std::string& TracePane::word(int32_t id) const {
     return it == words_.end() ? unknown : it->second;
 }
 
+TracePane::Ask TracePane::generate(const Object& settings) {
+    settings_ = settings;
+    runs_[0] = {}; runs_[1] = {};
+    const bool intervened = !interventions_.empty();
+    second_pending_ = intervened && compare_;
+    shown_ = intervened ? 1 : 0;
+    cursor_position_ = cursor_layer_ = -1;
+    follow_ = true;
+    return trace_request(intervened && !compare_ ? 1 : 0);
+}
+
+// Both runs share the settings and one seed, so the intervened run samples like the intact one until their
+// distributions part.
 TracePane::Ask TracePane::trace_request(int run) const {
     Ask ask;
     ask.op = "trace"; ask.run = run;
     Array changes;
     if (run == 1) for (const auto& change : interventions_) changes.push_back(change.fields());
-    ask.fields = Object{{"prompt", std::string(prompt_)}, {"max_new_tokens", static_cast<double>(max_new_tokens_)},
-                        {"k", 10.0}, {"temperature", 0.0}, {"seed", 0.0}, {"thinking", false},
-                        {"interventions", std::move(changes)}};
+    ask.fields = settings_;
+    ask.fields["k"] = 10.0;
+    ask.fields["seed"] = 0.0;
+    ask.fields["attention"] = true;
+    ask.fields["interventions"] = std::move(changes);
     return ask;
 }
 
@@ -231,33 +309,13 @@ TracePane::Ask TracePane::draw(bool can_send, bool tracing) {
     return ask;
 }
 
-TracePane::Ask TracePane::controls(bool can_send, bool tracing) {
+TracePane::Ask TracePane::controls(bool, bool tracing) {
     Ask ask;
     const ImGuiStyle& style = ImGui::GetStyle();
-    const float number = ImGui::CalcTextSize("0000").x + 2 * style.FramePadding.x;
-    const float tail = ImGui::CalcTextSize("Max tokens").x + number + ImGui::CalcTextSize("Trace").x + 24 +
-                       ImGui::CalcTextSize("Stop").x + 2 * style.FramePadding.x + 5 * style.ItemSpacing.x;
-    ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - tail));
-    ImGui::InputTextWithHint("##trace.prompt", "Prompt", prompt_, sizeof prompt_);
-    ImGui::SameLine(); label("Max tokens"); ImGui::SameLine(); ImGui::SetNextItemWidth(number);
-    ImGui::InputInt("##trace.max", &max_new_tokens_, 0, 0);
-    max_new_tokens_ = std::clamp(max_new_tokens_, 0, 256);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!can_send || prompt_[0] == '\0');
-    if (sternbild::primary_button("Trace")) {
-        runs_[0] = {}; runs_[1] = {};
-        const bool intervened = !interventions_.empty();
-        ask = trace_request(intervened && !compare_ ? 1 : 0);
-        second_pending_ = intervened && compare_;
-        shown_ = intervened ? 1 : 0;
-        cursor_position_ = cursor_layer_ = -1;
-        follow_ = true;
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
     ImGui::BeginDisabled(!tracing);
     if (sternbild::word_button("Stop")) ask.op = "stop";
     ImGui::EndDisabled();
+    ImGui::SameLine(0, style.ItemSpacing.x * 3);
 
     // Which lens and which run the grid shows.
     label("Lens");
@@ -303,6 +361,25 @@ TracePane::Ask TracePane::controls(bool can_send, bool tracing) {
         }
     }
     const TraceRun& r = runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_];
+    if (r.heads > 0) {
+        ImGui::SameLine(0, style.ItemSpacing.x * 4);
+        label("Attention heads");
+        ImGui::SameLine();
+        char current[16];
+        if (head_ < 0) std::snprintf(current, sizeof current, "Mean");
+        else std::snprintf(current, sizeof current, "%d", head_ + 1);
+        ImGui::SetNextItemWidth(ImGui::CalcTextSize("Mean").x + ImGui::GetFrameHeight() + 2 * style.FramePadding.x);
+        if (ImGui::BeginCombo("##trace.head", current)) {
+            if (ImGui::Selectable("Mean", head_ < 0)) head_ = -1;
+            for (int h = 0; h < r.heads; ++h) {
+                char name[8];
+                std::snprintf(name, sizeof name, "%d", h + 1);
+                if (ImGui::Selectable(name, head_ == h)) head_ = h;
+            }
+            ImGui::EndCombo();
+        }
+        if (head_ >= r.heads) head_ = -1;
+    }
     char facts[128] = "";
     if (r.positions() > 0)
         std::snprintf(facts, sizeof facts, "%zu layers   %d prompt tokens   %d generated%s", r.layers.size(), r.prompt,
@@ -414,7 +491,7 @@ void TracePane::grid(float width, float height) {
     const TraceRun& r = runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_];
     if (r.positions() == 0) {
         ImGui::BeginChild("##trace.grid", ImVec2(width, height));
-        faint(r.running ? "Reading the prompt" : "Trace a prompt to read every layer through the lens");
+        faint(r.running ? "Reading the prompt" : "Generate in the Inference pane to read every layer through the lens");
         ImGui::EndChild();
         return;
     }
@@ -431,7 +508,12 @@ void TracePane::grid(float width, float height) {
     const float scroll = ImGui::GetScrollX();
     const float view = ImGui::GetWindowWidth();
     const float content = label_width + cell * r.positions();
-    ImGui::Dummy(ImVec2(content, rows * row + token_row));
+    // Below the tokens, the attention of the cursor's token over the tokens before it, one row per full-attention
+    // layer, aligned with the columns.
+    const int attention_rows = static_cast<int>(r.attention_layers.size());
+    const float attention_top = rows * row + token_row + row;
+    const float total_height = attention_rows ? attention_top + attention_rows * row : rows * row + token_row;
+    ImGui::Dummy(ImVec2(content, total_height));
     if (follow_ && r.running) ImGui::SetScrollX(std::max(0.0f, content - view + 8));
     auto* list = ImGui::GetWindowDrawList();
     const auto& ids = jacobian_ ? r.jlens : r.logit;
@@ -472,6 +554,30 @@ void TracePane::grid(float width, float height) {
         list->AddText(font, font_size, point(x + 4, y), split ? sternbild::col::bronze : generated ? sternbild::col::parchment : sternbild::col::secondary,
                       display_word(word(r.tokens[p])).c_str(), nullptr, 0, &clip);
     }
+    if (attention_rows && cursor_position_ < r.positions()) {
+        const int p = cursor_position_;
+        char heading[160];
+        if (r.keys[p] > 0)
+            std::snprintf(heading, sizeof heading, "Attention from position %d (%s), %s", p,
+                          display_word(word(r.tokens[p])).c_str(), head_ < 0 ? "mean of heads" : "one head");
+        else std::snprintf(heading, sizeof heading, "Attention not sent for position %d: the context is too long", p);
+        list->AddText(point(origin.x + scroll + label_width, origin.y + attention_top - row + 3), sternbild::col::secondary, heading);
+        for (int a = 0; a < attention_rows; ++a) {
+            const float y = origin.y + attention_top + row * a;
+            for (int key = first; key <= std::min(last, r.keys[p] - 1); ++key) {
+                const float w = r.weight(p, a, key, head_);
+                const float x = x_of(key);
+                // Square root, so the small weights beside an attention sink still show.
+                list->AddRectFilled(point(x + 1, y + 1), point(x + cell - 1, y + row - 1),
+                                    sternbild::with_alpha(sternbild::col::vehicle, static_cast<int>(10 + 235 * std::sqrt(w))));
+                if (w >= 0.995f || (cell >= 40 && w >= 0.005f)) {
+                    char percent[16];
+                    std::snprintf(percent, sizeof percent, "%.0f%%", w * 100);
+                    list->AddText(point(x + 4, y + 3), w > 0.3f ? sternbild::col::parchment : sternbild::col::secondary, percent);
+                }
+            }
+        }
+    }
     // The cursor cell.
     {
         const float x = x_of(cursor_position_), y = origin.y + row * (cursor_layer_ < 0 ? 0 : layers - cursor_layer_);
@@ -488,10 +594,36 @@ void TracePane::grid(float width, float height) {
         list->AddText(point(left + 2, origin.y + row * i + 3), layer < 0 ? sternbild::col::secondary : sternbild::col::faint, name);
     }
     list->AddLine(point(left + label_width - 4, origin.y), point(left + label_width - 4, origin.y + rows * row), sternbild::col::rule);
+    if (attention_rows) {
+        list->AddRectFilled(point(left, origin.y + attention_top), point(left + label_width, origin.y + attention_top + attention_rows * row),
+                            sternbild::col::ground);
+        for (int a = 0; a < attention_rows; ++a) {
+            char name[16];
+            std::snprintf(name, sizeof name, "%d", r.attention_layers[a]);
+            list->AddText(point(left + 2, origin.y + attention_top + row * a + 3), sternbild::col::faint, name);
+        }
+    }
 
     // Hover shows the cell's top words; a click moves the cursor; arrows move it while the grid is hovered.
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    if (ImGui::IsWindowHovered() && mouse.x > left + label_width) {
+    if (ImGui::IsWindowHovered() && mouse.x > left + label_width && attention_rows &&
+        mouse.y >= origin.y + attention_top && mouse.y < origin.y + attention_top + attention_rows * row) {
+        const int key = static_cast<int>(std::floor((mouse.x - origin.x - label_width) / cell));
+        const int a = static_cast<int>(std::floor((mouse.y - origin.y - attention_top) / row));
+        const int p = cursor_position_;
+        if (key >= 0 && key < r.positions() && a >= 0 && a < attention_rows && p >= 0 && key < r.keys[p]) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Layer %d: position %d (%s) attends to position %d (%s)", r.attention_layers[a], p,
+                        display_word(word(r.tokens[p])).c_str(), key, display_word(word(r.tokens[key])).c_str());
+            ImGui::Text("%s %.2f%%", head_ < 0 ? "Mean over heads" : "Head", r.weight(p, a, key, head_) * 100);
+            if (head_ < 0) {
+                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+                for (int h = 0; h < r.heads; ++h) ImGui::Text("Head %d  %.2f%%", h + 1, r.weight(p, a, key, h) * 100);
+                ImGui::PopStyleColor();
+            }
+            ImGui::EndTooltip();
+        }
+    } else if (ImGui::IsWindowHovered() && mouse.x > left + label_width) {
         const int p = static_cast<int>(std::floor((mouse.x - origin.x - label_width) / cell));
         const int i = static_cast<int>(std::floor((mouse.y - origin.y) / row));
         if (p >= 0 && p < r.positions() && i >= 0 && i < rows) {

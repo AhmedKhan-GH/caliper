@@ -19,6 +19,7 @@ for Qwen3.5-0.8B (neuronpedia/jacobian-lens, qwen3.5-0.8b/jlens), converted here
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import base64
 from pathlib import Path
 
 import numpy as np
@@ -68,13 +69,19 @@ class JSpace:
             return self.text.embed_tokens.as_linear(normed)
         return self.language.lm_head(normed)
 
-    def forward(self, tokens, cache, visit=None):
-        """The text model's forward pass with a visit(layer, h) -> h after every block; returns logits."""
+    def forward(self, tokens, cache, visit=None, attend=None):
+        """The text model's forward pass with a visit(layer, h) -> h after every block; returns logits.
+
+        attend(layer, weights) receives each full-attention block's softmax weights [heads, L, T].
+        """
         h = self.text.embed_tokens(tokens)
         fa_mask = self._attention_mask(h, cache[self.text.fa_idx])
         ssm_mask = self._ssm_mask(h, cache[self.text.ssm_idx])
         for index, (layer, c) in enumerate(zip(self.layers, cache)):
+            before, offset = h, (None if layer.is_linear else c.offset)
             h = layer(h, mask=ssm_mask if layer.is_linear else fa_mask, cache=c)
+            if attend is not None and not layer.is_linear:
+                attend(index, attention_weights(layer.self_attn, layer.input_layernorm(before), c, offset))
             if visit is not None:
                 h = visit(index, h)
         return self.unembed(h)
@@ -157,6 +164,28 @@ class JSpace:
         return h
 
 
+def attention_weights(attention, x, cache, offset):
+    """The softmax attention weights of a full-attention layer, [heads, L, T], for the L positions of x.
+
+    Called after the layer ran on x (its cache now holds T = offset + L keys), it recomputes what MLX's fused
+    attention used: the queries (normed, rotated at their positions), every cached key, the scale and the causal
+    mask. Grouped key/value heads are shared by attention // key-value heads query heads.
+    """
+    import mlx.core as mx
+    B, L, _ = x.shape
+    queries = attention.q_proj(x).reshape(B, L, attention.num_attention_heads, -1)
+    queries = mx.split(queries, 2, axis=-1)[0]
+    queries = attention.rope(attention.q_norm(queries).transpose(0, 2, 1, 3), offset=offset)
+    keys = cache.keys_and_values()[0]                                   # the T cached keys
+    group = attention.num_attention_heads // attention.num_key_value_heads
+    keys = mx.repeat(keys, group, axis=1)                                # [B, heads, T, d]
+    scores = (queries.astype(mx.float32) * attention.scale) @ keys.astype(mx.float32).swapaxes(-1, -2)
+    T = keys.shape[2]
+    causal = mx.arange(T)[None, :] <= (offset + mx.arange(L))[:, None]   # [L, T]
+    scores = mx.where(causal, scores, -mx.inf)
+    return mx.softmax(scores, axis=-1)[0]
+
+
 def project_out(mx, x, V):
     """x minus its projection onto the span of V's columns: x - V V^+ x."""
     pinv = mx.linalg.pinv(V, stream=mx.cpu)
@@ -172,18 +201,29 @@ def project_out_each(mx, x, rows):
 
 TRACE_CHUNK = 64        # prompt positions read out per step: 64 x 248k float32 logits, 64 MB
 PROTECTED = 10          # the clean run's top outputs that J-space ablation spares, as in the paper
+MAX_ATTENTION_KEYS = 1024   # attention is sent while the context is at most this long
+ATTENTION_BYTES = 1_500_000 # attention bytes per event, so a reply stays under the 4 MB request frame
 
 
-def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, emit, cancelled, eos):
+def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, emit, cancelled, eos,
+          attention=False):
     """Run tokens through the model and generate, emitting the lens grid as it goes.
 
-    Every event covers positions first .. first + count - 1 (prompt is the prompt's length): their token ids, and for each position and source
-    layer the top k tokens of the J-lens (jlens, jprob) and of the plain logit lens (logit, lprob), then the
-    model's own top k at that position (output, oprob). Ids are flat, position-major, then layer, then rank.
-    words maps every id not yet sent in this trace to its text.
+    Every event covers positions first .. first + count - 1 (prompt is the prompt's length): their token ids, and
+    for each position and source layer the top k tokens of the J-lens (jlens, jprob) and of the plain logit lens
+    (logit, lprob), then the model's own top k at that position (output, oprob). Ids are flat, position-major,
+    then layer, then rank. words maps every id not yet sent in this trace to its text.
+
+    With attention, each event also carries the attention patterns of the full-attention layers
+    (attention_layers): for each of its positions, layer and head, the softmax weights over the keys (the first
+    keys positions), as bytes 0-255 of weight, base64. keys is 0 when the context is longer than
+    MAX_ATTENTION_KEYS. The model's linear-attention layers form no such weights.
     """
     mx = js.mx
     layers = js.source_layers
+    attention_layers = [i for i, layer in enumerate(js.layers) if not layer.is_linear] if attention else []
+    heads = js.layers[attention_layers[0]].self_attn.num_attention_heads if attention_layers else 0
+    attended = {}
     sent = set()
 
     def words(ids):
@@ -201,7 +241,19 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
         out_ids, out_p = js.top(logits.astype(mx.float32), k)
         jl, jp, ll, lp = (np.array(stack(x)) for x in (jl, jp, ll, lp))
         out_ids, out_p = np.array(out_ids), np.array(out_p)
-        emit(dict(first=first, count=len(ids), prompt=len(tokens), layers=layers, k=k, tokens=ids,
+        pattern = dict()
+        if attention_layers:
+            keys = attended[attention_layers[0]].shape[-1] if attended else 0
+            if 0 < keys <= MAX_ATTENTION_KEYS:
+                rows = slice(first - offset_of[0], first - offset_of[0] + len(ids))
+                weights = mx.stack([attended[l][:, rows, :] for l in attention_layers])     # [layers, heads, n, keys]
+                weights = np.array(weights.transpose(2, 0, 1, 3).astype(mx.float32))         # [n, layers, heads, keys]
+                data = np.clip(np.rint(weights * 255), 0, 255).astype(np.uint8).tobytes()
+            else:
+                keys, data = 0, b""
+            pattern = dict(attention_layers=attention_layers, heads=heads, keys=keys,
+                           attention=base64.b64encode(data).decode("ascii"))
+        emit(dict(first=first, count=len(ids), prompt=len(tokens), layers=layers, k=k, tokens=ids, **pattern,
                   jlens=jl.reshape(-1).tolist(), jprob=np.round(jp, 4).reshape(-1).tolist(),
                   logit=ll.reshape(-1).tolist(), lprob=np.round(lp, 4).reshape(-1).tolist(),
                   output=out_ids.reshape(-1).tolist(), oprob=np.round(out_p, 4).reshape(-1).tolist(),
@@ -232,11 +284,20 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
             captured[index] = h[0]
         return h
 
-    logits = js.forward(mx.array([tokens]), cache, visit)
-    for first in range(0, len(tokens), TRACE_CHUNK):
+    # The positions the attention just recorded start at offset_of[0].
+    offset_of = [0]
+
+    def attend(index, weights):
+        attended[index] = weights
+
+    logits = js.forward(mx.array([tokens]), cache, visit, attend if attention_layers else None)
+    chunk = TRACE_CHUNK
+    if attention_layers and len(tokens) <= MAX_ATTENTION_KEYS:
+        chunk = max(1, min(TRACE_CHUNK, ATTENTION_BYTES // (len(attention_layers) * heads * len(tokens))))
+    for first in range(0, len(tokens), chunk):
         if cancelled.is_set():
             return dict(tokens=0, cancelled=True, finish_reason="cancelled", prompt_tokens=len(tokens))
-        end = min(len(tokens), first + TRACE_CHUNK)
+        end = min(len(tokens), first + chunk)
         send(first, tokens[first:end], {l: captured[l][first:end] for l in layers}, logits[0, first:end])
 
     count, finish = 0, "length"
@@ -254,7 +315,8 @@ def trace(js, tokenizer, tokens, *, max_new_tokens, sampler, k, interventions, e
             clean_logits = js.forward(mx.array([[token]]), clean)
             state["protected"] = [set(js.top(clean_logits[0].astype(mx.float32), PROTECTED)[0][0].tolist())]
         state["start"] = position
-        logits = js.forward(mx.array([[token]]), cache, visit)
+        offset_of[0] = position
+        logits = js.forward(mx.array([[token]]), cache, visit, attend if attention_layers else None)
         send(position, [token], {l: captured[l] for l in layers}, logits[0])
         position += 1
         count += 1

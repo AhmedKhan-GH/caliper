@@ -20,6 +20,13 @@ struct TraceRun {
     int k = 0, prompt = 0;
     std::vector<int32_t> tokens, jlens, logit, output;
     std::vector<float> jprob, lprob, oprob;
+    // Attention patterns of the full-attention layers, when sent: per position, layer and head, the weights
+    // (0-255) over that position's keys. keys[p] is 0 where none were sent (a context too long).
+    std::vector<int> attention_layers;
+    int heads = 0;
+    std::vector<int> keys;
+    std::vector<size_t> attention_at;
+    std::vector<uint8_t> attention;
     bool running = false, done = false;
     std::string finish, error;
     int positions() const { return static_cast<int>(tokens.size()); }
@@ -28,7 +35,12 @@ struct TraceRun {
     size_t at(int position, int layer, int rank = 0) const {
         return (static_cast<size_t>(position) * layers.size() + static_cast<size_t>(layer)) * k + rank;
     }
+    // The weight (0-1) position gives key at an attention layer: one head's, or the heads' mean for head < 0.
+    float weight(int position, int layer, int key, int head = -1) const;
 };
+
+// Standard base64 (with padding) to bytes; false if the text is not base64.
+bool decode_base64(const std::string& text, std::vector<uint8_t>& out);
 
 // Appends one trace event to run and its new words to words. False, with a reason, if the event does not
 // continue the run where it ended or its arrays do not match its shape.
@@ -53,6 +65,9 @@ public:
     // What the pane asks the inspector to send: op is empty for nothing. run is 0 (intact) or 1 (intervened).
     struct Ask { std::string op; crude_json::object fields; int run = -1; };
 
+    // Starts a generation with the Inference pane's prompt and sampling (prompt, max_new_tokens, temperature,
+    // top_p, top_k, thinking): the intact run, the intervened run, or the intact then the intervened run.
+    Ask generate(const crude_json::object& settings);
     void started(int run);
     bool event(int run, const crude_json::value& event, std::string& error);
     void finished(int run, const crude_json::value& result);
@@ -79,9 +94,9 @@ private:
     TraceRun runs_[2];
     std::map<int32_t, std::string> words_;
     std::vector<TraceIntervention> interventions_;
-    char prompt_[4096] = "What is the capital of the country where the Eiffel Tower is? Answer in one word.";
-    int max_new_tokens_ = 24;
+    crude_json::object settings_;
     bool jacobian_ = true, compare_ = true, second_pending_ = false;
+    int head_ = -1;
     int shown_ = 0, cursor_position_ = -1, cursor_layer_ = -1;
     bool follow_ = true;
     // The intervention being written.

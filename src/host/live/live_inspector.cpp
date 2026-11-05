@@ -100,31 +100,6 @@ struct Values {
 constexpr int kMaxValueSide = 16384;
 constexpr int64_t kMaxValues = int64_t{1} << 24;
 
-bool decode_base64(const std::string& text, std::vector<uint8_t>& out) {
-    static const auto table = [] {
-        std::array<int8_t, 256> t{}; t.fill(-1);
-        const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        for (int i = 0; i < 64; ++i) t[static_cast<uint8_t>(alphabet[i])] = static_cast<int8_t>(i);
-        return t;
-    }();
-    if (text.size() % 4) return false;
-    out.clear(); out.reserve(text.size() / 4 * 3);
-    for (size_t i = 0; i < text.size(); i += 4) {
-        uint32_t n = 0; int padding = 0;
-        for (size_t k = 0; k < 4; ++k) {
-            const char c = text[i + k];
-            if (c == '=' && i + 4 == text.size() && k >= 2) { ++padding; n <<= 6; continue; }
-            const int v = table[static_cast<uint8_t>(c)];
-            if (v < 0 || padding) return false;
-            n = n << 6 | static_cast<uint32_t>(v);
-        }
-        out.push_back(static_cast<uint8_t>(n >> 16));
-        if (padding < 2) out.push_back(static_cast<uint8_t>(n >> 8));
-        if (padding < 1) out.push_back(static_cast<uint8_t>(n));
-    }
-    return true;
-}
-
 Object region_fields(Geometry::Region r) {
     return {{"row", static_cast<double>(r.row)}, {"col", static_cast<double>(r.col)},
             {"rows", static_cast<double>(r.rows)}, {"cols", static_cast<double>(r.cols)}};
@@ -208,6 +183,16 @@ struct Inspector::Impl {
     TracePane trace_pane;
     // Model 3D and Trace share a dock place without tabs; only the one shown is drawn.
     bool show_trace = false;
+    double trace_started = 0;
+    // The Output follows the run being written.
+    void trace_output(int run) {
+        const TraceRun& r = trace_pane.run(run);
+        output = trace_pane.text(std::vector<int32_t>(r.tokens.begin() + std::min(r.prompt, r.positions()), r.tokens.end()));
+        output_changed = true;
+        tokens = r.generated();
+        const double elapsed = seconds() - trace_started;
+        tokens_per_second = elapsed > 0 ? tokens / elapsed : 0;
+    }
     Model3D model3d;
     caliper_host::HostRenderer* renderer = nullptr;
     Sample detail, overview;
@@ -534,6 +519,7 @@ struct Inspector::Impl {
             if (active.op == "trace") {
                 std::string why;
                 if (!trace_pane.event(trace_run(active), field(reply, "event"), why)) { stop(); error = why; }
+                else trace_output(trace_run(active));
             } else if (active.op == "generate") {
                 const Json& event = field(reply, "event");
                 const std::string part = string(field(event, "text"));
@@ -559,7 +545,7 @@ struct Inspector::Impl {
             }
             error = string(field(reply, "error"));
             if (op == "generate") { generation_status = "Generation failed"; stop_requested = false; }
-            if (op == "trace") { trace_pane.failed(trace_run(completed), error); stop_requested = false; }
+            if (op == "trace") { trace_pane.failed(trace_run(completed), error); stop_requested = false; generation_status = "Generation failed"; }
             if (op == "tokenize") { std::string ignored; trace_pane.tokenized(Json(), ignored); }
             return;
         }
@@ -570,6 +556,7 @@ struct Inspector::Impl {
             stop_requested = false;
         } else if (op == "trace") {
             trace_pane.finished(trace_run(completed), result);
+            generation_status = boolean(field(result, "cancelled")) ? "Stopped" : "Complete";
             stop_requested = false;
         } else if (op == "tokenize") {
             std::string why;
@@ -685,10 +672,23 @@ struct Inspector::Impl {
         const Geometry::Target size{shape[1], shape[0]};
         if (!request_sample(name, "thumbnail", {0, 0, it->rows, it->cols}, size)) model3d.thumbnail_failed(name);
     }
+    // With a lens on the host, generating is a trace: the Output streams as before, and the Trace pane reads
+    // every layer through the lens, token by token, with the attention of the full-attention layers.
     void generate() {
-        if (send("generate", {{"prompt", prompt}, {"max_new_tokens", static_cast<double>(max_new_tokens)},
-                {"temperature", static_cast<double>(temperature)}, {"top_p", static_cast<double>(top_p)},
-                {"top_k", static_cast<double>(top_k)}, {"thinking", thinking}})) {
+        Object settings{{"prompt", prompt}, {"max_new_tokens", static_cast<double>(max_new_tokens)},
+                        {"temperature", static_cast<double>(temperature)}, {"top_p", static_cast<double>(top_p)},
+                        {"top_k", static_cast<double>(top_k)}, {"thinking", thinking}};
+        if (supports("trace")) {
+            const auto ask = trace_pane.generate(settings);
+            if (send("trace", ask.fields, ask.run == 1 ? "intervened" : "intact")) {
+                trace_pane.started(ask.run);
+                output.clear(); tokens = 0; tokens_per_second = 0; trace_started = seconds();
+                generation_status = "Generating"; stop_requested = false; output_changed = true;
+                show_trace = true;
+            }
+            return;
+        }
+        if (send("generate", std::move(settings))) {
             output.clear(); tokens = 0; tokens_per_second = 0;
             generation_status = "Generating";
             stop_requested = false;
@@ -747,7 +747,7 @@ struct Inspector::Impl {
             if (sternbild::primary_button("Generate")) generate();
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::BeginDisabled(active.op != "generate" || stop_requested || !channel.connected());
+            ImGui::BeginDisabled((active.op != "generate" && active.op != "trace") || stop_requested || !channel.connected());
             if (sternbild::word_button("Stop")) stop();
             ImGui::EndDisabled();
             char stats[64];
@@ -1274,7 +1274,9 @@ struct Inspector::Impl {
             const auto ask = trace_pane.draw(can_control() && queued_op.empty(), active.op == "trace");
             if (ask.op == "stop") stop();
             else if (ask.op == "trace") {
-                if (send("trace", ask.fields, ask.run == 1 ? "intervened" : "intact")) trace_pane.started(ask.run);
+                if (send("trace", ask.fields, ask.run == 1 ? "intervened" : "intact")) {
+                    trace_pane.started(ask.run); trace_started = seconds(); generation_status = "Generating intervened";
+                }
             } else if (ask.op == "tokenize" && !send("tokenize", ask.fields)) {
                 std::string ignored; trace_pane.tokenized(Json(), ignored);
             }

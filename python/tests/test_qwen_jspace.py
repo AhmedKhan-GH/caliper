@@ -194,3 +194,39 @@ def test_host_refuses_malformed_interventions(space, item):
     assert host.interventions(dict(interventions=[dict(kind="ablate"), dict(kind="swap", tokens=[4, 5])]))
     with pytest.raises(ValueError):
         host.interventions(dict(interventions=[item]))
+
+
+def test_trace_streams_the_attention_patterns_of_full_attention_layers(space):
+    import base64
+    from mlx_lm.sample_utils import make_sampler
+    model, js = space
+    tokens = list(range(1, 13))
+    events = []
+    trace(js, Tokenizer(), tokens, max_new_tokens=2, sampler=make_sampler(temp=0.0), k=3, interventions=[],
+          emit=events.append, cancelled=threading.Event(), eos=set(), attention=True)
+    assert all(e["attention_layers"] == [3] and e["heads"] == 4 for e in events)    # one full-attention block
+    for e in events:
+        data = np.frombuffer(base64.b64decode(e["attention"]), np.uint8)
+        weights = data.reshape(e["count"], 1, 4, e["keys"]).astype(np.float64) / 255
+        for i in range(e["count"]):
+            position = e["first"] + i
+            # Causal: nothing beyond the position itself; each row is a distribution.
+            assert np.all(weights[i, :, :, position + 1:] == 0)
+            assert np.allclose(weights[i].sum(axis=-1), 1, atol=e["keys"] / 255)
+    assert [e["keys"] for e in events] == [12, 13, 14]
+    # Weights times values, gated and projected, is the block's own attention output.
+    layer = model.language_model.model.layers[3]
+    cache = model.make_cache()
+    h = js.text.embed_tokens(mx.array([tokens]))
+    for l, c in zip(js.layers[:3], cache[:3]):
+        h = l(h, mask=None, cache=c)
+    x = layer.input_layernorm(h)
+    fused = layer.self_attn(x, "causal", cache[3])
+    from qwen_jspace import attention_weights
+    w = attention_weights(layer.self_attn, x, cache[3], 0)
+    attn = layer.self_attn
+    values = mx.repeat(cache[3].keys_and_values()[1][0], attn.num_attention_heads // attn.num_key_value_heads, axis=0)
+    out = (w @ values.astype(mx.float32)).transpose(1, 0, 2).reshape(1, len(tokens), -1)
+    gate = mx.split(attn.q_proj(x).reshape(1, len(tokens), attn.num_attention_heads, -1), 2, axis=-1)[1]
+    mine = attn.o_proj(out * mx.sigmoid(gate.reshape(1, len(tokens), -1)))
+    assert np.abs(f64(mine) - f64(fused)).max() <= 0.02 * np.abs(f64(fused)).max()
