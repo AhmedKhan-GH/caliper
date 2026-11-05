@@ -4,11 +4,11 @@ docs_dir: docs/wiki
 site_dir: build/wiki-site
 theme:
   name: material
-  logo: assets/mark.svg
-  favicon: assets/favicon.svg
+  logo: assets/caliper-mark.svg
+  favicon: assets/caliper-mark.svg
   font: false
   palette:
-    scheme: default
+    scheme: slate
     primary: custom
     accent: custom
   features:
