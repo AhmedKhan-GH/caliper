@@ -375,9 +375,11 @@
   .house-url { font: 15px/1 var(--text); letter-spacing: .04em; color: var(--faint); }
   .house:hover .house-url { color: var(--bronze-hover); }
   /* The maker's line at the top of the hero. */
-  .maker { display: inline-flex; align-items: center; gap: 16px; margin: 0 auto 44px; color: var(--faint);
-           font: 16px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; }
-  .maker img { width: 40px; height: 40px; }
+  /* The line spans the wordmark below it (fitted by the script at the end of the hero); the seal hangs to its left. */
+  .maker { position: relative; display: inline-block; margin: 0 auto 44px; color: var(--faint);
+           font: 16px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; }
+  .maker span { display: inline-block; padding-left: .24em; }
+  .maker img { position: absolute; right: calc(100% + .7em); top: 50%; width: 3.6em; height: 3.6em; transform: translateY(-50%); }
   .maker:hover { color: var(--parchment); }
   footer .links { display: flex; gap: 22px; flex-wrap: wrap; font: 12px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
   footer a:hover { color: var(--parchment); }
@@ -2203,7 +2205,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
 <footer>
   <div class="wrap">
-    <a class="house" href="https://sternbild.com"><img src="assets/sternbild-seal.svg" alt=""><span class="house-text"><span class="house-name">STERNBILD</span><span class="house-url">sternbild.com</span></span></a>
+    <a class="house" href="https://sternbild.org"><img src="assets/sternbild-seal.svg" alt=""><span class="house-text"><span class="house-name">STERNBILD</span><span class="house-url">sternbild.org</span></span></a>
     <div class="links">
       <a href="docs/">Documentation</a>
       <a href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
@@ -2384,6 +2386,26 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   plate.querySelector(".tb-play").addEventListener("click", () => { playing = !playing; run(); });
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; run(); }, { threshold: 0.25 }).observe(svg);
   run();
+})();
+</script>
+<script>
+// The Sternbild line under the nav spans the CALIPER wordmark: its font size scales until the two widths match
+// (letters only, without the trailing letter spacing), never below 10px.
+(() => {
+  const title = document.querySelector(".hero h1"), maker = document.querySelector(".maker"), text = maker && maker.querySelector("span");
+  if (!title || !text) return;
+  const letters = el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return range.getBoundingClientRect().width - (parseFloat(getComputedStyle(el).letterSpacing) || 0);
+  };
+  function fit() {
+    maker.style.fontSize = "";
+    const size = parseFloat(getComputedStyle(maker).fontSize);
+    maker.style.fontSize = Math.max(10, size * letters(title) / letters(text)).toFixed(2) + "px";
+  }
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(fit);
+  addEventListener("resize", fit);
 })();
 </script>
 <script>
