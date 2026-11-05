@@ -66,6 +66,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -242,6 +243,8 @@ inline bool instance_upper3x3_rigid(const float* m) {
 }
 
 class VulkanRenderer final : public HostRenderer {
+    struct Tex;
+
 public:
     const char* name() const override { return "vulkan"; }
     const char* last_device_path() const override { return last_device_path_; }
@@ -604,6 +607,16 @@ public:
 
     uint64_t create_tex(int w, int h, bool exportable) {
         Tex t{};
+        if (!init_tex_image(t, w, h, exportable)) return 0;
+        t.created_frame = frame_value_;
+        uint64_t id = next_id_++;
+        textures_[id] = t;
+        return id;
+    }
+
+    // The image, memory, view and descriptor set of a texture; false on failure,
+    // with whatever was made already destroyed.
+    bool init_tex_image(Tex& t, int w, int h, bool exportable) {
         t.w = w; t.h = h;
         // CUDA has no notion of image layouts, so an image it writes rests in
         // GENERAL for its whole life, sampling included (D25).
@@ -625,7 +638,7 @@ public:
         VkExternalMemoryImageCreateInfo emi{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
         emi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
         if (exportable) ici.pNext = &emi;
-        if (vkCreateImage(device_, &ici, nullptr, &t.image) != VK_SUCCESS) return 0;
+        if (vkCreateImage(device_, &ici, nullptr, &t.image) != VK_SUCCESS) return false;
 
         VkMemoryRequirements mr;
         vkGetImageMemoryRequirements(device_, t.image, &mr);
@@ -641,7 +654,7 @@ public:
         if (!find_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            &mai.memoryTypeIndex) ||
             vkAllocateMemory(device_, &mai, nullptr, &t.memory) != VK_SUCCESS) {
-            destroy_tex(t); return 0;
+            destroy_tex(t); return false;
         }
         vkBindImageMemory(device_, t.image, t.memory, 0);
 
@@ -651,12 +664,12 @@ public:
         vci.format = VK_FORMAT_R8G8B8A8_UNORM;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         if (vkCreateImageView(device_, &vci, nullptr, &t.view) != VK_SUCCESS) {
-            destroy_tex(t); return 0;
+            destroy_tex(t); return false;
         }
 
         // The ImGui-facing handle: a descriptor set in the texture's rest layout.
         t.descset = ImGui_ImplVulkan_AddTexture(t.view, t.rest_layout);
-        if (t.descset == VK_NULL_HANDLE) { destroy_tex(t); return 0; }
+        if (t.descset == VK_NULL_HANDLE) { destroy_tex(t); return false; }
 
         // Images start UNDEFINED; move to the rest layout so drawing an
         // un-uploaded texture is defined (black), matching GL/Metal behavior.
@@ -664,10 +677,7 @@ public:
             barrier(cb, t, VK_IMAGE_LAYOUT_UNDEFINED, t.rest_layout);
         });
         t.layout = t.rest_layout;
-
-        uint64_t id = next_id_++;
-        textures_[id] = t;
-        return id;
+        return true;
     }
 
     bool tex_upload_rgba8(uint64_t tex, const void* data, int w, int h) override {
@@ -708,7 +718,7 @@ public:
 
     uint64_t tex_imtexture_id(uint64_t tex) override {
         auto it = textures_.find(tex);
-        return it == textures_.end() ? 0 : (uint64_t)it->second.descset;
+        return it == textures_.end() ? 0 : (uint64_t)public_set(it->second);
     }
 
     // Device-resident update: t.data is a CUDA device pointer (torch CUDA
@@ -795,7 +805,8 @@ public:
     // the Tex whose descset matches and copy its image to host bytes.
     std::vector<uint8_t> debug_readback_rgba8(uint64_t id, int, int) override {
         for (auto& kv : textures_)
-            if ((uint64_t)kv.second.descset == id) return readback_rgba8(kv.second);
+            if ((uint64_t)public_set(kv.second) == id || (uint64_t)kv.second.descset == id)
+                return readback_rgba8(kv.second);
         return {};
     }
 
@@ -1918,6 +1929,15 @@ private:
         // that follows it on the same stream needs no wait on the timeline.
         uint64_t direct_value = 0;
         void* direct_stream = nullptr;
+        // Two images, once a kernel has to write a texture a frame may sample:
+        // the kernel writes the back one, then the two trade places, so training
+        // never waits for the frame. id_set is the set applets hold, whichever
+        // image it was made for; frame_render draws descset instead.
+        std::shared_ptr<Tex> back;
+        VkDescriptorSet id_set = VK_NULL_HANDLE;
+        bool back_failed = false;
+        uint64_t last_front_frame = 0;   // back image: last frame that could sample it
+        uint64_t created_frame = 0;      // frame_value_ when created
         VkFramebuffer fb = VK_NULL_HANDLE;  // geometry.v1 view render target
         // geometry.v1_1 optional depth attachment (CALIPER_GEOM_VIEW_DEPTH).
         // Device-local D32-float, never sampled, never an id; the framebuffer
@@ -2323,6 +2343,7 @@ private:
             rebuild_swapchain_ = true;
         if (err == VK_ERROR_OUT_OF_DATE_KHR) return;
 
+        resolve_swapped_textures(dd);
         ImGui_ImplVulkanH_Frame* fd = &wd_.Frames[wd_.FrameIndex];
         vkWaitForFences(device_, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
         vkResetFences(device_, 1, &fd->Fence);
@@ -2668,6 +2689,11 @@ private:
     }
 
     void destroy_tex(Tex& t) {
+        if (t.back) {
+            swapped_sets_.erase(t.id_set);
+            destroy_tex(*t.back);
+            t.back.reset();
+        }
         destroy_direct(t.direct);
         destroy_interop(t.interop);
         if (t.fb) { vkDestroyFramebuffer(device_, t.fb, nullptr); t.fb = VK_NULL_HANDLE; }
@@ -3758,9 +3784,14 @@ private:
         if (t.shape[0] != dst.h || t.shape[1] != dst.w || stride_x <= 0 || stride_y <= 0)
             return false;
 
-        if (!ensure_direct_globals() || !ensure_direct_image(dst) ||
-            !ensure_pipeline_objects(dst))
-            return false;
+        if (!ensure_direct_globals() || !ensure_pipeline_objects(dst)) return false;
+        // No frame submitted since this texture was created can have sampled it,
+        // so the first updates write it in place and a short-lived texture never
+        // pays for a second image.
+        const bool in_place = !dst.back && dst.created_frame == frame_value_;
+        if (!in_place && !ensure_back_image(dst)) return false;
+        Tex& target = in_place ? dst : *dst.back;
+        if (!ensure_direct_image(target)) return false;
 
         const cudadrv::Api* cu = cudadrv::api();
         const cudadrv::DirectApi* da = cudadrv::direct_api();
@@ -3777,15 +3808,17 @@ private:
                     != cudadrv::CUDA_SUCCESS)
                 return dev_bail("direct: chain wait failed");
         }
-        // Frames already submitted may be sampling this image. Most have finished
-        // by now, and only an unfinished one costs the producer's stream a wait.
+        // Only frames from before the last swap can still be sampling the back
+        // image. They have nearly always finished; an unfinished one costs the
+        // producer's stream a wait, which is what the second image is here to avoid.
+        const uint64_t last_sampler = in_place ? 0 : target.last_front_frame;
         uint64_t frames_done = 0;
-        if (frame_value_ != 0 &&
+        if (last_sampler != 0 &&
             vkGetSemaphoreCounterValueKHR(device_, frame_timeline_, &frames_done) == VK_SUCCESS &&
-            frames_done < frame_value_) {
+            frames_done < last_sampler) {
             ++stats_frame_waits_;
             cudadrv::ExternalSemaphoreWaitParams wp{};
-            wp.params.fence.value = frame_value_;
+            wp.params.fence.value = last_sampler;
             if (da->cuWaitExternalSemaphoresAsync(&cuda_frame_sem_, &wp, 1, stream)
                     != cudadrv::CUDA_SUCCESS)
                 return dev_bail("direct: frame wait failed");
@@ -3793,9 +3826,9 @@ private:
 
         const void* src_arg = (const void*)(uintptr_t)src;
         int w = dst.w, h = dst.h;
-        void* cmap_params[] = {&src_arg, &dst.direct.surf, &w, &h, &stride_x, &stride_y,
+        void* cmap_params[] = {&src_arg, &target.direct.surf, &w, &h, &stride_x, &stride_y,
                                &vmin, &vmax, const_cast<uint32_t*>(lut256)};
-        void* blit_params[] = {&src_arg, &dst.direct.surf, &w, &h, &stride_x, &stride_y};
+        void* blit_params[] = {&src_arg, &target.direct.surf, &w, &h, &stride_x, &stride_y};
         if (da->cuLaunchKernel(is_cmap ? direct_cmap_ : direct_blit_,
                                ((unsigned)w + 15) / 16, ((unsigned)h + 15) / 16, 1,
                                16, 16, 1, 0, stream,
@@ -3817,7 +3850,51 @@ private:
         last_update_value_ = io.timeline_value;
         last_device_path_ = is_cmap ? "direct-cmap" : "direct-blit";
         ++stats_direct_;
+        if (!in_place) swap_images(dst);
         return true;
+    }
+
+    // What applets hold for this texture: fixed for its life, across swaps.
+    static VkDescriptorSet public_set(const Tex& t) {
+        return t.id_set != VK_NULL_HANDLE ? t.id_set : t.descset;
+    }
+
+    bool ensure_back_image(Tex& t) {
+        if (t.back) return true;
+        if (t.back_failed) return false;
+        auto back = std::make_shared<Tex>();
+        if (!init_tex_image(*back, t.w, t.h, /*exportable=*/true)) {
+            t.back_failed = true;
+            dev_note("direct image: second image failed, using the buffer path");
+            return false;
+        }
+        t.back = std::move(back);
+        t.id_set = t.descset;
+        return true;
+    }
+
+    // The newly written back image becomes the front. Frames up to the last one
+    // submitted may still be sampling the old front, which is the next back.
+    void swap_images(Tex& t) {
+        Tex& b = *t.back;
+        std::swap(t.image, b.image);
+        std::swap(t.memory, b.memory);
+        std::swap(t.view, b.view);
+        std::swap(t.descset, b.descset);
+        std::swap(t.direct, b.direct);
+        b.last_front_frame = frame_value_;
+        swapped_sets_[t.id_set] = t.descset;
+    }
+
+    // Applets draw with id_set; send each draw to whichever image is the front.
+    void resolve_swapped_textures(ImDrawData* dd) {
+        if (swapped_sets_.empty()) return;
+        for (ImDrawList* list : dd->CmdLists)
+            for (ImDrawCmd& cmd : list->CmdBuffer) {
+                if (cmd.TexRef._TexData != nullptr) continue;   // the font atlas
+                const auto it = swapped_sets_.find((VkDescriptorSet)cmd.TexRef._TexID);
+                if (it != swapped_sets_.end()) cmd.TexRef._TexID = (ImTextureID)it->second;
+            }
     }
 
     // ---- V4 pipelined imported update: update_pipelined minus the D2D copy ----
@@ -4016,6 +4093,8 @@ private:
     bool pipelined_ok_ = false;         // interop + timeline: V4 pipelining live
     bool direct_failed_ = false;        // D25 kernels or frame timeline failed to set up
     bool force_buffer_path_ = false;    // test-only
+    // id_set -> current front set, for textures with a second image.
+    std::unordered_map<VkDescriptorSet, VkDescriptorSet> swapped_sets_;
     const bool stats_on_ = std::getenv("CALIPER_VULKAN_STATS") != nullptr;
     std::vector<float> stats_frames_;
     std::chrono::steady_clock::time_point stats_last_frame_{};

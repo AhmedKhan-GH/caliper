@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <set>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -3390,6 +3391,55 @@ TEST_CASE("gfx/Vulkan+CUDA: direct updates interleaved with frames stay in order
     std::vector<uint8_t> ref((size_t)n * 4);
     map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_MAGMA), 0.f, 250.f, ref.data());
     CHECK(bk.readback(id, w, h) == ref);
+    bk.bridge->release_texture(id);
+}
+
+// D25's second image: the id an applet holds never changes, and what a frame
+// actually draws, read back from the draw list, is always the newest write. A
+// frame left drawing the old image would show training one update behind.
+TEST_CASE("gfx/Vulkan+CUDA: frames draw the newest image, under a stable id") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+
+    const int w = 64, h = 48, n = w * h;
+    std::vector<float> data(n);
+    const auto fill = [&](int gen) {
+        for (int i = 0; i < n; ++i) data[i] = (float)((i + gen * 53) % 251);
+    };
+    fill(0);
+    CudaTensor src(data.data(), data.size() * sizeof(float));
+    src.f32(w, h);
+    CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+        &src.t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+    REQUIRE(id != 0);
+    vk_draw_frame(bk.renderer, id);
+
+    std::set<uint64_t> drawn_sets;
+    for (int gen = 1; gen <= 6; ++gen) {
+        fill(gen);
+        src.write(data.data());
+        REQUIRE(bk.bridge->update_texture(id, &src.t));
+        REQUIRE(on_direct_path(bk.renderer));
+        vk_draw_frame(bk.renderer, id);
+
+        ImDrawData* dd = ImGui::GetDrawData();
+        REQUIRE(dd != nullptr);
+        uint64_t drawn = 0;
+        for (ImDrawList* list : dd->CmdLists)
+            for (const ImDrawCmd& cmd : list->CmdBuffer)
+                if (cmd.TexRef._TexData == nullptr && cmd.ElemCount > 0)
+                    drawn = (uint64_t)cmd.TexRef._TexID;
+        REQUIRE(drawn != 0);
+        drawn_sets.insert(drawn);
+
+        std::vector<uint8_t> ref((size_t)n * 4);
+        map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
+                         0.f, 250.f, ref.data());
+        CHECK(bk.readback(drawn, w, h) == ref);   // what the frame drew
+        CHECK(bk.readback(id, w, h) == ref);      // what the applet's id names
+    }
+    CHECK(drawn_sets.size() == 2);   // the two images really did trade places
     bk.bridge->release_texture(id);
 }
 
