@@ -255,6 +255,15 @@
   .platforms dt { font: 12px/1.6 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
   .platforms dd { color: var(--secondary); }
   @media (max-width: 1000px) { .libs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tl-plate { position: relative; }
+  .hw .tl-wave { fill: none; stroke: var(--parchment); stroke-width: 1.3; stroke-linejoin: round; }
+  .hw .tl-model { fill: none; stroke: #3ca99c; stroke-width: 1.6; stroke-dasharray: 4 3; }
+  .hw .tl-anomaly { fill: rgba(179, 139, 89, .22); }
+  .hw .tl-flag { fill: var(--bronze); }
+  .hw .tl-now { stroke: var(--bronze); stroke-width: 1; opacity: .7; }
+  .hw .tl-slot { fill: #232220; stroke: var(--rule); }
+  .hw .tl-slot.full { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); }
+  .hw .tl-slot.lost { fill: none; stroke: var(--faint); stroke-dasharray: 2 2; }
   .soon-item { margin-top: 34px; }
   .soon-text { display: grid; grid-template-columns: 15em minmax(0, 46em); gap: 8px 28px; align-items: baseline; margin-bottom: 18px; }
   .soon-text h3 { margin: 0; font: 15px/1.4 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--parchment); }
@@ -1760,9 +1769,9 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div class="label eyebrow">06 · Coming soon</div>
       <h2>Coming soon</h2>
       <div class="soon-item">
-        <div class="soon-text"><h3>Caliper MCP server</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
+        <div class="soon-text"><h3>Caliper MCP</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
-<svg class="hw soon-svg" id="soon-mcp" viewBox="0 0 1100 470" role="img" aria-label="Concept: an AI agent asks for a fine-tuning panel; through the Caliper MCP server it reads the SDK, writes the applet, builds it, attaches it to train.py and captures it, and the panel appears live in Caliper">
+<svg class="hw soon-svg" id="soon-mcp" viewBox="0 0 1100 470" role="img" aria-label="Concept: an AI agent asks for a fine-tuning panel; through Caliper MCP it reads the SDK, writes the applet, builds it, attaches it to train.py and captures it, and the panel appears live in Caliper">
 <defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
 <rect x="16" y="44" width="360" height="410" rx="10" class="pkg"/>
 <text x="34" y="28" class="k">YOUR AGENT</text>
@@ -1773,7 +1782,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <text x="50" y="126" class="mono small" xml:space="preserve">  entropy, and a button that</text>
 <text x="50" y="145" class="mono small" xml:space="preserve">  snapshots the weights.</text>
 <rect x="406" y="44" width="288" height="410" rx="10" class="pkg"/>
-<text x="424" y="28" class="k">CALIPER MCP SERVER</text>
+<text x="424" y="28" class="k">CALIPER MCP</text>
 <text x="676" y="28" class="n dim" text-anchor="end">stdio or HTTP</text>
 <rect x="426" y="64" width="248" height="96" rx="4" class="blk"/>
 <text x="442" y="90" class="mono small">caliper://sdk</text>
@@ -1947,6 +1956,58 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <text x="924" y="412" class="n dim">last at step 1,200</text>
 </g>
 <rect x="744" y="64" width="320" height="374" rx="4" id="mcp-flash"/>
+</svg>
+        </div>
+      </div>
+      <div class="soon-item">
+        <div class="soon-text"><h3>Caliper Bench</h3><p>Instruments, sensors, test rigs and simulations streaming into Caliper on one clock, beside the models trained on their data, for the physical sciences, engineering and the life sciences.</p></div>
+        <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
+<svg class="hw tl" id="tl-fig" viewBox="0 0 1100 440" role="img" aria-label="Illustrative: a vibration sensor, a spectrometer and a particle simulation stream into Caliper; the two feed channels share the host clock and show lost samples as a gap, the simulation stays on the GPU, and Caliper draws all three live, aligned in time, with a model's prediction over the vibration">
+<defs><marker id="ttip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+<rect x="16" y="44" width="360" height="380" rx="10" class="pkg"/>
+<text x="34" y="28" class="k">SOURCES</text>
+<text x="358" y="28" class="n dim" text-anchor="end">instruments, rigs, simulations</text>
+<rect x="36" y="64" width="320" height="104" rx="4" class="blk"/>
+<text x="52" y="86" class="n">Sensors and test rigs</text><text x="340" y="86" class="n dim" text-anchor="end">vibration</text>
+<polyline id="tl-src-wave" class="tl-wave"/>
+<rect x="36" y="180" width="320" height="104" rx="4" class="blk"/>
+<text x="52" y="202" class="n">Instruments and imaging</text><text x="340" y="202" class="n dim" text-anchor="end">spectrum per frame</text>
+<g id="tl-src-spec"></g>
+<rect x="36" y="296" width="320" height="108" rx="4" class="blk"/>
+<text x="52" y="318" class="n">Simulations</text><text x="340" y="318" class="n dim" text-anchor="end">particles on the GPU</text>
+<g id="tl-src-sim"></g>
+<rect x="406" y="44" width="288" height="380" rx="10" class="pkg"/>
+<text x="424" y="28" class="k">CALIPER HOST</text>
+<text x="676" y="28" class="n dim" text-anchor="end">one clock</text>
+<text x="426" y="92" class="mono small" id="tl-seq-0">feed · seq 48,212</text>
+<g id="tl-ring-0"></g>
+<text x="426" y="208" class="mono small" id="tl-seq-1">feed · seq 9,604</text>
+<g id="tl-ring-1"></g>
+<rect x="426" y="314" width="248" height="70" rx="4" class="blk"/>
+<text x="442" y="340" class="mono small">ExportablePool block</text>
+<text x="442" y="362" class="n dim">drawn in place, no copy</text>
+<text x="550" y="410" class="n dim" text-anchor="middle" id="tl-gap-note">lost samples show as a gap</text>
+<path class="arrow data" d="M358,128 L424,128" marker-end="url(#ttip)"/>
+<path class="arrow data" d="M358,244 L424,244" marker-end="url(#ttip)"/>
+<path class="arrow data" d="M358,350 L424,350" marker-end="url(#ttip)"/>
+<path class="arrow data" d="M676,128 L742,128" marker-end="url(#ttip)"/>
+<path class="arrow data" d="M676,244 L742,244" marker-end="url(#ttip)"/>
+<path class="arrow data" d="M676,350 L742,350" marker-end="url(#ttip)"/>
+<rect x="724" y="44" width="360" height="380" rx="10" class="pkg"/>
+<text x="742" y="28" class="k">CALIPER</text>
+<text x="1066" y="28" class="n dim" text-anchor="end">aligned on the host clock</text>
+<rect x="744" y="64" width="320" height="340" rx="4" class="blk"/>
+<line x1="760" y1="100" x2="1048" y2="100" class="rulefaint"/><line x1="760" y1="160" x2="1048" y2="160" class="rulefaint"/>
+<rect id="tl-anomaly" x="1000" y="100" width="0" height="60" class="tl-anomaly"/>
+<polyline id="tl-view-wave" class="tl-wave"/>
+<polyline id="tl-view-model" class="tl-model"/>
+<text x="760" y="88" class="n dim">vibration, and the model's prediction</text>
+<text x="1048" y="88" class="n tl-flag" text-anchor="end" id="tl-flag"></text>
+<text x="760" y="186" class="n dim">spectrum over time</text>
+<g id="tl-view-spec"></g>
+<text x="760" y="276" class="n dim">particles, coloured by speed</text>
+<g id="tl-view-sim"></g>
+<line x1="1048" y1="96" x2="1048" y2="256" class="tl-now"/>
 </svg>
         </div>
       </div>
@@ -2408,7 +2469,103 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 })();
 </script>
 <script>
-// The Coming soon figures, both concepts. The MCP server: the agent's steps light in turn, each through its tool,
+// The telemetry figure, illustrative data: a vibration channel and a spectrometer stream through feed rings on the
+// host clock (a few samples go missing now and then, and show as a gap), a particle simulation stays on the GPU,
+// and Caliper draws the three aligned in time, a model's prediction over the vibration flagging where they part.
+(() => {
+  const svg = document.getElementById("tl-fig");
+  if (!svg) return;
+  const NS = "http://www.w3.org/2000/svg", reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const $ = id => svg.getElementById(id);
+  const el = (parent, tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+  const ramp = v => { v = Math.max(0, Math.min(1, v)); const a = [42, 41, 37], b = [179, 139, 89], c = [232, 211, 173];
+    const [x, y, u] = v < .55 ? [a, b, v / .55] : [b, c, (v - .55) / .45]; return `rgb(${x.map((q, i) => Math.round(q + (y[i] - q) * u)).join(",")})`; };
+
+  // Spectrograms: columns of cells that scroll left.
+  const spec = (g, x0, y0, cols, rows, w, h) => {
+    const cells = [];
+    for (let c = 0; c < cols; c++) { cells.push([]); for (let r = 0; r < rows; r++) cells[c].push(el(g, "rect", { x: x0 + c * w, y: y0 + r * h, width: w - 1, height: h - 1, fill: "#232220" })); }
+    return cells;
+  };
+  const srcSpec = spec($("tl-src-spec"), 52, 214, 24, 6, 12, 10), viewSpec = spec($("tl-view-spec"), 760, 194, 36, 6, 8, 9);
+  const columns = [];
+  // Feed rings: ten slots each.
+  const rings = [0, 1].map(k => [...Array(10)].map((_, i) => el($("tl-ring-" + k), "rect", { x: 426 + i * 25, y: k ? 222 : 106, width: 21, height: 21, rx: 2, class: "tl-slot" })));
+  const seq = [48212, 9604];
+  // Particles in a slow swirl.
+  const P = [...Array(26)].map((_, i) => ({ a: i * 2.4, r: 0.25 + (i % 7) / 9, s: 0.4 + (i % 5) * 0.12 }));
+  const srcDots = P.map(() => el($("tl-src-sim"), "circle", { r: 2.2, fill: "#e8e0d0" }));
+  const viewDots = P.map(() => el($("tl-view-sim"), "circle", { r: 3.2 }));
+
+  const N = 120, wave = [], model = [];
+  let t = 0, last = 0, raf = 0, visible = false, slotAt = [0, 0], tickAcc = 0, spike = -1, flagged = 0;
+  function sample(time) {
+    let v = Math.sin(time * 9) * 0.45 + Math.sin(time * 23) * 0.18 + (Math.random() - 0.5) * 0.12;
+    if (spike > 0) { v += Math.sin(time * 61) * 0.9 * spike; }
+    return v;
+  }
+  for (let i = 0; i < N; i++) { wave.push(sample(i / 40)); model.push(Math.sin(i / 40 * 9) * 0.45 + Math.sin(i / 40 * 23) * 0.18); }
+  const line = (id, data, x0, x1, ym, amp) => $(id).setAttribute("points", data.map((v, i) => `${(x0 + (x1 - x0) * i / (N - 1)).toFixed(1)},${(ym - v * amp).toFixed(1)}`).join(" "));
+
+  function step(dt) {
+    t += dt; tickAcc += dt;
+    // A disturbance now and then, that the model does not expect.
+    if (spike < 0 && Math.random() < dt * 0.18) spike = 1;
+    if (spike > 0) { spike -= dt * 0.7; if (spike <= 0) spike = -1; }
+    const n = Math.max(1, Math.round(dt * 40));
+    for (let k = 0; k < n; k++) {
+      const time = t + k / 40;
+      wave.push(sample(time)); wave.shift();
+      model.push(Math.sin(time * 9) * 0.45 + Math.sin(time * 23) * 0.18); model.shift();
+    }
+    line("tl-src-wave", wave, 52, 340, 132, 26);
+    line("tl-view-wave", wave, 760, 1048, 130, 24);
+    line("tl-view-model", model, 760, 1048, 130, 24);
+    // Where they part, flag it.
+    let worst = 0, at = -1;
+    for (let i = N - 40; i < N; i++) { const d = Math.abs(wave[i] - model[i]); if (d > worst) { worst = d; at = i; } }
+    const band = $("tl-anomaly");
+    if (worst > 0.55) { flagged = 1.2; }
+    flagged = Math.max(0, flagged - dt);
+    band.setAttribute("x", 760 + 288 * (N - 40) / (N - 1)); band.setAttribute("width", flagged > 0 ? 288 * 40 / (N - 1) : 0);
+    $("tl-flag").textContent = flagged > 0 ? "off the prediction" : "";
+    // Spectrum columns at about 12 a second.
+    if (tickAcc > 0.08) {
+      tickAcc = 0;
+      const col = [...Array(6)].map((_, r) => Math.max(0, 0.75 - Math.abs(r - 2.5 - Math.sin(t * 1.3) * 1.6) * 0.3 + (spike > 0 ? 0.35 : 0) + (Math.random() - 0.5) * 0.25));
+      columns.push(col); if (columns.length > 36) columns.shift();
+      const paint = (cells, cols) => cells.forEach((c, ci) => { const src = columns[columns.length - cols + ci]; c.forEach((cell, r) => cell.setAttribute("fill", src ? ramp(src[r]) : "#232220")); });
+      paint(srcSpec, 24); paint(viewSpec, 36);
+      // Feed rings: the next slot fills; once in a while two samples go missing and the gap shows.
+      [0, 1].forEach(k => {
+        const ring = rings[k], i = slotAt[k] % ring.length;
+        const lost = Math.random() < 0.05;
+        ring.forEach((r, j) => { if (j === i) r.setAttribute("class", lost ? "tl-slot lost" : "tl-slot full"); else if (j === (i + 1) % ring.length) r.setAttribute("class", "tl-slot"); });
+        seq[k] += lost ? 3 : 1; slotAt[k]++;
+        $("tl-seq-" + k).textContent = `feed · seq ${seq[k].toLocaleString("en-US")}`;
+      });
+    }
+    // Particles.
+    P.forEach((p, i) => {
+      p.a += dt * p.s * (1 + 0.6 * Math.sin(t * 0.7 + i));
+      const x = Math.cos(p.a) * p.r, y = Math.sin(p.a * 1.3) * p.r * 0.8;
+      srcDots[i].setAttribute("cx", (196 + x * 130).toFixed(1)); srcDots[i].setAttribute("cy", (360 + y * 34).toFixed(1));
+      viewDots[i].setAttribute("cx", (904 + x * 130).toFixed(1)); viewDots[i].setAttribute("cy", (336 + y * 52).toFixed(1));
+      viewDots[i].setAttribute("fill", ramp(0.25 + 0.75 * Math.abs(Math.sin(p.a * 1.7))));
+    });
+  }
+  function frame(now) {
+    raf = 0;
+    const dt = last ? Math.min(0.05, (now - last) / 1000) : 0.016;
+    last = now; step(dt);
+    if (visible && !reduce) raf = requestAnimationFrame(frame);
+  }
+  for (let i = 0; i < 40; i++) step(0.05);
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; last = 0; if (visible && !raf && !reduce) raf = requestAnimationFrame(frame); }, { threshold: 0.2 }).observe(svg);
+})();
+</script>
+<script>
+// The Coming soon figures, concepts. Caliper MCP: the agent's steps light in turn, each through its tool,
 // and the panel builds in Caliper. Caliper Cloud: the Trace grid fills as views stream in, the GPUs light as a pass
 // sweeps the sharded model.
 (() => {
