@@ -93,6 +93,7 @@ private:
     void intervention_editor(Ask& ask, bool can_send);
     void answers();
     void grid(float width, float height);
+    void tape(float width);
     void side_list(float width, float height, Ask& ask, bool can_send);
     void word_menu(int32_t id, Ask& ask, bool can_send);
     Ask trace_request(int run) const;
@@ -123,6 +124,9 @@ private:
     void playback();
     int shown_ = 0, cursor_position_ = -1, cursor_layer_ = -1;
     bool follow_ = true;
+    // The grid's horizontal window as last drawn (positions), and a scroll the tape asks of it.
+    int visible_first_ = 0, visible_last_ = 0;
+    float scroll_to_ = -1;
     // The intervention being written.
     int kind_ = 0, first_ = 5, last_ = 17, k_ = 10;
     float strength_ = 4;

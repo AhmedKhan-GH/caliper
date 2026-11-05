@@ -691,3 +691,39 @@ TEST_CASE("slowed down, the Trace pane and the Output reveal a finished generati
     CHECK(ui.captured.find(" w3 w4 w5") != std::string::npos);
     CHECK(ui.errors == 0);
 }
+
+TEST_CASE("the tape shows the whole trace and a click on it moves the grid's cursor there") {
+    Ui ui;
+    auto hello = ui.request("hello");
+    ui.peer.reply(hello, Object{{"protocol", 1.0}, {"capabilities", Array{"generate", "list_tensors", "show_tensor", "trace"}}});
+    auto list = ui.request("list_tensors");
+    ui.peer.reply(list, Object{{"model", "Test model"}, {"tensors", Array{
+        Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
+               {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
+    for (int i = 0; i < 3; ++i) ui.frame();
+    ui.activate("Model 3D###caliper.inspector.model3d", "Trace");
+    ui.activate(inference_window, "Generate");
+    auto run = ui.request("trace");
+    ui.peer.send(Object{{"id", run["id"]}, {"done", false}, {"event", trace_event(0, {1, 2, 3, 4, 5, 6}, 2)}});
+    ui.peer.reply(run, Object{{"tokens", 4.0}, {"finish_reason", "length"}});
+    for (int i = 0; i < 4; ++i) ui.frame();
+    CHECK(ui.captured.find("Position 5") != std::string::npos);            // the cursor follows the newest token
+    // Find the tape by its tooltip, near its left end, then click there.
+    ImGuiWindow* trace = ImGui::FindWindowByName(trace_window);
+    REQUIRE(trace != nullptr);
+    auto& io = ImGui::GetIO();
+    const float x = trace->Pos.x + 30;
+    float found = -1;
+    for (float y = trace->Pos.y; y < trace->Pos.y + trace->Size.y && found < 0; y += 2) {
+        io.AddMousePosEvent(x, y);
+        ui.frame(); ui.frame();
+        if (ui.captured.find("move the grid here") != std::string::npos) found = y;
+    }
+    REQUIRE(found >= 0);
+    CHECK(ui.captured.find("Position 0 (w1) of 6") != std::string::npos);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true); ui.frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false); ui.frame(); ui.frame();
+    CHECK(ui.captured.find("Position 0") != std::string::npos);
+    CHECK(ui.captured.find("Position 5") == std::string::npos);
+    CHECK(ui.errors == 0);
+}

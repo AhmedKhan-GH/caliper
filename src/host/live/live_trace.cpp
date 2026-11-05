@@ -349,10 +349,12 @@ TracePane::Ask TracePane::draw(bool can_send, bool tracing) {
     Ask ask = controls(can_send, tracing);
     intervention_editor(ask, can_send);
     answers();
-    const ImVec2 available = ImGui::GetContentRegionAvail();
-    const float side = std::clamp(available.x * 0.3f, 220.0f, 460.0f);
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    grid(std::max(120.0f, available.x - side - spacing), std::max(80.0f, available.y));
+    const float side = std::clamp(ImGui::GetContentRegionAvail().x * 0.3f, 220.0f, 460.0f);
+    const float grid_width = std::max(120.0f, ImGui::GetContentRegionAvail().x - side - spacing);
+    tape(grid_width);
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    grid(grid_width, std::max(80.0f, available.y));
     ImGui::SameLine();
     side_list(side, std::max(80.0f, available.y), ask, can_send);
     // The intervened run follows the intact one, prompt for prompt.
@@ -547,6 +549,64 @@ void TracePane::answers() {
     }
 }
 
+// The whole tape at a glance: every position the clock has reached (across, squeezed to the width) by layer (up,
+// the output on top), coloured like the grid, with the grid's window framed in bronze and the cursor marked.
+// Click or drag to move the grid and the cursor there.
+void TracePane::tape(float width) {
+    const TraceRun& r = display();
+    if (r.positions() == 0) return;
+    const int layers = static_cast<int>(r.layers.size()), rows = layers + 1;
+    const int seen = std::max(1, revealed_positions(r));
+    const float row = 2, height = rows * row;
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##trace.tape", ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+    auto* list = ImGui::GetWindowDrawList();
+    list->AddRectFilled(origin, point(origin.x + width, origin.y + height), sternbild::col::deep);
+    const auto x_of = [&](double position) { return origin.x + width * position / seen; };
+    const auto& ids = jacobian_ ? r.jlens : r.logit;
+    const auto& probs = jacobian_ ? r.jprob : r.lprob;
+    // One column per position, or per point when positions outnumber points (the middle position stands in).
+    const int columns = std::max(1, std::min(seen, static_cast<int>(width)));
+    for (int c = 0; c < columns; ++c) {
+        const int p = std::min(seen - 1, static_cast<int>((c + 0.5) * seen / columns));
+        const float x0 = origin.x + width * c / columns, x1 = origin.x + width * (c + 1) / columns;
+        const int32_t answer = r.output[static_cast<size_t>(p) * r.k];
+        for (int i = 0; i < rows; ++i) {
+            const int layer = i == 0 ? -1 : layers - i;
+            if (!revealed(r, p, layer)) continue;
+            const size_t at = layer < 0 ? static_cast<size_t>(p) * r.k : r.at(p, layer);
+            const int32_t id = layer < 0 ? r.output[at] : ids[at];
+            const float prob = layer < 0 ? r.oprob[at] : probs[at];
+            const ImU32 fill = differs(p, layer) ? sternbild::with_alpha(sternbild::col::cat, 200)
+                : id == answer ? sternbild::with_alpha(kAnswer, static_cast<int>(70 + 185 * std::clamp(prob, 0.0f, 1.0f)))
+                : sternbild::with_alpha(sternbild::col::vehicle, static_cast<int>(18 + 200 * std::clamp(prob, 0.0f, 1.0f)));
+            list->AddRectFilled(point(x0, origin.y + row * i), point(std::max(x1, x0 + 1), origin.y + row * (i + 1)), fill);
+        }
+    }
+    if (r.prompt > 0 && r.prompt < seen)
+        list->AddLine(point(x_of(r.prompt), origin.y), point(x_of(r.prompt), origin.y + height), sternbild::col::rule);
+    const float a = static_cast<float>(x_of(visible_first_)), b = std::max(static_cast<float>(x_of(visible_last_ + 1)), a + 3);
+    list->AddRect(point(a, origin.y - 1), point(b, origin.y + height + 1), sternbild::col::bronze, 0, 0, 1.5f);
+    if (cursor_position_ >= 0 && cursor_position_ < seen) {
+        const float x = x_of(cursor_position_ + 0.5);
+        list->AddLine(point(x, origin.y), point(x, origin.y + height), sternbild::col::parchment);
+    }
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const int under = std::clamp(static_cast<int>((mouse.x - origin.x) / width * seen), 0, seen - 1);
+    if (hovered && !active)
+        ImGui::SetTooltip("Position %d (%s) of %d\nClick or drag to move the grid here", under,
+                          display_word(word(r.tokens[under])).c_str(), seen);
+    if (active) {
+        // Centre the grid on the position under the pointer, and put the cursor there.
+        const float cell = 72, label_width = ImGui::CalcTextSize("Out").x + 14;
+        const float view = std::max(1.0f, (visible_last_ - visible_first_ + 1) * cell);
+        scroll_to_ = std::max(0.0f, label_width + cell * under - view * 0.5f);
+        cursor_position_ = under;
+        follow_ = false;
+    }
+}
+
 bool TracePane::differs(int position, int layer) const {
     const TraceRun& a = runs_[0];
     const TraceRun& b = runs_[1];
@@ -578,6 +638,7 @@ void TracePane::grid(float width, float height) {
     cursor_position_ = std::clamp(cursor_position_, 0, seen - 1);
     cursor_layer_ = std::clamp(cursor_layer_, -1, layers - 1);
 
+    if (scroll_to_ >= 0) { ImGui::SetNextWindowScroll(ImVec2(scroll_to_, -1)); scroll_to_ = -1; }
     ImGui::BeginChild("##trace.grid", ImVec2(width, height), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float scroll = ImGui::GetScrollX();
@@ -595,6 +656,8 @@ void TracePane::grid(float width, float height) {
     const auto& probs = jacobian_ ? r.jprob : r.lprob;
     const int first = std::max(0, static_cast<int>((scroll - label_width) / cell));
     const int last = std::min(seen - 1, static_cast<int>((scroll + view) / cell) + 1);
+    visible_first_ = std::clamp(static_cast<int>(scroll / cell), 0, seen - 1);
+    visible_last_ = std::clamp(static_cast<int>((scroll + view - label_width) / cell), visible_first_, seen - 1);
     ImFont* font = ImGui::GetFont();
     const float font_size = ImGui::GetFontSize();
     const auto x_of = [&](int position) { return origin.x + label_width + cell * position; };
