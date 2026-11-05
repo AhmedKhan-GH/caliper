@@ -60,8 +60,11 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
@@ -354,10 +357,12 @@ public:
         if (minimized || rebuild_swapchain_) return;
         frame_render(dd);
         frame_present();
+        if (stats_on_) note_frame();
     }
 
     void shutdown() override {
         if (device_ == VK_NULL_HANDLE) return;
+        if (stats_on_) print_stats();
         vkDeviceWaitIdle(device_);
         for (auto& kv : textures_) destroy_tex(kv.second);
         textures_.clear();
@@ -2387,6 +2392,34 @@ private:
         wd_.SemaphoreIndex = (wd_.SemaphoreIndex + 1) % wd_.SemaphoreCount;
     }
 
+    // ---- CALIPER_VULKAN_STATS: frame times and update stalls, printed at exit ---
+    void note_frame() {
+        const auto now = std::chrono::steady_clock::now();
+        if (stats_last_frame_ != std::chrono::steady_clock::time_point{})
+            stats_frames_.push_back(
+                std::chrono::duration<float, std::milli>(now - stats_last_frame_).count());
+        stats_last_frame_ = now;
+    }
+    void note_retire(std::chrono::steady_clock::time_point t0) {
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count();
+        if (ms >= 0.1) { ++stats_retire_blocks_; stats_retire_ms_ += ms; }
+    }
+    void print_stats() {
+        std::sort(stats_frames_.begin(), stats_frames_.end());
+        const auto pct = [&](double q) {
+            return stats_frames_.empty() ? 0.f
+                : stats_frames_[(size_t)(q * (double)(stats_frames_.size() - 1))];
+        };
+        std::fprintf(stderr,
+            "[vulkan] stats: %zu frames, ms p50 %.2f p99 %.2f max %.2f; updates direct %llu "
+            "buffer %llu; kernel waits on a frame %llu; retire blocks %llu (%.1f ms total)\n",
+            stats_frames_.size(), pct(0.5), pct(0.99), pct(1.0),
+            (unsigned long long)stats_direct_, (unsigned long long)stats_buffer_,
+            (unsigned long long)stats_frame_waits_, (unsigned long long)stats_retire_blocks_,
+            stats_retire_ms_);
+    }
+
     // ---- small helpers ----
     bool find_mem_type(uint32_t type_bits, VkMemoryPropertyFlags props, uint32_t* out) {
         for (uint32_t i = 0; i < mem_props_.memoryTypeCount; ++i)
@@ -2679,7 +2712,8 @@ private:
     // canvas composites without the frame's timeline waits, so it stays on the
     // buffer path, whose Vulkan pass the composite's queue order covers.
     bool direct_available() const {
-        return pipelined_ok_ && cudadrv::direct_api() != nullptr &&
+        static const bool off = std::getenv("CALIPER_VULKAN_NO_DIRECT") != nullptr;
+        return !off && pipelined_ok_ && cudadrv::direct_api() != nullptr &&
                !direct_failed_ && !(canvas_active_ && canvas_mode_ == CANVAS_OFFSCREEN);
     }
 
@@ -3489,7 +3523,9 @@ private:
                           bool shared_in_place, const uint32_t* lut256,
                           float vmin, float vmax) {
         Interop& io = dst.interop;
+        const auto retire_t0 = std::chrono::steady_clock::now();
         if (!retire(dst)) return dev_bail("pipelined: retire timed out");
+        if (stats_on_) note_retire(retire_t0);
 
         // Validate + prepare descriptors BEFORE enqueuing anything on CUDA,
         // so a rejected tensor leaves no half-signaled timeline behind.
@@ -3567,6 +3603,7 @@ private:
         pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
         last_update_sem_ = io.timeline;
         last_update_value_ = io.timeline_value;
+        ++stats_buffer_;
         dst.layout = dst.rest_layout;   // CB's end state
         last_device_path_ = is_cmap ? "compute" : "blit";
         return true;
@@ -3746,6 +3783,7 @@ private:
         if (frame_value_ != 0 &&
             vkGetSemaphoreCounterValueKHR(device_, frame_timeline_, &frames_done) == VK_SUCCESS &&
             frames_done < frame_value_) {
+            ++stats_frame_waits_;
             cudadrv::ExternalSemaphoreWaitParams wp{};
             wp.params.fence.value = frame_value_;
             if (da->cuWaitExternalSemaphoresAsync(&cuda_frame_sem_, &wp, 1, stream)
@@ -3778,6 +3816,7 @@ private:
         last_update_sem_ = io.timeline;
         last_update_value_ = io.timeline_value;
         last_device_path_ = is_cmap ? "direct-cmap" : "direct-blit";
+        ++stats_direct_;
         return true;
     }
 
@@ -3977,6 +4016,12 @@ private:
     bool pipelined_ok_ = false;         // interop + timeline: V4 pipelining live
     bool direct_failed_ = false;        // D25 kernels or frame timeline failed to set up
     bool force_buffer_path_ = false;    // test-only
+    const bool stats_on_ = std::getenv("CALIPER_VULKAN_STATS") != nullptr;
+    std::vector<float> stats_frames_;
+    std::chrono::steady_clock::time_point stats_last_frame_{};
+    uint64_t stats_direct_ = 0, stats_buffer_ = 0;
+    uint64_t stats_frame_waits_ = 0, stats_retire_blocks_ = 0;
+    double stats_retire_ms_ = 0.0;
     cudadrv::CUmodule direct_module_ = nullptr;
     cudadrv::CUfunction direct_cmap_ = nullptr;
     cudadrv::CUfunction direct_blit_ = nullptr;
