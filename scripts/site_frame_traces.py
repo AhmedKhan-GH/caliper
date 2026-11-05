@@ -111,6 +111,15 @@ METAL = {
         (4, 0.0, VSYNC, "screen", "previous frame", "the previous frame on screen", []),
         (4, VSYNC, 20.0, "screen", "this frame", "this frame on screen from the vsync after its present", [MR_PRESENT]),
     ],
+    # The buffers, in data order: (title, what it is, how it is drawn, writes). States: 0 the last step's values,
+    # 1 this step's, 2 the next step's.
+    "memory": [
+        ("TENSOR", "torch's MTLBuffer, f32", "raw", [(0.4, 5.0, 0, 1, "blend"), (12.4, 20.0, 1, 2, "blend")]),
+        ("TEXTURE", "MTLTexture, colormapped", "cmap", [(5.15, 5.75, 0, 1, "wipe")]),
+        ("ON SCREEN", "the drawable, from vsync", "cmap", [(VSYNC, VSYNC, 0, 1, "swap")]),
+    ],
+    # (from buffer, to buffer, label, from ms, to ms): the step that moves the data, lit while it runs.
+    "links": [(0, 1, "cmap_f32", 5.15, 5.75), (1, 2, "ImGui draw", 6.4, 7.5)],
     # (from lane, time, to lane, time, label)
     "arrows": [
         (1, 3.1, 2, 3.1, ""),
@@ -191,6 +200,13 @@ NVIDIA = {
         (4, 0.0, VSYNC, "screen", "previous frame", "the previous frame on screen", []),
         (4, VSYNC, 20.0, "screen", "this frame", "this frame on screen from the vsync after its present", [VR_PRESENT]),
     ],
+    "memory": [
+        ("TENSOR", "torch's CUDA memory, f32", "raw", [(0.3, 4.6, 0, 1, "blend"), (10.9, 20.0, 1, 2, "blend")]),
+        ("SHARED BUFFER", "exported by Vulkan, f32", "raw", [(4.6, 4.95, 0, 1, "wipe")]),
+        ("VKIMAGE", "colormapped", "cmap", [(5.05, 5.6, 0, 1, "wipe")]),
+        ("ON SCREEN", "swapchain, from vsync", "cmap", [(VSYNC, VSYNC, 0, 1, "swap")]),
+    ],
+    "links": [(0, 1, "copy", 4.6, 4.95), (1, 2, "colormap", 5.05, 5.6), (2, 3, "draw", 6.45, 7.6)],
     "arrows": [
         (1, 3.33, 2, 4.6, ""),
         (1, 3.48, 2, 4.95, ""),
@@ -208,6 +224,7 @@ NVIDIA = {
 W, T = 1100, 20.0
 X0, X1 = 212, 1084
 Y0, PITCH, TRACK = 44, 76, 24
+MEM_ROWS, MEM_COLS, MEM_H = 8, 16, 128      # the buffers' cells and the height of a buffer's box
 
 
 def axis(bands):
@@ -244,8 +261,10 @@ def svg(tr, refs):
     n = tr["name"]
     lanes = tr["lanes"]
     x, _ = axis(tr["bands"])
-    H = Y0 + len(lanes) * PITCH - 8
-    out = [f'<svg class="trace-svg" viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(tr["label"])}">',
+    H = Y0 + len(lanes) * PITCH - 8                 # the lanes end here; the memory strip follows
+    MY = H + 22
+    HT = MY + MEM_H + 6
+    out = [f'<svg class="trace-svg" viewBox="0 0 {W} {HT}" role="img" aria-label="{html.escape(tr["label"])}">',
            f'<defs><pattern id="wait-{n}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
            f'<line x1="0" y1="0" x2="0" y2="6" class="hatch"/></pattern>'
            f'<marker id="arrow-{n}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">'
@@ -298,6 +317,30 @@ def svg(tr, refs):
                    f'class="now-c"></text></a>')
     out.append(f'<g class="playhead"><line x1="0" y1="{Y0 - 30}" x2="0" y2="{H}"/>'
                f'<path d="M -5 {Y0 - 32} L 5 {Y0 - 32} L 0 {Y0 - 25} Z"/></g>')
+    # The memory strip: each buffer as a grid of cells the page's script fills in step with the playhead.
+    out.append(f'<line x1="0" y1="{H + 8}" x2="{X1}" y2="{H + 8}" class="grid"/>')
+    out.append(f'<text x="0" y="{MY + 10}" class="lane-name">MEMORY</text>')
+    out.append(f'<text x="0" y="{MY + 27}" class="lane-sub">illustrative values</text>')
+    boxes = tr["memory"]
+    gap = 90 if len(boxes) <= 3 else 64
+    bw = (X1 - X0 - gap * (len(boxes) - 1)) / len(boxes)
+    for m, (title, sub, kind, _) in enumerate(boxes):
+        bx = X0 + m * (bw + gap)
+        hw, hh = bw - 24, MEM_H - 52
+        cw, ch = hw / MEM_COLS, hh / MEM_ROWS
+        cells = "".join(f'<rect x="{bx + 12 + c * cw:.2f}" y="{MY + 42 + r * ch:.2f}" width="{cw - 0.8:.2f}" height="{ch - 0.8:.2f}"/>'
+                        for r in range(MEM_ROWS) for c in range(MEM_COLS))
+        tag = (f'<text x="{bx + bw - 12:.2f}" y="{MY + 20}" class="mem-tag" text-anchor="end"></text>'
+               if any(w[4] == "swap" for w in boxes[m][3]) else "")
+        out.append(f'<g class="mem" data-m="{m}" data-kind="{kind}"><rect x="{bx:.2f}" y="{MY}" width="{bw:.2f}" '
+                   f'height="{MEM_H}" rx="5" class="box"/><text x="{bx + 12:.2f}" y="{MY + 20}" class="mem-name">'
+                   f'{html.escape(title)}</text><text x="{bx + 12:.2f}" y="{MY + 35}" class="mem-sub">{html.escape(sub)}</text>'
+                   f'{tag}<g class="cells">{cells}</g></g>')
+    for i, (a, b, label, _, _) in enumerate(tr["links"]):
+        xa, xb, ym = X0 + a * (bw + gap) + bw + 6, X0 + b * (bw + gap) - 6, MY + 42 + (MEM_H - 52) / 2
+        out.append(f'<g class="mem-link" data-k="{i}"><path d="M {xa:.2f} {ym:.2f} L {xb:.2f} {ym:.2f}" '
+                   f'marker-end="url(#arrow-{n})"/><text x="{(xa + xb) / 2:.2f}" y="{ym - 9:.2f}" text-anchor="middle" '
+                   f'class="mem-l">{html.escape(label)}</text></g>')
     out.append("</svg>")
     return "\n      ".join(out)
 
@@ -316,6 +359,9 @@ def block(tr, ref, sha):
         "lanes": len(tr["lanes"]),
         "segs": [{"l": s[0], "a": s[1], "b": s[2], "label": s[5], "refs": rs} for s, rs in zip(tr["segs"], refs)],
         "arrows": [a[1] for a in tr["arrows"]],
+        "memory": {"rows": MEM_ROWS, "cols": MEM_COLS, "vsync": VSYNC,
+                   "boxes": [{"kind": kind, "writes": writes} for _, _, kind, writes in tr["memory"]],
+                   "links": [[a, b] for _, _, _, a, b in tr["links"]]},
     }
     blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     return (f'<div class="trace trace-plate" data-trace="{tr["name"]}">\n'
