@@ -3239,6 +3239,75 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
     cu->cuMemFree(buf);
 }
 
+// W0 of docs/vulkan-update-costs.md: what one tensor update costs by size, on
+// the path the renderer picks. "call" is the frame-thread time inside
+// update_texture; "done" adds the wait for the GPU to finish it; "frame" is
+// the mean and worst whole frame with the texture drawn and updated each frame.
+// Prints numbers only: it proves nothing by itself, and a hidden window's
+// present pacing is not the display's.
+TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+    if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
+    Backend bk = vk_backend();
+    const cudadrv::Api* cu = cudadrv::api();
+    using clk = std::chrono::steady_clock;
+    const auto us = [](clk::time_point a, clk::time_point b) {
+        return std::chrono::duration<double, std::micro>(b - a).count();
+    };
+
+    for (int side : {256, 1024, 2048, 4096}) {
+        const int n = side * side;
+        const int iters = side >= 2048 ? 60 : 200;
+        std::vector<float> data(n);
+        for (int i = 0; i < n; ++i) data[i] = (float)(i % 251);
+        cudadrv::CUdeviceptr buf = 0;
+        REQUIRE(cu->cuMemAlloc(&buf, (size_t)n * sizeof(float)) == cudadrv::CUDA_SUCCESS);
+        cu->cuMemcpyHtoD(buf, data.data(), (size_t)n * sizeof(float));
+
+        CaliperTensor t{};
+        t.struct_size = sizeof(t); t.data = (void*)(uintptr_t)buf; t.dtype = CALIPER_DT_F32;
+        t.ndim = 2; t.shape[0] = side; t.shape[1] = side; t.strides[0] = side; t.strides[1] = 1;
+        t.device = CALIPER_DEV_CUDA;
+
+        CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
+            &t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
+        REQUIRE(id != 0);
+        bk.renderer->device_update_wait();
+
+        double call = 0, done = 0;
+        for (int i = 0; i < iters; ++i) {
+            auto t0 = clk::now();
+            REQUIRE(bk.bridge->update_texture(id, &t));
+            auto t1 = clk::now();
+            bk.renderer->device_update_wait();
+            auto t2 = clk::now();
+            call += us(t0, t1);
+            done += us(t0, t2);
+        }
+
+        double frame_sum = 0, frame_max = 0;
+        for (int i = 0; i < iters; ++i) {
+            auto t0 = clk::now();
+            bk.renderer->new_frame();
+            ImGui::GetBackgroundDrawList()->AddImage(
+                (ImTextureID)id, ImVec2(0, 0), ImVec2(64, 64));
+            REQUIRE(bk.bridge->update_texture(id, &t));
+            bk.renderer->render(64, 64);
+            const double f = us(t0, clk::now());
+            frame_sum += f;
+            frame_max = std::max(frame_max, f);
+        }
+        MESSAGE(side << "x" << side << " [" << std::string(bk.renderer->last_device_path())
+                << "]: call " << call / iters << " us, done " << done / iters
+                << " us, frame mean " << frame_sum / iters << " us, frame max "
+                << frame_max << " us");
+
+        bk.renderer->device_update_wait();
+        bk.bridge->release_texture(id);
+        cu->cuMemFree(buf);
+    }
+}
+
 // Frame-thread hitch forensics (embed_scope "hitches every batch" report):
 // the applet's per-generation refresh does release+create for all 9 textures
 // (8x conv 48x48 + 1x embw 36x512). On the Vulkan+CUDA path a CREATE is the

@@ -236,6 +236,12 @@ public:
     const char* name() const override { return "vulkan"; }
     const char* last_device_path() const override { return last_device_path_; }
 
+    void device_update_wait() override {
+        if (last_update_sem_ == VK_NULL_HANDLE) return;
+        wait_timeline(last_update_sem_, last_update_value_);
+        last_update_sem_ = VK_NULL_HANDLE;
+    }
+
     void window_hints() override {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // no GL context
     }
@@ -2413,6 +2419,7 @@ private:
     void destroy_sync_objects(Interop& io) {
         const cudadrv::Api* cu = cudadrv::api();
         if (io.timeline != VK_NULL_HANDLE) {
+            if (last_update_sem_ == io.timeline) last_update_sem_ = VK_NULL_HANDLE;
             // A destroyed semaphore must never linger in the frame-wait list.
             for (size_t i = pending_frame_waits_.size(); i-- > 0;)
                 if (pending_frame_waits_[i].first == io.timeline)
@@ -3462,6 +3469,8 @@ private:
 
         io.timeline_value = base + 2;
         pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
+        last_update_sem_ = io.timeline;
+        last_update_value_ = io.timeline_value;
         dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;   // CB's end state
         last_device_path_ = is_cmap ? "compute" : "blit";
         return true;
@@ -3539,6 +3548,8 @@ private:
 
         io.timeline_value = base + 2;
         pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
+        last_update_sem_ = io.timeline;
+        last_update_value_ = io.timeline_value;
         dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         last_device_path_ = is_cmap ? "compute-imported" : "blit-imported";
         return true;
@@ -3667,6 +3678,9 @@ private:
     // (semaphore, value) — filled by pipelined updates, consumed by
     // frame_render. Bridge + frame loop are UI-thread-only, so no lock.
     std::vector<std::pair<VkSemaphore, uint64_t>> pending_frame_waits_;
+    // The most recent pipelined update, for device_update_wait().
+    VkSemaphore last_update_sem_ = VK_NULL_HANDLE;
+    uint64_t last_update_value_ = 0;
 
     std::unordered_map<uint64_t, Tex> textures_;
     uint64_t next_id_ = 1;   // 0 is the invalid id
