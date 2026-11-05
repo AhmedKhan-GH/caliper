@@ -581,8 +581,21 @@ public:
     // ---- Texture ops ----
     uint64_t tex_create_rgba8(int w, int h) override {
         if (w <= 0 || h <= 0 || device_ == VK_NULL_HANDLE) return 0;
+        if (direct_available()) {
+            if (const uint64_t id = create_tex(w, h, /*exportable=*/true)) return id;
+            dev_note("direct image: exportable image failed, using the buffer path");
+        }
+        return create_tex(w, h, /*exportable=*/false);
+    }
+
+    uint64_t create_tex(int w, int h, bool exportable) {
         Tex t{};
         t.w = w; t.h = h;
+        // CUDA has no notion of image layouts, so an image it writes rests in
+        // GENERAL for its whole life, sampling included (D25).
+        t.direct.exportable = exportable;
+        t.rest_layout = exportable ? VK_IMAGE_LAYOUT_GENERAL
+                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ici.imageType = VK_IMAGE_TYPE_2D;
@@ -595,12 +608,22 @@ public:
         ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkExternalMemoryImageCreateInfo emi{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+        emi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        if (exportable) ici.pNext = &emi;
         if (vkCreateImage(device_, &ici, nullptr, &t.image) != VK_SUCCESS) return 0;
 
         VkMemoryRequirements mr;
         vkGetImageMemoryRequirements(device_, t.image, &mr);
+        VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        ded.image = t.image;
+        VkExportMemoryAllocateInfo xmai{VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};
+        xmai.pNext = &ded;
+        xmai.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
         VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        if (exportable) mai.pNext = &xmai;
         mai.allocationSize = mr.size;
+        t.direct.mem_size = mr.size;
         if (!find_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            &mai.memoryTypeIndex) ||
             vkAllocateMemory(device_, &mai, nullptr, &t.memory) != VK_SUCCESS) {
@@ -617,16 +640,16 @@ public:
             destroy_tex(t); return 0;
         }
 
-        // The ImGui-facing handle: a descriptor set in SHADER_READ_ONLY layout.
-        t.descset = ImGui_ImplVulkan_AddTexture(t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // The ImGui-facing handle: a descriptor set in the texture's rest layout.
+        t.descset = ImGui_ImplVulkan_AddTexture(t.view, t.rest_layout);
         if (t.descset == VK_NULL_HANDLE) { destroy_tex(t); return 0; }
 
-        // Images start UNDEFINED; move to SHADER_READ_ONLY so drawing an
+        // Images start UNDEFINED; move to the rest layout so drawing an
         // un-uploaded texture is defined (black), matching GL/Metal behavior.
         submit_once([&](VkCommandBuffer cb) {
-            barrier(cb, t, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            barrier(cb, t, VK_IMAGE_LAYOUT_UNDEFINED, t.rest_layout);
         });
-        t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        t.layout = t.rest_layout;
 
         uint64_t id = next_id_++;
         textures_[id] = t;
@@ -654,10 +677,9 @@ public:
             region.imageExtent = {(uint32_t)w, (uint32_t)h, 1};
             vkCmdCopyBufferToImage(cb, staging_.buf, t.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-            barrier(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            barrier(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, t.rest_layout);
         });
-        t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        t.layout = t.rest_layout;
         return true;
     }
 
@@ -1309,7 +1331,7 @@ public:
                 if (tit == textures_.end() || tit->second.fb != VK_NULL_HANDLE ||
                     d.texture == view_tex)
                     return dev_bail("primitives: bad sampled texture");
-                if (tit->second.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                if (tit->second.layout != tit->second.rest_layout)
                     return dev_bail("primitives: sampled texture not shader-readable");
                 e.texture = &tit->second;
             }
@@ -1575,7 +1597,7 @@ public:
                 if (e.texture != nullptr) {
                     sampled.sampler = geom_prim_sampler_;
                     sampled.imageView = e.texture->view;
-                    sampled.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    sampled.imageLayout = e.texture->rest_layout;
                     wr[9] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                     wr[9].dstSet = sets[i];
                     wr[9].dstBinding = 7;
@@ -1841,14 +1863,31 @@ private:
         Buffer lut;                          // per-texture LUT (256 RGBA8)
         bool pipelined = false;              // sync objects created OK
     };
+    // D25 direct path (per texture): the VkImage's memory imported into CUDA and
+    // reachable by a kernel as a surface object. Imported lazily, on the first
+    // direct update; a texture that never gets a device tensor pays only for
+    // the exportable allocation.
+    struct Direct {
+        bool exportable = false;             // memory is exportable to CUDA
+        bool broken = false;                 // import failed: stay on the buffer path
+        VkDeviceSize mem_size = 0;
+        void* win32_handle = nullptr;
+        cudadrv::CUexternalMemory ext = nullptr;
+        cudadrv::CUmipmappedArray mip = nullptr;
+        cudadrv::CUsurfObject surf = 0;
+    };
     struct Tex {
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
         VkDescriptorSet descset = VK_NULL_HANDLE;
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // Where the image sits when no update is writing it, and what its
+        // descriptor set says: GENERAL when CUDA may write it.
+        VkImageLayout rest_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         int w = 0, h = 0;
         Interop interop;
+        Direct direct;
         VkFramebuffer fb = VK_NULL_HANDLE;  // geometry.v1 view render target
         // geometry.v1_1 optional depth attachment (CALIPER_GEOM_VIEW_DEPTH).
         // Device-local D32-float, never sampled, never an id; the framebuffer
@@ -2588,6 +2627,15 @@ private:
                          : "sync mode: synchronous (timeline semaphores unavailable)");
     }
 
+    // D25: the direct path needs the pipelined objects, the optional driver
+    // table, and a frame loop that signals when frames finish. The offscreen
+    // canvas composites without the frame's timeline waits, so it stays on the
+    // buffer path, whose Vulkan pass the composite's queue order covers.
+    bool direct_available() const {
+        return pipelined_ok_ && cudadrv::direct_api() != nullptr &&
+               !direct_failed_ && !(canvas_active_ && canvas_mode_ == CANVAS_OFFSCREEN);
+    }
+
     bool ensure_cuda() {
         if (cuda_ctx_) return true;
         const cudadrv::Api* cu = cudadrv::api();
@@ -3298,8 +3346,7 @@ private:
         vkCmdPushConstants(cb, cmap_pipe_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(p), &p);
         vkCmdDispatch(cb, (p.w + 15) / 16, (p.h + 15) / 16, 1);
-        barrier(cb, dst, VK_IMAGE_LAYOUT_GENERAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        barrier(cb, dst, VK_IMAGE_LAYOUT_GENERAL, dst.rest_layout);
     }
 
     // Blit body from an explicit source buffer + byte offset. The v1.2 imported
@@ -3320,8 +3367,7 @@ private:
         region.imageExtent = {w, h, 1};
         vkCmdCopyBufferToImage(cb, src, dst.image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, dst.rest_layout);
     }
 
     void record_blit_body(VkCommandBuffer cb, Tex& dst, uint32_t w, uint32_t h) {
@@ -3358,7 +3404,7 @@ private:
             record_cmap_body(cb, dst, p, cmap_set_);
         });
         if (!ok) return false;
-        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        dst.layout = dst.rest_layout;
         last_device_path_ = "compute";
         return true;
     }
@@ -3375,7 +3421,7 @@ private:
             record_blit_body(cb, dst, w, h);
         });
         if (!ok) return false;
-        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        dst.layout = dst.rest_layout;
         last_device_path_ = "blit";
         return true;
     }
@@ -3471,7 +3517,7 @@ private:
         pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
         last_update_sem_ = io.timeline;
         last_update_value_ = io.timeline_value;
-        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;   // CB's end state
+        dst.layout = dst.rest_layout;   // CB's end state
         last_device_path_ = is_cmap ? "compute" : "blit";
         return true;
     }
@@ -3550,7 +3596,7 @@ private:
         pending_frame_waits_.emplace_back(io.timeline, io.timeline_value);
         last_update_sem_ = io.timeline;
         last_update_value_ = io.timeline_value;
-        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        dst.layout = dst.rest_layout;
         last_device_path_ = is_cmap ? "compute-imported" : "blit-imported";
         return true;
     }
@@ -3580,7 +3626,7 @@ private:
                 record_cmap_body(cb, dst, p, cmap_set_);
             });
             if (!ok) return false;
-            dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            dst.layout = dst.rest_layout;
             last_device_path_ = "compute-imported";
             return true;
         }
@@ -3593,7 +3639,7 @@ private:
             record_blit_body_src(cb, dst, w, h, src.buf, offset);
         });
         if (!ok) return false;
-        dst.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        dst.layout = dst.rest_layout;
         last_device_path_ = "blit-imported";
         return true;
     }
@@ -3670,6 +3716,7 @@ private:
     bool interop_ok_ = false;           // …AND a UUID-matched CUDA device paired
     bool timeline_ok_ = false;          // device exports timeline semaphores
     bool pipelined_ok_ = false;         // interop + timeline: V4 pipelining live
+    bool direct_failed_ = false;        // D25 kernels or frame timeline failed to set up
     uint8_t device_uuid_[16] = {};
     cudadrv::CUcontext cuda_ctx_ = nullptr;
     cudadrv::CUdevice cuda_dev_ = 0;
