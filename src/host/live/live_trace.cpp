@@ -64,6 +64,8 @@ ImU32 confidence(float p) {
 // The model's own next word, wherever a layer already holds it: a teal lighter than the palette's, to read
 // on the blue probability shade.
 constexpr ImU32 kAnswer = IM_COL32(0x7f, 0xe0, 0xd2, 255);
+// The speed slider in log10 layer steps a second: from 30 s a layer to everything at once.
+constexpr float kSlowest = -1.48f, kMaxSpeed = 3.0f;
 constexpr const char* kKinds[] = {"Ablate J-space", "Remove words", "Swap two words", "Inject word"};
 constexpr const char* kKindIds[] = {"ablate", "remove", "swap", "inject"};
 } // namespace
@@ -265,12 +267,60 @@ const std::string& TracePane::word(int32_t id) const {
     return it == words_.end() ? unknown : it->second;
 }
 
+double TracePane::total_steps(const TraceRun& r) const {
+    return r.positions() == 0 ? 0 : static_cast<double>(r.layers.size() + 1) * (1 + r.generated());
+}
+
+bool playback_shows(double steps, int layers, int prompt, int position, int layer) {
+    const double per_token = layers + 1.0, index = layer < 0 ? layers : layer;
+    const double before = position < prompt ? 0 : per_token * (1 + position - prompt);
+    return std::floor(steps) >= before + index + 1;
+}
+
+int playback_positions(double steps, int layers, int prompt, int positions) {
+    const double per_token = layers + 1.0, n = std::floor(steps);
+    if (n <= per_token) return std::min(prompt, positions);
+    return static_cast<int>(std::min<double>(positions, prompt + std::ceil((n - per_token) / per_token)));
+}
+
+bool TracePane::revealed(const TraceRun& r, int position, int layer) const {
+    return &r != &display() || playback_shows(revealed_, static_cast<int>(r.layers.size()), r.prompt, position, layer);
+}
+
+int TracePane::revealed_positions(const TraceRun& r) const {
+    return &r != &display() ? r.positions()
+        : playback_positions(revealed_, static_cast<int>(r.layers.size()), r.prompt, r.positions());
+}
+
+std::string TracePane::revealed_answer(int run) const {
+    const TraceRun& r = runs_[run];
+    const int end = &r == &display() ? revealed_positions(r) : r.positions();
+    if (end <= r.prompt) return {};
+    return text(std::vector<int32_t>(r.tokens.begin() + r.prompt, r.tokens.begin() + end));
+}
+
+void TracePane::playback() {
+    const TraceRun& r = display();
+    const int index = &r == &runs_[0] ? 0 : 1;
+    if (index != played_) {
+        // Another run on show: a fresh one plays from its start, one switched to is shown whole.
+        revealed_ = r.running && r.generated() == 0 ? 0 : 1e18;
+        played_ = index;
+    }
+    if (speed_ >= kMaxSpeed) revealed_ = 1e18;
+    else if (!paused_) revealed_ += ImGui::GetIO().DeltaTime * std::pow(10.0, static_cast<double>(speed_));
+    // Never ahead of the computation: at the edge, the view is live.
+    revealed_ = std::min(revealed_, total_steps(r));
+}
+
 TracePane::Ask TracePane::generate(const Object& settings) {
     settings_ = settings;
     runs_[0] = {}; runs_[1] = {};
+    revealed_ = speed_ >= kMaxSpeed ? 1e18 : 0;
     const bool intervened = !interventions_.empty();
     second_pending_ = intervened && compare_;
     shown_ = intervened ? 1 : 0;
+    played_ = intervened && compare_ ? 0 : shown_;
     cursor_position_ = cursor_layer_ = -1;
     follow_ = true;
     return trace_request(intervened && !compare_ ? 1 : 0);
@@ -292,6 +342,7 @@ TracePane::Ask TracePane::trace_request(int run) const {
 }
 
 TracePane::Ask TracePane::draw(bool can_send, bool tracing) {
+    playback();
     Ask ask = controls(can_send, tracing);
     intervention_editor(ask, can_send);
     answers();
@@ -314,6 +365,25 @@ TracePane::Ask TracePane::controls(bool, bool tracing) {
     const ImGuiStyle& style = ImGui::GetStyle();
     ImGui::BeginDisabled(!tracing);
     if (sternbild::word_button("Stop")) ask.op = "stop";
+    ImGui::EndDisabled();
+    // The clock: one slider from 30 seconds a layer, through layers and tokens a second, to full speed.
+    ImGui::SameLine(0, style.ItemSpacing.x * 3);
+    label("Speed");
+    ImGui::SameLine();
+    const double steps = static_cast<double>((display().layers.empty() ? 23 : display().layers.size()) + 1);
+    const double rate = std::pow(10.0, static_cast<double>(speed_));
+    char speed[48];
+    if (speed_ >= kMaxSpeed) std::snprintf(speed, sizeof speed, "Full speed");
+    else if (rate >= steps) std::snprintf(speed, sizeof speed, "%.3g tokens/s", rate / steps);
+    else if (rate >= 1) std::snprintf(speed, sizeof speed, "%.3g layers/s", rate);
+    else std::snprintf(speed, sizeof speed, "%.3g s per layer", 1 / rate);
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("00.0 s per layer").x * 1.6f);
+    ImGui::SliderFloat("##trace.speed", &speed_, kSlowest, kMaxSpeed, speed, ImGuiSliderFlags_NoInput);
+    ImGui::SameLine();
+    if (sternbild::word_button(paused_ ? "Play" : "Pause")) paused_ = !paused_;
+    ImGui::SameLine();
+    ImGui::BeginDisabled(speed_ >= kMaxSpeed);
+    if (sternbild::word_button("Step")) { paused_ = true; revealed_ = std::floor(revealed_) + 1; }
     ImGui::EndDisabled();
     ImGui::SameLine(0, style.ItemSpacing.x * 3);
 
@@ -499,27 +569,28 @@ void TracePane::grid(float width, float height) {
     const float row = ImGui::GetTextLineHeight() + 6, cell = 72;
     const float label_width = ImGui::CalcTextSize("Out").x + 14;
     const float token_row = ImGui::GetTextLineHeight() + 8;
-    if (follow_ && r.positions() > 0) { cursor_position_ = r.positions() - 1; if (cursor_layer_ < 0) cursor_layer_ = -1; }
-    cursor_position_ = std::clamp(cursor_position_, 0, r.positions() - 1);
+    const int seen = std::max(1, revealed_positions(r));
+    if (follow_) cursor_position_ = seen - 1;
+    cursor_position_ = std::clamp(cursor_position_, 0, seen - 1);
     cursor_layer_ = std::clamp(cursor_layer_, -1, layers - 1);
 
     ImGui::BeginChild("##trace.grid", ImVec2(width, height), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float scroll = ImGui::GetScrollX();
     const float view = ImGui::GetWindowWidth();
-    const float content = label_width + cell * r.positions();
+    const float content = label_width + cell * seen;
     // Below the tokens, the attention of the cursor's token over the tokens before it, one row per full-attention
     // layer, aligned with the columns.
     const int attention_rows = static_cast<int>(r.attention_layers.size());
     const float attention_top = rows * row + token_row + row;
     const float total_height = attention_rows ? attention_top + attention_rows * row : rows * row + token_row;
     ImGui::Dummy(ImVec2(content, total_height));
-    if (follow_ && r.running) ImGui::SetScrollX(std::max(0.0f, content - view + 8));
+    if (follow_ && (r.running || revealed_ < total_steps(r))) ImGui::SetScrollX(std::max(0.0f, content - view + 8));
     auto* list = ImGui::GetWindowDrawList();
     const auto& ids = jacobian_ ? r.jlens : r.logit;
     const auto& probs = jacobian_ ? r.jprob : r.lprob;
     const int first = std::max(0, static_cast<int>((scroll - label_width) / cell));
-    const int last = std::min(r.positions() - 1, static_cast<int>((scroll + view) / cell) + 1);
+    const int last = std::min(seen - 1, static_cast<int>((scroll + view) / cell) + 1);
     ImFont* font = ImGui::GetFont();
     const float font_size = ImGui::GetFontSize();
     const auto x_of = [&](int position) { return origin.x + label_width + cell * position; };
@@ -532,6 +603,7 @@ void TracePane::grid(float width, float height) {
         for (int i = 0; i < rows; ++i) {
             const int layer = layer_of(i);
             const float y = origin.y + row * i;
+            if (!revealed(r, p, layer)) continue;     // the clock has not reached this layer yet
             const size_t at = layer < 0 ? static_cast<size_t>(p) * r.k : r.at(p, layer);
             const int32_t id = layer < 0 ? r.output[at] : ids[at];
             const float prob = layer < 0 ? r.oprob[at] : probs[at];
@@ -564,6 +636,8 @@ void TracePane::grid(float width, float height) {
         list->AddText(point(origin.x + scroll + label_width, origin.y + attention_top - row + 3), sternbild::col::secondary, heading);
         for (int a = 0; a < attention_rows; ++a) {
             const float y = origin.y + attention_top + row * a;
+            const int block = r.attention_layers[a];
+            if (!revealed(r, p, block < static_cast<int>(r.layers.size()) ? block : -1)) continue;
             for (int key = first; key <= std::min(last, r.keys[p] - 1); ++key) {
                 const float w = r.weight(p, a, key, head_);
                 const float x = x_of(key);

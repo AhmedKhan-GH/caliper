@@ -623,3 +623,22 @@ TEST_CASE("the inspector asks for binary samples when offered and draws them") {
     CHECK(ui.captured.find("Region: 2 x 2 sampled values") != std::string::npos);
     CHECK(ui.errors == 0);
 }
+
+TEST_CASE("the playback clock shows the prompt's layers together, then each token from layer 0 to the output") {
+    using caliper_live::playback_shows;
+    using caliper_live::playback_positions;
+    // Two lens layers plus the output row: three steps a token. A prompt of four tokens, then two generated.
+    CHECK(playback_positions(0, 2, 4, 6) == 4);                       // the prompt's tokens show from the start
+    CHECK_FALSE(playback_shows(0, 2, 4, 0, 0));
+    CHECK(playback_shows(1, 2, 4, 3, 0));                             // step 1: layer 0 at every prompt position
+    CHECK_FALSE(playback_shows(1, 2, 4, 3, 1));
+    CHECK(playback_shows(3, 2, 4, 0, -1));                            // step 3: the prompt's output row
+    CHECK(playback_positions(3, 2, 4, 6) == 4);
+    CHECK(playback_positions(4, 2, 4, 6) == 5);                       // step 4: the first generated token enters
+    CHECK(playback_shows(4, 2, 4, 4, 0));
+    CHECK_FALSE(playback_shows(4.9, 2, 4, 4, 1));                     // fractions of a step show nothing more
+    CHECK(playback_shows(6, 2, 4, 4, -1));
+    CHECK_FALSE(playback_shows(6, 2, 4, 5, 0));
+    CHECK(playback_positions(1e18, 2, 4, 6) == 6);                    // full speed: everything
+    CHECK(playback_shows(1e18, 2, 4, 5, -1));
+}

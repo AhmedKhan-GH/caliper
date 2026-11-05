@@ -185,10 +185,10 @@ struct Inspector::Impl {
     bool show_trace = false;
     double trace_started = 0;
     // The Output follows the run being written.
+    int trace_shown = -1;
     void trace_output(int run) {
         const TraceRun& r = trace_pane.run(run);
-        output = trace_pane.text(std::vector<int32_t>(r.tokens.begin() + std::min(r.prompt, r.positions()), r.tokens.end()));
-        output_changed = true;
+        trace_shown = run;
         tokens = r.generated();
         const double elapsed = seconds() - trace_started;
         tokens_per_second = elapsed > 0 ? tokens / elapsed : 0;
@@ -1485,6 +1485,11 @@ struct Inspector::Impl {
         if (!visible) return;
         if (renderer != current_renderer) {
             clear_samples(); release_values(values); renderer = current_renderer; detail_needed = overview_needed = true;
+        }
+        // The Output follows the Trace pane's playback clock: words appear as the view reaches them.
+        if (supports("trace") && trace_shown >= 0) {
+            std::string revealed = trace_pane.revealed_answer(trace_shown);
+            if (revealed != output) { output = std::move(revealed); output_changed = true; }
         }
         docked = (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
         if (docked) dock_host(x, y, width, height);

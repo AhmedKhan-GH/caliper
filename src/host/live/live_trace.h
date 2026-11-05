@@ -47,6 +47,12 @@ bool decode_base64(const std::string& text, std::vector<uint8_t>& out);
 bool read_trace_event(const crude_json::value& event, TraceRun& run, std::map<int32_t, std::string>& words,
                       std::string& error);
 
+// The playback clock's map. A run with `layers` lens layers (plus the output row) and `prompt` prompt tokens
+// plays the prompt's layers together, then each generated token from layer 0 to the output, one step a layer.
+// After `steps` steps: whether a cell shows (layer -1 is the output row), and how many positions do.
+bool playback_shows(double steps, int layers, int prompt, int position, int layer);
+int playback_positions(double steps, int layers, int prompt, int positions);
+
 // A word as a grid cell shows it: line breaks and tabs escaped, leading spaces dropped, a lone space a dot.
 std::string display_word(const std::string& word);
 
@@ -77,6 +83,8 @@ public:
     Ask draw(bool can_send, bool tracing);
 
     const TraceRun& run(int index) const { return runs_[index]; }
+    // The run's generated words as far as the playback has revealed them (all of them at full speed).
+    std::string revealed_answer(int run) const;
     const std::vector<TraceIntervention>& interventions() const { return interventions_; }
     std::string text(const std::vector<int32_t>& ids) const;
 
@@ -97,6 +105,18 @@ private:
     crude_json::object settings_;
     bool jacobian_ = true, compare_ = true, second_pending_ = false;
     int head_ = -1;
+    // Playback, a clock over the computation: the model runs at full speed and the view replays it, the
+    // prompt's layers together (as they are computed), then each generated token from layer 0 up to the output.
+    // revealed_ counts those layer steps; speed_ is log10 layer steps a second, and its top shows all at once.
+    float speed_ = 3;
+    bool paused_ = false;
+    double revealed_ = 1e18;
+    int played_ = 0;
+    const TraceRun& display() const { return runs_[shown_].positions() > 0 ? runs_[shown_] : runs_[1 - shown_]; }
+    double total_steps(const TraceRun& r) const;
+    bool revealed(const TraceRun& r, int position, int layer) const;   // layer -1 is the output row
+    int revealed_positions(const TraceRun& r) const;
+    void playback();
     int shown_ = 0, cursor_position_ = -1, cursor_layer_ = -1;
     bool follow_ = true;
     // The intervention being written.
