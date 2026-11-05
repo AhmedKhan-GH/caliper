@@ -2,8 +2,7 @@
 
 What building on Caliper actually looks like: what code you write, what code
 is already running, where every library comes from, and the edit-build-run
-loop. Read this before [Your first applet](first-applet.md); read the
-[ML applet cookbook](../howto/ml-applet-cookbook.md) after it.
+loop. Read this before [Your first applet](first-applet.md).
 
 ## The mental model
 
@@ -65,8 +64,8 @@ examples/hello/
   called every frame on the frame thread; submit ImGui windows, read
   worker-published state. `cleanup()` — cancel jobs, bounded-wait, release
   textures, return.
-- **CMakeLists**: copy hello's verbatim for a UI-only applet; copy the
-  exemplar's for an ML applet. The only parts you edit: target name, source
+- **CMakeLists**: copy hello's verbatim for a UI-only applet, or SineScope's
+  (`examples/sine_scope/`) for an ML applet. The only parts you edit: target name, source
   files, manifest filename.
 
 ### The smallest complete applet, in full
@@ -93,9 +92,8 @@ line:
 Note what is **absent**: no `main`, no window, no GL/Metal, no ImGui
 context creation, no event loop, no `extern "C"`. The macro plus the host
 supply all of it. Growing from here toward ML means adding a `jobs.v1`
-training job and the bridge — that path is the
-[cookbook](../howto/ml-applet-cookbook.md), and its finished form is the
-exemplar.
+training job and the bridge — that path is
+[Your first ML applet](first-ml-applet.md).
 
 ## The development loop
 
@@ -292,15 +290,14 @@ would report the suite as passed.
   ImGui/ImPlot/ImPlot3D; get tensors on screen through `tensor_bridge.v1`.
   This is what makes your applet run identically on both backends.
 - **Bridge and data.v1 calls: frame thread only.** Torch ops: worker thread
-  only. The [cookbook](../howto/ml-applet-cookbook.md) §1 has the full spine.
+  only.
 - **Honor cancel within 100 ms** in every job loop (check per batch,
   per download chunk).
 - **Don't catch your way across the ABI** — the sugar's exception walls
   already guarantee nothing throws into the host; inside your own code,
   handle errors normally.
 - **If a service is optional, degrade visibly** — a disabled panel saying
-  "metrics: absent (ok)" beats silent absence. Every optional feature of the
-  exemplar shows the idiom.
+  "metrics: absent (ok)" beats silent absence.
 
 ## Reading order
 
@@ -308,9 +305,5 @@ would report the suite as passed.
 2. [Your first applet](first-applet.md) — walk hello line by line.
 3. [Your first ML applet](first-ml-applet.md) — the staged climb: compute,
    then torch, then live plots, then the bridge — one capability per stage.
-4. `applets/embed_scope/` — the exemplar; every framework capability in one
-   annotated file, structured to be copied.
-5. [ML applet cookbook](../howto/ml-applet-cookbook.md) — the composition
-   idioms (threading, cadences, the device-resident pull, viewport policy).
-6. Per-service [reference pages](../reference/services/jobs-v1.md) — the
+4. Per-service [reference pages](../reference/services/jobs-v1.md) — the
    contracts, when you need exact semantics.

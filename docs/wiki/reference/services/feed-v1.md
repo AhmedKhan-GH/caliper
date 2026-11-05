@@ -99,16 +99,3 @@ The NVML channels are this box's set: no NVIDIA driver → no GPU channels
 Whatever is unavailable is simply **not a channel** — never a faked value; a
 consumer displays whatever enumerates. On Linux in v0 every entry point is
 inert and consumers degrade honestly (one line, nothing drawn).
-
-## The exemplar
-
-**PulseScope** (`applets/pulse_scope/`, tag *Telemetry*) is the
-dashboard that freezes this service: it enumerates the channels dynamically,
-polls each on a jobs worker at ~10 Hz into an applet-side ring copy, and draws
-one **input-locked** ImPlot strip chart per channel with the current value +
-units, a climbing "last sample N.N s ago" staleness label, and a cumulative
-"lost M samples" gap counter — the honest-loss contract, made visible. It is
-CPU + ImPlot only (no tensors), and it is **host-neutral**: it runs identically
-under the `caliper` exe and under an out-of-tree embedder. The machine-thermal
-**twin** — a model that learns this Mac's utilization → temperature response and
-consumes the same feed *through* tensors — is the named follow-up (feed spec §6).

@@ -43,8 +43,8 @@ buffer starting at the wrong address and **silently address the wrong texels**.
 So the adapter rejects it, and the caller clones the view (`.clone()`, or
 `.contiguous()` of a materialized tensor) so the buffer starts at offset 0.
 
-MLScope hits exactly this: a per-kernel `select()` slice of the `(8,1,3,3)`
-weight carries a nonzero offset, so the worker takes an **owned clone** of each
+A per-kernel `select()` slice of an `(8,1,3,3)` weight hits exactly this: it
+carries a nonzero offset, so the worker takes an **owned clone** of each
 `(3,3)` filter — which also decouples the snapshot from the still-mutating live
 weight.
 

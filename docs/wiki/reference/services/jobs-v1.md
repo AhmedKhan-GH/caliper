@@ -94,7 +94,7 @@ it is cleared.
 submission failed (for example, a headless host that does not vend the service).
 `is_running`/`progress_of` on an unknown or finished id return `false`/`0`.
 
-The canonical consumer is the [MLScope exemplar](../../tutorials/first-applet.md)
-(`examples/ml_scope/`): it submits an MLP training loop, polls `cancelled()` each
-epoch, publishes loss under a mutex, and does the bounded-wait teardown described
-above.
+The [ML applet tutorial](../../tutorials/first-ml-applet.md) walks a consumer:
+SineScope (`examples/sine_scope/`) submits an MLP training loop, polls
+`cancelled()` each step, publishes loss under a mutex, and does the bounded-wait
+teardown described above.

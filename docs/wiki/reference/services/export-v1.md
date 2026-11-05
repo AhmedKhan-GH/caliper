@@ -21,9 +21,9 @@ add scope with zero claim.
     **macOS / Metal:** **run-proven.** The E1 battery is green live on Metal (a
     known FLAT quad exported and decoded back to the CPU reference pixels;
     double-export byte-identity; refusal purity; sidecar golden; a finalized
-    sequence). The E2 exemplars produced real artifacts from a live session — a
-    3840×2160 TwinScope figure + sidecar (`backend=metal`) and a 300-frame
-    twin_scope sequence assembled into a 10 s clip via the documented ffmpeg
+    sequence). The E2 example applets produced real artifacts from a live session — a
+    3840×2160 figure + sidecar (`backend=metal`) and a 300-frame
+    sequence assembled into a 10 s clip via the documented ffmpeg
     line. **Windows / Vulkan:** **run-proven.** The full battery ran live on
     the Vulkan box (RTX 500 Ada, Windows 11) — 14 cases, 0 skipped: the same
     decoded-quad byte-exactness, double-export byte-identity, and refusal
@@ -33,10 +33,10 @@ add scope with zero claim.
     (`MoveFileExW(MOVEFILE_REPLACE_EXISTING)` semantics confirmed); a target
     held open without `FILE_SHARE_DELETE` makes the rename **fail cleanly**
     (refusal, temp removed, original byte-identical); and a sidecar-write
-    failure **rolls the PNG back** rather than orphaning it. The E2 exemplars
+    failure **rolls the PNG back** rather than orphaning it. The E2 example applets
     reproduced on Vulkan: a 3840×2160 figure + sidecar
     (`backend=vulkan platform=windows`) and a finalized 300-frame sequence
-    from each of twin_scope and mesh_scope, plus a deliberate mid-record kill
+    from each of two example applets, plus a deliberate mid-record kill
     whose `sequence.json` finalized with the honest partial count. When the geometry
     primitives cap is absent (headless, or a host without the renderer path) the
     export cap bit is unset and **every entry point is inert** — no file is ever
@@ -171,12 +171,12 @@ documented ffmpeg line:
 ffmpeg -framerate 30 -i frame_%06d.png -pix_fmt yuv420p out.mp4
 ```
 
-This is the exact line the E2 twin_scope run used to turn a 300-frame sequence
+This is the exact line the E2 run used to turn a 300-frame sequence
 into its 10 s clip.
 
 ## What is not exportable — the ImPlot / metrics split
 
-ImPlot chart panes (pulse_scope, metrics dashboards) are **ImGui chrome, not
+ImPlot chart panes (strip charts, metrics plots) are **ImGui chrome, not
 exportable views** — they are not tensors re-rendered offscreen, so export does
 not touch them. Their paper path is the one that already ships: the numbers go to
 **SQL via [`caliper.metrics.v1_1`](metrics-v1.md)** and into matplotlib
@@ -185,7 +185,7 @@ are for the metrics surface. (`PUBLISHING.md` §3, the honest split.)
 
 ## Worked shape — export a figure and record a clip
 
-Modelled on `applets/mesh_scope` and `applets/twin_scope` (the E2 exemplars).
+Modelled on the E2 example applets.
 The applet already draws its 3-D view every frame from worker-published,
 mutex-snapshotted slot tensors; export reuses **those same arrays**, on the frame
 thread:

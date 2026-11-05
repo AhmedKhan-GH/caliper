@@ -60,9 +60,9 @@ The defaults and the precedence are in
     `std::string` immediately if you will call the service again before using it.
     The host backs this with **thread-local** storage, so two threads each calling
     `path_of` get independent buffers and cannot stomp each other's result — but
-    a *second* call **on the same thread** still overwrites the first. EmbedScope
-    sidesteps the race entirely by resolving `path_of` on the frame thread and
-    handing the *copied* path to its worker.
+    a *second* call **on the same thread** still overwrites the first. Resolve
+    `path_of` on the frame thread and hand the *copied* path to the worker to
+    sidestep the race entirely.
 
 ### C++ sugar
 
@@ -75,13 +75,3 @@ std::string digest = art.put("embedscope-model", bytes.data(), bytes.size(), run
 if (art.exists("embedscope-model"))     // digest OR name
     const char* path = art.path_of("embedscope-model");   // copy before next call
 ```
-
-### The reference consumer
-
-[EmbedScope](../../tutorials/first-applet.md) uses artifacts.v1 as its
-**load-bearing** demand: **Save** serializes the trained module to a byte buffer
-(`torch::save`) and `put`s it under `"embedscope-model"` linked to the current
-run; **Load** resolves the path via `path_of`, `torch::load`s the module, and runs
-**one eval pass — skipping training entirely**. Quit, relaunch, Load: the 3-D
-cloud is restored without ever re-training. That "no reload without it" is why the
-service is load-bearing rather than merely demonstrative.

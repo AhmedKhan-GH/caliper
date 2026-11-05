@@ -2,6 +2,10 @@ site_name: Caliper Documentation
 site_url: https://ahmedkhan-gh.github.io/caliper/docs/
 docs_dir: docs/wiki
 site_dir: build/wiki-site
+# In the repository, not on the site: guides written around the applets, which are not shipped.
+exclude_docs: |
+  howto/ml-applet-cookbook.md
+  howto/port-v1-applet.md
 theme:
   name: material
   logo: assets/caliper-mark.svg
@@ -35,9 +39,7 @@ nav:
       - Your first ML applet: tutorials/first-ml-applet.md
       - Watch PyTorch training live: tutorials/live-pytorch.md
   - How-to:
-      - Port a v1 applet: howto/port-v1-applet.md
       - Debug an applet: howto/debug-an-applet.md
-      - ML applet cookbook: howto/ml-applet-cookbook.md
       - Attach to a running script: howto/attach-to-a-running-script.md
   - Reference:
       - ABI (epoch 2): reference/abi.md
@@ -46,7 +48,6 @@ nav:
       - Tensor (caliper/tensor.h): reference/tensor.md
       - Arrow C Data Interface: reference/arrow.md
       - Adapters (torch): reference/adapters.md
-      - Applets: reference/applets.md
       - Services:
           - caliper.ui.v1: reference/services/ui-v1.md
           - caliper.log.v1: reference/services/log-v1.md

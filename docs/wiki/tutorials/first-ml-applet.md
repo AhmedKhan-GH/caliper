@@ -18,9 +18,7 @@ CALIPER_AUTOLAUNCH=dev.example.sine-scope ./build/caliper
 ```
 
 Prereqs: [Development basics](development-basics.md) (the mental model),
-[Your first applet](first-applet.md) (the hello walkthrough). The finished
-staircase — same patterns, full scale — is `applets/embed_scope/`, with the
-[cookbook](../howto/ml-applet-cookbook.md) as its field guide.
+[Your first applet](first-applet.md) (the hello walkthrough).
 
 ## Stage 0 — the build and the manifest
 
@@ -47,8 +45,7 @@ Two layers are enough to bend a line into a sine:
 ```
 
 Every live applet shares the same skeleton state — service wrappers, one
-mutex, published copies, a generation counter
-([cookbook §1](../howto/ml-applet-cookbook.md#1-the-threading-spine)):
+mutex, published copies, a generation counter:
 
 ```cpp
 --8<-- "examples/sine_scope/sine_scope.cpp:state"
@@ -90,8 +87,7 @@ weight display) under the mutex, bumping the generation:
 
 The frame consumes when the generation moves, then draws. The prediction
 curve bending toward the target is the "it's alive" moment — and it's just
-two `PlotLine`s, plus the follow-toggle idiom on the loss curve
-([cookbook §6](../howto/ml-applet-cookbook.md#6-viewport-policy-who-owns-the-camera)):
+two `PlotLine`s, plus the follow-toggle idiom on the loss curve:
 
 ```cpp
 --8<-- "examples/sine_scope/sine_scope.cpp:plots"
@@ -107,9 +103,9 @@ politely instead of failing:
 --8<-- "examples/sine_scope/sine_scope.cpp:bridge"
 ```
 
-(The tutorial stages the weights to CPU for simplicity; the exemplar's
-Tensors panel shows the full **zero-copy device pull** — weights that never
-leave the GPU — in [cookbook §3](../howto/ml-applet-cookbook.md#3-the-device-resident-pull-the-usp-pattern).)
+(The tutorial stages the weights to CPU for simplicity;
+[`tensor_bridge.v1`](../reference/services/tensor-bridge-v1.md) also draws device
+tensors without them leaving the GPU.)
 
 Cleanup grows its symmetric duties — cancel, bounded wait, release:
 
@@ -123,19 +119,15 @@ heatmap's blocks reorganize.
 
 ## Stage 5 — real data instead of synthetic
 
-Everything above holds; only acquisition changes. The rules
-([cookbook §8](../howto/ml-applet-cookbook.md#8-data-acquisition-the-download-recipe)):
+Everything above holds; only acquisition changes. The rules:
 fetch **inside the job**, cache in `host.data_dir()`, write atomically
 (`.tmp` + rename), self-heal corrupt caches, make the transfer cancellable
 via curl's progress callback, and add `CURL::libcurl`/`ZLIB::ZLIB` to the
-CMake links. The exemplar's `ensure_dataset` + `mnist_path` are the
-copy-paste source — including the sibling-cache trick (reuse another
-applet's MNIST download rather than duplicating 11 MB).
+CMake links.
 
 ## Stage 6 — the rest of the framework, one line each
 
-Each remaining service is a small delta from here, and the exemplar shows
-all of them finished:
+Each remaining service is a small delta from here:
 
 - **`metrics.v1`** — persistence for two lines:
   `run = metrics.begin_run("sine", "mlp32")` once, then
@@ -143,13 +135,7 @@ all of them finished:
   survives restarts in the host's metrics store. The host's Runs dashboard was removed on 2026-07-03, so the app
   has no view of stored runs today.
 - **`artifacts.v1`** — Save/Load buttons so a trained model outlives the
-  process ([cookbook §9](../howto/ml-applet-cookbook.md#9-checkpoints-via-artifactsv1)).
+  process.
   Load-then-eval *without retraining* is the demo magic.
 - **`data.v1`** — when your published state is genuinely tabular, register
-  it and ask SQL questions
-  ([cookbook §10](../howto/ml-applet-cookbook.md#10-sql-over-live-data-datav1)).
-
-When all of these feel natural, read `applets/embed_scope/` end to end —
-it is exactly this tutorial's patterns at full scale: a real dataset, a 3-D
-learned embedding, per-step device pulls, and all eight services in ~900
-annotated lines.
+  it and ask SQL questions.

@@ -329,9 +329,7 @@ says so; never a wrong image, never a false status line. The `caliper::Geometry`
 sugar exposes `has_textured()` (caps bit 2) and a `draw_primitives` overload
 taking `CaliperGeomDrawV1_2*`; seed descriptors so the texture tail is zero over
 the v1_1 defaults (a zero-tail v1_2 record renders byte-identically to the
-equivalent v1_1 draw). **TwinScope's surface twin** — a learned thermal field
-draped on a heatsink housing at texture resolution — is the exemplar: the twin's
-*state painted on its shape*.
+equivalent v1_1 draw).
 
 ## caliper.geometry.v1_3 — instanced transforms
 
@@ -411,7 +409,7 @@ the source. Set only the fields your draw needs.
 
 ## Worked example — a learned surface, three draws
 
-Modelled on `applets/mesh_scope` (the v1_1 exemplar): a small net's prediction over
+A small net's prediction over
 a grid is written into imported device tensors each training step by a
 [`jobs.v1`](jobs-v1.md) worker and drawn the **same frame** as Lambert-lit
 triangles + a wireframe overlay + the training minibatch as additive points. The
@@ -428,7 +426,7 @@ const bool geom_live = geometry.has_primitives();
 // Honest fallback ladder: no caps / no pool / no view / no surface -> CPU heatmap.
 if (!geom_live || view == 0 || !pool || !draw_pos.defined()) {
     // …input-locked ImPlot heatmap of the same per-vertex error; never a blank
-    // rectangle. See mesh_scope.cpp for the full fallback.
+    // rectangle.
     return;
 }
 

@@ -37,7 +37,7 @@ silently copying.
 Every bridge entry point is **frame-thread-only**. Unlike
 [`caliper.metrics.v1`](metrics-v1.md) (callable from a job thread), the bridge
 touches renderer state and must be called only from the applet's `frame()`. In
-the MLScope exemplar the training worker *snapshots* weights under a mutex and
+the usual pattern the training worker *snapshots* weights under a mutex and
 never calls the bridge; the frame thread reads that snapshot and does every
 upload. Textures are therefore frame-thread-owned and released on the frame
 thread (after the job wait, before renderer teardown).
@@ -79,9 +79,9 @@ path is exact vs the CPU `map_f32_to_rgba8` reference at ragged sizes (4×4, 5×
 
 !!! warning "Pinned range in v1 (frozen)"
     `update_texture` has **no colormap-range channel** — it is frozen. The
-    `[vmin,vmax]` of a colormapped texture is fixed at creation. MLScope pins the
-    symmetric RdBu range at the first kernel snapshot; the filters still visibly
-    sharpen (structure changes, not just scale), and the UI states this honestly.
+    `[vmin,vmax]` of a colormapped texture is fixed at creation. Pin a
+    symmetric RdBu range at the first snapshot; learned filters still visibly
+    sharpen (structure changes, not just scale), and the UI should say so.
     Recreating the texture per snapshot to re-range would violate create-once and
     is deliberately not done.
 
@@ -159,150 +159,3 @@ it — zero copies of the tensor data:
 import machinery that [`caliper.geometry.v1` / v1_1](geometry-v1.md) draws
 geometry from: geometry sources are `(CaliperAllocId, byte offset)` pairs into
 these same imports, reusing v1.2's caches, gates, and lifecycle wholesale.
-
----
-
-## Demo checklist (human)
-
-The Phase-2C acceptance demo. These are the live-visual checks that automation
-**cannot** cover (they require clicking *start* and watching training on a
-display); the machine verification — crash-free startup on both backends and
-per-backend pixel-exactness of the exact bridge entry points MLScope uses — is
-green (C5/C8).
-
-1. **Metal, GPU-resident.** `CALIPER_RENDERER=metal ./build/caliper`, open
-   **MLScope**, click *start*. The 4×2 conv1 kernel grid appears; the RdBu tiles
-   **sharpen from noise** into structured filters as the loss falls. The status
-   line reads **GPU-resident (Metal, zero CPU staging)**.
-2. **GL, identical visuals.** Relaunch on the default GL renderer (no env var),
-   train again. The kernel grid is **visually identical**; the status line reads
-   **CPU-staged (GL fallback)**. Same applet code — only where the staging
-   happens differs.
-3. **Cancel / relaunch mid-training.** Cancel training partway (or relaunch the
-   app mid-run). The grid **persists its last snapshot**, and there is **no
-   crash** — textures are released on the frame thread after the bounded job
-   wait.
-4. **No frame hitching.** With kernel textures updating every eval cadence point,
-   the **Runs dashboard keeps streaming** its loss/accuracy curves smoothly — no
-   frame hitching from the uploads. *(Historical: The host's Runs dashboard was removed on 2026-07-03.)*
-
-### Phase-2D additions (bridge-native applets, Metal default)
-
-Phase 2D moved the last raw-GL applets onto the bridge and flipped the macOS
-default renderer to Metal. The `grep -rn 'glGenTextures\|glTexImage\|glDeleteTextures\|glBindTexture' applets/`
-sweep (§6c) is now **empty** — every applet texture crosses as a
-`CaliperTextureId`. These checks extend the demo:
-
-5. **OpenGllama heatmaps (bridge-native).** Open **OpenGllama**, load a GGUF
-   model, run a generation. Switch the context-heatmap mode through **EMA
-   (decay) / Max / Recent / Final Layer / Single Layer** — every mode renders
-   the attention overlay over the context text. All modes change the *composed
-   RGBA pixels* and reach the **one** bridge upload path (create-once, then
-   `update_texture` in place; recreate only when the text reflows and the size
-   changes). The applet issues no raw GL — `tensor_bridge.v1` is now a
-   **required** service (an unmet requirement lists the applet as `REFUSED`
-   rather than crashing).
-6. **RepNet viz tabs.** Open **repnet_demo**; the **Model** tab's weight/kernel
-   heatmaps and the per-lead detail views render through the same bridge upload
-   (RdBu/diverging colormap composed to RGBA8, then `texture_from_tensor`). The
-   tabs recompose-then-reupload on dirty (a release-then-create path), and switch
-   without artifacts.
-7. **MLScope real-data panel.** In MLScope, start training and watch the
-   real-data panel: a **fixed probe digit** (t10k[0]) rendered VIRIDIS on the
-   left with its **conv1 8× (26,26) feature maps** in a 4×2 grid on the right.
-   The maps **sharpen live** across the run as conv1 learns, and the caption
-   reads **`pred N / true N`** (green when they agree). The probe reuses the same
-   worker-snapshot frame the kernel grid does — no extra bridge calls off the
-   frame thread.
-8. **Default-flip expectations.** A **bare** `./build/caliper` launches on
-   **Metal** (macOS default; the startup line prints `[renderer] metal`, and the
-   status bar shows `METAL`). The landing screen is drawn with ImGui and is the
-   same on every backend. Relaunch with `CALIPER_RENDERER=gl` to compare against
-   the frozen GL fallback; every applet above renders identically on both
-   backends — only where the bridge stages the pixels differs.
-
-### Phase-2E′ additions (GPTScope, the flagship)
-
-Phase 2E′ shipped **GPTScope** — a char-level mini-GPT trained live on
-TinyShakespeare, built entirely on the public service stack. These checks are the
-flagship's live-visual acceptance demo (the machine verification — build green,
-full `ctest` + `caliper_gfx_tests` + torch-label suites, both renderers headless
-for 10s — is green):
-
-9. **Sample-evolution arc.** Open **GPTScope**, click *start*. The TinyShakespeare
-   corpus **downloads once** into the data dir (cached forever; a second run is
-   offline-clean), then training begins. Train loss **falls**, and the live sample
-   panel **evolves from gibberish → words → Shakespearean cadence** across the
-   ~3-minute run. The **val perplexity** readout beside the loss plot
-   (`exp(val_loss)`) drops alongside.
-10. **Attention grid, live.** The per-head attention panel shows the selected
-    layer's **4 heads** as VIRIDIS heatmaps (per-head vmax) over a fixed val
-    excerpt, refreshing every eval cadence — the heads **sharpen** as the net
-    learns. Switching **layer L0–L3** repoints the snapshot (the map updates one
-    eval tick after the click). **Hovering** a map highlights the excerpt's
-    **source char (row, cyan)** and **target char (col, amber)** — the touch that
-    makes attention legible. The status line reads **GPU-resident (Metal, zero CPU
-    staging)** on Metal, **CPU-staged (GL fallback)** on GL.
-11. **Temperature control.** Drag the **temperature slider** (0.2–1.5); the next
-    sample's character changes — **lower is greedier/sharper/more repetitive,
-    higher looser/more diverse** (the worker reads the live value at each sample
-    tick, so the change lands on the following sample).
-12. **Cancel / relaunch clean.** Cancel partway (or relaunch mid-run): the last
-    loss curve, sample, and attention grid **persist**, with **no crash** —
-    textures release on the frame thread after the bounded job wait.
-13. **Runs dashboard.** The GPTScope run appears in the **Runs dashboard**
-    (train/loss, val/loss) **alongside MLScope history** — the same optional
-    `caliper.metrics.v1` path, streaming smoothly with no frame hitching from the
-    attention uploads. *(Historical: The host's Runs dashboard was removed on 2026-07-03.)*
-14. **Both renderers.** All of the above renders identically on **Metal**
-    (`CALIPER_RENDERER=metal`) and the default **GL** fallback — same applet code,
-    only where the bridge stages the pixels differs.
-
-!!! note "Deferred by design: checkpoint save"
-    GPTScope's *save checkpoint* button is **disabled** with a tooltip saying it
-    arrives with `caliper.artifacts.v1`. That is the honest placeholder for the
-    D16 demand-driven clause — checkpointing is the first real demand for an
-    artifacts service, not something faked here.
-
-### Phase-2F′ additions (EmbedScope, all-services exemplar)
-
-Phase 2F′ shipped **EmbedScope** — a small MNIST net with a learned **3-D
-embedding bottleneck**, drawn as a live **ImPlot3D** scatter, and the honest first
-consumer of the last two services ([`caliper.artifacts.v1`](artifacts-v1.md),
-[`caliper.data.v1`](data-v1.md)). ImPlot3D renders through ImGui's draw list, so
-the 3-D view works on **both** renderers (§6c-clean, no raw GL). These checks are
-the exemplar's live-visual acceptance demo (the machine verification — build
-green, full `ctest` + `caliper_gfx_tests` + torch suites, both renderers headless
-for 10 s, 8 applets listed — is green):
-
-15. **Blob → lobes, live.** Open **EmbedScope**, click *Train*. The 3-D point
-    cloud starts as **one gray blob** and, as training runs, **splits into ten
-    colored lobes** (tab10, one series per digit class) — visibly reorganizing
-    while the loss falls. The plot is **rotatable/zoomable** with the mouse
-    throughout. (Honest note: a 3-D bottleneck on MNIST yields **lobes, not
-    cleanly linearly-separated islands** — the blob→lobes *transition* is the
-    point, not perfect separation.)
-16. **Hover → digit.** Hover any point in the cloud; a tooltip shows that
-    sample's **digit texture** (its 28×28 image via `tensor_bridge.v1`) with its
-    `label N / pred N`. The texture is a CPU tensor, so it renders on Metal and GL
-    alike.
-17. **Live SQL panels (`data.v1`).** Each eval tick the worker republishes the
-    embedding table and EmbedScope runs SQL over it: **per-class centroids** appear
-    as large 3-D diamonds among the points, and the **misclassified count / total
-    (%)** line updates — both computed by `caliper.data.v1` and drained through the
-    Arrow stream.
-18. **Save → relaunch → Load skips training (`artifacts.v1`, load-bearing).**
-    Click **Save model** (shows a digest), **quit** the app, **relaunch**, open
-    EmbedScope, click **Load model**. The cloud is **restored from the checkpoint
-    by running eval only — with NO training** (the model persists across
-    relaunches via the content-addressed store). This is the load-bearing demand:
-    without artifacts.v1 there is no reload.
-19. **Runs dashboard.** The EmbedScope run appears in the **Runs dashboard**
-    (train/loss, test/accuracy) alongside MLScope and GPTScope history — the same
-    optional `caliper.metrics.v1` path. *(Historical: The host's Runs dashboard was removed on 2026-07-03.)*
-20. **Both renderers.** All of the above renders identically on the default
-21. **EmbedScope live tensors:** while training runs, the `EmbedScope: Tensors` panel shows the 8 conv1 kernels (magma) and the 3x64 projection matrix (RdBu) **changing every optimizer step** (~8/s), and the Cloud shows the white "live batch" sparks moving between eval snapshots — this is the per-step bridge surface, distinct from the per-eval snapshot.
-    **Metal** (`./build/caliper`) and the **GL** fallback
-    (`CALIPER_RENDERER=gl ./build/caliper`) — the ImPlot3D cloud, the hover digit,
-    the centroid diamonds, save/load, and the dashboard. Same applet code; only
-    where the bridge stages the hover pixels differs.

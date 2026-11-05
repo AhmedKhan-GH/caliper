@@ -126,8 +126,7 @@ stream**, so simple consumers never touch Arrow buffers:
 
 ```cpp
 caliper::Data data(host);                       // falsy if the host doesn't vend it
-// DDL/INSERT still hand back a (empty) stream — release it (EmbedScope's
-// data_exec helper wraps exactly this):
+// DDL/INSERT still hand back a (empty) stream — release it:
 ArrowArrayStream ddl{};
 if (data.query("CREATE OR REPLACE TABLE embed_points(label INT, x REAL, y REAL, z REAL)", &ddl)
     && ddl.release)
@@ -138,13 +137,3 @@ std::vector<std::vector<double>> cols;
 if (data.query("SELECT label, AVG(x), AVG(y), AVG(z) FROM embed_points GROUP BY label", &s))
     caliper::Data::drain_numeric(&s, &names, &cols);   // releases s for you
 ```
-
-### The reference consumer
-
-[EmbedScope](../../tutorials/first-applet.md) registers its published test-set
-embeddings as a table each eval tick, then runs live SQL over that genuinely
-tabular data: **per-class centroids** (`AVG(x), AVG(y), AVG(z) GROUP BY label`,
-drawn as 3-D diamonds) and a **misclassified count** (`SUM(CASE ...)`), both
-drained through `drain_numeric`. It is demonstrative but honest — real learned
-data, real aggregation — and degrades gracefully: absent, the panels say so and
-the applet still runs.
