@@ -184,7 +184,7 @@ green (C5/C8).
    wait.
 4. **No frame hitching.** With kernel textures updating every eval cadence point,
    the **Runs dashboard keeps streaming** its loss/accuracy curves smoothly — no
-   frame hitching from the uploads.
+   frame hitching from the uploads. *(Historical: The host's Runs dashboard was removed on 2026-07-03.)*
 
 ### Phase-2D additions (bridge-native applets, Metal default)
 
@@ -253,7 +253,7 @@ for 10s — is green):
 13. **Runs dashboard.** The GPTScope run appears in the **Runs dashboard**
     (train/loss, val/loss) **alongside MLScope history** — the same optional
     `caliper.metrics.v1` path, streaming smoothly with no frame hitching from the
-    attention uploads.
+    attention uploads. *(Historical: The host's Runs dashboard was removed on 2026-07-03.)*
 14. **Both renderers.** All of the above renders identically on **Metal**
     (`CALIPER_RENDERER=metal`) and the default **GL** fallback — same applet code,
     only where the bridge stages the pixels differs.
@@ -299,7 +299,7 @@ for 10 s, 8 applets listed — is green):
     without artifacts.v1 there is no reload.
 19. **Runs dashboard.** The EmbedScope run appears in the **Runs dashboard**
     (train/loss, test/accuracy) alongside MLScope and GPTScope history — the same
-    optional `caliper.metrics.v1` path.
+    optional `caliper.metrics.v1` path. *(Historical: The host's Runs dashboard was removed on 2026-07-03.)*
 20. **Both renderers.** All of the above renders identically on the default
 21. **EmbedScope live tensors:** while training runs, the `EmbedScope: Tensors` panel shows the 8 conv1 kernels (magma) and the 3x64 projection matrix (RdBu) **changing every optimizer step** (~8/s), and the Cloud shows the white "live batch" sparks moving between eval snapshots — this is the per-step bridge surface, distinct from the per-eval snapshot.
     **Metal** (`./build/caliper`) and the **GL** fallback

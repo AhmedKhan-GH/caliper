@@ -56,8 +56,8 @@ paths (no CPU staging) arrive with `caliper.tensor_bridge.v1` in Phase 2C.
 ### The payoff
 
 Metrics is an **optional** service: probe it, and stream only when present. Every
-applet that logs a scalar this way inherits the **Runs dashboard** for free —
-run list, per-tag plots, EMA smoothing — with no dashboard code of its own. See
-[MLScope](../../tutorials/first-applet.md) for the exemplar: MNIST training that
-streams `train/loss` per batch and `test/accuracy` every 50 batches (from a
-step-0 baseline) to this service.
+applet that logs a scalar this way has its runs persisted in the host's metrics
+store, with no storage code of its own. The host's Runs dashboard was removed on 2026-07-03 (it showed a run list,
+per-tag plots and EMA smoothing), so stored runs have no view in the app today.
+GPTScope and EmbedScope stream their training and evaluation metrics to this
+service; see [Applets](../applets.md).

@@ -137,10 +137,11 @@ applet's MNIST download rather than duplicating 11 MB).
 Each remaining service is a small delta from here, and the exemplar shows
 all of them finished:
 
-- **`metrics.v1`** — persistence + the Runs dashboard for two lines:
+- **`metrics.v1`** — persistence for two lines:
   `run = metrics.begin_run("sine", "mlp32")` once, then
   `metrics.scalar(run, "train/loss", step, loss)` in the loop. Your run now
-  survives restarts and plots in the host's Runs window.
+  survives restarts in the host's metrics store. The host's Runs dashboard was removed on 2026-07-03, so the app
+  has no view of stored runs today.
 - **`artifacts.v1`** — Save/Load buttons so a trained model outlives the
   process ([cookbook §9](../howto/ml-applet-cookbook.md#9-checkpoints-via-artifactsv1)).
   Load-then-eval *without retraining* is the demo magic.

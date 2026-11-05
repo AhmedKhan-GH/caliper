@@ -80,7 +80,7 @@ for (int64_t b = 0; b < n; b += kBatch) {
 |---|---|---|
 | Live layer: current batch, weight tensors, cloud | **every optimizer step** | weights only change when the optimizer steps — per-step IS every change |
 | Derived aggregates: SQL centroids, misclassified | **throttled (~2 Hz)**, on the frame side (§10) | rebuilt on the *frame thread*; at step rate it would stutter the UI |
-| Quality metrics → `metrics.v1` | **every `kEvalEvery` steps** | metrics want statistical stability, not liveness; they persist to the Runs dashboard |
+| Quality metrics → `metrics.v1` | **every `kEvalEvery` steps** | metrics want statistical stability, not liveness; they persist to the metrics store |
 
 Don't add a config knob for cadence unless a *measured* cost forces one.
 (The exemplar once had a "cloud refresh" slider defending against a 6×

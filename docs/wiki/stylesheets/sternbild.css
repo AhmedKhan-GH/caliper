@@ -150,3 +150,6 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 /* Every admonition type wears the same bronze rule and icon; Material's per-type colours go. */
 .md-typeset :is(.admonition, details) { border-color: var(--rule-faint) !important; border-left-color: var(--bronze) !important; }
 .md-typeset :is(.admonition-title, summary)::before { background-color: var(--bronze) !important; }
+
+/* The sidebar's sticky title sits on the ground colour, so links scrolling under it stay hidden. */
+.md-nav--primary > .md-nav__title { background: var(--ground); box-shadow: 0 .4rem .4rem -.2rem var(--ground); }
