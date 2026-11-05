@@ -2,6 +2,7 @@
 
 #include "live/model3d_geometry.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,6 +47,8 @@ public:
     void thumbnail_failed(const std::string& name);
     // Returns the tensor selected by a click, or an empty string. Null renderer
     // keeps the UI testable and explicitly reports missing renderer support.
+    // Drawn at the end of the pane's toolbar, when set (the inspector's switch between the views sharing a place).
+    std::function<void()> toolbar;
     std::string draw(caliper_host::HostRenderer* renderer, float x, float y,
                      float width, float height, const std::string& selected);
     // The camera and exact drawing/picking viewport, available without a GPU.

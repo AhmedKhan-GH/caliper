@@ -201,6 +201,7 @@ struct Model3D::Impl {
     // The axis navigator: an eased swing to an axis view, and whether a press on it became a drag.
     bool snapping = false, axes_dragged = false;
     double snap_azimuth = 0, snap_elevation = 0;
+    std::function<void()> toolbar;
     std::string selected, output_label = "Output (tied)";
 
     ~Impl() { release_renderer(); }
@@ -539,6 +540,7 @@ struct Model3D::Impl {
             focused = selected; framing = Framing::Focus; framing_pending = true;
         }
         ImGui::EndDisabled();
+        if (toolbar) { ImGui::SameLine(0, 18); toolbar(); }
         {
             const char* legend = "Bold frame: full attention   Bronze: selected or edited   Left drag rotates, right drag moves, wheel zooms";
             ImGui::SameLine();
@@ -837,6 +839,7 @@ void Model3D::thumbnail_failed(const std::string& name) {
 }
 std::string Model3D::draw(HostRenderer* renderer, float x, float y, float width, float height,
                          const std::string& selected) {
+    impl_->toolbar = toolbar;
     return impl_->draw(renderer, x, y, width, height, selected);
 }
 model3d::ViewState Model3D::view_state() const { return {impl_->camera, impl_->viewport, impl_->label_column}; }

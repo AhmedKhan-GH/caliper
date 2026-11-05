@@ -1,7 +1,9 @@
 #include "live/live_inspector.h"
 #include "live/live_requests.h"
+#include "live/live_embedding.h"
 #include "live/live_model3d.h"
 #include "live/live_trace.h"
+#include "live/live_trajectories.h"
 #include "live/tensor_geometry.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -120,6 +123,8 @@ constexpr const char* kModelPane = "Model###caliper.inspector.model";
 constexpr const char* kModel3DPane = "Model 3D###caliper.inspector.model3d";
 constexpr const char* kTensorPane = "Tensor###caliper.inspector.tensor";
 constexpr const char* kTracePane = "Trace###caliper.inspector.trace";
+constexpr const char* kEmbeddingPane = "Embedding###caliper.inspector.embedding";
+constexpr const char* kTrajectoryPane = "Trajectories###caliper.inspector.trajectories";
 
 // A pane: a window whose pane_header strip replaces the title bar, bronze while
 // the pane has focus. Its tables and output scroll inside it, never the pane.
@@ -181,9 +186,25 @@ struct Inspector::Impl {
     std::string queued_op, queued_purpose;
     Object queued_fields;
     TracePane trace_pane;
-    // With a lens, Trace has the top of the centre and Model 3D and Tensor share the place under it, without
-    // tabs: only the one shown is drawn. Picking a tensor shows Tensor; its Model 3D switch goes back.
-    bool show_tensor = false;
+    // With a lens, Trace has the top of the centre and four views share the place under it, without tabs: only
+    // the one shown is drawn, and each has the switch between them. Picking a tensor shows Tensor.
+    enum Lower { kModel3D, kTensor, kEmbedding, kTrajectories };
+    int lower = kModel3D;
+    EmbeddingView embedding;
+    std::map<int32_t, std::string> embedding_words;   // token texts for the Embedding pane's hover, by id
+    TrajectoryView trajectories;
+    // The switch between the views under Trace; the one on show in bronze.
+    void lower_switch() {
+        static const char* names[] = {"Model 3D", "Tensor", "Embedding", "Trajectories"};
+        for (int i = 0; i < 4; ++i) {
+            if (i == kEmbedding && !supports("embedding_map")) continue;
+            if (i == kTrajectories && !supports("trajectories")) continue;
+            if (i) ImGui::SameLine(0, 14);
+            ImGui::PushStyleColor(ImGuiCol_Text, i == lower ? sternbild::col::bronze : sternbild::col::secondary);
+            if (sternbild::word_button(names[i])) lower = i;
+            ImGui::PopStyleColor();
+        }
+    }
     double trace_started = 0;
     // The Output follows the run being written.
     int trace_shown = -1;
@@ -521,6 +542,8 @@ struct Inspector::Impl {
                 std::string why;
                 if (!trace_pane.event(trace_run(active), field(reply, "event"), why)) { stop(); error = why; }
                 else trace_output(trace_run(active));
+            } else if (active.op == "embedding_map") {
+                embedding.status(string(field(field(reply, "event"), "status")));
             } else if (active.op == "generate") {
                 const Json& event = field(reply, "event");
                 const std::string part = string(field(event, "text"));
@@ -548,6 +571,8 @@ struct Inspector::Impl {
             if (op == "generate") { generation_status = "Generation failed"; stop_requested = false; }
             if (op == "trace") { trace_pane.failed(trace_run(completed), error); stop_requested = false; generation_status = "Generation failed"; }
             if (op == "tokenize") { std::string ignored; trace_pane.tokenized(Json(), ignored); }
+            if (op == "embedding_map") { embedding.failed(error); error.clear(); }
+            if (op == "decode") error.clear();
             return;
         }
         const Json& result = field(reply, "result");
@@ -562,6 +587,20 @@ struct Inspector::Impl {
         } else if (op == "tokenize") {
             std::string why;
             if (!trace_pane.tokenized(result, why)) error = why;
+        } else if (op == "embedding_map") {
+            EmbeddingMap map;
+            std::vector<uint8_t> positions, kinds;
+            map.method = string(field(result, "method"));
+            const Json& names = field(result, "kind_names");
+            if (names.is_array()) for (const Json& n : names.get<Array>()) map.kind_names.push_back(string(n));
+            if (!decode_base64(string(field(result, "positions")), positions) || !decode_base64(string(field(result, "kinds")), kinds) ||
+                !read_embedding_map(integer(field(result, "count")), positions, kinds, map.kind_names.size(), map))
+                embedding.failed("Invalid embedding map from script");
+            else embedding.set(std::move(map));
+        } else if (op == "decode") {
+            const Json& words = field(result, "words");
+            if (words.is_object())
+                for (const auto& entry : words.get<Object>()) embedding_words[std::atoi(entry.first.c_str())] = string(entry.second);
         } else if (op == "list_tensors") {
             if (!read_tensors(result)) protocol_error("Invalid tensor list from script");
         } else if (op == "show_tensor") {
@@ -837,7 +876,7 @@ struct Inspector::Impl {
                             for (const char* common : {"language_model.model.", "model."})
                                 if (label.rfind(common, 0) == 0) { label.erase(0, std::strlen(common)); break; }
                             ImGui::BeginDisabled(!can_control());
-                            if (ImGui::Selectable(label.c_str(), selected == t.name, ImGuiSelectableFlags_SpanAllColumns)) { select(t.name); show_tensor = true; }
+                            if (ImGui::Selectable(label.c_str(), selected == t.name, ImGuiSelectableFlags_SpanAllColumns)) { select(t.name); lower = kTensor; }
                             ImGui::EndDisabled();
                             if (scroll_selected && selected == t.name) { ImGui::SetScrollHereY(0.5f); scroll_selected = false; }
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%.0f values", t.name.c_str(), t.size);
@@ -1286,6 +1325,29 @@ struct Inspector::Impl {
         }
         ImGui::End();
     }
+    // The embedding table laid out in 3-D: asked for once, when first shown; hovering names a token.
+    void embedding_pane(float x, float y, float w, float h) {
+        place_window(kEmbeddingPane, x, y, w, h);
+        if (begin_pane(kEmbeddingPane, "Embedding", embedding.subtitle().c_str())) {
+            lower_switch();
+            const int want = embedding.draw(renderer, embedding_words);
+            if (want >= 0 && idle() && queued_op.empty() && !embedding_words.count(want))
+                send("decode", {{"ids", Array{Json(static_cast<double>(want))}}}, "embedding");
+        }
+        ImGui::End();
+        if (!embedding.loaded() && !embedding.requested && idle() && queued_op.empty() && send("embedding_map", {}, "map"))
+            embedding.requested = true;
+    }
+    // The run on show in Trace, each token a path up the lens layers, growing as the run streams in.
+    void trajectories_pane(float x, float y, float w, float h) {
+        place_window(kTrajectoryPane, x, y, w, h);
+        trajectories.show(trace_pane.displayed());
+        if (begin_pane(kTrajectoryPane, "Trajectories", trajectories.subtitle().c_str())) {
+            lower_switch();
+            trajectories.draw(renderer, [this](int32_t id) { return trace_pane.text({id}); });
+        }
+        ImGui::End();
+    }
     void tensor_view(float x, float y, float w, float h) {
         place_window(kTensorPane, x, y, w, h);
         const Tensor* t = tensor();
@@ -1293,7 +1355,7 @@ struct Inspector::Impl {
         for (const char* prefix : {"language_model.model.", "model."})
             if (subtitle.rfind(prefix, 0) == 0) { subtitle.erase(0, std::strlen(prefix)); break; }
         if (begin_pane(kTensorPane, "Tensor", subtitle.c_str())) {
-            if (supports("trace") && sternbild::word_button("Model 3D")) show_tensor = false;
+            if (supports("trace")) lower_switch();
             if (!t) faint_text("Select a tensor in Model or Model 3D.");
             else tensor_body(*t);
         }
@@ -1488,6 +1550,8 @@ struct Inspector::Impl {
         if (supports("trace") && model3d_dock && tensor_dock) {
             if (!trace_dock) ImGui::DockBuilderDockWindow(kTracePane, model3d_dock);
             else if (model3d_dock != tensor_dock) ImGui::DockBuilderDockWindow(kModel3DPane, tensor_dock);
+            for (const char* pane : {kEmbeddingPane, kTrajectoryPane})
+                if (place_of(pane) != tensor_dock) ImGui::DockBuilderDockWindow(pane, tensor_dock);
         } else if (!capabilities.empty() && !supports("trace") && trace_dock && model3d_dock && model3d_dock == tensor_dock) {
             ImGui::DockBuilderDockWindow(kModel3DPane, trace_dock);
         }
@@ -1527,14 +1591,20 @@ struct Inspector::Impl {
             if (supports("trace")) {
                 // Trace on top; under it Model 3D, or Tensor once a tensor is picked.
                 draw_window([&](float a,float b,float c,float d) { trace_view(a,b,c,d); }, windows.model3d);
-                if (show_tensor) draw_window([&](float a,float b,float c,float d) { tensor_view(a,b,c,d); }, windows.tensor);
+                model3d.toolbar = [this] { lower_switch(); };
+                if (lower == kTensor) draw_window([&](float a,float b,float c,float d) { tensor_view(a,b,c,d); }, windows.tensor);
+                else if (lower == kEmbedding && supports("embedding_map"))
+                    draw_window([&](float a,float b,float c,float d) { embedding_pane(a,b,c,d); }, windows.tensor);
+                else if (lower == kTrajectories && supports("trajectories"))
+                    draw_window([&](float a,float b,float c,float d) { trajectories_pane(a,b,c,d); }, windows.tensor);
                 else clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
             } else {
+                model3d.toolbar = nullptr;
                 clicked = model3d.draw(renderer, r.x, r.y, r.width, r.height, selected);
                 draw_window([&](float a,float b,float c,float d) { tensor_view(a,b,c,d); }, windows.tensor);
             }
             if (!clicked.empty()) {
-                select(clicked, true); show_tensor = true;
+                select(clicked, true); lower = kTensor;
                 ImGui::SetWindowCollapsed("Tensor###caliper.inspector.tensor", false);
                 ImGui::SetWindowFocus("Tensor###caliper.inspector.tensor");
             }

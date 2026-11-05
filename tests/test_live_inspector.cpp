@@ -545,12 +545,10 @@ TEST_CASE("the Trace pane traces a prompt, then compares an intact run with an i
         Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
                {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
     for (int i = 0; i < 5; ++i) ui.frame();
-    // Trace takes Model 3D's place through the switch in its toolbar, and gives it back.
-    CHECK(ui.captured.find("Fit Focus selected Trace") != std::string::npos);
-    ui.activate("Model 3D###caliper.inspector.model3d", "Trace");
-    ui.frame();
+    // With a lens, Trace has the top of the centre; Model 3D sits under it, its toolbar switching between the
+    // views that share that place.
     REQUIRE(ImGui::FindWindowByName(trace_window) != nullptr);
-    CHECK(ui.captured.find("Fit Focus selected") == std::string::npos);
+    CHECK(ui.captured.find("Fit Focus selected Model 3D Tensor") != std::string::npos);
     // Generate in the Inference pane runs a trace with its prompt and sampling, attention included.
     ui.activate(inference_window, "Generate");
     auto plain = ui.request("trace");
@@ -652,7 +650,6 @@ TEST_CASE("slowed down, the Trace pane and the Output reveal a finished generati
         Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
                {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
     for (int i = 0; i < 3; ++i) ui.frame();
-    ui.activate("Model 3D###caliper.inspector.model3d", "Trace");
     ui.frame();
     // The speed slider, moved with the keyboard to its slow end (Shift steps a tenth of the range).
     ImGuiWindow* trace = ImGui::FindWindowByName(trace_window);
@@ -701,7 +698,6 @@ TEST_CASE("the tape shows the whole trace and a click on it moves the grid's cur
         Object{{"name", "block.weight"}, {"group", "Block"}, {"shape", Array{4.0, 3.0}}, {"dtype", "float32"},
                {"bytes", 48.0}, {"size", 12.0}, {"rows", 4.0}, {"cols", 3.0}}}}});
     for (int i = 0; i < 3; ++i) ui.frame();
-    ui.activate("Model 3D###caliper.inspector.model3d", "Trace");
     ui.activate(inference_window, "Generate");
     auto run = ui.request("trace");
     ui.peer.send(Object{{"id", run["id"]}, {"done", false}, {"event", trace_event(0, {1, 2, 3, 4, 5, 6}, 2)}});
@@ -726,4 +722,67 @@ TEST_CASE("the tape shows the whole trace and a click on it moves the grid's cur
     CHECK(ui.captured.find("Position 0") != std::string::npos);
     CHECK(ui.captured.find("Position 5") == std::string::npos);
     CHECK(ui.errors == 0);
+}
+
+#include "live/live_embedding.h"
+#include "live/live_trace.h"
+#include "live/live_trajectories.h"
+
+TEST_CASE("embedding map: int16 positions over [-1, 1] and a kind byte per row") {
+    using caliper_live::EmbeddingMap;
+    const int16_t q[6] = {32767, -32767, 0, 16384, 0, -16384};
+    std::vector<uint8_t> positions(sizeof q);
+    std::memcpy(positions.data(), q, sizeof q);
+    EmbeddingMap map;
+    REQUIRE(caliper_live::read_embedding_map(2, positions, {0, 3}, 4, map));
+    CHECK(map.rows() == 2);
+    CHECK(map.xyz[0] == doctest::Approx(1.0f));
+    CHECK(map.xyz[1] == doctest::Approx(-1.0f));
+    CHECK(map.xyz[3] == doctest::Approx(0.5f).epsilon(1e-3));
+    CHECK(map.kinds[1] == 3);
+    EmbeddingMap bad;
+    CHECK_FALSE(caliper_live::read_embedding_map(3, positions, {0, 3}, 4, bad));        // too few bytes for 3 rows
+    CHECK_FALSE(caliper_live::read_embedding_map(2, positions, {0, 4}, 4, bad));        // kind out of range
+}
+
+TEST_CASE("trajectories: a token settles from the first lens layer that keeps reading its next token") {
+    caliper_live::TraceRun run;
+    run.layers = {0, 1, 2, 3};
+    run.k = 1;
+    run.prompt = 1;
+    run.tokens = {10, 11, 12};
+    run.output = {20, 21, 22};                            // the model's own next token, per position
+    run.jlens = {7, 20, 20, 20,                           // position 0: reads 20 from layer 1 on
+                 21, 9, 21, 21,                           // position 1: reads 21 at layer 0, loses it, settles at 2
+                 5, 6, 7, 8};                             // position 2: never reads 22
+    const auto lock = caliper_live::lock_layers(run);
+    REQUIRE(lock.size() == 3);
+    CHECK(lock[0] == 1);
+    CHECK(lock[1] == 2);
+    CHECK(lock[2] == -1);
+}
+
+TEST_CASE("trace: a plane comes with every event of a run, count x layers x 2 floats") {
+    const auto placed = [](Json event, std::vector<float> plane) {
+        std::string bytes(plane.size() * sizeof(float), '\0');
+        std::memcpy(bytes.data(), plane.data(), bytes.size());
+        event["plane"] = base64(bytes);
+        return event;
+    };
+    caliper_live::TraceRun run;
+    std::map<int32_t, std::string> words;
+    std::string error;
+    // Two positions, two layers: x and y per position and layer.
+    REQUIRE(caliper_live::read_trace_event(placed(trace_event(0, {1, 2}, 2), {0, 1, 2, 3, 4, 5, 6, 7}), run, words, error));
+    REQUIRE(caliper_live::read_trace_event(placed(trace_event(2, {3}, 2), {8, 9, 10, 11}), run, words, error));
+    CHECK(run.placed());
+    REQUIRE(run.plane.size() == 12);
+    CHECK(run.plane[11] == 11.0f);
+    CHECK_FALSE(caliper_live::read_trace_event(trace_event(3, {4}, 2), run, words, error));        // stops coming
+    CHECK_FALSE(caliper_live::read_trace_event(placed(trace_event(3, {4}, 2), {1, 2}), run, words, error));   // short
+    CHECK_FALSE(caliper_live::read_trace_event(placed(trace_event(3, {4}, 2), {1, 2, NAN, 4}), run, words, error));
+    caliper_live::TraceRun plain;
+    REQUIRE(caliper_live::read_trace_event(trace_event(0, {1, 2}, 2), plain, words, error));
+    CHECK_FALSE(plain.placed());
+    CHECK_FALSE(caliper_live::read_trace_event(placed(trace_event(2, {3}, 2), {0, 1, 2, 3}), plain, words, error));  // starts late
 }

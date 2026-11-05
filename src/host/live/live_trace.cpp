@@ -149,6 +149,19 @@ bool read_trace_event(const Json& event, TraceRun& run, std::map<int32_t, std::s
             (attention_layers != run.attention_layers || heads != run.heads))
             return fail("trace attention changes the run's shape");
     }
+    // The trajectory plane: count x layers x 2 little-endian float32, in every event of a run or in none.
+    std::vector<float> plane;
+    if (field(event, "plane").is_string()) {
+        std::vector<uint8_t> bytes;
+        if (!decode_base64(field(event, "plane").get<std::string>(), bytes) ||
+            bytes.size() != static_cast<size_t>(count) * layers.size() * 2 * sizeof(float))
+            return fail("trace plane does not match its shape");
+        plane.resize(bytes.size() / sizeof(float));
+        std::memcpy(plane.data(), bytes.data(), bytes.size());
+        for (float v : plane)
+            if (!std::isfinite(v)) return fail("trace plane is not finite");
+    }
+    if (run.positions() > 0 && plane.empty() != run.plane.empty()) return fail("trace plane comes and goes");
     const Json& names = field(event, "words");
     std::map<int32_t, std::string> added;
     if (names.is_object()) {
@@ -162,7 +175,7 @@ bool read_trace_event(const Json& event, TraceRun& run, std::map<int32_t, std::s
     if (run.positions() == 0) { run.layers = layers; run.k = k; run.prompt = prompt; }
     const auto append = [](auto& to, const auto& from) { to.insert(to.end(), from.begin(), from.end()); };
     append(run.tokens, tokens); append(run.jlens, jlens); append(run.logit, logit); append(run.output, output);
-    append(run.jprob, jprob); append(run.lprob, lprob); append(run.oprob, oprob);
+    append(run.jprob, jprob); append(run.lprob, lprob); append(run.oprob, oprob); append(run.plane, plane);
     for (auto& [id, text] : added) words[id] = std::move(text);
     if (!attention_layers.empty()) { run.attention_layers = attention_layers; run.heads = heads; }
     const size_t per_position = attention_layers.size() * heads * keys;

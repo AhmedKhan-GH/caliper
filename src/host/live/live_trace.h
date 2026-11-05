@@ -27,10 +27,14 @@ struct TraceRun {
     std::vector<int> keys;
     std::vector<size_t> attention_at;
     std::vector<uint8_t> attention;
+    // Each position's place after every lens layer in the run's trajectory plane, when sent: x and y per
+    // position and layer, position-major.
+    std::vector<float> plane;
     bool running = false, done = false;
     std::string finish, error;
     int positions() const { return static_cast<int>(tokens.size()); }
     int generated() const { return positions() > prompt ? positions() - prompt : 0; }
+    bool placed() const { return !plane.empty() && plane.size() == tokens.size() * layers.size() * 2; }
     // The top word index into jlens/logit (rank 0 is the most likely).
     size_t at(int position, int layer, int rank = 0) const {
         return (static_cast<size_t>(position) * layers.size() + static_cast<size_t>(layer)) * k + rank;
@@ -83,6 +87,8 @@ public:
     Ask draw(bool can_send, bool tracing);
 
     const TraceRun& run(int index) const { return runs_[index]; }
+    // The run on show in the grid.
+    const TraceRun& displayed() const { return display(); }
     // The run's generated words as far as the playback has revealed them (all of them at full speed).
     std::string revealed_answer(int run) const;
     const std::vector<TraceIntervention>& interventions() const { return interventions_; }
