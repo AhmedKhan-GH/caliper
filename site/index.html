@@ -262,8 +262,10 @@
   @media (max-width: 760px) { .soon-text { grid-template-columns: 1fr; } }
   .soon-plate { position: relative; }
   .soon-tag { position: absolute; top: 12px; right: 16px; font: 12.5px/1 var(--text); color: var(--faint); }
-  .hw .mcp-row rect, .hw .mcp-tool rect, .hw .journey rect { transition: stroke .3s; }
-  .hw .mcp-row.hot rect, .hw .mcp-tool.hot rect, .hw .journey.hot rect { stroke: var(--bronze); }
+  .hw .mcp-row rect, .hw .mcp-tool rect { transition: stroke .3s; }
+  .hw .mcp-row.hot rect, .hw .mcp-tool.hot rect, .hw .tier.paid rect { stroke: var(--bronze); }
+  .hw .tier .em { fill: var(--parchment); font-weight: 500; }
+  .hw .tier .price { fill: var(--bronze); }
   .hw .mcp-row .st { transition: fill .3s; }
   .hw .mcp-row.done .st { fill: #3ca99c; }
   .hw .mcp-link { opacity: .18; transition: opacity .3s; }
@@ -1757,7 +1759,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div class="label eyebrow">06 · Coming soon</div>
       <h2>Coming soon</h2>
       <div class="soon-item">
-        <div class="soon-text"><h3>Caliper MCP server</h3><p>An MCP server for rapid prototyping with your AI agent. Describe the interface your project needs, and your agent builds it on Caliper's SDK.</p></div>
+        <div class="soon-text"><h3>Caliper MCP server</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
 <svg class="hw soon-svg" id="soon-mcp" viewBox="0 0 1100 470" role="img" aria-label="Concept: an AI agent asks for a fine-tuning panel; through the Caliper MCP server it reads the SDK, writes the applet, builds it, attaches it to train.py and captures it, and the panel appears live in Caliper">
 <defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
@@ -1948,9 +1950,9 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         </div>
       </div>
       <div class="soon-item">
-        <div class="soon-text"><h3>Caliper Cloud</h3><p>A paid service for visualizing and interacting with models you cannot run yourself, on our dedicated, highly integrated compute that scales. Experiment with the open-source app for free, then work with our experts to bring your machine learning to market.</p></div>
+        <div class="soon-text"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold, with experts who work alongside your team to take the model to production.</p></div>
         <div class="hw-plate soon-plate"><span class="soon-tag">Concept</span>
-<svg class="hw soon-svg" id="soon-cloud" viewBox="0 0 1100 490" role="img" aria-label="Concept: Caliper on your machine streams views of a model sharded across dedicated GPU nodes in Caliper Cloud, and sends prompts, interventions and camera moves back; below, open source is free, Caliper Cloud runs what you cannot, and our experts take your machine learning to market">
+<svg class="hw soon-svg" id="soon-cloud" viewBox="0 0 1100 490" role="img" aria-label="Concept: Caliper on your machine streams views of a model sharded across dedicated GPU nodes in Caliper Cloud, and sends prompts, interventions and camera moves back; below, the free open-source SDK and app for experimenting lead to paid Caliper Cloud, with dedicated compute and experts">
 <defs><marker id="stip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="stip-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
 <rect x="16" y="44" width="340" height="300" rx="10" class="pkg"/>
 <text x="34" y="28" class="k">YOUR MACHINE</text>
@@ -2176,11 +2178,15 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <rect class="gpu core" data-g="30" x="1012" y="269" width="20" height="26" rx="2"/>
 <rect class="gpu core" data-g="31" x="1036" y="269" width="20" height="26" rx="2"/>
 <text x="927" y="332" class="n dim" text-anchor="middle">one model, sharded across every GPU</text>
-<g class="journey" data-i="0"><rect x="16" y="380" width="340" height="96" rx="6" class="blk"/><text x="36" y="410" class="k">OPEN SOURCE</text><text x="36" y="438" class="n">Free. Caliper on your own Mac or PC,</text><text x="36" y="457" class="n">with its GPU and your models.</text></g>
-<path class="arrow" d="M358,428 L378,428" marker-end="url(#stip)"/>
-<g class="journey" data-i="1"><rect x="380" y="380" width="340" height="96" rx="6" class="blk"/><text x="400" y="410" class="k">CALIPER CLOUD</text><text x="400" y="438" class="n">Models you cannot run yourself, on</text><text x="400" y="457" class="n">dedicated compute that scales.</text></g>
-<path class="arrow" d="M722,428 L742,428" marker-end="url(#stip)"/>
-<g class="journey" data-i="2"><rect x="744" y="380" width="340" height="96" rx="6" class="blk"/><text x="764" y="410" class="k">OUR EXPERTS</text><text x="764" y="438" class="n">Work with us to bring your</text><text x="764" y="457" class="n">machine learning to market.</text></g>
+<g class="tier"><rect x="16" y="380" width="500" height="96" rx="6" class="blk"/>
+<text x="36" y="410" class="k">OPEN SOURCE</text><text x="496" y="410" class="n dim" text-anchor="end">free</text>
+<text x="36" y="438" class="n">The SDK and the app, to <tspan class="em">experiment</tspan> with your own</text>
+<text x="36" y="457" class="n">models on your own GPU.</text></g>
+<path class="arrow" d="M520,428 L580,428" marker-end="url(#stip)"/>
+<g class="tier paid"><rect x="584" y="380" width="500" height="96" rx="6" class="blk"/>
+<text x="604" y="410" class="k">CALIPER CLOUD</text><text x="1064" y="410" class="n price" text-anchor="end">paid</text>
+<text x="604" y="438" class="n">Dedicated GPU nodes for the models you cannot run, and</text>
+<text x="604" y="457" class="n"><tspan class="em">experts</tspan> who work with your team to take them to market.</text></g>
 </svg>
         </div>
       </div>
@@ -2383,7 +2389,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 <script>
 // The Coming soon figures, both concepts. The MCP server: the agent's steps light in turn, each through its tool,
 // and the panel builds in Caliper. Caliper Cloud: the Trace grid fills as views stream in, the GPUs light as a pass
-// sweeps the sharded model, and the path below moves from open source to the experts.
+// sweeps the sharded model.
 (() => {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const watch = (el, start, stop) => new IntersectionObserver(([e]) => (e.isIntersecting ? start : stop)(), { threshold: 0.2 }).observe(el);
@@ -2417,7 +2423,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   const cloud = document.getElementById("soon-cloud");
   if (cloud) {
     const cells = [...cloud.querySelectorAll(".gcell")], gpus = [...cloud.querySelectorAll(".gpu")];
-    const steps = [...cloud.querySelectorAll(".journey")], layer = cloud.querySelector("#cloud-packets");
+    const layer = cloud.querySelector("#cloud-packets");
     const NS = "http://www.w3.org/2000/svg";
     const packets = [];
     for (let i = 0; i < 9; i++) {
@@ -2429,7 +2435,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       packets.push({ r, up, u: i / (up ? 3 : 6) });
     }
     const order = cells.slice().sort((a, b) => (a.dataset.c - b.dataset.c) || (a.dataset.r - b.dataset.r));
-    let filled = 0, clock = 0, last = 0, raf = 0, journeyAt = -1;
+    let filled = 0, clock = 0, last = 0, raf = 0;
     function frame(now) {
       raf = 0;
       const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
@@ -2447,12 +2453,10 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         p.r.setAttribute("x", x.toFixed(1)); p.r.setAttribute("y", y - (p.up ? 0 : 1));
         p.r.style.opacity = Math.sin(Math.PI * p.u).toFixed(2);
       });
-      const at = Math.floor(clock / 2.8) % 3;
-      if (at !== journeyAt) { journeyAt = at; steps.forEach((g, i) => g.classList.toggle("hot", i === at)); }
       if (visible) raf = requestAnimationFrame(frame);
     }
     let visible = false;
-    if (reduce) { order.forEach(c => c.style.fill = c.dataset.f); steps[1].classList.add("hot"); }
+    if (reduce) order.forEach(c => c.style.fill = c.dataset.f);
     else watch(cloud, () => { visible = true; last = 0; if (!raf) raf = requestAnimationFrame(frame); }, () => { visible = false; });
   }
 })();
