@@ -173,11 +173,6 @@
   pre.code .p { color: var(--bronze); }
   pre.code .c { color: var(--faint); }
   /* The frame traces: one frame as lanes over time, with the line each lane is on and the arrows between them. */
-  /* Use cases: name and status. */
-  .ucs { list-style: none; padding: 0; margin: 30px 0 0; max-width: 720px; border-top: 1px solid var(--rule-faint); }
-  .ucs li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--rule-faint); }
-  .uc-name { font-size: 16px; color: var(--parchment); }
-
   /* Libraries: logo, name and repository. */
   .libs { list-style: none; padding: 0; margin: 30px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; border-top: 1px solid var(--rule-faint); }
   .libs a { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -288,7 +283,6 @@
   <div class="wrap">
     <a class="brand" href="#top"><img src="assets/caliper-mark.svg" alt=""><span>CALIPER</span></a>
     <div class="links">
-      <a href="#use-cases">Use cases</a>
       <a href="#backends">Backends</a>
       <a href="#libraries">Libraries</a>
       <a href="#build">Build</a>
@@ -345,23 +339,10 @@
 </header>
 
 <main>
-  <section id="use-cases">
-    <div class="wrap">
-      <div class="label eyebrow">01 · Use cases</div>
-      <h2>Use cases</h2>
-      <ul class="ucs">
-        <li><span class="uc-name">Training dynamics in PyTorch</span></li>
-        <li><span class="uc-name">Language model interpretability</span></li>
-        <li><span class="uc-name">Learned models beside simulations</span></li>
-        <li><span class="uc-name">Machine telemetry</span></li>
-        <li><span class="uc-name">Sensor and test-rig telemetry (planned)</span></li>
-      </ul>
-    </div>
-  </section>
 
   <section id="backends">
     <div class="wrap">
-      <div class="label eyebrow">02 · Native backends</div>
+      <div class="label eyebrow">01 · Native backends</div>
       <h2>Native backends</h2>
       <!-- code:call -->
 <div class="code-grid code-call"><details class="code-panel"><summary class="code-head"><span class="code-title">The descriptor</span><a class="code-file" href="https://github.com/AhmedKhan-GH/caliper/blob/9abcd47cc68ab3f1c5ec36aa9e90e23468cad5cb/sdk/include/caliper/tensor.h#L17-L27">tensor.h · 17–27</a></summary><pre class="code"><code><span class="row" data-file="tensor.h" data-ln="17"><span class="ln">17</span>typedef struct <span class="p">CaliperTensor</span> {</span><span class="row" data-file="tensor.h" data-ln="18"><span class="ln">18</span>    uint32_t          struct_size;</span><span class="row" data-file="tensor.h" data-ln="19"><span class="ln">19</span>    void*             <span class="p">data</span>;            <span class="c">/* device or host pointer */</span></span><span class="row" data-file="tensor.h" data-ln="20"><span class="ln">20</span>    CaliperDType      dtype;</span><span class="row" data-file="tensor.h" data-ln="21"><span class="ln">21</span>    int32_t           ndim;            <span class="c">/* &lt;= 8 */</span></span><span class="row" data-file="tensor.h" data-ln="22"><span class="ln">22</span>    int64_t           shape[8];</span><span class="row" data-file="tensor.h" data-ln="23"><span class="ln">23</span>    int64_t           strides[8];      <span class="c">/* in elements */</span></span><span class="row" data-file="tensor.h" data-ln="24"><span class="ln">24</span>    CaliperDeviceKind <span class="p">device</span>;</span><span class="row" data-file="tensor.h" data-ln="25"><span class="ln">25</span>    int32_t           device_index;</span><span class="row" data-file="tensor.h" data-ln="26"><span class="ln">26</span>    void*             <span class="p">stream</span>;          <span class="c">/* cudaStream_t / MTLCommandQueue* / NULL */</span></span><span class="row" data-file="tensor.h" data-ln="27"><span class="ln">27</span>} <span class="p">CaliperTensor</span>;</span></code></pre></details>
@@ -1407,7 +1388,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
   <section id="libraries">
     <div class="wrap">
-      <div class="label eyebrow">03 · Libraries</div>
+      <div class="label eyebrow">02 · Libraries</div>
       <h2>Libraries</h2>
       <ul class="libs">
         <li><a href="https://github.com/ocornut/imgui"><img src="assets/libs/ocornut.png" alt="" width="28" height="28"><span class="lib-name">Dear ImGui</span><span class="lib-repo">ocornut/imgui</span></a></li>
@@ -1429,7 +1410,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section id="build">
     <div class="wrap two">
       <div>
-        <div class="label eyebrow">04 · Build</div>
+        <div class="label eyebrow">03 · Build</div>
         <h2>Build from source</h2>
         <p class="muted">CMake 3.18 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
         <dl class="platforms">
