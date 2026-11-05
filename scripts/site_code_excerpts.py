@@ -35,13 +35,16 @@ PANELS = {
     "nvidia": [
         ("Tensor to descriptor", "sdk/include/caliper/adapters/torch.hpp", [(157, 166)],
          ["data_ptr", "CALIPER_DEV_CUDA"]),
-        ("Vulkan allocates, exportable", "src/host/renderer/vulkan_renderer.cpp", [(2380, 2388)],
-         ["VkExportMemoryAllocateInfo", "VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT", "vkAllocateMemory"]),
-        ("CUDA maps the same VRAM", "src/host/renderer/vulkan_renderer.cpp", [(2657, 2661), (2669, 2673), (2677, 2681)],
-         ["vkGetMemoryWin32HandleKHR", "cuImportExternalMemory", "cuExternalMemoryGetMappedBuffer", "cuda_ptr"]),
-        ("Each update", "src/host/renderer/vulkan_renderer.cpp", [(3422, 3432), (3445, 3460)],
-         ["cuMemcpyDtoDAsync", "cuSignalExternalSemaphoresAsync", "pWaitSemaphoreValues", "pSignalSemaphoreValues",
-          "vkQueueSubmit"]),
+        ("Vulkan allocates the image, exportable", "src/host/renderer/vulkan_renderer.cpp", [(638, 640), (645, 651)],
+         ["VkExternalMemoryImageCreateInfo", "VkMemoryDedicatedAllocateInfo", "VkExportMemoryAllocateInfo",
+          "VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT"]),
+        ("CUDA imports it as a surface", "src/host/renderer/vulkan_renderer.cpp", [(3723, 3728), (3730, 3734), (3745, 3749)],
+         ["vkGetMemoryWin32HandleKHR", "cuImportExternalMemory", "cuExternalMemoryGetMappedMipmappedArray",
+          "cuSurfObjectCreate"]),
+        ("Each update", "src/host/renderer/vulkan_renderer.cpp", [(3827, 3843), (3853, 3853)],
+         ["cuLaunchKernel", "cuSignalExternalSemaphoresAsync", "swap_images"]),
+        ("The kernel", "src/host/renderer/kernels/cmap_direct.cu", [(21, 44)],
+         ["caliper_cmap_f32", "lut", "surf2Dwrite"]),
     ],
 }
 

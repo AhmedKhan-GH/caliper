@@ -23,7 +23,7 @@ GS = "applets/gpt_scope/gpt_scope.cpp"
 TORCH = "sdk/include/caliper/adapters/torch.hpp"
 MR = "src/host/renderer/metal_renderer.mm"
 VR = "src/host/renderer/vulkan_renderer.cpp"
-COMP = "src/host/renderer/shaders/colormap.comp"
+KERNEL = "src/host/renderer/kernels/cmap_direct.cu"
 
 # A ref is (path, text) or (path, text, anchor): the line holding text, the first one after the anchor's line when
 # an anchor is given. Without an anchor the text must occur once in the file.
@@ -133,10 +133,9 @@ METAL = {
     ],
 }
 
-VR_PIPE = "bool update_pipelined("
-VR_COPY = (VR, "cu->cuMemcpyDtoDAsync(io.cuda_ptr, src, (size_t)bytes, stream)", VR_PIPE)
-VR_SIGNAL = (VR, "if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)", VR_PIPE)
-VR_WAIT = (VR, "tsi.pWaitSemaphoreValues = &wait_val;", VR_PIPE)
+VR_DIRECT = "bool update_direct("
+VR_LAUNCH = (VR, "if (da->cuLaunchKernel(is_cmap ? direct_cmap_ : direct_blit_,", VR_DIRECT)
+VR_SIGNAL = (VR, "if (cu->cuSignalExternalSemaphoresAsync(&io.cuda_sem, &sp, 1, stream)", VR_DIRECT)
 VR_NEW_FRAME = [(VR, "ImGui_ImplVulkan_NewFrame();", "void new_frame() override {")]
 VR_DRAW = (VR, "ImGui_ImplVulkan_RenderDrawData(dd, fd->CommandBuffer);")
 VR_PRESENT = (VR, "VkResult err = vkQueuePresentKHR(queue_, &pi);")
@@ -145,10 +144,10 @@ NVIDIA = {
     "name": "nvidia",
     "scope": ["call", "nvidia"],
     "start": 3.45,
-    "bands": [(2.75, 4.0, 13), (5.35, 6.65, 3)],
-    "label": "NVIDIA, one frame: the frame thread enqueues an in-VRAM copy and a timeline signal on torch's CUDA "
-             "stream, submits a colormap pass that waits for that value on Caliper's Vulkan queue, and submits the "
-             "frame, which waits for the pass and is presented at the next vsync",
+    "bands": [(2.75, 4.0, 13), (4.5, 5.25, 9), (5.35, 6.65, 3)],
+    "label": "NVIDIA, one frame: the frame thread enqueues a colormap kernel and a timeline signal on torch's CUDA "
+             "stream; the kernel reads the tensor in place and writes the back VkImage, which swaps with the front "
+             "one; the frame waits for that signal, samples the image and is presented at the next vsync",
     "lanes": [("TRAINING THREAD", "CPU · gpt_scope train_job"), ("FRAME THREAD", "CPU · Caliper host"),
               ("TORCH'S STREAM", "GPU · CUDA stream"), ("CALIPER'S QUEUE", "GPU · VkQueue"),
               ("DISPLAY", "swapchain")],
@@ -159,59 +158,47 @@ NVIDIA = {
          [(TORCH, "out.data = t.data_ptr();", "if (t.is_cuda()) {"), (TORCH, "out.device = CALIPER_DEV_CUDA;"), HANDOFF]),
         (1, 2.96, 3.1, "caliper", "stream", "stream_to_tensor: torch's current CUDA stream goes in the descriptor",
          [(TORCH, "out->stream = (void*)at::cuda::getCurrentCUDAStream("), HANDOFF]),
-        (1, 3.1, 3.25, "caliper", "retire", "update_texture: retire this texture's last update, a host wait only if it is still running",
-         [(VR, 'if (!retire(dst)) return dev_bail("pipelined: retire timed out");', VR_PIPE), UPDATE]),
-        (1, 3.25, 3.4, "caliper", "copy", "the in-VRAM copy enqueued on torch's stream", [VR_COPY]),
-        (1, 3.4, 3.55, "caliper", "signal", "the semaphore signal, base+1, enqueued on torch's stream",
-         [VR_SIGNAL, (VR, "sp.params.fence.value = base + 1;", VR_PIPE), (VR, "cudadrv::ExternalSemaphoreSignalParams sp{};", VR_PIPE)]),
-        (1, 3.55, 3.75, "caliper", "record", "the colormap pass recorded into this texture's command buffer",
-         [(VR, "record_cmap_body(io.cb, dst, make_push(dst, t, vmin, vmax), io.set);", VR_PIPE)]),
-        (1, 3.75, 3.95, "caliper", "submit", "vkQueueSubmit: wait for base+1, signal base+2, no fence",
-         [(VR, "if (vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS)", VR_PIPE), VR_WAIT,
-          (VR, "tsi.pSignalSemaphoreValues = &signal_val;", VR_PIPE), (VR, "uint64_t wait_val = base + 1, signal_val = base + 2;", VR_PIPE),
-          (VR, "si.pWaitSemaphores = &io.timeline;", VR_PIPE), (VR, "si.pSignalSemaphores = &io.timeline;", VR_PIPE),
-          (VR, "tsi.waitSemaphoreValueCount = 1;", VR_PIPE), (VR, "tsi.signalSemaphoreValueCount = 1;", VR_PIPE),
-          (VR, "VkTimelineSemaphoreSubmitInfoKHR tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};", VR_PIPE),
-          (VR, "VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};", VR_PIPE), (VR, "si.pNext = &tsi;", VR_PIPE),
-          (VR, "si.waitSemaphoreCount = 1;", VR_PIPE), (VR, "si.pWaitDstStageMask = &wait_stage;", VR_PIPE),
-          (VR, "si.commandBufferCount = 1;", VR_PIPE), (VR, "si.pCommandBuffers = &io.cb;", VR_PIPE),
-          (VR, "si.signalSemaphoreCount = 1;", VR_PIPE)]),
-        (1, 3.95, 5.4, "caliper", "applet UI", "the applet draws the texture with ImGui::Image", [IMAGE]),
-        (1, 5.4, 5.65, "caliper", "", "frame_render: acquire a swapchain image, wait for its frame's fence",
-         [(VR, "VkResult err = vkAcquireNextImageKHR(device_, wd_.Swapchain, UINT64_MAX,"),
+        (1, 3.1, 3.25, "caliper", "checks", "update_texture: shape, strides and alignment checked, so the kernel can only read this tensor's memory",
+         [(VR, "if (t.shape[0] != dst.h || t.shape[1] != dst.w || stride_x <= 0 || stride_y <= 0)", VR_DIRECT), UPDATE]),
+        (1, 3.25, 3.45, "caliper", "kernel", "the colormap kernel enqueued on torch's stream, after a wait only if a frame may still be sampling the back image",
+         [VR_LAUNCH, (VR, "if (last_sampler != 0 &&", VR_DIRECT)]),
+        (1, 3.45, 3.6, "caliper", "signal", "the semaphore signal, base+1, enqueued on torch's stream",
+         [VR_SIGNAL, (VR, "sp.params.fence.value = base + 1;", VR_DIRECT), (VR, "cudadrv::ExternalSemaphoreSignalParams sp{};", VR_DIRECT)]),
+        (1, 3.6, 3.75, "caliper", "swap", "the two images trade places; the id the applet holds does not change",
+         [(VR, "if (!in_place) swap_images(dst);"), (VR, "std::swap(t.image, b.image);")]),
+        (1, 3.75, 5.4, "caliper", "applet UI", "the applet draws the texture with ImGui::Image", [IMAGE]),
+        (1, 5.4, 5.65, "caliper", "", "frame_render: acquire a swapchain image, send draws to the front image, wait for its frame's fence",
+         [(VR, "VkResult err = vkAcquireNextImageKHR(device_, wd_.Swapchain, UINT64_MAX,"), (VR, "resolve_swapped_textures(dd);"),
           (VR, "vkWaitForFences(device_, 1, &fd->Fence, VK_TRUE, UINT64_MAX);", "void frame_render(")]),
         (1, 5.65, 6.25, "caliper", "record", "ImGui's draw recorded into the frame's command buffer", [VR_DRAW]),
-        (1, 6.25, 6.45, "caliper", "", "vkQueueSubmit: wait for the image and for base+2",
+        (1, 6.25, 6.45, "caliper", "", "vkQueueSubmit: wait for the image and for base+1",
          [(VR, "if (vkQueueSubmit(queue_, 1, &si, fd->Fence) == VK_SUCCESS)"),
           (VR, "for (const auto& pw : pending_frame_waits_) {", "void frame_render(")]),
         (1, 6.45, 6.6, "caliper", "", "vkQueuePresentKHR: queued behind render-complete", [VR_PRESENT]),
         (1, 17.5, 17.8, "caliper", "new_frame", "next frame: new_frame", VR_NEW_FRAME),
         (1, 17.8, 20.0, "caliper", "applet UI", "next frame: the applet's draw_ui", [WIDGETS]),
         (2, 0.3, 4.6, "torch", "torch's kernels", "torch's kernels launched before the handoff: forward, start of backward", []),
-        (2, 4.6, 4.95, "caliper", "copy", "cuMemcpyDtoDAsync: the tensor into the shared buffer, inside VRAM", [VR_COPY]),
-        (2, 4.95, 5.05, "caliper", "", "the timeline semaphore reaches base+1", [VR_SIGNAL]),
-        (2, 5.05, 8.2, "torch", "torch's kernels", "torch's kernels: rest of backward, grad norms", []),
+        (2, 4.6, 5.05, "caliper", "colormap", "the kernel reads the tensor in place and writes the back VkImage, with no copy",
+         [(KERNEL, "const float v = *(const float*)(src + y * stride_y + x * stride_x);"), (KERNEL, "surf2Dwrite(lut.v[idx], dst, x * 4, y);")]),
+        (2, 5.05, 5.15, "caliper", "", "the timeline semaphore reaches base+1", [VR_SIGNAL]),
+        (2, 5.15, 8.2, "torch", "torch's kernels", "torch's kernels: rest of backward, grad norms", []),
         (2, 8.5, 10.4, "torch", "torch's kernels", "torch's kernels: optimizer step", []),
         (2, 10.9, 20.0, "torch", "torch's kernels", "torch's kernels: next step", []),
-        (3, 3.95, 5.05, "wait", "waits base+1", "the colormap submit waits for base+1, on the GPU", [VR_WAIT]),
-        (3, 5.05, 5.6, "caliper", "colormap", "colormap.comp reads the shared buffer, writes the VkImage, signals base+2",
-         [(COMP, "float v = src[gid.y * p.sy + gid.x * p.sx];"), (COMP, "imageStore(dst, ivec2(gid), c);")]),
         (3, 6.45, 7.6, "caliper", "ImGui draw", "ImGui's draw samples the VkImage into the swapchain image", [VR_DRAW]),
         (4, 0.0, VSYNC, "screen", "previous frame", "the previous frame on screen", []),
         (4, VSYNC, 20.0, "screen", "this frame", "this frame on screen from the vsync after its present", [VR_PRESENT]),
     ],
     "memory": [
         ("TENSOR", "torch's CUDA memory, f32", "raw", [(0.3, 4.6, 0, 1, "blend"), (10.9, 20.0, 1, 2, "blend")]),
-        ("SHARED BUFFER", "exported by Vulkan, f32", "raw", [(4.6, 4.95, 0, 1, "wipe")]),
-        ("VKIMAGE", "colormapped", "cmap", [(5.05, 5.6, 0, 1, "wipe")]),
+        ("BACK IMAGE", "the kernel writes it, unsampled", "cmap", [(4.6, 5.05, 0, 1, "wipe")]),
+        ("FRONT IMAGE", "swapped in; ImGui samples it", "cmap", [(5.05, 5.05, 0, 1, "swap")]),
         ("ON SCREEN", "swapchain: texture, surface, histogram", "screen", [(VSYNC, VSYNC, 0, 1, "swap")]),
     ],
-    "links": [(0, 1, "copy", 4.6, 4.95), (1, 2, "colormap", 5.05, 5.6), (2, 3, "draw", 6.45, 7.6)],
+    "links": [(0, 1, "kernel", 4.6, 5.05), (1, 2, "swap", 5.05, 5.25), (2, 3, "draw", 6.45, 7.6)],
     "arrows": [
-        (1, 3.33, 2, 4.6, ""),
-        (1, 3.48, 2, 4.95, ""),
-        (1, 3.93, 3, 3.95, ""),
-        (2, 5.05, 3, 5.05, ""),
+        (1, 3.35, 2, 4.6, ""),
+        (1, 3.53, 2, 5.05, ""),
+        (2, 5.15, 3, 6.45, ""),
         (1, 6.4, 3, 6.45, ""),
         (3, 7.6, 4, VSYNC, "present"),
         (2, 8.2, 0, 8.3, ""),
@@ -346,7 +333,7 @@ def svg(tr, refs):
             derived = (f'<g class="surface" data-x="{sx:.2f}" data-y="{MY + 42}" data-w="{sw:.2f}" data-h="{hh * 0.62:.2f}">{surface}</g>'
                        f'<g class="hist" data-y="{MY + 42 + hh:.2f}" data-h="{hh * 0.3:.2f}">{bars}</g>')
         tag = (f'<text x="{bx + bw - 12:.2f}" y="{MY + 20}" class="mem-tag" text-anchor="end"></text>'
-               if any(w[4] == "swap" for w in writes) else "")
+               if kind == "screen" else "")
         out.append(f'<g class="mem" data-m="{m}" data-kind="{kind}"><rect x="{bx:.2f}" y="{MY}" width="{bw:.2f}" '
                    f'height="{MEM_H}" rx="5" class="box"/><text x="{bx + 12:.2f}" y="{MY + 20}" class="mem-name">'
                    f'{html.escape(title)}</text><text x="{bx + 12:.2f}" y="{MY + 35}" class="mem-sub">{html.escape(sub)}</text>'
