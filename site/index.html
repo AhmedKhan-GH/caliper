@@ -218,8 +218,14 @@
   .hw .mono.small.dim { fill: var(--faint); }
   .snippet pre.code .row.live-py { background: rgba(179, 139, 89, .16); box-shadow: inset 2px 0 var(--bronze); }
   /* Cross-platform development: the platforms, two canvas mockups of graphics built from model data, the draw call. */
-  .dev-platforms { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 28px 0 22px; }
-  .dev-platforms .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-right: 8px; }
+  .dev-stack { margin: 28px 0 24px; border-top: 1px solid var(--rule-faint); }
+  .dev-row { display: grid; grid-template-columns: 9em 1fr; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
+  .dev-row .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); }
+  .dev-items { display: flex; flex-wrap: wrap; gap: 10px 26px; }
+  .dev-item { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; color: var(--parchment); }
+  .dev-item img { width: 22px; height: 22px; border-radius: 5px; background: #f2eee6; }
+  .dev-item img.mark { background: none; }
+  @media (max-width: 600px) { .dev-row { grid-template-columns: 1fr; gap: 8px; } }
   .dev-plate { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 20px 22px 18px;
                background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; }
   .dev-tag { position: absolute; top: 14px; right: 18px; font: 12.5px/1 var(--text); color: var(--faint); }
@@ -535,9 +541,18 @@
     <div class="wrap">
       <div class="label eyebrow">02 · Cross-platform development</div>
       <h2>Cross-platform development</h2>
-      <div class="dev-platforms">
-        <span class="k">One applet source</span>
-        <span class="chip">Metal · macOS</span><span class="chip">Vulkan + CUDA · Windows</span><span class="chip">OpenGL · fallback</span>
+      <div class="dev-stack">
+        <div class="dev-row"><span class="k">Platforms</span><div class="dev-items">
+          <span class="dev-item"><img src="assets/libs/apple.png" alt="">Metal · macOS</span>
+          <span class="dev-item"><img src="assets/libs/khronosgroup.png" alt=""><img src="assets/libs/nvidia.png" alt="">Vulkan + CUDA · Windows</span>
+          <span class="dev-item">OpenGL 3.3 · fallback</span>
+        </div></div>
+        <div class="dev-row"><span class="k">Graphics</span><div class="dev-items">
+          <span class="dev-item"><img src="assets/libs/ocornut.png" alt="">Dear ImGui</span>
+          <span class="dev-item"><img src="assets/libs/epezent.png" alt="">ImPlot</span>
+          <span class="dev-item"><img src="assets/libs/brenocq.png" alt="">ImPlot3D</span>
+          <span class="dev-item"><img class="mark" src="assets/caliper-mark.svg" alt="">Caliper geometry · points, lines, meshes, instancing</span>
+        </div></div>
       </div>
       <div class="dev-plate">
         <div class="dev-tag">Illustrative data</div>
