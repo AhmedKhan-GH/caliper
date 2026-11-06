@@ -1,10 +1,52 @@
-# Caliper
+<p align="center">
+  <img src="site/assets/caliper-mark.svg" width="128" height="128" alt="Caliper mark">
+</p>
 
-Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, without CPU staging on its native Metal and Vulkan paths.
+<h1 align="center">Caliper</h1>
 
----
+<p align="center">
+  <b>Machine learning visualization framework.</b><br>
+  Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors,<br>
+  without CPU staging on its native Metal and Vulkan paths.
+</p>
 
-## Quick Start
+<p align="center">
+  <img alt="C++17" src="https://img.shields.io/badge/C%2B%2B-17-00599c?style=flat-square&logo=cplusplus">
+  <img alt="macOS: Metal and MPS" src="https://img.shields.io/badge/macOS-Metal%20%C2%B7%20MPS-2f7bf5?style=flat-square&logo=apple">
+  <img alt="Windows: Vulkan and CUDA" src="https://img.shields.io/badge/Windows-Vulkan%20%C2%B7%20CUDA-2f7bf5?style=flat-square&logo=windows">
+  <img alt="LibTorch 2.5.1" src="https://img.shields.io/badge/LibTorch-2.5.1-ee4c2c?style=flat-square&logo=pytorch">
+  <img alt="ImGui" src="https://img.shields.io/badge/UI-ImGui%20%C2%B7%20ImPlot-3a3a3a?style=flat-square">
+</p>
+
+<p align="center">
+  <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
+  <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
+  <a href="ROADMAP.md">Roadmap</a> ·
+  <a href="PLATFORM.md">Platform</a> ·
+  <a href="APPLETS.md">Applets</a>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="site/assets/inspector-model3d.jpg" alt="The Caliper inspector attached to Qwen3.5-0.8B: the parameter tree, the Trace pane reading every layer through the Jacobian lens while the model writes, Model 3D with every tensor at its true shape, and the inference output" width="100%">
+  <br>
+  <sub>The Caliper inspector attached to Qwen3.5-0.8B: the parameter tree, the Trace pane reading every layer<br>
+  through the Jacobian lens while the model writes, Model 3D with every tensor at its true shape, and the inference output.</sub>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#prerequisites">Prerequisites</a> ·
+  <a href="#build-options">Build options</a> ·
+  <a href="#libtorch-configuration">LibTorch</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="#license">License</a>
+</p>
+
+<br>
+
+## Quick start
 
 ```bash
 # 1. Initialize submodules
@@ -22,17 +64,15 @@ cmake --build --preset release
 `--preset release-notorch` builds the host without LibTorch or the applets, into
 `cmake-build-notorch/`. The presets need CMake 3.25 or later.
 
----
-
 ## Prerequisites
 
-### All Platforms
+### All platforms
 - **Git** (for submodule management)
 - **CMake 3.18+**
 - **C++17 compatible compiler**
 - **OpenGL** (system library)
 
-### Windows-Specific (CUDA)
+### Windows-specific (CUDA)
 ⚠️ **Important**: These exact versions must match your device configuration:
 - **Visual Studio 2022** (MSVC v143)
 - **CUDA Toolkit 12.8** at `C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8`
@@ -41,14 +81,12 @@ cmake --build --preset release
 
 💡 **To use different versions**: Update paths in `CMakeLists.txt:27-30` and LibTorch URL in `cmake/Dependencies.cmake:147-162`
 
-### macOS-Specific (MPS)
+### macOS-specific (MPS)
 - **Xcode** with command line tools
 - **Apple Silicon** (M1/M2/M3)
 - **Metal compiler** (xcrun --find metal)
 
----
-
-## Build Options
+## Build options
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -64,9 +102,7 @@ cmake --preset debug -DBUILD_TESTS=ON
 cmake --preset release-notorch
 ```
 
----
-
-## LibTorch Configuration
+## LibTorch configuration
 
 Caliper depends on **libtorch 2.5.1**. There are several flavors (CPU, CUDA
 11.8, CUDA 12.1, CUDA 12.4, macOS arm64). The build picks one at *configure
@@ -227,9 +263,7 @@ on non supported HW`) — your shipped variant requires a newer NVIDIA driver
 than the user has. Either tell them to upgrade the driver, or rebuild with
 an older `LIBTORCH_VARIANT` (e.g., `cu118`).
 
----
-
-## Project Structure
+## Project structure
 
 ```
 caliper/
@@ -240,8 +274,6 @@ caliper/
 ├── third_party/                # Git submodules (glfw, glm, imgui, implot)
 └── main.cpp                    # Application entry point
 ```
-
----
 
 ## Dependencies
 
@@ -259,9 +291,7 @@ caliper/
 
 **No manual downloads required!** Everything is handled by git submodules and CMake.
 
----
-
-## Platform-Specific Notes
+## Platform-specific notes
 
 ### Windows (CUDA)
 - **First build**: 5-10 minutes (downloads pre-built PyTorch ~2GB)
@@ -279,8 +309,6 @@ caliper/
 - Matrix operations: **15x faster**
 - Neural network training: **7-10x faster**
 
----
-
 ## Troubleshooting
 
 | Issue | Solution |
@@ -294,9 +322,7 @@ caliper/
 | **Out of memory** | Reduce parallel jobs: `cmake --build build -j2` |
 | **Clean rebuild** | `rm -rf build/ && cmake -B build && cmake --build build -j8` |
 
----
-
-## GPU Usage Examples
+## GPU usage examples
 
 ### Apple Silicon (MPS)
 ```cpp
@@ -312,21 +338,15 @@ auto tensor = torch::randn({1000, 1000}, device);
 model.to(device);
 ```
 
----
-
 ## Resources
 
 - [GLFW](https://www.glfw.org/documentation.html) | [GLM](https://github.com/g-truc/glm) | [ImGui](https://github.com/ocornut/imgui/wiki) | [ImPlot](https://github.com/epezent/implot) | [PyTorch C++](https://pytorch.org/cppdocs/)
-
----
 
 ## License
 
 [Your License Here]
 
----
-
-## Third-Party Licenses
+## Third-party licenses
 
 Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/`.
 
@@ -344,8 +364,6 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [GLEW](https://github.com/nigels-com/glew) | BSD 3-Clause / MIT | 2002-2007 Milan Ikits, Marcelo E. Magallon, Lev Povalahev | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [DuckDB](https://github.com/duckdb/duckdb) | MIT | 2018-2026 Stichting DuckDB Foundation | Use, modify, and distribute freely provided the license notice is included. |
 | [LibTorch](https://pytorch.org) | BSD 3-Clause | 2016 Facebook Inc. | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
-
----
 
 ## Acknowledgments
 
