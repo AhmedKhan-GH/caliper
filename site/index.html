@@ -51,6 +51,8 @@
   /* Buttons: inscriptional caps on a ruled plate. */
   .btn { --c: 8px; display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px 11px; font: 14px/1 var(--display);
          letter-spacing: .16em; text-transform: uppercase; cursor: pointer; transition: background .15s, color .15s; }
+  .btn-primary { color: var(--deep); background: var(--parchment); border: 1px solid var(--parchment); border-radius: 4px; }
+  .btn-primary:hover { background: #f4eee3; border-color: #f4eee3; }
   .btn-ghost { color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; }
   .btn-ghost:hover { background: var(--plate-hover); border-color: var(--faint); }
   .arrow { font-family: var(--text); letter-spacing: 0; }
@@ -419,11 +421,11 @@
       <a href="#develop">Develop</a>
       <a href="#backends">Backends</a>
       <a href="#libraries">Libraries</a>
-      <a href="#build">Build</a>
       <a href="#soon">Coming soon</a>
-      <a href="docs/">Documentation</a>
+      <a href="docs/">Docs</a>
+      <a href="https://github.com/AhmedKhan-GH/caliper">GitHub ↗</a>
     </div>
-    <a class="btn btn-ghost" href="https://github.com/AhmedKhan-GH/caliper">GitHub <span class="arrow">↗</span></a>
+    <a class="btn btn-primary" href="#build">Build from source</a>
   </div>
 </nav>
 
@@ -457,11 +459,10 @@
     <p class="tagline">Machine learning visualization framework</p>
     <p class="lede">A native app for interpretability. Observe models from the GPU in real time.</p>
     <div class="actions">
-      <a class="btn btn-ghost" href="docs/">Documentation</a>
-      <a class="btn btn-ghost" href="#build">Build from source</a>
-      <a class="btn btn-ghost" href="https://github.com/AhmedKhan-GH/caliper">View source <span class="arrow">↗</span></a>
+      <a class="btn btn-primary" href="#build">Build from source</a>
+      <a class="btn btn-ghost" href="docs/">Docs</a>
     </div>
-    <p class="fine">Source available · no packaged release</p>
+    <p class="fine">Source available · no packaged release yet · macOS on Metal · Windows on Vulkan and CUDA</p>
     <div class="chips">
       <span class="chip">C++</span><span class="chip">MPS</span><span class="chip">CUDA</span><span class="chip">Metal</span>
       <span class="chip">Vulkan</span><span class="chip">ImGui</span><span class="chip">ImPlot</span>
@@ -2324,8 +2325,11 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
   <section class="closing">
     <div class="wrap">
-      <h2>Documentation</h2>
-      <a class="btn btn-ghost" href="docs/">Open documentation</a>
+      <h2>Get started</h2>
+      <div class="actions">
+        <a class="btn btn-primary" href="#build">Build from source</a>
+        <a class="btn btn-ghost" href="docs/">Docs</a>
+      </div>
     </div>
   </section>
 </main>
@@ -2334,8 +2338,8 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <div class="wrap">
     <a class="house" href="https://sternbild.org"><img src="assets/sternbild-seal.svg" alt=""><span class="house-text"><span class="house-name">STERNBILD</span><span class="house-url">sternbild.org</span></span></a>
     <div class="links">
-      <a href="docs/">Documentation</a>
-      <a href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
+      <a href="docs/">Docs</a>
+      <a href="https://github.com/AhmedKhan-GH/caliper">GitHub ↗</a>
       <a href="mailto:emailahmedebadkhan@gmail.com">Contact</a>
       <span>© 2026 Ahmed Khan</span>
     </div>
