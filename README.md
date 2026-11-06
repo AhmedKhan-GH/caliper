@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/assets/caliper-mark.svg" width="128" height="128" alt="Caliper mark">
+  <img src="site/assets/caliper-icon-256.png" width="128" height="128" alt="Caliper app icon">
 </p>
 
 <h1 align="center">Caliper</h1>
