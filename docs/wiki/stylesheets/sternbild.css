@@ -74,7 +74,7 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 
 /* Header: the mark and the name in the display face, on the deep ground, ruled underneath. */
 .md-header { background: var(--deep); border-bottom: 1px solid var(--rule-faint); box-shadow: none; }
-.md-header__button.md-logo img, .md-header__button.md-logo svg { height: 1.5rem; width: auto; }
+.md-header__button.md-logo img, .md-header__button.md-logo svg { height: 1.85rem; width: auto; }
 .md-header__title { font-family: var(--display); font-size: .8rem; letter-spacing: .18em; text-transform: uppercase; }
 .md-tabs { background: var(--deep); border-bottom: 1px solid var(--rule-faint); }
 

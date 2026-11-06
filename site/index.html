@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Caliper</title>
 <meta name="description" content="Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, without CPU staging on its native Metal and Vulkan paths.">
-<link rel="icon" href="assets/caliper-mark.svg">
+<link rel="icon" href="assets/caliper-icon-32.png" sizes="32x32">
+<link rel="icon" href="assets/caliper-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/caliper-icon-180.png">
 <meta property="og:title" content="Caliper">
 <meta property="og:description" content="Caliper renders live ImGui graphics from GPU-resident MPS and CUDA tensors, without CPU staging on its native Metal and Vulkan paths.">
 <meta property="og:image" content="https://ahmedkhan-gh.github.io/caliper/assets/og.png">
@@ -57,7 +59,7 @@
   nav { position: sticky; top: 0; z-index: 20; background: rgba(18, 17, 15, .86); backdrop-filter: blur(12px); border-bottom: 1px solid var(--rule-faint); }
   nav .wrap { display: flex; align-items: center; gap: 30px; height: 64px; }
   .brand { display: flex; align-items: center; gap: 12px; }
-  .brand img { width: 30px; height: 30px; }
+  .brand img { width: 36px; height: 36px; }
   .brand span { font: 17px/1 var(--display); letter-spacing: .22em; padding-top: 2px; }
   nav .links { display: flex; gap: 26px; margin-left: auto; color: var(--secondary); font: 13px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
   nav .links a:hover { color: var(--parchment); }
@@ -71,7 +73,7 @@
                         background: linear-gradient(180deg, rgba(232, 224, 208, .055), rgba(232, 224, 208, 0) 100%); }
   .aura { position: absolute; left: 50%; top: 0; width: 1600px; height: 980px; transform: translateX(-50%); pointer-events: none; }
   .hero .wrap { position: relative; }
-  .hero-mark { width: 112px; height: 112px; margin: 0 auto 30px; filter: drop-shadow(0 22px 34px rgba(0, 0, 0, .65)); }
+  .hero-mark { width: 136px; height: 136px; margin: 0 auto 26px; filter: drop-shadow(0 18px 30px rgba(0, 0, 0, .45)); }
   /* The name is the hero's headline; the trailing letter-space is padded on the left so the word sits centred. */
   .hero h1 { font: clamp(44px, 10.5vw, 116px)/1 var(--display); letter-spacing: .16em; padding-left: .16em; margin: 0 auto;
              text-shadow: 0 18px 44px rgba(0, 0, 0, .55); }
@@ -220,7 +222,7 @@
   .dev-items { display: flex; flex-wrap: wrap; gap: 10px 26px; }
   .dev-item { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; color: var(--parchment); }
   .dev-item img { width: 22px; height: 22px; border-radius: 5px; background: #f2eee6; }
-  .dev-item img.mark { background: none; }
+  .dev-item img.mark { background: none; width: 26px; height: 26px; }
   @media (max-width: 600px) { .dev-row { grid-template-columns: 1fr; gap: 8px; } }
   .dev-snippet { margin-top: 20px; }
   .xp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; margin-top: 8px; }
@@ -411,7 +413,7 @@
 
 <nav>
   <div class="wrap">
-    <a class="brand" href="#top"><img src="assets/caliper-mark.svg" alt=""><span>CALIPER</span></a>
+    <a class="brand" href="#top"><img src="assets/caliper-icon.svg" alt=""><span>CALIPER</span></a>
     <div class="links">
       <a href="#python">Python</a>
       <a href="#develop">Develop</a>
@@ -450,7 +452,7 @@
     </g>
   </svg>
   <div class="wrap">
-    <img class="hero-mark" src="assets/caliper-mark.svg" alt="Caliper">
+    <img class="hero-mark" src="assets/caliper-icon.svg" alt="Caliper">
     <h1>Caliper</h1>
     <p class="tagline">Machine learning visualization framework</p>
     <p class="lede">A native app for interpretability. Observe models from the GPU in real time.</p>
@@ -595,7 +597,7 @@
           <span class="dev-item"><img src="assets/libs/ocornut.png" alt="">Dear ImGui</span>
           <span class="dev-item"><img src="assets/libs/epezent.png" alt="">ImPlot</span>
           <span class="dev-item"><img src="assets/libs/brenocq.png" alt="">ImPlot3D</span>
-          <span class="dev-item"><img class="mark" src="assets/caliper-mark.svg" alt="">Caliper geometry · points, lines, meshes, instancing</span>
+          <span class="dev-item"><img class="mark" src="assets/caliper-icon.svg" alt="">Caliper geometry · points, lines, meshes, instancing</span>
         </div></div>
       </div>
       <div class="xp">

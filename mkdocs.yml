@@ -8,8 +8,8 @@ exclude_docs: |
   howto/port-v1-applet.md
 theme:
   name: material
-  logo: assets/caliper-mark.svg
-  favicon: assets/caliper-mark.svg
+  logo: assets/caliper-icon.svg
+  favicon: assets/caliper-icon.svg
   font: false
   palette:
     scheme: slate
