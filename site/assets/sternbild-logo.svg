@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="filter-1" filterUnits="userSpaceOnUse" x="60" y="133.244" width="904" height="757.512" data-vc-blend="multiply" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="8"/><feOffset dx="0" dy="14" result="shadow"/><feFlood flood-color="#000000" flood-opacity="0.3"/><feComposite in2="shadow" operator="in" result="paint"/><feMerge><feMergeNode in="paint"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="linear-gradient-1" x1="512" y1="173.244" x2="512" y2="850.756" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#36332d"/>
+      <stop offset="0.5" stop-color="#211f1b"/>
+      <stop offset="1" stop-color="#141311"/>
+    </linearGradient>
+    <filter id="filter-2" filterUnits="userSpaceOnUse" x="180.851" y="179.862" width="662.298" height="555.94" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="1.465"/></filter>
+    <linearGradient id="linear-gradient-2" x1="421.616" y1="726.716" x2="203.668" y2="426.734" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="471.578" y1="726.716" x2="332.313" y2="298.089" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-4" x1="512" y1="726.716" x2="512" y2="186.254" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-5" x1="552.422" y1="726.716" x2="691.687" y2="298.089" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-6" x1="602.384" y1="726.716" x2="820.332" y2="426.734" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <filter id="filter-3" filterUnits="userSpaceOnUse" x="224.788" y="328.927" width="606.597" height="480.385" data-vc-blend="multiply" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="5"/><feOffset dx="0" dy="8" result="shadow"/><feFlood flood-color="#050403" flood-opacity="0.35"/><feComposite in2="shadow" operator="in" result="paint"/><feMerge><feMergeNode in="paint"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="linear-gradient-7" x1="512" y1="347.2" x2="512" y2="786.667" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#f5f5f5"/>
+      <stop offset="1" stop-color="#e0e0e0"/>
+    </linearGradient>
+  </defs>
+  <title>Sternbild</title>
+  <g id="Sternbild_seal" data-name="Sternbild seal">
+    <g filter="url(#filter-1)">
+      <path id="Diamond" d="M438.756 173.244 L585.244 173.244 L924 512 L585.244 850.756 L438.756 850.756 L100 512 Z" fill="url(#linear-gradient-1)"/>
+    </g>
+    <path id="Border" d="M441.451 179.751 L582.549 179.751 L914.798 512 L582.549 844.249 L441.451 844.249 L109.202 512 Z" fill="none" stroke="#ffffff" stroke-width="13.013" stroke-miterlimit="10"/>
+    <g filter="url(#filter-2)">
+      <g id="Beams">
+        <path id="Beam_-36_" data-name="Beam -36°" d="M417.91 729.407 L187.246 443.158 L220.349 410.055 L425.317 724.025 Z" fill="url(#linear-gradient-2)"/>
+        <path id="Beam_-18_" data-name="Beam -18°" d="M467.225 728.131 L311.328 319.075 L354.389 276.015 L475.932 725.302 Z" fill="url(#linear-gradient-3)"/>
+        <path id="Beam__0_" data-name="Beam +0°" d="M507.422 726.716 L480.4 186.257 L543.6 186.257 L516.578 726.716 Z" fill="url(#linear-gradient-4)"/>
+        <path id="Beam__18_" data-name="Beam +18°" d="M548.068 725.302 L669.611 276.015 L712.672 319.075 L556.775 728.131 Z" fill="url(#linear-gradient-5)"/>
+        <path id="Beam__36_" data-name="Beam +36°" d="M598.683 724.025 L803.651 410.055 L836.754 443.158 L606.09 729.407 Z" fill="url(#linear-gradient-6)"/>
+      </g>
+    </g>
+    <g id="Keyline">
+      <path d="M512 505.494 L519.605 726.715 L546.297 726.715 L588.907 614.459 L569.248 686.739 L636.303 668.709 L711.11 577.101 L585.899 771.651 L585.899 741.924 L517.531 741.924 L512 783.404 L506.47 741.924 L438.101 741.924 L438.101 771.651 L312.89 577.101 L387.697 668.709 L454.752 686.739 L435.093 614.459 L477.703 726.715 L504.395 726.715 Z M398.184 681.551 L435.065 726.715 L465.624 726.715 L457.692 697.551 Z M625.816 681.551 L566.308 697.551 L558.376 726.715 L588.935 726.715 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M254.376 496.564 L264.361 502.517 C264.94 502.862 265.558 502.96 266.215 502.81 L277.551 500.234 L271.599 510.22 C271.254 510.799 271.156 511.417 271.305 512.074 L273.881 523.41 L263.896 517.457 C263.317 517.112 262.699 517.014 262.042 517.163 L250.706 519.739 L256.658 509.754 C257.003 509.175 257.101 508.557 256.952 507.9 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M376.559 434.309 L384.216 443.056 C384.66 443.563 385.218 443.847 385.889 443.908 L397.466 444.961 L388.719 452.618 C388.212 453.062 387.928 453.619 387.867 454.291 L386.813 465.868 L379.156 457.121 C378.712 456.614 378.155 456.33 377.484 456.269 L365.907 455.215 L374.654 447.558 C375.161 447.114 375.445 446.557 375.506 445.886 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M512 381.056 L525.356 412.221 C526.13 414.027 527.421 415.318 529.228 416.092 L560.392 429.448 L529.228 442.805 C527.421 443.579 526.13 444.869 525.356 446.676 L512 477.841 L498.644 446.676 C497.869 444.869 496.579 443.579 494.772 442.805 L463.608 429.448 L494.772 416.092 C496.579 415.318 497.869 414.027 498.644 412.221 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M647.441 434.309 L648.494 445.886 C648.555 446.557 648.839 447.114 649.346 447.558 L658.093 455.215 L646.516 456.269 C645.845 456.33 645.288 456.614 644.844 457.121 L637.187 465.868 L636.133 454.291 C636.072 453.619 635.788 453.062 635.281 452.618 L626.534 444.961 L638.111 443.908 C638.782 443.847 639.34 443.563 639.784 443.056 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M769.624 496.564 L767.048 507.9 C766.899 508.557 766.997 509.175 767.342 509.754 L773.294 519.739 L761.958 517.163 C761.301 517.014 760.683 517.112 760.104 517.457 L750.119 523.41 L752.695 512.074 C752.844 511.417 752.746 510.799 752.401 510.22 L746.449 500.234 L757.785 502.81 C758.442 502.96 759.06 502.862 759.639 502.517 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M673.261 354.842 L674.314 366.419 C674.375 367.091 674.66 367.648 675.167 368.092 L683.914 375.749 L672.336 376.802 C671.665 376.863 671.108 377.147 670.664 377.654 L663.007 386.401 L661.954 374.824 C661.893 374.153 661.608 373.596 661.101 373.152 L652.354 365.495 L663.931 364.441 C664.603 364.38 665.16 364.096 665.604 363.589 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+      <path d="M801.798 452.281 L799.222 463.617 C799.072 464.274 799.17 464.892 799.515 465.471 L805.468 475.456 L794.132 472.88 C793.475 472.731 792.857 472.829 792.278 473.174 L782.293 479.126 L784.869 467.79 C785.018 467.133 784.92 466.515 784.575 465.936 L778.622 455.951 L789.958 458.527 C790.615 458.676 791.233 458.578 791.812 458.233 Z" fill="none" stroke="#0b0a09" stroke-opacity="0.7" stroke-width="4.578" stroke-linejoin="round"/>
+    </g>
+    <g filter="url(#filter-3)">
+      <g id="Sternbild">
+        <g>
+          <g id="Crown___united__vertical-sided_lower_points" data-name="Crown • united, vertical-sided lower points">
+            <path id="Crown___united__vertical-sided_lower_points-2" data-name="Crown • united, vertical-sided lower points" d="M511.085 505.462 C511.102 504.969 511.507 504.578 512 504.578 C512.493 504.578 512.898 504.969 512.915 505.462 L520.489 725.8 L545.666 725.8 L588.051 614.134 C588.224 613.677 588.725 613.437 589.189 613.588 C589.654 613.739 589.918 614.228 589.79 614.699 L570.55 685.44 L635.78 667.902 L710.401 576.522 C711.123 575.638 712.497 576.637 711.88 577.597 L586.669 772.147 C586.177 772.911 584.984 772.56 584.984 771.651 L584.984 742.84 L518.332 742.84 L512.908 783.525 C512.768 784.575 511.232 784.575 511.092 783.525 L505.668 742.84 L439.016 742.84 L439.016 771.651 C439.016 772.56 437.823 772.911 437.331 772.147 L312.12 577.597 C311.503 576.637 312.877 575.638 313.599 576.522 L388.22 667.902 L453.45 685.44 L434.21 614.699 C434.082 614.228 434.346 613.739 434.811 613.588 C435.275 613.437 435.776 613.677 435.949 614.134 L478.334 725.8 L503.511 725.8 Z M400.69 683.173 L435.499 725.8 L464.426 725.8 L456.947 698.299 Z M623.31 683.173 L567.053 698.299 L559.574 725.8 L588.501 725.8 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Radial_star___36____radius_610" data-name="Radial star • 36° / radius 610">
+            <path id="Radial_star___36____radius_610-2" data-name="Radial star • 36° / radius 610" d="M253.483 496.767 C253.306 495.984 254.156 495.367 254.845 495.777 L264.83 501.73 C265.207 501.955 265.585 502.015 266.013 501.917 L277.349 499.342 C278.131 499.164 278.749 500.014 278.338 500.703 L272.385 510.689 C272.16 511.066 272.101 511.443 272.198 511.871 L274.774 523.207 C274.951 523.989 274.101 524.607 273.412 524.196 L263.427 518.243 C263.05 518.019 262.672 517.959 262.244 518.056 L250.908 520.632 C250.126 520.81 249.508 519.959 249.919 519.27 L255.872 509.285 C256.097 508.908 256.156 508.531 256.059 508.103 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Radial_star___18____radius_610" data-name="Radial star • 18° / radius 610">
+            <path id="Radial_star___18____radius_610-2" data-name="Radial star • 18° / radius 610" d="M375.647 434.226 C375.72 433.427 376.72 433.102 377.248 433.706 L384.905 442.452 C385.194 442.783 385.535 442.956 385.972 442.996 L397.549 444.049 C398.348 444.122 398.672 445.121 398.069 445.65 L389.322 453.307 C388.992 453.596 388.818 453.937 388.778 454.374 L387.725 465.951 C387.652 466.75 386.653 467.074 386.124 466.471 L378.467 457.724 C378.178 457.394 377.838 457.22 377.401 457.18 L365.824 456.127 C365.025 456.054 364.7 455.055 365.304 454.526 L374.051 446.869 C374.381 446.58 374.554 446.24 374.594 445.803 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Centre_star___straight_arms__softened_inner_corners" data-name="Centre star • straight arms, softened inner corners">
+            <path id="Centre_star___straight_arms__softened_inner_corners-2" data-name="Centre star • straight arms, softened inner corners" d="M511.663 380.912 C511.79 380.617 512.21 380.617 512.337 380.912 L525.693 412.077 C526.43 413.797 527.652 415.018 529.372 415.756 L560.537 429.112 C560.831 429.238 560.831 429.659 560.537 429.785 L529.372 443.141 C527.652 443.879 526.43 445.1 525.693 446.82 L512.337 477.985 C512.21 478.28 511.79 478.28 511.663 477.985 L498.307 446.82 C497.57 445.1 496.348 443.879 494.628 443.141 L463.463 429.785 C463.169 429.659 463.169 429.238 463.463 429.112 L494.628 415.756 C496.348 415.018 497.57 413.797 498.307 412.077 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Radial_star___18____radius_610-3" data-name="Radial star • 18° / radius 610">
+            <path id="Radial_star___18____radius_610-4" data-name="Radial star • 18° / radius 610" d="M646.752 433.706 C647.28 433.102 648.28 433.427 648.353 434.226 L649.406 445.803 C649.446 446.24 649.619 446.58 649.949 446.869 L658.696 454.526 C659.3 455.055 658.975 456.054 658.176 456.127 L646.599 457.18 C646.162 457.22 645.822 457.394 645.533 457.724 L637.876 466.471 C637.347 467.074 636.348 466.75 636.275 465.951 L635.222 454.374 C635.182 453.937 635.008 453.596 634.678 453.307 L625.931 445.65 C625.328 445.121 625.652 444.122 626.451 444.049 L638.028 442.996 C638.465 442.956 638.806 442.783 639.095 442.452 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Radial_star___36____radius_610-3" data-name="Radial star • 36° / radius 610">
+            <path id="Radial_star___36____radius_610-4" data-name="Radial star • 36° / radius 610" d="M769.155 495.777 C769.844 495.367 770.694 495.984 770.517 496.767 L767.941 508.103 C767.844 508.531 767.903 508.908 768.128 509.285 L774.081 519.27 C774.492 519.959 773.874 520.81 773.092 520.632 L761.756 518.056 C761.328 517.959 760.95 518.019 760.573 518.243 L750.588 524.196 C749.899 524.607 749.049 523.989 749.226 523.207 L751.802 511.871 C751.899 511.443 751.84 511.066 751.615 510.689 L745.662 500.703 C745.251 500.014 745.869 499.164 746.651 499.342 L757.987 501.917 C758.415 502.015 758.793 501.955 759.17 501.73 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Radial_star___18____radius_731__midway_to_the_border_" data-name="Radial star • 18° / radius 731 (midway to the border)">
+            <path id="Radial_star___18____radius_731__midway_to_the_border_-2" data-name="Radial star • 18° / radius 731 (midway to the border)" d="M672.572 354.239 C673.101 353.636 674.1 353.96 674.173 354.759 L675.226 366.336 C675.266 366.773 675.439 367.114 675.77 367.403 L684.517 375.06 C685.12 375.588 684.795 376.588 683.996 376.661 L672.419 377.714 C671.982 377.754 671.642 377.927 671.353 378.257 L663.696 387.004 C663.167 387.608 662.168 387.283 662.095 386.484 L661.042 374.907 C661.002 374.47 660.828 374.13 660.498 373.841 L651.751 366.184 C651.148 365.655 651.472 364.656 652.271 364.583 L663.848 363.53 C664.286 363.49 664.626 363.316 664.915 362.986 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+          <g id="Radial_star___36____radius_689__midway_to_the_border_" data-name="Radial star • 36° / radius 689 (midway to the border)">
+            <path id="Radial_star___36____radius_689__midway_to_the_border_-2" data-name="Radial star • 36° / radius 689 (midway to the border)" d="M801.329 451.494 C802.018 451.083 802.868 451.701 802.69 452.484 L800.115 463.819 C800.017 464.247 800.077 464.625 800.302 465.002 L806.255 474.987 C806.665 475.676 806.048 476.526 805.265 476.349 L793.929 473.773 C793.501 473.676 793.124 473.735 792.747 473.96 L782.762 479.913 C782.073 480.324 781.222 479.706 781.4 478.924 L783.976 467.588 C784.073 467.16 784.013 466.782 783.789 466.405 L777.836 456.42 C777.425 455.731 778.043 454.881 778.825 455.058 L790.161 457.634 C790.589 457.731 790.967 457.672 791.344 457.447 Z" fill="url(#linear-gradient-7)"/>
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>
