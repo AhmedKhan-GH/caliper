@@ -2559,7 +2559,8 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       g, kind: g.dataset.kind, cells: [...g.querySelectorAll(".cells rect")], tag: g.querySelector(".mem-tag"),
       surface: g.querySelector(".surface"), bars: [...g.querySelectorAll(".hist rect")],
       writes: M.boxes[i].writes, key: "" }));
-    // Per-cell noise that changes every twelfth of a ms of trace time: the churn of kernels writing the tensor.
+    // Per-cell noise for the churn of kernels writing the tensor. It changes at one steady rate on screen (twelve
+    // times per drawn unit), not with trace time, so the stretched bands' slow motion doesn't slow the compute.
     const jit = (i, q) => {
       let h = Math.imul(i + 1, 374761393) ^ Math.imul(q + 7, 668265263);
       h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -2590,7 +2591,7 @@ vulkan_renderer.cpp:2309  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         if (t < a) break;
         const f = (t - a) / (e - a);
         if (how === "blend") {
-          const q = Math.floor(t * 12);
+          const q = Math.floor(v * 12);
           return { key: `b${from}${to}${q}`, v: STATES[from].map((x, i) => x + (STATES[to][i] - x) * f + 0.42 * jit(i, q)), on: true };
         }
         const n = Math.floor(f * STATES[0].length);
