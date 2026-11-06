@@ -47,14 +47,10 @@
   /* Corners: the 45-degree cut is kept for what matters, the mark and the primary action, as in the app marks'
      frames. Everything else, buttons, chips, cards, code and figures, takes a small radius, and the app's own
      window keeps the desktop's rounded corners. */
-  .cut { --c: 10px; clip-path: polygon(var(--c) 0, calc(100% - var(--c)) 0, 100% var(--c), 100% calc(100% - var(--c)),
-         calc(100% - var(--c)) 100%, var(--c) 100%, 0 calc(100% - var(--c)), 0 var(--c)); }
 
-  /* Buttons: inscriptional caps on a cut plate. One bronze action; the rest ruled. */
+  /* Buttons: inscriptional caps on a ruled plate. */
   .btn { --c: 8px; display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px 11px; font: 14px/1 var(--display);
          letter-spacing: .16em; text-transform: uppercase; cursor: pointer; transition: background .15s, color .15s; }
-  .btn-primary { background: var(--bronze); color: var(--deep); }
-  .btn-primary:hover { background: var(--bronze-hover); }
   .btn-ghost { color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; }
   .btn-ghost:hover { background: var(--plate-hover); border-color: var(--faint); }
   .arrow { font-family: var(--text); letter-spacing: 0; }
@@ -461,7 +457,7 @@
     <p class="tagline">Machine learning visualization framework</p>
     <p class="lede">A native app for interpretability. Observe models from the GPU in real time.</p>
     <div class="actions">
-      <a class="btn btn-primary cut" href="docs/">Documentation</a>
+      <a class="btn btn-ghost" href="docs/">Documentation</a>
       <a class="btn btn-ghost" href="#build">Build from source</a>
       <a class="btn btn-ghost" href="https://github.com/AhmedKhan-GH/caliper">View source <span class="arrow">↗</span></a>
     </div>
@@ -2328,7 +2324,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section class="closing">
     <div class="wrap">
       <h2>Documentation</h2>
-      <a class="btn btn-primary cut" href="docs/">Open documentation</a>
+      <a class="btn btn-ghost" href="docs/">Open documentation</a>
     </div>
   </section>
 </main>
