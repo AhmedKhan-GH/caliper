@@ -191,7 +191,7 @@ NVIDIA = {
     "memory": [
         ("TENSOR", "torch's CUDA memory, f32", "raw", [(0.3, 4.6, 0, 1, "blend"), (10.9, 20.0, 1, 2, "blend")]),
         ("BACK IMAGE", "unsampled kernel write", "cmap", [(4.6, 5.05, 0, 1, "wipe")]),
-        ("FRONT IMAGE", "swapped in; ImGui samples it", "cmap", [(5.05, 5.05, 0, 1, "swap")]),
+        ("FRONT IMAGE", "swap for ImGui sampling", "cmap", [(5.05, 5.05, 0, 1, "swap")]),
         ("ON SCREEN", "swapchain: texture, surface, histogram", "screen", [(VSYNC, VSYNC, 0, 1, "swap")]),
     ],
     "links": [(0, 1, "kernel", 4.6, 5.05), (1, 2, "swap", 5.05, 5.25), (2, 3, "draw", 6.45, 7.6)],
