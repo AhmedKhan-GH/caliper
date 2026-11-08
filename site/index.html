@@ -266,7 +266,7 @@
   pre.dev-code .row { padding-right: 8px; }
   pre.dev-code .step { background: rgba(179, 139, 89, .13); box-shadow: inset 2px 0 var(--bronze); }
   pre.dev-code .step-n { display: inline-block; width: 2.4em; }
-  pre.dev-code .step-n:not(:empty), .dev-steps .step-n, .dev-shot .mark { display: inline-grid; place-items: center; border-radius: 50%; background: var(--bronze); color: #181715; font: 600 10.5px/1 var(--mono); }
+  pre.dev-code .step-n:not(:empty), .dev-steps .step-n { display: inline-grid; place-items: center; border-radius: 50%; background: var(--bronze); color: #181715; font: 600 10.5px/1 var(--mono); }
   pre.dev-code .step-n:not(:empty) { width: 17px; height: 17px; margin: 0 calc(2.4em - 17px) 0 0; vertical-align: 1px; }
   .dev-steps { list-style: none; margin: 20px 0 0; padding: 0; display: grid; gap: 16px; }
   .dev-steps .step-n { width: 24px; height: 24px; font-size: 12px; margin-top: 1px; }
@@ -275,7 +275,6 @@
   .dev-steps code { font: 13px/1.4 var(--mono); color: var(--bronze); overflow-wrap: anywhere; }
   .dev-shot { position: relative; margin: 36px 0 0; max-width: 1100px; }
   .dev-shot .shot { position: relative; }
-  .dev-shot .mark { position: absolute; width: 28px; height: 28px; font-size: 13px; transform: translate(-50%, -50%); box-shadow: 0 0 0 3px rgba(18, 17, 15, .85); }
   .dev-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--rule-faint); border-radius: 6px; }
   .dev-shot figcaption { margin-top: 10px; color: var(--faint); font-size: 14px; }
   @media (max-width: 1000px) { .dev-flow { grid-template-columns: minmax(0, 1fr); } }
@@ -1692,11 +1691,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <figure class="dev-shot">
         <div class="shot">
           <img src="assets/sine-scope.jpg?v=2" width="2400" height="1553" loading="lazy" alt="SineScope running in Caliper on an Apple M5 Max: training at 59 percent, the model&#x27;s curve running through noisy samples of sin(x), the loss falling, and the first layer&#x27;s weights as a red and blue heatmap.">
-          <span class="mark" style="left:2.2%;top:94.6%">1</span>
-          <span class="mark" style="left:63.4%;top:10.8%">2</span>
-          <span class="mark" style="left:11.2%;top:62.6%">5</span>
         </div>
-        <figcaption>SineScope in Caliper, halfway through training. The numbers match the steps above.</figcaption>
+        <figcaption>SineScope in Caliper, halfway through training.</figcaption>
       </figure>
     </div>
   </section>
