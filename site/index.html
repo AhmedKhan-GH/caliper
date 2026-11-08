@@ -192,7 +192,7 @@
   /* The VRAM-path figures: memory as bands, the data path in bronze, the path not taken faint. */
   .mech-fig { margin: 0 0 72px; scroll-margin-top: 90px; }
   .toc { padding: 72px 0 0; }
-  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 28px; border-top: 1px solid var(--rule-faint); }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 28px; border-top: 1px solid var(--rule-faint); }
   .toc ol > li { padding-top: 18px; }
   .toc-n { display: block; font: 12px/1 var(--display); letter-spacing: .24em; color: var(--bronze); }
   .toc-s { display: block; margin-top: 10px; font: 14px/1.35 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); }
@@ -343,6 +343,7 @@
   .sub-minor .kicker { font: 11px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 10px; }
   .sub-minor h4 { font: 17px/1.3 var(--display); letter-spacing: .1em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
   .build-two { margin-top: 26px; }
+  #products .soon-big { margin-top: 34px; }
   .sub-head + .xp { margin-top: 26px; }
   .sub-head .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
   .sub-head h3 { font: 22px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
@@ -500,6 +501,7 @@
       <a href="#sdk">SDK</a>
       <a href="#build">Build</a>
       <a href="#soon">Coming soon</a>
+      <a href="#products">Future Products</a>
       <a href="docs/">Docs</a>
       <a href="https://github.com/AhmedKhan-GH/caliper">GitHub ↗</a>
     </div>
@@ -517,6 +519,9 @@
         <stop offset=".5" stop-color="#e8e0d0" stop-opacity=".092"/>
         <stop offset="1" stop-color="#e8e0d0" stop-opacity=".055"/>
       </linearGradient>
+      <linearGradient id="horizon" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1600" y2="0">
+        <stop offset="0" stop-color="#6a655a" stop-opacity=".55"/><stop offset=".5" stop-color="#6a655a"/><stop offset="1" stop-color="#6a655a" stop-opacity=".55"/>
+      </linearGradient>
       <filter id="beam-light" filterUnits="userSpaceOnUse" x="-60" y="-40" width="1720" height="1000" color-interpolation-filters="sRGB">
         <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="soft"/>
         <feGaussianBlur in="SourceGraphic" stdDeviation="20" result="wide"/>
@@ -532,11 +537,11 @@
       <polygon points="798,840 125,0 255,0 802,840"/>
       <polygon points="798,840 1345,0 1475,0 802,840"/>
     </g>
-    <!-- Construction: the horizon and two arcs about the point, drawn at hairline. -->
-    <g fill="none" stroke="#2c2b28" stroke-width="1">
-      <line x1="0" y1="840.5" x2="1600" y2="840.5"/>
+    <!-- Construction: the horizon and two arcs about the point, in the organisation page's construction stroke. -->
+    <g fill="none" stroke="#6a655a" stroke-width="1.5" vector-effect="non-scaling-stroke">
+      <line x1="0" y1="840.5" x2="1600" y2="840.5" stroke="url(#horizon)"/>
       <path d="M 300 840 A 500 500 0 0 1 1300 840"/>
-      <path d="M 40 840 A 760 760 0 0 1 1560 840" stroke-dasharray="2 6"/>
+      <path d="M 40 840 A 760 760 0 0 1 1560 840" stroke-dasharray="2 6" stroke-opacity=".86"/>
     </g>
   </svg>
   <div class="wrap">
@@ -571,7 +576,9 @@
         <li><span class="toc-n">02</span><a class="toc-s" href="#develop">Development</a>
           <ul><li><a href="#lib">Caliper Lib</a></li><li><a href="#sdk">Caliper SDK</a></li><li><a href="#build">Build from source</a></li></ul></li>
         <li><span class="toc-n">03</span><a class="toc-s" href="#soon">Coming soon</a>
-          <ul><li><a href="#soon-cli">Caliper CLI</a></li><li><a href="#soon-api">Caliper API</a></li><li><a href="#soon-mcp">Caliper MCP</a></li><li><a href="#soon-bench">Caliper Bench</a></li><li><a href="#soon-cloud">Caliper Cloud</a></li><li><a href="#soon-platform">Caliper Platform</a></li></ul></li>
+          <ul><li><a href="#soon-cli">Caliper CLI</a></li><li><a href="#soon-api">Caliper API</a></li><li><a href="#soon-mcp">Caliper MCP</a></li></ul></li>
+        <li><span class="toc-n">04</span><a class="toc-s" href="#products">Future Products</a>
+          <ul><li><a href="#soon-bench">Caliper Bench</a></li><li><a href="#soon-cloud">Caliper Cloud</a></li><li><a href="#soon-platform">Caliper Platform</a></li></ul></li>
       </ol>
     </div>
   </div>
@@ -1837,6 +1844,13 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
           <pre class="code soon-code"><code><span class="row"><span class="c">$</span> claude mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> codex mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> claude</span><span class="row"><span class="p">&gt;</span> Plot the loss of each layer.</span><span class="row">  new("finetune_scope")</span><span class="row">  build("finetune_scope")</span><span class="row">  run("finetune_scope")</span><span class="row">  capture("loss")</span></code></pre>
         </article>
       </div>
+    </div>
+  </section>
+
+  <section id="products">
+    <div class="wrap">
+      <div class="label eyebrow">04 · Future Products</div>
+      <h2>Future Products</h2>
       <div class="soon-grid soon-big">
         <article class="soon-card" id="soon-bench">
           <div class="soon-copy"><h3>Caliper Bench</h3><p>Live measurements and telemetry streaming into Caliper, beside the models trained on them, across the physical sciences and engineering.</p><span class="soon-k">Example</span><p class="soon-ex">A robot arm streams its seven joint angles over ROS&#160;2, 500 times a second. Caliper plots them live beside the angles your control policy predicted, so you see the moment the two diverge.</p></div>
