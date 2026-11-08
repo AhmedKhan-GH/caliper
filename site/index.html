@@ -1878,7 +1878,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <article class="soon-card" id="soon-cloud">
           <div class="soon-copy"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold.</p><span class="soon-k">Example</span><p class="soon-ex">Kimi K3.1 Pro, 2.8 trillion parameters, runs on one of our 8-GPU nodes. You open it in Caliper on your laptop and read its 93 layers in the Trace pane as you would a local model; the node sends back the readings, not the activations.</p></div>
           <div class="soon-fig">
-          <svg class="hw" viewBox="0 0 740 440" role="img" aria-label="Caliper Cloud: Kimi K3.1 Pro, 2.8 trillion parameters with 104 billion active per token, on one HGX B300 node, eight Blackwell Ultra GPUs joined by NVLink at tensor parallel 8, about 195 GB of its 1.56 TB of weights in each GPU's eight 36 GB HBM3e stacks. Memory load of the node's 2.30 TB: weights 1.56 TB, the KV cache of one 1M-token sequence 142 GB (17.7 GB copied on each GPU), 601 GB free. Only the readings, 15 KB per token, go to the Trace pane on your laptop.">
+          <svg class="hw" viewBox="0 0 740 440" role="img" aria-label="Caliper Cloud: Kimi K3.1 Pro, 2.8 trillion parameters with 104 billion active per token, on one HGX B300 node, eight Blackwell Ultra GPUs joined by NVLink at tensor parallel 8, about 195 GB of its 1.56 TB of weights in each GPU's eight 36 GB HBM3e stacks. Memory load of the node's 2.30 TB, weights 1.56 TB, the KV cache of one 1M-token sequence 142 GB (17.7 GB copied on each GPU), 601 GB free. Only the readings, 15 KB per token, go to the Trace pane on your laptop.">
             <defs><marker id="cloud-tipd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
             <text x="0" y="14" class="k" text-anchor="start">KIMI K3.1 PRO</text><text x="740" y="14" class="t11" text-anchor="end">2.8T parameters · 104B active per token · 1.56 TB of weights · 93 layers</text>
             <g transform="translate(0 26)">
@@ -2061,7 +2061,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <text x="734" y="127" class="t11 dim" text-anchor="end">601 GB</text>
             <text x="478" y="152" class="t11" text-anchor="start">each GPU holds 195 GB of weights of 288 GB</text>
             <text x="478" y="176" class="t11 dim" text-anchor="start">the 69 KDA layers also hold a state per sequence,</text>
-            <text x="478" y="190" class="t11 dim" text-anchor="start">108.5M values in a precision not published</text>
+            <text x="478" y="191" class="t11 dim" text-anchor="start">108.5M values in a precision not published</text>
             <text x="478" y="218" class="k" text-anchor="start">YOUR LAPTOP</text>
             <rect x="478" y="226" width="256" height="172" rx="6" class="blk"/>
             <rect x="486" y="234" width="240" height="156" rx="2" class="cl-screen"/>
@@ -2097,7 +2097,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <text x="192" y="318" class="t11 dim" text-anchor="start">free HBM</text>
             <rect x="260" y="308" width="11" height="11" rx="1" class="die"/>
             <text x="277" y="318" class="t11 dim" text-anchor="start">GPU die, two per package</text>
-            <text x="0" y="344" class="t11 dim" text-anchor="start">1.56 TB of weights, MXFP4 routed experts and everything else bf16;</text>
+            <text x="0" y="344" class="t11 dim" text-anchor="start">1.56 TB of weights, MXFP4 routed experts and everything else bf16,</text>
             <text x="0" y="360" class="t11 dim" text-anchor="start">split eight ways by tensor parallelism.</text>
             <text x="0" y="380" class="t11 dim" text-anchor="start">Each B300 has 288 GB of HBM3e in eight 12-Hi stacks of 36 GB.</text>
             <text x="0" y="396" class="t11 dim" text-anchor="start">Readings are 15 KB per token in binary, 25.8 KB as today's JSON.</text>
