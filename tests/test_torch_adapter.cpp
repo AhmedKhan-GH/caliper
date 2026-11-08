@@ -32,7 +32,8 @@ static bool cuda_ok() {
 
 // Mirrors the adapter's guard (adapters/torch.hpp): the CUDA cases drive the
 // handoff from a non-default pool stream, which needs the c10 stream API.
-#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
+    __has_include(<cuda_runtime_api.h>)
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #endif
@@ -189,7 +190,7 @@ TEST_CASE("stream_to_tensor: cuda tensor carries the producer stream when honore
 #if defined(__APPLE__)
     // Unreachable: Apple torch never reports CUDA. The early return above
     // keeps this TU compiling without the c10 CUDA headers.
-#elif !__has_include(<c10/cuda/CUDAStream.h>)
+#elif !(__has_include(<c10/cuda/CUDAStream.h>) && __has_include(<cuda_runtime_api.h>))
     // The finding-1 tripwire must fire LOUDLY, never skip: if this header
     // vanished from the include path, the adapter's guard compiled its CUDA
     // branch out too — the drain is silently back and the speedup fictional.
@@ -292,7 +293,7 @@ TEST_CASE("synced_to_tensor: drain survives a concurrently-encoding training thr
 TEST_CASE("exportable pool: allocations are pool-backed, registry-resolvable, "
           "and export a shareable handle" * doctest::skip(!torch::cuda::is_available())) {
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
-    __has_include(<c10/cuda/CUDACachingAllocator.h>)
+    __has_include(<c10/cuda/CUDACachingAllocator.h>) && __has_include(<cuda_runtime_api.h>)
     caliper::adapters::ExportablePool pool(0);
     REQUIRE_MESSAGE(pool.ok(), "cuMemCreate-backed pool failed on a CUDA machine "
                                "— VMM or export unsupported by this driver?");
@@ -352,7 +353,8 @@ TEST_CASE("mps exportable pool: storage_ref extracts (buffer, size, offset) "
 
 TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training thread") {
     if (!cuda_ok()) CALIPER_SKIP_NO_CUDA();
-#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
+    __has_include(<cuda_runtime_api.h>)
     // CUDA twin of the MPS stress case above (docs/m2a-windows-verification.md
     // T4, finding 2). On MPS the equivalent race SIGABRTed within a few hundred
     // handoffs because torch's public stream calls are not internally

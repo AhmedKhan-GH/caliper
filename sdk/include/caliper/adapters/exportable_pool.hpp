@@ -46,7 +46,7 @@
 // whole interior is compiled out here; the fallback class below keeps applet
 // code that mentions ExportablePool compiling on every platform.
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
-    __has_include(<c10/cuda/CUDACachingAllocator.h>)
+    __has_include(<c10/cuda/CUDACachingAllocator.h>) && __has_include(<cuda_runtime_api.h>)
 #define CALIPER_EXPORTABLE_POOL_CUDA 1
 #else
 #define CALIPER_EXPORTABLE_POOL_CUDA 0

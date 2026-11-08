@@ -11,6 +11,8 @@
 #include "feed_store.h"
 
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <set>
 #include <string>
 #include <thread>
@@ -62,13 +64,24 @@ TEST_CASE("feed provider: start registers the guaranteed tier, caps LIVE") {
     uint32_t caps = store.caps();
     uint32_t count = store.channel_count();
     CHECK(caps == CALIPER_FEED_CAP_LIVE);   // >=1 channel => LIVE
-    CHECK(count >= kGuaranteedCount);
 
+    // A Mac without GPU performance counters (a hosted CI runner is a VM) has
+    // no sys.gpu.util: a missing device, not a provider bug. It is required
+    // only where a GPU must be present (CALIPER_REQUIRE_GPU=1, as in gpu_skip.h).
+    const char* rg = std::getenv("CALIPER_REQUIRE_GPU");
+    const bool require_gpu = rg && std::strcmp(rg, "1") == 0;
     std::set<std::string> ids = channel_ids(store);
+    uint32_t required = 0;
     for (const char* id : kGuaranteed) {
         bool present = ids.count(id) != 0;
+        if (!present && std::strcmp(id, "sys.gpu.util") == 0 && !require_gpu) {
+            MESSAGE("no GPU utilisation counters here; sys.gpu.util not required");
+            continue;
+        }
+        ++required;
         CHECK(present);
     }
+    CHECK(count >= required);
 
     caliper_host::feed_provider_stop();   // BEFORE `store` dies (it writes into it)
 }
