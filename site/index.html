@@ -230,12 +230,32 @@
   .dev-item img.mark { background: none; width: 26px; height: 26px; }
   @media (max-width: 600px) { .dev-row { grid-template-columns: 1fr; gap: 8px; } }
   .dev-snippet { margin-top: 20px; }
+  .dev-flow { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 32px; align-items: start; }
+  .dev-flow .dev-snippet { margin: 20px 0 0; }
+  pre.dev-code .row { padding-right: 8px; }
+  pre.dev-code .step { background: rgba(179, 139, 89, .13); box-shadow: inset 2px 0 var(--bronze); }
+  pre.dev-code .step-n { display: inline-block; width: 2.4em; }
+  pre.dev-code .step-n:not(:empty), .dev-steps .step-n, .dev-shot .mark { display: inline-grid; place-items: center; border-radius: 50%; background: var(--bronze); color: #181715; font: 600 10.5px/1 var(--mono); }
+  pre.dev-code .step-n:not(:empty) { width: 17px; height: 17px; margin: 0 calc(2.4em - 17px) 0 0; vertical-align: 1px; }
+  .dev-steps { list-style: none; margin: 20px 0 0; padding: 0; display: grid; gap: 16px; }
+  .dev-steps .step-n { width: 24px; height: 24px; font-size: 12px; margin-top: 1px; }
+  .dev-steps li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; align-items: start; color: var(--secondary); font-size: 15.5px; line-height: 1.55; }
+  .dev-steps b { color: var(--parchment); font-weight: 600; }
+  .dev-steps code { font: 13px/1.4 var(--mono); color: var(--bronze); overflow-wrap: anywhere; }
+  .dev-shot { position: relative; margin: 36px 0 0; max-width: 1100px; }
+  .dev-shot .shot { position: relative; }
+  .dev-shot .mark { position: absolute; width: 28px; height: 28px; font-size: 13px; transform: translate(-50%, -50%); box-shadow: 0 0 0 3px rgba(18, 17, 15, .85); }
+  .dev-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--rule-faint); border-radius: 6px; }
+  .dev-shot figcaption { margin-top: 10px; color: var(--faint); font-size: 14px; }
+  @media (max-width: 1000px) { .dev-flow { grid-template-columns: minmax(0, 1fr); } }
   .xp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; margin-top: 8px; }
   .xp-k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
   .xp-api { display: grid; grid-template-columns: max-content 1fr; margin: 0; border-top: 1px solid var(--rule-faint); }
   .xp-api dt, .xp-api dd { margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule-faint); }
   .xp-api dt { font: 13.5px/1.5 var(--mono); color: var(--parchment); padding-right: 28px; }
   .xp-api dd { font: 13.5px/1.5 var(--mono); color: var(--secondary); }
+  .xp-api dt a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
+  .xp-api dt a:hover { color: var(--bronze-hover); border-color: currentColor; }
   .xp-table { border-top: 1px solid var(--rule-faint); }
   .xp-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 9px 0;
             border-bottom: 1px solid var(--rule-faint); font-size: 14.5px; color: var(--secondary); }
@@ -1654,32 +1674,19 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
     <div class="wrap">
       <div class="label eyebrow">03 · Development</div>
       <h2>Development</h2>
-      <div class="dev-stack">
-        <div class="dev-row"><span class="k">Platforms</span><div class="dev-items">
-          <span class="dev-item"><img src="assets/libs/apple.png" alt="">Metal · macOS</span>
-          <span class="dev-item"><img src="assets/libs/khronosgroup.png" alt=""><img src="assets/libs/nvidia.png" alt="">Vulkan + CUDA · Windows</span>
-          <span class="dev-item">OpenGL 3.3 · fallback</span>
-        </div></div>
-        <div class="dev-row"><span class="k">Graphics</span><div class="dev-items">
-          <span class="dev-item"><img src="assets/libs/ocornut.png" alt="">Dear ImGui</span>
-          <span class="dev-item"><img src="assets/libs/epezent.png" alt="">ImPlot</span>
-          <span class="dev-item"><img src="assets/libs/brenocq.png" alt="">ImPlot3D</span>
-          <span class="dev-item"><img class="mark" src="assets/caliper-icon.svg?v=2" alt="">Caliper geometry · points, lines, meshes, instancing</span>
-        </div></div>
-      </div>
       <div class="xp">
         <div class="xp-block">
           <div class="xp-k">Interfaces</div>
           <dl class="xp-api">
-            <dt>caliper::Applet</dt><dd>on_init(Host&amp;) &middot; on_frame(const Frame&amp;) &middot; on_cleanup()</dd>
-            <dt>caliper::Device</dt><dd>query(host) &rarr; METAL, CUDA or CPU</dd>
-            <dt>caliper::Bridge</dt><dd>texture_from_tensor_mapped &middot; update_texture &middot; import_allocation &middot; imtex</dd>
-            <dt>caliper::Geometry</dt><dd>create_view &middot; draw_primitives: points, lines, meshes, instancing</dd>
-            <dt>caliper::Jobs</dt><dd>submit &middot; request_cancel &middot; progress_of</dd>
-            <dt>caliper::Metrics</dt><dd>begin_run &middot; scalar &middot; hparams_json &middot; end_run</dd>
-            <dt>caliper::Data</dt><dd>query (SQL to Arrow) &middot; register_dataset &middot; open_dataset</dd>
-            <dt>caliper::Artifacts</dt><dd>put &middot; path_of &middot; exists</dd>
-            <dt>caliper::Export</dt><dd>view_png &middot; begin_sequence &middot; end_sequence</dd>
+            <dt><a href="docs/reference/sugar/">caliper::Applet</a></dt><dd>on_init(Host&amp;) &middot; on_frame(const Frame&amp;) &middot; on_cleanup()</dd>
+            <dt><a href="docs/reference/services/device-v1/">caliper::Device</a></dt><dd>query(host) &rarr; METAL, CUDA or CPU</dd>
+            <dt><a href="docs/reference/services/tensor-bridge-v1/">caliper::Bridge</a></dt><dd>texture_from_tensor_mapped &middot; update_texture &middot; import_allocation &middot; imtex</dd>
+            <dt><a href="docs/reference/services/geometry-v1/">caliper::Geometry</a></dt><dd>create_view &middot; draw_primitives: points, lines, meshes, instancing</dd>
+            <dt><a href="docs/reference/services/jobs-v1/">caliper::Jobs</a></dt><dd>submit &middot; request_cancel &middot; progress_of</dd>
+            <dt><a href="docs/reference/services/metrics-v1/">caliper::Metrics</a></dt><dd>begin_run &middot; scalar &middot; hparams_json &middot; end_run</dd>
+            <dt><a href="docs/reference/services/data-v1/">caliper::Data</a></dt><dd>query (SQL to Arrow) &middot; register_dataset &middot; open_dataset</dd>
+            <dt><a href="docs/reference/services/artifacts-v1/">caliper::Artifacts</a></dt><dd>put &middot; path_of &middot; exists</dd>
+            <dt><a href="docs/reference/services/export-v1/">caliper::Export</a></dt><dd>view_png &middot; begin_sequence &middot; end_sequence</dd>
           </dl>
         </div>
         <div class="xp-block">
@@ -1695,33 +1702,25 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
           </div>
         </div>
       </div>
-      <div class="snippet dev-snippet"><div class="snippet-head"><span>examples/sine_scope/sine_scope.cpp</span><a href="https://github.com/AhmedKhan-GH/caliper/blob/main/examples/sine_scope/sine_scope.cpp">source</a></div><pre class="code"><code><span class="c">// device.v1 -&gt; torch device: METAL means MPS on Apple, CUDA on Windows/Linux.</span>
-auto d = <span class="p">caliper::Device::query</span>(*st-&gt;host);
-torch::Device dev =
-    (d.kind == CALIPER_DEV_CUDA &amp;&amp; torch::cuda::is_available())
-        ? torch::Device(<span class="p">torch::kCUDA</span>)
-    : (d.kind == CALIPER_DEV_METAL) ? torch::Device(<span class="p">torch::kMPS</span>)
-                                    : torch::Device(<span class="p">torch::kCPU</span>);
-
-<span class="c">// … training on dev; then, on the frame thread:</span>
-
-<span class="c">// The weight matrix as pixels — gen-gated rebuild, frame thread only.</span>
-if (st-&gt;bridge &amp;&amp; gen != 0 &amp;&amp; gen != st-&gt;tex_gen &amp;&amp;
-    disp_w.defined()) {
-    if (st-&gt;w_tex) st-&gt;bridge.<span class="p">release_texture</span>(st-&gt;w_tex);
-    auto ct = <span class="p">caliper::adapters::to_tensor</span>(disp_w);
-    st-&gt;w_tex = ct ? st-&gt;bridge.<span class="p">texture_from_tensor_mapped</span>(
-                         &amp;*ct, CALIPER_CMAP_RDBU, -w_max, w_max)
-                   : 0;
-    st-&gt;tex_gen = gen;
-}
-if (st-&gt;w_tex) {
-    ImGui::TextDisabled(&quot;fc1 weights (32x1 as 8x4 blocks, RdBu)&quot;);
-    <span class="p">ImGui::Image</span>(<span class="p">caliper::Bridge::imtex</span>(st-&gt;w_tex), ImVec2(128, 256));
-} else {
-    ImGui::TextDisabled(
-        &quot;tensor_bridge.v1 absent (ok) — no weight heatmap&quot;);
-}</code></pre></div>
+      <div class="dev-flow">
+      <div class="snippet dev-snippet"><div class="snippet-head"><span>examples/sine_scope/sine_scope.cpp</span><a href="https://github.com/AhmedKhan-GH/caliper/blob/main/examples/sine_scope/sine_scope.cpp">source</a></div><pre class="code dev-code"><code><span class="row step s1"><span class="step-n">1</span><span class="c">// device.v1 -&gt; torch device: METAL means MPS on Apple, CUDA on Windows/Linux.</span></span><span class="row step s1"><span class="step-n"></span>auto d = <span class="p">caliper::Device::query</span>(*st-&gt;host);</span><span class="row step s1"><span class="step-n"></span>torch::Device dev =</span><span class="row step s1"><span class="step-n"></span>    (d.kind == CALIPER_DEV_CUDA &amp;&amp; torch::cuda::is_available())</span><span class="row step s1"><span class="step-n"></span>        ? torch::Device(<span class="p">torch::kCUDA</span>)</span><span class="row step s1"><span class="step-n"></span>    : (d.kind == CALIPER_DEV_METAL) ? torch::Device(<span class="p">torch::kMPS</span>)</span><span class="row step s1"><span class="step-n"></span>                                    : torch::Device(<span class="p">torch::kCPU</span>);</span><span class="row"><span class="step-n"></span> </span><span class="row step s2"><span class="step-n">2</span><span class="c">// … training on dev; then, on the frame thread:</span></span><span class="row"><span class="step-n"></span> </span><span class="row"><span class="step-n"></span><span class="c">// The weight matrix as pixels — gen-gated rebuild, frame thread only.</span></span><span class="row"><span class="step-n"></span>if (st-&gt;bridge &amp;&amp; gen != 0 &amp;&amp; gen != st-&gt;tex_gen &amp;&amp;</span><span class="row"><span class="step-n"></span>    disp_w.defined()) {</span><span class="row"><span class="step-n"></span>    if (st-&gt;w_tex) st-&gt;bridge.<span class="p">release_texture</span>(st-&gt;w_tex);</span><span class="row step s3"><span class="step-n">3</span>    auto ct = <span class="p">caliper::adapters::to_tensor</span>(disp_w);</span><span class="row step s4"><span class="step-n">4</span>    st-&gt;w_tex = ct ? st-&gt;bridge.<span class="p">texture_from_tensor_mapped</span>(</span><span class="row step s4"><span class="step-n"></span>                         &amp;*ct, CALIPER_CMAP_RDBU, -w_max, w_max)</span><span class="row step s4"><span class="step-n"></span>                   : 0;</span><span class="row"><span class="step-n"></span>    st-&gt;tex_gen = gen;</span><span class="row"><span class="step-n"></span>}</span><span class="row"><span class="step-n"></span>if (st-&gt;w_tex) {</span><span class="row"><span class="step-n"></span>    ImGui::TextDisabled(&quot;fc1 weights (32x1 as 8x4 blocks, RdBu)&quot;);</span><span class="row step s5"><span class="step-n">5</span>    <span class="p">ImGui::Image</span>(<span class="p">caliper::Bridge::imtex</span>(st-&gt;w_tex), ImVec2(128, 256));</span><span class="row"><span class="step-n"></span>} else if (!st-&gt;bridge) {</span><span class="row"><span class="step-n"></span>    ImGui::TextDisabled(&quot;tensor_bridge.v1 absent: no weight heatmap&quot;);</span><span class="row"><span class="step-n"></span>} else {</span><span class="row"><span class="step-n"></span>    ImGui::TextDisabled(&quot;fc1 weights appear once training starts&quot;);</span><span class="row"><span class="step-n"></span>}</span></code></pre></div>
+      <ol class="dev-steps">
+        <li><span class="step-n">1</span><div><b>Pick the GPU.</b> <code>caliper::Device::query</code> reports Metal or CUDA, and the applet trains on the matching torch device: <code>torch::kMPS</code> on macOS, <code>torch::kCUDA</code> on Windows.</div></li>
+        <li><span class="step-n">2</span><div><b>Train.</b> Ordinary libtorch on that device: a small network fitted to 256 noisy samples of sin(x), run as a background job whose progress shows in the app.</div></li>
+        <li><span class="step-n">3</span><div><b>Describe the tensor.</b> <code>caliper::adapters::to_tensor</code> wraps the weight tensor&#x27;s GPU memory as a <code>CaliperTensor</code>. Nothing is copied.</div></li>
+        <li><span class="step-n">4</span><div><b>Make a texture.</b> <code>texture_from_tensor_mapped</code> colormaps the tensor on the GPU (RdBu, −w_max to w_max).</div></li>
+        <li><span class="step-n">5</span><div><b>Draw it.</b> <code>ImGui::Image</code> with <code>Bridge::imtex</code> puts the texture in the applet&#x27;s panel: the heatmap below.</div></li>
+      </ol>
+      </div>
+      <figure class="dev-shot">
+        <div class="shot">
+          <img src="assets/sine-scope.jpg?v=2" width="2400" height="1553" loading="lazy" alt="SineScope running in Caliper on an Apple M5 Max: training at 59 percent, the model&#x27;s curve running through noisy samples of sin(x), the loss falling, and the first layer&#x27;s weights as a red and blue heatmap.">
+          <span class="mark" style="left:2.2%;top:94.6%">1</span>
+          <span class="mark" style="left:63.4%;top:10.8%">2</span>
+          <span class="mark" style="left:11.2%;top:62.6%">5</span>
+        </div>
+        <figcaption>SineScope in Caliper, halfway through training. The numbers match the steps above.</figcaption>
+      </figure>
     </div>
   </section>
 

@@ -51,6 +51,7 @@ struct SineState {
     std::mutex mtx;
     std::vector<float> loss_hist;
     std::vector<float> pred_ys;   // model(x) on the fixed 256-point grid
+    std::vector<float> data_xs, data_ys;  // the noisy training samples
     torch::Tensor      disp_w;    // weight display tensor (handle swap)
     float              w_max = 1e-6f;
     uint64_t           gen = 0;   // bumped per publish (0 = none yet)
@@ -100,11 +101,21 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         : (d.kind == CALIPER_DEV_METAL) ? torch::Device(torch::kMPS)
                                         : torch::Device(torch::kCPU);
 
-    // Synthetic dataset: 256 points of y = sin(x) on [-pi, pi].
-    auto X = torch::linspace(-M_PI, M_PI, 256,
-                             torch::TensorOptions().device(dev))
-                 .unsqueeze(1);
-    auto Y = torch::sin(X);
+    // Synthetic dataset: 256 noisy samples of y = sin(x) at random x in
+    // [-pi, pi], drawn once (fixed seed). The model is drawn on an even grid.
+    torch::manual_seed(0);
+    auto X = ((torch::rand({256, 1}) * 2 - 1) * M_PI).to(dev);
+    auto Y = torch::sin(X) + 0.15 * torch::randn({256, 1}).to(dev);
+    auto grid = torch::linspace(-M_PI, M_PI, 256,
+                                torch::TensorOptions().device(dev))
+                    .unsqueeze(1);
+    {
+        auto xc = X.to(torch::kCPU).contiguous();
+        auto yc = Y.to(torch::kCPU).contiguous();
+        std::lock_guard<std::mutex> lk(st->mtx);
+        st->data_xs.assign(xc.data_ptr<float>(), xc.data_ptr<float>() + 256);
+        st->data_ys.assign(yc.data_ptr<float>(), yc.data_ptr<float>() + 256);
+    }
 
     SineNet model;
     model->to(dev);
@@ -117,10 +128,10 @@ void train_job(void* user, const CaliperJobControl* ctl) {
         auto loss = torch::mse_loss(model->forward(X), Y);
         loss.backward();
         opt.step();
-        publish(st, model, X, loss.item<float>());
+        publish(st, model, grid, loss.item<float>());
         ctl->progress(ctl, step / 2000.f, "fitting sin(x)");
     }
-    ctl->progress(ctl, 1.f, "done — the line is a sine");
+    ctl->progress(ctl, 1.f, "done");
 }
 // --8<-- [end:job]
 
@@ -147,7 +158,7 @@ public:
         auto* st = s_.get();
 
         // Copy the latest published state out under the mutex (gen-gated).
-        std::vector<float> loss, pred;
+        std::vector<float> loss, pred, data_xs, data_ys;
         torch::Tensor disp_w; float w_max = 1e-6f;
         uint64_t gen;
         {
@@ -155,6 +166,8 @@ public:
             gen  = st->gen;
             loss = st->loss_hist;
             pred = st->pred_ys;
+            data_xs = st->data_xs;
+            data_ys = st->data_ys;
             if (gen != 0 && gen != st->tex_gen) {
                 disp_w = st->disp_w;          // co-owning handle copy
                 w_max  = st->w_max;
@@ -193,18 +206,22 @@ public:
             ImPlotFlags_NoInputs | ImPlotFlags_NoMenus |
             ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText;
 
-        // The fixed grid + target are frame-side constants.
-        static std::vector<float> xs, target;
+        // The display grid is a frame-side constant.
+        static std::vector<float> xs;
         if (xs.empty()) {
-            xs.resize(256); target.resize(256);
-            for (int i = 0; i < 256; i++) {
+            xs.resize(256);
+            for (int i = 0; i < 256; i++)
                 xs[i] = -3.14159265f + i / 255.0f * 6.2831853f;
-                target[i] = std::sin(xs[i]);
-            }
         }
         if (ImPlot::BeginPlot("fit", {-1, 240}, kLockedPlot)) {
             ImPlot::SetupAxes("x", "y", 0, 0);
-            ImPlot::PlotLine("target sin(x)", xs.data(), target.data(), 256);
+            ImPlot::SetupAxesLimits(-3.3, 3.3, -1.6, 1.6, ImPlotCond_Always);
+            if (!data_xs.empty()) {
+                ImPlot::PlotScatter("data: sin(x) + noise", data_xs.data(),
+                                    data_ys.data(), (int)data_xs.size(),
+                                    {ImPlotProp_Marker, ImPlotMarker_Circle,
+                                     ImPlotProp_MarkerSize, 2.5f});
+            }
             if (!pred.empty())
                 ImPlot::PlotLine("model(x)", xs.data(), pred.data(), 256);
             ImPlot::EndPlot();
@@ -234,9 +251,10 @@ public:
         if (st->w_tex) {
             ImGui::TextDisabled("fc1 weights (32x1 as 8x4 blocks, RdBu)");
             ImGui::Image(caliper::Bridge::imtex(st->w_tex), ImVec2(128, 256));
+        } else if (!st->bridge) {
+            ImGui::TextDisabled("tensor_bridge.v1 absent: no weight heatmap");
         } else {
-            ImGui::TextDisabled(
-                "tensor_bridge.v1 absent (ok) — no weight heatmap");
+            ImGui::TextDisabled("fc1 weights appear once training starts");
         }
         // --8<-- [end:bridge]
 
