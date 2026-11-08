@@ -87,6 +87,53 @@
   .hw .pred { fill: none; stroke: #3ca99c; stroke-width: 1.3; stroke-dasharray: 3 2; }
   .hw .divband { fill: rgba(179, 139, 89, .18); }
   .hw .divline { stroke: var(--bronze); stroke-width: 1; }
+  /* soon-parts */
+#bench-fig .flow-bar { top: 0; right: 0; }
+  .hw .bn-case { fill: #2a2925; stroke: var(--parchment); stroke-width: 1.3; stroke-linejoin: round; }
+  .hw .bn-seam { fill: none; stroke: var(--rule); stroke-width: 1; }
+  .hw .bn-ring { fill: var(--faint); }
+  .hw .bn-case.bn-pad { fill: var(--rule); stroke: none; }
+  .hw .bn-ghost.bn-pad { display: none; }
+  .hw .bn-joint { fill: rgba(179, 139, 89, .3); stroke: var(--bronze); stroke-width: 1.4; }
+  .hw .bn-joint.bn-hub { fill: none; stroke-width: 1; }
+  .hw .bn-ghost { fill: none; stroke: #3ca99c; stroke-width: 1.3; stroke-dasharray: 4 3; stroke-linejoin: round; }
+  .hw .bn-ghost.bn-hub { stroke-dasharray: none; stroke-width: 1; }
+  .hw .bn-table { stroke: var(--rule); stroke-width: 1.2; }
+  .hw .bn-meas { fill: none; stroke: var(--parchment); stroke-width: 1.4; stroke-linejoin: round; }
+  .hw .bn-pred { fill: none; stroke: #3ca99c; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .hw .bn-grid { stroke: var(--rule-faint); stroke-width: 1; }
+  .hw .bn-band { fill: rgba(179, 139, 89, .16); }
+  .hw .bn-cursor { stroke: var(--bronze); stroke-width: 1.2; }
+  .hw .mono.bn-hot { fill: var(--bronze); }
+  #bench-lag { transition: opacity .3s; }
+.hw .cl-off { fill: none; stroke: var(--faint); stroke-dasharray: 2 2; }
+  .hw .cl-switch { fill: #2e2d29; stroke: var(--rule); }
+  .hw .cl-track { fill: var(--deep); stroke: var(--rule-faint); }
+  .hw .cl-stay { fill: #3ca99c; }
+  .hw .cl-cross { fill: var(--bronze-hover); }
+  .hw .cl-screen { fill: var(--deep); stroke: var(--rule); }
+  .hw .cl-base { fill: var(--plate); stroke: var(--rule); }
+  .hw .cl-wire { fill: none; stroke: var(--bronze); stroke-width: 1.8; }
+.hw .pf-cmd { font-family: var(--mono); font-size: 12.5px; fill: var(--bronze); }
+  .hw .pf-val { font-family: var(--text); font-size: 11.5px; fill: var(--secondary); }
+  .hw .pf-val.hot { fill: var(--bronze); }
+  .hw .pf-note { font-family: var(--text); font-size: 11.5px; fill: var(--faint); }
+  .hw .pf-note.hot { fill: var(--bronze); }
+  .hw .pf-code { font-family: var(--mono); font-size: 11px; fill: var(--secondary); }
+  .hw .pf-plus { fill: var(--bronze); }
+  .hw .pf-path { font-family: var(--mono); font-size: 11px; fill: var(--parchment); }
+  .hw .pf-path.old { fill: var(--faint); }
+  .hw .pf-path.add { fill: var(--bronze); }
+  .hw .pf-tree { fill: none; stroke: var(--rule); stroke-width: 1; }
+  .hw .pf-swatch { fill: var(--bronze); }
+  .hw .pf-step { font-family: var(--mono); font-size: 11px; fill: var(--bronze); }
+  .hw .pf-win { fill: #151412; stroke: var(--rule); }
+  .hw .pf-bar { fill: #29271f; stroke: var(--rule); }
+  .hw .pf-tri { fill: var(--secondary); }
+  .hw .pf-plot { fill: #1a1916; stroke: var(--rule-faint); }
+  .hw .pf-h1 { fill: #2a241c; } .hw .pf-h2 { fill: #3f3223; } .hw .pf-h3 { fill: #5c4630; }
+  .hw .pf-h4 { fill: #87653f; } .hw .pf-h5 { fill: #b38b59; } .hw .pf-h6 { fill: #e3cfa6; }
+  /* /soon-parts */
   .btn-ghost { color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; }
   .btn-ghost:hover { background: var(--plate-hover); border-color: var(--faint); }
   .arrow { font-family: var(--text); letter-spacing: 0; }
@@ -1865,231 +1912,608 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <article class="soon-card">
           <div class="soon-copy"><h3>Caliper Bench</h3><p>Live measurements and telemetry streaming into Caliper, beside the models trained on them, across the physical sciences and engineering.</p><span class="soon-k">Example</span><p class="soon-ex">A robot arm streams its seven joint angles over ROS&#160;2, 500 times a second. Caliper plots them live beside the angles your control policy predicted, so you see the moment the two diverge.</p></div>
           <div class="soon-fig">
-          <svg class="hw" viewBox="-1 -1 742 406" role="img" aria-label="Caliper Bench, illustrative data: a 7-joint arm's encoders publish /joint_states and its controller, running policy.pt, publishes /policy/joint_targets over ROS 2 at 500 Hz; Caliper's Bench source subscribes to both and aligns them by time; the views plot measured and predicted angles for joints 1 to 7 and mark where joint 4 diverges; policy.pt opens at that moment">
-            <defs><marker id="t-bench" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="td-bench" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-            <text x="0" y="14" class="k" text-anchor="start">ROBOT CELL</text>
-            <text x="226" y="14" class="k" text-anchor="start">ROS 2</text>
-            <text x="466" y="14" class="k" text-anchor="start">CALIPER</text>
-            <rect x="0" y="24" width="200" height="372" rx="10" class="pkg"/>
-            <rect x="226" y="24" width="214" height="372" rx="10" class="pkg"/>
-            <rect x="466" y="24" width="274" height="372" rx="10" class="pkg"/>
-            <rect x="14" y="40" width="172" height="170" rx="4" class="blk"/>
-            <text x="26" y="60" class="mono small" text-anchor="start">7-joint arm</text>
-            <text x="26" y="77" class="t11 dim" text-anchor="start">an encoder on each joint</text>
-            <rect x="40" y="186" width="48" height="10" rx="2" class="blk"/>
-            <polyline class="link" points="64,186 64,160 86,140 112,132 134,116 152,108 166,117"/>
-            <path class="link" d="M 166 117 L 174 128 M 166 117 L 158 129" style="stroke-width:2"/>
-            <circle cx="64" cy="186" r="4.5" class="joint"/>
-            <circle cx="64" cy="160" r="4.5" class="joint"/>
-            <circle cx="86" cy="140" r="4.5" class="joint"/>
-            <circle cx="112" cy="132" r="4.5" class="joint hot"/>
-            <circle cx="134" cy="116" r="4.5" class="joint"/>
-            <circle cx="152" cy="108" r="4.5" class="joint"/>
-            <circle cx="166" cy="117" r="4.5" class="joint"/>
-            <text x="112" y="152" class="t11 hot" text-anchor="middle">4</text>
-            <rect x="14" y="250" width="172" height="72" rx="4" class="blk"/>
-            <text x="26" y="272" class="mono small" text-anchor="start">controller</text>
-            <text x="26" y="290" class="t11 dim" text-anchor="start">runs policy.pt at 500 Hz</text>
-            <text x="26" y="306" class="t11 dim" text-anchor="start">drives the motors</text>
-            <path d="M 60 210 L 60 248" class="arrow" marker-end="url(#t-bench)"/>
-            <text x="54" y="234" class="lbl" text-anchor="end">angles</text>
-            <path d="M 150 248 L 150 212" class="arrow" marker-end="url(#t-bench)"/>
-            <text x="142" y="234" class="lbl" text-anchor="end">commands</text>
-            <rect x="240" y="40" width="186" height="64" rx="4" class="blk"/>
-            <text x="252" y="60" class="m11" text-anchor="start">/joint_states</text>
-            <text x="252" y="77" class="t11 dim" text-anchor="start">measured angles, 7 joints</text>
-            <text x="252" y="93" class="t11 dim" text-anchor="start">500 Hz</text>
-            <rect x="240" y="250" width="186" height="72" rx="4" class="blk"/>
-            <text x="252" y="272" class="m11" text-anchor="start">/policy/joint_targets</text>
-            <text x="252" y="290" class="t11 dim" text-anchor="start">predicted angles, 7 joints</text>
-            <text x="252" y="306" class="t11 dim" text-anchor="start">500 Hz</text>
-            <text x="240" y="384" class="t11 dim" text-anchor="start">DDS on the lab network</text>
-            <path d="M 186 66 L 238 66" class="arrow data" marker-end="url(#td-bench)"/>
-            <path d="M 186 286 L 238 286" class="arrow data" marker-end="url(#td-bench)"/>
-            <rect x="480" y="40" width="246" height="52" rx="4" class="blk"/>
-            <text x="492" y="60" class="mono small" text-anchor="start">Bench source</text>
-            <text x="492" y="78" class="t11 dim" text-anchor="start">subscribes to both, aligns them by time</text>
-            <path d="M 426 66 L 478 66" class="arrow data" marker-end="url(#td-bench)"/>
-            <path d="M 426 286 L 452 286 L 452 84 L 478 84" class="arrow data" marker-end="url(#td-bench)"/>
-            <rect x="480" y="108" width="246" height="208" rx="4" class="blk hot"/>
-            <text x="492" y="126" class="t11" text-anchor="start">joints 1 to 7</text>
-            <path class="meas" d="M 492 138 L 508 138"/>
-            <text x="512" y="142" class="t11 dim" text-anchor="start">measured</text>
-            <path class="pred" d="M 572 138 L 588 138"/>
-            <text x="592" y="142" class="t11 dim" text-anchor="start">predicted</text>
-            <path d="M 603 92 L 603 106" class="arrow data" marker-end="url(#td-bench)"/>
-            <text x="492" y="164" class="m11 dim" text-anchor="start">j1</text>
-            <polyline class="meas" points="512.0,160.0 515.4,159.1 518.8,158.3 522.2,157.5 525.6,157.0 529.0,156.5 532.4,156.2 535.8,155.9 539.2,155.6 542.6,155.2 546.0,154.8 549.4,154.4 552.8,153.9 556.2,153.4 559.6,152.9 563.0,152.6 566.4,152.5 569.8,152.6 573.2,152.8 576.6,153.1 580.0,153.5 583.4,154.0 586.8,154.4 590.2,154.7 593.6,154.9 597.0,155.2 600.4,155.4 603.8,155.7 607.2,156.2 610.6,156.7 614.0,157.4 617.4,158.3 620.8,159.1 624.2,160.0 627.6,160.9 631.0,161.6 634.4,162.2 637.8,162.7 641.2,163.1 644.6,163.4 648.0,163.7 651.4,164.1 654.8,164.6 658.2,165.2 661.6,165.7 665.0,166.3 668.4,166.8 671.8,167.2 675.2,167.4 678.6,167.4 682.0,167.2 685.4,167.0 688.8,166.7 692.2,166.3 695.6,166.0 699.0,165.8 702.4,165.6 705.8,165.4 709.2,165.2 712.6,165.0 716.0,164.6"/>
-            <polyline class="pred" points="512.0,160.0 515.4,159.3 518.8,158.7 522.2,158.0 525.6,157.4 529.0,156.8 532.4,156.2 535.8,155.7 539.2,155.2 542.6,154.7 546.0,154.3 549.4,154.0 552.8,153.7 556.2,153.4 559.6,153.2 563.0,153.1 566.4,153.0 569.8,153.0 573.2,153.1 576.6,153.2 580.0,153.3 583.4,153.6 586.8,153.9 590.2,154.2 593.6,154.6 597.0,155.1 600.4,155.5 603.8,156.1 607.2,156.6 610.6,157.2 614.0,157.8 617.4,158.5 620.8,159.1 624.2,159.8 627.6,160.4 631.0,161.1 634.4,161.7 637.8,162.4 641.2,163.0 644.6,163.6 648.0,164.1 651.4,164.6 654.8,165.1 658.2,165.5 661.6,165.9 665.0,166.2 668.4,166.5 671.8,166.7 675.2,166.9 678.6,167.0 682.0,167.0 685.4,167.0 688.8,166.9 692.2,166.7 695.6,166.5 699.0,166.2 702.4,165.9 705.8,165.5 709.2,165.1 712.6,164.6 716.0,164.1"/>
-            <text x="492" y="184" class="m11 dim" text-anchor="start">j2</text>
-            <polyline class="meas" points="512.0,174.9 515.4,175.4 518.8,176.0 522.2,176.7 525.6,177.7 529.0,178.7 532.4,179.9 535.8,181.1 539.2,182.2 542.6,183.3 546.0,184.1 549.4,184.8 552.8,185.3 556.2,185.6 559.6,185.9 563.0,186.1 566.4,186.3 569.8,186.5 573.2,186.7 576.6,186.8 580.0,186.8 583.4,186.6 586.8,186.2 590.2,185.6 593.6,184.8 597.0,183.8 600.4,182.7 603.8,181.6 607.2,180.6 610.6,179.6 614.0,178.7 617.4,178.0 620.8,177.3 624.2,176.7 627.6,176.1 631.0,175.4 634.4,174.8 637.8,174.1 641.2,173.5 644.6,173.0 648.0,172.7 651.4,172.5 654.8,172.6 658.2,173.0 661.6,173.6 665.0,174.3 668.4,175.1 671.8,175.9 675.2,176.7 678.6,177.5 682.0,178.2 685.4,178.9 688.8,179.6 692.2,180.4 695.6,181.2 699.0,182.2 702.4,183.2 705.8,184.2 709.2,185.1 712.6,186.0 716.0,186.6"/>
-            <polyline class="pred" points="512.0,174.9 515.4,175.6 518.8,176.4 522.2,177.2 525.6,178.1 529.0,179.0 532.4,180.0 535.8,181.0 539.2,181.9 542.6,182.8 546.0,183.6 549.4,184.4 552.8,185.1 556.2,185.7 559.6,186.2 563.0,186.6 566.4,186.8 569.8,187.0 573.2,187.0 576.6,186.9 580.0,186.6 583.4,186.2 586.8,185.7 590.2,185.2 593.6,184.5 597.0,183.7 600.4,182.8 603.8,182.0 607.2,181.0 610.6,180.1 614.0,179.1 617.4,178.2 620.8,177.3 624.2,176.4 627.6,175.7 631.0,174.9 634.4,174.3 637.8,173.8 641.2,173.4 644.6,173.2 648.0,173.0 651.4,173.0 654.8,173.1 658.2,173.4 661.6,173.7 665.0,174.2 668.4,174.8 671.8,175.5 675.2,176.2 678.6,177.1 682.0,178.0 685.4,178.9 688.8,179.9 692.2,180.8 695.6,181.7 699.0,182.6 702.4,183.5 705.8,184.3 709.2,185.0 712.6,185.6 716.0,186.1"/>
-            <text x="492" y="204" class="m11 dim" text-anchor="start">j3</text>
-            <polyline class="meas" points="512.0,207.0 515.4,206.8 518.8,206.6 522.2,206.4 525.6,206.4 529.0,206.4 532.4,206.4 535.8,206.5 539.2,206.4 542.6,206.3 546.0,206.0 549.4,205.5 552.8,205.0 556.2,204.3 559.6,203.7 563.0,203.1 566.4,202.6 569.8,202.2 573.2,201.9 576.6,201.6 580.0,201.4 583.4,201.1 586.8,200.6 590.2,200.1 593.6,199.5 597.0,198.7 600.4,198.0 603.8,197.3 607.2,196.7 610.6,196.2 614.0,195.8 617.4,195.6 620.8,195.4 624.2,195.3 627.6,195.1 631.0,194.9 634.4,194.5 637.8,194.1 641.2,193.7 644.6,193.2 648.0,192.9 651.4,192.7 654.8,192.6 658.2,192.6 661.6,192.8 665.0,193.1 668.4,193.4 671.8,193.7 675.2,193.8 678.6,193.9 682.0,194.0 685.4,194.0 688.8,194.0 692.2,194.2 695.6,194.4 699.0,194.8 702.4,195.3 705.8,196.0 709.2,196.6 712.6,197.3 716.0,197.9"/>
-            <polyline class="pred" points="512.0,207.0 515.4,207.0 518.8,207.0 522.2,206.9 525.6,206.8 529.0,206.7 532.4,206.5 535.8,206.3 539.2,206.1 542.6,205.8 546.0,205.5 549.4,205.2 552.8,204.8 556.2,204.4 559.6,204.0 563.0,203.6 566.4,203.1 569.8,202.6 573.2,202.2 576.6,201.7 580.0,201.2 583.4,200.7 586.8,200.1 590.2,199.6 593.6,199.1 597.0,198.6 600.4,198.1 603.8,197.6 607.2,197.2 610.6,196.7 614.0,196.2 617.4,195.8 620.8,195.4 624.2,195.1 627.6,194.7 631.0,194.4 634.4,194.1 637.8,193.8 641.2,193.6 644.6,193.4 648.0,193.3 651.4,193.1 654.8,193.1 658.2,193.0 661.6,193.0 665.0,193.0 668.4,193.1 671.8,193.2 675.2,193.3 678.6,193.5 682.0,193.7 685.4,194.0 688.8,194.3 692.2,194.6 695.6,194.9 699.0,195.3 702.4,195.7 705.8,196.1 709.2,196.5 712.6,197.0 716.0,197.4"/>
-            <rect x="638.48" y="211" width="77.52" height="18" rx="2" class="divband"/>
-            <text x="492" y="224" class="m11 hot" text-anchor="start">j4</text>
-            <polyline class="meas" points="512.0,217.1 515.4,216.4 518.8,215.7 522.2,215.1 525.6,214.6 529.0,214.1 532.4,213.7 535.8,213.4 539.2,213.2 542.6,213.0 546.0,213.0 549.4,213.1 552.8,213.2 556.2,213.4 559.6,213.8 563.0,214.2 566.4,214.6 569.8,215.2 573.2,215.8 576.6,216.5 580.0,217.2 583.4,218.0 586.8,218.7 590.2,219.5 593.6,220.4 597.0,221.2 600.4,221.9 603.8,222.7 607.2,223.4 610.6,224.1 614.0,224.7 617.4,225.3 620.8,225.8 624.2,226.2 627.6,226.5 631.0,226.8 634.4,226.9 637.8,227.0 641.2,226.9 644.6,226.8 648.0,226.8 651.4,226.7 654.8,226.6 658.2,226.5 661.6,226.5 665.0,226.4 668.4,226.4 671.8,226.4 675.2,226.4 678.6,226.4 682.0,226.4 685.4,226.5 688.8,226.5 692.2,226.6 695.6,226.7 699.0,226.7 702.4,226.8 705.8,226.9 709.2,227.0 712.6,227.1 716.0,227.2"/>
-            <polyline class="pred" points="512.0,217.1 515.4,216.4 518.8,215.7 522.2,215.1 525.6,214.6 529.0,214.1 532.4,213.7 535.8,213.4 539.2,213.2 542.6,213.0 546.0,213.0 549.4,213.1 552.8,213.2 556.2,213.4 559.6,213.8 563.0,214.2 566.4,214.6 569.8,215.2 573.2,215.8 576.6,216.5 580.0,217.2 583.4,218.0 586.8,218.7 590.2,219.5 593.6,220.4 597.0,221.2 600.4,221.9 603.8,222.7 607.2,223.4 610.6,224.1 614.0,224.7 617.4,225.3 620.8,225.8 624.2,226.2 627.6,226.5 631.0,226.8 634.4,226.9 637.8,227.0 641.2,227.0 644.6,226.9 648.0,226.6 651.4,226.3 654.8,226.0 658.2,225.5 661.6,225.0 665.0,224.4 668.4,223.7 671.8,223.0 675.2,222.2 678.6,221.5 682.0,220.7 685.4,219.9 688.8,219.1 692.2,218.3 695.6,217.5 699.0,216.8 702.4,216.1 705.8,215.4 709.2,214.9 712.6,214.3 716.0,213.9"/>
-            <text x="492" y="244" class="m11 dim" text-anchor="start">j5</text>
-            <polyline class="meas" points="512.0,239.1 515.4,240.1 518.8,241.0 522.2,242.1 525.6,243.2 529.0,244.3 532.4,245.3 535.8,246.2 539.2,246.9 542.6,247.4 546.0,247.5 549.4,247.3 552.8,246.8 556.2,246.1 559.6,245.3 563.0,244.3 566.4,243.4 569.8,242.4 573.2,241.5 576.6,240.5 580.0,239.6 583.4,238.7 586.8,237.6 590.2,236.6 593.6,235.6 597.0,234.6 600.4,233.7 603.8,233.0 607.2,232.6 610.6,232.5 614.0,232.7 617.4,233.2 620.8,234.0 624.2,234.9 627.6,235.9 631.0,236.9 634.4,237.9 637.8,238.8 641.2,239.8 644.6,240.7 648.0,241.7 651.4,242.6 654.8,243.6 658.2,244.6 661.6,245.6 665.0,246.4 668.4,247.0 671.8,247.4 675.2,247.5 678.6,247.2 682.0,246.7 685.4,245.9 688.8,245.0 692.2,243.9 695.6,242.9 699.0,241.8 702.4,240.8 705.8,239.9 709.2,239.0 712.6,238.0 716.0,237.1"/>
-            <polyline class="pred" points="512.0,239.1 515.4,240.3 518.8,241.5 522.2,242.6 525.6,243.6 529.0,244.6 532.4,245.4 535.8,246.1 539.2,246.6 542.6,246.9 546.0,247.0 549.4,246.9 552.8,246.7 556.2,246.2 559.6,245.6 563.0,244.8 566.4,243.9 569.8,242.8 573.2,241.7 576.6,240.6 580.0,239.4 583.4,238.3 586.8,237.2 590.2,236.1 593.6,235.2 597.0,234.4 600.4,233.8 603.8,233.3 607.2,233.1 610.6,233.0 614.0,233.1 617.4,233.4 620.8,233.9 624.2,234.6 627.6,235.4 631.0,236.4 634.4,237.4 637.8,238.5 641.2,239.7 644.6,240.9 648.0,242.0 651.4,243.1 654.8,244.1 658.2,245.0 661.6,245.7 665.0,246.3 668.4,246.7 671.8,247.0 675.2,247.0 678.6,246.8 682.0,246.5 685.4,245.9 688.8,245.2 692.2,244.3 695.6,243.4 699.0,242.3 702.4,241.2 705.8,240.0 709.2,238.8 712.6,237.7 716.0,236.6"/>
-            <text x="492" y="264" class="m11 dim" text-anchor="start">j6</text>
-            <polyline class="meas" points="512.0,265.7 515.4,265.1 518.8,264.5 522.2,264.0 525.6,263.5 529.0,263.2 532.4,262.9 535.8,262.6 539.2,262.2 542.6,261.8 546.0,261.2 549.4,260.5 552.8,259.7 556.2,258.9 559.6,258.1 563.0,257.4 566.4,256.8 569.8,256.3 573.2,256.0 576.6,255.7 580.0,255.5 583.4,255.3 586.8,255.0 590.2,254.6 593.6,254.2 597.0,253.7 600.4,253.3 603.8,252.9 607.2,252.6 610.6,252.5 614.0,252.6 617.4,252.8 620.8,253.1 624.2,253.5 627.6,253.8 631.0,254.1 634.4,254.3 637.8,254.5 641.2,254.6 644.6,254.7 648.0,254.9 651.4,255.3 654.8,255.8 658.2,256.4 661.6,257.1 665.0,257.9 668.4,258.7 671.8,259.4 675.2,260.1 678.6,260.6 682.0,261.0 685.4,261.3 688.8,261.7 692.2,262.0 695.6,262.5 699.0,263.0 702.4,263.7 705.8,264.4 709.2,265.0 712.6,265.6 716.0,266.1"/>
-            <polyline class="pred" points="512.0,265.7 515.4,265.3 518.8,264.9 522.2,264.5 525.6,264.0 529.0,263.5 532.4,263.0 535.8,262.4 539.2,261.9 542.6,261.3 546.0,260.7 549.4,260.1 552.8,259.6 556.2,259.0 559.6,258.4 563.0,257.8 566.4,257.3 569.8,256.8 573.2,256.2 576.6,255.8 580.0,255.3 583.4,254.9 586.8,254.5 590.2,254.2 593.6,253.9 597.0,253.6 600.4,253.4 603.8,253.2 607.2,253.1 610.6,253.0 614.0,253.0 617.4,253.0 620.8,253.1 624.2,253.2 627.6,253.4 631.0,253.6 634.4,253.9 637.8,254.2 641.2,254.5 644.6,254.9 648.0,255.3 651.4,255.8 654.8,256.2 658.2,256.8 661.6,257.3 665.0,257.8 668.4,258.4 671.8,259.0 675.2,259.6 678.6,260.1 682.0,260.7 685.4,261.3 688.8,261.9 692.2,262.4 695.6,263.0 699.0,263.5 702.4,264.0 705.8,264.5 709.2,264.9 712.6,265.3 716.0,265.7"/>
-            <text x="492" y="284" class="m11 dim" text-anchor="start">j7</text>
-            <polyline class="meas" points="512.0,273.1 515.4,272.8 518.8,272.6 522.2,272.6 525.6,272.9 529.0,273.4 532.4,274.0 535.8,274.8 539.2,275.6 542.6,276.4 546.0,277.1 549.4,277.8 552.8,278.4 556.2,279.1 559.6,279.7 563.0,280.4 566.4,281.2 569.8,282.1 573.2,283.1 576.6,284.1 580.0,285.0 583.4,285.8 586.8,286.4 590.2,286.8 593.6,287.0 597.0,287.0 600.4,286.9 603.8,286.7 607.2,286.4 610.6,286.2 614.0,285.9 617.4,285.7 620.8,285.4 624.2,285.0 627.6,284.5 631.0,283.9 634.4,283.0 637.8,282.0 641.2,281.0 644.6,279.8 648.0,278.8 651.4,277.8 654.8,276.9 658.2,276.3 661.6,275.7 665.0,275.3 668.4,274.9 671.8,274.5 675.2,274.2 678.6,273.8 682.0,273.4 685.4,273.0 688.8,272.8 692.2,272.7 695.6,272.8 699.0,273.2 702.4,273.8 705.8,274.5 709.2,275.3 712.6,276.2 716.0,277.1"/>
-            <polyline class="pred" points="512.0,273.1 515.4,273.0 518.8,273.0 522.2,273.1 525.6,273.3 529.0,273.7 532.4,274.1 535.8,274.6 539.2,275.2 542.6,275.9 546.0,276.6 549.4,277.4 552.8,278.3 556.2,279.1 559.6,280.0 563.0,280.9 566.4,281.7 569.8,282.6 573.2,283.4 576.6,284.1 580.0,284.8 583.4,285.4 586.8,285.9 590.2,286.3 593.6,286.7 597.0,286.9 600.4,287.0 603.8,287.0 607.2,286.9 610.6,286.7 614.0,286.3 617.4,285.9 620.8,285.4 624.2,284.8 627.6,284.1 631.0,283.4 634.4,282.6 637.8,281.7 641.2,280.9 644.6,280.0 648.0,279.1 651.4,278.3 654.8,277.4 658.2,276.6 661.6,275.9 665.0,275.2 668.4,274.6 671.8,274.1 675.2,273.7 678.6,273.3 682.0,273.1 685.4,273.0 688.8,273.0 692.2,273.1 695.6,273.3 699.0,273.7 702.4,274.1 705.8,274.6 709.2,275.2 712.6,275.9 716.0,276.6"/>
-            <path class="divline" d="M 638.5 150 L 638.5 292"/>
-            <text x="638.5" y="306" class="t11 hot" text-anchor="middle">j4 diverges here</text>
-            <path d="M 603 316 L 603 336" class="arrow" marker-end="url(#t-bench)"/>
-            <rect x="480" y="338" width="246" height="48" rx="4" class="blk"/>
-            <text x="492" y="357" class="m11" text-anchor="start">policy.pt</text>
-            <text x="492" y="374" class="t11 dim" text-anchor="start">opened at the moment they diverge</text>
+          <div class="flow-plate" id="bench-fig"><div class="flow-bar"><span>Illustrative data</span><button class="tb-play" type="button" aria-label="Play or pause"><svg class="i-play" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5 L10.5 6 L3 10.5 Z"/></svg><svg class="i-pause" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.6" height="9"/><rect x="6.9" y="1.5" width="2.6" height="9"/></svg></button></div>
+          <svg class="hw" viewBox="0 0 740 470" role="img" aria-label="Caliper Bench, illustrative data: a Franka Research 3 in side view reaches forward; its measured pose, from /joint_states at 500 Hz, is drawn solid and the pose its control policy predicted, from /policy/joint_targets, as a teal outline. The two match until joint 4 falls behind the prediction, after which every link past joint 4 drifts from the predicted pose. Below, joint 4's measured and predicted angles over five seconds, with the moment they separate marked.">
+            <text x="16" y="20" class="k" text-anchor="start">SIDE VIEW</text>
+            <line x1="40" y1="280.0" x2="440" y2="280.0" class="bn-table"/>
+            <rect x="106.8" y="267.2" width="86.4" height="12.8" rx="3" class="bn-case"/><path d="M 115.4 267.2 C 116.7 248.0 123.8 238.4 128.9 232.0 L 171.1 232.0 C 176.2 238.4 183.3 248.0 184.6 267.2 Z" class="bn-case"/><path d="M 170.1 233.2 L 173.6 174.9 A 23.7 23.7 0 1 0 126.4 174.9 L 129.9 233.2 A 20.2 20.2 0 0 0 170.1 233.2 Z" class="bn-case"/><path d="M 131.4 232.0 L 168.6 232.0" class="bn-seam"/>
+            <g id="bench-m-up" transform="translate(150.0 173.4) rotate(20.71)"><path d="M 21.7 5.4 L 46.9 -96.0 A 21.1 21.1 0 0 0 6.0 -106.7 L -21.6 -5.9 A 22.4 22.4 0 1 0 21.7 5.4 Z" class="bn-case"/><path d="M 32.7 -47.6 L -5.2 -57.5" class="bn-seam"/></g><g id="bench-m-j2"><circle cx="150.0" cy="173.4" r="16.0" class="bn-joint"/><circle cx="150.0" cy="173.4" r="8.0" class="bn-joint bn-hub"/></g><g id="bench-m-fore" transform="translate(210.5 88.2) rotate(134.83)"><path d="M 19.9 -4.8 L -9.6 -126.9 A 17.3 17.3 0 0 0 -43.4 -119.7 L -20.1 3.8 A 20.5 20.5 0 1 0 19.9 -4.8 Z" class="bn-case"/><path d="M 9.3 -40.6 L -25.1 -33.2" class="bn-seam"/></g><g id="bench-m-hand" transform="translate(316.2 156.1) rotate(10.23)"><path d="M 13.4 0 L 13.4 33.3 L 42.9 33.3 L 42.9 0 Z" class="bn-case"/><rect x="14.4" y="33.3" width="27.5" height="3.8" rx="1" class="bn-ring"/><path d="M -0.0 37.1 L 56.3 37.1 Q 60.2 37.1 60.2 41.6 L 60.2 51.8 Q 60.2 55.0 57.0 55.0 L -0.6 55.0 Q -3.8 55.0 -3.8 51.8 L -3.8 41.6 Q -3.8 37.1 -0.0 37.1 Z" class="bn-case"/><path d="M 10.9 55.0 L 12.2 72.3 Q 12.2 74.2 14.1 74.2 L 22.4 74.2 L 21.8 55.0 Z" class="bn-case"/><rect x="19.2" y="64.6" width="3.2" height="8.3" rx="1" class="bn-case bn-pad"/><path d="M 45.4 55.0 L 44.2 72.3 Q 44.2 74.2 42.2 74.2 L 33.9 74.2 L 34.6 55.0 Z" class="bn-case"/><rect x="33.9" y="64.6" width="3.2" height="8.3" rx="1" class="bn-case bn-pad"/><path d="M 1.6 17.8 L 29.6 15.3 A 15.4 15.4 0 0 0 29.6 -15.3 L 1.6 -17.8 A 17.9 17.9 0 1 0 1.6 17.8 Z" class="bn-case"/><circle cx="0.0" cy="0.0" r="12.8" class="bn-joint"/><circle cx="0.0" cy="0.0" r="6.4" class="bn-joint bn-hub"/></g><g id="bench-m-j4" transform="translate(210.5 88.2)"><circle cx="0.0" cy="0.0" r="14.7" class="bn-joint"/><circle cx="0.0" cy="0.0" r="7.4" class="bn-joint bn-hub"/></g>
+            <g id="bench-p-fore" transform="translate(210.5 88.2) rotate(124.60)"><path d="M 19.9 -4.8 L -9.6 -126.9 A 17.3 17.3 0 0 0 -43.4 -119.7 L -20.1 3.8 A 20.5 20.5 0 1 0 19.9 -4.8 Z" class="bn-ghost"/></g><g id="bench-p-hand" transform="translate(326.6 136.2) rotate(0.00)"><path d="M 13.4 0 L 13.4 33.3 L 42.9 33.3 L 42.9 0 Z" class="bn-ghost"/><path d="M -0.0 37.1 L 56.3 37.1 Q 60.2 37.1 60.2 41.6 L 60.2 51.8 Q 60.2 55.0 57.0 55.0 L -0.6 55.0 Q -3.8 55.0 -3.8 51.8 L -3.8 41.6 Q -3.8 37.1 -0.0 37.1 Z" class="bn-ghost"/><path d="M 10.9 55.0 L 12.2 72.3 Q 12.2 74.2 14.1 74.2 L 22.4 74.2 L 21.8 55.0 Z" class="bn-ghost"/><rect x="19.2" y="64.6" width="3.2" height="8.3" rx="1" class="bn-ghost bn-pad"/><path d="M 45.4 55.0 L 44.2 72.3 Q 44.2 74.2 42.2 74.2 L 33.9 74.2 L 34.6 55.0 Z" class="bn-ghost"/><rect x="33.9" y="64.6" width="3.2" height="8.3" rx="1" class="bn-ghost bn-pad"/><path d="M 1.6 17.8 L 29.6 15.3 A 15.4 15.4 0 0 0 29.6 -15.3 L 1.6 -17.8 A 17.9 17.9 0 1 0 1.6 17.8 Z" class="bn-ghost"/><circle cx="0.0" cy="0.0" r="12.8" class="bn-ghost"/><circle cx="0.0" cy="0.0" r="6.4" class="bn-ghost bn-hub"/></g>
+            <text id="bench-j4-label" x="184.5" y="66.2" class="t11 hot" text-anchor="end">joint 4</text>
+            <text x="470" y="70" class="k" text-anchor="start">JOINT 4</text>
+            <path d="M 470 96 L 490 96" class="bn-meas"/><text x="500" y="100" class="n" text-anchor="start">measured</text>
+            <text id="bench-r-meas" x="724" y="100" class="mono small" text-anchor="end">−1.99 rad</text>
+            <path d="M 470 128 L 490 128" class="bn-pred"/><text x="500" y="132" class="n" text-anchor="start">predicted</text>
+            <text id="bench-r-pred" x="724" y="132" class="mono small" text-anchor="end">−1.81 rad</text>
+            <line x1="470" y1="148" x2="724" y2="148" class="rulefaint"/>
+            <text x="500" y="170" class="n" text-anchor="start">difference</text>
+            <text id="bench-r-diff" x="724" y="170" class="mono small bn-hot" text-anchor="end">0.18 rad</text>
+            <text x="470" y="214" class="t11 dim" text-anchor="start">Joints 2 and 6 follow the policy.</text>
+            <text x="470" y="231" class="t11 dim" text-anchor="start">Joint 4 falls behind, so every link</text>
+            <text x="470" y="248" class="t11 dim" text-anchor="start">past it leaves the predicted pose.</text>
+            <text x="16" y="300" class="k" text-anchor="start">JOINT 4 ANGLE</text>
+            <text x="724.0" y="300" class="t11 dim" text-anchor="end">rad</text>
+            <rect x="64.0" y="306.0" width="660.0" height="90.0" rx="2" class="spark"/>
+            <line x1="64.0" y1="386.5" x2="724.0" y2="386.5" class="bn-grid"/><text x="56.0" y="390.5" class="m11 dim" text-anchor="end">−2.5</text><line x1="64.0" y1="339.2" x2="724.0" y2="339.2" class="bn-grid"/><text x="56.0" y="343.2" class="m11 dim" text-anchor="end">−2.0</text>
+            <rect id="bench-band" x="314.8" y="307.0" width="145.2" height="88.0" class="bn-band"/>
+            <polyline id="bench-plot-p" class="bn-pred" points="64.0,386.5 66.6,386.5 69.3,386.5 71.9,386.5 74.6,386.5 77.2,386.5 79.8,386.5 82.5,386.5 85.1,386.5 87.8,386.5 90.4,386.5 93.0,386.5 95.7,386.5 98.3,386.5 101.0,386.5 103.6,386.5 106.2,386.5 108.9,386.5 111.5,386.5 114.2,386.5 116.8,386.5 119.4,386.5 122.1,386.5 124.7,386.5 127.4,386.4 130.0,386.4 132.6,386.3 135.3,386.2 137.9,386.1 140.6,386.0 143.2,385.8 145.8,385.7 148.5,385.5 151.1,385.4 153.8,385.2 156.4,385.0 159.0,384.8 161.7,384.6 164.3,384.3 167.0,384.1 169.6,383.8 172.2,383.5 174.9,383.3 177.5,383.0 180.2,382.7 182.8,382.3 185.4,382.0 188.1,381.6 190.7,381.3 193.4,380.9 196.0,380.5 198.6,380.1 201.3,379.7 203.9,379.3 206.6,378.9 209.2,378.5 211.8,378.0 214.5,377.6 217.1,377.1 219.8,376.6 222.4,376.1 225.0,375.6 227.7,375.1 230.3,374.6 233.0,374.1 235.6,373.5 238.2,373.0 240.9,372.4 243.5,371.9 246.2,371.3 248.8,370.7 251.4,370.2 254.1,369.6 256.7,369.0 259.4,368.4 262.0,367.7 264.6,367.1 267.3,366.5 269.9,365.9 272.6,365.2 275.2,364.6 277.8,363.9 280.5,363.3 283.1,362.6 285.8,362.0 288.4,361.3 291.0,360.6 293.7,360.0 296.3,359.3 299.0,358.6 301.6,357.9 304.2,357.2 306.9,356.6 309.5,355.9 312.2,355.2 314.8,354.5 317.4,353.8 320.1,353.1 322.7,352.4 325.4,351.7 328.0,351.0 330.6,350.3 333.3,349.6 335.9,348.9 338.6,348.2 341.2,347.5 343.8,346.8 346.5,346.1 349.1,345.4 351.8,344.8 354.4,344.1 357.0,343.4 359.7,342.7 362.3,342.0 365.0,341.4 367.6,340.7 370.2,340.0 372.9,339.4 375.5,338.7 378.2,338.1 380.8,337.4 383.4,336.8 386.1,336.1 388.7,335.5 391.4,334.9 394.0,334.3 396.6,333.6 399.3,333.0 401.9,332.4 404.6,331.8 407.2,331.3 409.8,330.7 412.5,330.1 415.1,329.6 417.8,329.0 420.4,328.5 423.0,327.9 425.7,327.4 428.3,326.9 431.0,326.4 433.6,325.9 436.2,325.4 438.9,324.9 441.5,324.4 444.2,324.0 446.8,323.5 449.4,323.1 452.1,322.7 454.7,322.3 457.4,321.9 460.0,321.5"/>
+            <polyline id="bench-plot-m" class="bn-meas" points="64.0,386.4 66.6,386.5 69.3,386.6 71.9,386.5 74.6,386.5 77.2,386.6 79.8,386.5 82.5,386.5 85.1,386.5 87.8,386.6 90.4,386.5 93.0,386.5 95.7,386.6 98.3,386.5 101.0,386.5 103.6,386.5 106.2,386.6 108.9,386.5 111.5,386.5 114.2,386.6 116.8,386.5 119.4,386.4 122.1,386.6 124.7,386.5 127.4,386.3 130.0,386.4 132.6,386.3 135.3,386.0 137.9,386.1 140.6,386.1 143.2,385.7 145.8,385.7 148.5,385.7 151.1,385.3 153.8,385.1 156.4,385.2 159.0,384.7 161.7,384.4 164.3,384.5 167.0,384.1 169.6,383.6 172.2,383.7 174.9,383.4 177.5,382.7 180.2,382.7 182.8,382.5 185.4,381.8 188.1,381.6 190.7,381.5 193.4,380.8 196.0,380.5 198.6,380.4 201.3,379.6 203.9,379.2 206.6,379.1 209.2,378.4 211.8,377.8 214.5,377.7 217.1,377.2 219.8,376.4 222.4,376.2 225.0,375.8 227.7,374.9 230.3,374.6 233.0,374.2 235.6,373.4 238.2,372.9 240.9,372.6 243.5,371.8 246.2,371.2 248.8,370.9 251.4,370.1 254.1,369.4 256.7,369.1 259.4,368.4 262.0,367.6 264.6,367.2 267.3,366.6 269.9,365.8 272.6,365.2 275.2,364.7 277.8,363.9 280.5,363.3 283.1,362.7 285.8,362.0 288.4,361.3 291.0,360.7 293.7,360.0 296.3,359.3 299.0,358.6 301.6,358.0 304.2,357.2 306.9,356.5 309.5,355.9 312.2,355.2 314.8,354.4 317.4,353.8 320.1,353.2 322.7,352.3 325.4,351.7 328.0,351.2 330.6,350.4 333.3,349.8 335.9,349.5 338.6,348.8 341.2,348.2 343.8,348.0 346.5,347.5 349.1,346.9 351.8,346.8 354.4,346.6 357.0,346.0 359.7,345.9 362.3,345.8 365.0,345.2 367.6,345.1 370.2,345.1 372.9,344.6 375.5,344.3 378.2,344.5 380.8,344.0 383.4,343.6 386.1,343.8 388.7,343.4 391.4,342.9 394.0,343.0 396.6,342.8 399.3,342.2 401.9,342.3 404.6,342.3 407.2,341.7 409.8,341.6 412.5,341.7 415.1,341.1 417.8,341.0 420.4,341.1 423.0,340.6 425.7,340.3 428.3,340.5 431.0,340.2 433.6,339.8 436.2,339.9 438.9,339.7 441.5,339.3 444.2,339.4 446.8,339.3 449.4,338.9 452.1,338.8 454.7,338.8 457.4,338.5 460.0,338.4"/>
+            <text id="bench-lag" x="320.8" y="321.0" class="t11 hot" text-anchor="start" style="opacity:1">joint 4 falls behind</text>
+            <line id="bench-cursor" x1="460.0" y1="302.0" x2="460.0" y2="400.0" class="bn-cursor"/>
+            <text x="64.0" y="410" class="m11 dim" text-anchor="start">0 s</text><text x="196.0" y="410" class="m11 dim" text-anchor="middle">1 s</text><text x="328.0" y="410" class="m11 dim" text-anchor="middle">2 s</text><text x="460.0" y="410" class="m11 dim" text-anchor="middle">3 s</text><text x="592.0" y="410" class="m11 dim" text-anchor="middle">4 s</text><text x="724.0" y="410" class="m11 dim" text-anchor="end">5 s</text>
+            <line x1="16" y1="424" x2="724" y2="424" class="rulefaint"/><text x="16" y="442" class="k" text-anchor="start">ARM</text><text x="16" y="463" class="v plain" text-anchor="start">Franka Research 3</text><line x1="190" y1="434" x2="190" y2="466" class="rulefaint"/><text x="206" y="442" class="k" text-anchor="start">RATE</text><text x="206" y="463" class="v plain" text-anchor="start">500 Hz</text><line x1="300" y1="434" x2="300" y2="466" class="rulefaint"/><text x="316" y="442" class="k" text-anchor="start">MEASURED</text><text x="316" y="463" class="mono" text-anchor="start">/joint_states</text><line x1="478" y1="434" x2="478" y2="466" class="rulefaint"/><text x="494" y="442" class="k" text-anchor="start">PREDICTED</text><text x="494" y="463" class="mono" text-anchor="start">/policy/joint_targets</text>
+          </svg>
+          </div>
+          </div>
+        </article>
+        <article class="soon-card">
+          <div class="soon-copy"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold, with experts who work alongside your team to take the model to production.</p><span class="soon-k">Example</span><p class="soon-ex">Llama 3.1 405B runs across two of our 8-GPU nodes, 63 layers on each. You open it in Caliper on your laptop and read its layers in the Trace pane as you would a local model; the nodes send back the readings, not the activations.</p></div>
+          <div class="soon-fig">
+          <svg class="hw" viewBox="0 0 740 482" role="img" aria-label="Caliper Cloud: Llama 3.1 405B across two HGX H100 nodes of eight GPUs, layers 1 to 63 on node 1 and 64 to 126 on node 2, 50.6 GB of bf16 weights in each GPU's HBM. Per token, the residual stream (3.9 MB) and KV cache (504 KB) stay on the nodes; node 1 passes node 2 one 32 KB hidden state, and only 21 KB of readings go to the Trace pane on your laptop.">
+            <defs><marker id="cloud-tipd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+            <text x="0" y="14" class="k" text-anchor="start">NODE 1</text>
+            <text x="438" y="14" class="t11 dim" text-anchor="end">HGX H100 · layers 1–63</text>
+            <rect x="0" y="22" width="438" height="176" rx="10" class="pkg"/>
+            <rect x="12" y="34" width="90" height="70" rx="4" class="blk"/>
+            <rect x="43" y="51" width="28" height="36" rx="2" class="die"/>
+            <rect x="20" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="45" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="62" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="79" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="79" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="81" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="56.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="81" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="79" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="110" y="34" width="90" height="70" rx="4" class="blk"/>
+            <rect x="141" y="51" width="28" height="36" rx="2" class="die"/>
+            <rect x="118" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="45" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="62" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="79" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="79" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="179" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="56.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="179" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="79" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="208" y="34" width="90" height="70" rx="4" class="blk"/>
+            <rect x="239" y="51" width="28" height="36" rx="2" class="die"/>
+            <rect x="216" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="45" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="62" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="79" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="79" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="277" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="56.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="277" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="79" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="306" y="34" width="90" height="70" rx="4" class="blk"/>
+            <rect x="337" y="51" width="28" height="36" rx="2" class="die"/>
+            <rect x="314" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="45" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="62" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="79" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="79" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="375" y="45" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="56.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="375" y="62" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="79" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="12" y="114" width="90" height="70" rx="4" class="blk"/>
+            <rect x="43" y="131" width="28" height="36" rx="2" class="die"/>
+            <rect x="20" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="125" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="142" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="159" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="159" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="81" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="136.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="81" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="159" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="110" y="114" width="90" height="70" rx="4" class="blk"/>
+            <rect x="141" y="131" width="28" height="36" rx="2" class="die"/>
+            <rect x="118" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="125" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="142" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="159" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="159" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="179" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="136.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="179" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="159" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="208" y="114" width="90" height="70" rx="4" class="blk"/>
+            <rect x="239" y="131" width="28" height="36" rx="2" class="die"/>
+            <rect x="216" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="125" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="142" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="159" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="159" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="277" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="136.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="277" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="159" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="306" y="114" width="90" height="70" rx="4" class="blk"/>
+            <rect x="337" y="131" width="28" height="36" rx="2" class="die"/>
+            <rect x="314" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="125" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="142" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="159" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="159" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="375" y="125" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="136.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="375" y="142" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="159" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="406" y="36" width="22" height="30" rx="2" class="cl-switch"/>
+            <rect x="406" y="74" width="22" height="30" rx="2" class="cl-switch"/>
+            <rect x="406" y="112" width="22" height="30" rx="2" class="cl-switch"/>
+            <rect x="406" y="150" width="22" height="30" rx="2" class="cl-switch"/>
+            <text x="0" y="238" class="k" text-anchor="start">NODE 2</text>
+            <text x="438" y="238" class="t11 dim" text-anchor="end">HGX H100 · layers 64–126</text>
+            <rect x="0" y="246" width="438" height="176" rx="10" class="pkg"/>
+            <rect x="12" y="258" width="90" height="70" rx="4" class="blk"/>
+            <rect x="43" y="275" width="28" height="36" rx="2" class="die"/>
+            <rect x="20" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="269" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="286" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="303" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="303" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="81" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="280.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="81" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="303" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="110" y="258" width="90" height="70" rx="4" class="blk"/>
+            <rect x="141" y="275" width="28" height="36" rx="2" class="die"/>
+            <rect x="118" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="269" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="286" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="303" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="303" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="179" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="280.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="179" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="303" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="208" y="258" width="90" height="70" rx="4" class="blk"/>
+            <rect x="239" y="275" width="28" height="36" rx="2" class="die"/>
+            <rect x="216" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="269" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="286" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="303" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="303" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="277" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="280.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="277" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="303" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="306" y="258" width="90" height="70" rx="4" class="blk"/>
+            <rect x="337" y="275" width="28" height="36" rx="2" class="die"/>
+            <rect x="314" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="269" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="286" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="303" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="303" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="375" y="269" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="280.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="375" y="286" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="303" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="12" y="338" width="90" height="70" rx="4" class="blk"/>
+            <rect x="43" y="355" width="28" height="36" rx="2" class="die"/>
+            <rect x="20" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="349" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="366" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="20" y="383" width="13" height="14" rx="1" class="page"/>
+            <rect x="20" y="383" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="81" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="360.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="81" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="81" y="383" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="110" y="338" width="90" height="70" rx="4" class="blk"/>
+            <rect x="141" y="355" width="28" height="36" rx="2" class="die"/>
+            <rect x="118" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="349" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="366" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="118" y="383" width="13" height="14" rx="1" class="page"/>
+            <rect x="118" y="383" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="179" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="360.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="179" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="179" y="383" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="208" y="338" width="90" height="70" rx="4" class="blk"/>
+            <rect x="239" y="355" width="28" height="36" rx="2" class="die"/>
+            <rect x="216" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="349" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="366" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="216" y="383" width="13" height="14" rx="1" class="page"/>
+            <rect x="216" y="383" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="277" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="360.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="277" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="277" y="383" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="306" y="338" width="90" height="70" rx="4" class="blk"/>
+            <rect x="337" y="355" width="28" height="36" rx="2" class="die"/>
+            <rect x="314" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="349" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="366" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="314" y="383" width="13" height="14" rx="1" class="page"/>
+            <rect x="314" y="383" width="13" height="14" rx="1" class="page tensor"/>
+            <rect x="375" y="349" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="360.7" width="13" height="2.3" rx="1" class="page tensor"/>
+            <rect x="375" y="366" width="13" height="14" rx="1" class="page"/>
+            <rect x="375" y="383" width="13" height="14" rx="1" class="cl-off"/>
+            <rect x="406" y="260" width="22" height="30" rx="2" class="cl-switch"/>
+            <rect x="406" y="298" width="22" height="30" rx="2" class="cl-switch"/>
+            <rect x="406" y="336" width="22" height="30" rx="2" class="cl-switch"/>
+            <rect x="406" y="374" width="22" height="30" rx="2" class="cl-switch"/>
+            <path d="M 170 198 L 170 244" class="arrow data" marker-end="url(#cloud-tipd)"/>
+            <text x="160" y="215" class="lbl" text-anchor="end">hidden state, 32 KB per token</text>
+            <text x="438" y="215" class="t11 dim" text-anchor="end">each H100: 80 GB in five HBM3 stacks</text>
+            <path d="M 438 110 L 456 110 L 456 296" class="cl-wire"/>
+            <path d="M 438 334 L 456 334 L 456 296" class="cl-wire"/>
+            <path d="M 456 296 L 474 296" class="arrow data" marker-end="url(#cloud-tipd)"/>
+            <text x="451" y="222" class="lbl" text-anchor="middle" transform="rotate(-90 451 222)">readings, 21 KB per token</text>
+            <text x="478" y="14" class="k" text-anchor="start">PER TOKEN, TO SCALE</text>
+            <text x="478" y="40" class="t11 dim" text-anchor="start">stays on the nodes</text>
+            <text x="478" y="58" class="t11" text-anchor="start">residual after each of 126 layers</text>
+            <text x="734" y="58" class="t11 dim" text-anchor="end">3.9 MB</text>
+            <rect x="478" y="64" width="256" height="8" rx="1" class="cl-track"/>
+            <rect x="478" y="64" width="256" height="8" rx="1" class="cl-stay"/>
+            <text x="478" y="84" class="t11" text-anchor="start">KV cache</text>
+            <text x="734" y="84" class="t11 dim" text-anchor="end">504 KB</text>
+            <rect x="478" y="90" width="256" height="8" rx="1" class="cl-track"/>
+            <rect x="478" y="90" width="32" height="8" rx="1" class="cl-stay"/>
+            <text x="478" y="116" class="t11 dim" text-anchor="start">crosses a wire</text>
+            <text x="478" y="134" class="t11" text-anchor="start">node 1 to node 2</text>
+            <text x="734" y="134" class="t11 dim" text-anchor="end">32 KB</text>
+            <rect x="478" y="140" width="256" height="8" rx="1" class="cl-track"/>
+            <rect x="478" y="140" width="2.03" height="8" rx="1" class="cl-cross"/>
+            <text x="478" y="160" class="t11" text-anchor="start">nodes to your laptop</text>
+            <text x="734" y="160" class="t11 dim" text-anchor="end">21 KB</text>
+            <rect x="478" y="166" width="256" height="8" rx="1" class="cl-track"/>
+            <rect x="478" y="166" width="1.6" height="8" rx="1" class="cl-cross"/>
+            <text x="478" y="206" class="k" text-anchor="start">YOUR LAPTOP</text>
+            <rect x="478" y="214" width="256" height="172" rx="6" class="blk"/>
+            <rect x="486" y="222" width="240" height="156" rx="2" class="cl-screen"/>
+            <path d="M 474 388 L 738 388 L 732 398 L 480 398 Z" class="cl-base"/>
+            <text x="496" y="242" class="t11" text-anchor="start">Trace pane · Llama 3.1 405B</text>
+            <text x="496" y="261" class="m11" text-anchor="start">The capital of France is</text>
+            <text x="496" y="284" class="m11 dim" text-anchor="start">L25</text>
+            <text x="536" y="284" class="m11" text-anchor="start">the</text>
+            <rect x="596" y="276" width="4.2" height="8" rx="1" class="bar"/>
+            <text x="716" y="284" class="t11 dim" text-anchor="end">0.06</text>
+            <text x="496" y="302" class="m11 dim" text-anchor="start">L50</text>
+            <text x="536" y="302" class="m11" text-anchor="start">French</text>
+            <rect x="596" y="294" width="10.5" height="8" rx="1" class="bar"/>
+            <text x="716" y="302" class="t11 dim" text-anchor="end">0.15</text>
+            <text x="496" y="320" class="m11 dim" text-anchor="start">L76</text>
+            <text x="536" y="320" class="m11" text-anchor="start">Paris</text>
+            <rect x="596" y="312" width="26.6" height="8" rx="1" class="bar"/>
+            <text x="716" y="320" class="t11 dim" text-anchor="end">0.38</text>
+            <text x="496" y="338" class="m11 dim" text-anchor="start">L101</text>
+            <text x="536" y="338" class="m11" text-anchor="start">Paris</text>
+            <rect x="596" y="330" width="49.7" height="8" rx="1" class="bar"/>
+            <text x="716" y="338" class="t11 dim" text-anchor="end">0.71</text>
+            <text x="496" y="356" class="m11 dim" text-anchor="start">L126</text>
+            <text x="536" y="356" class="m11" text-anchor="start">Paris</text>
+            <rect x="596" y="348" width="64.4" height="8" rx="1" class="bar"/>
+            <text x="716" y="356" class="t11 dim" text-anchor="end">0.92</text>
+            <text x="496" y="372" class="t11 dim" text-anchor="start">illustrative readings</text>
+            <rect x="0" y="430" width="10" height="11" rx="1" class="page tensor"/>
+            <text x="16" y="440" class="t11 dim" text-anchor="start">weights in HBM</text>
+            <rect x="112" y="430" width="10" height="11" rx="1" class="page"/>
+            <text x="128" y="440" class="t11 dim" text-anchor="start">free HBM</text>
+            <rect x="194" y="430" width="10" height="11" rx="1" class="cl-off"/>
+            <text x="210" y="440" class="t11 dim" text-anchor="start">unused HBM site</text>
+            <rect x="312" y="430" width="10" height="11" rx="1" class="cl-switch"/>
+            <text x="328" y="440" class="t11 dim" text-anchor="start">NVSwitch</text>
+            <text x="0" y="458" class="t11 dim" text-anchor="start">810 GB of bf16 weights, 50.6 GB on each of 16 H100s; 8-way tensor parallel in each node,</text>
+            <text x="0" y="474" class="t11 dim" text-anchor="start">the two nodes in a pipeline over InfiniBand; the readings are computed on the GPUs.</text>
           </svg>
           </div>
         </article>
         <article class="soon-card">
-          <div class="soon-copy"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold, with experts who work alongside your team to take the model to production.</p><span class="soon-k">Example</span><p class="soon-ex">Llama 3 70B runs on four of our GPU nodes. You open it in Caliper on your laptop and read its layers in the Trace pane as you would a local model; the nodes send back the readings, not the activations.</p></div>
+          <div class="soon-copy"><h3>Caliper Platform</h3><p>A place to exchange widgets and applets, and to source pre-made professional tools.</p><span class="soon-k">Example</span><p class="soon-ex">A lab publishes the spectrogram widget from its own applet. You add its source to your project with <code>caliper add spectrogram</code>; a licensed tool installs into Caliper with <code>caliper install attention_scope</code>.</p></div>
           <div class="soon-fig">
-          <svg class="hw" viewBox="-1 -1 742 322" role="img" aria-label="Caliper Cloud, illustrative readings: Caliper on your laptop sends a prompt to the gateway; Llama 3 70B runs across four GPU nodes of 20 layers and 35 GB each, passing a 16 KB hidden state per token between them; a reader on each node computes the Trace readings next to the activations and only the readings come back to the Trace pane">
-            <defs><marker id="t-cloud" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="td-cloud" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-            <text x="0" y="14" class="k" text-anchor="start">YOUR LAPTOP</text>
-            <text x="290" y="14" class="k" text-anchor="start">CALIPER CLOUD</text>
-            <rect x="0" y="24" width="240" height="290" rx="10" class="pkg"/>
-            <rect x="290" y="24" width="450" height="290" rx="10" class="pkg"/>
-            <rect x="14" y="40" width="212" height="260" rx="4" class="blk hot"/>
-            <text x="26" y="60" class="mono small" text-anchor="start">Caliper app</text>
-            <text x="26" y="78" class="t11 dim" text-anchor="start">Trace pane, Llama 3 70B</text>
-            <text x="26" y="104" class="m11" text-anchor="start">The capital of France is</text>
-            <text x="26" y="134" class="m11 dim" text-anchor="start">L16</text>
-            <text x="62" y="134" class="m11" text-anchor="start">the</text>
-            <rect x="126" y="125" width="4.2" height="10" rx="1" class="bar"/>
-            <text x="214" y="134" class="t11 dim" text-anchor="end">0.07</text>
-            <text x="26" y="162" class="m11 dim" text-anchor="start">L32</text>
-            <text x="62" y="162" class="m11" text-anchor="start">French</text>
-            <rect x="126" y="153" width="10.8" height="10" rx="1" class="bar"/>
-            <text x="214" y="162" class="t11 dim" text-anchor="end">0.18</text>
-            <text x="26" y="190" class="m11 dim" text-anchor="start">L48</text>
-            <text x="62" y="190" class="m11" text-anchor="start">Paris</text>
-            <rect x="126" y="181" width="24.6" height="10" rx="1" class="bar"/>
-            <text x="214" y="190" class="t11 dim" text-anchor="end">0.41</text>
-            <text x="26" y="218" class="m11 dim" text-anchor="start">L64</text>
-            <text x="62" y="218" class="m11" text-anchor="start">Paris</text>
-            <rect x="126" y="209" width="43.8" height="10" rx="1" class="bar"/>
-            <text x="214" y="218" class="t11 dim" text-anchor="end">0.73</text>
-            <text x="26" y="246" class="m11 dim" text-anchor="start">L80</text>
-            <text x="62" y="246" class="m11" text-anchor="start">Paris</text>
-            <rect x="126" y="237" width="54.6" height="10" rx="1" class="bar"/>
-            <text x="214" y="246" class="t11 dim" text-anchor="end">0.91</text>
-            <text x="26" y="284" class="t11 dim" text-anchor="start">illustrative readings</text>
-            <rect x="304" y="40" width="422" height="50" rx="4" class="blk"/>
-            <text x="316" y="60" class="mono small" text-anchor="start">gateway</text>
-            <text x="316" y="78" class="t11 dim" text-anchor="start">your workspace and access token</text>
-            <path d="M 226 54 L 302 54" class="arrow" marker-end="url(#t-cloud)"/>
-            <text x="264" y="47" class="lbl" text-anchor="middle">prompt</text>
-            <path d="M 302 78 L 228 78" class="arrow data" marker-end="url(#td-cloud)"/>
-            <text x="264" y="96" class="lbl" text-anchor="middle">readings</text>
-            <rect x="304" y="128" width="88" height="136" rx="4" class="blk"/>
-            <text x="316" y="148" class="mono small" text-anchor="start">node 1</text>
-            <text x="316" y="166" class="t11 dim" text-anchor="start">layers 1–20</text>
-            <text x="316" y="182" class="t11 dim" text-anchor="start">35 GB</text>
-            <rect x="312" y="196" width="72" height="56" rx="3" class="slot"/>
-            <text x="320" y="216" class="m11" text-anchor="start">reader</text>
-            <text x="320" y="232" class="t11 dim" text-anchor="start">computes</text>
-            <text x="320" y="246" class="t11 dim" text-anchor="start">readings</text>
-            <path d="M 372.0 128 L 372.0 92" class="arrow data" marker-end="url(#td-cloud)"/>
-            <path d="M 392.0 170 L 413.3 170" class="arrow" marker-end="url(#t-cloud)"/>
-            <rect x="415.333" y="128" width="88" height="136" rx="4" class="blk"/>
-            <text x="427.333" y="148" class="mono small" text-anchor="start">node 2</text>
-            <text x="427.333" y="166" class="t11 dim" text-anchor="start">layers 21–40</text>
-            <text x="427.333" y="182" class="t11 dim" text-anchor="start">35 GB</text>
-            <rect x="423.333" y="196" width="72" height="56" rx="3" class="slot"/>
-            <text x="431.333" y="216" class="m11" text-anchor="start">reader</text>
-            <text x="431.333" y="232" class="t11 dim" text-anchor="start">computes</text>
-            <text x="431.333" y="246" class="t11 dim" text-anchor="start">readings</text>
-            <path d="M 483.3 128 L 483.3 92" class="arrow data" marker-end="url(#td-cloud)"/>
-            <path d="M 503.3 170 L 524.7 170" class="arrow" marker-end="url(#t-cloud)"/>
-            <rect x="526.667" y="128" width="88" height="136" rx="4" class="blk"/>
-            <text x="538.667" y="148" class="mono small" text-anchor="start">node 3</text>
-            <text x="538.667" y="166" class="t11 dim" text-anchor="start">layers 41–60</text>
-            <text x="538.667" y="182" class="t11 dim" text-anchor="start">35 GB</text>
-            <rect x="534.667" y="196" width="72" height="56" rx="3" class="slot"/>
-            <text x="542.667" y="216" class="m11" text-anchor="start">reader</text>
-            <text x="542.667" y="232" class="t11 dim" text-anchor="start">computes</text>
-            <text x="542.667" y="246" class="t11 dim" text-anchor="start">readings</text>
-            <path d="M 594.7 128 L 594.7 92" class="arrow data" marker-end="url(#td-cloud)"/>
-            <path d="M 614.7 170 L 636.0 170" class="arrow" marker-end="url(#t-cloud)"/>
-            <rect x="638" y="128" width="88" height="136" rx="4" class="blk"/>
-            <text x="650" y="148" class="mono small" text-anchor="start">node 4</text>
-            <text x="650" y="166" class="t11 dim" text-anchor="start">layers 61–80</text>
-            <text x="650" y="182" class="t11 dim" text-anchor="start">35 GB</text>
-            <rect x="646" y="196" width="72" height="56" rx="3" class="slot"/>
-            <text x="654" y="216" class="m11" text-anchor="start">reader</text>
-            <text x="654" y="232" class="t11 dim" text-anchor="start">computes</text>
-            <text x="654" y="246" class="t11 dim" text-anchor="start">readings</text>
-            <path d="M 706.0 128 L 706.0 92" class="arrow data" marker-end="url(#td-cloud)"/>
-            <path d="M 318 90 L 318 126" class="arrow" marker-end="url(#t-cloud)"/>
-            <text x="324" y="112" class="lbl" text-anchor="start">tokens</text>
-            <text x="515" y="286" class="t11 dim" text-anchor="middle">each node hands the next a hidden state, 16 KB per token</text>
-            <text x="515" y="302" class="t11 dim" text-anchor="middle">activations stay here: 1.3 MB per token across 80 layers</text>
-          </svg>
-          </div>
-        </article>
-        <article class="soon-card">
-          <div class="soon-copy"><h3>Caliper Platform</h3><p>A place to exchange widgets and applets, and to source pre-made professional tools.</p><span class="soon-k">Example</span><p class="soon-ex">A lab publishes the spectrogram widget from its own applet. You add its source to your project with <code>caliper add spectrogram</code>; a licensed tool installs into your applets the same way.</p></div>
-          <div class="soon-fig">
-          <svg class="hw" viewBox="-1 -1 742 302" role="img" aria-label="Caliper Platform: authors publish to a registry with versions, signatures and licences; widgets are source you add to your applet, applets are built for macOS and Windows, tools are licensed with support; caliper add or the Platform pane installs them into your project or Caliper's applets">
-            <defs><marker id="t-platform" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="td-platform" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-            <text x="0" y="14" class="k" text-anchor="start">AUTHORS</text>
-            <text x="226" y="14" class="k" text-anchor="start">CALIPER PLATFORM</text>
-            <text x="512" y="14" class="k" text-anchor="start">YOUR CALIPER</text>
-            <rect x="0" y="24" width="200" height="268" rx="10" class="pkg"/>
-            <rect x="226" y="24" width="260" height="268" rx="10" class="pkg"/>
-            <rect x="512" y="24" width="228" height="268" rx="10" class="pkg"/>
-            <rect x="14" y="40" width="172" height="50" rx="4" class="blk hot"/>
-            <text x="26" y="60" class="m11" text-anchor="start">caliper publish</text>
-            <text x="26" y="78" class="t11 dim" text-anchor="start">signs and uploads a release</text>
-            <path d="M 186 65 L 238 65" class="arrow" marker-end="url(#t-platform)"/>
-            <rect x="240" y="40" width="232" height="50" rx="4" class="blk"/>
-            <text x="252" y="60" class="mono small" text-anchor="start">registry</text>
-            <text x="252" y="78" class="t11 dim" text-anchor="start">versions, signatures, licences</text>
-            <rect x="526" y="40" width="200" height="50" rx="4" class="blk hot"/>
-            <text x="538" y="60" class="m11" text-anchor="start">caliper add spectrogram</text>
-            <text x="538" y="78" class="t11 dim" text-anchor="start">or the Platform pane</text>
-            <rect x="14" y="108" width="172" height="48" rx="4" class="blk"/>
-            <text x="26" y="128" class="mono small" text-anchor="start">a lab</text>
-            <text x="26" y="145" class="t11 dim" text-anchor="start">a spectrogram widget</text>
-            <rect x="240" y="108" width="232" height="48" rx="4" class="blk"/>
-            <text x="252" y="128" class="m11" text-anchor="start">widgets</text>
-            <text x="252" y="145" class="t11 dim" text-anchor="start">source you add to an applet</text>
-            <rect x="526" y="108" width="200" height="48" rx="4" class="blk"/>
-            <text x="538" y="128" class="m11" text-anchor="start">your project</text>
-            <text x="538" y="145" class="t11 dim" text-anchor="start">the widget's source</text>
-            <path d="M 186 132 L 238 132" class="arrow" marker-end="url(#t-platform)"/>
-            <path d="M 472 132 L 524 132" class="arrow data" marker-end="url(#td-platform)"/>
-            <rect x="14" y="170" width="172" height="48" rx="4" class="blk"/>
-            <text x="26" y="190" class="mono small" text-anchor="start">a researcher</text>
-            <text x="26" y="207" class="t11 dim" text-anchor="start">an attention_scope applet</text>
-            <rect x="240" y="170" width="232" height="48" rx="4" class="blk"/>
-            <text x="252" y="190" class="m11" text-anchor="start">applets</text>
-            <text x="252" y="207" class="t11 dim" text-anchor="start">built for macOS and Windows</text>
-            <rect x="526" y="170" width="200" height="48" rx="4" class="blk"/>
-            <text x="538" y="190" class="m11" text-anchor="start">applets/</text>
-            <text x="538" y="207" class="t11 dim" text-anchor="start">ready to open</text>
-            <path d="M 186 194 L 238 194" class="arrow" marker-end="url(#t-platform)"/>
-            <path d="M 472 194 L 524 194" class="arrow data" marker-end="url(#td-platform)"/>
-            <rect x="14" y="232" width="172" height="48" rx="4" class="blk"/>
-            <text x="26" y="252" class="mono small" text-anchor="start">Sternbild, partners</text>
-            <text x="26" y="269" class="t11 dim" text-anchor="start">professional tools</text>
-            <rect x="240" y="232" width="232" height="48" rx="4" class="blk"/>
-            <text x="252" y="252" class="m11" text-anchor="start">tools</text>
-            <text x="252" y="269" class="t11 dim" text-anchor="start">licensed, with support</text>
-            <rect x="526" y="232" width="200" height="48" rx="4" class="blk"/>
-            <text x="538" y="252" class="m11" text-anchor="start">applets/</text>
-            <text x="538" y="269" class="t11 dim" text-anchor="start">with its licence</text>
-            <path d="M 186 256 L 238 256" class="arrow" marker-end="url(#t-platform)"/>
-            <path d="M 472 256 L 524 256" class="arrow data" marker-end="url(#td-platform)"/>
+          <svg class="hw" viewBox="0 0 740 490" role="img" aria-label="Caliper Platform: caliper add spectrogram puts the widget's source in your project under widgets/spectrogram and adds two lines to CMakeLists.txt; caliper install attention_scope puts libattention_scope.dylib, its caliper.toml manifest and a licence file in Caliper's applets folder; Caliper reads the manifest, checks the ABI epoch, host version, services and licence, then loads the library. The spectrogram shown is illustrative.">
+            <defs><marker id="plat-tipd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+            <text x="0" y="12" class="k" text-anchor="start">RELEASE</text>
+            <text x="216" y="12" class="k" text-anchor="start">ON YOUR DISK</text>
+            <rect x="420" y="4" width="8" height="8" rx="1" class="pf-swatch"/>
+            <text x="434" y="12" class="pf-note" text-anchor="start">added</text>
+            <text x="516" y="12" class="k" text-anchor="start">IN THE APP</text>
+            <text x="0" y="38" class="pf-cmd" text-anchor="start">$ caliper add spectrogram</text>
+            <rect x="0" y="50" width="196" height="100" rx="4" class="blk"/>
+            <text x="12" y="70" class="mono small" text-anchor="start">spectrogram 1.4.2</text>
+            <text x="12" y="92" class="pf-note" text-anchor="start">kind</text>
+            <text x="68" y="92" class="pf-val" text-anchor="start">widget, source</text>
+            <text x="12" y="108" class="pf-note" text-anchor="start">sha256</text>
+            <text x="68" y="108" class="pf-code" text-anchor="start">9f3a…c41e</text>
+            <text x="12" y="124" class="pf-note" text-anchor="start">signed</text>
+            <text x="68" y="124" class="pf-val" text-anchor="start">by the lab</text>
+            <text x="12" y="140" class="pf-note" text-anchor="start">licence</text>
+            <text x="68" y="140" class="pf-val" text-anchor="start">MIT</text>
+            <text x="0" y="168" class="pf-note" text-anchor="start">listed in caliper-registry</text>
+            <path d="M 198 100 L 212 100" class="arrow data" marker-end="url(#plat-tipd)"/>
+            <path class="pf-tree" d="M 221 68 L 221 76 L 230 76"/>
+            <path class="pf-tree" d="M 221 68 L 221 92 L 230 92"/>
+            <path class="pf-tree" d="M 221 68 L 221 108 L 230 108"/>
+            <path class="pf-tree" d="M 221 68 L 221 124 L 230 124"/>
+            <path class="pf-tree" d="M 239 132 L 239 140 L 248 140"/>
+            <path class="pf-tree" d="M 239 132 L 239 156 L 248 156"/>
+            <path class="pf-tree" d="M 239 132 L 239 172 L 248 172"/>
+            <path class="pf-tree" d="M 239 132 L 239 188 L 248 188"/>
+            <text x="216" y="64" class="pf-path plain" text-anchor="start">finetune_scope/</text>
+            <text x="234" y="80" class="pf-path plain" text-anchor="start">CMakeLists.txt</text>
+            <text x="336.4" y="80" class="pf-note hot" text-anchor="start">+ 2 lines</text>
+            <text x="234" y="96" class="pf-path old" text-anchor="start">finetune_scope.cpp</text>
+            <text x="234" y="112" class="pf-path old" text-anchor="start">finetune_scope.caliper.toml</text>
+            <text x="234" y="128" class="pf-path add" text-anchor="start">widgets/spectrogram/</text>
+            <text x="252" y="144" class="pf-path add" text-anchor="start">CMakeLists.txt</text>
+            <text x="252" y="160" class="pf-path add" text-anchor="start">spectrogram.h</text>
+            <text x="252" y="176" class="pf-path add" text-anchor="start">spectrogram.cpp</text>
+            <text x="252" y="192" class="pf-path add" text-anchor="start">widget.toml</text>
+            <text x="216" y="212" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan> add_subdirectory(widgets/spectrogram)</text>
+            <text x="216" y="227" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan> target_link_libraries(finetune_scope</text>
+            <text x="216" y="242" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan>     PRIVATE spectrogram)</text>
+            <rect x="516" y="50" width="224" height="196" rx="4" class="pf-win"/>
+            <rect x="516" y="50" width="224" height="20" rx="4" class="pf-bar"/>
+            <path class="pf-tri" d="M 525 57 L 533 57 L 529 63 Z"/>
+            <text x="540" y="64" class="pf-val" text-anchor="start">spectrogram</text>
+            <rect x="552" y="82" width="172" height="124" rx="1" class="pf-plot"/>
+            <rect x="556" y="198" width="4" height="4" class="pf-h2"/>
+            <rect x="560" y="198" width="8" height="4" class="pf-h3"/>
+            <rect x="568" y="198" width="8" height="4" class="pf-h2"/>
+            <rect x="576" y="198" width="4" height="4" class="pf-h1"/>
+            <rect x="556" y="194" width="4" height="4" class="pf-h2"/>
+            <rect x="560" y="194" width="4" height="4" class="pf-h4"/>
+            <rect x="564" y="194" width="8" height="4" class="pf-h6"/>
+            <rect x="572" y="194" width="4" height="4" class="pf-h5"/>
+            <rect x="576" y="194" width="4" height="4" class="pf-h4"/>
+            <rect x="580" y="194" width="4" height="4" class="pf-h3"/>
+            <rect x="584" y="194" width="4" height="4" class="pf-h2"/>
+            <rect x="588" y="194" width="4" height="4" class="pf-h1"/>
+            <rect x="556" y="190" width="4" height="4" class="pf-h1"/>
+            <rect x="560" y="190" width="4" height="4" class="pf-h3"/>
+            <rect x="564" y="190" width="8" height="4" class="pf-h4"/>
+            <rect x="572" y="190" width="8" height="4" class="pf-h5"/>
+            <rect x="580" y="190" width="4" height="4" class="pf-h6"/>
+            <rect x="584" y="190" width="8" height="4" class="pf-h5"/>
+            <rect x="592" y="190" width="4" height="4" class="pf-h3"/>
+            <rect x="596" y="190" width="4" height="4" class="pf-h2"/>
+            <rect x="600" y="190" width="4" height="4" class="pf-h1"/>
+            <rect x="556" y="186" width="4" height="4" class="pf-h1"/>
+            <rect x="560" y="186" width="4" height="4" class="pf-h2"/>
+            <rect x="564" y="186" width="8" height="4" class="pf-h3"/>
+            <rect x="572" y="186" width="8" height="4" class="pf-h2"/>
+            <rect x="580" y="186" width="4" height="4" class="pf-h3"/>
+            <rect x="584" y="186" width="4" height="4" class="pf-h4"/>
+            <rect x="588" y="186" width="12" height="4" class="pf-h5"/>
+            <rect x="600" y="186" width="4" height="4" class="pf-h4"/>
+            <rect x="604" y="186" width="4" height="4" class="pf-h3"/>
+            <rect x="608" y="186" width="4" height="4" class="pf-h1"/>
+            <rect x="560" y="182" width="4" height="4" class="pf-h1"/>
+            <rect x="564" y="182" width="16" height="4" class="pf-h2"/>
+            <rect x="580" y="182" width="8" height="4" class="pf-h1"/>
+            <rect x="588" y="182" width="4" height="4" class="pf-h2"/>
+            <rect x="592" y="182" width="4" height="4" class="pf-h3"/>
+            <rect x="596" y="182" width="4" height="4" class="pf-h4"/>
+            <rect x="600" y="182" width="8" height="4" class="pf-h5"/>
+            <rect x="608" y="182" width="4" height="4" class="pf-h4"/>
+            <rect x="612" y="182" width="4" height="4" class="pf-h3"/>
+            <rect x="616" y="182" width="4" height="4" class="pf-h1"/>
+            <rect x="568" y="178" width="4" height="4" class="pf-h1"/>
+            <rect x="572" y="178" width="12" height="4" class="pf-h2"/>
+            <rect x="584" y="178" width="4" height="4" class="pf-h1"/>
+            <rect x="596" y="178" width="4" height="4" class="pf-h1"/>
+            <rect x="600" y="178" width="4" height="4" class="pf-h2"/>
+            <rect x="604" y="178" width="4" height="4" class="pf-h3"/>
+            <rect x="608" y="178" width="8" height="4" class="pf-h5"/>
+            <rect x="616" y="178" width="4" height="4" class="pf-h4"/>
+            <rect x="620" y="178" width="4" height="4" class="pf-h3"/>
+            <rect x="624" y="178" width="4" height="4" class="pf-h1"/>
+            <rect x="576" y="174" width="4" height="4" class="pf-h1"/>
+            <rect x="580" y="174" width="12" height="4" class="pf-h2"/>
+            <rect x="592" y="174" width="4" height="4" class="pf-h1"/>
+            <rect x="608" y="174" width="4" height="4" class="pf-h2"/>
+            <rect x="612" y="174" width="4" height="4" class="pf-h3"/>
+            <rect x="616" y="174" width="8" height="4" class="pf-h5"/>
+            <rect x="624" y="174" width="4" height="4" class="pf-h4"/>
+            <rect x="628" y="174" width="4" height="4" class="pf-h2"/>
+            <rect x="632" y="174" width="4" height="4" class="pf-h1"/>
+            <rect x="584" y="170" width="4" height="4" class="pf-h1"/>
+            <rect x="588" y="170" width="8" height="4" class="pf-h2"/>
+            <rect x="596" y="170" width="4" height="4" class="pf-h1"/>
+            <rect x="616" y="170" width="4" height="4" class="pf-h1"/>
+            <rect x="620" y="170" width="4" height="4" class="pf-h3"/>
+            <rect x="624" y="170" width="8" height="4" class="pf-h5"/>
+            <rect x="632" y="170" width="4" height="4" class="pf-h4"/>
+            <rect x="636" y="170" width="4" height="4" class="pf-h2"/>
+            <rect x="588" y="166" width="4" height="4" class="pf-h1"/>
+            <rect x="592" y="166" width="8" height="4" class="pf-h2"/>
+            <rect x="600" y="166" width="4" height="4" class="pf-h1"/>
+            <rect x="624" y="166" width="4" height="4" class="pf-h2"/>
+            <rect x="628" y="166" width="4" height="4" class="pf-h3"/>
+            <rect x="632" y="166" width="8" height="4" class="pf-h5"/>
+            <rect x="640" y="166" width="4" height="4" class="pf-h3"/>
+            <rect x="644" y="166" width="4" height="4" class="pf-h1"/>
+            <rect x="596" y="162" width="4" height="4" class="pf-h1"/>
+            <rect x="600" y="162" width="4" height="4" class="pf-h2"/>
+            <rect x="604" y="162" width="4" height="4" class="pf-h1"/>
+            <rect x="632" y="162" width="4" height="4" class="pf-h2"/>
+            <rect x="636" y="162" width="4" height="4" class="pf-h4"/>
+            <rect x="640" y="162" width="4" height="4" class="pf-h5"/>
+            <rect x="644" y="162" width="4" height="4" class="pf-h4"/>
+            <rect x="648" y="162" width="4" height="4" class="pf-h2"/>
+            <rect x="600" y="158" width="4" height="4" class="pf-h1"/>
+            <rect x="604" y="158" width="8" height="4" class="pf-h2"/>
+            <rect x="636" y="158" width="4" height="4" class="pf-h1"/>
+            <rect x="640" y="158" width="4" height="4" class="pf-h3"/>
+            <rect x="644" y="158" width="4" height="4" class="pf-h4"/>
+            <rect x="648" y="158" width="4" height="4" class="pf-h5"/>
+            <rect x="652" y="158" width="4" height="4" class="pf-h3"/>
+            <rect x="656" y="158" width="4" height="4" class="pf-h1"/>
+            <rect x="604" y="154" width="4" height="4" class="pf-h1"/>
+            <rect x="608" y="154" width="8" height="4" class="pf-h2"/>
+            <rect x="644" y="154" width="4" height="4" class="pf-h1"/>
+            <rect x="648" y="154" width="4" height="4" class="pf-h3"/>
+            <rect x="652" y="154" width="4" height="4" class="pf-h5"/>
+            <rect x="656" y="154" width="4" height="4" class="pf-h4"/>
+            <rect x="660" y="154" width="4" height="4" class="pf-h2"/>
+            <rect x="608" y="150" width="4" height="4" class="pf-h1"/>
+            <rect x="612" y="150" width="8" height="4" class="pf-h2"/>
+            <rect x="648" y="150" width="4" height="4" class="pf-h1"/>
+            <rect x="652" y="150" width="4" height="4" class="pf-h2"/>
+            <rect x="656" y="150" width="4" height="4" class="pf-h4"/>
+            <rect x="660" y="150" width="4" height="4" class="pf-h5"/>
+            <rect x="664" y="150" width="4" height="4" class="pf-h3"/>
+            <rect x="668" y="150" width="4" height="4" class="pf-h1"/>
+            <rect x="616" y="146" width="8" height="4" class="pf-h2"/>
+            <rect x="656" y="146" width="4" height="4" class="pf-h1"/>
+            <rect x="660" y="146" width="4" height="4" class="pf-h4"/>
+            <rect x="664" y="146" width="4" height="4" class="pf-h5"/>
+            <rect x="668" y="146" width="4" height="4" class="pf-h4"/>
+            <rect x="672" y="146" width="4" height="4" class="pf-h1"/>
+            <rect x="620" y="142" width="8" height="4" class="pf-h2"/>
+            <rect x="660" y="142" width="4" height="4" class="pf-h1"/>
+            <rect x="664" y="142" width="4" height="4" class="pf-h3"/>
+            <rect x="668" y="142" width="4" height="4" class="pf-h5"/>
+            <rect x="672" y="142" width="4" height="4" class="pf-h4"/>
+            <rect x="676" y="142" width="4" height="4" class="pf-h2"/>
+            <rect x="624" y="138" width="4" height="4" class="pf-h2"/>
+            <rect x="628" y="138" width="4" height="4" class="pf-h1"/>
+            <rect x="668" y="138" width="4" height="4" class="pf-h2"/>
+            <rect x="672" y="138" width="4" height="4" class="pf-h4"/>
+            <rect x="676" y="138" width="4" height="4" class="pf-h5"/>
+            <rect x="680" y="138" width="4" height="4" class="pf-h2"/>
+            <rect x="624" y="134" width="4" height="4" class="pf-h1"/>
+            <rect x="628" y="134" width="4" height="4" class="pf-h2"/>
+            <rect x="632" y="134" width="4" height="4" class="pf-h1"/>
+            <rect x="672" y="134" width="4" height="4" class="pf-h1"/>
+            <rect x="676" y="134" width="4" height="4" class="pf-h4"/>
+            <rect x="680" y="134" width="4" height="4" class="pf-h5"/>
+            <rect x="684" y="134" width="4" height="4" class="pf-h3"/>
+            <rect x="688" y="134" width="4" height="4" class="pf-h1"/>
+            <rect x="628" y="130" width="4" height="4" class="pf-h1"/>
+            <rect x="632" y="130" width="4" height="4" class="pf-h2"/>
+            <rect x="636" y="130" width="4" height="4" class="pf-h1"/>
+            <rect x="676" y="130" width="4" height="4" class="pf-h1"/>
+            <rect x="680" y="130" width="4" height="4" class="pf-h3"/>
+            <rect x="684" y="130" width="4" height="4" class="pf-h5"/>
+            <rect x="688" y="130" width="4" height="4" class="pf-h3"/>
+            <rect x="692" y="130" width="4" height="4" class="pf-h1"/>
+            <rect x="632" y="126" width="4" height="4" class="pf-h1"/>
+            <rect x="636" y="126" width="4" height="4" class="pf-h2"/>
+            <rect x="640" y="126" width="4" height="4" class="pf-h1"/>
+            <rect x="684" y="126" width="4" height="4" class="pf-h2"/>
+            <rect x="688" y="126" width="8" height="4" class="pf-h4"/>
+            <rect x="696" y="126" width="4" height="4" class="pf-h1"/>
+            <rect x="636" y="122" width="4" height="4" class="pf-h1"/>
+            <rect x="640" y="122" width="4" height="4" class="pf-h2"/>
+            <rect x="688" y="122" width="4" height="4" class="pf-h2"/>
+            <rect x="692" y="122" width="8" height="4" class="pf-h4"/>
+            <rect x="700" y="122" width="4" height="4" class="pf-h2"/>
+            <rect x="640" y="118" width="4" height="4" class="pf-h1"/>
+            <rect x="644" y="118" width="4" height="4" class="pf-h2"/>
+            <rect x="692" y="118" width="4" height="4" class="pf-h1"/>
+            <rect x="696" y="118" width="8" height="4" class="pf-h4"/>
+            <rect x="704" y="118" width="4" height="4" class="pf-h2"/>
+            <rect x="644" y="114" width="4" height="4" class="pf-h2"/>
+            <rect x="648" y="114" width="4" height="4" class="pf-h1"/>
+            <rect x="696" y="114" width="4" height="4" class="pf-h1"/>
+            <rect x="700" y="114" width="4" height="4" class="pf-h3"/>
+            <rect x="704" y="114" width="4" height="4" class="pf-h4"/>
+            <rect x="708" y="114" width="4" height="4" class="pf-h2"/>
+            <rect x="648" y="110" width="4" height="4" class="pf-h2"/>
+            <rect x="652" y="110" width="4" height="4" class="pf-h1"/>
+            <rect x="700" y="110" width="4" height="4" class="pf-h1"/>
+            <rect x="704" y="110" width="4" height="4" class="pf-h3"/>
+            <rect x="708" y="110" width="4" height="4" class="pf-h4"/>
+            <rect x="712" y="110" width="4" height="4" class="pf-h2"/>
+            <rect x="648" y="106" width="4" height="4" class="pf-h1"/>
+            <rect x="652" y="106" width="4" height="4" class="pf-h2"/>
+            <rect x="708" y="106" width="4" height="4" class="pf-h3"/>
+            <rect x="712" y="106" width="4" height="4" class="pf-h4"/>
+            <rect x="716" y="106" width="4" height="4" class="pf-h2"/>
+            <rect x="652" y="102" width="8" height="4" class="pf-h1"/>
+            <rect x="712" y="102" width="4" height="4" class="pf-h3"/>
+            <rect x="716" y="102" width="4" height="4" class="pf-h4"/>
+            <rect x="720" y="102" width="4" height="4" class="pf-h2"/>
+            <rect x="656" y="98" width="4" height="4" class="pf-h2"/>
+            <rect x="660" y="98" width="4" height="4" class="pf-h1"/>
+            <rect x="716" y="98" width="4" height="4" class="pf-h2"/>
+            <rect x="720" y="98" width="4" height="4" class="pf-h4"/>
+            <rect x="660" y="94" width="4" height="4" class="pf-h2"/>
+            <rect x="720" y="94" width="4" height="4" class="pf-h2"/>
+            <rect x="660" y="90" width="4" height="4" class="pf-h1"/>
+            <rect x="664" y="90" width="4" height="4" class="pf-h2"/>
+            <rect x="664" y="86" width="4" height="4" class="pf-h2"/>
+            <rect x="668" y="86" width="4" height="4" class="pf-h1"/>
+            <rect x="668" y="82" width="4" height="4" class="pf-h2"/>
+            <text x="548" y="90" class="pf-note" text-anchor="end">8 kHz</text>
+            <text x="548" y="206" class="pf-note" text-anchor="end">0</text>
+            <text x="552" y="220" class="pf-note" text-anchor="start">0 s</text>
+            <text x="724" y="220" class="pf-note" text-anchor="end">2 s</text>
+            <text x="552" y="238" class="pf-note" text-anchor="start">a chirp, illustrative</text>
+            <line x1="0" y1="262" x2="740" y2="262" class="rulefaint"/>
+            <text x="0" y="286" class="pf-cmd" text-anchor="start">$ caliper install attention_scope</text>
+            <rect x="0" y="298" width="196" height="100" rx="4" class="blk"/>
+            <text x="12" y="318" class="mono small" text-anchor="start">attention_scope 2.0.0</text>
+            <text x="12" y="340" class="pf-note" text-anchor="start">kind</text>
+            <text x="68" y="340" class="pf-val" text-anchor="start">applet, built</text>
+            <text x="12" y="356" class="pf-note" text-anchor="start">sha256</text>
+            <text x="68" y="356" class="pf-code" text-anchor="start">4b07…e912</text>
+            <text x="12" y="372" class="pf-note" text-anchor="start">signed</text>
+            <text x="68" y="372" class="pf-val" text-anchor="start">by Sternbild</text>
+            <text x="12" y="388" class="pf-note" text-anchor="start">licence</text>
+            <text x="68" y="388" class="pf-val" text-anchor="start">commercial, 1 seat</text>
+            <text x="0" y="416" class="pf-note" text-anchor="start">listed in caliper-registry</text>
+            <path d="M 198 348 L 212 348" class="arrow data" marker-end="url(#plat-tipd)"/>
+            <path class="pf-tree" d="M 221 316 L 221 324 L 230 324"/>
+            <path class="pf-tree" d="M 239 332 L 239 340 L 248 340"/>
+            <path class="pf-tree" d="M 239 332 L 239 356 L 248 356"/>
+            <path class="pf-tree" d="M 239 332 L 239 372 L 248 372"/>
+            <path class="pf-tree" d="M 239 332 L 239 388 L 248 388"/>
+            <path class="pf-tree" d="M 239 332 L 239 404 L 248 404"/>
+            <text x="216" y="312" class="pf-path old" text-anchor="start">~/Library/Application Support/Caliper/</text>
+            <text x="234" y="328" class="pf-path plain" text-anchor="start">applets/</text>
+            <text x="252" y="344" class="pf-path old" text-anchor="start">libsine_scope.dylib</text>
+            <text x="252" y="360" class="pf-path old" text-anchor="start">sine_scope.caliper.toml</text>
+            <text x="252" y="376" class="pf-path add" text-anchor="start">libattention_scope.dylib</text>
+            <text x="252" y="392" class="pf-path add" text-anchor="start">attention_scope.caliper.toml</text>
+            <text x="252" y="408" class="pf-path add" text-anchor="start">attention_scope.licence</text>
+            <text x="216" y="426" class="pf-note" text-anchor="start">on Windows: %APPDATA%\Caliper\applets\ and a .dll</text>
+            <text x="516" y="312" class="pf-step" text-anchor="start">1</text>
+            <text x="530" y="312" class="pf-val" text-anchor="start">reads attention_scope.caliper.toml</text>
+            <text x="516" y="332" class="pf-step" text-anchor="start">2</text>
+            <text x="530" y="332" class="pf-val" text-anchor="start">checks ABI epoch, host version, services</text>
+            <text x="516" y="352" class="pf-step" text-anchor="start">3</text>
+            <text x="530" y="352" class="pf-val hot" text-anchor="start">checks the licence</text>
+            <text x="516" y="372" class="pf-step" text-anchor="start">4</text>
+            <text x="530" y="372" class="pf-val" text-anchor="start">loads libattention_scope.dylib</text>
+            <line x1="0" y1="440" x2="740" y2="440" class="rulefaint"/>
+            <text x="0" y="458" class="k" text-anchor="start">WIDGET</text>
+            <text x="0" y="478" class="v plain" text-anchor="start">4 source files</text>
+            <line x1="173" y1="450" x2="173" y2="480" class="rulefaint"/>
+            <text x="185" y="458" class="k" text-anchor="start">APPLET</text>
+            <text x="185" y="478" class="v plain" text-anchor="start">3 files</text>
+            <line x1="358" y1="450" x2="358" y2="480" class="rulefaint"/>
+            <text x="370" y="458" class="k" text-anchor="start">INSTALLED TO</text>
+            <text x="370" y="478" class="v plain" text-anchor="start">Caliper/applets/</text>
+            <line x1="543" y1="450" x2="543" y2="480" class="rulefaint"/>
+            <text x="555" y="458" class="k" text-anchor="start">READ BEFORE LOADING</text>
+            <text x="555" y="478" class="v plain" text-anchor="start">manifest, licence</text>
           </svg>
           </div>
         </article>
@@ -2474,6 +2898,85 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
     draw();
     run();
   }
+})();
+</script>
+<script id="soon-js">
+(() => {
+  // Caliper Bench card: replays an illustrative 500 Hz reach of a Franka Research 3. Joints 2 and 6 track the policy;
+  // from t = 1.9 s joint 4 makes only a third of its commanded motion, so every link past it drifts from the predicted
+  // pose. Kinematics: Franka's DH table reduced to the side plane (see soon_parts/bench.py).
+  const root = document.getElementById("bench-fig");
+  if (!root) return;
+  const $ = id => document.getElementById(id);
+  const S = 320, X0 = 150, Y0 = 280, T_END = 5, T_DIV = 1.9, FS = 500, T_STILL = 3.0;
+  const QA = [-0.6, -2.5], QB = [0.45, -1.75];
+  const PX0 = 64, PX1 = 724, PY0 = 306, PY1 = 396, QMAX = -1.65, QMIN = -2.6;
+  const ease = t => { const u = Math.min(1, Math.max(0, (t - 0.4) / 3.2)); return 0.5 - 0.5 * Math.cos(Math.PI * u); };
+  const predicted = t => { const e = ease(t), q2 = QA[0] + (QB[0] - QA[0]) * e, q4 = QA[1] + (QB[1] - QA[1]) * e; return [q2, q4, q2 - q4]; };
+  const gain = t => t <= T_DIV ? 1 : 1 - 0.65 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, (t - T_DIV) / 0.4)));
+  const N = T_END * FS + 1, q4m = new Float64Array(N), q4p = new Float64Array(N);
+  let acc = QA[1], prev = predicted(0)[1];
+  for (let i = 0; i < N; i++) {
+    const t = i / FS, p = predicted(t)[1];
+    acc += (p - prev) * gain(t); prev = p; q4p[i] = p;
+    q4m[i] = acc + 0.0015 * Math.sin(97 * t) + 0.001 * Math.sin(213 * t + 1);
+  }
+  const R = (a, x, z) => [x * Math.cos(a) + z * Math.sin(a), -x * Math.sin(a) + z * Math.cos(a)];
+  function pose(q2, q4, q6) {
+    const J2 = [0, 0.333], a1 = q2, d1 = R(a1, 0.0825, 0.316), J4 = [J2[0] + d1[0], J2[1] + d1[1]], a2 = a1 - q4;
+    const d2 = R(a2, -0.0825, 0.384), J6 = [J4[0] + d2[0], J4[1] + d2[1]], a3 = a2 - q6;
+    return { J2, J4, J6, a1, a2, a3 };
+  }
+  const tf = (J, a) => `translate(${(X0 + S * J[0]).toFixed(1)} ${(Y0 - S * J[1]).toFixed(1)}) rotate(${(a * 180 / Math.PI).toFixed(2)})`;
+  const ptx = t => PX0 + t / T_END * (PX1 - PX0), pqy = q => PY0 + (QMAX - q) / (QMAX - QMIN) * (PY1 - PY0);
+  const fmt = q => q.toFixed(2).replace("-", "−") + " rad";
+  const el = { mu: $("bench-m-up"), mf: $("bench-m-fore"), mh: $("bench-m-hand"), mj: $("bench-m-j4"),
+               pf: $("bench-p-fore"), ph: $("bench-p-hand"), lab: $("bench-j4-label"),
+               rm: $("bench-r-meas"), rp: $("bench-r-pred"), rd: $("bench-r-diff"),
+               pm: $("bench-plot-m"), pp: $("bench-plot-p"), band: $("bench-band"), lag: $("bench-lag"), cur: $("bench-cursor") };
+  function draw(t) {
+    const i = Math.min(N - 1, Math.round(t * FS)), [q2, , q6] = predicted(t);
+    const m = pose(q2, q4m[i], q6), p = pose(q2, q4p[i], q6);
+    el.mu.setAttribute("transform", tf(m.J2, m.a1));
+    el.mf.setAttribute("transform", tf(m.J4, m.a2));
+    el.mh.setAttribute("transform", tf(m.J6, m.a3));
+    el.mj.setAttribute("transform", `translate(${(X0 + S * m.J4[0]).toFixed(1)} ${(Y0 - S * m.J4[1]).toFixed(1)})`);
+    el.pf.setAttribute("transform", tf(p.J4, p.a2));
+    el.ph.setAttribute("transform", tf(p.J6, p.a3));
+    el.lab.setAttribute("x", (X0 + S * m.J4[0] - 26).toFixed(1));
+    el.lab.setAttribute("y", (Y0 - S * m.J4[1] - 22).toFixed(1));
+    const diff = Math.abs(q4m[i] - q4p[i]);
+    el.rm.textContent = fmt(q4m[i]); el.rp.textContent = fmt(q4p[i]); el.rd.textContent = fmt(diff);
+    el.rd.classList.toggle("bn-hot", t > T_DIV);
+    let sm = "", sp = "";
+    for (let k = 0; k <= i; k += 10) { const x = ptx(k / FS).toFixed(1); sm += `${x},${pqy(q4m[k]).toFixed(1)} `; sp += `${x},${pqy(q4p[k]).toFixed(1)} `; }
+    el.pm.setAttribute("points", sm); el.pp.setAttribute("points", sp);
+    const cx = ptx(t).toFixed(1);
+    el.cur.setAttribute("x1", cx); el.cur.setAttribute("x2", cx);
+    el.band.setAttribute("width", Math.max(0, ptx(t) - ptx(T_DIV)).toFixed(1));
+    el.lag.style.opacity = t > T_DIV ? 1 : 0;
+  }
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let playing = !reduce, visible = false, raf = 0, last = 0, t = T_STILL, hold = 0, started = false;
+  function tick(ts) {
+    if (!playing || !visible) { raf = 0; return; }
+    const dt = last ? Math.min(100, ts - last) : 0; last = ts;
+    if (t >= T_END) { hold += dt; if (hold > 1500) { t = 0; hold = 0; } }
+    else t = Math.min(T_END, t + dt / 1000);
+    draw(t);
+    raf = requestAnimationFrame(tick);
+  }
+  function run() {
+    root.classList.toggle("playing", playing);
+    if (playing && visible && !raf) {
+      if (!started) { started = true; t = 0; }
+      last = 0; raf = requestAnimationFrame(tick);
+    }
+  }
+  root.querySelector(".tb-play").addEventListener("click", () => { playing = !playing; run(); });
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; run(); }, { threshold: 0.25 }).observe(root);
+  draw(T_STILL);
+  root.classList.toggle("playing", playing);
 })();
 </script>
 </body>
