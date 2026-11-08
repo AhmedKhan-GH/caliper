@@ -156,7 +156,7 @@
                         background: linear-gradient(180deg, rgba(232, 224, 208, .055), rgba(232, 224, 208, 0) 100%); }
   .aura { position: absolute; left: 50%; top: 0; width: 1600px; height: 980px; transform: translateX(-50%); pointer-events: none; }
   .hero .wrap { position: relative; }
-  .hero-mark { width: 136px; height: 136px; margin: 0 auto 26px; filter: drop-shadow(0 18px 30px rgba(0, 0, 0, .45)); }
+  .hero-mark { display: block; width: 136px; height: 136px; margin: 0 auto 26px; overflow: visible; }
   /* The name is the hero's headline; the trailing letter-space is padded on the left so the word sits centred. */
   .hero h1 { font: clamp(44px, 10.5vw, 116px)/1 var(--display); letter-spacing: .16em; padding-left: .16em; margin: 0 auto;
              text-shadow: 0 18px 44px rgba(0, 0, 0, .55); }
@@ -537,15 +537,55 @@
       <polygon points="798,840 125,0 255,0 802,840"/>
       <polygon points="798,840 1345,0 1475,0 802,840"/>
     </g>
-    <!-- Construction: the horizon and two arcs about the point, in the organisation page's construction stroke. -->
+    <!-- Construction: the horizon and three rings about the point, as on the Sternbild organisation page (same radii,
+         stroke and opacities, each ring a little fainter outwards). -->
     <g fill="none" stroke="#6a655a" stroke-width="1.5" vector-effect="non-scaling-stroke">
       <line x1="0" y1="840.5" x2="1600" y2="840.5" stroke="url(#horizon)"/>
-      <path d="M 300 840 A 500 500 0 0 1 1300 840"/>
-      <path d="M 40 840 A 760 760 0 0 1 1560 840" stroke-dasharray="2 6" stroke-opacity=".86"/>
+      <path d="M 530 840 A 270 270 0 0 1 1070 840"/>
+      <path d="M 230 840 A 570 570 0 0 1 1370 840" stroke-opacity=".86"/>
+      <path d="M -30 840 A 830 830 0 0 1 1630 840" stroke-opacity=".72"/>
     </g>
   </svg>
   <div class="wrap">
-    <img class="hero-mark" src="assets/caliper-icon.svg?v=2" alt="Caliper">
+    <svg class="hero-mark" viewBox="0 0 1024 1024" role="img" aria-label="Caliper" xmlns="http://www.w3.org/2000/svg"><defs><filter id="hm-drop" filterUnits="userSpaceOnUse" x="-400" y="-400" width="1824" height="1900" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="135" stdDeviation="113" flood-color="#000" flood-opacity=".45"/></filter></defs><g filter="url(#hm-drop)"><defs>
+    <filter id="hm-filter-1" filterUnits="userSpaceOnUse" x="60" y="60" width="904" height="904" data-vc-blend="multiply" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="8"/><feOffset dx="0" dy="14" result="shadow"/><feFlood flood-color="#000000" flood-opacity="0.3"/><feComposite in2="shadow" operator="in" result="paint"/><feMerge><feMergeNode in="paint"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="hm-linear-gradient-1" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#36332d"/>
+      <stop offset="0.5" stop-color="#211f1b"/>
+      <stop offset="1" stop-color="#141311"/>
+    </linearGradient>
+    <filter id="hm-filter-2" filterUnits="userSpaceOnUse" x="169" y="265.279" width="686" height="493.442" data-vc-blend="multiply" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="5"/><feOffset dx="0" dy="8" result="shadow"/><feFlood flood-color="#050403" flood-opacity="0.35"/><feComposite in2="shadow" operator="in" result="paint"/><feMerge><feMergeNode in="paint"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="hm-linear-gradient-2" x1="512" y1="394" x2="512" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d8b27a"/>
+      <stop offset="0.55" stop-color="#b38b59"/>
+      <stop offset="1" stop-color="#8d6a3e"/>
+    </linearGradient>
+    <linearGradient id="hm-linear-gradient-3" x1="512" y1="300" x2="512" y2="724" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6f0e4"/>
+      <stop offset="0.5" stop-color="#e8e0d0"/>
+      <stop offset="1" stop-color="#cfc3aa"/>
+    </linearGradient>
+    <linearGradient id="hm-linear-gradient-4" x1="512" y1="478" x2="512" y2="546" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d8b27a"/>
+      <stop offset="1" stop-color="#9a7647"/>
+    </linearGradient>
+  </defs>
+  <title>Caliper</title>
+  <g id="hm-Caliper_app_icon" data-name="Caliper app icon">
+    <g filter="url(#hm-filter-1)">
+      <path id="hm-Tile" d="M264.8 100 L759.2 100 L924 264.8 L924 759.2 L759.2 924 L264.8 924 L100 759.2 L100 264.8 Z" fill="url(#hm-linear-gradient-1)"/>
+    </g>
+    <path id="hm-Border" d="M269.465 111.261 L754.535 111.261 L912.739 269.465 L912.739 754.535 L754.535 912.739 L269.465 912.739 L111.261 754.535 L111.261 269.465 Z" fill="none" stroke="#e8e0d0" stroke-width="22.523"/>
+    <g filter="url(#hm-filter-2)">
+      <g id="hm-Caliper">
+        <path id="hm-Iris" d="M630 512 C630 577.17 577.17 630 512 630 C446.83 630 394 577.17 394 512 C394 446.83 446.83 394 512 394 C577.17 394 630 446.83 630 512 Z M512 430 C466.713 430 430 466.713 430 512 C430 557.287 466.713 594 512 594 C557.287 594 594 557.287 594 512 C594 466.713 557.287 430 512 430 Z" fill="url(#hm-linear-gradient-2)" fill-rule="evenodd"/>
+        <path id="hm-Left_caliper" data-name="Left caliper" d="M447.599 290.933 C460.479 289.59 473.418 290.314 486.063 293.111 C497.138 295.644 507.746 299.695 517.81 304.95 C534.417 313.74 549.475 325.272 561.469 339.795 C572.397 353.093 580.397 368.412 586.436 384.474 C588.711 390.551 590.736 396.721 592.514 402.962 C593.433 406.209 594.77 409.791 594.92 413.18 C593.57 411.854 592.543 410.104 591.478 408.549 C589.664 405.892 587.895 403.205 586.119 400.524 C581.046 392.869 575.908 385.254 570.288 377.987 C561.956 367.246 552.534 357.381 541.546 349.328 C530.758 341.46 518.754 335.508 506.19 331.05 C488.957 325.043 470.779 322.972 452.792 326.513 C433.184 330.498 415.436 340.334 399.371 351.977 C382.234 364.478 366.72 379.084 351.767 394.084 C336.611 409.32 322.023 425.108 307.482 440.927 C290.881 458.992 274.36 477.137 257.341 494.811 C260.302 499.854 262 505.729 262 512 C262 518.271 260.302 524.146 257.341 529.189 C277.914 550.553 297.758 572.604 317.899 594.373 C329.208 606.589 340.61 618.724 352.365 630.516 C367.966 646.133 384.193 661.34 402.263 674.092 C419.733 686.336 439.224 696.197 460.645 698.718 C462.75 700.365 464.538 702.578 466.493 704.414 C469.98 707.673 473.623 710.757 477.404 713.67 C481.821 717.055 486.414 720.197 491.153 723.113 C493.54 724.574 496.142 725.812 498.434 727.407 C481.48 733.04 463.71 734.975 445.955 732.879 C428.609 730.712 412.037 724.913 396.601 716.801 C369.308 702.292 346.01 681.3 325.354 658.528 C302.151 632.839 282.081 604.569 262.348 576.189 C254.855 565.408 247.4 554.6 239.794 543.899 C236.119 545.258 232.146 546 228 546 C209.222 546 194 530.778 194 512 C194 493.222 209.222 478 228 478 C232.146 478 236.119 478.742 239.793 480.101 C248.808 467.418 257.612 454.588 266.516 441.827 C281.617 420.197 297.028 398.753 313.985 378.526 C326.516 363.632 339.876 349.419 354.554 336.614 C380.952 313.73 412.278 294.859 447.599 290.933 Z M228 491 C216.402 491 207 500.402 207 512 C207 523.598 216.402 533 228 533 C239.598 533 249 523.598 249 512 C249 500.402 239.598 491 228 491 Z M592.015 614.669 C592.916 613.369 593.788 611.932 594.92 610.82 C594.796 613.615 593.753 616.538 593.02 619.224 C591.649 624.214 590.102 629.156 588.411 634.047 C581.579 653.726 572.049 672.488 558.112 688.118 C556.135 688.513 553.909 688.347 551.899 688.329 C547.771 688.265 543.666 687.903 539.586 687.272 C536.553 686.783 533.552 686.152 530.575 685.395 C529.204 685.037 527.669 684.778 526.397 684.146 C536.578 678.725 545.941 671.944 554.283 663.98 C562.036 656.548 568.844 648.222 575.13 639.53 C579.527 633.436 583.67 627.167 587.822 620.905 C589.207 618.818 590.593 616.731 592.015 614.669 Z" fill="url(#hm-linear-gradient-3)"/>
+        <path id="hm-Left_pivot" d="M239.5 512 C239.5 518.351 234.351 523.5 228 523.5 C221.649 523.5 216.5 518.351 216.5 512 C216.5 505.649 221.649 500.5 228 500.5 C234.351 500.5 239.5 505.649 239.5 512 Z" fill="url(#hm-linear-gradient-4)"/>
+        <path id="hm-Right_caliper" data-name="Right caliper" d="M525.566 296.593 C542.52 290.96 560.29 289.025 578.045 291.121 C595.391 293.288 611.963 299.087 627.399 307.199 C654.692 321.708 677.99 342.7 698.646 365.472 C721.849 391.161 741.919 419.431 761.652 447.811 C769.145 458.592 776.6 469.4 784.206 480.101 C787.881 478.742 791.854 478 796 478 C814.778 478 830 493.222 830 512 C830 530.778 814.778 546 796 546 C791.854 546 787.881 545.258 784.207 543.899 C775.192 556.582 766.388 569.412 757.484 582.173 C742.383 603.803 726.972 625.247 710.015 645.474 C697.484 660.368 684.124 674.581 669.446 687.386 C643.048 710.27 611.722 729.141 576.401 733.067 C563.521 734.41 550.582 733.686 537.937 730.889 C526.862 728.356 516.254 724.305 506.19 719.05 C489.583 710.26 474.525 698.728 462.531 684.205 C451.603 670.907 443.603 655.588 437.564 639.526 C435.289 633.449 433.264 627.279 431.486 621.038 C430.567 617.791 429.23 614.209 429.08 610.82 C430.43 612.146 431.457 613.896 432.522 615.451 C434.336 618.108 436.105 620.795 437.881 623.476 C442.954 631.131 448.092 638.746 453.712 646.013 C462.044 656.754 471.466 666.619 482.454 674.672 C493.242 682.54 505.246 688.492 517.81 692.95 C535.043 698.957 553.221 701.028 571.208 697.487 C590.816 693.502 608.564 683.666 624.629 672.023 C641.766 659.522 657.28 644.916 672.233 629.916 C687.389 614.68 701.977 598.892 716.518 583.073 C733.119 565.008 749.64 546.863 766.659 529.189 C763.698 524.146 762 518.271 762 512 C762 505.729 763.698 499.854 766.659 494.811 C746.086 473.447 726.242 451.395 706.101 429.627 C694.792 417.411 683.39 405.276 671.635 393.484 C656.034 377.867 639.807 362.66 621.737 349.908 C604.267 337.664 584.776 327.803 563.355 325.282 C561.25 323.635 559.462 321.422 557.507 319.586 C554.02 316.327 550.377 313.243 546.596 310.33 C542.179 306.945 537.586 303.803 532.847 300.887 C530.46 299.426 527.858 298.188 525.566 296.593 Z M465.888 335.882 C467.865 335.487 470.091 335.653 472.101 335.671 C476.229 335.735 480.334 336.097 484.414 336.728 C487.447 337.217 490.448 337.848 493.425 338.605 C494.796 338.963 496.331 339.222 497.603 339.854 C487.422 345.275 478.059 352.056 469.717 360.02 C461.964 367.452 455.156 375.778 448.87 384.47 C444.473 390.564 440.33 396.833 436.178 403.095 C434.793 405.182 433.407 407.269 431.985 409.331 C431.084 410.631 430.212 412.068 429.08 413.18 C429.204 410.385 430.247 407.462 430.98 404.776 C432.351 399.786 433.898 394.844 435.589 389.953 C442.421 370.274 451.951 351.512 465.888 335.882 Z M796 491 C784.402 491 775 500.402 775 512 C775 523.598 784.402 533 796 533 C807.598 533 817 523.598 817 512 C817 500.402 807.598 491 796 491 Z" fill="url(#hm-linear-gradient-3)"/>
+        <path id="hm-Right_pivot" d="M807.5 512 C807.5 518.351 802.351 523.5 796 523.5 C789.649 523.5 784.5 518.351 784.5 512 C784.5 505.649 789.649 500.5 796 500.5 C802.351 500.5 807.5 505.649 807.5 512 Z" fill="url(#hm-linear-gradient-4)"/>
+      </g>
+    </g>
+  </g></g></svg>
     <h1>Caliper</h1>
     <p class="tagline">Machine learning visualization framework</p>
     <p class="lede">A native app for interpretability. Observe models directly from the GPU in real time.</p>
