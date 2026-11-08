@@ -41,7 +41,9 @@ jobs:
         with:
           path: third_party/libtorch
           key: libtorch-macos-arm64-${{ env.LIBTORCH_VERSION }}
-      - run: cmake --preset release
+      # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
+      # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
+      - run: cmake --preset release -DCALIPER_WITH_SLANG=OFF
       - run: cmake --build cmake-build-release --parallel
       # The GPU suites (gfx, export, embed, torch) skip without a device and
       # report that as Skipped, not Passed. A hosted runner's Metal/GL
@@ -78,7 +80,9 @@ jobs:
             third_party/libtorch-release
             third_party/glew-prebuilt
           key: libtorch-win-cpu-${{ env.LIBTORCH_VERSION }}-glew-2.3.1
-      - run: cmake --preset release
+      # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
+      # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
+      - run: cmake --preset release -DCALIPER_WITH_SLANG=OFF
       - run: cmake --build cmake-build-release --parallel
       - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
       - if: failure()
