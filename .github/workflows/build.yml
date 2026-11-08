@@ -103,9 +103,12 @@ jobs:
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
       # sccache cannot cache MSVC compiles that write a PDB (/Zi). Release builds have no /Zi
       # (CMP0141 is NEW, so debug info is only requested for Debug and RelWithDebInfo).
+      # It cannot cache precompiled-header compiles (/Yc, /Yu /Fp) either; glslang's
+      # MachineIndependent target is the only one using them, so PCH is switched off here.
       - run: >-
           cmake --preset release -DCALIPER_WITH_SLANG=OFF
           -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
       - run: cmake --build cmake-build-release --parallel
       - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
       - if: failure()
