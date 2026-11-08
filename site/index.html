@@ -58,8 +58,8 @@
   .btn .sep { font-family: var(--text); }   /* the display face has no middle dot */
   .btn-soon { color: var(--faint); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; opacity: .6; cursor: not-allowed; }
   .soon-grid { display: grid; gap: 20px; margin-top: 20px; }
-  .soon-small { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto auto; margin-top: 34px; }
-  .soon-small .soon-card { display: grid; grid-row: span 3; grid-template-rows: subgrid; }
+  .soon-small { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto; margin-top: 34px; }
+  .soon-small .soon-card { display: grid; grid-row: span 2; grid-template-rows: subgrid; }
   .soon-card pre.soon-code { padding: 14px 16px 16px; border-top: 1px solid var(--rule-faint); font-size: 12px; }
   .soon-small .soon-fig { margin-top: 0; }
   .soon-card { scroll-margin-top: 90px; display: flex; flex-direction: column; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; overflow: hidden; }
@@ -155,21 +155,6 @@
   .hw .pf-plot { fill: #1a1916; stroke: var(--rule-faint); }
   .hw .pf-h1 { fill: #2a241c; } .hw .pf-h2 { fill: #3f3223; } .hw .pf-h3 { fill: #5c4630; }
   .hw .pf-h4 { fill: #87653f; } .hw .pf-h5 { fill: #b38b59; } .hw .pf-h6 { fill: #e3cfa6; }
-.hw .ci-path { font-family: var(--mono); font-size: 11px; fill: var(--parchment); }
-  .hw .ci-path.ctx { fill: var(--faint); }
-  .hw .ci-verb { font-family: var(--mono); font-size: 11px; fill: var(--bronze); }
-  .hw .ci-key { font-family: var(--mono); font-size: 10px; fill: var(--faint); }
-  .hw .ci-tree { fill: none; stroke: var(--rule); stroke-width: 1; }
-  .hw .ci-png { fill: var(--night); stroke: var(--rule); }
-.hw .ai-flow.arrow.data { stroke-width: 1.2; }
-  .hw .ai-hot { fill: var(--bronze); }
-  .hw .ai-code { font-family: var(--mono); font-size: 11px; }
-  .hw .ai-rule { stroke: var(--rule-faint); stroke-width: 1; }
-  .hw .ai-dot { fill: var(--bronze); stroke: var(--deep); stroke-width: 1; }
-.hw .mi-code { font-family: var(--mono); font-size: 11px; fill: var(--secondary); white-space: pre; }
-  .hw .mi-old { font-family: var(--mono); font-size: 11px; fill: var(--faint); white-space: pre; }
-  .hw .mi-plus { fill: var(--bronze); }
-  .hw .mi-key { stroke: #3ca99c; stroke-width: 1.6; }
   /* /soon-parts */
   .btn-ghost { color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; }
   .btn-ghost:hover { background: var(--plate-hover); border-color: var(--faint); }
@@ -1870,121 +1855,14 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <article class="soon-card" id="soon-cli">
           <div class="soon-copy"><h3>Caliper CLI</h3><p>Create, build, run and capture applets from a terminal, a script or a CI job.</p></div>
           <pre class="code soon-code"><code><span class="row"><span class="c">$</span> caliper new finetune_scope</span><span class="row"><span class="c">$</span> caliper build finetune_scope</span><span class="row"><span class="c">$</span> caliper run finetune_scope</span><span class="row"><span class="c">$</span> caliper capture loss -o loss.png</span></code></pre>
-          <div class="soon-fig">
-          <svg class="hw" viewBox="-1 -1 322 322" role="img" aria-label="Files the Caliper CLI leaves on disk. new writes finetune_scope/ with CMakeLists.txt, finetune_scope.cpp and finetune_scope.caliper.toml; build writes build/applets/ with libfinetune_scope.dylib and a copy of the manifest; run creates the applet's data folder data/dev.example.finetune-scope/ under ~/Library/Application Support/Caliper/; capture writes loss.png, shown as a thumbnail of the loss curve, and its sidecar loss.png.json with version, git_commit, backend, platform, timestamp_utc, width, height and state. On Windows the library is finetune_scope.dll and the data folder is under %APPDATA%\Caliper\. The applet and the curve are illustrative.">
-            <text x="0" y="12" class="k" text-anchor="start">ON DISK</text>
-            <text x="320" y="12" class="k" text-anchor="end">COMMAND</text>
-            <path class="ci-tree" d="M 5 42 L 5 50 L 14 50"/>
-            <path class="ci-tree" d="M 5 42 L 5 66 L 14 66"/>
-            <path class="ci-tree" d="M 5 42 L 5 82 L 14 82"/>
-            <path class="ci-tree" d="M 5 42 L 5 98 L 14 98"/>
-            <path class="ci-tree" d="M 23 106 L 23 114 L 32 114"/>
-            <path class="ci-tree" d="M 23 106 L 23 130 L 32 130"/>
-            <text x="0" y="38" class="ci-path" text-anchor="start">finetune_scope/</text>
-            <text x="320" y="38" class="ci-verb" text-anchor="end">new</text>
-            <text x="18" y="54" class="ci-path" text-anchor="start">CMakeLists.txt</text>
-            <text x="320" y="54" class="ci-verb" text-anchor="end">new</text>
-            <text x="18" y="70" class="ci-path" text-anchor="start">finetune_scope.cpp</text>
-            <text x="320" y="70" class="ci-verb" text-anchor="end">new</text>
-            <text x="18" y="86" class="ci-path" text-anchor="start">finetune_scope.caliper.toml</text>
-            <text x="320" y="86" class="ci-verb" text-anchor="end">new</text>
-            <text x="18" y="102" class="ci-path" text-anchor="start">build/applets/</text>
-            <text x="320" y="102" class="ci-verb" text-anchor="end">build</text>
-            <text x="36" y="118" class="ci-path" text-anchor="start">libfinetune_scope.dylib</text>
-            <text x="320" y="118" class="ci-verb" text-anchor="end">build</text>
-            <text x="36" y="134" class="ci-path" text-anchor="start">finetune_scope.caliper.toml</text>
-            <text x="320" y="134" class="ci-verb" text-anchor="end">build</text>
-            <path class="ci-tree" d="M 5 166 L 5 174 L 14 174"/>
-            <text x="0" y="162" class="ci-path ctx" text-anchor="start">~/Library/Application Support/Caliper/</text>
-            <text x="18" y="178" class="ci-path" text-anchor="start">data/dev.example.finetune-scope/</text>
-            <text x="320" y="178" class="ci-verb" text-anchor="end">run</text>
-            <text x="0" y="206" class="ci-path" text-anchor="start">loss.png</text>
-            <text x="320" y="206" class="ci-verb" text-anchor="end">capture</text>
-            <text x="0" y="222" class="ci-path" text-anchor="start">loss.png.json</text>
-            <text x="320" y="222" class="ci-verb" text-anchor="end">capture</text>
-            <rect x="100" y="192" width="72" height="40" rx="2" class="ci-png"/>
-            <polyline class="loss" points="104.0,197.4 106.1,201.3 108.3,204.6 110.4,207.3 112.5,209.7 114.7,211.7 116.8,213.4 118.9,214.8 121.1,216.0 123.2,217.1 125.3,217.9 127.5,218.7 129.6,219.3 131.7,219.8 133.9,220.3 136.0,220.6 138.1,220.9 140.3,221.2 142.4,221.4 144.5,221.6 146.7,221.8 148.8,221.9 150.9,222.1 153.1,222.2 155.2,222.2 157.3,222.3 159.5,222.4 161.6,222.4 163.7,222.5 165.9,222.5 168.0,222.5"/>
-            <path class="ci-tree" d="M 5 226 L 5 258"/>
-            <text x="18" y="248" class="ci-key" text-anchor="start">version · git_commit · backend · platform</text>
-            <text x="18" y="262" class="ci-key" text-anchor="start">timestamp_utc · width · height · state</text>
-            <text x="0" y="292" class="t11 dim" text-anchor="start">finetune_scope.dll and %APPDATA%\Caliper\ on Windows</text>
-            <text x="0" y="314" class="t11 dim" text-anchor="start">illustrative applet and curve</text>
-          </svg>
-          </div>
         </article>
         <article class="soon-card" id="soon-api">
           <div class="soon-copy"><h3>Caliper API</h3><p>An HTTP interface to the running app, so code in any language can run applets, send them data and fetch what they show.</p></div>
           <pre class="code soon-code"><code><span class="row"><span class="c"># CALIPER is the running app's address</span></span><span class="row"><span class="c">$</span> curl -X POST \</span><span class="row">    $CALIPER/applets/finetune_scope/run</span><span class="row"><span class="c">$</span> curl -X POST $CALIPER/streams/loss \</span><span class="row">    -d '{"step": 1200, "value": 0.41}'</span><span class="row"><span class="c">$</span> curl -o loss.png $CALIPER/views/loss.png</span></code></pre>
-          <div class="soon-fig">
-          <svg class="hw" viewBox="-1 -1 322 322" role="img" aria-label="Caliper API, one value followed end to end. A POST to /streams/loss with step 1200 and value 0.41 is inserted as a row of the metrics store's DuckDB table scalars, with columns run, tag, step and value; the loss view selects step and value back and draws 0.41 as the last point of its curve; GET /views/loss.png returns that view as a 840 by 360 PNG rendered by Export::view_png. Both HTTP routes are proposed, and the values are illustrative.">
-            <defs><marker id="api-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
-            <text x="0" y="11" class="k" text-anchor="start">ONE VALUE, END TO END</text>
-            <rect x="0" y="20" width="320" height="42" rx="4" class="blk"/>
-            <text x="12" y="37" class="m11" text-anchor="start">POST /streams/loss</text>
-            <text x="308" y="37" class="t11 dim" text-anchor="end">proposed route</text>
-            <text x="12" y="54" class="m11" text-anchor="start">{"step": 1200, "value": <tspan class="ai-hot">0.41</tspan>}</text>
-            <path d="M 160 62 L 160 79" class="arrow data ai-flow" marker-end="url(#api-tip)"/>
-            <text x="170" y="74.5" class="m11 dim" text-anchor="start">INSERT INTO scalars</text>
-            <rect x="0" y="80" width="320" height="42" rx="4" class="blk"/>
-            <text x="12" y="97" class="m11 dim" text-anchor="start">run</text>
-            <text x="46" y="97" class="m11 dim" text-anchor="start">tag</text>
-            <text x="88" y="97" class="m11 dim" text-anchor="start">step</text>
-            <text x="130" y="97" class="m11 dim" text-anchor="start">value</text>
-            <line x1="12" y1="102.5" x2="166" y2="102.5" class="ai-rule"/>
-            <text x="12" y="115" class="m11" text-anchor="start">7</text>
-            <text x="46" y="115" class="m11" text-anchor="start">loss</text>
-            <text x="88" y="115" class="m11" text-anchor="start">1200</text>
-            <text x="130" y="115" class="m11" text-anchor="start"><tspan class="ai-hot">0.41</tspan></text>
-            <text x="308" y="97" class="t11 dim" text-anchor="end">metrics store</text>
-            <text x="308" y="115" class="t11 dim" text-anchor="end">DuckDB table <tspan class="ai-code">scalars</tspan></text>
-            <path d="M 160 122 L 160 139" class="arrow data ai-flow" marker-end="url(#api-tip)"/>
-            <text x="170" y="134.5" class="m11 dim" text-anchor="start">SELECT step, value</text>
-            <rect x="0" y="140" width="320" height="96" rx="4" class="blk"/>
-            <text x="308" y="156" class="t11 dim" text-anchor="end">loss view</text>
-            <rect x="20" y="162" width="280" height="56" rx="2" class="spark"/>
-            <polyline class="loss" points="20.0,164.4 29.3,171.2 38.7,177.0 48.0,181.8 57.3,186.0 66.7,189.5 76.0,192.4 85.3,194.9 94.7,197.1 104.0,198.8 113.3,200.4 122.7,201.6 132.0,202.7 141.3,203.7 150.7,204.4 160.0,205.1 169.3,205.7 178.7,206.1 188.0,206.5 197.3,206.9 206.7,207.2 216.0,207.4 225.3,207.6 234.7,207.8 244.0,207.9 253.3,208.0 262.7,208.2 272.0,208.2 281.3,208.3 290.7,208.4 300.0,208.4"/>
-            <circle cx="300.0" cy="208.4" r="3.2" class="ai-dot"/>
-            <text x="293" y="201.438" class="m11 hot" text-anchor="end">0.41</text>
-            <text x="20" y="231" class="m11 dim" text-anchor="start">0</text>
-            <text x="300" y="231" class="m11 dim" text-anchor="end">1200</text>
-            <text x="160" y="231" class="t11 dim" text-anchor="middle">step</text>
-            <path d="M 160 236 L 160 253" class="arrow data ai-flow" marker-end="url(#api-tip)"/>
-            <text x="170" y="248.5" class="m11 dim" text-anchor="start">Export::view_png</text>
-            <rect x="0" y="254" width="320" height="42" rx="4" class="blk"/>
-            <text x="12" y="271" class="m11" text-anchor="start">GET /views/loss.png</text>
-            <text x="308" y="271" class="t11 dim" text-anchor="end">proposed route</text>
-            <text x="12" y="288" class="m11" text-anchor="start">200</text>
-            <text x="44" y="288" class="m11 dim" text-anchor="start">image/png</text>
-            <text x="118" y="288" class="m11 dim" text-anchor="start">840 × 360</text>
-            <text x="0" y="316" class="t11 dim" text-anchor="start">illustrative values</text>
-          </svg>
-          </div>
         </article>
         <article class="soon-card" id="soon-mcp">
           <div class="soon-copy"><h3>Caliper MCP</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
           <pre class="code soon-code"><code><span class="row"><span class="c">$</span> claude mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> codex mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> claude</span><span class="row"><span class="p">&gt;</span> Plot the loss of each layer.</span><span class="row">  new("finetune_scope")</span><span class="row">  build("finetune_scope")</span><span class="row">  run("finetune_scope")</span><span class="row">  capture("loss")</span></code></pre>
-          <div class="soon-fig">
-          <svg class="hw" viewBox="-1 -1 322 322" role="img" aria-label="Caliper MCP. The capture tool's result for the loss view holds the rendered view as an image/png content block, 840 by 360, its curve falling from step 0 to 0.41 at step 1200, followed by the state from the loss.png.json sidecar. The agent then replaces its single metrics.scalar call for loss with one call per layer, under each layer's name, in finetune_scope.cpp, and calls build, run and capture again. Values are illustrative.">
-            <text x="0" y="13" class="k" text-anchor="start">WHAT THE AGENT RECEIVES</text>
-            <text x="320" y="13" class="t11 dim" text-anchor="end">illustrative</text>
-            <text x="0" y="31" class="m11" text-anchor="start">capture("loss")</text>
-            <rect x="0" y="39" width="320" height="188" rx="4" class="blk"/>
-            <rect x="20" y="50" width="280" height="120" rx="2" class="spark"/>
-            <polyline class="loss" points="20.0,55.2 29.3,69.7 38.7,82.1 48.0,92.5 57.3,101.4 66.7,108.9 76.0,115.2 85.3,120.6 94.7,125.1 104.0,129.0 113.3,132.2 122.7,135.0 132.0,137.3 141.3,139.3 150.7,140.9 160.0,142.4 169.3,143.5 178.7,144.6 188.0,145.4 197.3,146.1 206.7,146.8 216.0,147.3 225.3,147.7 234.7,148.1 244.0,148.4 253.3,148.7 262.7,148.9 272.0,149.1 281.3,149.3 290.7,149.4 300.0,149.5"/>
-            <line x1="248" y1="63" x2="260" y2="63" class="mi-key"/>
-            <text x="290" y="67" class="m11 dim" text-anchor="end">loss</text>
-            <text x="20" y="184" class="m11 dim" text-anchor="start">0</text>
-            <text x="300" y="184" class="m11 dim" text-anchor="end">1200</text>
-            <text x="20" y="201" class="m11 dim" text-anchor="start">image/png · 840 × 360</text>
-            <text x="20" y="216" class="m11 dim" text-anchor="start">loss.png.json · step 1200 · value 0.41</text>
-            <text x="0" y="250" class="k" text-anchor="start">WHAT IT CHANGES</text>
-            <text x="320" y="250" class="m11 dim" text-anchor="end">finetune_scope.cpp</text>
-            <text x="0" y="268" class="mi-old">−<tspan x="14">metrics.scalar(run, "loss", step, loss);</tspan></text>
-            <text x="0" y="283" class="mi-code"><tspan class="mi-plus">+</tspan><tspan x="14">for (auto&amp; l : layers)</tspan></text>
-            <text x="0" y="298" class="mi-code"><tspan class="mi-plus">+</tspan><tspan x="27.2">metrics.scalar(run, l.name, step, l.loss);</tspan></text>
-            <text x="0" y="316" class="t11 dim">then<tspan x="32" class="mi-old">build(…)  run(…)  capture("loss")</tspan></text>
-          </svg>
-          </div>
         </article>
       </div>
       <div class="soon-grid soon-big">
