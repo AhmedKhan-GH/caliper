@@ -60,13 +60,10 @@ jobs:
     # CPU-only: USE_CUDA falls back when no toolkit is found (CMakeLists.txt
     # "USE_CUDA is ON but no CUDA toolkit found"), libtorch comes as the CPU
     # zip, GLEW as the prebuilt zip, Vulkan through volk (no SDK) with glslang
-    # fetched and built in-tree. Realistic, but DuckDB from source under MSVC
-    # is slow and this lane has not run yet, so it is advisory until it has
-    # gone green a few times: continue-on-error keeps a Windows failure from
-    # blocking the macOS result.
+    # fetched and built in-tree. DuckDB from source under MSVC is slow, hence
+    # the longer timeout. A Windows failure fails the run, as a macOS one does.
     runs-on: windows-latest
     timeout-minutes: 150
-    continue-on-error: true
     defaults:
       run:
         shell: bash
