@@ -209,5 +209,86 @@ struct VmmApi {
 // is absent, the core api() load failed, or ANY symbol is missing.
 const VmmApi* vmm_api();
 
+// ---------------------------------------------------------------------------
+// OPTIONAL direct-image surface (D25, docs/vulkan-update-costs.md W2): what the
+// renderer needs to launch a kernel that writes a VkImage. A SEPARATE table for
+// the same reason as vmm_api(): a hole here costs only the direct path, and the
+// renderer stays on its buffer path. Layouts mirror cuda.h's v1 ABI.
+// ---------------------------------------------------------------------------
+
+using CUmodule         = void*;
+using CUfunction       = void*;
+using CUarray          = void*;
+using CUmipmappedArray = void*;
+using CUsurfObject     = unsigned long long;
+
+constexpr unsigned kExtMemDedicated        = 0x1;   // CUDA_EXTERNAL_MEMORY_DEDICATED
+constexpr unsigned kArrayFormatUnsignedInt8 = 0x01; // CU_AD_FORMAT_UNSIGNED_INT8
+constexpr unsigned kArray3dSurfaceLdst     = 0x02;  // CUDA_ARRAY3D_SURFACE_LDST
+constexpr unsigned kResourceTypeArray      = 0x00;  // CU_RESOURCE_TYPE_ARRAY
+
+// CUDA_ARRAY3D_DESCRIPTOR (cuda.h).
+struct Array3dDescriptor {
+    size_t       Width;
+    size_t       Height;
+    size_t       Depth;
+    unsigned int Format;               // CUarray_format
+    unsigned int NumChannels;
+    unsigned int Flags;
+};
+// CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC (v1 layout, cuda.h).
+struct ExternalMemoryMipmappedArrayDesc {
+    unsigned long long offset;
+    Array3dDescriptor  arrayDesc;
+    unsigned int       numLevels;
+    unsigned int       reserved[16];
+};
+// CUDA_RESOURCE_DESC (cuda.h): only the array arm is used here.
+struct ResourceDesc {
+    unsigned int resType;              // CUresourcetype
+    union {
+        struct { CUarray hArray; } array;
+        struct { int reserved[32]; } reserved;
+    } res;
+    unsigned int flags;
+};
+// CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS (v1 layout, cuda.h). For a timeline
+// semaphore, params.fence.value is the value to wait for.
+struct ExternalSemaphoreWaitParams {
+    struct {
+        struct { unsigned long long value; } fence;
+        union { void* fence; unsigned long long reserved; } nvSciSync;
+        struct { unsigned long long key; unsigned int timeoutMs; } keyedMutex;
+        unsigned int reserved[10];
+    } params;
+    unsigned int flags;
+    unsigned int reserved[16];
+};
+
+struct DirectApi {
+    CUresult (*cuModuleLoadData)(CUmodule* mod, const void* image);
+    CUresult (*cuModuleUnload)(CUmodule mod);
+    CUresult (*cuModuleGetFunction)(CUfunction* fn, CUmodule mod, const char* name);
+    CUresult (*cuLaunchKernel)(CUfunction f, unsigned int gx, unsigned int gy,
+                               unsigned int gz, unsigned int bx, unsigned int by,
+                               unsigned int bz, unsigned int shared_bytes,
+                               CUstream stream, void** params, void** extra);
+    CUresult (*cuExternalMemoryGetMappedMipmappedArray)(
+        CUmipmappedArray* out, CUexternalMemory mem,
+        const ExternalMemoryMipmappedArrayDesc* desc);
+    CUresult (*cuMipmappedArrayGetLevel)(CUarray* out, CUmipmappedArray mip,
+                                         unsigned int level);
+    CUresult (*cuMipmappedArrayDestroy)(CUmipmappedArray mip);
+    CUresult (*cuSurfObjectCreate)(CUsurfObject* out, const ResourceDesc* desc);
+    CUresult (*cuSurfObjectDestroy)(CUsurfObject surf);
+    CUresult (*cuWaitExternalSemaphoresAsync)(
+        const CUexternalSemaphore* sems, const ExternalSemaphoreWaitParams* params,
+        unsigned int count, CUstream stream);
+};
+
+// Resolves the optional table on first call; cached. nullptr when the driver
+// is absent, the core api() load failed, or ANY symbol is missing.
+const DirectApi* direct_api();
+
 }  // namespace cudadrv
 }  // namespace caliper_host

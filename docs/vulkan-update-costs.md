@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Proposal. Nothing here is measured on the frame yet; §3 lists what is. |
-| **Date** | 2026-11-04 |
+| **Status** | W0, W1 and W2 implemented and run on the RTX 500 Ada, 2026-11-05; D25 ratified. W3 not done. §7 has the results. §§1–2 describe the code before this work. |
+| **Date** | 2026-11-04, results 2026-11-05 |
 | **Owner** | Ahmed Khan |
 | **Scope** | Why the Windows backend does more work per tensor update than Metal, what DLPack does and does not change, and an ordered plan to close the gap. |
 | **Parent** | `docs/vulkan-cuda-backend.md` (D19–D22), `docs/metal-pipelining.md` (D23–D24), `ZEROCOPY.md` |
@@ -89,7 +89,7 @@ that has to cross APIs is the output image, which Caliper allocates itself and c
 2. Map it with `cuExternalMemoryGetMappedMipmappedArray`, and write it through a surface object.
 3. Ship the colormap and the u8 blit as PTX, loaded with `cuModuleLoadData`. That is driver API only, so the host still links no toolkit (D11).
 4. Each update launches one kernel on the producer's stream, after `cuWaitExternalSemaphoresAsync` on an *image free* value that the last frame sampling the image signalled. Then it signals a value that the frame submit waits on.
-5. Two images per texture with the `ImTextureID` swapped, instead of the wait in step 4, if W0 shows that wait matters.
+5. Two images per texture with the `ImTextureID` swapped, instead of the wait in step 4, if W0 shows that wait matters. **It does (§7), so this shipped.**
 
 This removes:
 - the in-VRAM copy, for every tensor and not only `alloc_shared` ones;
@@ -118,4 +118,36 @@ to Vulkan.
 
 | # | Decision | Rationale / trade accepted |
 |---|---|---|
-| D25 | **The update pass runs in CUDA and writes the Vulkan image**, superseding D19 for the tensor-update path. The buffer-level path stays as the fallback | Removes the copy and the cross-API pass for every tensor, matching Metal. Costs a third colormap implementation held byte-exact by the gfx tests, and an image-format constraint |
+| D25 | **Ratified 2026-11-05. The update pass runs in CUDA and writes the Vulkan image**, superseding D19 for the tensor-update path. The buffer-level path stays as the fallback | Removes the copy and the cross-API pass for every tensor, matching Metal. Costs a third colormap implementation held byte-exact by the gfx tests, an image-format constraint, and a second image per texture updated after it has been drawn |
+
+## 7. Results
+
+Measured 2026-11-05 on the RTX 500 Ada, driver 596.47, Release build. `CALIPER_VULKAN_NO_DIRECT=1` selects the buffer path in the same binary, and `CALIPER_VULKAN_STATS=1` prints frame times and stalls at exit.
+
+**`embed_scope` training MNIST** (`CALIPER_EMBED_AUTOTRAIN=1`, on torch's real stream), 20 s per run, three alternating runs per path:
+
+| | Buffer path | Direct path |
+|---|---|---|
+| Training steps | 1039, 1093, 968 | 1005, 1003, 1017 |
+| Frame thread blocked in `retire()` | 2.5–3.5 s | 0 |
+| Frame time p99 | 19.8–22.5 ms | 12.8–19.3 ms |
+| Frame time p50 | 8.2–8.4 ms | 8.3 ms, 8.3 ms, 10.0 ms |
+
+Training speed is level, within run-to-run noise. Typical frame time is pinned to the display's vsync, so it does not move; the gain is in the frame thread's blocking and in the worst frames. Why one direct run has a 10 ms p50 is not explained. Three runs is a small sample.
+
+**Step 5 was not optional.** With one image, about 97% of kernels waited on torch's stream for the frame sampling that image, because a submitted frame sits waiting for its swapchain image. In 30 s runs the direct path reached 880–897 training steps, while the buffer path finished all 1407, so it cost training at least 37%. All tests passed with that version; only the training run showed it. With two images the steps recover, though kernels still wait on a frame for 5–84% of updates depending on the run. That is not understood yet.
+
+**One update, by size** (`gfx/Vulkan+CUDA: timing — update cost by size`, one run). "Call" is frame-thread time, "done" adds the wait for the GPU:
+
+| Size | Buffer call / done | Direct call / done |
+|---|---|---|
+| 256² | 57 / 265 µs | 30 / 65 µs |
+| 1024² | 52 / 312 µs | 24 / 137 µs |
+| 2048² | 70 / 730 µs | 38 / 419 µs |
+| 4096² | 100 / 1971 µs | 51 / 1391 µs |
+
+**Release + create** at applet sizes fell from about 3–4 ms to about 1 ms, because a texture updated only before its first frame needs neither a shared buffer nor a second image.
+
+**What this does not touch:** Metal, CPU-staged tensors, the OpenGL fallback, imported allocations, and the training loop's own speed. The offscreen canvas stays on the buffer path, because it composites without the frame's timeline waits.
+
+**The hybrid presentation hypothesis (§2) was not tested,** and W3 was not done: the release+create drop above came from W2.

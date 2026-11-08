@@ -336,7 +336,8 @@ worst case is a working slow path, never a broken one.
 |---|---|---|
 | Metal / MPS (Apple Silicon) | 0 host copies; 1 on-GPU blit | **Implemented + pixel-exact tested** |
 | Metal / MPS (Apple Silicon), imported allocation (bridge v1.2) | 0 host copies; **0 in-VRAM copies** (in-process `id<MTLBuffer>` import; geometry.v1 points + imported-texture updates read it directly) | **Implemented + byte-exact verified on Apple Silicon** |
-| Vulkan / CUDA (Windows), arbitrary tensor | 0 host copies; 1 in-VRAM copy | **Implemented + pixel-exact verified on NVIDIA** |
+| Vulkan / CUDA (Windows), arbitrary tensor | 0 host copies; **0 in-VRAM copies** (a CUDA kernel reads the tensor in place and writes the image, D25) | **Implemented + byte-exact verified on NVIDIA** |
+| Vulkan / CUDA (Windows), arbitrary tensor, buffer fallback (offscreen canvas, or the kernel path refused) | 0 host copies; 1 in-VRAM copy | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), `alloc_shared` | 0 host copies; **0 in-VRAM copies** (kernels write texture-backed VRAM in place) | **Implemented + pixel-exact verified on NVIDIA** |
 | Vulkan / CUDA (Windows), exportable-pool tensor | 0 host copies; **0 in-VRAM copies** (bridge imports the pool block once; the pass reads it at byte offset) | **Implemented + hardware-verified on NVIDIA** |
 | Metal / MPS (Apple Silicon), imported geometry (`geometry.v1_1` primitives) | 0 host copies; **0 in-VRAM copies** (indexed triangles/lines/points vertex-pulled in place from imported buffers) | **Implemented + byte-exact §9.2 matrix on Apple Silicon** |

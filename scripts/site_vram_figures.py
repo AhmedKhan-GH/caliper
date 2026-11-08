@@ -176,24 +176,24 @@ def nvidia():
     rect(344, 158, 328, 140, "blk hot")
     text(356, 178, "STREAMING MULTIPROCESSORS", "t")
     cores(356, 192, 13, 3, 18, 24.5, "core on")
-    text(356, 290, "torch's kernels, the colormap pass, ImGui's draw", "n")
+    text(356, 290, "torch's kernels, the colormap kernel, ImGui's draw", "n")
     rect(344, 306, 328, 28, "blk")
     text(508, 325, "L2 CACHE", "t", "middle")
     rect(344, 340, 328, 26, "blk dim")
     text(508, 358, "MEMORY CONTROLLERS", "t dim", "middle")
-    # Zoom into VRAM: one allocation, two address spaces.
+    # Zoom into VRAM: the tensor read where it lies, two images that swap.
     text(740, 42, "VRAM PAGES", "k")
     out.append('<path d="M 716 56 L 736 58 M 716 446 L 736 480" class="zoom"/>')
     rect(736, 52, 348, 434, "zoomframe", 4)
     page_map(746, 66, 25, [
-        (8, 40, "tensor", "TENSOR", ["torch's CUDA allocator", "written by torch's kernels", "copied by cuMemcpyDtoD"]),
-        (56, 40, "shared", "SHARED BUFFER", ["exported by Vulkan and", "imported by CUDA: the same", "pages, in two address spaces"]),
-        (104, 40, "texture", "VKIMAGE", ["written by the colormap pass", "sampled by ImGui's draw"]),
+        (8, 40, "tensor", "TENSOR", ["torch's CUDA allocator", "written by torch's kernels", "read in place by the kernel"]),
+        (56, 40, "shared", "BACK VKIMAGE", ["exported by Vulkan and", "imported by CUDA: the same", "pages; the kernel writes it"]),
+        (104, 40, "texture", "FRONT VKIMAGE", ["sampled by ImGui's draw", "swaps with the back image"]),
         (152, 16, "frame", "SWAPCHAIN", ["written by ImGui's draw", "then presented"]),
-        (184, 1, "commands", "SEMAPHORE", ["timeline value: CUDA", "signals, Vulkan waits"]),
+        (184, 1, "commands", "SEMAPHORE", ["timeline value: CUDA", "signals, the frame waits"]),
     ], 916)
     stats(548, [("EXAMPLE", "4096 × 4096 f32", "plain"), ("OVER PCIE", "0 bytes", "plain"),
-                ("COPY IN VRAM", "64 MiB, 0 with alloc_shared", "tensor"), ("GPU WRITES", "64 MiB", "texture"),
+                ("COPY IN VRAM", "0, 64 MiB on the fallback", "tensor"), ("GPU WRITES", "64 MiB", "texture"),
                 ("HOST-STAGED, OVER PCIE", "64 MiB each way", "faint")])
     return H
 
@@ -206,10 +206,10 @@ def svg(H, label):
 APPLE_LABEL = ("Apple Silicon: the SoC's CPU, GPU, system level cache and display engine share the LPDDR on the "
                "package; in DRAM, torch's tensor buffer is read by Caliper's GPU pass, which writes a texture that "
                "ImGui's draw samples into the frame the display engine scans out; nothing is copied")
-NVIDIA_LABEL = ("NVIDIA: the host CPU and system RAM sit across PCIe and only send commands; on the board, the tensor "
-                "is copied once inside VRAM into a buffer Vulkan exports and CUDA imports, the streaming "
-                "multiprocessors colormap it into a VkImage that ImGui draws into the swapchain, ordered by a "
-                "timeline semaphore")
+NVIDIA_LABEL = ("NVIDIA: the host CPU and system RAM sit across PCIe and only send commands; on the board, a kernel "
+                "on the streaming multiprocessors reads the tensor in place and writes the back of two VkImages "
+                "Vulkan exports and CUDA imports; the two swap and ImGui draws the front one into the swapchain, "
+                "ordered by a timeline semaphore")
 
 
 def figure(which):

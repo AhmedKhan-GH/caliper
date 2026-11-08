@@ -55,11 +55,13 @@ Vulkan backend imports it via external-memory interop (see `ZEROCOPY.md`). The
 CUDA branch is compiled under
 
 ```cpp
-#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
+    __has_include(<cuda_runtime_api.h>)
 ```
 
-— `__has_include` alone is not enough because **mac libtorch ships the
-c10/cuda headers without the CUDA toolkit headers** they include. If this
+— `__has_include` of the c10 header alone is not enough because **mac libtorch
+and the Windows CPU libtorch ship the c10/cuda headers without the CUDA toolkit
+headers** they include. If this
 guard is ever wrong in the compiled-out direction, everything stays green
 while the drain silently returns; the torch test suite carries a tripwire
 case that fails loudly instead (`stream` must round-trip a non-default pool

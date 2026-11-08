@@ -230,6 +230,7 @@ set_tests_properties(caliper_embed_tests PROPERTIES SKIP_RETURN_CODE 77)
 # offscreen core. Links exactly like caliper_embed_tests. GPU cases skip
 # without a device (counted; exit 77 -> ctest "Skipped", gpu_skip.h).
 # ---------------------------------------------------------------------------
+if(APPLE)   # the live session code is macOS-only so far
 add_executable(caliper_live_tests test_live.cpp)
 target_link_libraries(caliper_live_tests PRIVATE
     doctest::doctest libcaliper caliper::sdk)
@@ -259,6 +260,7 @@ if(APPLE)
 endif()
 add_test(NAME caliper_live_views_tests COMMAND caliper_live_views_tests)
 set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
+endif()  # APPLE (live tests)
 
 # ---------------------------------------------------------------------------
 # Applet learning-core / engine tests. Each is a SEPARATE binary that links

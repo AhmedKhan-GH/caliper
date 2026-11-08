@@ -315,6 +315,15 @@ if(WIN32)
         "${CALIPER_SPV_DIR}/geom_frag_spv.h"
         "${CALIPER_SPV_DIR}/geom_tex_frag_spv.h")
 
+    # The direct-image kernels (D25) ship as checked-in PTX, embedded here so
+    # no build needs the CUDA toolkit (D11). See kernels/cmap_direct.cu.
+    set(CALIPER_DIRECT_PTX "${CMAKE_SOURCE_DIR}/src/host/renderer/kernels/cmap_direct.ptx")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CALIPER_DIRECT_PTX}")
+    file(READ "${CALIPER_DIRECT_PTX}" CALIPER_DIRECT_PTX_HEX HEX)
+    string(REGEX REPLACE "(..)" "0x\\1," CALIPER_DIRECT_PTX_BYTES "${CALIPER_DIRECT_PTX_HEX}")
+    file(GENERATE OUTPUT "${CALIPER_SPV_DIR}/cmap_direct_ptx.h" CONTENT
+        "static const unsigned char kCmapDirectPtx[] = {${CALIPER_DIRECT_PTX_BYTES}0x00};\n")
+
     add_library(caliper_vulkan_backend STATIC
         src/host/renderer/vulkan_renderer.cpp
         ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_vulkan.cpp
@@ -357,8 +366,11 @@ file(GLOB CALIPER_LIVE_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/src/host/live/*.cpp
     ${CMAKE_SOURCE_DIR}/src/host/live/*.mm)
 list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "viewer_main\\.mm$")
-if(NOT APPLE)
-    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "\\.mm$")
+if(APPLE)
+    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "live_unsupported\\.cpp$")
+else()
+    # The session code is macOS-only so far; live_unsupported.cpp stands in.
+    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "\\.mm$|live_core\\.cpp$|live_attach\\.cpp$")
 endif()
 add_library(libcaliper STATIC
     src/host/host_services.cpp

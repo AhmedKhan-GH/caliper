@@ -2,8 +2,8 @@
 
 The ladder from an empty window to a live machine-learning demonstration,
 one capability per stage. We build **SineScope**: a tiny MLP that learns
-`y = sin(x)` in front of you — live loss curve, the model's prediction
-bending toward the target in real time, and its weight matrix rendered as a
+`y = sin(x)` from noisy samples in front of you — live loss curve, the model's
+curve settling through the scattered points in real time, and its weight matrix rendered as a
 heatmap. Synthetic data keeps it self-contained (no downloads); the last
 two stages show where real datasets and the remaining services attach.
 
@@ -86,8 +86,8 @@ weight display) under the mutex, bumping the generation:
 ```
 
 The frame consumes when the generation moves, then draws. The prediction
-curve bending toward the target is the "it's alive" moment — and it's just
-two `PlotLine`s, plus the follow-toggle idiom on the loss curve:
+curve settling through the noisy samples is the "it's alive" moment — and it's
+a `PlotScatter` and a `PlotLine`, plus the follow-toggle idiom on the loss curve:
 
 ```cpp
 --8<-- "examples/sine_scope/sine_scope.cpp:plots"

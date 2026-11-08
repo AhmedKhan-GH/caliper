@@ -31,10 +31,12 @@
 #include <dispatch/dispatch.h>  // dispatch_sync_f: serialize on torch's MPS stream queue
 #include <objc/message.h>       // producer-queue lookup without an ObjC++ TU
 #endif
-// !__APPLE__: mac libtorch ships the c10/cuda headers but no CUDA toolkit
-// headers, so presence-of-header alone is not usability — and Apple torch
-// builds never have CUDA anyway.
-#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+// The c10/cuda headers ship in every libtorch (mac, and the Windows CPU zip)
+// but include the CUDA toolkit's own headers, so presence-of-header alone is
+// not usability: cuda_runtime_api.h must be there too. Apple torch builds
+// never have CUDA anyway.
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
+    __has_include(<cuda_runtime_api.h>)
 #include <c10/cuda/CUDAStream.h>
 #endif
 
@@ -219,7 +221,8 @@ inline std::optional<CaliperTensor> stream_to_tensor(const at::Tensor& t,
         return out;
     }
 #endif
-#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>)
+#if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
+    __has_include(<cuda_runtime_api.h>)
     if (t.is_cuda()) {
         auto out = to_tensor(t);
         if (!out) return out;
