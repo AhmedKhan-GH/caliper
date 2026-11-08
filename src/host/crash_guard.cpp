@@ -44,6 +44,7 @@ FaultKind fault_kind_of(const std::string& fault) {
 
 #ifdef _WIN32
 #include <windows.h>
+#include <malloc.h>   // _resetstkoflw
 #include <cstdio>
 
 namespace caliper_host {
@@ -83,6 +84,11 @@ GuardResult guarded_call(const std::function<void()>& fn) {
     unsigned long code = 0;
     std::string fault;
     const int rc = seh_invoke(&fn, &fault, &code);
+    // A stack overflow is raised by the thread's guard page, and raising it
+    // spends that page. Until it is re-armed, the next overflow on this
+    // thread meets no guard at all: no exception is raised and the process
+    // dies outright. The stack is unwound by now, so re-arm it here.
+    if (rc == 2 && code == EXCEPTION_STACK_OVERFLOW) _resetstkoflw();
     if (rc == 1) {
         r.ok = false;
         r.fault = fault;
