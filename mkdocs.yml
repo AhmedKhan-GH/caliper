@@ -48,6 +48,7 @@ nav:
       - Tensor (caliper/tensor.h): reference/tensor.md
       - Arrow C Data Interface: reference/arrow.md
       - Adapters (torch): reference/adapters.md
+      - Torch objects on each platform: reference/torch-on-each-platform.md
       - Services:
           - caliper.ui.v1: reference/services/ui-v1.md
           - caliper.log.v1: reference/services/log-v1.md

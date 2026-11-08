@@ -249,11 +249,12 @@
   .dev-shot figcaption { margin-top: 10px; color: var(--faint); font-size: 14px; }
   @media (max-width: 1000px) { .dev-flow { grid-template-columns: minmax(0, 1fr); } }
   .xp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; margin-top: 8px; }
+  .xp-more { display: inline-block; margin-top: 18px; }
   .xp-k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
   .xp-api { display: grid; grid-template-columns: max-content 1fr; margin: 0; border-top: 1px solid var(--rule-faint); }
   .xp-api dt, .xp-api dd { margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule-faint); }
   .xp-api dt { font: 13.5px/1.5 var(--mono); color: var(--parchment); padding-right: 28px; }
-  .xp-api dd { font: 13.5px/1.5 var(--mono); color: var(--secondary); }
+  .xp-api dd { font: 15px/1.55 var(--text); color: var(--secondary); }
   .xp-api dt a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
   .xp-api dt a:hover { color: var(--bronze-hover); border-color: currentColor; }
   .xp-table { border-top: 1px solid var(--rule-faint); }
@@ -1679,28 +1680,17 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <div class="xp-block">
           <div class="xp-k">Interfaces</div>
           <dl class="xp-api">
-            <dt><a href="docs/reference/sugar/">caliper::Applet</a></dt><dd>on_init(Host&amp;) &middot; on_frame(const Frame&amp;) &middot; on_cleanup()</dd>
-            <dt><a href="docs/reference/services/device-v1/">caliper::Device</a></dt><dd>query(host) &rarr; METAL, CUDA or CPU</dd>
-            <dt><a href="docs/reference/services/tensor-bridge-v1/">caliper::Bridge</a></dt><dd>texture_from_tensor_mapped &middot; update_texture &middot; import_allocation &middot; imtex</dd>
-            <dt><a href="docs/reference/services/geometry-v1/">caliper::Geometry</a></dt><dd>create_view &middot; draw_primitives: points, lines, meshes, instancing</dd>
-            <dt><a href="docs/reference/services/jobs-v1/">caliper::Jobs</a></dt><dd>submit &middot; request_cancel &middot; progress_of</dd>
-            <dt><a href="docs/reference/services/metrics-v1/">caliper::Metrics</a></dt><dd>begin_run &middot; scalar &middot; hparams_json &middot; end_run</dd>
-            <dt><a href="docs/reference/services/data-v1/">caliper::Data</a></dt><dd>query (SQL to Arrow) &middot; register_dataset &middot; open_dataset</dd>
-            <dt><a href="docs/reference/services/artifacts-v1/">caliper::Artifacts</a></dt><dd>put &middot; path_of &middot; exists</dd>
-            <dt><a href="docs/reference/services/export-v1/">caliper::Export</a></dt><dd>view_png &middot; begin_sequence &middot; end_sequence</dd>
+            <dt><a href="docs/reference/sugar/">caliper::Applet</a></dt><dd>The class an applet derives from: the host calls on_init once, on_frame every frame and on_cleanup when the applet closes.</dd>
+            <dt><a href="docs/reference/services/device-v1/">caliper::Device</a></dt><dd>Reports the GPU the app is running on (Metal, CUDA or the CPU), so the applet trains on the same device.</dd>
+            <dt><a href="docs/reference/services/tensor-bridge-v1/">caliper::Bridge</a></dt><dd>Turns a GPU tensor into a texture the interface can draw, colormapped on the GPU without a copy to the CPU.</dd>
+            <dt><a href="docs/reference/services/geometry-v1/">caliper::Geometry</a></dt><dd>Draws points, lines, meshes and instanced shapes straight from vertex data the applet keeps in GPU memory.</dd>
+            <dt><a href="docs/reference/services/jobs-v1/">caliper::Jobs</a></dt><dd>Runs work such as training on a background thread, with progress shown in the app and a cancel the applet checks.</dd>
+            <dt><a href="docs/reference/services/metrics-v1/">caliper::Metrics</a></dt><dd>Records each run&#x27;s scalars and hyperparameters, so loss curves and run comparisons outlast the session.</dd>
+            <dt><a href="docs/reference/services/data-v1/">caliper::Data</a></dt><dd>Runs SQL over the app&#x27;s built-in analytical store and returns Arrow tables; datasets can be registered and shared between applets.</dd>
+            <dt><a href="docs/reference/services/artifacts-v1/">caliper::Artifacts</a></dt><dd>Stores checkpoints and exports by their content, so identical files are kept once and each records where it came from.</dd>
+            <dt><a href="docs/reference/services/export-v1/">caliper::Export</a></dt><dd>Re-renders a view offscreen at any resolution and saves a pixel-exact PNG, alone or as a sequence, with a JSON record of how it was made.</dd>
           </dl>
-        </div>
-        <div class="xp-block">
-          <div class="xp-k">Torch objects</div>
-          <div class="xp-table" role="table">
-            <div class="xp-row xp-head" role="row"><span role="columnheader"></span><span role="columnheader">macOS &middot; Metal</span><span role="columnheader">Windows &middot; Vulkan + CUDA</span></div>
-            <div class="xp-row" role="row"><code role="rowheader">torch::Device</code><span role="cell"><code>torch::kMPS</code></span><span role="cell"><code>torch::kCUDA</code></span></div>
-            <div class="xp-row" role="row"><code role="rowheader">at::Tensor</code><span role="cell">storage in an <code>id&lt;MTLBuffer&gt;</code></span><span role="cell">storage in CUDA device memory</span></div>
-            <div class="xp-row" role="row"><code role="rowheader">adapters::to_tensor</code><span role="cell"><code>CaliperTensor</code> on <code>CALIPER_DEV_METAL</code></span><span role="cell"><code>CaliperTensor</code> on <code>CALIPER_DEV_CUDA</code></span></div>
-            <div class="xp-row" role="row"><code role="rowheader">adapters::stream_to_tensor</code><span role="cell">ordered after the producer's MPS command queue</span><span role="cell">ordered after the producer's CUDA stream</span></div>
-            <div class="xp-row" role="row"><code role="rowheader">ExportablePool::to_bridge</code><span role="cell">the tensor's <code>MTLBuffer</code>, imported once</span><span role="cell">a <code>cuMemCreate</code> block, imported into Vulkan</span></div>
-            <div class="xp-row" role="row"><code role="rowheader">Bridge::texture_from_tensor_mapped</code><span role="cell">a Metal texture</span><span role="cell">a Vulkan image</span></div>
-          </div>
+          <a class="link xp-more" href="docs/reference/torch-on-each-platform/">Torch objects on each platform →</a>
         </div>
       </div>
       <div class="dev-flow">
