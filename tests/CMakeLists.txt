@@ -156,7 +156,33 @@ set_tests_properties(caliper_export_tests PROPERTIES LABELS "export"
 # when no MPS device is present (counted; exit 77 -> ctest "Skipped").
 # ---------------------------------------------------------------------------
 if(CALIPER_WITH_TORCH)   # torch-linking test binaries; closed below
+# Windows has no rpath: a test binary that links libtorch finds c10.dll /
+# torch_cpu.dll only beside itself or on PATH. Without them it dies 0xc0000135
+# before main, and on a desktop session (a CI runner included) the loader's
+# "DLL was not found" dialog holds the process open until ctest's timeout.
+# One copy into the tests' output dir serves every torch-linked test binary
+# (and the torch applets caliper_embed_tests loads), mirroring the caliper
+# exe's "Copying PyTorch DLLs" step in the root CMakeLists.
+if(MSVC)
+    file(GLOB _caliper_test_torch_dlls "${LIBTORCH_DIR}/lib/*.dll")
+    set(_caliper_test_torch_dlls_stamp "${CMAKE_CURRENT_BINARY_DIR}/torch_dlls.stamp")
+    add_custom_command(OUTPUT "${_caliper_test_torch_dlls_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${_caliper_test_torch_dlls} "${CMAKE_CURRENT_BINARY_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_caliper_test_torch_dlls_stamp}"
+        DEPENDS ${_caliper_test_torch_dlls}
+        COMMENT "Copying PyTorch DLLs next to the test executables")
+    add_custom_target(caliper_test_torch_dlls DEPENDS "${_caliper_test_torch_dlls_stamp}")
+endif()
+# Each torch-linked test target calls this, so the DLLs land before it runs.
+function(caliper_test_needs_torch_dlls target)
+    if(TARGET caliper_test_torch_dlls)
+        add_dependencies(${target} caliper_test_torch_dlls)
+    endif()
+endfunction()
+
 add_executable(caliper_torch_tests test_torch_adapter.cpp)
+caliper_test_needs_torch_dlls(caliper_torch_tests)
 target_link_libraries(caliper_torch_tests PRIVATE
     doctest::doctest caliper::sdk "${TORCH_LIBRARIES}")
 set_target_properties(caliper_torch_tests PROPERTIES
@@ -210,6 +236,7 @@ set_target_properties(caliper_embed_tests PROPERTIES
 add_dependencies(caliper_embed_tests hello_applet)
 if(CALIPER_WITH_TORCH)
     add_dependencies(caliper_embed_tests sine_scope)
+    caliper_test_needs_torch_dlls(caliper_embed_tests)   # sine_scope links libtorch
 else()
     # Torch-free build: sine_scope (links libtorch) is not built, so the cases
     # that swap to dev.example.sine-scope compile out (test_embed.cpp guards).
@@ -271,6 +298,7 @@ endif()  # APPLE (live tests)
 if(CALIPER_WITH_TORCH)   # applet learning-core tests all link libtorch
 function(add_caliper_torch_model_test name src applet_dir)
     add_executable(${name} ${src})
+    caliper_test_needs_torch_dlls(${name})
     target_link_libraries(${name} PRIVATE doctest::doctest "${TORCH_LIBRARIES}")
     target_include_directories(${name} PRIVATE "${applet_dir}")
     set_target_properties(${name} PROPERTIES
