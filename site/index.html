@@ -1833,15 +1833,15 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div class="soon-grid soon-small">
         <article class="soon-card" id="soon-cli">
           <div class="soon-copy"><h3>Caliper CLI</h3><p>Create, build, run and capture applets from a terminal, a script or a CI job.</p></div>
-          <pre class="code soon-code"><code><span class="row"><span class="c">$</span> caliper new finetune_scope</span><span class="row"><span class="c">$</span> caliper build finetune_scope</span><span class="row"><span class="c">$</span> caliper run finetune_scope</span><span class="row"><span class="c">$</span> caliper capture loss -o loss.png</span></code></pre>
+          <pre class="code soon-code"><code><span class="row"><span class="c">$</span> caliper new finetune</span><span class="row"><span class="c">$</span> caliper build finetune</span><span class="row"><span class="c">$</span> caliper run finetune</span><span class="row"><span class="c">$</span> caliper capture loss -o loss.png</span></code></pre>
         </article>
         <article class="soon-card" id="soon-api">
           <div class="soon-copy"><h3>Caliper API</h3><p>An HTTP interface to the running app, so code in any language can run applets, send them data and fetch what they show.</p></div>
-          <pre class="code soon-code"><code><span class="row"><span class="c"># CALIPER is the running app's address</span></span><span class="row"><span class="c">$</span> curl -X POST \</span><span class="row">    $CALIPER/applets/finetune_scope/run</span><span class="row"><span class="c">$</span> curl -X POST $CALIPER/streams/loss \</span><span class="row">    -d '{"step": 1200, "value": 0.41}'</span><span class="row"><span class="c">$</span> curl -o loss.png $CALIPER/views/loss.png</span></code></pre>
+          <pre class="code soon-code"><code><span class="row"><span class="c"># CALIPER is the running app's address</span></span><span class="row"><span class="c">$</span> curl -X POST \</span><span class="row">    $CALIPER/applets/finetune/run</span><span class="row"><span class="c">$</span> curl -X POST $CALIPER/streams/loss \</span><span class="row">    -d '{"step": 1200, "value": 0.41}'</span><span class="row"><span class="c">$</span> curl -o loss.png $CALIPER/views/loss.png</span></code></pre>
         </article>
         <article class="soon-card" id="soon-mcp">
           <div class="soon-copy"><h3>Caliper MCP</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
-          <pre class="code soon-code"><code><span class="row"><span class="c">$</span> claude mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> codex mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> claude</span><span class="row"><span class="p">&gt;</span> Plot the loss of each layer.</span><span class="row">  new("finetune_scope")</span><span class="row">  build("finetune_scope")</span><span class="row">  run("finetune_scope")</span><span class="row">  capture("loss")</span></code></pre>
+          <pre class="code soon-code"><code><span class="row"><span class="c">$</span> claude mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> codex mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> claude</span><span class="row"><span class="p">&gt;</span> Plot the loss of each layer.</span><span class="row">  new("finetune")</span><span class="row">  build("finetune")</span><span class="row">  run("finetune")</span><span class="row">  capture("loss")</span></code></pre>
         </article>
       </div>
     </div>
@@ -2120,9 +2120,9 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
           </div>
         </article>
         <article class="soon-card" id="soon-platform">
-          <div class="soon-copy"><h3>Caliper Platform</h3><p>A place to exchange widgets and applets, and to source pre-made professional tools.</p><span class="soon-k">Example</span><p class="soon-ex">A lab publishes the spectrogram widget from its own applet. You add its source to your project with <code>caliper add spectrogram</code>; a licensed tool installs into Caliper with <code>caliper install attention_scope</code>.</p></div>
+          <div class="soon-copy"><h3>Caliper Platform</h3><p>A place to exchange widgets and applets, and to source pre-made professional tools.</p><span class="soon-k">Example</span><p class="soon-ex">A lab publishes the spectrogram widget from its own applet. You add its source to your project with <code>caliper add spectrogram</code>; a licensed tool installs into Caliper with <code>caliper install attention</code>.</p></div>
           <div class="soon-fig">
-          <svg class="hw" viewBox="0 0 740 490" role="img" aria-label="Caliper Platform: caliper add spectrogram puts the widget's source in your project under widgets/spectrogram and adds two lines to CMakeLists.txt; caliper install attention_scope puts libattention_scope.dylib, its caliper.toml manifest and a licence file in Caliper's applets folder; Caliper reads the manifest, checks the ABI epoch, host version, services and licence, then loads the library. The spectrogram shown is illustrative.">
+          <svg class="hw" viewBox="0 0 740 490" role="img" aria-label="Caliper Platform: caliper add spectrogram puts the widget's source in your project under widgets/spectrogram and adds two lines to CMakeLists.txt; caliper install attention puts libattention.dylib, its caliper.toml manifest and a licence file in Caliper's applets folder; Caliper reads the manifest, checks the ABI epoch, host version, services and licence, then loads the library. The spectrogram shown is illustrative.">
             <defs><marker id="plat-tipd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
             <text x="0" y="12" class="k" text-anchor="start">RELEASE</text>
             <text x="216" y="12" class="k" text-anchor="start">ON YOUR DISK</text>
@@ -2150,18 +2150,18 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <path class="pf-tree" d="M 239 132 L 239 156 L 248 156"/>
             <path class="pf-tree" d="M 239 132 L 239 172 L 248 172"/>
             <path class="pf-tree" d="M 239 132 L 239 188 L 248 188"/>
-            <text x="216" y="64" class="pf-path plain" text-anchor="start">finetune_scope/</text>
+            <text x="216" y="64" class="pf-path plain" text-anchor="start">finetune/</text>
             <text x="234" y="80" class="pf-path plain" text-anchor="start">CMakeLists.txt</text>
             <text x="336.4" y="80" class="pf-note hot" text-anchor="start">+ 2 lines</text>
-            <text x="234" y="96" class="pf-path old" text-anchor="start">finetune_scope.cpp</text>
-            <text x="234" y="112" class="pf-path old" text-anchor="start">finetune_scope.caliper.toml</text>
+            <text x="234" y="96" class="pf-path old" text-anchor="start">finetune.cpp</text>
+            <text x="234" y="112" class="pf-path old" text-anchor="start">finetune.caliper.toml</text>
             <text x="234" y="128" class="pf-path add" text-anchor="start">widgets/spectrogram/</text>
             <text x="252" y="144" class="pf-path add" text-anchor="start">CMakeLists.txt</text>
             <text x="252" y="160" class="pf-path add" text-anchor="start">spectrogram.h</text>
             <text x="252" y="176" class="pf-path add" text-anchor="start">spectrogram.cpp</text>
             <text x="252" y="192" class="pf-path add" text-anchor="start">widget.toml</text>
             <text x="216" y="212" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan> add_subdirectory(widgets/spectrogram)</text>
-            <text x="216" y="227" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan> target_link_libraries(finetune_scope</text>
+            <text x="216" y="227" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan> target_link_libraries(finetune</text>
             <text x="216" y="242" class="pf-code" text-anchor="start" xml:space="preserve"><tspan class="pf-plus">+</tspan>     PRIVATE spectrogram)</text>
             <rect x="516" y="50" width="224" height="196" rx="4" class="pf-win"/>
             <rect x="516" y="50" width="224" height="20" rx="4" class="pf-bar"/>
@@ -2363,9 +2363,9 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <text x="724" y="220" class="pf-note" text-anchor="end">2 s</text>
             <text x="552" y="238" class="pf-note" text-anchor="start">a chirp, illustrative</text>
             <line x1="0" y1="262" x2="740" y2="262" class="rulefaint"/>
-            <text x="0" y="286" class="pf-cmd" text-anchor="start">$ caliper install attention_scope</text>
+            <text x="0" y="286" class="pf-cmd" text-anchor="start">$ caliper install attention</text>
             <rect x="0" y="298" width="196" height="100" rx="4" class="blk"/>
-            <text x="12" y="318" class="mono small" text-anchor="start">attention_scope 2.0.0</text>
+            <text x="12" y="318" class="mono small" text-anchor="start">attention 2.0.0</text>
             <text x="12" y="340" class="pf-note" text-anchor="start">kind</text>
             <text x="68" y="340" class="pf-val" text-anchor="start">applet, built</text>
             <text x="12" y="356" class="pf-note" text-anchor="start">sha256</text>
@@ -2386,18 +2386,18 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <text x="234" y="328" class="pf-path plain" text-anchor="start">applets/</text>
             <text x="252" y="344" class="pf-path old" text-anchor="start">libsine_scope.dylib</text>
             <text x="252" y="360" class="pf-path old" text-anchor="start">sine_scope.caliper.toml</text>
-            <text x="252" y="376" class="pf-path add" text-anchor="start">libattention_scope.dylib</text>
-            <text x="252" y="392" class="pf-path add" text-anchor="start">attention_scope.caliper.toml</text>
-            <text x="252" y="408" class="pf-path add" text-anchor="start">attention_scope.licence</text>
+            <text x="252" y="376" class="pf-path add" text-anchor="start">libattention.dylib</text>
+            <text x="252" y="392" class="pf-path add" text-anchor="start">attention.caliper.toml</text>
+            <text x="252" y="408" class="pf-path add" text-anchor="start">attention.licence</text>
             <text x="216" y="426" class="pf-note" text-anchor="start">on Windows: %APPDATA%\Caliper\applets\ and a .dll</text>
             <text x="516" y="312" class="pf-step" text-anchor="start">1</text>
-            <text x="530" y="312" class="pf-val" text-anchor="start">reads attention_scope.caliper.toml</text>
+            <text x="530" y="312" class="pf-val" text-anchor="start">reads attention.caliper.toml</text>
             <text x="516" y="332" class="pf-step" text-anchor="start">2</text>
             <text x="530" y="332" class="pf-val" text-anchor="start">checks ABI epoch, host version, services</text>
             <text x="516" y="352" class="pf-step" text-anchor="start">3</text>
             <text x="530" y="352" class="pf-val hot" text-anchor="start">checks the licence</text>
             <text x="516" y="372" class="pf-step" text-anchor="start">4</text>
-            <text x="530" y="372" class="pf-val" text-anchor="start">loads libattention_scope.dylib</text>
+            <text x="530" y="372" class="pf-val" text-anchor="start">loads libattention.dylib</text>
             <line x1="0" y1="440" x2="740" y2="440" class="rulefaint"/>
             <text x="0" y="458" class="k" text-anchor="start">WIDGET</text>
             <text x="0" y="478" class="v plain" text-anchor="start">4 source files</text>
