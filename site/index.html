@@ -554,7 +554,7 @@
       <div class="xp-k">Contents</div>
       <ol>
         <li><span class="toc-n">01</span><a class="toc-s" href="#backends">Native backends</a>
-          <ul><li><a href="#metal">Unified-memory path</a></li><li><a href="#cuda">Device-local CUDA interop</a></li></ul></li>
+          <ul><li><a href="#metal">MPS unified memory path</a></li><li><a href="#cuda">CUDA device-local interop</a></li></ul></li>
         <li><span class="toc-n">02</span><a class="toc-s" href="#lib">Caliper Lib</a>
           <ul><li><a href="#python">Python streaming</a></li></ul></li>
         <li><span class="toc-n">03</span><a class="toc-s" href="#develop">Caliper SDK</a>
@@ -576,7 +576,7 @@
 <!-- /code:call -->
       <figure class="mech-fig" id="metal">
         <div class="mech-head">
-          <div><div class="kicker">macOS · Metal</div><h3>Unified-memory path</h3></div>
+          <div><div class="kicker">macOS · Metal</div><h3>MPS unified memory path</h3></div>
           <div class="muted"><p>MPS tensor data is colormapped or blitted on the GPU before ImGui draws it.</p>
             <p>The Metal renderer is the macOS default. The bridge validates layout and device information before using the buffer; unsupported inputs are rejected instead of reinterpreted.</p></div>
         </div>
@@ -1082,7 +1082,7 @@ metal_renderer.mm:731  [frame_cmd_ presentDrawable:drawable_];</title><rect x="9
       </figure>
       <figure class="mech-fig" id="cuda">
         <div class="mech-head">
-          <div><div class="kicker">Windows · Vulkan + CUDA</div><h3>Device-local CUDA interop</h3></div>
+          <div><div class="kicker">Windows · Vulkan + CUDA</div><h3>CUDA device-local interop</h3></div>
           <div class="muted"><p>The tensor is read where it lies in VRAM: a CUDA kernel on torch's stream writes the texture directly, with no copy and no system-RAM staging.</p>
             <p>Vulkan exports each texture's image for CUDA import. The kernel writes the image no frame is sampling, then the two swap, so the frame thread does not wait on the update and training keeps its pace. Shared timeline semaphores order it on the GPU. Where the kernel cannot run, one VRAM copy and a Vulkan pass take over.</p></div>
         </div>
