@@ -280,6 +280,9 @@
   @media (max-width: 1000px) { .dev-flow { grid-template-columns: minmax(0, 1fr); } }
   .xp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; margin-top: 8px; }
   .xp-more { display: inline-block; margin-top: 18px; }
+  .lib-lede { max-width: 46em; margin: 0 0 30px; font-size: 17px; line-height: 1.6; color: var(--secondary); }
+  #lib .xp-api { grid-template-columns: 290px minmax(0, 1fr); }
+  @media (max-width: 760px) { #lib .xp-api { grid-template-columns: minmax(0, 1fr); } }
   .xp-k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
   .xp-api { display: grid; grid-template-columns: max-content 1fr; margin: 0; border-top: 1px solid var(--rule-faint); }
   .xp-api dt, .xp-api dd { margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule-faint); }
@@ -428,6 +431,7 @@
     <div class="links">
       <a href="#backends">Backends</a>
       <a href="#python">Python</a>
+      <a href="#lib">Lib</a>
       <a href="#develop">Develop</a>
       <a href="#build">Build</a>
       <a href="#soon">Coming soon</a>
@@ -1657,9 +1661,29 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
     </div>
   </section>
 
+  <section id="lib">
+    <div class="wrap">
+      <div class="label eyebrow">03 · Caliper Lib</div>
+      <h2>Caliper Lib</h2>
+      <p class="lib-lede">The <code>caliper</code> Python package behind Python streaming. Version 0.1.0, for Python 3.12 on macOS with Apple Silicon, built from source.</p>
+      <div class="xp-block">
+        <div class="xp-k">Available</div>
+        <dl class="xp-api">
+          <dt><a href="docs/reference/python-api/#view-calls">show, points, series, histogram</a></dt><dd>Send a tensor to a heatmap, a scatter, a curve or a histogram. The call returns at once; the copy runs on the tensor&#x27;s own GPU stream.</dd>
+          <dt><a href="docs/reference/python-api/#watch">watch(model)</a></dt><dd>Shows each module&#x27;s activations, and optionally its gradients, through forward and gradient hooks.</dd>
+          <dt><a href="docs/reference/python-api/#routes-and-lifetime">session()</a></dt><dd>Opens the shared-memory session the Caliper app attaches to with F4, Attach to process.</dd>
+          <dt><a href="docs/reference/python-api/#routes-and-lifetime">window(), run(train)</a></dt><dd>Opens a Caliper window inside the script&#x27;s own process; run trains on a worker thread so the window stays responsive.</dd>
+          <dt><a href="docs/reference/python-api/#inspection-and-test-helpers">offscreen()</a></dt><dd>Renders without a window and reads back pixels, values and counters, so tests can check what a view shows.</dd>
+          <dt><a href="docs/reference/python-api/#caliperlive">caliper.live</a></dt><dd>Lists the running sessions and starts a viewer for one, for tools that attach on their own.</dd>
+        </dl>
+        <a class="link xp-more" href="docs/tutorials/live-pytorch/">Watch PyTorch training live →</a>
+      </div>
+    </div>
+  </section>
+
   <section id="develop">
     <div class="wrap">
-      <div class="label eyebrow">03 · Development</div>
+      <div class="label eyebrow">04 · Development</div>
       <h2>Development</h2>
       <div class="xp">
         <div class="xp-block">
@@ -1700,7 +1724,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
   <section id="build">
     <div class="wrap two">
       <div>
-        <div class="label eyebrow">04 · Build</div>
+        <div class="label eyebrow">05 · Build</div>
         <h2>Build from source</h2>
         <p class="muted">CMake 3.25 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
         <dl class="platforms">
@@ -1724,7 +1748,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
   <section id="soon">
     <div class="wrap">
-      <div class="label eyebrow">05 · Coming soon</div>
+      <div class="label eyebrow">06 · Coming soon</div>
       <h2>Coming soon</h2>
       <div class="soon-grid soon-small">
         <article class="soon-card">
