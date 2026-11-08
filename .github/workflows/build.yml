@@ -19,8 +19,15 @@ concurrency:
 # third_party/libtorch* is absent (PYTORCH_VERSION there); the cache key pins
 # the same version so a bump in CMake misses the cache instead of reusing a
 # stale archive.
+#
+# Compilers run through sccache (configure sets it as the compiler launcher),
+# which stores each object in the GitHub Actions cache, so a run recompiles
+# only the translation units whose preprocessed source, flags or compiler
+# changed. Before this every run rebuilt DuckDB, curl, zlib, glslang and GLFW
+# from scratch.
 env:
   LIBTORCH_VERSION: 2.5.1
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   macos:
@@ -41,9 +48,16 @@ jobs:
         with:
           path: third_party/libtorch
           key: libtorch-macos-arm64-${{ env.LIBTORCH_VERSION }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.19.0
       # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
-      - run: cmake --preset release -DCALIPER_WITH_SLANG=OFF
+      # The Metal backend is Objective-C++, so the OBJC/OBJCXX launchers are set as well.
+      - run: >-
+          cmake --preset release -DCALIPER_WITH_SLANG=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache
       - run: cmake --build cmake-build-release --parallel
       # The GPU suites (gfx, export, embed, torch) skip without a device and
       # report that as Skipped, not Passed. A hosted runner's Metal/GL
@@ -57,6 +71,8 @@ jobs:
           name: macos-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+      - if: always()
+        run: sccache --show-stats
 
   windows:
     # CPU-only: USE_CUDA falls back when no toolkit is found (CMakeLists.txt
@@ -80,9 +96,16 @@ jobs:
             third_party/libtorch-release
             third_party/glew-prebuilt
           key: libtorch-win-cpu-${{ env.LIBTORCH_VERSION }}-glew-2.3.1
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.19.0
       # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
-      - run: cmake --preset release -DCALIPER_WITH_SLANG=OFF
+      # sccache cannot cache MSVC compiles that write a PDB (/Zi). Release builds have no /Zi
+      # (CMP0141 is NEW, so debug info is only requested for Debug and RelWithDebInfo).
+      - run: >-
+          cmake --preset release -DCALIPER_WITH_SLANG=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
       - run: cmake --build cmake-build-release --parallel
       - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
       - if: failure()
@@ -91,3 +114,5 @@ jobs:
           name: windows-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+      - if: always()
+        run: sccache --show-stats
