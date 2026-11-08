@@ -57,8 +57,9 @@
   .btn .sep { font-family: var(--text); }   /* the display face has no middle dot */
   .btn-soon { color: var(--faint); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; opacity: .6; cursor: not-allowed; }
   .soon-grid { display: grid; gap: 20px; margin-top: 20px; }
-  .soon-small { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto; margin-top: 34px; }
-  .soon-small .soon-card { display: grid; grid-row: span 2; grid-template-rows: subgrid; }
+  .soon-small { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto auto; margin-top: 34px; }
+  .soon-small .soon-card { display: grid; grid-row: span 3; grid-template-rows: subgrid; }
+  .soon-card pre.soon-code { padding: 14px 16px 16px; border-top: 1px solid var(--rule-faint); font-size: 12px; }
   .soon-small .soon-fig { margin-top: 0; }
   .soon-card { display: flex; flex-direction: column; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; overflow: hidden; }
   .soon-copy { padding: 22px 22px 20px; }
@@ -1732,6 +1733,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div class="soon-grid soon-small">
         <article class="soon-card">
           <div class="soon-copy"><h3>Caliper CLI</h3><p>Create, build, run and capture applets from a terminal, a script or a CI job.</p></div>
+          <pre class="code soon-code"><code><span class="row"><span class="c">$</span> caliper new finetune_scope</span><span class="row"><span class="c">$</span> caliper build finetune_scope</span><span class="row"><span class="c">$</span> caliper run finetune_scope</span><span class="row"><span class="c">$</span> caliper capture loss -o loss.png</span></code></pre>
           <div class="soon-fig">
           <svg class="hw" viewBox="-1 -1 322 298" role="img" aria-label="Caliper CLI: new writes the applet's source, CMake file and manifest; build makes libfinetune_scope.dylib against the Caliper SDK; run has the Caliper app load the applet and start its job; capture renders the loss view to loss.png">
             <defs><marker id="t-cli" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="td-cli" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
@@ -1771,6 +1773,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         </article>
         <article class="soon-card">
           <div class="soon-copy"><h3>Caliper API</h3><p>An HTTP interface to the running app, so code in any language can run applets, send them data and fetch what they show.</p></div>
+          <pre class="code soon-code"><code><span class="row"><span class="c"># CALIPER is the running app's address</span></span><span class="row"><span class="c">$</span> curl -X POST \</span><span class="row">    $CALIPER/applets/finetune_scope/run</span><span class="row"><span class="c">$</span> curl -X POST $CALIPER/streams/loss \</span><span class="row">    -d '{"step": 1200, "value": 0.41}'</span><span class="row"><span class="c">$</span> curl -o loss.png $CALIPER/views/loss.png</span></code></pre>
           <div class="soon-fig">
           <svg class="hw" viewBox="-1 -1 322 302" role="img" aria-label="Caliper API: any HTTP client sends requests to an HTTP server in the Caliper app; POST /applets/{id}/run goes to the applet host, POST /streams/{name} to the metrics store, GET /views/{name}.png to the renderer; the app answers with PNG or JSON">
             <defs><marker id="t-api" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="td-api" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
@@ -1807,6 +1810,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         </article>
         <article class="soon-card">
           <div class="soon-copy"><h3>Caliper MCP</h3><p>Tools that hand your coding agent Caliper's SDK, its documentation and the running app, so it can write a panel for your project, build it and check the result on screen.</p></div>
+          <pre class="code soon-code"><code><span class="row"><span class="c">$</span> claude mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> codex mcp add caliper -- caliper-mcp</span><span class="row"><span class="c">$</span> claude</span><span class="row"><span class="p">&gt;</span> Plot the loss of each layer.</span><span class="row">  new("finetune_scope")</span><span class="row">  build("finetune_scope")</span><span class="row">  run("finetune_scope")</span><span class="row">  capture("loss")</span></code></pre>
           <div class="soon-fig">
           <svg class="hw" viewBox="-1 -1 322 308" role="img" aria-label="Caliper MCP: a coding agent edits the applet's source in your repo and calls caliper-mcp's tools (docs, sdk, new, build, run, capture); caliper-mcp has the Caliper app build and run the applet and returns an image of the view, which the agent checks before editing again">
             <defs><marker id="t-mcp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip"/></marker><marker id="td-mcp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
