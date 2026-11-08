@@ -25,6 +25,14 @@ find third_party -mindepth 1 -delete 2>/dev/null || true
 rm -rf third_party
 mkdir -p third_party
 
+# The wipe also removed what the superproject tracks under third_party/ directly
+# rather than as submodules (stb's headers, the llama.cpp and DuckDB patches).
+# Put those back from HEAD.
+echo "Restoring tracked third_party files..."
+git ls-files -s -- third_party | awk '$1 != "160000" { print $4 }' | while IFS= read -r f; do
+    git checkout HEAD -- "$f"
+done
+
 # Remove pytorch from .gitmodules permanently (it's not a real submodule)
 echo "Removing pytorch from .gitmodules..."
 if grep -q "third_party/pytorch" .gitmodules 2>/dev/null; then
