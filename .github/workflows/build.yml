@@ -1,0 +1,92 @@
+# .github/workflows/build.yml
+name: Build
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['site/**', 'docs/**', 'mkdocs.yml', '**.md',
+                   '.github/workflows/pages.yml']
+  pull_request:
+    paths-ignore: ['site/**', 'docs/**', 'mkdocs.yml', '**.md',
+                   '.github/workflows/pages.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+# libtorch is fetched by cmake/Dependencies.cmake at configure time when
+# third_party/libtorch* is absent (PYTORCH_VERSION there); the cache key pins
+# the same version so a bump in CMake misses the cache instead of reusing a
+# stale archive.
+env:
+  LIBTORCH_VERSION: 2.5.1
+
+jobs:
+  macos:
+    # Apple Silicon: the libtorch archive CMake downloads is arm64 and the
+    # Metal backend + MPS cases only mean anything there.
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      # Submodules come from the repo's own script, not checkout's recursion:
+      # some pins are not fetchable from their remotes (init-submodules.sh
+      # explains which and falls back to the default branch) and GLEW's
+      # sources are generated afterwards. It wipes third_party/ first, so the
+      # libtorch cache is restored only after it has run.
+      - uses: actions/checkout@v7
+      - run: brew install ninja
+      - run: ./init-submodules.sh
+      - uses: actions/cache@v5
+        with:
+          path: third_party/libtorch
+          key: libtorch-macos-arm64-${{ env.LIBTORCH_VERSION }}
+      - run: cmake --preset release
+      - run: cmake --build cmake-build-release --parallel
+      # The GPU suites (gfx, export, embed, torch) skip without a device and
+      # report that as Skipped, not Passed. A hosted runner's Metal/GL
+      # availability is not guaranteed, so skips are accepted here; a lane
+      # that must have a GPU sets CALIPER_REQUIRE_GPU=1 to turn them into
+      # failures.
+      - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
+      - if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-ctest-log
+          path: cmake-build-release/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  windows:
+    # CPU-only: USE_CUDA falls back when no toolkit is found (CMakeLists.txt
+    # "USE_CUDA is ON but no CUDA toolkit found"), libtorch comes as the CPU
+    # zip, GLEW as the prebuilt zip, Vulkan through volk (no SDK) with glslang
+    # fetched and built in-tree. Realistic, but DuckDB from source under MSVC
+    # is slow and this lane has not run yet, so it is advisory until it has
+    # gone green a few times: continue-on-error keeps a Windows failure from
+    # blocking the macOS result.
+    runs-on: windows-latest
+    timeout-minutes: 150
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: choco install ninja -y --no-progress
+      - run: ./init-submodules.sh
+      - uses: actions/cache@v5
+        with:
+          path: |
+            third_party/libtorch-release
+            third_party/glew-prebuilt
+          key: libtorch-win-cpu-${{ env.LIBTORCH_VERSION }}-glew-2.3.1
+      - run: cmake --preset release
+      - run: cmake --build cmake-build-release --parallel
+      - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
+      - if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-ctest-log
+          path: cmake-build-release/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
