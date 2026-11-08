@@ -2208,10 +2208,12 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
           </div>
         </article>
         <article class="soon-card" id="soon-cloud">
-          <div class="soon-copy"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold.</p><span class="soon-k">Example</span><p class="soon-ex">Kimi K3.1 Pro runs on one of our 8-GPU nodes. You open it in Caliper on your laptop and read its 93 layers in the Trace pane as you would a local model; the node sends back the readings, not the activations.</p></div>
+          <div class="soon-copy"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold.</p><span class="soon-k">Example</span><p class="soon-ex">Kimi K3.1 Pro, 2.8 trillion parameters, runs on one of our 8-GPU nodes. You open it in Caliper on your laptop and read its 93 layers in the Trace pane as you would a local model; the node sends back the readings, not the activations.</p></div>
           <div class="soon-fig">
-          <svg class="hw" viewBox="0 0 740 414" role="img" aria-label="Caliper Cloud: Kimi K3.1 Pro on one HGX B300 node, eight Blackwell Ultra GPUs joined by NVLink at tensor parallel 8, about 195 GB of its 1.56 TB of weights in each GPU's eight HBM3e stacks. Per token, the hidden state after each of 93 layers (1.3 MB) and the KV cache (17 KB) stay in HBM, and only 15 KB of readings go to the Trace pane on your laptop.">
+          <svg class="hw" viewBox="0 0 740 440" role="img" aria-label="Caliper Cloud: Kimi K3.1 Pro, 2.8 trillion parameters with 104 billion active per token, on one HGX B300 node, eight Blackwell Ultra GPUs joined by NVLink at tensor parallel 8, about 195 GB of its 1.56 TB of weights in each GPU's eight HBM3e stacks. Per token, the hidden state after each of 93 layers (1.3 MB) and the KV cache (17 KB) stay in HBM, and only 15 KB of readings go to the Trace pane on your laptop.">
             <defs><marker id="cloud-tipd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
+            <text x="0" y="14" class="k" text-anchor="start">KIMI K3.1 PRO</text><text x="740" y="14" class="t11" text-anchor="end">2.8T parameters · 104B active per token · 1.56 TB of weights · 93 layers</text>
+            <g transform="translate(0 26)">
             <text x="0" y="14" class="k" text-anchor="start">ONE NODE</text>
             <text x="440" y="14" class="t11 dim" text-anchor="end">HGX B300 · 8 Blackwell Ultra GPUs · tensor parallel 8</text>
             <rect x="0" y="22" width="440" height="274" rx="10" class="pkg"/>
@@ -2420,6 +2422,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <text x="0" y="360" class="t11 dim" text-anchor="start">about 195 GB on each GPU, split eight ways by tensor parallelism.</text>
             <text x="0" y="380" class="t11 dim" text-anchor="start">Blackwell Ultra has up to 288 GB of HBM3e in eight 12-Hi stacks;</text>
             <text x="0" y="396" class="t11 dim" text-anchor="start">NVIDIA lists HGX B300 at 2.1 TB for its eight GPUs.</text>
+            </g>
           </svg>
           </div>
         </article>
