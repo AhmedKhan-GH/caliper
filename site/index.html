@@ -1743,8 +1743,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         </article>
         <article class="soon-card">
           <h3>Caliper API</h3>
-          <p>The same commands as a library for Python and C++, so a training script can open its applet and save what it shows at each checkpoint.</p>
-          <div class="soon-ex"><span class="soon-ex-head">Example</span><pre class="code"><code><span class="row">import caliper</span><span class="row">caliper.run("finetune_scope")</span><span class="row">for step in range(10_000):</span><span class="row">    train_step()</span><span class="row">    if step % 1000 == 0:</span><span class="row">        caliper.capture("loss")</span></code></pre></div>
+          <p>An HTTP interface to the running app, so code in any language can run applets, send them data and fetch what they show.</p>
+          <div class="soon-ex"><span class="soon-ex-head">Example</span><pre class="code"><code><span class="row"><span class="p">POST</span> /applets/finetune_scope/run</span><span class="row"><span class="p">POST</span> /streams/loss</span><span class="row">     {"step": 1200, "value": 0.41}</span><span class="row"><span class="p">GET</span>  /views/loss.png</span></code></pre></div>
         </article>
         <article class="soon-card">
           <h3>Caliper MCP</h3>
