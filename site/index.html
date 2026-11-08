@@ -107,9 +107,8 @@
   .hw .bn-cursor { stroke: var(--bronze); stroke-width: 1.2; }
   .hw .mono.bn-hot { fill: var(--bronze); }
   #bench-lag { transition: opacity .3s; }
-.hw .cl-track { fill: var(--deep); stroke: var(--rule-faint); }
-  .hw .cl-stay { fill: #3ca99c; }
-  .hw .cl-cross { fill: var(--bronze-hover); }
+.hw .cl-track { fill: var(--deep); stroke: var(--rule); }
+  .hw .cl-kv { fill: #3ca99c; }
   .hw .cl-screen { fill: var(--deep); stroke: var(--rule); }
   .hw .cl-base { fill: var(--plate); stroke: var(--rule); }
   .hw .cl-wire { fill: none; stroke: var(--bronze); stroke-width: 1.8; }
@@ -193,7 +192,7 @@
   /* The VRAM-path figures: memory as bands, the data path in bronze, the path not taken faint. */
   .mech-fig { margin: 0 0 72px; scroll-margin-top: 90px; }
   .toc { padding: 72px 0 0; }
-  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0 28px; border-top: 1px solid var(--rule-faint); }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 28px; border-top: 1px solid var(--rule-faint); }
   .toc ol > li { padding-top: 18px; }
   .toc-n { display: block; font: 12px/1 var(--display); letter-spacing: .24em; color: var(--bronze); }
   .toc-s { display: block; margin-top: 10px; font: 14px/1.35 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); }
@@ -338,10 +337,16 @@
   @media (max-width: 1000px) { .dev-flow { grid-template-columns: minmax(0, 1fr); } }
   .xp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; margin-top: 8px; }
   .xp-more { display: inline-block; margin-top: 18px; }
-  .sub-head { margin-top: 64px; scroll-margin-top: 90px; }
+  .sub-head { margin-top: 88px; scroll-margin-top: 90px; }
+  .sub-head.sub-first { margin-top: 34px; }
+  .sub-minor { margin-top: 56px; scroll-margin-top: 90px; }
+  .sub-minor .kicker { font: 11px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 10px; }
+  .sub-minor h4 { font: 17px/1.3 var(--display); letter-spacing: .1em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
+  .build-two { margin-top: 26px; }
+  .sub-head + .xp { margin-top: 26px; }
   .sub-head .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
   .sub-head h3 { font: 22px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
-  .lib-lede { max-width: 46em; margin: 0 0 30px; font-size: 17px; line-height: 1.6; color: var(--secondary); }
+  .lib-lede { max-width: 46em; margin: 16px 0 30px; font-size: 17px; line-height: 1.6; color: var(--secondary); }
   #lib .xp-api { grid-template-columns: 290px minmax(0, 1fr); }
   @media (max-width: 760px) { #lib .xp-api { grid-template-columns: minmax(0, 1fr); } }
   .xp-k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
@@ -492,7 +497,7 @@
     <div class="links">
       <a href="#backends">Backends</a>
       <a href="#lib">Lib</a>
-      <a href="#develop">SDK</a>
+      <a href="#sdk">SDK</a>
       <a href="#build">Build</a>
       <a href="#soon">Coming soon</a>
       <a href="docs/">Docs</a>
@@ -563,12 +568,9 @@
       <ol>
         <li><span class="toc-n">01</span><a class="toc-s" href="#backends">Native backends</a>
           <ul><li><a href="#metal">MPS unified memory path</a></li><li><a href="#cuda">CUDA device-local interop</a></li></ul></li>
-        <li><span class="toc-n">02</span><a class="toc-s" href="#lib">Caliper Lib</a>
-          <ul><li><a href="#python">Python streaming</a></li></ul></li>
-        <li><span class="toc-n">03</span><a class="toc-s" href="#develop">Caliper SDK</a>
-          <ul><li><a href="#example-app">Example app</a></li></ul></li>
-        <li><span class="toc-n">04</span><a class="toc-s" href="#build">Build</a></li>
-        <li><span class="toc-n">05</span><a class="toc-s" href="#soon">Coming soon</a>
+        <li><span class="toc-n">02</span><a class="toc-s" href="#develop">Development</a>
+          <ul><li><a href="#lib">Caliper Lib</a></li><li><a href="#sdk">Caliper SDK</a></li><li><a href="#build">Build from source</a></li></ul></li>
+        <li><span class="toc-n">03</span><a class="toc-s" href="#soon">Coming soon</a>
           <ul><li><a href="#soon-cli">Caliper CLI</a></li><li><a href="#soon-api">Caliper API</a></li><li><a href="#soon-mcp">Caliper MCP</a></li><li><a href="#soon-bench">Caliper Bench</a></li><li><a href="#soon-cloud">Caliper Cloud</a></li><li><a href="#soon-platform">Caliper Platform</a></li></ul></li>
       </ol>
     </div>
@@ -1637,10 +1639,11 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
     </div>
   </section>
 
-  <section id="lib">
+  <section id="develop">
     <div class="wrap">
-      <div class="label eyebrow">02 · Caliper Lib</div>
-      <h2>Caliper Lib</h2>
+      <div class="label eyebrow">02 · Development</div>
+      <h2>Development</h2>
+      <div class="sub-head sub-first" id="lib"><div class="kicker">Python</div><h3>Caliper Lib</h3></div>
       <p class="lib-lede">The <code>caliper</code> Python package. Version 0.1.0, for Python 3.12 on macOS with Apple Silicon, built from source.</p>
       <div class="xp-block">
         <div class="xp-k">Available</div>
@@ -1654,7 +1657,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         </dl>
         <a class="link xp-more" href="docs/tutorials/live-pytorch/">Watch PyTorch training live →</a>
       </div>
-      <div class="sub-head" id="python"><div class="kicker">macOS · PyTorch</div><h3>Python streaming</h3></div>
+      <div class="sub-minor" id="python"><div class="kicker">macOS · PyTorch</div><h4>Python streaming</h4></div>
       <div class="snippet"><div class="snippet-head"><span>Python</span><a href="docs/tutorials/live-pytorch/">live-pytorch</a></div><pre class="code"><code><span class="row">import caliper</span><span class="row">&nbsp;</span><span class="row">for step in range(steps):</span><span class="row">    x, y = make_batch(64, device)</span><span class="row">    loss = F.cross_entropy(model(x), y)</span><span class="row">    opt.zero_grad(set_to_none=True)</span><span class="row" data-k="compute">    loss.backward()</span><span class="row" data-k="compute">    opt.step()</span><span class="row">&nbsp;</span><span class="row" data-k="show">    <span class="p">caliper.show</span>(model.fc1.weight, "fc1.weight", cmap="rdbu")     <span class="c"># (64, 784) heatmap</span></span><span class="row" data-k="show">    <span class="p">caliper.show</span>(acts["conv1"], "conv1.act")                       <span class="c"># (64, 8, 28, 28) -&gt; mosaic</span></span><span class="row" data-k="show">    <span class="p">caliper.points</span>(acts["hidden"] @ proj, y, "embedding", classes=4)</span><span class="row" data-k="show">    <span class="p">caliper.series</span>(loss.detach(), "loss")</span><span class="row" data-k="show">    <span class="p">caliper.histogram</span>(model.fc1.weight, "fc1.weight.hist")</span></code></pre></div>
       <div class="hw-plate flow-plate">
         <div class="flow-bar"><span>Illustrative data</span><button class="tb-play" type="button" aria-label="Play or pause"><svg class="i-play" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5 L10.5 6 L3 10.5 Z"/></svg><svg class="i-pause" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.6" height="9"/><rect x="6.9" y="1.5" width="2.6" height="9"/></svg></button></div>
@@ -1757,13 +1760,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <g id="packet" class="packet"><rect x="-9" y="-6" width="18" height="12" rx="2"/></g>
     </svg>
       </div>
-    </div>
-  </section>
-
-  <section id="develop">
-    <div class="wrap">
-      <div class="label eyebrow">03 · Caliper SDK</div>
-      <h2>Caliper SDK</h2>
+      <div class="sub-head" id="sdk"><div class="kicker">C++</div><h3>Caliper SDK</h3></div>
       <div class="xp">
         <div class="xp-block">
           <div class="xp-k">Interfaces</div>
@@ -1781,7 +1778,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
           <a class="link xp-more" href="docs/reference/torch-on-each-platform/">Torch objects on each platform →</a>
         </div>
       </div>
-      <div class="sub-head" id="example-app"><div class="kicker">C++ · LibTorch</div><h3>Example app</h3></div>
+      <div class="sub-minor" id="example-app"><div class="kicker">LibTorch · Metal or CUDA</div><h4>C++ Example</h4></div>
       <div class="dev-flow">
       <div class="snippet dev-snippet"><div class="snippet-head"><span>examples/sine_scope/sine_scope.cpp</span><a href="https://github.com/AhmedKhan-GH/caliper/blob/main/examples/sine_scope/sine_scope.cpp">source</a></div><pre class="code dev-code"><code><span class="row step s1"><span class="step-n">1</span><span class="c">// device.v1 -&gt; torch device: METAL means MPS on Apple, CUDA on Windows/Linux.</span></span><span class="row step s1"><span class="step-n"></span>auto d = <span class="p">caliper::Device::query</span>(*st-&gt;host);</span><span class="row step s1"><span class="step-n"></span>torch::Device dev =</span><span class="row step s1"><span class="step-n"></span>    (d.kind == CALIPER_DEV_CUDA &amp;&amp; torch::cuda::is_available())</span><span class="row step s1"><span class="step-n"></span>        ? torch::Device(<span class="p">torch::kCUDA</span>)</span><span class="row step s1"><span class="step-n"></span>    : (d.kind == CALIPER_DEV_METAL) ? torch::Device(<span class="p">torch::kMPS</span>)</span><span class="row step s1"><span class="step-n"></span>                                    : torch::Device(<span class="p">torch::kCPU</span>);</span><span class="row"><span class="step-n"></span> </span><span class="row step s2"><span class="step-n">2</span><span class="c">// … training on dev; then, on the frame thread:</span></span><span class="row"><span class="step-n"></span> </span><span class="row"><span class="step-n"></span><span class="c">// The weight matrix as pixels — gen-gated rebuild, frame thread only.</span></span><span class="row"><span class="step-n"></span>if (st-&gt;bridge &amp;&amp; gen != 0 &amp;&amp; gen != st-&gt;tex_gen &amp;&amp;</span><span class="row"><span class="step-n"></span>    disp_w.defined()) {</span><span class="row"><span class="step-n"></span>    if (st-&gt;w_tex) st-&gt;bridge.<span class="p">release_texture</span>(st-&gt;w_tex);</span><span class="row step s3"><span class="step-n">3</span>    auto ct = <span class="p">caliper::adapters::to_tensor</span>(disp_w);</span><span class="row step s4"><span class="step-n">4</span>    st-&gt;w_tex = ct ? st-&gt;bridge.<span class="p">texture_from_tensor_mapped</span>(</span><span class="row step s4"><span class="step-n"></span>                         &amp;*ct, CALIPER_CMAP_RDBU, -w_max, w_max)</span><span class="row step s4"><span class="step-n"></span>                   : 0;</span><span class="row"><span class="step-n"></span>    st-&gt;tex_gen = gen;</span><span class="row"><span class="step-n"></span>}</span><span class="row"><span class="step-n"></span>if (st-&gt;w_tex) {</span><span class="row"><span class="step-n"></span>    ImGui::TextDisabled(&quot;fc1 weights (32x1 as 8x4 blocks, RdBu)&quot;);</span><span class="row step s5"><span class="step-n">5</span>    <span class="p">ImGui::Image</span>(<span class="p">caliper::Bridge::imtex</span>(st-&gt;w_tex), ImVec2(128, 256));</span><span class="row"><span class="step-n"></span>} else if (!st-&gt;bridge) {</span><span class="row"><span class="step-n"></span>    ImGui::TextDisabled(&quot;tensor_bridge.v1 absent: no weight heatmap&quot;);</span><span class="row"><span class="step-n"></span>} else {</span><span class="row"><span class="step-n"></span>    ImGui::TextDisabled(&quot;fc1 weights appear once training starts&quot;);</span><span class="row"><span class="step-n"></span>}</span></code></pre></div>
       <ol class="dev-steps">
@@ -1794,18 +1791,13 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       </div>
       <figure class="dev-shot">
         <div class="shot">
-          <img src="assets/sine-scope.jpg?v=2" width="2400" height="1553" loading="lazy" alt="The example app running in Caliper on an Apple M5 Max: training at 59 percent, the model&#x27;s curve running through noisy samples of sin(x), the loss falling, and the first layer&#x27;s weights as a red and blue heatmap.">
+          <img src="assets/sine-scope.jpg?v=2" width="2400" height="1553" loading="lazy" alt="The C++ example running in Caliper on an Apple M5 Max: training at 59 percent, the model&#x27;s curve running through noisy samples of sin(x), the loss falling, and the first layer&#x27;s weights as a red and blue heatmap.">
         </div>
-        <figcaption>The example app in Caliper, halfway through training.</figcaption>
+        <figcaption>The C++ example in Caliper, halfway through training.</figcaption>
       </figure>
-    </div>
-  </section>
-
-  <section id="build">
-    <div class="wrap two">
+      <div class="sub-head" id="build"><div class="kicker">CMake · macOS and Windows</div><h3>Build from source</h3></div>
+      <div class="two build-two">
       <div>
-        <div class="label eyebrow">04 · Build</div>
-        <h2>Build from source</h2>
         <p class="muted">CMake 3.25 or later and a C++17 compiler. macOS needs Xcode command line tools and Apple Silicon; Windows needs Visual Studio 2022 and CUDA 12.8.</p>
         <dl class="platforms">
           <dt>macOS</dt><dd>Metal, default · MPS tensors on the GPU</dd>
@@ -1823,12 +1815,13 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
 
 <span class="c"># Run</span>
 <span class="p">$</span> ./cmake-build-release/caliper</pre>
+      </div>
     </div>
   </section>
 
   <section id="soon">
     <div class="wrap">
-      <div class="label eyebrow">05 · Coming soon</div>
+      <div class="label eyebrow">03 · Coming soon</div>
       <h2>Coming soon</h2>
       <div class="soon-grid soon-small">
         <article class="soon-card" id="soon-cli">
@@ -1885,7 +1878,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <article class="soon-card" id="soon-cloud">
           <div class="soon-copy"><h3>Caliper Cloud</h3><p>A paid plan that runs Caliper on our dedicated GPU nodes, for models larger than your own hardware can hold.</p><span class="soon-k">Example</span><p class="soon-ex">Kimi K3.1 Pro, 2.8 trillion parameters, runs on one of our 8-GPU nodes. You open it in Caliper on your laptop and read its 93 layers in the Trace pane as you would a local model; the node sends back the readings, not the activations.</p></div>
           <div class="soon-fig">
-          <svg class="hw" viewBox="0 0 740 440" role="img" aria-label="Caliper Cloud: Kimi K3.1 Pro, 2.8 trillion parameters with 104 billion active per token, on one HGX B300 node, eight Blackwell Ultra GPUs joined by NVLink at tensor parallel 8, about 195 GB of its 1.56 TB of weights in each GPU's eight HBM3e stacks. Per token, the hidden state after each of 93 layers (1.3 MB) and the KV cache (17 KB) stay in HBM, and only 15 KB of readings go to the Trace pane on your laptop.">
+          <svg class="hw" viewBox="0 0 740 440" role="img" aria-label="Caliper Cloud: Kimi K3.1 Pro, 2.8 trillion parameters with 104 billion active per token, on one HGX B300 node, eight Blackwell Ultra GPUs joined by NVLink at tensor parallel 8, about 195 GB of its 1.56 TB of weights in each GPU's eight 36 GB HBM3e stacks. Memory load of the node's 2.30 TB: weights 1.56 TB, the KV cache of one 1M-token sequence 142 GB (17.7 GB copied on each GPU), 601 GB free. Only the readings, 15 KB per token, go to the Trace pane on your laptop.">
             <defs><marker id="cloud-tipd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 Z" class="tip-data"/></marker></defs>
             <text x="0" y="14" class="k" text-anchor="start">KIMI K3.1 PRO</text><text x="740" y="14" class="t11" text-anchor="end">2.8T parameters · 104B active per token · 1.56 TB of weights · 93 layers</text>
             <g transform="translate(0 26)">
@@ -1906,7 +1899,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="20" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="20" y="111" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="41.5" y="111" width="18" height="14" rx="1" class="page"/>
-            <rect x="41.5" y="111" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="41.5" y="111" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="49.08" y="111" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="63" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="84.5" y="111" width="18" height="14" rx="1" class="page"/>
             <path d="M 61 132 L 61 150" class="cl-tick"/>
@@ -1924,7 +1918,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="126" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="126" y="111" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="147.5" y="111" width="18" height="14" rx="1" class="page"/>
-            <rect x="147.5" y="111" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="147.5" y="111" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="155.08" y="111" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="169" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="190.5" y="111" width="18" height="14" rx="1" class="page"/>
             <path d="M 167 132 L 167 150" class="cl-tick"/>
@@ -1942,7 +1937,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="232" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="232" y="111" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="253.5" y="111" width="18" height="14" rx="1" class="page"/>
-            <rect x="253.5" y="111" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="253.5" y="111" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="261.08" y="111" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="275" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="296.5" y="111" width="18" height="14" rx="1" class="page"/>
             <path d="M 273 132 L 273 150" class="cl-tick"/>
@@ -1960,7 +1956,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="338" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="338" y="111" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="359.5" y="111" width="18" height="14" rx="1" class="page"/>
-            <rect x="359.5" y="111" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="359.5" y="111" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="367.08" y="111" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="381" y="111" width="18" height="14" rx="1" class="page"/>
             <rect x="402.5" y="111" width="18" height="14" rx="1" class="page"/>
             <path d="M 379 132 L 379 150" class="cl-tick"/>
@@ -1978,7 +1975,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="20" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="20" y="259" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="41.5" y="259" width="18" height="14" rx="1" class="page"/>
-            <rect x="41.5" y="259" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="41.5" y="259" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="49.08" y="259" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="63" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="84.5" y="259" width="18" height="14" rx="1" class="page"/>
             <path d="M 61 184 L 61 166" class="cl-tick"/>
@@ -1996,7 +1994,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="126" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="126" y="259" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="147.5" y="259" width="18" height="14" rx="1" class="page"/>
-            <rect x="147.5" y="259" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="147.5" y="259" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="155.08" y="259" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="169" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="190.5" y="259" width="18" height="14" rx="1" class="page"/>
             <path d="M 167 184 L 167 166" class="cl-tick"/>
@@ -2014,7 +2013,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="232" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="232" y="259" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="253.5" y="259" width="18" height="14" rx="1" class="page"/>
-            <rect x="253.5" y="259" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="253.5" y="259" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="261.08" y="259" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="275" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="296.5" y="259" width="18" height="14" rx="1" class="page"/>
             <path d="M 273 184 L 273 166" class="cl-tick"/>
@@ -2032,7 +2032,8 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <rect x="338" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="338" y="259" width="18" height="14" rx="1" class="page tensor"/>
             <rect x="359.5" y="259" width="18" height="14" rx="1" class="page"/>
-            <rect x="359.5" y="259" width="7.6" height="14" rx="1" class="page tensor"/>
+            <rect x="359.5" y="259" width="7.58" height="14" rx="1" class="page tensor"/>
+            <rect x="367.08" y="259" width="8.86" height="14" rx="1" class="cl-kv"/>
             <rect x="381" y="259" width="18" height="14" rx="1" class="page"/>
             <rect x="402.5" y="259" width="18" height="14" rx="1" class="page"/>
             <path d="M 379 184 L 379 166" class="cl-tick"/>
@@ -2042,24 +2043,25 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <path d="M 440 158 L 458 158 L 458 306" class="cl-wire"/>
             <path d="M 458 306 L 474 306" class="arrow data" marker-end="url(#cloud-tipd)"/>
             <text x="452" y="232" class="lbl" text-anchor="middle" transform="rotate(-90 452 232)">readings, 15 KB per token</text>
-            <text x="478" y="14" class="k" text-anchor="start">PER TOKEN, TO SCALE</text>
-            <text x="478" y="40" class="t11 dim" text-anchor="start">stays in HBM</text>
-            <text x="478" y="58" class="t11" text-anchor="start">hidden state after each of 93 layers</text>
-            <text x="734" y="58" class="t11 dim" text-anchor="end">1.3 MB</text>
-            <rect x="478" y="64" width="256" height="8" rx="1" class="cl-track"/>
-            <rect x="478" y="64" width="256" height="8" rx="1" class="cl-stay"/>
-            <text x="478" y="84" class="t11" text-anchor="start">KV cache, 24 DSA layers, FP8</text>
-            <text x="734" y="84" class="t11 dim" text-anchor="end">17 KB</text>
-            <rect x="478" y="90" width="256" height="8" rx="1" class="cl-track"/>
-            <rect x="478" y="90" width="3.24" height="8" rx="1" class="cl-stay"/>
-            <text x="478" y="110" class="t11 dim" text-anchor="start">69 KDA layers keep a fixed state per sequence,</text>
-            <text x="478" y="124" class="t11 dim" text-anchor="start">96 heads × 128 × 128 values in each layer</text>
-            <text x="478" y="150" class="t11 dim" text-anchor="start">leaves the node</text>
-            <text x="478" y="168" class="t11" text-anchor="start">readings to your laptop</text>
-            <text x="734" y="168" class="t11 dim" text-anchor="end">15 KB</text>
-            <rect x="478" y="174" width="256" height="8" rx="1" class="cl-track"/>
-            <rect x="478" y="174" width="3.02" height="8" rx="1" class="cl-cross"/>
-            <text x="478" y="194" class="t11 dim" text-anchor="start">25.8 KB as today's JSON</text>
+            <text x="478" y="14" class="k" text-anchor="start">MEMORY LOAD</text>
+            <text x="734" y="14" class="t11 dim" text-anchor="end">8 × 288 GB = 2.30 TB</text>
+            <rect x="478" y="26" width="256" height="22" rx="2" class="cl-track"/>
+            <rect x="478" y="26" width="173.47" height="22" rx="1" class="page tensor"/>
+            <rect x="651.47" y="26" width="15.75" height="22" rx="1" class="cl-kv"/>
+            <rect x="667.22" y="26" width="66.78" height="22" rx="1" class="page"/>
+            <rect x="478" y="63" width="10" height="10" rx="1" class="page tensor"/>
+            <text x="494" y="72" class="t11" text-anchor="start">weights</text>
+            <text x="734" y="72" class="t11 dim" text-anchor="end">1.56 TB</text>
+            <rect x="478" y="83" width="10" height="10" rx="1" class="cl-kv"/>
+            <text x="494" y="92" class="t11" text-anchor="start">KV cache, one 1M-token sequence</text>
+            <text x="734" y="92" class="t11 dim" text-anchor="end">142 GB</text>
+            <text x="494" y="107" class="t11 dim" text-anchor="start">17.7 GB copied on each GPU at tensor parallel 8</text>
+            <rect x="478" y="118" width="10" height="10" rx="1" class="page"/>
+            <text x="494" y="127" class="t11" text-anchor="start">free</text>
+            <text x="734" y="127" class="t11 dim" text-anchor="end">601 GB</text>
+            <text x="478" y="152" class="t11" text-anchor="start">each GPU holds 195 GB of weights of 288 GB</text>
+            <text x="478" y="176" class="t11 dim" text-anchor="start">the 69 KDA layers also hold a state per sequence,</text>
+            <text x="478" y="190" class="t11 dim" text-anchor="start">108.5M values in a precision not published</text>
             <text x="478" y="218" class="k" text-anchor="start">YOUR LAPTOP</text>
             <rect x="478" y="226" width="256" height="172" rx="6" class="blk"/>
             <rect x="486" y="234" width="240" height="156" rx="2" class="cl-screen"/>
@@ -2089,14 +2091,16 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <text x="496" y="384" class="t11 dim" text-anchor="start">illustrative readings</text>
             <rect x="0" y="308" width="18" height="11" rx="1" class="page tensor"/>
             <text x="24" y="318" class="t11 dim" text-anchor="start">weights</text>
-            <rect x="80" y="308" width="18" height="11" rx="1" class="page"/>
-            <text x="104" y="318" class="t11 dim" text-anchor="start">free HBM</text>
-            <rect x="172" y="308" width="11" height="11" rx="1" class="die"/>
-            <text x="189" y="318" class="t11 dim" text-anchor="start">GPU die, two per package</text>
+            <rect x="80" y="308" width="18" height="11" rx="1" class="cl-kv"/>
+            <text x="104" y="318" class="t11 dim" text-anchor="start">KV cache</text>
+            <rect x="168" y="308" width="18" height="11" rx="1" class="page"/>
+            <text x="192" y="318" class="t11 dim" text-anchor="start">free HBM</text>
+            <rect x="260" y="308" width="11" height="11" rx="1" class="die"/>
+            <text x="277" y="318" class="t11 dim" text-anchor="start">GPU die, two per package</text>
             <text x="0" y="344" class="t11 dim" text-anchor="start">1.56 TB of weights, MXFP4 routed experts and everything else bf16;</text>
-            <text x="0" y="360" class="t11 dim" text-anchor="start">about 195 GB on each GPU, split eight ways by tensor parallelism.</text>
-            <text x="0" y="380" class="t11 dim" text-anchor="start">Blackwell Ultra has up to 288 GB of HBM3e in eight 12-Hi stacks;</text>
-            <text x="0" y="396" class="t11 dim" text-anchor="start">NVIDIA lists HGX B300 at 2.1 TB for its eight GPUs.</text>
+            <text x="0" y="360" class="t11 dim" text-anchor="start">split eight ways by tensor parallelism.</text>
+            <text x="0" y="380" class="t11 dim" text-anchor="start">Each B300 has 288 GB of HBM3e in eight 12-Hi stacks of 36 GB.</text>
+            <text x="0" y="396" class="t11 dim" text-anchor="start">Readings are 15 KB per token in binary, 25.8 KB as today's JSON.</text>
             </g>
           </svg>
           </div>
