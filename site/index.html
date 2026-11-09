@@ -56,7 +56,7 @@
   .btn-primary:hover { background: #f4eee3; border-color: #f4eee3; }
   /* A download that isn't out yet: greyed and not a link, as on the Falcon site. */
   .btn .sep { font-family: var(--text); }   /* the display face has no middle dot */
-  .btn-soon { color: var(--faint); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; opacity: .6; cursor: not-allowed; }
+  .btn-soon { color: var(--deep); background: var(--bronze); border: 1px solid var(--bronze); border-radius: 4px; opacity: .45; filter: saturate(.55); cursor: not-allowed; }   /* filled gold, greyed: not out yet */
   .soon-grid { display: grid; gap: 20px; margin-top: 20px; }
   .soon-small { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 34px; }
   .soon-small .soon-copy { flex: 1 0 auto; }
@@ -150,6 +150,10 @@
   nav .links { display: flex; gap: 26px; margin-left: auto; color: var(--secondary); font: 13px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
   nav .links a:hover { color: var(--parchment); }
   nav .btn { padding: 10px 16px 9px; font-size: 12px; }
+  nav .links .soon { opacity: .45; cursor: not-allowed; }   /* no download yet: not a link */
+  /* The GitHub mark in a button: the repository, one click from the hero, the build steps and the end. */
+  .btn .gh { width: 16px; height: 16px; flex: none; margin-top: -1px; }
+  .build-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 22px; margin-top: 4px; }
 
   /* Hero, lit like the Loggia opening: a fall of light from above and five beams along the seal's construction
      rays (0, 18 and 36 degrees either side of the upright), rising from one point. No round light. */
@@ -486,10 +490,11 @@
 
   @media (max-width: 900px) {
     .two, .mech-head, .code-grid { grid-template-columns: 1fr; gap: 28px; }
-    nav .links { display: none; }
-    nav .btn { margin-left: auto; }
   }
   @media (max-width: 520px) {
+    nav .wrap { gap: 16px; }
+    nav .links { gap: 16px; }
+    .brand span { display: none; }   /* the mark alone, so the three links fit a phone */
     header.hero { padding-top: 64px; }
     section { padding-top: 72px; }
     .wrap { padding: 0 18px; }
@@ -502,16 +507,10 @@
   <div class="wrap">
     <a class="brand" href="#top"><img src="assets/caliper-icon.svg?v=2" alt=""><span>CALIPER</span></a>
     <div class="links">
-      <a href="#backends">Backends</a>
-      <a href="#lib">LIB</a>
-      <a href="#sdk">SDK</a>
-      <a href="#build">Build</a>
-      <a href="#soon">Future Features</a>
-      <a href="#products">Future Products</a>
       <a href="docs/">Docs</a>
-      <a href="https://github.com/AhmedKhan-GH/caliper">GitHub ↗</a>
+      <a href="https://github.com/AhmedKhan-GH/caliper">GitHub</a>
+      <span class="soon" title="Download in preparation">Download</span>
     </div>
-    <span class="btn btn-soon" role="button" aria-disabled="true" title="Download in preparation">Download</span>
   </div>
 </nav>
 
@@ -597,6 +596,7 @@
     <p class="lede">A native app for interpretability. Observe models directly from the GPU in real time.</p>
     <div class="actions">
       <span class="btn btn-soon" role="button" aria-disabled="true" title="A packaged download is in preparation">Download</span>
+      <a class="btn btn-ghost gh-btn" href="https://github.com/AhmedKhan-GH/caliper"><svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>GitHub</a>
       <a class="btn btn-ghost" href="docs/">Docs</a>
       <a class="btn btn-ghost" href="#build">Build from source</a>
     </div>
@@ -1857,10 +1857,14 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
           <dt>Windows</dt><dd>Vulkan, default · CUDA tensors through external memory</dd>
           <dt>Fallback</dt><dd>OpenGL 3.3 core · CPU-staged upload</dd>
         </dl>
-        <a class="link" href="https://github.com/AhmedKhan-GH/caliper#prerequisites">Prerequisites →</a>
+        <div class="build-actions">
+          <a class="btn btn-ghost gh-btn" href="https://github.com/AhmedKhan-GH/caliper"><svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>Source on GitHub</a>
+          <a class="link" href="https://github.com/AhmedKhan-GH/caliper#prerequisites">Prerequisites →</a>
+        </div>
       </div>
-<pre><span class="c"># Initialize submodules</span>
-<span class="p">$</span> git submodule update --init --recursive
+<pre><span class="c"># Clone, with its submodules</span>
+<span class="p">$</span> git clone --recursive https://github.com/AhmedKhan-GH/caliper
+<span class="p">$</span> cd caliper
 
 <span class="c"># Configure and build; the applets download LibTorch</span>
 <span class="p">$</span> cmake --preset release
@@ -2468,6 +2472,7 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <h2>Get started</h2>
       <div class="actions">
         <span class="btn btn-soon" role="button" aria-disabled="true" title="A packaged download is in preparation">Download</span>
+        <a class="btn btn-ghost gh-btn" href="https://github.com/AhmedKhan-GH/caliper"><svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>GitHub</a>
         <a class="btn btn-ghost" href="docs/">Docs</a>
         <a class="btn btn-ghost" href="#build">Build from source</a>
       </div>
