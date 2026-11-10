@@ -1,0 +1,44 @@
+# Dependabot opens one pull request per update; CI builds and tests it, and a person reviews and merges it.
+# Nothing merges by itself. CMake FetchContent downloads (zlib, curl, the Vulkan SDK set, toml++) and libtorch
+# are not covered by Dependabot and stay manual.
+version: 2
+updates:
+  # Submodules move to the newest commit of the branch named in .gitmodules (the default branch otherwise).
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "Deps"
+    ignore:
+      # The UI stack pin defines the applet ABI epoch (PLATFORM.md, D4), so it moves only on purpose.
+      - dependency-name: "third_party/imgui"
+      - dependency-name: "third_party/implot"
+      - dependency-name: "third_party/implot3d"
+      # Carries local patches (third_party/patches/llama.cpp) against a fast-moving master; bumped by hand.
+      - dependency-name: "third_party/llama.cpp"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "CI"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The Python client (pyproject.toml, uv.lock).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "Python"
+    groups:
+      python:
+        patterns: ["*"]
