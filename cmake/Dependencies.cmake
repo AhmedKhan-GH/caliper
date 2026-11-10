@@ -241,39 +241,13 @@ set(BUILD_PYTHON     OFF CACHE BOOL "" FORCE)
 set(ENABLE_SANITIZER         OFF CACHE BOOL "" FORCE)
 set(ENABLE_UBSAN             OFF CACHE BOOL "" FORCE)
 set(ENABLE_THREAD_SANITIZER  OFF CACHE BOOL "" FORCE)
-set(DUCKDB_EXPLICIT_VERSION "v1.5.2" CACHE STRING "" FORCE)
+set(DUCKDB_EXPLICIT_VERSION "v1.5.6" CACHE STRING "" FORCE)
 # Set explicit platform to avoid running duckdb_platform_binary which can create NUL files on Windows
 if(WIN32)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(DUCKDB_EXPLICIT_PLATFORM "windows_amd64" CACHE STRING "" FORCE)
     else()
         set(DUCKDB_EXPLICIT_PLATFORM "windows_x86" CACHE STRING "" FORCE)
-    endif()
-endif()
-# Caliper's DuckDB deltas, applied at configure time like llama.cpp's below
-# (third_party/patches/duckdb/README.md). Skipped when already applied.
-file(GLOB _duckdb_patches "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/duckdb/*.patch")
-list(SORT _duckdb_patches)
-if(_duckdb_patches)
-    set(_duckdb_patches_rev ${_duckdb_patches})
-    list(REVERSE _duckdb_patches_rev)
-    execute_process(
-        COMMAND git -C ${THIRD_PARTY_DIR}/duckdb apply --reverse --check ${_duckdb_patches_rev}
-        RESULT_VARIABLE _duckdb_patched OUTPUT_QUIET ERROR_QUIET)
-    if(_duckdb_patched EQUAL 0)
-        message(STATUS "    DuckDB patches already applied — skipping")
-    else()
-        execute_process(
-            COMMAND git -C ${THIRD_PARTY_DIR}/duckdb apply ${_duckdb_patches}
-            RESULT_VARIABLE _duckdb_apply)
-        if(NOT _duckdb_apply EQUAL 0)
-            message(FATAL_ERROR
-                "  DuckDB patches neither apply cleanly nor are already applied.\n"
-                "  The submodule is likely not at its pin (9e248008); see "
-                "third_party/patches/duckdb/README.md.")
-        endif()
-        list(LENGTH _duckdb_patches _duckdb_npatch)
-        message(STATUS "    applied ${_duckdb_npatch} local DuckDB patch(es)")
     endif()
 endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
