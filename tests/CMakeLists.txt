@@ -64,6 +64,8 @@ target_sources(caliper_tests PRIVATE test_dock_layout.cpp)
 # (src/host/host_cli.h); the acceptance check for applets built outside the
 # core runs only when CALIPER_TEST_APPLET_DIR is set.
 target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
+# The command line's subcommands (src/host/host_cli.h) on temporary folders.
+target_sources(caliper_tests PRIVATE test_cli.cpp)
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)
@@ -75,6 +77,53 @@ target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 add_test(NAME caliper_tests COMMAND caliper_tests)
+
+# ---------------------------------------------------------------------------
+# The caliper executable's subcommands, run as a user runs them. Each runs and
+# exits without a window (host_cli.h); `caliper dev` and plain `caliper` start
+# the app, so no test runs them. The applets folder of this build stands in
+# for an outside build folder, and CALIPER_USER_APPLETS_DIR points install at
+# a folder inside the build tree.
+# ---------------------------------------------------------------------------
+if(TARGET caliper)
+    set(_cli_work "${CMAKE_CURRENT_BINARY_DIR}/cli-work")
+    set(_cli_env "CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
+    function(caliper_cli_test name)
+        cmake_parse_arguments(PARSE_ARGV 1 t "" "ARGS;EXIT;MATCH;ERROR;CLEAN" "")
+        set(defs -DEXE=$<TARGET_FILE:caliper> "-DARGS=${t_ARGS}" -DEXIT=${t_EXIT}
+                 "-DENV=${_cli_env}")
+        if(DEFINED t_MATCH)
+            list(APPEND defs "-DMATCH=${t_MATCH}")
+        endif()
+        if(DEFINED t_ERROR)
+            list(APPEND defs "-DERROR=${t_ERROR}")
+        endif()
+        if(DEFINED t_CLEAN)
+            list(APPEND defs "-DCLEAN=${t_CLEAN}")
+        endif()
+        add_test(NAME caliper_cli_${name}
+                 COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_run.cmake)
+        set_tests_properties(caliper_cli_${name} PROPERTIES LABELS cli)
+    endfunction()
+
+    caliper_cli_test(help ARGS "--help" EXIT 0 MATCH "usage: caliper")
+    caliper_cli_test(bad_option ARGS "--frobnicate" EXIT 2
+        ERROR "unknown option: --frobnicate")
+    caliper_cli_test(info ARGS "info" EXIT 0
+        MATCH "abi_epoch 2.*service caliper\\.ui\\.v1_1")
+    caliper_cli_test(list ARGS "list|--applets|${CMAKE_BINARY_DIR}/applets" EXIT 0
+        MATCH "READY +dev\\.caliper\\.hello +0\\.1\\.0 ")
+    caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
+        MATCH "1 of 1 applets pass the checks")
+    caliper_cli_test(check_missing ARGS "check|${_cli_work}/nowhere" EXIT 1
+        ERROR "not a folder")
+    caliper_cli_test(install ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
+        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*user-applets"
+        CLEAN "${_cli_work}/user-applets")
+    caliper_cli_test(new ARGS "new|com.example.cli-made|${_cli_work}/cli-made" EXIT 0
+        MATCH "created .*cli-made for applet com\\.example\\.cli-made"
+        CLEAN "${_cli_work}/cli-made")
+endif()
 
 # ---------------------------------------------------------------------------
 # caliper_gfx_tests — windowed, pixel-exact tensor->texture proof (§16).

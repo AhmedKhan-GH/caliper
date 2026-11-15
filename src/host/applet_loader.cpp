@@ -155,6 +155,18 @@ std::vector<std::string> applet_search_dirs(
     return out;
 }
 
+const char* applet_status_word(AppletStatus s) {
+    switch (s) {
+        case AppletStatus::Ready:       return "READY";
+        case AppletStatus::Active:      return "ACTIVE";
+        case AppletStatus::Refused:     return "REFUSED";
+        case AppletStatus::Failed:      return "FAILED";
+        case AppletStatus::Quarantined: return "QUARANTINED";
+        case AppletStatus::Shadowed:    return "SHADOWED";
+    }
+    return "UNKNOWN";
+}
+
 std::string shadowed_reason(const std::string& winner_version,
                             const std::string& winner_folder) {
     return "Version " + winner_version + " in " + winner_folder +
@@ -186,6 +198,7 @@ int AppletLoader::scan(const std::string& dir) {
 
         AppletEntry entry;
         entry.folder = e.path().parent_path().string();
+        entry.manifest_path = e.path().string();
         entry.search_rank = rank;
         auto parsed = parse_manifest_file(e.path().string());
         if (!parsed.ok) {

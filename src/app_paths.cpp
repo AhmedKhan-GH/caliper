@@ -102,6 +102,8 @@ std::string shipped_applets_dir() {
 }
 
 std::string user_applets_dir() {
+    if (const char* dir = std::getenv("CALIPER_USER_APPLETS_DIR"); dir && *dir)
+        return dir;
     return app_data_path("applets");
 }
 

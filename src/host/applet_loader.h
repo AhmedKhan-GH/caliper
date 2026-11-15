@@ -26,6 +26,7 @@ struct AppletEntry {
     std::string dylib_path;    // "" when binary missing
     std::string data_dir;      // per-applet sandbox; storage for the ABI pointer
     std::string folder;        // the folder the manifest was found in
+    std::string manifest_path; // <folder>/<stem>.caliper.toml
     int search_rank = 0;       // that folder's position in the search order
     AppletStatus status = AppletStatus::Failed;
     std::string status_text;   // card text for Refused/Failed/Quarantined/Shadowed
@@ -84,6 +85,9 @@ inline constexpr char kAppletPathSeparator =
 #else
     ':';
 #endif
+
+// The status in capitals, as the landing screen and the command line write it.
+const char* applet_status_word(AppletStatus s);
 
 // Card text of a copy that another copy of the same id shadows.
 std::string shadowed_reason(const std::string& winner_version,

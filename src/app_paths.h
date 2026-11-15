@@ -39,7 +39,8 @@ std::string executable_dir();
 // the executable; "" when the executable's folder is unknown.
 std::string shipped_applets_dir();
 
-// The user applets folder: applets/ under the app-data folder.
+// The user applets folder: CALIPER_USER_APPLETS_DIR when it is set and not
+// empty, otherwise applets/ under the app-data folder.
 std::string user_applets_dir();
 
 } // namespace caliper

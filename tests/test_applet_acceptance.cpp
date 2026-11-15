@@ -9,7 +9,7 @@
 // accepted, or if the folder holds none.
 //
 //   CALIPER_TEST_APPLET_DIR=<folder> \
-//       ./cmake-build-release/tests/caliper_tests -tc="acceptance*"
+//       ./cmake-build-release/tests/caliper_tests -tc="acceptance: applets*"
 #include <doctest/doctest.h>
 #include "applet_loader.h"
 #include <cstdio>

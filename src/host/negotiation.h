@@ -40,9 +40,12 @@ int semver_cmp(const std::string& a, const std::string& b); // <0, 0, >0
 const std::set<std::string>& host_service_ids();
 // The libtorch version and UI-stack hash this build provides, from the
 // compile definitions CALIPER_HOST_TORCH_VERSION and
-// CALIPER_HOST_UI_STACK_HASH; "" when the build defines neither.
+// CALIPER_HOST_UI_STACK_HASH; "" for one the build does not define.
 const char* host_torch_version();
 const char* host_ui_stack_hash();
+// The version of the SDK built with this host, from the compile definition
+// CALIPER_HOST_SDK_VERSION; "" when the build does not define it.
+const char* host_sdk_version();
 // The capabilities the caliper executable and the embed core advertise.
 HostCaps host_caps();
 }

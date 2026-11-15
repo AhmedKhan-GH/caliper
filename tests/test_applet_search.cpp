@@ -150,7 +150,7 @@ TEST_CASE("command line: --applets in both spellings, --help, and errors") {
     }
     {
         const char* argv[] = {"caliper", "--frobnicate"};
-        CHECK(parse_command_line(2, argv).error == "unknown argument: --frobnicate");
+        CHECK(parse_command_line(2, argv).error == "unknown option: --frobnicate");
     }
     CHECK(std::string(usage_text()).rfind("usage: caliper", 0) == 0);
 }

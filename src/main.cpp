@@ -27,6 +27,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 
 enum class AppPage {
     Landing,
@@ -841,9 +843,35 @@ int main(int argc, char** argv) {
                      caliper_host::usage_text());
         return 2;
     }
-    if (cl.command == caliper_host::CommandLine::Command::Help) {
+    using Command = caliper_host::CommandLine::Command;
+    if (cl.command == Command::Help) {
         std::fputs(caliper_host::usage_text(), stdout);
         return 0;
+    }
+    if (cl.command != Command::Run && cl.command != Command::Dev) {
+        // A subcommand runs and exits here; the app never starts. Only the
+        // ones that read installed applets touch the app-data folder.
+        const bool reads_applets = cl.command == Command::List ||
+                                   cl.command == Command::Check ||
+                                   cl.command == Command::Install;
+        caliper_host::CliContext ctx;
+        ctx.caps = caliper_host::host_caps();
+        ctx.sdk_version = caliper_host::host_sdk_version();
+        if (reads_applets) {
+            ctx.user_dir = caliper::user_applets_dir();
+            ctx.shipped_dir = caliper::shipped_applets_dir();
+            ctx.data_root = caliper::app_data_path("data");
+        }
+        ctx.applet_path_env = std::getenv("CALIPER_APPLET_PATH");
+        return caliper_host::run_subcommand(cl, ctx, std::cout, std::cerr);
+    }
+    if (cl.command == Command::Dev) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(cl.applet_dirs.front(), ec)) {
+            std::fprintf(stderr, "caliper: not a folder: %s\n",
+                         cl.applet_dirs.front().c_str());
+            return 1;
+        }
     }
 
     std::cout << "=== Caliper ===" << std::endl;

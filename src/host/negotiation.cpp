@@ -29,6 +29,9 @@
 #ifndef CALIPER_HOST_UI_STACK_HASH
 #define CALIPER_HOST_UI_STACK_HASH ""
 #endif
+#ifndef CALIPER_HOST_SDK_VERSION
+#define CALIPER_HOST_SDK_VERSION ""
+#endif
 
 namespace caliper_host {
 
@@ -127,6 +130,7 @@ const std::set<std::string>& host_service_ids() {
 
 const char* host_torch_version() { return CALIPER_HOST_TORCH_VERSION; }
 const char* host_ui_stack_hash() { return CALIPER_HOST_UI_STACK_HASH; }
+const char* host_sdk_version() { return CALIPER_HOST_SDK_VERSION; }
 
 HostCaps host_caps() {
     return HostCaps{CALIPER_ABI_EPOCH, kHostVersionStr, host_service_ids(),
