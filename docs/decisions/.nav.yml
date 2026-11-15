@@ -1,0 +1,4 @@
+nav:
+  - index.md
+  - glob: "*"
+    ignore_no_matches: true

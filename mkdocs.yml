@@ -2,14 +2,14 @@ site_name: Caliper Documentation
 site_url: https://ahmedkhan-gh.github.io/caliper/docs/
 docs_dir: docs
 site_dir: build/wiki-site
-# In the repository, not on the site: guides written around the applets, which are not shipped.
-# The old design documents below are mined and deleted in the following commits.
+# In the repository, not on the site: the cookbook is written around the applets, which are
+# not shipped, and report/ holds a LaTeX paper.
 exclude_docs: |
   guides/ml-applet-cookbook.md
   report/
-  superpowers/
-  /*.md
-  !/index.md
+# Broken anchors fail the strict build too, like broken links.
+validation:
+  anchors: warn
 theme:
   name: material
   # Icons, fonts and the stylesheet live outside docs/, which holds documents only.
@@ -23,10 +23,15 @@ theme:
     accent: custom
   features:
     - navigation.sections
+    - navigation.indexes
     - content.code.copy
     - search.suggest
 extra:
   homepage: /caliper/
+# The navigation follows the folders under docs/; a .nav.yml in a folder sets its order.
+plugins:
+  - search
+  - awesome-nav
 markdown_extensions:
   - admonition
   - toc:
@@ -35,48 +40,3 @@ markdown_extensions:
   - pymdownx.snippets:
       base_path: ['.']
       check_paths: true
-nav:
-  - Home: index.md
-  - Tutorials:
-      - tutorials/index.md
-      - Development basics: tutorials/development-basics.md
-      - Your first applet: tutorials/first-applet.md
-      - Your first ML applet: tutorials/first-ml-applet.md
-      - Watch PyTorch training live: tutorials/live-pytorch.md
-  - Guides:
-      - guides/index.md
-      - Debug an applet: guides/debug-an-applet.md
-      - Attach to a running script: guides/attach-to-a-running-script.md
-      - Continuous integration: guides/ci.md
-  - References:
-      - references/index.md
-      - ABI (epoch 2): references/abi.md
-      - Manifest (caliper.toml): references/manifest.md
-      - Refusal messages: references/refusals.md
-      - Tensor (caliper/tensor.h): references/tensor.md
-      - Arrow C Data Interface: references/arrow.md
-      - Adapters (torch): references/adapters.md
-      - Torch objects on each platform: references/torch-on-each-platform.md
-      - Services:
-          - caliper.ui.v1: references/service-ui-v1.md
-          - caliper.log.v1: references/service-log-v1.md
-          - caliper.jobs.v1: references/service-jobs-v1.md
-          - caliper.device.v1: references/service-device-v1.md
-          - caliper.metrics.v1: references/service-metrics-v1.md
-          - caliper.tensor_bridge.v1: references/service-tensor-bridge-v1.md
-          - caliper.geometry.v1 / v1_1 / v1_2 / v1_3: references/service-geometry-v1.md
-          - caliper.export.v1 / v1_1: references/service-export-v1.md
-          - caliper.artifacts.v1: references/service-artifacts-v1.md
-          - caliper.data.v1: references/service-data-v1.md
-          - caliper.feed.v1: references/service-feed-v1.md
-      - C++ sugar: references/sugar.md
-      - Embedding (libcaliper): references/embedding.md
-      - Python API (caliper): references/python-api.md
-  - Explanations:
-      - explanations/index.md
-      - Architecture: explanations/architecture.md
-      - Rendering: explanations/rendering.md
-      - Live streaming: explanations/live-streaming.md
-      - Compatibility & epochs: explanations/compatibility.md
-      - Trust model: explanations/trust-model.md
-  - Decisions: decisions/index.md

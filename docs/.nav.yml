@@ -1,0 +1,8 @@
+nav:
+  - index.md
+  - Tutorials: tutorials
+  - Guides: guides
+  - References: references
+  - Explanations: explanations
+  - Decisions: decisions
+  - Plans: plans

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="C++17" src="https://img.shields.io/badge/C%2B%2B-17-00599c?style=flat-square&logo=cplusplus">
+  <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599c?style=flat-square&logo=cplusplus">
   <img alt="macOS: Metal and MPS" src="https://img.shields.io/badge/macOS-Metal%20%C2%B7%20MPS-2f7bf5?style=flat-square&logo=apple">
   <img alt="Windows: Vulkan and CUDA" src="https://img.shields.io/badge/Windows-Vulkan%20%C2%B7%20CUDA-2f7bf5?style=flat-square&logo=windows">
   <img alt="LibTorch 2.5.1" src="https://img.shields.io/badge/LibTorch-2.5.1-ee4c2c?style=flat-square&logo=pytorch">
@@ -21,9 +21,8 @@
 <p align="center">
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
-  <a href="ROADMAP.md">Roadmap</a> ·
-  <a href="PLATFORM.md">Platform</a> ·
-  <a href="APPLETS.md">Applets</a>
+  <a href="docs/plans/roadmap.md">Roadmap</a> ·
+  <a href="docs/references/applets.md">Applets</a>
 </p>
 
 <br>
@@ -68,259 +67,163 @@ cmake --build --preset release
 
 ### All platforms
 - **Git** (for submodule management)
-- **CMake 3.18+**
-- **C++17 compatible compiler**
-- **OpenGL** (system library)
+- **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.18)
+- **A C++20 compiler** for the host and the applets
+- **OpenGL**, which the host uses as its fallback renderer and which the build still requires
 
-### Windows-specific (CUDA)
-⚠️ **Important**: These exact versions must match your device configuration:
+### Windows
 - **Visual Studio 2022** (MSVC v143)
-- **CUDA Toolkit 12.8** at `C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8`
-- **LibTorch 2.5.1+cu121** (auto-downloaded, ~2GB)
-- **NVIDIA GPU** with compute capability 3.5+
+- **CUDA Toolkit** (optional). If CMake finds one, it builds the CUDA paths and picks the matching LibTorch variant. If it finds none, the build falls back to CPU. There is no fixed install path.
+- **An NVIDIA GPU and driver** to use the CUDA and Vulkan interop path at run time. Vulkan is loaded at run time (`vulkan-1.dll`), so no Vulkan SDK is needed.
 
-💡 **To use different versions**: Update paths in `CMakeLists.txt:27-30` and LibTorch URL in `cmake/Dependencies.cmake:147-162`
-
-### macOS-specific (MPS)
+### macOS
 - **Xcode** with command line tools
-- **Apple Silicon** (M1/M2/M3)
-- **Metal compiler** (xcrun --find metal)
+- **Apple Silicon**
+- **Metal compiler** (`xcrun --find metal`)
 
 ## Build options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `USE_CUDA` | ON (Windows), OFF (macOS) | Enable NVIDIA CUDA support |
-| `CALIPER_WITH_TORCH` | ON | Download and link LibTorch for the applets and adapter tests |
+| `USE_CUDA` | ON | Build the CUDA support. It turns itself OFF when no CUDA toolkit is found, and the `release-notorch` preset sets it OFF. |
+| `USE_MPS` | ON on macOS when the Metal compiler is found, otherwise OFF | Build the Metal Performance Shaders support |
+| `BUILD_TESTS` | OFF | Build the test suites. The `release`, `debug` and `release-notorch` presets set it ON. |
+| `CALIPER_WITH_TORCH` | ON | Download and link LibTorch for the applets and the adapter tests |
 | `CALIPER_BUILD_APPLETS` | ON | Build `applets/`; forced OFF without LibTorch |
-| `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension |
-| `BUILD_TESTS` | OFF | Build test suite |
+| `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension (nanobind) |
+| `CALIPER_WITH_SLANG` | ON | Configure the vendored slang library |
+| `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp library |
+| `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
+| `CALIPER_BUILD_EXAMPLES` | ON | Build the example applets in `examples/` (`hello` and `sine_scope`) |
+| `CALIPER_BUILD_OPENGLLAMA` | OFF | Build the archived opengllama applet; needs `CALIPER_WITH_LLAMA` |
+| `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
 **Examples:**
 ```bash
-cmake --preset debug -DBUILD_TESTS=ON
+cmake --preset debug
 cmake --preset release-notorch
+cmake --preset release -DCALIPER_WITH_SLANG=OFF
 ```
 
 ## LibTorch configuration
 
-Caliper depends on **libtorch 2.5.1**. There are several flavors (CPU, CUDA
-11.8, CUDA 12.1, CUDA 12.4, macOS arm64). The build picks one at *configure
-time*. This section explains how to let it pick automatically vs. how to
-override it.
+Caliper's applets use **LibTorch 2.5.1**. The host executable and `libcaliper` do not link it. The build downloads the archive at configure time into `third_party/` and does nothing else to it. There is no option that names a variant; the platform and the CUDA toolkit that CMake finds decide it (`cmake/Dependencies.cmake`).
 
-### TL;DR
-
-| You are on... | Run this | Result |
+| Platform | Archive | Folder |
 |---|---|---|
-| Apple Silicon Mac | `cmake -B build .` | macOS arm64 (CPU + MPS, no flags needed) |
-| Windows / Linux, no GPU | `cmake -B build .` | CPU |
-| Windows / Linux, NVIDIA GPU | `cmake -B build -DLIBTORCH_VARIANT=cu121 .` | CUDA 12.1 |
-| Want a specific CUDA | `cmake -B build -DLIBTORCH_VARIANT=cu124 .` | CUDA 12.4 |
+| macOS (Apple Silicon) | The prebuilt `libtorch-macos-arm64` archive, which includes MPS support. Nothing is built from source. | `third_party/libtorch/` |
+| Windows | The prebuilt Windows archive for the variant below. The debug build uses the separate debug archive. | `third_party/libtorch-release/` or `third_party/libtorch-debug/` |
+| Linux | The prebuilt CPU archive, or the CUDA archive for the variant below when `USE_CUDA` is ON. | `third_party/libtorch/` |
 
-If `LIBTORCH_VARIANT` is unset, the build picks a sensible default for your
-platform. If you set it, the build does what you say.
+With `USE_CUDA` ON and a CUDA toolkit found, the variant follows the toolkit version:
 
-### The variants
+| CUDA toolkit | LibTorch variant |
+|---|---|
+| 12.4 or newer | `cu124` |
+| 12.1 or newer | `cu121` |
+| 11.8 or newer | `cu118` |
+| older than 11.8 | `cpu`, with a warning and `USE_CUDA` turned OFF |
 
-| `LIBTORCH_VARIANT` | What you get | Min NVIDIA driver |
-|---|---|---|
-| `cpu` | CPU-only build | (none) |
-| `cu118` | CUDA 11.8 | 520.61 (Linux) / 522.06 (Windows) |
-| `cu121` | CUDA 12.1 | 530.30 / 531.14 |
-| `cu124` | CUDA 12.4 | 550.54 / 551.78 |
-| `macos-arm64` | macOS arm64 (CPU + MPS) | (n/a — Apple Silicon, macOS 12.3+) |
+With `USE_CUDA` OFF, or no toolkit, the variant is `cpu`. To use the CPU variant on a machine that has CUDA, configure with `-DUSE_CUDA=OFF`.
 
-Driver-version table comes from
-[NVIDIA's CUDA compatibility matrix](https://docs.nvidia.com/deploy/cuda-compatibility/).
-
-### Auto mode (default)
-
-If you do **not** set `LIBTORCH_VARIANT`, the build chooses for you based on
-the host platform:
-
-```
-host                         → variant
-─────────────────────────────────────────
-APPLE                        → macos-arm64
-WIN32 / Linux + USE_CUDA=ON  → cu121
-WIN32 / Linux + USE_CUDA=OFF → cpu
-```
-
-Auto mode is the right pick if you don't know or don't care. It will:
-
-- Always work (CPU is the fallback).
-- Use MPS on Apple Silicon at runtime, automatically.
-- Use CUDA 12.1 on Linux/Windows when `USE_CUDA=ON`, which has the broadest
-  driver support among current options.
-
-### Custom mode (explicit override)
-
-Pass `-DLIBTORCH_VARIANT=<flavor>` when configuring. Examples:
+The download is skipped when the folder already exists, so switching variants means deleting the folder and configuring again:
 
 ```bash
-# Latest CUDA, requires driver ≥ 550.54
-cmake -B build -DLIBTORCH_VARIANT=cu124 .
-
-# Older CUDA for a machine with an older driver
-cmake -B build -DLIBTORCH_VARIANT=cu118 .
-
-# CPU on a CUDA-capable machine (debugging, perf comparison)
-cmake -B build -DLIBTORCH_VARIANT=cpu .
+rm -rf third_party/libtorch-release       # or third_party/libtorch on macOS and Linux
+cmake --preset release -DUSE_CUDA=OFF
 ```
 
-Custom mode is the right pick when:
+To build without LibTorch, use the `release-notorch` preset or set `CALIPER_WITH_TORCH=OFF`. That skips the download, the applets and the torch tests.
 
-- You know your driver version doesn't support `cu121` (use `cu118`).
-- You want bleeding-edge CUDA support (use `cu124`).
-- You're on a Linux box with no NVIDIA GPU but want to verify CPU paths.
-- You're shipping per-variant binaries from CI (each job hard-pins a variant).
+At run time LibTorch chooses the device. The same archive runs on the CPU when no GPU backend is available, and a CUDA archive on a machine without a usable GPU or driver falls back to the CPU.
 
-### Switching variants after the fact
+## Python package
 
-The download is cached at `third_party/libtorch/`. Switching variants
-requires deleting it so the next configure pulls the right archive:
-
-```bash
-rm -rf third_party/libtorch
-cmake -B build -DLIBTORCH_VARIANT=cu124 .
-```
-
-If you forget this step, you'll keep using the previously-downloaded variant
-silently. (We may add a stamp-file check in the future to detect this.)
-
-### What about MPS?
-
-There is **no `--mps` variant**. MPS support is compiled into the
-`macos-arm64` libtorch you already get on Apple Silicon. At runtime:
-
-```cpp
-torch::Device pick_device() {
-    if (torch::cuda::is_available()) return torch::kCUDA;
-    if (torch::mps::is_available())  return torch::kMPS;
-    return torch::kCPU;
-}
-```
-
-On an M1/M2/M3 Mac running macOS 12.3+, `torch::mps::is_available()` returns
-true and your tensors run on the GPU via Apple's Metal Performance Shaders
-backend. You don't ship anything different. You don't pick anything
-different. It just works.
-
-If you're on an Intel Mac, MPS isn't supported by hardware; libtorch falls
-back to CPU automatically. Same binary.
-
-### CI / multi-variant builds
-
-To produce per-variant releases (e.g., `caliper-cu121`, `caliper-cu124`,
-`caliper-cpu`), run a build matrix:
-
-```yaml
-strategy:
-  matrix:
-    variant: [cpu, cu118, cu121, cu124]
-steps:
-  - run: cmake -B build -DLIBTORCH_VARIANT=${{ matrix.variant }} .
-  - run: cmake --build build
-  - run: tar czf caliper-${{ matrix.variant }}.tar.gz build/caliper third_party/libtorch
-```
-
-Macs get their own job that uses auto mode (`macos-arm64`).
-
-### How the runtime resolves which backend to actually use
-
-Variant selection only decides *what gets shipped*. The decision of CPU vs
-GPU at run time is separate, and made by libtorch:
-
-| Variant shipped | At runtime, does the user's hardware support a GPU backend? | What runs on |
-|---|---|---|
-| `cu121` | Yes (`cuda::is_available()` true) | CUDA |
-| `cu121` | No (no GPU / driver too old) | CPU (silent fallback) |
-| `macos-arm64` | Apple Silicon + macOS 12.3+ | MPS |
-| `macos-arm64` | Intel Mac or older macOS | CPU |
-| `cpu` | (irrelevant) | CPU |
-
-So a single CUDA build "works" on a machine without a GPU — it just runs on
-CPU. The cost is: the binary carries CUDA libraries it'll never use. If
-that's acceptable, ship one CUDA variant and call it done. If it isn't,
-ship a CPU variant in parallel.
-
-### LibTorch troubleshooting
-
-**"CUDA out of memory" on first run** — your GPU's VRAM is smaller than
-what the workload allocates. Lower batch size or fall back to CPU.
-
-**"undefined symbol" linking against libtorch** — you've mixed libtorch
-versions or variants. Delete `third_party/libtorch/` and reconfigure.
-
-**MPS works on Python PyTorch but not from C++ libtorch** — confirm
-`torch::mps::is_available()` at runtime; ensure your `.to()` calls go
-through the helper that picks `kMPS`. The pre-built libtorch supports MPS
-out of the box on Apple Silicon — there's no separate flag.
-
-**Driver version mismatch on launch** (`forward compatibility was attempted
-on non supported HW`) — your shipped variant requires a newer NVIDIA driver
-than the user has. Either tell them to upgrade the driver, or rebuild with
-an older `LIBTORCH_VARIANT` (e.g., `cu118`).
+The `python/caliper` package opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/references/python-api.md`](docs/references/python-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
 
 ## Project structure
 
 ```
 caliper/
 ├── CMakeLists.txt              # Main build config
+├── CMakePresets.json           # release, debug and release-notorch presets
 ├── cmake/
-│   ├── Dependencies.cmake      # Dependency management
+│   ├── Dependencies.cmake      # Dependency management and LibTorch selection
 │   └── wrappers/               # ImGui/ImPlot CMake wrappers
-├── third_party/                # Git submodules (glfw, glm, imgui, implot)
-└── main.cpp                    # Application entry point
+├── src/                        # The caliper executable (main.cpp) and the host (src/host/)
+├── sdk/                        # The applet SDK: headers, CMake package, test fixtures
+├── include/caliper/            # The embedding and live-session C headers
+├── applets/                    # Applets built with the host (plus legacy/ and legacy-dev/)
+├── examples/                   # hello, sine_scope, embed_host and the Python example
+├── python/                     # The caliper Python package and its extension
+├── tests/                      # Test suites
+├── scripts/                    # Helper scripts
+├── assets/fonts/               # UI fonts
+├── docs/                       # Documentation source for the site
+├── site/                       # The project website
+└── third_party/                # Git submodules and vendored headers
 ```
 
 ## Dependencies
 
 **System:**
-- OpenGL (rendering)
+- OpenGL (fallback renderer)
+- Metal on macOS; the Vulkan loader on Windows (loaded at run time)
 
 **Submodules (built from source):**
 - [GLFW](https://github.com/glfw/glfw) - Window management
 - [GLM](https://github.com/g-truc/glm) - Math library (header-only)
 - [ImGui](https://github.com/ocornut/imgui) - UI framework
 - [ImPlot](https://github.com/epezent/implot) - Plotting
+- [ImPlot3D](https://github.com/brenocq/implot3d) - 3D plotting
+- [imgui-node-editor](https://github.com/thedmd/imgui-node-editor) - Node editor widget
+- [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) - Text editor widget
+- [ImTerm](https://github.com/Organic-Code/ImTerm) - Terminal widget
+- [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) - File dialog
+- [GLEW](https://github.com/nigels-com/glew) - OpenGL loader (downloaded and extracted on Windows)
+- [DuckDB](https://github.com/duckdb/duckdb) - The host's query engine
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) - GGUF inference, used by the archived opengllama applet
+- [slang](https://github.com/MikePopoloski/slang) - SystemVerilog front end
+
+**Vendored:**
+- [stb](https://github.com/nothings/stb) - `stb_image_write.h` for PNG export, `stb_image.h` for tests (`third_party/stb/`)
+
+**Fetched by CMake at configure time:**
+- [toml++](https://github.com/marzer/tomlplusplus) - Manifest parsing
+- [doctest](https://github.com/doctest/doctest) - Tests
+- zlib and curl - Windows only, built in-tree
+- Vulkan-Headers, volk and glslang - Windows only
+- [nanobind](https://github.com/wjakob/nanobind) - The Python extension (a Python build requirement)
 
 **Downloaded:**
-- [LibTorch](https://pytorch.org) - Windows: pre-built with CUDA | macOS: built from source with MPS
+- [LibTorch](https://pytorch.org) - Prebuilt archive for every platform
 
-**No manual downloads required!** Everything is handled by git submodules and CMake.
+Everything is handled by git submodules and CMake. Run `git submodule update --init --recursive` once.
 
 ## Platform-specific notes
 
 ### Windows (CUDA)
-- **First build**: 5-10 minutes (downloads pre-built PyTorch ~2GB)
-- **Subsequent builds**: ~10 seconds (PyTorch cached)
-- CUDA DLLs automatically copied to executable directory
-- To force re-download: `rm -rf third_party/libtorch/`
+- The first configure downloads the prebuilt LibTorch archive (about 2 GB)
+- CUDA DLLs are copied to the executable directory
+- To force a new download: `rm -rf third_party/libtorch-release` (or `libtorch-debug`)
 
 ### macOS (MPS)
-- **First build**: 10-30 minutes (builds PyTorch from source)
-- **Subsequent builds**: ~10 seconds (PyTorch cached)
-- MPS support requires Metal compiler
-- To force rebuild: `rm -rf build/pytorch_build build/pytorch_install`
-
-### Performance (GPU vs CPU)
-- Matrix operations: **15x faster**
-- Neural network training: **7-10x faster**
+- The first configure downloads the prebuilt LibTorch archive, which includes MPS support
+- MPS support requires the Metal compiler
+- To force a new download: `rm -rf third_party/libtorch`
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| **CUDA not available** | Verify `USE_CUDA=ON`, check DLLs in `build/Release/`, ensure CUDA 12.8 installed |
+| **CUDA not available** | Check the configure output for the `CUDA support` line. `USE_CUDA` turns itself OFF when CMake finds no CUDA toolkit. Check that the CUDA DLLs sit next to the executable in `cmake-build-release/`. |
 | **Submodules missing** | Run `git submodule update --init --recursive` |
-| **ImGui/ImPlot errors** | Delete `third_party/imgui/CMakeLists.txt` and `third_party/implot/CMakeLists.txt`, reconfigure |
 | **OpenGL not found** | Update graphics drivers |
-| **LibTorch download fails** | Check internet; manually download from PyTorch website to `third_party/libtorch/` |
+| **LibTorch download fails** | Check internet; manually download the archive from the PyTorch website and extract it to the folder named in the LibTorch section |
+| **Wrong LibTorch variant** | Delete the LibTorch folder and configure again; see the LibTorch section |
 | **MPS not available** | Ensure Apple Silicon Mac, Metal compiler available (`xcrun --find metal`) |
-| **Out of memory** | Reduce parallel jobs: `cmake --build build -j2` |
-| **Clean rebuild** | `rm -rf build/ && cmake -B build && cmake --build build -j8` |
+| **Out of memory** | Reduce parallel jobs: `cmake --build --preset release -j2` |
+| **Clean rebuild** | `rm -rf cmake-build-release/ && cmake --preset release && cmake --build --preset release` |
 
 ## GPU usage examples
 
@@ -344,11 +247,11 @@ model.to(device);
 
 ## License
 
-[Your License Here]
+The licence for Caliper has not been chosen yet. See [decision D10](docs/decisions/d010-sdk-licence.md).
 
 ## Third-party licenses
 
-Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/`.
+Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`. The libraries that CMake fetches at configure time carry their own license files in their source trees.
 
 | Library | License | Copyright | Permits |
 |---|---|---|---|
@@ -364,6 +267,19 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [GLEW](https://github.com/nigels-com/glew) | BSD 3-Clause / MIT | 2002-2007 Milan Ikits, Marcelo E. Magallon, Lev Povalahev | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [DuckDB](https://github.com/duckdb/duckdb) | MIT | 2018-2026 Stichting DuckDB Foundation | Use, modify, and distribute freely provided the license notice is included. |
 | [LibTorch](https://pytorch.org) | BSD 3-Clause | 2016 Facebook Inc. | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
+| [llama.cpp](https://github.com/ggerganov/llama.cpp) | MIT | The ggml authors | Use, modify, and distribute freely provided the license notice is included. |
+| [slang](https://github.com/MikePopoloski/slang) | MIT | Michael Popoloski | Use, modify, and distribute freely provided the license notice is included. |
+| [stb](https://github.com/nothings/stb) | MIT / public domain | Sean Barrett and contributors | Use, modify, and distribute freely. |
+| [toml++](https://github.com/marzer/tomlplusplus) | MIT | Mark Gillard | Use, modify, and distribute freely provided the license notice is included. |
+| [doctest](https://github.com/doctest/doctest) | MIT | Viktor Kirilov | Use, modify, and distribute freely provided the license notice is included. |
+| [nanobind](https://github.com/wjakob/nanobind) | BSD 3-Clause | Wenzel Jakob | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
+| [zlib](https://github.com/madler/zlib) | Zlib | Jean-loup Gailly and Mark Adler | Use, modify, and distribute freely with no attribution required in binaries. |
+| [curl](https://github.com/curl/curl) | curl license (MIT-style) | Daniel Stenberg and contributors | Use, modify, and distribute freely provided the license notice is included. |
+| [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | Apache 2.0 or MIT | The Khronos Group | Use, modify, and distribute freely provided the license notice is included. |
+| [volk](https://github.com/zeux/volk) | MIT | Arseny Kapoulkine | Use, modify, and distribute freely provided the license notice is included. |
+| [glslang](https://github.com/KhronosGroup/glslang) | BSD 3-Clause (with other permissive licenses for some files) | The Khronos Group and contributors | Use, modify, and distribute freely provided the license notices are included. |
+| [IBM Plex Sans Condensed](https://github.com/IBM/plex) | SIL OFL 1.1 | 2017 IBM Corp. | Use, embed, and redistribute freely; the font may not be sold on its own. |
+| [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL OFL 1.1 | 2010, 2012 Adobe Systems Incorporated | Use, embed, and redistribute freely; the font may not be sold on its own. |
 
 ## Acknowledgments
 

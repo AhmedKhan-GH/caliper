@@ -3,8 +3,10 @@ name: Deploy Pages
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'docs/wiki/**', 'mkdocs.yml',
-            'sdk/include/**', '.github/workflows/pages.yml']
+    # The docs, their theme, and the sources the docs embed as snippets.
+    paths: ['site/**', 'docs/**', 'docs-theme/**', 'mkdocs.yml',
+            'sdk/include/**', 'include/caliper/**', 'examples/**',
+            '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,9 +26,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      # The wiki (MkDocs Material) is served under /docs/ on the same Pages
+      # The docs (MkDocs Material) are served under /docs/ on the same Pages
       # site; --strict keeps the snippet-embedded headers honest (D15).
-      - run: pip install mkdocs-material
+      # awesome-nav builds the navigation from the docs/ folders and their .nav.yml files.
+      - run: pip install mkdocs-material mkdocs-awesome-nav
       - run: mkdocs build --strict
       # Assemble the Pages artifact: landing page at /, wiki at /docs/.
       - run: |
