@@ -14,6 +14,8 @@ Views:
   loss         series, a noisy decaying curve, several values per tick
   histogram    histogram of 64 bins over [-4, 4], a drifting normal sample
   image        image (H, W, 4) u8, a moving colour pattern
+  embedding    points (N, D) f32 in 8 clusters with categorical labels, turning
+               slowly (--points N, --dims 2 or 3)
 
 Usage:
   python stream_server.py --site <build dir> [--port 0] [--rate 60]
@@ -52,12 +54,18 @@ RETAIN = 16384
 class Session:
     """The producer's state: the views and the series history."""
 
-    def __init__(self, heat_w: int, heat_h: int):
+    def __init__(self, heat_w: int, heat_h: int, points: int = 4000, dims: int = 3):
         self.id = "synthetic"
         self.start_ms = int(time.time() * 1000)
         self.w, self.h = heat_w, heat_h
         self.t0 = time.monotonic()
-        self.seq = {"activations": 0, "histogram": 0, "image": 0}
+        self.seq = {"activations": 0, "histogram": 0, "image": 0, "embedding": 0}
+        self.n, self.dims = points, dims
+        rng = np.random.default_rng(7)
+        self.labels = (np.arange(points) % 8).astype(np.float32)
+        ang = 2 * np.pi * self.labels / 8
+        centres = np.stack([np.cos(ang), np.sin(ang), 0.5 * np.cos(2 * ang)], axis=1) * 3.0
+        self.cloud = (centres + rng.standard_normal((points, 3)) * 0.6).astype(np.float32)
         self.series = np.zeros(0, dtype=np.float32)
         self.total = 0
         self.rng = np.random.default_rng(12345)
@@ -70,6 +78,8 @@ class Session:
             {"id": 2, "name": "loss", "kind": int(w.Kind.SERIES), "sources": []},
             {"id": 3, "name": "histogram", "kind": int(w.Kind.HISTOGRAM),
              "sources": [{"name": "values", "dtype": "f32", "dims": [{"name": "sample", "size": 4096}]}]},
+            {"id": 5, "name": "embedding", "kind": int(w.Kind.POINTS),
+             "sources": [{"name": "hidden", "dtype": "f32", "dims": [{"name": "sample", "size": points}]}]},
             {"id": 4, "name": "image", "kind": int(w.Kind.IMAGE),
              "sources": [{"name": "image", "dtype": "u8",
                           "dims": [{"name": "row", "size": heat_h}, {"name": "col", "size": heat_w}]}]},
@@ -102,6 +112,16 @@ class Session:
         rgba[..., 2] = (127.5 + 127.5 * np.cos(0.03 * (x - y) + 0.4 * t)).astype(np.uint8)
         rgba[..., 3] = 255
         return rgba
+
+    def points(self) -> tuple[np.ndarray, list]:
+        t = time.monotonic() - self.t0
+        c, s_ = math.cos(0.2 * t), math.sin(0.2 * t)
+        p = self.cloud @ np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+        p = p[:, :self.dims].copy()
+        lo, hi = p.min(axis=0), p.max(axis=0)
+        z = (float(lo[2]), float(hi[2])) if self.dims == 3 else (0.0, 0.0)
+        stats = [0.0, 7.0, float(lo[0]), float(hi[0]), float(lo[1]), float(hi[1]), *z]
+        return p, stats
 
     def histogram(self) -> np.ndarray:
         t = time.monotonic() - self.t0
@@ -206,6 +226,11 @@ async def serve_viewer(ws, session: Session, rate: float):
                 elif name == "histogram":
                     snap = w.Snapshot(sub_id, name, session.seq[name], stamp, int(w.Kind.HISTOGRAM),
                                       sub["data_view"], session.histogram(), stats=[-4.0, 4.0])
+                elif name == "embedding":
+                    data, stats = session.points()
+                    snap = w.Snapshot(sub_id, name, session.seq[name], stamp, int(w.Kind.POINTS),
+                                      sub["data_view"], data, aux=session.labels, stats=stats,
+                                      points_dims=session.dims, label_count=8)
                 elif name == "image":
                     snap = w.Snapshot(sub_id, name, session.seq[name], stamp, int(w.Kind.IMAGE),
                                       sub["data_view"], session.image())
@@ -263,10 +288,12 @@ async def main() -> None:
     ap.add_argument("--heat", default="256x192")
     ap.add_argument("--seconds", type=float, default=0.0)
     ap.add_argument("--token", default=None)
+    ap.add_argument("--points", type=int, default=4000)
+    ap.add_argument("--dims", type=int, default=3, choices=(2, 3))
     args = ap.parse_args()
     heat_w, heat_h = (int(x) for x in args.heat.split("x"))
     token = args.token or secrets.token_urlsafe(16)
-    session = Session(heat_w, heat_h)
+    session = Session(heat_w, heat_h, args.points, args.dims)
 
     async def ticker():   # the producer appends to the series whether or not anyone watches
         while True:

@@ -210,10 +210,6 @@ void mul_cm(const float* a, const float* b, float* out) {   // out = a * b
         }
 }
 
-float point_size_px(uint64_t n, float scale) {
-    const float base = n <= 2000 ? 5.0f : n <= 50000 ? 3.0f : 2.0f;
-    return base * scale;
-}
 
 void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     HostRenderer* r = core->renderer.get();
@@ -311,6 +307,8 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     // ---- GPU: redraw the render target when something changed
     float V[16], P[16];
     camera_matrices(v, aspect, V, P);
+    // Bare views (a page draws the chrome) clear to the window's ground.
+    const uint32_t clear = core->views_bare ? ImGui::GetColorU32(ImGuiCol_WindowBg) : kClear;
     if (v.dirty) {
         bool ok;
         if (v.have_cur) {
@@ -334,14 +332,14 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 d.color_mode = CALIPER_GEOM_COLOR_FLAT;
                 d.flat_rgba = kFlat;
             }
-            ok = r->geom_draw_primitives(v.view_rid, V, P, &d, 1, kClear);
+            ok = r->geom_draw_primitives(v.view_rid, V, P, &d, 1, clear);
             if (ok) {
                 void* h = r->geom_draw_retain_last();
                 if (v.cur.last_draw) r->device_update_release(v.cur.last_draw);
                 v.cur.last_draw = h;
             }
         } else {
-            ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, kClear);
+            ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, clear);
         }
         v.dirty = false;   // a refused draw is not retried every frame (it logs)
         v.draw_failed = !ok;
@@ -566,6 +564,11 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
 }
 
 }  // namespace
+
+float point_size_px(uint64_t n, float scale) {
+    const float base = n <= 2000 ? 5.0f : n <= 50000 ? 3.0f : 2.0f;
+    return base * scale;
+}
 
 void camera_matrices(const View& v, float aspect, float view16[16], float proj16[16]) {
     const Camera& c = v.cam;

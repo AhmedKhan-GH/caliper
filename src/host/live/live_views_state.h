@@ -49,6 +49,9 @@ struct Import {
     uint64_t bytes = 0;           // imported length (the whole buffer)
     void*    owned = nullptr;     // +1 buffer we made for a CPU payload (released after rid)
     int      refs = 0;
+    // A CPU payload the renderer copied with import_host_allocation: our own
+    // copy of the bytes, the CPU view hover reads.
+    std::vector<uint8_t> host;
 };
 
 struct PointsPayload {
@@ -150,5 +153,7 @@ void draw_view(CaliperCore* core, CaliperLiveViewsState* S, View& v);
 void camera_matrices(const View& v, float aspect, float view16[16], float proj16[16]);
 // The fixed 16-colour categorical palette (r | g<<8 | b<<16 | a<<24).
 extern const uint32_t kPalette[16];
+// The side in physical pixels of the square a points view draws per point.
+float point_size_px(uint64_t n, float scale);
 
 }  // namespace caliper_live_views

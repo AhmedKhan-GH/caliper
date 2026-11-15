@@ -38,6 +38,23 @@ type El = HTMLElement & { debugState(): Record<string, unknown>; dataView: unkno
 const state = (page: Page, view: string) => page.evaluate((v) =>
   (document.querySelector(`caliper-view[view="${v}"]`) as El).debugState(), view);
 
+/** A second producer with its own options (the fixture's has the defaults). */
+async function producerWith(args: string[]): Promise<Server> {
+  const proc = spawn(PYTHON, [path.join(WEB, 'test', 'mock_server.py'), '--wire', wireModule(), '--wasm', WASM, ...args],
+                     { stdio: ['ignore', 'pipe', 'inherit'] });
+  const lines = readline.createInterface({ input: proc.stdout! });
+  const url = await new Promise<string>((ok, fail) => {
+    proc.once('exit', (code) => fail(new Error(`mock_server.py exited with ${code}`)));
+    lines.on('line', (line) => { if (line.startsWith('http://')) ok(line.trim()); });
+  });
+  const u = new URL(url);
+  return { url, ws: `ws://${u.host}/v3/stream?token=${u.searchParams.get('token')}`, proc };
+}
+
+async function wasmStats(page: Page, view: string): Promise<Record<string, unknown>> {
+  return ((await state(page, view)).wasmStats ?? {}) as Record<string, unknown>;
+}
+
 async function plates(page: Page, n: number) {
   await page.waitForFunction((n) => {
     const els = [...document.querySelectorAll('caliper-view')] as El[];
@@ -60,10 +77,10 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     // No adapter: the TypeScript views draw everything.
     expect(got.map((g) => g[1])).toEqual(['ts', 'ts', 'ts', 'ts', 'ts', 'ts']);
   } else {
-    // The loader lists heatmap, image, series and histogram; points stay with the TypeScript views.
+    // The loader lists every kind the stream has, so the WebAssembly views draw them all.
     expect(got).toEqual([
       ['loss', 'wasm', 'wasm', 'loss', false], ['weights', 'wasm', 'wasm', 'weights', false],
-      ['attention', 'wasm', 'wasm', 'attention', false], ['embedding', 'ts', 'webgpu', 'embedding', false],
+      ['attention', 'wasm', 'wasm', 'attention', false], ['embedding', 'wasm', 'wasm', 'embedding', false],
       ['weight_hist', 'wasm', 'wasm', 'weight_hist', false], ['input', 'wasm', 'wasm', 'input', false],
     ]);
     // Each WebAssembly view drew on its own canvas inside the element's body.
@@ -73,7 +90,7 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
         const c = e.shadowRoot!.querySelector('.body .wasm canvas') as HTMLCanvasElement | null;
         return c ? c.width > 0 && c.height > 0 : false;
       }));
-    expect(canvases).toEqual([true, true, true, true, true]);
+    expect(canvases).toEqual([true, true, true, true, true, true]);
     // Each module read its texture back: the image is exactly the bytes that were sent, and the
     // heatmap is the CPU reference colormap within one level (README.md, "The colormap").
     const checks = async (view: string) => {
@@ -117,4 +134,60 @@ test('the header picker sets the WebAssembly view\'s data view, and the stream\'
   expect(before).not.toContain('"head":5');
   await page.waitForTimeout(400);
   await page.locator('caliper-view[view="attention"]').screenshot({ path: shotPath(info, 'wasm-picker') });
+});
+
+test('points draw as quads with their palette colours, and hover finds the point under the mouse', async ({ page, producer }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(producer.url);
+  await plates(page, 6);
+  expect((await state(page, 'embedding')).drawer).toBe('wasm');
+  // The module read its render target back: at every sampled point no other point covers, the
+  // pixel is the palette colour of the point's label ("view:3:mismatches:compared").
+  await expect.poll(async () => String((await wasmStats(page, 'embedding')).checks ?? ''), { timeout: 20_000 })
+    .toMatch(/^embedding:3:\d+:\d+$/);
+  const [, , bad, compared] = String((await wasmStats(page, 'embedding')).checks).split(':').map(Number);
+  expect(bad).toBe(0);
+  expect(compared).toBeGreaterThan(10);
+  // Hover: somewhere around the middle of the cloud the module finds a point.
+  const box = (await page.locator('caliper-view[view="embedding"] .body').boundingBox())!;
+  const hover = async () => Number(/hover=(-?\d+)/.exec(String((await wasmStats(page, 'embedding')).viewInfo))?.[1] ?? -1);
+  let found = -1;
+  for (let k = 0; k < 40 && found < 0; ++k) {
+    const r = 4 + k * 3, a = k * 0.9;
+    await page.mouse.move(box.x + box.width / 2 + r * Math.cos(a), box.y + box.height / 2 + r * Math.sin(a));
+    await page.waitForTimeout(300);
+    found = await hover();
+  }
+  expect(found).toBeGreaterThanOrEqual(0);
+  await page.locator('caliper-view[view="embedding"]').screenshot({ path: shotPath(info, 'wasm-points-hover') });
+});
+
+test('100,000 points orbit at an interactive rate on the GPU', async ({ page }, info) => {
+  test.skip(info.project.name !== 'webgpu', 'measured on the machine\'s GPU only');
+  const big = await producerWith(['--points', '100000']);
+  try {
+    await page.setViewportSize({ width: 1000, height: 760 });
+    await page.goto(big.url);
+    await plates(page, 6);
+    expect((await state(page, 'embedding')).drawer).toBe('wasm');
+    const box = (await page.locator('caliper-view[view="embedding"] .body').boundingBox())!;
+    const frames = async () => Number((await wasmStats(page, 'embedding')).frames ?? 0);
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    const f0 = await frames();
+    const t0 = Date.now();
+    for (let k = 0; Date.now() - t0 < 3000; ++k) {
+      await page.mouse.move(cx + 120 * Math.sin(k / 20), cy + 60 * Math.cos(k / 27));
+      await page.waitForTimeout(8);
+    }
+    const fps = ((await frames()) - f0) / ((Date.now() - t0) / 1000);
+    await page.mouse.up();
+    console.log(`${info.project.name} wasm points 100000: ${fps.toFixed(1)} frames per second while orbiting`);
+    expect(fps).toBeGreaterThan(30);
+    await page.locator('caliper-view[view="embedding"]').screenshot({ path: shotPath(info, 'wasm-points-100k') });
+  } finally {
+    big.proc.kill();
+  }
 });

@@ -4,7 +4,8 @@
 //                  [--view NAME] [--kind KIND] [--frames N] [--heat WxH]
 //                  [--viewport WxH] [--scale S] [--hover X,Y] [--page demo.html]
 //                  [--python PYTHON] [--seconds S] [--dataview JSON]
-//                  [--resize WxH] [--input X,Y] [--sample S]
+//                  [--resize WxH] [--input X,Y] [--sample S] [--points N] [--dims 2|3]
+//                  [--orbit S] [--rate HZ]
 //
 // Starts the synthetic producer (stream_server.py) on 127.0.0.1, which serves
 // the build directory over HTTP and the stream on /v3/stream on one port, as
@@ -19,7 +20,10 @@
 // the wheel and presses keys there, and reports what reached ImGui. With
 // --seconds S it keeps streaming S seconds before the report, and with
 // --sample T it records the module's heap and counters every T seconds of
-// that time (report.samples). Every
+// that time (report.samples). With --orbit S it drags across the middle of
+// the canvas for S seconds (a points view orbits and redraws every frame) and
+// reports the frames the module drew per second meanwhile (report.orbit).
+// Every
 // process it starts
 // is stopped before it exits. Headless only: it never opens a visible browser.
 //
@@ -52,6 +56,9 @@ export const ADAPTER_FLAGS = {
 // The producer: wait for its READY line.
 const serverArgs = [path.join(here, 'stream_server.py'), '--site', opt.build];
 if (opt.heat) serverArgs.push('--heat', opt.heat);
+if (opt.points) serverArgs.push('--points', opt.points);
+if (opt.dims) serverArgs.push('--dims', opt.dims);
+if (opt.rate) serverArgs.push('--rate', opt.rate);
 const server = spawn(opt.python, serverArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
 const serverLines = [];
 const ready = new Promise((resolve, reject) => {
@@ -117,6 +124,23 @@ try {
     await page.keyboard.type('ab');
     await page.waitForTimeout(300);
   }
+  if (opt.orbit) {
+    const frames = () => page.evaluate(() => globalThis.caliperViews.caliperStats.frames);
+    const [vw2, vh2] = [vw / 2, vh / 2];
+    await page.mouse.move(vw2, vh2);
+    await page.mouse.down();
+    const f0 = await frames();
+    const t0 = Date.now();
+    const end = t0 + Number(opt.orbit) * 1000;
+    for (let k = 0; Date.now() < end; ++k) {
+      await page.mouse.move(vw2 + 120 * Math.sin(k / 20), vh2 + 60 * Math.cos(k / 27));
+      await page.waitForTimeout(8);
+    }
+    const f1 = await frames();
+    const secs = (Date.now() - t0) / 1000;
+    await page.mouse.up();
+    globalThis.orbitReport = { seconds: +secs.toFixed(2), frames: f1 - f0, fps: +((f1 - f0) / secs).toFixed(1) };
+  }
   const samples = [];
   if (Number(opt.seconds) > 0) {
     const end = Date.now() + Number(opt.seconds) * 1000;
@@ -135,6 +159,7 @@ try {
   const report = await page.evaluate(() => ({ ...globalThis.caliperViews?.caliperStats,
                                               dataViews: globalThis.caliperDataViews }));
   if (samples.length) report.samples = samples;
+  if (globalThis.orbitReport) report.orbit = globalThis.orbitReport;
   await page.screenshot({ path: opt.out });
   if (opt.resize) {
     const [rw, rh] = opt.resize.split('x').map(Number);

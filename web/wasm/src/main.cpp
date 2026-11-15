@@ -24,6 +24,7 @@
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
+#include "live/live_views_state.h"   // the points check reads the view's camera and payload
 #include "host_services.h"
 #include "renderer/webgpu_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut, map_f32_to_rgba8 (the CPU reference)
@@ -167,6 +168,10 @@ void publish() {
                       (unsigned long long)info.updates, (long long)info.count, info.path, info.width,
                       info.height, info.latency_ms);
         per += b;
+        // A points view: the index of the point under the mouse, -1 for none.
+        if (info.kind == CALIPER_LIVE_KIND_POINTS)
+            if (const caliper_live_views::View* lv = caliper_live_views::find(g.core, v.name.c_str()))
+                per += ",hover=" + std::to_string(lv->hover_idx);
     }
     put("viewInfo", per.c_str());
     const caliper_web::InputCounts ic = caliper_web::input_counts();
@@ -197,10 +202,17 @@ void publish() {
         list += (list.empty() ? "" : ";") + c.view + ":" + std::to_string(c.kind) + ":" +
                 std::to_string(c.mismatch) + ":" + std::to_string(c.maxdiff);
     }
+    auto unchecked = [&](const std::string& name) {
+        return std::none_of(g.checks.begin(), g.checks.end(),
+                            [&](const Page::Check& c) { return c.view == name; });
+    };
     for (const auto& tv : g.core ? g.core->views : std::vector<caliper_embed_views::TensorView>{})
-        if (tv.tex && std::none_of(g.checks.begin(), g.checks.end(),
-                                   [&](const Page::Check& c) { return c.view == tv.name; }))
-            all = false;
+        if (tv.tex && unchecked(tv.name)) all = false;
+    if (g.core && g.core->live_views)
+        for (const auto& v : g.core->live_views->views)
+            if (v->kind == CALIPER_LIVE_KIND_POINTS && v->label_count > 0 && v->view_rid &&
+                unchecked(v->name))
+                all = false;
     put("checkState", all ? 2 : g.checks.empty() && !g.check_pending ? 0 : 1);
     put("checkMismatch", g.checks.empty() ? -1.0 : (double)mism);
     put("checkMaxDiff", g.checks.empty() ? -1 : maxd);
@@ -215,10 +227,94 @@ void fail(const std::string& why) {
     publish();
 }
 
+void finish_check(Page::Check c) {
+    g.checks.push_back(std::move(c));
+    g.check_pending = false;
+    publish();
+}
+
+// A points view with categorical labels: its render target read back, and at
+// the pixel under each of up to 256 sampled points that no other point covers
+// in front of it (later in draw order in 2-D, nearer in 3-D), the palette
+// colour of its label. Records mismatches and, in maxdiff, how many points were
+// compared. False when there is nothing to check yet.
+bool start_points_check(caliper_live_views::View& v) {
+    if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !v.view_rid || v.dirty) return false;
+    const int W = v.tex_w, H = v.tex_h;
+    const uint64_t n = v.cur.n;
+    float V[16], P[16], M[16];
+    caliper_live_views::camera_matrices(v, (float)W / (float)H, V, P);
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) {
+            float acc = 0.0f;
+            for (int k = 0; k < 4; ++k) acc += P[k * 4 + r] * V[c * 4 + k];
+            M[c * 4 + r] = acc;
+        }
+    struct Proj { float x, y, z; bool ok; };
+    std::vector<Proj> pr(n);
+    const float* pos = (const float*)v.cur.pos_cpu;
+    for (uint64_t i = 0; i < n; ++i) {
+        const float x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
+        const float cw = M[3] * x + M[7] * y + M[11] * z + M[15];
+        if (!(cw > 1e-9f)) { pr[i] = {0, 0, 0, false}; continue; }
+        pr[i] = {((M[0] * x + M[4] * y + M[8] * z + M[12]) / cw * 0.5f + 0.5f) * (float)W,
+                 (0.5f - (M[1] * x + M[5] * y + M[9] * z + M[13]) / cw * 0.5f) * (float)H,
+                 (M[2] * x + M[6] * y + M[10] * z + M[14]) / cw, true};
+    }
+    const float half = 0.5f * caliper_live_views::point_size_px(n, g.core->scale) + 1.0f;
+    struct Want { int px, py; uint32_t rgba; };
+    auto wants = std::make_shared<std::vector<Want>>();
+    const float* aux = (const float*)v.cur.aux_cpu;
+    const uint64_t stride = std::max<uint64_t>(1, n / 256);
+    for (uint64_t i = 0; i < n && wants->size() < 256; i += stride) {
+        const Proj& a = pr[i];
+        if (!a.ok || a.x < 1 || a.y < 1 || a.x >= W - 1 || a.y >= H - 1 || a.z < 0 || a.z > 1) continue;
+        bool covered = false;
+        for (uint64_t j = 0; j < n && !covered; ++j) {
+            if (j == i || !pr[j].ok) continue;
+            if (std::fabs(pr[j].x - a.x) > 2 * half || std::fabs(pr[j].y - a.y) > 2 * half) continue;
+            covered = v.dims == 2 ? j > i : (pr[j].z <= a.z + 1e-6f);
+        }
+        if (covered) continue;
+        const float t = std::min(std::max((aux[i] - v.pvmin) / (v.pvmax - v.pvmin), 0.0f), 1.0f);
+        wants->push_back({(int)a.x, (int)a.y, v.lut[(uint32_t)(t * 255.0f + 0.5f)]});
+    }
+    if (wants->empty()) return false;
+    g.check_pending = true;
+    const std::string name = v.name;
+    g.renderer->readback_async(v.view_rid, [wants, name, W, H](std::vector<uint8_t> got) {
+        Page::Check c;
+        c.view = name;
+        c.kind = CALIPER_LIVE_KIND_POINTS;
+        if (got.size() != (size_t)W * H * 4) {
+            c.mismatch = -2;
+        } else {
+            long long bad = 0;
+            for (const Want& w : *wants) {
+                const uint8_t* q = got.data() + ((size_t)w.py * W + w.px) * 4;
+                const uint32_t px = q[0] | (q[1] << 8) | (q[2] << 16) | ((uint32_t)q[3] << 24);
+                if (px != w.rgba) ++bad;
+            }
+            c.mismatch = bad;
+            c.maxdiff = (int)wants->size();   // for points: how many were compared
+        }
+        finish_check(c);
+    });
+    return true;
+}
+
 // Read the next unchecked texture view back and compare it, byte for byte,
 // with what the CPU makes of the snapshot it was drawn from: the reference
 // colormap map_f32_to_rgba8 for a heatmap, the bytes themselves for an image.
+// Points views with categorical labels are checked by start_points_check.
 void start_check() {
+    if (g.core->live_views)
+        for (auto& pv : g.core->live_views->views)
+            if (pv->kind == CALIPER_LIVE_KIND_POINTS && pv->label_count > 0 &&
+                std::none_of(g.checks.begin(), g.checks.end(),
+                             [&](const Page::Check& c) { return c.view == pv->name; }) &&
+                start_points_check(*pv))
+                return;
     for (auto& tv : g.core->views) {
         if (!tv.tex || std::any_of(g.checks.begin(), g.checks.end(),
                                    [&](const Page::Check& c) { return c.view == tv.name; }))
@@ -259,9 +355,7 @@ void start_check() {
                 c.mismatch = bad;
                 c.maxdiff = maxd;
             }
-            g.checks.push_back(c);
-            g.check_pending = false;
-            publish();
+            finish_check(c);
         });
         return;
     }

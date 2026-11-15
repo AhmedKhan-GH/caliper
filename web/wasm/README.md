@@ -57,7 +57,7 @@ handle.destroy();                                // BYE, the GPU released, the c
 
 With `header: false` a view shows only itself: no title bar, no diagnostics line (size, path, sequence number, latency, updates, drops) and no Pause or Fit button, while hover values stay (`CaliperCore::views_bare`; the native app keeps all of it). In the browser the views also take the page palette (`src/page_style.cpp`): the view's ground is the plate colour, a series line is parchment, hover marks are bronze, and rules and tick labels are drawn as the TypeScript views draw them, so the two renderers of the element look alike.
 
-The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`). The views send no selections yet, so `onSelect` is never called.
+The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `points`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`). The views send no selections yet, so `onSelect` is never called.
 
 The loader creates the canvas inside `container` and hands that element to the module, so a container inside a shadow root works and nothing is looked up in the document. `preloadCaliperViews(assetBase)` starts the download and compilation early.
 
@@ -78,6 +78,10 @@ A notebook page imports the loader from another origin, so each of the three nee
 ## Input, size and look
 
 Every listener sits on the instance's own canvas: pointer events with pointer capture for drags, the wheel, keys while the canvas has focus (a click gives it focus) and focus changes. The page keeps a wheel turn or a key only when ImGui does not want it. Each frame the canvas's backing store is sized to its CSS box times the device pixel ratio, so the canvas follows its element and text is rasterised at the screen's density. The views look as they do in the native app: the module embeds the app's faces (IBM Plex Sans Condensed and Source Code Pro, unchanged from `assets/fonts`, both under the SIL Open Font License 1.1) and applies its style with `sternbild::load_fonts_from_memory` and `sternbild::apply_style`.
+
+## Points
+
+WebGPU draws a point as one pixel, so the renderer draws each point of a points view as an instanced quad of the native point size (`src/host/renderer/webgpu_renderer.cpp`, `kPointsWgsl`), with the native colour rule and depth test. A points payload arrives as bytes, so the live views hand it to the renderer with `HostRenderer::import_host_allocation`, which copies it into a GPU buffer; released buffers are reused for the next snapshot of the same size, because creating and destroying a buffer per snapshot backed the GPU queue up by seconds. Hover is the native one, over a copy of the positions. Measured headless on the Mac's GPU, 100,000 points streamed at 60 snapshots per second orbit at 56 to 60 frames per second. The module's checks compare the render target with the palette colour of each sampled point that no other point covers, on both adapters.
 
 ## Memory
 

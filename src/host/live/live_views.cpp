@@ -323,6 +323,19 @@ bool bind_buffer(CaliperCore* core, View& v, const CaliperTensor& t, uint64_t of
         *out_cpu = bi.contents ? (const uint8_t*)bi.contents + off : nullptr;
         return true;
     }
+    // A renderer that copies host memory itself (the browser's WebGPU renderer).
+    if (const uint64_t rid = r->import_host_allocation((const uint8_t*)t.data + off, bytes)) {
+        auto p = std::make_unique<Import>();
+        p->rid = rid;
+        p->bytes = bytes;
+        p->refs = 1;
+        p->host.assign((const uint8_t*)t.data + off, (const uint8_t*)t.data + off + bytes);
+        *out = p.get();
+        *out_off = 0;
+        *out_cpu = p->host.data();
+        v.imports.push_back(std::move(p));
+        return true;
+    }
     void* dev = r->native_device();
     if (!dev) { *why = std::string(what) + ": CPU payload needs a Metal renderer"; return false; }
     void* buf = metal_new_shared_buffer(dev, (const uint8_t*)t.data + off, bytes);
