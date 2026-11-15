@@ -19,6 +19,7 @@
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
 #include "host/live/live_attach.h"
+#include "host/api/app_api.h"
 #include "app_paths.h"
 
 #include <string>
@@ -30,6 +31,12 @@
 #include <cstring>
 #include <filesystem>
 #include <system_error>
+
+// Caliper API's answer to GET /v0/capture.png in the window: the window's
+// frame cannot be read back, and `caliper shot --api` draws offscreen.
+static const char kWindowCaptureUnavailable[] =
+    "the app draws into a window, whose frame cannot be read back; start it windowless with "
+    "caliper shot --api to capture its frame";
 
 enum class AppPage {
     Landing,
@@ -194,6 +201,10 @@ public:
             if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
             note_live_events();
 
+            // Caliper API (--api): the calls that read or change the app run
+            // here, between frames, as CALIPER_AUTOLAUNCH launches.
+            if (api_.running()) serve_api();
+
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
 
@@ -285,35 +296,36 @@ public:
             // released only after the frame that drew them has been rendered.
             if (pending_detach_) {
                 pending_detach_ = false;
-                live_.detach();
-                note_live_events();   // "detached"
-                page_ = AppPage::Landing;
-                glfwSetWindowTitle(window_, "Caliper");
+                leave_live_page();
             }
 
             // Deferred applet teardown — runs ONLY after this frame's draw list
             // has been rendered, so no just-released bridge texture is still
-            // referenced by the Metal pass. Order: hard-join workers (they
-            // reference applet state and the applet's own cleanup wait is a
-            // timeout, not a join), tear the applet down, then return to the
-            // landing page (it reads statuses live, so nothing to refresh).
+            // referenced by the Metal pass (leave_applet_page gives the order).
             if (pending_home_ >= 0) {
-                const std::string left = loader_.at(pending_home_).manifest.name;
-                // Joining drops every job entry, failed ones included, so a
-                // failure since the tray last looked is recorded first.
-                note_failed_jobs(caliper_host::host_job_system().views());
-                caliper_host::host_job_system().cancel_all_and_join();
-                loader_.teardown(pending_home_);
+                const int idx = pending_home_;
                 pending_home_ = -1;
-                active_applet_ = -1;
-                page_ = AppPage::Landing;
-                glfwSetWindowTitle(window_, "Caliper");
-                landing_.log("home", left);
+                leave_applet_page(idx);
             }
         }
     }
 
+    // Caliper API (--api): listens until cleanup(). A failure to start is
+    // said on stderr and in Activity, and the app runs without it.
+    void start_api(const caliper_host::CommandLine& cl) {
+        std::string why;
+        if (!api_.start(cl, kWindowCaptureUnavailable, caliper::app_data_location(), std::cout,
+                        &why)) {
+            std::cerr << "[api] not started: " << why << std::endl;
+            landing_.log("api not started", why);
+            return;
+        }
+        landing_.log("api", api_.url());
+    }
+
     void cleanup() {
+        // The API first: calls still waiting for a frame get 503.
+        api_.stop();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
         // 139-at-exit was a worker touching a freed applet mid-teardown).
@@ -339,6 +351,86 @@ public:
     }
 
 private:
+    // The applet page's teardown, run only after the frame that drew the
+    // applet has been rendered. Order: hard-join workers (they reference
+    // applet state and the applet's own cleanup wait is a timeout, not a
+    // join), tear the applet down, then return to the landing page (it reads
+    // statuses live, so nothing to refresh).
+    void leave_applet_page(int idx) {
+        const std::string left = loader_.at(idx).manifest.name;
+        // Joining drops every job entry, failed ones included, so a
+        // failure since the tray last looked is recorded first.
+        note_failed_jobs(caliper_host::host_job_system().views());
+        caliper_host::host_job_system().cancel_all_and_join();
+        loader_.teardown(idx);
+        active_applet_ = -1;
+        page_ = AppPage::Landing;
+        glfwSetWindowTitle(window_, "Caliper");
+        landing_.log("home", left);
+    }
+
+    // The live page's detach, after the frame that drew its views.
+    void leave_live_page() {
+        live_.detach();
+        note_live_events();   // "detached"
+        page_ = AppPage::Landing;
+        glfwSetWindowTitle(window_, "Caliper");
+    }
+
+    // Caliper API's calls of this frame (api/api_server.h). Capture is never
+    // one of them here: the API answers it with 501 in the window.
+    void serve_api() {
+        for (const caliper_api::Call& c : api_.take()) {
+            switch (c.kind) {
+                case caliper_api::Call::Kind::Applets:
+                    api_.reply(c.ticket, 200, caliper_host::applets_json(loader_));
+                    break;
+                case caliper_api::Call::Kind::Launch:
+                    api_launch(c);
+                    break;
+                case caliper_api::Call::Kind::Capture:
+                    api_.reply_error(c.ticket, 501, kWindowCaptureUnavailable);
+                    break;
+            }
+        }
+    }
+
+    // POST /v0/applets/{id}/launch: opens that applet's page as a click on
+    // its row does. The page shown goes first, as Home takes it: an applet
+    // is torn down, a live session detached.
+    void api_launch(const caliper_api::Call& c) {
+        const int i = loader_.find(c.applet_id);
+        if (i < 0) {
+            api_.reply_error(c.ticket, 404,
+                             "no applet with the id " + c.applet_id +
+                                 " in the search folders (GET /v0/applets lists them)");
+            return;
+        }
+        if (page_ == AppPage::Applet && active_applet_ == i) {
+            const auto& a = loader_.at(i);
+            api_.reply(c.ticket, 200,
+                       caliper_host::launched_json(a.manifest.id, a.manifest.version, true));
+            return;
+        }
+        if (loader_.at(i).status != caliper_host::AppletStatus::Ready) {
+            const auto& a = loader_.at(i);
+            api_.reply_error(c.ticket, 409,
+                             c.applet_id + " cannot be launched (" +
+                                 caliper_host::applet_status_word(a.status) + "): " +
+                                 a.status_text);
+            return;
+        }
+        if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
+        else if (page_ == AppPage::Live) leave_live_page();
+        launch_applet(i);
+        const auto& a = loader_.at(i);
+        if (page_ == AppPage::Applet && active_applet_ == i)
+            api_.reply(c.ticket, 200,
+                       caliper_host::launched_json(a.manifest.id, a.manifest.version, false));
+        else
+            api_.reply_error(c.ticket, 409, c.applet_id + " failed to launch: " + a.status_text);
+    }
+
     void launch_applet(int idx) {
         if (idx < 0 || idx >= loader_.count()) return;
         const std::string name = loader_.at(idx).manifest.name;
@@ -667,6 +759,7 @@ private:
     std::string live_script_;
     int32_t live_pid_ = 0;
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
+    caliper_host::AppApi api_;        // Caliper API (--api); not running without it
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
     bool chromeless_ = false;         // CALIPER_CHROMELESS=1: applet page without bars
@@ -732,6 +825,7 @@ int main(int argc, char** argv) {
         std::cerr << "Initialization failed" << std::endl;
         return 1;
     }
+    if (caliper_host::api_wanted(cl)) app.start_api(cl);
 
     app.run();
     app.cleanup();

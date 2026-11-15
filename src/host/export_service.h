@@ -58,6 +58,11 @@ bool export_write_png_atomic(const std::string& path,
                              const uint8_t* rgba, uint32_t w, uint32_t h,
                              std::string* why = nullptr);
 
+// Encode tightly-packed top-down RGBA8 to PNG bytes in memory, with the
+// encoder of export_write_png_atomic (Caliper API's capture). False when there
+// are no pixels or the encoder fails; `out` is replaced.
+bool export_encode_png(const uint8_t* rgba, uint32_t w, uint32_t h, std::string* out);
+
 // Write UTF-8 text atomically (temp + rename); same refusal-purity guarantee.
 bool export_write_text_atomic(const std::string& path, const std::string& text,
                               std::string* why = nullptr);

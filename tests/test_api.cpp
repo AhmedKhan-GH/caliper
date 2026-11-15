@@ -1,6 +1,10 @@
 // Caliper API v0 (src/host/api/api_server.h). The routes, the token and the
-// checks of a plain request as functions, and the server in ONE process on
-// 127.0.0.1 with a fake frame thread. Nothing here opens a window.
+// checks of a plain request as functions; the server in ONE process on
+// 127.0.0.1 with a fake frame thread; and, when the ctest entry
+// caliper_cli_api names the executable, `caliper shot --api` as a process,
+// which is the app's windowless mode: every endpoint, a capture that is a PNG
+// of the shot's size, the stream's handshake, and a clean stop on SIGTERM.
+// Nothing here opens a window.
 #include <doctest/doctest.h>
 
 #include "api/api_server.h"
@@ -8,14 +12,23 @@
 #include "net/json.h"
 #include "net/wire.h"
 #include "net/ws.h"
+#include "test_proc.h"
+
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#include <stb_image.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -39,6 +52,7 @@ using api_sock = int;
 #  define api_close ::close
 #endif
 
+namespace fs = std::filesystem;
 namespace wire = caliper_net::wire;
 using caliper_api::Route;
 using caliper_net::HttpRequest;
@@ -235,6 +249,20 @@ struct FakeApp {
         server->stop();
     }
     uint16_t port() const { return server->port(); }
+};
+
+struct TempDir {
+    fs::path path;
+    explicit TempDir(const std::string& name) : path(fs::temp_directory_path() / ("caliper-api-" + name)) {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+        fs::create_directories(path);
+    }
+    ~TempDir() {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+    std::string str(const std::string& sub) const { return (path / sub).string(); }
 };
 
 }  // namespace
@@ -468,3 +496,142 @@ TEST_CASE("api: the server refuses a token that is not a session token, and a po
     caliper_api::Server second(same);
     CHECK_FALSE(second.start(&err));
 }
+
+// ---- caliper shot --api as a process ------------------------------------------------------
+// Runs the caliper executable named by CALIPER_TEST_CALIPER_EXE (the ctest
+// entry caliper_cli_api sets it, and CALIPER_TEST_APPLETS to the build's
+// applets folder) as `caliper shot --api`: no window, the page drawn into the
+// offscreen canvas. Without a GPU, shot cannot draw and the run is reported
+// as skipped, as the shot tests do. POSIX only (it sends a signal).
+#ifndef _WIN32
+TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops on SIGTERM") {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
+    if (!exe || !*exe || !applets || !*applets) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_APPLETS is not set: run the ctest entry caliper_cli_api");
+        return;
+    }
+    TempDir t("process");
+    const std::string data = t.str("data");
+    const std::string out_png = t.str("shot.png");
+    Proc p;
+    REQUIRE(p.start(exe,
+                    {"shot", "--applets", applets, "--launch", "dev.caliper.hello", "--size", "640x400",
+                     "--frames", "36000", "--out", out_png, "--api", "--api-port", "0"},
+                    {"CALIPER_DATA_DIR=" + data}));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (p.text.find("[api] Caliper API on ") == std::string::npos &&
+           p.text.find("shot cannot draw offscreen") == std::string::npos &&
+           std::chrono::steady_clock::now() < deadline && p.pid > 0) {
+        p.read_some(20);
+        if (::waitpid(p.pid, &p.status, WNOHANG) == p.pid) p.pid = -1;
+    }
+    p.read_some(50);
+    if (p.text.find("shot cannot draw offscreen") != std::string::npos) {
+        const char* require = std::getenv("CALIPER_REQUIRE_GPU");
+        REQUIRE_MESSAGE(!(require && std::string(require) == "1"), p.text);
+        MESSAGE("caliper shot --api: run skipped: no GPU");
+        return;
+    }
+    REQUIRE_MESSAGE(p.text.find("[api] Caliper API on ") != std::string::npos, p.text);
+
+    // The API file: owner only, with the port and the token the line printed.
+    const std::string api_file = (fs::path(data) / "api.json").string();
+    REQUIRE(fs::exists(api_file));
+    CHECK((fs::status(api_file).permissions() & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+    std::ifstream af(api_file);
+    const std::string api_text((std::istreambuf_iterator<char>(af)), std::istreambuf_iterator<char>());
+    const Json api = parse_json(api_text);
+    uint64_t port64 = 0;
+    REQUIRE(api.find("port")->get_u64(&port64));
+    const uint16_t port = (uint16_t)port64;
+    const std::string token = api.find("token")->as_string();
+    CHECK(caliper_net::valid_token(token));
+    CHECK(api.find("url")->as_string() == "http://127.0.0.1:" + std::to_string(port) + "/v0");
+    CHECK(api.find("stream_url")->as_string() == "ws://127.0.0.1:" + std::to_string(port) + "/v0/stream");
+    CHECK(p.text.find("http://127.0.0.1:" + std::to_string(port) + "/v0 with the session token " + token +
+                      " (also in " + api_file + ")") != std::string::npos);
+
+    // info
+    Response info = http(port, "GET", "/v0/info", bearer(token));
+    REQUIRE(info.status == 200);
+    const Json ij = parse_json(info.body);
+    CHECK_FALSE(ij.find("host")->as_string().empty());
+    int64_t epoch = 0;
+    CHECK(ij.find("abi_epoch")->get_i64(&epoch));
+    CHECK(epoch >= 2);
+    CHECK(ij.find("services")->size() > 0);
+    CHECK(ij.has("sdk"));
+
+    // applets: the shot's applet is ACTIVE, the other one READY.
+    auto status_of = [&](const std::string& id) {
+        Response r = http(port, "GET", "/v0/applets", bearer(token));
+        REQUIRE(r.status == 200);
+        const Json j = parse_json(r.body);
+        for (const Json& e : j.find("applets")->items())
+            if (e.find("id")->as_string() == id) return e.find("status")->as_string();
+        return std::string("absent");
+    };
+    CHECK(status_of("dev.caliper.hello") == "ACTIVE");
+    CHECK(status_of("dev.example.sine-scope") == "READY");
+
+    // capture: a PNG of the shot's size that is not one flat colour.
+    auto capture = [&] {
+        Response r = http(port, "GET", "/v0/capture.png?token=" + token);
+        REQUIRE(r.status == 200);
+        CHECK(r.headers["content-type"] == "image/png");
+        int w = 0, h = 0, n = 0;
+        unsigned char* px = stbi_load_from_memory((const unsigned char*)r.body.data(), (int)r.body.size(), &w, &h, &n, 4);
+        REQUIRE_MESSAGE(px != nullptr, stbi_failure_reason());
+        std::unordered_set<uint32_t> colours;
+        for (size_t i = 0; i < (size_t)w * (size_t)h; ++i) {
+            const unsigned char* q = px + i * 4;
+            colours.insert((uint32_t)q[0] | (uint32_t)q[1] << 8 | (uint32_t)q[2] << 16 | (uint32_t)q[3] << 24);
+        }
+        stbi_image_free(px);
+        CHECK(w == 640);
+        CHECK(h == 400);
+        CHECK(colours.size() > 1);
+        return colours.size();
+    };
+    capture();
+
+    // launch: another applet, the same one again, an unknown one.
+    Response launched = http(port, "POST", "/v0/applets/dev.example.sine-scope/launch", bearer(token));
+    REQUIRE_MESSAGE(launched.status == 200, launched.body);
+    const Json lj = parse_json(launched.body);
+    CHECK(lj.find("id")->as_string() == "dev.example.sine-scope");
+    CHECK_FALSE(lj.find("already_open")->as_bool());
+    CHECK(status_of("dev.example.sine-scope") == "ACTIVE");
+    CHECK(status_of("dev.caliper.hello") == "READY");
+    Response again = http(port, "POST", "/v0/applets/dev.example.sine-scope/launch", bearer(token));
+    CHECK(again.status == 200);
+    CHECK(parse_json(again.body).find("already_open")->as_bool());
+    CHECK(http(port, "POST", "/v0/applets/dev.example.nowhere/launch", bearer(token)).status == 404);
+    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch?token=" + token).status == 401);
+    CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello/launch", bearer(token)).status == 405);
+    capture();
+
+    // The stream's handshake: the app answers as the hub.
+    std::string role, why;
+    REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v0/stream?token=" + token, &role, &why), why);
+    CHECK(role == CALIPER_NET_ROLE_HUB);
+
+    // Refusals.
+    CHECK(http(port, "GET", "/v0/info").status == 401);
+    CHECK(http(port, "GET", "/v0/info", bearer(token), "evil.example:" + std::to_string(port)).status == 403);
+    CHECK(http(port, "GET", "/v0/info", bearer(token) + "Origin: https://evil.example\r\n").status == 403);
+    CHECK(http(port, "GET", "/", bearer(token)).status == 404);
+
+    // SIGTERM ends the frames; the shot writes its image of the applet it
+    // shows and leaves neither the API file nor a listening socket.
+    REQUIRE(p.pid > 0);
+    ::kill(p.pid, SIGTERM);
+    CHECK(p.wait(15000) == 0);
+    CHECK_MESSAGE(p.text.find("wrote " + out_png + ": dev.example.sine-scope at 640x400 after ") != std::string::npos, p.text);
+    CHECK(fs::exists(out_png));
+    CHECK_FALSE(fs::exists(api_file));
+    CHECK(open_socket(port) == (api_sock)-1);
+    CHECK(p.text.find(token, p.text.find("(also in")) == std::string::npos);   // printed once
+}
+#endif

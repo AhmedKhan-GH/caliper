@@ -77,9 +77,11 @@ target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptan
 # The command line's subcommands (src/host/host_cli.h) on temporary folders.
 target_sources(caliper_tests PRIVATE test_cli.cpp)
 # Caliper API v0 (src/host/api/api_server.h): the routes, the token, the Host
-# and Origin refusals and the limits, with the server in this process.
+# and Origin refusals and the limits, with the server in this process; the
+# ctest entry caliper_cli_api runs the same binary against `caliper shot --api`.
 target_sources(caliper_tests PRIVATE test_api.cpp)
 target_link_libraries(caliper_tests PRIVATE caliper_api)
+target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)
@@ -221,6 +223,21 @@ if(TARGET caliper)
                  COMMAND caliper_tests "--test-case=cli: caliper serve runs as a process*")
         set_tests_properties(caliper_cli_serve PROPERTIES LABELS cli
             ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+    endif()
+
+    # Caliper API as a process (tests/test_api.cpp): `caliper shot --api` on the
+    # hello fixture, every endpoint, the capture as a PNG of the shot's size,
+    # the stream's handshake, and a clean stop on SIGTERM. No window: shot
+    # draws offscreen. Without a GPU the run is reported as skipped, as the
+    # shot runs do. POSIX only.
+    caliper_cli_test(api_elsewhere ARGS "list|--api" EXIT 2
+        ERROR "--api applies only to starting the app, dev and shot")
+    if(NOT WIN32)
+        add_test(NAME caliper_cli_api
+                 COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")
+        set_tests_properties(caliper_cli_api PROPERTIES LABELS "cli;shot;api" TIMEOUT 180
+            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets"
+            SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
     endif()
 endif()
 

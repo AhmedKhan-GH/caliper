@@ -4,7 +4,7 @@
 // last frame as a PNG, with nothing on screen.
 //
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-//                [--frames <N>] --out <file.png>
+//                [--frames <N>] --out <file.png> [--api [--api-port <n>]]
 //
 // It runs the app's own code for the page (ui/applet_page.h: the page bar and
 // the status bar unless CALIPER_CHROMELESS=1, the dock space, docking by role,
@@ -26,6 +26,14 @@
 // as in the app. Without it, they are under a temporary folder that shot
 // creates and removes, so a shot writes nothing in the app-data folder. The
 // user applets folder is searched in either case, as the app searches it.
+//
+// With --api, shot is the app's windowless mode: it serves Caliper API
+// (api/app_api.h) while it draws, answering the API's calls between frames
+// and its captures at the end of a frame with the same read-back as the
+// image. A launch through the API changes the applet the page shows. SIGINT
+// and SIGTERM end the frames early, and the image is written as usual. The
+// API file goes to the app-data folder that is the user's, also when the
+// stores are under a temporary one.
 //
 // Exit codes: 0 when the PNG is written; 1 when the applet is not found,
 // cannot be launched, fails to launch or is quarantined, when the renderer

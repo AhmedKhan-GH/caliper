@@ -578,6 +578,8 @@ add_executable(caliper
     # which renders it into an offscreen canvas and writes a PNG.
     src/host/ui/applet_page.cpp
     src/host/shot.cpp
+    # Caliper API v0 for the app and for `caliper shot` (--api).
+    src/host/api/app_api.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -598,7 +600,7 @@ target_compile_definitions(caliper PRIVATE
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
 # libs it uses directly (imgui/glfw/implot chrome).
-target_link_libraries(caliper PRIVATE libcaliper caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)

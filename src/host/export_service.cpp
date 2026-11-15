@@ -209,6 +209,16 @@ bool export_write_png_atomic(const std::string& path,
     return true;
 }
 
+bool export_encode_png(const uint8_t* rgba, uint32_t w, uint32_t h, std::string* out) {
+    if (!rgba || w == 0 || h == 0 || !out) return false;
+    out->clear();
+    auto append = [](void* ctx, void* data, int size) {
+        static_cast<std::string*>(ctx)->append(static_cast<const char*>(data), (size_t)size);
+    };
+    return stbi_write_png_to_func(append, out, static_cast<int>(w), static_cast<int>(h), 4, rgba,
+                                  static_cast<int>(w * 4)) != 0;
+}
+
 bool export_write_text_atomic(const std::string& path, const std::string& text,
                               std::string* why) {
     return write_bytes_atomic(path, text.data(), text.size(), why);
