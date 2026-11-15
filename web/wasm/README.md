@@ -46,7 +46,9 @@ const handle = await mountCaliperViews(container, {
   height,       // CSS pixels; optional, the default fills the container
   header,       // false: the page draws the view's header, so the view shows itself alone (default true)
   assetBase,    // the folder of caliper-views.js and .wasm; default: the loader's own folder
-  onSelect,     // (detail, view) => {}; the views emit no selections yet
+  onSelect,     // (detail, view) => {}; every selection, {} when it was cleared
+  onEvent,      // ({ view, type, detail }) => {}; every select, pick and hover
+  onInfo,       // (facts, view) => {}; what a header says about the view, as it changes
   onDataView,   // (dataView, view) => {}; every data view the producer resolved
 });
 await handle.ready;                              // the first snapshot is drawn
@@ -55,9 +57,17 @@ handle.stats;                                    // the module's counters
 handle.destroy();                                // BYE, the GPU released, the canvas removed
 ```
 
-With `header: false` a view shows only itself: no title bar, no diagnostics line (size, path, sequence number, latency, updates, drops) and no Pause or Fit button, while hover values stay (`CaliperCore::views_bare`; the native app keeps all of it). In the browser the views also take the page palette (`src/page_style.cpp`): the view's ground is the plate colour, a series line is parchment, hover marks are bronze, and rules and tick labels are drawn as the TypeScript views draw them, so the two renderers of the element look alike.
+With `header: false` a view shows only itself: no title bar, no diagnostics line (size, path, sequence number, latency, updates, drops) and no Pause or Fit button, while hover values stay (`CaliperCore::views_bare`; the native app keeps all of it). In the browser the views also take the page palette (`src/page_style.cpp`): the view's ground is the plate colour, a series line is parchment, hover marks and selections are bronze, a fitted y range reaches 6% of the data's span past it on each side, and rules and tick labels are drawn as the TypeScript views draw them, so the two renderers of the element look alike.
 
-The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `points`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`). The views send no selections yet, so `onSelect` is never called.
+The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `points`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`), with the line about the view made from the facts `onInfo` reports, in the TypeScript views' words (`web/src/views/info.ts`).
+
+## Selections, picks and hovers
+
+The views select, pick and hover with the gestures of the element's TypeScript views (`web/src/views/interact.ts`), and report the same details (wire protocol v3, "Events"). A shift-drag selects: in points a lasso, or a rectangle with shift and alt; in a heatmap or an image a block of cells, kept inside the tile where it began in a mosaic; in a series a range of steps; in a histogram a range of bins. A shift-click clears the selection, which an empty detail reports. A click picks the point, cell, step or bin under the pointer, and a hover is reported when the hovered item changes, at most 30 times a second. In 3-D points a drag orbits and a right, middle, alt or ctrl drag pans; in 2-D points any drag pans and the wheel zooms. The points outside a selection are dimmed, and the count of selected points shows in the corner.
+
+The details are in source indices: each snapshot's payload axes (`axes`, `tile`) go with it into the view layer, which maps a payload index to the source positions it stands for. Each event goes to the producer as an EVENT on the module's own connection, with the subscription, the `seq` and the data view of the snapshot the view shows, and to the page through `onEvent`, and `onSelect` for selections. The element passes a selection on as its `caliper-select` event, so a widget's `selection` and the server's `events()` receive the same detail whichever renderer drew the view.
+
+The seam is the view layer's, so the native app can use it too: a host sets an event sink on the core (`caliper_live_views::set_event_sink`), and a `caliper_live::Source` sends what it hears with `send_event` and asks for data views with `request_data_view` (`src/host/live/live_source.h`). Without a sink, as in the native app today, the views neither select nor report, and their native gestures are unchanged.
 
 The loader creates the canvas inside `container` and hands that element to the module, so a container inside a shadow root works and nothing is looked up in the document. `preloadCaliperViews(assetBase)` starts the download and compilation early.
 
@@ -94,6 +104,8 @@ WebGPU draws a point as one pixel, so the renderer draws each point of a points 
 The heap is capped: it starts at 16 MB and may grow to 512 MB, which holds the protocol's largest frame (64 MB) about four times over, the most one snapshot needs while it is applied. Nothing grows with the length of a run. The latest snapshot of a view replaces the one before in two buffers that keep their capacity, a series keeps its newest 65,536 values in a fixed ring, and the socket's per-message buffer is freed after each message. The module reports `heapSize` and `heapUsed` (the bytes malloc has handed out) in its counters.
 
 Measured headless (SwiftShader) over 7 minutes of streaming at 60 snapshots per second, with all four views on one page and a 512 × 512 heatmap and image (46.6 GB received): the heap never grew from its 16 MB, and the bytes in use rose from 11.8 MB to 12.3 MB in the first two and a half minutes, while the series filled its plot buffers, and then stayed at exactly 12,287,952 bytes for the last four minutes. A page with only the heatmap view stayed at 5,320,656 bytes from the first sample to the last. The frame rate stayed at 60 per second throughout.
+
+A data view change that changes the payload's shape makes the heatmap a new texture, and a resize makes the points a new render target. The renderer destroys a released texture at once and releases its view at the end of the frame: the ImGui backend makes one bind group per texture view while it records a frame and releases them all when the frame is recorded, so nothing released outlives the frame. The module reports what the renderer holds as `textures`, `allocations` and `retiredViews`. Measured headless on the Mac's GPU over 300 data view changes and 300 resizes after a warm-up (`test/wasm.spec.ts`), which made 300 new textures and 300 new render targets: the renderer held 2 textures and 4 buffers before and after, no released view was left waiting, and the bytes in use of the two modules went from 2,545,072 to 2,545,096. The page's JavaScript heap, after a garbage collection, stayed between 3.0 and 3.35 MB over 900 changes, moving by no more than it moves in 18 seconds of streaming without changes.
 
 ## The stream
 

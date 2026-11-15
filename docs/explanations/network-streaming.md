@@ -61,10 +61,11 @@ view layer compiled to WebAssembly (`web/wasm`, the
 kinds its loader lists, which are now all five: heatmaps, images, points,
 series and histograms. A kind the loader does not list is drawn by small views
 written for the browser in TypeScript. Without an adapter the TypeScript views
-draw every kind, with Canvas 2D where they need it. The element's header, with the view's name, its status and the data view
-picker, is the same either way. The WebAssembly views do not send selections
-yet, so an element that needs them sets `renderer="ts"`, which keeps the
-TypeScript views for every kind.
+draw every kind, with Canvas 2D where they need it. The element's header, with the view's name, its status, the data view
+picker and a line about the view, is the same either way. Both kinds of
+views select, pick and hover with the same gestures and send the producer the
+same events, in source indices, so a widget's `selection` and the server's
+`events()` do not depend on which views drew the view.
 
 ## Snapshots reduced on the device
 

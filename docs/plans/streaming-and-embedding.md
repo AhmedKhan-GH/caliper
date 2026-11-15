@@ -37,7 +37,7 @@ The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPl
 
 The [web viewer spike](web-viewer-spike.md) showed that this path works. The live views compiled for WebAssembly without changes, and a heatmap and a series drew in headless Chromium on a software and a hardware WebGPU adapter.
 
-The notebook widget and the viewer page draw every live view kind with the web viewer where WebGPU is available: heatmap, image, series, histogram and points. Small views written for the browser in TypeScript, over the same protocol, remain as the fallback where WebGPU is absent, where they draw with Canvas 2D. Selections come only from the TypeScript views for now.
+The notebook widget and the viewer page draw every live view kind with the web viewer where WebGPU is available: heatmap, image, series, histogram and points. Small views written for the browser in TypeScript, over the same protocol, remain as the fallback where WebGPU is absent, where they draw with Canvas 2D. Both select, pick and hover with the same gestures and send the same events.
 
 The web viewer then grows in this order:
 
