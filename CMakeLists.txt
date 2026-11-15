@@ -678,6 +678,18 @@ if(BUILD_TESTS)
         "-DEXE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
         -P "${CMAKE_SOURCE_DIR}/tests/sdk_install_probe/run.cmake")
     set_tests_properties(caliper_sdk_install PROPERTIES LABELS "sdk" TIMEOUT 900)
+
+    # caliper_host_names_no_applet: no applet id, name or window title from
+    # applets/ or examples/ may appear as a string literal in src/ or include/.
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME caliper_host_names_no_applet COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/check_host_names_no_applet.py"
+            --root "${CMAKE_SOURCE_DIR}")
+        set_tests_properties(caliper_host_names_no_applet PROPERTIES LABELS "boundary")
+    else()
+        message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
+    endif()
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed

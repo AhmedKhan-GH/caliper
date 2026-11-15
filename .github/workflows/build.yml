@@ -82,6 +82,9 @@ jobs:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      # The host must name no applet: no applet id, name or window title may
+      # appear as a string literal in src/ or include/.
+      - run: python3 scripts/check_host_names_no_applet.py
       - if: always()
         run: sccache --show-stats
 
