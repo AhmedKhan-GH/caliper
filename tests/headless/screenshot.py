@@ -4,9 +4,9 @@ Command line, from the repository root:
 
     python -m tests.headless.screenshot <url-or-file> <out.png> [--wait-for X] [--nonblank SEL]
 
-A local file path is served from a loopback HTTP server, so the page is a
-secure context and WebGPU works in it. The command prints pixel statistics of
-the screenshot (or of the ``--nonblank`` element) as JSON.
+A local file path is served from a loopback HTTP server, because Chromium
+does not let a ``file://`` page import ES modules beside it. The command
+prints pixel statistics of the screenshot (or of the ``--element``) as JSON.
 
 Pixels of a WebGPU canvas cannot be read back through the page once a frame
 is presented, so every pixel check here works on a screenshot (PNG), which

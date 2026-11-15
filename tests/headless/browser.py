@@ -230,9 +230,9 @@ class _BlankHandler(http.server.BaseHTTPRequestHandler):
 def static_server(directory: str | Path | None) -> Iterator[str]:
     """Serve `directory` on 127.0.0.1 and yield its base URL (no trailing slash).
 
-    Pages served from loopback are secure contexts, so WebGPU works in them,
-    unlike pages opened from ``file://`` URLs. With ``directory=None`` every
-    path returns an empty HTML page.
+    A page served from loopback is a secure context (WebGPU needs one) and,
+    unlike a page opened from a ``file://`` URL, can import ES modules beside
+    it. With ``directory=None`` every path returns an empty HTML page.
     """
     if directory is None:
         handler = _BlankHandler
