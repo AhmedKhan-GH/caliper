@@ -63,6 +63,7 @@ target_link_options(caliper_web_spike PRIVATE
     --use-port=emdawnwebgpu
     -sUSE_GLFW=3
     -sENVIRONMENT=web
+    -sFILESYSTEM=0
     -sALLOW_MEMORY_GROWTH=1
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString"
