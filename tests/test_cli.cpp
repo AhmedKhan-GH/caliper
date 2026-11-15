@@ -124,10 +124,70 @@ TEST_CASE("cli: wrong command lines are usage errors") {
     CHECK(parse({"info", "x"}).error == "info takes no operands");
     CHECK(parse({"list", "x"}).error == "list takes no operands");
     CHECK(parse({"check", "/f", "--applets", "/x"}).error ==
-          "--applets applies only to starting the app, dev and list");
+          "--applets applies only to starting the app, dev, list and shot");
     CHECK(parse({"--applets"}).error == "--applets needs a folder");
     CHECK(parse({"--applets", "--help"}).error == "--applets needs a folder");
     CHECK(parse({"list", "--applets=--x"}).error == "--applets needs a folder");
+}
+
+TEST_CASE("cli: shot takes its options in either spelling, with defaults") {
+    auto shot = parse({"shot", "--applets", "/a", "--launch", "com.example.viewer",
+                       "--out", "/tmp/v.png"});
+    CHECK(shot.error.empty());
+    CHECK(shot.command == Command::Shot);
+    CHECK(shot.applet_dirs == std::vector<std::string>{"/a"});
+    CHECK(shot.launch_id == "com.example.viewer");
+    CHECK(shot.out == "/tmp/v.png");
+    CHECK(shot.width == 1600);
+    CHECK(shot.height == 1000);
+    CHECK(shot.frames == 60);
+
+    auto sized = parse({"--size=800x600", "shot", "--launch=x.y.z", "--frames=5",
+                        "--out=o.png", "--applets=/b"});
+    CHECK(sized.error.empty());
+    CHECK(sized.command == Command::Shot);
+    CHECK(sized.width == 800);
+    CHECK(sized.height == 600);
+    CHECK(sized.frames == 5);
+    CHECK(sized.launch_id == "x.y.z");
+    CHECK(sized.out == "o.png");
+    CHECK(sized.applet_dirs == std::vector<std::string>{"/b"});
+
+    auto largest = parse({"shot", "--launch", "x", "--size", "16384x1", "--out", "o.png"});
+    CHECK(largest.error.empty());
+    CHECK(largest.width == kShotMaxSide);
+    CHECK(largest.height == 1);
+    CHECK(parse({"shot", "--help"}).command == Command::Help);
+}
+
+TEST_CASE("cli: wrong shot command lines are usage errors") {
+    CHECK(parse({"shot", "--out", "o.png"}).error == "shot needs --launch <id>");
+    CHECK(parse({"shot", "--launch", "x"}).error == "shot needs --out <file.png>");
+    CHECK(parse({"shot", "x", "--launch", "x", "--out", "o.png"}).error ==
+          "shot takes no operands");
+    CHECK(parse({"shot", "--launch"}).error == "--launch needs an applet id");
+    CHECK(parse({"shot", "--launch", "--out", "o.png"}).error == "--launch needs an applet id");
+    CHECK(parse({"shot", "--launch", "x", "--out"}).error == "--out needs a file");
+    CHECK(parse({"shot", "--frames="}).error == "--frames needs a number of frames");
+    CHECK(parse({"shot", "--size"}).error == "--size needs a size such as 1600x1000");
+    CHECK(parse({"shot", "--launch", "x", "--launch", "y"}).error == "--launch is given twice");
+    for (const char* bad : {"0x10", "10x0", "10", "x10", "10x", "10x10x10", "-5x10",
+                            "10 x10", "16385x10", "abcxdef", "1e3x10"}) {
+        CAPTURE(bad);
+        CHECK(parse({"shot", "--size", bad}).error.rfind("--size takes <W>x<H>", 0) == 0);
+    }
+    for (const char* bad : {"0", "-1", "100001", "ten", "1.5", "+3"}) {
+        CAPTURE(bad);
+        CHECK(parse({"shot", "--frames", bad}).error.rfind("--frames takes a whole number", 0) == 0);
+    }
+    CHECK(parse({"list", "--frames", "3"}).error == "--frames applies only to shot");
+    CHECK(parse({"--launch", "x"}).error == "--launch applies only to shot");
+    CHECK(parse({"info", "--out", "o.png", "--size", "1x1"}).error == "--out applies only to shot");
+}
+
+TEST_CASE("cli: the usage names shot") {
+    CHECK(std::string(usage_text()).find("caliper shot [--applets <dir>]... --launch <id>") !=
+          std::string::npos);
 }
 
 TEST_CASE("cli: the -psn_ argument Finder passes is ignored") {

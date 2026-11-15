@@ -159,6 +159,40 @@ if(TARGET caliper)
         "-DBUILD_TYPE=$<CONFIG>"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_new_build.cmake")
     set_tests_properties(caliper_cli_new_builds PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
+
+    # `caliper shot`: the command-line errors first, which need no GPU and
+    # create nothing; an unknown id is found before any folder is made.
+    caliper_cli_test(shot_needs_launch ARGS "shot|--out|${_cli_work}/x.png" EXIT 2
+        ERROR "shot needs --launch <id>")
+    caliper_cli_test(shot_bad_size
+        ARGS "shot|--launch|dev.caliper.hello|--size|0x10|--out|${_cli_work}/x.png" EXIT 2
+        ERROR "--size takes <W>x<H>")
+    caliper_cli_test(shot_option_elsewhere ARGS "list|--frames|3" EXIT 2
+        ERROR "--frames applies only to shot")
+    caliper_cli_test(shot_unknown_applet
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.example.nowhere|--out|${_cli_work}/x.png"
+        EXIT 1 ERROR "no applet with the id dev\\.example\\.nowhere")
+
+    # Then real shots of the hello fixture: the image has the requested size
+    # and is not one flat colour (caliper_png_check), and the run leaves
+    # nothing behind (tests/shot_run.cmake). Without a GPU the run is
+    # reported as skipped, as the GPU suites do.
+    add_executable(caliper_png_check png_check.cpp)
+    target_include_directories(caliper_png_check PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+    set_target_properties(caliper_png_check PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    add_dependencies(caliper_png_check hello_applet)
+    foreach(mode temp data_dir)
+        set(name caliper_cli_shot_${mode})
+        add_test(NAME ${name} COMMAND "${CMAKE_COMMAND}"
+            "-DEXE=$<TARGET_FILE:caliper>"
+            "-DCHECK=$<TARGET_FILE:caliper_png_check>"
+            "-DAPPLETS=${CMAKE_BINARY_DIR}/applets"
+            "-DID=dev.caliper.hello" "-DSIZE=640x400" "-DFRAMES=10"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/shot-work-${mode}" "-DMODE=${mode}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/shot_run.cmake")
+        set_tests_properties(${name} PROPERTIES LABELS "cli;shot" TIMEOUT 180
+            SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+    endforeach()
 endif()
 
 # ---------------------------------------------------------------------------

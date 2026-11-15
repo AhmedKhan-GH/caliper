@@ -317,7 +317,7 @@ endif()
 # ============================================================================
 # The Metal HostRenderer backend + the ImGui Metal backend live in their own
 # Objective-C++ static lib compiled with ARC (-fobjc-arc). Keeping it separate
-# scopes ARC to these two .mm files and keeps the exe a plain C++/OBJC build.
+# scopes ARC to these .mm files and keeps the exe a plain C++/OBJC build.
 # The vendored imgui_impl_metal.mm compiles here rather than into the exe.
 #
 # background_process_mac.mm (src/host/background_process.h) keeps a process
@@ -539,9 +539,11 @@ add_executable(caliper
     src/host/ui/sternbild_theme.cpp
     src/host/ui/sternbild_fonts.cpp
     src/host/ui/landing_screen.cpp
-    # The applet page: page bar, status bar, dock space, docking by role, the
-    # applet's frame and the jobs tray.
+    # The applet page (page bar, status bar, dock space, docking by role, the
+    # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,
+    # which renders it into an offscreen canvas and writes a PNG.
     src/host/ui/applet_page.cpp
+    src/host/shot.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an

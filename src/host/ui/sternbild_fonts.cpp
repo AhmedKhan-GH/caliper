@@ -263,9 +263,9 @@ bool load_fonts(const FontPaths& paths) {
                   << "; using ImGui's built-in font (set CALIPER_FONTS_DIR)"
                   << std::endl;
     }
-    if (!g_fonts.display) {
+    if (!g_fonts.display && !paths.display_font.empty()) {
         std::cerr << "[fonts] Sternbild Display not found at "
-                  << (paths.display_font.empty() ? "(no path)" : paths.display_font)
+                  << paths.display_font
                   << "; the wordmark uses the UI face" << std::endl;
     }
     return g_fonts.ok();

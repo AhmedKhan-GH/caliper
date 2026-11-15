@@ -1,13 +1,15 @@
 #pragma once
 // ============================================================================
-// The applet page of the caliper executable. One frame of the page is, in
-// this order: the page bar and the status bar (unless the page is
-// chromeless), the dock space over the work area between them, docking by
-// role (dock_layout.h), and the applet's own frame between UI checkpoints
-// (ui_recovery.h). The jobs tray, drawn on every page of the app while jobs
-// exist, is here too.
+// The applet page of the caliper executable, shared by the app and by
+// `caliper shot`. One frame of the page is, in this order: the page bar and
+// the status bar (unless the page is chromeless), the dock space over the
+// work area between them, docking by role (dock_layout.h), and the applet's
+// own frame between UI checkpoints (ui_recovery.h). The jobs tray, drawn on
+// every page of the app while jobs exist, is here too.
 //
-// Navigation (Esc, Home, quarantine back to the landing) stays with the
+// The app draws these into its window; `caliper shot` draws the same frames
+// into an offscreen canvas and writes the last one as a PNG, so a shot shows
+// what the app shows. Navigation (Esc, Home, quarantine back to the landing) stays with the
 // caller: draw() only reports what happened.
 // ============================================================================
 #include "applet_loader.h"

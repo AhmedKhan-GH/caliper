@@ -3,7 +3,8 @@
 // The caliper executable's command line. It is parsed before any window,
 // AppKit, GLFW or renderer exists. `caliper` with no subcommand and
 // `caliper dev` start the app; every other subcommand runs and exits without
-// starting it, so it never shows a window.
+// starting it, so it never shows a window. `shot` draws the app's applet page
+// into an offscreen canvas (shot.h) and opens no window either.
 //
 //   caliper [--applets <dir>]...              start the app
 //   caliper dev <folder> [--applets <dir>]... start the app, <folder> searched first
@@ -12,6 +13,9 @@
 //   caliper install <folder>                  check, then copy into the user folder
 //   caliper new <name> [<dir>]                create an applet from a template
 //   caliper info                              print versions and served services
+//   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
+//                [--frames <N>] --out <file.png>
+//                                             write the applet page as a PNG
 //   caliper --help                            print the usage
 //
 // `--applets <dir>` (or `--applets=<dir>`) adds a development folder to the
@@ -26,7 +30,9 @@
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
 //
 // Header-only and free of any graphics dependency: main() dispatches here
-// and the tests call the same functions with their own CliContext.
+// and the tests call the same functions with their own CliContext. `shot`
+// needs the renderer, so only its parsing is here and main() runs it
+// (run_shot in shot.h).
 // ============================================================================
 #include "applet_loader.h"
 #include "negotiation.h"
@@ -44,11 +50,18 @@
 namespace caliper_host {
 
 struct CommandLine {
-    enum class Command { Run, Help, Dev, List, Check, Install, New, Info };
+    enum class Command { Run, Help, Dev, List, Check, Install, New, Info, Shot };
     Command command = Command::Run;
     std::vector<std::string> applet_dirs;   // dev's folder, then --applets, in order
     std::vector<std::string> operands;      // the subcommand's operands
     std::string error;                      // set: print it and the usage, exit 2
+
+    // shot's options, with their defaults.
+    std::string launch_id;                  // --launch <id>
+    int width = 1600;                       // --size <W>x<H>, in pixels
+    int height = 1000;
+    int frames = 60;                        // --frames <N>
+    std::string out;                        // --out <file.png>
 };
 
 inline const char* usage_text() {
@@ -59,14 +72,37 @@ inline const char* usage_text() {
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
            "       caliper info\n"
+           "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
+           "                    [--frames <N>] --out <file.png>\n"
            "       caliper --help\n";
 }
+
+namespace cli_detail {
+
+// A whole number from lo to hi written in decimal digits only, or -1.
+inline int parse_count(const std::string& s, int lo, int hi) {
+    if (s.empty() || s.size() > 9) return -1;
+    int n = 0;
+    for (char c : s) {
+        if (c < '0' || c > '9') return -1;
+        n = n * 10 + (c - '0');
+    }
+    return n >= lo && n <= hi ? n : -1;
+}
+
+} // namespace cli_detail
+
+// The largest side `shot --size` accepts: the largest texture side that Metal
+// supports on Apple GPUs, and that desktop Vulkan drivers commonly support.
+constexpr int kShotMaxSide = 16384;
 
 inline CommandLine parse_command_line(int argc, const char* const* argv) {
     using C = CommandLine::Command;
     CommandLine cl;
     const std::string kApplets = "--applets";
     bool have_command = false;
+    // shot's options, in the order of their first appearance.
+    std::vector<std::string> shot_options;
     for (int i = 1; i < argc; i++) {
         const std::string arg = argv[i] ? argv[i] : "";
         // macOS passes -psn_<number> to an app that Finder launches on older
@@ -93,6 +129,61 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             cl.applet_dirs.push_back(dir);
             continue;
         }
+        // shot's options: --launch, --size, --frames and --out, each with its
+        // value as the next argument or after '='.
+        bool shot_option = false;
+        for (const std::string opt : {"--launch", "--size", "--frames", "--out"}) {
+            if (arg != opt && arg.rfind(opt + "=", 0) != 0) continue;
+            shot_option = true;
+            std::string value;
+            if (arg == opt) {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(opt.size() + 1);
+            }
+            if (std::find(shot_options.begin(), shot_options.end(), opt) !=
+                shot_options.end()) {
+                cl.error = opt + " is given twice";
+                return cl;
+            }
+            shot_options.push_back(opt);
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = opt + (opt == "--launch"   ? " needs an applet id"
+                                  : opt == "--size"   ? " needs a size such as 1600x1000"
+                                  : opt == "--frames" ? " needs a number of frames"
+                                                      : " needs a file");
+                return cl;
+            }
+            if (opt == "--launch") {
+                cl.launch_id = value;
+            } else if (opt == "--out") {
+                cl.out = value;
+            } else if (opt == "--frames") {
+                cl.frames = cli_detail::parse_count(value, 1, 100000);
+                if (cl.frames < 0) {
+                    cl.error = "--frames takes a whole number from 1 to 100000: " + value;
+                    return cl;
+                }
+            } else {
+                const size_t x = value.find('x');
+                const int w = x == std::string::npos
+                                  ? -1
+                                  : cli_detail::parse_count(value.substr(0, x), 1, kShotMaxSide);
+                const int h = x == std::string::npos
+                                  ? -1
+                                  : cli_detail::parse_count(value.substr(x + 1), 1, kShotMaxSide);
+                if (w < 0 || h < 0) {
+                    cl.error = "--size takes <W>x<H>, each from 1 to " +
+                               std::to_string(kShotMaxSide) + " pixels, such as 1600x1000: " +
+                               value;
+                    return cl;
+                }
+                cl.width = w;
+                cl.height = h;
+            }
+            break;
+        }
+        if (shot_option) continue;
         if (arg.size() > 1 && arg[0] == '-') {
             cl.error = "unknown option: " + arg;
             return cl;
@@ -105,6 +196,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             else if (arg == "install") cl.command = C::Install;
             else if (arg == "new") cl.command = C::New;
             else if (arg == "info") cl.command = C::Info;
+            else if (arg == "shot") cl.command = C::Shot;
             else if (arg == "help") cl.command = C::Help;
             else {
                 cl.error = "unknown command: " + arg;
@@ -136,11 +228,20 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         case C::Check: operands(1, 1, "check"); break;
         case C::Install: operands(1, 1, "install"); break;
         case C::New: operands(1, 2, "new"); break;
+        case C::Shot:
+            operands(0, 0, "shot");
+            if (cl.error.empty() && cl.launch_id.empty())
+                cl.error = "shot needs --launch <id>";
+            else if (cl.error.empty() && cl.out.empty())
+                cl.error = "shot needs --out <file.png>";
+            break;
     }
     if (cl.error.empty() && !cl.applet_dirs.empty() &&
         (cl.command == C::Check || cl.command == C::Install ||
          cl.command == C::New || cl.command == C::Info))
-        cl.error = "--applets applies only to starting the app, dev and list";
+        cl.error = "--applets applies only to starting the app, dev, list and shot";
+    if (cl.error.empty() && !shot_options.empty() && cl.command != C::Shot)
+        cl.error = shot_options.front() + " applies only to shot";
     return cl;
 }
 

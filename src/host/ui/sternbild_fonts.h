@@ -57,7 +57,8 @@ FontPaths default_font_paths();
 // dynamic atlas accepts fonts before or after the renderer backend is up.
 // When the in-repo faces cannot be found the app keeps ImGui's built-in font
 // for ui and mono and returns false; a missing Display face only leaves
-// fonts().display null (the wordmark falls back to the UI face).
+// fonts().display null (the wordmark falls back to the UI face). An empty
+// display_font asks for no Display face, and nothing is reported.
 bool load_fonts(const FontPaths& paths = default_font_paths());
 
 // The loaded faces; all null until load_fonts() has run.

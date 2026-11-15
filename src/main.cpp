@@ -12,6 +12,7 @@
 #include "ui/ui_recovery.h"
 #include "host/applet_loader.h"
 #include "host/host_cli.h"
+#include "host/shot.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
 #include "host/job_system.h"
@@ -236,7 +237,7 @@ public:
 
                 // The page bar and the status bar (unless CALIPER_CHROMELESS=1),
                 // the dock space, docking by role and the applet's frame
-                // (ui/applet_page.h).
+                // (ui/applet_page.h, which `caliper shot` draws too).
                 const caliper_host::AppletPage::Result page = page_view_.draw(
                     loader_, active_applet_, fi, renderer_->name(), chromeless_);
                 if (page.home) go_back = true;
@@ -656,6 +657,11 @@ int main(int argc, char** argv) {
     if (cl.command == Command::Help) {
         std::fputs(caliper_host::usage_text(), stdout);
         return 0;
+    }
+    if (cl.command == Command::Shot) {
+        // The applet page drawn into an offscreen canvas and written as a
+        // PNG (host/shot.h). No window, no GLFW, no Dock icon.
+        return caliper_host::run_shot(cl);
     }
     if (cl.command != Command::Run && cl.command != Command::Dev) {
         // A subcommand runs and exits here; the app never starts, and no
