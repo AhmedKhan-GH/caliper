@@ -6,7 +6,8 @@
 #       SOURCES <source>...
 #       MANIFEST <stem>.caliper.toml
 #       [OUTPUT_NAME <stem>]          # default: <target>
-#       [OUTPUT_DIRECTORY <dir>])     # default: ${CMAKE_BINARY_DIR}/applets
+#       [OUTPUT_DIRECTORY <dir>]      # default: ${CMAKE_BINARY_DIR}/applets
+#       [TORCH])
 #
 # It builds the shared library lib<stem>.dylib, <stem>.dll or lib<stem>.so as
 # C++20 with CALIPER_APPLET_EXPORT, linked to caliper::sdk and caliper::ui_stack,
@@ -21,18 +22,26 @@
 # version and the UI-stack hash the applet was compiled against, so the source
 # manifest must not contain a [build] table of its own.
 #
+# TORCH links the libtorch the SDK names (CALIPER_TORCH_DIR, version
+# CALIPER_TORCH_VERSION), sets the build rpath to it, and stamps
+# torch = "<version>" into the [compat] table of the copy. A source manifest
+# that already states [compat] torch must state the same version.
+#
 # The manifest reader handles the subset of TOML that manifests use: [table]
 # headers and single-line key = value pairs with string or integer values.
 #
 # It needs these variables, which the package (or the core build) sets:
-# CALIPER_SDK_VERSION, CALIPER_SDK_ABI_EPOCH and CALIPER_UI_STACK_HASH.
+# CALIPER_SDK_VERSION, CALIPER_SDK_ABI_EPOCH, CALIPER_UI_STACK_HASH,
+# CALIPER_TORCH_VERSION (empty when the SDK was built without libtorch) and
+# CALIPER_TORCH_DIR.
 
 include_guard(GLOBAL)
 
 # Reads the scalar keys of the [applet] and [compat] tables of a manifest into
 # <prefix>_<table>_<key> (the value) and <prefix>_<table>_<key>_type (string or
 # integer) in the caller's scope. Also sets <prefix>_has_build (TRUE when the
-# manifest has a [build] table).
+# manifest has a [build] table) and <prefix>_compat_offset (the byte offset of
+# the line after the [compat] header).
 function(_caliper_read_manifest manifest prefix)
     file(READ "${manifest}" text)
     string(REPLACE "\r" "" text "${text}")
@@ -44,11 +53,15 @@ function(_caliper_read_manifest manifest prefix)
     string(REPLACE "\n" ";" lines "${text}")
 
     set(table "")
+    set(offset 0)
     set(has_build FALSE)
+    set(compat_offset -1)
     foreach(line IN LISTS lines)
         string(REPLACE "<caliper-semicolon>" ";" line "${line}")
         string(REPLACE "<caliper-lbracket>" "[" line "${line}")
         string(REPLACE "<caliper-rbracket>" "]" line "${line}")
+        string(LENGTH "${line}" length)
+        math(EXPR offset "${offset} + ${length} + 1")
         string(STRIP "${line}" line)
 
         if(line MATCHES "^\\[\\[")
@@ -58,6 +71,9 @@ function(_caliper_read_manifest manifest prefix)
             set(table "${CMAKE_MATCH_1}")
             if(table STREQUAL "build" OR table MATCHES "^build[ \t]*\\.")
                 set(has_build TRUE)
+            endif()
+            if(table STREQUAL "compat")
+                set(compat_offset ${offset})
             endif()
         elseif(table STREQUAL "" AND line MATCHES "^build[ \t]*[.=]")
             set(has_build TRUE)
@@ -83,11 +99,50 @@ function(_caliper_read_manifest manifest prefix)
         endif()
     endforeach()
     set(${prefix}_has_build ${has_build} PARENT_SCOPE)
+    set(${prefix}_compat_offset ${compat_offset} PARENT_SCOPE)
+endfunction()
+
+# Finds the libtorch the SDK names and checks its version. Sets
+# _caliper_torch_libraries and _caliper_torch_root in the caller's scope.
+function(_caliper_find_torch target)
+    if(NOT CALIPER_TORCH_VERSION)
+        message(FATAL_ERROR
+            "caliper_add_applet(${target} ... TORCH): this SDK was built without "
+            "libtorch (CALIPER_WITH_TORCH=OFF), so it names no libtorch to link.")
+    endif()
+    # The core build has already found libtorch; an SDK consumer finds it here.
+    # Finding it again in the same directory is harmless.
+    if(NOT TARGET torch OR NOT DEFINED TORCH_LIBRARIES)
+        if(NOT EXISTS "${CALIPER_TORCH_DIR}/share/cmake/Torch/TorchConfig.cmake")
+            message(FATAL_ERROR
+                "caliper_add_applet(${target} ... TORCH): no libtorch at "
+                "CALIPER_TORCH_DIR=\"${CALIPER_TORCH_DIR}\". Pass "
+                "-DCALIPER_TORCH_DIR=<libtorch root> pointing at libtorch "
+                "${CALIPER_TORCH_VERSION}, the version the host was built with.")
+        endif()
+        find_package(Torch REQUIRED PATHS "${CALIPER_TORCH_DIR}" NO_DEFAULT_PATH)
+        if(WIN32)
+            # torch headers include windows.h; without NOMINMAX its min and max
+            # macros break std::max and tensor.max() (the core build does the same).
+            set_property(TARGET torch APPEND PROPERTY
+                INTERFACE_COMPILE_DEFINITIONS NOMINMAX)
+        endif()
+    endif()
+    if(NOT "${Torch_VERSION}" STREQUAL "${CALIPER_TORCH_VERSION}")
+        message(FATAL_ERROR
+            "caliper_add_applet(${target} ... TORCH): found libtorch "
+            "\"${Torch_VERSION}\" in ${Torch_DIR}, but the host was built with "
+            "libtorch ${CALIPER_TORCH_VERSION}. An applet must link the host's "
+            "libtorch; point CALIPER_TORCH_DIR at libtorch ${CALIPER_TORCH_VERSION}.")
+    endif()
+    get_filename_component(root "${Torch_DIR}/../../.." ABSOLUTE)
+    set(_caliper_torch_libraries "${TORCH_LIBRARIES}" PARENT_SCOPE)
+    set(_caliper_torch_root "${root}" PARENT_SCOPE)
 endfunction()
 
 function(caliper_add_applet target)
     cmake_parse_arguments(PARSE_ARGV 1 arg
-        "" "MANIFEST;OUTPUT_NAME;OUTPUT_DIRECTORY" "SOURCES")
+        "TORCH" "MANIFEST;OUTPUT_NAME;OUTPUT_DIRECTORY" "SOURCES")
     set(where "caliper_add_applet(${target})")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "${where}: unknown arguments: ${arg_UNPARSED_ARGUMENTS}")
@@ -193,9 +248,55 @@ function(caliper_add_applet target)
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON)
 
+    # ---- libtorch ----
+    if(DEFINED m_compat_torch AND NOT arg_TORCH)
+        message(FATAL_ERROR
+            "${bad} [compat] torch is set, but caliper_add_applet() was called "
+            "without TORCH. Add TORCH, or remove the key from the manifest.")
+    endif()
+    set(torch_line "")
+    if(arg_TORCH)
+        _caliper_find_torch(${target})
+        target_link_libraries(${target} PRIVATE ${_caliper_torch_libraries})
+        if(APPLE)
+            # adapters/torch.hpp reaches the MPS command queue through the
+            # Objective-C runtime, so a macOS applet that includes it needs libobjc.
+            target_link_libraries(${target} PRIVATE objc)
+        endif()
+        if(UNIX)
+            set_target_properties(${target} PROPERTIES
+                BUILD_RPATH "${_caliper_torch_root}/lib")
+        endif()
+        # Windows has no rpath. The host executable carries the libtorch DLLs
+        # beside itself, so an applet DLL resolves them from the host process
+        # and never ships a second copy.
+        if(DEFINED m_compat_torch)
+            if(NOT m_compat_torch STREQUAL CALIPER_TORCH_VERSION)
+                message(FATAL_ERROR
+                    "${bad} [compat] torch is \"${m_compat_torch}\", but the SDK's "
+                    "libtorch is ${CALIPER_TORCH_VERSION}.")
+            endif()
+        else()
+            set(torch_line "torch = \"${CALIPER_TORCH_VERSION}\"\n")
+        endif()
+    endif()
+
     # ---- The stamped manifest ----
     file(READ "${manifest}" text)
     string(REPLACE "\r" "" text "${text}")
+    if(torch_line)
+        if(m_compat_offset LESS 0)
+            message(FATAL_ERROR "${bad} no [compat] table header to stamp torch into.")
+        endif()
+        string(LENGTH "${text}" text_length)
+        if(m_compat_offset GREATER text_length)
+            # The [compat] header is the last line and has no newline.
+            string(APPEND text "\n")
+        endif()
+        string(SUBSTRING "${text}" 0 ${m_compat_offset} head)
+        string(SUBSTRING "${text}" ${m_compat_offset} -1 tail)
+        set(text "${head}${torch_line}${tail}")
+    endif()
     if(NOT text MATCHES "\n$")
         string(APPEND text "\n")
     endif()

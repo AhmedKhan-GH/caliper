@@ -62,6 +62,8 @@ function(check_no_source_refs name)
             continue()
         endif()
         file(READ "${path}" text)
+        # The package names the core build's libtorch on purpose.
+        string(REGEX REPLACE "\nCALIPER_TORCH_DIR:[^\n]*" "" text "${text}")
         foreach(root "${CALIPER_SOURCE_DIR}" "${src_real}")
             foreach(sub sdk src include examples third_party applets cmake)
                 string(FIND "${text}" "${root}/${sub}/" at)

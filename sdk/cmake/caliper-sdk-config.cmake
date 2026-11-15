@@ -17,6 +17,13 @@
 #   CALIPER_SDK_ABI_EPOCH  The ABI epoch the SDK's headers speak.
 #   CALIPER_UI_STACK_HASH  The hash of the pinned UI stack (see
 #                          share/caliper-sdk/ui_stack/ui_stack.txt for its inputs).
+#   CALIPER_TORCH_VERSION  The host's libtorch version, empty when the SDK was
+#                          built without libtorch.
+#   CALIPER_TORCH_DIR      Where the host's libtorch is. It defaults to the
+#                          libtorch of the build that installed the SDK; pass
+#                          -DCALIPER_TORCH_DIR=<libtorch root> to use another
+#                          copy of the same version. Only applets that call
+#                          caliper_add_applet(... TORCH) need it.
 include("${CMAKE_CURRENT_LIST_DIR}/caliper-sdk-info.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/CaliperSDKTargets.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/caliper-ui-stack.cmake")

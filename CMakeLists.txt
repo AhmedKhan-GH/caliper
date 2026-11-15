@@ -141,6 +141,16 @@ file(STRINGS sdk/include/caliper/abi.h _caliper_epoch_line
 string(REGEX REPLACE "^#define CALIPER_ABI_EPOCH[ \t]+([0-9]+).*" "\\1"
     CALIPER_SDK_ABI_EPOCH "${_caliper_epoch_line}")
 
+# The host's libtorch. The package records its version and location, and
+# caliper_add_applet(... TORCH) links exactly that libtorch.
+if(CALIPER_WITH_TORCH)
+    set(CALIPER_TORCH_VERSION "${Torch_VERSION}")
+    set(CALIPER_TORCH_DIR "${LIBTORCH_DIR}")
+else()
+    set(CALIPER_TORCH_VERSION "")
+    set(CALIPER_TORCH_DIR "")
+endif()
+
 # CALIPER_UI_STACK_HASH, and the install rules for the pinned UI-stack sources.
 include(cmake/CaliperUiStack.cmake)
 
@@ -217,6 +227,8 @@ install(EXPORT CaliperSDKTargets NAMESPACE caliper::
 write_basic_package_version_file(
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     VERSION ${CALIPER_SDK_VERSION} COMPATIBILITY SameMajorVersion)
+# The libtorch path recorded here is the build's own; a consumer overrides it
+# with -DCALIPER_TORCH_DIR=<libtorch root>.
 configure_file(sdk/cmake/caliper-sdk-info.cmake.in
     "${CMAKE_BINARY_DIR}/caliper-sdk-info.cmake" @ONLY)
 install(FILES
@@ -289,11 +301,17 @@ else()
 endif()
 set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
-# What the host was built with, for the loader to compare with the [build]
-# table that caliper_add_applet() stamps into each applet's manifest.
+# What the host was built with, for the loader to compare with the [build] and
+# [compat] tables that caliper_add_applet() stamps into each applet's manifest.
+# CALIPER_HOST_TORCH_VERSION is defined only in a build with libtorch; the host
+# never links libtorch, it only names the version its applets must use.
 target_compile_definitions(caliper_host_lib PUBLIC
     CALIPER_HOST_UI_STACK_HASH="${CALIPER_UI_STACK_HASH}"
     CALIPER_HOST_SDK_VERSION="${CALIPER_SDK_VERSION}")
+if(CALIPER_WITH_TORCH)
+    target_compile_definitions(caliper_host_lib PUBLIC
+        CALIPER_HOST_TORCH_VERSION="${CALIPER_TORCH_VERSION}")
+endif()
 
 # ============================================================================
 # Metal renderer backend (C2, Apple only)

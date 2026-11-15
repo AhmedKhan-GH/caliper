@@ -1,17 +1,14 @@
-add_library(sine_scope SHARED sine_scope.cpp)
-target_link_libraries(sine_scope PRIVATE
-    caliper::sdk caliper::ui_stack
-    "${TORCH_LIBRARIES}")                  # vendored third_party/libtorch
-target_compile_definitions(sine_scope PRIVATE CALIPER_APPLET_EXPORT)
-set_target_properties(sine_scope PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"   # .dll on Windows
-    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-if(APPLE)   # let the dylib find libtorch at runtime
-    set_target_properties(sine_scope PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+# SineScope, the ML tutorial applet. On its own it builds against an installed
+# SDK that was built with libtorch:
+#   cmake -S . -B build -DCMAKE_PREFIX_PATH=<sdk prefix>
+#   cmake --build build
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.18)
+    project(sine_scope LANGUAGES CXX)
+    find_package(caliper-sdk 0.2 CONFIG REQUIRED)
 endif()
-add_custom_command(TARGET sine_scope POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/sine_scope.caliper.toml
-        ${CMAKE_BINARY_DIR}/applets/sine_scope.caliper.toml)
+
+caliper_add_applet(sine_scope
+    SOURCES sine_scope.cpp
+    MANIFEST sine_scope.caliper.toml
+    TORCH)
