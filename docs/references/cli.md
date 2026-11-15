@@ -1,4 +1,4 @@
-# Command line
+# Caliper CLI
 
 The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs and exits without opening a window: `list`, `check`, `install`, `new`, `info`, `shot` and `--help` never start the app, so they are safe in scripts and CI. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
@@ -147,7 +147,7 @@ Each option takes its value as the next argument or after `=`, as in `--size=800
 
 The page is drawn at a scale of 1, so a 1600x1000 image shows what a window of 1600 by 1000 points shows on a display without scaling, and the image is opaque. As in the app, an applet's windows do not appear in the first frame and are docked in place from the second; give enough frames for the applet to load what it shows.
 
-Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, the canvas that the embedding core uses in `CALIPER_CANVAS_OFFSCREEN` mode, and reads the frame back from it. It starts no GLFW and creates no window, and on macOS it first sets the activation policy to `NSApplicationActivationPolicyProhibited`, so the process has no Dock icon and no menu bar. The offscreen canvas needs Metal on macOS or Vulkan on Windows. With the OpenGL fallback (`CALIPER_RENDERER=gl`, and on Linux), or when no GPU can make the canvas, `shot` prints `caliper: shot cannot draw offscreen: ...` and exits with 1.
+Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, the canvas that Caliper Embed uses in `CALIPER_CANVAS_OFFSCREEN` mode, and reads the frame back from it. It starts no GLFW and creates no window, and on macOS it first sets the activation policy to `NSApplicationActivationPolicyProhibited`, so the process has no Dock icon and no menu bar. The offscreen canvas needs Metal on macOS or Vulkan on Windows. With the OpenGL fallback (`CALIPER_RENDERER=gl`, and on Linux), or when no GPU can make the canvas, `shot` prints `caliper: shot cannot draw offscreen: ...` and exits with 1.
 
 `shot` never reads or writes the saved window layout, `imgui.ini`, so every image shows the layout of a first run, with each window where its dock role puts it. Where the stores and the applet's data folder go depends on `CALIPER_DATA_DIR`:
 

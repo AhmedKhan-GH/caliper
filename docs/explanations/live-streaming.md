@@ -12,7 +12,7 @@ training from 331 to 159 steps/s with two shows per step. Live streaming removes
 the wait: `show()` waits for nothing and the viewer samples at its own pace.
 
 To use it, start with [Watch a PyTorch training run live](../tutorials/live-pytorch.md);
-every call is in the [Python API](../references/python-api.md) reference.
+every call is in the [Caliper LIB](../references/python-api.md) reference.
 
 !!! note "Status"
     macOS / Metal (Apple Silicon) only, local only: protocol v2
@@ -24,7 +24,7 @@ every call is in the [Python API](../references/python-api.md) reference.
 ## One view layer, two transports
 
 Every call (`show()` and its siblings for points, series and histograms)
-produces a **snapshot**. It reaches the embed core by one of two transports,
+produces a **snapshot**. It reaches Caliper Embed by one of two transports,
 and both end in `caliper_core_live_apply()`, so the drawing code never knows
 where a snapshot came from:
 
@@ -42,7 +42,7 @@ the bottom one is the **own window**. One `SnapshotRing`
 for both; a transport only allocates slots and receives completed snapshots. On
 the viewer side, `live_core.cpp` reads a `Source` (`src/host/live/live_source.h`);
 today the only `Source` is the shared-memory session. The Caliper app runs
-the same viewer side inside its own window: a hosted embed core borrows the
+the same viewer side inside its own window: a hosted instance of Caliper Embed borrows the
 app's renderer, so the views draw in the app's frame
 (`src/host/live/live_attach.h`).
 
@@ -194,18 +194,18 @@ Liveness with a 5 s `time.sleep` in the training loop:
 | Close | After the sleep | After the sleep | 103 ms | At once |
 
 Hence the design: both
-modes sit behind one view layer in libcaliper. The separate-process viewer
+modes sit behind one view layer in Caliper Embed. The separate-process viewer
 (attach to app) is the primary mode, because only a separate process keeps the
 window and its input alive whatever the training loop does, and it also
 survives the script. The in-process window is the second mode, with the limits
-above. The tensor view is implemented inside libcaliper behind the
+above. The tensor view is implemented inside Caliper Embed behind the
 [embed ABI](../references/embedding.md), not as an applet.
 
-## Torch-free libcaliper
+## Torch-free Caliper Embed
 
 The core, the Metal renderer and the embed C ABI never include a torch header,
-which is what lets libcaliper share a process with the torch the script
-imported. Python's own torch 2.14.1 and libcaliper therefore never meet in one
+which is what lets Caliper Embed share a process with the torch the script
+imported. Python's own torch 2.14.1 and Caliper Embed therefore never meet in one
 symbol table: the Python extensions link `libcaliper` built with
 `CALIPER_WITH_TORCH=OFF`. The rule is checked with namespace-anchored patterns,
 not a bare `torch` search, because a case-insensitive `torch` grep matches

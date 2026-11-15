@@ -12,15 +12,15 @@ The host keeps everything it writes under one folder, computed in `src/app_paths
 | Windows | `%APPDATA%\Caliper\` (the Roaming AppData known folder). If Windows cannot resolve it, `caliper-data/` under the current directory. |
 | Linux | `$XDG_DATA_HOME/caliper/` when `XDG_DATA_HOME` is set and not empty, otherwise `~/.local/share/caliper/`. The folder name is lowercase. |
 
-`CALIPER_DATA_DIR`, when it is set and not empty, moves the whole folder, with everything in the table below, for every Caliper process that reads it: the app, the subcommands of the command line, the embedding core, the live viewer and the Python client. It is read once, at the first lookup (`src/app_paths.cpp`). An embedding host moves the folder for one core with `CaliperCoreDesc.data_dir`, which wins over both, except for the live session files under `live/`; see [Embedding](embedding.md#per-core-settings-and-limits).
+`CALIPER_DATA_DIR`, when it is set and not empty, moves the whole folder, with everything in the table below, for every Caliper process that reads it: the app, the Caliper CLI subcommands, Caliper Embed, the live viewer and Caliper LIB. It is read once, at the first lookup (`src/app_paths.cpp`). An embedding host moves the folder for one core with `CaliperCoreDesc.data_dir`, which wins over both, except for the live session files under `live/`; see [Embedding](embedding.md#per-core-settings-and-limits).
 
-The host creates the folder on first use. The read-only subcommands `list`, `check`, `info`, `new` and `--help` create nothing in it, whether `CALIPER_DATA_DIR` is set or not (`check` only reads the data-schema stamps under `data/`), `caliper install` writes only the user applets folder, and `caliper shot` without `CALIPER_DATA_DIR` uses a temporary folder in its place; see [Command line](cli.md).
+The host creates the folder on first use. The read-only subcommands `list`, `check`, `info`, `new` and `--help` create nothing in it, whether `CALIPER_DATA_DIR` is set or not (`check` only reads the data-schema stamps under `data/`), `caliper install` writes only the user applets folder, and `caliper shot` without `CALIPER_DATA_DIR` uses a temporary folder in its place; see [Caliper CLI](cli.md).
 
 Inside it:
 
 | Path | What it holds |
 |---|---|
-| `applets/` | The user applets folder: applet libraries and their `.caliper.toml` manifests, unless `CALIPER_USER_APPLETS_DIR` names another folder. The host searches it after the development folders and before the `applets/` folder next to the executable, and `caliper install` copies into it. See [Command line](cli.md#the-search-order). |
+| `applets/` | The user applets folder: applet libraries and their `.caliper.toml` manifests, unless `CALIPER_USER_APPLETS_DIR` names another folder. The host searches it after the development folders and before the `applets/` folder next to the executable, and `caliper install` copies into it. See [Caliper CLI](cli.md#the-search-order). |
 | `data/<id>/` | One folder per applet, named by the manifest `id`. The host creates it and passes it to the applet as `host.data_dir()`. For an applet that declares `[data].schema`, the host keeps the highest schema that has opened the folder in `.caliper-data.toml` inside it, and holds a lock on `.caliper-data.lock` beside it while it raises that value, so that two processes opening the folder at once cannot record the lower schema. |
 | `live/` | The live session folder. A script that calls `caliper.show` writes `<pid>.json` here, and the viewer lists these files; see [Attach to a running script](../guides/attach-to-a-running-script.md). |
 | `imgui.ini` | The saved window layout. Delete it to return to the default layouts. |
@@ -40,8 +40,8 @@ The `caliper` executable reads these. The first six are development hooks for sc
 | `CALIPER_HOME_AFTER=<seconds>` | Returns to the landing screen once, that many seconds after an applet page or live page opened. | `src/main.cpp` |
 | `CALIPER_WINDOW_SIZE=<W>x<H>` | Sets the window size in screen coordinates, for example `1440x900`. A malformed value is ignored and the default of 95% of the work area stands. | `src/main.cpp` |
 | `CALIPER_CHROMELESS=1` | Hides the page bar and the status bar on the applet page, so the applet's windows fill the whole window, for recordings. Esc still returns to the landing screen, and the landing screen and the live page keep their bars. Any other value leaves the bars. [`caliper shot`](cli.md#caliper-shot) honours it too. | `src/main.cpp`, `src/host/shot.cpp` |
-| `CALIPER_USER_APPLETS_DIR` | The user applets folder, in place of `applets/` under the app-data folder, when it is set and not empty. The host searches it after the development folders, and `caliper install` copies into it. The embed core reads it too. | `src/app_paths.cpp` |
-| `CALIPER_APPLET_PATH` | Folders to search for applets before the user applets folder and the shipped applets, separated by `:` (`;` on Windows), searched in the order given and after any `--applets` folders. A folder that holds no manifest but whose `applets/` subfolder does, such as an applet's build folder, stands for that subfolder (see [Build folders](cli.md#build-folders)). The embed core reads it too, after its `applets_dir`. | `src/main.cpp`, `src/host/embed/embed_core.cpp` |
+| `CALIPER_USER_APPLETS_DIR` | The user applets folder, in place of `applets/` under the app-data folder, when it is set and not empty. The host searches it after the development folders, and `caliper install` copies into it. Caliper Embed reads it too. | `src/app_paths.cpp` |
+| `CALIPER_APPLET_PATH` | Folders to search for applets before the user applets folder and the shipped applets, separated by `:` (`;` on Windows), searched in the order given and after any `--applets` folders. A folder that holds no manifest but whose `applets/` subfolder does, such as an applet's build folder, stands for that subfolder (see [Build folders](cli.md#build-folders)). Caliper Embed reads it too, after its `applets_dir`. | `src/main.cpp`, `src/host/embed/embed_core.cpp` |
 | `CALIPER_FONTS_DIR` | A folder that holds the UI fonts. It is searched before `assets/fonts` next to the executable and the source tree. | `src/host/ui/sternbild_fonts.cpp` |
 | `CALIPER_DISPLAY_FONT` | The path of the display font file, in place of `fonts/SternbildDisplay-Regular.otf` in the app-data folder. | `src/host/ui/sternbild_fonts.cpp` |
 | `CALIPER_DATA_DIR` | The app-data folder, in place of the one for the OS. It moves the whole folder: the three stores and `artifacts/`, `imgui.ini`, every applet's data folder under `data/`, the live session files under `live/`, the default location of the display face under `fonts/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. It is read once, at the first lookup. An embedder's `CaliperCoreDesc.data_dir` wins over it for everything but `live/`. The viewer sets it from its `--data-dir` flag, and the test suite sets it to a work folder so that no test opens the user's stores. | `src/app_paths.cpp`, `src/host/live/live_shm.h`, `src/host/live/viewer_main.mm` |
@@ -95,7 +95,7 @@ The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CA
 | `CALIPER_PY_LIVE_APPLY=0` | Sends heatmap and image snapshots through the embed view route instead of `caliper_core_live_apply`. | `python/src/_native.mm` |
 | `CALIPER_TEST_NO_WINDOW=1` | Skips the Python tests that open a real window. | `python/tests/test_window_real.py` |
 
-See [Python API](python-api.md) for the calls themselves.
+See [Caliper LIB](python-api.md) for the calls themselves.
 
 ## Startup log lines
 
@@ -117,6 +117,6 @@ On Windows the Vulkan renderer reports how each tensor update travelled. Each di
 | `tensor not CUDA-resident`, `external-memory interop unavailable`, `dtype not f32/u8`, `CUDA context init failed` and similar | The update took the CPU-staged or buffer path, and the message gives the reason. The fallback is not an error; see [Platform rules](../explanations/architecture.md#platform-rules). |
 | `direct image: exportable image failed, using the buffer path` | The direct path could not be set up, and updates use the buffer path. |
 
-Other host lines carry a tag: `[jobs]` for failed jobs and jobs still running at shutdown, `[ui]` for a UI state unwound after an applet fault, `[metrics]`, `[artifacts]` and `[data]` when a store fails to open, `[duckdb]` for an ignored limit override and `[live]` for session events. A host that embeds `libcaliper` receives its own `renderer: <name>` line through `log_fn`, and applet log lines tagged `[applet] `.
+Other host lines carry a tag: `[jobs]` for failed jobs and jobs still running at shutdown, `[ui]` for a UI state unwound after an applet fault, `[metrics]`, `[artifacts]` and `[data]` when a store fails to open, `[duckdb]` for an ignored limit override and `[live]` for session events. A program that embeds the core through Caliper Embed receives its own `renderer: <name>` line through `log_fn`, and applet log lines tagged `[applet] `.
 
 The device that `caliper.device.v1` reports is found at startup: Metal on Apple, and the CUDA driver API elsewhere. See [`caliper.device.v1`](service-device-v1.md).

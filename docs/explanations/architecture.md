@@ -23,7 +23,7 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 | UI STACK  pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog,     |
 |   shipped as sources in the SDK                                   |
 +------------------------------------------------------------------+
-| HOST  the caliper executable and libcaliper                       |
+| HOST  the caliper executable and Caliper Embed (libcaliper)       |
 |   window and frame loop, HostRenderer, applet loader,            |
 |   service implementations, crash guard, frame watchdog            |
 |   embedders link it as one shared library, caliper_embed          |
@@ -62,7 +62,7 @@ The frame thread does no I/O: no file access, no network call, no SQL query and 
 
 ## Embedding
 
-`libcaliper` is the host without the window. It holds the applet loader, the service registry, the services, `HostRenderer`, the tensor bridge and the geometry path behind a small C interface, so another program can run the applet canvas inside a view it owns. The `caliper` executable is the first embedder. The embedder supplies a native view and its input events. `libcaliper` owns the applet canvas end to end: the ImGui context, the renderer, the bridge and the geometry all run inside it, and the embedder's own chrome wraps around the canvas and never paints applet pixels. A toolkit such as wxWidgets paints through its own drawing backends and cannot paint pixels that applets produce on the GPU, and a single owner of the canvas keeps the applet contract the same in every host.
+Caliper Embed is the host without the window, built as the static library `libcaliper`. It holds the applet loader, the service registry, the services, `HostRenderer`, the tensor bridge and the geometry path behind a small C interface, so another program can run the applet canvas inside a view it owns. The `caliper` executable is the first embedder. The embedder supplies a native view and its input events. `libcaliper` owns the applet canvas end to end: the ImGui context, the renderer, the bridge and the geometry all run inside it, and the embedder's own chrome wraps around the canvas and never paints applet pixels. A toolkit such as wxWidgets paints through its own drawing backends and cannot paint pixels that applets produce on the GPU, and a single owner of the canvas keeps the applet contract the same in every host.
 
 A program outside this repository embeds the core through the `caliper-embed` package. It holds one shared library, `caliper_embed`, linked as the CMake target `caliper::embed`, which carries `libcaliper` and the libraries behind it and exports only the C functions of `caliper/embed.h`, `caliper/live.h` and `caliper/live_views.h`. An embedder therefore links one file and keeps its own copies of ImGui, GLFW or DuckDB apart from the core's. The headers install under an include root of their own, `include/caliper-embed`, so an applet that links `caliper::sdk` cannot include `<caliper/embed.h>`, even when both packages are installed in one prefix. In a shared prefix the header is still reachable as `<caliper-embed/caliper/embed.h>`, so separate prefixes keep the two apart completely ([Embedding Caliper](../references/embedding.md)).
 

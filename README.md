@@ -144,7 +144,7 @@ At run time LibTorch chooses the device. The same archive runs on the CPU when n
 
 ## Python package
 
-The `python/caliper` package opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/references/python-api.md`](docs/references/python-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
+Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/references/python-api.md`](docs/references/python-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
 
 ## Project structure
 

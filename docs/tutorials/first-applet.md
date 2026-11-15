@@ -207,7 +207,7 @@ quits, so after each rebuild quit Caliper and run `caliper dev` again.
 
 To keep the applet installed, `"$CALIPER" install build/applets` runs the same
 checks and copies the library and its manifest into the user applets folder,
-which the host searches every time it starts. [Command line](../references/cli.md)
+which the host searches every time it starts. [Caliper CLI](../references/cli.md)
 describes every subcommand.
 
 ## 6. See it in the app

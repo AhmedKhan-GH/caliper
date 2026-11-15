@@ -39,7 +39,7 @@ native. Applets built before the rule stay native-only until they are ported.
   screenshots for documentation and tests, and demo recordings, through one
   interface. Its first piece is built: `caliper shot` draws an applet's page
   as the app draws it, with nothing on screen, and writes it as a PNG (see
-  [Command line](../references/cli.md#caliper-shot)).
+  [Caliper CLI](../references/cli.md#caliper-shot)).
 - **ImGui errors went unnoticed.** One pane produced a constant stream of ImGui
   runtime errors, and nothing showed them. Development builds of the host
   should.

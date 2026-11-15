@@ -1,8 +1,10 @@
 # Embedding Caliper
 
-`libcaliper` is the framework core: the applet loader, the service registry,
+Caliper Embed is the framework core: the applet loader, the service registry,
 the host-neutral services, `HostRenderer` (Metal or Vulkan), the tensor bridge
-and the geometry ladder. It sits behind a small C ABI, so a host binary can run
+and the geometry ladder. Its code is the static library `libcaliper`, and the
+`caliper-embed` package installs it as one shared library, `libcaliper_embed.dylib`
+on macOS and `caliper_embed.dll` on Windows. It sits behind a small C ABI, so a host binary can run
 the applet canvas inside a view it owns without linking ImGui, torch or any
 renderer type. The `caliper` executable is the first embedder. The second
 in-tree embedder is `examples/embed_host/`, an AppKit host of about 260 lines
@@ -97,7 +99,7 @@ The typed live-view calls (`caliper_core_live_*`) are declared in
 
 ## Ownership
 
-libcaliper owns the applet canvas end to end. The embedder supplies a native
+Caliper Embed owns the applet canvas end to end. The embedder supplies a native
 child view; the core runs the ImGui context, `HostRenderer`, bridge and geometry
 inside it. A host's own chrome (docking, property grids, menus) wraps around
 those canvases and never paints applet pixels.
@@ -107,11 +109,11 @@ those canvases and never paints applet pixels.
 | Process event loop | **Embedder** | `caliper_core_frame` does one frame and returns — no polling, no vsync wait |
 | Native window / view handle | **Embedder** | `NSView*` / `HWND` passed to `attach_canvas` |
 | Input events | **Embedder** translates → core consumes | your GLFW/AppKit/wx event becomes a `CaliperInputEvent`; no toolkit types cross |
-| ImGui context (one per canvas) | **libcaliper** | the embedder never touches ImGui state; allocator handoff stays internal |
-| `HostRenderer` + tensor bridge + geometry | **libcaliper** | the zero-copy claim travels with the core |
-| Applet loader + service registry + services | **libcaliper** | the same registry applets already see |
-| libtorch (one per process) | **libcaliper** | the embedder must NOT link its own torch; the core owns device/pack policy |
-| Crash containment | **libcaliper** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../explanations/trust-model.md#every-applet-call-is-guarded)) |
+| ImGui context (one per canvas) | **Caliper Embed** | the embedder never touches ImGui state; allocator handoff stays internal |
+| `HostRenderer` + tensor bridge + geometry | **Caliper Embed** | the zero-copy claim travels with the core |
+| Applet loader + service registry + services | **Caliper Embed** | the same registry applets already see |
+| libtorch (one per process) | **Caliper Embed** | the embedder must NOT link its own torch; the core owns device/pack policy |
+| Crash containment | **Caliper Embed** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../explanations/trust-model.md#every-applet-call-is-guarded)) |
 
 ## Per-core settings and limits
 
@@ -480,13 +482,13 @@ package and of the offscreen mode has not been run yet.
 
 ## The torch-free build
 
-libcaliper (core, Metal renderer, embed C ABI) never included a torch header.
+`libcaliper` (core, Metal renderer, embed C ABI) never included a torch header.
 The renderers consume `CaliperTensor.data` as a raw `id<MTLBuffer>` (Metal) or
 a CUDA device pointer (Vulkan), and `sdk/include/caliper/adapters/torch.hpp` is
-applet-side only. The vendored libtorch 2.5.1 reached libcaliper, the `caliper`
+applet-side only. The vendored libtorch 2.5.1 reached `libcaliper`, the `caliper`
 exe and `embed_host` purely through `${CALIPER_DEPENDENCY_LIBS}`, to which
 `cmake/Dependencies.cmake` appended `${TORCH_LIBRARIES}`. The options below make
-that boundary buildable, so one process can host libcaliper next to a
+that boundary buildable, so one process can host Caliper Embed next to a
 **different** torch: the torch that the Python script imported, beside the Python extension.
 
 In a torch-free build the core carries no libtorch at all, so the libtorch row
@@ -505,7 +507,7 @@ embedding process is free to load its own torch.
 | `CALIPER_BUILD_VIEWER` | ON | `caliper_viewer`, the live-viewer process (Apple only). The wheel ships it as `caliper/bin/caliper-viewer`. |
 
 slang and llama.cpp are configured `EXCLUDE_FROM_ALL` and linked by nothing
-that libcaliper, the `caliper` exe or the tests need; llama.cpp only backs the
+that `libcaliper`, the `caliper` exe or the tests need; llama.cpp only backs the
 opt-in archived opengllama applet. They cost about two thirds of a 12.7 s
 configure, and slang clones boost_regex and mimalloc over the network at
 configure time, which a pip build should not do. The Python build and the
@@ -526,9 +528,9 @@ sets `CALIPER_BUILD_PYTHON` ON and `CALIPER_WITH_TORCH`,
 | List | Contents | Linked by |
 |---|---|---|
 | `CALIPER_DEPENDENCY_LIBS` | Everything the `caliper` exe and the gfx and export tests link: the UI chrome widgets (imgui-node-editor, ImGuiColorTextEdit, ImTerm), DuckDB and the rest. `TORCH_LIBRARIES` is no longer appended in either branch; applets and torch tests link `"${TORCH_LIBRARIES}"` themselves. | the `caliper` exe |
-| `CALIPER_CORE_LIBS` | Only what libcaliper's own sources and the GL/Metal backends need: `OpenGL::GL`, `-framework Cocoa`, `-framework IOKit`, `-framework CoreVideo` (Apple), `libglew_static`, `glfw`. | libcaliper, `PRIVATE` |
+| `CALIPER_CORE_LIBS` | Only what the sources of `libcaliper` and the GL/Metal backends need: `OpenGL::GL`, `-framework Cocoa`, `-framework IOKit`, `-framework CoreVideo` (Apple), `libglew_static`, `glfw`. | libcaliper, `PRIVATE` |
 
-The split matters because libcaliper is a static library: its private
+The split matters because `libcaliper` is a static library: its private
 dependencies still propagate to every embedder as link-only items, so the full
 list used to drag the chrome widgets into `embed_host` and the Python
 extension. DuckDB now reaches an embedder through `caliper_host_lib`, and
@@ -539,7 +541,7 @@ nothing of the exe's list, plus whatever its own window code needs.
 `examples/embed_host` links `caliper::embed` instead, the shared library of the
 [package](#the-caliper-embed-package), which carries all of that inside it.
 `caliper_embed_tests` links `doctest::doctest libcaliper caliper::sdk` only, so
-it proves libcaliper's link interface is self-sufficient. The Python extensions
+it proves that the link interface of `libcaliper` is self-sufficient. The Python extensions
 link the same two targets plus the Apple frameworks (and `glfw` for
 `caliper._native`'s window).
 
@@ -558,7 +560,7 @@ ctest --preset release-notorch
 ./cmake-build-notorch/tests/caliper_embed_tests
 ```
 
-A cold torch-free build of everything (libcaliper, exe, `embed_host`, all test
+A cold torch-free build of everything (`libcaliper`, exe, `embed_host`, all test
 binaries) is 462 steps, 120 s at `-j 8`; `libcaliper.a` itself is 276 KB (its
 own six objects; dependencies are separate archives). The default
 `cmake --preset release` configures with torch ON (vendored libtorch 2.5.1

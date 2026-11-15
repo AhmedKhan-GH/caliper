@@ -123,7 +123,7 @@ ctest --test-dir build
 with the stem `my_applet`: the manifest, the `CMakeLists.txt`, a source file with
 one window, and a test that runs the applet on the fixture host. Pass a full id,
 such as `com.example.my-applet`, to choose the id yourself.
-[Command line](../references/cli.md#caliper-new) describes the template.
+[Caliper CLI](../references/cli.md#caliper-new) describes the template.
 
 ### Loading your applet
 

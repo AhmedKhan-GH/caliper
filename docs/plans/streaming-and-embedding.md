@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package is built, and the rest is planned for after Phase 1. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), the [Python API](../references/python-api.md) and [Embedding Caliper](../references/embedding.md).
+This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package is built, and the rest is planned for after Phase 1. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Caliper LIB](../references/python-api.md) and [Embedding Caliper](../references/embedding.md).
 
 ## The order of surfaces
 

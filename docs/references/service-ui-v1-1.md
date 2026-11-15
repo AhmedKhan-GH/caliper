@@ -14,7 +14,7 @@ Service id `caliper.ui.v1_1` is an additive revision of [`caliper.ui.v1`](servic
 - **The user's layout wins.** A hint places only a window that has no saved layout, that is, no entry in `imgui.ini`. The host places each window once per process, the first time it appears, so a window the user moves or undocks afterwards stays where the user put it. A hinted window with `ImGuiWindowFlags_NoSavedSettings` is docked too, but nothing about it is written to `imgui.ini`.
 - **No hint means the centre, for an ordinary window.** A window that the applet begins without a hint docks in the centre the first time it appears when it is an ordinary window: not a child window, a popup, a tooltip or a modal, and without any of `ImGuiWindowFlags_NoDocking`, `NoSavedSettings`, `NoMove`, `NoResize`, `NoTitleBar` and `AlwaysAutoResize`. Any other window, such as a tool window that sizes itself, keeps the placement ImGui gives it. To keep an ordinary window floating, such as a non-modal file dialog, give it `ImGuiWindowFlags_NoDocking`.
 - **Optional for the applet.** An applet that uses hints still lists only `caliper.ui.v1` in `[services].required`. The sugar `caliper::ui::dock_hint(host, title, role)` probes `caliper.ui.v1_1` and does nothing on a host that lacks it, where the windows keep the placement ImGui gives them.
-- **Where hints apply.** The `caliper` executable applies hints on its applet page. An embedding host that has no docked layout, such as the embed core, accepts the calls and ignores them.
+- **Where hints apply.** The `caliper` executable applies hints on its applet page. An embedding host that has no docked layout, such as Caliper Embed, accepts the calls and ignores them.
 
 ## Example
 

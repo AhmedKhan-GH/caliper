@@ -8,9 +8,15 @@ The terms below are used across these pages with one meaning each.
 
 **Core.** The host's own code, as opposed to the applets. The core is the loader, the service implementations, the renderer, the crash guard and the frame watchdog. It is built as the `libcaliper` library and the `caliper` executable.
 
-**libcaliper.** The host core as a library behind a small C interface, so that another program can run the applet canvas inside a view it owns. It owns the applet canvas, the renderer and the one libtorch of the process. See [Embedding Caliper](embedding.md).
+**Caliper Embed.** The host core as a library behind a small C interface, so that another program can run the applet canvas inside a view it owns. It owns the applet canvas, the renderer and the one libtorch of the process. Its code is the static library `libcaliper`, and the `caliper-embed` package installs it as the shared library `caliper_embed`. See [Embedding Caliper](embedding.md).
 
-**SDK.** The `caliper-sdk` package that applets build against: the headers in `sdk/include/caliper` (the C ABI, the service tables, the interchange types, the C++ sugar and the adapters), the pinned UI-stack sources, the fixture host and `caliper_add_applet()`. See [SDK package](sdk-package.md) and the [ABI](abi.md).
+**Caliper SDK.** The C++ applet SDK, the `caliper-sdk` package that applets build against: the headers in `sdk/include/caliper` (the C ABI, the service tables, the interchange types, the C++ sugar and the adapters), the pinned UI-stack sources, the fixture host and `caliper_add_applet()`. See [SDK package](sdk-package.md) and the [ABI](abi.md).
+
+**Caliper CLI.** The subcommands of the `caliper` executable, such as `list`, `check`, `new`, `install`, `dev` and `shot`. See [Caliper CLI](cli.md).
+
+**Caliper LIB.** The `caliper` Python package, which gives a training script live views of its tensors. See [Caliper LIB](python-api.md).
+
+**Caliper API.** A planned HTTP interface to the running app, so that a program in any language can list and launch applets, stream data to them and fetch what they show. It is not built; the [roadmap](../plans/roadmap.md#api) gives its plan.
 
 **Service.** A named, immutable C function table that the host vends through `get_service("caliper.x.vN")`. The [Service catalog](services.md) lists them all.
 

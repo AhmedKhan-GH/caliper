@@ -79,7 +79,7 @@ for applets that crashed and were quarantined, and the Activity pane logs each
 `launch failed` and `quarantined` event with the applet's name. If an applet
 doesn't appear at all, run `caliper check` on the folder you loaded it from: it
 lists every manifest it finds there, with the status and reason the host would
-give, without opening a window ([Command line](../references/cli.md#caliper-check)).
+give, without opening a window ([Caliper CLI](../references/cli.md#caliper-check)).
 
 A background job that faults or throws prints one line on the host's stderr,
 `[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`, and the jobs
@@ -118,7 +118,7 @@ it: with `CALIPER_DATA_DIR=/tmp/caliper-try`, an applet with the id
 `com.example.viewer` gets `/tmp/caliper-try/data/com.example.viewer/`. That is
 a quick way to run an applet against an empty data folder without touching the
 real one. `caliper shot` uses a temporary root of its own unless
-`CALIPER_DATA_DIR` is set; see [Command line](../references/cli.md#caliper-shot).
+`CALIPER_DATA_DIR` is set; see [Caliper CLI](../references/cli.md#caliper-shot).
 
 The host also keeps `.caliper-data.toml` there for an applet that declares a data
 schema; leave that file alone. For example, an applet can build `data_dir() + "/settings.txt"` and

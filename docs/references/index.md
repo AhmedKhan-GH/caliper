@@ -9,7 +9,7 @@ Reference pages describe the contracts exactly: the ABI, the manifest, each serv
 | [ABI](abi.md) | `caliper/abi.h`, the epoch 2 descriptor and host structs |
 | [Manifest](manifest.md) | The `caliper.toml` keys and the id rules |
 | [SDK package](sdk-package.md) | The installed `caliper-sdk` package, `caliper_add_applet()` and the UI-stack hash |
-| [Command line](cli.md) | The `caliper` subcommands, the `--applets` flag, the search order and the exit codes |
+| [Caliper CLI](cli.md) | The `caliper` subcommands, the `--applets` flag, the search order and the exit codes |
 | [Refusal messages](refusals.md) | Every message the loader and the services show when they refuse an applet |
 | [C++ sugar](sugar.md) | `caliper.hpp`, the `CALIPER_APPLET` macro and the service wrappers |
 | [Tensor](tensor.md) | `caliper/tensor.h`, the `CaliperTensor` interchange type |
@@ -41,7 +41,7 @@ The [service catalog](services.md) lists every service id the host serves, with 
 | Page | Contents |
 |---|---|
 | [Embedding Caliper](embedding.md) | `caliper/embed.h`, the C interface for hosting the core in another program |
-| [Python API](python-api.md) | The `caliper` Python package |
+| [Caliper LIB](python-api.md) | The `caliper` Python package |
 
 ## Applets and environment
 

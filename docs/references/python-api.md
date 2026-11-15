@@ -1,6 +1,6 @@
-# Python API (caliper)
+# Caliper LIB
 
-`import caliper` gives a PyTorch script live views of its tensors. This page
+Caliper LIB is the `caliper` Python package: `import caliper` gives a PyTorch script live views of its tensors. This page
 lists every public call of the `caliper` package (version 0.1.0, Python 3.12,
 macOS arm64) and of `caliper.live`. The source of truth is
 `python/caliper/__init__.py`; the design is in
@@ -9,8 +9,8 @@ macOS arm64) and of `caliper.live`. The source of truth is
 a script.
 
 The package is pure Python on top of two nanobind extensions. `caliper._native`
-binds the embed C ABI (`caliper/embed.h`, including the view calls) of a
-libcaliper built without libtorch, so the core lives next to the torch the
+binds the embed C ABI (`caliper/embed.h`, including the view calls) of
+Caliper Embed built without libtorch, so the core lives next to the torch the
 script already imported. `caliper._live` is the client of the shared-memory
 live session protocol. `caliper.__version__` is `"0.1.0"`.
 

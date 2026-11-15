@@ -13,8 +13,8 @@ Service id `caliper.log.v1` — timestamped log lines from an applet into the ho
   required (the host adds one). Do the formatting on the applet side and pass the
   finished string.
 - **Where it goes.** The `caliper` executable stamps each line with a local
-  `HH:MM:SS` timestamp and its level tag and writes it to **stderr**. A host that
-  embeds `libcaliper` and sets `log_fn` in its `CaliperCoreDesc` receives the
+  `HH:MM:SS` timestamp and its level tag and writes it to **stderr**. A program that
+  embeds the core through Caliper Embed and sets `log_fn` in its `CaliperCoreDesc` receives the
   applet lines through that callback instead, tagged `[applet] `, and nothing
   goes to stderr; see [Embedding](embedding.md).
 - **Levels.** `level` is one of `CALIPER_LOG_DEBUG`/`INFO`/`WARN`/`ERROR`; any
