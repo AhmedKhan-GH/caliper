@@ -203,7 +203,10 @@ message(STATUS "    ✓ GLFW configured")
 message(STATUS "  Configuring ImGui...")
 set(IMGUI_SRC_DIR "${THIRD_PARTY_DIR}/imgui")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui EXCLUDE_FROM_ALL)
-list(APPEND CALIPER_DEPENDENCY_LIBS imgui)
+# imgui is the core library (part of caliper::ui_stack); imgui_backends holds the
+# GLFW and OpenGL 3 backends, which only the host links.
+list(APPEND CALIPER_DEPENDENCY_LIBS imgui imgui_backends)
+list(APPEND CALIPER_CORE_LIBS imgui_backends)
 message(STATUS "    ✓ ImGui configured")
 
 # --- ImPlot (Plotting library) ---
@@ -429,6 +432,7 @@ message(STATUS "  Configuring ImGuiFileDialog...")
 set(IGFD_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(${THIRD_PARTY_DIR}/ImGuiFileDialog EXCLUDE_FROM_ALL)
 target_link_libraries(ImGuiFileDialog PUBLIC imgui)
+set_target_properties(ImGuiFileDialog PROPERTIES POSITION_INDEPENDENT_CODE ON)
 list(APPEND CALIPER_DEPENDENCY_LIBS ImGuiFileDialog)
 message(STATUS "    ✓ ImGuiFileDialog configured")
 

@@ -1,30 +1,17 @@
-# PulseScope — the caliper.feed.v1 dashboard exemplar (feed spec §5).
-# Deliberately CPU + ImPlot only: NO torch, NO bridge/geometry. It links just the
-# SDK sugar and the ImGui/ImPlot UI stack (the hello_applet shape), so it builds
-# and loads host-neutrally — on a host with no telemetry provider it degrades to
-# one honest line.
-add_library(pulse_scope SHARED
-    plugin.cpp
-    pulse_scope.cpp
-)
+# PulseScope — the caliper.feed.v1 dashboard exemplar. Deliberately CPU and
+# ImPlot only: no libtorch, no bridge or geometry. It links just the SDK sugar
+# and the UI stack (the hello shape), so it builds and loads host-neutrally — on
+# a host with no telemetry provider it degrades to one honest line.
+# On its own it builds against an installed SDK:
+#   cmake -S . -B build -DCMAKE_PREFIX_PATH=<sdk prefix>
+#   cmake --build build
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.18)
+    project(pulse_scope LANGUAGES CXX)
+    find_package(caliper-sdk 0.2 CONFIG REQUIRED)
+endif()
 
+caliper_add_applet(pulse_scope
+    SOURCES plugin.cpp pulse_scope.cpp
+    MANIFEST pulse_scope.caliper.toml)
 target_include_directories(pulse_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-target_link_libraries(pulse_scope PRIVATE
-    caliper::sdk
-    caliper::ui_stack
-)
-
-target_compile_definitions(pulse_scope PRIVATE CALIPER_APPLET_EXPORT)
-
-set_target_properties(pulse_scope PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_custom_command(TARGET pulse_scope POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/pulse_scope.caliper.toml
-        ${CMAKE_BINARY_DIR}/applets/pulse_scope.caliper.toml)

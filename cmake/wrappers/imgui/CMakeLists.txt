@@ -7,32 +7,37 @@ if(NOT DEFINED IMGUI_SRC_DIR)
     message(FATAL_ERROR "IMGUI_SRC_DIR must be defined (path to imgui submodule)")
 endif()
 
+# imgui: the core library, the part of the UI stack that applets also compile
+# (caliper::ui_stack). It carries the UI-stack definitions, which the SDK hands
+# to applets so both sides compile ImGui the same way.
 add_library(imgui STATIC
     ${IMGUI_SRC_DIR}/imgui.cpp
     ${IMGUI_SRC_DIR}/imgui_demo.cpp
     ${IMGUI_SRC_DIR}/imgui_draw.cpp
     ${IMGUI_SRC_DIR}/imgui_tables.cpp
     ${IMGUI_SRC_DIR}/imgui_widgets.cpp
-    ${IMGUI_SRC_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_SRC_DIR}/backends/imgui_impl_opengl3.cpp
 )
-
-target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
-# The UI-stack definitions: the SDK hands the same list to applets, so both
-# sides compile ImGui the same way.
+target_include_directories(imgui PUBLIC ${IMGUI_SRC_DIR})
 if(CALIPER_UI_STACK_DEFINITIONS)
     target_compile_definitions(imgui PUBLIC ${CALIPER_UI_STACK_DEFINITIONS})
 endif()
-
-target_include_directories(imgui PUBLIC
-    ${IMGUI_SRC_DIR}
-    ${IMGUI_SRC_DIR}/backends
+set_target_properties(imgui PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
 )
 
+# imgui_backends: the GLFW platform backend and the OpenGL 3 renderer backend.
+# Only the host links them; applets never see a window or a graphics API.
+add_library(imgui_backends STATIC
+    ${IMGUI_SRC_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_SRC_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_compile_definitions(imgui_backends PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
+target_include_directories(imgui_backends PUBLIC ${IMGUI_SRC_DIR}/backends)
 find_package(OpenGL REQUIRED)
-target_link_libraries(imgui PUBLIC libglew_static glfw OpenGL::GL)
-
-set_target_properties(imgui PROPERTIES
+target_link_libraries(imgui_backends PUBLIC imgui libglew_static glfw OpenGL::GL)
+set_target_properties(imgui_backends PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )

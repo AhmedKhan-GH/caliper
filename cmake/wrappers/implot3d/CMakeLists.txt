@@ -20,4 +20,5 @@ target_link_libraries(implot3d PUBLIC imgui)
 set_target_properties(implot3d PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
 )

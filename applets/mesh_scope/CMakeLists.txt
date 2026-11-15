@@ -1,32 +1,17 @@
-add_library(mesh_scope SHARED
-    plugin.cpp
-    mesh_scope.cpp
-)
-
-target_include_directories(mesh_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/applets/common)
-
-target_link_libraries(mesh_scope PRIVATE
-    caliper::sdk
-    caliper::ui_stack
-    "${TORCH_LIBRARIES}"
-)
-
-target_compile_definitions(mesh_scope PRIVATE CALIPER_APPLET_EXPORT)
-
-set_target_properties(mesh_scope PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/applets"
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-if(APPLE)
-    set_target_properties(mesh_scope PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+# MeshScope (id dev.caliper.mesh-scope). It shares export_affordance.h with
+# TwinScope through the sibling folder ../common.
+# On its own it builds against an installed SDK:
+#   cmake -S . -B build -DCMAKE_PREFIX_PATH=<sdk prefix>
+#   cmake --build build
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.18)
+    project(mesh_scope LANGUAGES CXX)
+    find_package(caliper-sdk 0.2 CONFIG REQUIRED)
 endif()
 
-add_custom_command(TARGET mesh_scope POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/mesh_scope.caliper.toml
-        ${CMAKE_BINARY_DIR}/applets/mesh_scope.caliper.toml)
+caliper_add_applet(mesh_scope
+    SOURCES plugin.cpp mesh_scope.cpp
+    MANIFEST mesh_scope.caliper.toml
+    TORCH)
+target_include_directories(mesh_scope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common)

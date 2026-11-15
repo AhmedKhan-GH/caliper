@@ -99,7 +99,9 @@ option(BUILD_TESTS "Build tests" OFF)
 # every torch-linking target, so one process can host libcaliper next to a
 # DIFFERENT torch (Python's torch 2.14.1 vs the vendored libtorch 2.5.1).
 option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch applets + adapter tests" ON)
-option(CALIPER_BUILD_APPLETS "Build the applets/* tree (all of them link libtorch today)" ON)
+# The core build compiles no applets. ON also builds the applets/* tree here,
+# through the same caliper_add_applet() that builds them against the installed SDK.
+option(CALIPER_BUILD_APPLETS "Also build the applets/* tree in the core build" OFF)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
 # slang + llama.cpp are configured EXCLUDE_FROM_ALL and linked by nothing that
 # libcaliper / the caliper exe / the tests need (only the opt-in opengllama
@@ -108,7 +110,7 @@ option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanob
 option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
 option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
 if(CALIPER_BUILD_APPLETS AND NOT CALIPER_WITH_TORCH)
-    message(STATUS "CALIPER_WITH_TORCH=OFF: applets/* need libtorch, forcing CALIPER_BUILD_APPLETS=OFF")
+    message(STATUS "CALIPER_WITH_TORCH=OFF: most of applets/* need libtorch, forcing CALIPER_BUILD_APPLETS=OFF")
     set(CALIPER_BUILD_APPLETS OFF)
 endif()
 
@@ -161,22 +163,19 @@ target_include_directories(caliper_sdk INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
-# UI stack: pinned imgui/implot/implot3d/ImGuiFileDialog from the monorepo.
-# Moves into the SDK repo at Phase 3; a separate target so the seam is visible.
+# UI stack: the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, without
+# any backend. Here it is the host's own libraries; the installed package
+# builds the same sources inside the applet's build (sdk/cmake/caliper-ui-stack.cmake).
 add_library(caliper_ui_stack INTERFACE)
 add_library(caliper::ui_stack ALIAS caliper_ui_stack)
 target_include_directories(caliper_ui_stack INTERFACE
     ${THIRD_PARTY_DIR}/imgui
-    ${THIRD_PARTY_DIR}/imgui/backends
     ${THIRD_PARTY_DIR}/implot
     ${THIRD_PARTY_DIR}/implot3d
     ${THIRD_PARTY_DIR}/ImGuiFileDialog
 )
 target_link_libraries(caliper_ui_stack INTERFACE
     imgui implot implot3d ImGuiFileDialog
-)
-target_compile_definitions(caliper_ui_stack INTERFACE
-    IMGUI_IMPL_OPENGL_LOADER_GLEW
 )
 
 # Host-owned app-paths utility. Applets that still need the shared data dir
@@ -331,7 +330,7 @@ if(APPLE)
         PUBLIC caliper::sdk
                "-framework Metal" "-framework QuartzCore"
                "-framework Foundation" "-framework Cocoa"
-        PRIVATE caliper::ui_stack glfw)
+        PRIVATE caliper::ui_stack imgui_backends glfw)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
         ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
@@ -406,7 +405,7 @@ if(WIN32)
         VK_USE_PLATFORM_WIN32_KHR)
     target_link_libraries(caliper_vulkan_backend
         PUBLIC caliper::sdk volk::volk
-        PRIVATE caliper::ui_stack glfw)
+        PRIVATE caliper::ui_stack imgui_backends glfw)
     set_target_properties(caliper_vulkan_backend PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
         POSITION_INDEPENDENT_CODE ON)
@@ -587,53 +586,41 @@ elseif(UNIX)
 endif()
 
 # ============================================================================
-# Applets (each builds a shared library)
+# Applets
 # ============================================================================
-
+# The core build compiles no applets, and the caliper target depends on none.
+# Applets build in their own repositories against the installed SDK with
+# caliper_add_applet(), and every folder under applets/ and examples/ builds
+# standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
+# CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here. Archived applets
+# live under applets/legacy/ and applets/legacy-dev/; neither has a top-level
+# CMakeLists, so the glob below never descends into them.
 if(CALIPER_BUILD_APPLETS)
     file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
-else()
-    set(applet_dirs "")
+    foreach(dir ${applet_dirs})
+        if(IS_DIRECTORY "${dir}" AND EXISTS "${dir}/CMakeLists.txt")
+            get_filename_component(applet_name "${dir}" NAME)
+            message(STATUS "  Found applet: ${applet_name}")
+            add_subdirectory("${dir}")
+        endif()
+    endforeach()
 endif()
 
-set(_active_applet_libs "")
-foreach(dir ${applet_dirs})
-    if(IS_DIRECTORY "${dir}" AND EXISTS "${dir}/CMakeLists.txt")
-        get_filename_component(applet_name "${dir}" NAME)
-        message(STATUS "  Found applet: ${applet_name}")
-        add_subdirectory("${dir}")
-        add_dependencies(caliper "${applet_name}")
-        list(APPEND _active_applet_libs
-            "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}${applet_name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    endif()
-endforeach()
-
-# hello is the loader-test fixture (tests dlopen it) and the docs' embedded
-# tutorial applet — it builds even though it is not a showcase piece.
-# Archived applets live under applets/legacy/ (Ahmed's real projects, awaiting
-# their own repos) and applets/legacy-dev/ (demos that drove the platform's
-# architecture, kept for history). Neither has a top-level CMakeLists, so the
-# applets/* glob above never descends into them: archived = not built,
-# not loaded.
-option(CALIPER_BUILD_EXAMPLES "Build example applets (hello fixture + tutorial applets)" ON)
-if(CALIPER_BUILD_EXAMPLES)
-    # hello = loader-test fixture AND the UI-only tutorial applet the wiki
-    # embeds VERBATIM (dev-basics / first-applet); sine_scope = the ML tutorial
-    # applet (first-ml-applet) — building them here keeps the docs' code honest.
+# hello is the loader-test fixture (the tests dlopen it), and sine_scope is the
+# second applet caliper_embed_tests swaps to, so they build with the tests. Both
+# are also the tutorial applets the docs embed.
+if(BUILD_TESTS OR CALIPER_BUILD_APPLETS)
     add_subdirectory(examples/hello)
-    # embed_host: the second, out-of-tree-style embedder of libcaliper (L2b).
-    # A bare native-window host; NOT an applet, NOT linked into `caliper`.
-    add_subdirectory(examples/embed_host)
-    add_dependencies(caliper hello_applet)
-    list(APPEND _active_applet_libs
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}hello${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    # sine_scope links libtorch (the ML tutorial applet): torch builds only.
     if(CALIPER_WITH_TORCH)
         add_subdirectory(examples/sine_scope)
-        add_dependencies(caliper sine_scope)
-        list(APPEND _active_applet_libs
-            "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}sine_scope${CMAKE_SHARED_LIBRARY_SUFFIX}")
     endif()
+endif()
+
+# embed_host: the second, out-of-tree-style embedder of libcaliper (L2b).
+# A bare native-window host; NOT an applet, NOT linked into `caliper`.
+option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
+if(CALIPER_BUILD_EXAMPLES)
+    add_subdirectory(examples/embed_host)
 endif()
 
 # Opt-in resurrection of the archived GGUF-inference applet (applets/legacy/):
@@ -649,33 +636,6 @@ if(CALIPER_BUILD_OPENGLLAMA)
     list(APPEND _active_applet_libs
         "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}opengllama${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
-
-# Remove stale applet libraries AND manifests left from previously deleted or
-# archived applets (a stale manifest without its dylib would show a ghost
-# refusal card in the launcher).
-file(GLOB _existing_applet_libs "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}*${CMAKE_SHARED_LIBRARY_SUFFIX}")
-foreach(lib ${_existing_applet_libs})
-    if(NOT lib IN_LIST _active_applet_libs)
-        get_filename_component(_stale_name "${lib}" NAME)
-        message(STATUS "  Removing stale applet: ${_stale_name}")
-        file(REMOVE "${lib}")
-    endif()
-endforeach()
-set(_active_applet_stems "")
-foreach(lib ${_active_applet_libs})
-    get_filename_component(_stem "${lib}" NAME_WE)
-    string(REGEX REPLACE "^${CMAKE_SHARED_LIBRARY_PREFIX}" "" _stem "${_stem}")
-    list(APPEND _active_applet_stems "${_stem}")
-endforeach()
-file(GLOB _existing_manifests "${CMAKE_BINARY_DIR}/applets/*.caliper.toml")
-foreach(mf ${_existing_manifests})
-    get_filename_component(_mf_name "${mf}" NAME)
-    string(REPLACE ".caliper.toml" "" _mf_stem "${_mf_name}")
-    if(NOT _mf_stem IN_LIST _active_applet_stems)
-        message(STATUS "  Removing stale manifest: ${_mf_name}")
-        file(REMOVE "${mf}")
-    endif()
-endforeach()
 
 # ============================================================================
 # Summary
