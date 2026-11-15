@@ -107,6 +107,16 @@ with every default filled in, and so does every snapshot, so a viewer always
 knows what it is drawing. A choice of layer or head in a picker, and a zoom
 that needs another resolution, are requests for a different data view.
 
+Each subscription has its own data view, so two viewers can show different
+heads of one view at the same time. The producer computes each distinct data
+view once per snapshot for every subscription that shares it, and a source
+that no subscription selects costs nothing. The script itself sets the view's
+default data view, with the `data_view` argument of the call or with
+`caliper.set_data_view()`; the window and the live session draw that default,
+and a new subscription starts from it. A view whose tensor has no named
+dimensions still offers its payload as one source, so a viewer can range it to
+zoom in, or pool it to a smaller budget.
+
 Data views and sampling divide the work. Sampling in time, by the rate limit,
 decides how often a view travels. Data views and the budget decide how much of
 it travels each time.
@@ -123,8 +133,9 @@ memory does not grow with the viewer's backlog.
 A series is the exception, because a curve needs every value. A series message
 is a delta: the absolute index of its first value and the values that are new
 since the last message. Values that are not yet sent are coalesced into one
-pending message and never dropped. The producer retains at least the last 4096
-values of each series whether or not anyone watches, and when a viewer
+pending message and never dropped. The producer retains the last 1,048,576
+values of each series whether or not anyone watches (the protocol asks for at
+least 4096), and when a viewer
 subscribes, it first sends that history and then the deltas. Because every
 delta carries an absolute index, a viewer that joins late draws the same curve
 as one that watched from the start.
@@ -148,19 +159,22 @@ pass `loss.detach()`, not `loss.item()`.
 
 The server listens only on the loopback interface, 127.0.0.1, so only programs
 on the same machine can connect to it. Each server makes a random **session
-token**, and both the viewer page and the stream require it. The link that
-`caliper.serve()` prints carries the token, so anyone who has the link can
-watch the views while the server runs; it should be kept like a password. The
-server also checks the `Host` and `Origin` headers of every connection, so that
-a web page from another site, opened in a browser on the same machine, cannot
-reach the stream, even by DNS rebinding.
+token**, and the stream requires it. The viewer page and its files hold no
+data, so they are served without the token; the page reads the token from its
+own link and passes it to the stream. The link that `caliper.serve()` prints
+carries the token, so anyone who has the link can watch the views while the
+server runs; it should be kept like a password. The server also checks the
+`Host` header of every request and the `Origin` header of every stream
+connection, so that a web page from another site, opened in a browser on the
+same machine, cannot reach the stream, even by DNS rebinding.
 
 The stream carries data and nothing else. Snapshots and series travel to the
 viewer. Subscriptions, data view requests and viewer events (`select`, `pick`
 and `hover`) travel back. A data view request can only name a slice, selection
 or reduction of a source that the producer offered, and an event is data for
-the producer's Python code to read. The stream never carries host commands, and
-nothing a viewer sends runs as code.
+the producer's Python code to read, through `server.on_event()` or
+`server.events()`. The stream never carries host commands, and nothing a viewer
+sends runs as code.
 
 This position holds until a dedicated security review, which comes before any
 session leaves the machine ([Security](../plans/streaming-and-embedding.md#security)).

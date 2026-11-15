@@ -58,11 +58,12 @@ http://127.0.0.1:<port>/?token=<token>
 ```
 
 The token is a random **session token**, made new for each server, and the
-server refuses a connection that does not carry it. The kernel is now a
+server refuses a stream connection that does not carry it. The kernel is now a
 **producer**: every view call in it is offered to the server, which sends the
 view's snapshots to each viewer that subscribes to it. `server.url`,
-`server.port` and `server.token` hold the parts of the link, and
-`server.close()` stops the server.
+`server.port` and `server.token` hold the parts of the link, `server.stats()`
+shows the connected viewers and their subscriptions, and `server.close()` stops
+the server.
 
 ## The model and the data
 
@@ -190,6 +191,9 @@ also has a picker for its data view, built from the dimensions that `dims`
 named and their sizes. Choosing a layer, a sequence or a head in the picker
 sends a data view request over the stream to the producer, so the choice takes
 effect at the view's next snapshot, while the training cell is still running.
+The choice belongs to that widget's subscription: a browser tab on the same
+view keeps its own data view, and the producer computes each data view that a
+viewer asks for once per snapshot.
 
 Selecting points in the embedding widget sends a `select` event. The widget
 stores the latest event in its `selection` trait, which Python reads:
@@ -223,6 +227,9 @@ therefore reaches `selection` once the training cell has finished, and a data
 view set from Python takes effect at the next snapshot, which is why the
 notebook trains for a few more seconds after setting it. Events from the
 viewer are data for your code to read; nothing in them runs as a command.
+Besides a widget's traits, `server.on_event(fn)` calls `fn` with every event of
+every viewer, on a thread of its own, also while a cell runs, and
+`server.events()` returns the events received since its last call.
 
 ## Open the stream in a browser tab
 

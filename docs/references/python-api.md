@@ -103,10 +103,13 @@ the rate limit applies.
 ### show
 
 ```python
-caliper.show(t, name="tensor", cmap="viridis", vmin=None, vmax=None, rate=None)
+caliper.show(t, name="tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
+             dims=None, data_view=None)
 ```
 
 Show or update view `name` with tensor `t` as a heatmap or an RGBA image.
+With `dims` or `data_view`, the view shows a data view of `t` instead of the
+layouts below; see [Data views](#data-views).
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
@@ -139,7 +142,7 @@ by ±0.5. NaN values draw as colormap index 0.
 
 ```python
 caliper.points(z, labels=None, name="points", classes=None, cmap="viridis",
-               vmin=None, vmax=None, rate=None)
+               vmin=None, vmax=None, rate=None, *, dims=None, data_view=None)
 ```
 
 A scatter of `z`: `(N, 2)` (pan and zoom) or `(N, 3)` (orbit), any dtype, cast
@@ -147,14 +150,16 @@ to float32 on its device; N must be at least 1.
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
-| `labels` | tensor `(N,)` or `None` | `None` | Per-point labels or values, on `z`'s device or on the CPU (uploaded host to device, never the other way). `None` draws one flat colour |
+| `labels` | tensor `(N,)` or `None` | `None` | Per-point labels or values, on `z`'s device or on the CPU. CPU labels for MPS points are copied to the device without waiting for its queue, from a private copy kept until the device has read it, so the caller may reuse its tensor at once; nothing is copied the other way. `None` draws one flat colour |
 | `classes` | `int` or `None` | `None` | K categorical labels 0..K-1, drawn with a fixed 16-colour palette (label L gets colour L mod 16). Needs `labels` |
 | `cmap`, `vmin`, `vmax` | | | Without `classes`, labels are colormapped over [vmin, vmax], autoscaled like `show` |
 | `name`, `rate` | | `"points"`, `None` | As for `show` |
 
 The bounding box for auto-fit is computed on the device. Wrong shapes, a label
 count other than N, labels on a device other than `z`'s or the CPU,
-`classes < 1` and `classes` without `labels` raise `ValueError`.
+`classes < 1` and `classes` without `labels` raise `ValueError`. With `dims`
+or `data_view`, `z` is a source of data views and `labels` follows its kept
+dimension; see [Data views](#data-views).
 
 ### series
 
@@ -174,7 +179,7 @@ offered while nothing is attached are not recorded. An empty tensor raises
 ### histogram
 
 ```python
-caliper.histogram(t, name="histogram", bins=64, rate=None)
+caliper.histogram(t, name="histogram", bins=64, rate=None, *, dims=None, data_view=None)
 ```
 
 Bin counts of every element of `t` (flattened, cast to float32, at least one
@@ -182,13 +187,15 @@ element) over its [min, max], with `bins` in 1..65536. The range comes from a
 GPU `aminmax`; constant data uses [v - 1, v + 1] as `torch.histc` does, and NaN
 values fall into bin 0. On MPS the binning runs on the device (`index_add_`),
 because `torch.histc` on MPS reads its range back to the host, a full drain of
-the queue measured at 15 to 53 ms. On the CPU it is `torch.histc`.
+the queue measured at 15 to 53 ms. On the CPU it is `torch.histc`. With `dims`
+or `data_view`, the histogram bins the data view of `t`; see
+[Data views](#data-views).
 
 ### watch
 
 ```python
 handle = caliper.watch(model, activations=True, gradients=False, every=1,
-                       include=None, rate=None)
+                       include=None, rate=None, groups=True)
 ```
 
 Hooks that call `show` for a module's outputs and gradients. Returns a
@@ -202,10 +209,34 @@ Hooks that call `show` for a module's outputs and gradients. Returns a
 | `every` | `int` | 1 | Show 1 of every N hook calls (per hook); must be at least 1 |
 | `include` | `None`, `str`, list of `str`, or callable | `None` | `None`: leaf modules. Strings are `fnmatch` patterns over `named_modules()` names. A callable is `predicate(name, module) -> bool` |
 | `rate` | | `None` | Passed to `show` |
+| `groups` | `bool` or `str` | `True` | Also offer the grouped views below; a string prefixes their names with `<string>.`, and `False` offers none |
 
 The root module is labelled with its class name in lower case. `WatchHandle`
-has `remove()` (takes every hook off), `active`, `views` (the view names),
-`modules` (the hooked module names), `len()`, and works as a context manager.
+has `remove()` (takes every hook off and removes the grouped views), `active`,
+`views` (the view names), `modules` (the hooked module names), `groups` (the
+grouped view names), `len()`, and works as a context manager.
+
+The grouped views are heatmaps with [data views](#data-views) whose sources are
+the selected modules or their parameters, so one widget can switch between
+layers. The same hooks feed them, so `watch()` adds no hook for them.
+
+| View | Sources | Dims | Default data view |
+|---|---|---|---|
+| `weights` | `<module>.<param>`, every parameter with 2 or more dims | `out`, `in` (higher-rank weights reshaped to `(out, -1)`) | The first source, whole |
+| `activations` | `<module>`, with `activations=True` | From the rank: `batch`, `feature`; `batch`, `position`, `feature`; `batch`, `channel`, `height`, `width`; `batch`, `channel`, `length` for a 1-D convolution | The first module, its leading dims at index 0 |
+| `gradients` | `<module>.<param>`, with `gradients=True`, as the `.grad` views | As `weights` | The first source, whole |
+
+Because the weights and gradients have the same two dims, `{"source":
+"fc2.weight"}` alone switches between them. Activations of different ranks have
+different dims, so a request for another module names its own `index` (and
+`{}` for a 2-D output). `weights` takes a snapshot when its module runs forward
+(with `activations=False`, after its gradient accumulates) and on
+`caliper.update()`. A source does tensor work only when a route needs it: the
+window and the session need the default data view's source, a server the
+sources its subscriptions select; the hook of any other source records the
+shape and returns. A view has at most 64 sources, so a group keeps the first
+64, and sources whose names are longer than 63 bytes are left out, each with a
+`RuntimeWarning`.
 
 ## No host copy for MPS
 
@@ -269,15 +300,11 @@ renders a frame (at most 60 per second), so `view_info`, `view_readback` and
 `caliper.render()` returns the composited frame as an `(H, W, 4)` uint8 array
 to display.
 
-<!-- Network streaming block (sprint 2): serve, widget and data views. Each
-"TO CONFIRM" comment below marks a signature or behaviour that follows the
-sprint contracts and is to be checked against the code at integration. -->
-
 ## Network streaming
 
 `caliper.serve()` serves the script's live views over a WebSocket on the
 loopback interface, `caliper.widget()` shows one of them in a notebook cell,
-and data views let a viewer choose which part of a tensor travels.
+and data views let each viewer choose which part of a tensor travels.
 [Network streaming](../explanations/network-streaming.md) explains the design,
 the [Wire protocol](wire-protocol.md) reference defines the messages, and
 [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md)
@@ -290,8 +317,9 @@ the extra `caliper[notebook]`, which adds anywidget.
 server = caliper.serve(port=0)
 ```
 
-Start the server of this process and print its link,
-`http://127.0.0.1:<port>/?token=<token>`.
+Start the stream server of this process, print its link,
+`http://127.0.0.1:<port>/?token=<token>`, and return it, a
+`caliper._net.NetServer`. A second call while it runs returns the same server.
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
@@ -299,29 +327,53 @@ Start the server of this process and print its link,
 
 The server listens on 127.0.0.1 only and makes a new random session token.
 It is one more route: every view call is offered to it, and a view takes a
-snapshot for the server only while a viewer subscribes to that view. Snapshots
-for the server are reduced on the device by the view's data view and copied
-off it; the call still returns at once.
+snapshot for it only while a viewer subscribes to that view, once for each
+data view that its subscriptions ask for. Snapshots for the server are computed
+on the device and copied into pinned host memory without waiting; the call
+still returns at once.
 
-| Address | Serves |
-|---|---|
-| `http://127.0.0.1:<port>/?token=<token>` | The viewer page: every view of the stream in a grid |
-| `ws://127.0.0.1:<port>/v3/stream?token=<token>` | The stream, as the [Wire protocol](wire-protocol.md) reference defines it |
+| Address | Serves | Token |
+|---|---|---|
+| `http://127.0.0.1:<port>/?token=<token>` | The viewer page: every view of the stream in a grid | Not needed; the page reads it from its own link |
+| `http://127.0.0.1:<port>/<file>` | The page's modules, the WebAssembly views and the fonts, from the package | Not needed; the files hold no data |
+| `ws://127.0.0.1:<port>/v3/stream?token=<token>` | The stream, as the [Wire protocol](wire-protocol.md) reference defines it | Required |
 
-A request without the right token is refused, and so is one whose `Host` or
-`Origin` header names another site. The stream carries snapshots, series,
+Every request must name the server in its `Host` header, `127.0.0.1:<port>` or
+`localhost:<port>`. The stream also refuses a wrong token and an `Origin`
+header other than a loopback page (http or https on 127.0.0.1, localhost or
+[::1], any port, such as a JupyterLab page), `null` or a VS Code webview. The
+files carry `Access-Control-Allow-Origin` for such a page, so a notebook page
+can load the widget's modules. The stream carries snapshots, series,
 subscriptions, data view requests and viewer events, and never host commands.
+
+The server keeps the last 1,048,576 values of each series whether or not a
+viewer watches it, and sends them first to a viewer that subscribes late.
 
 | Member | Meaning |
 |---|---|
 | `url` | The viewer page's link, with the token |
+| `stream_url` | The stream's `ws://` URL, with the token |
 | `port` | The port the server listens on |
 | `token` | The session token |
-| `close()` | Stop the server and end the stream to every viewer |
+| `session` | The session id, `clp-<pid>-<6 hex>`, that viewers see |
+| `closed` | `True` once the server is stopped |
+| `stats()` | A dict: `url`, `port`, `session`, `closed`, `attached` (connected viewers), `connections`, `views` (per view its `id`, `kind`, `groups` of subscriptions with one data view, and `seq`), `series` (values retained per series) and counters |
+| `on_event(fn)` | Call `fn(event)` for every viewer event from now on; returns `fn`, so it also works as a decorator |
+| `remove_event_handler(fn)` | Stop calling `fn`; `True` if it was registered |
+| `events()` | The events received since the last call, oldest first, and clears them; never blocks |
+| `close()` | Deliver what is pending (for about a second), end every connection and stop the server |
 
-<!-- TO CONFIRM: the class name of the returned server; what a second serve()
-call does while one is open; whether close() may be called twice and whether it
-runs at interpreter exit. -->
+An event is a dict with `view`, `type` (`"select"`, `"pick"` or `"hover"`),
+`detail` (in source indices, as the [Wire protocol](wire-protocol.md#events)
+reference lists for each kind), `sub`, `seq`, `data_view`, `connection` and
+`time`. `on_event` functions run on a thread of their own, `caliper.events`,
+never on the training thread; an exception in one becomes a `RuntimeWarning`
+and does not stop the others. The server keeps at most 256 unread events for
+`events()` and drops the oldest. Events are data for Python code to read;
+nothing in them runs as a command.
+
+`close()` may be called more than once. It also runs at `caliper.close()` and at
+interpreter exit, and the server works as a context manager that closes it.
 
 ### widget
 
@@ -338,7 +390,7 @@ channel, so it keeps updating while a cell runs. It is an ipywidgets widget, so
 |---|---|---|---|
 | `name` | `str` | | The view to show. The widget may be created before the view's first call |
 | `kind` | `str` or `None` | `None` | `"series"`, `"heatmap"`, `"image"`, `"points"` or `"histogram"`; `None` takes the kind from the stream |
-| `height` | `int` | 320 | Height in CSS pixels |
+| `height` | `int` | 320 | Height of the whole widget, header included, in CSS pixels |
 
 When no server runs, `widget()` starts one with `serve()`. An unknown kind
 raises `ValueError`. Without anywidget installed, the call raises `ImportError`
@@ -352,7 +404,7 @@ Its traits, synced through anywidget:
 | `view` | `str` | The view's name |
 | `kind` | `str` or `None` | The live view's kind |
 | `height` | `int` | Height in CSS pixels |
-| `data_view` | `dict` | Both directions: the browser writes the data view the user picked, and setting it from Python makes the widget request that data view |
+| `data_view` | `dict` | The data view of the widget's own subscription, both directions: the browser writes the data view the user picked, and setting it from Python makes the widget request that data view |
 | `selection` | `dict` | Written by the browser: the latest event it reported, as `{"view", "type", "detail"}` |
 
 The `detail` of an event is given in source indices; for a `select` in a
@@ -364,53 +416,109 @@ reference lists the detail of every kind. `w.on_select(callback)` calls
 
 Traits travel over the notebook's message channel, which the kernel reads only
 while no cell runs. A selection made during a long cell reaches `selection`
-when the cell ends. A data view chosen in the widget's own picker goes to the
-producer over the stream and takes effect during the cell.
+when the cell ends, and a `data_view` set from Python reaches the widget at
+once. A data view chosen in the widget's own picker goes to the producer over
+the stream and takes effect during the cell.
 
 ### Data views
 
-```python
-caliper.show(t, name="tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
-             dims=None, data_view=None)
-```
+A data view decides which data of a tensor travels: a slice, selection,
+projection or aggregation that the producer computes on the tensor's device.
+[Network streaming](../explanations/network-streaming.md#data-views) explains
+the idea, and the [Wire protocol](wire-protocol.md#data-views) reference
+defines the rules exactly. A view offers data views when its tensors have
+named dimensions:
 
-<!-- TO CONFIRM: the names `dims` and `data_view`; whether points() and
-histogram() take them too; how watch() offers data views of activations. -->
+```python
+caliper.show(t, name="tensor", ..., *, dims=None, data_view=None)
+caliper.points(z, labels=None, name="points", ..., *, dims=None, data_view=None)
+caliper.histogram(t, name="histogram", ..., *, dims=None, data_view=None)
+caliper.offer(name, sources, kind="heatmap", dims=None, *, data_view=None, rate=None, **options)
+caliper.watch(model, ..., groups=True)       # the grouped views of watch
+```
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
-| `dims` | sequence of `str` or `None` | `None` | One name for each dimension of `t`. Naming the dimensions makes `t` a source that a viewer can index and reduce |
+| `dims` | sequence of `str` or `None` | `None` | One name for each dimension of the tensor, 1 to 63 bytes each, at most 8. An image (a tensor whose last three dimensions hold RGB or RGBA, by the rule of [show](#show)) names every dimension but the colour one. Points name every dimension but the last, which holds the 2 or 3 coordinates, and end with the point dimension. With `data_view` and no `dims` the names are `dim0`, `dim1`, ... |
 | `data_view` | `dict` or `None` | `None` | The view's default data view, in the form below |
 
-A data view request is a dict in which every field is optional. An empty dict
-means the view's default.
+A call with neither keeps the layouts of `show`, `points` and `histogram`. With
+either, the view has one source, the call's tensor, named after the view. A
+default without an `index` gets one: the leading dimensions that it does not
+reduce or tile are indexed at 0 until the dimensions that remain fit the live
+view, so a batch shows item 0 as `show` does. A `data_view` that does not fit
+the tensor raises `DataViewError` at the call.
+
+A data view is a dict in which every field is optional:
 
 | Field | Form | Meaning |
 |---|---|---|
 | `source` | `str` | The source to read |
 | `index` | `{"<dim>": i}`, `{"<dim>": [start, stop]}` or `{"<dim>": [start, stop, step]}` | An integer selects one position and drops the dimension; a range keeps the dimension |
-| `reduce` | `{"<dim>": op}`, with `op` one of `"mean"`, `"sum"`, `"max"`, `"min"` and `"norm"` | Reduces over the dimension and removes it |
+| `reduce` | `{"<dim>": op}`, with `op` one of `"mean"`, `"sum"`, `"max"`, `"min"` and `"norm"` | Reduces over the dimension and removes it; `"norm"` is the square root of the sum of squares |
 | `tile` | `"<dim>"` | Heatmaps only: lays out a kept dimension as a mosaic of cells |
-| `budget` | `{"max_extent": n, "pool": op, "max_points": n}` | The largest heatmap or image extent (default 512), how a heatmap is pooled to meet it (`"mean"`, `"max"` or `"min"`), and the largest number of points (default 100,000) |
+| `budget` | `{"max_extent": n, "pool": op, "max_points": n}` | The largest heatmap or image extent (default 512, at most 4096), how a heatmap is pooled to meet it (`"mean"`, `"max"` or `"min"`; an image always by mean), and the largest number of points (default 100,000, at most 1,000,000) |
 
 Indices count from 0, and a negative one counts from the end, as in Python. A
 field that a request names replaces the default's field as a whole, except
-`budget`, whose keys are taken one by one. The producer applies the index, then
-the reduction, then the tile layout and the budget, which pools a heatmap or
-samples points, all on the tensor's device. The dimensions that remain must
-fit the live view: two for a heatmap (three with `tile`) or an image, and one,
-the point dimension, for points. A data view that breaks a rule is refused with
-the error `bad_data_view`, and the view keeps the data view it had.
+`budget`, whose keys are taken one by one, so `{}` is the default and
+`{"index": {}}` the default without its indexing. The dimensions that remain
+must fit the live view: two for a heatmap (three with `tile`) or an image, one
+for points (the point dimension), any number for a histogram. A budget value
+under 1 is refused, and one over the limit is taken as the limit. The producer
+applies the index, then the reductions one dimension at a time in the source's
+order, then the tile layout and the budget, all on the tensor's device. Pooling
+covers each cell with the window of torch's adaptive pooling, and points are
+sampled with a stride, point i being position floor(i × count / size), so the
+sample stays the same while the size does. A pooled or tiled heatmap reports
+the range of its data before pooling, the empty cells left out, for autoscale.
+A data view that breaks a rule is refused with the error `bad_data_view`
+(`DataViewError` in Python), and the view keeps the data view it had.
 
-A view with named dimensions advertises an offer to its viewers: its sources,
-each with its name, its dimensions and their sizes, and its dtype, and its
-default data view. A viewer builds its picker from the offer. Each reply carries
-the resolved data view, which is the request with every default filled in.
+**Default and subscriptions.** The view's default data view is what the window
+and the live session draw, and what a viewer's subscription starts from. Each
+subscription of a viewer, such as a widget or a browser tab, has its own data
+view and changes it with a request over the stream, so two viewers can show
+different heads of one view at once. The producer computes each distinct data
+view once per snapshot for every subscription that shares it, and a source
+that no route needs costs nothing. A subscription whose data view no longer
+fits, because the source's sizes changed, receives no snapshots until it fits
+again; nothing raises in the training loop. A default that no longer fits falls
+back to the default the view was registered with, then to the one the rule
+above gives, with a `RuntimeWarning`.
+
+| Call | Returns | Meaning |
+|---|---|---|
+| `data_view(name)` | `dict` or `None` | The view's default data view, resolved: `source`, `index`, `reduce`, `budget`, and `tile` when the heatmap tiles. `None` when the view offers no data views or has no data yet |
+| `set_data_view(name, request=None)` | `dict` or `None` | Set the view's default data view from `request` (a dict or its JSON text). Its fields replace the current default's as above, so `{}` changes nothing, and `None` returns to the default the view was registered with. Returns the resolved data view and raises `DataViewError` when it does not fit; the next VIEWS message carries the new default, and a subscription with its own data view keeps it. A request for a view that does not exist yet, or has no data yet, is kept, checked at its first snapshot, and `None` is returned. Safe from any thread |
+| `offer(name, sources, kind="heatmap", dims=None, *, data_view=None, rate=None, **options)` | `dict` or `None` | Register view `name` with several sources, for tensors no view call shows, such as attention maps or a layer's output on a fixed probe batch. Returns its default data view, resolved, or `None` while the default source has no tensor |
+| `update(name=None)` | `bool` | Take a snapshot of every offered view that is due, and of `watch()`'s `weights`, or of view `name` only; call it in the training loop. Same return values as `show` |
+| `DataViewError` | | A `ValueError` whose message names the broken rule |
+
+`offer()` arguments: `sources` maps source names to tensors or to callables
+that return the current tensor or `None`; a single tensor or callable is one
+source named `name`. A tensor is read at each snapshot, so one updated in
+place, such as a parameter, stays current. A callable runs under
+`torch.no_grad()`, once at the call to learn the shape and then only when a
+route needs that source and a snapshot is due. `dims` is one tuple for every
+source or a dict of tuples per source, by default `dim0`, `dim1`, ...; `kind`
+is `"heatmap"`, `"image"`, `"points"` or `"histogram"` (a series has no
+sources); `options` are the matching call's arguments: `cmap`, `vmin` and
+`vmax` (heatmap, points), `labels` (a tensor or a callable, along the kept
+dimension) and `classes` (points), and `bins` (histogram). An unknown option
+raises `TypeError`. A later `offer()` of the same name replaces the view.
+
+Over a server, a view called without `dims` offers one source named `data`
+over its payload: a heatmap or image with dimensions `row` and `col`, points
+with `point`, a histogram none. A viewer can range or pool it, which is how it
+zooms in on a plain heatmap, and its default is the whole payload within the
+budget.
 
 ```python
 caliper.show(attention, "attention", dims=("layer", "sequence", "head", "query", "key"),
              data_view={"index": {"layer": 1, "sequence": 0, "head": 0}})
 widget.data_view = {"index": {"layer": 0, "sequence": 0}, "reduce": {"head": "max"}}
+caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 2, "head": 1}})
 ```
 
 ## Inspection and test helpers
