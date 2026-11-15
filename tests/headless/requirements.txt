@@ -1,0 +1,11 @@
+playwright>=1.49
+nbclient>=0.10
+nbformat>=5.10
+ipykernel>=6.29
+jupyterlab>=4.2
+notebook>=7.2
+anywidget>=0.9.13
+pytest>=8
+numpy>=1.26
+websockets>=13
+pillow>=10.4
