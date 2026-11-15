@@ -1,17 +1,37 @@
-# Manifest (caliper.toml)
+# Manifest
 
-Every applet ships a `caliper.toml` manifest. The host parses it before loading
+Every applet ships a manifest, a TOML file named `<stem>.caliper.toml`. The host parses it before loading
 any code: it declares the applet's identity, the ABI epoch it was built against,
 an optional minimum host version, and the framework services it needs. Parsing is
 strict about required fields and their formats, and lenient about everything
 else — unknown keys and tables are ignored so newer manifests keep loading on
 older hosts (forward compatibility).
 
+## Where the host looks
+
+The manifest is a sidecar file in the same folder as the applet's library, and the two share a stem. For an applet with the stem `sine_scope`, the folder holds:
+
+```text
+sine_scope.caliper.toml
+libsine_scope.dylib      (macOS; the library prefix is `lib`)
+sine_scope.dll           (Windows)
+libsine_scope.so         (Linux)
+```
+
+The layout is flat: one folder holds any number of applets, and there are no subfolders or bundles. The loader lists each folder for files that end in `.caliper.toml`, parses each one, and then looks for `<stem>.dylib`, `<stem>.dll` or `<stem>.so`, with or without the `lib` prefix, beside it. A manifest without its library is shown as a failed applet.
+
+The host scans two folders at startup:
+
+1. `applets/` under the app-data root: `~/Library/Application Support/Caliper/applets` on macOS and `%APPDATA%\Caliper\applets` on Windows.
+2. `applets/` next to the `caliper` executable.
+
+Dropping a manifest and its library into either folder installs an applet. See [Debug an applet](../guides/debug-an-applet.md) for the paths on each platform.
+
 ## Schema
 
 | Section     | Key        | Type              | Required | Meaning                                                                 |
 |-------------|------------|-------------------|----------|-------------------------------------------------------------------------|
-| `[applet]`  | `id`       | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.ahmed.circuitnet`. See [Applet ids](#applet-ids). |
+| `[applet]`  | `id`       | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.example.sine-scope`. See [Applet ids](#applet-ids). |
 | `[applet]`  | `name`     | string            | Yes      | Human-readable display name. Must be non-empty.                          |
 | `[applet]`  | `version`  | string            | Yes      | Applet version, strict semver `x.y.z` (three numeric parts).            |
 | `[applet]`  | `summary`  | string            | No       | Short one-line description shown in the landing screen's Inspector.      |
@@ -26,7 +46,7 @@ Notes:
 - **Strict semver** means exactly three dot-separated numeric parts (`x.y.z`).
   Values like `1.0` (too few parts) or `v1.0.0` (leading `v`) are rejected.
 - **Unknown keys and tables are ignored.** A manifest may carry extra fields
-  (e.g. `authors`, or a whole `[future]` table); the host skips them so that
+  (for example `authors`, or a whole `[future]` table); the host skips them so that
   manifests targeting newer schema revisions still load.
 - Missing or malformed required fields are hard errors: the host lists the
   applet as `FAILED` on the landing screen, under the manifest's file name,
@@ -46,8 +66,8 @@ so it is restricted to a form that is always a single, safe path component:
 - dot-separated segments, none empty: no leading or trailing dot, no `..`;
 - at most 128 characters.
 
-`dev.ahmed.circuitnet` and `dev.example.sine-scope` are valid;
-`Dev.Ahmed.App` (uppercase), `dev.ahmed.my_app` (underscore), `dev/app`,
+`dev.example.sine-scope` and `dev.caliper.gpt-scope` are valid;
+`Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`,
 `a..b` and `../../escape` are not. A manifest with an invalid id is listed as
 `FAILED` with the message
 `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): <id>`

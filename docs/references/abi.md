@@ -1,6 +1,6 @@
 # ABI — epoch 2
 
-The frozen contract (PLATFORM.md §6). This page embeds the header verbatim; the docs build fails if the file moves.
+The header below is the frozen applet contract and the single source for it. This page embeds it verbatim, so the docs build fails if the file moves. [Compatibility and epochs](../explanations/compatibility.md) explains how the contract grows.
 
 ```c
 --8<-- "sdk/include/caliper/abi.h"

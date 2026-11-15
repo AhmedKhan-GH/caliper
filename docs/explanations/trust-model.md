@@ -6,12 +6,12 @@ Caliper runs applets **in-process**: an applet is a shared library the host
 the host's privileges, in the host's address space. The trust model is therefore
 stated plainly: **in-process applets are trusted code.** What follows is how the
 host stays alive and honest when that trust is misplaced — not a claim that it is
-sandboxed. Real isolation arrives in Phase 6.
+sandboxed. Applets do not run out of process.
 
 ## Pre-flight beats post-mortem
 
 The first line of defence runs before any of the applet's code does. Each applet
-ships a `caliper.toml` manifest declaring the ABI epoch it was built against, the
+ships a manifest (`<stem>.caliper.toml`) declaring the ABI epoch it was built against, the
 minimum host version it needs, and the services it requires. The host checks that
 manifest **before the `dlopen`**. A wrong-build applet — compiled for an ABI
 epoch this host doesn't speak, or requiring a capability the host can't vend —
@@ -60,9 +60,8 @@ a crash guard:
 - **Windows:** the same shape via structured exception handling — the applet call
   sits inside a `__try/__except (EXCEPTION_EXECUTE_HANDLER)` frame, and a hardware
   exception is caught and reported by its exception code; a C++ exception is
-  caught in its own frame beside it and reported by name. *(This path compiles on
-  Windows but has not yet been exercised on a Windows host; the POSIX path is the
-  one verified today. Under `/EHsc`, MSVC may report a C++ throw by its SEH code
+  caught in its own frame beside it and reported by name. *(The Windows CI lane runs
+  `tests/test_crash_guard.cpp`, which checks this path. Under `/EHsc`, MSVC may report a C++ throw by its SEH code
   `0xE06D7363` instead of by name; it is still quarantined, as a signal. Every
   SEH exception counts as a signal, so it is not offered a restart.)*
 
@@ -123,9 +122,20 @@ wherever the throw interrupted it, so the restart makes a fresh instance rather
 than resuming the old one.
 
 Real isolation — where a misbehaving applet genuinely *cannot* corrupt the host —
-requires an address-space boundary, i.e. running applets out-of-process. That is
-**Phase 6**. Until then, the trust model is: manifest-gated loading, guarded
+requires an address-space boundary, that is, running applets out of process.
+Caliper does not do that. The trust model is manifest-gated loading, guarded
 calls, visible quarantine, and no false promises.
+
+### A quarantined applet's library stays loaded
+
+The host never closes the library of a quarantined applet with `dlclose` (or
+`FreeLibrary` on Windows). Closing an image runs its static destructors, and
+running them inside an image that has just faulted risks a second fault, or a
+hang, on top of the first. Leaking the mapped library costs a little address
+space and nothing else. The same policy applies at shutdown: the host leaves
+every applet library mapped when the process exits, because large dependencies
+such as libtorch are not safe to unload (their thread pools and allocator state
+can abort during teardown) and the operating system reclaims the pages anyway.
 
 ## Frame watchdog
 
@@ -136,7 +146,7 @@ the window stops responding until it returns. The watchdog makes that visible: i
 times each `frame()`, and when one exceeds the budget (about 250 ms) for three
 consecutive frames, it puts a plain note in the applet's bar at the top of its
 page — `slow: long work belongs in background jobs` — pointing long work to
-`caliper.jobs` rather than the frame loop (PLATFORM.md §15). The flag
+`caliper.jobs` rather than the frame loop. The flag
 **latches** — it stays raised until the applet is relaunched, and a later fast
 frame does *not* clear it — so the evidence of a stall doesn't scroll away the
 instant the applet recovers. The point is observability, not punishment: the
@@ -183,4 +193,13 @@ as anything that runs without a net; poll `cancelled()` so the host can stop it
 within the ≤ 100 ms contract (Home and quit wait at most 5 s, then detach the
 worker); and make the object you pass as `user` outlive the job
 (cancel-and-bounded-wait in `on_cleanup`). Real isolation for worker code, like
-everything else here, waits for the out-of-process boundary in Phase 6.
+everything else here, would need an out-of-process boundary, which Caliper does not provide.
+
+## Supply chain and data
+
+The loader trusts the files in the folders it scans. Two things are in place around them, and two are not.
+
+- **Digests.** The artifact store ([`caliper.artifacts.v1`](../references/service-artifacts-v1.md)) keys every stored file by its sha256 digest, so identical bytes are stored once and a file is always found by its content.
+- **Signing is undecided.** The loader does not check a signature on an applet. Whether and how third-party applets will be signed is an open question, recorded in decision [D22](../decisions/d022-third-party-applet-signing.md).
+- **Data folders are a convention.** Each applet gets its own data folder, `data/<id>/` under the app-data root. Nothing enforces it. An applet runs in the host's process with the host's file permissions and can read any file the host can read. The restriction on the id (`[a-z0-9.-]`) only keeps the folder name a single, safe path component.
+- **No sandbox.** Everything in this page that sounds like a boundary is containment of faults, not protection against a hostile applet. Load only applets you trust.

@@ -1,61 +1,53 @@
 # Architecture
 
-*Adapted from `PLATFORM.md` §5.1–5.3. The spec is the source of truth.*
-
-!!! warning "Planned topology"
-    The layer and repository split below is the target architecture. The current repository still contains the host, SDK headers, examples, and in-tree applets together. Separate SDK releases, runtime packs, an applet registry, and packaged host binaries are not currently published.
-
-Caliper is four layers with a single dependency rule: **arrows point down only.**
+Caliper has four layers, with a single dependency rule: arrows point down only. The repository holds all of them. The applets are separate shared libraries that the host loads at run time.
 
 ## Layers
 
 ```text
-┌──────────────────────────────────────────────────────────────────┐
-│ APPLETS — one repo each, own history, own CI, own releases       │
-│   repnet-lab · circuitnet · opengllama · <anyone's idea>         │
-│   artifact: <name>.caliperapp  (manifest + dylibs + assets)      │
-├──────────────────────────────────────────────────────────────────┤
-│ CALIPER-SDK — separate repo, tagged releases (THE CONTRACT)      │
-│   include/caliper/abi.h          frozen C entry ABI (epoched)    │
-│   include/caliper/tensor.h       CaliperTensor interchange type  │
-│   include/caliper/services/*.h   named C service tables          │
-│   include/caliper/caliper.hpp    header-only C++ sugar           │
-│   ui-stack/                      PINNED imgui/implot/implot3d    │
-│   cmake/                         caliper_add_applet, package cfg │
-│   conformance/                   ABI lint + fixture host         │
-├──────────────────────────────────────────────────────────────────┤
-│ CALIPER HOST — this repo, slimmed to a shell                     │
-│   window/GL/frame loop · launcher/Browse UI · applet manager     │
-│   service implementations · crash guard · dev mode · pack mgr    │
-├──────────────────────────────────────────────────────────────────┤
-│ RUNTIME PACKS — host-managed heavy deps, shared across applets   │
-│   libtorch-2.5.1-{cu121|macos-arm64} · (later: cuda extras, …)   │
-└──────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------+
+| APPLETS  shared libraries, each beside a <stem>.caliper.toml      |
+|   embed, field, flow, gpt, instance, mesh, pulse, sculpt and      |
+|   twin scopes (the nine applets on main)                          |
++------------------------------------------------------------------+
+| SDK  sdk/include/caliper (the contract)                           |
+|   abi.h          frozen C entry ABI, versioned by an epoch        |
+|   tensor.h       CaliperTensor interchange type                   |
+|   arrow_c.h      Arrow C Data Interface                           |
+|   services/*.h   named C service tables                           |
+|   caliper.hpp    header-only C++ sugar                            |
+|   adapters/      header-only torch and allocation helpers         |
+|   sdk/testing    the fixture host                                 |
++------------------------------------------------------------------+
+| UI STACK  third_party, pinned ImGui, ImPlot and ImPlot3D          |
++------------------------------------------------------------------+
+| HOST  the caliper executable and libcaliper                       |
+|   window and frame loop, HostRenderer, applet loader,            |
+|   service implementations, crash guard, frame watchdog            |
++------------------------------------------------------------------+
 ```
 
-**Dependency rule.** Applets depend on the SDK; the host depends on the SDK too (as a consumer, via the same pinned releases); the SDK depends on nothing of Caliper's. Torch and DuckDB types never appear in any SDK header — the interchange types (`CaliperTensor`, Arrow C streams) cross the boundary instead. See [Compatibility & epochs](compatibility.md).
+**Dependency rule.** Applets depend on the SDK and the UI stack. The host implements the SDK. The SDK depends on nothing else in Caliper. Torch and DuckDB types never appear in an SDK header: the interchange types (`CaliperTensor` and Arrow C streams) cross the boundary instead. See [Compatibility and epochs](compatibility.md).
 
-## Repo topology
+**Only `caliper.ui.v1` may know the toolkit or the renderer.** Every other service describes data, such as tensors, tables, geometry and files, and never an ImGui, Metal, Vulkan or OpenGL type. That keeps the services usable by a host that draws with a different toolkit, and it is why a renderer change needs no applet rebuild. The one service that hands applets the ImGui, ImPlot and ImPlot3D contexts is [`caliper.ui.v1`](../references/service-ui-v1.md).
 
-Each layer maps to its own repository and release artifact:
-
-| Repo | Contents | Release artifact |
-|---|---|---|
-| `caliper` | Host application, service implementations, `examples/hello` fixture applet, the spec | `Caliper-<ver>-<platform>.{dmg,zip}` |
-| `caliper-sdk` | Headers, sugar, pinned UI stack (submodules at exact commits), CMake package, conformance harness | `caliper-sdk-<ver>` source tarball + optional prebuilt `ui-stack` libs |
-| `caliper-applet-template` | Hello-world applet: 10-line CMakeLists, `caliper.toml`, tests, CI matrix | template — users instantiate |
-| `caliper-registry` | `index.json` + per-applet manifests | the repo *is* the artifact |
-| `repnet-lab`, `circuitnet`, `opengllama`, … | One applet each, history migrated via `git filter-repo` | `<name>-<ver>.caliperapp` per platform |
+The repository holds the host, the SDK and the applets together. A plan to move the applets out of the core, with the host and the SDK versioned on their own, is in [Applets outside the core](../plans/applets-outside-the-core.md).
 
 ## The frame loop
 
-The host owns: the GLFW window, the rendering backend, the ImGui/ImPlot/ImPlot3D contexts, and the frame clock. Per frame:
+The host owns the GLFW window, the rendering backend, the ImGui, ImPlot and ImPlot3D contexts, and the frame clock. Per frame:
 
 1. Host **begins** the ImGui frame.
-2. The active applet's `frame()` renders its UI — and may consume GPU results produced by its own background jobs.
+2. The active applet's `on_frame` renders its UI and may consume GPU results produced by its own background jobs.
 3. Host **ends** the frame and swaps buffers.
 
 Applets never create windows or touch the graphics API. Long work never runs on the frame thread — that is what the `caliper.jobs.v1` service is for, and the host's watchdog flags applets that stall the loop (see the [Trust model](trust-model.md)).
 
 !!! note "Renderer-agnostic by contract"
-    The ABI never mentions a graphics API. Textures cross the boundary as an opaque `CaliperTextureId`, and applets render exclusively through ImGui/ImPlot. Native backends (Metal on macOS, Vulkan on Windows) are the target, with OpenGL 3.3 core as a frozen fallback — but because the contract hides all of this, backend changes require no epoch bump and no applet rebuilds. See [Rendering](rendering.md) for the `HostRenderer` seam and backend status, and `PLATFORM.md` §5.4.
+    The ABI never mentions a graphics API. Textures cross the boundary as an opaque `CaliperTextureId`, and applets render only through ImGui and ImPlot. Metal on macOS and Vulkan on Windows are the default backends, and OpenGL 3.3 core is a frozen fallback chosen with `CALIPER_RENDERER=gl`. Because the contract hides the backend, a backend change needs no epoch bump and no applet rebuild. See [Rendering](rendering.md) for the `HostRenderer` seam and the backends.
+
+## Embedding
+
+`libcaliper` is the host without the window. It holds the applet loader, the service registry, the services, `HostRenderer`, the tensor bridge and the geometry path behind a small C interface, so another program can run the applet canvas inside a view it owns. The `caliper` executable is the first embedder. The embedder supplies a native view and its input events. `libcaliper` owns the applet canvas end to end: the ImGui context, the renderer, the bridge and the geometry all run inside it, and the embedder's own chrome wraps around the canvas and never paints applet pixels. This is decision [D36](../decisions/d036-libcaliper-owns-the-canvas.md).
+
+A process has one libtorch, and the core owns it. An embedder must not link its own torch, and `caliper_core_create` refuses a second live core in the same process. The interface is described in [Embedding Caliper](../references/embedding.md).
