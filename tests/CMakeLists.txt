@@ -60,6 +60,9 @@ target_sources(caliper_tests PRIVATE test_ui_recovery.cpp)
 # Docking by role on the applet page (src/host/ui/dock_layout.h, header-only)
 # on a headless ImGui context.
 target_sources(caliper_tests PRIVATE test_dock_layout.cpp)
+# The work area a page's bars leave, and when the jobs tray takes its strip
+# (src/host/ui/work_area.h, header-only), on a headless ImGui context.
+target_sources(caliper_tests PRIVATE test_work_area.cpp)
 # The applet search order, copies of one id, and the command line
 # (src/host/host_cli.h); the acceptance check for applets built outside the
 # core runs only when CALIPER_TEST_APPLET_DIR is set.

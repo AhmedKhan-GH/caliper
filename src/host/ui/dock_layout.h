@@ -33,6 +33,7 @@
 // headless ImGui context.
 // ============================================================================
 #include <caliper/services/ui_v1_1.h>
+#include "ui/work_area.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <cstdint>
@@ -81,8 +82,9 @@ public:
             dockspace_ = dockspace_id;
             side_top_ = side_bottom_ = 0;
             if (root->IsEmpty()) {
-                ImGui::DockBuilderSetNodeSize(dockspace_id,
-                                              ImGui::GetMainViewport()->WorkSize);
+                // The work area this frame's bars leave, which the dock
+                // space fills (work_area.h).
+                ImGui::DockBuilderSetNodeSize(dockspace_id, work_area().GetSize());
                 build_side(kSideShareFresh);
                 ImGui::DockBuilderFinish(dockspace_id);
             }

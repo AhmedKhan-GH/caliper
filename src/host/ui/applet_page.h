@@ -16,6 +16,7 @@
 #include "frame_watchdog.h"
 #include "job_system.h"
 #include "ui/dock_layout.h"
+#include "ui/work_area.h"
 
 #include <caliper/abi.h>
 

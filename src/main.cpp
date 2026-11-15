@@ -561,11 +561,12 @@ private:
         sternbild::status_bar_end();
 
         // Its own dock space id, so the applet page's docked layout never
-        // shows through on this page (and the reverse).
-        const ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGui::DockSpaceOverViewport(ImGui::GetID("caliper_live_dockspace"), vp,
-                                     ImGuiDockNodeFlags_PassthruCentralNode);
-        live_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
+        // shows through on this page (and the reverse). The views tile the
+        // work area the bars leave this frame.
+        const ImRect area = caliper_host::work_area();
+        caliper_host::dock_space_over_work_area(ImGui::GetID("caliper_live_dockspace"),
+                                                ImGuiDockNodeFlags_PassthruCentralNode);
+        live_.draw(area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight(),
                    ImGui::GetIO().DisplayFramebufferScale.x);
 
         if (go_back) pending_detach_ = true;

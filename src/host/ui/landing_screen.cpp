@@ -24,6 +24,7 @@
 
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
+#include "ui/work_area.h"
 #include "applet_loader.h"
 #include "device_query.h"
 #include "host_services.h"
@@ -728,12 +729,14 @@ void LandingScreen::rebuild_rows(const AppletLoader& loader) {
 // applet layout does.
 void LandingScreen::draw_dock_space() {
     // The command and status bars are viewport side bars: they reserve their
-    // height from the work area (from the next NewFrame on), so the host is
-    // simply the work area, with no bar heights to subtract.
+    // height from the work area, so the host is simply the work area they
+    // leave in this frame (work_area.h), with no bar heights to subtract, and
+    // it never runs under a bar that has just appeared.
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float height = std::max(1.0f, vp->WorkSize.y);
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x, height));
+    const ImRect area = caliper_host::work_area();
+    const float height = std::max(1.0f, area.GetHeight());
+    ImGui::SetNextWindowPos(area.Min);
+    ImGui::SetNextWindowSize(ImVec2(area.GetWidth(), height));
     ImGui::SetNextWindowViewport(vp->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -764,7 +767,7 @@ void LandingScreen::draw_dock_space() {
         if (node == nullptr || node->IsEmpty()) {
             ImGui::DockBuilderRemoveNode(dock_id);
             ImGui::DockBuilderAddNode(dock_id, ImGuiDockNodeFlags_DockSpace);
-            ImGui::DockBuilderSetNodeSize(dock_id, ImVec2(vp->WorkSize.x, height));
+            ImGui::DockBuilderSetNodeSize(dock_id, ImVec2(area.GetWidth(), height));
             ImGuiID left = 0, right = 0;
             ImGui::DockBuilderSplitNode(dock_id, ImGuiDir_Left, 0.62f, &left, &right);
             ImGuiID projects = 0, instruments = 0;

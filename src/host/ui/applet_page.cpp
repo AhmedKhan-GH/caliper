@@ -54,12 +54,12 @@ AppletPage::Result AppletPage::draw(AppletLoader& loader, int applet,
     // (CALIPER_CHROMELESS=1).
     if (!chromeless && draw_bars(loader, applet, renderer_name)) r.home = true;
 
-    // Docked desktop. A passthru dock space fills the viewport's work area
-    // (between the page bar and the status bar) so the applet's windows can
-    // be docked. The central node stays transparent while empty, so a
-    // full-viewport applet docked into it looks exactly as before.
-    const ImGuiID dock_id = ImGui::DockSpaceOverViewport(
-        0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+    // Docked desktop. A passthru dock space fills the work area the bars
+    // leave this frame (work_area.h), so the applet's windows can be docked
+    // and none runs under a bar. The central node stays transparent while
+    // empty, so a full-viewport applet docked into it looks exactly as before.
+    const ImGuiID dock_id =
+        dock_space_over_work_area(0, ImGuiDockNodeFlags_PassthruCentralNode);
 
     // Docking by role (dock_layout.h): windows the applet hinted, or began
     // without a hint, and that have no saved layout are placed the first time
