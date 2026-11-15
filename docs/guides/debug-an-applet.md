@@ -154,7 +154,7 @@ inside it blocked.
 
 **The usual cause is I/O on the frame thread.** The rule is that the frame thread
 does no I/O: no file access, no network call, no SQL query and no store call
-([D39](../decisions/d039-no-io-on-the-frame-thread.md)). The cost of that work
+([The frame loop](../explanations/architecture.md#the-frame-loop)). The cost of that work
 differs by platform and by session age, so it can look fine on one machine and
 freeze the window on another. EmbedScope froze at about 2 fps on Windows because
 it rebuilt a table in the on-disk data store on the frame thread twice a second,

@@ -247,7 +247,7 @@ model.to(device);
 
 ## License
 
-Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SDK alike. Copyright 2026 Ahmed Khan; `NOTICE` holds the copyright line. Applet authors need a permissive licence, and Apache 2.0 is as permissive as the MIT licence of ImGui and ImPlot, adds an explicit patent grant and gives no rights to the Caliper name. See [decision D10](docs/decisions/d010-sdk-licence.md).
+Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SDK alike. Copyright 2026 Ahmed Khan; `NOTICE` holds the copyright line. Applet authors need a permissive licence, and Apache 2.0 is as permissive as the MIT licence of ImGui and ImPlot, adds an explicit patent grant and gives no rights to the Caliper name.
 
 ## Third-party licenses
 

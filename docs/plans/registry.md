@@ -4,7 +4,7 @@ This page proposes a registry for applets. Nothing described here is built. The 
 
 ## Proposal
 
-The registry is served at `caliperapp.ai`. A registry repository backs it, and the repository takes publications by pull request. The site serves the index that the repository holds, so the repository stays the record of what was published and who published it. A served registry lets users find and install applets without knowing about git, and it keeps review of publications by pull request. This is decision [D41](../decisions/d041-registry-at-caliperapp.md), which supersedes [D6](../decisions/d006-registry-as-a-git-repository.md). D6 proposed a git repository alone as the registry, with no served site.
+The registry is served at `caliperapp.ai`. A registry repository backs it, and the repository takes publications by pull request. The site serves the index that the repository holds, so the repository stays the record of what was published and who published it. A served registry lets users find and install applets without knowing about git, and it keeps review of publications by pull request.
 
 Sideloading continues to work and is not replaced. A registry lists applets and helps the host find them, and it never gates what the host will load. The host loads what is in its applets folders.
 
@@ -34,7 +34,7 @@ An applet's author opens a pull request against the registry repository that add
 
 ## Open questions
 
-- Whether signing a release is required, and by whom. This is the open question in [D22](../decisions/d022-third-party-applet-signing.md), and the registry would be where a signature is checked.
+- Whether signing a release is required, and by whom. This is an [open question](roadmap.md#open-questions) for every third-party applet, and the registry would be where a signature is checked.
 - Where the host stores the downloaded index and how long it trusts the cached copy.
-- How a release that depends on a libtorch version, which the applets link today, is described in the index. See [D5](../decisions/d005-runtime-packs.md).
+- How a release that depends on a libtorch version, which the applets link today, is described in the index. See runtime packs under [Undecided](roadmap.md#undecided) in the roadmap.
 - Whether the installed layout stays the flat sidecar folder or changes with the plan in [Applets outside the core](applets-outside-the-core.md).

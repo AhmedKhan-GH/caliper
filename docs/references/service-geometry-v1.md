@@ -51,8 +51,8 @@ The service draws geometry from a fixed menu. These are not provided, and each i
 
 | Not provided | Why |
 |---|---|
-| Applet-supplied shaders | They would break the seam, in which applets see only ImGui and bridge ids, and they open a large security surface ([D32](../decisions/d032-data-flows-one-way.md)) |
-| Render-to-tensor or readback | Data flows one way, from tensors to pixels. A readback would add a reverse sync contract to every frame ([D32](../decisions/d032-data-flows-one-way.md)) |
+| Applet-supplied shaders | They would break the seam, in which applets see only ImGui and bridge ids, and they open a large security surface |
+| Render-to-tensor or readback | Data flows one way, from tensors to pixels. A readback would add a reverse sync contract to every frame |
 | Back-face culling | Drawing is two-sided everywhere, which is deterministic and has no winding footguns |
 | MSAA | Views are single-sample RGBA8 |
 | Mipmaps | Views have no mip chain, and textured meshes sample the base level only |

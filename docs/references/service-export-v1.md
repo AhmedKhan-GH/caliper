@@ -11,15 +11,14 @@ embedded file moves.
 
 ## Export is a terminal sink
 
-Export is the one place where pixels leave the data flow described in
-[D32](../decisions/d032-data-flows-one-way.md). The readback it performs feeds a
+Export is the one place where pixels leave the one-way data flow described in
+[Platform rules](../explanations/architecture.md#platform-rules). The readback it performs feeds a
 file on disk, and nothing returns to compute: no export call hands pixels, a
 texture or a tensor back to the applet. Caliper exports **pixel-exact view
 images plus a sidecar** and does not compose figures. Axes, captions, typography
 and subfigure layout belong to the paper toolchain (matplotlib, TikZ) that
 consumes these PNGs. The claim that the pixels are the tensors survives export
-bit for bit; a typography engine would add scope and no claim. The decision is
-[D38](../decisions/d038-export-is-a-terminal-sink.md).
+bit for bit; a typography engine would add scope and no claim.
 
 ## Platform behaviour
 
@@ -37,8 +36,8 @@ failure rolls the PNG back rather than orphaning it.
 
 When the geometry primitives capability is absent (headless, or a host without
 the renderer path) the export capability bit is unset and **every entry point is
-inert**: no file is written. This is the degradation ladder in
-[D33](../decisions/d033-honest-fallbacks.md), not a bug.
+inert**: no file is written. This is the
+[fallback rule](../explanations/architecture.md#platform-rules) at work, not a bug.
 
 ```c
 --8<-- "sdk/include/caliper/services/export_v1.h"
@@ -104,7 +103,7 @@ Every export writes `<path>.json` next to the PNG (for a sequence, one
 `git_commit` is compiled in at configure time (the same mechanism that plumbs
 the version string). `state` is the caller's own JSON, copied **verbatim** (step,
 seed, hparams — whatever the applet chooses) or `null`. A sequence sidecar adds
-`frame_count`. This is the rule in [D38](../decisions/d038-export-is-a-terminal-sink.md):
+`frame_count`. This is the export rule:
 **a figure without its sidecar is a screenshot; Caliper exports figures.**
 
 A sequence's `sequence.json` is written by `end_sequence()`. If that write

@@ -1,6 +1,6 @@
 # C++ sugar
 
-`caliper.hpp` is the header-only, optional C++ layer over the frozen C ABI ([D1](../decisions/d001-in-process-c-abi.md)). A C applet can implement `abi.h` by hand; the sugar exists so C++ authors write a class and a macro instead of five `extern "C"` bridge functions and a hand-built descriptor. It requires **C++20** (the `CALIPER_APPLET` macro uses designated initializers).
+`caliper.hpp` is the header-only, optional C++ layer over the frozen C ABI. A C applet can implement `abi.h` by hand; the sugar exists so C++ authors write a class and a macro instead of five `extern "C"` bridge functions and a hand-built descriptor. It requires **C++20** (the `CALIPER_APPLET` macro uses designated initializers).
 
 ## The `CALIPER_APPLET` macro
 

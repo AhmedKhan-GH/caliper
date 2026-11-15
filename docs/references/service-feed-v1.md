@@ -8,10 +8,8 @@ their own tensors on their job threads, so data still flows from tensors to
 pixels. Embedders reach the same surface through `caliper_core_get_service`. One
 host service saves every applet from writing its own ingestion, and reading
 with cursors that the caller holds needs no callbacks across the ABI and no
-state in the host for each reader. The
-decision behind this shape is
-[D35](../decisions/d035-telemetry-is-a-host-service.md). This page embeds the
-header verbatim; the docs build fails if the file moves.
+state in the host for each reader. This
+page embeds the header verbatim; the docs build fails if the file moves.
 
 ```c
 --8<-- "sdk/include/caliper/services/feed_v1.h"

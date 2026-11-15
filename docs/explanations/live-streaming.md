@@ -192,7 +192,7 @@ Liveness with a 5 s `time.sleep` in the training loop:
 | Input handled | After the sleep (4.5 s late) | After the sleep | 0 to 0.3 ms | At once |
 | Close | After the sleep | After the sleep | 103 ms | At once |
 
-Hence the decision ([D40](../decisions/d040-separate-process-viewer.md)): both
+Hence the design: both
 modes sit behind one view layer in libcaliper. The separate-process viewer
 (attach to app) is the primary mode, because only a separate process keeps the
 window and its input alive whatever the training loop does, and it also

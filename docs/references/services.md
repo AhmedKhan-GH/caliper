@@ -4,7 +4,7 @@ The host serves 18 service ids on `main`, which are 11 services and their additi
 
 ## Revisions
 
-A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.geometry.v1_2`. A revision is additive: its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.geometry.v1` keeps working when the host also serves `v1_3`. The rule is decision [D30](../decisions/d030-additive-service-revisions.md), and [Compatibility and epochs](../explanations/compatibility.md) explains it. No service has an incompatible `.v2`.
+A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.geometry.v1_2`. A revision is additive: its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.geometry.v1` keeps working when the host also serves `v1_3`. [Compatibility and epochs](../explanations/compatibility.md) explains the rule. No service has an incompatible `.v2`.
 
 ## The ids
 

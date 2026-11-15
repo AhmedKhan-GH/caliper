@@ -65,7 +65,7 @@ runs are read back through `caliper.metrics.v1_1.query` or from SQL tools.
 `caliper.metrics.v1` is write-only across the ABI and immutable, so a consumer
 such as an embedding host ([Embedding Caliper](embedding.md#reaching-services-from-a-host))
 cannot list runs or read scalars through it. `caliper.metrics.v1_1` is the
-additive read revision ([D30](../decisions/d030-additive-service-revisions.md)).
+additive read revision.
 Its table starts with the byte-identical v1 writer prefix, and appends two
 entries: `query` and `last_error`.
 
@@ -104,8 +104,7 @@ A consumer could in principle open the metrics database file read-only with
 DuckDB `ATTACH`. That second instance sees only checkpointed state, so rows an
 applet logged a moment ago would be missing. `query` runs on the writer's own
 connection and sees fresh rows immediately, and it keeps DuckDB types on the
-host side of the ABI ([D3](../decisions/d003-no-framework-types-across-the-abi.md)).
-The reasoning is recorded in [D37](../decisions/d037-metrics-reads-through-query.md).
+host side of the ABI.
 
 The header is immutable once published. A future read entry would arrive as
 `caliper.metrics.v1_2`.

@@ -14,7 +14,7 @@ pixels without a CPU round trip, and what each path costs, is in [Zero-copy tens
 Applets render only through ImGui and ImPlot. A tensor crosses to the renderer as a [`CaliperTensor`](../references/tensor.md),
 and what comes back is an opaque `CaliperTextureId`. The host keeps a table from that id to the backend's own handle,
 so the id is never a raw OpenGL, Metal or Vulkan object. Because the contract hides the backend, swapping or adding
-one needs no epoch bump and no applet rebuild ([D13](../decisions/d013-renderer-agnostic-abi.md)).
+one needs no epoch bump and no applet rebuild.
 
 The seam is `HostRenderer` (`src/host/renderer/host_renderer.h`), a host-internal interface the ABI never sees. Each
 backend is its own translation unit, and the host picks one at startup.
@@ -53,7 +53,7 @@ string that `last_device_path()` reports says which one ran.
 
 1. **Direct** (`direct-cmap` for f32 with a colormap, `direct-blit` for u8). A CUDA kernel, launched on the producer's
    stream, reads the tensor where it lies and writes the Vulkan image through a surface object. There is no copy and
-   no Vulkan compute pass ([D25](../decisions/d025-cuda-writes-the-vulkan-image.md)).
+   no Vulkan compute pass.
 2. **Buffer** (`compute` or `blit`). The tensor is copied inside VRAM into a buffer shared with Vulkan, and a Vulkan
    pass turns that buffer into the image. This rung takes over when the direct path is unavailable or refuses the
    tensor, and for the offscreen canvas.
@@ -61,12 +61,13 @@ string that `last_device_path()` reports says which one ran.
    tensor.
 
 Each rung keeps the output byte-identical to the CPU reference. When a rung is unavailable the next one runs, and the
-startup log says so ([D33](../decisions/d033-honest-fallbacks.md)).
+startup log says so, as the [fallback rule](architecture.md#platform-rules) requires.
 
 ## Data flows one way
 
-Data moves from tensors to pixels to ImGui, and no further. There is no render-to-tensor entry point, no readback on
-any hot path, and no way for an applet to supply its own shader ([D32](../decisions/d032-data-flows-one-way.md)). The
+Data moves from tensors to pixels to ImGui, and no further, as the [platform rules](architecture.md#platform-rules)
+require. There is no render-to-tensor entry point, no readback on any hot path, and no way for an applet to supply its
+own shader. The
 backends' `debug_readback_rgba8` exists for the test harness only. Training consumes the same tensors the renderer
 reads and never the renderer's output.
 
@@ -100,20 +101,19 @@ in place into an offscreen view, and the view is an ordinary `CaliperTextureId` 
 - **Growth by records.** Textures on meshes and instanced transforms were added by growing the draw record with
   appended fields, not by adding entry points. A revision is a new service id whose table and record begin with the
   previous revision's bytes, gated by a new capability bit, and a host draws a zero tail exactly as the earlier
-  revision did ([D30](../decisions/d030-additive-service-revisions.md),
-  [D31](../decisions/d031-geometry-grows-by-additive-records.md)). Both backends stay byte-exact against one shared
+  revision did (see the [growth rules](compatibility.md#growth-rules)). Both backends stay byte-exact against one shared
   CPU reference.
 
 The Vulkan backend keeps a pipeline cache keyed by topology, blend mode and depth state, a descriptor set per draw,
 and a ring of per-draw parameter blocks. The Metal backend keeps the equivalent pipeline and depth-stencil caches.
 Metal compiles its shaders at run time, and Vulkan embeds SPIR-V built at compile time
-([D29](../decisions/d029-build-time-spir-v.md)).
+([Build-time SPIR-V](vulkan-cuda.md#build-time-spir-v)).
 
 ## Why Metal pipelines by queue commit order
 
 The Metal renderer submits tensor operations and the frame's drawing to one `MTLCommandQueue`, and Metal starts the
 command buffers on one queue in the order they were committed. That gives most of what the Vulkan backend needs
-explicit machinery for ([D23](../decisions/d023-metal-orders-by-commit-order.md)):
+explicit machinery for:
 
 - **Draw after update.** The tensor operation is committed during the applet's `frame()`, before the frame's own
   command buffer, so the frame samples finished texels with no added synchronization.

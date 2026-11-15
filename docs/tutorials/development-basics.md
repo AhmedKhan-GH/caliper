@@ -32,8 +32,8 @@ toolchains and system prerequisites must still be installed; see the root
 | Library | Comes from | You link it via | Notes |
 |---|---|---|---|
 | SDK headers (ABI, services, sugar, adapters) | `sdk/include/` in this repo | `caliper::sdk` | Header-only INTERFACE target — nothing compiles into the SDK itself |
-| ImGui (docking) + ImPlot + ImPlot3D + FileDialog | `third_party/` submodules, **pinned** | `caliper::ui_stack` | Compiled once in-tree. **Never bring your own copy** — the pin is part of the ABI (see [D4](../decisions/d004-ui-stack-pin-defines-the-epoch.md)): your applet and the host must agree on ImGui's memory layout byte-for-byte |
-| libtorch | Downloaded by CMake into `third_party/` (`libtorch/` on macOS and Linux, `libtorch-release/` or `libtorch-debug/` on Windows) | `"${TORCH_LIBRARIES}"` + the rpath block | Only applets and torch tests link it. The `caliper` executable and `libcaliper` do not ([D11](../decisions/d011-host-without-libtorch.md)). |
+| ImGui (docking) + ImPlot + ImPlot3D + FileDialog | `third_party/` submodules, **pinned** | `caliper::ui_stack` | Compiled once in-tree. **Never bring your own copy** — the pin is part of the ABI (see [Compatibility and epochs](../explanations/compatibility.md)): your applet and the host must agree on ImGui's memory layout byte-for-byte |
+| libtorch | Downloaded by CMake into `third_party/` (`libtorch/` on macOS and Linux, `libtorch-release/` or `libtorch-debug/` on Windows) | `"${TORCH_LIBRARIES}"` + the rpath block | Only applets and torch tests link it. The `caliper` executable and `libcaliper` do not ([Platform rules](../explanations/architecture.md#platform-rules)). |
 | curl, zlib | macOS system SDK | `CURL::libcurl`, `ZLIB::ZLIB` | Only if you download/decompress data. Data acquisition is applet business — the host has no downloader |
 | DuckDB | host-internal | **you can't** | Deliberately unreachable. You get its powers through services: `metrics.v1`, `artifacts.v1`, `data.v1`. No DuckDB type ever crosses the ABI |
 
@@ -289,7 +289,7 @@ would report the suite as passed.
 
 ## The rules (each one guards something real)
 
-- **No raw GL/Metal/Vulkan calls in applets** ([D32](../decisions/d032-data-flows-one-way.md)). Draw through
+- **No raw GL/Metal/Vulkan calls in applets** ([Platform rules](../explanations/architecture.md#platform-rules)). Draw through
   ImGui/ImPlot/ImPlot3D; get tensors on screen through `tensor_bridge.v1`.
   This is what makes your applet run identically on both backends.
 - **Bridge and data.v1 calls: frame thread only.** Torch ops: worker thread

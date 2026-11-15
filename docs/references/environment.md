@@ -50,7 +50,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | Variable | What it does | Read in |
 |---|---|---|
 | `CALIPER_RENDERER=gl` | Selects the OpenGL fallback instead of Metal or Vulkan. Any other value leaves the platform default. An embedding host that asks for the default renderer honours it too. | `src/host/core_lifecycle.cpp` |
-| `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the direct path where a CUDA kernel writes the Vulkan image ([D25](../decisions/d025-cuda-writes-the-vulkan-image.md)), so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
+| `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../explanations/vulkan-cuda.md#the-direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
 | `CALIPER_VULKAN_STATS` | Set to any value, the Vulkan renderer prints one summary line at shutdown with frame times and the count of direct and buffer updates. | `src/host/renderer/vulkan_renderer.cpp` |
 
 ## Applet and example variables
@@ -107,7 +107,7 @@ On Windows the Vulkan renderer reports how each tensor update travelled. Each di
 | `CUDA interop OK — zero-copy (kernel reads the tensor, writes the image)` | The CUDA kernel wrote the update straight into the Vulkan image. |
 | `import path OK — zero-copy (imported allocation in place)` | An imported allocation was used in place, with no copy. |
 | `geometry path OK — points drawn from imported allocation in place` | `geometry.v1` drew points from an imported allocation. |
-| `tensor not CUDA-resident`, `external-memory interop unavailable`, `dtype not f32/u8`, `CUDA context init failed` and similar | The update took the CPU-staged or buffer path, and the message gives the reason. The fallback is not an error; see [D33](../decisions/d033-honest-fallbacks.md). |
+| `tensor not CUDA-resident`, `external-memory interop unavailable`, `dtype not f32/u8`, `CUDA context init failed` and similar | The update took the CPU-staged or buffer path, and the message gives the reason. The fallback is not an error; see [Platform rules](../explanations/architecture.md#platform-rules). |
 | `direct image: exportable image failed, using the buffer path` | The direct path could not be set up, and updates use the buffer path. |
 
 Other host lines carry a tag: `[jobs]` for failed jobs and jobs still running at shutdown, `[ui]` for a UI state unwound after an applet fault, `[metrics]`, `[artifacts]` and `[data]` when a store fails to open, `[duckdb]` for an ignored limit override and `[live]` for session events. A host that embeds `libcaliper` receives its own `renderer: <name>` line through `log_fn`, and applet log lines tagged `[applet] `.

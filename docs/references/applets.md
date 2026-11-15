@@ -17,7 +17,7 @@ writes into tensors allocated from an
 that same memory through [`caliper.geometry.v1`](service-geometry-v1.md) without a
 copy. Each of these applets states in its window whether the zero-copy path
 actually drew the current frame, and says which fallback ran when it did not
-([D33](../decisions/d033-honest-fallbacks.md)).
+([Platform rules](../explanations/architecture.md#platform-rules)).
 
 ## EmbedScope
 
@@ -77,7 +77,7 @@ actually drew the current frame, and says which fallback ran when it did not
 ## GPTScope
 
 - **Manifest id:** `dev.caliper.gpt-scope`, version 0.2.0. GPTScope is the
-  flagship applet ([D16](../decisions/d016-gpt-scope-is-the-flagship.md)). It
+  flagship applet. It
   was written the way an outside author would write an applet, on the full
   service stack from the start, so it tests the platform better than older code
   moved onto the services would.

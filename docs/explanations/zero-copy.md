@@ -7,7 +7,8 @@ interop machinery in [Vulkan and CUDA on Windows](vulkan-cuda.md).
 
 ## What the words mean
 
-Two phrases are used, and they are kept apart ([D33](../decisions/d033-honest-fallbacks.md)).
+Two phrases are used, and they are kept apart, because the host claims zero-copy only when the zero-copy path drew
+([Platform rules](architecture.md#platform-rules)).
 
 - **Zero-copy** means the tensor's data is copied nowhere: not into host memory and not to a second place in GPU
   memory. A GPU pass may still convert it (a colormap, a buffer-to-texture write), because converting is work on the
@@ -99,7 +100,7 @@ auto ct = caliper::adapters::stream_to_tensor(t, caps);
   producer's queue or stream in `CaliperTensor.stream` (an `MTLCommandQueue*` on MPS, a `CUstream` on CUDA), and the
   renderer orders its work on the GPU after the producer's queued work. Metal uses a per-texture `MTLSharedEvent`.
   Vulkan with CUDA uses a shared timeline semaphore that rides the producer's stream. The CPU never waits on the hot
-  path ([D24](../decisions/d024-stream-ordered-handoff-through-caps.md)).
+  path.
 
 Metal always grants the stream-ordered rung. Vulkan grants it when the device exports timeline semaphores; where it
 does not, the handoff stays synchronous and adapters keep draining. OpenGL does not grant it.
@@ -146,7 +147,7 @@ already synchronizes. The gain is that the frame thread stops stalling on the tr
 correct by construction.
 
 The biggest frame-thread stall that was measured had nothing to do with tensors. A database table rebuilt on the UI
-thread froze the frame, which is why the host forbids I/O there ([D39](../decisions/d039-no-io-on-the-frame-thread.md)).
+thread froze the frame, which is why the host [forbids I/O there](architecture.md#the-frame-loop).
 Two habits keep texture work cheap: create a texture once and call `update_texture` afterwards, because a create costs
 about a millisecond where an update costs a fraction of one.
 
@@ -155,8 +156,7 @@ about a millisecond where an update costs a fraction of one.
 A texture update normally reads a tensor wherever it lies. Imported allocations go one step further: the applet
 exports a block of device memory once, the host imports it once, and from then on both the texture path and the
 geometry path address the memory as an allocation id plus a byte offset. This is
-[`caliper.tensor_bridge.v1_2`](../references/service-tensor-bridge-v1.md), and it is opt-in per allocation
-([D34](../decisions/d034-opt-in-imported-allocations.md)).
+[`caliper.tensor_bridge.v1_2`](../references/service-tensor-bridge-v1.md), and it is opt-in per allocation.
 
 **Windows.** An applet allocates its torch CUDA tensors from `caliper::adapters::ExportablePool`, a torch `MemPool`
 whose blocks are created with `cuMemCreate` and a shareable handle. The host imports each block into Vulkan on first

@@ -20,7 +20,7 @@ the session, and the CUDA side retains the device's primary context, the same co
 
 With no match, interop is switched off rather than falling back to device 0, because pairing with the wrong GPU
 would corrupt images. This covers hybrid laptops where Vulkan picks the integrated GPU, machines without CUDA, and
-software Vulkan drivers. Vulkan still renders, and the bridge CPU-stages tensors ([D27](../decisions/d027-uuid-matched-device-pairing.md)).
+software Vulkan drivers. Vulkan still renders, and the bridge CPU-stages tensors.
 
 ## Which path an update takes
 
@@ -30,7 +30,7 @@ This section gives the detail.
 
 ### The direct image path
 
-The first rung gives CUDA the Vulkan image to write ([D25](../decisions/d025-cuda-writes-the-vulkan-image.md)). Each
+The first rung gives CUDA the Vulkan image to write. Each
 texture's `VkImage` is allocated as an exportable dedicated allocation, imported into CUDA once, mapped with
 `cuExternalMemoryGetMappedMipmappedArray` and opened as a surface object. Each update launches one kernel on the
 producer's stream that reads the tensor in place and writes the image. No Vulkan pass runs, and the tensor is not
@@ -56,7 +56,7 @@ or the CUDA import fails, the backend logs the reason once and the texture uses 
 
 ### The buffer path
 
-The fallback rung is the design that came first. It is interop at the level of buffers ([D26](../decisions/d026-vulkan-cuda-interop-at-buffer-level.md)),
+The fallback rung is the design that came first. It is interop at the level of buffers,
 and the direct path supersedes it for tensor updates. Each texture has a shared `VkBuffer`, created with
 `VkExportMemoryAllocateInfo` and an opaque Win32 handle, and imported into CUDA with `cuImportExternalMemory`, so one
 allocation is visible as both a `VkBuffer` and a CUDA pointer. An update:
@@ -83,7 +83,7 @@ the update runs the buffer-to-image pass with no copy. An optimally tiled image 
 way a unified-memory buffer can back a Metal texture, so zero-copy here means zero copies of the data, not zero GPU
 work. Without interop (OpenGL, or CUDA unpaired) `alloc_shared` falls back to a CPU vector.
 
-An imported allocation ([D34](../decisions/d034-opt-in-imported-allocations.md)) is a block the applet exported with
+An [imported allocation](zero-copy.md#imported-allocations) is a block the applet exported with
 `cuMemCreate` and a shareable handle. `import_allocation` imports it into Vulkan with `VkImportMemoryWin32HandleInfoKHR`
 after duplicating the handle, and unwinds fully on failure. `update_texture_from_alloc` then reads it at a byte offset
 with no copy: a descriptor offset for the f32 compute pass, a `bufferOffset` for the u8 blit, reported as
@@ -128,22 +128,19 @@ previous update finished, the frame thread waits, because the command buffer is 
 overwritten. The direct path has no such wait.
 
 When the producer hands over a non-NULL stream, which means the host honors the stream-ordered handoff, the copy and
-the signal ride that stream and the adapter's full-device drain is skipped
-([D24](../decisions/d024-stream-ordered-handoff-through-caps.md)).
+the signal ride that stream and the adapter's full-device drain is skipped.
 
 ### The synchronous fallback
 
 A device that cannot export timeline semaphores (the `timelineSemaphore` feature and the Win32 external-semaphore
 extension are both required) cannot pipeline. The texture then uses the synchronous model: copy, `cuCtxSynchronize`,
 and a fence-waited Vulkan submission. Correctness never depends on the optimization, and the host reports that it
-does not honor stream-ordered handoff there, so adapters keep draining
-([D28](../decisions/d028-synchronous-interop-first.md)). The direct path needs the pipelined objects and is unavailable
+does not honor stream-ordered handoff there, so adapters keep draining. The direct path needs the pipelined objects and is unavailable
 in this mode.
 
 ### Build-time SPIR-V
 
-The Vulkan shaders are compiled to SPIR-V at build time by an in-tree glslang and embedded in the binary as byte arrays
-([D29](../decisions/d029-build-time-spir-v.md)). Colormaps are fixed by the byte-exact contract, so run-time code
+The Vulkan shaders are compiled to SPIR-V at build time by an in-tree glslang and embedded in the binary as byte arrays. Colormaps are fixed by the byte-exact contract, so run-time code
 generation would buy nothing. The build fetches the Vulkan headers and volk, so no SDK needs to be installed. All
 shaders go through one CMake function, `caliper_compile_shader`, because the generated headers have to stay bit-identical
 for the byte-exact guarantee to hold.

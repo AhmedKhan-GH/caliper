@@ -113,15 +113,14 @@ the device once at the handoff, with `torch::mps::synchronize()` or `torch::cuda
 stream ordering where the host honors it.
 
 On a host that vends `caliper.tensor_bridge.v1_1`, the `caps()` query says what is honored. Metal honors
-stream-ordered handoff, and Vulkan honors it when the device exports timeline semaphores
-([D24](../decisions/d024-stream-ordered-handoff-through-caps.md)). Where it is honored the adapter skips the drain
+stream-ordered handoff, and Vulkan honors it when the device exports timeline semaphores. Where it is honored the adapter skips the drain
 and puts the producer's stream in `CaliperTensor.stream`. Otherwise v1's drain applies. The adapter side and the
 reasons are in [Adapters](adapters.md) and
 [Zero-copy tensor visualization](../explanations/zero-copy.md#the-sync-ladder).
 
 ## Additive revisions: v1_1 and v1_2
 
-Two additive revisions extend the bridge under one discipline ([D30](../decisions/d030-additive-service-revisions.md)).
+Two additive revisions extend the bridge under one discipline, the [growth rules](../explanations/compatibility.md#growth-rules).
 The struct is prefix-identical, with the same members in the same order and with the same semantics. New members are
 appended, and each revision has one new capability bit. There is no ABI epoch bump, and the earlier headers, tables
 and ids stay frozen. An applet negotiates by asking the host for each id and calling `caps()`. A missing id or an
@@ -138,7 +137,7 @@ or leave the bit unset, keep the v1 contract: the adapter drains and `stream` st
 
 v1_2 adds three entry points to the seven v1_1 members. Bit 1, `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`, set means the host
 can import an applet-exported device allocation and run device texture updates directly from it, with no copy of the
-tensor data ([D34](../decisions/d034-opt-in-imported-allocations.md)).
+tensor data.
 
 - `import_allocation(os_handle, size_bytes, handle_type)` hands the host an OS shareable handle (from
   `cuMemExportToShareableHandle`) or, on Apple, `CALIPER_ALLOC_HANDLE_MTLBUFFER`, an in-process `id<MTLBuffer>` that

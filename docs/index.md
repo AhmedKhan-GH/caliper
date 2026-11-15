@@ -19,7 +19,7 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 | Backend | Where it is used | How tensors reach the screen |
 |---|---|---|
 | Metal and MPS | macOS default | Metal processes accepted MPS buffers directly, without host staging. |
-| Vulkan and CUDA | Windows default | A CUDA kernel writes a tensor update straight into the Vulkan image, with no copy ([D25](decisions/d025-cuda-writes-the-vulkan-image.md)). |
+| Vulkan and CUDA | Windows default | A CUDA kernel writes a tensor update straight into the Vulkan image, with no copy. |
 | OpenGL 3.3 | Fallback on every platform | The host stages tensor uploads through the CPU. |
 
 [Rendering](explanations/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](references/service-tensor-bridge-v1.md) lists what each backend accepts.
@@ -30,5 +30,4 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 - [Guides](guides/index.md) are task recipes for debugging, attaching to scripts and continuous integration.
 - [References](references/index.md) list the ABI, the manifest, the service tables, the adapters, embedding, the C++ sugar and the folders and environment variables.
 - [Explanations](explanations/index.md) cover rendering, compatibility, trust and the architecture.
-- [Decisions](decisions/index.md) is the log of design decisions.
 - [Plans](plans/index.md) holds the roadmap and the designs that are not built yet.

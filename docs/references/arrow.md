@@ -22,7 +22,7 @@ that is also how end-of-stream is signalled.
 
 ## Why it is the ABI's tabular boundary
 
-Caliper's contract is a **frozen C ABI** ([D3](../decisions/d003-no-framework-types-across-the-abi.md)): no third-party type may
+Caliper's contract is a **frozen C ABI**: no third-party type may
 appear in a service header, or the applet and host would have to agree on that
 library's version and layout. DuckDB is the host's query engine and libtorch is a
 common applet dependency, but **no DuckDB or Arrow C++ type crosses the

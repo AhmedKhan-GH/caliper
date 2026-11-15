@@ -3,12 +3,7 @@
 The host should ship with no applets and name none. Applets are built, stored
 and installed outside the core repository, and adding one never means editing
 the host. This page records what already works, what is still hard-coded, and
-the changes that remove it. The decisions are
-[D19](../decisions/d019-host-names-no-applet.md),
-[D20](../decisions/d020-applet-search-order.md),
-[D21](../decisions/d021-shipped-applets-in-the-app-bundle.md) and
-[D22](../decisions/d022-third-party-applet-signing.md). The registry is a separate
-plan, [Applet registry](registry.md).
+the changes that remove it. The registry is a separate plan, [Applet registry](registry.md).
 
 Two parts of this plan are undecided: the `caliper` command-line tool (`caliper dev`,
 `caliper new`, `caliper install`) and the `.caliperapp` bundle format. The
@@ -75,7 +70,7 @@ mismatch crashes in ways that are hard to trace.
 - The Applets loop and the stale-library cleanup leave the root `CMakeLists.txt`.
 - `CALIPER_BUILD_APPLETS` goes away.
 - First-party applets move to one `caliper-applets` repository with their
-  history ([D8](../decisions/d008-applets-keep-their-history.md)), rather than one repository each.
+  history, rather than one repository each.
   The history is extracted with `git filter-repo` rather than copied as a fresh
   start, because it is the record of how each applet was built.
 - `hello` stays in this repository as the loader-test fixture under `tests/`.
@@ -87,7 +82,7 @@ mismatch crashes in ways that are hard to trace.
 
 - `--applets <dir>` and `CALIPER_APPLET_PATH` add folders to the search, so a
   dev build loads applets from their own build folders without copying.
-- `caliper dev <folder>` ([D9](../decisions/d009-cli-as-host-subcommands.md)) loads one applet from its build folder and reloads
+- `caliper dev <folder>` loads one applet from its build folder and reloads
   it when its library is rebuilt.
 - `caliper new <name>` creates an applet from a template: manifest, CMake and CI.
 
@@ -95,7 +90,7 @@ mismatch crashes in ways that are hard to trace.
 
 - Copying a `.caliperapp` folder into the user applets folder keeps working.
 - `caliper install <path|url>` checks the sha256, places the bundle and handles
-  the quarantine flag under the signing policy (D22).
+  the quarantine flag under the [signing policy](#signing-on-macos).
 - A Browse tab reading the registry comes later ([Applet registry](registry.md)).
 
 ## Where applets are stored
@@ -104,11 +99,11 @@ mismatch crashes in ways that are hard to trace.
 |---|---|
 | Source | The applet's own repository. First-party applets in `caliper-applets`; private applets in private repositories |
 | Releases | The applet repository's releases, as `<id>-<version>-<platform>.caliperapp.zip`; the registry points to them |
-| Shipped with the app | `Caliper.app/Contents/PlugIns/`, signed with the app (D21) |
+| Shipped with the app | `Caliper.app/Contents/PlugIns/`, signed with the app |
 | Installed by the user | macOS `~/Library/Application Support/Caliper/applets/<id>.caliperapp/`; Windows `%APPDATA%\Caliper\applets\`; Linux `~/.local/share/caliper/applets/` |
 | Applet data | `~/Library/Application Support/Caliper/data/<id>/` |
 | Rebuildable caches | `~/Library/Caches/Caliper/<id>/` |
-| Shared runtimes | `~/Library/Application Support/Caliper/runtimes/` ([D5](../decisions/d005-runtime-packs.md)) |
+| Shared runtimes | `~/Library/Application Support/Caliper/runtimes/`, if [runtime packs](roadmap.md#undecided) are adopted |
 | During development | The applet's build folder, found through `--applets`, `CALIPER_APPLET_PATH` or `caliper dev` |
 
 The host scans `<exe>/applets/` today, which inside a macOS app is
@@ -138,8 +133,7 @@ different team. Two options:
 - Only applets signed by the same team load; others must be re-signed locally.
 
 Downloaded bundles also carry Gatekeeper's quarantine flag, which
-`caliper install` must handle. The policy is D22 and must be decided before the
-first third-party applet ships.
+`caliper install` must handle. The policy must be decided before the first third-party applet ships.
 
 ## Checks that keep it this way
 

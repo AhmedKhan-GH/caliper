@@ -11,7 +11,7 @@ Service id `caliper.device.v1` — the host's negotiated compute device. This pa
 **The host negotiates; the applet maps.** The host detects one compute device
 and vends it through this service. The applet reads the `kind` and maps it to
 *its own framework's* device — the host stays framework-agnostic. This is a hard
-architectural rule ([D11](../decisions/d011-host-without-libtorch.md)): **the host never links torch or any other ML
+[architectural rule](../explanations/architecture.md#platform-rules): **the host never links torch or any other ML
 framework.** On Apple the detection uses the Metal API only. Elsewhere the host
 detects CUDA devices through the CUDA driver API, which it loads at run time
 (`src/host/device_query_cuda.cpp`), so it links no CUDA toolkit. With no NVIDIA
@@ -20,7 +20,7 @@ driver, or no device, the service reports the CPU.
 **Kinds name the memory/API domain, not a backend.** The enum is
 `CALIPER_DEV_CPU = 0`, `CALIPER_DEV_CUDA = 1`, `CALIPER_DEV_METAL = 2`.
 `METAL` deliberately does **not** say "MPS": it names the Metal memory/API
-domain, which covers torch-MPS, MLX, and ggml-Metal alike (see [D3](../decisions/d003-no-framework-types-across-the-abi.md)). "MPS" is
+domain, which covers torch-MPS, MLX, and ggml-Metal alike (see [Types that never cross the boundary](../explanations/compatibility.md#types-that-never-cross-the-boundary)). "MPS" is
 a torch-specific backend name and must never appear in the ABI. An applet that
 uses libtorch maps `CALIPER_DEV_METAL → torch::kMPS` itself:
 

@@ -10,7 +10,7 @@ pool, the OBJ loader and the orbit camera.
 `caliper/adapters/torch.hpp` is a **header-only** bridge from a `torch::Tensor`
 to the frozen [`CaliperTensor`](tensor.md) It compiles
 against the **applet's** libtorch and is **never** included by the host: torch
-stays out of the ABI (D11). The host links no torch — it consumes only the
+stays out of the ABI. The host links no torch — it consumes only the
 `CaliperTensor` this adapter produces, then hands it to
 [`caliper.tensor_bridge.v1`](service-tensor-bridge-v1.md).
 
@@ -145,8 +145,8 @@ owns one and fills it as blocks are created.
 ## exportable_pool.hpp
 
 `ExportablePool` gives an applet tensors that the bridge can import, so a texture
-or a geometry buffer updates with zero copies of the data. It is applet-side only
-([D11](../decisions/d011-host-without-libtorch.md)). Every failure degrades to
+or a geometry buffer updates with zero copies of the data. It is applet-side only,
+because the [host links no ML framework](../explanations/architecture.md#platform-rules). Every failure degrades to
 "not pool-backed", and the caller falls back to the `stream_to_tensor` and
 `update_texture` path.
 

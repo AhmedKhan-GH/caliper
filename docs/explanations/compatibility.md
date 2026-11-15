@@ -22,7 +22,7 @@ New capabilities arrive as new service ids, never as changes to the base ABI, so
 
 These four rules let the contract grow without breaking an applet that is already built:
 
-1. **A published service table is immutable.** A new capability ships as a new service id that carries a revision suffix: `caliper.metrics.v1_1`, `caliper.tensor_bridge.v1_2`, `caliper.geometry.v1_3`. The new table starts with a byte-identical copy of the previous table and appends its new entries, and the host keeps serving every older id unchanged. An applet that asks for `caliper.geometry.v1` still gets the original table. Where a revision adds behaviour that a host may not provide, a `caps()` bit says so, one bit per revision. A change that cannot be made by appending is an incompatible change and gets a new major id, such as `caliper.metrics.v2`, served beside the old one. No service has needed one so far. See decision [D30](../decisions/d030-additive-service-revisions.md).
+1. **A published service table is immutable.** A new capability ships as a new service id that carries a revision suffix: `caliper.metrics.v1_1`, `caliper.tensor_bridge.v1_2`, `caliper.geometry.v1_3`. The new table starts with a byte-identical copy of the previous table and appends its new entries, and the host keeps serving every older id unchanged. An applet that asks for `caliper.geometry.v1` still gets the original table. Where a revision adds behaviour that a host may not provide, a `caps()` bit says so, one bit per revision. A change that cannot be made by appending is an incompatible change and gets a new major id, such as `caliper.metrics.v2`, served beside the old one. No service has needed one so far.
 2. **Hosts may provide any set of services.** Applets declare `required_services` and probe optional ones at run time. A missing required service is refused at the manifest check, and the landing screen lists the applet as `REFUSED` with the reason.
 3. **`struct_size` is always the first field.** A reader never touches bytes beyond the size the writer declared.
 4. **The ABI epoch changes only for** an entry-point change, a `CaliperHost` layout change, or a UI-stack pin change.
@@ -63,7 +63,7 @@ A binary applet is compatible with a host only when both are built with the same
 | macOS arm64 | AppleClang with libc++ | CI builds on `macos-15`. |
 | Windows x64 | MSVC with the dynamic CRT (`/MD`) | Host and applets share one CRT heap. CI builds on `windows-latest`. |
 
-On Windows the dynamic CRT is the default, so that the CRT state of the host and of every applet agrees: heap, locale, `FILE*` and `errno`. The CMake option `CALIPER_STATIC_CRT=ON` selects the static runtime (`/MT`) as an escape hatch for a build that needs it; see decision [D7](../decisions/d007-dynamic-crt-on-windows.md). Linux is not a supported platform.
+On Windows the dynamic CRT is the default, so that the CRT state of the host and of every applet agrees: heap, locale, `FILE*` and `errno`. The CMake option `CALIPER_STATIC_CRT=ON` selects the static runtime (`/MT`) as an escape hatch for a build that needs it. Linux is not a supported platform.
 
 ## Versioning
 

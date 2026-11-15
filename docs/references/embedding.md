@@ -97,14 +97,14 @@ those canvases and never paints applet pixels.
 | ImGui context (one per canvas) | **libcaliper** | the embedder never touches ImGui state; allocator handoff stays internal |
 | `HostRenderer` + tensor bridge + geometry | **libcaliper** | the zero-copy claim travels with the core |
 | Applet loader + service registry + services | **libcaliper** | the same registry applets already see |
-| libtorch (one per process, D5) | **libcaliper** | the embedder must NOT link its own torch; the core owns device/pack policy |
+| libtorch (one per process) | **libcaliper** | the embedder must NOT link its own torch; the core owns device/pack policy |
 | Crash containment | **libcaliper** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../explanations/trust-model.md#every-applet-call-is-guarded)) |
 
 ## Per-core settings and limits
 
 - **One `CaliperCore` per process.** `caliper_core_create` returns `NULL` for a
   second live core, because the one-libtorch-per-process policy
-  ([D5](../decisions/d005-runtime-packs.md)) already binds the process. Shut the
+  already binds the process. Shut the
   first down first.
 - **One canvas per core.** `caliper_core_attach_canvas` refuses a second canvas.
   A canvas-info query and several canvases per core are not provided.
@@ -126,8 +126,7 @@ those canvases and never paints applet pixels.
 - **Window mode has no automated test.** The windowed canvas is checked by
   running `embed_host` on each platform. Automated byte-exactness rides the
   offscreen `read_pixels` tests, which pass on both backends.
-- **GL is not an embed target.** GL's context ownership is GLFW-coupled
-  ([D13](../decisions/d013-renderer-agnostic-abi.md)). A core whose resolved
+- **GL is not an embed target.** GL's context ownership is GLFW-coupled. A core whose resolved
   backend is GL refuses at `attach_canvas` with "embed requires Metal or
   Vulkan".
 
@@ -141,8 +140,8 @@ receives from `CaliperHost.get_service` for that id, for example
 `"caliper.metrics.v1"`, `"caliper.jobs.v1"`, `"caliper.artifacts.v1"` or
 `"caliper.data.v1"`. Cast the result to the matching struct from the
 `caliper/services` headers and call its function pointers as an applet would.
-No renderer, torch or ImGui type crosses the seam
-([D3](../decisions/d003-no-framework-types-across-the-abi.md)); the interchange
+No renderer, torch or ImGui type crosses the seam;
+the interchange
 is the C ABI, `CaliperTensor` and Arrow C streams. A C++ host can use the
 `caliper.hpp` sugar. The call returns `NULL` for an unknown id or a `NULL`
 core. The pointer is a process-static table, valid from create until shutdown.
@@ -229,7 +228,7 @@ cannot import), the call **fails**. The core never quietly downloads a METAL
 tensor to the host; a refusal is an error, not a slower success.
 
 `tensor->stream` is passed through: a non-NULL `MTLCommandQueue*` GPU-orders
-the read after that queue's committed work (bridge v1_1, [D24](../decisions/d024-stream-ordered-handoff-through-caps.md)). NULL is the
+the read after that queue's committed work (bridge v1_1). NULL is the
 normal case for a caller that made sure the producer finished first.
 
 Measured on Apple Silicon:

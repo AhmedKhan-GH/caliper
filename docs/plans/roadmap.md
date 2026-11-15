@@ -12,8 +12,8 @@ On 15 November 2026, `main` holds the host, the SDK with its 18 service ids, the
 
 1. Write the versioning contract into [Compatibility and epochs](../explanations/compatibility.md). It has four layers: the host ABI and service versions, the SDK version, each applet's version and what it requires, and the schema version of each applet's stored data. It also states the promotion rule: when a feature moves into the core, applets that need it declare the new service version, and applets that bundle their own copy keep working.
 2. Ship the SDK as an installed package: the headers, the CMake config, the pinned UI stack and the sugar libraries.
-3. Make the host name no applet: windows dock by role ([D19](../decisions/d019-host-names-no-applet.md)), the core build compiles no applets, and CI builds and starts an empty core.
-4. Load applets from outside the repository: development paths, the user applets folder and the search order ([D20](../decisions/d020-applet-search-order.md)), and shipped applets signed in the app bundle ([D21](../decisions/d021-shipped-applets-in-the-app-bundle.md)).
+3. Make the host name no applet: windows dock by role, the core build compiles no applets, and CI builds and starts an empty core.
+4. Load applets from outside the repository: development paths, the user applets folder and the search order, and shipped applets signed in the app bundle.
 5. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
 6. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
 7. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
@@ -34,7 +34,7 @@ Plan: [Applet builder](applet-builder.md).
 
 ## Phase 4: the registry
 
-A registry at caliperapp.ai of spec applets and signed first-party applets, a Browse tab, versioned install by id, and publishing by pull request to a registry repository ([D41](../decisions/d041-registry-at-caliperapp.md)).
+A registry at caliperapp.ai of spec applets and signed first-party applets, a Browse tab, versioned install by id, and publishing by pull request to a registry repository.
 
 Plan: [Applet registry](registry.md).
 
@@ -44,7 +44,7 @@ Plan: [Applet registry](registry.md).
 - Fix stale code comments: the `sql_job` comment in `applets/embed_scope/embed_scope.cpp` (the code uses `sql_thread`), and the `CALIPER_VULKAN_SELFTEST` comment in `src/host/cuda_driver.h` (no code reads it).
 - Measure EmbedScope's training step time on a Mac without the device drain, then retire the comment in `embed_scope.cpp` that says the drain dominates step time.
 - GPTScope's head heatmap releases and re-creates its texture on every probe when the zero-copy pool is not in use. Create it once and update it.
-- EmbedScope saves its checkpoint with `artifacts.put` on the frame thread when Save is clicked. Move the save into a job, as [D39](../decisions/d039-no-io-on-the-frame-thread.md) requires.
+- EmbedScope saves its checkpoint with `artifacts.put` on the frame thread when Save is clicked. Move the save into a job, as the [frame-thread rule](../explanations/architecture.md#the-frame-loop) requires.
 - Add the Vulkan mirror of the `geometry.v1_2` textured POINT row in `tests/gfx`, which exists only for Metal.
 - Re-check the G15 instance-offset gate in the Metal and Vulkan backends, not only in the bridge, and isolate the Metal G1 to G12 re-gate in its own test.
 - CI: cache the FetchContent downloads outside `cmake-build-release`, and cache or shallow-clone `third_party/`, which is now the longest step of a warm run.
@@ -55,16 +55,18 @@ A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly app
 
 ## Invariants
 
-- Data flows from tensors to pixels, one way ([D32](../decisions/d032-data-flows-one-way.md)).
-- Applets supply no shaders ([D32](../decisions/d032-data-flows-one-way.md)).
-- A missing capability falls back to a working slower path and says so ([D33](../decisions/d033-honest-fallbacks.md)).
-- Graphics increments are verified byte for byte on both platforms ([D31](../decisions/d031-geometry-grows-by-additive-records.md)).
+Every phase keeps these rules. [Platform rules](../explanations/architecture.md#platform-rules) gives the reasons.
+
+- Data flows from tensors to pixels, one way.
+- Applets supply no shaders.
+- A missing capability falls back to a working slower path and says so.
+- Graphics increments are verified byte for byte on both platforms.
 
 ## Risks
 
 - Every additive revision grows the ABI surface that must be kept working.
 - Once a registry exists, an epoch bump strands every installed applet until it is rebuilt.
-- A registry is a supply-chain target ([D22](../decisions/d022-third-party-applet-signing.md)).
+- A registry is a supply-chain target; see signing under [Open questions](#open-questions).
 
 ## Open questions
 
@@ -85,8 +87,8 @@ These ideas come from earlier designs and are not built. Each needs a decision b
 - **Digital twins.** A population twin built on InstanceScope's unused per-variant reduction, and a machine thermal twin fed by `caliper.feed.v1`.
 - **Research publishing beyond export.** A Python DLPack path into the geometry bridge, and applets written in Python.
 - **Artifacts redesign.** A checkpoint browser with previews and resuming training from a checkpoint.
-- **Applet dependency packaging.** Whether an applet built outside the core may link its own heavy dependencies, such as DuckDB or llama.cpp, and what happens when two applets each carry a copy. The proposal for large runtimes such as libtorch is runtime packs ([D5](../decisions/d005-runtime-packs.md)): the host installs and manages each runtime once instead of every applet bundling its own multi-gigabyte copy, and a process loads one libtorch for the whole session. The stated limit is that two applets that need different torch versions cannot share a session. No pack manager exists; the build downloads torch directly.
-- **The `caliper` CLI.** `new`, `dev`, `install`, `package` and `publish` as subcommands of the host binary rather than a separate program, so there is one thing to install, as with the `code` command of Visual Studio Code ([D9](../decisions/d009-cli-as-host-subcommands.md)). The host's `main` takes no arguments yet, and whether `new` is needed depends on the [applet builder](applet-builder.md).
+- **Applet dependency packaging.** Whether an applet built outside the core may link its own heavy dependencies, such as DuckDB or llama.cpp, and what happens when two applets each carry a copy. The proposal for large runtimes such as libtorch is runtime packs: the host installs and manages each runtime once instead of every applet bundling its own multi-gigabyte copy, and a process loads one libtorch for the whole session. The stated limit is that two applets that need different torch versions cannot share a session. No pack manager exists; the build downloads torch directly.
+- **The `caliper` CLI.** `new`, `dev`, `install`, `package` and `publish` as subcommands of the host binary rather than a separate program, so there is one thing to install, as with the `code` command of Visual Studio Code. The host's `main` takes no arguments yet, and whether `new` is needed depends on the [applet builder](applet-builder.md).
 - **`.caliperapp` bundles.** A bundle folder with per-platform binaries, and manifest keys for platforms, authors, licence and runtimes.
 - **Hot reload.** Reloading a rebuilt applet, with `save_state`, `load_state`, `on_suspend` and `on_resume` entry points.
 - **SDK conformance.** A conformance checker, and a set of reference applets built against each SDK release.
