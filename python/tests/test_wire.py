@@ -107,7 +107,7 @@ def test_golden_frame_round_trips(name):
     msg = w.decode(buf)
     if name in ("ping_future", "unknown_type"):
         return                                  # sent by a later minor; covered below
-    assert w.encode(msg) == buf
+    assert w.encode(msg, minor=w.decode_frame(buf).minor) == buf
 
 
 def test_later_minor_is_accepted():

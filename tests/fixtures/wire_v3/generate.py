@@ -102,7 +102,9 @@ def valid_vectors() -> dict[str, bytes]:
         "event_select": w.Event("embedding", w.EVENT_SELECT,
                                 {"indices": [0, 2], "row_ids": [0, 500]}, sub=2, seq=7),
     }
-    out = {name: w.encode(m) for name, m in msgs.items()}
+    # These are frames of a 3.0 sender, and stay byte for byte what 3.0 wrote
+    # whatever the codec's own minor is: minor 0 in the header.
+    out = {name: w.encode(m, minor=0) for name, m in msgs.items()}
     # Forward compatibility: a later minor, unknown flags, a nonzero reserved
     # field and an unknown metadata key, on a known and on an unknown type.
     ping = bytearray(w.encode_frame(w.MsgType.PING, {"nonce": 17, "future_key": [1, 2]},
