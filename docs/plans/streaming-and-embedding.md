@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first part of data streaming are built: the WebSocket transport, `caliper.serve()`, the notebook widget, the first browser views, data views of tensors and the `caliper serve` hub. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
+This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first part of data streaming are built: the WebSocket transport, `caliper.serve()`, the notebook widget, the first browser views, data views of tensors and the `caliper serve` hub. After a successful [spike](web-viewer-spike.md), the web viewer is being built on Caliper's own view layer. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
 
 ## The order of surfaces
 
@@ -14,7 +14,7 @@ The tools that ML engineers use come first, and consumer surfaces come last:
 
 ## Data streaming
 
-Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data, today with small views written for the browser and later with the WebAssembly view layer, the [web viewer](#the-web-viewer). Data streaming powers notebooks, `caliper.serve()` and the hub, which are built; [Network streaming](../explanations/network-streaming.md) describes them.
+Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the [web viewer](#the-web-viewer), which is Caliper's own view layer compiled to WebAssembly, and with small views written for the browser where WebGPU is absent. Data streaming powers notebooks, `caliper.serve()` and the hub, which are built; [Network streaming](../explanations/network-streaming.md) describes them.
 
 - The live protocol has a network transport. The WebSocket transport is built, and WebTransport comes later.
 - The latest snapshot wins for each live view, and a series is sent as deltas.
@@ -33,11 +33,32 @@ A data view decides which data travels, and a live view, such as a series or a h
 
 ## The web viewer
 
-The web viewer is Caliper's view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly and drawn by the WebGPU renderer. It has no applet loader, no DuckDB and no tensor bridge. It ships as a JavaScript and TypeScript package with a `<caliper-view>` element and a Jupyter widget.
+The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`. Its first form holds the views only, with no applet loader and no DuckDB. Whether its texture live views keep the tensor bridge is decided when the view layer is split from the native core. It ships in the `web/` package, behind the `<caliper-view>` element, the notebook widget and the viewer page that `caliper.serve()` serves.
 
-The first browser views come before the web viewer and are built. They are small views written for the browser over the same protocol, in the `web/` package: the `<caliper-view>` element, the notebook widget and the viewer page that `caliper.serve()` serves. They draw with WebGPU where it is available and with Canvas 2D otherwise. A spike tried the web viewer's approach, Caliper's view layer in WebAssembly with WebGPU. It was a spike only, and the web viewer itself is still planned.
+The [web viewer spike](web-viewer-spike.md) showed that this path works. The live views compiled for WebAssembly without changes, and a heatmap and a series drew in headless Chromium on a software and a hardware WebGPU adapter.
+
+The notebook widget and the viewer page are being built on the web viewer. The live views come in this order: heatmap and series, then histogram and image, then points. Small views written for the browser in TypeScript, over the same protocol, are built and remain as the fallback where WebGPU is absent, where they draw with Canvas 2D.
+
+The web viewer then grows in this order:
+
+1. Caliper's real views in notebooks and browsers.
+2. Every built-in view, including points, geometry and ImPlot3D.
+3. The whole Caliper interface in a browser, with the landing screen, docking and the panes. It needs storage in the browser's file system, DuckDB's WebAssembly build, and cross-origin isolation, without which a browser does not let a page use threads.
+4. Applets in the browser, through the split into computation and interface described in [Applets in the browser](#applets-in-the-browser).
+5. The same WebGPU backend as the native fallback through Dawn, described in [Renderers](#renderers).
 
 No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends. An applet reaches a browser through the split described in [Applets in the browser](#applets-in-the-browser): its interface, compiled to WebAssembly, draws there from the data stream. An applet that has not been ported to the split is shown only in the native app.
+
+## Limits in the browser
+
+These limits hold for the web viewer at every step. The facts come from the [web viewer spike](web-viewer-spike.md).
+
+- **Computation stays native.** The browser draws what a producer sends and computes nothing. Data views are computed by the producer on its own device.
+- **The heap stops at 4 GB.** WebAssembly in the browser is 32-bit, so the web viewer cannot hold more than 4 GB, and it bounds the size of the snapshots it accepts.
+- **Each snapshot is copied twice.** A snapshot crosses the network, and the browser then copies it from WebAssembly memory into its GPU process. In the spike, a 2048 by 2048 heatmap sent 16 MB into the GPU process every frame, and the GPU queue backed up. Sampling and data views keep snapshots small for this reason as well.
+- **Colours may differ by one level.** Natively, Caliper's colormap matches its CPU reference byte for byte. WGSL does not promise the same arithmetic, and on Metal the spike saw a few texels of the largest heatmaps differ by one level in one channel. In the browser, the colormap therefore has a tolerance of one level.
+- **ImGui is not a web page.** ImGui draws the whole interface into one canvas. Keyboard and text input, the clipboard and touch need work in a browser, and the spike verified none of them. The canvas gives the browser's accessibility tools nothing to read, so a screen reader cannot follow the interface.
+- **Most browsers are untested.** The spike ran only in headless Chromium. Chromium-based browsers ship WebGPU, while support in Safari and Firefox depends on the version and the platform, and neither was tested; nor were Windows and HiDPI screens. Where WebGPU is absent, the views written for the browser draw instead.
 
 ## Serving
 
@@ -61,7 +82,7 @@ The spec applets of Phase 3 ([Applet builder](applet-builder.md)) are designed t
 
 ## Renderers
 
-Metal and Vulkan stay the fast paths. One WebGPU renderer serves the browser and, through Dawn, the native fallbacks. The roadmap's [Renderers](roadmap.md#renderers) section gives that plan.
+Metal and Vulkan stay the fast paths. One WebGPU renderer serves the browser and, through Dawn, the native fallbacks. The spike's backend is written against the standard `webgpu.h`, which Dawn also offers natively, so the same code can serve both roles. The roadmap's [Renderers](roadmap.md#renderers) section gives that plan.
 
 ## The embedding package
 

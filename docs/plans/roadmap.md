@@ -80,10 +80,17 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 1. Done: the minimal embedding package, built in Phase 1; see [Embed Caliper in a program](../guides/embed-caliper.md).
 2. Done: network streaming for Python scripts and notebooks. The live protocol has a WebSocket transport, wire protocol v3, in which the latest snapshot of each view wins and a series travels as deltas. `caliper.serve()` serves a script's live views and a viewer page on the loopback interface with a session token, and `caliper.widget()` shows a view in a notebook. Data views let a viewer ask for a slice, selection or reduction of a tensor, which the producer computes on the device. [Network streaming](../explanations/network-streaming.md) describes the design, and [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md) uses it.
 3. Done: the hub, `caliper serve`, a subcommand of the `caliper` binary that relays the same protocol from producers to viewers and outlives the producers.
-4. Done: the first browser views, small views written for the browser in the `web/` package: the `<caliper-view>` element, the notebook widget and the viewer page. They draw with WebGPU where it is available and with Canvas 2D otherwise.
-5. A spike tried Caliper's view layer in WebAssembly with WebGPU in a browser. It was a spike only, and nothing from it ships. Still to do: the web viewer itself, which is Caliper's view layer compiled to WebAssembly, and applets in the browser, which wait for the split that [Phase 2](#phase-2-promote-proven-features) settles.
-6. Still to do: WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
-7. Then the rest of C++ embedding, Rust bindings and Swift.
+4. Done: views written for the browser in TypeScript, in the `web/` package, behind the `<caliper-view>` element, the notebook widget and the viewer page. They stay as the fallback where WebGPU is absent, and draw with Canvas 2D there.
+5. Done: a spike that drew a heatmap and a series in headless Chromium with Caliper's own view layer, compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`. [Web viewer spike](web-viewer-spike.md) reports it.
+6. Being built: the notebook widget and the viewer page on Caliper's own view layer, the [web viewer](streaming-and-embedding.md#the-web-viewer). The live views come in this order: heatmap and series, then histogram and image, then points.
+7. Then the web viewer grows in this order:
+    1. Caliper's real views in notebooks and browsers.
+    2. Every built-in view, including points, geometry and ImPlot3D.
+    3. The whole Caliper interface in a browser, with the landing screen, docking and the panes, storage in the browser's file system, DuckDB's WebAssembly build, and cross-origin isolation so that the page can use threads.
+    4. Applets in the browser, through the split into computation and interface that [Phase 2](#phase-2-promote-proven-features) settles.
+    5. The same WebGPU backend as the native fallback through Dawn, as [Renderers](#renderers) describes.
+8. Still to do: WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
+9. Then the rest of C++ embedding, Rust bindings and Swift.
 
 ## Data and Cloud
 
@@ -91,7 +98,7 @@ Run history, comparison between runs, and recording and replaying a session are 
 
 ## Renderers
 
-This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). It is not part of the current work. The WebAssembly and WebGPU spike of that section was a spike only, and the steps below are still to do.
+This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). The browser role of step 1 below has started: the [web viewer spike](web-viewer-spike.md) drew Caliper's views in a browser through a WebGPU backend behind `HostRenderer`, and the web viewer is being built on that backend. The native fallback through Dawn is the last step of the web viewer's order and is not part of the current work.
 
 Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the normal path, at full speed and with zero-copy from torch. Nothing routes them through another layer.
 

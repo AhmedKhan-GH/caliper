@@ -53,12 +53,11 @@ binary message. The zero-copy claim therefore applies only to viewing on the
 same machine through a live session or the own window; a viewer on the network
 receives copies.
 
-The viewers in the browser are small views written for the browser, in the
-`web/` package: the `<caliper-view>` element, the notebook widget built on it,
-and the viewer page. They draw with WebGPU where it is available and with
-Canvas 2D otherwise. They are not Caliper's own C++ views. Compiling those to
-WebAssembly is a later step of the
-[web viewer](../plans/streaming-and-embedding.md#the-web-viewer) plan.
+The viewers in the browser live in the `web/` package: the `<caliper-view>`
+element, the notebook widget built on it, and the viewer page. Where WebGPU is
+available, they draw with Caliper's own view layer compiled to WebAssembly, the
+[web viewer](../plans/streaming-and-embedding.md#the-web-viewer). Where it is
+absent, small views written for the browser in TypeScript draw with Canvas 2D.
 
 ## Snapshots reduced on the device
 
@@ -169,10 +168,12 @@ interface.
   show the widgets, because the browser connects to its own 127.0.0.1.
 - **Copies, not zero-copy.** Every snapshot on the network is a copy off the
   device. Data views and the budget keep it small; they do not remove it.
-- **Browser views are written for the browser.** The browser does not run
-  Caliper's own views or any applet. Applets reach the browser only after the
-  split into computation and interface that Phase 2 settles
+- **No applets in the browser yet.** The browser draws views and runs no
+  applet. Applets reach the browser only after the split into computation and
+  interface that Phase 2 settles
   ([Applets in the browser](../plans/streaming-and-embedding.md#applets-in-the-browser)).
+  [Limits in the browser](../plans/streaming-and-embedding.md#limits-in-the-browser)
+  lists the limits of the web viewer itself.
 - **Widget traits wait for an idle kernel.** A widget's `selection` and
   `data_view` traits travel over the notebook's message channel, which the
   kernel reads only while no cell runs. The picker in a widget works during
