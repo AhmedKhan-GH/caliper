@@ -84,7 +84,14 @@ target_link_options(caliper-views PRIVATE
     -sEXPORT_NAME=createCaliperViews
     -sENVIRONMENT=web
     -sFILESYSTEM=0
+    # A capped heap: 16 MB to start (one view uses about 2 MB, a page of four
+    # about 12 MB), growing to at most 512 MB. One snapshot costs about four
+    # times its payload while it is applied (the socket's copy, the source's
+    # two buffers, the hover copy), so the cap holds a 64 MB frame, the
+    # protocol's largest.
+    -sINITIAL_MEMORY=16MB
     -sALLOW_MEMORY_GROWTH=1
+    -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
     "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view"

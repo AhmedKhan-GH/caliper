@@ -32,7 +32,9 @@
 #include <implot.h>
 
 #include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
 #include <emscripten/html5.h>
+#include <malloc.h>
 #include <webgpu/webgpu.h>
 
 #include <algorithm>
@@ -163,6 +165,10 @@ void publish() {
     put("cssH", g.css_h);
     put("fbW", g.fb_w);
     put("fbH", g.fb_h);
+    // Memory: the WebAssembly heap and the bytes malloc has handed out.
+    const struct mallinfo mi = mallinfo();
+    put("heapSize", (double)emscripten_get_heap_size());
+    put("heapUsed", (double)mi.uordblks);
     put("checkState", g.check_state);
     put("checkMismatch", (double)g.check_mismatch);
     put("checkMaxDiff", g.check_maxdiff);

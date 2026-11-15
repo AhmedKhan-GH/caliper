@@ -4,7 +4,7 @@
 //                  [--view NAME] [--kind KIND] [--frames N] [--heat WxH]
 //                  [--viewport WxH] [--scale S] [--hover X,Y] [--page demo.html]
 //                  [--python PYTHON] [--seconds S] [--dataview JSON]
-//                  [--resize WxH] [--input X,Y]
+//                  [--resize WxH] [--input X,Y] [--sample S]
 //
 // Starts the synthetic producer (stream_server.py) on 127.0.0.1, which serves
 // the build directory over HTTP and the stream on /v3/stream on one port, as
@@ -16,7 +16,10 @@
 // for that data view (VIEW_REQUEST) before the screenshot and reports the
 // data views the producer resolved. With --resize it then changes the page's
 // viewport and saves <shot>-resized.png. With --input it clicks at X,Y, turns
-// the wheel and presses keys there, and reports what reached ImGui. Every
+// the wheel and presses keys there, and reports what reached ImGui. With
+// --seconds S it keeps streaming S seconds before the report, and with
+// --sample T it records the module's heap and counters every T seconds of
+// that time (report.samples). Every
 // process it starts
 // is stopped before it exits. Headless only: it never opens a visible browser.
 //
@@ -114,9 +117,24 @@ try {
     await page.keyboard.type('ab');
     await page.waitForTimeout(300);
   }
-  if (Number(opt.seconds) > 0) await page.waitForTimeout(Number(opt.seconds) * 1000);
+  const samples = [];
+  if (Number(opt.seconds) > 0) {
+    const end = Date.now() + Number(opt.seconds) * 1000;
+    const every = Number(opt.sample || 0) * 1000;
+    while (every > 0 && Date.now() + every <= end) {
+      await page.waitForTimeout(every);
+      samples.push(await page.evaluate(() => {
+        const s = globalThis.caliperViews.caliperStats;
+        return { t: Math.round(performance.now() / 1000), frames: s.frames, updates: s.updates,
+                 messages: s.messages, mbytes: Math.round(s.bytes / 1e6), heapSize: s.heapSize,
+                 heapUsed: s.heapUsed, fps: Math.round(s.fps * 10) / 10 };
+      }));
+    }
+    await page.waitForTimeout(Math.max(0, end - Date.now()));
+  }
   const report = await page.evaluate(() => ({ ...globalThis.caliperViews?.caliperStats,
                                               dataViews: globalThis.caliperDataViews }));
+  if (samples.length) report.samples = samples;
   await page.screenshot({ path: opt.out });
   if (opt.resize) {
     const [rw, rh] = opt.resize.split('x').map(Number);
