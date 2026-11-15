@@ -327,8 +327,10 @@ TEST_CASE("search: development folders resolve, installed folders do not") {
     const std::string env = t.str("env");
     const auto dirs = applet_search_dirs({t.str("cli"), t.str("cli/applets")}, env.c_str(),
                                          t.str("user"), "");
-    // "cli" and "cli/applets" name one folder, which is searched once.
-    CHECK(dirs == std::vector<std::string>{t.str("cli/applets"), t.str("env/applets"),
+    // "cli" and "cli/applets" name one folder, which is searched once. The
+    // folders come back with the platform's separator, '\' on Windows.
+    CHECK(dirs == std::vector<std::string>{(t.path / "cli" / "applets").string(),
+                                           (t.path / "env" / "applets").string(),
                                            t.str("user")});
     AppletLoader L(caps(), t.str("data"));
     L.scan(dirs);

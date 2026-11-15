@@ -392,7 +392,9 @@ TEST_CASE("cli: check and install take a build folder whose applets are in apple
     const CliContext ctx = context(t);
     fake_applet(t.path / "build" / "applets", "a", "x.a", "1.0.0");
     const std::string build = t.str("build");
-    const std::string applets = t.str("build/applets");
+    // Joined part by part: the host prints folders with the platform's
+    // separator, '\' on Windows.
+    const std::string applets = (t.path / "build" / "applets").string();
     const Run r = run({"check", build.c_str()}, ctx);
     CHECK(r.code == 0);
     CHECK(r.out == "using the applets in " + applets + "\n"
