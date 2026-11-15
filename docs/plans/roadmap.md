@@ -6,7 +6,7 @@ This page is the only place for the order and status of work. Each phase links t
 
 ## Where things stand
 
-On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, the Python client and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
+On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, Caliper Embed, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, Caliper LIB, the Python package, and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
 
 ## Phase 1: one core with versioned applets
 
@@ -14,7 +14,7 @@ On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the
 2. Done: the SDK installs as the `caliper-sdk` package, with the headers, the CMake config, the pinned UI stack and `caliper_add_applet()`; see [SDK package](../references/sdk-package.md).
 3. Make the host name no applet. Done: windows dock by role, the core build compiles no applets, and CI builds the core without applets and checks that the host names none. Still to do: CI starts the empty core and checks that the landing screen shows its empty state.
 4. Load applets from outside the repository. Done: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder, and the search order with one copy chosen per id. Still to do: shipped applets signed in the app bundle.
-5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see [Command line](../references/cli.md). `caliper shot` draws an applet's page as the app draws it, with nothing on screen, and writes it as a PNG. It is the first piece of the capture service that Phase 2 promotes.
+5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see [Caliper CLI](../references/cli.md). `caliper shot` draws an applet's page as the app draws it, with nothing on screen, and writes it as a PNG. It is the first piece of the capture service that Phase 2 promotes.
 6. Done: the minimal embedding package, which is the `caliper-embed` package with its one shared library, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository and run offscreen; see [Embed Caliper in a program](../guides/embed-caliper.md).
 7. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
 8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
@@ -48,11 +48,14 @@ Plan: [Applet registry](registry.md).
 
 ### API
 
-The [Python API](../references/python-api.md) and the embeddable `libcaliper` ([Embedding Caliper](../references/embedding.md)) exist. Driving the app's state from outside waits for the command layer in [Phase 3](#phase-3-agent-built-panels).
+[Caliper LIB](../references/python-api.md), the `caliper` Python package, and Caliper Embed, the embeddable core in the `caliper-embed` package ([Embedding Caliper](../references/embedding.md)), exist. Caliper API, an HTTP interface to the running app, is planned work that follows the [streaming work](#streaming-and-embedding):
 
-### Command line
+- **API v0** listens only on the loopback interface and requires a token. It lists the applets, launches one, streams data to it over the wire protocol of data streaming, and fetches a capture of what it shows.
+- **The full API** comes later, with the command layer of [Phase 3](#phase-3-agent-built-panels), which is what lets a program drive the app's state from outside.
 
-The command line is subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Command line](../references/cli.md) describes them.
+### Caliper CLI
+
+Caliper CLI is the subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Caliper CLI](../references/cli.md) describes them.
 
 `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
 
@@ -89,6 +92,10 @@ Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the no
 3. Evaluate writing each shader once and translating it for each backend, for example with the Slang shading language. This Slang is not the SystemVerilog library of the same name that `third_party/` vendors.
 
 Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers that exist today are described in [Rendering](../explanations/rendering.md).
+
+## Windows parity
+
+Windows parity follows the macOS sprints; [Windows parity](windows-parity.md) gives its steps.
 
 ## Smaller work
 
