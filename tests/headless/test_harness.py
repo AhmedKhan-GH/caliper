@@ -6,14 +6,30 @@ go to `$CALIPER_HEADLESS_DIR/shots` (see README.md), never into the repository.
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
+import nbformat
 import pytest
+from nbformat.v4 import new_code_cell, new_notebook
 
 from .browser import HeadedBrowserRefused, launch, probe_webgpu, work_dir
-from .screenshot import screenshot_element, screenshot_page
+from .notebook import (
+    NotebookCellError,
+    _alive,
+    _children,
+    notebook_session,
+    run_notebook,
+    screenshot_notebook,
+)
+from .screenshot import png_difference, png_stats, screenshot_element, screenshot_page
+
+HERE = Path(__file__).parent
+SELFTEST = HERE / "mock_widget" / "selftest.ipynb"
+CANVAS = ".mock-view canvas"  # inside the widget's open shadow root
 
 CANVAS_2D_PAGE = """<!doctype html>
 <body style="margin:0;background:#181715">
@@ -116,3 +132,82 @@ def test_webgpu_canvas_appears_in_screenshots(mode, page_dir, shots):
     assert stats.nonblank(), stats
     # The triangle covers about a quarter of the canvas.
     assert 0.2 < stats.nonbackground_fraction < 0.3, stats
+
+
+def _write_notebook(path: Path, *sources: str) -> Path:
+    nb = new_notebook(cells=[new_code_cell(s) for s in sources])
+    nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
+    nbformat.write(nb, path)
+    return path
+
+
+def test_run_notebook_runs_a_trivial_notebook(page_dir):
+    path = _write_notebook(page_dir / "trivial.ipynb", "x = 6 * 7", "print(x)")
+    nb = run_notebook(path, timeout=60)
+    assert nb.cells[1].outputs[0]["text"].strip() == "42"
+
+
+def test_run_notebook_reports_the_failing_cell(page_dir):
+    path = _write_notebook(page_dir / "failing.ipynb", "y = 1", "y / 0", "print('never')")
+    with pytest.raises(NotebookCellError) as info:
+        run_notebook(path, timeout=60)
+    assert info.value.cell == 1 and info.value.ename == "ZeroDivisionError"
+    assert "y / 0" in info.value.traceback
+
+
+def test_notebook_session_fails_fast_and_cleans_up(page_dir):
+    path = _write_notebook(page_dir / "failing.ipynb", "import time", "1 / 0", "time.sleep(600)")
+    with pytest.raises(NotebookCellError) as info:
+        with notebook_session(path, work=page_dir) as session:
+            server = session.server
+            kernels = _children(server.process.pid)
+            session.wait(idle=True, timeout=60)
+    assert info.value.cell == 1 and info.value.ename == "ZeroDivisionError"
+    assert server.process.poll() is not None
+    assert kernels and not any(_alive(k) for k in kernels)
+    # After an error the session folder is kept for its server log.
+    assert any(str(server.state) in note for note in info.value.__notes__)
+    assert (server.state / "server.log").exists()
+
+
+def test_screenshot_notebook_shows_the_widget(shots):
+    result = screenshot_notebook(SELFTEST, shots / "selftest.png", nonblank=CANVAS, outputs=True,
+                                 env={"MOCK_LOOP_SECONDS": "30"})
+    assert result.stats and all(s.nonblank() for s in result.stats), result.stats
+    assert result.pngs[0].exists() and png_stats(result.pngs[0]).nonblank()
+    widget_outputs = [p for p in result.pngs[1:] if "cell1" in p.name]
+    assert widget_outputs and png_stats(widget_outputs[0]).nonblank()
+
+
+def test_widget_stays_live_while_a_later_cell_runs(shots):
+    with notebook_session(SELFTEST, env={"MOCK_LOOP_SECONDS": "60"}) as session:
+        session.wait("() => __caliperHarness.deepQueryAll('canvas')"
+                     ".some(c => c.getRootNode() instanceof ShadowRoot)", timeout=60)
+        session.wait(nonblank=CANVAS, timeout=60)
+        # Cell 2 is the loop; take both shots while it is running.
+        session.wait(lambda page: any(c["running"] and c["index"] == 2
+                                      for c in session.state()["cells"]), timeout=30)
+        first = session.page.locator(CANVAS).screenshot(path=str(shots / "live-a.png"))
+        time.sleep(0.5)
+        second = session.page.locator(CANVAS).screenshot(path=str(shots / "live-b.png"))
+        assert session.state()["cells"][2]["running"], "the loop ended before the second shot"
+        assert png_stats(first).nonblank() and png_stats(second).nonblank()
+        assert png_difference(first, second) > 0.05
+        session.screenshot(shots / "live-notebook.png")
+
+        webgpu = session.probe_webgpu()
+        csp = session.headers.get("content-security-policy", "")
+
+        (session.server.root / "stop-loop").write_text("")
+        session.wait(idle=True, timeout=60)
+        report = json.loads((session.server.root / "mock_stream_report.json").read_text())
+
+    assert webgpu["adapter"] and webgpu["device"], webgpu
+    # JupyterLab's only policy is frame-ancestors; it does not restrict sockets.
+    assert "connect-src" not in csp and "default-src" not in csp, csp
+    [connection] = report["connections"]
+    # The socket to another loopback port carries the JupyterLab page's origin.
+    assert connection["origin"] == session.server.url
+    assert connection["received"] > 0
+    assert connection["webgpu"]["adapter"] is True
+    assert report["measured_rate"] > 20, report
