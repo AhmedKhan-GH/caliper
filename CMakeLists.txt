@@ -313,12 +313,15 @@ if(CALIPER_WITH_TORCH)
 endif()
 
 # Wire protocol v3 networking (src/host/net, caliper/live_net.h): the WebSocket
-# layer (client and server). Portable C++17 with no graphics, Metal or torch
+# layer (client and server), the strict JSON reader and canonical writer, and
+# the frame and message codec. Portable C++17 with no graphics, Metal or torch
 # dependency, so libcaliper's NetSource, the `caliper serve` hub and the
 # headless tests share it. Windows links Winsock.
 add_library(caliper_net STATIC
     src/host/net/sha1.cpp
     src/host/net/ws.cpp
+    src/host/net/json.cpp
+    src/host/net/wire.cpp
 )
 target_include_directories(caliper_net PUBLIC
     ${CMAKE_SOURCE_DIR}/src/host

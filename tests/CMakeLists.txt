@@ -41,8 +41,9 @@ endif()
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB)
 # Wire protocol v3 networking (src/host/net): the WebSocket layer against its
-# own server on 127.0.0.1. Portable and headless, so it rides the fast suite.
-target_sources(caliper_tests PRIVATE test_net_ws.cpp)
+# own server on 127.0.0.1, and the codec against the golden frames in
+# tests/fixtures/wire_v3. Portable and headless, so it rides the fast suite.
+target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_wire.cpp)
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
