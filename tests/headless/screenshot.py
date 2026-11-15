@@ -147,10 +147,14 @@ def wait_for(page: Page, predicate: WaitFor, *, timeout: float = 30.0) -> None:
 
 
 def nonblank_now(page: Page, selector: str) -> list[PixelStats]:
-    """Pixel statistics of every element matching `selector`, or [] if none is ready."""
+    """Pixel statistics of every visible element matching `selector`, or [] if
+    none is ready. Hidden matches are left out: an element may hold a canvas it
+    does not show (``<caliper-view>`` keeps one for each renderer), and a
+    screenshot of a hidden element would wait for it to appear."""
     locator = page.locator(selector)
     try:
-        return [png_stats(element_png(page, locator.nth(i))) for i in range(locator.count())]
+        shown = [locator.nth(i) for i in range(locator.count()) if locator.nth(i).is_visible()]
+        return [png_stats(element_png(page, el)) for el in shown]
     except Exception:  # an element was re-rendered or hidden while we looked at it
         return []
 

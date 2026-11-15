@@ -8,9 +8,6 @@ when that is set."""
 import importlib.util
 import json
 import os
-import secrets
-import signal
-import socket
 import subprocess
 import sys
 import time
@@ -178,56 +175,44 @@ def test_missing_widget_module_names_the_build_command(tmp_path):
 # ---------------------------------------------------------------------------
 # the widget in a real JupyterLab, driven by headless Chromium
 # ---------------------------------------------------------------------------
-# The first cell runs a mock stream server in the kernel: it refuses a wrong
-# token and sends a binary frame to each socket 30 times a second. It hands its
-# URL to the widget through the seam caliper._server.
-CELL_STREAM = r'''
-import asyncio, http, json, os, secrets, threading, types
+# The widget in JupyterLab under headless Chromium, through the harness in
+# tests/headless: the first cell starts caliper.serve() and a thread that shows
+# a 4-D tensor with named dims 30 times a second (a thread, so the kernel stays
+# idle and traits can travel while the view updates); the second shows it with
+# caliper.widget().
+CELL_PRODUCER = r"""
+import json, os, threading, time
 from pathlib import Path
-from websockets.asyncio.server import serve
+import torch
 import caliper
 
 OUT = Path(os.environ["CALIPER_E2E_OUT"])
-TOKEN = secrets.token_urlsafe(16)
-seen = {"origins": [], "refused": 0}
+server = caliper.serve()
+g = torch.Generator().manual_seed(0)
+base = torch.rand(2, 3, 24, 32, generator=g)
 
-def check(connection, request):
-    if request.path != "/v3/stream?token=" + TOKEN:
-        seen["refused"] += 1
-        return connection.respond(http.HTTPStatus.FORBIDDEN, "wrong token\n")
-
-async def stream(ws):
-    seen["origins"].append(ws.request.headers.get("Origin"))
-    (OUT / "stream.json").write_text(json.dumps(seen))
-    n = 0
+def produce():
+    step = 0
     while True:
-        n += 1
-        await ws.send(n.to_bytes(8, "little") * 8)
-        await asyncio.sleep(1 / 30)
+        step += 1
+        x = base + 0.5 * torch.sin(torch.tensor(step / 10.0)) * torch.rand(2, 3, 24, 32)
+        caliper.show(x, "heat", dims=("layer", "head", "query", "key"),
+                     data_view={"index": {"layer": 0, "head": 0}})
+        time.sleep(1 / 30)
 
-ready = threading.Event()
+threading.Thread(target=produce, daemon=True).start()
+"""
 
-def run():
-    async def main():
-        async with serve(stream, "127.0.0.1", 0, process_request=check) as server:
-            port = server.sockets[0].getsockname()[1]
-            caliper._server = types.SimpleNamespace(
-                stream_url=f"ws://127.0.0.1:{port}/v3/stream?token={TOKEN}")
-            ready.set()
-            await server.serve_forever()
-    asyncio.run(main())
-
-threading.Thread(target=run, daemon=True).start()
-assert ready.wait(10)
-'''
-
-CELL_WIDGET = r'''
-w = caliper.widget("loss")
+CELL_WIDGET = r"""
+w = caliper.widget("heat")
 w.on_select(lambda sel: (OUT / "selection.json").write_text(json.dumps(sel)))
 w.observe(lambda change: (OUT / "data_view.json").write_text(json.dumps(change["new"])),
           names="data_view")
 w
-'''
+"""
+
+STATE_JS = """() => { const v = __caliperHarness.deepQueryAll('caliper-view')[0];
+                     return v ? v.debugState() : null; }"""
 
 
 def notebook(*cells: str) -> dict:
@@ -238,18 +223,6 @@ def notebook(*cells: str) -> dict:
                                     "language": "python"}},
         "nbformat": 4, "nbformat_minor": 5,
     }
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def http_call(url: str, token: str, method: str = "GET", timeout: float = 5.0):
-    req = urllib.request.Request(url, method=method, headers={"Authorization": f"token {token}"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.status
 
 
 def wait_for(fn, timeout: float, what: str):
@@ -265,135 +238,85 @@ def wait_for(fn, timeout: float, what: str):
     raise AssertionError(f"timed out waiting for {what}")
 
 
-def processes_mentioning(text: str) -> list[str]:
-    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
-    return [line.strip() for line in out.splitlines()
-            if text in line and str(os.getpid()) != line.split()[0]]
-
-
-def drawn_and_changed(png1: bytes, png2: bytes) -> tuple[int, bool]:
+def changed(png1: bytes, png2: bytes) -> bool:
     import io
     from PIL import Image, ImageChops
     a = Image.open(io.BytesIO(png1)).convert("RGB")
     b = Image.open(io.BytesIO(png2)).convert("RGB")
-    colors = len(a.getcolors(maxcolors=1 << 20) or [])
-    return colors, ImageChops.difference(a, b).getbbox() is not None
+    return ImageChops.difference(a, b).getbbox() is not None
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the test manages POSIX process groups")
+@pytest.mark.skipif(sys.platform == "win32", reason="the harness manages POSIX process groups")
 @needs_anywidget
-def test_widget_draws_in_jupyterlab(tmp_path):
-    for mod in ("jupyterlab", "ipykernel", "websockets", "PIL"):
+@pytest.mark.parametrize("mode", ["metal", "canvas2d"])
+def test_widget_draws_in_jupyterlab(tmp_path, mode):
+    """The widget draws a real view of caliper.serve() inside its cell, keeps
+    updating, takes the data view chosen in its picker or set from Python, and
+    reports selections and data views back to Python. "metal" draws with the
+    WebAssembly views on WebGPU, "canvas2d" with the element's own views."""
+    for mod in ("jupyterlab", "ipykernel", "websockets", "PIL", "torch", "playwright"):
         pytest.importorskip(mod)
-    sync_api = pytest.importorskip("playwright.sync_api")
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from tests.headless.notebook import notebook_session
+    from tests.headless.screenshot import png_stats
     shots = Path(os.environ.get("CALIPER_TEST_ARTIFACTS") or tmp_path / "shots")
     shots.mkdir(parents=True, exist_ok=True)
-    out, nbdir, jdir = tmp_path / "out", tmp_path / "notebooks", tmp_path / "jupyter"
-    for d in (out, nbdir, jdir):
-        d.mkdir()
-    (nbdir / "widget.ipynb").write_text(json.dumps(notebook(CELL_STREAM, CELL_WIDGET)))
-    # No news or update checks (they would fetch from the network).
-    notify = jdir / "lab-settings" / "@jupyterlab" / "apputils-extension"
-    notify.mkdir(parents=True)
-    (notify / "notification.jupyterlab-settings").write_text(
-        json.dumps({"fetchNews": "false", "checkForUpdates": False}))
-
-    # Every Jupyter directory inside tmp_path; the kernel imports this checkout.
-    env = {**os.environ,
-           "JUPYTER_CONFIG_DIR": str(jdir / "config"), "JUPYTER_DATA_DIR": str(jdir / "data"),
-           "JUPYTER_RUNTIME_DIR": str(jdir / "runtime"), "IPYTHONDIR": str(jdir / "ipython"),
-           "JUPYTERLAB_SETTINGS_DIR": str(jdir / "lab-settings"),
-           "JUPYTERLAB_WORKSPACES_DIR": str(jdir / "lab-workspaces"),
-           "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO / "python"),
+    out = tmp_path / "out"
+    out.mkdir()
+    path = tmp_path / "widget.ipynb"
+    path.write_text(json.dumps(notebook(CELL_PRODUCER, CELL_WIDGET)))
+    env = {"PYTHONPATH": os.pathsep.join(filter(None, [str(REPO / "python"),
                                                        os.environ.get("PYTHONPATH")])),
-           "CALIPER_E2E_OUT": str(out)}
-    port, token = free_port(), secrets.token_hex(16)
-    base = f"http://127.0.0.1:{port}"
-    # --no-browser: the server opens no window; only headless Chromium visits it.
-    cmd = [sys.executable, "-m", "jupyterlab", "--no-browser", "--ip=127.0.0.1",
-           f"--port={port}", "--ServerApp.port_retries=0", f"--IdentityProvider.token={token}",
-           f"--ServerApp.root_dir={nbdir}", "--LabApp.expose_app_in_browser=True",
-           "--LabApp.news_url=None", "--LabApp.extension_manager=readonly",
-           "--LabApp.check_for_updates_class=jupyterlab.NeverCheckForUpdate"]
-    log = open(tmp_path / "jupyter.log", "wb")
-    proc = subprocess.Popen(cmd, cwd=nbdir, env=env, stdout=log, stderr=subprocess.STDOUT,
-                            start_new_session=True)
-    try:
-        wait_for(lambda: http_call(f"{base}/api/status", token) == 200, 90, "JupyterLab to start")
-        with sync_api.sync_playwright() as p:
-            try:
-                browser = p.chromium.launch(headless=True)
-            except sync_api.Error as e:
-                pytest.skip(f"Playwright's Chromium is not available: {e}")
-            try:
-                page = browser.new_page(viewport={"width": 1100, "height": 900},
-                                        device_scale_factor=1)
-                page.goto(f"{base}/lab/tree/widget.ipynb?token={token}")
-                page.wait_for_function(
-                    "() => window.jupyterapp?.shell.currentWidget?.sessionContext"
-                    "?.session?.kernel?.status === 'idle'", timeout=90_000)
-                page.evaluate("() => window.jupyterapp.commands.execute('notebook:run-all-cells')")
+           "CALIPER_E2E_OUT": str(out), "CALIPER_SESSION": "0"}
+    with notebook_session(path, env=env, mode=mode, viewport=(1100, 900)) as nb:
+        nb.wait("() => { const v = __caliperHarness.deepQueryAll('caliper-view')[0];"
+                " return !!v && v.debugState().status === 'connected'; }", timeout=90)
+        state = nb.page.evaluate(STATE_JS)
+        assert state["renderer"] == ("wasm" if mode == "metal" else "canvas2d"), state
+        view = nb.page.locator(".jp-OutputArea-output caliper-view")
+        area = view.locator("canvas:visible").first
+        cell = nb.page.locator(".jp-CodeCell").filter(has=view)
+        cell.scroll_into_view_if_needed()
+        nb.page.wait_for_timeout(500)
+        first = area.screenshot()
+        nb.page.wait_for_timeout(800)
+        second = area.screenshot()
+        cell.screenshot(path=shots / f"widget-{mode}-cell.png")
+        assert png_stats(first).nonblank(), png_stats(first).to_dict()
+        assert changed(first, second), "the view did not change between the screenshots"
+        c = area.bounding_box()
+        o = cell.locator(".jp-Cell-outputArea").bounding_box()
+        assert o["x"] <= c["x"] and c["x"] + c["width"] <= o["x"] + o["width"] + 1
+        assert o["y"] <= c["y"] and c["y"] + c["height"] <= o["y"] + o["height"] + 1
+        v = view.bounding_box()                               # height= is the whole element
+        assert abs(v["height"] - 320) <= 2 and c["height"] > 200 and c["width"] > 200
 
-                view = page.locator(".jp-OutputArea-output caliper-view")
-                view.wait_for(state="attached", timeout=60_000)
-                cell = page.locator(".jp-CodeCell").filter(has=view)
-                canvas = view.locator("canvas")
-                canvas.wait_for(state="visible", timeout=30_000)
-                stream = json.loads(wait_for(lambda: (out / "stream.json").read_text(), 20,
-                                             "the widget to open the stream socket"))
-                page.wait_for_timeout(1500)
-                cell.scroll_into_view_if_needed()
-                first = canvas.screenshot()
-                cell.screenshot(path=shots / "widget-cell-1.png")
-                page.screenshot(path=shots / "widget-page-1.png")
-                page.wait_for_timeout(800)
-                second = canvas.screenshot()
-                cell.screenshot(path=shots / "widget-cell-2.png")
-                page.screenshot(path=shots / "widget-page-2.png")
+        # The picker: layer 1, head 2; the trait reaches Python, the view follows.
+        view.locator('select[data-dim="layer"]').select_option("i:1")
+        view.locator('select[data-dim="head"]').select_option("i:2")
+        want = {"layer": 1, "head": 2}
+        got = wait_for(lambda: json.loads((out / "data_view.json").read_text() or "{}")
+                       .get("index") == want and (out / "data_view.json").read_text(), 20,
+                       "the picked data view in Python")
+        assert json.loads(got)["source"] == "heat"
+        nb.wait("() => { const s = (" + STATE_JS + ")();"
+                " return s.dataView.index.layer === 1 && s.dataView.index.head === 2; }",
+                timeout=20)
 
-                # Drawn, inside the cell's output area, at the default height, changing.
-                colors, changed = drawn_and_changed(first, second)
-                assert colors >= 3, f"the canvas looks blank ({colors} colours)"
-                assert changed, "the canvas did not change between the screenshots"
-                c = canvas.bounding_box()
-                o = cell.locator(".jp-Cell-outputArea").bounding_box()
-                assert o["x"] <= c["x"] and c["x"] + c["width"] <= o["x"] + o["width"] + 1
-                assert o["y"] <= c["y"] and c["y"] + c["height"] <= o["y"] + o["height"] + 1
-                assert abs(c["height"] - 320) <= 2 and c["width"] > 200
+        # Set from Python: the widget requests it, the picker shows it.
+        nb.execute('w.data_view = {"index": {"layer": 0, "head": 1}}')
+        nb.wait("() => { const s = (" + STATE_JS + ")();"
+                " return s.dataView.index.layer === 0 && s.dataView.index.head === 1; }",
+                timeout=20)
+        assert view.locator('select[data-dim="head"]').input_value() == "i:1"
+        stats = json.loads(nb.execute("print(json.dumps(server.stats()))"))
+        assert stats["views"]["heat"]["groups"] >= 1
 
-                # The page is Jupyter's origin; the stream socket is another port.
-                assert stream["origins"] == [base]
-                assert stream["refused"] == 0
-
-                # Events from the element come back to Python as traits.
-                sel = {"view": "loss", "type": "select", "detail": {"index": [3, 9]}}
-                dv = {"source": "loss", "index": {"step": [0, 100]}}
-                view.evaluate("(el, d) => el.dispatchEvent(new CustomEvent('caliper-select',"
-                              " {detail: d, bubbles: true, composed: true}))", sel)
-                view.evaluate("(el, d) => el.dispatchEvent(new CustomEvent('caliper-dataview',"
-                              " {detail: d, bubbles: true, composed: true}))", dv)
-                got = wait_for(lambda: (out / "selection.json").read_text(), 20, "the selection")
-                assert json.loads(got) == sel
-                got = wait_for(lambda: (out / "data_view.json").read_text(), 20, "the data view")
-                assert json.loads(got) == dv
-            finally:
-                browser.close()
-    finally:
-        try:
-            http_call(f"{base}/api/shutdown", token, method="POST")
-        except OSError:
-            pass
-        try:
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-        log.close()
-        # Kernels run in their own sessions; their command lines name tmp_path.
-        end = time.monotonic() + 15
-        while processes_mentioning(str(tmp_path)) and time.monotonic() < end:
-            time.sleep(0.2)
-        left = processes_mentioning(str(tmp_path))
-        for line in left:
-            os.kill(int(line.split()[0]), signal.SIGKILL)
-        assert not left, f"processes left running: {left}"
+        # A selection reported by the element reaches Python.
+        sel = {"view": "heat", "type": "select", "detail": {"rows": [3, 9], "cols": [0, 4]}}
+        view.evaluate("(el, d) => el.dispatchEvent(new CustomEvent('caliper-select',"
+                      " {detail: d, bubbles: true, composed: true}))", sel)
+        got = wait_for(lambda: (out / "selection.json").read_text(), 20, "the selection")
+        assert json.loads(got) == sel
+        assert json.loads(nb.execute("print(json.dumps(w.selection))")) == sel

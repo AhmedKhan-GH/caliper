@@ -116,10 +116,13 @@ def _state_dir(work: str | Path | None, prefix: str, keep: bool = False,
             shutil.rmtree(path, ignore_errors=True)
 
 
-def _pythonpath(notebooks: Iterable[Path]) -> str:
-    """The notebooks' folders, then any PYTHONPATH this process already has."""
+def _pythonpath(notebooks: Iterable[Path], extra: str | None = None) -> str:
+    """The notebooks' folders, then the PYTHONPATH the caller passed in `env`
+    (`extra`), then any PYTHONPATH this process already has, all made absolute,
+    because the kernel runs in another folder."""
     parts = [str(Path(n).resolve().parent) for n in notebooks]
-    parts += [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
+    for value in (extra, os.environ.get("PYTHONPATH")):
+        parts += [str(Path(p).resolve()) for p in (value or "").split(os.pathsep) if p]
     return os.pathsep.join(dict.fromkeys(parts))
 
 
@@ -160,7 +163,7 @@ def run_notebook(
     nb = nbformat.read(path, as_version=4)
     with _state_dir(work, "run-", keep_on_error=False) as state:
         jenv = jupyter_env(state / "jupyter", kernel_name=kernel_name, python=python,
-                           kernel_env={"PYTHONPATH": _pythonpath([path])})
+                           kernel_env={"PYTHONPATH": _pythonpath([path], (env or {}).get("PYTHONPATH"))})
         if cwd is None:
             cwd = state / "cwd"
             cwd.mkdir()
@@ -358,7 +361,7 @@ def jupyter_lab(
         root.mkdir()
         _prepare_root(root, notebooks, extra_files, kernel_name)
         jenv = jupyter_env(state / "jupyter", kernel_name=kernel_name, python=python,
-                           kernel_env={"PYTHONPATH": _pythonpath(notebooks)})
+                           kernel_env={"PYTHONPATH": _pythonpath(notebooks, (env or {}).get("PYTHONPATH"))})
         settings = Path(jenv["JUPYTERLAB_SETTINGS_DIR"])
         lab_settings = dict(_LAB_SETTINGS)
         if theme == "dark":
@@ -454,6 +457,25 @@ def _stop_server(server: LabServer) -> None:
     for k in kernels:
         if _alive(k):
             _kill_group(k, signal.SIGKILL)
+
+
+_EXECUTE_JS = """
+async ([name, code, timeout]) => {
+  const kernel = __nbPanel(name).sessionContext.session.kernel;
+  const out = [];
+  let error = null;
+  const future = kernel.requestExecute({code, store_history: false});
+  future.onIOPub = (msg) => {
+    const t = msg.header.msg_type, c = msg.content;
+    if (t === 'stream') out.push(c.text);
+    else if (t === 'execute_result') out.push(c.data['text/plain'] + '\\n');
+    else if (t === 'error') error = [c.ename, c.evalue, c.traceback.join('\\n')];
+  };
+  const timer = new Promise((_, reject) => setTimeout(() => reject(new Error('execute timed out')), timeout));
+  await Promise.race([future.done, timer]);
+  return {out: out.join(''), error};
+}
+"""
 
 
 @dataclass
@@ -558,6 +580,16 @@ class NotebookSession:
         if fit and size:
             self.page.set_viewport_size(size)
         return written
+
+    def execute(self, code: str, timeout: float = 60.0) -> str:
+        """Run `code` in the notebook's kernel, as a cell would but without adding
+        one, and return what it printed (and its result). Raises
+        `NotebookCellError` (cell -1) if it raises."""
+        r = self.page.evaluate(_EXECUTE_JS, [self.name, code, int(timeout * 1000)])
+        if r["error"]:
+            ename, evalue, tb = r["error"]
+            raise NotebookCellError(-1, code, ename, evalue, tb)
+        return r["out"]
 
     def element_stats(self, selector: str) -> PixelStats:
         """Pixel statistics of the first element matching `selector` (shadow DOM included)."""
