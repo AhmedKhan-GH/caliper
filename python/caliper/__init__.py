@@ -609,3 +609,19 @@ def _native_core():
 
 
 atexit.register(close)
+
+
+# ---------------------------------------------------------------------------
+# notebook widget (the notebook extra: pip install 'caliper[notebook]')
+# ---------------------------------------------------------------------------
+__all__ += ["widget"]
+
+
+def widget(name: str, kind: str | None = None, *, height: int = 320):
+    """A live view of the stream inline in a notebook cell (an anywidget fed by
+    the stream socket, not by Jupyter's message channel). ``kind`` is "series",
+    "heatmap", "image", "points" or "histogram"; None takes it from the stream.
+    Starts :func:`serve` when no server runs. The widget's ``selection`` and
+    ``data_view`` traits carry what the viewer picks back to Python."""
+    from ._widget import widget as _widget
+    return _widget(name, kind, height=height)

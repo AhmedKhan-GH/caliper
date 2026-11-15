@@ -7,7 +7,7 @@ name = "caliper"
 version = "0.1.0"
 description = "Live tensor views for PyTorch: caliper.show/points/series/histogram stream GPU snapshots to the Caliper app or an in-process window, zero-copy for MPS tensors"
 requires-python = ">=3.12"
-dependencies = ["numpy"]
+dependencies = ["numpy", "websockets"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: MacOS",
@@ -16,6 +16,7 @@ classifiers = [
 [project.optional-dependencies]
 torch = ["torch"]
 test = ["pytest", "torch"]
+notebook = ["anywidget"]
 
 [tool.scikit-build]
 minimum-version = "0.10"
