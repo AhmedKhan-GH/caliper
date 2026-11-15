@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- NOTE -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caliper</title>
+<style>
+  body { margin: 0; padding: 16px; background: #181715; color: #f0e9db;
+         font-family: "IBM Plex Sans Condensed", system-ui, sans-serif; }
+  caliper-view { border: 1px solid #36342f; }
+</style>
+</head>
+<body>
+<caliper-view view=""></caliper-view>
+<script type="module">
+  import "./caliper-view.js";
+  const token = new URLSearchParams(location.search).get("token") || "";
+  const src = `ws://${location.host}/v3/stream?token=${encodeURIComponent(token)}`;
+  document.querySelector("caliper-view").setAttribute("src", src);
+</script>
+</body>
+</html>
