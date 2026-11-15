@@ -55,7 +55,7 @@ Applets never create windows or touch the graphics API.
 The frame thread does no I/O: no file access, no network call, no SQL query and no store call. The cost of I/O differs by machine and grows with the age of a session, so a call that is fast on one machine freezes the window on another. Work that takes longer than about 5 ms runs on another thread: a `caliper.jobs.v1` job for work that a user watches or cancels, and a thread the applet owns for its own upkeep. A table that is rebuilt several times a second for live display is a DuckDB `TEMP` table, because the persistent store is for data that is saved on purpose and read back. The host's watchdog flags applets that stall the loop (see the [Trust model](trust-model.md)).
 
 !!! note "Renderer-agnostic by contract"
-    The ABI never mentions a graphics API. Textures cross the boundary as an opaque `CaliperTextureId`, and applets render only through ImGui and ImPlot. Metal on macOS and Vulkan on Windows are the default backends, and OpenGL 3.3 core is a frozen fallback chosen with `CALIPER_RENDERER=gl`. Because the contract hides the backend, a backend change needs no epoch bump and no applet rebuild. See [Rendering](rendering.md) for the `HostRenderer` seam and the backends.
+    The ABI never mentions a graphics API. Textures cross the boundary as an opaque `CaliperTextureId`, and applets render only through ImGui and ImPlot. Metal on macOS and Vulkan on Windows are the default backends, and OpenGL 3.3 core is the fallback, chosen with `CALIPER_RENDERER=gl` or when the default backend fails to start. Because the contract hides the backend, a backend change needs no epoch bump and no applet rebuild. See [Rendering](rendering.md) for the `HostRenderer` seam and the backends.
 
 ## Embedding
 

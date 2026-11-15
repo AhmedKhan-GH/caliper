@@ -183,14 +183,15 @@ Builder pane ◄─ session/update, request_permission ─┐
 Caliper ── spawns ──► claude-agent-acp / codex-acp / gemini …
                         │ connects to the MCP servers named in session/new
                         ▼
-               caliper-cli mcp ──► Caliper's control port ──► command layer
+               caliper mcp ──► Caliper's control port ──► command layer
 ```
 
 1. Caliper starts the agent that the user chose as a subprocess. It calls `initialize`, then `session/new` with a
    working folder and the list of MCP servers the agent should connect to
    ([session setup](https://agentclientprotocol.com/protocol/session-setup.md)).
-2. The MCP server it names is a small `caliper-cli mcp --connect <port>` bridge to the running app. This is a common
-   pattern for desktop apps: the app runs a control port, and a command-line tool serves MCP over it.
+2. The MCP server it names is `caliper mcp --connect <port>`, a small subcommand of the `caliper` binary that bridges
+   to the running app. This is a common pattern for desktop apps: the app runs a control port, and a command-line tool
+   serves MCP over it.
 3. The pane shows the agent's messages, its tool calls and its permission requests, which become approve and deny
    buttons. Messages arrive on a background thread and reach the UI through the command queue.
 4. Authentication stays with the agent. A user signed in to Claude Code or Codex works on their own plan, and Caliper

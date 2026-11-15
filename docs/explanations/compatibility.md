@@ -76,7 +76,7 @@ The host application has a semver version of its own, which an applet compares a
 
 ### The host ABI epoch and service revisions
 
-The ABI epoch is an integer, 2 today, that versions the frozen contract: the entry points in [`abi.h`](../references/abi.md), the `CaliperHost` layout and the UI-stack pin. A host speaks exactly one epoch, and the epoch check is exact equality. Before it opens an applet's library, the host compares `[compat].abi_epoch` with its own epoch and refuses an applet built for an older or a newer epoch. After opening the library, it checks that the descriptor carries the same epoch.
+The ABI epoch is an integer, 2 today, that versions the frozen contract: the entry points in [`abi.h`](../references/abi.md), the `CaliperHost` layout and the UI-stack pin. A host speaks exactly one epoch, and the epoch check is exact equality. Before it opens an applet's library, the host compares `[compat].abi_epoch` with its own epoch and refuses an applet built for an older or a newer epoch. A host never also accepts the previous epoch, so an epoch change means rebuilding every applet. After opening the library, it checks that the descriptor carries the same epoch.
 
 Within an epoch, each service is versioned by its id. `caliper.geometry.v1` is the first version of a table, `caliper.geometry.v1_1` to `caliper.geometry.v1_3` are revisions that append to it, and a major id such as `caliper.metrics.v2` is reserved for an incompatible change. No service has needed a major id so far.
 

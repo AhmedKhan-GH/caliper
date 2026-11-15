@@ -13,10 +13,13 @@ On 15 November 2026, `main` holds the host, the SDK with its 18 service ids, the
 1. Done: the versioning contract and the promotion rule are written in [Compatibility and epochs](../explanations/compatibility.md#versioning).
 2. Ship the SDK as an installed package: the headers, the CMake config, the pinned UI stack and the sugar libraries.
 3. Make the host name no applet: windows dock by role, the core build compiles no applets, and CI builds and starts an empty core.
-4. Load applets from outside the repository: development paths, the user applets folder and the search order, and shipped applets signed in the app bundle.
-5. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
-6. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
-7. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
+4. Load applets from outside the repository: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder and the search order, and shipped applets signed in the app bundle.
+5. Add the `caliper` subcommands listed under [Command line](#command-line), which also gives their status.
+6. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
+7. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
+8. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
+
+OpenGLlama comes back with the inspector work, as an applet beside the inspector. Nothing about it changes before then.
 
 Plan: [Applets outside the core](applets-outside-the-core.md).
 
@@ -38,6 +41,54 @@ A registry at caliperapp.ai of spec applets and signed first-party applets, a Br
 
 Plan: [Applet registry](registry.md).
 
+## Developer features
+
+### API
+
+The [Python API](../references/python-api.md) and the embeddable `libcaliper` ([Embedding Caliper](../references/embedding.md)) exist. Driving the app's state from outside waits for the command layer in [Phase 3](#phase-3-agent-built-panels).
+
+### Command line
+
+Phase 1 adds subcommands to the `caliper` binary rather than a separate program, so there is one thing to install. Every subcommand except `dev` runs and exits without opening a window.
+
+| Command | What it does |
+|---|---|
+| `caliper list` | Lists the applets that the host finds, with their status. |
+| `caliper check <folder>` | Runs the loader's checks on the applet in a folder without loading it. |
+| `caliper info` | Prints the host's version, ABI epoch and services. |
+| `caliper new <name> [dir]` | Creates an applet from a template. |
+| `caliper install <folder>` | Installs an applet from a local folder into the user applets folder. |
+| `caliper dev <folder>` | Starts the app with that folder first in the search order, without hot reload. |
+
+The `--applets <dir>` flag and the `CALIPER_APPLET_PATH` variable add development paths to the search.
+
+The subcommands, the flag and the variable are being built on a branch and are not merged yet.
+
+`caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
+
+### MCP
+
+An MCP server comes in [Phase 3](#phase-3-agent-built-panels), beside the command layer, and uses the capture service that Phase 2 adds. Besides building applets in the app, it is for:
+
+- visualising the work of any agent;
+- watching training runs;
+- running interpretability experiments automatically through the inspector's intervention API;
+- answering questions about data through `caliper.data.v1`;
+- making figures and screenshots for the documentation;
+- driving applets in tests;
+- explaining what is on the screen from the tour data.
+
+If agents need to see the screen sooner, the capture service moves earlier, not MCP.
+
+## Renderer fallback
+
+Drawing already falls back from Metal or Vulkan to OpenGL when the native backend fails to start. The plan keeps that fallback, makes it robust and adds a CPU renderer below it, so that each step is slower but works and says so. This serves headless CI, virtual machines and machines with broken graphics drivers.
+
+1. Harden the OpenGL path: replace GLEW with a modern loader, and run the OpenGL graphics tests in CI.
+2. Add a CPU renderer as the last fallback.
+
+The backends are described in [Rendering](../explanations/rendering.md).
+
 ## Smaller work
 
 - Code comments still cite sections of the deleted design documents by bare number, such as `(§6c)`. Rewrite each as its file is next touched.
@@ -52,6 +103,8 @@ Plan: [Applet registry](registry.md).
 ## Not now
 
 A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts.
+
+A second native host is not needed now. `examples/embed_host` stays as the embedding example and test. Revisit this only for a single-applet app or for embedding Caliper in another product.
 
 ## Invariants
 
@@ -73,10 +126,6 @@ Every phase keeps these rules. [Platform rules](../explanations/architecture.md#
 - **Audience.** Today the audience is collaborators who build Caliper from source, and the contracts are sized so that they also work for end users who install a prebuilt bundle. Revisit this when the first such user appears.
 - **Signing third-party applets on macOS.** A notarized host either carries the `disable-library-validation` entitlement or loads only applets signed by its own team. The choice must be made before the first third-party applet ships; the options are in [Applets outside the core](applets-outside-the-core.md#signing-on-macos).
 - **Applet shaders.** Whether applets still supply no shaders once agent-built panels exist.
-- **The OpenGL fallback.** Whether to replace GLEW with a GLAD 3.3-core loader, or to remove the fallback.
-- **Older epochs.** Whether the host must accept applets built for epoch N−1 before the first outside applet ships.
-- **A second native host.** Whether a second program that embeds `libcaliper` is still needed once applets live outside the core.
-- **OpenGLlama.** Whether to revive the archived OpenGLlama applet in its own repository, or delete it.
 
 ## Undecided
 
@@ -88,9 +137,8 @@ These ideas come from earlier designs and are not built. Each needs a decision b
 - **Research publishing beyond export.** A Python DLPack path into the geometry bridge, and applets written in Python.
 - **Artifacts redesign.** A checkpoint browser with previews and resuming training from a checkpoint.
 - **Applet dependency packaging.** Whether an applet built outside the core may link its own heavy dependencies, such as DuckDB or llama.cpp, and what happens when two applets each carry a copy. The proposal for large runtimes such as libtorch is runtime packs: the host installs and manages each runtime once instead of every applet bundling its own multi-gigabyte copy, and a process loads one libtorch for the whole session. The stated limit is that two applets that need different torch versions cannot share a session. No pack manager exists; the build downloads torch directly.
-- **The `caliper` CLI.** `new`, `dev`, `install`, `package` and `publish` as subcommands of the host binary rather than a separate program, so there is one thing to install, as with the `code` command of Visual Studio Code. The host's `main` takes no arguments yet, and whether `new` is needed depends on the [applet builder](applet-builder.md).
 - **`.caliperapp` bundles.** A bundle folder with per-platform binaries, and manifest keys for platforms, authors, licence and runtimes.
-- **Hot reload.** Reloading a rebuilt applet, with `save_state`, `load_state`, `on_suspend` and `on_resume` entry points.
+- **Hot reload.** Which entry points reloading a rebuilt applet needs, such as `save_state`, `load_state`, `on_suspend` and `on_resume`.
 - **SDK conformance.** A conformance checker, and a set of reference applets built against each SDK release.
 - **Isolation and reach.** Applets in a separate process, scripting bindings, and a Linux build.
 - **Live streaming.** Several viewers per session, f16, bf16 and RGB zero-copy kernels, a smaller wheel without the stores, and an arm64 wheel job.

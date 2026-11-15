@@ -5,10 +5,12 @@ and installed outside the core repository, and adding one never means editing
 the host. This page records what already works, what is still hard-coded, and
 the changes that remove it. The registry is a separate plan, [Applet registry](registry.md).
 
-Two parts of this plan are undecided: the `caliper` command-line tool (`caliper dev`,
-`caliper new`, `caliper install`) and the `.caliperapp` bundle format. The
-[roadmap](roadmap.md) lists them under "Undecided"; the sections below describe
-them as proposed.
+The `caliper` subcommands that work on local folders are decided: `list`,
+`check`, `info`, `new`, `install <folder>` and `dev`, and the
+[roadmap](roadmap.md#command-line) gives their status. Hot reload,
+`caliper install <url>` and the `.caliperapp` bundle format are still proposals,
+and the sections below describe them as such. The roadmap lists the bundle
+format and the entry points for hot reload under [Undecided](roadmap.md#undecided).
 
 ## What already works
 
@@ -82,15 +84,19 @@ mismatch crashes in ways that are hard to trace.
 
 - `--applets <dir>` and `CALIPER_APPLET_PATH` add folders to the search, so a
   dev build loads applets from their own build folders without copying.
-- `caliper dev <folder>` loads one applet from its build folder and reloads
-  it when its library is rebuilt.
-- `caliper new <name>` creates an applet from a template: manifest, CMake and CI.
+- `caliper dev <folder>` starts the app with that folder first in the search
+  order. Reloading the applet when its library is rebuilt is proposed for later,
+  as hot reload.
+- `caliper new <name> [dir]` creates an applet from a template: manifest, CMake and CI.
 
 ### Installing
 
-- Copying a `.caliperapp` folder into the user applets folder keeps working.
-- `caliper install <path|url>` checks the sha256, places the bundle and handles
-  the quarantine flag under the [signing policy](#signing-on-macos).
+- Copying an applet into the user applets folder keeps working.
+- `caliper install <folder>` installs an applet from a local folder into the
+  user applets folder.
+- `caliper install <url>` is proposed for later. It would download a
+  `.caliperapp` bundle, check its sha256, place it and handle the quarantine
+  flag under the [signing policy](#signing-on-macos).
 - A Browse tab reading the registry comes later ([Applet registry](registry.md)).
 
 ## Where applets are stored
@@ -133,7 +139,7 @@ different team. Two options:
 - Only applets signed by the same team load; others must be re-signed locally.
 
 Downloaded bundles also carry Gatekeeper's quarantine flag, which
-`caliper install` must handle. The policy must be decided before the first third-party applet ships.
+`caliper install <url>` must handle. The policy must be decided before the first third-party applet ships.
 
 ## Checks that keep it this way
 

@@ -33,7 +33,7 @@ The `hello` applet and `throwing_applet` are built first, because the loader tes
 
 The suite runs once per backend that the platform offers:
 
-- OpenGL runs everywhere, as the frozen fallback.
+- OpenGL runs everywhere, as the fallback.
 - Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, imported allocations and their gates, and the geometry service.
 - Vulkan runs on Windows with the CPU-staged path. Cases that need CUDA hardware run only when a CUDA device is present.
 
