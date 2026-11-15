@@ -112,7 +112,7 @@ export class HistogramView implements LiveView {
   }
 
   private binDetail(b: number): Record<string, unknown> {
-    return { bin: b, range: [this.lo + b * this.width, this.lo + (b + 1) * this.width], count: this.counts[b] };
+    return { bin: b, lo: this.lo + b * this.width, hi: this.lo + (b + 1) * this.width, count: this.counts[b] };
   }
 
   private onHover(x: number, y: number): void {
@@ -143,10 +143,11 @@ export class HistogramView implements LiveView {
       const b1 = Math.min(n, Math.ceil((Math.max(s.x0, s.x1) - this.lo) / wd));
       if (!Number.isNaN(x) && b1 > b0) {
         this.selection = { b0, b1 };
-        let count = 0;
-        for (let i = b0; i < b1; i++) count += this.counts[i];
-        this.host.report('select', { bins: [b0, b1], range: [this.lo + b0 * wd, this.lo + b1 * wd], count });
-      } else this.selection = null;
+        this.host.report('select', { range: [this.lo + b0 * wd, this.lo + b1 * wd] });
+      } else if (this.selection) {
+        this.selection = null;
+        this.host.report('select', {});
+      }
     }
     this.host.request('overlay');
   }

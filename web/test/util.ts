@@ -26,6 +26,9 @@ export async function serve(root: string, extra?: (url: string) => string | null
     const mapped = extra?.(name);
     const file = mapped ?? path.join(root, name);
     if (!file.startsWith(root) && !mapped) return void res.writeHead(403).end();
+    // As a stream server must, so that a page on another loopback origin (a
+    // notebook) can import the WebAssembly views' loader.
+    res.setHeader('access-control-allow-origin', '*');
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) return void res.writeHead(404).end();
     res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
     fs.createReadStream(file).pipe(res);
@@ -50,7 +53,8 @@ export const test = base.extend<{ harness: Page }, { server: string }>({
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => {
-      if (m.type() === 'error') errors.push(m.text());
+      // Elements pointed at a server that is not a stream log failed sockets.
+      if (m.type() === 'error' && !/WebSocket connection|Failed to load resource/.test(m.text())) errors.push(m.text());
     });
     await page.goto(`${server}/test/harness.html`);
     await page.waitForFunction(() => 'harness' in window && customElements.get('caliper-view'));

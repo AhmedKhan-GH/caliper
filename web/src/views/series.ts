@@ -114,7 +114,7 @@ export class SeriesView implements LiveView {
       select: (phase, x) => this.onSelect(phase, x),
       click: (x) => {
         const i = this.indexAt(x);
-        if (i !== null && !this.dragSel) this.host.report('pick', { step: i, values: this.curves.map((c) => nullable(c.get(i))) });
+        if (i !== null && !this.dragSel) this.host.report('pick', this.stepDetail(i));
       },
     });
   }
@@ -195,6 +195,12 @@ export class SeriesView implements LiveView {
     return Math.max(b.lo, Math.min(b.hi - 1, i));
   }
 
+  /** A pick or hover: the absolute index, and the first curve's value there. */
+  private stepDetail(i: number): Record<string, unknown> {
+    const v = this.curves[0]?.get(i);
+    return v !== undefined && Number.isFinite(v) ? { step: i, value: v } : { step: i };
+  }
+
   private onHover(x: number, y: number): void {
     this.hoverPx = Number.isNaN(x) || !this.plot.inside(x, y) ? null : { x, y };
     const i = this.hoverPx ? this.indexAt(x) : null;
@@ -205,7 +211,7 @@ export class SeriesView implements LiveView {
       const lines = [`step ${i}`];
       this.curves.forEach((c, k) => lines.push(`${this.names[k]} ${fmt(c.get(i), 5)}`));
       this.host.tooltip(lines.join('\n'), x, y);
-      if (changed) this.host.report('hover', { step: i, values: this.curves.map((c) => nullable(c.get(i))) });
+      if (changed) this.host.report('hover', this.stepDetail(i));
     }
     if (changed) this.host.request('overlay');
   }
@@ -225,7 +231,10 @@ export class SeriesView implements LiveView {
       if (!Number.isNaN(x) && s1 > s0) {
         this.selection = { s0, s1 };
         this.host.report('select', { steps: [s0, s1] });
-      } else this.selection = null;
+      } else if (this.selection) {
+        this.selection = null;
+        this.host.report('select', {});
+      }
     }
     this.host.request('overlay');
   }
@@ -397,6 +406,4 @@ export class SeriesView implements LiveView {
   }
 }
 
-function nullable(v: number): number | null {
-  return Number.isFinite(v) ? v : null;
-}
+

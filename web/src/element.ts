@@ -14,6 +14,7 @@ import { HistogramView } from './views/histogram.js';
 import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
+import { assetBase, hasAdapter, mountWasm, type WasmHandle } from './wasm.js';
 import { C, FONT_MONO, FONT_TEXT } from './views/theme.js';
 
 const STYLE = `
@@ -44,6 +45,8 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
 .body { position: relative; flex: 1; min-height: 0; }
 .body canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .body canvas.overlay { z-index: 1; cursor: crosshair; touch-action: none; }
+.plate[hidden], .wasm[hidden] { display: none; }
+.wasm { height: 100%; position: relative; }
 .tip { position: absolute; z-index: 2; pointer-events: none; background: rgba(24, 23, 21, .94); border: 1px solid ${C.rule};
   border-radius: 4px; padding: 4px 7px; font: 11.5px/1.45 ${FONT_MONO}; color: ${C.parchment}; white-space: pre; }
 .msg { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; padding: 16px;
@@ -53,7 +56,7 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
 `;
 
 const NEEDS_GPU: ReadonlySet<Kind> = new Set(['heatmap', 'image', 'points']);
-const HOVER_MS = 100;
+const HOVER_MS = 1000 / 30;
 
 export class CaliperView extends HTMLElement {
   static get observedAttributes(): string[] {
@@ -77,19 +80,18 @@ export class CaliperView extends HTMLElement {
   private dirtyData = false;
   private raf = 0;
   private device: GPUDevice | null = null;
-  private hoverTimer: ReturnType<typeof setTimeout> | null = null;
-  private hoverQueued: Record<string, unknown> | null = null;
   private lastHover = 0;
   private msgTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private built = false;
   private ro: ResizeObserver | null = null;
   private offLost: (() => void) | null = null;
+  private wasm: WasmHandle | null = null;
   private readonly picker = new Picker((dv) => this.pick(dv));
   private readonly root: ShadowRoot;
   private readonly parts: {
     name: HTMLElement; info: HTMLElement; tools: HTMLElement; dot: HTMLElement; body: HTMLElement;
-    overlay: HTMLCanvasElement; tip: HTMLElement; msg: HTMLElement;
+    overlay: HTMLCanvasElement; tip: HTMLElement; msg: HTMLElement; plate: HTMLElement; wasm: HTMLElement;
   };
 
   constructor() {
@@ -103,6 +105,7 @@ export class CaliperView extends HTMLElement {
     this.parts = {
       name: el('span', 'name'), info: el('span', 'info'), tools: el('span', 'tools'), dot: el('span', 'dot'),
       body: el('div', 'body'), overlay: el('canvas', 'overlay'), tip: el('div', 'tip'), msg: el('div', 'msg'),
+      plate: el('div', 'plate'), wasm: el('div', 'wasm'),
     };
   }
 
@@ -128,18 +131,23 @@ export class CaliperView extends HTMLElement {
     const text = JSON.stringify(dv);
     if (!dv || text === JSON.stringify(this.resolved) || text === JSON.stringify(this.wanted)) return;
     this.wanted = dv;
-    if (this.client && this.subs.length) this.client.requestDataView(this.subs[0], dv);
+    if (this.wasm) this.wasm.setDataView(dv);
+    else if (this.client && this.subs.length) this.client.requestDataView(this.subs[0], dv);
   }
 
-  /** 'webgpu' or 'canvas2d' once the live view exists. */
+  /**
+   * What draws the view: 'wasm' (Caliper's own view layer compiled to
+   * WebAssembly), or the element's own views with 'webgpu' or 'canvas2d'.
+   */
   get renderer(): string | null {
+    if (this.wasm) return 'wasm';
     return this.live ? String(this.live.debug().renderer) : null;
   }
 
   /** Read-only state for tests and debugging. */
   debugState(): Record<string, unknown> {
     return {
-      view: this.names.join(','), subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
+      view: this.names.join(','), renderer: this.renderer, subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
       adapter: this.device ? adapterInfo() : null, ...(this.live?.debug() ?? {}),
     };
   }
@@ -171,16 +179,15 @@ export class CaliperView extends HTMLElement {
   attributeChangedCallback(name: string, old: string | null, value: string | null): void {
     if (!this.isConnected || old === value) return;
     if (name === 'height') this.applyHeight();
-    else if (name === 'src' || name === 'view') this.reattach();
-    else if (name === 'kind' || name === 'renderer') this.recreate();
+    else if (name === 'src' || name === 'view' || name === 'renderer') this.reattach();
+    else if (name === 'kind') this.wasm ? this.reattach() : this.recreate();
   }
 
   private build(): void {
     this.built = true;
     const style = document.createElement('style');
     style.textContent = STYLE;
-    const plate = document.createElement('div');
-    plate.className = 'plate';
+    const plate = this.parts.plate;
     const head = document.createElement('div');
     head.className = 'head';
     const p = this.parts;
@@ -189,7 +196,8 @@ export class CaliperView extends HTMLElement {
     p.tip.hidden = true;
     p.body.append(p.overlay, p.tip, p.msg);
     plate.append(head, p.body);
-    this.root.append(style, plate);
+    p.wasm.hidden = true;
+    this.root.append(style, plate, p.wasm);
     this.ro = new ResizeObserver(() => {
       this.live?.resize();
       this.request('data');
@@ -215,6 +223,47 @@ export class CaliperView extends HTMLElement {
     const gen = ++this.generation;
     const view = this.getAttribute('view') ?? '';
     const src = this.getAttribute('src');
+    // renderer="auto" (the default) uses the WebAssembly views when WebGPU
+    // gives an adapter and their module loads; "wasm" tries them whatever the
+    // adapter; "ts" uses this element's own views. A stream given through the
+    // source property always uses the element's own views.
+    const mode = this.getAttribute('renderer') ?? 'auto';
+    const base = src && assetBase(src);
+    if (!this.sourceProp && base && view && (mode === 'auto' || mode === 'wasm')) {
+      this.tryWasm(gen, mode, src!, base, view);
+      return;
+    }
+    this.attachTs(gen, view, src);
+  }
+
+  private async tryWasm(gen: number, mode: string, src: string, base: string, view: string): Promise<void> {
+    const ok = mode === 'wasm' || (await hasAdapter());
+    const handle = ok && gen === this.generation ? await mountWasm(this.parts.wasm, {
+      src, view, kind: this.getAttribute('kind') ?? undefined, height: Number(this.getAttribute('height')) || undefined, assetBase: base,
+      onSelect: (e) => {
+        const event = 'detail' in e && 'type' in e ? e : { view, type: 'select', detail: e };
+        this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));
+      },
+      onDataView: (dv) => {
+        this.resolved = dv;
+        this.dispatchEvent(new CustomEvent('caliper-dataview', { detail: dv, bubbles: true, composed: true }));
+      },
+    }) : null;
+    if (gen !== this.generation) {
+      handle?.destroy();
+      return;
+    }
+    if (!handle) {
+      this.attachTs(gen, view, src);
+      return;
+    }
+    this.wasm = handle;
+    this.parts.plate.hidden = true;
+    this.parts.wasm.hidden = false;
+    if (this.wanted) handle.setDataView(this.wanted);
+  }
+
+  private attachTs(gen: number, view: string, src: string | null): void {
     let client = this.sourceProp;
     if (!client && src) {
       client = acquire(src);
@@ -260,6 +309,17 @@ export class CaliperView extends HTMLElement {
   }
 
   private detach(): void {
+    if (this.wasm) {
+      try {
+        this.wasm.destroy();
+      } catch (e) {
+        console.warn('caliper-view:', e);
+      }
+      this.wasm = null;
+      this.parts.wasm.replaceChildren();
+    }
+    this.parts.wasm.hidden = true;
+    this.parts.plate.hidden = false;
     if (this.client) for (const s of this.subs) this.client.unsubscribe(s);
     this.subs = [];
     this.unlisten?.();
@@ -346,7 +406,7 @@ export class CaliperView extends HTMLElement {
   private ensureLive(kind: Kind): void {
     if (this.liveKind === kind || this.creating === kind) return;
     this.destroyLive();
-    const wantGpu = NEEDS_GPU.has(kind) && this.getAttribute('renderer') !== 'canvas';
+    const wantGpu = NEEDS_GPU.has(kind);
     if (!wantGpu) {
       this.makeLive(kind, null);
       return;
@@ -479,18 +539,11 @@ export class CaliperView extends HTMLElement {
     const event = { view, type, detail };
     if (type === 'select') this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));
     if (type === 'hover') {
-      // Hovers reach the producer at most every HOVER_MS, the newest one last.
-      this.hoverQueued = detail;
-      if (this.hoverTimer) return;
-      const wait = Math.max(0, HOVER_MS - (performance.now() - this.lastHover));
-      this.hoverTimer = setTimeout(() => {
-        this.hoverTimer = null;
-        this.lastHover = performance.now();
-        const d = this.hoverQueued;
-        this.hoverQueued = null;
-        if (d) this.send({ view, type: 'hover', detail: d });
-      }, wait);
-      return;
+      // At most 30 hovers per second reach the producer; a hover inside that
+      // interval is dropped, not queued (wire protocol, Events).
+      const now = performance.now();
+      if (now - this.lastHover < HOVER_MS) return;
+      this.lastHover = now;
     }
     this.send(event);
   }

@@ -128,23 +128,31 @@ export class HeatmapView implements LiveView {
     return ax.start + Math.floor((i * ax.count) / ax.size) * ax.step;
   }
 
-  private cellDetail(cell: Cell): Record<string, unknown> {
-    const s = this.snap!;
-    const d: Record<string, unknown> = { row: cell.r, col: cell.c };
-    if (this.image) {
-      const o = (cell.r * this.cols + cell.c) * 4;
-      d.rgba = Array.from(s.data.subarray(o, o + 4));
-    } else {
-      const v = (s.data as Float32Array)[cell.r * this.cols + cell.c];
-      d.value = Number.isFinite(v) ? v : null;
-    }
+  /** The half-open source range that payload indices [i0, i1) stand for. */
+  private static range(ax: PayloadAxis | undefined, i0: number, i1: number): [number, number] {
+    if (!ax || !ax.size) return [i0, i1];
+    const p0 = Math.floor((i0 * ax.count) / ax.size), p1 = Math.ceil((i1 * ax.count) / ax.size);
+    return [ax.start + p0 * ax.step, ax.start + (p1 - 1) * ax.step + 1];
+  }
+
+  /** Where a payload cell is in the source: the tile, and the row and column inside it. */
+  private locate(r: number, c: number): { tile: number | null; r: number; c: number } {
     const { row, col, tile } = this.axes();
     const t = this.snap?.tile;
-    if (t && tile && row && col) {
-      const k = Math.floor(cell.r / row.size) * t.cols + Math.floor(cell.c / col.size);
-      d.index = { [tile.dim]: HeatmapView.source(tile, k), [row.dim]: HeatmapView.source(row, cell.r % row.size), [col.dim]: HeatmapView.source(col, cell.c % col.size) };
-    } else if (row && col) {
-      d.index = { [row.dim]: HeatmapView.source(row, cell.r), [col.dim]: HeatmapView.source(col, cell.c) };
+    if (!t || !tile || !row || !col) return { tile: null, r, c };
+    return { tile: Math.floor(r / row.size) * t.cols + Math.floor(c / col.size), r: r % row.size, c: c % col.size };
+  }
+
+  /** A pick or hover: source indices of the cell's first position, and its value. */
+  private cellDetail(cell: Cell): Record<string, unknown> {
+    const s = this.snap!;
+    const { row, col, tile } = this.axes();
+    const at = this.locate(cell.r, cell.c);
+    const d: Record<string, unknown> = { row: HeatmapView.source(row, at.r), col: HeatmapView.source(col, at.c) };
+    if (at.tile !== null) d.tile = HeatmapView.source(tile, at.tile);
+    if (!this.image) {
+      const v = (s.data as Float32Array)[cell.r * this.cols + cell.c];
+      if (Number.isFinite(v)) d.value = v;
     }
     return d;
   }
@@ -168,11 +176,11 @@ export class HeatmapView implements LiveView {
     } else {
       const d = this.cellDetail(cell);
       const { row, col, tile } = this.axes();
-      const idx = d.index as Record<string, number> | undefined;
       const parts: string[] = [];
-      if (idx && tile) parts.push(`${tile.dim} ${idx[tile.dim]}`);
-      parts.push(`${row?.dim ?? 'row'} ${idx && row ? idx[row.dim] : cell.r}`, `${col?.dim ?? 'col'} ${idx && col ? idx[col.dim] : cell.c}`);
-      const val = this.image ? `rgba ${(d.rgba as number[]).join(' ')}` : fmt((this.snap.data as Float32Array)[cell.r * this.cols + cell.c], 5);
+      if (tile && d.tile !== undefined) parts.push(`${tile.dim} ${d.tile}`);
+      parts.push(`${row?.dim ?? 'row'} ${d.row}`, `${col?.dim ?? 'col'} ${d.col}`);
+      const o = cell.r * this.cols + cell.c;
+      const val = this.image ? `rgba ${Array.from(this.snap.data.subarray(o * 4, o * 4 + 4)).join(' ')}` : fmt((this.snap.data as Float32Array)[o], 5);
       this.host.tooltip(`${parts.join('  ')}\n${val}`, x, y);
       if (changed) this.host.report('hover', d);
     }
@@ -188,17 +196,35 @@ export class HeatmapView implements LiveView {
     } else if (this.dragSel && phase === 'end') {
       const s = this.dragSel;
       this.dragSel = null;
-      if (Number.isNaN(x)) {
+      let r0 = 0, r1 = 0, c0 = 0, c1 = 0;
+      if (!Number.isNaN(x)) {
+        // In a mosaic the selection stays inside the tile where the drag began.
+        const { row, col } = this.axes();
+        const t = this.snap?.tile;
+        let rlo = 0, rhi = this.rows, clo = 0, chi = this.cols;
+        if (t && row && col) {
+          const tr = Math.floor(Math.max(0, Math.min(this.rows - 1, s.y0)) / row.size);
+          const tc = Math.floor(Math.max(0, Math.min(this.cols - 1, s.x0)) / col.size);
+          rlo = tr * row.size; rhi = rlo + row.size; clo = tc * col.size; chi = clo + col.size;
+        }
+        const cr = (v: number) => Math.max(rlo, Math.min(rhi, v));
+        const cc = (v: number) => Math.max(clo, Math.min(chi, v));
+        c0 = cc(Math.floor(Math.min(s.x0, s.x1))); c1 = cc(Math.ceil(Math.max(s.x0, s.x1)));
+        r0 = cr(Math.floor(Math.min(s.y0, s.y1))); r1 = cr(Math.ceil(Math.max(s.y0, s.y1)));
+      }
+      if (r1 > r0 && c1 > c0) {
+        this.selection = { r0, r1, c0, c1 };
+        const { row, col, tile } = this.axes();
+        const a = this.locate(r0, c0);
+        const d: Record<string, unknown> = {
+          rows: HeatmapView.range(row, a.r, a.r + (r1 - r0)), cols: HeatmapView.range(col, a.c, a.c + (c1 - c0)),
+        };
+        if (a.tile !== null) d.tile = HeatmapView.source(tile, a.tile);
+        this.host.report('select', d);
+      } else if (this.selection) {
+        // A shift-click clears the selection, which an empty detail reports.
         this.selection = null;
-      } else {
-        const clampR = (v: number) => Math.max(0, Math.min(this.rows, v));
-        const clampC = (v: number) => Math.max(0, Math.min(this.cols, v));
-        const c0 = clampC(Math.floor(Math.min(s.x0, s.x1))), c1 = clampC(Math.ceil(Math.max(s.x0, s.x1)));
-        const r0 = clampR(Math.floor(Math.min(s.y0, s.y1))), r1 = clampR(Math.ceil(Math.max(s.y0, s.y1)));
-        if (r1 > r0 && c1 > c0) {
-          this.selection = { r0, r1, c0, c1 };
-          this.host.report('select', { rows: [r0, r1], cols: [c0, c1] });
-        } else this.selection = null;
+        this.host.report('select', {});
       }
     }
     this.host.request('overlay');

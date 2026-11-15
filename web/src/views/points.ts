@@ -312,11 +312,16 @@ export class PointsView implements LiveView {
     return best >= 0 ? best : null;
   }
 
+  /** The source index of sample point i along the point dim (the first of its positions). */
+  private rowId(i: number): number {
+    const ax = this.snap?.axes[this.snap.axes.length - 1];
+    if (!ax || !ax.size) return i;
+    return ax.start + Math.floor((i * ax.count) / ax.size) * ax.step;
+  }
+
+  /** A pick or hover: the index in the sample and the source index. */
   private pointDetail(i: number): Record<string, unknown> {
-    const d: Record<string, unknown> = { index: i, position: Array.from(this.pos.subarray(3 * i, 3 * i + this.dims)) };
-    const aux = this.snap?.aux;
-    if (aux) d[this.classes ? 'label' : 'value'] = Number.isFinite(aux[i]) ? aux[i] : null;
-    return d;
+    return { index: i, row_id: this.rowId(i) };
   }
 
   private onHover(x: number, y: number): void {
@@ -327,13 +332,14 @@ export class PointsView implements LiveView {
     this.hover = i;
     if (i === null) this.host.tooltip(null);
     else {
-      const d = this.pointDetail(i);
       const lines = [`point ${i}`];
-      if ('label' in d) lines.push(`label ${d.label}`);
-      if ('value' in d) lines.push(`value ${fmt(d.value as number, 5)}`);
-      lines.push((d.position as number[]).map((v, k) => `${'xyz'[k]} ${fmt(v)}`).join('  '));
+      const row = this.rowId(i);
+      if (row !== i) lines[0] += `  row ${row}`;
+      const aux = this.snap?.aux;
+      if (aux) lines.push(this.classes ? `label ${aux[i]}` : `value ${fmt(aux[i], 5)}`);
+      lines.push(Array.from(this.pos.subarray(3 * i, 3 * i + this.dims)).map((v, k) => `${'xyz'[k]} ${fmt(v)}`).join('  '));
       this.host.tooltip(lines.join('\n'), x, y);
-      if (changed) this.host.report('hover', d);
+      if (changed) this.host.report('hover', this.pointDetail(i));
     }
     if (changed) this.host.request('overlay');
   }
@@ -352,6 +358,8 @@ export class PointsView implements LiveView {
       const rect = this.rect;
       this.lasso = null;
       if (Number.isNaN(x) || poly.length < 2) {
+        // A shift-click clears the selection, which an empty detail reports.
+        if (this.selected) this.host.report('select', {});
         this.selected = null;
         this.selCount = 0;
       } else {
@@ -393,7 +401,8 @@ export class PointsView implements LiveView {
     }
     this.selected = idx.length ? sel : null;
     this.selCount = idx.length;
-    const detail: Record<string, unknown> = { indices: idx.slice(0, LIMITS.maxEventIndices), count: idx.length };
+    const kept = idx.slice(0, LIMITS.maxEventIndices);
+    const detail: Record<string, unknown> = { indices: kept, row_ids: kept.map((i) => this.rowId(i)) };
     if (idx.length > LIMITS.maxEventIndices) detail.truncated = true;
     this.host.report('select', detail);
   }
