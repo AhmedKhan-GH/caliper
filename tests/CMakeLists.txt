@@ -146,6 +146,19 @@ if(TARGET caliper)
         CLEAN "${_cli_work}/cli-made")
     caliper_cli_test(new_reserved ARGS "new|test|${_cli_work}/reserved" EXIT 2
         ERROR "the CMake target \"test\" is reserved")
+
+    # The template of `caliper new`, configured, built and tested against
+    # this build's installed SDK, then checked with `caliper check`.
+    add_test(NAME caliper_cli_new_builds COMMAND "${CMAKE_COMMAND}"
+        "-DEXE=$<TARGET_FILE:caliper>"
+        "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-new-build"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DBUILD_TYPE=$<CONFIG>"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_new_build.cmake")
+    set_tests_properties(caliper_cli_new_builds PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
 endif()
 
 # ---------------------------------------------------------------------------
