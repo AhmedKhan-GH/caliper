@@ -65,6 +65,7 @@ export const LIMITS = {
   maxSections: 8,
   maxJsonDepth: 16,
   maxEventIndices: 32768,
+  handshakeTimeoutMs: 10000,
   pingIntervalMs: 10000,
   idleTimeoutMs: 30000,
   seriesRetainMin: 4096,

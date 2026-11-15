@@ -12,8 +12,10 @@ const VERSION = '0.1.0';
 interface Sub {
   view: string;
   dataView?: DataView;
-  /** SUBSCRIBE was sent on the current connection. */
+  /** SUBSCRIBE was sent on the current connection, for the view of this id. */
   sent: boolean;
+  viewId: number;
+  subscribeId: number;
 }
 
 /** Close codes after which reconnecting cannot help. */
@@ -32,9 +34,13 @@ export class SocketClient implements StreamClient {
   private nextSub = 1;
   private nextRequest = 1;
   private nextNonce = 1;
-  /** WELCOME received (and, from a hub, a session attached). */
+  /** Attached to a session: subscriptions may be sent. */
   private ready = false;
+  private welcomed = false;
   private hub = false;
+  private sessions: SessionIdentity[] = [];
+  private attached: string | null = null;
+  private attachSent: string | null = null;
   private closedByUs = false;
   private ended = false;
   private retries = 0;
@@ -82,7 +88,7 @@ export class SocketClient implements StreamClient {
 
   subscribe(view: string, dataView?: DataView): number {
     const sub = this.nextSub++;
-    this.subs.set(sub, { view, dataView, sent: false });
+    this.subs.set(sub, { view, dataView, sent: false, viewId: -1, subscribeId: -1 });
     this.sendSub(sub);
     return sub;
   }
@@ -113,7 +119,10 @@ export class SocketClient implements StreamClient {
 
   private open(): void {
     this.ready = false;
+    this.welcomed = false;
     this.hub = false;
+    this.attached = null;
+    this.attachSent = null;
     for (const s of this.subs.values()) s.sent = false;
     let ws: WebSocket;
     try {
@@ -167,9 +176,11 @@ export class SocketClient implements StreamClient {
     this.stopTimers();
     this.timer = setInterval(() => {
       const idle = performance.now() - this.lastInput;
-      if (idle > LIMITS.idleTimeoutMs) {
+      if (!this.welcomed && idle > LIMITS.handshakeTimeoutMs) {
+        this.ws?.close(CLOSE.handshakeTimeout);
+      } else if (idle > LIMITS.idleTimeoutMs) {
         this.ws?.close(CLOSE.idleTimeout);
-      } else if (idle > LIMITS.pingIntervalMs && !this.pinged && this.ready) {
+      } else if (idle > LIMITS.pingIntervalMs && !this.pinged && this.welcomed) {
         this.pinged = true;
         this.send({ type: 'ping', nonce: this.nextNonce++ });
       }
@@ -197,9 +208,18 @@ export class SocketClient implements StreamClient {
 
   private sendSub(sub: number): void {
     const s = this.subs.get(sub);
-    if (!s || !this.ready || !this.views.some((v) => v.name === s.view)) return;
+    const v = s && this.views.find((x) => x.name === s.view);
+    if (!s || !v || !this.ready) return;
     s.sent = true;
-    this.send({ type: 'subscribe', sub, view: s.view, request_id: this.nextRequest++, data_view: s.dataView });
+    s.viewId = v.id;
+    s.subscribeId = this.nextRequest++;
+    this.send({ type: 'subscribe', sub, view: s.view, request_id: s.subscribeId, data_view: s.dataView });
+  }
+
+  private setSession(info: SessionIdentity): void {
+    const changed = JSON.stringify(info) !== JSON.stringify(this.session);
+    this.session = info;
+    if (changed) emit(this.listeners, 'onSession', info);
   }
 
   private becomeReady(): void {
@@ -227,37 +247,38 @@ export class SocketClient implements StreamClient {
     }
     switch (msg.type) {
       case 'welcome':
+        // The server sends SESSIONS next, and VIEWS once this viewer is attached.
         this.hub = msg.role === 'hub';
-        if (!this.hub) {
-          this.session = msg.session ?? null;
-          emit(this.listeners, 'onSession', this.session);
-          this.becomeReady();
-        }
+        this.welcomed = true;
+        if (msg.session) this.setSession(msg.session);
         break;
       case 'sessions': {
-        if (!this.hub) break;
-        const list = msg.sessions;
-        const current = this.session && list.find((s) => s.id === this.session!.id);
-        if (current) {
-          this.session = current;
-          emit(this.listeners, 'onSession', current);
+        this.sessions = msg.sessions;
+        const mine = this.attached && this.sessions.find((s) => s.id === this.attached);
+        if (mine) {
+          this.setSession(mine);
           break;
         }
-        const pick = (this.wantSession && list.find((s) => s.id === this.wantSession))
-          || list.find((s) => s.state === 'live') || list[0];
-        if (pick) {
-          this.session = pick;
+        // A server with one live session attaches a new viewer to it; a viewer
+        // chooses only when it was told to, or when there are several.
+        const live = this.sessions.filter((s) => s.state === 'live');
+        const wanted = this.wantSession ? this.sessions.find((s) => s.id === this.wantSession) : undefined;
+        const pick = wanted ?? (live.length > 1 ? live.reduce((a, b) => (b.start_unix_ms > a.start_unix_ms ? b : a)) : undefined);
+        if (pick && pick.id !== this.attachSent) {
+          this.attachSent = pick.id;
           this.send({ type: 'attach', session: pick.id });
-          emit(this.listeners, 'onSession', pick);
         }
         break;
       }
       case 'views': {
-        if (this.hub && this.session && msg.session && msg.session !== this.session.id) break;
-        this.views = msg.views;
-        const names = new Set(msg.views.map((v) => v.name));
-        for (const s of this.subs.values()) if (!names.has(s.view)) s.sent = false;
-        if (!this.ready) this.becomeReady();
+        this.attached = msg.session ?? null;
+        const info = this.attached ? this.sessions.find((s) => s.id === this.attached) : undefined;
+        if (info) this.setSession(info);
+        this.views = this.attached || !this.hub ? msg.views : [];
+        const ids = new Map(this.views.map((v) => [v.name, v.id]));
+        // A producer ends the subscriptions of a view that disappears or is re-created.
+        for (const s of this.subs.values()) if (ids.get(s.view) !== s.viewId) s.sent = false;
+        if (this.views.length || this.attached) this.becomeReady();
         emit(this.listeners, 'onViews', this.views);
         for (const [sub, s] of this.subs) if (!s.sent) this.sendSub(sub);
         break;
@@ -268,17 +289,18 @@ export class SocketClient implements StreamClient {
       case 'series':
         if (this.subs.has(msg.sub)) emit(this.listeners, 'onSeries', msg);
         break;
-      case 'view_reply':
-        if (this.subs.has(msg.sub)) emit(this.listeners, 'onReply', msg);
+      case 'view_reply': {
+        const s = this.subs.get(msg.sub);
+        if (!s) break;
+        // A failed SUBSCRIBE leaves no subscription; it is sent again when the views change.
+        if (msg.error && msg.request_id === s.subscribeId) s.sent = false;
+        emit(this.listeners, 'onReply', msg);
         break;
+      }
       case 'ping':
         this.send({ type: 'pong', nonce: msg.nonce });
         break;
       case 'error':
-        if (msg.code === 'unknown_view' && msg.sub !== undefined) {
-          const s = this.subs.get(msg.sub);
-          if (s) s.sent = false;
-        }
         emit(this.listeners, 'onError', msg);
         break;
       case 'bye':

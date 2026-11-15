@@ -1,0 +1,177 @@
+// Shared helpers of the Playwright tests: a static server for web/, the
+// harness page, golden frames fetched at run time, PNG decoding and the
+// screenshot folder.
+
+import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
+
+export const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const REPO = path.resolve(WEB, '..');
+/** Screenshots go to $CALIPER_SHOTS, or test-results/shots. */
+export const SHOTS = process.env.CALIPER_SHOTS ?? path.join(WEB, 'test-results', 'shots');
+
+const TYPES: Record<string, string> = {
+  '.html': 'text/html', '.js': 'text/javascript', '.woff': 'font/woff', '.json': 'application/json', '.map': 'application/json',
+};
+
+/** Serves the files under root on 127.0.0.1; returns the origin and a close function. */
+export async function serve(root: string, extra?: (url: string) => string | null): Promise<{ origin: string; close: () => void }> {
+  const srv = http.createServer((req, res) => {
+    const name = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname);
+    const mapped = extra?.(name);
+    const file = mapped ?? path.join(root, name);
+    if (!file.startsWith(root) && !mapped) return void res.writeHead(403).end();
+    if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) return void res.writeHead(404).end();
+    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+    fs.createReadStream(file).pipe(res);
+  });
+  await new Promise<void>((ok) => srv.listen(0, '127.0.0.1', ok));
+  const port = (srv.address() as { port: number }).port;
+  return { origin: `http://127.0.0.1:${port}`, close: () => srv.close() };
+}
+
+/** The render path a project expects for heatmaps, images and points. */
+export function gpuPath(info: TestInfo): 'webgpu' | 'canvas2d' {
+  return info.project.name === 'canvas2d' ? 'canvas2d' : 'webgpu';
+}
+
+export const test = base.extend<{ harness: Page }, { server: string }>({
+  server: [async ({}, use) => {
+    const s = await serve(WEB, (name) => (name === '/caliper-views-loader.js' ? path.join(WEB, 'test', 'stub-loader.js') : null));
+    await use(s.origin);
+    s.close();
+  }, { scope: 'worker' }],
+  harness: async ({ page, server }, use) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text());
+    });
+    await page.goto(`${server}/test/harness.html`);
+    await page.waitForFunction(() => 'harness' in window && customElements.get('caliper-view'));
+    await use(page);
+    expect(errors, 'page errors').toEqual([]);
+  },
+});
+export { expect };
+
+/** Saves a screenshot under SHOTS with the project's name. */
+export function shotPath(info: TestInfo, name: string): string {
+  fs.mkdirSync(SHOTS, { recursive: true });
+  return path.join(SHOTS, `${name}-${info.project.name}.png`);
+}
+
+// --- golden frames -------------------------------------------------------------
+
+/**
+ * The folder of the wire v3 golden frames: the checkout's own copy when it has
+ * one, otherwise a copy taken with git show from the branch that holds them
+ * (CALIPER_WIRE_REF, sprint2 or sprint2-proto), never checked in here.
+ */
+export function goldenFrames(): string {
+  const inTree = path.join(REPO, 'tests', 'fixtures', 'wire_v3');
+  if (fs.existsSync(path.join(inTree, 'snapshot.bin'))) return inTree;
+  return fromGit('tests/fixtures/wire_v3', path.join(WEB, 'test-results', 'wire_v3'));
+}
+
+/** The Python codec _wire.py: the checkout's own, or a copy from git. */
+export function wireModule(): string {
+  const inTree = path.join(REPO, 'python', 'caliper', '_wire.py');
+  if (fs.existsSync(inTree)) return inTree;
+  return path.join(fromGit('python/caliper/_wire.py', path.join(WEB, 'test-results', 'wire-py')), '_wire.py');
+}
+
+function fromGit(what: string, dest: string): string {
+  const refs = [process.env.CALIPER_WIRE_REF, 'sprint2', 'sprint2-proto'].filter(Boolean) as string[];
+  const git = (...args: string[]) => execFileSync('git', ['-C', REPO, ...args]);
+  for (const ref of refs) {
+    let files: string[];
+    try {
+      files = git('ls-tree', '-r', '--name-only', ref, what).toString().split('\n').filter(Boolean);
+    } catch {
+      continue;
+    }
+    if (!files.length) continue;
+    fs.rmSync(dest, { recursive: true, force: true });
+    for (const f of files) {
+      const rel = files.length === 1 && f === what ? path.basename(f) : path.relative(what, f);
+      const out = path.join(dest, rel);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, git('show', `${ref}:${f}`));
+    }
+    return dest;
+  }
+  throw new Error(`${what} is neither in the checkout nor on ${refs.join(', ')}`);
+}
+
+// --- PNG decoding ---------------------------------------------------------------
+
+export interface Pixels { width: number; height: number; data: Uint8Array; at(x: number, y: number): [number, number, number, number] }
+
+/** Decodes an 8-bit RGB or RGBA PNG (what Chromium's screenshots are). */
+export function decodePng(buf: Buffer): Pixels {
+  let pos = 8, width = 0, height = 0, type = 0;
+  const idat: Buffer[] = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const kind = buf.toString('ascii', pos + 4, pos + 8);
+    const body = buf.subarray(pos + 8, pos + 8 + len);
+    if (kind === 'IHDR') {
+      width = body.readUInt32BE(0);
+      height = body.readUInt32BE(4);
+      if (body[8] !== 8) throw new Error('only 8-bit PNGs');
+      type = body[9];
+    } else if (kind === 'IDAT') idat.push(body);
+    pos += 12 + len;
+  }
+  const ch = type === 6 ? 4 : type === 2 ? 3 : 0;
+  if (!ch) throw new Error(`PNG colour type ${type}`);
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const stride = width * ch;
+  const out = new Uint8Array(width * height * 4);
+  const prev = new Uint8Array(stride), cur = new Uint8Array(stride);
+  for (let y = 0; y < height; y++) {
+    const f = raw[y * (stride + 1)];
+    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    for (let i = 0; i < stride; i++) {
+      const a = i >= ch ? cur[i - ch] : 0, b = prev[i], c = i >= ch ? prev[i - ch] : 0;
+      let v = line[i];
+      if (f === 1) v += a;
+      else if (f === 2) v += b;
+      else if (f === 3) v += (a + b) >> 1;
+      else if (f === 4) {
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+      cur[i] = v & 255;
+    }
+    for (let x = 0; x < width; x++) {
+      for (let k = 0; k < 3; k++) out[(y * width + x) * 4 + k] = cur[x * ch + k];
+      out[(y * width + x) * 4 + 3] = ch === 4 ? cur[x * ch + 3] : 255;
+    }
+    prev.set(cur);
+  }
+  return {
+    width, height, data: out,
+    at: (x, y) => {
+      const o = (Math.floor(y) * width + Math.floor(x)) * 4;
+      return [out[o], out[o + 1], out[o + 2], out[o + 3]];
+    },
+  };
+}
+
+/** Screenshot of an element's drawing area, decoded. */
+export async function bodyPixels(page: Page, selector: string): Promise<{ px: Pixels; box: { x: number; y: number } }> {
+  const box = await page.evaluate((sel) => {
+    const el = document.querySelector(sel) as HTMLElement;
+    const r = el.shadowRoot!.querySelector('.body')!.getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  }, selector);
+  const png = await page.screenshot({ clip: box });
+  return { px: decodePng(png), box };
+}
