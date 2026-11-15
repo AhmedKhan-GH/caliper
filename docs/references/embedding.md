@@ -5,15 +5,23 @@ the host-neutral services, `HostRenderer` (Metal or Vulkan), the tensor bridge
 and the geometry ladder. It sits behind a small C ABI, so a host binary can run
 the applet canvas inside a view it owns without linking ImGui, torch or any
 renderer type. The `caliper` executable is the first embedder. The second
-in-tree embedder is `examples/embed_host/`, an AppKit host of about 250 lines
-(`main.mm`) with a Win32 counterpart (`main_win32.cpp`), which this page
-mirrors.
+in-tree embedder is `examples/embed_host/`, an AppKit host of about 260 lines
+(`main.mm`) with a Win32 counterpart (`main_win32.cpp`) and an offscreen mode
+they share (`embed_host.h`), which this page mirrors. A program outside this
+repository builds against the installed [`caliper-embed`
+package](#the-caliper-embed-package), as `embed_host` does in the
+`caliper_embed_install` test; the guide
+[Embed Caliper in a program](../guides/embed-caliper.md) walks through it.
 
 This page describes the embedder-facing contract. It is not the applet-facing
 ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](abi.md) and the
 [C++ sugar](sugar.md). `caliper/embed.h` lives on a separate include root, so an
 applet cannot `#include` it. Embedding a core from inside an applet would be a
-category error, and the include topology rules it out.
+category error, and the include topology rules it out: the installed headers
+sit under `include/caliper-embed`, which no SDK target exposes, and
+`caliper_sdk_install` checks that an applet source including `caliper/embed.h`
+fails to compile against every SDK target, even with both packages in one
+prefix.
 
 The embed ABI has run on both ecosystems: Metal on Apple Silicon and
 Vulkan with an `HWND` on Windows. `CALIPER_EMBED_API_VERSION` is 1. The labels
@@ -124,7 +132,8 @@ those canvases and never paints applet pixels.
   touches shared UI state must marshal to its UI thread.
 - **Window mode has no automated test.** The windowed canvas is checked by
   running `embed_host` on each platform. Automated byte-exactness rides the
-  offscreen `read_pixels` tests, which pass on both backends.
+  offscreen `read_pixels` tests, which pass on both backends, and
+  `caliper_embed_install` runs `embed_host` in its offscreen mode.
 - **GL is not an embed target.** GL's context ownership is GLFW-coupled. A core whose resolved
   backend is GL refuses at `attach_canvas` with "embed requires Metal or
   Vulkan".
@@ -161,7 +170,8 @@ if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
 The macros are integer constant expressions, so `#if` can test them, and the
 call needs no core and may run on any thread. `CALIPER_EMBED_HAVE_VIEWS`
 remains defined as 1 for code that tested for the views before the version
-call existed.
+call existed. The [`caliper-embed` package](#the-caliper-embed-package) carries
+the same version.
 
 ## Reaching services from a host
 
@@ -341,6 +351,111 @@ the client and viewer C API that feed it from another process. Both are
 macOS/Metal only today; the design is in
 [Live streaming](../explanations/live-streaming.md).
 
+## The caliper-embed package
+
+`cmake --install <build> --prefix <prefix> --component embed` installs the
+`caliper-embed` CMake package on macOS and Windows. It is separate from the SDK
+(`--component sdk`) and goes into the SDK's prefix or a prefix of its own.
+
+| Installed path | Contents |
+|---|---|
+| `lib/libcaliper_embed.dylib` (macOS); `bin/caliper_embed.dll` and `lib/caliper_embed.lib` (Windows) | The embedding library. |
+| `include/caliper-embed/caliper/` | `embed.h`, `live.h` and `live_views.h`, with copies of the SDK's C headers they include and of the service tables `caliper_core_get_service` returns: `tensor.h`, `arrow_c.h` and `services/`. |
+| `lib/cmake/caliper-embed/` | `caliper-embed-config.cmake`, its version file and the exported target. |
+| `share/caliper-embed/` | `LICENSE` and `NOTICE`. |
+
+`find_package(caliper-embed CONFIG)` gives one imported target,
+`caliper::embed`, which carries the library and the include root
+`include/caliper-embed`. The package version is the interface version
+([Versions](#versions)), 1.4.0, with CMake's `SameMajorVersion` rule: a request
+for 1.2 accepts 1.4, and a request for 2 refuses it. In the core build
+`caliper::embed` is an alias of the `caliper_embed` target, so one
+`target_link_libraries` line works in the tree and outside it.
+
+### One shared library
+
+`libcaliper` is a static library over a dozen more: `caliper_host_lib`, the
+Metal or Vulkan backend, DuckDB, ImGui, ImPlot, ImPlot3D, ImGuiFileDialog,
+GLFW and GLEW. Shipping those archives would make every embedder link all of
+them and would put their symbols beside the embedder's own copies of the same
+libraries. The package ships one shared library instead, `caliper_embed`,
+built from `libcaliper` and everything behind it, which exports only the C
+functions that `embed.h`, `live.h` and `live_views.h` declare (56 on macOS).
+Everything else stays inside it: an embedder keeps its own ImGui, GLFW or
+DuckDB apart from the core's, and the frameworks the core needs (Metal,
+QuartzCore, Cocoa, IOKit, CoreVideo, OpenGL) are load commands of the library
+rather than link items of the embedder.
+
+`cmake/CaliperEmbed.cmake` reads the export list from the three headers at
+configure time. On macOS it becomes an exported-symbols list, and on Windows a
+module-definition file that leaves out the `caliper_live_*` client and listing
+calls, which exist on macOS only. On macOS `caliper_embed_install` checks that
+the library exports exactly the C functions that `libcaliper.a` defines. The
+`caliper` executable, the test binaries and the Python extension still link
+the static `libcaliper`.
+
+On macOS the install name is `@rpath/libcaliper_embed.dylib`. A program built
+in its own build folder finds the library through the build rpath that CMake
+adds; an installed program needs an rpath to `<prefix>/lib`. On Windows the
+program needs `caliper_embed.dll` beside it or on `PATH`, and `embed_host`
+copies the DLL beside itself after each build.
+
+### Building against the package
+
+```sh
+cmake --install cmake-build-release --prefix <prefix> --component embed
+cp -R examples/embed_host <work>/embed_host
+cmake -S <work>/embed_host -B <work>/embed_host-build -DCMAKE_PREFIX_PATH=<prefix>
+cmake --build <work>/embed_host-build
+```
+
+`examples/embed_host/CMakeLists.txt` calls `cmake_minimum_required`, `project`
+and `find_package(caliper-embed 1.4 CONFIG REQUIRED)` only when it is the
+top-level project, as `examples/hello` does with the SDK, and links the same
+target in both builds. The frameworks serve the host's own window code:
+
+```cmake
+target_link_libraries(embed_host PRIVATE
+    caliper::embed
+    "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
+```
+
+### The offscreen mode of embed_host
+
+With `CALIPER_EMBED_OFFSCREEN=1`, `embed_host` runs without a window. `main()`
+takes this path before it creates an `NSApplication`, a window class or a
+window, so nothing appears on screen. It creates the core, attaches a
+`CALIPER_CANVAS_OFFSCREEN` canvas of 1280x800, loads the applet named on the
+command line, pumps frames for `CALIPER_EMBED_EXIT_AFTER` seconds (1 by
+default), reads the last frame back with `caliper_core_read_pixels`, prints
+what it did and exits 0 when the applet drew, otherwise 1. Both modes check
+the library's version first and read the applets folder from
+`CALIPER_EMBED_APPLETS`. A run of the build above on Apple Silicon:
+
+```text
+$ CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_APPLETS=<applets> \
+      <work>/embed_host-build/embed_host dev.caliper.hello
+[embed-host] offscreen mode, embed 1.4.0
+[embed-host] info: renderer: metal
+[feed] macOS provider: 5 channels live (cpu=1 mem=1 thermal=1 gpu=1 fan=1 temp=0 power=0) @ 10 Hz
+[embed-host] info: canvas attached: 1280x800 @1.000000x (offscreen)
+[embed-host] info: [applet] hello.on_init
+[embed-host] info: applet loaded: dev.caliper.hello
+[embed-host] info: [applet] hello.on_cleanup
+[embed-host] offscreen: 43 frames of dev.caliper.hello at 1280x800 in 1.02 s, 13310 drawn pixels in the last frame
+```
+
+`caliper_embed_install` (label `embed`) runs that whole path. It installs the
+embed component alone into a work folder, checks the installed tree, builds a
+copy of `examples/embed_host` there with only the package on
+`CMAKE_PREFIX_PATH`, checks that the build names nothing in the source tree,
+and runs the copy in its offscreen mode on a copy of the `hello` fixture, with
+`HOME` and the user applets folder inside the work folder. When the canvas
+cannot attach, as on a machine without a GPU, the test reports Skipped, and
+`CALIPER_REQUIRE_GPU=1` makes that a failure. `CALIPER_EMBED_PROBE_DIR` sets
+the work folder, which CI puts outside the checkout. The Windows build of the
+package and of the offscreen mode has not been run yet.
+
 ## The torch-free build
 
 libcaliper (core, Metal renderer, embed C ABI) never included a torch header.
@@ -397,15 +512,10 @@ list used to drag the chrome widgets into `embed_host` and the Python
 extension. DuckDB now reaches an embedder through `caliper_host_lib`, and
 imgui, implot, implot3d and ImGuiFileDialog through `caliper::ui_stack`.
 
-An embedder links `libcaliper caliper::sdk` and nothing of the exe's list,
-plus whatever its own window code needs. `examples/embed_host` on macOS:
-
-```cmake
-target_link_libraries(embed_host PRIVATE
-    libcaliper caliper::sdk
-    "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
-```
-
+Inside the core build, an embedder can link `libcaliper caliper::sdk` and
+nothing of the exe's list, plus whatever its own window code needs.
+`examples/embed_host` links `caliper::embed` instead, the shared library of the
+[package](#the-caliper-embed-package), which carries all of that inside it.
 `caliper_embed_tests` links `doctest::doctest libcaliper caliper::sdk` only, so
 it proves libcaliper's link interface is self-sufficient. The Python extensions
 link the same two targets plus the Apple frameworks (and `glfw` for
@@ -451,6 +561,10 @@ A case-insensitive `torch` grep over the binaries gives false positives from
 DuckDB symbol names (`OperatorChildren`, `VectorChildIndex`), hence the
 namespace-anchored patterns. `otool -L` lists only system frameworks, libc++
 and libobjc, and the torch-free embed binaries carry no `LC_RPATH` at all.
+These lines predate the embedding library: `embed_host` now also loads
+`@rpath/libcaliper_embed.dylib` through an `LC_RPATH` to the build folder, and
+in the torch build `otool -L` on that library lists only system frameworks,
+libc++ and libobjc.
 
 ## The header, verbatim
 
