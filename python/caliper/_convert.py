@@ -224,6 +224,27 @@ def plan_show(t, cm: int, vmin=None, vmax=None, raw: bool = False) -> Plan:
 # ---------------------------------------------------------------------------
 # points
 # ---------------------------------------------------------------------------
+_UPLOADS: list = []        # (private host copy, event) until the device has read it
+
+
+def _upload(t, device):
+    """Copy host tensor ``t`` to ``device`` without waiting. A blocking copy to
+    MPS waits for the whole queue (measured 408 ms behind a busy one), and a
+    non-blocking one reads the host memory when the device runs it, not when
+    it is queued; so the copy is made from a private host copy that is kept
+    until an event says the device has run it."""
+    if device.type != "mps":
+        return t.to(device)
+    import torch
+    _UPLOADS[:] = [u for u in _UPLOADS if not u[1].query()]
+    host = t.clone()
+    out = host.to(device, non_blocking=True)
+    ev = torch.mps.Event()
+    ev.record()
+    _UPLOADS.append((host, ev))
+    return out
+
+
 def plan_points(z, labels=None, classes=None, cm: int = 0, vmin=None, vmax=None) -> Plan:
     """(N, 2|3) positions -> (N, 3) float32 payload (z = 0 for 2-D input);
     labels (N,) -> aux float32 (cast on the device). ``classes`` = number of
@@ -248,7 +269,7 @@ def plan_points(z, labels=None, classes=None, cm: int = 0, vmin=None, vmax=None)
         if lab.device != z.device:
             if lab.device.type != "cpu":
                 raise ValueError(f"points: labels on {lab.device} but points on {z.device}")
-            lab = lab.to(z.device)     # host -> device upload, never device -> host
+            lab = _upload(lab, z.device)     # host -> device, never device -> host
     if classes is not None:
         classes = int(classes)
         if classes < 1:

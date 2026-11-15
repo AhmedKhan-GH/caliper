@@ -827,6 +827,37 @@ def test_apply_never_waits_for_the_device(fake):
     assert busy, f"the queue drained during the data view calls ({dt * 1e3:.1f} ms)"
 
 
+@requires_mps
+def test_points_with_cpu_labels_never_wait_for_the_device():
+    """plan_points uploads CPU labels for MPS points without waiting behind the
+    queue, and they arrive as they were at the call even if the caller then
+    reuses its buffer (a non-blocking copy reads host memory when it runs)."""
+    from caliper._convert import plan_points
+    from caliper._ring import RingSlot
+    dev = torch.device("mps")
+    z = torch.randn(1000, 2, device=dev)
+    labels = torch.arange(1000, dtype=torch.float32)
+    plan_points(z, labels)                              # warm up
+    a = torch.randn(4096, 4096, device=dev)
+    torch.mps.synchronize()
+    x = a
+    for _ in range(40):
+        x = x @ a
+        x = x / x.abs().amax()
+    ev = torch.mps.Event()
+    ev.record()
+    plan = plan_points(z, labels)
+    busy = not ev.query()
+    labels.fill_(-1.0)                                  # the caller reuses its buffer at once
+    stats = torch.zeros(8, device=dev)
+    slot = RingSlot(0, torch.zeros(1000, 3, device=dev), stats, torch.zeros(1000, device=dev), None,
+                    stats[0], stats[1], stats[2:8:2], stats[3:8:2])
+    plan.write(slot)
+    torch.mps.synchronize()
+    assert busy, "plan_points waited for the device"
+    assert torch.equal(slot.aux.cpu(), torch.arange(1000, dtype=torch.float32))
+
+
 def test_import_does_not_import_torch():
     code = "import sys, caliper, caliper._dataview; print('torch' in sys.modules)"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
