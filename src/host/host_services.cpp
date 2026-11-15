@@ -1,4 +1,5 @@
 #include "host_services.h"
+#include "negotiation.h"
 #include "job_system.h"
 #include "device_query.h"
 #include "metrics_store.h"
@@ -719,20 +720,6 @@ const CaliperExportV1_1 kExport11 = {sizeof(CaliperExportV1_1), &ex_caps,
     &ex_view_png, &ex_begin_sequence, &ex_frame, &ex_end_sequence, nullptr,
     &ex_last_error};
 
-const std::set<std::string> kIds = {CALIPER_UI_V1, CALIPER_LOG_V1,
-                                    CALIPER_JOBS_V1, CALIPER_DEVICE_V1,
-                                    CALIPER_METRICS_V1,
-                                    CALIPER_METRICS_V1_1,
-                                    CALIPER_TENSOR_BRIDGE_V1,
-                                    CALIPER_TENSOR_BRIDGE_V1_1,
-                                    CALIPER_TENSOR_BRIDGE_V1_2,
-                                    CALIPER_GEOMETRY_V1,
-                                    CALIPER_GEOMETRY_V1_1,
-                                    CALIPER_GEOMETRY_V1_2,
-                                    CALIPER_GEOMETRY_V1_3,
-                                    CALIPER_ARTIFACTS_V1, CALIPER_DATA_V1,
-                                    CALIPER_FEED_V1, CALIPER_EXPORT_V1,
-                                    CALIPER_EXPORT_V1_1};
 
 } // namespace
 
@@ -852,6 +839,8 @@ const void* services_get(const char* id) {
     return nullptr;   // unknown ids: NULL, never UB (§6b)
 }
 
-const std::set<std::string>& service_ids() { return kIds; }
+// The ids are listed once, in negotiation.cpp, where the loader also reads
+// them; every one must have a table above.
+const std::set<std::string>& service_ids() { return host_service_ids(); }
 
 } // namespace caliper_host

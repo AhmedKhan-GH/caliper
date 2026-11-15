@@ -8,9 +8,9 @@ messages below as the applet's status text — no code from the applet is
 executed.
 
 The checks run in a fixed order (see [Compatibility](../explanations/compatibility.md)): **ABI epoch → minimum host
-version → required services**. The first failing check wins, so only one message
-is ever shown. These strings are contractual: the loader and the landing screen
-reuse them verbatim.
+version → UI-stack hash → libtorch version → required services → data schema**.
+The first failing check wins, so only one message is ever shown. These strings
+are contractual: the loader and the landing screen reuse them verbatim.
 
 ## Negotiation refusals
 
@@ -18,11 +18,24 @@ reuse them verbatim.
 |------------------|---------------|------------|
 | `Built for ABI epoch {applet_epoch}; this host speaks {host_epoch} — check for an applet update.` | The applet's `abi_epoch` does not equal the host's ABI epoch. | Install a build of the applet that targets this host's epoch, or update the host to one that speaks the applet's epoch. |
 | `Requires host {min_host} or newer; this host is {host_version}.` | The manifest sets a `min_host` floor and the host's version is older than it (compared numerically, not lexically). | Update the host to at least `{min_host}`. Only fires when `min_host` is set; an empty `min_host` imposes no floor. |
+| `Built against UI stack {applet_ui_stack}; this host uses {host_ui_stack} — rebuild the applet against this host's SDK.` | The manifest's `[build].ui_stack` differs from the host's UI-stack hash. Fires only when both are present; a host built without a hash checks nothing. | Rebuild the applet against the SDK installed with this host. |
+| `Built against libtorch {applet_torch}; this host provides {host_torch}.` | The manifest's `[compat].torch` differs from the libtorch version the host provides. | Install a build of the applet made against `{host_torch}`, or run it on a host that provides `{applet_torch}`. |
+| `Built against libtorch {applet_torch}; this host provides no libtorch.` | The manifest sets `[compat].torch` and the host was built without libtorch. | Run the applet on a host built with libtorch `{applet_torch}`. |
 | `Requires a capability this host doesn't have: {service_id}.` | A service listed in the manifest's `required` array is not vended by this host. `{service_id}` is the **first** missing service in declaration order. | Run the applet on a host that provides `{service_id}`, or use an applet build that doesn't require it. Optional services never cause a refusal. |
+| `Stored data is schema {stored}; this applet reads schema {applet}.` | The manifest's `[data].schema` is lower than the schema recorded in the applet's data folder, which a newer version of the applet has opened. An applet without the key is never checked. | Install a version of the applet whose schema is at least `{stored}`. |
 
 Placeholders in `{braces}` are filled at runtime: `{applet_epoch}` / `{host_epoch}`
-are integers, `{min_host}` / `{host_version}` are semver strings like `0.6.0`, and
-`{service_id}` is a service id like `caliper.jobs.v1`.
+are integers, `{min_host}` / `{host_version}` are semver strings like `0.6.0`,
+`{service_id}` is a service id like `caliper.jobs.v1`, `{applet_torch}` /
+`{host_torch}` are libtorch version strings like `2.5.1`, `{applet_ui_stack}` /
+`{host_ui_stack}` are the first 12 characters of each UI-stack hash, and
+`{stored}` / `{applet}` are data-schema integers.
+
+The host records the highest data schema that has opened `data/<id>/` in the
+file `.caliper-data.toml` inside that folder. `launch()` checks the stamp again
+before it opens the library, so a stamp raised since the scan still refuses
+the applet with the same message and the same `Refused` status. It raises the
+stamp before `create()` and `initialize()` run.
 
 The required-services check runs a second time inside `launch()`. After the
 `dlopen` and the descriptor checks, the loader walks the binary's own
@@ -81,6 +94,7 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 | `descriptor id disagrees with manifest` | The descriptor's `id` is NULL or differs from the manifest's `id`. The manifest describes a different applet than the binary. | Make the manifest `id` and the descriptor `id` identical (rebuild if the descriptor is stale). |
 | `descriptor version disagrees with manifest` | The descriptor's `version` is NULL or differs from the manifest's `version`. | Bump manifest and descriptor to the same version and rebuild. |
 | `descriptor function table incomplete` | One of the required `api` entry points (`create`, `destroy`, `initialize`, `frame`, `cleanup`) is NULL. | Provide all five lifecycle functions; the `CALIPER_APPLET` macro wires them for you. |
+| `could not record the data schema in {stamp_path}` | The manifest declares `[data].schema`, and the host could not write the data-schema stamp in the applet's data folder. The library is open, but none of the applet's entry points has run. | Make the applet's data folder writable. |
 | `create() returned null` | `create()` ran cleanly but returned no instance — the applet declined to construct itself (e.g. an internal precondition failed). | Investigate the applet's `create`; return a valid instance or surface the real error from `initialize` instead. |
 | `initialize() returned false` | `initialize()` ran cleanly but reported failure. The loader then calls `destroy()` on the instance and marks the applet Failed. | Check the applet's own logs for why init refused (a required service or resource it couldn't obtain). |
 
@@ -99,8 +113,9 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 `SIGSEGV (invalid memory access)`, `C++ exception: <what()>`, or
 `C++ exception (non-std type)`. `{label}` is the label the job was submitted
 with, `{dlerror}` is the platform loader's message, `{manifest_filename}` is the
-manifest file the applet was scanned from, and `{id}` is the manifest's
-`applet.id`.
+manifest file the applet was scanned from, `{id}` is the manifest's
+`applet.id`, and `{stamp_path}` is the stamp file `.caliper-data.toml` in the
+applet's data folder.
 
 "Restart it" above means `⌘R Restart` in the Inspector when the fault was a
 C++ exception, and a restart of Caliper when it was a signal (see

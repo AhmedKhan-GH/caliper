@@ -15,8 +15,12 @@ struct AppletManifest {
     std::string tag;
     uint32_t    abi_epoch = 0;
     std::string min_host;  // "" = no floor; else strict x.y.z
+    std::string torch;     // [compat].torch: exact libtorch version; "" = none
     std::vector<std::string> required_services;
     std::vector<std::string> optional_services;
+    std::string sdk;       // [build].sdk: SDK version that built it; a record only
+    std::string ui_stack;  // [build].ui_stack: UI-stack hash; "" = not checked
+    uint32_t    data_schema = 0;  // [data].schema; 0 = the key is absent
 };
 
 struct ManifestResult {

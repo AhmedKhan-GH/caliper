@@ -46,6 +46,19 @@ struct AppletEntry {
     bool stale_initialized = false;   // initialize() had succeeded: cleanup first
 };
 
+// The data-schema stamp (docs/explanations/compatibility.md): a small TOML
+// file the host keeps in each applet's data folder, recording the highest
+// [data].schema that has opened the folder. The applet never writes it.
+inline constexpr const char* kDataStampName = ".caliper-data.toml";
+// The schema recorded in <data_dir>/.caliper-data.toml; 0 when there is no
+// stamp or it cannot be read (a damaged stamp is ignored and rewritten by the
+// next launch that declares a schema).
+uint32_t read_data_schema_stamp(const std::string& data_dir);
+// Records `schema` when it is higher than the recorded one, through a
+// temporary file renamed over the stamp, so a reader never sees half a file.
+// True when the stamp now holds at least `schema`.
+bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema);
+
 // Manifest-first loader (docs/explanations/compatibility.md): scan() never dlopens; launch()
 // performs dlopen -> descriptor sanity -> guarded create/initialize.
 class AppletLoader {

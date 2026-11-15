@@ -1,8 +1,11 @@
 #include "applet_loader.h"
 #include "crash_guard.h"
 #include "job_system.h"
+#include <toml++/toml.hpp>
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -73,6 +76,44 @@ std::string find_binary(const fs::path& dir, const std::string& stem) {
 
 } // namespace
 
+uint32_t read_data_schema_stamp(const std::string& data_dir) {
+    const fs::path stamp = fs::path(data_dir) / kDataStampName;
+    std::error_code ec;
+    if (!fs::is_regular_file(stamp, ec)) return 0;
+    try {
+        const toml::table t = toml::parse_file(stamp.string());
+        const auto* n = t["schema"].as_integer();
+        if (!n || n->get() < 1 || n->get() > INT32_MAX) return 0;
+        return (uint32_t)n->get();
+    } catch (...) {
+        return 0;
+    }
+}
+
+bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema) {
+    if (schema == 0) return true;
+    if (read_data_schema_stamp(data_dir) >= schema) return true;
+    std::error_code ec;
+    fs::create_directories(data_dir, ec);
+    const fs::path stamp = fs::path(data_dir) / kDataStampName;
+    const fs::path tmp = fs::path(data_dir) / (std::string(kDataStampName) + ".tmp");
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        out << "# Written by the Caliper host. The highest data schema that has\n"
+               "# opened this folder; an applet with a lower schema is refused.\n"
+               "schema = " << schema << "\n";
+        out.flush();
+        if (!out) return false;
+    }
+    fs::rename(tmp, stamp, ec);   // replaces the old stamp in one step
+    if (ec) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+    return true;
+}
+
 AppletLoader::AppletLoader(HostCaps caps, std::string data_root)
     : caps_(std::move(caps)), data_root_(std::move(data_root)) {}
 
@@ -116,10 +157,13 @@ int AppletLoader::scan(const std::string& dir) {
         const std::string stem =
             fname.substr(0, fname.size() - std::string(kManifestSuffix).size());
         entry.dylib_path = find_binary(e.path().parent_path(), stem);
+        const uint32_t stored = entry.manifest.data_schema
+                                    ? read_data_schema_stamp(entry.data_dir)
+                                    : 0;
         if (entry.dylib_path.empty()) {
             entry.status = AppletStatus::Failed;
             entry.status_text = "applet binary not found next to " + fname;
-        } else if (auto n = negotiate(entry.manifest, caps_); !n.ok) {
+        } else if (auto n = negotiate(entry.manifest, caps_, stored); !n.ok) {
             entry.status = AppletStatus::Refused;
             entry.status_text = n.reason;
         } else {
@@ -150,6 +194,18 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
         a.status_text = std::move(why);
         return false;
     };
+
+    // The stamp may have been raised since scan() (another copy of the
+    // applet, or another process using the same data folder): checked again
+    // before the library is opened.
+    if (a.manifest.data_schema != 0) {
+        const uint32_t stored = read_data_schema_stamp(a.data_dir);
+        if (a.manifest.data_schema < stored) {
+            a.status = AppletStatus::Refused;
+            a.status_text = data_schema_reason(stored, a.manifest.data_schema);
+            return false;
+        }
+    }
 
     if (!a.handle) {
         a.handle = lib_open(a.dylib_path.c_str());
@@ -191,6 +247,12 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
 
     std::error_code ec;
     fs::create_directories(a.data_dir, ec);
+    // The stamp is raised before any applet code can touch the folder: the
+    // applet migrates its data in initialize(), so data that a failed
+    // initialize() left half-migrated is still marked.
+    if (!raise_data_schema_stamp(a.data_dir, a.manifest.data_schema))
+        return fail("could not record the data schema in " +
+                    (fs::path(a.data_dir) / kDataStampName).string());
     host_blocks_[idx] = host_proto;
     host_blocks_[idx].applet_data_dir = a.data_dir.c_str();
 

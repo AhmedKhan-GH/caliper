@@ -867,10 +867,8 @@ private:
     std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
     LandingScreen landing_;
-    caliper_host::AppletLoader loader_{
-        caliper_host::HostCaps{2, caliper_host::kHostVersionStr,
-                               caliper_host::service_ids()},
-        caliper::app_data_path("data")};
+    caliper_host::AppletLoader loader_{caliper_host::host_caps(),
+                                       caliper::app_data_path("data")};
     caliper_host::FrameWatchdog watchdog_;
     int active_applet_ = -1;
     int pending_home_ = -1;   // applet idx awaiting post-render teardown (Home)

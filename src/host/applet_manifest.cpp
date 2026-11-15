@@ -1,6 +1,7 @@
 #include "applet_manifest.h"
 #include <toml++/toml.hpp>
 #include <cctype>
+#include <cstdint>
 #include <sstream>
 
 namespace caliper_host {
@@ -38,6 +39,12 @@ bool is_valid_applet_id(const std::string& id) {
 namespace {
 ManifestResult fail(std::string msg) {
     ManifestResult r; r.error = std::move(msg); return r;
+}
+// A present key whose value must be a non-empty string.
+bool non_empty_string(toml::node_view<toml::node> v, std::string& dst) {
+    if (!v.is_string()) return false;
+    dst = *v.value<std::string>();
+    return !dst.empty();
 }
 std::vector<std::string> read_array(const toml::table& t, const char* key) {
     std::vector<std::string> out;
@@ -89,10 +96,35 @@ ManifestResult parse_manifest_text(const std::string& toml_text) {
             return fail("compat.min_host is not strict semver x.y.z: " + *mh);
         r.manifest.min_host = *mh;
     }
+    if (auto torch = (*compat)["torch"]) {
+        if (!non_empty_string(torch, r.manifest.torch))
+            return fail("compat.torch is not a non-empty string");
+    }
 
     if (auto* services = root["services"].as_table()) {
         r.manifest.required_services = read_array(*services, "required");
         r.manifest.optional_services = read_array(*services, "optional");
+    }
+
+    // [build] is written by the build, never by hand. sdk is a record for
+    // diagnosis, so a value of the wrong type is ignored rather than refused;
+    // ui_stack gates loading, so it must be well formed when present.
+    if (auto* build = root["build"].as_table()) {
+        if (auto sdk = (*build)["sdk"]; sdk.is_string())
+            r.manifest.sdk = *sdk.value<std::string>();
+        if (auto ui = (*build)["ui_stack"]) {
+            if (!non_empty_string(ui, r.manifest.ui_stack))
+                return fail("build.ui_stack is not a non-empty string");
+        }
+    }
+
+    if (auto* data = root["data"].as_table()) {
+        if (auto schema = (*data)["schema"]) {
+            const auto* n = schema.as_integer();
+            if (!n || n->get() < 1 || n->get() > INT32_MAX)
+                return fail("data.schema is not an integer >= 1");
+            r.manifest.data_schema = (uint32_t)n->get();
+        }
     }
 
     r.ok = true;

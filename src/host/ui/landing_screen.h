@@ -20,8 +20,9 @@
 //                                 status; ↑↓ select, Enter / double-click
 //                                 launch)
 //                   Inspector    (the selected applet's manifest: id, version,
-//                                 tag, summary, required / optional services,
-//                                 status text, binary path; ⏎ Launch plate,
+//                                 tag, summary, libtorch, required / optional
+//                                 services, data schema, SDK, status text,
+//                                 binary path; ⏎ Launch plate,
 //                                 and ⌘R Restart beside it for an applet
 //                                 quarantined by a C++ exception)
 //                   Activity     (host log: renderer, scans, launches, jobs,

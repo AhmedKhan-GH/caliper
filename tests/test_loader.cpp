@@ -204,3 +204,136 @@ TEST_CASE("loader: descriptor-required service missing refuses with the friendly
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+
+// ---------------------------------------------------------------------------
+// Data-schema stamp (docs/explanations/compatibility.md, "The version of each
+// applet's stored data").
+// ---------------------------------------------------------------------------
+
+// A fresh folder under the system temp dir, removed when the case ends.
+struct TempDir {
+    fs::path path;
+    explicit TempDir(const std::string& name)
+        : path(fs::temp_directory_path() / ("caliper-test-" + name)) {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+        fs::create_directories(path);
+    }
+    ~TempDir() {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+};
+
+// Copies the hello fixture's library into `dir` as <stem> beside a manifest
+// for dev.caliper.hello 0.1.0 (what its descriptor says) plus `extra` TOML.
+static void hello_copy(const fs::path& dir, const std::string& stem,
+                       const std::string& extra = "") {
+    fs::create_directories(dir);
+    fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello"),
+                  dir / lib_name(stem), fs::copy_options::overwrite_existing);
+    std::ofstream(dir / (stem + ".caliper.toml")) <<
+        "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"0.1.0\"\n"
+        "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n" << extra;
+}
+
+TEST_CASE("data stamp: read, raise, never lowered") {
+    TempDir t("stamp");
+    const std::string d = (t.path / "data").string();
+    CHECK(read_data_schema_stamp(d) == 0);
+    CHECK(raise_data_schema_stamp(d, 2));
+    CHECK(read_data_schema_stamp(d) == 2);
+    CHECK(raise_data_schema_stamp(d, 1));      // lower: kept at 2
+    CHECK(read_data_schema_stamp(d) == 2);
+    CHECK(raise_data_schema_stamp(d, 5));
+    CHECK(read_data_schema_stamp(d) == 5);
+    CHECK_FALSE(fs::exists(fs::path(d) / (std::string(kDataStampName) + ".tmp")));
+    std::ofstream(fs::path(d) / kDataStampName) << "schema = {{{";
+    CHECK(read_data_schema_stamp(d) == 0);     // damaged: ignored
+}
+
+TEST_CASE("data stamp: raised before initialize(), even when it fails") {
+    caliper::testing::FixtureHost fx;
+    TempDir t("stamp-init");
+    hello_copy(t.path / "applets", "hello", "[data]\nschema=2\n");
+    const std::string data_root = (t.path / "data").string();
+    setenv("CALIPER_HELLO_INIT_FAIL", "1", 1);
+    AppletLoader L(caps(), data_root);
+    L.scan((t.path / "applets").string());
+    REQUIRE(L.count() == 1);
+    REQUIRE(L.at(0).status == AppletStatus::Ready);
+    CHECK_FALSE(L.launch(0, *fx.host()));
+    unsetenv("CALIPER_HELLO_INIT_FAIL");
+    CHECK(L.at(0).status_text == "initialize() returned false");
+    CHECK(read_data_schema_stamp(data_root + "/dev.caliper.hello") == 2);
+    L.close_all();
+}
+
+TEST_CASE("data stamp: an applet without a schema writes no stamp") {
+    caliper::testing::FixtureHost fx;
+    TempDir t("stamp-none");
+    hello_copy(t.path / "applets", "hello");
+    const std::string data_root = (t.path / "data").string();
+    AppletLoader L(caps(), data_root);
+    L.scan((t.path / "applets").string());
+    REQUIRE(L.launch(0, *fx.host()));
+    CHECK(fs::is_directory(data_root + "/dev.caliper.hello"));
+    CHECK_FALSE(fs::exists(fs::path(data_root) / "dev.caliper.hello" / kDataStampName));
+    L.close_all();
+}
+
+TEST_CASE("data stamp: a lower schema is refused before dlopen") {
+    TempDir t("stamp-refuse");
+    fs::create_directories(t.path / "applets");
+    std::ofstream(t.path / "applets" / "old.caliper.toml") <<
+        "[applet]\nid=\"x.old\"\nname=\"Old\"\nversion=\"1.0.0\"\n"
+        "[compat]\nabi_epoch=2\n[data]\nschema=2\n";
+    std::ofstream(t.path / "applets" / lib_name("old")) << "never opened";
+    const std::string data_root = (t.path / "data").string();
+    REQUIRE(raise_data_schema_stamp(data_root + "/x.old", 3));
+    AppletLoader L(caps(), data_root);
+    L.scan((t.path / "applets").string());
+    REQUIRE(L.count() == 1);
+    CHECK(L.at(0).status == AppletStatus::Refused);
+    CHECK(L.at(0).status_text == "Stored data is schema 3; this applet reads schema 2.");
+}
+
+TEST_CASE("data stamp: checked again at launch, before dlopen") {
+    caliper::testing::FixtureHost fx;
+    TempDir t("stamp-relaunch");
+    hello_copy(t.path / "applets", "hello", "[data]\nschema=2\n");
+    const std::string data_root = (t.path / "data").string();
+    AppletLoader L(caps(), data_root);
+    L.scan((t.path / "applets").string());
+    REQUIRE(L.at(0).status == AppletStatus::Ready);
+    // Another copy (or process) raised the stamp after the scan.
+    REQUIRE(raise_data_schema_stamp(data_root + "/dev.caliper.hello", 4));
+    CHECK_FALSE(L.launch(0, *fx.host()));
+    CHECK(L.at(0).status == AppletStatus::Refused);
+    CHECK(L.at(0).status_text == "Stored data is schema 4; this applet reads schema 2.");
+    CHECK(L.at(0).handle == nullptr);          // never opened
+    CHECK(count_log(fx, "hello.on_init") == 0);
+}
+
+TEST_CASE("loader: libtorch and UI-stack refusals come before dlopen") {
+    TempDir t("pins");
+    fs::create_directories(t.path);
+    std::ofstream(t.path / "t.caliper.toml") <<
+        "[applet]\nid=\"x.torch\"\nname=\"T\"\nversion=\"1.0.0\"\n"
+        "[compat]\nabi_epoch=2\ntorch=\"2.5.1\"\n";
+    std::ofstream(t.path / "u.caliper.toml") <<
+        "[applet]\nid=\"x.ui\"\nname=\"U\"\nversion=\"1.0.0\"\n"
+        "[compat]\nabi_epoch=2\n[build]\nui_stack=\"ffff0000ffff0000\"\n";
+    std::ofstream(t.path / lib_name("t")) << "never opened";
+    std::ofstream(t.path / lib_name("u")) << "never opened";
+    HostCaps c = caps();
+    c.ui_stack_hash = "0000ffff0000ffff";
+    AppletLoader L(c, (t.path / "data").string());
+    L.scan(t.path.string());
+    REQUIRE(L.count() == 2);
+    const int ti = find_by_id(L, "x.torch"), ui = find_by_id(L, "x.ui");
+    CHECK(L.at(ti).status == AppletStatus::Refused);
+    CHECK(L.at(ti).status_text == "Built against libtorch 2.5.1; this host provides no libtorch.");
+    CHECK(L.at(ui).status == AppletStatus::Refused);
+    CHECK(L.at(ui).status_text.find("UI stack ffff0000ffff") != std::string::npos);
+}

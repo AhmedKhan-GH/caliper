@@ -1337,10 +1337,17 @@ void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e) {
               col::parchment);
     field("Min host");
     mono_value(m.min_host, "none");
+    field("Libtorch");
+    mono_value(m.torch, "none");
     field("Required");
     list(m.required_services);
     field("Optional");
     list(m.optional_services);
+    field("Data schema");
+    mono_value(m.data_schema ? std::to_string(m.data_schema) : std::string(),
+               "none");
+    field("SDK");
+    mono_value(m.sdk, "unknown");
     field("Binary");
     cell_wrapped(e.dylib_path.empty() ? "missing" : e.dylib_path.c_str(), mono,
                  font_size::mono, col::faint);

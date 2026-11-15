@@ -229,11 +229,10 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     services_set_renderer(core->renderer.get());
 
     // STEP 4 (mirrors main.cpp:113-135): manifest-first discovery. The loader
-    // never dlopens here — scan() only reads manifests. service_ids() is a
-    // static set, valid independent of services_init.
-    core->loader = std::make_unique<AppletLoader>(
-        HostCaps{2, kHostVersionStr, service_ids()},
-        caliper::app_data_path("data"));
+    // never dlopens here — scan() only reads manifests. host_caps() is built from
+    // static values, valid independent of services_init.
+    core->loader = std::make_unique<AppletLoader>(host_caps(),
+                                                  caliper::app_data_path("data"));
     core->loader->scan(caliper::app_data_path("applets"));
     {
         namespace fs = std::filesystem;

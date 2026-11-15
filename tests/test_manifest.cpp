@@ -106,3 +106,62 @@ TEST_CASE("applet id validation") {
     CHECK_FALSE(is_valid_applet_id(std::string(129, 'a')));
     CHECK(is_valid_applet_id(std::string(128, 'a')));
 }
+
+// The versioning keys (docs/explanations/compatibility.md): [compat].torch,
+// [build].sdk, [build].ui_stack and [data].schema, all optional.
+static const char* kMinimal =
+    "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n";
+
+TEST_CASE("manifest: versioning keys parse") {
+    auto r = parse_manifest_text(
+        "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n"
+        "[compat]\nabi_epoch=2\ntorch=\"2.5.1\"\n"
+        "[build]\nsdk=\"0.7.0\"\nui_stack=\"0123456789abcdef\"\n"
+        "[data]\nschema=3\n");
+    REQUIRE(r.ok);
+    CHECK(r.manifest.torch == "2.5.1");
+    CHECK(r.manifest.sdk == "0.7.0");
+    CHECK(r.manifest.ui_stack == "0123456789abcdef");
+    CHECK(r.manifest.data_schema == 3);
+}
+
+TEST_CASE("manifest: versioning keys are absent by default") {
+    auto r = parse_manifest_text(kMinimal);
+    REQUIRE(r.ok);
+    CHECK(r.manifest.torch.empty());
+    CHECK(r.manifest.sdk.empty());
+    CHECK(r.manifest.ui_stack.empty());
+    CHECK(r.manifest.data_schema == 0);
+}
+
+TEST_CASE("manifest: malformed versioning keys are manifest errors") {
+    struct Case { const char* tail; const char* needle; };
+    const Case cases[] = {
+        {"[data]\nschema=0\n", "data.schema"},
+        {"[data]\nschema=-2\n", "data.schema"},
+        {"[data]\nschema=\"2\"\n", "data.schema"},
+        {"[data]\nschema=1.5\n", "data.schema"},
+        {"[build]\nui_stack=\"\"\n", "build.ui_stack"},
+        {"[build]\nui_stack=7\n", "build.ui_stack"},
+    };
+    for (auto& c : cases) {
+        const std::string text = std::string(kMinimal) + c.tail;
+        CAPTURE(text);
+        auto r = parse_manifest_text(text);
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.find(c.needle) != std::string::npos);
+    }
+    // [compat].torch sits in the [compat] table the minimal text opens last.
+    for (const char* torch : {"torch=\"\"\n", "torch=2\n"}) {
+        auto r = parse_manifest_text(std::string(kMinimal) + torch);
+        CAPTURE(torch);
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.find("compat.torch") != std::string::npos);
+    }
+}
+
+TEST_CASE("manifest: [build].sdk is a record, never an error") {
+    auto r = parse_manifest_text(std::string(kMinimal) + "[build]\nsdk=7\n");
+    REQUIRE(r.ok);
+    CHECK(r.manifest.sdk.empty());
+}
