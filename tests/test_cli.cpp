@@ -108,6 +108,18 @@ std::string slurp(const fs::path& p) {
 
 } // namespace
 
+TEST_CASE("cli: --hidden starts the app or dev with the window never shown") {
+    CHECK(parse({"--hidden"}).hidden);
+    CHECK(parse({"--hidden"}).command == Command::Run);
+    CHECK_FALSE(parse({}).hidden);
+    auto dev = parse({"dev", "/a", "--hidden", "--api"});
+    CHECK(dev.error.empty());
+    CHECK(dev.hidden);
+    CHECK(dev.api);
+    CHECK(parse({"list", "--hidden"}).error == "--hidden applies only to starting the app and dev");
+    CHECK(parse({"--hidden=1"}).error == "--hidden takes no value");
+}
+
 TEST_CASE("cli: subcommands and their operands parse") {
     CHECK(parse({}).command == Command::Run);
     CHECK(parse({"--help"}).command == Command::Help);

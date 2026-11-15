@@ -12,6 +12,7 @@
 #include "ui/ui_recovery.h"
 #include "host/applet_loader.h"
 #include "host/host_cli.h"
+#include "host/background_process.h"
 #include "host/shot.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
@@ -28,10 +29,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <system_error>
+
+// The hidden window (--hidden, CALIPER_HIDDEN=1): SIGINT and SIGTERM ask for
+// the normal close of the window, which nobody can click, so the teardown runs
+// and the API file is removed.
+static volatile std::sig_atomic_t g_hidden_stop = 0;
+extern "C" void caliper_hidden_on_signal(int) { g_hidden_stop = 1; }
 
 enum class AppPage {
     Landing,
@@ -41,15 +49,27 @@ enum class AppPage {
 
 class CaliperApp {
 public:
-    // `applet_dirs`: the --applets folders, searched first.
-    explicit CaliperApp(std::vector<std::string> applet_dirs)
-        : applet_dirs_(std::move(applet_dirs)) {}
+    // `applet_dirs`: the --applets folders, searched first. `hidden`: the
+    // window is never shown (--hidden, CALIPER_HIDDEN=1), a testing aid.
+    explicit CaliperApp(std::vector<std::string> applet_dirs, bool hidden = false)
+        : applet_dirs_(std::move(applet_dirs)), hidden_(hidden) {}
 
     bool initialize() {
+        // The hidden window takes the mechanism of the test binaries that open
+        // hidden windows (tests/glfw_background.h): the background activation
+        // policy before and after glfwInit(), and no menu bar from GLFW, so the
+        // process has no Dock icon, takes no menu bar and is never activated.
+        // The window is created invisible and unfocused (create_window_and_init)
+        // and nothing shows it later; run() hides it again should anything do.
+        if (hidden_) {
+            caliper_host::use_background_activation_policy();
+            glfwInitHint(GLFW_COCOA_MENUBAR, GLFW_FALSE);
+        }
         if (!glfwInit()) {
             std::cerr << "GLFW init failed" << std::endl;
             return false;
         }
+        if (hidden_) caliper_host::use_background_activation_policy();
 
         // Renderer seam (docs/explanations/rendering.md): backend selection (env
         // CALIPER_RENDERER + platform default, GL fallback) now lives in
@@ -61,7 +81,11 @@ public:
         // back to a sane default window instead of crashing at startup.
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         int ww = 1440, wh = 900;
-        if (monitor) {
+        if (hidden_) {
+            // The same size on every display, for reproducible captures.
+            ww = 1280;
+            wh = 800;
+        } else if (monitor) {
             int ax, ay, aw, ah;
             glfwGetMonitorWorkarea(monitor, &ax, &ay, &aw, &ah);
             // GLFW work areas and window sizes are both in screen coordinates.
@@ -95,7 +119,9 @@ public:
         // files around. IniFilename is a raw pointer read until shutdown, so
         // the path string is static.
         static const std::string ini = caliper::app_data_path("imgui.ini");
-        ImGui::GetIO().IniFilename = ini.c_str();
+        // The hidden window reads and writes no layout: every run is a first
+        // run's, and the user's saved layout is left alone.
+        ImGui::GetIO().IniFilename = hidden_ ? nullptr : ini.c_str();
 
         // Sternbild house style. Faces first: apply_style() reads the UI font
         // size, and the first NewFrame() fixes style.FontSizeBase from the
@@ -123,6 +149,15 @@ public:
         }
         std::cerr << "[renderer] " << renderer_->name() << std::endl;
         landing_.log("renderer", renderer_->name());
+        if (hidden_) {
+            int fw = 0, fh = 0;
+            glfwGetFramebufferSize(window_, &fw, &fh);
+            std::cerr << "[hidden] the window is not shown (visible "
+                      << glfwGetWindowAttrib(window_, GLFW_VISIBLE) << ", focused "
+                      << glfwGetWindowAttrib(window_, GLFW_FOCUSED) << ", background policy "
+                      << caliper_host::background_activation_policy_active() << ", framebuffer " << fw
+                      << "x" << fh << ")" << std::endl;
+        }
         caliper_host::services_init();
         // caliper.ui.v1_1 dock hints go to the applet page's layout.
         caliper_host::set_dock_hint_sink(
@@ -186,6 +221,15 @@ public:
         while (!glfwWindowShouldClose(window_)) {
             if (exit_after > 0.0 && glfwGetTime() - t0 >= exit_after)
                 glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            if (hidden_) {
+                if (g_hidden_stop) glfwSetWindowShouldClose(window_, GLFW_TRUE);
+                // A safety net: nothing in the app shows the window, but a
+                // window that became visible is hidden again at once.
+                if (glfwGetWindowAttrib(window_, GLFW_VISIBLE)) {
+                    glfwHideWindow(window_);
+                    std::cerr << "[hidden] the window became visible and was hidden again" << std::endl;
+                }
+            }
             if (page_ == AppPage::Live) wait_for_live_frame();
             glfwPollEvents();
 
@@ -750,12 +794,20 @@ private:
         if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
         glfwDefaultWindowHints();
         renderer_->window_hints();
+        if (hidden_) {
+            // Never shown, never focused (GLFW shows and focuses a window at
+            // creation only when it is visible).
+            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+            glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+            glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+        }
         window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
         if (!window_) return false;
         return renderer_->init(window_);
     }
 
     std::vector<std::string> applet_dirs_;   // --applets, in order
+    bool hidden_ = false;                    // --hidden: the window is never shown
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
@@ -839,14 +891,27 @@ int main(int argc, char** argv) {
 
     std::cout << "=== Caliper ===" << std::endl;
 
-    CaliperApp app(cl.applet_dirs);
+    // --hidden or CALIPER_HIDDEN=1: the real app with its window never shown.
+    const char* hidden_env = std::getenv("CALIPER_HIDDEN");
+    const bool hidden = cl.hidden || (hidden_env && std::strcmp(hidden_env, "1") == 0);
+    CaliperApp app(cl.applet_dirs, hidden);
     if (!app.initialize()) {
         std::cerr << "Initialization failed" << std::endl;
         return 1;
     }
     if (caliper_host::api_wanted(cl)) app.start_api(cl);
 
+    void (*old_int)(int) = SIG_DFL;
+    void (*old_term)(int) = SIG_DFL;
+    if (hidden) {
+        old_int = std::signal(SIGINT, caliper_hidden_on_signal);
+        old_term = std::signal(SIGTERM, caliper_hidden_on_signal);
+    }
     app.run();
+    if (hidden) {
+        std::signal(SIGINT, old_int);
+        std::signal(SIGTERM, old_term);
+    }
     app.cleanup();
     return 0;
 }

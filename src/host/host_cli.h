@@ -6,9 +6,9 @@
 // starting it, so it never shows a window. `shot` draws the app's applet page
 // into an offscreen canvas (shot.h) and opens no window either.
 //
-//   caliper [--applets <dir>]... [--api [--api-port <n>]]
+//   caliper [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
 //                                             start the app
-//   caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]
+//   caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
 //                                             start the app, <folder> searched first
 //   caliper list [--applets <dir>]...         list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
@@ -39,6 +39,10 @@
 // runs: with no subcommand, with dev, and with shot, whose offscreen canvas
 // is the app's windowless mode. `--api-port <n>` chooses its port (7341
 // without it, 0 for any free port) and needs --api.
+//
+// `--hidden` (or CALIPER_HIDDEN=1), a testing aid, runs the real app with
+// its window never shown: no Dock icon, no menu bar, no focus (main.cpp).
+// It applies to starting the app and to dev.
 //
 // Exit codes: 0 success; 1 a check failed, nothing was found, or a file
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
@@ -85,6 +89,7 @@ struct CommandLine {
     // Caliper API (the app, dev and shot)
     bool api = false;                       // --api
     int api_port = -1;                      // --api-port; -1: caliper_api::kDefaultPort
+    bool hidden = false;                    // --hidden: the app's window is never shown
     std::string error;                      // set: print it and the usage, exit 2
 
     // shot's options, with their defaults.
@@ -96,8 +101,8 @@ struct CommandLine {
 };
 
 inline const char* usage_text() {
-    return "usage: caliper [--applets <dir>]... [--api [--api-port <n>]]\n"
-           "       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]\n"
+    return "usage: caliper [--applets <dir>]... [--api [--api-port <n>]] [--hidden]\n"
+           "       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]] [--hidden]\n"
            "       caliper list [--applets <dir>]...\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
@@ -222,6 +227,15 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
         }
         if (shot_option) continue;
+        // The hidden window (a testing aid): a flag.
+        if (arg == "--hidden") {
+            cl.hidden = true;
+            continue;
+        }
+        if (arg.rfind("--hidden=", 0) == 0) {
+            cl.error = "--hidden takes no value";
+            return cl;
+        }
         // Caliper API: --api, a flag, and --api-port <n>.
         if (arg == "--api") {
             cl.api = true;
@@ -357,6 +371,9 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         cl.error = std::string(cl.api ? "--api" : "--api-port") +
                    " applies only to starting the app, dev and shot";
     if (cl.error.empty() && api_port_given && !cl.api) cl.error = "--api-port needs --api";
+    if (cl.error.empty() && cl.hidden && cl.command != C::Run && cl.command != C::Dev &&
+        cl.command != C::Help)
+        cl.error = "--hidden applies only to starting the app and dev";
     return cl;
 }
 
