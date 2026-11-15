@@ -156,6 +156,58 @@ subscriptions, and neither changes how fast the script trains. The calls never
 read a value back to the host, so the advice of the other pages holds unchanged:
 pass `loss.detach()`, not `loss.item()`.
 
+## Cost of streaming
+
+Streaming costs a training loop the work it adds to the thread that makes the
+view calls, and the time other threads of the same process hold Python's global
+interpreter lock (the GIL), which the loop needs between its torch calls. The
+server therefore splits the work so that as little as possible of it runs in
+Python:
+
+| Thread | What it does | The GIL |
+|---|---|---|
+| The training thread | For each subscribed view that is due: reduce the snapshot on the device (pool a heatmap, sample points), queue a non-blocking copy into pinned host memory, record a `torch.mps.Event`. For a series: keep each value, and move gathered values to the host 30 times a second while a viewer watches | Held: about 65 µs per snapshot and 1.5 µs per series call. A call between due times returns after a clock check |
+| The pump (`caliper.net`, Python) | Waits in native code. Wakes for a request from a viewer, for the training thread, or every 4 ms while snapshots are in flight; polls their events, which needs the GIL; hands each completed snapshot to the native sender | Held about 20 µs per snapshot. The native sender copies the snapshot with the GIL released |
+| The native sender (C++, `caliper._netio`) | Listens on 127.0.0.1, checks upgrades, serves the viewer page, runs the handshake, pings and time-outs, keeps the latest snapshot per subscription and the retained series, computes heatmap and points stats from the payload, encodes and sends | Never |
+
+SUBSCRIBE, UNSUBSCRIBE, VIEW_REQUEST and EVENT go to Python, because the data
+view engine and the event handlers live there. They are rare, and the native
+sender queues at most 256 of them per connection.
+
+When the native sender is not built, `caliper.serve()` uses a sender written in
+Python, which encodes and sends on an asyncio thread that holds the GIL, and it
+says so once. `python scripts/build_netio.py` builds the native sender in a few
+seconds from `python/src/_netio.cpp` and `src/host/net`.
+
+The table gives throughput as a percentage of the commit-matched control (see
+[Live streaming](live-streaming.md#sync)), for `bench_net.py`'s workload on MPS
+at 60 snapshots per second: the median of three runs of ten interleaved pairs,
+with the runs' medians in brackets. Each viewer is a process of its own. The
+machine was shared with other builds, at load averages from 3 to 15.
+
+| Views called every step | One viewer | Two viewers |
+|---|---|---|
+| 1024 by 1024 heatmap | 96.4 % (93.3 to 97.0) | 96.0 % (93.8 to 96.1) |
+| Series of the loss | 96.8 % (88.9 to 98.6) | 97.6 % (97.1 to 97.7) |
+| 100,000 points | 95.2 % (94.4 to 97.5) | 96.3 % (94.7 to 97.3) |
+| All three | 94.3 % (94.2 to 95.7) | 92.9 % (91.3 to 93.5) |
+
+The sender written in Python measured 92.7 % for the heatmap, 90.7 % for the
+points and 85.6 % for all three with one viewer, in one run at load averages
+from 8 to 15. With no viewer, a heatmap or points call costs what it costs
+without a server, 0.13 µs, and the loop runs at 99.5 to 106 % of the same loop
+without calls. A series call costs 0.2 µs for a number and 0.5 µs for a tensor,
+because its values are kept for viewers that come later.
+
+Most of the remaining cost has two measured parts. The training thread's own
+work for the snapshots and series values takes about 2 % of the loop's time for
+all three views at 1,700 steps per second, timed call by call. Each snapshot
+also commits torch's command buffer with its event, about 150 commits per
+second for all three views against the control's 60, and events recorded at
+300 Hz instead of 60 Hz cost the control 3 % by themselves. Both grow with the
+snapshots per second. The pump's wake-ups were no measurable part: polling
+every 4, 8 or 12 ms gave the same throughput.
+
 ## Security
 
 The server listens only on the loopback interface, 127.0.0.1, so only programs
