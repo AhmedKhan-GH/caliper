@@ -35,7 +35,10 @@ server. A **viewer** is anything that connects to the stream and draws, such as
 a notebook widget or a browser tab with the viewer page. The **hub**,
 `caliper serve`, is a subcommand of the `caliper` binary that stands between
 the two: any number of producers stream to it, any number of viewers watch it,
-and it outlives the producers.
+and it outlives the producers. It holds one session for each producer, and a
+viewer chooses one. When only one session is live, the hub attaches a new
+viewer to it, so a viewer written for `caliper.serve()` works against the hub
+unchanged.
 
 The kinds of live view are the same on every transport: heatmap, image, points,
 series and histogram. So are the names, the arguments, the rate limit and the
@@ -63,7 +66,8 @@ A tensor in training can be far larger than anything a viewer can show. A 4096
 by 4096 float32 weight is 64 MiB, so at the default 60 snapshots per second it
 would be 3.75 GiB/s on the socket, for a widget a few hundred pixels wide. The
 network transport therefore reduces a snapshot on the device before anything is
-copied, and only the result leaves the GPU.
+copied, and only the result leaves the GPU. With the default budget, a heatmap
+snapshot is pooled to at most 512 by 512 values, which is 1 MiB.
 
 The reduction runs where the data lives because the alternative defeats its
 purpose. Reading the whole tensor back to the host to reduce it there costs the
@@ -86,11 +90,16 @@ layer, sequence, head, query and key. The view then advertises its sources,
 their named dimensions with their sizes, and a default data view, and a viewer
 builds its picker from that. A request can index a dimension, either selecting
 one position, which drops the dimension, or keeping a range of it. It can
-reduce a dimension with a mean, a maximum, a minimum or a norm, and it can set
-a budget. The producer applies the
-index, then the reduction, then the budget, which pools a heatmap or samples
-points down to the viewer's limit. The reply carries the resolved data view,
-with every default filled in, so a viewer always knows what it is drawing.
+reduce a dimension with a mean, a sum, a maximum, a minimum or a norm, lay out
+one dimension of a heatmap as a mosaic, and set a budget. The producer applies
+the index, then the reduction, then the mosaic and the budget, which pools a
+heatmap or samples points down to the viewer's limit. A request that does not
+fit the live view, such as one that leaves three dimensions for a heatmap, is
+refused, and the view keeps the data view it had. The reply to a request that
+fits carries the resolved data view,
+with every default filled in, and so does every snapshot, so a viewer always
+knows what it is drawing. A choice of layer or head in a picker, and a zoom
+that needs another resolution, are requests for a different data view.
 
 Data views and sampling divide the work. Sampling in time, by the rate limit,
 decides how often a view travels. Data views and the budget decide how much of
@@ -99,21 +108,25 @@ it travels each time.
 ## Latest wins, and series as deltas
 
 A snapshot carries the newest state of one view, with a sequence number, and
-the latest snapshot wins. When a viewer cannot take snapshots as fast as a view
-produces them, it receives fewer of them, never a queue of old ones, so a slow
-viewer sees fewer frames rather than older ones and the producer's memory does
-not grow with the viewer's backlog.
+the latest snapshot wins. The producer hands one data message at a time to a
+connection's socket and keeps at most one pending snapshot for each
+subscription; a newer snapshot replaces the pending one. A viewer that cannot
+keep up therefore sees fewer frames rather than older ones, and the producer's
+memory does not grow with the viewer's backlog.
 
 A series is the exception, because a curve needs every value. A series message
 is a delta: the absolute index of its first value and the values that are new
-since the last message. When a viewer subscribes, the producer first sends the
-history it retains and then the deltas. Because every delta carries an absolute
-index, a viewer that joins late draws the same curve as one that watched from
-the start.
+since the last message. Values that are not yet sent are coalesced into one
+pending message and never dropped. The producer retains at least the last 4096
+values of each series whether or not anyone watches, and when a viewer
+subscribes, it first sends that history and then the deltas. Because every
+delta carries an absolute index, a viewer that joins late draws the same curve
+as one that watched from the start.
 
-A viewer subscribes to the views it shows, and a producer does no work for a
-view that no viewer subscribes to. A notebook widget that shows one view costs
-the producer that one view and no other.
+A viewer subscribes to the views it shows, and apart from retaining series
+values, a producer does no work for a view that no viewer subscribes to. A
+notebook widget that shows one view costs the producer that one view and no
+other.
 
 ## Training is never blocked
 
@@ -131,7 +144,10 @@ The server listens only on the loopback interface, 127.0.0.1, so only programs
 on the same machine can connect to it. Each server makes a random **session
 token**, and both the viewer page and the stream require it. The link that
 `caliper.serve()` prints carries the token, so anyone who has the link can
-watch the views while the server runs; it should be kept like a password.
+watch the views while the server runs; it should be kept like a password. The
+server also checks the `Host` and `Origin` headers of every connection, so that
+a web page from another site, opened in a browser on the same machine, cannot
+reach the stream, even by DNS rebinding.
 
 The stream carries data and nothing else. Snapshots and series travel to the
 viewer. Subscriptions, data view requests and viewer events (`select`, `pick`

@@ -192,11 +192,17 @@ sends a data view request over the stream to the producer, so the choice takes
 effect at the view's next snapshot, while the training cell is still running.
 
 Selecting points in the embedding widget sends a `select` event. The widget
-stores the latest selection in its `selection` trait, which Python reads:
+stores the latest event in its `selection` trait, which Python reads:
 
 ```python
 print("selection:", embedding_widget.selection)
 ```
+
+The selection is a dict with the view's name, the event's type and its detail.
+For points, the detail holds `indices`, the positions of the selected points in
+the snapshot that was shown, and `row_ids`, their indices in the source tensor.
+To run code on every new selection instead, pass a function to
+`embedding_widget.on_select()`.
 
 The `data_view` trait works in both directions. The widget writes the data view
 the user picked, and setting it from Python makes the widget request that data

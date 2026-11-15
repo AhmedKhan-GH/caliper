@@ -308,9 +308,9 @@ off it; the call still returns at once.
 | `http://127.0.0.1:<port>/?token=<token>` | The viewer page: every view of the stream in a grid |
 | `ws://127.0.0.1:<port>/v3/stream?token=<token>` | The stream, as the [Wire protocol](wire-protocol.md) reference defines it |
 
-A request without the right token is refused. The stream carries snapshots,
-series, subscriptions, data view requests and viewer events, and never host
-commands.
+A request without the right token is refused, and so is one whose `Host` or
+`Origin` header names another site. The stream carries snapshots, series,
+subscriptions, data view requests and viewer events, and never host commands.
 
 | Member | Meaning |
 |---|---|
@@ -340,8 +340,9 @@ channel, so it keeps updating while a cell runs. It is an ipywidgets widget, so
 | `kind` | `str` or `None` | `None` | `"series"`, `"heatmap"`, `"image"`, `"points"` or `"histogram"`; `None` takes the kind from the stream |
 | `height` | `int` | 320 | Height in CSS pixels |
 
-<!-- TO CONFIRM: whether widget() needs serve() first or starts a server
-itself, and what an unknown kind raises. -->
+When no server runs, `widget()` starts one with `serve()`. An unknown kind
+raises `ValueError`. Without anywidget installed, the call raises `ImportError`
+and names the extra.
 
 Its traits, synced through anywidget:
 
@@ -352,10 +353,14 @@ Its traits, synced through anywidget:
 | `kind` | `str` or `None` | The live view's kind |
 | `height` | `int` | Height in CSS pixels |
 | `data_view` | `dict` | Both directions: the browser writes the data view the user picked, and setting it from Python makes the widget request that data view |
-| `selection` | `dict` | Written by the browser: the latest selection, from the view's `select` event |
+| `selection` | `dict` | Written by the browser: the latest event it reported, as `{"view", "type", "detail"}` |
 
-<!-- TO CONFIRM: the exact content of `selection` (the whole event
-{"view", "type", "detail"} or only its detail). -->
+The `detail` of an event is given in source indices; for a `select` in a
+points view it holds `indices`, the positions in the points that were shown,
+and `row_ids`, their source indices. The [Wire protocol](wire-protocol.md)
+reference lists the detail of every kind. `w.on_select(callback)` calls
+`callback(selection)` each time the browser reports a new selection, and
+`w.on_select(callback, remove=True)` stops it.
 
 Traits travel over the notebook's message channel, which the kernel reads only
 while no cell runs. A selection made during a long cell reaches `selection`
@@ -384,15 +389,18 @@ means the view's default.
 |---|---|---|
 | `source` | `str` | The source to read |
 | `index` | `{"<dim>": i}`, `{"<dim>": [start, stop]}` or `{"<dim>": [start, stop, step]}` | An integer selects one position and drops the dimension; a range keeps the dimension |
-| `reduce` | `{"<dim>": op}`, with `op` one of `"mean"`, `"max"`, `"min"` and `"norm"` | Reduces over the dimension and removes it |
-| `budget` | `{"max_extent": n, "max_points": n}` | The largest heatmap extent and the largest number of points the viewer wants |
+| `reduce` | `{"<dim>": op}`, with `op` one of `"mean"`, `"sum"`, `"max"`, `"min"` and `"norm"` | Reduces over the dimension and removes it |
+| `tile` | `"<dim>"` | Heatmaps only: lays out a kept dimension as a mosaic of cells |
+| `budget` | `{"max_extent": n, "pool": op, "max_points": n}` | The largest heatmap or image extent (default 512), how a heatmap is pooled to meet it (`"mean"`, `"max"` or `"min"`), and the largest number of points (default 100,000) |
 
-The producer applies the index, then the reduction, then the budget, which
-pools a heatmap or samples points, all on the tensor's device. The dimensions
-that remain are drawn by the layout rules of [show](#show); two make a heatmap.
-
-<!-- TO CONFIRM: what happens when the dimensions that remain do not fit the
-live view, and the default budget. -->
+Indices count from 0, and a negative one counts from the end, as in Python. A
+field that a request names replaces the default's field as a whole, except
+`budget`, whose keys are taken one by one. The producer applies the index, then
+the reduction, then the tile layout and the budget, which pools a heatmap or
+samples points, all on the tensor's device. The dimensions that remain must
+fit the live view: two for a heatmap (three with `tile`) or an image, and one,
+the point dimension, for points. A data view that breaks a rule is refused with
+the error `bad_data_view`, and the view keeps the data view it had.
 
 A view with named dimensions advertises an offer to its viewers: its sources,
 each with its name, its dimensions and their sizes, and its dtype, and its
