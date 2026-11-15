@@ -42,8 +42,9 @@ applet if it ever runs beside another libtorch:
 ### Build and load your copy
 
 Build your copy in a folder of its own against the installed SDK, as
-[Your first applet](first-applet.md#4-build-it) does for hello. The SDK must
-come from a core build with libtorch, which the release preset is:
+[Your first applet](first-applet.md#4-build-it) does for hello, with `CALIPER`
+set to the host you built. The SDK must come from a core build with libtorch,
+which the release preset is:
 
 ```bash
 mkdir -p "$HOME/caliper-applets"
@@ -51,17 +52,14 @@ cp -R examples/sine_scope "$HOME/caliper-applets/sine_scope"
 cd "$HOME/caliper-applets/sine_scope"
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/caliper-sdk" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-mkdir -p "$HOME/Library/Application Support/Caliper/applets"
-cp build/applets/libsine_scope.dylib build/applets/sine_scope.caliper.toml \
-   "$HOME/Library/Application Support/Caliper/applets/"
+"$CALIPER" check build/applets
+CALIPER_AUTOLAUNCH=dev.example.sine-scope "$CALIPER" dev build/applets
 ```
 
-On Windows the user applets folder is `%APPDATA%\Caliper\applets\`, and the
-library is `sine_scope.dll`. The host searches the user applets folder before
-the folder beside the executable, so at equal versions it loads your copy
-rather than the one the release preset built. It reads its folders when it
-starts and keeps a library loaded until it quits, so after each rebuild copy the
-two files again and restart Caliper.
+`caliper dev` searches your build folder first, so at equal versions the host
+loads your copy rather than the one the release preset built beside the
+executable. The host keeps a library loaded until it quits, so after each
+rebuild quit Caliper and run `caliper dev` again.
 
 ## Stage 1 — the model and the state spine
 
@@ -140,7 +138,7 @@ Cleanup grows its symmetric duties — cancel, bounded wait, release:
 --8<-- "examples/sine_scope/sine_scope.cpp:cleanup"
 ```
 
-**Run it** (`CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper`):
+**Run it** (`CALIPER_AUTOLAUNCH=dev.example.sine-scope "$CALIPER" dev build/applets`):
 you should see the flat line snap into a sine within seconds while the
 heatmap's blocks reorganize.
 

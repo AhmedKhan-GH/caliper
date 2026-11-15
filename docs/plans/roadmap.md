@@ -14,7 +14,7 @@ On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the
 2. Done: the SDK installs as the `caliper-sdk` package, with the headers, the CMake config, the pinned UI stack and `caliper_add_applet()`; see [SDK package](../references/sdk-package.md).
 3. Make the host name no applet. Done: windows dock by role, the core build compiles no applets, and CI builds the core without applets and checks that the host names none. Still to do: CI starts the empty core and checks that the landing screen shows its empty state.
 4. Load applets from outside the repository. Done: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder, and the search order with one copy chosen per id. Still to do: shipped applets signed in the app bundle.
-5. Add the `caliper` subcommands listed under [Command line](#command-line), which also gives their status.
+5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>` and `dev`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see [Command line](../references/cli.md).
 6. Ship the minimal embedding package, as [Streaming and embedding](streaming-and-embedding.md#the-embedding-package) describes. It is being built on a branch and is not merged yet.
 7. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
 8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
@@ -50,20 +50,7 @@ The [Python API](../references/python-api.md) and the embeddable `libcaliper` ([
 
 ### Command line
 
-Phase 1 adds subcommands to the `caliper` binary rather than a separate program, so there is one thing to install. Every subcommand except `dev` runs and exits without opening a window.
-
-| Command | What it does |
-|---|---|
-| `caliper list` | Lists the applets that the host finds, with their status. |
-| `caliper check <folder>` | Runs the loader's checks on the applet in a folder without loading it. |
-| `caliper info` | Prints the host's version, the ABI epoch, the SDK version, the libtorch version, the UI-stack hash and the services. |
-| `caliper new <name> [dir]` | Creates an applet from a template. |
-| `caliper install <folder>` | Installs an applet from a local folder into the user applets folder. |
-| `caliper dev <folder>` | Starts the app with that folder first in the search order, without hot reload. |
-
-The `--applets <dir>` flag and the `CALIPER_APPLET_PATH` variable add development paths to the search.
-
-The subcommands, the flag and the variable are built.
+The command line is subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>` and `dev`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Command line](../references/cli.md) describes them.
 
 `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
 
@@ -99,6 +86,7 @@ Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers 
 
 ## Smaller work
 
+- A development build lists the `hello` and `sine_scope` test fixtures as shipped applets, because the tests build them into the build's `applets/` folder, which is the folder beside the executable.
 - Code comments still cite sections of the deleted design documents by bare number, such as `(§6c)`. Rewrite each as its file is next touched.
 - Fix stale code comments: the `sql_job` comment in `applets/embed_scope/embed_scope.cpp` (the code uses `sql_thread`), and the `CALIPER_VULKAN_SELFTEST` comment in `src/host/cuda_driver.h` (no code reads it).
 - Measure EmbedScope's training step time on a Mac without the device drain, then retire the comment in `embed_scope.cpp` that says the drain dominates step time.

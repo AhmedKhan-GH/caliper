@@ -143,6 +143,7 @@ Caliper repository. First build Caliper and install the SDK from your checkout:
 cmake --preset release
 cmake --build --preset release
 cmake --install cmake-build-release --prefix "$HOME/caliper-sdk" --component sdk
+CALIPER="$PWD/cmake-build-release/caliper"   # the host you just built
 ```
 
 Then copy hello to a folder of your own and build it there:
@@ -172,26 +173,42 @@ and writes a copy of the manifest beside it with a `[build]` table that records
 the SDK version and the UI-stack hash. [SDK package](../references/sdk-package.md)
 describes the function and the package.
 
+This tutorial copies hello so that the walk above matches the code you build.
+To start an applet of your own, `caliper new <name>` writes a project of the
+same shape, as [Development basics](development-basics.md#the-development-loop)
+shows.
+
 ## 5. Load it into Caliper
 
-The host reads its applet folders when it starts. Copy the library and its
-manifest into the user applets folder:
+Check the build first. `caliper check` runs the checks the host makes before it
+opens a library, without opening a window:
 
 ```bash
-mkdir -p "$HOME/Library/Application Support/Caliper/applets"
-cp build/applets/libhello.dylib build/applets/hello.caliper.toml \
-   "$HOME/Library/Application Support/Caliper/applets/"
+"$CALIPER" check build/applets
 ```
 
-On Windows the user applets folder is `%APPDATA%\Caliper\applets\`, and the
-library is `hello.dll`. Then start Caliper from your checkout with
-`./cmake-build-release/caliper`.
+```text
+READY  dev.caliper.hello  0.1.0  <your folder>/build/applets
+1 of 1 applets pass the checks
+```
 
-The release preset also builds its own copy of Hello beside the executable, in
-`cmake-build-release/applets/`, because the loader tests load it. The host
-searches the user applets folder first, so at equal versions it loads your copy
+Then start Caliper with that folder searched first:
+
+```bash
+"$CALIPER" dev build/applets
+```
+
+On Windows the executable is `cmake-build-release\caliper.exe`. `caliper dev`
+puts the folder ahead of every other applet folder. The release preset also
+builds its own copy of Hello beside the executable, because the loader tests
+load it; at equal versions the host loads the copy found first, which is yours,
 and lists the other one as `SHADOWED`. The host keeps a library loaded until it
-quits, so after each rebuild copy the two files again and restart Caliper.
+quits, so after each rebuild quit Caliper and run `caliper dev` again.
+
+To keep the applet installed, `"$CALIPER" install build/applets` runs the same
+checks and copies the library and its manifest into the user applets folder,
+which the host searches every time it starts. [Command line](../references/cli.md)
+describes every subcommand.
 
 ## 6. See it in the app
 
@@ -199,9 +216,8 @@ Hello appears as a row in the landing screen's **Instruments** pane; select it
 and press Enter (or double-click the row) to open it. The host's epoch-2 loader
 discovers it by reading its `<stem>.caliper.toml` manifest and the
 `caliper_applet_descriptor` export — the two signals every applet you build this
-way must ship. If the row is missing, check that both are present side by side
-in the user applets folder; if its status is `REFUSED`,
-`FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
+way must ship. If the row is missing, run `caliper check` on the folder. If its
+status is `REFUSED`, `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
 [refusal reference](../references/refusals.md)). Esc, or the `esc Home` button,
 returns to the landing screen. [Development basics](development-basics.md#the-landing-screen)

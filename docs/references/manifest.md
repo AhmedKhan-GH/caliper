@@ -22,11 +22,11 @@ The layout is flat: one folder holds any number of applets, and there are no sub
 
 The host scans these folders at startup, in this order:
 
-1. The development folders given with `--applets <dir>` and in `CALIPER_APPLET_PATH`.
+1. The development folders: the `caliper dev` folder and those given with `--applets <dir>`, then those in `CALIPER_APPLET_PATH`.
 2. The user applets folder, `applets/` under the app-data root: `~/Library/Application Support/Caliper/applets` on macOS and `%APPDATA%\Caliper\applets` on Windows.
 3. `applets/` next to the `caliper` executable.
 
-Dropping a manifest and its library into the user applets folder installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) describes. [Folders and environment variables](environment.md) gives the folders on each platform and the variables that change them.
+Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) describes. [Command line](cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](environment.md) gives the folders on each platform and the variables that change them.
 
 ## Schema
 

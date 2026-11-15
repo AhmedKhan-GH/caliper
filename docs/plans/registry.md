@@ -1,6 +1,6 @@
 # Applet registry
 
-This page proposes a registry for applets. Nothing described here is built. The host has no Browse tab, no registry client, no install command and no index format. Today an applet is installed by copying its manifest and library into an applets folder; see [Manifest](../references/manifest.md).
+This page proposes a registry for applets. Nothing described here is built. The host has no Browse tab, no registry client, no download and no index format. Today an applet is installed from a local folder, with `caliper install <folder>` or by copying its manifest and library into the user applets folder; see [Command line](../references/cli.md#caliper-install) and [Manifest](../references/manifest.md).
 
 ## Proposal
 

@@ -103,34 +103,41 @@ training job and the bridge — that path is
 cmake --preset release
 cmake --build --preset release
 cmake --install cmake-build-release --prefix "$HOME/caliper-sdk" --component sdk
+CALIPER="$PWD/cmake-build-release/caliper"
 
-# 2. create: a folder of your own, outside the checkout (copy examples/hello/ to start)
-mkdir -p "$HOME/caliper-applets"
-cp -R examples/hello "$HOME/caliper-applets/my_applet"
+# 2. create: a project of your own, outside the checkout
+"$CALIPER" new my-applet "$HOME/caliper-applets/my-applet"
 
-# 3. build: the library and its stamped manifest land in build/applets/
-cd "$HOME/caliper-applets/my_applet"
+# 3. build and test: the library and its stamped manifest land in build/applets/
+cd "$HOME/caliper-applets/my-applet"
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/caliper-sdk" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+ctest --test-dir build
+
+# 4. check, then run with the build folder searched first
+"$CALIPER" check build/applets
+"$CALIPER" dev build/applets
 ```
 
-A copy of hello still calls itself hello. Before you build it as your own
-applet, give it its own id and stem: the `id` and `name` in the manifest and
-the same fields in the `CALIPER_APPLET` macro, then the target, `OUTPUT_NAME`
-and manifest file name in `CMakeLists.txt`.
+`caliper new my-applet` writes a project for the applet `dev.example.my-applet`
+with the stem `my_applet`: the manifest, the `CMakeLists.txt`, a source file with
+one window, and a test that runs the applet on the fixture host. Pass a full id,
+such as `com.example.my-applet`, to choose the id yourself.
+[Command line](../references/cli.md#caliper-new) describes the template.
 
 ### Loading your applet
 
-The host reads its applet folders when it starts, and it keeps a library loaded
-until it quits. Copy the library and its manifest from `build/applets/` into the
-user applets folder, `~/Library/Application Support/Caliper/applets/` on macOS
-or `%APPDATA%\Caliper\applets\` on Windows, then start Caliper from your
-checkout. After each rebuild, copy the two files again and restart Caliper.
+`caliper check` runs the checks the host makes before it opens a library, and
+`caliper dev` starts Caliper with the folder searched before every other applet
+folder. The host reads its applet folders when it starts and keeps a library
+loaded until it quits, so after each rebuild quit Caliper and run `caliper dev`
+again. `--applets <dir>` on the command line, or `CALIPER_APPLET_PATH`, adds
+development folders in the same way, and `caliper install build/applets` copies
+the applet into the user applets folder to keep it installed.
 
 ```bash
-./cmake-build-release/caliper
 # skip the landing screen on every restart:
-CALIPER_AUTOLAUNCH=dev.example.my-applet ./cmake-build-release/caliper
+CALIPER_AUTOLAUNCH=dev.example.my-applet "$CALIPER" dev build/applets
 #    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI;
 #     CALIPER_WINDOW_SIZE=1440x900 fixes the window size for screenshots)
 ```

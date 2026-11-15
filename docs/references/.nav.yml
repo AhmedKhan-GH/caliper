@@ -4,6 +4,7 @@ nav:
       - abi.md
       - manifest.md
       - sdk-package.md
+      - cli.md
       - refusals.md
       - sugar.md
       - tensor.md

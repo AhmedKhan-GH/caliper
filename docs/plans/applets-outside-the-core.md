@@ -11,9 +11,9 @@ search order and the choice among copies of one applet in
 [Compatibility and epochs](../explanations/compatibility.md#several-copies-of-one-applet),
 dock hints in [caliper.ui.v1_1](../references/service-ui-v1-1.md), and the
 folders and variables in [Folders and environment variables](../references/environment.md).
-The roadmap lists the `caliper` subcommands under
-[Command line](roadmap.md#command-line), and the `.caliperapp` bundle format and
-the entry points for hot reload under [Undecided](roadmap.md#undecided).
+The `caliper` subcommands, including `dev` and `install <folder>`, are in
+[Command line](../references/cli.md). The roadmap lists the `.caliperapp` bundle
+format and the entry points for hot reload under [Undecided](roadmap.md#undecided).
 
 ## The changes
 

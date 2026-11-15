@@ -79,6 +79,15 @@ Ordering matters: `scan()` is manifest-first and never `dlopen`s, so parse,
 missing-binary, and negotiation results are all decided before any applet code
 runs. Everything from `load failed` downward happens only inside `launch()`.
 
+A copy can also be **Shadowed**. Of the copies of one applet id that pass
+negotiation, the loader keeps one `Ready`: the highest version, and at equal
+versions the copy found first in the [search order](cli.md#the-search-order).
+Every other passing copy is `Shadowed`, with the text
+`Version {version} in {folder} is used instead.`, where `{version}` and
+`{folder}` name the chosen copy. A shadowed copy is never launched, and the
+status bar's count of instruments leaves it out. A refused or failed copy keeps
+its own reason, so the landing screen shows why a newer copy was passed over.
+
 ### Failed messages
 
 | Message template | When it fires | What to do |
@@ -124,11 +133,11 @@ C++ exception, and a restart of Caliper when it was a signal (see
 !!! note
     The landing screen shows these statuses. An applet that is not
     `Ready`/`Active` keeps its row in the Instruments pane, with `REFUSED`,
-    `FAILED` or `QUARANTINED` in the Status column. With the row selected, the
+    `FAILED`, `QUARANTINED` or `SHADOWED` in the Status column. With the row selected, the
     Inspector's Status field shows the exact `status_text` from the tables above
-    (the negotiation refusal, `Failed`, or `Quarantined` message), and the
-    `⏎ Launch` button is disabled. Beside it is the same text for a refused or
-    failed applet, `⌘R Restart` for one quarantined by a C++ exception, and
+    (the negotiation refusal, `Failed`, `Quarantined` or `Shadowed` message), and the
+    `⏎ Launch` button is disabled. Beside it is the same text for a refused,
+    failed or shadowed applet, `⌘R Restart` for one quarantined by a C++ exception, and
     `restart Caliper to reload` for one quarantined by a signal. A launch that
     fails is also logged in the Activity pane as `launch failed` with the
     reason, and a quarantine while the applet runs (in `frame()`, or from one
