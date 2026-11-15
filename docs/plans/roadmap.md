@@ -53,6 +53,8 @@ Plan: [Applet registry](registry.md).
 - **API v0** listens only on the loopback interface and requires a token. It lists the applets, launches one, streams data to it over the wire protocol of data streaming, and fetches a capture of what it shows.
 - **The full API** comes later, with the command layer of [Phase 3](#phase-3-agent-built-panels), which is what lets a program drive the app's state from outside.
 
+API v0 is built: [Caliper API](../references/api.md) lists the applets, launches one, takes producers and viewers on its stream as a hub, and returns a capture of the frame in the windowless mode, `caliper shot --api`, while driving the app's state beyond a launch stays in Phase 3.
+
 ### Caliper CLI
 
 Caliper CLI is the subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Caliper CLI](../references/cli.md) describes them.

@@ -3,15 +3,15 @@
 The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
-usage: caliper [--applets <dir>]...
-       caliper dev <folder> [--applets <dir>]...
+usage: caliper [--applets <dir>]... [--api [--api-port <n>]]
+       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]
        caliper list [--applets <dir>]...
        caliper check <folder>
        caliper install <folder>
        caliper new <name> [<dir>]
        caliper info
        caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-                    [--frames <N>] --out <file.png>
+                    [--frames <N>] --out <file.png> [--api [--api-port <n>]]
        caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
        caliper --help
 ```
@@ -23,6 +23,17 @@ Results go to standard output, and errors go to standard error, each starting wi
 `caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev`, `list` and `shot`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
 
 `caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build folder, such as `build`, or its build output, `build/applets` (see [Build folders](#build-folders)). The Activity pane's `scanned` line names the folder that was searched. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
+
+### Caliper API
+
+`--api` serves [Caliper API](api.md), the HTTP interface to the running app, on 127.0.0.1 while the app runs. It is accepted when starting the app and with `dev` and `shot`, whose offscreen canvas is the app's windowless mode; with any other subcommand it is a usage error. Setting `CALIPER_API=1` turns the API on as `--api` does.
+
+| Option | Meaning |
+|---|---|
+| `--api` | Serve Caliper API. The process prints the address and the session token, and writes them in `api.json` in the app-data folder, readable by its owner only, until it exits. |
+| `--api-port <n>` | The port, from 0 to 65535. The default is 7341, and 0 takes any free port. It needs `--api`, and may be given once. |
+
+`--api-port` also takes the form `--api-port=<n>`. `--api` takes no value. When the port is taken, the app starts without the API and says why on standard error and in the Activity pane, and `shot` exits with 1. With `--api`, SIGINT and SIGTERM end the frames of `shot` early, and it then writes its image as usual.
 
 ## The search order
 
@@ -213,8 +224,8 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, or when the renderer cannot draw offscreen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets` with a subcommand that does not take it, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--api` or `--api-port` with a subcommand that does not take it, `--api-port` without `--api`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## Environment variables
 
@@ -225,5 +236,6 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
 | `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
 | `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
+| `CALIPER_API` | `1` serves [Caliper API](api.md) as `--api` does, when starting the app and with `dev` and `shot`. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.
