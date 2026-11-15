@@ -89,7 +89,7 @@ if(TARGET caliper)
     set(_cli_work "${CMAKE_CURRENT_BINARY_DIR}/cli-work")
     set(_cli_env "CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
     function(caliper_cli_test name)
-        cmake_parse_arguments(PARSE_ARGV 1 t "" "ARGS;EXIT;MATCH;ERROR;CLEAN" "")
+        cmake_parse_arguments(PARSE_ARGV 1 t "" "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE" "")
         set(defs -DEXE=$<TARGET_FILE:caliper> "-DARGS=${t_ARGS}" -DEXIT=${t_EXIT}
                  "-DENV=${_cli_env}")
         if(DEFINED t_MATCH)
@@ -100,6 +100,9 @@ if(TARGET caliper)
         endif()
         if(DEFINED t_CLEAN)
             list(APPEND defs "-DCLEAN=${t_CLEAN}")
+        endif()
+        if(DEFINED t_STAGE)
+            list(APPEND defs "-DSTAGE=${t_STAGE}")
         endif()
         add_test(NAME caliper_cli_${name}
                  COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_run.cmake)
@@ -115,6 +118,12 @@ if(TARGET caliper)
         MATCH "READY +dev\\.caliper\\.hello +0\\.1\\.0 ")
     caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
         MATCH "1 of 1 applets pass the checks")
+    # An applet's build folder, its manifests only in build/applets as
+    # caliper_add_applet() leaves them: check uses that subfolder and says so.
+    caliper_cli_test(check_build_folder ARGS "check|${_cli_work}/applet-build" EXIT 0
+        MATCH "^using the applets in .*applet-build/applets.*1 of 1 applets pass the checks"
+        CLEAN "${_cli_work}/applet-build"
+        STAGE "${CMAKE_BINARY_DIR}/test-applets|${_cli_work}/applet-build/applets")
     caliper_cli_test(check_missing ARGS "check|${_cli_work}/nowhere" EXIT 1
         ERROR "not a folder")
     caliper_cli_test(install ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0

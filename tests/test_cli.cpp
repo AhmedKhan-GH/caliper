@@ -290,3 +290,30 @@ TEST_CASE("cli: new writes a project from the template and never overwrites") {
     CHECK(slurp(t.path / "other" / "CMakeLists.txt")
               .find("find_package(caliper-sdk CONFIG REQUIRED)") != std::string::npos);
 }
+
+TEST_CASE("cli: check and install take a build folder whose applets are in applets/") {
+    TempDir t("build-folder");
+    const CliContext ctx = context(t);
+    fake_applet(t.path / "build" / "applets", "a", "x.a", "1.0.0");
+    const std::string build = t.str("build");
+    const std::string applets = t.str("build/applets");
+    const Run r = run({"check", build.c_str()}, ctx);
+    CHECK(r.code == 0);
+    CHECK(r.out == "using the applets in " + applets + "\n"
+                   "READY  x.a  1.0.0  " + applets + "\n"
+                   "1 of 1 applets pass the checks\n");
+    // Named directly, the folder is used as given and nothing more is said.
+    const Run direct = run({"check", applets.c_str()}, ctx);
+    CHECK(direct.out.rfind("READY  x.a", 0) == 0);
+
+    const Run in = run({"install", build.c_str()}, ctx);
+    CHECK(in.code == 0);
+    CHECK(in.out.rfind("using the applets in " + applets + "\n", 0) == 0);
+    CHECK(fs::exists(t.path / "user" / "a.caliper.toml"));
+
+    // A folder with no manifests and none in applets/ names itself.
+    fs::create_directories(t.path / "empty" / "applets");
+    const Run none = run({"check", t.str("empty").c_str()}, ctx);
+    CHECK(none.code == 1);
+    CHECK(none.err == "caliper: no applets in " + t.str("empty") + "\n");
+}

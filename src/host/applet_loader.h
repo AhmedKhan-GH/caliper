@@ -69,13 +69,20 @@ bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema);
 // development paths, first those given on the command line and then those in
 // CALIPER_APPLET_PATH, each list in its own order; then the user applets
 // folder; then the applets shipped with the app. Relative paths are made
-// absolute against the current directory, empty entries are dropped, and a
+// absolute against the current directory, each development folder is
+// resolved by resolve_applet_folder(), empty entries are dropped, and a
 // folder listed twice is searched once, at its first position.
 std::vector<std::string> applet_search_dirs(
     const std::vector<std::string>& command_line_dirs,
     const char* applet_path_env,          // CALIPER_APPLET_PATH, or nullptr
     const std::string& user_dir,          // "" to leave out
     const std::string& shipped_dir);      // "" to leave out
+// The folder the host scans for a development folder `dir`: `dir` itself
+// when it holds a manifest (<stem>.caliper.toml), otherwise its applets/
+// subfolder when that holds one, which is where caliper_add_applet() puts
+// an applet's build output, so an applet's build folder can be named
+// directly. Otherwise, a folder that does not exist included, `dir` as given.
+std::string resolve_applet_folder(const std::string& dir);
 // CALIPER_APPLET_PATH split into folders: ';' separates them on Windows and
 // ':' elsewhere. Empty entries are dropped.
 std::vector<std::string> split_applet_path(const std::string& value);

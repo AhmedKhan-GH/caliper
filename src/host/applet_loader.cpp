@@ -127,18 +127,46 @@ std::vector<std::string> split_applet_path(const std::string& value) {
     return out;
 }
 
+namespace {
+bool is_manifest_name(const std::string& fname) {
+    const std::string suffix = kManifestSuffix;
+    return fname.size() > suffix.size() &&
+           fname.compare(fname.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// True when `dir` directly holds a regular file named <stem>.caliper.toml.
+bool holds_manifest(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        if (is_manifest_name(it->path().filename().string()) &&
+            it->is_regular_file(ec))
+            return true;
+    return false;
+}
+} // namespace
+
+std::string resolve_applet_folder(const std::string& dir) {
+    std::error_code ec;
+    if (dir.empty() || !fs::is_directory(dir, ec) || holds_manifest(dir)) return dir;
+    const fs::path sub = fs::path(dir) / "applets";
+    if (fs::is_directory(sub, ec) && holds_manifest(sub)) return sub.string();
+    return dir;
+}
+
 std::vector<std::string> applet_search_dirs(
     const std::vector<std::string>& command_line_dirs, const char* applet_path_env,
     const std::string& user_dir, const std::string& shipped_dir) {
     std::vector<std::string> wanted = command_line_dirs;
     if (applet_path_env)
         for (auto& d : split_applet_path(applet_path_env)) wanted.push_back(d);
+    const size_t development = wanted.size();
     wanted.push_back(user_dir);
     wanted.push_back(shipped_dir);
 
     std::vector<std::string> out;
     std::vector<fs::path> seen;
-    for (const std::string& d : wanted) {
+    for (size_t i = 0; i < wanted.size(); i++) {
+        const std::string& d = wanted[i];
         if (d.empty()) continue;
         std::error_code ec;
         fs::path p = fs::absolute(fs::path(d), ec);
@@ -146,6 +174,7 @@ std::vector<std::string> applet_search_dirs(
         p = p.lexically_normal();
         // "dir/" and "dir" are one folder; so are two spellings of a link.
         if (p.has_relative_path() && p.filename().empty()) p = p.parent_path();
+        if (i < development) p = fs::path(resolve_applet_folder(p.string()));
         fs::path key = fs::weakly_canonical(p, ec);
         if (ec) key = p;
         if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
@@ -191,10 +220,7 @@ int AppletLoader::scan(const std::string& dir) {
     for (const auto& e : fs::directory_iterator(dir, ec)) {
         if (!e.is_regular_file()) continue;
         const std::string fname = e.path().filename().string();
-        if (fname.size() <= std::string(kManifestSuffix).size() ||
-            fname.substr(fname.size() - std::string(kManifestSuffix).size())
-                != kManifestSuffix)
-            continue;
+        if (!is_manifest_name(fname)) continue;
 
         AppletEntry entry;
         entry.folder = e.path().parent_path().string();

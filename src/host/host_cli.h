@@ -1,8 +1,9 @@
 #pragma once
 // ============================================================================
 // The caliper executable's command line. It is parsed before any window,
-// AppKit, GLFW or renderer exists, and every subcommand runs and exits
-// without starting the UI, so none of them ever shows a window.
+// AppKit, GLFW or renderer exists. `caliper` with no subcommand and
+// `caliper dev` start the app; every other subcommand runs and exits without
+// starting it, so it never shows a window.
 //
 //   caliper [--applets <dir>]...              start the app
 //   caliper dev <folder> [--applets <dir>]... start the app, <folder> searched first
@@ -16,6 +17,10 @@
 // `--applets <dir>` (or `--applets=<dir>`) adds a development folder to the
 // search, before CALIPER_APPLET_PATH and the installed folders; it may be
 // given more than once, and the folders are searched in the order given.
+// A development folder without manifests whose applets/ subfolder has some,
+// such as an applet's build folder, stands for that subfolder
+// (resolve_applet_folder); dev, check and install resolve their folder the
+// same way.
 //
 // Exit codes: 0 success; 1 a check failed, nothing was found, or a file
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
@@ -198,13 +203,16 @@ inline int check_folder(const std::string& folder, AppletLoader& L,
         err << "caliper: not a folder: " << folder << "\n";
         return -1;
     }
-    // Absolute, as list prints folders.
+    // Absolute, as list prints folders, and resolved: a build folder whose
+    // manifests are in its applets/ subfolder stands for that subfolder.
     const auto dirs = applet_search_dirs({folder}, nullptr, "", "");
     L.scan(dirs);
     if (L.count() == 0) {
         err << "caliper: no applets in " << dirs.front() << "\n";
         return -1;
     }
+    if (resolve_applet_folder(folder) != folder)   // its applets/ subfolder
+        out << "using the applets in " << dirs.front() << "\n";
     print_entries(L, out);
     int failing = 0;
     for (int i = 0; i < L.count(); i++) failing += passes(L.at(i)) ? 0 : 1;

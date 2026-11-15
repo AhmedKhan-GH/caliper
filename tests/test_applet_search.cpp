@@ -301,3 +301,38 @@ TEST_CASE("copies: probe opens, checks and creates without initializing") {
     REQUIRE(L.launch(hello, *fx.host()));
     L.close_all();
 }
+
+TEST_CASE("search: a build folder stands for its applets/ subfolder") {
+    TempDir t("resolve");
+    // Manifests only in build/applets, where caliper_add_applet() puts them.
+    fake_applet(t.path / "build" / "applets", "x", "x.app", "1.0.0");
+    CHECK(resolve_applet_folder(t.str("build")) == (t.path / "build" / "applets").string());
+    // A folder with manifests of its own is used as given, applets/ or not.
+    fake_applet(t.path / "both", "y", "y.app", "1.0.0");
+    fake_applet(t.path / "both" / "applets", "z", "z.app", "1.0.0");
+    CHECK(resolve_applet_folder(t.str("both")) == t.str("both"));
+    CHECK(resolve_applet_folder(t.str("build/applets")) == t.str("build/applets"));
+    // Nothing to resolve to: the folder as given.
+    fs::create_directories(t.path / "bare" / "applets");
+    CHECK(resolve_applet_folder(t.str("bare")) == t.str("bare"));
+    CHECK(resolve_applet_folder(t.str("nowhere")) == t.str("nowhere"));
+    CHECK(resolve_applet_folder("").empty());
+}
+
+TEST_CASE("search: development folders resolve, installed folders do not") {
+    TempDir t("resolve-order");
+    fake_applet(t.path / "cli" / "applets", "a", "a.app", "1.0.0");
+    fake_applet(t.path / "env" / "applets", "b", "b.app", "1.0.0");
+    fake_applet(t.path / "user" / "applets", "c", "c.app", "1.0.0");
+    const std::string env = t.str("env");
+    const auto dirs = applet_search_dirs({t.str("cli"), t.str("cli/applets")}, env.c_str(),
+                                         t.str("user"), "");
+    // "cli" and "cli/applets" name one folder, which is searched once.
+    CHECK(dirs == std::vector<std::string>{t.str("cli/applets"), t.str("env/applets"),
+                                           t.str("user")});
+    AppletLoader L(caps(), t.str("data"));
+    L.scan(dirs);
+    CHECK(L.find("a.app") >= 0);
+    CHECK(L.find("b.app") >= 0);
+    CHECK(L.find("c.app") < 0);   // the user folder is never resolved
+}
