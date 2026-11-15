@@ -1,4 +1,4 @@
-# caliper.geometry.v1 / v1_1 / v1_2 / v1_3
+# caliper.geometry.v1 to v1_3
 
 Service ids `caliper.geometry.v1` (instanced points) and its additive revisions
 `caliper.geometry.v1_1` (general primitives), `caliper.geometry.v1_2`
@@ -7,7 +7,8 @@ Service ids `caliper.geometry.v1` (instanced points) and its additive revisions
 writes vertices/indices/normals/attributes into device memory, exports them once
 through [`caliper.tensor_bridge.v1_2`](service-tensor-bridge-v1.md), and the host draws
 them **in place** — zero copies of the geometry data — into an offscreen view
-texture you show with `ImGui::Image`. This page embeds the headers verbatim; the
+texture you show with `ImGui::Image`. How the draw works on each backend is in
+[Rendering](../explanations/rendering.md#the-geometry-path). This page embeds the headers verbatim; the
 docs build fails if any embedded file moves.
 
 Deliberately a **new** service, not a tensor-bridge revision: the bridge's frozen
@@ -17,21 +18,16 @@ in the same table the bridge uses (drawable with `ImGui::Image` like any texture
 and geometry sources are addressed as `(CaliperAllocId, byte offset)`, reusing the
 v1.2 import machinery, caches, gates, and lifecycle as-is.
 
-!!! info "Platform status (honest, stated once)"
-    **Points (`v1`):** Metal + Vulkan + GL-fallback ladder. **Primitives
-    (`v1_1`):** shipped on **both** backends (Metal and Vulkan), byte-exact
-    against one CPU reference on real hardware on each. **Textures on meshes
-    (`v1_2`):** **run-proven byte-exact on both backends** — Vulkan/RTX 500 Ada
-    and Metal/Apple Silicon (both 2026-07-10, the macOS hardware pass), against
-    the same shared CPU reference. **Instanced transforms
-    (`v1_3`):** **run-proven byte-exact on both backends** — Metal on Apple
-    Silicon and Vulkan/CUDA on Windows (both 2026-07-11), against the same
-    shared CPU reference. On a backend without
-    the path (the GL fallback, or a host that doesn't vend the revision) the
-    matching **caps bit is unset and every
-    entry point is inert** — ship your fallback (see the worked example
-    below). This is the degradation ladder, not a bug: absent capability →
-    CPU path, never a wrong image.
+!!! info "Platform support"
+    **Points (`v1`):** Metal and Vulkan; on OpenGL the caps bit is unset. **Primitives
+    (`v1_1`), textures on meshes (`v1_2`) and instanced transforms (`v1_3`):**
+    Metal and Vulkan with CUDA, each byte-exact against one shared CPU reference
+    (the gfx test suite runs the same rows on both backends). On a backend
+    without the path (the OpenGL fallback, or a host that doesn't vend the
+    revision) the matching **caps bit is unset and every entry point is inert**.
+    Ship your fallback (see the worked example below). That is the degradation
+    ladder, not a bug: an absent capability means a CPU path, never a wrong
+    image.
 
 ```c
 --8<-- "sdk/include/caliper/services/geometry_v1.h"
@@ -48,6 +44,21 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 ```c
 --8<-- "sdk/include/caliper/services/geometry_v1_3.h"
 ```
+
+## Non-goals
+
+The service draws geometry from a fixed menu. These are not provided, and each is a decision rather than a gap.
+
+| Not provided | Why |
+|---|---|
+| Applet-supplied shaders | They would break the seam, in which applets see only ImGui and bridge ids, and they open a large security surface ([D32](../decisions/d032-data-flows-one-way.md)) |
+| Render-to-tensor or readback | Data flows one way, from tensors to pixels. A readback would add a reverse sync contract to every frame ([D32](../decisions/d032-data-flows-one-way.md)) |
+| Back-face culling | Drawing is two-sided everywhere, which is deterministic and has no winding footguns |
+| MSAA | Views are single-sample RGBA8 |
+| Mipmaps | Views have no mip chain, and textured meshes sample the base level only |
+| Line width above 1 px | `wideLines` is optional in Vulkan, and portable thick lines are triangles. `size_px` applies to points only |
+| Per-pixel lighting | Lighting is evaluated per vertex, which keeps the fragment stage trivial and parity easy |
+| Transparency sorting | The applet orders its draw array. Unsorted alpha artifacts are documented, not fixed |
 
 ## caliper.geometry.v1 — instanced points
 
@@ -88,7 +99,8 @@ The addressed bytes are read **in place** and must not be rewritten until this
 view's next draw. On the worker side, drain the producer stream/queue once at the
 handoff **before** publishing the slot (this is the triple-buffer / ready-slot
 discipline the exemplars use with [`caliper.jobs.v1`](service-jobs-v1.md)); the frame
-thread does every draw and never touches the learner's tensors.
+thread does every draw and never touches the learner's tensors. The reasons for the two halves of this rule are in
+[Zero-copy tensor visualization](../explanations/zero-copy.md#geometry-stays-on-the-drain-rung).
 
 ## caliper.geometry.v1_1 — general primitives
 
@@ -233,10 +245,27 @@ so you never hit it.
 Clip-space convention (applet-owned camera math): **+Y up, clip Z in `[0, 1]`**
 (Vulkan/Metal/D3D, not GL's `[-1,1]`).
 
+### Fixed-function state
+
+The render state is fixed, and both backends use the same values.
+
+| State | Value |
+|---|---|
+| Depth compare | `LESS_OR_EQUAL` when testing (`ALWAYS` when only writing) |
+| Depth clear value | `1.0` |
+| Depth format | D32 float (`VK_FORMAT_D32_SFLOAT`, `MTLPixelFormatDepth32Float`) |
+| Culling | None, two-sided |
+| Line width | 1 px |
+| Point size | `size_px`, clamped to the device limit |
+| `OPAQUE` | Blending disabled |
+| `ALPHA` | Color `SRC_ALPHA` and `ONE_MINUS_SRC_ALPHA`, alpha `ONE` and `ONE_MINUS_SRC_ALPHA` |
+| `ADDITIVE` | `ONE` and `ONE` on both channels, byte-identical to the v1 points look |
+
 ### Gates and refusals
 
-All gates run **before any encoding** (on Metal, before the encoder exists —
-creating it performs the clear). Any failure refuses the **whole frame**: `false`,
+All gates run **before any encoding**, which means before the encoder exists
+(on Metal, creating the encoder performs the clear). That includes the
+instanced-LAMBERT rigidity check on the host. Any failure refuses the **whole frame**: `false`,
 pixels untouched, one `caliper.log.v1` line.
 
 | Scope | Gate |
@@ -334,7 +363,8 @@ equivalent v1_1 draw).
 ## caliper.geometry.v1_3 — instanced transforms
 
 Additive revision of v1_1/v1_2: `CaliperGeomDrawV1_3` = the frozen 216-byte
-`CaliperGeomDrawV1_2` record (`base`) plus an appended **instance tail**, carried
+`CaliperGeomDrawV1_2` record (`base`) plus an appended **instance tail**, 256 bytes
+in all (`static_assert(sizeof(CaliperGeomDrawV1_3) == 256)`), carried
 by the same `draw_primitives` + `draw_stride` slot. No new entry point, `reserved0`
 still NULL, the v1.1/v1.2 prefixes untouched. Caps bit **3**
 (`CALIPER_GEOM_CAP_INSTANCED`, `1u << 3`) set means the instance tail is live;
@@ -372,6 +402,25 @@ plain draws) and says so; never a wrong image, never a false status line. The
 `caliper::Geometry` sugar exposes `has_instanced()` (caps bit 3) and a
 `draw_primitives` overload taking `CaliperGeomDrawV1_3*`; seed descriptors from
 `caliper::geom_draw_v1_3_defaults()` (a zero instance tail over the v1_2 defaults).
+
+## Backend notes
+
+These details are host-internal, and applets cannot see them. They matter when a record grows or a gate refuses.
+
+- **`PrimParams` is 192 bytes.** Each draw is described to the shaders by a parameter block holding the combined
+  transform, the normal matrix, the element bases of every source and the mode and tail fields. Its layout is kept in
+  step by hand across four places: the GLSL `std140` block in `geom.vert`, `PrimParams` in `vulkan_renderer.cpp`, and
+  the MSL struct and its C++ mirror in `metal_renderer.mm`. Two `static_assert(sizeof(PrimParams) == 192)` lines pin
+  the sizes, and a record that grows has to move all four together.
+- **Metal reads private storage through a blit.** Torch MPS tensors import as `MTLStorageModePrivate`, and `contents()`
+  of a private buffer is not host-readable. The rigidity gate (G14) has to read the instance matrices on the host, so
+  the Metal backend copies every private instance buffer of a frame with one blit into a grow-only staging buffer and
+  waits once, before any render encoder exists. Shared-storage imports are read directly. Vulkan stages the same way
+  with `vkCmdCopyBuffer`.
+- **Caches.** Vulkan keeps a pipeline cache keyed by topology, blend mode, depth state and whether the draw is textured,
+  a descriptor set per draw, and a ring of 256-byte-aligned parameter slots that grows as needed. Metal keeps a
+  pipeline cache keyed by topology class, blend mode, depth and whether the draw is textured, and a depth-stencil state per test and write
+  combination. Indexed draws are issued as non-indexed draws, so no index buffer is bound on either backend.
 
 ## C++ sugar
 

@@ -1,59 +1,130 @@
-# Rendering (the HostRenderer story)
+# Rendering
+
+Caliper draws tensors that already live on the GPU, so its renderer has to speak the graphics API the tensors are
+reachable from. OpenGL cannot do that on a Mac: it is deprecated there, capped at version 4.1, and has no path to
+the memory that PyTorch's MPS backend allocates. Every Mac tensor would take a round trip through the CPU on its way
+to becoming a texture, in the hottest loop the framework owns.
+
+The answer is to keep graphics out of the contract entirely. This page describes the seam that does it, the three
+backends behind it, how each one updates a texture, and how the geometry path draws 3-D data. How a tensor reaches
+pixels without a CPU round trip, and what each path costs, is in [Zero-copy tensor visualization](zero-copy.md).
 
 ## Why the ABI never names a graphics API
 
-Caliper's USP is GPU-resident visualization, so the renderer must speak the API
-the tensors actually live in. OpenGL cannot: it is deprecated on macOS (capped at
-4.1) with no path to MPS memory, so every Mac tensor would take a CPU round-trip
-on its way to becoming a texture — a copy in the hottest loop the framework owns.
-The answer (PLATFORM.md §5.4) is to keep graphics **out of the contract
-entirely**: applets render only through ImGui/ImPlot, textures cross the boundary
-as an opaque [`CaliperTextureId`](../references/service-tensor-bridge-v1.md), and
-the host keeps an id→backend-handle table so the id is *never* a raw GL/Metal
-handle. Because the contract hides the backend, swapping it needs **no epoch bump
-and no applet rebuild**.
+Applets render only through ImGui and ImPlot. A tensor crosses to the renderer as a [`CaliperTensor`](../references/tensor.md),
+and what comes back is an opaque `CaliperTextureId`. The host keeps a table from that id to the backend's own handle,
+so the id is never a raw OpenGL, Metal or Vulkan object. Because the contract hides the backend, swapping or adding
+one needs no epoch bump and no applet rebuild ([D13](../decisions/d013-renderer-agnostic-abi.md)).
 
-The seam is `HostRenderer` (`src/host/renderer/host_renderer.h`), a host-internal
-interface the ABI never sees. It is validated by prior art: wxWidgets'
-`wxGraphicsContext` converged on the same answer — one abstract drawing API over
-*native* backends (Direct2D / CoreGraphics / Cairo), not one cross-platform GPU
-API (PLATFORM.md §5.4 discussion).
+The seam is `HostRenderer` (`src/host/renderer/host_renderer.h`), a host-internal interface the ABI never sees. Each
+backend is its own translation unit, and the host picks one at startup.
 
-## Backend status
+## Backends
 
-| Backend | Selection | Status | Notes |
-|---------|-----------|--------|-------|
-| **Metal** | default (macOS) | **Shipping default (macOS)** | Full app parity; `tensor_bridge.v1` colormaps MPS buffers on-GPU (zero CPU staging), §16 pixel-exact (C5). Apple-only translation unit. |
-| **Vulkan (CUDA interop)** | default (Windows) | **Shipping default (Windows)** | Phase 4: device-resident CUDA tensors via external-memory interop — the Vulkan side exports, CUDA imports, synchronized by a shared timeline semaphore. Pixel-exact verified on NVIDIA hardware (`CALIPER_VULKAN_SELFTEST=1`, both rungs byte-identical to the CPU reference); folding that proof into the `ctest` gfx harness as a Vulkan env is the remaining CI wiring. Windows-only translation unit. |
-| **OpenGL 3.3 core** | `CALIPER_RENDERER=gl` | **Frozen fallback** | The retained escape hatch; `tensor_bridge.v1` CPU-stages onto it. Also the runtime fallback on both platforms when the native backend fails to init (no driver, RDP, ...). |
+| Backend | Selected | Update path | Notes |
+|---|---|---|---|
+| Metal | Default on macOS | A compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | No CPU staging. Apple-only translation unit |
+| Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](vulkan-cuda.md). Windows-only translation unit |
+| OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback. `tex_update_from_device` always returns `false` |
 
-`core_select_renderer()` (`src/host/core_lifecycle.cpp`) does the env-driven
-selection between the three factories (`make_metal_renderer()`,
-`make_vulkan_renderer()`, `make_renderer("gl")`): the default is Metal on macOS
-and Vulkan on Windows, `CALIPER_RENDERER=gl` selects the frozen GL fallback on
-either, and if the native backend fails to init the host still falls back to GL.
+`core_select_renderer()` in `src/host/core_lifecycle.cpp` picks the default: Metal on macOS and Vulkan on Windows.
+`CALIPER_RENDERER=gl` selects OpenGL on either. If the native backend fails to initialize (no driver, a remote
+desktop session), `src/main.cpp` recreates the window with OpenGL. Every backend produces the same pixels
+for the same tensor: the gfx test suite runs one matrix per backend and compares each readback byte for byte against
+the CPU reference conversion (`map_f32_to_rgba8` and `expand_u8_to_rgba8`). The suite has an environment for OpenGL,
+for Metal, for Vulkan (the CPU-staged rows, which run on any Vulkan driver) and for Vulkan with CUDA (the device
+rows, which run when the paired CUDA device is the only one in the machine).
 
-### Why Metal is now the default
+The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
+with ImGui, so they look the same on every backend.
 
-Metal became the macOS default once the **opengllama migration cleared the flip
-gate**. The ratified Phase-2 sequencing (PLATFORM.md §17, ratified 2026-07-01)
-made this a hard dependency: opengllama shed its grandfathered raw-GL heatmaps
-onto `texture_from_tensor_mapped` (the bridge's first non-torch consumer —
-ggml/llama.cpp Metal buffers), leaving zero raw-GL applets. A raw-GL applet
-cannot run in a Metal-backed host, so the §6c grandfather clause expired there by
-necessity, and **the host's default macOS backend flipped GL→Metal**. Both
-backends stay honest under the same §16 pixel-exact test matrix run per backend.
+## The pixel-space contract
 
-The host's own screens carry no raw GL either. The landing screen
-(`src/host/ui/landing_screen.cpp`) is drawn entirely with ImGui, so it is
-identical on Metal, Vulkan and GL, as are the launch flow and the dashboards.
+Applets never issue graphics calls. They describe what to draw in ImGui terms and hand tensors to the bridge, and the
+host owns the window, the contexts and every GPU call. A tensor becomes a texture through
+[`caliper.tensor_bridge.v1`](../references/service-tensor-bridge-v1.md). That service is the one place where the backend
+difference lives: device compute or blit on Metal and Vulkan, CPU staging on OpenGL. The applet runs the same code on
+every backend.
 
-## The pixel-space contract, recapped
+## The update ladder on Windows
 
-Applets never issue graphics calls (§6c). They describe *what* to draw in ImGui
-terms and hand *tensors* to the bridge; the host owns the window, the contexts,
-and every actual GPU call. A tensor becomes a texture through
-[`caliper.tensor_bridge.v1`](../references/service-tensor-bridge-v1.md) — the one
-place the backend difference (device compute/blit on Metal and Vulkan vs
-CPU-staged on GL) lives, and it is invisible to the applet, which runs identical
-code on every backend.
+The Vulkan backend tries three rungs for each device-resident CUDA tensor and takes the first that accepts it. The
+string that `last_device_path()` reports says which one ran.
+
+1. **Direct** (`direct-cmap` for f32 with a colormap, `direct-blit` for u8). A CUDA kernel, launched on the producer's
+   stream, reads the tensor where it lies and writes the Vulkan image through a surface object. There is no copy and
+   no Vulkan compute pass ([D25](../decisions/d025-cuda-writes-the-vulkan-image.md)).
+2. **Buffer** (`compute` or `blit`). The tensor is copied inside VRAM into a buffer shared with Vulkan, and a Vulkan
+   pass turns that buffer into the image. This rung takes over when the direct path is unavailable or refuses the
+   tensor, and for the offscreen canvas.
+3. **CPU staging.** The bridge converts on the CPU and uploads. This is the last rung, and the only one for a CPU
+   tensor.
+
+Each rung keeps the output byte-identical to the CPU reference. When a rung is unavailable the next one runs, and the
+startup log says so ([D33](../decisions/d033-honest-fallbacks.md)).
+
+## Data flows one way
+
+Data moves from tensors to pixels to ImGui, and no further. There is no render-to-tensor entry point, no readback on
+any hot path, and no way for an applet to supply its own shader ([D32](../decisions/d032-data-flows-one-way.md)). The
+backends' `debug_readback_rgba8` exists for the test harness only. Training consumes the same tensors the renderer
+reads and never the renderer's output.
+
+Several things look as though they need a new host capability and do not:
+
+- **Static assets** such as CAD, OBJ or glTF shells. The applet loads the file and fills vertex and index tensors; the
+  host never learns about file formats.
+- **Picking, hover and selection.** The applet casts rays against its own tensors. Interaction is math the applet owns.
+- **Annotation and heads-up displays.** ImGui composites over the view image.
+- **Training on the visualized data.** Training reads the tensors the renderer reads.
+
+## The geometry path
+
+Textures show tensors as images. The geometry path draws a tensor as 3-D geometry. The applet writes vertices,
+indices, normals and attributes into device memory, imports them into the host once through
+[`caliper.tensor_bridge.v1_2`](../references/service-tensor-bridge-v1.md), and calls
+[`caliper.geometry.v1` and its revisions](../references/service-geometry-v1.md) each frame. The host draws the geometry
+in place into an offscreen view, and the view is an ordinary `CaliperTextureId` that the applet shows with
+`ImGui::Image`.
+
+- **Offscreen views.** A view is a texture the host renders into. It lives in the same id table as bridge textures, so
+  `ImGui::Image` draws it like any other texture.
+- **Depth views.** A view created with the depth flag carries a D32 float depth buffer that is private to the renderer.
+  Setting depth state against a view without one is refused, never ignored.
+- **Vertex pulling.** There is no vertex-input state. The vertex shader reads positions, indices, normals and
+  attributes straight out of the imported buffers by vertex index, and an indexed draw is issued as a non-indexed draw
+  of `index_count` vertices. One mechanism serves every topology on both backends.
+- **One atomic, gated frame.** `draw_primitives` renders a whole frame from an array of draw descriptors. Every draw
+  is checked before anything is encoded, and one failed check refuses the whole frame with the previous pixels
+  intact. A begin and end API could fail after the clear, which would break that guarantee.
+- **Growth by records.** Textures on meshes and instanced transforms were added by growing the draw record with
+  appended fields, not by adding entry points. A revision is a new service id whose table and record begin with the
+  previous revision's bytes, gated by a new capability bit, and a host draws a zero tail exactly as the earlier
+  revision did ([D30](../decisions/d030-additive-service-revisions.md),
+  [D31](../decisions/d031-geometry-grows-by-additive-records.md)). Both backends stay byte-exact against one shared
+  CPU reference.
+
+The Vulkan backend keeps a pipeline cache keyed by topology, blend mode and depth state, a descriptor set per draw,
+and a ring of per-draw parameter blocks. The Metal backend keeps the equivalent pipeline and depth-stencil caches.
+Metal compiles its shaders at run time, and Vulkan embeds SPIR-V built at compile time
+([D29](../decisions/d029-build-time-spir-v.md)).
+
+## Why Metal pipelines by queue commit order
+
+The Metal renderer submits tensor operations and the frame's drawing to one `MTLCommandQueue`, and Metal starts the
+command buffers on one queue in the order they were committed. That gives most of what the Vulkan backend needs
+explicit machinery for ([D23](../decisions/d023-metal-orders-by-commit-order.md)):
+
+- **Draw after update.** The tensor operation is committed during the applet's `frame()`, before the frame's own
+  command buffer, so the frame samples finished texels with no added synchronization.
+- **Resource lifetime.** A command buffer retains the resources it references until it completes, so a buffer or a
+  texture released mid-flight stays alive until the GPU is done with it. The renderer never encodes unretained.
+- **Rapid re-update.** Two updates to one texture are two command buffers on one queue, serialized by commit order.
+  Each update allocates a fresh command buffer, so there is nothing to re-record.
+
+Metal therefore keeps no per-texture sync objects, no back-pressure wait and no list of pending waits. An
+`MTLSharedEvent` appears only where a second queue exists, which is the producer's queue when a stream-ordered handoff
+is in use. The remaining CPU waits are in readbacks, the offscreen canvas, the geometry rigidity check and a rare fallback, not in the update path.
+
+The larger stall was never in the renderer. Draining the whole device at the handoff was the dominant cost, and that
+is what the stream-ordered handoff removes; [Zero-copy tensor visualization](zero-copy.md#the-sync-ladder) covers it.
