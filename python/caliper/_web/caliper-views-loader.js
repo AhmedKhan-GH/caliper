@@ -24,7 +24,7 @@
 
 // The live view kinds these views draw. A page draws the other kinds itself
 // (the <caliper-view> element uses its TypeScript views for them).
-export const CALIPER_VIEWS_KINDS = Object.freeze(['heatmap', 'image', 'series', 'histogram']);
+export const CALIPER_VIEWS_KINDS = Object.freeze(['heatmap', 'image', 'points', 'series', 'histogram']);
 
 const compiled = new Map();   // assetBase -> Promise<{ factory, wasm }>
 
