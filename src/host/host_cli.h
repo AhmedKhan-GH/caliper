@@ -6,15 +6,17 @@
 // starting it, so it never shows a window. `shot` draws the app's applet page
 // into an offscreen canvas (shot.h) and opens no window either.
 //
-//   caliper [--applets <dir>]...              start the app
-//   caliper dev <folder> [--applets <dir>]... start the app, <folder> searched first
+//   caliper [--applets <dir>]... [--api [--api-port <n>]]
+//                                             start the app
+//   caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]
+//                                             start the app, <folder> searched first
 //   caliper list [--applets <dir>]...         list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
 //   caliper new <name> [<dir>]                create an applet from a template
 //   caliper info                              print versions and served services
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-//                [--frames <N>] --out <file.png>
+//                [--frames <N>] --out <file.png> [--api [--api-port <n>]]
 //                                             write the applet page as a PNG
 //   caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
 //                                             run the hub of wire protocol v3
@@ -32,6 +34,11 @@
 // SIGTERM; it needs no window, renderer or GPU either. --port, --token-file
 // and --assets apply only to it.
 //
+// `--api` serves Caliper API v0 (api/api_server.h) on 127.0.0.1 while the app
+// runs: with no subcommand, with dev, and with shot, whose offscreen canvas
+// is the app's windowless mode. `--api-port <n>` chooses its port (7341
+// without it, 0 for any free port) and needs --api.
+//
 // Exit codes: 0 success; 1 a check failed, nothing was found, or a file
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
 //
@@ -43,6 +50,7 @@
 #include "applet_loader.h"
 #include "negotiation.h"
 #include "net/hub.h"
+#include "net/json.h"
 #include <algorithm>
 #include <atomic>
 #include <iterator>
@@ -73,6 +81,9 @@ struct CommandLine {
     int port = -1;                          // --port; -1: kDefaultHubPort
     std::string token_file;                 // --token-file
     std::string assets_dir;                 // --assets
+    // Caliper API (the app, dev and shot)
+    bool api = false;                       // --api
+    int api_port = -1;                      // --api-port; -1: caliper_api::kDefaultPort
     std::string error;                      // set: print it and the usage, exit 2
 
     // shot's options, with their defaults.
@@ -84,15 +95,15 @@ struct CommandLine {
 };
 
 inline const char* usage_text() {
-    return "usage: caliper [--applets <dir>]...\n"
-           "       caliper dev <folder> [--applets <dir>]...\n"
+    return "usage: caliper [--applets <dir>]... [--api [--api-port <n>]]\n"
+           "       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]\n"
            "       caliper list [--applets <dir>]...\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
-           "                    [--frames <N>] --out <file.png>\n"
+           "                    [--frames <N>] --out <file.png> [--api [--api-port <n>]]\n"
            "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]\n"
            "       caliper --help\n";
 }
@@ -127,6 +138,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     // shot's options, in the order of their first appearance.
     std::vector<std::string> shot_options;
     std::vector<std::string> serve_options;   // given, to refuse them elsewhere
+    bool api_port_given = false;
     for (int i = 1; i < argc; i++) {
         const std::string arg = argv[i] ? argv[i] : "";
         // macOS passes -psn_<number> to an app that Finder launches on older
@@ -208,6 +220,38 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
         }
         if (shot_option) continue;
+        // Caliper API: --api, a flag, and --api-port <n>.
+        if (arg == "--api") {
+            cl.api = true;
+            continue;
+        }
+        if (arg.rfind("--api=", 0) == 0) {
+            cl.error = "--api takes no value; choose the port with --api-port <n>";
+            return cl;
+        }
+        if (arg == "--api-port" || arg.rfind("--api-port=", 0) == 0) {
+            std::string value;
+            if (arg == "--api-port") {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(std::string("--api-port=").size());
+            }
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = "--api-port needs a number";
+                return cl;
+            }
+            if (api_port_given) {
+                cl.error = "--api-port is given twice";
+                return cl;
+            }
+            api_port_given = true;
+            cl.api_port = cli_detail::parse_count(value, 0, 65535);
+            if (cl.api_port < 0) {
+                cl.error = "--api-port needs a number from 0 to 65535, not " + value;
+                return cl;
+            }
+            continue;
+        }
         // The options of serve: --port, --token-file, --assets.
         bool serve_option = false;
         for (const char* opt : {"--port", "--token-file", "--assets"}) {
@@ -304,6 +348,11 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         cl.error = shot_options.front() + " applies only to shot";
     if (cl.error.empty() && !serve_options.empty() && cl.command != C::Serve)
         cl.error = serve_options.front() + " applies only to serve";
+    if (cl.error.empty() && (cl.api || api_port_given) && cl.command != C::Run &&
+        cl.command != C::Dev && cl.command != C::Shot && cl.command != C::Help)
+        cl.error = std::string(cl.api ? "--api" : "--api-port") +
+                   " applies only to starting the app, dev and shot";
+    if (cl.error.empty() && api_port_given && !cl.api) cl.error = "--api-port needs --api";
     return cl;
 }
 
@@ -327,9 +376,9 @@ inline bool passes(const AppletEntry& a) {
     return a.status == AppletStatus::Ready || a.status == AppletStatus::Shadowed;
 }
 
-// One line per applet: status, id, version, folder, in columns; a refused,
-// failed or shadowed applet's reason on the next line, under the id.
-inline void print_entries(const AppletLoader& L, std::ostream& out) {
+// The order list prints the applets in: search order, then id, then the
+// highest version first.
+inline std::vector<int> list_order(const AppletLoader& L) {
     std::vector<int> order;
     for (int i = 0; i < L.count(); i++) order.push_back(i);
     std::stable_sort(order.begin(), order.end(), [&](int x, int y) {
@@ -341,9 +390,18 @@ inline void print_entries(const AppletLoader& L, std::ostream& out) {
         if (ia != ib) return ia < ib;
         return semver_cmp(a.manifest.version, b.manifest.version) > 0;
     });
-    auto id_of = [](const AppletEntry& a) {
-        return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
-    };
+    return order;
+}
+
+inline std::string list_id(const AppletEntry& a) {
+    return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
+}
+
+// One line per applet: status, id, version, folder, in columns; a refused,
+// failed or shadowed applet's reason on the next line, under the id.
+inline void print_entries(const AppletLoader& L, std::ostream& out) {
+    const std::vector<int> order = list_order(L);
+    auto id_of = [](const AppletEntry& a) { return list_id(a); };
     auto version_of = [](const AppletEntry& a) {
         return a.manifest.version.empty() ? std::string("-") : a.manifest.version;
     };
@@ -834,6 +892,47 @@ inline int run_info(const CommandLine&, const CliContext& ctx, std::ostream& out
         << (ctx.caps.ui_stack_hash.empty() ? "none" : ctx.caps.ui_stack_hash) << "\n";
     for (const std::string& id : ctx.caps.services) out << "service " << id << "\n";
     return 0;
+}
+
+// ---- the same data as JSON (Caliper API v0) ----------------------------------
+
+// What `caliper info` prints, as a JSON object: {"host", "abi_epoch", "sdk",
+// "libtorch", "ui_stack", "services"}, with null for what is unknown or absent.
+inline std::string info_json(const CliContext& ctx) {
+    using caliper_net::Json;
+    auto or_null = [](const std::string& s) { return s.empty() ? Json() : Json(s); };
+    Json j = Json::object();
+    j.set("host", ctx.caps.version);
+    j.set("abi_epoch", (int64_t)ctx.caps.abi_epoch);
+    j.set("sdk", or_null(ctx.sdk_version));
+    j.set("libtorch", or_null(ctx.caps.torch_version));
+    j.set("ui_stack", or_null(ctx.caps.ui_stack_hash));
+    Json services = Json::array();
+    for (const std::string& id : ctx.caps.services) services.push(id);
+    j.set("services", std::move(services));
+    return j.dump();
+}
+
+// What `caliper list` prints for the applets of `L`, in its order, as a JSON
+// object {"applets": [{"status", "id", "version", "folder", "reason"}]}: the
+// status word, the version ("" when the manifest has none) and the reason that
+// list prints under the id ("" for a READY applet).
+inline std::string applets_json(const AppletLoader& L) {
+    using caliper_net::Json;
+    Json list = Json::array();
+    for (int i : cli_detail::list_order(L)) {
+        const AppletEntry& a = L.at(i);
+        Json e = Json::object();
+        e.set("status", applet_status_word(a.status));
+        e.set("id", cli_detail::list_id(a));
+        e.set("version", a.manifest.version);
+        e.set("folder", a.folder);
+        e.set("reason", a.status == AppletStatus::Ready ? std::string() : a.status_text);
+        list.push(std::move(e));
+    }
+    Json j = Json::object();
+    j.set("applets", std::move(list));
+    return j.dump();
 }
 
 // ---- caliper serve -----------------------------------------------------------

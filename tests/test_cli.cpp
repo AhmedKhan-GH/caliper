@@ -295,6 +295,79 @@ TEST_CASE("cli: list shows every copy in search order, with reasons") {
     CHECK(r.out == expected);
 }
 
+TEST_CASE("cli: --api and --api-port start the app, dev and shot with Caliper API") {
+    CHECK_FALSE(parse({}).api);
+    auto app = parse({"--api"});
+    CHECK(app.error.empty());
+    CHECK(app.command == Command::Run);
+    CHECK(app.api);
+    CHECK(app.api_port == -1);
+    auto dev = parse({"dev", "/a", "--api", "--api-port", "0"});
+    CHECK(dev.error.empty());
+    CHECK(dev.api);
+    CHECK(dev.api_port == 0);
+    auto shot = parse({"shot", "--launch", "x", "--out", "o.png", "--api-port=7400", "--api"});
+    CHECK(shot.error.empty());
+    CHECK(shot.api);
+    CHECK(shot.api_port == 7400);
+    CHECK(parse({"--api", "--help"}).command == Command::Help);
+}
+
+TEST_CASE("cli: wrong --api command lines are usage errors") {
+    CHECK(parse({"list", "--api"}).error == "--api applies only to starting the app, dev and shot");
+    CHECK(parse({"serve", "--api"}).error == "--api applies only to starting the app, dev and shot");
+    CHECK(parse({"info", "--api-port", "1"}).error ==
+          "--api-port applies only to starting the app, dev and shot");
+    CHECK(parse({"--api-port", "7400"}).error == "--api-port needs --api");
+    CHECK(parse({"--api", "--api-port"}).error == "--api-port needs a number");
+    CHECK(parse({"--api", "--api-port", "--help"}).error == "--api-port needs a number");
+    CHECK(parse({"--api", "--api-port", "65536"}).error ==
+          "--api-port needs a number from 0 to 65535, not 65536");
+    CHECK(parse({"--api", "--api-port", "-1"}).error ==
+          "--api-port needs a number from 0 to 65535, not -1");
+    CHECK(parse({"--api", "--api-port", "1", "--api-port", "2"}).error == "--api-port is given twice");
+    CHECK(parse({"--api=7400"}).error == "--api takes no value; choose the port with --api-port <n>");
+}
+
+TEST_CASE("cli: the usage names --api") {
+    const std::string u = usage_text();
+    CHECK(u.find("usage: caliper [--applets <dir>]... [--api [--api-port <n>]]") != std::string::npos);
+    CHECK(u.find("caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]") !=
+          std::string::npos);
+    CHECK(u.find("--out <file.png> [--api [--api-port <n>]]") != std::string::npos);
+}
+
+TEST_CASE("cli: info and list as JSON hold what the text forms print") {
+    TempDir t("json");
+    CliContext ctx = context(t);
+    ctx.caps.torch_version = "2.5.1";
+    CHECK(info_json(ctx) ==
+          "{\"abi_epoch\":2,\"host\":\"0.6.0\",\"libtorch\":\"2.5.1\",\"sdk\":\"0.2.0\","
+          "\"services\":[\"caliper.log.v1\",\"caliper.ui.v1\"],\"ui_stack\":null}");
+
+    fake_applet(t.path / "dev", "x", "x.app", "2.0.0", "torch=\"9.9.9\"\n");
+    fake_applet(t.path / "user", "x", "x.app", "1.0.0");
+    ctx = context(t);   // a host without libtorch, as in the list test
+    AppletLoader L(ctx.caps, ctx.data_root);
+    L.scan(applet_search_dirs({t.str("dev")}, nullptr, ctx.user_dir, ctx.shipped_dir));
+    caliper_net::Json j;
+    std::string err;
+    const std::string text = applets_json(L);
+    REQUIRE_MESSAGE(caliper_net::Json::parse(text.data(), text.size(), &j, &err), err);
+    const caliper_net::Json* list = j.find("applets");
+    REQUIRE(list);
+    REQUIRE(list->size() == 2);
+    const caliper_net::Json& refused = list->at(0);
+    CHECK(refused.find("status")->as_string() == "REFUSED");
+    CHECK(refused.find("id")->as_string() == "x.app");
+    CHECK(refused.find("version")->as_string() == "2.0.0");
+    CHECK(refused.find("folder")->as_string() == t.str("dev"));
+    CHECK(refused.find("reason")->as_string() ==
+          "Built against libtorch 9.9.9; this host provides no libtorch.");
+    CHECK(list->at(1).find("status")->as_string() == "READY");
+    CHECK(list->at(1).find("reason")->as_string().empty());
+}
+
 TEST_CASE("cli: check passes a good folder and fails a bad one") {
     TempDir t("check");
     const CliContext ctx = context(t);
