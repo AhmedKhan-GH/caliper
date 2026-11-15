@@ -76,6 +76,10 @@ target_sources(caliper_tests PRIVATE test_work_area.cpp)
 target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
 # The command line's subcommands (src/host/host_cli.h) on temporary folders.
 target_sources(caliper_tests PRIVATE test_cli.cpp)
+# Caliper API v0 (src/host/api/api_server.h): the routes, the token, the Host
+# and Origin refusals and the limits, with the server in this process.
+target_sources(caliper_tests PRIVATE test_api.cpp)
+target_link_libraries(caliper_tests PRIVATE caliper_api)
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)

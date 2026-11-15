@@ -336,6 +336,15 @@ endif()
 set_target_properties(caliper_net PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
+# Caliper API v0 (src/host/api/api_server.h): the routes, the token, Host and
+# Origin checks of the HTTP interface to the running app, and its server around
+# the hub. Headless, like caliper_net, so the unit tests link it directly; the
+# app's side (src/host/api/app_api.cpp) is in the caliper executable.
+add_library(caliper_api STATIC src/host/api/api_server.cpp)
+target_link_libraries(caliper_api PUBLIC caliper_net)
+set_target_properties(caliper_api PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
