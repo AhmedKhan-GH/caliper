@@ -622,8 +622,10 @@ if(BUILD_TESTS OR CALIPER_BUILD_APPLETS)
     endif()
 endif()
 
-# embed_host: the second, out-of-tree-style embedder of libcaliper (L2b).
-# A bare native-window host; NOT an applet, NOT linked into `caliper`.
+# embed_host: the second embedder of libcaliper, linked to caliper::embed. A
+# bare native-window host with an offscreen mode; not an applet, not linked
+# into `caliper`. It also builds on its own against the installed caliper-embed
+# package (caliper_embed_install does that).
 option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/embed_host)
@@ -695,25 +697,37 @@ if(BUILD_TESTS)
 
     # caliper_embed_install: install the embed component alone to its own
     # prefix, check the installed tree and, on macOS, that the library exports
-    # exactly the C functions of libcaliper.a (tests/embed_install/run.cmake).
-    # CI points the work folder outside the checkout.
+    # exactly the C functions of libcaliper.a; then build a copy of
+    # examples/embed_host against the package with only find_package(caliper-embed)
+    # and run it in its offscreen mode, which creates no window, on a copy of
+    # the hello fixture (tests/embed_install/run.cmake). Without a GPU the run
+    # is reported as skipped, as the GPU suites do. CI points the work folder
+    # outside the checkout.
     if(TARGET caliper_embed)
         set(CALIPER_EMBED_PROBE_DIR "${CMAKE_BINARY_DIR}/embed-probe" CACHE PATH
             "Work folder of the caliper_embed_install test")
         set(_embed_probe_exports "")
         if(APPLE)
-            set(_embed_probe_exports "-DNM=${CMAKE_NM}" "-DCORE_LIBRARY=$<TARGET_FILE:libcaliper>")
+            set(_embed_probe_exports "-DNM=${CMAKE_NM}" "-DCORE_LIBRARY=$<TARGET_FILE:libcaliper>"
+                "-DOBJCXX_COMPILER=${CMAKE_OBJCXX_COMPILER}")
         endif()
         add_test(NAME caliper_embed_install COMMAND "${CMAKE_COMMAND}"
             "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
             "-DCALIPER_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
             "-DWORK_DIR=${CALIPER_EMBED_PROBE_DIR}"
             "-DEXPECT_VERSION=${CALIPER_EMBED_PACKAGE_VERSION}"
+            "-DAPPLETS_DIR=${CMAKE_BINARY_DIR}/applets"
+            "-DGENERATOR=${CMAKE_GENERATOR}"
+            "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DBUILD_TYPE=$<CONFIG>"
             "-DLIB_PREFIX=${CMAKE_SHARED_LIBRARY_PREFIX}"
             "-DLIB_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
+            "-DEXE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
             ${_embed_probe_exports}
             -P "${CMAKE_SOURCE_DIR}/tests/embed_install/run.cmake")
-        set_tests_properties(caliper_embed_install PROPERTIES LABELS "embed" TIMEOUT 900)
+        set_tests_properties(caliper_embed_install PROPERTIES LABELS "embed" TIMEOUT 900
+            SKIP_REGULAR_EXPRESSION "headless run skipped: no GPU")
     endif()
 
     # caliper_host_names_no_applet: no applet id, name or window title from

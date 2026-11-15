@@ -16,6 +16,8 @@
 
 #include <caliper/embed.h>
 
+#include "embed_host.h"   // version check and the offscreen mode
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -81,6 +83,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int main(int argc, char** argv) {
     const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.instance-scope";
+    if (!embed_version_ok()) return 1;
+    // CALIPER_EMBED_OFFSCREEN=1: an offscreen canvas and no window class or
+    // window at all (embed_host.h).
+    if (embed_offscreen_requested())
+        return embed_run_offscreen(applet_id, &embed_log, &embed_crash);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     WNDCLASSA wc{}; wc.lpfnWndProc = WndProc; wc.hInstance = GetModuleHandle(nullptr);

@@ -18,12 +18,18 @@
 // timer, event translation — deliberately sparse so the five calls stand out.
 //
 // Run:  ./embed_host [manifest-id]        (default: dev.caliper.instance-scope)
-//   CALIPER_EMBED_EXIT_AFTER=<seconds>   auto-close for a headless run-proof.
+//   CALIPER_EMBED_APPLETS=<dir>          the applets folder (applets_dir).
+//   CALIPER_EMBED_EXIT_AFTER=<seconds>   close the window after that long.
+//   CALIPER_EMBED_OFFSCREEN=1            no window at all: an offscreen canvas,
+//                                        pumped for EXIT_AFTER seconds (default
+//                                        1), then exit (embed_host.h).
 // ===========================================================================
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <caliper/embed.h>
+
+#include "embed_host.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -242,11 +248,16 @@ static void send(CaliperInputEvent ev) {
 @end
 
 int main(int argc, const char* argv[]) {
+    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.instance-scope";
+    if (!embed_version_ok()) return 1;
+    // The offscreen mode returns before any NSApplication or window exists.
+    if (embed_offscreen_requested())
+        return embed_run_offscreen(applet_id, &embed_log, &embed_crash);
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         HostDelegate* d = [HostDelegate new];
-        d.appletId = (argc > 1) ? argv[1] : "dev.caliper.instance-scope";
+        d.appletId = applet_id;
         [NSApp setDelegate:d];
         [NSApp run];
     }
