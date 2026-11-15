@@ -81,8 +81,3 @@ gh run rerun <run-id> --failed
 **Windows tests that hang until the 600 s timeout.** This usually means an executable couldn't load a DLL. The Windows loader shows an error dialog on the runner's desktop session and waits for it to be dismissed. Run the executable directly from bash to see the `0xC0000135` exit code immediately.
 
 **A stack overflow test that kills `caliper_tests` with no output on Windows.** The crash guard must re-arm the thread's guard page after a contained overflow (`_resetstkoflw` in `src/host/crash_guard.cpp`). Without that, a second overflow on the same thread ends the process.
-
-## Possible improvements
-
-- **Cache the FetchContent downloads.** That would remove most download failures. Set `-DFETCHCONTENT_BASE_DIR` outside `cmake-build-release`, because `init-submodules.sh` deletes that directory. Then cache its `*-src` and `*-subbuild` folders with `actions/cache`, keyed on hashes of `cmake/Dependencies.cmake`, `CMakeLists.txt` and `tests/CMakeLists.txt`. Check that a restored folder really skips the download.
-- **Cache or shallow-clone `third_party/`.** `init-submodules.sh` is now the longest step of a warm run, at about 2 minutes per lane.
