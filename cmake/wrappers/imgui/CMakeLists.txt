@@ -18,6 +18,11 @@ add_library(imgui STATIC
 )
 
 target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
+# The UI-stack definitions: the SDK hands the same list to applets, so both
+# sides compile ImGui the same way.
+if(CALIPER_UI_STACK_DEFINITIONS)
+    target_compile_definitions(imgui PUBLIC ${CALIPER_UI_STACK_DEFINITIONS})
+endif()
 
 target_include_directories(imgui PUBLIC
     ${IMGUI_SRC_DIR}

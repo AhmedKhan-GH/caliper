@@ -116,6 +116,12 @@ endif()
 # Include Dependencies (PyTorch-style architecture)
 # ============================================================================
 
+# Definitions that change how ImGui, ImPlot or ImPlot3D are compiled. The
+# host's imgui target and every applet's caliper::ui_stack get the same list,
+# and it is an input of the UI-stack hash (cmake/CaliperUiStack.cmake). None
+# are needed today.
+set(CALIPER_UI_STACK_DEFINITIONS "")
+
 # This file handles all third-party dependencies
 include(cmake/Dependencies.cmake)
 
@@ -123,7 +129,20 @@ include(cmake/Dependencies.cmake)
 # Caliper SDK (installable package, in-tree source)
 # ============================================================================
 
-set(CALIPER_SDK_VERSION 0.1.0)
+# `cmake --install <build> --prefix <prefix> --component sdk` installs the
+# caliper-sdk package that applets outside this repository build against with
+# find_package(caliper-sdk CONFIG): caliper::sdk, caliper::ui_stack,
+# caliper::sdk_testing and caliper_add_applet() (sdk/cmake/caliper-sdk-config.cmake
+# lists what each holds). The core build uses the same targets and function.
+
+set(CALIPER_SDK_VERSION 0.2.0)
+file(STRINGS sdk/include/caliper/abi.h _caliper_epoch_line
+    REGEX "^#define CALIPER_ABI_EPOCH[ \t]+[0-9]+")
+string(REGEX REPLACE "^#define CALIPER_ABI_EPOCH[ \t]+([0-9]+).*" "\\1"
+    CALIPER_SDK_ABI_EPOCH "${_caliper_epoch_line}")
+
+# CALIPER_UI_STACK_HASH, and the install rules for the pinned UI-stack sources.
+include(cmake/CaliperUiStack.cmake)
 
 add_library(caliper_sdk INTERFACE)
 add_library(caliper::sdk ALIAS caliper_sdk)
@@ -157,32 +176,58 @@ add_library(caliper_app_paths STATIC src/app_paths.cpp)
 target_include_directories(caliper_app_paths PUBLIC ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# doctest backs the tests here and ships in the package for an applet's own
+# tests. doctest v2.4.11 declares cmake_minimum_required 2.8, which CMake 4
+# rejects without this floor.
+include(FetchContent)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+FetchContent_Declare(doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(doctest)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
+
+# Fixture host for TDD of applets and the sugar, plus doctest.
+add_library(caliper_sdk_testing INTERFACE)
+add_library(caliper::sdk_testing ALIAS caliper_sdk_testing)
+target_include_directories(caliper_sdk_testing INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/sdk/testing>
+    $<INSTALL_INTERFACE:include/caliper-testing>)
+target_link_libraries(caliper_sdk_testing INTERFACE
+    caliper::sdk $<BUILD_INTERFACE:doctest::doctest>)
+
+# caliper_add_applet(), shared with the installed package.
+include(sdk/cmake/CaliperAddApplet.cmake)
+
 # ---- SDK install rules (component: sdk) ----
 include(CMakePackageConfigHelpers)
 install(DIRECTORY sdk/include/ DESTINATION include COMPONENT sdk)
+install(DIRECTORY sdk/testing/ DESTINATION include/caliper-testing COMPONENT sdk)
+install(FILES "${doctest_SOURCE_DIR}/doctest/doctest.h"
+    DESTINATION include/caliper-testing/doctest COMPONENT sdk)
+install(FILES "${doctest_SOURCE_DIR}/LICENSE.txt"
+    DESTINATION share/caliper-sdk/licenses RENAME doctest-LICENSE.txt COMPONENT sdk)
 # ALIAS targets are build-tree-only; without EXPORT_NAME the installed export
-# would be caliper::caliper_sdk (caught by the Phase 0 exit proof).
+# would be caliper::caliper_sdk.
 set_target_properties(caliper_sdk PROPERTIES EXPORT_NAME sdk)
-install(TARGETS caliper_sdk EXPORT CaliperSDKTargets COMPONENT sdk)
+set_target_properties(caliper_sdk_testing PROPERTIES EXPORT_NAME sdk_testing)
+install(TARGETS caliper_sdk caliper_sdk_testing EXPORT CaliperSDKTargets COMPONENT sdk)
 install(EXPORT CaliperSDKTargets NAMESPACE caliper::
         DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 write_basic_package_version_file(
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     VERSION ${CALIPER_SDK_VERSION} COMPATIBILITY SameMajorVersion)
+configure_file(sdk/cmake/caliper-sdk-info.cmake.in
+    "${CMAKE_BINARY_DIR}/caliper-sdk-info.cmake" @ONLY)
 install(FILES
     "${CMAKE_SOURCE_DIR}/sdk/cmake/caliper-sdk-config.cmake"
+    "${CMAKE_SOURCE_DIR}/sdk/cmake/caliper-ui-stack.cmake"
+    "${CMAKE_SOURCE_DIR}/sdk/cmake/CaliperAddApplet.cmake"
+    "${CMAKE_BINARY_DIR}/caliper-sdk-info.cmake"
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
-# Fixture host for TDD of applets/sugar (ships in the SDK at Phase 3).
-add_library(caliper_sdk_testing INTERFACE)
-add_library(caliper::sdk_testing ALIAS caliper_sdk_testing)
-target_include_directories(caliper_sdk_testing INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/sdk/testing>)
-target_link_libraries(caliper_sdk_testing INTERFACE caliper::sdk)
-
 # Host library: loader/negotiation logic, unit-testable without OpenGL.
-include(FetchContent)
 FetchContent_Declare(tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
     GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
@@ -244,6 +289,11 @@ else()
 endif()
 set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+# What the host was built with, for the loader to compare with the [build]
+# table that caliper_add_applet() stamps into each applet's manifest.
+target_compile_definitions(caliper_host_lib PUBLIC
+    CALIPER_HOST_UI_STACK_HASH="${CALIPER_UI_STACK_HASH}"
+    CALIPER_HOST_SDK_VERSION="${CALIPER_SDK_VERSION}")
 
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
@@ -628,6 +678,28 @@ message(STATUS "")
 if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+
+    # caliper_sdk_install: install the SDK component and build the probe and a
+    # copy of examples/hello against it, using only find_package(caliper-sdk)
+    # (tests/sdk_install_probe/run.cmake). The work folder holds those copies
+    # and builds; CI points it outside the checkout.
+    set(CALIPER_SDK_PROBE_DIR "${CMAKE_BINARY_DIR}/sdk-probe" CACHE PATH
+        "Work folder of the caliper_sdk_install test")
+    add_test(NAME caliper_sdk_install COMMAND "${CMAKE_COMMAND}"
+        "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DCALIPER_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DWORK_DIR=${CALIPER_SDK_PROBE_DIR}"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DBUILD_TYPE=$<CONFIG>"
+        "-DEXPECT_SDK_VERSION=${CALIPER_SDK_VERSION}"
+        "-DEXPECT_UI_STACK_HASH=${CALIPER_UI_STACK_HASH}"
+        "-DLIB_PREFIX=${CMAKE_SHARED_LIBRARY_PREFIX}"
+        "-DLIB_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "-DEXE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+        -P "${CMAKE_SOURCE_DIR}/tests/sdk_install_probe/run.cmake")
+    set_tests_properties(caliper_sdk_install PROPERTIES LABELS "sdk" TIMEOUT 900)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed
