@@ -155,7 +155,7 @@ A "diagnostic" below is an object `{"code", "message", "where"}`, as the spec va
 
 ### catalog
 
-The catalog page gives the entry, the sample and the limits.
+The [Catalog](catalog.md) page gives the entry, the sample and the limits.
 
 | Command | Arguments | Result | Errors |
 |---|---|---|---|
