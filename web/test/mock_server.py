@@ -14,6 +14,12 @@ With --wasm it also serves Caliper's WebAssembly views from DIR (the three
 files caliper-views-loader.js, caliper-views.js and caliper-views.wasm), as
 caliper.serve() does from the package.
 
+With --fixed it serves instead the fixed data of the element's view tests
+(web/test/views.spec.ts), sent once per subscription: two 4 x 8 heatmaps, one
+with the identity axes and one pooled from query and key dims, four 2-D
+points at the corners of the unit square sampled with stride 3, a series of
+the values 0 to 999, and a histogram of ten bins over [-5, 5].
+
 It prints the viewer page's URL on the first line, then one JSON line for
 each EVENT a viewer sends.
 """
@@ -133,6 +139,52 @@ def views(run: Run) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# the fixed data (--fixed)
+# ---------------------------------------------------------------------------
+HEAT = [float("nan") if i == 31 else float(i % 31) for i in range(32)]   # 4 x 8
+
+
+def fixed_views() -> list[dict]:
+    K = W.Kind
+    return [
+        {"id": 1, "name": "h", "kind": int(K.HEATMAP),
+         "sources": [{"name": "h", "dims": [{"name": "row", "size": 4}, {"name": "col", "size": 8}]}]},
+        {"id": 2, "name": "ha", "kind": int(K.HEATMAP),
+         "sources": [{"name": "ha", "dims": [{"name": "query", "size": 64}, {"name": "key", "size": 41}]}]},
+        {"id": 3, "name": "p", "kind": int(K.POINTS),
+         "sources": [{"name": "p", "dims": [{"name": "sample", "size": 10}]}]},
+        {"id": 4, "name": "s", "kind": int(K.SERIES), "sources": []},
+        {"id": 5, "name": "hist", "kind": int(K.HISTOGRAM),
+         "sources": [{"name": "hist", "dims": [{"name": "value", "size": 91}]}]},
+    ]
+
+
+def fixed_snapshot(view: dict, sub: int, seq: int, dv: dict):
+    K = W.Kind
+    name, t = view["name"], time.monotonic_ns()
+    heat = np.asarray(HEAT, np.float32).reshape(4, 8)
+    if name == "h":
+        axes = [{"dim": "row", "start": 0, "step": 1, "count": 4, "size": 4},
+                {"dim": "col", "start": 0, "step": 1, "count": 8, "size": 8}]
+        return W.Snapshot(sub, name, seq, t, K.HEATMAP, dv, heat, vmin=0.0, vmax=31.0, axes=axes)
+    if name == "ha":
+        # Pooled from query rows 0..63 and key columns 10, 12, ..., 40.
+        axes = [{"dim": "query", "start": 0, "step": 1, "count": 64, "size": 4},
+                {"dim": "key", "start": 10, "step": 2, "count": 16, "size": 8}]
+        return W.Snapshot(sub, name, seq, t, K.HEATMAP, dv, heat, vmin=0.0, vmax=31.0, axes=axes)
+    if name == "p":
+        data = np.asarray([[0, 0], [1, 0], [0, 1], [1, 1]], np.float32)
+        axes = [{"dim": "sample", "start": 0, "step": 3, "count": 4, "size": 4}]
+        return W.Snapshot(sub, name, seq, t, K.POINTS, dv, data, aux=np.arange(4, dtype=np.float32),
+                          stats=[0.0, 3.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0], axes=axes, points_dims=2, label_count=4)
+    counts = np.asarray([1, 2, 4, 8, 16, 32, 16, 8, 4, 0], np.float32)
+    return W.Snapshot(sub, name, seq, t, K.HISTOGRAM, dv, counts, stats=[-5.0, 5.0])
+
+
+FIXED_SERIES = np.arange(1000, dtype=np.float32)
+
+
+# ---------------------------------------------------------------------------
 # data views, computed with numpy
 # ---------------------------------------------------------------------------
 REDUCE = {"mean": np.mean, "sum": np.sum, "max": np.max, "min": np.min,
@@ -206,8 +258,9 @@ ORIGIN = re.compile(r"^(https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?|vscode-
 
 
 class Producer:
-    def __init__(self, run: Run, token: str, dist: Path, session_id: str, wasm: Path | None = None):
-        self.run, self.token, self.dist, self.wasm = run, token, dist, wasm
+    def __init__(self, run: Run, token: str, dist: Path, session_id: str, wasm: Path | None = None,
+                 fixed: bool = False):
+        self.run, self.token, self.dist, self.wasm, self.fixed = run, token, dist, wasm, fixed
         self.identity = {"id": session_id, "script": "train_mock.py", "pid": os.getpid(),
                          "start_unix_ms": int(time.time() * 1000)}
         self.seq = 0
@@ -262,8 +315,8 @@ class Producer:
             await ws.close(W.CLOSE_ROLE_REFUSED)
             return
         await send(W.Welcome(W.ROLE_PRODUCER, [W.CAP_EVENTS], {"name": "mock_server", "version": "0"}, self.identity))
-        await send(W.Sessions([dict(self.identity, state=W.SESSION_LIVE, views=len(views(self.run)))]))
-        await send(W.Views(views(self.run), self.identity["id"]))
+        await send(W.Sessions([dict(self.identity, state=W.SESSION_LIVE, views=len(self.views()))]))
+        await send(W.Views(self.views(), self.identity["id"]))
         pump = asyncio.create_task(self.pump(subs, send))
         try:
             async for raw in ws:
@@ -281,24 +334,31 @@ class Producer:
         finally:
             pump.cancel()
 
+    def views(self) -> list[dict]:
+        return fixed_views() if self.fixed else views(self.run)
+
+    def retained(self) -> int:
+        return len(FIXED_SERIES) if self.fixed else len(self.run.loss)
+
     async def answer(self, msg, subs, send, ws):
-        vs = {v["name"]: v for v in views(self.run)}
+        vs = {v["name"]: v for v in self.views()}
         if isinstance(msg, (W.Subscribe, W.ViewRequest)):
             v = vs.get(msg.view)
             if v is None:
                 await send(W.ViewReply(msg.request_id, msg.sub, msg.view, error={"code": W.ERR_UNKNOWN_VIEW, "message": msg.view}))
                 return
             try:
-                dv = W.resolve_data_view(v, msg.data_view, retain=len(self.run.loss))
+                dv = W.resolve_data_view(v, msg.data_view, retain=self.retained())
             except W.MessageError as e:
                 await send(W.ViewReply(msg.request_id, msg.sub, msg.view, error={"code": e.code, "message": e.message}))
                 return
             await send(W.ViewReply(msg.request_id, msg.sub, msg.view, data_view=dv))
             if isinstance(msg, W.Subscribe):
                 back = dv.get("budget", {}).get("max_backfill", 0)
-                subs[msg.sub] = {"view": v, "dv": dv, "sent": max(0, len(self.run.loss) - back)}
+                subs[msg.sub] = {"view": v, "dv": dv, "sent": max(0, self.retained() - back), "fresh": True}
             elif msg.sub in subs:
                 subs[msg.sub]["dv"] = dv
+                subs[msg.sub]["fresh"] = True
         elif isinstance(msg, W.Unsubscribe):
             subs.pop(msg.sub, None)
         elif isinstance(msg, W.Event):
@@ -311,6 +371,18 @@ class Producer:
             await ws.close(W.CLOSE_NORMAL)
 
     async def pump(self, subs, send):
+        while self.fixed:
+            for sub, s in list(subs.items()):
+                v = s["view"]
+                if v["kind"] == W.Kind.SERIES and s["sent"] < len(FIXED_SERIES):
+                    start = s["sent"]
+                    s["sent"] = len(FIXED_SERIES)
+                    await send(W.Series(sub, v["name"], start, len(FIXED_SERIES), time.monotonic_ns(),
+                                        FIXED_SERIES[start:]))
+                elif v["kind"] != W.Kind.SERIES and s.pop("fresh", False):
+                    self.seq += 1
+                    await send(fixed_snapshot(v, sub, self.seq, s["dv"]))
+            await asyncio.sleep(0.05)
         while True:
             for sub, s in list(subs.items()):
                 v = s["view"]
@@ -338,11 +410,12 @@ async def main():
     ap.add_argument("--points", type=int, default=4000)
     ap.add_argument("--dims", type=int, default=3, choices=(2, 3))
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--fixed", action="store_true", help="serve the fixed data of the view tests")
     a = ap.parse_args()
     W = load_wire(a.wire)
     run = Run(a.points, a.dims, a.seed)
     token = secrets.token_urlsafe(24)
-    prod = Producer(run, token, Path(a.dist), "mock", Path(a.wasm) if a.wasm else None)
+    prod = Producer(run, token, Path(a.dist), "mock", Path(a.wasm) if a.wasm else None, fixed=a.fixed)
     async with serve(prod.handler, "127.0.0.1", a.port, process_request=prod.process_request,
                      compression=None, max_size=W.MAX_FRAME_BYTES) as server:
         prod.port = server.sockets[0].getsockname()[1]
