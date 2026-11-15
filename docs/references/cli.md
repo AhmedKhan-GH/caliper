@@ -129,7 +129,7 @@ service caliper.ui.v1_1
 
 ### caliper shot
 
-Draws the app's applet page for one applet without a window, and writes the last frame as a PNG. It runs the code that the app runs for the applet page (`src/host/ui/applet_page.h`): the page bar and the status bar, unless `CALIPER_CHROMELESS=1`, the dock space, docking by role, the applet's own frame and the jobs tray. It finds the applet in [the search order](#the-search-order), with the `--applets` folders first, launches it as the app launches an applet, draws the frames at about 60 a second, and writes the last one:
+Draws the app's applet page for one applet without a window, and writes the last frame as a PNG. It runs the code that the app runs for the applet page (`src/host/ui/applet_page.h`): the page bar, the status bar and, while a job runs or a failure is kept, the jobs tray's strip above the status bar, all three unless `CALIPER_CHROMELESS=1`, then the dock space over the area they leave, docking by role and the applet's own frame. The tray's strip appears once a job has run for half a second, so a shot of an applet that starts a job when it launches needs more than 30 frames to show it. It finds the applet in [the search order](#the-search-order), with the `--applets` folders first, launches it as the app launches an applet, draws the frames at about 60 a second, and writes the last one:
 
 ```text
 caliper shot --applets build --launch com.example.my-viewer --out page.png
@@ -188,6 +188,6 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | `CALIPER_APPLET_PATH` | Adds development folders after the `--applets` folders. A build folder in it stands for its `applets/` subfolder, as described in [Build folders](#build-folders). Read when starting the app, and by `dev`, `list` and `shot`. |
 | `CALIPER_USER_APPLETS_DIR` | Replaces the user applets folder, for the app, `dev`, `list`, `install` and `shot`. |
 | `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
-| `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar and the status bar, in the app and in `shot`. |
+| `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.

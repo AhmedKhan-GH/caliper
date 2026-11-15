@@ -42,6 +42,11 @@ first-time users; the rules below hold at any density.
 - **A view's content fills its view.** A 3-D or 2-D view fits its content on
   opening, on resize and after the data change, without jumps.
 - **Different questions get different tabs** rather than more panes.
+- **The host's chrome takes its own space.** The page bar, the status bar and
+  the jobs tray are strips at the window's edges, and the panes fill only what
+  they leave, so nothing the host shows covers a pane unless the user opens it,
+  as with a popup. A strip that comes and goes waits a moment before it takes
+  its space and before it gives it back, so the panes do not jump.
 
 ## Behaviour
 

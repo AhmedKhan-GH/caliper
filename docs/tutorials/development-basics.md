@@ -247,11 +247,20 @@ goes away.
 
 ### Jobs and window layout
 
-While any job exists, a **Jobs** tray sits at the bottom right of every page:
-running jobs with their progress and a `cancel` button, then failed jobs, marked
-`FAILED` with the reason, then finished ones. A failed job stays in the tray,
-across Home, until `clear finished` is pressed, and Activity logs it once as
-`job failed`.
+While a job runs or a failure is kept, the **Jobs** tray is a strip of its own
+above the status bar, on every page. It takes its height from the area the
+panes and the applet's windows fill, so it never covers them. On one line it
+shows the running jobs, each with its progress and a `cancel` button, then the
+failed jobs, each marked `FAILED` with the reason, then how many jobs finished
+and `clear finished` at the right end. Jobs that do not fit are behind
+`+N more`, which opens the whole list.
+
+So that the panes do not jump, a job must run for half a second before the
+strip appears, and the strip stays for two seconds after the last running job
+ends, showing it as finished, so jobs that follow one another keep one strip.
+A failed job keeps the strip, across Home, until `clear finished` is pressed,
+and Activity logs it once as `job failed`; `clear finished` with nothing
+running closes the strip at once.
 
 The window layout is saved in `imgui.ini` in the app-data folder
 (`~/Library/Application Support/Caliper/imgui.ini` on macOS): the dividers

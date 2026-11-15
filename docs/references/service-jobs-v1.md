@@ -86,8 +86,9 @@ against `user` after your applet object is gone — honour cancel.
 
 **Finished workers are joined promptly.** The host joins a finished job's thread
 on the next `submit` or the next frame, so a long session of short jobs does not
-accumulate threads. The job stays listed in the tray until
-it is cleared.
+accumulate threads. The job stays listed in the jobs tray's full list
+(`+N more`) until it is cleared, and the tray's strip counts it as finished
+while the strip is open.
 
 **Ids.** `submit` returns a job id; `0` is never a valid id — it means the
 submission failed (for example, a headless host that does not vend the service).
