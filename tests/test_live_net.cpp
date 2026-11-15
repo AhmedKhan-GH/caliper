@@ -32,6 +32,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <fstream>
 #include <future>
 #include <map>
 #include <memory>
@@ -59,6 +60,7 @@ public:
     // Producer-thread state (read through call()).
     caliper_net::ConnId conn = 0;
     int hellos = 0;
+    std::vector<std::string> hello_caps;      // the capabilities of the last HELLO
     std::map<std::string, uint32_t> sub_of;   // view -> its open subscription
     std::vector<float> series;                // the retained values of "loss"
     std::vector<std::string> errors;          // ERROR codes the viewer sent
@@ -190,8 +192,9 @@ private:
         wire::Message m;
         const wire::DecodeResult r = wire::decode(data.data(), data.size(), &m);
         if (!r.ok()) return;
-        if (std::holds_alternative<wire::Hello>(m)) {
+        if (auto* hh = std::get_if<wire::Hello>(&m)) {
             ++hellos;
+            hello_caps = hh->capabilities;
             wire::Welcome w;
             w.role = CALIPER_NET_ROLE_PRODUCER;
             w.session = id.to_json();
@@ -645,6 +648,48 @@ TEST_CASE("live/net: after a dropped connection the stream reconnects; views and
     REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 2; }));
     CHECK(view_info(core, "heat").creates == 1);
     CHECK(readback(core, "heat", 8, 4) == map_ref(ramp(8, 4, 0.5f), 8, 4, 0, 0.0f, 1.0f));
+    caliper_core_shutdown(core);
+}
+
+// Protocol 3.1: the native source implements neither controls nor linked
+// selection, so it announces neither capability. A server that sends it the
+// 3.1 messages and keys anyway (CONTROLS, CONTROL_REPLY, SELECTION, items in
+// VIEWS) does not disturb it: they are ignored and the views keep drawing.
+TEST_CASE("live/net: the native source announces no 3.1 capability and tolerates every 3.1 message and key") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(64, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.size(); }) == 5; }));
+    CHECK(p.call([](FakeProducer& f) { return f.hello_caps.empty(); }));
+    p.call([](FakeProducer& f) {
+        for (const char* name : {"controls", "control_reply_queued", "selection", "selection_clear"}) {
+            std::ifstream in(std::string(CALIPER_TEST_SOURCE_ROOT) + "/tests/fixtures/wire_v3/v3_1/" + name + ".bin",
+                             std::ios::binary);
+            f.send_raw(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+        }
+        // The same views, with 3.1's item spaces on a dim and on the series.
+        Json views = f.views;
+        Json with = Json::array();
+        for (const Json& v : views.items()) {
+            Json e = v;
+            if (e.find("name")->as_string() == "loss") e.set("items", "step");
+            with.push(e);
+        }
+        wire::Views v;
+        v.session = f.id.id;
+        v.views = with;
+        f.send(v);
+        f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, CALIPER_NET_SNAP_RAW);
+        return 0;
+    });
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(status(core).client_alive == 1);
+    CHECK(p.call([](FakeProducer& f) { return f.errors.empty() && f.closes.empty() && f.hellos == 1; }));
+    CHECK(readback(core, "heat", 8, 4) == map_ref(ramp(8, 4, 1.0f), 8, 4, 0, 0.0f, 1.0f));
     caliper_core_shutdown(core);
 }
 

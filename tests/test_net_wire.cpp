@@ -40,10 +40,13 @@ Json read_json(const fs::path& p) {
     return j;
 }
 
+// The 3.0 frames, then the frames that 3.1 adds (v3_1/<name>).
 std::vector<std::string> valid_names() {
     std::vector<std::string> out;
     for (const auto& e : fs::directory_iterator(fixtures()))
         if (e.path().extension() == ".bin") out.push_back(e.path().stem().string());
+    for (const auto& e : fs::directory_iterator(fixtures() / "v3_1"))
+        if (e.path().extension() == ".bin") out.push_back("v3_1/" + e.path().stem().string());
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -181,12 +184,13 @@ TEST_CASE("net/wire: every golden frame decodes as described and encodes back to
         const DecodeResult r = decode_bytes(bin, &m);
         REQUIRE_MESSAGE(r.ok(), r.error_code << ": " << r.message);
         CHECK(message_type(m) == f.type);
-        if (f.type <= CALIPER_NET_MSG_EVENT && std::string(type_name(f.type)) != "?")
+        if (std::string(type_name(f.type)) != "?")
             CHECK(std::string(type_name(f.type)) == want.find("type_name")->as_string());
 
-        // The golden frames are canonical: re-encoding gives the same bytes,
-        // except for the two frames of a later minor version, which a 3.0
-        // codec reads but does not reproduce (unknown keys, flags, type).
+        // The golden frames are canonical: re-encoding at the frame's own minor
+        // (0 for the 3.0 frames, 1 for v3_1/) gives the same bytes, except for
+        // the two frames of a later minor version, which this codec reads but
+        // does not reproduce (unknown keys, flags, type).
         std::vector<uint8_t> again;
         std::string err;
         REQUIRE_MESSAGE(encode(m, &again, &err, f.minor), err);
@@ -287,6 +291,134 @@ TEST_CASE("net/wire: decoded messages carry the golden values") {
     CHECK(std::get<Attach>(m).session == std::string("clp-4242-a1b2c3"));
     load("error");
     CHECK(std::get<Error>(m).in_reply_to == (uint32_t)CALIPER_NET_MSG_SUBSCRIBE);
+}
+
+TEST_CASE("net/wire: the 3.1 golden frames carry their values") {
+    Message m;
+    std::vector<std::vector<uint8_t>> keep;
+    auto load = [&](const char* name) {
+        keep.push_back(read_bytes(fixtures() / "v3_1" / (std::string(name) + ".bin")));
+        const DecodeResult r = decode_bytes(keep.back(), &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.message);
+        CHECK(r.frame.minor == 1);
+    };
+    load("welcome");
+    CHECK(std::get<Welcome>(m).control == true);
+    load("welcome_hub_read_only");
+    CHECK(std::get<Welcome>(m).role == "hub");
+    CHECK(std::get<Welcome>(m).control == false);
+    load("hello");
+    CHECK(std::get<Hello>(m).capabilities == std::vector<std::string>{"controls", "selection"});
+    load("controls");
+    {
+        const Controls& c = std::get<Controls>(m);
+        CHECK(c.run.find("state")->as_string() == "paused");
+        REQUIRE(c.params.size() == 3);
+        CHECK(c.params.at(0).find("pending")->as_double() == 0.01);
+        CHECK(c.params.at(2).find("choices")->size() == 2);
+        CHECK(c.actions.at(0).find("queued")->as_bool());
+    }
+    load("controls_none");
+    CHECK(std::get<Controls>(m).params.size() == 0);
+    load("control_set");
+    {
+        const Control& c = std::get<Control>(m);
+        CHECK(c.op == "set");
+        CHECK(c.name == std::string("lr"));
+        CHECK(c.value.as_double() == 0.5);
+        CHECK_FALSE(c.count.has_value());
+    }
+    load("control_step");
+    CHECK(std::get<Control>(m).count == 5u);
+    CHECK_FALSE(std::get<Control>(m).name.has_value());
+    load("control_reply_queued");
+    CHECK(std::get<ControlReply>(m).status == "queued");
+    load("control_reply_error");
+    CHECK(std::get<ControlReply>(m).error.find("code")->as_string() == CALIPER_NET_ERR_FORBIDDEN);
+    load("control_reply_done");
+    CHECK(std::get<ControlReply>(m).message == std::string("saved ckpt-1200.pt"));
+    load("selection");
+    {
+        const Selection& s = std::get<Selection>(m);
+        CHECK(s.space == "test");
+        CHECK(s.items.size() == 2);
+        CHECK(s.view == std::string("embedding"));
+        CHECK(s.details.find("fields")->size() == 2);
+        CHECK_FALSE(s.truncated);
+    }
+    load("event_select_items");
+    CHECK(std::get<caliper_net::wire::Event>(m).detail.find("space")->as_string() == "test");
+    load("views_items");
+    {
+        const Views& v = std::get<Views>(m);
+        REQUIRE(v.list.size() == 3);
+        CHECK(v.list[0].sources[0].dims[0].items == "test");
+        CHECK(v.list[1].sources[0].dims[1].items.empty());
+        CHECK(v.list[2].items == "step");
+    }
+}
+
+TEST_CASE("net/wire: the 3.1 messages and keys are checked as _wire.py checks them") {
+    auto code = [](uint16_t type, const std::string& meta) {
+        const std::vector<uint8_t> b = frame_of(type, meta);
+        Message m;
+        const DecodeResult r = decode(b.data(), b.size(), &m);
+        return r.status == DecodeResult::Status::BadMessage ? r.error_code : std::string("ok");
+    };
+    const std::string run = "\"run\":{\"state\":\"running\"}";
+    const std::string none = run + ",\"actions\":[]";
+    struct Case {
+        uint16_t type;
+        std::string meta;
+        const char* want;
+    };
+    const Case cases[] = {
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[]}", "ok"},
+        {CALIPER_NET_MSG_CONTROLS, "{\"run\":{\"state\":\"asleep\"},\"params\":[],\"actions\":[]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + run + ",\"params\":[]}", "bad_request"},   // no actions
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[{\"name\":\"n\",\"type\":\"integer\",\"value\":1.5}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[{\"name\":\"n\",\"type\":\"integer\",\"value\":2,\"min\":3,\"max\":1}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[{\"name\":\"n\",\"type\":\"number\",\"value\":2,\"log\":true,\"min\":0,\"max\":1}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[{\"name\":\"c\",\"type\":\"choice\",\"value\":\"z\",\"choices\":[\"a\"]}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[{\"name\":\"c\",\"type\":\"choice\",\"value\":\"a\",\"choices\":[\"a\",\"a\"]}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + none + ",\"params\":[{\"name\":\"b\",\"type\":\"boolean\",\"value\":true},{\"name\":\"b\",\"type\":\"boolean\",\"value\":false}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROLS, "{" + run + ",\"params\":[],\"actions\":[{\"name\":\"a\",\"running\":false}]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"pause\"}", "ok"},
+        {CALIPER_NET_MSG_CONTROL, "{\"op\":\"pause\"}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"jump\"}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"set\",\"value\":1}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"set\",\"name\":\"lr\"}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"set\",\"name\":\"lr\",\"value\":[1]}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"step\",\"count\":0}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"run\"}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL, "{\"request_id\":1,\"op\":\"run\",\"name\":\"save\",\"args\":{\"x\":1}}", "ok"},
+        {CALIPER_NET_MSG_CONTROL_REPLY, "{\"request_id\":1,\"op\":\"pause\",\"status\":\"ok\"}", "ok"},
+        {CALIPER_NET_MSG_CONTROL_REPLY, "{\"request_id\":1,\"op\":\"pause\",\"status\":\"error\"}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL_REPLY, "{\"request_id\":1,\"op\":\"pause\",\"status\":\"ok\",\"error\":{\"code\":\"x\"}}", "bad_request"},
+        {CALIPER_NET_MSG_CONTROL_REPLY, "{\"request_id\":1,\"op\":\"set\",\"status\":\"queued\"}", "bad_request"},
+        {CALIPER_NET_MSG_SELECTION, "{\"space\":\"s\",\"items\":[1,2]}", "ok"},
+        {CALIPER_NET_MSG_SELECTION, "{\"space\":\"s\",\"items\":[2,1]}", "bad_request"},
+        {CALIPER_NET_MSG_SELECTION, "{\"space\":\"s\",\"items\":[1,1]}", "bad_request"},
+        {CALIPER_NET_MSG_SELECTION, "{\"items\":[]}", "bad_request"},
+        {CALIPER_NET_MSG_SELECTION, "{\"space\":\"s\",\"items\":[0],\"details\":{\"fields\":[\"a\"],\"items\":[0],\"values\":[[1,2]]}}", "bad_request"},
+        {CALIPER_NET_MSG_EVENT, "{\"view\":\"v\",\"type\":\"select\",\"detail\":{\"space\":\"s\"}}", "bad_request"},
+        {CALIPER_NET_MSG_EVENT, "{\"view\":\"v\",\"type\":\"select\",\"detail\":{\"space\":\"s\",\"items\":[3]}}", "ok"},
+        {CALIPER_NET_MSG_WELCOME, "{\"role\":\"hub\",\"control\":1}", "bad_request"},
+        {CALIPER_NET_MSG_VIEWS, "{\"views\":[{\"id\":1,\"name\":\"v\",\"kind\":4,\"sources\":[],\"items\":7}]}", "bad_request"},
+    };
+    for (const Case& c : cases) {
+        CAPTURE(c.meta);
+        CHECK(code(c.type, c.meta) == std::string(c.want));
+    }
+    // A CONTROL keeps only the keys of its op (args is reserved for later).
+    Message m;
+    const std::vector<uint8_t> b = frame_of(CALIPER_NET_MSG_CONTROL,
+                                            "{\"request_id\":4,\"op\":\"pause\",\"name\":\"x\",\"value\":1,\"count\":3}");
+    REQUIRE(decode(b.data(), b.size(), &m).ok());
+    const Control& c = std::get<Control>(m);
+    CHECK_FALSE(c.name.has_value());
+    CHECK(c.value.is_null());
+    CHECK_FALSE(c.count.has_value());
 }
 
 TEST_CASE("net/wire: every invalid golden frame is refused with its close code and reason") {

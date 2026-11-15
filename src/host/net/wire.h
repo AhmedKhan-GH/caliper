@@ -24,6 +24,15 @@
 // so a forwarder loses no key it does not know. Sessions and Views also carry
 // a parsed copy (`list`) for readers; encode() writes the Json.
 //
+// 3.1. The messages of controls (CONTROLS, CONTROL, CONTROL_REPLY) and linked
+// selection (SELECTION) decode and encode here with the field rules of
+// _wire.py, as do the keys 3.1 adds to 3.0 messages (WELCOME's `control`,
+// `items` on a source dim and on a series view, `space` and `items` in an
+// event's detail). Which peer may receive them is the caller's business: the
+// protocol sends each only to a peer that announced its capability. encode()
+// writes the codec's minor (CALIPER_NET_PROTOCOL_MINOR, 1) unless told
+// otherwise; the 3.0 golden frames encode back to their bytes at minor 0.
+//
 // LIFETIME. A decoded Section points into the buffer given to decode(): keep
 // that buffer alive while the message is used.
 #include "caliper/live_net.h"
@@ -139,6 +148,7 @@ struct SessionInfo {   // an entry of SESSIONS: an identity plus "state" and "vi
 struct DimInfo {
     std::string name;
     uint64_t size = 0;
+    std::string items;            // 3.1: the item space the dim indexes, "" none
 };
 struct SourceInfo {
     std::string name;
@@ -151,6 +161,7 @@ struct ViewInfo {   // an entry of VIEWS
     int64_t kind = 0;
     std::vector<SourceInfo> sources;
     Json default_view;            // the view's default data view, null when absent
+    std::string items;            // 3.1, series: the item space of its index, "" none
 };
 
 struct Hello {
@@ -166,6 +177,7 @@ struct Welcome {
     std::vector<std::string> capabilities;
     Json software;
     Json session;
+    std::optional<bool> control;           // 3.1: whether CONTROL is accepted (forwarded)
 };
 struct Bye {
     static constexpr uint16_t kType = CALIPER_NET_MSG_BYE;
@@ -267,6 +279,41 @@ struct Event {
     std::optional<uint64_t> seq;
     Json data_view;                        // null when absent
 };
+// ---- 3.1: controls ("controls") and linked selection ("selection") ---------
+struct Controls {   // the run state, parameters and actions of a script
+    static constexpr uint16_t kType = CALIPER_NET_MSG_CONTROLS;
+    Json run = Json::object();             // {"state", "step", "steps_left"}
+    Json params = Json::array();           // parameter entries, validated
+    Json actions = Json::array();          // action entries, validated
+};
+struct Control {    // pause, resume, step, set, run
+    static constexpr uint16_t kType = CALIPER_NET_MSG_CONTROL;
+    uint32_t request_id = 0;
+    std::string op;
+    std::optional<std::string> name;       // set, run
+    Json value;                            // set: a number, a boolean or a choice; null otherwise
+    std::optional<uint32_t> count;         // step: at least 1; absent means 1
+};
+struct ControlReply {
+    static constexpr uint16_t kType = CALIPER_NET_MSG_CONTROL_REPLY;
+    uint32_t request_id = 0;
+    std::string op;
+    std::string status;                    // ok, queued, error
+    std::optional<std::string> name;
+    Json value;                            // set with ok: the accepted value; null when absent
+    std::optional<std::string> message;    // run with ok: the action's result text
+    Json error;                            // status error: {"code", "message"}; null otherwise
+};
+struct Selection {  // the selection of one item space
+    static constexpr uint16_t kType = CALIPER_NET_MSG_SELECTION;
+    std::string space;
+    Json items = Json::array();            // ascending item ids, without repeats
+    std::optional<std::string> view;
+    bool truncated = false;
+    Json details;                          // {"fields", "items", "values"}; null when absent
+    std::optional<std::string> details_error;
+};
+
 struct Unknown {   // a type this version does not know; receivers ignore it
     uint16_t type = 0;
     Json meta;
@@ -274,7 +321,8 @@ struct Unknown {   // a type this version does not know; receivers ignore it
 };
 
 using Message = std::variant<Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach, Views, Subscribe,
-                             Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Unknown>;
+                             Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Controls, Control,
+                             ControlReply, Selection, Unknown>;
 
 struct DecodeResult {
     enum class Status { Ok, BadFrame, BadMessage };

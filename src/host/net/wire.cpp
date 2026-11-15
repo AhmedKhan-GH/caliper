@@ -153,14 +153,19 @@ bool view_entry(const Json& v, ViewInfo* out) {
             if (!is_obj(d)) return false;
             const Json* dn = d.find("name");
             const Json* sz = d.find("size");
+            const Json* it = d.find("items");   // 3.1: an item space
             if (!(dn && is_name(*dn) && sz && is_uint(*sz))) return false;
-            si.dims.push_back({dn->as_string(), u64(*sz)});
+            if (it && !it->is_null() && !is_name(*it)) return false;
+            si.dims.push_back({dn->as_string(), u64(*sz), it && it->is_string() ? it->as_string() : std::string()});
         }
         vi.sources.push_back(std::move(si));
     }
     const Json* def = v.find("default");
     if (def && !def->is_null() && !is_obj(*def)) return false;
     if (def && def->is_object()) vi.default_view = *def;
+    const Json* items = v.find("items");   // 3.1: a series' item space
+    if (items && !items->is_null() && !is_name(*items)) return false;
+    if (items && items->is_string()) vi.items = items->as_string();
     if (out) *out = std::move(vi);
     return true;
 }
@@ -189,6 +194,8 @@ Welcome welcome(const Frame& f) {
     if (const Json* c = opt(m, "capabilities", is_strs, "a list of strings")) w.capabilities = strs(*c);
     if (const Json* s = opt(m, "software", is_obj, "an object")) w.software = *s;
     if (const Json* s = opt(m, "session", is_identity, "a session identity")) w.session = *s;
+    if (const Json* c = opt(m, "control", [](const Json& v) { return v.is_bool(); }, "a boolean"))
+        w.control = c->as_bool();
     return w;
 }
 
@@ -395,7 +402,7 @@ Event event(const Frame& f) {
     const Json& m = f.meta;
     Event e;
     e.detail = req(m, "detail", is_obj, "an object");
-    for (const char* key : {"indices", "row_ids"}) {
+    for (const char* key : {"indices", "row_ids", "items"}) {
         const Json* lst = e.detail.find(key);
         if (!lst || lst->is_null()) continue;
         bool ok = lst->is_array() && lst->size() <= CALIPER_NET_MAX_EVENT_INDICES;
@@ -406,12 +413,226 @@ Event event(const Frame& f) {
             bad(std::string("detail.") + key + " must be at most " + std::to_string(CALIPER_NET_MAX_EVENT_INDICES) +
                 " unsigned integers");
     }
+    {   // 3.1: an item space and its item ids go together
+        const Json* sp = e.detail.find("space");
+        const Json* it = e.detail.find("items");
+        const bool has_sp = sp && !sp->is_null(), has_it = it && !it->is_null();
+        if (has_sp != has_it || (has_sp && !is_name(*sp)))
+            bad("detail.space (an item space name) and detail.items go together");
+    }
     e.view = req(m, "view", is_name, "a view name").as_string();
     e.type = req(m, "type", is_str, "a string").as_string();
     if (const Json* v = opt(m, "sub", is_u32, "a uint32")) e.sub = u32(*v);
     if (const Json* v = opt(m, "seq", is_uint, "an integer")) e.seq = u64(*v);
     if (const Json* v = opt(m, "data_view", is_obj, "an object")) e.data_view = *v;
     return e;
+}
+
+// ---- 3.1: controls and linked selection (the rules of _wire.py) ----------------------------
+
+bool is_bool(const Json& v) { return v.is_bool(); }
+bool is_text(const Json& v) { return v.is_string() && v.as_string().size() <= CALIPER_NET_TEXT_MAX; }
+bool is_finite(const Json& v) { return v.is_number() && std::isfinite(v.as_double()); }
+// An integer of magnitude at most 2^53, exact in every implementation.
+bool is_int53(const Json& v) {
+    int64_t i = 0;
+    uint64_t u = 0;
+    if (v.get_i64(&i)) return i >= -(int64_t(1) << 53) && i <= (int64_t(1) << 53);
+    return v.get_u64(&u) && u <= (uint64_t(1) << 53);
+}
+bool one_of(const Json& v, std::initializer_list<const char*> words) {
+    if (!v.is_string()) return false;
+    for (const char* w : words)
+        if (v.as_string() == w) return true;
+    return false;
+}
+bool is_op(const Json& v) {
+    return one_of(v, {CALIPER_NET_OP_PAUSE, CALIPER_NET_OP_RESUME, CALIPER_NET_OP_STEP, CALIPER_NET_OP_SET,
+                      CALIPER_NET_OP_RUN});
+}
+bool is_set_value(const Json& v) { return is_finite(v) || v.is_bool() || is_name(v); }
+bool present(const Json* v) { return v && !v->is_null(); }
+
+// Whether v is a value of parameter p's type, its range aside.
+bool fits_type(const Json& p, const Json& v) {
+    const std::string& t = p.find("type")->as_string();
+    if (t == CALIPER_NET_PARAM_NUMBER) return is_finite(v);
+    if (t == CALIPER_NET_PARAM_INTEGER) return v.is_int() && is_int53(v);
+    if (t == CALIPER_NET_PARAM_BOOLEAN) return v.is_bool();
+    if (!v.is_string()) return false;
+    for (const Json& c : p.find("choices")->items())
+        if (c.is_string() && c.as_string() == v.as_string()) return true;
+    return false;
+}
+
+bool unique_names(const Json& list) {
+    std::set<std::string> seen;
+    for (const Json& e : list.items())
+        if (!seen.insert(e.find("name")->as_string()).second) return false;
+    return true;
+}
+
+bool param_entry(const Json& p) {
+    if (!p.is_object()) return false;
+    const Json* name = p.find("name");
+    const Json* type = p.find("type");
+    if (!(name && is_name(*name) && type &&
+          one_of(*type, {CALIPER_NET_PARAM_NUMBER, CALIPER_NET_PARAM_INTEGER, CALIPER_NET_PARAM_BOOLEAN,
+                         CALIPER_NET_PARAM_CHOICE})))
+        return false;
+    const std::string& t = type->as_string();
+    if (t == CALIPER_NET_PARAM_NUMBER || t == CALIPER_NET_PARAM_INTEGER) {
+        auto bound = [&](const Json& x) {
+            return t == CALIPER_NET_PARAM_NUMBER ? is_finite(x) : (x.is_int() && is_int53(x));
+        };
+        const Json* lo = p.find("min");
+        const Json* hi = p.find("max");
+        if ((present(lo) && !bound(*lo)) || (present(hi) && !bound(*hi))) return false;
+        if (present(lo) && present(hi) && lo->as_double() > hi->as_double()) return false;
+        const Json* log = p.find("log");
+        if (present(log) && !log->is_bool()) return false;
+        if (present(log) && log->as_bool() && !(present(lo) && lo->as_double() > 0 && present(hi))) return false;
+    } else if (t == CALIPER_NET_PARAM_CHOICE) {
+        const Json* ch = p.find("choices");
+        if (!(ch && ch->is_array() && ch->size() >= 1 && ch->size() <= CALIPER_NET_MAX_CHOICES)) return false;
+        std::set<std::string> seen;
+        for (const Json& c : ch->items())
+            if (!is_name(c) || !seen.insert(c.as_string()).second) return false;
+    }
+    const Json* help = p.find("help");
+    if (present(help) && !is_text(*help)) return false;
+    const Json* value = p.find("value");
+    if (!value || !fits_type(p, *value)) return false;
+    const Json* pending = p.find("pending");
+    return !present(pending) || fits_type(p, *pending);
+}
+
+bool action_entry(const Json& a) {
+    if (!a.is_object()) return false;
+    const Json* name = a.find("name");
+    const Json* running = a.find("running");
+    const Json* queued = a.find("queued");
+    const Json* help = a.find("help");
+    return name && is_name(*name) && running && running->is_bool() && queued && queued->is_bool() &&
+           (!present(help) || is_text(*help));
+}
+
+bool run_obj(const Json& r) {
+    if (!r.is_object()) return false;
+    const Json* state = r.find("state");
+    const Json* step = r.find("step");
+    const Json* left = r.find("steps_left");
+    return state &&
+           one_of(*state, {CALIPER_NET_RUN_NONE, CALIPER_NET_RUN_RUNNING, CALIPER_NET_RUN_PAUSING,
+                           CALIPER_NET_RUN_PAUSED, CALIPER_NET_RUN_STEPPING}) &&
+           (!present(step) || is_uint(*step)) && (!present(left) || is_uint(*left));
+}
+
+Controls controls(const Frame& f) {
+    const Json& m = f.meta;
+    Controls c;
+    c.run = req(m, "run", run_obj, "a run state");
+    c.params = req(m, "params", [](const Json& v) {
+        if (!v.is_array() || v.size() > CALIPER_NET_MAX_PARAMS) return false;
+        for (const Json& p : v.items())
+            if (!param_entry(p)) return false;
+        return unique_names(v);
+    }, "at most 64 parameters with unique names");
+    c.actions = req(m, "actions", [](const Json& v) {
+        if (!v.is_array() || v.size() > CALIPER_NET_MAX_ACTIONS) return false;
+        for (const Json& a : v.items())
+            if (!action_entry(a)) return false;
+        return unique_names(v);
+    }, "at most 64 actions with unique names");
+    return c;
+}
+
+Control control(const Frame& f) {
+    const Json& m = f.meta;
+    Control c;
+    c.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
+    c.op = req(m, "op", is_op, "pause, resume, step, set or run").as_string();
+    const Json* name = opt(m, "name", is_name, "a parameter or action name");
+    const bool named = c.op == CALIPER_NET_OP_SET || c.op == CALIPER_NET_OP_RUN;
+    if (named && !name) bad("'" + c.op + "' needs 'name'");
+    if (c.op == CALIPER_NET_OP_SET) c.value = req(m, "value", is_set_value, "a number, a boolean or a choice");
+    if (c.op == CALIPER_NET_OP_STEP)
+        if (const Json* n = opt(m, "count", [](const Json& v) { return is_u32(v) && u64(v) >= 1; },
+                                "a positive uint32"))
+            c.count = u32(*n);
+    if (named) c.name = name->as_string();
+    return c;
+}
+
+ControlReply control_reply(const Frame& f) {
+    const Json& m = f.meta;
+    ControlReply r;
+    r.status = req(m, "status", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_STATUS_OK, CALIPER_NET_STATUS_QUEUED, CALIPER_NET_STATUS_ERROR});
+    }, "ok, queued or error").as_string();
+    r.op = req(m, "op", is_op, "a control op").as_string();
+    const Json* err = opt(m, "error", [](const Json& v) {
+        const Json* code = v.find("code");
+        const Json* msg = v.find("message");
+        return v.is_object() && code && code->is_string() && (!present(msg) || is_text(*msg));
+    }, "{code, message}");
+    if ((err == nullptr) == (r.status == CALIPER_NET_STATUS_ERROR))
+        bad("a control_reply carries 'error' exactly when its status is 'error'");
+    if (r.status == CALIPER_NET_STATUS_QUEUED && r.op != CALIPER_NET_OP_RUN) bad("only 'run' is queued");
+    r.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
+    if (const Json* v = opt(m, "name", is_name, "a parameter or action name")) r.name = v->as_string();
+    if (const Json* v = opt(m, "value", is_set_value, "a number, a boolean or a choice")) r.value = *v;
+    if (const Json* v = opt(m, "message", is_text, "a string of at most 1024 bytes")) r.message = v->as_string();
+    if (err) r.error = *err;
+    return r;
+}
+
+bool detail_cell(const Json& v) {
+    return v.is_null() || v.is_bool() || is_finite(v) ||
+           (v.is_string() && v.as_string().size() <= CALIPER_NET_DETAIL_TEXT_MAX);
+}
+
+bool details_obj(const Json& d) {
+    if (!d.is_object()) return false;
+    const Json* fields = d.find("fields");
+    const Json* items = d.find("items");
+    const Json* values = d.find("values");
+    if (!(fields && fields->is_array() && fields->size() <= CALIPER_NET_MAX_DETAIL_FIELDS)) return false;
+    std::set<std::string> seen;
+    for (const Json& x : fields->items())
+        if (!is_name(x) || !seen.insert(x.as_string()).second) return false;
+    if (!(items && items->is_array() && items->size() <= CALIPER_NET_MAX_DETAIL_ITEMS)) return false;
+    for (const Json& x : items->items())
+        if (!is_uint(x)) return false;
+    if (!(values && values->is_array() && values->size() == items->size())) return false;
+    for (const Json& row : values->items()) {
+        if (!row.is_array() || row.size() != fields->size()) return false;
+        for (const Json& c : row.items())
+            if (!detail_cell(c)) return false;
+    }
+    return true;
+}
+
+Selection selection(const Frame& f) {
+    const Json& m = f.meta;
+    Selection s;
+    s.space = req(m, "space", is_name, "an item space name").as_string();
+    s.items = req(m, "items", [](const Json& v) {
+        if (!v.is_array() || v.size() > CALIPER_NET_MAX_EVENT_INDICES) return false;
+        uint64_t prev = 0;
+        for (size_t i = 0; i < v.size(); ++i) {
+            uint64_t x = 0;
+            if (!v.at(i).get_u64(&x) || (i > 0 && x <= prev)) return false;
+            prev = x;
+        }
+        return true;
+    }, "at most 32768 ascending unsigned integers");
+    if (const Json* v = opt(m, "view", is_name, "a view name")) s.view = v->as_string();
+    if (const Json* v = opt(m, "truncated", is_bool, "a boolean")) s.truncated = v->as_bool();
+    if (const Json* v = opt(m, "details", details_obj, "{fields, items, values} within the limits")) s.details = *v;
+    if (const Json* v = opt(m, "details_error", is_text, "a string of at most 1024 bytes"))
+        s.details_error = v->as_string();
+    return s;
 }
 
 // ---- message encoders (to_meta) -------------------------------------------------------------
@@ -448,6 +669,7 @@ Encoded to_meta(const Message& msg) {
         m.set("capabilities", str_list(w->capabilities));
         if (!w->software.is_null()) m.set("software", w->software);
         if (!w->session.is_null()) m.set("session", w->session);
+        if (w->control) m.set("control", *w->control);
     } else if (const auto* b = std::get_if<Bye>(&msg)) {
         m.set("reason", b->reason);
         m.set("message", b->message);
@@ -522,6 +744,31 @@ Encoded to_meta(const Message& msg) {
         if (v->sub) m.set("sub", *v->sub);
         if (v->seq) m.set("seq", *v->seq);
         if (!v->data_view.is_null()) m.set("data_view", v->data_view);
+    } else if (const auto* c = std::get_if<Controls>(&msg)) {
+        m.set("run", c->run);
+        m.set("params", c->params);
+        m.set("actions", c->actions);
+    } else if (const auto* c = std::get_if<Control>(&msg)) {
+        m.set("request_id", c->request_id);
+        m.set("op", c->op);
+        if (c->name) m.set("name", *c->name);
+        if (!c->value.is_null()) m.set("value", c->value);
+        if (c->count) m.set("count", *c->count);
+    } else if (const auto* r = std::get_if<ControlReply>(&msg)) {
+        m.set("request_id", r->request_id);
+        m.set("op", r->op);
+        m.set("status", r->status);
+        if (r->name) m.set("name", *r->name);
+        if (!r->value.is_null()) m.set("value", r->value);
+        if (r->message) m.set("message", *r->message);
+        if (!r->error.is_null()) m.set("error", r->error);
+    } else if (const auto* s = std::get_if<Selection>(&msg)) {
+        m.set("space", s->space);
+        m.set("items", s->items);
+        if (s->view) m.set("view", *s->view);
+        if (s->truncated) m.set("truncated", true);
+        if (!s->details.is_null()) m.set("details", s->details);
+        if (s->details_error) m.set("details_error", *s->details_error);
     } else if (const auto* u = std::get_if<Unknown>(&msg)) {
         m = u->meta.is_object() ? u->meta : Json::object();
         m.erase("sections");
@@ -821,6 +1068,10 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
             case CALIPER_NET_MSG_SNAPSHOT: *out = snapshot(f); break;
             case CALIPER_NET_MSG_SERIES: *out = series(f); break;
             case CALIPER_NET_MSG_EVENT: *out = event(f); break;
+            case CALIPER_NET_MSG_CONTROLS: *out = controls(f); break;
+            case CALIPER_NET_MSG_CONTROL: *out = control(f); break;
+            case CALIPER_NET_MSG_CONTROL_REPLY: *out = control_reply(f); break;
+            case CALIPER_NET_MSG_SELECTION: *out = selection(f); break;
             default: *out = Unknown{f.type, f.meta, f.sections}; break;
         }
     } catch (const MsgError& e) {
@@ -867,6 +1118,10 @@ const char* type_name(uint16_t type) {
         case CALIPER_NET_MSG_SNAPSHOT: return "snapshot";
         case CALIPER_NET_MSG_SERIES: return "series";
         case CALIPER_NET_MSG_EVENT: return "event";
+        case CALIPER_NET_MSG_CONTROLS: return "controls";
+        case CALIPER_NET_MSG_CONTROL: return "control";
+        case CALIPER_NET_MSG_CONTROL_REPLY: return "control_reply";
+        case CALIPER_NET_MSG_SELECTION: return "selection";
         default: return "?";
     }
 }

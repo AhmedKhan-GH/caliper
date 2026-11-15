@@ -354,6 +354,8 @@ private:
                 switch (e.type) {
                     case caliper_net::Event::Type::Open: {
                         open = true;
+                        // No capabilities: this source implements neither the
+                        // controls nor the linked selection of 3.1.
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
                         Json sw = Json::object();
@@ -501,6 +503,12 @@ private:
         else if (auto* er = std::get_if<wire::Error>(&m)) on_error(*er);
         else if (auto* b = std::get_if<wire::Bye>(&m)) on_bye(*b);
         else if (std::holds_alternative<wire::Unknown>(m)) {}
+        // 3.1: this source announces neither `controls` nor `selection` in its
+        // HELLO, so a server sends it no CONTROLS, CONTROL_REPLY or SELECTION.
+        // One that does anyway is tolerated and ignored; showing run state,
+        // parameters, actions and linked selections needs the capabilities.
+        else if (std::holds_alternative<wire::Controls>(m) || std::holds_alternative<wire::ControlReply>(m) ||
+                 std::holds_alternative<wire::Selection>(m)) {}
         else protocol_error(std::string("'") + wire::type_name(type) + "' sent to a viewer");
     }
 

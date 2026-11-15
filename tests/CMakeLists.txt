@@ -489,6 +489,9 @@ endif()
 # loopback (net/ws.h server, net/wire.h encoder) streams every kind to a core
 # attached by URL (caliper_core_live_attach_url, live_net_source.h).
 target_sources(caliper_live_tests PRIVATE test_live_net.cpp)
+# The 3.1 golden frames (tests/fixtures/wire_v3/v3_1) that the native source
+# must tolerate.
+target_compile_definitions(caliper_live_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 add_test(NAME caliper_live_tests COMMAND caliper_live_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.
 set_tests_properties(caliper_live_tests PROPERTIES ENVIRONMENT
