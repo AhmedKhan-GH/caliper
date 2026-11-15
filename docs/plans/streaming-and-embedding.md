@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, a running Caliper streamed to a browser as video, and programs that embed Caliper. The minimal embedding package is built in Phase 1, and the rest is planned for after Phase 1. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), the [Python API](../references/python-api.md) and [Embedding Caliper](../references/embedding.md).
+This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, a running Caliper streamed to a browser as video, and programs that embed Caliper. The minimal embedding package is built, and the rest is planned for after Phase 1. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), the [Python API](../references/python-api.md) and [Embedding Caliper](../references/embedding.md).
 
 ## The order of surfaces
 
@@ -53,11 +53,7 @@ Metal and Vulkan stay the fast paths. One WebGPU renderer serves the browser and
 
 ## The embedding package
 
-The minimal embedding package is built in Phase 1. It has three parts:
-
-- `caliper-embed`, a CMake package installed separately from the SDK. It holds `caliper/embed.h`, `caliper/live.h`, `caliper/live_views.h` and the core library, under an include root of its own, so an applet can never include `embed.h`.
-- `caliper_embed_api_version()`, an additive call that reports the version of the embedding interface.
-- `examples/embed_host`, built outside the repository with only `find_package(caliper-embed)`.
+The minimal embedding package is built: the `caliper-embed` package, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository with only `find_package(caliper-embed)`. [Embedding Caliper](../references/embedding.md) describes it, and [Embed Caliper in a program](../guides/embed-caliper.md) builds an embedder against it.
 
 The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, offscreen rendering to an image, HiDPI work and a Qt widget.
 

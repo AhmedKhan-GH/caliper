@@ -6,7 +6,7 @@ This page is the only place for the order and status of work. Each phase links t
 
 ## Where things stand
 
-On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the embeddable core, the Python client and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
+On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, the Python client and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
 
 ## Phase 1: one core with versioned applets
 
@@ -15,7 +15,7 @@ On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the
 3. Make the host name no applet. Done: windows dock by role, the core build compiles no applets, and CI builds the core without applets and checks that the host names none. Still to do: CI starts the empty core and checks that the landing screen shows its empty state.
 4. Load applets from outside the repository. Done: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder, and the search order with one copy chosen per id. Still to do: shipped applets signed in the app bundle.
 5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>` and `dev`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see [Command line](../references/cli.md).
-6. Ship the minimal embedding package, as [Streaming and embedding](streaming-and-embedding.md#the-embedding-package) describes. It is being built on a branch and is not merged yet.
+6. Done: the minimal embedding package, which is the `caliper-embed` package with its one shared library, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository and run offscreen; see [Embed Caliper in a program](../guides/embed-caliper.md).
 7. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
 8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
 9. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
@@ -70,7 +70,7 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 ## Streaming and embedding
 
-Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming comes first; video streaming of a running Caliper to a browser, which shows native applets there unchanged, comes after it.
+Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package, which Phase 1 built, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming comes first; video streaming of a running Caliper to a browser, which shows native applets there unchanged, comes after it.
 
 ## Data and Cloud
 

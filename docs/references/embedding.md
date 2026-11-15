@@ -124,6 +124,11 @@ those canvases and never paints applet pixels.
   default, which is what the `caliper` executable passes, and nothing is
   written to the process's working directory. The override lasts for the one
   live core and is cleared on shutdown.
+- **`CaliperCoreDesc.applets_dir` is searched first.** It takes the place of the
+  `caliper` executable's `--applets` folders in the
+  [search order](cli.md#the-search-order), and like them a folder that holds no
+  manifest but has an `applets/` subfolder that does stands for that subfolder,
+  so a build folder can be passed as it is.
 - **Applet log lines reach `log_fn`.** When the embedder sets `log_fn`, the
   applet `caliper.log.v1` service routes there with the prefix `[applet] `, and
   core diagnostics (renderer choice, refusals, crash text) arrive untagged.
@@ -476,7 +481,7 @@ embedding process is free to load its own torch.
 | Option | Default | Effect |
 |---|---|---|
 | `CALIPER_WITH_TORCH` | ON | OFF skips the whole "Category 4: PyTorch" block of `cmake/Dependencies.cmake` (no download, no `find_package(Torch)`, `TORCH_LIBRARIES` empty) and every torch-linking target: the `applets/*` tree (forces `CALIPER_BUILD_APPLETS` OFF), `examples/sine_scope` (the ML tutorial applet), `caliper_torch_tests`, the applet learning-core tests and the MSVC torch-DLL copy. `caliper_embed_tests` is then compiled with `CALIPER_TESTS_NO_TORCH_APPLETS=1`, so its sine-scope swap cases compile out, and no binary carries a libtorch rpath. |
-| `CALIPER_BUILD_APPLETS` | ON | The `applets/*` glob. Forced OFF when torch is OFF, because every applet links libtorch today. |
+| `CALIPER_BUILD_APPLETS` | OFF | Also builds the `applets/*` folders inside the core build; each also builds on its own against the installed SDK. Forced OFF when torch is OFF, because most applets link libtorch. |
 | `CALIPER_BUILD_PYTHON` | OFF | `add_subdirectory(python)`: the nanobind extensions `caliper._native` and `caliper._live`. The wheel build (scikit-build-core) sets it ON. |
 | `CALIPER_WITH_SLANG` | ON | Configure the vendored slang (SystemVerilog) library. |
 | `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp and apply its local patches. `CALIPER_BUILD_OPENGLLAMA=ON` stops the configure with an error when this is OFF. |
@@ -540,7 +545,7 @@ A cold torch-free build of everything (libcaliper, exe, `embed_host`, all test
 binaries) is 462 steps, 120 s at `-j 8`; `libcaliper.a` itself is 276 KB (its
 own six objects; dependencies are separate archives). The default
 `cmake --preset release` configures with torch ON (vendored libtorch 2.5.1
-found, nine applets discovered), and a cold `libcaliper` there builds in 123 s
+found), and a cold `libcaliper` there builds in 123 s
 with zero torch symbols.
 
 ### Verification

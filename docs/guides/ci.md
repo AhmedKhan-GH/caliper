@@ -25,7 +25,7 @@ The test executables that link libtorch need its DLLs beside them, because Windo
 Each lane runs these steps:
 1. **Check out,** then `./init-submodules.sh`. The script wipes `third_party/` and the build directories, then initializes the submodules. Some pins can't be fetched from their remotes, and the script falls back to the default branch for those.
 2. **Restore the caches.** This happens after the script, because the script would otherwise delete them.
-3. **Configure** with `cmake --preset release -DCALIPER_WITH_SLANG=OFF` and sccache as the compiler launcher. slang is vendored but nothing links it. `CALIPER_SDK_PROBE_DIR` points the `caliper_sdk_install` test at the runner's temporary folder, outside the checkout.
+3. **Configure** with `cmake --preset release -DCALIPER_WITH_SLANG=OFF` and sccache as the compiler launcher. slang is vendored but nothing links it. `CALIPER_SDK_PROBE_DIR` and `CALIPER_EMBED_PROBE_DIR` point the `caliper_sdk_install` and `caliper_embed_install` tests at the runner's temporary folder, outside the checkout.
 4. **Build** with `cmake --build cmake-build-release --parallel`. The core build compiles no applets.
 5. **Test** with `ctest --test-dir cmake-build-release --output-on-failure --timeout 600`.
    - The GPU suites (gfx, export, embed, torch) skip when the runner has no usable device, and ctest reports them as skipped.

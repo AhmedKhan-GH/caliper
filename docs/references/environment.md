@@ -67,8 +67,9 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `FS_FIELD=<n>` | FieldScope starts in field mode `n`. | `applets/field_scope/field_scope.cpp` |
 | `CALIPER_HELLO_CRASH` | The hello applet faults in its frame function, to exercise quarantine. | `examples/hello/hello.cpp` |
 | `CALIPER_HELLO_INIT_FAIL` | The hello applet's `on_init` returns false. | `examples/hello/hello.cpp` |
-| `CALIPER_EMBED_APPLETS` | The applets folder the `embed_host` example passes in `CaliperCoreDesc.applets_dir`. | `examples/embed_host/main.mm`, `examples/embed_host/main_win32.cpp` |
-| `CALIPER_EMBED_EXIT_AFTER=<seconds>` | The `embed_host` example closes its window after that many seconds. | `examples/embed_host/main.mm`, `examples/embed_host/main_win32.cpp` |
+| `CALIPER_EMBED_APPLETS` | The applets folder the `embed_host` example passes in `CaliperCoreDesc.applets_dir`. | `examples/embed_host/main.mm`, `examples/embed_host/main_win32.cpp`, `examples/embed_host/embed_host.h` |
+| `CALIPER_EMBED_EXIT_AFTER=<seconds>` | The `embed_host` example closes its window after that many seconds. In offscreen mode it draws frames for that many seconds, 1 by default. | `examples/embed_host/main.mm`, `examples/embed_host/main_win32.cpp`, `examples/embed_host/embed_host.h` |
+| `CALIPER_EMBED_OFFSCREEN` | Any value other than empty or `0` runs the `embed_host` example in offscreen mode: it opens no window, draws the applet on a 1280 by 800 offscreen canvas at about 60 frames a second, reads the last frame back, prints how many frames it drew and how many pixels the applet drew, and exits with 0 only when the applet drew. | `examples/embed_host/embed_host.h` |
 
 ## Test variables
 

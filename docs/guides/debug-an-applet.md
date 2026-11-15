@@ -106,16 +106,15 @@ then says `restart Caliper to reload`), quit and start Caliper again.
 
 The host hands you a writable directory via `host.data_dir()`, and that is the
 **only** place an applet should read or write files — never build your own paths
-or drop dotfiles in `$HOME`. On the current host this resolves under the app-data
-root:
+or drop dotfiles in `$HOME`. It is `data/<id>/` under the app-data root, named
+by the applet's manifest id, so two applets never collide:
 
 - **macOS:** `~/Library/Application Support/Caliper/`
 - **Linux:** `$XDG_DATA_HOME/caliper/` (or `~/.local/share/caliper/`; the folder name is lowercase)
 - **Windows:** `%APPDATA%/Caliper/`
 
-Under loader v2 the host namespaces this directory per applet id, so two applets
-never collide; either way, `host.data_dir()` is the accessor and your code stays
-the same. For example, an applet can build `data_dir() + "/settings.txt"` and
+The host also keeps `.caliper-data.toml` there for an applet that declares a data
+schema; leave that file alone. For example, an applet can build `data_dir() + "/settings.txt"` and
 persist a single value across relaunches. (The `signal_scope` applet in
 `applets/legacy-dev/` does this, but it is archived and the default build does
 not compile it.)

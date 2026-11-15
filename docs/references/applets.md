@@ -235,12 +235,16 @@ Hello always, and SineScope in a build with libtorch.
 
 ## Embedding example
 
-`examples/embed_host` is a second host of libcaliper, not an applet. It is a bare
+`examples/embed_host` is a second host of the core, not an applet. It is a bare
 native window (AppKit on macOS, Win32 on Windows) that makes the five embed calls
 and loads one applet by manifest id, which defaults to
-`dev.caliper.instance-scope`. It links the core and none of the `caliper`
-executable. `CALIPER_EMBED_EXIT_AFTER=<seconds>` closes it automatically. There is
-no Linux host. See [Embedding](embedding.md).
+`dev.caliper.instance-scope`. It links `caliper::embed` and none of the `caliper`
+executable, and it builds outside the repository against the installed
+`caliper-embed` package with only `find_package(caliper-embed)`; inside the core
+build it links the in-tree target. `CALIPER_EMBED_OFFSCREEN=1` runs it in an
+offscreen mode that opens no window, and `CALIPER_EMBED_EXIT_AFTER=<seconds>`
+closes it automatically. There is no Linux host. See [Embedding](embedding.md)
+and [Embed Caliper in a program](../guides/embed-caliper.md).
 
 ## Archived applets
 
