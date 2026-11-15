@@ -448,6 +448,7 @@ std::vector<uint8_t> decode_png(const std::string& path, int* w, int* h) {
 #import <Metal/Metal.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include "glfw_background.h"
 
 namespace {
 
@@ -463,7 +464,7 @@ struct MetalHostEnv {
     id<MTLDevice> device = nil;
 
     MetalHostEnv() {
-        glfw_ok = !caliper_test::force_no_gpu() && glfwInit() == GLFW_TRUE;
+        glfw_ok = !caliper_test::force_no_gpu() && caliper_test::glfw_init_in_background();
         if (!glfw_ok) return;
         device = MTLCreateSystemDefaultDevice();
         if (device == nil) return;
@@ -533,6 +534,14 @@ Quad make_topleft_quad(uint32_t flat) {
 }
 
 }  // namespace
+
+// The hidden window gives the test process no Dock icon or menu bar: with GLFW
+// up and the window created, the activation policy is still the background one
+// (glfw_background.h).
+TEST_CASE("export live: the test process has no Dock icon or menu bar") {
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+    CHECK(caliper_host::background_activation_policy_active());
+}
 
 TEST_CASE("export live: caps track the geometry primitives cap when a renderer is bound") {
     if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
@@ -846,6 +855,7 @@ TEST_CASE("export live: the SDK sugar widens a v1.1 draw and produces the same p
 #include "cuda_driver.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include "glfw_background.h"
 #include <memory>
 
 namespace {
@@ -862,7 +872,7 @@ struct VkHostEnv {
     std::unique_ptr<HostRenderer> renderer;
 
     VkHostEnv() {
-        glfw_ok = !caliper_test::force_no_gpu() && glfwInit() == GLFW_TRUE;
+        glfw_ok = !caliper_test::force_no_gpu() && caliper_test::glfw_init_in_background();
         if (!glfw_ok) return;
         renderer = make_vulkan_renderer();
         glfwDefaultWindowHints();

@@ -319,9 +319,16 @@ endif()
 # Objective-C++ static lib compiled with ARC (-fobjc-arc). Keeping it separate
 # scopes ARC to these two .mm files and keeps the exe a plain C++/OBJC build.
 # The vendored imgui_impl_metal.mm compiles here rather than into the exe.
+#
+# background_process_mac.mm (src/host/background_process.h) keeps a process
+# that draws without a visible window out of the Dock and the menu bar. It
+# lives here because every binary that renders on macOS links this library:
+# the caliper executable (for `caliper shot`) and the test binaries that open
+# hidden windows.
 if(APPLE)
     add_library(caliper_metal_backend STATIC
         src/host/renderer/metal_renderer.mm
+        src/host/background_process_mac.mm
         ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
     )
     target_include_directories(caliper_metal_backend PRIVATE
@@ -333,6 +340,7 @@ if(APPLE)
         PRIVATE caliper::ui_stack imgui_backends glfw)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
+        src/host/background_process_mac.mm
         ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_metal_backend PROPERTIES

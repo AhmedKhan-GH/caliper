@@ -22,6 +22,7 @@
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include "../glfw_background.h"
 #include <imgui.h>
 #include <backends/imgui_impl_opengl3.h>
 
@@ -63,9 +64,12 @@ namespace {
 // envs come up — each env owns only its window + ImGui context. A function-local
 // guard is initialized by the first env that constructs, so it tears down after
 // every env (reverse static-destruction order), avoiding a double-terminate.
+// GLFW starts without a menu bar and the process keeps the background
+// activation policy, so no Dock icon appears while the suite runs
+// (glfw_background.h).
 struct GlfwGuard {
     bool ok;
-    GlfwGuard() : ok(!caliper_test::force_no_gpu() && glfwInit() == GLFW_TRUE) {}
+    GlfwGuard() : ok(!caliper_test::force_no_gpu() && caliper_test::glfw_init_in_background()) {}
     ~GlfwGuard() { if (ok) glfwTerminate(); }
 };
 GlfwGuard& glfw_guard() { static GlfwGuard g; return g; }
@@ -267,6 +271,16 @@ void mat_alloc_shared(Backend& bk) {
 } while (0)
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// The suite's hidden windows give the test process no Dock icon or menu bar:
+// after GLFW is up and a window exists, the activation policy is still the
+// background one (on macOS; elsewhere there is nothing to show).
+// ---------------------------------------------------------------------------
+TEST_CASE("gfx: the test process has no Dock icon or menu bar") {
+    REQUIRE_GL();
+    CHECK(caliper_host::background_activation_policy_active());
+}
 
 // ---------------------------------------------------------------------------
 // GL run of the §16 matrix.
