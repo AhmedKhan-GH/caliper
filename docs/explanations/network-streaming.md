@@ -58,10 +58,10 @@ element, the notebook widget built on it, and the viewer page. The element
 decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
 view layer compiled to WebAssembly (`web/wasm`, the
 [web viewer](../plans/streaming-and-embedding.md#the-web-viewer)) draws the
-kinds its loader lists, which are heatmaps, images, series and histograms, and
-small views written for the browser in TypeScript draw points. Without an
-adapter the TypeScript views draw every kind, with Canvas 2D where they need
-it. The element's header, with the view's name, its status and the data view
+kinds its loader lists, which are now all five: heatmaps, images, points,
+series and histograms. A kind the loader does not list is drawn by small views
+written for the browser in TypeScript. Without an adapter the TypeScript views
+draw every kind, with Canvas 2D where they need it. The element's header, with the view's name, its status and the data view
 picker, is the same either way. The WebAssembly views do not send selections
 yet, so an element that needs them sets `renderer="ts"`, which keeps the
 TypeScript views for every kind.
