@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first part of data streaming are built: the WebSocket transport, `caliper.serve()`, the notebook widget, the first browser views, data views of tensors and the `caliper serve` hub. After a successful [spike](web-viewer-spike.md), the web viewer is being built on Caliper's own view layer. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
+This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first pieces of data streaming are built: the wire protocol, the notebook widget and the first browser views. The transport in the Python client, `caliper.serve()`, data views of tensors and the `caliper serve` hub are being built. After a successful [spike](web-viewer-spike.md), the web viewer is being built on Caliper's own view layer. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
 
 ## The order of surfaces
 
@@ -14,9 +14,9 @@ The tools that ML engineers use come first, and consumer surfaces come last:
 
 ## Data streaming
 
-Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the [web viewer](#the-web-viewer), which is Caliper's own view layer compiled to WebAssembly, and with small views written for the browser where WebGPU is absent. Data streaming powers notebooks, `caliper.serve()` and the hub, which are built; [Network streaming](../explanations/network-streaming.md) describes them.
+Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the [web viewer](#the-web-viewer), which is Caliper's own view layer compiled to WebAssembly, and with small views written for the browser where WebGPU is absent. Data streaming powers notebooks, `caliper.serve()` and the hub; [Network streaming](../explanations/network-streaming.md) describes the design.
 
-- The live protocol has a network transport. The WebSocket transport is built, and WebTransport comes later.
+- The live protocol gains a network transport. The WebSocket protocol is specified as [wire protocol v3](../references/wire-protocol.md), its transport is being built, and WebTransport comes later.
 - The latest snapshot wins for each live view, and a series is sent as deltas.
 - Streaming never blocks training.
 - The zero-copy claim applies only to viewing on the same machine. A viewer on the network receives copies.
@@ -27,7 +27,7 @@ Large data is handled by sampling and by data views rather than sent whole:
 - **Data views.** A data view is a slice, selection, projection or aggregation of a tensor or table, such as one layer, one head, a window of steps, a subset of rows, or a mean over the batch. The viewer requests it, the producer computes it on the device where the data lives, and only the view's result is streamed. This is the same idea as a tensor view or a database view.
 - A zoom or a selection is a request for a different data view.
 
-Data views of tensors are built: a producer names the dimensions of a tensor, and a viewer indexes and reduces them within a budget. Data views of tables, such as a subset of rows, are still planned.
+Data views of tensors come first: a producer names the dimensions of a tensor, and a viewer indexes and reduces them within a budget. Data views of tables, such as a subset of rows, come later.
 
 A data view decides which data travels, and a live view, such as a series or a histogram, decides how the viewer draws it.
 
@@ -62,7 +62,7 @@ These limits hold for the web viewer at every step. The facts come from the [web
 
 ## Serving
 
-Two modes serve the browser views, both with the same protocol. Both are built:
+Two modes serve the browser views, both with the same protocol, built in this order:
 
 1. **`caliper.serve()` in Python.** The script itself serves the viewer page and its stream.
 2. **`caliper serve`, a subcommand of the `caliper` binary.** It runs a hub. Any number of scripts send to it, any number of browsers or Caliper apps watch it, and it outlives the scripts.
