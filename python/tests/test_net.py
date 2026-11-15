@@ -357,8 +357,8 @@ def _wait(pred, timeout=5.0):
 # ---------------------------------------------------------------------------
 # static files
 # ---------------------------------------------------------------------------
-def test_viewer_page_without_assets(server, monkeypatch):
-    monkeypatch.setitem(sys.modules, "caliper._assets", None)     # import fails
+def test_viewer_page_without_assets(server, monkeypatch, tmp_path):
+    monkeypatch.setenv("CALIPER_WEB_DIR", str(tmp_path))     # an asset folder with no build
     st, h, body = _http(server.port, "/", {"Host": f"127.0.0.1:{server.port}"})
     assert st == 200 and h["content-type"].startswith("text/html")
     assert b"not built" in body and h["cache-control"] == "no-store"

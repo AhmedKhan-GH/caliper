@@ -16,7 +16,7 @@ The tools that ML engineers use come first, and consumer surfaces come last:
 
 Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the [web viewer](#the-web-viewer), which is Caliper's own view layer compiled to WebAssembly, and with small views written for the browser where WebGPU is absent. Data streaming powers notebooks, `caliper.serve()` and the hub; [Network streaming](../explanations/network-streaming.md) describes the design.
 
-- The live protocol gains a network transport. The WebSocket protocol is specified as [wire protocol v3](../references/wire-protocol.md), its transport is being built, and WebTransport comes later.
+- The live protocol gains a network transport. The WebSocket protocol is specified as [wire protocol v3](../references/wire-protocol.md), its transport in the Python client is built, and WebTransport comes later.
 - The latest snapshot wins for each live view, and a series is sent as deltas.
 - Streaming never blocks training.
 - The zero-copy claim applies only to viewing on the same machine. A viewer on the network receives copies.
