@@ -312,6 +312,23 @@ if(CALIPER_WITH_TORCH)
         CALIPER_HOST_TORCH_VERSION="${CALIPER_TORCH_VERSION}")
 endif()
 
+# Wire protocol v3 networking (src/host/net, caliper/live_net.h): the WebSocket
+# layer (client and server). Portable C++17 with no graphics, Metal or torch
+# dependency, so libcaliper's NetSource, the `caliper serve` hub and the
+# headless tests share it. Windows links Winsock.
+add_library(caliper_net STATIC
+    src/host/net/sha1.cpp
+    src/host/net/ws.cpp
+)
+target_include_directories(caliper_net PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/host
+    ${CMAKE_SOURCE_DIR}/include)
+if(WIN32)
+    target_link_libraries(caliper_net PUBLIC ws2_32)
+endif()
+set_target_properties(caliper_net PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
@@ -489,7 +506,7 @@ target_include_directories(libcaliper PUBLIC
 # link-only, so the full list would drag the chrome widgets (node editor, text
 # editor, ImTerm) into every embedder, including the Python extension.
 target_link_libraries(libcaliper
-    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths
+    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net
     PRIVATE ${CALIPER_CORE_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
