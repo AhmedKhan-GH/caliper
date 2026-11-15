@@ -758,3 +758,25 @@ TEST_CASE("net/ws: connect failures, header timeout, wake from another thread") 
     t.join();
     CHECK(ms < 2000);
 }
+
+TEST_CASE("net/ws: a message sent as a prefix and a shared body arrives whole") {
+    Pair a;
+    auto body = std::make_shared<const Bytes>(pattern(300000, 3));
+    Bytes prefix = pattern(37, 4);
+    for (const auto& r : std::vector<std::pair<size_t, size_t>>{{0, 300000}, {1000, 70000}, {5, 100}, {0, 0}})
+        REQUIRE(a.server.send(a.conn, prefix, body, r.first, r.second));
+    CHECK_FALSE(a.server.send(a.conn, prefix, body, 299999, 2));   // past the body's end
+    REQUIRE(a.pump.until([&] { return Pump::count(a.pump.cev[0], Type::Message) == 4; }));
+    std::vector<const Event*> got;
+    for (const auto& e : a.pump.cev[0])
+        if (e.type == Type::Message) got.push_back(&e);
+    size_t i = 0;
+    for (const auto& r : std::vector<std::pair<size_t, size_t>>{{0, 300000}, {1000, 70000}, {5, 100}, {0, 0}}) {
+        Bytes want = prefix;
+        want.insert(want.end(), body->begin() + (std::ptrdiff_t)r.first, body->begin() + (std::ptrdiff_t)(r.first + r.second));
+        CHECK(got[i]->binary);
+        CHECK(got[i]->data == want);
+        ++i;
+    }
+}
+

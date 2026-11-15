@@ -587,6 +587,43 @@ public:
         return true;
     }
 
+    // One binary message: `prefix`, then body[off, off + len). On the server
+    // side (unmasked, unfragmented) the prefix rides in the frame head and the
+    // body is shared; otherwise the message is joined first.
+    bool send_prefixed(Bytes prefix, SharedBytes body, size_t off, size_t len) {
+        if (!can_send() || !body || off > body->size() || len > body->size() - off) return false;
+        const size_t n = prefix.size() + len;
+        if (out_bytes_ + n + 14 > opt_.max_queued_bytes) return false;
+        if (role_ == Role::Client || opt_.send_fragment_bytes) {
+            auto whole = std::make_shared<Bytes>(std::move(prefix));
+            whole->insert(whole->end(), body->begin() + (std::ptrdiff_t)off,
+                          body->begin() + (std::ptrdiff_t)(off + len));
+            return send_message(std::move(whole), true);
+        }
+        Out o;
+        o.head.push_back(uint8_t(0x80 | 0x2));
+        if (n < 126) {
+            o.head.push_back(uint8_t(n));
+        } else if (n <= 0xffff) {
+            o.head.push_back(126);
+            o.head.push_back(uint8_t(n >> 8));
+            o.head.push_back(uint8_t(n));
+        } else {
+            o.head.push_back(127);
+            for (int i = 7; i >= 0; --i) o.head.push_back(uint8_t((uint64_t)n >> (8 * i)));
+        }
+        o.head.insert(o.head.end(), prefix.begin(), prefix.end());
+        o.body = std::move(body);
+        o.begin = off;
+        o.end = off + len;
+        o.data = true;
+        o.ends_message = true;
+        out_bytes_ += o.head.size() + len;
+        out_.push_back(std::move(o));
+        ++out_msgs_;
+        return true;
+    }
+
     bool send_control(uint8_t op, const std::string& payload, bool priority) {
         if (phase_ != Phase::Open && !(op == 0x8 && phase_ == Phase::Closing)) return false;
         auto b = std::make_shared<Bytes>(payload.begin(), payload.end());
@@ -1315,6 +1352,11 @@ bool Server::send(ConnId c, SharedBytes msg, bool binary) {
 bool Server::send(ConnId c, const void* data, size_t n, bool binary) {
     const uint8_t* p = static_cast<const uint8_t*>(data);
     return send(c, std::make_shared<const Bytes>(p, p + n), binary);
+}
+
+bool Server::send(ConnId c, Bytes prefix, SharedBytes body, size_t offset, size_t length) {
+    Conn* k = find(c);
+    return k && k->send_prefixed(std::move(prefix), std::move(body), offset, length);
 }
 
 bool Server::ping(ConnId c, const std::string& payload) {

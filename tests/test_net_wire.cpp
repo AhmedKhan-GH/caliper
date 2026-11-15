@@ -571,3 +571,41 @@ TEST_CASE("net/wire: the upgrade checks of the reference page, in order") {
     CHECK_FALSE(token_equal("ab", "abc"));
     CHECK_FALSE(token_equal("abcd", "abc"));
 }
+
+TEST_CASE("net/wire: encode_head gives existing sections a new head, as the hub forwards a snapshot") {
+    for (const char* name : {"snapshot", "snapshot_points", "series"}) {
+        CAPTURE(name);
+        const std::vector<uint8_t> bin = read_bytes(fixtures() / (std::string(name) + ".bin"));
+        Frame f;
+        FrameError fe;
+        REQUIRE(decode_frame(bin.data(), bin.size(), &f, &fe));
+        REQUIRE(!f.sections.empty());
+        // A sub with more digits makes the metadata longer: the sections move,
+        // and every one of them must still start at a multiple of 8.
+        for (uint64_t sub : {uint64_t(0), uint64_t(7), uint64_t(4294967295u)}) {
+            Json meta = f.meta;
+            meta.set("sub", sub);
+            std::vector<uint32_t> lens;
+            for (const auto& s : f.sections) lens.push_back((uint32_t)s.size);
+            const size_t tail = f.sections.front().offset;
+            std::vector<uint8_t> head;
+            REQUIRE(encode_head(f.type, meta, lens, bin.size() - tail, &head, nullptr, f.minor, f.flags));
+            CHECK(head.size() % 8 == 0);
+            std::vector<uint8_t> whole = head;
+            whole.insert(whole.end(), bin.begin() + (std::ptrdiff_t)tail, bin.end());
+            Frame g;
+            REQUIRE(decode_frame(whole.data(), whole.size(), &g, &fe));
+            CHECK(g.type == f.type);
+            CHECK(g.meta.find("sub")->as_double() == (double)sub);
+            REQUIRE(g.sections.size() == f.sections.size());
+            for (size_t i = 0; i < g.sections.size(); ++i) {
+                CHECK(g.sections[i].size == f.sections[i].size);
+                CHECK(std::memcmp(g.sections[i].data, f.sections[i].data, f.sections[i].size) == 0);
+            }
+            // With the original sub it is the golden frame again.
+            if (sub == ju(f.meta, "sub")) CHECK(whole == bin);
+        }
+    }
+    std::vector<uint8_t> head;
+    CHECK_FALSE(encode_head(CALIPER_NET_MSG_SNAPSHOT, Json::object(), {}, 0, &head));
+}

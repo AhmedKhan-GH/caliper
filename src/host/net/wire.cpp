@@ -757,6 +757,38 @@ bool encode_frame(uint16_t type, const Json& meta_in, const std::vector<Section>
     return true;
 }
 
+bool encode_head(uint16_t type, const Json& meta, const std::vector<uint32_t>& section_lens, size_t tail_len,
+                 std::vector<uint8_t>* head, FrameError* err, uint16_t minor, uint16_t flags) {
+    auto fail = [&](int code, const char* reason, const std::string& msg) {
+        if (err) *err = FrameError{code, reason, msg};
+        return false;
+    };
+    if (section_lens.empty() || section_lens.size() > CALIPER_NET_MAX_SECTIONS)
+        return fail(CALIPER_NET_CLOSE_PROTOCOL_ERROR, "malformed", "a head needs 1 to 8 sections");
+    const std::string mbytes = meta.dump();
+    if (mbytes.size() > CALIPER_NET_MAX_META_BYTES)
+        return fail(CALIPER_NET_CLOSE_TOO_BIG, "too_big", "metadata of " + std::to_string(mbytes.size()) + " bytes");
+    const uint64_t meta_end = CALIPER_NET_HEADER_BYTES + 4ull * section_lens.size() + mbytes.size();
+    const uint64_t head_len = align8(meta_end);
+    const uint64_t frame_len = head_len + tail_len;
+    if (frame_len > CALIPER_NET_MAX_FRAME_BYTES)
+        return fail(CALIPER_NET_CLOSE_TOO_BIG, "too_big", "frame of " + std::to_string(frame_len) + " bytes");
+    head->assign((size_t)head_len, 0);
+    uint8_t* b = head->data();
+    wr32(b, CALIPER_NET_MAGIC);
+    wr16(b + 4, CALIPER_NET_PROTOCOL_MAJOR);
+    wr16(b + 6, minor);
+    wr16(b + 8, type);
+    wr16(b + 10, flags);
+    wr32(b + 12, (uint32_t)frame_len);
+    wr32(b + 16, (uint32_t)mbytes.size());
+    wr16(b + 20, (uint16_t)section_lens.size());
+    wr16(b + 22, 0);
+    for (size_t i = 0; i < section_lens.size(); ++i) wr32(b + CALIPER_NET_HEADER_BYTES + 4 * i, section_lens[i]);
+    std::memcpy(b + CALIPER_NET_HEADER_BYTES + 4 * section_lens.size(), mbytes.data(), mbytes.size());
+    return true;
+}
+
 // ---- messages ---------------------------------------------------------------------------------
 
 DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {

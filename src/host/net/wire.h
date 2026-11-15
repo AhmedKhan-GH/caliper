@@ -103,6 +103,18 @@ bool encode_frame(uint16_t type, const Json& meta, const std::vector<Section>& s
                   std::vector<uint8_t>* out, FrameError* err = nullptr,
                   uint16_t minor = CALIPER_NET_PROTOCOL_MINOR, uint16_t flags = 0);
 
+// The head of a frame whose sections already exist as one block of bytes: the
+// header, the section lengths, `meta` (which holds the "sections" descriptors
+// unchanged) and the zero padding up to the next multiple of 8. A decoded
+// frame's bytes from its first section's offset to its end are such a block,
+// because every section keeps its distance from the first one, so a forwarder
+// can rewrite a field such as "sub" and send the new head followed by the
+// original sections without copying them. tail_len is the block's length. The
+// header carries `minor` and `flags`.
+bool encode_head(uint16_t type, const Json& meta, const std::vector<uint32_t>& section_lens, size_t tail_len,
+                 std::vector<uint8_t>* head, FrameError* err = nullptr, uint16_t minor = CALIPER_NET_PROTOCOL_MINOR,
+                 uint16_t flags = 0);
+
 // ---- messages -------------------------------------------------------------------------
 
 struct Identity {   // a session identity: {"id", "script", "pid", "start_unix_ms"}

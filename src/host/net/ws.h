@@ -189,6 +189,12 @@ public:
     // connection is not open (or closing) or the queue limit would be passed.
     bool send(ConnId c, SharedBytes msg, bool binary = true);
     bool send(ConnId c, const void* data, size_t n, bool binary = true);
+    // Queues one binary message made of `prefix` followed by body[offset,
+    // offset + length), without copying the body: a forwarder sends a frame
+    // with its own head in front of a payload shared by many connections.
+    // With send_fragment_bytes set, the message is joined into one buffer and
+    // sent as above.
+    bool send(ConnId c, Bytes prefix, SharedBytes body, size_t offset, size_t length);
     bool ping(ConnId c, const std::string& payload = {});
     // Starts the close handshake with `code` (an upgraded connection), or ends
     // the HTTP exchange. Event::Closed follows once the peer answered, the
