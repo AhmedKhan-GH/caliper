@@ -10,6 +10,7 @@
 #include "ui/sternbild_theme.h"
 #include "ui/ui_recovery.h"
 #include "host/applet_loader.h"
+#include "host/host_cli.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
 #include "host/job_system.h"
@@ -27,14 +28,6 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <filesystem>
-#ifdef __APPLE__
-  #include <mach-o/dyld.h>
-#elif defined(_WIN32)
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-#endif
-
 enum class AppPage {
     Landing,
     Applet,
@@ -43,7 +36,9 @@ enum class AppPage {
 
 class CaliperApp {
 public:
-    CaliperApp() = default;
+    // `applet_dirs`: the --applets folders, searched first.
+    explicit CaliperApp(std::vector<std::string> applet_dirs)
+        : applet_dirs_(std::move(applet_dirs)) {}
 
     bool initialize() {
         if (!glfwInit()) {
@@ -135,44 +130,24 @@ public:
         // renderer is up so the first applet frame can vend textures.
         caliper_host::services_set_renderer(renderer_.get());
 
-        // Scan for applet shared libraries
-        std::string applets_dir = caliper::app_data_path("applets");
-        log_scan(applets_dir, loader_.scan(applets_dir));
-
-        // Also scan applets next to the executable (dev + prod)
-        {
-            namespace fs = std::filesystem;
-            std::string exe_dir;
-#ifdef __APPLE__
-            char path_buf[1024];
-            uint32_t path_size = sizeof(path_buf);
-            if (_NSGetExecutablePath(path_buf, &path_size) == 0)
-                exe_dir = fs::path(path_buf).parent_path().string();
-#elif defined(_WIN32)
-            char path_buf[MAX_PATH];
-            GetModuleFileNameA(nullptr, path_buf, MAX_PATH);
-            exe_dir = fs::path(path_buf).parent_path().string();
-#else
-            exe_dir = fs::read_symlink("/proc/self/exe", std::error_code{})
-                          .parent_path().string();
-#endif
-            if (!exe_dir.empty()) {
-                const std::string dir = (fs::path(exe_dir) / "applets").string();
-                log_scan(dir, loader_.scan(dir));
-            }
-        }
+        // Scan for applets in the search order: the development folders
+        // (--applets, then CALIPER_APPLET_PATH), the user applets folder,
+        // then the applets shipped next to the executable. Of several copies
+        // of one id the loader keeps the highest version that passes.
+        for (const std::string& dir : caliper_host::applet_search_dirs(
+                 applet_dirs_, std::getenv("CALIPER_APPLET_PATH"),
+                 caliper::user_applets_dir(), caliper::shipped_applets_dir()))
+            log_scan(dir, loader_.scan(dir));
 
         // Dev hook: CALIPER_AUTOLAUNCH=<manifest id> skips the landing page
         // and launches that applet immediately — reproduces a row launch for
         // headless debugging/CI and seeds the future `caliper dev` workflow.
         if (const char* want_id = std::getenv("CALIPER_AUTOLAUNCH")) {
-            for (int i = 0; i < loader_.count(); i++) {
-                if (loader_.at(i).manifest.id == want_id) {
-                    std::cerr << "[autolaunch] " << want_id << std::endl;
-                    landing_.log("autolaunch", want_id);
-                    launch_applet(i);
-                    break;
-                }
+            const int i = loader_.find(want_id);
+            if (i >= 0) {
+                std::cerr << "[autolaunch] " << want_id << std::endl;
+                landing_.log("autolaunch", want_id);
+                launch_applet(i);
             }
         }
 
@@ -810,6 +785,7 @@ private:
         return renderer_->init(window_);
     }
 
+    std::vector<std::string> applet_dirs_;   // --applets, in order
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
@@ -839,10 +815,22 @@ private:
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
 };
 
-int main() {
+int main(int argc, char** argv) {
+    // The command line is read before anything opens a window.
+    const caliper_host::CommandLine cl = caliper_host::parse_command_line(argc, argv);
+    if (!cl.error.empty()) {
+        std::fprintf(stderr, "caliper: %s\n%s", cl.error.c_str(),
+                     caliper_host::usage_text());
+        return 2;
+    }
+    if (cl.command == caliper_host::CommandLine::Command::Help) {
+        std::fputs(caliper_host::usage_text(), stdout);
+        return 0;
+    }
+
     std::cout << "=== Caliper ===" << std::endl;
 
-    CaliperApp app;
+    CaliperApp app(cl.applet_dirs);
     if (!app.initialize()) {
         std::cerr << "Initialization failed" << std::endl;
         return 1;

@@ -60,6 +60,10 @@ target_sources(caliper_tests PRIVATE test_ui_recovery.cpp)
 # Docking by role on the applet page (src/host/ui/dock_layout.h, header-only)
 # on a headless ImGui context.
 target_sources(caliper_tests PRIVATE test_dock_layout.cpp)
+# The applet search order, copies of one id, and the command line
+# (src/host/host_cli.h); the acceptance check for applets built outside the
+# core runs only when CALIPER_TEST_APPLET_DIR is set.
+target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)

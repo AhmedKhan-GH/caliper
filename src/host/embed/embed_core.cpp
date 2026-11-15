@@ -42,16 +42,12 @@
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log routing)
 
-#ifdef __APPLE__
-#  include <mach-o/dyld.h>
-#  include <filesystem>
-#elif defined(_WIN32)
+#include <cstdlib>
+#include <filesystem>
+#ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  define NOMINMAX
 #  include <windows.h>
-#  include <filesystem>
-#else
-#  include <filesystem>
 #endif
 
 using namespace caliper_host;
@@ -233,26 +229,18 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     // static values, valid independent of services_init.
     core->loader = std::make_unique<AppletLoader>(host_caps(),
                                                   caliper::app_data_path("data"));
-    core->loader->scan(caliper::app_data_path("applets"));
+    // The search order of the caliper executable, with the embedder's
+    // applets_dir in the place of its --applets folders: first, so it wins
+    // a tie between equal versions.
     {
-        namespace fs = std::filesystem;
-        std::string exe_dir;
-#ifdef __APPLE__
-        char buf[1024]; uint32_t sz = sizeof(buf);
-        if (_NSGetExecutablePath(buf, &sz) == 0)
-            exe_dir = fs::path(buf).parent_path().string();
-#elif defined(_WIN32)
-        char buf[MAX_PATH]; GetModuleFileNameA(nullptr, buf, MAX_PATH);
-        exe_dir = fs::path(buf).parent_path().string();
-#else
-        exe_dir = fs::read_symlink("/proc/self/exe", std::error_code{})
-                      .parent_path().string();
-#endif
-        if (!exe_dir.empty())
-            core->loader->scan((fs::path(exe_dir) / "applets").string());
+        std::vector<std::string> dev_dirs;
+        if (desc->applets_dir && desc->applets_dir[0])
+            dev_dirs.push_back(desc->applets_dir);
+        core->loader->scan(applet_search_dirs(dev_dirs,
+                                              std::getenv("CALIPER_APPLET_PATH"),
+                                              caliper::user_applets_dir(),
+                                              caliper::shipped_applets_dir()));
     }
-    if (desc->applets_dir && desc->applets_dir[0])
-        core->loader->scan(desc->applets_dir);
 
     // Route applet log.v1 lines to the embedder's log_fn (§3.3). Installed here,
     // AFTER every fallible create step, so no failure path can leave a sink
@@ -555,9 +543,7 @@ int caliper_core_load_applet(CaliperCore* core, const char* manifest_id) {
         core->fail("load_applet: attach a canvas before loading applets");
         return 0;
     }
-    int idx = -1;
-    for (int i = 0; i < core->loader->count(); ++i)
-        if (core->loader->at(i).manifest.id == manifest_id) { idx = i; break; }
+    const int idx = core->loader->find(manifest_id);
     if (idx < 0) {
         // An unknown id refuses WITHOUT disturbing a running applet — a typo
         // must not kill the live session. Only a resolvable target proceeds to

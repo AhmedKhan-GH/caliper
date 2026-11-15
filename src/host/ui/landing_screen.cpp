@@ -164,8 +164,9 @@ int status_rank(AppletStatus s) {
         case AppletStatus::Refused:     return 2;
         case AppletStatus::Failed:      return 3;
         case AppletStatus::Quarantined: return 4;
+        case AppletStatus::Shadowed:    return 5;
     }
-    return 5;
+    return 6;
 }
 
 const char* status_word(AppletStatus s) {
@@ -175,6 +176,7 @@ const char* status_word(AppletStatus s) {
         case AppletStatus::Refused:     return "REFUSED";
         case AppletStatus::Failed:      return "FAILED";
         case AppletStatus::Quarantined: return "QUARANTINED";
+        case AppletStatus::Shadowed:    return "SHADOWED";
     }
     return "UNKNOWN";
 }
@@ -1466,11 +1468,15 @@ void LandingScreen::draw_status_bar(const Context& ctx) {
     }
     if (ctx.loader) {
         int unavailable = 0;
+        // A shadowed copy is another copy of a listed applet, not an
+        // instrument of its own.
+        int n = 0;
         for (int i = 0; i < ctx.loader->count(); ++i) {
             const AppletStatus s = ctx.loader->at(i).status;
+            if (s == AppletStatus::Shadowed) continue;
+            n++;
             unavailable += (s != AppletStatus::Ready && s != AppletStatus::Active);
         }
-        const int n = ctx.loader->count();
         char text[64];
         std::snprintf(text, sizeof text,
                       n == 1 ? "%d instrument" : "%d instruments", n);

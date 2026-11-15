@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -114,10 +115,63 @@ bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema) {
     return true;
 }
 
+std::vector<std::string> split_applet_path(const std::string& value) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= value.size()) {
+        size_t end = value.find(kAppletPathSeparator, start);
+        if (end == std::string::npos) end = value.size();
+        if (end > start) out.push_back(value.substr(start, end - start));
+        start = end + 1;
+    }
+    return out;
+}
+
+std::vector<std::string> applet_search_dirs(
+    const std::vector<std::string>& command_line_dirs, const char* applet_path_env,
+    const std::string& user_dir, const std::string& shipped_dir) {
+    std::vector<std::string> wanted = command_line_dirs;
+    if (applet_path_env)
+        for (auto& d : split_applet_path(applet_path_env)) wanted.push_back(d);
+    wanted.push_back(user_dir);
+    wanted.push_back(shipped_dir);
+
+    std::vector<std::string> out;
+    std::vector<fs::path> seen;
+    for (const std::string& d : wanted) {
+        if (d.empty()) continue;
+        std::error_code ec;
+        fs::path p = fs::absolute(fs::path(d), ec);
+        if (ec) p = fs::path(d);
+        p = p.lexically_normal();
+        // "dir/" and "dir" are one folder; so are two spellings of a link.
+        if (p.has_relative_path() && p.filename().empty()) p = p.parent_path();
+        fs::path key = fs::weakly_canonical(p, ec);
+        if (ec) key = p;
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
+        seen.push_back(key);
+        out.push_back(p.string());
+    }
+    return out;
+}
+
+std::string shadowed_reason(const std::string& winner_version,
+                            const std::string& winner_folder) {
+    return "Version " + winner_version + " in " + winner_folder +
+           " is used instead.";
+}
+
 AppletLoader::AppletLoader(HostCaps caps, std::string data_root)
     : caps_(std::move(caps)), data_root_(std::move(data_root)) {}
 
+int AppletLoader::scan(const std::vector<std::string>& dirs) {
+    int added = 0;
+    for (const std::string& d : dirs) added += scan(d);
+    return added;
+}
+
 int AppletLoader::scan(const std::string& dir) {
+    const int rank = next_rank_++;
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return 0;
 
@@ -131,6 +185,8 @@ int AppletLoader::scan(const std::string& dir) {
             continue;
 
         AppletEntry entry;
+        entry.folder = e.path().parent_path().string();
+        entry.search_rank = rank;
         auto parsed = parse_manifest_file(e.path().string());
         if (!parsed.ok) {
             entry.manifest.name = fname;
@@ -172,9 +228,15 @@ int AppletLoader::scan(const std::string& dir) {
         entries_.push_back(std::move(entry));
         added++;
     }
+    resolve_duplicates();
+    // By name; copies of one applet newest first, then in search order.
     std::sort(entries_.begin(), entries_.end(),
               [](const AppletEntry& a, const AppletEntry& b) {
-                  return a.manifest.name < b.manifest.name;
+                  if (a.manifest.name != b.manifest.name)
+                      return a.manifest.name < b.manifest.name;
+                  if (int c = semver_cmp(a.manifest.version, b.manifest.version))
+                      return c > 0;
+                  return a.search_rank < b.search_rank;
               });
     // Rescanning reallocates host_blocks_, which active applets hold pointers
     // into — scan() must only run before any launch (true for both the app
@@ -183,12 +245,51 @@ int AppletLoader::scan(const std::string& dir) {
     return added;
 }
 
-bool AppletLoader::launch(int idx, CaliperHost host_proto) {
-    if (idx < 0 || idx >= count()) return false;
-    AppletEntry& a = entries_[idx];
-    if (a.status == AppletStatus::Active) teardown(idx);
-    if (a.status != AppletStatus::Ready) return false;
+// Recomputed from scratch after every scan: a Shadowed copy passed every
+// check, so it is a candidate again until the comparison says otherwise.
+void AppletLoader::resolve_duplicates() {
+    for (auto& a : entries_)
+        if (a.status == AppletStatus::Shadowed) {
+            a.status = AppletStatus::Ready;
+            a.status_text.clear();
+        }
+    // The chosen copy of each id: the highest version among the Ready
+    // copies; among equal versions the one found first (then, within one
+    // folder, the first library path, so the choice never depends on the
+    // order the folder lists its files in).
+    auto better = [](const AppletEntry& a, const AppletEntry& b) {
+        if (int c = semver_cmp(a.manifest.version, b.manifest.version)) return c > 0;
+        if (a.search_rank != b.search_rank) return a.search_rank < b.search_rank;
+        return a.dylib_path < b.dylib_path;
+    };
+    std::map<std::string, const AppletEntry*> chosen;
+    for (const auto& a : entries_) {
+        if (a.status != AppletStatus::Ready) continue;
+        auto [it, inserted] = chosen.emplace(a.manifest.id, &a);
+        if (!inserted && better(a, *it->second)) it->second = &a;
+    }
+    for (auto& a : entries_) {
+        if (a.status != AppletStatus::Ready) continue;
+        const AppletEntry* best = chosen[a.manifest.id];
+        if (best == &a) continue;
+        a.status = AppletStatus::Shadowed;
+        a.status_text = shadowed_reason(best->manifest.version, best->folder);
+    }
+}
 
+int AppletLoader::find(const std::string& id) const {
+    int fallback = -1;
+    for (int i = 0; i < count(); i++) {
+        const AppletEntry& a = entries_[i];
+        if (a.manifest.id != id) continue;
+        if (a.status == AppletStatus::Ready || a.status == AppletStatus::Active)
+            return i;
+        if (fallback < 0 && a.status != AppletStatus::Shadowed) fallback = i;
+    }
+    return fallback;
+}
+
+bool AppletLoader::open_and_check(AppletEntry& a) {
     auto fail = [&](std::string why) {
         a.status = AppletStatus::Failed;
         a.status_text = std::move(why);
@@ -244,6 +345,22 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
                 a.status_text = missing_service_reason(*s);
                 return false;
             }
+    return true;
+}
+
+bool AppletLoader::launch(int idx, CaliperHost host_proto) {
+    if (idx < 0 || idx >= count()) return false;
+    AppletEntry& a = entries_[idx];
+    if (a.status == AppletStatus::Active) teardown(idx);
+    if (a.status != AppletStatus::Ready) return false;
+    if (!open_and_check(a)) return false;
+    const auto* d = a.desc;
+
+    auto fail = [&](std::string why) {
+        a.status = AppletStatus::Failed;
+        a.status_text = std::move(why);
+        return false;
+    };
 
     std::error_code ec;
     fs::create_directories(a.data_dir, ec);
@@ -286,6 +403,34 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     a.instance = instance;
     a.status = AppletStatus::Active;
     a.status_text.clear();
+    return true;
+}
+
+bool AppletLoader::probe(int idx) {
+    if (idx < 0 || idx >= count()) return false;
+    AppletEntry& a = entries_[idx];
+    if (a.status != AppletStatus::Ready && a.status != AppletStatus::Shadowed)
+        return false;
+    if (!open_and_check(a)) return false;
+    const auto* d = a.desc;
+    a.jobs = std::make_shared<JobOwner>();
+    JobOwnerScope jobs_scope(a.jobs);
+    void* instance = nullptr;
+    auto cr = guarded_call([&] { instance = d->api.create(); });
+    if (!cr.ok) {
+        quarantine(a, "crashed in create(): " + cr.fault, cr.kind, nullptr, false);
+        return false;
+    }
+    if (!instance) {
+        a.status = AppletStatus::Failed;
+        a.status_text = "create() returned null";
+        return false;
+    }
+    auto de = guarded_call([&] { d->api.destroy(instance); });
+    if (!de.ok) {
+        quarantine(a, "crashed during teardown: " + de.fault, de.kind, nullptr, false);
+        return false;
+    }
     return true;
 }
 

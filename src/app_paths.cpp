@@ -8,6 +8,9 @@
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
 #  include <shlobj.h>
+#elif defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#  include <cstdint>
 #endif
 
 namespace fs = std::filesystem;
@@ -73,6 +76,33 @@ const std::string& app_data_dir() {
 
 std::string app_data_path(const std::string& filename) {
     return (fs::path(app_data_dir()) / filename).string();
+}
+
+std::string executable_dir() {
+#ifdef __APPLE__
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) return {};
+    return fs::path(buf).parent_path().string();
+#elif defined(_WIN32)
+    char buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    return fs::path(buf).parent_path().string();
+#else
+    std::error_code ec;
+    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+    return ec ? std::string() : exe.parent_path().string();
+#endif
+}
+
+std::string shipped_applets_dir() {
+    const std::string dir = executable_dir();
+    return dir.empty() ? std::string() : (fs::path(dir) / "applets").string();
+}
+
+std::string user_applets_dir() {
+    return app_data_path("applets");
 }
 
 } // namespace caliper

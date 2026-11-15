@@ -32,4 +32,14 @@ std::string app_data_path(const std::string& filename);
 // the stores open; not intended for concurrent mutation.
 void set_app_data_dir_override(const std::string& dir);
 
+// The folder that holds the running executable, "" when the OS cannot say.
+std::string executable_dir();
+
+// The folder that holds the applets shipped with the app: applets/ beside
+// the executable; "" when the executable's folder is unknown.
+std::string shipped_applets_dir();
+
+// The user applets folder: applets/ under the app-data folder.
+std::string user_applets_dir();
+
 } // namespace caliper
