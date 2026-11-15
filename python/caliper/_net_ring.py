@@ -47,6 +47,17 @@ SERIES_IDLE_FLUSH_S = 1.0      # chunk cadence of a series nobody watches
 SERIES_CAPACITY = 4096         # values kept of one huge tensor call (as caliper.series)
 
 
+_TORCH = None
+
+
+def _torch():
+    global _TORCH
+    if _TORCH is None:
+        import torch
+        _TORCH = torch
+    return _TORCH
+
+
 def canonical(dv: dict) -> str:
     return json.dumps(dv, sort_keys=True, separators=(",", ":"))
 
@@ -345,8 +356,11 @@ class NetRing:
             if s.watched:
                 self._wake()
             return s.watched
-        import torch
-        if cls is float or cls is int or cls is bool:
+        torch = _torch()
+        if cls is torch.Tensor and value.ndim == 0:   # the common case: loss.detach()
+            t = value.detach()
+            n = 1
+        elif cls is float or cls is int or cls is bool:
             t = float(value)
             n = 1
         else:
@@ -358,9 +372,10 @@ class NetRing:
             if n > SERIES_CAPACITY:
                 t = t.reshape(-1)[-SERIES_CAPACITY:]
                 n = SERIES_CAPACITY
+        if not s.refs:
+            s.thread = threading.get_ident()
         s.refs.append(t)
         s.nref += n
-        s.thread = threading.get_ident()
         now = time.perf_counter()
         cadence = SERIES_WATCHED_S if s.watched else SERIES_IDLE_FLUSH_S
         if s.nref >= SERIES_CHUNK or now - s.flush_t >= cadence:
