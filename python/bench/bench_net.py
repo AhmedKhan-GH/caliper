@@ -3,7 +3,7 @@ against a commit-matched control, per-call cost, snapshots and bytes per second
 on the socket, and step-to-receipt latency at a viewer in a second process.
 
     PYTHONPATH=python CALIPER_SESSION=0 .venv/bin/python python/bench/bench_net.py \\
-        --transport serve|standin [--host-copy nonblocking|direct|event-locked|event] \\
+        --transport serve|standin [--host-copy nonblocking,direct,event-locked,event] \\
         [--device mps|cpu] [--size 1024] [--points 10000,100000] [--viewers 3] \\
         [--arms ...] [--repeat 3] [--seconds 8] [--warmup 1] [--quick]
 
@@ -38,7 +38,9 @@ receipt time minus the stamp the producer put in the snapshot at the view call
 (StandinStream), not the product's: for each view call at up to 60 Hz it
 reduces the tensor on the device, queues it, and a background thread moves it
 to the host and sends it. --host-copy picks how the reduced snapshot reaches the
-host without the training thread waiting for it:
+host without the training thread waiting for it; with several, comma-separated,
+every arm with a viewer runs once per method, the methods side by side in each
+repeat (arm names "<arm>/<method>"):
   event         (a) the training thread queues a device copy and records a
                 torch.mps.Event; the background thread polls the event, then .cpu().
                 With torch 2.14.1 this aborts the process within seconds (a Metal
@@ -105,7 +107,7 @@ def open_stream(args):
                              "measures the stand-in transport")
         server = caliper.serve(port=0)
         return server, Calls(caliper.show, caliper.series, caliper.points), "wire"
-    s = StandinStream(args.device, args.host_copy, args.rate, args.max_extent, args.max_points)
+    s = StandinStream(args.device, args.host_copies[0], args.rate, args.max_extent, args.max_points)
     return s, Calls(s.show, s.series, s.points), "standin"
 
 
@@ -268,6 +270,15 @@ class StandinStream:
         self.url = f"http://127.0.0.1:{self.port}/?token={self.token}"
         self._worker = threading.Thread(target=self._work, name="standin-host", daemon=True)
         self._worker.start()
+
+    def set_host_copy(self, host_copy):
+        """Switch how snapshots reach the host, once the earlier ones are sent."""
+        t_end = time.monotonic() + 10.0
+        while (self._pending or self._retiring or any(self._fifo.values())) \
+                and time.monotonic() < t_end:
+            time.sleep(0.005)
+        self.host_copy = host_copy if self.device.type == "mps" else "cpu"
+        self.torch_lock = threading.Lock() if self.host_copy == "event-locked" else None
 
     # -- the view calls (training thread) ---------------------------------
     def _due(self, name):
@@ -585,7 +596,10 @@ class StandinStream:
 # ---------------------------------------------------------------------------
 # viewers (net_client.py processes)
 # ---------------------------------------------------------------------------
-def launch_viewers(url, views, codec, k, tmp, tag, timeout=30.0):
+def launch_viewers(url, views, codec, k, tmp, tag, keep_busy, timeout=30.0):
+    """Start k viewers and return once every one has subscribed. keep_busy()
+    runs meanwhile: a v3 view exists only once the script has called it, so
+    the script keeps training and calling its views while viewers subscribe."""
     procs = []
     for i in range(k):
         out = os.path.join(tmp, f"{tag}-v{i}.json")
@@ -595,17 +609,18 @@ def launch_viewers(url, views, codec, k, tmp, tag, timeout=30.0):
                              text=True)
         err.close()
         procs.append((p, out))
+    waiting = {p.stdout: (p, out) for p, out in procs}
     t_end = time.monotonic() + timeout
-    for p, out in procs:
-        line = ""
-        while "READY" not in line:
-            left = t_end - time.monotonic()
-            if left <= 0 or p.poll() is not None:
+    while waiting:
+        for f in select.select(list(waiting), [], [], 0)[0]:
+            if "READY" in f.readline():
+                del waiting[f]
+        for p, out in waiting.values():
+            if time.monotonic() > t_end or p.poll() is not None:
                 stop_viewers(procs)
                 raise RuntimeError(f"viewer did not subscribe: {open(out + '.stderr').read()[-2000:]}")
-            r, _, _ = select.select([p.stdout], [], [], left)
-            if r:
-                line = p.stdout.readline()
+        if waiting:
+            keep_busy()
     return procs
 
 
@@ -702,7 +717,8 @@ class Tee:
 # arms
 # ---------------------------------------------------------------------------
 def arm_plan(args):
-    """[(arm, views, viewers)]; views name what the arm calls every step."""
+    """[(arm, views, viewers, host copy)]; views name what the arm calls every
+    step; host copy is the stand-in's method for the arm (None for serve)."""
     pts = [f"emb{n // 1000}k" for n in args.points]
     every = ["W", "loss"] + pts
     plan = [("baseline", [], 0)]
@@ -716,10 +732,17 @@ def arm_plan(args):
     if args.arms:
         want = args.arms.split(",")
         plan = [a for a in plan if any(a[0] == w or a[0].startswith(w + "-") for w in want)]
-    return plan
+    hcs = args.host_copies if args.transport == "standin" else [None]
+    out = []
+    for name, vs, n in plan:
+        if n == 0 or len(hcs) == 1:
+            out.append((name, vs, n, hcs[0]))
+        else:
+            out += [(f"{name}/{h}", vs, n, h) for h in hcs]
+    return out
 
 
-def make_hook(arm, views, wl, calls, rate, costs, stamps):
+def make_hook(arm, views, wl, calls, rate, costs):
     """The per-step view calls of an arm, each timed singly."""
     pc = time.perf_counter_ns
     fns = []
@@ -755,19 +778,23 @@ def make_hook(arm, views, wl, calls, rate, costs, stamps):
     return hook
 
 
-def run_arm(args, wl, server, calls, codec, arm, views, viewers, rep, tmp, pooled):
-    tag = f"{arm}-r{rep}"
+def run_arm(args, wl, server, calls, codec, arm, views, viewers, hc, rep, tmp, pooled):
+    tag = f"{arm.replace('/', '-')}-r{rep}"
+    standin = isinstance(server, StandinStream)
+    if standin:
+        server.set_host_copy(hc)
+    lock = server.torch_lock if standin else None
+    warm = make_hook(arm, views, wl, calls, args.rate, {})
     procs = []
     if viewers:
-        procs = launch_viewers(stream_url(server), views, codec, viewers, tmp, tag)
-    standin = isinstance(server, StandinStream)
-    lock = server.torch_lock if standin else None
+        procs = launch_viewers(stream_url(server), views, codec, viewers, tmp, tag,
+                               lambda: train(wl, 0.02, warm, lock=lock))
     try:
-        train(wl, args.warmup, make_hook(arm, views, wl, calls, args.rate, {}, None), lock=lock)
+        train(wl, args.warmup, warm, lock=lock)
         if standin:
             server.reset_stats()
         costs, marks = {}, []
-        hook = make_hook(arm, views, wl, calls, args.rate, costs, None)
+        hook = make_hook(arm, views, wl, calls, args.rate, costs)
         load0 = os.getloadavg()[0]
         t0 = time.monotonic_ns()
         steps, el = train(wl, args.seconds, hook, marks, lock)
@@ -777,7 +804,8 @@ def run_arm(args, wl, server, calls, codec, arm, views, viewers, rep, tmp, poole
             time.sleep(0.3)          # frames in flight reach the viewers
     finally:
         recs = stop_viewers(procs) if procs else []
-    row = {"arm": arm, "rep": rep, "views": views, "viewers": viewers, "steps": steps,
+    row = {"arm": arm, "rep": rep, "host_copy": hc, "views": views, "viewers": viewers,
+           "steps": steps,
            "seconds": round(el, 3), "steps_per_s": round(steps / el, 1),
            "load": [round(load0, 2), round(load1, 2)]}
     pool = pooled.setdefault(arm, {"calls": {}, "lat": [], "steps": [], "ov": [], "free": [],
@@ -857,7 +885,7 @@ def report(out, args, plan, rows, pooled):
     out("| arm | viewers | steps/s | % of control | % of baseline | snapshots taken/s | received/s "
         "| MB/s on the socket | latency ms median / p95 [n] | step µs p50 / p99 / max |")
     out("|---|---|---|---|---|---|---|---|---|---|")
-    for arm, views, viewers in plan:
+    for arm, views, viewers, hc in plan:
         rs = [by[rep][arm] for rep in reps if arm in by[rep]]
         if not rs:
             continue
@@ -881,7 +909,7 @@ def report(out, args, plan, rows, pooled):
         "subscribed in the noviewer arm):")
     out("| arm | view | calls | took a snapshot: median / p99 [n] | skipped: median / p99 [n] |")
     out("|---|---|---|---|---|")
-    for arm, views, viewers in plan:
+    for arm, views, viewers, hc in plan:
         for v, (skip, snap) in pooled.get(arm, {}).get("calls", {}).items():
             sn = f"{q(snap, 0.5) / 1e3:.1f} / {q(snap, 0.99) / 1e3:.1f} [{len(snap)}]" if snap else "-"
             sk = f"{q(skip, 0.5) / 1e3:.2f} / {q(skip, 0.99) / 1e3:.2f} [{len(skip)}]" if skip else "-"
@@ -894,7 +922,7 @@ def report(out, args, plan, rows, pooled):
         out("| arm | .cpu() calls/s | .cpu() ms median / p99 | steps overlapping a .cpu(): µs "
             "median / p99 [n] | other steps: µs median / p99 [n] | published/s | superseded/s |")
         out("|---|---|---|---|---|---|---|")
-        for arm, views, viewers in plan:
+        for arm, views, viewers, hc in plan:
             rs = [by[rep][arm] for rep in reps if arm in by[rep]]
             if not rs or not viewers:
                 continue
@@ -913,9 +941,9 @@ def report(out, args, plan, rows, pooled):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--transport", choices=("serve", "standin"), default="serve")
-    ap.add_argument("--host-copy", choices=("nonblocking", "direct", "event-locked", "event"),
-                    default="nonblocking",
-                    help="stand-in only: how a reduced snapshot reaches the host")
+    ap.add_argument("--host-copy", default="nonblocking",
+                    help="stand-in only: how a reduced snapshot reaches the host, one or more "
+                    "of nonblocking, direct, event-locked and event, comma-separated")
     ap.add_argument("--device", choices=("mps", "cpu"), default="mps")
     ap.add_argument("--size", type=int, default=1024, help="heatmap W is size x size")
     ap.add_argument("--points", default="10000,100000", help="point counts of the points views")
@@ -943,11 +971,16 @@ def main() -> int:
     if args.device == "mps" and not torch.backends.mps.is_available():
         print("no MPS device", file=sys.stderr)
         return 2
-    args.host_copy_label = args.host_copy if args.device == "mps" else "cpu"
+    args.host_copies = [h for h in args.host_copy.split(",") if h] if args.device == "mps" else ["cpu"]
+    bad = set(args.host_copies) - {"nonblocking", "direct", "event-locked", "event", "cpu"}
+    if bad or not args.host_copies:
+        ap.error(f"--host-copy: unknown method {', '.join(sorted(bad))}")
+    args.host_copy_label = ",".join(args.host_copies)
+    label = args.host_copies[0] if len(args.host_copies) == 1 else "hostcopy"
     name = f"N-{args.transport}-{args.device}-{args.size}"
     if args.transport == "standin":
-        name = f"N-standin-{args.host_copy_label}-{args.size}" if args.device == "cpu" else \
-            f"N-standin-{args.host_copy_label}-{args.device}-{args.size}"
+        name = f"N-standin-{label}-{args.size}" if args.device == "cpu" else \
+            f"N-standin-{label}-{args.device}-{args.size}"
     os.makedirs(args.results, exist_ok=True)
     out = Tee(os.path.join(args.results, f"{name}{args.tag}.txt"))
     tmp = args.tmp or tempfile.mkdtemp(prefix="caliper-bench-net-")
@@ -961,7 +994,7 @@ def main() -> int:
     out(f"torch {torch.__version__}, W {args.size}x{args.size} f32 updated in place every step, "
         f"points {'/'.join(str(n) for n in args.points)} x {args.points_dim} f32 with 4-class labels, "
         f"series of the loss; snapshot rate {args.rate:g} Hz; {args.seconds:g} s per arm after "
-        f"{args.warmup:g} s warm-up; arms {', '.join(a for a, _, _ in plan)}; load average "
+        f"{args.warmup:g} s warm-up; arms {', '.join(a[0] for a in plan)}; load average "
         f"{' '.join(f'{x:.1f}' for x in os.getloadavg())} ({os.cpu_count()} cores)")
     if args.transport == "standin":
         out("STAND-IN transport written in bench_net.py (a measuring stick, not the product's "
@@ -974,8 +1007,9 @@ def main() -> int:
     try:
         train(wl, max(args.warmup, 1.0), lock=getattr(server, "torch_lock", None))
         for rep in range(1, args.repeat + 1):
-            for arm, views, viewers in plan:
-                r = run_arm(args, wl, server, calls, codec, arm, views, viewers, rep, tmp, pooled)
+            for arm, views, viewers, hc in plan:
+                r = run_arm(args, wl, server, calls, codec, arm, views, viewers, hc, rep, tmp,
+                            pooled)
                 rows.append(r)
                 out("RESULT " + json.dumps(r))
     finally:

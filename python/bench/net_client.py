@@ -3,31 +3,32 @@ snapshot stream, subscribes to named views, decodes every frame and records
 when it arrived and how many bytes it carried. It never opens a window.
 
     .venv/bin/python python/bench/net_client.py --url ws://127.0.0.1:PORT/v3/stream?token=T \\
-        --views W,loss [--codec standin|wire] [--out FILE] [--seconds 600]
+        --views W,loss [--codec wire|standin] [--out FILE] [--seconds 600] [--wire-py FILE]
 
-It prints READY on stdout once it has subscribed. On SIGTERM, SIGINT, the end
-of the stream or after --seconds it writes its records as JSON to --out (or
-stdout) and exits:
+It prints READY on stdout once every view is subscribed. On SIGTERM, SIGINT,
+the end of the stream or after --seconds it writes its records as JSON to --out
+(or stdout) and exits:
 
     {"views": [...], "recv_ns": [...], "view": [...], "type": [...], "nbytes": [...],
      "stamp_ns": [...], "seq": [...], "decode_ns": [...], "errors": n, ...}
 
-One entry per message received. recv_ns is time.monotonic_ns() right after
-the frame arrived (mach_absolute_time on macOS, the clock bench_net.py stamps
-calls with), stamp_ns the producer's stamp carried in the message (-1 when the
-message has none), view an index into "views" (-1 for messages without a view).
+One entry per message received after READY. recv_ns is time.monotonic_ns()
+right after the frame arrived (mach_absolute_time on macOS, the clock of the
+producer's stamp_ns), stamp_ns the producer's stamp carried in the message (-1
+when it has none), view an index into "views" (-1 for messages without a view).
 
-The stand-in codec below is the stand-in transport's framing, written to the
-facts fixed for wire protocol v3 (one binary frame: a little-endian header,
-UTF-8 JSON metadata, payload sections aligned to 8 bytes) but with its own
-magic. It is not the v3 codec. The two adapter functions at the top of this
-file are the only places that know the sprint's codec (caliper._wire) and its
-handshake.
+--codec wire speaks wire protocol v3 through caliper._wire (or, with --wire-py,
+a copy of that module loaded from a file). --codec standin speaks the framing
+of bench_net.py's stand-in transport, defined below: the same shape as v3 (a
+little-endian header, UTF-8 JSON metadata, payload sections aligned to 8 bytes)
+with its own magic and a two-message handshake. The two adapter functions at
+the top of this file are the only code that knows either protocol's messages.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import os
 import signal
@@ -38,45 +39,76 @@ from typing import NamedTuple
 
 
 class Msg(NamedTuple):
-    type: str
-    meta: dict
-    sections: list      # memoryviews into the frame
+    type: str           # "snapshot", "series", "views", "view_reply", "ping", ...
+    meta: dict          # the message's fields, without its payload sections
+    sections: list      # payload sections (memoryviews, or caliper._wire Sections)
 
 
 # ---------------------------------------------------------------------------
-# adapters: the only code that knows the sprint's wire codec (caliper._wire)
-# and its handshake. Fit these two functions when the codec is committed.
+# adapters: the only code that knows the protocols' messages
 # ---------------------------------------------------------------------------
-def wire_codec(name: str):
-    """(encode(meta, sections=()) -> bytes, decode(frame) -> Msg) for a codec name:
-    "standin" (the stand-in transport of bench_net.py) or "wire" (caliper._wire)."""
+def wire_codec(name: str, wire_py: str | None = None):
+    """(encode(meta) -> bytes, decode(frame) -> Msg). encode takes {"type": t,
+    **fields} for t in hello, subscribe and pong."""
     if name == "standin":
         return standin_encode, standin_decode
-    from caliper import _wire                  # assumed API: decode(buf) -> (meta, sections)
-
-    def decode(buf):
-        meta, sections = _wire.decode(buf)
-        return Msg(meta.get("type", ""), meta, list(sections))
+    if wire_py:
+        spec = importlib.util.spec_from_file_location("caliper_wire_copy", wire_py)
+        W = sys.modules["caliper_wire_copy"] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(W)
+    else:
+        from caliper import _wire as W
+    out = {"hello": W.Hello, "subscribe": W.Subscribe, "pong": W.Pong}
 
     def encode(meta, sections=()):
-        return _wire.encode(meta, sections)
+        meta = dict(meta)
+        return W.encode(out[meta.pop("type")](**meta))
+
+    def decode(buf):
+        m = W.decode(buf)
+        t = m.TYPE.name.lower() if hasattr(m, "TYPE") else "unknown"
+        fields = vars(m)
+        return Msg(t, {k: v for k, v in fields.items() if not isinstance(v, W.Section)},
+                   [v for v in fields.values() if isinstance(v, W.Section)])
     return encode, decode
 
 
-async def handshake(ws, codec, views) -> dict:
-    """hello -> welcome, then one subscribe per view (the empty data view, which
-    is the view's default). Returns the welcome metadata."""
+async def handshake(ws, codec_name, codec, views) -> dict:
+    """Subscribe to every view with its default data view. v3: HELLO, WELCOME,
+    then SUBSCRIBE each view once VIEWS lists it, until VIEW_REPLY confirms all.
+    Stand-in: hello, welcome, one subscribe per view. Returns the welcome."""
     encode, decode = codec
-    await ws.send(encode({"type": "hello", "role": "viewer", "client": "bench_net"}))
-    while True:
+    await ws.send(encode({"type": "hello", "role": "viewer",
+                          "software": {"name": "bench_net", "version": "1"}}))
+    want = {v: i + 1 for i, v in enumerate(views)}         # view -> sub and request_id
+    asked, done, welcome = set(), set(), None
+    while len(done) < len(want):
         msg = decode(await ws.recv())
         if msg.type == "welcome":
-            break
-        if msg.type == "error":
-            raise RuntimeError(f"stream refused the hello: {msg.meta}")
-    for v in views:
-        await ws.send(encode({"type": "subscribe", "view": v, "data_view": {}}))
-    return msg.meta
+            welcome = msg.meta
+            if codec_name == "standin":
+                for v in views:
+                    await ws.send(encode({"type": "subscribe", "view": v}))
+                done = set(want)
+        elif msg.type == "views":
+            listed = {e["name"] for e in msg.meta["views"]}
+            for v, i in want.items():
+                if v in listed and v not in asked:
+                    asked.add(v)
+                    await ws.send(encode({"type": "subscribe", "sub": i, "view": v, "request_id": i}))
+        elif msg.type == "view_reply":
+            err = msg.meta.get("error")
+            if err is None:
+                done.add(msg.meta["view"])
+            elif err.get("code") in ("unknown_view", "not_attached"):
+                asked.discard(msg.meta["view"])            # ask again when VIEWS lists it
+            else:
+                raise RuntimeError(f"subscribe {msg.meta['view']!r} refused: {err}")
+        elif msg.type == "ping":
+            await ws.send(encode({"type": "pong", "nonce": msg.meta["nonce"]}))
+        elif msg.type in ("error", "bye"):
+            raise RuntimeError(f"stream refused the viewer: {msg.meta}")
+    return welcome
 
 
 # ---------------------------------------------------------------------------
@@ -125,51 +157,42 @@ def standin_decode(buf) -> Msg:
 # ---------------------------------------------------------------------------
 # decoding payloads (what a viewer does before drawing)
 # ---------------------------------------------------------------------------
-_DTYPES = {"f32": "<f4", "f16": "<f2", "u8": "u1", "i32": "<i4", "u32": "<u4"}
-
-
 def payload_arrays(msg: Msg):
-    """The message's sections as numpy arrays, checked against its metadata."""
+    """The message's payload sections as numpy arrays (views, no copy)."""
     import numpy as np
+    if msg.sections and hasattr(msg.sections[0], "array"):    # caliper._wire Sections
+        return [s.array() for s in msg.sections]
     meta = msg.meta
+    out = [np.frombuffer(s, dtype="<f4") for s in msg.sections]
     if msg.type == "series":
-        vals = np.frombuffer(msg.sections[0], dtype="<f4")
-        if "n" in meta and len(vals) != meta["n"]:
-            raise ValueError(f"series: {len(vals)} values, metadata says {meta['n']}")
-        return [vals]
-    dt = np.dtype(_DTYPES.get(meta.get("dtype", "f32"), "<f4"))
-    shape = tuple(meta.get("shape", ()))
-    out = []
-    for i, s in enumerate(msg.sections):
-        a = np.frombuffer(s, dtype=dt if i == 0 else "<f4")
-        if i == 0 and shape:
-            a = a.reshape(shape)
-        out.append(a)
+        if len(out[0]) != meta["n"]:
+            raise ValueError(f"series: {len(out[0])} values, metadata says {meta['n']}")
+    elif out and meta.get("shape"):
+        out[0] = out[0].reshape(meta["shape"])
     return out
 
 
 # ---------------------------------------------------------------------------
 # the client
 # ---------------------------------------------------------------------------
-STAMP_KEYS = ("t_ns", "stamp_ns")
-
-
-async def run(url: str, views: list, codec_name: str, seconds: float) -> dict:
+async def run(url: str, views: list, codec_name: str, seconds: float, wire_py=None) -> dict:
     from websockets.asyncio.client import connect
     from websockets.exceptions import ConnectionClosed
-    codec = wire_codec(codec_name)
-    _, decode = codec
+    codec = wire_codec(codec_name, wire_py)
+    encode, decode = codec
     vidx = {v: i for i, v in enumerate(views)}
     rec = {k: [] for k in ("recv_ns", "view", "type", "nbytes", "stamp_ns", "seq", "decode_ns")}
-    res = {"views": views, "codec": codec_name, "errors": 0, "first_error": None, "closed": None}
+    res = {"views": views, "codec": codec_name, "errors": 0, "first_error": None, "closed": None,
+           "pings": 0}
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     mono = time.monotonic_ns
-    # compression=None: the producer must not deflate megabyte float frames
+    # compression=None: v3 servers decline permessage-deflate, and the stand-in must not deflate
     async with connect(url, compression=None, max_size=None, ping_interval=None) as ws:
-        res["welcome"] = await handshake(ws, codec, views)
+        res["welcome"] = {k: v for k, v in (await handshake(ws, codec_name, codec, views)).items()
+                          if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
         print("READY", flush=True)
 
         async def reader():
@@ -179,18 +202,21 @@ async def run(url: str, views: list, codec_name: str, seconds: float) -> dict:
                     t = mono()
                     try:
                         msg = decode(frame)
-                        payload_arrays(msg) if msg.type in ("snapshot", "series") else None
+                        if msg.type in ("snapshot", "series"):
+                            payload_arrays(msg)
+                        elif msg.type == "ping":
+                            res["pings"] += 1
+                            await ws.send(encode({"type": "pong", "nonce": msg.meta["nonce"]}))
                     except Exception as e:      # count and keep reading
                         res["errors"] += 1
                         res["first_error"] = res["first_error"] or repr(e)
                         continue
                     meta = msg.meta
-                    stamp = next((meta[k] for k in STAMP_KEYS if k in meta), -1)
                     rec["recv_ns"].append(t)
                     rec["view"].append(vidx.get(meta.get("view"), -1))
                     rec["type"].append(msg.type)
                     rec["nbytes"].append(len(frame))
-                    rec["stamp_ns"].append(int(stamp))
+                    rec["stamp_ns"].append(int(meta.get("stamp_ns", meta.get("t_ns", -1))))
                     rec["seq"].append(int(meta.get("seq", meta.get("start", -1))))
                     rec["decode_ns"].append(mono() - t)
             except ConnectionClosed as e:
@@ -212,12 +238,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--url", required=True, help="ws://127.0.0.1:PORT/v3/stream?token=T")
     ap.add_argument("--views", required=True, help="comma-separated view names to subscribe to")
-    ap.add_argument("--codec", choices=("standin", "wire"), default="wire")
+    ap.add_argument("--codec", choices=("wire", "standin"), default="wire")
+    ap.add_argument("--wire-py", help="load the v3 codec from this copy of caliper/_wire.py")
     ap.add_argument("--out", help="write the JSON records here (default: stdout)")
     ap.add_argument("--seconds", type=float, default=600.0, help="exit after this long at most")
     args = ap.parse_args()
     views = [v for v in args.views.split(",") if v]
-    res = asyncio.run(run(args.url, views, args.codec, args.seconds))
+    res = asyncio.run(run(args.url, views, args.codec, args.seconds, args.wire_py))
     text = json.dumps(res, separators=(",", ":"))
     if args.out:
         tmp = args.out + ".part"
