@@ -28,7 +28,7 @@ Inside it:
 
 ## Host variables
 
-The `caliper` executable reads these. The first five are development hooks for screenshots, headless checks and clean-exit runs.
+The `caliper` executable reads these. The first six are development hooks for screenshots, recordings, headless checks and clean-exit runs.
 
 | Variable | What it does | Read in |
 |---|---|---|
@@ -37,6 +37,8 @@ The `caliper` executable reads these. The first five are development hooks for s
 | `CALIPER_EXIT_AFTER=<seconds>` | Closes the window normally after that many seconds, so the full teardown path runs. | `src/main.cpp` |
 | `CALIPER_HOME_AFTER=<seconds>` | Returns to the landing screen once, that many seconds after an applet page or live page opened. | `src/main.cpp` |
 | `CALIPER_WINDOW_SIZE=<W>x<H>` | Sets the window size in screen coordinates, for example `1440x900`. A malformed value is ignored and the default of 95% of the work area stands. | `src/main.cpp` |
+| `CALIPER_CHROMELESS=1` | Hides the page bar and the status bar on the applet page, so the applet's windows fill the whole window, for recordings. Esc still returns to the landing screen, and the landing screen and the live page keep their bars. Any other value leaves the bars. | `src/main.cpp` |
+| `CALIPER_APPLET_PATH` | Folders to search for applets before the user applets folder and the shipped applets, separated by `:` (`;` on Windows), searched in the order given and after any `--applets` folders. The embed core reads it too, after its `applets_dir`. | `src/main.cpp`, `src/host/embed/embed_core.cpp` |
 | `CALIPER_FONTS_DIR` | A folder that holds the UI fonts. It is searched before `assets/fonts` next to the executable and the source tree. | `src/host/ui/sternbild_fonts.cpp` |
 | `CALIPER_DISPLAY_FONT` | The path of the display font file, in place of `fonts/SternbildDisplay-Regular.otf` in the app-data folder. | `src/host/ui/sternbild_fonts.cpp` |
 | `CALIPER_DATA_DIR` | The folder used for live session files, in place of the app-data folder. The viewer sets it from its `--data-dir` flag. | `src/host/live/live_shm.h`, `src/host/live/viewer_main.mm` |
@@ -73,6 +75,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 |---|---|---|
 | `CALIPER_REQUIRE_GPU=1` | A skip for want of a GPU becomes a failure. | `tests/gpu_skip.h` |
 | `CALIPER_TEST_FORCE_NO_GPU=1` | The device suites behave as if there were no GPU. | `tests/gpu_skip.h` |
+| `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder: each is negotiated, opened, checked, created and destroyed with the capabilities the `caliper` executable advertises. Without it the case is skipped. | `tests/test_applet_acceptance.cpp` |
 | `CALIPER_THROWING_WHERE` | Chooses where the test applet fails: `create`, `initialize`, `frame`, `frame-fault`, `frame-imgui`, `frame-imgui-fault`, `cleanup`, `job`, `job-fault` or `none`. The crash-guard and UI-recovery tests set it. | `tests/fixtures/throwing_applet/throwing_applet.cpp` |
 
 The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CALIPER_HELLO_*` and `CALIPER_DATA_DIR` themselves to exercise the code that reads them. See [Development basics](../tutorials/development-basics.md) for how the GPU skip variables behave.

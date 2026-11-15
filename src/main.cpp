@@ -151,6 +151,13 @@ public:
             }
         }
 
+        // CALIPER_CHROMELESS=1, for recordings: the applet page draws
+        // neither its page bar nor its status bar, so the dock space and the
+        // applet's windows fill the whole window. Esc still goes Home; the
+        // landing and the live page keep their bars.
+        if (const char* c = std::getenv("CALIPER_CHROMELESS"))
+            chromeless_ = std::strcmp(c, "1") == 0;
+
         // Dev hook: CALIPER_AUTOATTACH=<pid> attaches to that process's live
         // session as soon as the landing lists it (F4, then Enter on its row),
         // for screenshots and headless checks of the live page. Once: a
@@ -214,50 +221,9 @@ public:
                     if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
                 }
 
-                // Applet bar: Home as one key button holding its key, esc
-                // (recognition over recall, nothing printed beside it), the
-                // applet's name as metadata, and the watchdog warning in
-                // bronze, the palette's only accent. The page's one action
-                // lives here; the status bar below carries only facts.
-                if (begin_page_bar()) {
-                    if (sternbild::key_button("esc", "Home")) go_back = true;
-                    ImGui::Separator();
-                    ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
-                    ImGui::TextUnformatted(
-                        loader_.at(active_applet_).manifest.name.c_str());
-                    ImGui::PopStyleColor();
-                    if (watchdog_.flagged()) {
-                        ImGui::Separator();
-                        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::bronze);
-                        ImGui::TextUnformatted(
-                            "slow: long work belongs in background jobs");
-                        ImGui::PopStyleColor();
-                    }
-                    ImGui::EndMainMenuBar();
-                }
-
-                // Status bar (VS Code): the same persistent strip as the
-                // landing's, so the machine is always in the same place; facts
-                // only, as there (Home is in the applet bar above). Like the
-                // menu bar it is a viewport side bar, drawn before the dock
-                // space that fills what it leaves.
-                sternbild::status_bar_begin();
-                draw_host_status_items(renderer_->name());
-                {
-                    int running = 0;
-                    for (const auto& v : caliper_host::host_job_system().views())
-                        running += v.running ? 1 : 0;
-                    char jobs[48];
-                    if (running == 0)
-                        std::snprintf(jobs, sizeof jobs, "no jobs");
-                    else
-                        std::snprintf(jobs, sizeof jobs,
-                                      running == 1 ? "%d job running"
-                                                   : "%d jobs running",
-                                      running);
-                    sternbild::status_item(jobs);
-                }
-                sternbild::status_bar_end();
+                // The page bar and the status bar, unless the page is
+                // chromeless (CALIPER_CHROMELESS=1).
+                if (!chromeless_ && draw_applet_bars()) go_back = true;
 
                 // Docked desktop (applet page only). A passthru dockspace fills
                 // the viewport's work area (between the main menu bar and the
@@ -518,6 +484,57 @@ private:
         page_ = AppPage::Applet;
         glfwSetWindowTitle(window_,
                            ("Caliper - " + loader_.at(idx).manifest.name).c_str());
+    }
+
+    // The applet page's chrome: the page bar over the work area and the
+    // status bar under it. True when the page bar's Home was clicked.
+    bool draw_applet_bars() {
+        bool home = false;
+        // Applet bar: Home as one key button holding its key, esc
+        // (recognition over recall, nothing printed beside it), the
+        // applet's name as metadata, and the watchdog warning in
+        // bronze, the palette's only accent. The page's one action
+        // lives here; the status bar below carries only facts.
+        if (begin_page_bar()) {
+            if (sternbild::key_button("esc", "Home")) home = true;
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+            ImGui::TextUnformatted(
+                loader_.at(active_applet_).manifest.name.c_str());
+            ImGui::PopStyleColor();
+            if (watchdog_.flagged()) {
+                ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::bronze);
+                ImGui::TextUnformatted(
+                    "slow: long work belongs in background jobs");
+                ImGui::PopStyleColor();
+            }
+            ImGui::EndMainMenuBar();
+        }
+
+        // Status bar (VS Code): the same persistent strip as the
+        // landing's, so the machine is always in the same place; facts
+        // only, as there (Home is in the applet bar above). Like the
+        // menu bar it is a viewport side bar, drawn before the dock
+        // space that fills what it leaves.
+        sternbild::status_bar_begin();
+        draw_host_status_items(renderer_->name());
+        {
+            int running = 0;
+            for (const auto& v : caliper_host::host_job_system().views())
+                running += v.running ? 1 : 0;
+            char jobs[48];
+            if (running == 0)
+                std::snprintf(jobs, sizeof jobs, "no jobs");
+            else
+                std::snprintf(jobs, sizeof jobs,
+                              running == 1 ? "%d job running"
+                                           : "%d jobs running",
+                              running);
+            sternbild::status_item(jobs);
+        }
+        sternbild::status_bar_end();
+        return home;
     }
 
     // Esc goes Home (applet and live pages) only when it is not cancelling
@@ -813,6 +830,7 @@ private:
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
+    bool chromeless_ = false;         // CALIPER_CHROMELESS=1: applet page without bars
 };
 
 int main(int argc, char** argv) {
