@@ -1,6 +1,8 @@
 // net_source.cpp: the browser's Source over wire protocol v3 (net_source.h).
 #include "net_source.h"
 
+#include "live/live_series_ring.h"
+
 #include "caliper/live.h"       // CALIPER_LIVE_KIND_*, CALIPER_LIVE_SNAP_*
 #include "caliper/live_net.h"
 #include "net/wire.h"
@@ -299,16 +301,9 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
             View* v = by_sub(m.sub);
             if (!v || v->kind != CALIPER_LIVE_KIND_SERIES || v->ring.empty()) return;
             clock_.observe(m.stamp_ns, now_ns());
-            const float* vals = (const float*)m.values.data;
-            const uint64_t count = (uint64_t)m.values.count();
-            const uint64_t end = m.start + count;
-            // A gap past the end held reads as NaN (ImPlot breaks the line).
-            for (uint64_t i = std::max(v->series_end, end > kSeriesCapacity ? end - kSeriesCapacity : 0);
-                 i < m.start; ++i)
-                v->ring[i % kSeriesCapacity] = NAN;
-            const uint64_t first = count > kSeriesCapacity ? end - kSeriesCapacity : m.start;
-            for (uint64_t i = first; i < end; ++i) v->ring[i % kSeriesCapacity] = vals[i - m.start];
-            v->series_end = std::max(v->series_end, end);
+            // Gaps read as NaN, overlaps replace values: the native source's rule.
+            caliper_live::series_ring_apply(v->ring.data(), kSeriesCapacity, &v->series_end, m.start,
+                                            (const float*)m.values.data, (uint64_t)m.values.count());
             v->series_stamp = m.stamp_ns;
             ++v->series_seq;
         } else if constexpr (std::is_same_v<T, wire::Ping>) {

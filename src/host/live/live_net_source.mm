@@ -5,6 +5,7 @@
 #import <Metal/Metal.h>
 
 #include "live/live_net_source.h"
+#include "live/live_series_ring.h"
 
 #include "host_version.h"
 #include "live/live_shm.h"   // now_ns
@@ -273,20 +274,9 @@ private:
             for (uint64_t i = 0; i < M; ++i) r[i] = NAN;
         }
         float* ring = (float*)[v.ring contents];
-        for (const SeriesDelta& d : deltas) {
-            const uint64_t n = d.values.size();
-            const uint64_t end = d.start + n;
-            uint64_t& total = v.ring_total;
-            // A message past the end held leaves a gap (NaN; only the window matters).
-            if (d.start > total)
-                for (uint64_t i = std::max(total, d.start > M ? d.start - M : 0); i < d.start; ++i) ring[i % M] = NAN;
-            // Overlaps replace values, but never ones older than the window, whose
-            // ring positions now hold newer values.
-            const uint64_t newest = std::max(total, end);
-            const uint64_t lo = std::max<uint64_t>(d.start, newest > M ? newest - M : 0);
-            for (uint64_t i = lo; i < end; ++i) ring[i % M] = d.values[(size_t)(i - d.start)];
-            total = newest;
-        }
+        // Gaps read as NaN, overlaps replace values (live_series_ring.h).
+        for (const SeriesDelta& d : deltas)
+            series_ring_apply(ring, M, &v.ring_total, d.start, d.values.data(), d.values.size());
         out->mtl_buffer = (__bridge void*)v.ring;
         out->host_base = ring;
         out->byte_offset = 0;

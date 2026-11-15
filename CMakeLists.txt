@@ -322,6 +322,7 @@ add_library(caliper_net STATIC
     src/host/net/ws.cpp
     src/host/net/json.cpp
     src/host/net/wire.cpp
+    src/host/net/upgrade.cpp
 )
 target_include_directories(caliper_net PUBLIC
     ${CMAKE_SOURCE_DIR}/src/host
