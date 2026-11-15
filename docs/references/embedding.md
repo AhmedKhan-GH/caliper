@@ -1,43 +1,46 @@
-# Embedding Caliper (libcaliper)
+# Embedding Caliper
 
-`libcaliper` is the framework core — applet loader, service registry, the
-host-neutral services, `HostRenderer` (Metal/Vulkan), the tensor bridge, and
-the geometry ladder — behind a small **C ABI** so a host binary can run the
-applet canvas inside a view it owns *without linking ImGui, torch, or any
-renderer type*. The `caliper` executable is its first embedder; the second
-in-tree embedder is `examples/embed_host/` — a ~254-line AppKit host that this
-page mirrors.
+`libcaliper` is the framework core: the applet loader, the service registry,
+the host-neutral services, `HostRenderer` (Metal or Vulkan), the tensor bridge
+and the geometry ladder. It sits behind a small C ABI, so a host binary can run
+the applet canvas inside a view it owns without linking ImGui, torch or any
+renderer type. The `caliper` executable is the first embedder. The second
+in-tree embedder is `examples/embed_host/`, an AppKit host of about 250 lines
+(`main.mm`) with a Win32 counterpart (`main_win32.cpp`), which this page
+mirrors.
 
-This is the **embedder-facing** contract (hosts). It is NOT the applet-facing
-ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](abi.md) + the
-[C++ sugar](sugar.md). `caliper/embed.h` lives on a separate include root so an
-applet physically cannot `#include` it — embedding a core from inside an applet
-is a category error the include topology forbids.
+This page describes the embedder-facing contract. It is not the applet-facing
+ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](abi.md) and the
+[C++ sugar](sugar.md). `caliper/embed.h` lives on a separate include root, so an
+applet cannot `#include` it. Embedding a core from inside an applet would be a
+category error, and the include topology rules it out.
 
-!!! note "Status (v0)"
-    L1+L2 shipped 2026-07-11 (branch `feat/libcaliper`), **run-proven on both
-    ecosystems** — Metal on Apple Silicon and Vulkan/HWND on Windows (RTX 500
-    Ada, 2026-07-11). Design + phase outcomes:
-    `docs/superpowers/specs/2026-07-11-libcaliper-compass-design.md`.
+The embed ABI has run on both ecosystems: Metal on Apple Silicon and
+Vulkan with an `HWND` on Windows. `CALIPER_EMBED_API_VERSION` is 1. The labels
+v1.1, v1.2 and v1.3 in this page and in the headers name additive sections of that
+one version, not new version numbers. The
+additions since the first version (service access, per-core data root, applet
+log routing, built-in tensor views) are additive: no struct changed, so a caller
+built against the first header still links and runs.
 
-## The five calls
+## The core calls
 
-An embedder drives the core with exactly five calls, pumping frames from
-**its own** event loop (the core never owns the process loop — that is the
-difference between a library and a host):
+An embedder drives the core with five calls and pumps frames from its own event
+loop. The core never owns the process loop, which is the difference between a
+library and a host.
 
-1. **`caliper_core_create`** — spin up the core (renderer + services + loader).
-2. **`caliper_core_attach_canvas`** — hand it the native view (`NSView*` /
-   `HWND`) it should paint, or an offscreen target.
-3. **`caliper_core_load_applet`** — launch one applet by manifest id (e.g.
-   `dev.caliper.instance-scope`). A canvas must be attached **first** — an
-   applet's first frame touches the renderer's ImGui backend, so loading before
-   attach is an honest refusal, not a crash.
-4. **`caliper_core_frame`** / **`caliper_core_event`** — pump exactly ONE frame
-   from your loop (wx idle/timer, a `CVDisplayLink`, a Win32 message loop), and
-   translate your toolkit's input into `CaliperInputEvent` and forward it.
-5. **`caliper_core_shutdown`** — tear it all down (the exact reverse of create)
-   on window close; clears the one-core-per-process lock.
+1. `caliper_core_create` spins up the core: renderer, services and loader.
+2. `caliper_core_attach_canvas` hands it the native view (`NSView*` or `HWND`)
+   to paint, or selects an offscreen target.
+3. `caliper_core_load_applet` launches one applet by manifest id (for example
+   `dev.caliper.instance-scope`). A canvas must be attached first: an applet's
+   first frame touches the renderer's ImGui backend, so loading before attach is
+   a refusal, not a crash.
+4. `caliper_core_frame` and `caliper_core_event` pump exactly one frame from
+   your loop (a timer, a `CVDisplayLink`, a Win32 message loop) and forward your
+   toolkit's input as `CaliperInputEvent` values.
+5. `caliper_core_shutdown` tears everything down in the reverse order of create
+   and clears the one-core-per-process lock.
 
 ```c
 CaliperCoreDesc desc = { .struct_size = sizeof desc };
@@ -59,13 +62,32 @@ caliper_core_event(core, &event);
 caliper_core_shutdown(core);
 ```
 
-## Ownership (design §4)
+### Every function in `embed.h`
 
-The load-bearing decision: **libcaliper owns the applet canvas end-to-end.**
-The embedder supplies a native child view; the core runs the ImGui context,
-`HostRenderer`, bridge, and geometry inside it. A host's own chrome (Compass's
-wx AUI docking, property grids, menus) wraps *around* those canvases and never
-paints applet pixels.
+| Function | Purpose |
+|---|---|
+| `caliper_core_create(desc)` | Create the core. Returns `NULL` for a second live core, an unsupported renderer or a renderer failure. |
+| `caliper_core_shutdown(core)` | Tear down in reverse order of create. Safe on `NULL`. |
+| `caliper_core_attach_canvas(core, native_view, desc)` | Attach the one canvas. `native_view` is ignored (pass `NULL`) for `CALIPER_CANVAS_OFFSCREEN`. Returns 1, or 0 with `last_error` set. |
+| `caliper_core_frame(core)` | Run one frame: clear, draw the loaded applet under the crash guard, composite and present or store. |
+| `caliper_core_event(core, event)` | Feed one input event. A no-op before a canvas exists. |
+| `caliper_core_load_applet(core, manifest_id)` | Load and launch an applet. Any loaded applet is torn down first, so reloading the same id restarts it and a failed launch leaves no applet loaded. An unknown id is refused without disturbing the running applet. |
+| `caliper_core_unload_applet(core)` | Tear down the loaded applet. A no-op if none is loaded. Call between frames. |
+| `caliper_core_read_pixels(core, buf, stride)` | Copy the last composited frame as tightly packed RGBA8 with `stride` bytes per row. Offscreen canvases only. |
+| `caliper_core_last_error(core)` | The reason for the most recent refusal, or an empty string. Never `NULL` for a live core, and valid until the next core call. |
+| `caliper_core_get_service(core, id)` | The service table an applet receives for `id`, or `NULL` ([below](#reaching-services-from-a-host)). |
+| `caliper_core_view_tensor`, `_view_remove`, `_view_count`, `_view_info`, `_view_readback` | Built-in tensor views ([below](#built-in-tensor-views)). |
+| `caliper_core_colormap_lut(colormap, out256)` | The built-in 256-entry colormap table. Needs no core. |
+
+The typed live-view calls (`caliper_core_live_*`) are declared in
+`caliper/live_views.h` and described under [typed live views](#typed-live-views).
+
+## Ownership
+
+libcaliper owns the applet canvas end to end. The embedder supplies a native
+child view; the core runs the ImGui context, `HostRenderer`, bridge and geometry
+inside it. A host's own chrome (docking, property grids, menus) wraps around
+those canvases and never paints applet pixels.
 
 | Concern | Owner | Note |
 |---|---|---|
@@ -78,30 +100,74 @@ paints applet pixels.
 | libtorch (one per process, D5) | **libcaliper** | the embedder must NOT link its own torch; the core owns device/pack policy |
 | Crash containment | **libcaliper** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../explanations/trust-model.md#every-applet-call-is-guarded)) |
 
-## Honest caveats (v0)
+## Per-core settings and limits
 
-- **One `CaliperCore` per process.** `caliper_core_create` refuses a second
-  live core with a `NULL` return (the one-libtorch-per-process policy, D5,
-  already binds the process); shut the first down first.
-- **`CaliperCoreDesc.data_dir` is IGNORED.** The process app-data path is always
-  used; threading a per-core data root is a `host_services` signature change
-  deferred past R4.
-- **The applet `caliper.log.v1` service bypasses `log_fn`** and writes to process
-  stderr in v0. Core diagnostics (renderer pick, refusals, crash text) DO route
-  through `log_fn`; applet log lines do not.
-- **`CALIPER_CANVAS_WINDOW` has no ctest coverage.** The windowed canvas is
-  run-proven live on both OSes — Metal (Apple Silicon) and Vulkan/HWND (Windows,
-  RTX 500 Ada) — but there is no automated coverage of window mode on either;
-  the live `embed_host` run stays the ritual. Automated byte-exactness rides the
-  OFFSCREEN `read_pixels` battery (the §7 host-axis byte-compare), green on both
-  backends.
-- **GL is not an embed target.** GL's context ownership is GLFW-coupled chrome
-  (D13, the frozen fallback); a core whose resolved backend is GL refuses at
-  `attach_canvas` ("embed requires Metal or Vulkan").
+- **One `CaliperCore` per process.** `caliper_core_create` returns `NULL` for a
+  second live core, because the one-libtorch-per-process policy
+  ([D5](../decisions/d005-runtime-packs.md)) already binds the process. Shut the
+  first down first.
+- **One canvas per core.** `caliper_core_attach_canvas` refuses a second canvas.
+  A canvas-info query and several canvases per core are not provided.
+- **`CaliperCoreDesc.data_dir` roots the stores.** A non-`NULL` directory (created
+  if missing) holds metrics, artifacts and applet data for that core, and the
+  window layout at `<data_dir>/imgui.ini`. `NULL` keeps the operating system
+  default, which is what the `caliper` executable passes, and nothing is
+  written to the process's working directory. The override lasts for the one
+  live core and is cleared on shutdown.
+- **Applet log lines reach `log_fn`.** When the embedder sets `log_fn`, the
+  applet `caliper.log.v1` service routes there with the prefix `[applet] `, and
+  core diagnostics (renderer choice, refusals, crash text) arrive untagged.
+  With `log_fn` unset both go to stderr. The core calls `log_fn` from the frame
+  thread for its own lines and from any thread for applet lines, so a sink that
+  touches shared UI state must marshal to its UI thread.
+- **There is no `api_version` getter.** The compile-time macros
+  `CALIPER_EMBED_API_VERSION` and `CALIPER_EMBED_HAVE_VIEWS` are the only
+  version signals.
+- **Window mode has no automated test.** The windowed canvas is checked by
+  running `embed_host` on each platform. Automated byte-exactness rides the
+  offscreen `read_pixels` tests, which pass on both backends.
+- **GL is not an embed target.** GL's context ownership is GLFW-coupled
+  ([D13](../decisions/d013-renderer-agnostic-abi.md)). A core whose resolved
+  backend is GL refuses at `attach_canvas` with "embed requires Metal or
+  Vulkan".
 
-## Built-in tensor views (embed v1.2)
+All calls except the any-thread services below belong to one thread, the one
+that calls `caliper_core_frame`.
 
-The v1.2 section of `caliper/embed.h` lets a host hand the core a
+## Reaching services from a host
+
+`caliper_core_get_service(core, id)` returns the same service table an applet
+receives from `CaliperHost.get_service` for that id, for example
+`"caliper.metrics.v1"`, `"caliper.jobs.v1"`, `"caliper.artifacts.v1"` or
+`"caliper.data.v1"`. Cast the result to the matching struct from the
+`caliper/services` headers and call its function pointers as an applet would.
+No renderer, torch or ImGui type crosses the seam
+([D3](../decisions/d003-no-framework-types-across-the-abi.md)); the interchange
+is the C ABI, `CaliperTensor` and Arrow C streams. A C++ host can use the
+`caliper.hpp` sugar. The call returns `NULL` for an unknown id or a `NULL`
+core. The pointer is a process-static table, valid from create until shutdown.
+
+The header states a thread rule for each service:
+
+| Service | Thread rule |
+|---|---|
+| `caliper.metrics.v1` | Any thread. The store holds one DuckDB connection under one mutex, so reads from a host thread serialize with applet writes. |
+| `caliper.artifacts.v1` | Any thread, under the same one-connection model. `path_of` returns a thread-local buffer, valid until the next artifacts call on that thread. |
+| `caliper.data.v1` | Any thread, under one mutex. `last_error()` is thread-local, so each thread sees its own last failure. |
+| `caliper.jobs.v1` | Any thread, by design: `submit`, `cancel`, `is_running` and `progress` work over the process job system. |
+| `caliper.device.v1` | Any thread. It reads a record negotiated at startup that never changes. |
+| `caliper.log.v1` | Any thread. It is reentrant and routes to `log_fn` when one is installed. |
+| `caliper.tensor_bridge.v1`, `v1_1`, `v1_2` | Frame thread only. They upload to the GPU. |
+| `caliper.geometry.v1` to `v1_3` | Frame thread only. They draw. |
+| `caliper.ui.v1` | Frame thread only. It wraps the ImGui and ImPlot contexts, which a host has no use for. |
+
+A host pushes parameters; an applet's worker produces device tensors, because
+there is one torch per process and it is never the host's. The host-side use of
+the bridge is CPU-staged uploads on the frame thread.
+
+## Built-in tensor views
+
+The view section of `caliper/embed.h` lets a host hand the core a
 `CaliperTensor` and have the **core** draw it: a texture made through the
 process tensor bridge plus an ImGui window titled with the view's name,
 composited in `caliper_core_frame` after the loaded applet's draw. Views work
@@ -163,10 +229,10 @@ cannot import), the call **fails**. The core never quietly downloads a METAL
 tensor to the host; a refusal is an error, not a slower success.
 
 `tensor->stream` is passed through: a non-NULL `MTLCommandQueue*` GPU-orders
-the read after that queue's committed work (bridge v1.1, D24). NULL is the
+the read after that queue's committed work (bridge v1_1, [D24](../decisions/d024-stream-ordered-handoff-through-caps.md)). NULL is the
 normal case for a caller that made sure the producer finished first.
 
-Measured on Apple Silicon (SPIKE.md §3 and §6):
+Measured on Apple Silicon:
 
 | Case | CPU-staged | METAL zero-copy |
 |---|---|---|
@@ -232,12 +298,12 @@ canvas, because the renderer's device exists only after `attach_canvas`; a
 `view_tensor` before attach is a refusal. `caliper_core_shutdown` destroys the
 views, releasing textures and imports, before the renderer is torn down.
 
-### Typed live views (embed v1.3)
+### Typed live views
 
 `include/caliper/live_views.h` builds on this section. `caliper_core_live_apply`
 takes a `CaliperLiveSnapshot` of one of five kinds (heatmap, image, points,
 series, histogram) and keeps a typed view of that name. Heatmap and image live
-views are drawn through the v1.2 view of the same name, so
+views are drawn through the tensor view of the same name, so
 `caliper_core_view_info`, `_readback`, `_count` and `_remove` keep working for
 them. The header documents the per-kind payload contract, the claim rule that
 `caliper_core_live_view_read_done` reports for each kind, and the per-core
@@ -255,10 +321,10 @@ applet-side only. The vendored libtorch 2.5.1 reached libcaliper, the `caliper`
 exe and `embed_host` purely through `${CALIPER_DEPENDENCY_LIBS}`, to which
 `cmake/Dependencies.cmake` appended `${TORCH_LIBRARIES}`. The options below make
 that boundary buildable, so one process can host libcaliper next to a
-**different** torch: Python's own torch 2.14.1 in the Python extension.
+**different** torch: the torch that the Python script imported, beside the Python extension.
 
 In a torch-free build the core carries no libtorch at all, so the libtorch row
-of the [ownership table](#ownership-design-4) describes torch builds only; the
+of the [ownership table](#ownership) describes torch builds only; the
 embedding process is free to load its own torch.
 
 ### Options
@@ -334,13 +400,13 @@ ctest --preset release-notorch
 A cold torch-free build of everything (libcaliper, exe, `embed_host`, all test
 binaries) is 462 steps, 120 s at `-j 8`; `libcaliper.a` itself is 276 KB (its
 own six objects; dependencies are separate archives). The default
-`cmake --preset release` still configures with torch ON (vendored libtorch 2.5.1
+`cmake --preset release` configures with torch ON (vendored libtorch 2.5.1
 found, nine applets discovered), and a cold `libcaliper` there builds in 123 s
 with zero torch symbols.
 
 ### Verification
 
-Run in the torch-free tree `cmake-build-notorch` (SPIKE.md §2):
+Run in the torch-free tree `cmake-build-notorch`:
 
 ```text
 $ nm -gU cmake-build-notorch/libcaliper.a | grep -ci "torch\|c10::\|_ZN2at"      -> 0

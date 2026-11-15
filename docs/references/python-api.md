@@ -8,6 +8,12 @@ macOS arm64) and of `caliper.live`. The source of truth is
 [Watch a PyTorch training run live](../tutorials/live-pytorch.md) walks through
 a script.
 
+The package is pure Python on top of two nanobind extensions. `caliper._native`
+binds the embed C ABI (`caliper/embed.h`, including the view calls) of a
+libcaliper built without libtorch, so the core lives next to the torch the
+script already imported. `caliper._live` is the client of the shared-memory
+live session protocol. `caliper.__version__` is `"0.1.0"`.
+
 Importing the package does not touch GLFW, AppKit, Metal or torch; the native
 extension loads on first use. Tensor arguments are torch tensors (anything else
 goes through `torch.as_tensor`) and are detached before use.
@@ -43,8 +49,8 @@ shape raises only once something is attached.
 ## Cost of a call
 
 With nothing attached a call is one atomic load and a clock read, with no
-snapshot, no slot and no GPU work (`S-noviewer.txt`, 100,000 calls per row,
-each timed singly):
+snapshot, no slot and no GPU work (100,000 calls per row, each timed
+singly):
 
 | Call, nothing attached | Median | p99 |
 |---|---|---|

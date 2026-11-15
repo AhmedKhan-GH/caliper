@@ -183,7 +183,7 @@ heartbeat is stale.
 ## Cost to the script when nobody is attached
 
 With no viewer, a call returns after one atomic load and a clock read: no
-snapshot, no slot, no GPU work. Measured (`S-noviewer.txt`, torch 2.14.1,
+snapshot, no slot, no GPU work. Measured (torch 2.14.1,
 100,000 calls per row, each timed singly):
 
 | Call, nothing attached | Median | p99 |

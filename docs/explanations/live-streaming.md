@@ -4,12 +4,12 @@ The goal is a normal PyTorch script that keeps training at full speed while
 Caliper shows its tensors live, without the script waiting for the GPU or the
 display and without the window freezing, whatever the loop is doing.
 
-The first Python entry point did not meet that. `caliper.show` drew in-process
-through the [embed v1.2 views](../references/embedding.md#built-in-tensor-views-embed-v12),
-so the window was only live while the script called `show()`, and every call on
-MPS drained torch's queue: 3.6 of the 4.1 ms a show-step cost, taking training
-from 331 to 159 steps/s with two shows per step. Live streaming is the second
-stage: `show()` waits for nothing and the viewer samples at its own pace.
+Drawing in-process through the embed tensor views, with the script calling
+`show()` and the view syncing on each call, cannot meet that: the window is only
+live while the script calls `show()`, and every call on MPS drains torch's queue.
+In a measurement, 3.6 of the 4.1 ms a show-step cost was that drain, taking
+training from 331 to 159 steps/s with two shows per step. Live streaming removes
+the wait: `show()` waits for nothing and the viewer samples at its own pace.
 
 To use it, start with [Watch a PyTorch training run live](../tutorials/live-pytorch.md);
 every call is in the [Python API](../references/python-api.md) reference.
@@ -17,9 +17,9 @@ every call is in the [Python API](../references/python-api.md) reference.
 !!! note "Status"
     macOS / Metal (Apple Silicon) only, local only: protocol v2
     (`include/caliper/live.h`) and embed v1.3 typed views
-    (`include/caliper/live_views.h`). The numbers come from `SPIKE.md` §8, on
-    one machine (M5 Max, 18 cores, 64 GB, torch 2.14.1); raw logs are in
-    `python/bench/results/`.
+    (`include/caliper/live_views.h`). The numbers on this page were measured on
+    one machine (M5 Max, 18 cores, 64 GB, torch 2.14.1); the benchmark scripts
+    are in `python/bench/`.
 
 ## One view layer, two transports
 
@@ -186,18 +186,67 @@ is run.
 
 Liveness with a 5 s `time.sleep` in the training loop:
 
-| | Spike (v1.2 `show`) | Own window | Own window + `run(train)` | Attach to app |
+| | In-process `show` without a snapshot ring | Own window | Own window + `run(train)` | Attach to app |
 |---|---|---|---|---|
 | Canvas repaints | No | Yes, 300 frames | Yes | Yes, 59.5 to 60 fps |
 | Input handled | After the sleep (4.5 s late) | After the sleep | 0 to 0.3 ms | At once |
 | Close | After the sleep | After the sleep | 103 ms | At once |
 
-Hence the decision: both modes behind one view layer, attach to app first as
-the primary mode, the own window second with these limits documented.
+Hence the decision ([D40](../decisions/d040-separate-process-viewer.md)): both
+modes sit behind one view layer in libcaliper. The separate-process viewer
+(attach to app) is the primary mode, because only a separate process keeps the
+window and its input alive whatever the training loop does, and it also
+survives the script. The in-process window is the second mode, with the limits
+above. The tensor view is implemented inside libcaliper behind the
+[embed ABI](../references/embedding.md), not as an applet.
+
+## Torch-free libcaliper
+
+The core, the Metal renderer and the embed C ABI never include a torch header,
+which is what lets libcaliper share a process with the torch the script
+imported. Python's own torch 2.14.1 and libcaliper therefore never meet in one
+symbol table: the Python extensions link `libcaliper` built with
+`CALIPER_WITH_TORCH=OFF`. The rule is checked with namespace-anchored patterns,
+not a bare `torch` search, because a case-insensitive `torch` grep matches
+DuckDB symbol names such as `OperatorChildren`:
+
+```sh
+nm -gU cmake-build-notorch/libcaliper.a | grep -ci "torch\|c10::\|_ZN2at"      # 0
+nm <binary> | c++filt | grep -cE '[ (<,](at|c10|torch)::|_ZN3c10|_ZN2at|_ZN5torch'   # 0
+```
+
+The torch-free binaries also link no `libtorch`, `libc10` or `libomp`
+([Embedding Caliper](../references/embedding.md#the-torch-free-build) has the
+full check and the build options).
+
+## Known limits
+
+- **One viewer per session.** The claim words are single-reader, so a session
+  has one viewer. A second viewer would need per-reader claims.
+- **Shared-memory names outlive a killed script.** A script killed with SIGKILL
+  cannot unlink its segments. The next session listing sees the dead pid and
+  removes the names and the session file, so in practice they last until a
+  viewer lists sessions.
+- **Points views run out of slots sooner than other kinds.** A points view keeps
+  its current slot claimed while it is drawn, and a view has 3 slots, so the
+  ring is full more often. The view still updates about 50 times a second.
+- **Foreign `MTLBuffer` through DLPack.** `torch.from_dlpack` over a `kDLMetal`
+  buffer that torch did not allocate is not documented torch behaviour; it was
+  verified on torch 2.14.1. Whether torch's command buffers retain that buffer
+  is not known, so `remove` and `close` wait for the view's events before they
+  release it.
+- **The viewer repaints on a 60 Hz timer.** A display link at the screen's
+  refresh rate would cut the pickup delay. Viewer smoothness while a model
+  saturates the GPU has not been measured.
+- **Argument errors surface late.** Shape and argument errors appear when a
+  snapshot is built, so a bad shape goes unnoticed until something attaches.
+- **In-process mode under `run()`.** The worker thread cannot call
+  `signal.signal`, and Ctrl-C is delivered between bytecodes.
+- **macOS and Metal only.** Live streaming has no Windows or Linux path.
 
 ## Measured numbers
 
-These are the Phase 1 prototypes the decision was made on. The final code's
+These are the prototype measurements the decision rests on. The final code's
 numbers (98.3 to 99.5 % of the control in the own window, 98.1 to 99.4 % in
 attach mode, at 60 Hz) are in [Cost of a call](../references/python-api.md#cost-of-a-call).
 
@@ -214,7 +263,7 @@ process; "off" means no rate limit.
 | B, off | 96.5 | 97.1 / 97.1 | 94.9 / 94.1 |
 
 Against the plain baseline the same rows read 136 to 175 %, the commit effect.
-`train_show.py`'s two views, which the spike's `show()` ran at 48 % of
+`train_show.py`'s two views, which the synchronous `show()` ran at 48 % of
 baseline, run under B at 137 % (96.8 % of the control). CPU tensors at 256²: A
 98 / 97 % of baseline with the rate limit, B 98.1 %.
 
