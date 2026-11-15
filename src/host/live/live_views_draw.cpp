@@ -23,6 +23,18 @@
 //   HEATMAP / IMAGE  drawn by the v1.2 views; this file appends a one-line
 //              overlay (seq, latency, dropped) and the Pause button to that
 //              window.
+//
+// EVENTS. When the host set an event sink (set_event_sink: the browser does,
+// and sends them to the producer), every view also selects, picks and
+// reports hovers with the browser element's gestures and details
+// (web/src/views, wire protocol v3 "Events"), in source indices through the
+// snapshot's payload map: a shift-drag selects (points: a lasso, with alt a
+// rectangle; heatmap and image: a block of cells; series: a range of steps;
+// histogram: a range of bins), a shift-click clears the selection, a click
+// picks, and hovers go out at most 30 times a second. In 3-D points a drag
+// orbits and a right, middle, alt or ctrl drag pans. Selected points draw over
+// the others, which are dimmed. Without a sink nothing of this runs, and the
+// native gestures above are unchanged.
 #include "live/live_views_state.h"
 
 #include "renderer/host_renderer.h"
@@ -35,8 +47,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
+#include <vector>
 
 using caliper_embed_views::TensorView;
 using caliper_host::HostGeomDraw;
@@ -100,6 +115,128 @@ V3 eye_of(const Camera& c) {
 }
 
 std::string window_label(const View& v) { return v.name + "###caliper.view." + v.name; }
+
+// ---- events ------------------------------------------------------------------
+constexpr float  kClickSlop = 3.0f;              // px a press may move and still be a click
+constexpr double kHoverMs = 1000.0 / 30.0;       // at most 30 hovers a second reach the sink
+constexpr size_t kMaxEventIndices = 32768;       // wire protocol v3, Events
+const ImU32 kSelLine = IM_COL32(0xb3, 0x8b, 0x59, 255);   // bronze, as the browser views
+const ImU32 kSelFill = IM_COL32(0xb3, 0x8b, 0x59, 41);
+const ImU32 kSelText = kSelLine;
+
+double now_ms() { return (double)now_ns() * 1e-6; }
+
+// The shortest decimal text that reads back as the same double (as
+// JavaScript prints numbers), or null for a non-finite one.
+std::string json_number(double v) {
+    if (!std::isfinite(v)) return "null";
+    char buf[40];
+    for (int p = 1; p <= 17; ++p) {
+        std::snprintf(buf, sizeof buf, "%.*g", p, v);
+        if (std::strtod(buf, nullptr) == v) break;
+    }
+    return buf;
+}
+
+// A detail object, written in the order the browser views write theirs.
+class Detail {
+public:
+    Detail& num(const char* k, double v) { key(k); s_ += json_number(v); return *this; }
+    Detail& integer(const char* k, int64_t v) { key(k); s_ += std::to_string(v); return *this; }
+    Detail& pair(const char* k, double a, double b) {
+        key(k);
+        s_ += "[" + json_number(a) + "," + json_number(b) + "]";
+        return *this;
+    }
+    Detail& ipair(const char* k, int64_t a, int64_t b) {
+        key(k);
+        s_ += "[" + std::to_string(a) + "," + std::to_string(b) + "]";
+        return *this;
+    }
+    Detail& ints(const char* k, const std::vector<int64_t>& v) {
+        key(k);
+        s_ += "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i) s_ += ",";
+            s_ += std::to_string(v[i]);
+        }
+        s_ += "]";
+        return *this;
+    }
+    Detail& flag(const char* k, bool v) { key(k); s_ += v ? "true" : "false"; return *this; }
+    std::string str() const { return s_ + "}"; }
+
+private:
+    void key(const char* k) {
+        if (s_.size() > 1) s_ += ",";
+        s_ += "\"";
+        s_ += k;
+        s_ += "\":";
+    }
+    std::string s_ = "{";
+};
+
+void emit(CaliperLiveViewsState* S, const View& v, const char* type, std::string detail) {
+    if (!S->events) return;
+    LiveEvent e;
+    e.view = v.name;
+    e.type = type;
+    e.detail = std::move(detail);
+    S->events(e);
+}
+
+// A hover goes out when the hovered item changed (item -1: nothing hovered,
+// which is not reported), and is dropped, not queued, inside 1/30 s of the last.
+void emit_hover(CaliperLiveViewsState* S, View& v, int64_t item, const std::function<std::string()>& detail) {
+    if (item == v.hover_sent) return;
+    v.hover_sent = item;
+    if (item < 0 || !S->events) return;
+    const double t = now_ms();
+    if (t - v.last_hover_ms < kHoverMs) return;
+    v.last_hover_ms = t;
+    emit(S, v, "hover", detail());
+}
+
+// Payload index -> source index (wire protocol v3, Payload axes): the first
+// source position a payload index stands for, and the half-open source range
+// of payload indices [i0, i1).
+int64_t source_index(const caliper_live::PayloadAxis* ax, int64_t i) {
+    if (!ax || ax->size <= 0) return i;
+    return ax->start + (i * ax->count) / ax->size * ax->step;
+}
+void source_range(const caliper_live::PayloadAxis* ax, int64_t i0, int64_t i1, int64_t* a, int64_t* b) {
+    if (!ax || ax->size <= 0) { *a = i0; *b = i1; return; }
+    const int64_t p0 = (i0 * ax->count) / ax->size;
+    const int64_t p1 = (i1 * ax->count + ax->size - 1) / ax->size;
+    *a = ax->start + p0 * ax->step;
+    *b = ax->start + (p1 - 1) * ax->step + 1;
+}
+
+// A press, the drag and the release of a gesture on the item drawn just
+// before (an InvisibleButton). Returns true on the release frame.
+bool track_gesture(View& v, ImVec2 mouse, bool may_select) {
+    Gesture& g = v.gesture;
+    ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsItemActivated()) {
+        g = Gesture{};
+        g.down = true;
+        g.button = ImGui::IsMouseClicked(ImGuiMouseButton_Right) ? 1
+                   : ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ? 2 : 0;
+        g.shift = io.KeyShift;
+        g.alt = io.KeyAlt;
+        g.ctrl = io.KeyCtrl || io.KeySuper;
+        g.x0 = mouse.x;
+        g.y0 = mouse.y;
+        g.selecting = may_select && g.shift && g.button == 0;
+        g.rect = g.alt;
+    }
+    if (g.down && !g.moved && std::hypot(mouse.x - g.x0, mouse.y - g.y0) > kClickSlop) g.moved = true;
+    if (g.down && ImGui::IsItemDeactivated()) {
+        g.down = false;
+        return true;
+    }
+    return false;
+}
 
 // First placement, tiled with the v1.2 views' cursor (core->tile_*): the same
 // wrap rules as embed_core.cpp's place_view, for a content area `content`.
@@ -211,6 +348,115 @@ void mul_cm(const float* a, const float* b, float* out) {   // out = a * b
 }
 
 
+// Screen positions of the current sample under `mvp` (NaN: behind the camera
+// or outside the depth range), as pick_point projects them.
+void project_points(const View& v, const float mvp[16], ImVec2 p0, ImVec2 sz, std::vector<float>* out) {
+    const float* P = (const float*)v.cur.pos_cpu;
+    const uint64_t n = v.cur.n;
+    out->assign(2 * n, NAN);
+    for (uint64_t i = 0; i < n; ++i) {
+        const float x = P[3 * i], y = P[3 * i + 1], z = P[3 * i + 2];
+        const float cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
+        if (!(cw > 1e-9f)) continue;
+        const float nz = (mvp[2] * x + mvp[6] * y + mvp[10] * z + mvp[14]) / cw;
+        if (!(nz >= 0.0f && nz <= 1.0f)) continue;
+        (*out)[2 * i] = p0.x + ((mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12]) / cw * 0.5f + 0.5f) * sz.x;
+        (*out)[2 * i + 1] = p0.y + (0.5f - (mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13]) / cw * 0.5f) * sz.y;
+    }
+}
+
+// The browser element's selection of points (web/src/views/points.ts): the
+// points whose screen position is inside the polygon (even-odd rule), reported
+// as indices into the sample and their source rows, at most 32,768 of each.
+void select_polygon(CaliperLiveViewsState* S, View& v, const float mvp[16], ImVec2 p0, ImVec2 sz,
+                    const std::vector<float>& poly) {
+    std::vector<float> pr;
+    project_points(v, mvp, p0, sz, &pr);
+    const size_t m = poly.size() / 2;
+    float xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
+    for (size_t k = 0; k < m; ++k) {
+        xmin = std::min(xmin, poly[2 * k]); xmax = std::max(xmax, poly[2 * k]);
+        ymin = std::min(ymin, poly[2 * k + 1]); ymax = std::max(ymax, poly[2 * k + 1]);
+    }
+    const uint64_t n = v.cur.n;
+    std::vector<uint8_t> sel(n, 0);
+    std::vector<int64_t> idx;
+    for (uint64_t i = 0; i < n; ++i) {
+        const float px = pr[2 * i], py = pr[2 * i + 1];
+        if (!(px >= xmin && px <= xmax && py >= ymin && py <= ymax)) continue;
+        bool inside = false;
+        for (size_t a = 0, b = m - 1; a < m; b = a++) {
+            const float ax = poly[2 * a], ay = poly[2 * a + 1], bx = poly[2 * b], by = poly[2 * b + 1];
+            if ((ay > py) != (by > py) && px < ((bx - ax) * (py - ay)) / (by - ay) + ax) inside = !inside;
+        }
+        if (inside) {
+            sel[i] = 1;
+            idx.push_back((int64_t)i);
+        }
+    }
+    v.selected = idx.empty() ? std::vector<uint8_t>() : std::move(sel);
+    v.sel_count = idx.size();
+    ++v.sel_version;
+    v.dirty = true;
+    const bool cut = idx.size() > kMaxEventIndices;
+    if (cut) idx.resize(kMaxEventIndices);
+    const caliper_live::PayloadAxis* ax = v.map.axes.empty() ? nullptr : &v.map.axes.back();
+    std::vector<int64_t> rows(idx.size());
+    for (size_t k = 0; k < idx.size(); ++k) rows[k] = source_index(ax, idx[k]);
+    Detail d;
+    d.ints("indices", idx).ints("row_ids", rows);
+    if (cut) d.flag("truncated", true);
+    emit(S, v, "select", d.str());
+}
+
+std::string point_detail(const View& v, int64_t i) {
+    const caliper_live::PayloadAxis* ax = v.map.axes.empty() ? nullptr : &v.map.axes.back();
+    return Detail().integer("index", i).integer("row_id", source_index(ax, i)).str();
+}
+
+// The selected points' positions and aux, staged for the renderer, rebuilt
+// when the selection or the payload changed. The one it replaces retires like
+// a superseded payload.
+bool stage_selection(CaliperCore* core, View& v) {
+    if (v.have_sel_draw && v.sel_draw_for == v.sel_version && v.sel_draw_updates == v.updates) return true;
+    if (v.have_sel_draw) v.retired.push_back(v.sel_draw);
+    v.have_sel_draw = false;
+    v.sel_draw = PointsPayload{};
+    if (!v.cur.pos_cpu || v.selected.size() != v.cur.n || !v.sel_count) return false;
+    std::vector<float> pos, aux;
+    pos.reserve(3 * v.sel_count);
+    const float* P = (const float*)v.cur.pos_cpu;
+    const float* A = (const float*)v.cur.aux_cpu;
+    for (uint64_t i = 0; i < v.cur.n; ++i) {
+        if (!v.selected[i]) continue;
+        pos.insert(pos.end(), P + 3 * i, P + 3 * i + 3);
+        if (v.cur.aux && A) aux.push_back(A[i]);
+    }
+    PointsPayload p;
+    p.n = v.sel_count;
+    std::string why;
+    if (!stage_host(core, v, pos.data(), pos.size() * 4, &p.pos, &p.pos_cpu, &why)) return false;
+    if (!aux.empty() && !stage_host(core, v, aux.data(), aux.size() * 4, &p.aux, &p.aux_cpu, &why)) {
+        drop_payload(core, v, p);
+        return false;
+    }
+    v.sel_draw = p;
+    v.have_sel_draw = true;
+    v.sel_draw_for = v.sel_version;
+    v.sel_draw_updates = v.updates;
+    return true;
+}
+
+// rgba blended towards `ground` as the browser views dim unselected points.
+uint32_t dimmed(uint32_t c, uint32_t ground) {
+    uint32_t out = 0xff000000u;
+    for (int k = 0; k < 3; ++k) {
+        const float a = (float)((c >> (8 * k)) & 0xff), b = (float)((ground >> (8 * k)) & 0xff);
+        out |= (uint32_t)std::lround(a * 0.28f + b * 0.72f) << (8 * k);
+    }
+    return out;
+}
+
 void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     HostRenderer* r = core->renderer.get();
     const bool open = begin_window(core, v, ImVec2(320.0f, 260.0f));
@@ -260,10 +506,25 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
     ImGuiIO& io = ImGui::GetIO();
+    const bool ev = (bool)S->events;
+    Gesture& g = v.gesture;
+    const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu);
+    if (ev && g.down && g.selecting) {
+        // The lasso follows the pointer; a rectangle keeps its two corners.
+        if (g.rect) g.lasso = {g.x0, g.y0, io.MousePos.x, io.MousePos.y};
+        else if (g.lasso.empty()) g.lasso = {g.x0, g.y0};
+        else if (g.moved && (io.MousePos.x != g.lasso[g.lasso.size() - 2] ||
+                             io.MousePos.y != g.lasso.back()))
+            g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
+    }
     Camera& c = v.cam;
-    if (active && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    // With an event sink the camera moves only once a drag left the click slop,
+    // and never while selecting.
+    const bool drag = active && (!ev || (g.moved && !g.selecting));
+    if (drag && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
         const float dx = io.MouseDelta.x, dy = io.MouseDelta.y;
-        const bool pan = ImGui::IsMouseDown(ImGuiMouseButton_Middle) || io.KeyShift;
+        const bool pan = ev ? (g.button != 0 || g.alt || g.ctrl)
+                            : (ImGui::IsMouseDown(ImGuiMouseButton_Middle) || io.KeyShift);
         if (v.dims == 3 && !pan) {
             c.az += dx * 0.01f;
             c.el = std::clamp(c.el + dy * 0.01f, -1.55f, 1.55f);
@@ -304,39 +565,97 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
          (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && v.have_cur)
         fit_points(v, aspect);
 
-    // ---- GPU: redraw the render target when something changed
-    float V[16], P[16];
+    float V[16], P[16], mvp[16];
     camera_matrices(v, aspect, V, P);
+    mul_cm(P, V, mvp);
+    const float half_px = 0.5f * point_size_px(v.have_cur ? v.cur.n : 0, core->scale) / core->scale + 1.0f;
+
+    // ---- a finished gesture: a selection, a cleared selection or a pick
+    if (released && v.have_cur && v.cur.pos_cpu) {
+        if (g.selecting && g.moved && g.lasso.size() >= 4) {
+            std::vector<float> poly = g.lasso;
+            if (g.rect) {
+                const float ax = poly[0], ay = poly[1], bx = poly[2], by = poly[3];
+                poly = {ax, ay, bx, ay, bx, by, ax, by};
+            }
+            select_polygon(S, v, mvp, p0, avail, poly);
+        } else {
+            if (g.selecting) {
+                // A shift-click clears the selection, which an empty detail reports.
+                if (v.sel_count) emit(S, v, "select", "{}");
+                if (!v.selected.empty()) ++v.sel_version;
+                v.selected.clear();
+                v.sel_count = 0;
+                v.dirty = true;
+            }
+            if (!g.moved) {
+                uint64_t stride = 1;
+                const Pick pk = pick_point(v, mvp, p0, avail, io.MousePos, half_px, 8.0f, &stride);
+                if (pk.idx >= 0) emit(S, v, "pick", point_detail(v, pk.idx));
+            }
+        }
+        g.lasso.clear();
+    }
+    if (released) g.selecting = false;
+
+    // ---- GPU: redraw the render target when something changed
     // Bare views (a page draws the chrome) clear to the window's ground.
     const uint32_t clear = core->views_bare ? ImGui::GetColorU32(ImGuiCol_WindowBg) : kClear;
     if (v.dirty) {
         bool ok;
         if (v.have_cur) {
-            HostGeomDraw d;
-            d.pos_alloc = v.cur.pos->rid;
-            d.pos_offset = v.cur.pos_off;
-            d.vertex_count = v.cur.n;
-            d.topology = CALIPER_GEOM_TOPO_POINTS;
-            d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
-            d.blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
-            d.depth_flags = v.dims == 3 ? (CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE) : 0u;
-            d.size_px = point_size_px(v.cur.n, core->scale);
+            HostGeomDraw d[2];
+            d[0].pos_alloc = v.cur.pos->rid;
+            d[0].pos_offset = v.cur.pos_off;
+            d[0].vertex_count = v.cur.n;
+            d[0].topology = CALIPER_GEOM_TOPO_POINTS;
+            d[0].shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+            d[0].blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
+            d[0].depth_flags = v.dims == 3 ? (CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE) : 0u;
+            d[0].size_px = point_size_px(v.cur.n, core->scale);
             if (v.cur.aux) {
-                d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
-                d.attr_alloc = v.cur.aux->rid;
-                d.attr_offset = v.cur.aux_off;
-                d.lut256 = v.lut;
-                d.vmin = v.pvmin;
-                d.vmax = v.pvmax;
+                d[0].color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+                d[0].attr_alloc = v.cur.aux->rid;
+                d[0].attr_offset = v.cur.aux_off;
+                d[0].lut256 = v.lut;
+                d[0].vmin = v.pvmin;
+                d[0].vmax = v.pvmax;
             } else {
-                d.color_mode = CALIPER_GEOM_COLOR_FLAT;
-                d.flat_rgba = kFlat;
+                d[0].color_mode = CALIPER_GEOM_COLOR_FLAT;
+                d[0].flat_rgba = kFlat;
             }
-            ok = r->geom_draw_primitives(v.view_rid, V, P, &d, 1, clear);
+            // A selection: every point dimmed, then the selected ones over
+            // them in their own colours (depth test less-equal lets them win).
+            uint32_t dim_lut[256];
+            uint32_t count = 1;
+            if (ev && v.sel_count && stage_selection(core, v)) {
+                d[1] = d[0];
+                d[1].pos_alloc = v.sel_draw.pos->rid;
+                d[1].pos_offset = 0;
+                d[1].vertex_count = v.sel_draw.n;
+                if (v.cur.aux && v.sel_draw.aux) {
+                    d[1].attr_alloc = v.sel_draw.aux->rid;
+                    d[1].attr_offset = 0;
+                    for (int i = 0; i < 256; ++i) dim_lut[i] = dimmed(v.lut[i], clear);
+                    d[0].lut256 = dim_lut;
+                } else {
+                    d[1].color_mode = CALIPER_GEOM_COLOR_FLAT;
+                    d[1].flat_rgba = kFlat;
+                    d[0].color_mode = CALIPER_GEOM_COLOR_FLAT;
+                    d[0].flat_rgba = dimmed(kFlat, clear);
+                }
+                count = 2;
+            }
+            ok = r->geom_draw_primitives(v.view_rid, V, P, d, count, clear);
             if (ok) {
                 void* h = r->geom_draw_retain_last();
                 if (v.cur.last_draw) r->device_update_release(v.cur.last_draw);
                 v.cur.last_draw = h;
+                if (count == 2) {
+                    void* h2 = r->geom_draw_retain_last();
+                    if (v.sel_draw.last_draw) r->device_update_release(v.sel_draw.last_draw);
+                    v.sel_draw.last_draw = h2;
+                }
             }
         } else {
             ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, clear);
@@ -349,6 +668,41 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     dl->AddImage((ImTextureID)r->tex_imtexture_id(v.view_rid), p0,
                  ImVec2(p0.x + avail.x, p0.y + avail.y));
 
+    // Where the data is: the area, and for 2-D the window of x and y it shows.
+    v.geo_valid = true;
+    v.geo_area[0] = p0.x; v.geo_area[1] = p0.y; v.geo_area[2] = avail.x; v.geo_area[3] = avail.y;
+    v.geo_ydown = false;
+    if (v.dims == 2) {
+        v.geo_window[0] = (double)c.tx - (double)c.half_h * aspect;
+        v.geo_window[1] = (double)c.tx + (double)c.half_h * aspect;
+        v.geo_window[2] = (double)c.ty - (double)c.half_h;
+        v.geo_window[3] = (double)c.ty + (double)c.half_h;
+    } else {
+        std::fill(v.geo_window, v.geo_window + 4, 0.0);
+    }
+
+    // ---- the selection being drawn, and how many points are selected
+    if (ev && g.down && g.selecting && g.lasso.size() >= 4) {
+        dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
+        if (g.rect) {
+            const ImVec2 a(std::min(g.lasso[0], g.lasso[2]), std::min(g.lasso[1], g.lasso[3]));
+            const ImVec2 b(std::max(g.lasso[0], g.lasso[2]), std::max(g.lasso[1], g.lasso[3]));
+            dl->AddRectFilled(a, b, kSelFill);
+            dl->AddRect(a, b, kSelLine, 0.0f, 0, 1.0f);
+        } else {
+            std::vector<ImVec2> pts;
+            for (size_t k = 0; k + 1 < g.lasso.size(); k += 2) pts.emplace_back(g.lasso[k], g.lasso[k + 1]);
+            dl->AddPolyline(pts.data(), (int)pts.size(), kSelLine, ImDrawFlags_Closed, 1.0f);
+        }
+        dl->PopClipRect();
+    }
+    if (ev && v.sel_count) {
+        char t[48];
+        std::snprintf(t, sizeof t, "%llu selected", (unsigned long long)v.sel_count);
+        const ImVec2 ts = ImGui::CalcTextSize(t);
+        dl->AddText(ImVec2(p0.x + avail.x - ts.x - 10.0f, p0.y + 8.0f), kSelText, t);
+    }
+
     // ---- hover
     if (hovered && !active && v.have_cur) {
         if (!v.cur.pos_cpu) {
@@ -356,10 +710,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         } else {
             const ImVec2 m = io.MousePos;
             if (v.hover_dirty || m.x != v.hover_mx || m.y != v.hover_my) {
-                float mvp[16];
-                mul_cm(P, V, mvp);
-                const float half = 0.5f * point_size_px(v.cur.n, core->scale) / core->scale + 1.0f;
-                const Pick pk = pick_point(v, mvp, p0, avail, m, half, 8.0f, &v.hover_stride);
+                const Pick pk = pick_point(v, mvp, p0, avail, m, half_px, 8.0f, &v.hover_stride);
                 v.hover_idx = pk.idx;
                 v.hover_sx = pk.sx;
                 v.hover_sy = pk.sy;
@@ -383,7 +734,13 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                     ImGui::SetTooltip("#%lld%s\n(%.5g, %.5g)%s", (long long)v.hover_idx,
                                       v.hover_stride > 1 ? " (sampled)" : "", q[0], q[1], line);
             }
+            if (ev) {
+                const int64_t i = v.hover_idx;
+                emit_hover(S, v, i, [&] { return point_detail(v, i); });
+            }
         }
+    } else if (ev && !active) {
+        v.hover_sent = -1;   // left the view: the same point hovered again is reported again
     }
     ImGui::End();
 }
@@ -413,6 +770,62 @@ void decimate_series(View& v, size_t buckets) {
     }
 }
 
+// The gesture of a plot (series, histogram) while the host listens for
+// events: a left press inside the plot starts it, the drag follows the mouse
+// in plot x, the release ends it. ImPlot keeps its own pan, zoom and fit; the
+// axes are locked while a selection is dragged so they stay put.
+bool plot_gesture(View& v, double mx) {
+    Gesture& g = v.gesture;
+    ImGuiIO& io = ImGui::GetIO();
+    if (!g.down && ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        g = Gesture{};
+        g.down = true;
+        g.shift = io.KeyShift;
+        g.selecting = g.shift;
+        g.x0 = io.MousePos.x;
+        g.y0 = io.MousePos.y;
+        g.d0x = g.d1x = mx;
+    }
+    if (!g.down) return false;
+    if (!g.moved && std::hypot(io.MousePos.x - g.x0, io.MousePos.y - g.y0) > kClickSlop) g.moved = true;
+    g.d1x = mx;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        g.down = false;
+        return true;
+    }
+    return false;
+}
+
+// A band over the plot's whole height from x = a to x = b (plot units).
+void plot_band(double a, double b, bool fill) {
+    const ImPlotRect lim = ImPlot::GetPlotLimits();
+    ImVec2 p = ImPlot::PlotToPixels(std::min(a, b), lim.Y.Max), q = ImPlot::PlotToPixels(std::max(a, b), lim.Y.Min);
+    if (q.x - p.x < 1.0f) q.x = p.x + 1.0f;
+    ImPlot::PushPlotClipRect();
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    if (fill) dl->AddRectFilled(p, q, kSelFill);
+    dl->AddRect(p, q, kSelLine, 0.0f, 0, 1.0f);
+    ImPlot::PopPlotClipRect();
+}
+
+void plot_geometry(View& v) {
+    const ImVec2 pp = ImPlot::GetPlotPos(), ps = ImPlot::GetPlotSize();
+    const ImPlotRect lim = ImPlot::GetPlotLimits();
+    v.geo_valid = true;
+    v.geo_area[0] = pp.x; v.geo_area[1] = pp.y; v.geo_area[2] = ps.x; v.geo_area[3] = ps.y;
+    v.geo_window[0] = lim.X.Min; v.geo_window[1] = lim.X.Max;
+    v.geo_window[2] = lim.Y.Min; v.geo_window[3] = lim.Y.Max;
+    v.geo_ydown = false;
+}
+
+std::string step_detail(const View& v, int64_t step) {
+    Detail d;
+    d.integer("step", step);
+    const int64_t i = step - (int64_t)v.first;
+    if (i >= 0 && (size_t)i < v.values.size() && std::isfinite(v.values[(size_t)i])) d.num("value", v.values[(size_t)i]);
+    return d.str();
+}
+
 void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 200.0f));
     if (!open) { ImGui::End(); return; }
@@ -428,8 +841,13 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         else
             ImGui::Text("series (no values yet)  %s", tel);
     }
+    const bool ev = (bool)S->events;
+    Gesture& g = v.gesture;
+    const ImPlotAxisFlags lock = ev && g.down && g.selecting ? ImPlotAxisFlags_Lock : 0;
     if (ImPlot::BeginPlot("##caliper.series", ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
-        ImPlot::SetupAxes("step", nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+        ImPlot::SetupAxes("step", nullptr, ImPlotAxisFlags_AutoFit | lock, ImPlotAxisFlags_AutoFit | lock);
+        // The retained steps [lo, hi), as the browser view bounds a selection.
+        const int64_t lo = (int64_t)v.first, hi = (int64_t)(v.first + n);
         if (n) {
             if (n <= kSeriesRawMax) {
                 ImPlot::PlotLine("##line", v.values.data(), (int)n, 1.0, (double)v.first);
@@ -438,7 +856,7 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 ImPlot::PlotLine("##line", v.xs.data(), v.ys.data(), (int)v.xs.size());
             }
             v.draw_dirty = false;
-            if (ImPlot::IsPlotHovered()) {
+            if (ImPlot::IsPlotHovered() && !(ev && g.down)) {
                 const ImPlotPoint mp = ImPlot::GetPlotMousePos();
                 const double rel = std::round(mp.x - (double)v.first);
                 const size_t i = (size_t)std::clamp(rel, 0.0, (double)(n - 1));
@@ -449,14 +867,57 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 ImPlot::PlotScatter("##hover", &x, &y, 1, spec);
                 ImGui::SetTooltip("step %llu\nvalue %.6g", (unsigned long long)(v.first + i),
                                   (double)v.values[i]);
+                if (ev) {
+                    const int64_t step = (int64_t)(v.first + i);
+                    emit_hover(S, v, step, [&] { return step_detail(v, step); });
+                }
+            } else if (ev && !g.down) {
+                v.hover_sent = -1;
             }
         }
+        if (ev) {
+            const double mx = ImPlot::GetPlotMousePos().x;
+            if (plot_gesture(v, mx)) {
+                const bool had = v.sel_s1 > v.sel_s0;
+                if (g.selecting && g.moved) {
+                    const int64_t s0 = std::max(lo, (int64_t)std::ceil(std::min(g.d0x, g.d1x)));
+                    const int64_t s1 = std::min(hi, (int64_t)std::floor(std::max(g.d0x, g.d1x)) + 1);
+                    if (s1 > s0) {
+                        v.sel_s0 = s0;
+                        v.sel_s1 = s1;
+                        emit(S, v, "select", Detail().ipair("steps", s0, s1).str());
+                    } else if (had) {
+                        v.sel_s0 = v.sel_s1 = 0;
+                        emit(S, v, "select", "{}");
+                    }
+                } else if (!g.moved) {
+                    if (g.selecting && had) {
+                        v.sel_s0 = v.sel_s1 = 0;
+                        emit(S, v, "select", "{}");
+                    }
+                    if (hi > lo) {
+                        const int64_t step = std::clamp((int64_t)std::llround(mx), lo, hi - 1);
+                        emit(S, v, "pick", step_detail(v, step));
+                    }
+                }
+                g.selecting = false;
+            }
+            if (v.sel_s1 > v.sel_s0) plot_band((double)v.sel_s0, (double)(v.sel_s1 - 1), true);
+            if (g.down && g.selecting && g.moved) plot_band(g.d0x, g.d1x, false);
+        }
+        plot_geometry(v);
         ImPlot::EndPlot();
     }
     ImGui::End();
 }
 
 // ---- histogram -------------------------------------------------------------
+std::string bin_detail(const View& v, int64_t b) {
+    const double lo = v.lo, w = ((double)v.hi - lo) / (double)std::max<size_t>(1, v.values.size());
+    return Detail().integer("bin", b).num("lo", lo + (double)b * w).num("hi", lo + (double)(b + 1) * w)
+        .num("count", (double)v.values[(size_t)b]).str();
+}
+
 void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 200.0f));
     if (!open) { ImGui::End(); return; }
@@ -468,10 +929,13 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         telemetry(tel, sizeof tel, S, v);
         ImGui::Text("histogram bins=%zu [%.4g, %.4g]  %s", B, v.lo, v.hi, tel);
     }
+    const bool ev = (bool)S->events;
+    Gesture& g = v.gesture;
+    const ImPlotAxisFlags lock = ev && g.down && g.selecting ? ImPlotAxisFlags_Lock : 0;
     if (ImPlot::BeginPlot("##caliper.histogram", ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
-        ImPlot::SetupAxes(nullptr, "count", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+        ImPlot::SetupAxes(nullptr, "count", ImPlotAxisFlags_AutoFit | lock, ImPlotAxisFlags_AutoFit | lock);
+        const double w = B ? ((double)v.hi - (double)v.lo) / (double)B : 1.0;
         if (B) {
-            const double w = ((double)v.hi - (double)v.lo) / (double)B;
             if (v.draw_dirty || v.xs.size() != B) {
                 v.xs.resize(B);
                 v.ys.resize(B);
@@ -482,22 +946,139 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 v.draw_dirty = false;
             }
             ImPlot::PlotBars("##bars", v.xs.data(), v.ys.data(), (int)B, w);
-            if (ImPlot::IsPlotHovered()) {
+            bool over = false;
+            if (ImPlot::IsPlotHovered() && !(ev && g.down)) {
                 const ImPlotPoint mp = ImPlot::GetPlotMousePos();
                 const double fi = std::floor((mp.x - (double)v.lo) / w);
                 if (fi >= 0.0 && fi < (double)B) {
                     const size_t i = (size_t)fi;
+                    over = true;
                     ImGui::SetTooltip("[%.6g, %.6g)\ncount %.6g", (double)v.lo + (double)i * w,
                                       (double)v.lo + (double)(i + 1) * w, (double)v.values[i]);
+                    if (ev) emit_hover(S, v, (int64_t)i, [&] { return bin_detail(v, (int64_t)i); });
                 }
             }
+            if (ev && !over && !g.down) v.hover_sent = -1;
         }
+        if (ev && B) {
+            const double mx = ImPlot::GetPlotMousePos().x;
+            if (plot_gesture(v, mx)) {
+                const bool had = v.sel_s1 > v.sel_s0;
+                if (g.selecting && g.moved) {
+                    const int64_t b0 = std::max<int64_t>(0, (int64_t)std::floor((std::min(g.d0x, g.d1x) - v.lo) / w));
+                    const int64_t b1 = std::min<int64_t>((int64_t)B, (int64_t)std::ceil((std::max(g.d0x, g.d1x) - v.lo) / w));
+                    if (b1 > b0) {
+                        v.sel_s0 = b0;
+                        v.sel_s1 = b1;
+                        emit(S, v, "select", Detail().pair("range", v.lo + (double)b0 * w, v.lo + (double)b1 * w).str());
+                    } else if (had) {
+                        v.sel_s0 = v.sel_s1 = 0;
+                        emit(S, v, "select", "{}");
+                    }
+                } else if (!g.moved) {
+                    if (g.selecting && had) {
+                        v.sel_s0 = v.sel_s1 = 0;
+                        emit(S, v, "select", "{}");
+                    }
+                    const double fi = std::floor((mx - (double)v.lo) / w);
+                    if (fi >= 0.0 && fi < (double)B) emit(S, v, "pick", bin_detail(v, (int64_t)fi));
+                }
+                g.selecting = false;
+            }
+            if (v.sel_s1 > v.sel_s0) {
+                if (v.sel_s1 > (int64_t)B) v.sel_s0 = v.sel_s1 = 0;   // fewer bins now
+                else plot_band(v.lo + (double)v.sel_s0 * w, v.lo + (double)v.sel_s1 * w, true);
+            }
+            if (g.down && g.selecting && g.moved) plot_band(g.d0x, g.d1x, false);
+        }
+        plot_geometry(v);
         ImPlot::EndPlot();
     }
     ImGui::End();
 }
 
 // ---- heatmap / image overlay on the v1.2 window -----------------------------
+// The payload axes of a heatmap or image: rows, columns and, for a mosaic,
+// the tile axis (wire protocol v3, Payload axes).
+struct CellAxes {
+    const caliper_live::PayloadAxis* row = nullptr;
+    const caliper_live::PayloadAxis* col = nullptr;
+    const caliper_live::PayloadAxis* tile = nullptr;
+};
+CellAxes cell_axes(const View& v) {
+    const auto& a = v.map.axes;
+    CellAxes c;
+    if (v.map.tile_cols > 0 && a.size() == 3) {
+        c.tile = &a[0]; c.row = &a[1]; c.col = &a[2];
+    } else {
+        if (a.size() > 0) c.row = &a[0];
+        if (a.size() > 1) c.col = &a[1];
+    }
+    return c;
+}
+
+// Where payload cell (r, c) is in the source: the tile (-1: not a mosaic) and
+// the row and column inside it.
+void locate(const View& v, const CellAxes& ax, int64_t r, int64_t c, int64_t* tile, int64_t* rr, int64_t* cc) {
+    if (!ax.tile || !ax.row || !ax.col || ax.row->size <= 0 || ax.col->size <= 0) {
+        *tile = -1; *rr = r; *cc = c;
+        return;
+    }
+    *tile = (r / ax.row->size) * v.map.tile_cols + c / ax.col->size;
+    *rr = r % ax.row->size;
+    *cc = c % ax.col->size;
+}
+
+// A pick or hover of a cell: the source indices of its first position, the
+// tile of a mosaic, and its value when it is a finite heatmap value.
+std::string cell_detail(const View& v, const TensorView& tv, int64_t r, int64_t c, const uint8_t* cpu) {
+    const CellAxes ax = cell_axes(v);
+    int64_t tile, rr, cc;
+    locate(v, ax, r, c, &tile, &rr, &cc);
+    Detail d;
+    d.integer("row", source_index(ax.row, rr)).integer("col", source_index(ax.col, cc));
+    if (tile >= 0) d.integer("tile", source_index(ax.tile, tile));
+    if (v.kind == CALIPER_LIVE_KIND_HEATMAP && cpu) {
+        const float x = ((const float*)cpu)[(size_t)r * (size_t)tv.w + (size_t)c];
+        if (std::isfinite(x)) d.num("value", (double)x);
+    }
+    return d.str();
+}
+
+// The browser heatmap's selection (web/src/views/heatmap.ts): the cells a
+// drag from (x0, y0) to (x1, y1) covers (columns x, rows y, in cells), kept
+// inside the tile where the drag began in a mosaic. Empty when r1 <= r0.
+void select_cells(const View& v, int64_t rows, int64_t cols, double x0, double y0, double x1, double y1,
+                  int64_t* r0, int64_t* r1, int64_t* c0, int64_t* c1) {
+    const CellAxes ax = cell_axes(v);
+    int64_t rlo = 0, rhi = rows, clo = 0, chi = cols;
+    if (v.map.tile_cols > 0 && ax.row && ax.col && ax.row->size > 0 && ax.col->size > 0) {
+        const int64_t tr = (int64_t)std::floor(std::clamp(y0, 0.0, (double)(rows - 1)) / (double)ax.row->size);
+        const int64_t tc = (int64_t)std::floor(std::clamp(x0, 0.0, (double)(cols - 1)) / (double)ax.col->size);
+        rlo = tr * ax.row->size; rhi = rlo + ax.row->size;
+        clo = tc * ax.col->size; chi = clo + ax.col->size;
+    }
+    auto cr = [&](double x) { return std::clamp((int64_t)x, rlo, rhi); };
+    auto cc = [&](double x) { return std::clamp((int64_t)x, clo, chi); };
+    *c0 = cc(std::floor(std::min(x0, x1)));
+    *c1 = cc(std::ceil(std::max(x0, x1)));
+    *r0 = cr(std::floor(std::min(y0, y1)));
+    *r1 = cr(std::ceil(std::max(y0, y1)));
+}
+
+std::string cells_detail(const View& v, int64_t r0, int64_t r1, int64_t c0, int64_t c1) {
+    const CellAxes ax = cell_axes(v);
+    int64_t tile, rr, cc;
+    locate(v, ax, r0, c0, &tile, &rr, &cc);
+    int64_t ra, rb, ca, cb;
+    source_range(ax.row, rr, rr + (r1 - r0), &ra, &rb);
+    source_range(ax.col, cc, cc + (c1 - c0), &ca, &cb);
+    Detail d;
+    d.ipair("rows", ra, rb).ipair("cols", ca, cb);
+    if (tile >= 0) d.integer("tile", source_index(ax.tile, tile));
+    return d.str();
+}
+
 void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const TensorView* tv = nullptr;
     for (const auto& t : core->views)
@@ -539,24 +1120,110 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
         const float ah = wp.y + ws.y - st.WindowPadding.y - top;
         const float sc = (img.x > 0 && img.y > 0) ? std::min(aw / img.x, ah / img.y) : 0.0f;
         const ImVec2 m = ImGui::GetIO().MousePos;
-        if (sc > 0.0f && !on_button && ImGui::IsWindowHovered()) {
+        // A CPU payload's copy, or the MTLBuffer the v1.2 view still imports.
+        const bool live_buf = v.tex_cpu && (v.tex_cpu == v.tex_copy.data() ||
+                                            (tv->alloc && tv->alloc_buf == v.tex_buf));
+        const uint8_t* cpu = live_buf ? v.tex_cpu : nullptr;
+        if (sc > 0.0f) {
             const float x0 = x_start + std::max(0.0f, (aw - img.x * sc) * 0.5f);
-            const float fx = (m.x - x0) / (img.x * sc), fy = (m.y - top) / (img.y * sc);
-            if (fx >= 0.0f && fx < 1.0f && fy >= 0.0f && fy < 1.0f) {
-                const int col = std::min(tv->w - 1, (int)(fx * (float)tv->w));
-                const int row = std::min(tv->h - 1, (int)(fy * (float)tv->h));
-                // A CPU payload's copy, or the MTLBuffer the v1.2 view still imports.
-                const bool live_buf = v.tex_cpu && (v.tex_cpu == v.tex_copy.data() ||
-                                                    (tv->alloc && tv->alloc_buf == v.tex_buf));
-                const size_t i = (size_t)row * (size_t)tv->w + (size_t)col;
-                if (!live_buf) {
-                    ImGui::SetTooltip("(%d, %d)\nvalue unavailable (payload not CPU-visible)", row, col);
-                } else if (v.kind == CALIPER_LIVE_KIND_HEATMAP) {
-                    ImGui::SetTooltip("(%d, %d)\nvalue %.6g", row, col, (double)((const float*)v.tex_cpu)[i]);
-                } else {
-                    const uint8_t* q = v.tex_cpu + i * 4;
-                    ImGui::SetTooltip("(%d, %d)\nrgba %u %u %u %u", row, col, q[0], q[1], q[2], q[3]);
+            const float iw = img.x * sc, ih = img.y * sc;
+            v.geo_valid = true;
+            v.geo_area[0] = x0; v.geo_area[1] = top; v.geo_area[2] = iw; v.geo_area[3] = ih;
+            v.geo_window[0] = 0.0; v.geo_window[1] = tv->w; v.geo_window[2] = 0.0; v.geo_window[3] = tv->h;
+            v.geo_ydown = true;
+            // The cell under a point, in fractional cells (columns x, rows y).
+            auto at = [&](ImVec2 p, double* cx, double* cy) {
+                *cx = (double)(p.x - x0) / iw * tv->w;
+                *cy = (double)(p.y - top) / ih * tv->h;
+            };
+            auto cell = [&](ImVec2 p, int64_t* r, int64_t* c) {
+                double cx, cy;
+                at(p, &cx, &cy);
+                if (!(cx >= 0.0 && cx < tv->w && cy >= 0.0 && cy < tv->h)) return false;
+                *c = std::min<int64_t>(tv->w - 1, (int64_t)cx);
+                *r = std::min<int64_t>(tv->h - 1, (int64_t)cy);
+                return true;
+            };
+            const bool ev = (bool)S->events;
+            bool active = false;
+            if (ev) {
+                // An invisible button over the content takes the gestures.
+                if (v.sel_r1 > v.sel_r0 && (v.sel_rows != tv->h || v.sel_cols != tv->w)) v.sel_r0 = v.sel_r1 = 0;
+                ImGui::SetCursorScreenPos(ImVec2(x_start, top));
+                ImGui::InvisibleButton("##caliper.cells", ImVec2(std::max(aw, 1.0f), std::max(ah, 1.0f)),
+                                       ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+                active = ImGui::IsItemActive();
+                Gesture& g = v.gesture;
+                const bool released = track_gesture(v, m, true);
+                if (g.down || released) {
+                    double cx, cy;
+                    at(m, &cx, &cy);
+                    if (ImGui::IsItemActivated()) { g.d0x = cx; g.d0y = cy; }
+                    g.d1x = cx;
+                    g.d1y = cy;
                 }
+                if (released) {
+                    const bool had = v.sel_r1 > v.sel_r0;
+                    if (g.selecting && g.moved) {
+                        int64_t r0, r1, c0, c1;
+                        select_cells(v, tv->h, tv->w, g.d0x, g.d0y, g.d1x, g.d1y, &r0, &r1, &c0, &c1);
+                        if (r1 > r0 && c1 > c0) {
+                            v.sel_r0 = r0; v.sel_r1 = r1; v.sel_c0 = c0; v.sel_c1 = c1;
+                            v.sel_rows = tv->h;
+                            v.sel_cols = tv->w;
+                            emit(S, v, "select", cells_detail(v, r0, r1, c0, c1));
+                        } else if (had) {
+                            v.sel_r0 = v.sel_r1 = 0;
+                            emit(S, v, "select", "{}");
+                        }
+                    } else if (!g.moved) {
+                        // A shift-click clears the selection, which an empty detail reports.
+                        if (g.selecting && had) {
+                            v.sel_r0 = v.sel_r1 = 0;
+                            emit(S, v, "select", "{}");
+                        }
+                        int64_t r, c;
+                        if (cell(m, &r, &c)) emit(S, v, "pick", cell_detail(v, *tv, r, c, cpu));
+                    }
+                    g.selecting = false;
+                }
+                // The selection, and the drag that makes one.
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->PushClipRect(ImVec2(x0, top), ImVec2(x0 + iw, top + ih), true);
+                auto px = [&](double cx, double cy) {
+                    return ImVec2(x0 + (float)(cx / tv->w) * iw, top + (float)(cy / tv->h) * ih);
+                };
+                if (v.sel_r1 > v.sel_r0) {
+                    const ImVec2 a = px((double)v.sel_c0, (double)v.sel_r0), b = px((double)v.sel_c1, (double)v.sel_r1);
+                    dl->AddRectFilled(a, b, kSelFill);
+                    dl->AddRect(a, b, kSelLine, 0.0f, 0, 1.25f);
+                }
+                if (g.down && g.selecting && g.moved) {
+                    const ImVec2 a = px(g.d0x, g.d0y), b = px(g.d1x, g.d1y);
+                    const ImVec2 lo(std::min(a.x, b.x), std::min(a.y, b.y)), hi(std::max(a.x, b.x), std::max(a.y, b.y));
+                    dl->AddRectFilled(lo, hi, kSelFill);
+                    dl->AddRect(lo, hi, kSelLine, 0.0f, 0, 1.0f);
+                }
+                dl->PopClipRect();
+            }
+            if (!on_button && !active && ImGui::IsWindowHovered()) {
+                int64_t r = 0, c = 0;
+                const bool in = cell(m, &r, &c);
+                if (in) {
+                    const int row = (int)r, col = (int)c;
+                    const size_t i = (size_t)row * (size_t)tv->w + (size_t)col;
+                    if (!live_buf) {
+                        ImGui::SetTooltip("(%d, %d)\nvalue unavailable (payload not CPU-visible)", row, col);
+                    } else if (v.kind == CALIPER_LIVE_KIND_HEATMAP) {
+                        ImGui::SetTooltip("(%d, %d)\nvalue %.6g", row, col, (double)((const float*)v.tex_cpu)[i]);
+                    } else {
+                        const uint8_t* q = v.tex_cpu + i * 4;
+                        ImGui::SetTooltip("(%d, %d)\nrgba %u %u %u %u", row, col, q[0], q[1], q[2], q[3]);
+                    }
+                }
+                if (ev) emit_hover(S, v, in ? r * tv->w + c : -1, [&] { return cell_detail(v, *tv, r, c, cpu); });
+            } else if (ev && !active) {
+                v.hover_sent = -1;
             }
         }
     }

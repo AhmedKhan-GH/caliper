@@ -17,8 +17,10 @@
 
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
+#include "live/live_source.h"   // PayloadMap
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,6 +65,32 @@ struct PointsPayload {
     const uint8_t* aux_cpu = nullptr;   // CPU view of aux (NULL: hover shows no value)
     uint64_t       n = 0;
     void*          last_draw = nullptr; // +1 handle on the last frame that drew it
+};
+
+// What a person did in a view, for the host's event sink (set_event_sink):
+// `type` is "select", "pick" or "hover" and `detail` a JSON object in source
+// indices, exactly as wire protocol v3 ("Events") and the browser element's
+// own views report it. A select with detail "{}" clears the selection.
+struct LiveEvent {
+    std::string view;
+    const char* type = "select";
+    std::string detail;
+};
+using EventSink = std::function<void(const LiveEvent&)>;
+
+// The pointer gesture on a view while a host listens for events: the browser
+// element's rule (web/src/views/interact.ts). A shift-drag selects; a drag
+// without shift pans or orbits; a press and release that moved at most
+// kClickSlop pixels is a click (a pick), and with shift it also clears the
+// selection.
+struct Gesture {
+    bool down = false, moved = false, selecting = false;
+    bool shift = false, alt = false, ctrl = false;
+    int button = 0;                  // ImGuiMouseButton of the press
+    float x0 = 0.0f, y0 = 0.0f;      // press position (screen)
+    double d0x = 0.0, d0y = 0.0, d1x = 0.0, d1y = 0.0;   // drag ends in data coordinates
+    std::vector<float> lasso;        // points: the lasso (x, y pairs, screen)
+    bool rect = false;               // points: shift + alt selects a rectangle
 };
 
 struct Camera {
@@ -131,6 +159,33 @@ struct View {
     // Windowed layout (first placement tiles like the v1.2 views).
     bool  placed = false;
     float pos_x = 0.0f, pos_y = 0.0f, size_x = 0.0f, size_y = 0.0f;
+
+    // ---- events (only while the host has an event sink) ----------------------
+    caliper_live::PayloadMap map;     // of the last applied snapshot (set_payload_map)
+    Gesture gesture;
+    double  last_hover_ms = -1e9;     // hovers reach the sink at most 30 times a second
+    int64_t hover_sent = -2;          // the last hovered item reported (-1: none)
+    // HEATMAP / IMAGE: the selected payload cells [r0, r1) x [c0, c1), r1 == 0: none.
+    int64_t sel_r0 = 0, sel_r1 = 0, sel_c0 = 0, sel_c1 = 0;
+    int64_t sel_rows = 0, sel_cols = 0;   // the payload size it was made on
+    // SERIES / HISTOGRAM: the selected steps [s0, s1) or bins [b0, b1), s1 == s0: none.
+    int64_t sel_s0 = 0, sel_s1 = 0;
+    // POINTS: one flag per point of the current sample (empty: no selection),
+    // and the selected points' copy that is drawn over the dimmed rest.
+    std::vector<uint8_t> selected;
+    uint64_t    sel_count = 0;
+    uint64_t    sel_version = 0;          // grows with every change of the selection
+    PointsPayload sel_draw;               // the selected points' positions and aux
+    bool        have_sel_draw = false;
+    uint64_t    sel_draw_for = 0, sel_draw_updates = 0;   // sel_version and updates it was built for
+
+    // Where the view drew its data last frame, for tests and the page host:
+    // area in screen units (x, y, w, h) and the data window it shows
+    // (x0, x1, y0, y1: columns and rows for a heatmap, rows growing down).
+    bool   geo_valid = false;
+    float  geo_area[4] = {};
+    double geo_window[4] = {};
+    bool   geo_ydown = false;
 };
 
 }  // namespace caliper_live_views
@@ -138,12 +193,25 @@ struct View {
 struct CaliperLiveViewsState {
     std::vector<std::unique_ptr<caliper_live_views::View>> views;  // creation order
     bool paused = false;
+    // Set by a host that sends what people do in the views to a producer (the
+    // browser's NetSource). Without it the views neither select nor report.
+    caliper_live_views::EventSink events;
 };
 
 namespace caliper_live_views {
 
 // live_views.cpp
 View* find(CaliperCore* core, const char* name);
+// The host's event sink (empty: no selections, no events). Creates the state.
+void set_event_sink(CaliperCore* core, EventSink sink);
+// How the last applied snapshot of view `name` maps onto its source; the
+// host calls it right after caliper_core_live_apply. False: no such view.
+bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map);
+// A copy of `len` host bytes as a renderer allocation of view v, as a CPU
+// payload is staged (released with drop_import).
+bool stage_host(CaliperCore* core, View& v, const void* bytes, uint64_t len, Import** out,
+                const uint8_t** cpu, std::string* why);
+void drop_payload(CaliperCore* core, View& v, PointsPayload& p);
 void  poll_handles(CaliperCore* core, View& v);   // retire done handles (non-blocking)
 void  fit_points(View& v, float aspect);          // camera from bbox (stats or CPU scan)
 

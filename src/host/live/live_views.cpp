@@ -150,6 +150,8 @@ void release_typed(CaliperCore* core, View& v) {
     v.pending.clear();
     if (v.have_cur) release_payload(core, v, v.cur);
     v.have_cur = false;
+    if (v.have_sel_draw) release_payload(core, v, v.sel_draw);
+    v.have_sel_draw = false;
     for (auto& p : v.retired) release_payload(core, v, p);
     v.retired.clear();
     for (auto& im : v.imports) {   // empty unless a payload leaked a ref
@@ -389,6 +391,12 @@ bool apply_points(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
     v.cur = p;
     v.have_cur = true;
     if (v.dims != s.points_dims) v.fit_pending = true;   // 2-D <-> 3-D: new camera model
+    if (!v.selected.empty() && v.selected.size() != n) {
+        // Another sample size: the indices no longer name the same points.
+        v.selected.clear();
+        v.sel_count = 0;
+        ++v.sel_version;
+    }
     v.dims = s.points_dims;
     v.label_count = has_aux ? s.label_count : 0;
     v.colormap = s.colormap;
@@ -603,6 +611,29 @@ View* find(CaliperCore* core, const char* name) {
         if (v->name == name) return v.get();
     return nullptr;
 }
+
+void set_event_sink(CaliperCore* core, EventSink sink) {
+    if (core) state(core)->events = std::move(sink);
+}
+
+bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map) {
+    View* v = core ? find(core, name) : nullptr;
+    if (!v) return false;
+    v->map = map;
+    return true;
+}
+
+bool stage_host(CaliperCore* core, View& v, const void* bytes, uint64_t len, Import** out,
+                const uint8_t** cpu, std::string* why) {
+    CaliperTensor t{};
+    t.struct_size = sizeof t;
+    t.device = CALIPER_DEV_CPU;
+    t.data = const_cast<void*>(bytes);
+    uint64_t off = 0;
+    return bind_buffer(core, v, t, 0, len, "selection", out, &off, cpu, why);
+}
+
+void drop_payload(CaliperCore* core, View& v, PointsPayload& p) { release_payload(core, v, p); }
 
 void poll_handles(CaliperCore* core, View& v) {
     HostRenderer* r = core->renderer.get();

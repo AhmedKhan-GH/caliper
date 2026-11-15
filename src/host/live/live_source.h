@@ -21,6 +21,21 @@
 
 namespace caliper_live {
 
+// How a payload maps onto its source (wire protocol v3, "Payload axes"), so
+// that a view reports what a person picked or selected in source indices.
+// Payload index i along an axis stands for the source positions
+// start + step * [floor(i * count / size), ceil((i + 1) * count / size)).
+// An empty map means payload index = source index (the shared-memory
+// session, where the payload is the whole source).
+struct PayloadAxis {
+    std::string dim;
+    int64_t start = 0, step = 1, count = 0, size = 0;
+};
+struct PayloadMap {
+    std::vector<PayloadAxis> axes;   // payload order; a tiled heatmap's tile axis first
+    int64_t tile_rows = 0, tile_cols = 0;   // a tiled heatmap's mosaic of cells, 0 = not tiled
+};
+
 struct Snapshot {
     void*    mtl_buffer = nullptr;  // id<MTLBuffer>, borrowed: valid while the view exists
     void*    host_base = nullptr;   // CPU address of the same buffer (shared storage)
@@ -42,6 +57,7 @@ struct Snapshot {
     uint32_t slot = 0;
     uint64_t seq = 0;               // producer's publish counter for this view
     uint64_t stamp_ns = 0;          // producer CLOCK_UPTIME_RAW at show()
+    const PayloadMap* map = nullptr; // borrowed until the next take() of the view; null = identity
 };
 
 struct SourceView {
@@ -103,6 +119,28 @@ public:
     // Once per poll: tell the producer a consumer is alive (its attached()
     // turns true; it snapshots only while this keeps coming).
     virtual void heartbeat() = 0;
+
+    // ---- outbound: what the viewer tells the producer ------------------------
+    // A Source that cannot send keeps these defaults (the shared-memory session
+    // has no channel back). Both are called on the frame thread.
+    //
+    // What a person did in view `key` (the view layer's event sink, caliper_
+    // live_views::set_event_sink): `type` is "select", "pick" or "hover" and
+    // `detail` a JSON object in source indices (wire protocol v3, "Events").
+    // The Source adds what the viewer was showing (subscription, seq, data
+    // view). False when it was not sent.
+    virtual bool send_event(uint64_t key, const std::string& type, const std::string& detail_json) {
+        (void)key; (void)type; (void)detail_json;
+        return false;
+    }
+    // Ask the producer for another data view of view `key` (a JSON object;
+    // wire protocol v3, "Data views"). The snapshots that follow carry the
+    // resolved one. False with *err when it was not sent.
+    virtual bool request_data_view(uint64_t key, const std::string& data_view_json, std::string* err) {
+        (void)key; (void)data_view_json;
+        if (err) *err = "this source cannot request data views";
+        return false;
+    }
 };
 
 // Why open_shm_source returned NULL.
