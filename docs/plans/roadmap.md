@@ -70,7 +70,7 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 ## Streaming and embedding
 
-Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift.
+Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming comes first; video streaming of a running Caliper to a browser, which shows native applets there unchanged, comes after it.
 
 ## Data and Cloud
 

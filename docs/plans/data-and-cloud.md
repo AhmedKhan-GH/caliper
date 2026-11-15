@@ -37,7 +37,7 @@ Caliper Cloud and Caliper Web offer the same online, and they are planned in out
 - the desktop app's history, synced and shared;
 - teams and permissions;
 - hosted storage;
-- hosted compute sessions that reach a browser through the data streaming of [Streaming and embedding](streaming-and-embedding.md), drawn by its web viewer.
+- hosted compute sessions that reach a browser through the data streaming of [Streaming and embedding](streaming-and-embedding.md), drawn by its web viewer, and later through its video streaming.
 
 Both are separate, later products, and they live outside this repository. They use the same database schema, the same recording format and the same live protocol as the desktop app, so the desktop app's data moves to them unchanged and the desktop app changes nothing for them.
 
