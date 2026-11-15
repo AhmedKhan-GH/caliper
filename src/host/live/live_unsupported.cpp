@@ -24,6 +24,10 @@ int caliper_core_live_attach(CaliperCore* core, const char*) {
     if (core) core->fail(kUnsupported);
     return 0;
 }
+int caliper_core_live_attach_url(CaliperCore* core, const char*) {
+    if (core) core->fail(kUnsupported);
+    return 0;
+}
 int caliper_core_live_attach_pid(CaliperCore* core, int32_t, const char*) {
     if (core) core->fail(kUnsupported);
     return 0;
@@ -60,6 +64,10 @@ int SessionList::find_pid(int32_t) const { return -1; }
 std::string SessionList::root() const { return root_; }
 
 bool Attachment::attach(caliper_host::HostRenderer*, const std::string&, std::string* err) {
+    if (err) *err = kUnsupported;
+    return false;
+}
+bool Attachment::attach_url(caliper_host::HostRenderer*, const std::string&, std::string* err) {
     if (err) *err = kUnsupported;
     return false;
 }

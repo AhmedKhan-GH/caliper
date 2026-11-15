@@ -411,6 +411,10 @@ if(APPLE)
     set_source_files_properties(test_live.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
+# The network part (test_live_net.cpp): a fake wire protocol v3 producer on
+# loopback (net/ws.h server, net/wire.h encoder) streams every kind to a core
+# attached by URL (caliper_core_live_attach_url, live_net_source.h).
+target_sources(caliper_live_tests PRIVATE test_live_net.cpp)
 add_test(NAME caliper_live_tests COMMAND caliper_live_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.
 set_tests_properties(caliper_live_tests PROPERTIES ENVIRONMENT

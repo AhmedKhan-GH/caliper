@@ -96,6 +96,16 @@ std::string SessionList::root() const { return data_root(root_.c_str()); }
 
 bool Attachment::attach(caliper_host::HostRenderer* renderer, const std::string& session,
                         std::string* err) {
+    return attach_with(renderer, &caliper_core_live_attach, session, "live_attach: ", err);
+}
+
+bool Attachment::attach_url(caliper_host::HostRenderer* renderer, const std::string& url,
+                            std::string* err) {
+    return attach_with(renderer, &caliper_core_live_attach_url, url, "live_attach_url: ", err);
+}
+
+bool Attachment::attach_with(caliper_host::HostRenderer* renderer, int (*go)(CaliperCore*, const char*),
+                             const std::string& what, const char* prefix, std::string* err) {
     if (core_) {
         *err = "already attached to '" + status_.session + "'; detach first";
         return false;
@@ -106,11 +116,10 @@ bool Attachment::attach(caliper_host::HostRenderer* renderer, const std::string&
                         : "no renderer";
         return false;
     }
-    if (!caliper_core_live_attach(core_, session.c_str())) {
+    if (!go(core_, what.c_str())) {
         // "live_attach: <why>": the reason without the call's prefix.
         std::string why = caliper_core_last_error(core_);
-        constexpr const char* kPrefix = "live_attach: ";
-        if (why.rfind(kPrefix, 0) == 0) why.erase(0, std::char_traits<char>::length(kPrefix));
+        if (why.rfind(prefix, 0) == 0) why.erase(0, std::char_traits<char>::length(prefix));
         *err = why;
         caliper_core_destroy_hosted(core_);
         core_ = nullptr;

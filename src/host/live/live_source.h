@@ -5,8 +5,9 @@
 // "the newest completed snapshot": an MTLBuffer + byte offsets (payload, aux),
 // the dtype/shape, a CPU pointer to the producer's stats, the mapping
 // (colormap, fixed or GPU-computed vmin/vmax) and its seq/stamp plus the kind
-// metadata (series_total, points_dims, label_count). Today the only Source is
-// the shared-memory session of another process (live_session.mm); an
+// metadata (series_total, points_dims, label_count). Two Sources exist: the
+// shared-memory session of another process (live_session.mm) and a wire
+// protocol v3 stream over a loopback WebSocket (live_net_source.h); an
 // in-process ring over torch-owned buffers can implement the same interface and
 // reuse every line of live_core.cpp.
 #pragma once

@@ -1,0 +1,871 @@
+// live_net_source.mm: the wire protocol v3 Source of live_net_source.h. The
+// network thread speaks the protocol and fills slots; the frame thread claims
+// them through the Source methods. See the header for the rules.
+#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+
+#include "live/live_net_source.h"
+
+#include "host_version.h"
+#include "live/live_shm.h"   // now_ns
+#include "net/wire.h"
+#include "net/ws.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cmath>
+#include <condition_variable>
+#include <cstring>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+namespace caliper_live {
+namespace {
+
+namespace wire = caliper_net::wire;
+using caliper_net::Bytes;
+using caliper_net::Client;
+using caliper_net::Json;
+using caliper_net::monotonic_ms;
+
+constexpr uint32_t kNone = CALIPER_LIVE_SLOT_NONE;
+constexpr size_t kStatsFloats = CALIPER_LIVE_STATS_BYTES / sizeof(float);   // 64
+constexpr int kPollMs = 50;
+constexpr int kStopFlushMs = 300;
+constexpr int kBackoffFirstMs = 250;
+constexpr int kBackoffMaxMs = 2000;
+
+uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
+
+bool valid_token(const std::string& t) {
+    if (t.size() < CALIPER_NET_TOKEN_MIN || t.size() > CALIPER_NET_TOKEN_MAX) return false;
+    for (unsigned char c : t)
+        if (!(std::isalnum(c) || c == '_' || c == '-') || c >= 0x80) return false;
+    return true;
+}
+
+bool valid_session_id(const std::string& s) {
+    if (s.empty() || s.size() > CALIPER_NET_SESSION_ID_MAX) return false;
+    for (unsigned char c : s)
+        if (!(std::isalnum(c) || c == '.' || c == '_' || c == '-') || c >= 0x80) return false;
+    return true;
+}
+
+// What a slot holds (written by the network thread before it publishes).
+struct SlotMeta {
+    uint32_t kind = 0;
+    int32_t  dtype = 0;
+    int32_t  ndim = 0;
+    int64_t  shape[4] = {};
+    int32_t  colormap = 0;
+    uint32_t flags = 0;
+    float    vmin = 0.0f, vmax = 1.0f;
+    int32_t  stats_count = 0;
+    int32_t  points_dims = 0;
+    int32_t  label_count = 0;
+    int64_t  aux_count = 0;
+    uint64_t aux_offset = 0;
+    uint64_t stats_offset = 0;
+    uint64_t seq = 0;        // the local publish counter
+    uint64_t stamp_ns = 0;
+};
+
+struct Slot {
+    id<MTLBuffer> buf = nil;
+    uint64_t      cap = 0;
+    SlotMeta      meta;
+};
+
+struct SeriesDelta {
+    uint64_t start = 0;
+    std::vector<float> values;
+};
+
+struct NetView {
+    // Set at creation, never changed.
+    uint64_t    key = 0;
+    std::string name;
+    uint32_t    kind = 0;
+    uint64_t    view_id = 0;
+
+    // Network thread only.
+    uint32_t sub = 0;
+    bool     subscribed = false;
+    uint64_t last_producer_seq = 0;
+
+    // Guarded by NetSourceImpl::mu_.
+    Slot     slot[NetSource::kSlots];
+    uint32_t published = kNone, reading = kNone, prev = kNone;
+    uint64_t seq = 0;        // local publishes: completed snapshots, or queued series deltas
+    uint64_t dropped = 0;    // snapshots the producer (or a hub) replaced before sending
+    std::deque<SeriesDelta> pending;
+    uint64_t pending_end = 0;   // the largest end among the queued deltas
+    uint64_t series_stamp = 0;  // stamp_ns of the newest SERIES message
+
+    // Frame thread only (series).
+    id<MTLBuffer> ring = nil;
+    uint64_t      ring_total = 0;
+};
+
+class NetSourceImpl final : public NetSource {
+public:
+    NetSourceImpl(StreamUrl url, id<MTLDevice> device) : url_(std::move(url)), device_(device) {
+        label_ = url_.display;
+        client_ = std::make_unique<Client>();
+        thread_ = std::thread([this] { run(); });
+    }
+
+    ~NetSourceImpl() override {
+        stop_ = true;
+        client_->wake();
+        if (thread_.joinable()) thread_.join();
+    }
+
+    // ---- Source (frame thread) -------------------------------------------------------------
+    std::string label() const override {
+        std::lock_guard<std::mutex> g(mu_);
+        return label_;
+    }
+    std::string script() const override {
+        std::lock_guard<std::mutex> g(mu_);
+        return script_;
+    }
+    uint64_t start_unix_ms() const override {
+        std::lock_guard<std::mutex> g(mu_);
+        return start_ms_;
+    }
+    int32_t producer_pid() const override {
+        std::lock_guard<std::mutex> g(mu_);
+        return pid_;
+    }
+    bool producer_alive() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return !failed_ && !ended_ && (attached_ || !ever_attached_);
+    }
+    void heartbeat() override {}   // the stream needs none: PING and PONG keep it alive
+
+    bool sync(std::vector<SourceView>* views) override {
+        std::lock_guard<std::mutex> g(mu_);
+        if (views_gen_ == seen_gen_) return false;
+        seen_gen_ = views_gen_;
+        frame_views_ = views_;
+        views->clear();
+        for (const auto& v : frame_views_) views->push_back({v->key, v->name, v->kind});
+        return true;
+    }
+
+    bool take(uint64_t key, uint64_t after_seq, Snapshot* out) override {
+        NetView* v = find(key);
+        if (!v) return false;
+        if (v->kind == CALIPER_LIVE_KIND_SERIES) return take_series(*v, after_seq, out);
+        std::lock_guard<std::mutex> g(mu_);
+        if (v->published == kNone) return false;
+        const Slot& s = v->slot[v->published];
+        if (s.meta.seq <= after_seq) return false;
+        v->prev = v->reading;
+        v->reading = v->published;
+        fill(s, v->reading, out);
+        return true;
+    }
+
+    void release_prev(uint64_t key) override {
+        NetView* v = find(key);
+        if (!v) return;
+        std::lock_guard<std::mutex> g(mu_);
+        v->prev = kNone;
+    }
+
+    void unclaim(uint64_t key) override {
+        NetView* v = find(key);
+        if (!v || v->kind == CALIPER_LIVE_KIND_SERIES) return;
+        std::lock_guard<std::mutex> g(mu_);
+        v->reading = v->prev;
+        v->prev = kNone;
+    }
+
+    void drew(uint64_t, uint64_t, uint64_t) override {}
+
+    uint64_t producer_dropped(uint64_t key) override {
+        NetView* v = find(key);
+        if (!v) return 0;
+        std::lock_guard<std::mutex> g(mu_);
+        return v->dropped;
+    }
+
+    // ---- NetSource ------------------------------------------------------------------------
+    Ready wait_ready(int timeout_ms, std::string* err) override {
+        std::unique_lock<std::mutex> g(mu_);
+        cv_.wait_for(g, std::chrono::milliseconds(std::max(0, timeout_ms)),
+                     [&] { return ever_attached_ || failed_; });
+        if (ever_attached_) return Ready::Attached;
+        if (failed_) {
+            if (err) *err = problem_;
+            return Ready::Failed;
+        }
+        return Ready::Pending;
+    }
+
+    bool pending() const override {
+        std::lock_guard<std::mutex> g(mu_);
+        return !ever_attached_ && !failed_;
+    }
+
+    std::string problem() const override {
+        std::lock_guard<std::mutex> g(mu_);
+        return problem_;
+    }
+
+private:
+    // ---- frame thread helpers ------------------------------------------------------------------
+    NetView* find(uint64_t key) {
+        for (auto& v : frame_views_)
+            if (v->key == key) return v.get();
+        return nullptr;
+    }
+
+    void fill(const Slot& s, uint32_t index, Snapshot* out) {
+        const SlotMeta& m = s.meta;
+        out->mtl_buffer = (__bridge void*)s.buf;
+        out->host_base = [s.buf contents];
+        out->byte_offset = 0;
+        out->aux_offset = m.aux_offset;
+        out->aux_count = m.aux_count;
+        out->kind = m.kind;
+        out->dtype = m.dtype;
+        out->ndim = m.ndim;
+        for (int i = 0; i < 4; ++i) out->shape[i] = m.shape[i];
+        out->colormap = m.colormap;
+        out->flags = m.flags;
+        out->vmin = m.vmin;
+        out->vmax = m.vmax;
+        out->stats = (const float*)((const uint8_t*)[s.buf contents] + m.stats_offset);
+        out->stats_count = m.stats_count;
+        out->series_total = 0;
+        out->points_dims = m.points_dims;
+        out->label_count = m.label_count;
+        out->slot = index;
+        out->seq = m.seq;
+        out->stamp_ns = m.stamp_ns;
+    }
+
+    // Applies the queued deltas to the view's ring (frame thread only) and hands
+    // the ring over, never claimed.
+    bool take_series(NetView& v, uint64_t after_seq, Snapshot* out) {
+        std::deque<SeriesDelta> deltas;
+        uint64_t seq, stamp;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            if (v.seq <= after_seq) return false;
+            deltas.swap(v.pending);
+            v.pending_end = 0;
+            seq = v.seq;
+            stamp = v.series_stamp;
+        }
+        constexpr uint64_t M = kSeriesRing;
+        if (v.ring == nil) {
+            v.ring = [device_ newBufferWithLength:M * sizeof(float) options:MTLResourceStorageModeShared];
+            if (v.ring == nil) return false;
+            float* r = (float*)[v.ring contents];
+            for (uint64_t i = 0; i < M; ++i) r[i] = NAN;
+        }
+        float* ring = (float*)[v.ring contents];
+        for (const SeriesDelta& d : deltas) {
+            const uint64_t n = d.values.size();
+            const uint64_t end = d.start + n;
+            uint64_t& total = v.ring_total;
+            // A message past the end held leaves a gap (NaN; only the window matters).
+            if (d.start > total)
+                for (uint64_t i = std::max(total, d.start > M ? d.start - M : 0); i < d.start; ++i) ring[i % M] = NAN;
+            // Overlaps replace values, but never ones older than the window, whose
+            // ring positions now hold newer values.
+            const uint64_t newest = std::max(total, end);
+            const uint64_t lo = std::max<uint64_t>(d.start, newest > M ? newest - M : 0);
+            for (uint64_t i = lo; i < end; ++i) ring[i % M] = d.values[(size_t)(i - d.start)];
+            total = newest;
+        }
+        out->mtl_buffer = (__bridge void*)v.ring;
+        out->host_base = ring;
+        out->byte_offset = 0;
+        out->aux_offset = 0;
+        out->aux_count = 0;
+        out->kind = CALIPER_LIVE_KIND_SERIES;
+        out->dtype = CALIPER_DT_F32;
+        out->ndim = 1;
+        out->shape[0] = (int64_t)M;
+        for (int i = 1; i < 4; ++i) out->shape[i] = 0;
+        out->colormap = 0;
+        out->flags = 0;
+        out->vmin = 0.0f;
+        out->vmax = 1.0f;
+        out->stats = nullptr;
+        out->stats_count = 0;
+        out->series_total = v.ring_total;
+        out->points_dims = 0;
+        out->label_count = 0;
+        out->slot = 0;
+        out->seq = seq;
+        out->stamp_ns = stamp;
+        return true;
+    }
+
+    // ---- the network thread ---------------------------------------------------------------------
+    void set_problem(const std::string& p) {
+        std::lock_guard<std::mutex> g(mu_);
+        problem_ = p;
+    }
+
+    bool send(const wire::Message& m) {
+        auto b = std::make_shared<Bytes>();
+        if (!wire::encode(m, b.get())) return false;
+        return client_->send(std::shared_ptr<const Bytes>(std::move(b)));
+    }
+
+    void protocol_error(const std::string& why) {
+        set_problem("protocol error: " + why);
+        client_->close(CALIPER_NET_CLOSE_PROTOCOL_ERROR, why.substr(0, 120));
+    }
+
+    void run() {
+        int backoff = kBackoffFirstMs;
+        while (!stop_) {
+            bool attached_this_time = false;
+            const bool final = run_connection(&attached_this_time);
+            if (stop_ || final) break;
+            if (attached_this_time) backoff = kBackoffFirstMs;
+            // Wait before the next attempt; wake() (the destructor) ends the wait.
+            const uint64_t until = monotonic_ms() + (uint64_t)backoff;
+            while (!stop_ && monotonic_ms() < until) client_->poll((int)std::min<uint64_t>(until - monotonic_ms(), 100));
+            backoff = std::min(backoff * 2, kBackoffMaxMs);
+        }
+        std::lock_guard<std::mutex> g(mu_);
+        connected_ = false;
+        attached_ = false;
+        cv_.notify_all();
+    }
+
+    // One connection from connect to close. True when no retry should follow.
+    bool run_connection(bool* attached_here) {
+        std::string err;
+        welcomed_ = false;
+        attach_sent_ = false;
+        session_id_.clear();
+        by_sub_.clear();
+        for (auto& v : views_snapshot()) v->subscribed = false;
+        if (!client_->connect(url_.ws_url, &err)) return fail_final("cannot connect to " + url_.display + ": " + err);
+        bool open = false;
+        uint64_t hello_ms = 0, ping_ms = 0;
+        while (!stop_) {
+            std::vector<caliper_net::Event> events = client_->poll(kPollMs);
+            for (auto& e : events) {
+                switch (e.type) {
+                    case caliper_net::Event::Type::Open: {
+                        open = true;
+                        wire::Hello h;
+                        h.role = CALIPER_NET_ROLE_VIEWER;
+                        Json sw = Json::object();
+                        sw.set("name", "caliper-app");
+                        sw.set("version", caliper_host::kHostVersionStr);
+                        h.software = sw;
+                        send(h);
+                        hello_ms = monotonic_ms();
+                        std::lock_guard<std::mutex> g(mu_);
+                        connected_ = true;
+                        break;
+                    }
+                    case caliper_net::Event::Type::Message:
+                        if (!e.binary) {
+                            set_problem("protocol error: a text message");
+                            client_->close(CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "a text message");
+                            break;
+                        }
+                        on_frame(e.data);
+                        break;
+                    case caliper_net::Event::Type::Closed: {
+                        const bool attached = session_seen_on_connection_;
+                        session_seen_on_connection_ = false;
+                        *attached_here = attached;
+                        return on_closed(e, open);
+                    }
+                    default:
+                        break;
+                }
+            }
+            // Timers: the handshake, the protocol's ping and idle rules.
+            const uint64_t now = monotonic_ms();
+            if (open && !welcomed_ && hello_ms && now - hello_ms > CALIPER_NET_HANDSHAKE_TIMEOUT_MS) {
+                set_problem("no WELCOME within " + std::to_string(CALIPER_NET_HANDSHAKE_TIMEOUT_MS / 1000) + " s");
+                client_->close(CALIPER_NET_CLOSE_HANDSHAKE_TIMEOUT, "no welcome");
+            }
+            if (open && welcomed_) {
+                const uint64_t idle = now - client_->last_input_ms();
+                if (idle > CALIPER_NET_IDLE_TIMEOUT_MS) {
+                    set_problem("nothing received for " + std::to_string(CALIPER_NET_IDLE_TIMEOUT_MS / 1000) + " s");
+                    client_->close(CALIPER_NET_CLOSE_IDLE_TIMEOUT, "idle");
+                } else if (idle > CALIPER_NET_PING_INTERVAL_MS && now - ping_ms > CALIPER_NET_PING_INTERVAL_MS) {
+                    ping_ms = now;
+                    send(wire::Ping{++ping_nonce_});
+                }
+            }
+        }
+        // Stopping: say goodbye, close, and give the close a moment to go out.
+        if (open && client_->state() == Client::State::Open) {
+            send(wire::Bye{CALIPER_NET_BYE_NORMAL, "the viewer detached"});
+            client_->close(CALIPER_NET_CLOSE_NORMAL, "detached");
+            const uint64_t end = monotonic_ms() + kStopFlushMs;
+            while (monotonic_ms() < end) {
+                bool closed = false;
+                for (auto& e : client_->poll(20)) closed |= e.type == caliper_net::Event::Type::Closed;
+                if (closed) break;
+            }
+        }
+        return true;
+    }
+
+    bool fail_final(const std::string& why) {
+        std::lock_guard<std::mutex> g(mu_);
+        problem_ = why;
+        if (!ever_attached_) failed_ = true;
+        ended_ = true;
+        connected_ = false;
+        attached_ = false;
+        cv_.notify_all();
+        return true;
+    }
+
+    // The connection ended. True when the source should not reconnect.
+    bool on_closed(const caliper_net::Event& e, bool was_open) {
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            connected_ = false;
+            attached_ = false;
+        }
+        if (stop_) return true;
+        if (e.http_status == 403)
+            return fail_final("the server refused the connection (HTTP 403): the session token is wrong, or it "
+                              "does not accept this Host or Origin");
+        if (e.http_status)
+            return fail_final("the server refused the upgrade (HTTP " + std::to_string(e.http_status) + ") at " +
+                              url_.display);
+        if (e.code == CALIPER_NET_CLOSE_UNSUPPORTED_MAJOR)
+            return fail_final("the server speaks another major version of the protocol");
+        if (e.code == CALIPER_NET_CLOSE_ROLE_REFUSED) return fail_final("the server does not take viewers");
+        bool ever;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            ever = ever_attached_;
+        }
+        if (!ever) {
+            // Nothing was ever attached: report why and stop (the attach fails).
+            std::string why = problem();
+            if (why.empty())
+                why = was_open ? "the server closed the connection (code " + std::to_string(e.code) + ": " + e.reason + ")"
+                               : "cannot connect to " + url_.display + ": " + e.reason;
+            return fail_final(why);
+        }
+        set_problem(bye_reason_.empty() ? "disconnected (code " + std::to_string(e.code) + "); reconnecting"
+                                        : "the producer said goodbye (" + bye_reason_ + "); reconnecting");
+        bye_reason_.clear();
+        return false;
+    }
+
+    std::vector<std::shared_ptr<NetView>> views_snapshot() {
+        std::lock_guard<std::mutex> g(mu_);
+        return views_;
+    }
+
+    void on_frame(const Bytes& data) {
+        wire::Message m;
+        const wire::DecodeResult r = wire::decode(data.data(), data.size(), &m);
+        if (r.status == wire::DecodeResult::Status::BadFrame) {
+            set_problem("a frame the protocol refuses (" + r.reason + ": " + r.message + ")");
+            client_->close((uint16_t)r.close_code, r.reason);
+            return;
+        }
+        if (r.status == wire::DecodeResult::Status::BadMessage) {
+            wire::Error e;
+            e.code = r.error_code;
+            e.message = r.message;
+            e.in_reply_to = r.type;
+            send(e);
+            return;
+        }
+        const uint16_t type = wire::message_type(m);
+        if (!welcomed_) {
+            if (auto* w = std::get_if<wire::Welcome>(&m)) on_welcome(*w);
+            else if (auto* b = std::get_if<wire::Bye>(&m)) on_bye(*b);
+            else if (!std::holds_alternative<wire::Unknown>(m))
+                protocol_error(std::string("'") + wire::type_name(type) + "' before WELCOME");
+            return;
+        }
+        if (auto* s = std::get_if<wire::Sessions>(&m)) on_sessions(*s);
+        else if (auto* v = std::get_if<wire::Views>(&m)) on_views(*v);
+        else if (auto* p = std::get_if<wire::Snapshot>(&m)) on_snapshot(*p);
+        else if (auto* q = std::get_if<wire::Series>(&m)) on_series(*q);
+        else if (auto* vr = std::get_if<wire::ViewReply>(&m)) on_view_reply(*vr);
+        else if (auto* pi = std::get_if<wire::Ping>(&m)) send(wire::Pong{pi->nonce});
+        else if (std::holds_alternative<wire::Pong>(m)) {}
+        else if (auto* er = std::get_if<wire::Error>(&m)) on_error(*er);
+        else if (auto* b = std::get_if<wire::Bye>(&m)) on_bye(*b);
+        else if (std::holds_alternative<wire::Unknown>(m)) {}
+        else protocol_error(std::string("'") + wire::type_name(type) + "' sent to a viewer");
+    }
+
+    void on_welcome(const wire::Welcome& w) {
+        welcomed_ = true;
+        wire::Identity id;
+        if (wire::Identity::parse(w.session, &id)) remember_identity(id);
+    }
+
+    void remember_identity(const wire::Identity& id) {
+        std::lock_guard<std::mutex> g(mu_);
+        label_ = id.id;
+        script_ = id.script;
+        pid_ = (int32_t)id.pid;
+        start_ms_ = id.start_unix_ms;
+    }
+
+    void on_bye(const wire::Bye& b) {
+        bye_reason_ = b.reason;
+        std::lock_guard<std::mutex> g(mu_);
+        if (b.reason == CALIPER_NET_BYE_SHUTDOWN || b.reason == CALIPER_NET_BYE_NORMAL) ended_ = true;
+    }
+
+    void on_error(const wire::Error& e) {
+        set_problem("the server reported " + e.code + (e.message.empty() ? "" : ": " + e.message));
+    }
+
+    void on_sessions(const wire::Sessions& s) {
+        sessions_ = s.list;
+        const std::string& want = url_.session;
+        if (!want.empty()) {
+            const auto it = std::find_if(sessions_.begin(), sessions_.end(),
+                                         [&](const wire::SessionInfo& x) { return x.identity.id == want; });
+            if (it == sessions_.end()) {
+                set_problem("the server holds no session '" + want + "'");
+            } else if (session_id_ != want && !attach_sent_) {
+                attach_sent_ = true;
+                send(wire::Attach{want});
+            }
+        } else if (session_id_.empty()) {
+            int live = 0;
+            for (const auto& x : sessions_) live += x.state == CALIPER_NET_SESSION_LIVE;
+            if (live == 0) set_problem("the server holds no live session yet");
+            else if (live > 1)
+                set_problem("the server holds " + std::to_string(live) +
+                            " live sessions; name one with session=<id> in the link");
+        }
+        // The attached session's state and identity.
+        for (const auto& x : sessions_) {
+            if (x.identity.id != session_id_ || session_id_.empty()) continue;
+            remember_identity(x.identity);
+            std::lock_guard<std::mutex> g(mu_);
+            ended_ = x.state == CALIPER_NET_SESSION_ENDED;
+        }
+    }
+
+    void on_views(const wire::Views& v) {
+        if (!v.session) {   // detached: the views keep their last pixels
+            session_id_.clear();
+            std::lock_guard<std::mutex> g(mu_);
+            attached_ = false;
+            return;
+        }
+        session_id_ = *v.session;
+        session_seen_on_connection_ = true;
+        bool live = true;
+        for (const auto& x : sessions_)
+            if (x.identity.id == session_id_) {
+                remember_identity(x.identity);
+                live = x.state != CALIPER_NET_SESSION_ENDED;
+            }
+        std::vector<std::shared_ptr<NetView>> old = views_snapshot();
+        const bool same_session = views_session_ == session_id_;
+        views_session_ = session_id_;
+        std::vector<std::shared_ptr<NetView>> next;
+        for (const wire::ViewInfo& vi : v.list) {
+            if (vi.kind < CALIPER_LIVE_KIND_HEATMAP || vi.kind > CALIPER_LIVE_KIND_HISTOGRAM) continue;
+            std::shared_ptr<NetView> keep;
+            if (same_session)
+                for (const auto& o : old)
+                    if (o->name == vi.name && o->view_id == vi.id && o->kind == (uint32_t)vi.kind) keep = o;
+            if (!keep) {
+                keep = std::make_shared<NetView>();
+                keep->key = next_key_++;
+                keep->name = vi.name;
+                keep->kind = (uint32_t)vi.kind;
+                keep->view_id = vi.id;
+            }
+            next.push_back(keep);
+        }
+        // Subscriptions of views that went away end with them.
+        for (auto it = by_sub_.begin(); it != by_sub_.end();) {
+            const bool still = std::find(next.begin(), next.end(), it->second) != next.end();
+            it = still ? std::next(it) : by_sub_.erase(it);
+        }
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            views_ = next;
+            ++views_gen_;
+            attached_ = true;
+            ever_attached_ = true;
+            ended_ = !live;
+            problem_.clear();
+            cv_.notify_all();
+        }
+        for (const auto& view : next) {
+            if (view->subscribed) continue;
+            view->sub = next_sub_++;
+            view->subscribed = true;
+            view->last_producer_seq = 0;
+            by_sub_[view->sub] = view;
+            wire::Subscribe s;
+            s.sub = view->sub;
+            s.view = view->name;
+            s.request_id = next_request_++;
+            send(s);
+        }
+    }
+
+    void on_view_reply(const wire::ViewReply& r) {
+        if (r.error.is_null()) return;
+        const Json* code = r.error.find("code");
+        const Json* msg = r.error.find("message");
+        set_problem("view '" + r.view + "': " + (code ? code->as_string() : "?") +
+                    (msg && msg->is_string() ? ": " + msg->as_string() : ""));
+        by_sub_.erase(r.sub);
+    }
+
+    void unsupported(const std::string& view, const std::string& why) {
+        wire::Error e;
+        e.code = CALIPER_NET_ERR_UNSUPPORTED;
+        e.message = why;
+        e.in_reply_to = CALIPER_NET_MSG_SNAPSHOT;
+        e.view = view;
+        send(e);
+    }
+
+    void on_snapshot(const wire::Snapshot& s) {
+        const auto it = by_sub_.find(s.sub);
+        if (it == by_sub_.end()) return;   // ended, or another subscription's late snapshot
+        NetView& v = *it->second;
+        if (s.kind != (int64_t)v.kind || s.kind == CALIPER_NET_KIND_SERIES) {
+            set_problem("view '" + v.name + "': a snapshot of kind " + std::to_string(s.kind) +
+                        " for a view of kind " + std::to_string(v.kind));
+            return;
+        }
+        const wire::Section& d = s.data;
+        if (d.encoding != CALIPER_NET_ENCODING_RAW || (s.aux && s.aux->encoding != CALIPER_NET_ENCODING_RAW)) {
+            unsupported(v.name, "section encoding " + std::to_string(d.encoding));
+            return;
+        }
+        for (int64_t x : d.shape)
+            if (x <= 0) return;   // nothing to draw
+        if (d.shape.size() > 4) return;
+
+        // The slot layout: payload, aux, stats (64 f32).
+        SlotMeta m;
+        m.kind = v.kind;
+        m.colormap = (int32_t)s.colormap;
+        m.flags = (uint32_t)(s.flags & (CALIPER_LIVE_SNAP_AUTO_VMIN | CALIPER_LIVE_SNAP_AUTO_VMAX | CALIPER_LIVE_SNAP_RAW));
+        m.vmin = (float)s.vmin;
+        m.vmax = (float)s.vmax;
+        m.stamp_ns = s.stamp_ns;
+        uint64_t payload = d.size;
+        int64_t n_points = 0, dims = 0;
+        if (v.kind == CALIPER_LIVE_KIND_POINTS) {
+            n_points = d.shape[0];
+            dims = d.shape[1];
+            payload = (uint64_t)n_points * 3 * sizeof(float);
+            m.dtype = CALIPER_DT_F32;
+            m.ndim = 2;
+            m.shape[0] = n_points;
+            m.shape[1] = 3;
+            m.points_dims = (int32_t)dims;
+            m.label_count = s.aux ? (int32_t)std::min<uint64_t>(s.label_count.value_or(0), INT32_MAX) : 0;
+        } else {
+            m.dtype = v.kind == CALIPER_LIVE_KIND_IMAGE ? CALIPER_DT_U8 : CALIPER_DT_F32;
+            m.ndim = (int32_t)d.shape.size();
+            for (size_t i = 0; i < d.shape.size(); ++i) m.shape[i] = d.shape[i];
+        }
+        const uint64_t aux_bytes = s.aux ? s.aux->size : 0;
+        m.aux_count = s.aux ? (int64_t)(aux_bytes / sizeof(float)) : 0;
+        m.aux_offset = s.aux ? align_up(payload, 256) : 0;
+        m.stats_offset = align_up(s.aux ? m.aux_offset + aux_bytes : payload, 256);
+        const uint64_t need = m.stats_offset + CALIPER_LIVE_STATS_BYTES;
+        m.stats_count = (int32_t)std::min<size_t>(s.stats.size(), kStatsFloats);
+
+        // A slot that is neither claimed nor the newest completed one.
+        uint32_t idx = kNone;
+        std::shared_ptr<NetView> hold = it->second;   // the frame thread may drop the view meanwhile
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            for (uint32_t i = 0; i < kSlots; ++i)
+                if (i != v.published && i != v.reading && i != v.prev) {
+                    idx = i;
+                    break;
+                }
+        }
+        if (idx == kNone) return;   // cannot happen with kSlots = 4 (two claims, one published)
+        Slot& slot = v.slot[idx];
+        if (slot.cap < need) {
+            const uint64_t cap = align_up(need, 64 * 1024);
+            id<MTLBuffer> b = [device_ newBufferWithLength:(NSUInteger)cap options:MTLResourceStorageModeShared];
+            if (b == nil) {
+                set_problem("view '" + v.name + "': no memory for a " + std::to_string(cap) + "-byte slot");
+                return;
+            }
+            slot.buf = b;
+            slot.cap = cap;
+        }
+        uint8_t* base = (uint8_t*)[slot.buf contents];
+        if (v.kind == CALIPER_LIVE_KIND_POINTS) {
+            float* dst = (float*)base;
+            if (dims == 3) {
+                std::memcpy(dst, d.data, (size_t)payload);
+            } else {
+                for (int64_t i = 0; i < n_points; ++i) {
+                    float xy[2];
+                    std::memcpy(xy, d.data + (size_t)i * 8, 8);
+                    dst[i * 3 + 0] = xy[0];
+                    dst[i * 3 + 1] = xy[1];
+                    dst[i * 3 + 2] = 0.0f;
+                }
+            }
+            if (s.aux) std::memcpy(base + m.aux_offset, s.aux->data, (size_t)aux_bytes);
+        } else {
+            std::memcpy(base, d.data, d.size);
+        }
+        float* stats = (float*)(base + m.stats_offset);
+        for (size_t i = 0; i < kStatsFloats; ++i) stats[i] = i < s.stats.size() ? (float)s.stats[i] : NAN;
+
+        std::lock_guard<std::mutex> g(mu_);
+        if (v.last_producer_seq && s.seq > v.last_producer_seq + 1) v.dropped += s.seq - v.last_producer_seq - 1;
+        v.last_producer_seq = s.seq;
+        m.seq = ++v.seq;
+        slot.meta = m;
+        v.published = idx;
+    }
+
+    void on_series(const wire::Series& s) {
+        const auto it = by_sub_.find(s.sub);
+        if (it == by_sub_.end()) return;
+        NetView& v = *it->second;
+        if (v.kind != CALIPER_LIVE_KIND_SERIES) return;
+        if (s.values.encoding != CALIPER_NET_ENCODING_RAW) {
+            unsupported(v.name, "section encoding " + std::to_string(s.values.encoding));
+            return;
+        }
+        SeriesDelta delta;
+        delta.start = s.start;
+        delta.values.resize(s.values.size / sizeof(float));
+        std::memcpy(delta.values.data(), s.values.data, delta.values.size() * sizeof(float));
+        const uint64_t end = s.start + delta.values.size();
+        std::lock_guard<std::mutex> g(mu_);
+        v.series_stamp = s.stamp_ns;
+        v.pending_end = std::max(v.pending_end, end);
+        v.pending.push_back(std::move(delta));
+        // Values below the window of the newest end can never show: drop them,
+        // so a frame thread that is not polling holds at most a window's worth.
+        while (!v.pending.empty() && v.pending_end > kSeriesRing &&
+               v.pending.front().start + v.pending.front().values.size() <= v.pending_end - kSeriesRing)
+            v.pending.pop_front();
+        ++v.seq;
+    }
+
+    // ---- state ------------------------------------------------------------------------------
+    const StreamUrl url_;
+    id<MTLDevice> device_ = nil;
+    std::unique_ptr<Client> client_;   // the network thread's; wake() from any thread
+    std::thread thread_;
+    std::atomic<bool> stop_{false};
+
+    mutable std::mutex mu_;
+    std::condition_variable cv_;
+    // Guarded by mu_.
+    std::vector<std::shared_ptr<NetView>> views_;
+    uint64_t views_gen_ = 0;
+    std::string label_, script_, problem_;
+    uint64_t start_ms_ = 0;
+    int32_t pid_ = 0;
+    bool connected_ = false, attached_ = false, ever_attached_ = false, ended_ = false, failed_ = false;
+
+    // Frame thread only.
+    uint64_t seen_gen_ = UINT64_MAX;
+    std::vector<std::shared_ptr<NetView>> frame_views_;
+
+    // Network thread only.
+    std::map<uint32_t, std::shared_ptr<NetView>> by_sub_;
+    std::vector<wire::SessionInfo> sessions_;
+    std::string session_id_;        // attached on this connection ("" = not attached)
+    std::string views_session_;     // the session the views belong to (kept across reconnects)
+    std::string bye_reason_;
+    bool welcomed_ = false, attach_sent_ = false, session_seen_on_connection_ = false;
+    uint32_t next_sub_ = 1, next_request_ = 1, ping_nonce_ = 0;
+    uint64_t next_key_ = 1;
+};
+
+}  // namespace
+
+bool parse_stream_url(const std::string& in, StreamUrl* out, std::string* err) {
+    std::string url = in;
+    while (!url.empty() && (url.back() == ' ' || url.back() == '\n' || url.back() == '\r' || url.back() == '\t'))
+        url.pop_back();
+    while (!url.empty() && (url.front() == ' ' || url.front() == '\t')) url.erase(0, 1);
+    std::string lower = url;
+    for (char& c : lower) c = (char)std::tolower((unsigned char)c);
+    bool page = false;
+    if (lower.rfind("http://", 0) == 0) {
+        url = "ws://" + url.substr(7);   // the page link: same host, port and token
+        page = true;
+    } else if (lower.rfind("https://", 0) == 0 || lower.rfind("wss://", 0) == 0) {
+        *err = "the stream has no TLS: use the ws:// or http:// link on 127.0.0.1";
+        return false;
+    }
+    caliper_net::WsUrl u;
+    if (!caliper_net::parse_ws_url(url, &u, err)) return false;
+    if (u.host != "127.0.0.1" && u.host != "localhost") {
+        *err = "the stream is loopback only (127.0.0.1 or localhost), not " + u.host;
+        return false;
+    }
+    if (!page && u.path != CALIPER_NET_PATH) {
+        *err = "the stream path is " CALIPER_NET_PATH ", not " + u.path;
+        return false;
+    }
+    caliper_net::HttpRequest q;
+    q.query = u.query;
+    StreamUrl s;
+    if (!q.query_param(CALIPER_NET_TOKEN_PARAM, &s.token)) {
+        *err = "the link has no token (…?token=<session token>)";
+        return false;
+    }
+    if (!valid_token(s.token)) {
+        *err = "the token must be 22 to 128 characters of A-Z, a-z, 0-9, _ and -";
+        return false;
+    }
+    if (q.query_param("session", &s.session) && !valid_session_id(s.session)) {
+        *err = "session must be 1 to 63 characters of A-Z, a-z, 0-9, ., _ and -";
+        return false;
+    }
+    s.host = u.host;
+    s.port = u.port;
+    s.display = "ws://" + u.host + ":" + std::to_string(u.port) + CALIPER_NET_PATH;
+    s.ws_url = s.display + "?" CALIPER_NET_TOKEN_PARAM "=" + s.token;
+    *out = s;
+    return true;
+}
+
+std::unique_ptr<NetSource> open_net_source(const std::string& url, void* mtl_device, std::string* err) {
+    StreamUrl u;
+    if (!parse_stream_url(url, &u, err)) return nullptr;
+    if (!mtl_device) {
+        *err = "no Metal device";
+        return nullptr;
+    }
+    return std::make_unique<NetSourceImpl>(u, (__bridge id<MTLDevice>)mtl_device);
+}
+
+}  // namespace caliper_live

@@ -5,7 +5,8 @@
 // TRANSPORT-AGNOSTIC. Everything here works on caliper_live::Snapshot ("an
 // MTLBuffer + byte offsets + stats + seq/stamp") from a caliper_live::Source
 // (live_source.h). The shared-memory session of another process is one Source
-// (live_session.mm). This file only:
+// (live_session.mm); a wire protocol v3 stream on the loopback interface is
+// another (live_net_source.mm, caliper_core_live_attach_url). This file only:
 //   1. reconciles the source's view list with typed live views (same names),
 //   2. per frame, for each view whose previous GPU read has retired, claims the
 //      newest completed snapshot and applies it through caliper_core_live_apply
@@ -29,6 +30,7 @@
 
 #include "embed/embed_core.h"
 #include "live/live_attach.h"   // the session-row text the picker shares with the app
+#include "live/live_net_source.h"
 #include "live/live_shm.h"
 #include "live/live_source.h"
 
@@ -57,6 +59,7 @@ constexpr bool kTextureKindsThroughLiveViews = true;
 
 constexpr uint64_t kPendingRetryNs = 50ull * 1000 * 1000;     // a starting session: retry every 50 ms
 constexpr uint64_t kPickerRefreshNs = 1000ull * 1000 * 1000;  // the picker relists once a second
+constexpr int kNetAttachWaitMs = 2000;                         // attach_url: wait this long for the server
 
 }  // namespace
 
@@ -80,6 +83,8 @@ struct CaliperLiveState {
     uint64_t                retry_ns = 0;
     bool                    detach_requested = false;
     std::string             pending_why;
+    caliper_live::NetSource* net = nullptr;  // the source, when it is a network stream (attach_url)
+    std::string             net_problem;     // its last problem() (logged when it changes)
 
     struct View {
         uint64_t    key = 0;
@@ -423,6 +428,50 @@ int attach_impl(CaliperCore* core, const std::string& token, const char* root = 
     return 0;
 }
 
+// A wire protocol v3 stream (live_net_source.h). Waits a little for the
+// server's answer so a refusal fails the attach with its reason.
+int attach_url_impl(CaliperCore* core, const std::string& url) {
+    if (!core->canvas_ready || !core->renderer) {
+        core->fail("live_attach_url: attach a canvas first (the renderer's device exists only after attach_canvas)");
+        return 0;
+    }
+    if (core->live && core->live->attached) {
+        core->fail("live_attach_url: already attached to '" + core->live->session + "'; detach first");
+        return 0;
+    }
+    if (!core->renderer->native_device()) {
+        core->fail("live_attach_url: the active renderer has no Metal device (live views need Metal)");
+        return 0;
+    }
+    std::string err;
+    std::unique_ptr<caliper_live::NetSource> net =
+        caliper_live::open_net_source(url, core->renderer->native_device(), &err);
+    if (!net) {
+        core->fail("live_attach_url: " + err);
+        return 0;
+    }
+    if (net->wait_ready(kNetAttachWaitMs, &err) == caliper_live::NetSource::Ready::Failed) {
+        core->fail("live_attach_url: " + err);
+        return 0;
+    }
+    if (!core->live) core->live = new CaliperLiveState();
+    CaliperLiveState* L = core->live;
+    L->attached = true;
+    L->net = net.get();
+    L->source = std::move(net);
+    L->pending = L->net->pending();
+    L->session = L->source->label();
+    L->script = L->source->script();
+    L->pid = L->source->producer_pid();
+    L->start_ms = L->source->start_unix_ms();
+    L->client_alive = L->source->producer_alive();
+    L->window_t0 = L->fps_t0 = caliper_live::now_ns();
+    core->log(1, "live: attached to the stream of session '" + L->session + "'" +
+                     (L->pending ? " (waiting for a session)" : ""));
+    core->last_error.clear();
+    return 1;
+}
+
 // ---- per-poll work ----------------------------------------------------------
 
 void refresh_picker(CaliperLiveState* L, bool force) {
@@ -449,6 +498,20 @@ int poll_attached(CaliperCore* core, CaliperLiveState* L) {
     }
     L->source->heartbeat();
     L->client_alive = L->source->producer_alive();
+    if (L->net) {
+        // A stream learns its session (id, script, pid) after the attach, and
+        // may lose and regain it: refresh what the status shows.
+        L->pending = L->net->pending();
+        L->session = L->source->label();
+        L->script = L->source->script();
+        L->pid = L->source->producer_pid();
+        L->start_ms = L->source->start_unix_ms();
+        std::string problem = L->net->problem();
+        if (problem != L->net_problem) {
+            if (!problem.empty()) core->log(1, "live: " + problem);
+            L->net_problem = std::move(problem);
+        }
+    }
 
     std::vector<SourceView> now;
     if (L->source->sync(&now)) reconcile(core, L, now);
@@ -589,6 +652,7 @@ void draw_status(CaliperCore* core, CaliperLiveState* L, float lw, float lh) {
         } else {
             ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "running");
         }
+        if (L->net && !L->net_problem.empty()) ImGui::TextDisabled("%s", L->net_problem.c_str());
         ImGui::Text("frame %llu  %c  fps %.1f  views %d", (unsigned long long)L->frames,
                     kSpin[(L->frames / 8) % 4], L->fps_shown, (int)L->views.size());
         ImGui::Text("updates %llu  skipped %llu  errors %llu", (unsigned long long)L->updates,
@@ -627,6 +691,15 @@ extern "C" int caliper_core_live_attach(CaliperCore* core, const char* session) 
         return 0;
     }
     return attach_impl(core, session);
+}
+
+extern "C" int caliper_core_live_attach_url(CaliperCore* core, const char* url) {
+    if (!core) return 0;
+    if (!url || !url[0]) {
+        core->fail("live_attach_url: url must be a ws:// or http:// stream link on 127.0.0.1");
+        return 0;
+    }
+    return attach_url_impl(core, url);
 }
 
 extern "C" int caliper_core_live_attach_pid(CaliperCore* core, int32_t pid, const char* data_root) {
