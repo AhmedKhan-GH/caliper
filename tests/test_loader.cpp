@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <thread>
+#include <vector>
 #ifdef _WIN32
 // POSIX setenv/unsetenv don't exist on MSVC; _putenv_s with "" removes.
 #define setenv(k, v, overwrite) _putenv_s(k, v)
@@ -250,6 +252,28 @@ TEST_CASE("data stamp: read, raise, never lowered") {
     CHECK_FALSE(fs::exists(fs::path(d) / (std::string(kDataStampName) + ".tmp")));
     std::ofstream(fs::path(d) / kDataStampName) << "schema = {{{";
     CHECK(read_data_schema_stamp(d) == 0);     // damaged: ignored
+}
+
+TEST_CASE("data stamp: concurrent raises keep the highest schema") {
+    // Writers race on one folder, as two processes opening the same applet
+    // data would; each has its own temporary file, and the stamp ends at the
+    // highest schema any of them recorded.
+    for (int round = 0; round < 20; round++) {
+        TempDir t("stamp-race");
+        const std::string d = (t.path / "data").string();
+        std::vector<std::thread> writers;
+        bool ok[8] = {};
+        for (int i = 0; i < 8; i++)
+            writers.emplace_back([&, i] { ok[i] = raise_data_schema_stamp(d, (uint32_t)(i + 1)); });
+        for (auto& w : writers) w.join();
+        for (bool b : ok) CHECK(b);
+        CHECK(read_data_schema_stamp(d) == 8);
+        int leftovers = 0;   // only the stamp and its lock file remain
+        for (const auto& e : fs::directory_iterator(d))
+            leftovers += e.path().filename() != kDataStampName &&
+                         e.path().filename() != ".caliper-data.lock";
+        CHECK(leftovers == 0);
+    }
 }
 
 TEST_CASE("data stamp: raised before initialize(), even when it fails") {

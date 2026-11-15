@@ -3,6 +3,8 @@
 #include "job_system.h"
 #include <toml++/toml.hpp>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +15,10 @@
   #include <windows.h>
 #else
   #include <dlfcn.h>
+  #include <cerrno>
+  #include <fcntl.h>
+  #include <sys/file.h>
+  #include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -75,6 +81,69 @@ std::string find_binary(const fs::path& dir, const std::string& stem) {
     return {};
 }
 
+long process_id() {
+#ifdef _WIN32
+    return (long)GetCurrentProcessId();
+#else
+    return (long)getpid();
+#endif
+}
+
+// An exclusive lock on <data_dir>/.caliper-data.lock for the stamp's
+// read-modify-write, held until destruction. The OS drops it when the
+// process ends, so a crash never leaves the folder locked. The lock file
+// stays in the folder: removing it while another process waits on it would
+// let a third one take a second lock.
+class StampLock {
+public:
+    explicit StampLock(const fs::path& dir) {
+        const std::string path = (dir / ".caliper-data.lock").string();
+#ifdef _WIN32
+        h_ = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h_ != INVALID_HANDLE_VALUE) {
+            OVERLAPPED ov{};
+            locked_ = LockFileEx(h_, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &ov) != 0;
+        }
+#else
+        fd_ = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (fd_ >= 0) {
+            int rc;
+            do rc = ::flock(fd_, LOCK_EX); while (rc != 0 && errno == EINTR);
+            locked_ = rc == 0;
+        }
+#endif
+    }
+    ~StampLock() {
+#ifdef _WIN32
+        if (h_ != INVALID_HANDLE_VALUE) {
+            if (locked_) {
+                OVERLAPPED ov{};
+                UnlockFileEx(h_, 0, 1, 0, &ov);
+            }
+            CloseHandle(h_);
+        }
+#else
+        if (fd_ >= 0) {
+            if (locked_) ::flock(fd_, LOCK_UN);
+            ::close(fd_);
+        }
+#endif
+    }
+    StampLock(const StampLock&) = delete;
+    StampLock& operator=(const StampLock&) = delete;
+    bool locked() const { return locked_; }
+
+private:
+#ifdef _WIN32
+    HANDLE h_ = INVALID_HANDLE_VALUE;
+#else
+    int fd_ = -1;
+#endif
+    bool locked_ = false;
+};
+
 } // namespace
 
 uint32_t read_data_schema_stamp(const std::string& data_dir) {
@@ -97,22 +166,43 @@ bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema) {
     std::error_code ec;
     fs::create_directories(data_dir, ec);
     const fs::path stamp = fs::path(data_dir) / kDataStampName;
-    const fs::path tmp = fs::path(data_dir) / (std::string(kDataStampName) + ".tmp");
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) return false;
-        out << "# Written by the Caliper host. The highest data schema that has\n"
-               "# opened this folder; an applet with a lower schema is refused.\n"
-               "schema = " << schema << "\n";
-        out.flush();
-        if (!out) return false;
+    // Two processes (or threads) raising the stamp at once would each read
+    // the old value and the later rename would win, possibly with the lower
+    // schema. The read-modify-write therefore runs under a lock on the
+    // folder. Each write also goes through a temporary file of its own
+    // (process id and a counter), and the stamp is read back after the
+    // rename, in case the lock is not honoured, as on some network file
+    // systems.
+    static std::mutex in_process;
+    std::lock_guard<std::mutex> guard(in_process);
+    StampLock lock(data_dir);
+    static std::atomic<unsigned> counter{0};
+    for (int attempt = 0; attempt < 8; attempt++) {
+        if (read_data_schema_stamp(data_dir) >= schema) return true;
+        const fs::path tmp =
+            fs::path(data_dir) / (std::string(kDataStampName) + "." +
+                                  std::to_string(process_id()) + "." +
+                                  std::to_string(counter.fetch_add(1)) + ".tmp");
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (!out) return false;
+            out << "# Written by the Caliper host. The highest data schema that has\n"
+                   "# opened this folder; an applet with a lower schema is refused.\n"
+                   "schema = " << schema << "\n";
+            out.flush();
+            if (!out) {
+                out.close();
+                fs::remove(tmp, ec);
+                return false;
+            }
+        }
+        fs::rename(tmp, stamp, ec);   // replaces the old stamp in one step
+        if (ec) {
+            fs::remove(tmp, ec);
+            return false;
+        }
     }
-    fs::rename(tmp, stamp, ec);   // replaces the old stamp in one step
-    if (ec) {
-        fs::remove(tmp, ec);
-        return false;
-    }
-    return true;
+    return read_data_schema_stamp(data_dir) >= schema;
 }
 
 std::vector<std::string> split_applet_path(const std::string& value) {
