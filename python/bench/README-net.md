@@ -118,7 +118,7 @@ range across them in parentheses:
 |---|---|
 | steps/s | Training steps per second over the measured window, including the final device sync |
 | % of control, % of baseline | Steps/s divided by the same repeat's `control` or `baseline` |
-| snapshots taken/s | View calls that took a snapshot (returned a true value), per second, over all views |
+| snapshots taken/s | View calls that returned a true value, per second, over all views: calls that took a snapshot, and with `serve` every `series` call, because each one appends |
 | received/s | `snapshot` and `series` messages that reached the viewers, per second, summed over viewers |
 | MB/s on the socket | Bytes of every WebSocket message the viewers received, summed over viewers (frame headers of 2 to 14 bytes excluded) |
 | latency ms | Viewer receipt time minus the snapshot's `stamp_ns`, the producer's `time.monotonic_ns()` at the view call; median and p95 over every message whose stamp falls in the measured window, pooled over the repeats |
@@ -133,8 +133,9 @@ the socket and the viewer's event loop. On macOS both processes read
 The second table gives the cost of each view call in microseconds, median and
 p99, split into calls that took a snapshot and calls that did not. In
 `noviewer` every call is one that nobody subscribed to. Elsewhere a skipped call
-is one inside the rate limit. The `control` row is the cost of recording the
-event.
+is one inside the rate limit. With `serve`, `caliper.series` returns a true
+value on every append, so all of its calls fall in the first column. The
+`control` row is the cost of recording the event.
 
 The third table appears only for the stand-in and describes its background
 thread: how often it called `.cpu()`, how long each call took, and the step
@@ -251,12 +252,14 @@ messages to `caliper._wire` and back, and `handshake` performs the v3 opening:
 HELLO, WELCOME, then a SUBSCRIBE for each view once VIEWS lists it, until every
 VIEW_REPLY has confirmed. The client answers PING with PONG and reads
 `stamp_ns` from every SNAPSHOT and SERIES. It was checked against a v3
-producer built from the protocol branch's codec. Before that codec is merged,
-`--wire-py` loads a copy of `_wire.py` from a file.
+producer built from the protocol branch's codec, and the whole harness was run
+against the first committed `caliper.serve()` with the package taken from that
+branch. Where the codec is not in the checkout, `--wire-py` loads a copy of
+`_wire.py` from a file.
 
 The harness assumes three things of the product. `caliper.serve()` returns an
 object with `port`, `token` and `close()`. A view call returns a true value
-when it took a snapshot and a false one otherwise; without that, the per-call
-table cannot split the two. A view appears in VIEWS once the script has
+when it took a snapshot and a false one otherwise (a `series` call when it
+appended); without that, the per-call table cannot split the two. A view appears in VIEWS once the script has
 called it, so the harness keeps training and calling the arm's views while
 the viewers subscribe.
