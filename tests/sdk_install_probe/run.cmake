@@ -1,15 +1,20 @@
 # The SDK install proof, run by ctest as caliper_sdk_install:
-#   1. install the SDK component of the core build to <WORK_DIR>/prefix;
+#   1. install the SDK component of the core build to <WORK_DIR>/prefix, check
+#      that it holds none of the embed headers, and with WITH_EMBED=ON install
+#      the embed component into the same prefix;
 #   2. copy this folder and examples/hello to <WORK_DIR> and build each copy
 #      with only -DCMAKE_PREFIX_PATH=<WORK_DIR>/prefix;
 #   3. run the probe's doctest binary, check that hello's library and stamped
-#      manifest exist, and check that neither build refers to the source tree.
+#      manifest exist, and check that neither build refers to the source tree;
+#   4. build a copy of no_embed/, an applet source that includes caliper/embed.h
+#      against every SDK target, and check that it fails because the header is
+#      not found.
 #
 #   cmake -DCALIPER_BUILD_DIR=<build> -DCALIPER_SOURCE_DIR=<source> -DWORK_DIR=<dir>
 #         [-DGENERATOR=<generator>] [-DMAKE_PROGRAM=<path>] [-DCXX_COMPILER=<path>]
 #         [-DBUILD_TYPE=<type>] [-DEXPECT_SDK_VERSION=<version>]
 #         [-DEXPECT_UI_STACK_HASH=<hash>] [-DLIB_PREFIX=lib] [-DLIB_SUFFIX=.dylib]
-#         [-DEXE_SUFFIX=.exe] -P run.cmake
+#         [-DEXE_SUFFIX=.exe] [-DWITH_EMBED=ON] -P run.cmake
 cmake_minimum_required(VERSION 3.18)
 
 foreach(var CALIPER_BUILD_DIR CALIPER_SOURCE_DIR WORK_DIR)
@@ -33,6 +38,25 @@ file(MAKE_DIRECTORY "${WORK_DIR}")
 set(prefix "${WORK_DIR}/prefix")
 run("Installing the SDK"
     "${CMAKE_COMMAND}" --install "${CALIPER_BUILD_DIR}" --prefix "${prefix}" --component sdk)
+
+# The embed headers are not part of the SDK, and the embed package keeps them
+# under its own include root even in a shared prefix.
+function(check_no_embed_headers_in_sdk_root)
+    foreach(header embed.h live.h live_views.h)
+        if(EXISTS "${prefix}/include/caliper/${header}")
+            message(FATAL_ERROR "the SDK include root holds caliper/${header}")
+        endif()
+    endforeach()
+endfunction()
+check_no_embed_headers_in_sdk_root()
+if(WITH_EMBED)
+    run("Installing the embed package into the SDK prefix"
+        "${CMAKE_COMMAND}" --install "${CALIPER_BUILD_DIR}" --prefix "${prefix}" --component embed)
+    if(NOT EXISTS "${prefix}/include/caliper-embed/caliper/embed.h")
+        message(FATAL_ERROR "the embed package did not install include/caliper-embed/caliper/embed.h")
+    endif()
+    check_no_embed_headers_in_sdk_root()
+endif()
 
 set(configure_args "-DCMAKE_PREFIX_PATH=${prefix}" "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
 if(GENERATOR)
@@ -96,4 +120,20 @@ foreach(line "[build]" "sdk = \"${EXPECT_SDK_VERSION}\"" "ui_stack = \"${EXPECT_
         message(FATAL_ERROR "hello: the stamped manifest lacks the line: ${line}")
     endif()
 endforeach()
-message(STATUS "sdk install proof: OK (${library})")
+
+# An applet cannot include caliper/embed.h: the copy of no_embed/ configures,
+# and its build fails on that include.
+file(COPY "${CALIPER_SOURCE_DIR}/tests/sdk_install_probe/no_embed/" DESTINATION "${WORK_DIR}/no_embed")
+run("Configuring no_embed" "${CMAKE_COMMAND}" -S "${WORK_DIR}/no_embed"
+    -B "${WORK_DIR}/no_embed-build" ${configure_args})
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${WORK_DIR}/no_embed-build" --target no_embed
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+if(rc EQUAL 0)
+    message(FATAL_ERROR "no_embed: an applet source including caliper/embed.h compiled against the SDK targets")
+endif()
+string(FIND "${out}" "caliper/embed.h" at)
+if(at EQUAL -1 OR NOT out MATCHES "file not found|No such file or directory|Cannot open include file")
+    message(FATAL_ERROR "no_embed: the build failed for another reason than a missing caliper/embed.h:\n${out}")
+endif()
+
+message(STATUS "sdk install proof: OK (${library}); caliper/embed.h is out of an applet's reach")

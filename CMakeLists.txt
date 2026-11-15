@@ -498,6 +498,12 @@ if(NOT WIN32)
     set_target_properties(libcaliper PROPERTIES OUTPUT_NAME caliper)
 endif()
 
+# caliper_embed (caliper::embed): libcaliper and its static dependencies in one
+# shared library that exports only the embed C functions, and the caliper-embed
+# package that installs it (`cmake --install <build> --component embed`).
+# cmake/CaliperEmbed.cmake describes the package. macOS and Windows only.
+include(cmake/CaliperEmbed.cmake)
+
 # caliper_viewer — the standalone live viewer process (src/host/live/
 # viewer_main.mm): an AppKit window hosting the embed core attached to a
 # training process's live session. Thin shell; the attach logic is in libcaliper.
@@ -658,11 +664,18 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 
     # caliper_sdk_install: install the SDK component and build the probe and a
-    # copy of examples/hello against it, using only find_package(caliper-sdk)
-    # (tests/sdk_install_probe/run.cmake). The work folder holds those copies
-    # and builds; CI points it outside the checkout.
+    # copy of examples/hello against it, using only find_package(caliper-sdk),
+    # then check that an applet source cannot include caliper/embed.h even with
+    # the embed package in the same prefix (tests/sdk_install_probe/run.cmake).
+    # The work folder holds those copies and builds; CI points it outside the
+    # checkout.
     set(CALIPER_SDK_PROBE_DIR "${CMAKE_BINARY_DIR}/sdk-probe" CACHE PATH
         "Work folder of the caliper_sdk_install test")
+    if(TARGET caliper_embed)
+        set(_sdk_probe_with_embed ON)
+    else()
+        set(_sdk_probe_with_embed OFF)
+    endif()
     add_test(NAME caliper_sdk_install COMMAND "${CMAKE_COMMAND}"
         "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
         "-DCALIPER_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
@@ -676,8 +689,32 @@ if(BUILD_TESTS)
         "-DLIB_PREFIX=${CMAKE_SHARED_LIBRARY_PREFIX}"
         "-DLIB_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
         "-DEXE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+        "-DWITH_EMBED=${_sdk_probe_with_embed}"
         -P "${CMAKE_SOURCE_DIR}/tests/sdk_install_probe/run.cmake")
     set_tests_properties(caliper_sdk_install PROPERTIES LABELS "sdk" TIMEOUT 900)
+
+    # caliper_embed_install: install the embed component alone to its own
+    # prefix, check the installed tree and, on macOS, that the library exports
+    # exactly the C functions of libcaliper.a (tests/embed_install/run.cmake).
+    # CI points the work folder outside the checkout.
+    if(TARGET caliper_embed)
+        set(CALIPER_EMBED_PROBE_DIR "${CMAKE_BINARY_DIR}/embed-probe" CACHE PATH
+            "Work folder of the caliper_embed_install test")
+        set(_embed_probe_exports "")
+        if(APPLE)
+            set(_embed_probe_exports "-DNM=${CMAKE_NM}" "-DCORE_LIBRARY=$<TARGET_FILE:libcaliper>")
+        endif()
+        add_test(NAME caliper_embed_install COMMAND "${CMAKE_COMMAND}"
+            "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
+            "-DCALIPER_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+            "-DWORK_DIR=${CALIPER_EMBED_PROBE_DIR}"
+            "-DEXPECT_VERSION=${CALIPER_EMBED_PACKAGE_VERSION}"
+            "-DLIB_PREFIX=${CMAKE_SHARED_LIBRARY_PREFIX}"
+            "-DLIB_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
+            ${_embed_probe_exports}
+            -P "${CMAKE_SOURCE_DIR}/tests/embed_install/run.cmake")
+        set_tests_properties(caliper_embed_install PROPERTIES LABELS "embed" TIMEOUT 900)
+    endif()
 
     # caliper_host_names_no_applet: no applet id, name or window title from
     # applets/ or examples/ may appear as a string literal in src/ or include/.
