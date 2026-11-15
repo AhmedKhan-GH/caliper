@@ -28,6 +28,8 @@ Plan: [Applets outside the core](applets-outside-the-core.md).
 
 Each promotion is a new service version. In order: capture and automation; the layout grid and text scale; tours; the Python sidecar; the `caliper::viz` components (annotation scene, colour by value, catalog tree); a quiet job kind. Development builds treat ImGui errors as failures.
 
+Phase 2 starts by settling one decision: every applet splits into a computation that runs natively and an interface that compiles to WebAssembly, and the SDK lets interface code use only services that have a wire form. Applets built before the rule stay native-only until they are ported. [Applets in the browser](streaming-and-embedding.md#applets-in-the-browser) describes the split.
+
 Plan: [Platform candidates](platform-candidates.md).
 
 ## Phase 3: agent-built panels
@@ -70,7 +72,7 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 ## Streaming and embedding
 
-Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package, which Phase 1 built, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming comes first; video streaming of a running Caliper to a browser, which shows native applets there unchanged, comes after it.
+Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package, which Phase 1 built, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
 
 ## Data and Cloud
 

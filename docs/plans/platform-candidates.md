@@ -7,6 +7,13 @@ SDK. This page lists them, where each belongs, and the order to move them.
 A piece moves only when a second applet needs it. Each move is tested by moving
 the original applet and one existing scope onto the new host or SDK version.
 
+Phase 2 starts by settling one more rule, which every promoted piece follows:
+each applet splits into a computation that runs natively and an interface that
+compiles to WebAssembly, and interface code may use only services that have a
+wire form ([Applets in the browser](streaming-and-embedding.md#applets-in-the-browser)).
+A piece that draws belongs to the interface, and a piece that computes stays
+native. Applets built before the rule stay native-only until they are ported.
+
 ## Candidates
 
 | Built in the applet | What it does | Where it belongs |
