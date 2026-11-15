@@ -1,14 +1,17 @@
-# Data and the platform
+# Data and Cloud
 
-This page plans the data that Caliper keeps for the person who runs it: the history of their runs, comparison between runs, and recordings of sessions that can be replayed. It also draws the line between the desktop app, which keeps all of this locally, and a platform that would later offer the same online. The [roadmap](roadmap.md#data-and-the-platform) gives the order and status.
+This page plans the data that Caliper keeps for the person who runs it: the history of their runs, comparison between runs, and recordings of sessions that can be replayed. It also draws the line between the desktop app, which keeps all of this locally, and Caliper Cloud and Caliper Web, which would later offer the same online. The [roadmap](roadmap.md#data-and-cloud) gives the order and status.
 
 ## The line
 
 Caliper is a desktop app with a local database. Run history, comparing runs, and recording and replaying a session all belong to the desktop app, and it stores them on the machine it runs on. The desktop app never requires an account or a server, and it stays local-first.
 
-What makes something platform work is being online: syncing and sharing the app's history, teams and permissions, hosted storage, and hosted compute. That is a separate product that comes later. The site names it in two parts: Caliper Cloud, which runs Caliper on hosted GPU nodes for models larger than local hardware can hold, and Caliper Platform, a place to exchange widgets and applets and to find ready-made tools.
+What moves work to Caliper Cloud and Caliper Web is being online: syncing and sharing the app's history, teams and permissions, hosted storage, and hosted compute. They are separate products that come later:
 
-The registry of [Phase 4](roadmap.md#phase-4-the-registry) is planned on its own page, [Applet registry](registry.md). The desktop app can install from it but never needs it, because sideloading keeps working.
+- **Caliper Cloud** offers the desktop app's history and recordings online and runs hosted compute sessions, for example for models larger than local hardware can hold.
+- **Caliper Web** is the browser workspace.
+
+Caliper Platform, the registry and exchange of applets and widgets, is a third product. Phase 4 of the roadmap plans it as the [Applet registry](registry.md). The desktop app can install from it but never needs it, because sideloading keeps working.
 
 ## What the desktop app keeps today
 
@@ -27,17 +30,17 @@ These are planned for the desktop app, after Phase 1 and after the streaming wor
 - **Comparing runs.** The desktop app shows two or more runs from that history side by side.
 - **Recording and replay.** The desktop app records a session to a file and replays it later, with no server, so that a session can be reopened or shared as a file. The recording format shares its snapshots with the live protocol of [Streaming and embedding](streaming-and-embedding.md), which is why this work comes after the streaming work.
 
-## The platform
+## Caliper Cloud and Caliper Web
 
-The platform offers the same online, and it is planned in outline only:
+Caliper Cloud and Caliper Web offer the same online, and they are planned in outline only:
 
 - the desktop app's history, synced and shared;
 - teams and permissions;
 - hosted storage;
-- hosted compute sessions that reach a browser through the data streaming and the video streaming of [Streaming and embedding](streaming-and-embedding.md).
+- hosted compute sessions that reach a browser through the data streaming of [Streaming and embedding](streaming-and-embedding.md), drawn by its web viewer.
 
-The platform is a separate, later product, and it lives outside this repository. It uses the same database schema, the same recording format and the same live protocol as the desktop app, so the desktop app's data moves to it unchanged and the desktop app changes nothing for it.
+Both are separate, later products, and they live outside this repository. They use the same database schema, the same recording format and the same live protocol as the desktop app, so the desktop app's data moves to them unchanged and the desktop app changes nothing for them.
 
 ## Security
 
-The platform's network and compute security get a dedicated review before anything is hosted. The streaming plan holds the matching rule for sessions that leave the machine ([Security](streaming-and-embedding.md#security)).
+The network and compute security of Caliper Cloud and Caliper Web get a dedicated review before anything is hosted. The streaming plan holds the matching rule for sessions that leave the machine ([Security](streaming-and-embedding.md#security)).

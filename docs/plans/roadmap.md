@@ -70,11 +70,11 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 ## Streaming and embedding
 
-Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Video streaming of a running Caliper comes after them.
+Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift.
 
-## Data and the platform
+## Data and Cloud
 
-Run history, comparison between runs, and recording and replaying a session are planned for the desktop app after Phase 1, after the streaming work whose format they share. They build on the local DuckDB-backed stores and never need an account or a server. The platform, which offers the same online with sync, sharing, teams, hosted storage and hosted compute, is a separate later product outside this repository. [Data and the platform](data-and-platform.md) gives the plan.
+Run history, comparison between runs, and recording and replaying a session are planned for the desktop app after Phase 1, after the streaming work whose format they share. They build on the local DuckDB-backed stores and never need an account or a server. Caliper Cloud and Caliper Web, which offer the same online with sync, sharing, teams, hosted storage and hosted compute, are separate later products outside this repository. [Data and Cloud](data-and-cloud.md) gives the plan.
 
 ## Renderers
 
@@ -102,7 +102,7 @@ Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers 
 
 ## Not now
 
-A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to the platform, not the desktop app ([Data and the platform](data-and-platform.md)).
+A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to Caliper Cloud, not the desktop app ([Data and Cloud](data-and-cloud.md)).
 
 Linux is not planned for now.
 

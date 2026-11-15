@@ -26,7 +26,7 @@ Data streaming is the portable core of the plan. A producer keeps its computatio
 
 The web viewer is Caliper's view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly and drawn by the WebGPU renderer. It has no applet loader, no DuckDB and no tensor bridge. It ships as a JavaScript and TypeScript package with a `<caliper-view>` element and a Jupyter widget.
 
-No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends.
+No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends. Native applets are shown in the native app, and the browser draws only from data.
 
 ## Serving
 
@@ -34,10 +34,6 @@ Two modes serve the web viewer, both with the same protocol, built in this order
 
 1. **`caliper.serve()` in Python.** The script itself serves the viewer page and its stream.
 2. **`caliper serve`, a subcommand of the `caliper` binary.** It runs a hub. Any number of scripts send to it, any number of browsers or Caliper apps watch it, and it outlives the scripts.
-
-## Video streaming
-
-Streaming video of a running Caliper, for sessions on a remote machine, comes later. It is the only way to show native applets in a browser, because native applets run only in the app.
 
 ## Spec applets
 

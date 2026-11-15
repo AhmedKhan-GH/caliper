@@ -9,5 +9,5 @@ Plans describe work that is not built yet. The [roadmap](roadmap.md) is the one 
 | [Platform candidates](platform-candidates.md) | Pieces that applets built for themselves and that belong in the host or the SDK |
 | [Applet builder](applet-builder.md) | Panels that an agent builds from a declarative spec, through a command layer shared with outside agents |
 | [Applet registry](registry.md) | A registry at caliperapp.ai, a Browse tab and install by id and version |
-| [Data and the platform](data-and-platform.md) | Run history, run comparison and session recording in the desktop app's local database, and the separate platform that offers them online |
+| [Data and Cloud](data-and-cloud.md) | Run history, run comparison and session recording in the desktop app's local database, and Caliper Cloud and Caliper Web, which offer them online |
 | [Streaming and embedding](streaming-and-embedding.md) | Using Caliper from other programs: streaming over the network, a viewer in the browser, and the embedding package |
