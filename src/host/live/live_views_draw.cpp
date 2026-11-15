@@ -531,7 +531,9 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
             if (fx >= 0.0f && fx < 1.0f && fy >= 0.0f && fy < 1.0f) {
                 const int col = std::min(tv->w - 1, (int)(fx * (float)tv->w));
                 const int row = std::min(tv->h - 1, (int)(fy * (float)tv->h));
-                const bool live_buf = v.tex_cpu && tv->alloc && tv->alloc_buf == v.tex_buf;
+                // A CPU payload's copy, or the MTLBuffer the v1.2 view still imports.
+                const bool live_buf = v.tex_cpu && (v.tex_cpu == v.tex_copy.data() ||
+                                                    (tv->alloc && tv->alloc_buf == v.tex_buf));
                 const size_t i = (size_t)row * (size_t)tv->w + (size_t)col;
                 if (!live_buf) {
                     ImGui::SetTooltip("(%d, %d)\nvalue unavailable (payload not CPU-visible)", row, col);

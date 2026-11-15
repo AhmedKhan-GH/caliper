@@ -19,7 +19,7 @@ uint32_t apply_flags(uint32_t snap) {
 }
 
 // The snapshot as a CPU tensor at host_base (+ byte_offset as the data offset).
-bool apply(CaliperCore* core, PolledView& v, const caliper_live::Snapshot& s, int64_t offset_ns) {
+bool apply(CaliperCore* core, PolledView& v, const caliper_live::Snapshot& s) {
     CaliperTensor data{};
     data.struct_size = sizeof data;
     data.data = s.host_base;
@@ -62,7 +62,7 @@ bool apply(CaliperCore* core, PolledView& v, const caliper_live::Snapshot& s, in
     ls.points_dims = s.points_dims;
     ls.label_count = s.label_count;
     ls.seq = s.seq;
-    ls.stamp_ns = s.stamp_ns ? (uint64_t)((int64_t)s.stamp_ns - offset_ns) : 0;
+    ls.stamp_ns = s.stamp_ns;   // already in the viewer's clock (live_clock.h)
     if (!caliper_core_live_apply(core, &ls)) {
         v.error = caliper_core_last_error(core);
         return false;
@@ -105,7 +105,7 @@ int poll_source(CaliperCore* core, caliper_live::Source& src, PollState& st) {
     for (auto& v : st.views) {
         caliper_live::Snapshot s;
         if (!src.take(v.key, v.seq, &s)) continue;
-        if (!apply(core, v, s, st.stamp_offset_ns)) {
+        if (!apply(core, v, s)) {
             src.unclaim(v.key);
             ++st.errors;
             v.seq = s.seq;   // do not retry the same snapshot every frame

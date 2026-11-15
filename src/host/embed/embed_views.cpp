@@ -452,6 +452,7 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
     } else if (!cpu_uploaded) {
         ok = bridge->update_texture(tex, &t);
     }
+    if (ok && !metal) path = bridge->last_upload_path();   // "cpu-staged", or the GPU map's path
     if (!ok) {
         if (need_create) bridge->release_texture(tex);
         drop_fresh_import();

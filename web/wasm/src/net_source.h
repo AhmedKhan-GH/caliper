@@ -19,6 +19,7 @@
 // and a series ring of fixed capacity indexed by absolute value index.
 #pragma once
 
+#include "live/live_clock.h"
 #include "live/live_source.h"
 #include "net/json.h"
 
@@ -61,11 +62,9 @@ public:
     bool connected() const { return welcomed_ && !closed_; }
     uint64_t messages() const { return messages_; }
     uint64_t bytes() const { return bytes_; }
-    // The producer's monotonic clock minus this page's, in ns, estimated from
-    // the newest stamps (stamp_ns - arrival time, smallest seen): the views'
-    // latency then compares one clock with itself (see clock_offset_ns()).
-    int64_t clock_offset_ns() const { return offset_ns_; }
-    bool have_clock_offset() const { return have_offset_; }
+    // Snapshots are handed over with their stamps in this page's clock
+    // (live_clock.h): the producer's clock minus ours, as estimated so far.
+    int64_t clock_offset_ns() const { return clock_.offset_ns(); }
 
     // The snapshot the last take() of view `name` handed out, with host_base
     // set (valid until its next take), or null. For the colormap check.
@@ -124,7 +123,6 @@ private:
     void send(const std::vector<uint8_t>& frame);
     template <class M> void send_msg(const M& m);
     void subscribe(View& v);
-    void note_stamp(uint64_t stamp_ns);
     void set_state(const std::string& s);
 
     Options opt_;
@@ -140,8 +138,7 @@ private:
     uint32_t next_sub_ = 1, next_request_ = 1, next_nonce_ = 1;
     double last_rx_ms_ = 0.0, last_ping_ms_ = 0.0;
     uint64_t messages_ = 0, bytes_ = 0;
-    int64_t offset_ns_ = 0;
-    bool have_offset_ = false;
+    caliper_live::StampClock clock_;
     std::vector<uint8_t> out_;        // reused encode buffer
 };
 

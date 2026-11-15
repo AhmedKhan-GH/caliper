@@ -164,6 +164,8 @@ void release_typed(CaliperCore* core, View& v) {
     v.values.clear();
     v.xs.clear();
     v.ys.clear();
+    v.tex_copy = {};
+    v.tex_cpu = nullptr;
 }
 
 void erase_view(CaliperCore* core, CaliperLiveViewsState* S, View* v) {
@@ -250,12 +252,20 @@ bool apply_texture(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
     v.imported = tv && tv->imported;
     v.path = tv ? tv->path : "";
     v.count = 0;
-    // Hover values: the CPU side of a METAL payload (NULL for private storage
-    // and for CPU payloads, whose bytes the caller may free on return). Read
-    // only while the v1.2 view still imports this very buffer.
+    // Hover values: a copy of a CPU payload (the caller may free its bytes on
+    // return), or the CPU side of a METAL payload (NULL for private storage),
+    // read only while the v1.2 view still imports this very buffer.
     v.tex_buf = nullptr;
     v.tex_cpu = nullptr;
-    if (s.data->device == CALIPER_DEV_METAL) {
+    if (s.data->device == CALIPER_DEV_CPU) {
+        // (H,W) f32 and (H,W,4) u8 are both H * W * 4 bytes (validate()); the
+        // copy keeps its capacity between applies.
+        const size_t bytes = (size_t)t.shape[0] * (size_t)t.shape[1] * 4u;
+        const uint8_t* src = (const uint8_t*)s.data->data + s.data_offset;
+        v.tex_copy.assign(src, src + bytes);
+        v.tex_cpu = v.tex_copy.data();
+    } else if (s.data->device == CALIPER_DEV_METAL) {
+        v.tex_copy.clear();
         const BufferInfo bi = metal_buffer_info(s.data->data);
         if (bi.contents) {
             v.tex_buf = s.data->data;

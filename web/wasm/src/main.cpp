@@ -241,10 +241,7 @@ void draw_status(float w, float h) {
 void frame() {
     const double t0 = emscripten_get_now();
 
-    if (g.net) {
-        g.poll.stamp_offset_ns = g.net->have_clock_offset() ? g.net->clock_offset_ns() : 0;
-        caliper_web::poll_source(g.core, *g.net, g.poll);
-    }
+    if (g.net) caliper_web::poll_source(g.core, *g.net, g.poll);
     const double t_poll = emscripten_get_now();
 
     const caliper_web::FrameSize fs = caliper_web::input_new_frame();

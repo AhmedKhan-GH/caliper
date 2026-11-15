@@ -935,8 +935,11 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
     // returns false and keeps the CPU staging below.
     if (e.mapped &&
         renderer_.tex_update_mapped_from_host(e.tex, (const float*)t->data, e.w, e.h,
-                                              colormap_lut(e.colormap), e.vmin, e.vmax))
+                                              colormap_lut(e.colormap), e.vmin, e.vmax)) {
+        last_upload_path_ = renderer_.last_device_path();
         return true;
+    }
+    last_upload_path_ = "cpu-staged";
     std::vector<uint8_t> staging((size_t)e.w * (size_t)e.h * 4);
     if (e.mapped)
         map_f32_to_rgba8((const float*)t->data, e.w, e.h,

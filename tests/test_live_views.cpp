@@ -18,6 +18,7 @@
 #include <caliper/embed.h>
 #include <caliper/live_views.h>
 
+#include "live/live_clock.h"         // StampClock (network stamps into the viewer's clock)
 #include "live/live_views_state.h"   // kPalette (white-box: the exact categorical colours)
 #include "tensor_bridge.h"           // map_f32_to_rgba8 / colormap_lut (CPU reference)
 
@@ -923,6 +924,59 @@ TEST_CASE("live_views/shutdown: live views of every kind tear down clean; a fres
     CaliperLiveSnapshot s = snap("again", CALIPER_LIVE_KIND_HEATMAP, &th);
     CHECK(caliper_core_live_apply(c2.core, &s) == 1);
     c2.frames(1);
+}
+
+TEST_CASE("live_views/hover: a CPU payload is copied at apply, so hover reads values the "
+          "caller may already have freed") {
+    const int W = 8, H = 4;
+    Core c(32, 32);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::vector<float> r = ramp(W, H, -1.0f, 1.0f);
+    std::vector<float> caller = r;
+    CaliperTensor t = tensor(caller.data(), CALIPER_DT_F32, {H, W}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot s = snap("hov", CALIPER_LIVE_KIND_HEATMAP, &t);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &s) == 1, c.err());
+    std::fill(caller.begin(), caller.end(), 99.0f);   // the caller reuses its bytes
+    const caliper_live_views::View* v = caliper_live_views::find(c.core, "hov");
+    REQUIRE(v != nullptr);
+    REQUIRE(v->tex_cpu != nullptr);
+    CHECK(v->tex_cpu != (const uint8_t*)caller.data());
+    CHECK(std::memcmp(v->tex_cpu, r.data(), r.size() * 4) == 0);
+    CHECK(std::string(info(c.core, "hov").path) == "cpu-staged");   // a native backend's path
+
+    // An RGBA image keeps its bytes the same way.
+    std::vector<uint8_t> px((size_t)W * H * 4);
+    for (size_t i = 0; i < px.size(); ++i) px[i] = (uint8_t)i;
+    std::vector<uint8_t> ref = px;
+    CaliperTensor ti = tensor(px.data(), CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot si = snap("img", CALIPER_LIVE_KIND_IMAGE, &ti);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &si) == 1, c.err());
+    std::fill(px.begin(), px.end(), 0);
+    const caliper_live_views::View* vi = caliper_live_views::find(c.core, "img");
+    REQUIRE(vi != nullptr);
+    REQUIRE(vi->tex_cpu != nullptr);
+    CHECK(std::memcmp(vi->tex_cpu, ref.data(), ref.size()) == 0);
+}
+
+TEST_CASE("live_clock: producer stamps map into the viewer's clock from the fastest message") {
+    caliper_live::StampClock clk;
+    CHECK_FALSE(clk.ready());
+    CHECK(clk.to_viewer(123) == 0);
+    // The producer's clock reads 5 s more than the viewer's; messages take 3,
+    // 1 and 2 ms to arrive.
+    const uint64_t base = 100ull * 1000000000ull, skew = 5ull * 1000000000ull, ms = 1000000ull;
+    clk.observe(base + skew, base + 3 * ms);
+    clk.observe(base + skew + 10 * ms, base + 11 * ms);
+    clk.observe(base + skew + 20 * ms, base + 22 * ms);
+    REQUIRE(clk.ready());
+    CHECK(clk.offset_ns() == (int64_t)(skew - 1 * ms));   // the 1 ms message is the fastest
+    // A snapshot stamped 20 ms (producer) maps to 1 ms before it arrived at 22.
+    CHECK(clk.to_viewer(base + skew + 20 * ms) == base + 21 * ms);
+    CHECK(clk.to_viewer(0) == 0);
+    // After the window, an old fast message no longer counts.
+    const uint64_t later = base + (uint64_t)(caliper_live::StampClock::kWindow + 2) * 1000000000ull;
+    clk.observe(later + skew, later + 4 * ms);
+    CHECK(clk.offset_ns() == (int64_t)(skew - 4 * ms));
 }
 
 CALIPER_GPU_TEST_MAIN()

@@ -90,6 +90,9 @@ struct View {
     bool               have_range = false;    // last finite AUTO range
     void*              tex_buf = nullptr;     // MTLBuffer of the last METAL payload
     const uint8_t*     tex_cpu = nullptr;     // its CPU view at data_offset (hover)
+    // CPU payloads: a copy of the last one's bytes (the caller may free its own
+    // on return), so hover shows values for them too; tex_cpu points here.
+    std::vector<uint8_t> tex_copy;
 
     // POINTS.
     uint64_t    view_rid = 0;                 // renderer id of the render target

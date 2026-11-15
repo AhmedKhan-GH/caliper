@@ -57,7 +57,8 @@
  * torch buffer) is refused for SERIES/HISTOGRAM and loses hover values for
  * HEATMAP (the colormap kernel still runs; nothing is copied to the host).
  * Heatmap hover reads the slot after its claim ended, so it may show a value of
- * a newer snapshot of the same view (display aid only; CPU payloads: no hover).
+ * a newer snapshot of the same view (display aid only). A CPU payload is copied
+ * at apply for hover, since the caller may free its bytes on return.
  *
  * SYNC. The producer applies a snapshot only after the GPU work that wrote it
  * completed (torch.mps.Event polled, never waited on) and never rewrites a
@@ -129,7 +130,7 @@ typedef struct CaliperLiveSnapshot {
     int32_t              points_dims;   /* POINTS: 2 (pan/zoom) or 3 (orbit) */
     int32_t              label_count;   /* POINTS: categorical classes in aux, 0 = continuous */
     uint64_t             seq;           /* producer's publish counter for this view */
-    uint64_t             stamp_ns;      /* producer CLOCK_UPTIME_RAW ns at snapshot time (0 = unknown) */
+    uint64_t             stamp_ns;      /* snapshot time in the viewer's clock (CLOCK_UPTIME_RAW on Apple, which a producer on the same machine stamps with; a network source maps the producer's stamps, src/host/live/live_clock.h); 0 = unknown */
 } CaliperLiveSnapshot;
 
 typedef struct CaliperLiveViewInfo {

@@ -34,9 +34,6 @@ struct PollState {
     std::vector<PolledView> views;
     uint64_t polls = 0, updates = 0, errors = 0;
     bool producer_alive = true;
-    // Applied to every stamp before the apply: the producer's clock minus this
-    // page's (NetSource::clock_offset_ns), so the live views compare one clock.
-    int64_t stamp_offset_ns = 0;
 };
 
 // Applies what is new; returns how many snapshots were applied.

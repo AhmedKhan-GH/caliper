@@ -9,6 +9,7 @@
 #include <emscripten/websocket.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -24,7 +25,12 @@ namespace {
 
 double now_ms() { return emscripten_get_now(); }
 
-uint64_t now_ns() { return (uint64_t)(emscripten_get_now() * 1e6); }
+// The live views' clock off Apple (live_views.cpp now_ns()), which the stamps
+// are mapped into.
+uint64_t now_ns() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 bool on_open_cb(int, const EmscriptenWebSocketOpenEvent*, void* ud) {
     static_cast<NetSource*>(ud)->on_open();
@@ -153,15 +159,6 @@ void NetSource::subscribe(View& v) {
     send_msg(s);
 }
 
-void NetSource::note_stamp(uint64_t stamp_ns) {
-    if (!stamp_ns) return;
-    const int64_t d = (int64_t)stamp_ns - (int64_t)now_ns();
-    // The producer's clock minus ours, plus the one-way delay; the largest
-    // value seen is the one with the least delay.
-    if (!have_offset_ || d > offset_ns_) offset_ns_ = d;
-    have_offset_ = true;
-}
-
 void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
     last_rx_ms_ = now_ms();
     ++messages_;
@@ -256,7 +253,7 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         } else if constexpr (std::is_same_v<T, wire::Snapshot>) {
             View* v = by_sub(m.sub);
             if (!v || m.kind != v->kind) return;
-            note_stamp(m.stamp_ns);
+            clock_.observe(m.stamp_ns, now_ns());
             Payload& p = v->incoming;
             const wire::Section& d = m.data;
             // Points travel as (N, 2) or (N, 3); the live views take (N, 3),
@@ -301,7 +298,7 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         } else if constexpr (std::is_same_v<T, wire::Series>) {
             View* v = by_sub(m.sub);
             if (!v || v->kind != CALIPER_LIVE_KIND_SERIES || v->ring.empty()) return;
-            note_stamp(m.stamp_ns);
+            clock_.observe(m.stamp_ns, now_ns());
             const float* vals = (const float*)m.values.data;
             const uint64_t count = (uint64_t)m.values.count();
             const uint64_t end = m.start + count;
@@ -393,7 +390,7 @@ bool NetSource::take(uint64_t key, uint64_t after_seq, caliper_live::Snapshot* o
         s.host_base = v->ring.data();
         s.series_total = v->series_end;
         s.seq = v->series_seq;
-        s.stamp_ns = v->series_stamp;
+        s.stamp_ns = clock_.to_viewer(v->series_stamp);
         *out = s;
         return true;
     }
@@ -405,6 +402,7 @@ bool NetSource::take(uint64_t key, uint64_t after_seq, caliper_live::Snapshot* o
     s.byte_offset = 0;
     s.stats = v->shown.stats.empty() ? nullptr : v->shown.stats.data();
     *out = s;
+    out->stamp_ns = clock_.to_viewer(s.stamp_ns);
     return true;
 }
 
