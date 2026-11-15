@@ -76,6 +76,8 @@ mismatch crashes in ways that are hard to trace.
 - `CALIPER_BUILD_APPLETS` goes away.
 - First-party applets move to one `caliper-applets` repository with their
   history ([D8](../decisions/d008-applets-keep-their-history.md)), rather than one repository each.
+  The history is extracted with `git filter-repo` rather than copied as a fresh
+  start, because it is the record of how each applet was built.
 - `hello` stays in this repository as the loader-test fixture under `tests/`.
 - `examples/hello` and `examples/sine_scope` stay, because the tutorials embed
   them. CI builds them against the installed SDK, as an outside developer

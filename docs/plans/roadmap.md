@@ -10,7 +10,7 @@ On 15 November 2026, `main` holds the host, the SDK with its 18 service ids, the
 
 ## Phase 1: one core with versioned applets
 
-1. Write the versioning contract as a decision. It has four layers: the host ABI and service versions, the SDK version, each applet's version and what it requires, and the schema version of each applet's stored data. It also states the promotion rule: when a feature moves into the core, applets that need it declare the new service version, and applets that bundle their own copy keep working.
+1. Write the versioning contract into [Compatibility and epochs](../explanations/compatibility.md). It has four layers: the host ABI and service versions, the SDK version, each applet's version and what it requires, and the schema version of each applet's stored data. It also states the promotion rule: when a feature moves into the core, applets that need it declare the new service version, and applets that bundle their own copy keep working.
 2. Ship the SDK as an installed package: the headers, the CMake config, the pinned UI stack and the sugar libraries.
 3. Make the host name no applet: windows dock by role ([D19](../decisions/d019-host-names-no-applet.md)), the core build compiles no applets, and CI builds and starts an empty core.
 4. Load applets from outside the repository: development paths, the user applets folder and the search order ([D20](../decisions/d020-applet-search-order.md)), and shipped applets signed in the app bundle ([D21](../decisions/d021-shipped-applets-in-the-app-bundle.md)).
@@ -66,6 +66,16 @@ A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly app
 - Once a registry exists, an epoch bump strands every installed applet until it is rebuilt.
 - A registry is a supply-chain target ([D22](../decisions/d022-third-party-applet-signing.md)).
 
+## Open questions
+
+- **Audience.** Today the audience is collaborators who build Caliper from source, and the contracts are sized so that they also work for end users who install a prebuilt bundle. Revisit this when the first such user appears.
+- **Signing third-party applets on macOS.** A notarized host either carries the `disable-library-validation` entitlement or loads only applets signed by its own team. The choice must be made before the first third-party applet ships; the options are in [Applets outside the core](applets-outside-the-core.md#signing-on-macos).
+- **Applet shaders.** Whether applets still supply no shaders once agent-built panels exist.
+- **The OpenGL fallback.** Whether to replace GLEW with a GLAD 3.3-core loader, or to remove the fallback.
+- **Older epochs.** Whether the host must accept applets built for epoch N−1 before the first outside applet ships.
+- **A second native host.** Whether a second program that embeds `libcaliper` is still needed once applets live outside the core.
+- **OpenGLlama.** Whether to revive the archived OpenGLlama applet in its own repository, or delete it.
+
 ## Undecided
 
 These ideas come from earlier designs and are not built. Each needs a decision before it enters a phase.
@@ -75,8 +85,8 @@ These ideas come from earlier designs and are not built. Each needs a decision b
 - **Digital twins.** A population twin built on InstanceScope's unused per-variant reduction, and a machine thermal twin fed by `caliper.feed.v1`.
 - **Research publishing beyond export.** A Python DLPack path into the geometry bridge, and applets written in Python.
 - **Artifacts redesign.** A checkpoint browser with previews and resuming training from a checkpoint.
-- **Applet dependency packaging.** Applets that carry heavy dependencies of their own, and host-managed runtime packs ([D5](../decisions/d005-runtime-packs.md)).
-- **The `caliper` CLI.** `new`, `dev`, `install`, `package` and `publish` as subcommands of the host ([D9](../decisions/d009-cli-as-host-subcommands.md)).
+- **Applet dependency packaging.** Whether an applet built outside the core may link its own heavy dependencies, such as DuckDB or llama.cpp, and what happens when two applets each carry a copy. The proposal for large runtimes such as libtorch is runtime packs ([D5](../decisions/d005-runtime-packs.md)): the host installs and manages each runtime once instead of every applet bundling its own multi-gigabyte copy, and a process loads one libtorch for the whole session. The stated limit is that two applets that need different torch versions cannot share a session. No pack manager exists; the build downloads torch directly.
+- **The `caliper` CLI.** `new`, `dev`, `install`, `package` and `publish` as subcommands of the host binary rather than a separate program, so there is one thing to install, as with the `code` command of Visual Studio Code ([D9](../decisions/d009-cli-as-host-subcommands.md)). The host's `main` takes no arguments yet, and whether `new` is needed depends on the [applet builder](applet-builder.md).
 - **`.caliperapp` bundles.** A bundle folder with per-platform binaries, and manifest keys for platforms, authors, licence and runtimes.
 - **Hot reload.** Reloading a rebuilt applet, with `save_state`, `load_state`, `on_suspend` and `on_resume` entry points.
 - **SDK conformance.** A conformance checker, and a set of reference applets built against each SDK release.

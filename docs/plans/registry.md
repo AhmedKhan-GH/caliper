@@ -4,7 +4,7 @@ This page proposes a registry for applets. Nothing described here is built. The 
 
 ## Proposal
 
-The registry is served at `caliperapp.ai`. A registry repository backs it, and the repository takes publications by pull request. The site serves the index that the repository holds, so the repository stays the record of what was published and who published it. This is decision [D41](../decisions/d041-registry-at-caliperapp.md), which supersedes [D6](../decisions/d006-registry-as-a-git-repository.md). D6 proposed a git repository alone as the registry, with no served site.
+The registry is served at `caliperapp.ai`. A registry repository backs it, and the repository takes publications by pull request. The site serves the index that the repository holds, so the repository stays the record of what was published and who published it. A served registry lets users find and install applets without knowing about git, and it keeps review of publications by pull request. This is decision [D41](../decisions/d041-registry-at-caliperapp.md), which supersedes [D6](../decisions/d006-registry-as-a-git-repository.md). D6 proposed a git repository alone as the registry, with no served site.
 
 Sideloading continues to work and is not replaced. A registry lists applets and helps the host find them, and it never gates what the host will load. The host loads what is in its applets folders.
 
