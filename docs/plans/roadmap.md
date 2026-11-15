@@ -72,6 +72,10 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Video streaming of a running Caliper comes after them.
 
+## Data and the platform
+
+Run history and comparison, shared storage, accounts and hosted sessions belong to a platform: a separate product that lives outside this repository and comes later, after the streaming work. The tool keeps working fully without it and never requires an account or a server. [Data and the platform](data-and-platform.md) draws the line.
+
 ## Renderers
 
 This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). It is not part of the current work.
@@ -98,7 +102,7 @@ Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers 
 
 ## Not now
 
-A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts.
+A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to the platform, not the tool ([Data and the platform](data-and-platform.md)).
 
 Linux is not planned for now.
 
@@ -127,8 +131,9 @@ Every phase keeps these rules. [Platform rules](../explanations/architecture.md#
 
 ## Undecided
 
-These ideas come from earlier designs and are not built. Each needs a decision before it enters a phase.
+These ideas are not built. Each needs a decision before it enters a phase.
 
+- **Session recording.** Recording a session to a file and replaying it later without a server, so that a session can be reopened or shared as a file. The choice is whether the tool builds it or it waits for the platform ([Data and the platform](data-and-platform.md#on-the-line)).
 - **Reviewer bundle.** One download that runs an applet and its demo on a machine that never built Caliper.
 - **The em-controller.** An actor-critic policy that steers FieldScope's plasma, as an applet of its own.
 - **Digital twins.** A population twin built on InstanceScope's unused per-variant reduction, and a machine thermal twin fed by `caliper.feed.v1`.
