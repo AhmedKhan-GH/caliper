@@ -1700,7 +1700,7 @@ bool Hub::listen(std::string* err) {
         "The Python package ships the viewer page in caliper/_web/; start the hub with\n"
         "--assets <that folder> to open the stream in a browser at this address.\n";
     m.door = std::make_unique<HttpDoor>(m.opt.token, m.server.port(), &m.files, note,
-                                        m.opt.stream_path, m.opt.on_request);
+                                        m.opt.stream_path, m.opt.on_request, m.opt.stream_alias);
     m.publish(true);
     return true;
 }

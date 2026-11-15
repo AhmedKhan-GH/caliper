@@ -93,12 +93,14 @@ struct HubOptions {
     std::function<void(const std::string&)> log;
 
     // For a server that embeds the hub. The stream is upgraded at
-    // stream_path. When on_request is set, every request on another path goes
+    // stream_path, and also at stream_alias when that is not empty, with the
+    // same checks. When on_request is set, every request on another path goes
     // to it, on the hub's thread after the Host check, and the hub serves no
     // files and no note; the request is answered through Hub::respond().
     // on_tick runs on the hub's thread once per loop round, and at least
     // every tick_ms when that is above 0.
     std::string stream_path = CALIPER_NET_PATH;
+    std::string stream_alias;          // a second path for the same stream, "" none
     std::function<void(ConnId, const HttpRequest&)> on_request;
     std::function<void()> on_tick;
     int tick_ms = 0;

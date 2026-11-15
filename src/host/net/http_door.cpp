@@ -150,7 +150,7 @@ bool HttpDoor::answer(Server& server, ConnId c, const HttpRequest& r) {
         server.respond(c, 403, "text/plain; charset=utf-8", "Forbidden: Host\n", nosniff);
         return false;
     }
-    if (other_ && r.path != stream_path_) {
+    if (other_ && !is_stream(r.path)) {
         ++stats_.handed_over;
         other_(c, r);
         return false;
@@ -162,8 +162,8 @@ bool HttpDoor::answer(Server& server, ConnId c, const HttpRequest& r) {
         server.respond(c, 405, "text/plain; charset=utf-8", "Method Not Allowed\n", h);
         return false;
     }
-    if (r.path == stream_path_) {
-        const int status = wire::upgrade_status(r, token_, port_, stream_path_);
+    if (is_stream(r.path)) {
+        const int status = wire::upgrade_status(r, token_, port_, r.path);
         if (status != 0) {
             if (r.has_origin && !wire::origin_allowed(r.origin)) {
                 ++stats_.refused_origin;

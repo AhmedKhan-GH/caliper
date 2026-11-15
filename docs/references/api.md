@@ -11,7 +11,8 @@ Caliper API is an HTTP interface to the running app. Version 0 lists the applets
 | `GET /v0/applets` | The applets the app lists, as `caliper list` shows them |
 | `POST /v0/applets/{id}/launch` | Opens that applet's page |
 | `GET /v0/capture.png` | The frame the app draws, as a PNG |
-| `GET /v0/stream` | The WebSocket of wire protocol v3, with the app as the hub |
+| `GET /v3/stream` | The WebSocket of wire protocol v3, with the app as the hub, at the protocol's own path |
+| `GET /v0/stream` | The same WebSocket, under the API's prefix |
 
 ## Starting it
 
@@ -38,7 +39,7 @@ The API file is `api.json` in the app-data folder ([Folders and environment vari
 | `port` | The port the API listens on |
 | `token` | The session token |
 | `url` | `http://127.0.0.1:<port>/v0` |
-| `stream_url` | `ws://127.0.0.1:<port>/v0/stream`, without the token |
+| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
 
 The session token is new for each run: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
 
@@ -57,7 +58,7 @@ Every request gets the checks of the stream ([The upgrade request](wire-protocol
 - An `Origin` header, when the request has one, must be one that the protocol accepts: `null`, an `http` or `https` origin on `127.0.0.1`, `localhost` or `[::1]`, or `vscode-webview://`. Any other origin is refused with 403.
 - The session token must come with the request. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time. A missing or wrong token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream with 403, as the protocol says.
 
-The API serves nothing beyond the five endpoints: no files, no command layer and no way to run code. A request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
+The API serves nothing beyond its endpoints: no files, no command layer and no way to run code. A request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
 
 ## Endpoints
 
@@ -98,15 +99,15 @@ Opens the page of the applet with that manifest id, as a click on its row on the
 
 The frame the app draws, as an opaque PNG of the canvas's size in pixels, read back at the end of the next frame. In the windowless mode that is the size `caliper shot --size` gives, 1600 by 1000 by default. The app in its window answers 501 with the reason. The PNG is encoded on a thread of its own, so the frame loop does not wait for the encoder.
 
-### GET /v0/stream
+### GET /v3/stream
 
-The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. Only the path differs from the protocol's `/v3/stream`: the upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address:
+The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address:
 
 ```text
-ws://127.0.0.1:7341/v0/stream?token=<token>
+ws://127.0.0.1:7341/v3/stream?token=<token>
 ```
 
-A client that takes the stream's whole address, such as the `<caliper-view>` element's `src`, connects as it does to `caliper serve`. The link field of the app's attach pane and `caliper-viewer --url` accept only `/v3/stream` links for now. The stream carries data and viewer events only, never host commands.
+`GET /v0/stream` is an alias of it, with the same checks, for clients that keep every address under the API's prefix. The stream carries data and viewer events only, never host commands.
 
 ## Threads and limits
 
@@ -134,7 +135,7 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 | 405 | The endpoint takes another method; `Allow` names it. |
 | 409 | The applet cannot be launched, or failed to launch. |
 | 413 | The request has a body. |
-| 426 | A GET of `/v0/stream` that is not a WebSocket upgrade. |
+| 426 | A GET of `/v3/stream` or `/v0/stream` that is not a WebSocket upgrade. |
 | 501 | A capture in the app's window. |
 | 503 | Too many requests wait for the app, or the app is closing. |
 | 504 | The app did not take the request within 5 s. |

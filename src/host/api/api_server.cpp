@@ -60,7 +60,7 @@ Routed route(const std::string& method, const std::string& path) {
         r.route = Route::Applets;
     } else if (path == "/v0/capture.png") {
         r.route = Route::Capture;
-    } else if (path == kStreamPath) {
+    } else if (path == kStreamPath || path == kStreamAlias) {
         r.route = Route::Stream;
     } else if (starts_with(path, kLaunchHead) && ends_with(path, kLaunchTail)) {
         const size_t a = sizeof kLaunchHead - 1;
@@ -344,6 +344,7 @@ bool Server::start(std::string* err) {
     h.software_version = opt_.software_version;
     h.log = opt_.log;
     h.stream_path = kStreamPath;
+    h.stream_alias = kStreamAlias;
     h.on_request = [p](ConnId c, const HttpRequest& r) { p->on_request(c, r); };
     h.on_tick = [p] { p->on_tick(); };
     h.tick_ms = 50;

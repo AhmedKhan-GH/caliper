@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -201,6 +202,97 @@ bool viewer_handshake(const std::string& url, std::string* role, std::string* wh
     return false;
 }
 
+// A producer that streams one 8 x 8 heatmap view, "heat", into the app's hub:
+// it answers SUBSCRIBE and sends a snapshot every 30 ms for each open
+// subscription. Pumped from the test thread.
+struct TinyProducer {
+    caliper_net::Client c;
+    bool open = false, welcomed = false;
+    int subscribes = 0;
+    std::map<uint32_t, Json> subs;   // sub -> resolved data view
+    uint64_t seq = 0;
+    std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now();
+
+    bool connect(const std::string& url) {
+        std::string err;
+        return c.connect(url, &err);
+    }
+    void send(const wire::Message& m) {
+        std::vector<uint8_t> b;
+        REQUIRE(wire::encode(m, &b));
+        c.send(b.data(), b.size());
+    }
+    void pump(int ms) {
+        for (auto& e : c.poll(ms)) {
+            using T = caliper_net::Event::Type;
+            if (e.type == T::Open && !open) {
+                open = true;
+                wire::Hello h;
+                h.role = CALIPER_NET_ROLE_PRODUCER;
+                h.session = wire::Identity{"tiny-producer", "tiny.py", 7, 1}.to_json();
+                send(h);
+            }
+            if (e.type != T::Message) continue;
+            wire::Message m;
+            if (!wire::decode(e.data.data(), e.data.size(), &m).ok()) continue;
+            if (std::holds_alternative<wire::Welcome>(m)) {
+                welcomed = true;
+                wire::Views v;
+                Json views = Json::array(), heat = Json::object(), src = Json::object(), dims = Json::array();
+                for (const char* d : {"rows", "cols"}) {
+                    Json dim = Json::object();
+                    dim.set("name", d);
+                    dim.set("size", 8);
+                    dims.push(dim);
+                }
+                src.set("name", "w");
+                src.set("dims", dims);
+                Json sources = Json::array();
+                sources.push(src);
+                heat.set("id", 1);
+                heat.set("name", "heat");
+                heat.set("kind", (int)CALIPER_NET_KIND_HEATMAP);
+                heat.set("sources", sources);
+                views.push(heat);
+                v.views = views;
+                send(v);
+            } else if (auto* s = std::get_if<wire::Subscribe>(&m)) {
+                ++subscribes;
+                wire::ViewReply r;
+                r.request_id = s->request_id;
+                r.sub = s->sub;
+                r.view = s->view;
+                Json dv = Json::object();
+                dv.set("source", "w");
+                r.data_view = dv;
+                subs[s->sub] = dv;
+                send(r);
+            } else if (auto* u = std::get_if<wire::Unsubscribe>(&m)) {
+                subs.erase(u->sub);
+            } else if (auto* pi = std::get_if<wire::Ping>(&m)) {
+                send(wire::Pong{pi->nonce});
+            }
+        }
+        if (std::chrono::steady_clock::now() < next || subs.empty()) return;
+        next = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+        std::vector<float> data(64);
+        ++seq;
+        for (size_t i = 0; i < data.size(); ++i) data[i] = (float)((i + seq) % 9);
+        for (const auto& kv : subs) {
+            wire::Snapshot s;
+            s.sub = kv.first;
+            s.view = "heat";
+            s.seq = seq;
+            s.kind = CALIPER_NET_KIND_HEATMAP;
+            s.data_view = kv.second;
+            s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {8, 8}, data.data(), data.size() * 4);
+            s.flags = CALIPER_NET_SNAP_AUTO_VMIN | CALIPER_NET_SNAP_AUTO_VMAX;
+            s.stats = {0.0, 8.0};
+            send(s);
+        }
+    }
+};
+
 // ---- the server with a fake frame thread ------------------------------------------------
 struct FakeApp {
     std::unique_ptr<caliper_api::Server> server;
@@ -273,6 +365,7 @@ TEST_CASE("api: the routes of v0 and the method each takes") {
     CHECK(caliper_api::route("GET", "/v0/info").route == Route::Info);
     CHECK(caliper_api::route("GET", "/v0/applets").route == Route::Applets);
     CHECK(caliper_api::route("GET", "/v0/capture.png").route == Route::Capture);
+    CHECK(caliper_api::route("GET", "/v3/stream").route == Route::Stream);
     CHECK(caliper_api::route("GET", "/v0/stream").route == Route::Stream);
     auto launch = caliper_api::route("POST", "/v0/applets/dev.caliper.hello/launch");
     CHECK(launch.route == Route::Launch);
@@ -284,7 +377,7 @@ TEST_CASE("api: the routes of v0 and the method each takes") {
     CHECK(std::string(wrong.allow) == "POST");
     CHECK_FALSE(caliper_api::route("POST", "/v0/info").method_ok);
     CHECK_FALSE(caliper_api::route("HEAD", "/v0/capture.png").method_ok);
-    for (const char* none : {"/", "/v0", "/v0/", "/v0/info/", "/v1/info", "/v3/stream", "/v0/applets/",
+    for (const char* none : {"/", "/v0", "/v0/", "/v0/info/", "/v1/info", "/v3/stream/", "/v3/", "/v0/applets/",
                              "/v0/applets//launch", "/v0/applets/a/b/launch", "/v0/applets/x/launch/",
                              "/v0/applets/x", "/V0/info", "/v0/capture", "/index.html"}) {
         CAPTURE(none);
@@ -350,7 +443,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     const uint16_t port = app.port();
     REQUIRE(port != 0);
     CHECK(app.server->base_url() == "http://127.0.0.1:" + std::to_string(port) + "/v0");
-    CHECK(app.server->stream_url() == "ws://127.0.0.1:" + std::to_string(port) + "/v0/stream");
+    CHECK(app.server->stream_url() == "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream");
 
     Response info = http(port, "GET", "/v0/info", bearer());
     CHECK(info.status == 200);
@@ -387,7 +480,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(method.headers["allow"] == "GET");
     CHECK(http(port, "GET", "/", bearer()).status == 404);
     CHECK(http(port, "GET", "/index.html", bearer()).status == 404);
-    CHECK(http(port, "GET", "/v3/stream?token=" + kToken).status == 404);
+    CHECK(http(port, "GET", "/v3/info?token=" + kToken).status == 404);
     CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer() + "Content-Length: 2\r\n").status == 413);
     CHECK(app.launches.load() == 2);   // refused requests never reached the app
 
@@ -399,7 +492,8 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
 TEST_CASE("api: Host and Origin are refused on every path, the stream included") {
     FakeApp app;
     const uint16_t port = app.port();
-    for (const char* target : {"/v0/info", "/v0/applets", "/v0/capture.png", "/v0/stream?token=api_test_token-0123456789abcdef"}) {
+    for (const char* target : {"/v0/info", "/v0/applets", "/v0/capture.png", "/v3/stream?token=api_test_token-0123456789abcdef",
+                               "/v0/stream?token=api_test_token-0123456789abcdef"}) {
         CAPTURE(target);
         CHECK(http(port, "GET", target, bearer(), "evil.example:" + std::to_string(port)).status == 403);
         CHECK(http(port, "GET", target, bearer(), "127.0.0.1:1").status == 403);
@@ -409,16 +503,21 @@ TEST_CASE("api: Host and Origin are refused on every path, the stream included")
     CHECK(app.launches.load() == 0);
 }
 
-TEST_CASE("api: /v0/stream is wire protocol v3 with the app as the hub") {
+TEST_CASE("api: /v3/stream, and /v0/stream as its alias, is wire protocol v3 with the app as the hub") {
     FakeApp app;
-    const std::string base = "ws://127.0.0.1:" + std::to_string(app.port()) + "/v0/stream?token=";
-    std::string role, why;
-    REQUIRE_MESSAGE(viewer_handshake(base + kToken, &role, &why), why);
-    CHECK(role == CALIPER_NET_ROLE_HUB);
-    CHECK_FALSE(viewer_handshake(base + "api_test_token-0123456789abcdeX", &role, &why));
-    CHECK(why.find("403") != std::string::npos);
-    // A plain GET of the stream path is not an upgrade.
-    CHECK(http(app.port(), "GET", "/v0/stream?token=" + kToken).status == 426);
+    for (const char* path : {"/v3/stream", "/v0/stream"}) {
+        CAPTURE(path);
+        const std::string base = "ws://127.0.0.1:" + std::to_string(app.port()) + path + "?token=";
+        std::string role, why;
+        REQUIRE_MESSAGE(viewer_handshake(base + kToken, &role, &why), why);
+        CHECK(role == CALIPER_NET_ROLE_HUB);
+        CHECK_FALSE(viewer_handshake(base + "api_test_token-0123456789abcdeX", &role, &why));
+        CHECK(why.find("403") != std::string::npos);
+        // A plain GET of the stream path is not an upgrade.
+        CHECK(http(app.port(), "GET", std::string(path) + "?token=" + kToken).status == 426);
+    }
+    // Other paths under /v3/ are not the API's.
+    CHECK(http(app.port(), "GET", "/v3/other", bearer()).status == 404);
 }
 
 TEST_CASE("api: a call the frame thread does not answer times out, and waiting calls are bounded") {
@@ -548,7 +647,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     const std::string token = api.find("token")->as_string();
     CHECK(caliper_net::valid_token(token));
     CHECK(api.find("url")->as_string() == "http://127.0.0.1:" + std::to_string(port) + "/v0");
-    CHECK(api.find("stream_url")->as_string() == "ws://127.0.0.1:" + std::to_string(port) + "/v0/stream");
+    CHECK(api.find("stream_url")->as_string() == "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream");
     CHECK(p.text.find("http://127.0.0.1:" + std::to_string(port) + "/v0 with the session token " + token +
                       " (also in " + api_file + ")") != std::string::npos);
 
@@ -612,10 +711,46 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello/launch", bearer(token)).status == 405);
     capture();
 
-    // The stream's handshake: the app answers as the hub.
-    std::string role, why;
-    REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v0/stream?token=" + token, &role, &why), why);
-    CHECK(role == CALIPER_NET_ROLE_HUB);
+    // The stream's handshake on both paths: the app answers as the hub.
+    for (const char* path : {"/v3/stream", "/v0/stream"}) {
+        std::string role, why;
+        REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + token, &role, &why), why);
+        CHECK(role == CALIPER_NET_ROLE_HUB);
+    }
+
+    // The native viewer (caliper_viewer --headless, the app's NetSource)
+    // attaches through /v3/stream on the API port, unchanged, to a session that
+    // a fake producer streams into the app.
+    if (const char* viewer = std::getenv("CALIPER_TEST_VIEWER_EXE"); viewer && *viewer) {
+        TinyProducer prod;
+        REQUIRE(prod.connect("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token));
+        const auto ready = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!prod.welcomed && std::chrono::steady_clock::now() < ready) prod.pump(10);
+        REQUIRE(prod.welcomed);
+        Proc v;
+        REQUIRE(v.start(viewer, {"--headless", "--url", "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token,
+                                 "--exit-after", "3", "--stats", "--data-dir", t.str("viewer-data")}, {}));
+        int code = -1;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (std::chrono::steady_clock::now() < until) {
+            prod.pump(5);
+            v.read_some(0);
+            if (::waitpid(v.pid, &v.status, WNOHANG) == v.pid) {
+                v.pid = -1;
+                v.read_some(50);
+                code = WIFEXITED(v.status) ? WEXITSTATUS(v.status) : -1;
+                break;
+            }
+        }
+        CHECK_MESSAGE(code == 0, v.text);
+        CHECK_MESSAGE(v.text.find("received session=tiny-producer ") != std::string::npos, v.text);
+        const size_t at = v.text.find("received view=heat kind=heatmap updates=");
+        REQUIRE_MESSAGE(at != std::string::npos, v.text);
+        CHECK(std::atoi(v.text.c_str() + at + std::strlen("received view=heat kind=heatmap updates=")) > 0);
+        CHECK(prod.subscribes >= 1);
+    } else {
+        MESSAGE("CALIPER_TEST_VIEWER_EXE is not set: the native viewer's attach through /v3/stream is not run");
+    }
 
     // Refusals.
     CHECK(http(port, "GET", "/v0/info").status == 401);

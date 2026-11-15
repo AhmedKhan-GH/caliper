@@ -28,9 +28,10 @@
 //     given by the server (the hub says where the viewer assets are).
 //   - A server that answers other requests itself (Caliper API, api/
 //     api_server.h) gives the door a handler and the path it mounts the stream
-//     at. Then every request whose path is not the stream's goes to the
-//     handler after the Host check, whatever its method, and the door serves
-//     no files and no page.
+//     at, and may give a second path, an alias, that upgrades to the same
+//     stream with the same checks. Then every request whose path is neither
+//     goes to the handler after the Host check, whatever its method, and the
+//     door serves no files and no page.
 #include "caliper/live_net.h"
 #include "net/ws.h"
 
@@ -82,12 +83,20 @@ public:
 
     // `token` is the session token; `port` the port the server listens on;
     // `files` may be null; `fallback_page` answers "/" without files.
-    // `stream_path` is where the stream is upgraded, and `other`, when set,
-    // takes every request on another path (see the rules above).
+    // `stream_path` is where the stream is upgraded, `stream_alias` another
+    // path for it ("" none), and `other`, when set, takes every request on
+    // another path (see the rules above).
     HttpDoor(std::string token, uint16_t port, const StaticFiles* files, std::string fallback_page,
-             std::string stream_path = CALIPER_NET_PATH, Handler other = nullptr)
+             std::string stream_path = CALIPER_NET_PATH, Handler other = nullptr,
+             std::string stream_alias = {})
         : token_(std::move(token)), port_(port), files_(files), fallback_(std::move(fallback_page)),
-          stream_path_(std::move(stream_path)), other_(std::move(other)) {}
+          stream_path_(std::move(stream_path)), stream_alias_(std::move(stream_alias)),
+          other_(std::move(other)) {}
+
+    // True for the stream's path and its alias.
+    bool is_stream(const std::string& path) const {
+        return path == stream_path_ || (!stream_alias_.empty() && path == stream_alias_);
+    }
 
     // Answers one Event::Request on `server`: accepts the upgrade (true; an
     // Event::Open follows) or responds and closes (false).
@@ -100,6 +109,7 @@ private:
     const StaticFiles* files_;
     std::string fallback_;
     std::string stream_path_;
+    std::string stream_alias_;
     Handler other_;
     DoorStats stats_;
 };

@@ -10,13 +10,16 @@
 //                                   `caliper list` shows them
 //   POST /v0/applets/{id}/launch    open that applet's page
 //   GET  /v0/capture.png            the app's current frame as a PNG
-//   GET  /v0/stream                 the WebSocket of wire protocol v3
+//   GET  /v3/stream                 the WebSocket of wire protocol v3
+//   GET  /v0/stream                 the same WebSocket, under the API's prefix
 //
-// THE STREAM. /v0/stream is wire protocol v3 with the app in the hub role: the
+// THE STREAM. /v3/stream is wire protocol v3 with the app in the hub role: the
 // hub of `caliper serve` (net/hub.h) runs on the API's port, so producers
 // connect to the app and become sessions, and viewers list them and attach to
-// one, as with `caliper serve`. Only the path differs from the protocol's
-// /v3/stream; every check of the upgrade is the protocol's.
+// one, as with `caliper serve`. It is the protocol's own path, so every client
+// of the protocol (the app's NetSource, caliper-viewer --url, the browser
+// element) attaches to it unchanged; /v0/stream is an alias of it. Every check
+// of the upgrade is the protocol's, on either path.
 //
 // SECURITY. Every request gets the stream's checks (net/wire.h,
 // net/http_door.h): the server listens on 127.0.0.1 only; the Host header must
@@ -53,8 +56,9 @@ namespace caliper_api {
 
 // The port the API listens on without --api-port.
 constexpr uint16_t kDefaultPort = 7341;
-// Where the stream is mounted.
-inline constexpr char kStreamPath[] = "/v0/stream";
+// Where the stream is mounted: the protocol's path, and an alias under /v0/.
+inline constexpr char kStreamPath[] = CALIPER_NET_PATH;
+inline constexpr char kStreamAlias[] = "/v0/stream";
 
 // ---- routing --------------------------------------------------------------------------
 
@@ -143,7 +147,7 @@ public:
     uint16_t port() const;
     const std::string& token() const { return opt_.token; }
     std::string base_url() const;      // http://127.0.0.1:<port>/v0
-    std::string stream_url() const;    // ws://127.0.0.1:<port>/v0/stream (no token)
+    std::string stream_url() const;    // ws://127.0.0.1:<port>/v3/stream (no token)
 
     // ---- the frame thread ----
     // The calls waiting for the frame thread, oldest first. Cheap when none

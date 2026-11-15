@@ -246,7 +246,8 @@ if(TARGET caliper)
 
     # Caliper API as a process (tests/test_api.cpp): `caliper shot --api` on the
     # hello fixture, every endpoint, the capture as a PNG of the shot's size,
-    # the stream's handshake, and a clean stop on SIGTERM. No window: shot
+    # the stream's handshake on /v3/stream and /v0/stream, the native viewer
+    # attached through /v3/stream, and a clean stop on SIGTERM. No window: shot
     # draws offscreen. Without a GPU the run is reported as skipped, as the
     # shot runs do. POSIX only.
     caliper_cli_test(api_elsewhere ARGS "list|--api" EXIT 2
@@ -254,8 +255,15 @@ if(TARGET caliper)
     if(NOT WIN32)
         add_test(NAME caliper_cli_api
                  COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")
+        # With caliper_viewer built, the native viewer also attaches through
+        # /v3/stream on the API port (headless, no window).
+        set(_api_env "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+        if(TARGET caliper_viewer)
+            list(APPEND _api_env "CALIPER_TEST_VIEWER_EXE=$<TARGET_FILE:caliper_viewer>")
+        endif()
         set_tests_properties(caliper_cli_api PROPERTIES LABELS "cli;shot;api" TIMEOUT 180
-            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets"
+            ENVIRONMENT "${_api_env}"
             SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
     endif()
 endif()
