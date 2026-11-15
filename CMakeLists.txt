@@ -539,6 +539,9 @@ add_executable(caliper
     src/host/ui/sternbild_theme.cpp
     src/host/ui/sternbild_fonts.cpp
     src/host/ui/landing_screen.cpp
+    # The applet page: page bar, status bar, dock space, docking by role, the
+    # applet's frame and the jobs tray.
+    src/host/ui/applet_page.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an

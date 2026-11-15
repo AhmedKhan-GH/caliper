@@ -4,6 +4,7 @@
 #include <implot.h>
 #include <implot3d.h>
 
+#include "ui/applet_page.h"
 #include "ui/dock_layout.h"
 #include "ui/landing_screen.h"
 #include "ui/sternbild_fonts.h"
@@ -15,7 +16,6 @@
 #include "host/core_lifecycle.h"
 #include "host/job_system.h"
 #include "host/host_version.h"
-#include "host/frame_watchdog.h"
 #include "host/renderer/host_renderer.h"
 #include "host/live/live_attach.h"
 #include "app_paths.h"
@@ -126,7 +126,7 @@ public:
             [](void* layout, const char* title, uint32_t role) {
                 static_cast<caliper_host::DockLayout*>(layout)->hint(title, role);
             },
-            &dock_layout_);
+            &page_view_.dock_layout());
         // Hand the live renderer to the bridge (caliper.tensor_bridge.v1); it is
         // cleared before renderer teardown in cleanup(). Do this right after the
         // renderer is up so the first applet frame can vend textures.
@@ -223,25 +223,6 @@ public:
                     if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
                 }
 
-                // The page bar and the status bar, unless the page is
-                // chromeless (CALIPER_CHROMELESS=1).
-                if (!chromeless_ && draw_applet_bars()) go_back = true;
-
-                // Docked desktop (applet page only). A passthru dockspace fills
-                // the viewport's work area (between the main menu bar and the
-                // status bar) so the applet's windows can be docked. The
-                // central node stays transparent while empty, so a
-                // full-viewport applet docked into it looks exactly as before.
-                ImGuiID dock_id = ImGui::DockSpaceOverViewport(
-                    0, ImGui::GetMainViewport(),
-                    ImGuiDockNodeFlags_PassthruCentralNode);
-
-                // Docking by role (ui/dock_layout.h): windows the applet
-                // hinted, or began without a hint, and that have no saved
-                // layout are placed the first time they appear. A layout the
-                // user arranged is never touched.
-                dock_layout_.apply(dock_id);
-
                 double now = glfwGetTime();
                 int ww = 0, wh = 0;
                 glfwGetWindowSize(window_, &ww, &wh);
@@ -253,20 +234,14 @@ public:
                 fi.delta_sec = now - last_frame_time_;
                 last_frame_time_ = now;
 
-                // The UI stacks are checkpointed around the applet's frame
-                // (ui_recovery.h): a throw or fault partway through it leaves
-                // its windows, plots and pushes open, and they are unwound
-                // before the host draws anything more into this frame.
-                const caliper_host::UiCheckpoint ui_checkpoint =
-                    caliper_host::UiCheckpoint::store();
-                double t0 = glfwGetTime();
-                dock_layout_.begin_applet_frame();
-                bool alive = loader_.frame(active_applet_, fi);
-                dock_layout_.end_applet_frame();
-                watchdog_.feed((glfwGetTime() - t0) * 1000.0);
+                // The page bar and the status bar (unless CALIPER_CHROMELESS=1),
+                // the dock space, docking by role and the applet's frame
+                // (ui/applet_page.h).
+                const caliper_host::AppletPage::Result page = page_view_.draw(
+                    loader_, active_applet_, fi, renderer_->name(), chromeless_);
+                if (page.home) go_back = true;
 
-                if (!alive) {                 // quarantined mid-frame
-                    ui_checkpoint.recover();
+                if (!page.alive) {            // quarantined mid-frame
                     go_back = true;
                     // A failed job that caused it goes in Activity first.
                     note_failed_jobs(caliper_host::host_job_system().views());
@@ -283,86 +258,13 @@ public:
                 if (go_back) pending_home_ = active_applet_;
             }
 
-            // Jobs tray (§7.5): visible on every page while jobs exist. A
-            // plate pinned to the bottom-right of the WORK area, so it sits
-            // above the status bar instead of over it; sized to its content,
-            // never docked, never saved. Actions are house words, not boxes.
-            // Running jobs first, then failures (kept until cleared, see
-            // note_failed_jobs), then the jobs that finished.
+            // Jobs tray (§7.5): visible on every page while jobs exist
+            // (ui/applet_page.h). Failures are kept until cleared, see
+            // note_failed_jobs.
             {
                 auto views = caliper_host::host_job_system().views();
                 note_failed_jobs(views);
-                if (!views.empty() || !failed_jobs_.empty()) {
-                    const ImGuiViewport* vp = ImGui::GetMainViewport();
-                    constexpr float inset = 12.0f;
-                    constexpr float bar_w = 240.0f;
-                    ImGui::SetNextWindowPos(
-                        {vp->WorkPos.x + vp->WorkSize.x - inset,
-                         vp->WorkPos.y + vp->WorkSize.y - inset},
-                        ImGuiCond_Always, {1.0f, 1.0f});
-                    ImGui::SetNextWindowViewport(vp->ID);
-                    ImGui::PushStyleColor(ImGuiCol_WindowBg, sternbild::col::plate);
-                    ImGui::Begin("Jobs", nullptr,
-                                 ImGuiWindowFlags_NoTitleBar |
-                                     ImGuiWindowFlags_NoResize |
-                                     ImGuiWindowFlags_NoCollapse |
-                                     ImGuiWindowFlags_NoDocking |
-                                     ImGuiWindowFlags_NoSavedSettings |
-                                     ImGuiWindowFlags_AlwaysAutoResize);
-                    ImGui::PopStyleColor();
-                    sternbild::label("Jobs");
-                    bool any_done = !failed_jobs_.empty();
-                    for (auto& v : views) any_done |= !v.running;
-                    if (any_done) {
-                        ImGui::SameLine(0.0f, sternbild::metric::gap);
-                        if (sternbild::word_button("clear finished")) {
-                            caliper_host::host_job_system().clear_finished();
-                            failed_jobs_.clear();
-                        }
-                    }
-                    auto job_row = [&](const caliper_host::JobSystem::JobView& v) {
-                        ImGui::PushID((int)v.id);
-                        ImGui::TextUnformatted(v.label.c_str());
-                        // Fixed width: the tray auto-sizes, so a bar sized
-                        // from the window width would feed back into it.
-                        ImGui::ProgressBar(v.progress, {bar_w, 0.0f},
-                                           v.message.empty() ? nullptr
-                                                             : v.message.c_str());
-                        if (v.running) {
-                            ImGui::SameLine(0.0f, sternbild::metric::gap);
-                            if (sternbild::word_button("cancel"))
-                                caliper_host::host_job_system().request_cancel(v.id);
-                        }
-                        ImGui::PopID();
-                    };
-                    for (auto& v : views)
-                        if (v.running) job_row(v);
-                    // A failure in place of its bar: the status word in
-                    // capitals, as the Instruments STATUS column writes it,
-                    // in parchment, the strongest ink after bronze (which
-                    // stays for focus and selection; the palette has no red),
-                    // then the reason in secondary, wrapped at the bar's
-                    // width so a long one never widens the tray. Newest first.
-                    for (auto it = failed_jobs_.rbegin(); it != failed_jobs_.rend();
-                         ++it) {
-                        ImGui::PushID((int)it->id);
-                        ImGui::TextUnformatted(it->label.c_str());
-                        const float row_x = ImGui::GetCursorPosX();
-                        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::parchment);
-                        ImGui::TextUnformatted("FAILED");
-                        ImGui::PopStyleColor();
-                        ImGui::SameLine(0.0f, sternbild::metric::pad);
-                        ImGui::PushTextWrapPos(row_x + bar_w);
-                        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
-                        ImGui::TextUnformatted(it->reason.c_str());
-                        ImGui::PopStyleColor();
-                        ImGui::PopTextWrapPos();
-                        ImGui::PopID();
-                    }
-                    for (auto& v : views)
-                        if (!v.running && !v.failed) job_row(v);
-                    ImGui::End();
-                }
+                jobs_tray_.draw(views);
             }
 
             // Sampled after every window of the frame: next frame's Esc test
@@ -431,18 +333,6 @@ public:
     }
 
 private:
-    static CaliperHost host_proto() {
-        CaliperHost proto{};
-        proto.struct_size  = sizeof(CaliperHost);
-        proto.abi_epoch    = 2;
-        proto.host_version = caliper_host::kHostVersionU32;
-        proto.applet_data_dir = nullptr;   // loader fills per-applet
-        proto.get_service = [](const CaliperHost*, const char* id) {
-            return caliper_host::services_get(id);
-        };
-        return proto;
-    }
-
     void launch_applet(int idx) {
         if (idx < 0 || idx >= loader_.count()) return;
         const std::string name = loader_.at(idx).manifest.name;
@@ -453,7 +343,7 @@ private:
         // initialize() runs inside the landing's frame, after its windows
         // have ended: checkpointed like frame(), in case it throws mid-UI.
         const auto ui_checkpoint = caliper_host::UiCheckpoint::store();
-        if (loader_.launch(idx, host_proto())) {
+        if (loader_.launch(idx, caliper_host::applet_host_proto())) {
             enter_applet(idx);
         } else {
             ui_checkpoint.recover();
@@ -471,7 +361,7 @@ private:
         landing_.log("restart", name);
         landing_.select(idx);
         const auto ui_checkpoint = caliper_host::UiCheckpoint::store();
-        if (loader_.restart(idx, host_proto())) {
+        if (loader_.restart(idx, caliper_host::applet_host_proto())) {
             enter_applet(idx);
         } else {
             ui_checkpoint.recover();
@@ -481,62 +371,11 @@ private:
 
     void enter_applet(int idx) {
         active_applet_ = idx;
-        watchdog_.reset();
+        page_view_.enter();
         last_frame_time_ = glfwGetTime();
         page_ = AppPage::Applet;
         glfwSetWindowTitle(window_,
                            ("Caliper - " + loader_.at(idx).manifest.name).c_str());
-    }
-
-    // The applet page's chrome: the page bar over the work area and the
-    // status bar under it. True when the page bar's Home was clicked.
-    bool draw_applet_bars() {
-        bool home = false;
-        // Applet bar: Home as one key button holding its key, esc
-        // (recognition over recall, nothing printed beside it), the
-        // applet's name as metadata, and the watchdog warning in
-        // bronze, the palette's only accent. The page's one action
-        // lives here; the status bar below carries only facts.
-        if (begin_page_bar()) {
-            if (sternbild::key_button("esc", "Home")) home = true;
-            ImGui::Separator();
-            ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
-            ImGui::TextUnformatted(
-                loader_.at(active_applet_).manifest.name.c_str());
-            ImGui::PopStyleColor();
-            if (watchdog_.flagged()) {
-                ImGui::Separator();
-                ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::bronze);
-                ImGui::TextUnformatted(
-                    "slow: long work belongs in background jobs");
-                ImGui::PopStyleColor();
-            }
-            ImGui::EndMainMenuBar();
-        }
-
-        // Status bar (VS Code): the same persistent strip as the
-        // landing's, so the machine is always in the same place; facts
-        // only, as there (Home is in the applet bar above). Like the
-        // menu bar it is a viewport side bar, drawn before the dock
-        // space that fills what it leaves.
-        sternbild::status_bar_begin();
-        draw_host_status_items(renderer_->name());
-        {
-            int running = 0;
-            for (const auto& v : caliper_host::host_job_system().views())
-                running += v.running ? 1 : 0;
-            char jobs[48];
-            if (running == 0)
-                std::snprintf(jobs, sizeof jobs, "no jobs");
-            else
-                std::snprintf(jobs, sizeof jobs,
-                              running == 1 ? "%d job running"
-                                           : "%d jobs running",
-                              running);
-            sternbild::status_item(jobs);
-        }
-        sternbild::status_bar_end();
-        return home;
     }
 
     // Esc goes Home (applet and live pages) only when it is not cancelling
@@ -551,20 +390,6 @@ private:
             !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
                                              ImGuiPopupFlags_AnyPopupLevel);
         return ImGui::IsKeyPressed(ImGuiKey_Escape, false) && esc_free;
-    }
-
-    // The page bar of the applet and live pages: a main menu bar one frame
-    // tall, so a taller frame padding gives it the landing command bar's
-    // height and its key button the same margins as there. EndMainMenuBar()
-    // when it returns true.
-    static bool begin_page_bar() {
-        const float bar_pad_y =
-            (sternbild::metric::command_bar - ImGui::GetFontSize()) * 0.5f;
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                            ImVec2(ImGui::GetStyle().FramePadding.x, bar_pad_y));
-        const bool open = ImGui::BeginMainMenuBar();
-        ImGui::PopStyleVar();
-        return open;
     }
 
     // ---- Live page (F4 Attach to process) ---------------------------------
@@ -671,7 +496,7 @@ private:
         // filled and breathes while the script runs and is outlined once it
         // has gone (SPEC §6.5); SESSION ENDED is in capitals, in parchment, as
         // the jobs tray writes FAILED (bronze stays for focus and selection).
-        if (begin_page_bar()) {
+        if (caliper_host::begin_page_bar()) {
             if (sternbild::key_button("esc", "Home")) go_back = true;
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
@@ -745,25 +570,15 @@ private:
         if (go_back) pending_detach_ = true;
     }
 
-    // A failed job (JobView::failed) is kept here, for the tray, until the
-    // user clears finished jobs, and written to Activity once. The job
-    // system's own entry does not last that long: going Home joins the
-    // applet's jobs and drops every entry, and a failed applet job is what
-    // quarantines its applet and sends the host Home. Job ids never repeat.
+    // A failed job (JobView::failed) is kept by the tray until the user
+    // clears finished jobs, and written to Activity once. The job system's
+    // own entry does not last that long: going Home joins the applet's jobs
+    // and drops every entry, and a failed applet job is what quarantines its
+    // applet and sends the host Home. Job ids never repeat.
     void note_failed_jobs(const std::vector<caliper_host::JobSystem::JobView>& views) {
-        for (const auto& v : views) {
-            if (!v.failed) continue;
-            bool known = false;
-            for (const auto& f : failed_jobs_) known |= f.id == v.id;
-            if (known) continue;
-            // JobSystem writes the reason as the message, "failed: <why>".
-            std::string reason = v.message;
-            constexpr const char* kPrefix = "failed: ";
-            if (reason.rfind(kPrefix, 0) == 0) reason.erase(0, std::strlen(kPrefix));
-            if (reason.empty()) reason = "no reason given";
-            landing_.log("job failed", v.label, reason);
-            failed_jobs_.push_back({v.id, v.label, std::move(reason)});
-        }
+        jobs_tray_.note_failures(views, [this](const caliper_host::JobsTray::Failure& f) {
+            landing_.log("job failed", f.label, f.reason);
+        });
     }
 
     // One Activity line per applet directory scanned, the path written from
@@ -811,17 +626,11 @@ private:
     LandingScreen landing_;
     caliper_host::AppletLoader loader_{caliper_host::host_caps(),
                                        caliper::app_data_path("data")};
-    caliper_host::FrameWatchdog watchdog_;
     int active_applet_ = -1;
     int pending_home_ = -1;   // applet idx awaiting post-render teardown (Home)
     double last_frame_time_ = 0.0;
-    struct FailedJob {
-        uint64_t id;
-        std::string label;
-        std::string reason;   // the message without its "failed: " prefix
-    };
-    std::vector<FailedJob> failed_jobs_;   // oldest first; see note_failed_jobs
-    caliper_host::DockLayout dock_layout_;  // applet windows docked by role
+    caliper_host::JobsTray jobs_tray_;      // every page; failures kept until cleared
+    caliper_host::AppletPage page_view_;    // the applet page: bars, dock space, applet
     bool popup_open_prev_ = false;    // a popup was open at the end of last frame
     // F4 Attach to process: the live sessions the landing lists, the one
     // attached session (hosted core) and what Activity names it by.
