@@ -252,6 +252,8 @@ if(TARGET caliper)
     # shot runs do. POSIX only.
     caliper_cli_test(api_elsewhere ARGS "list|--api" EXIT 2
         ERROR "--api applies only to starting the app, dev and shot")
+    caliper_cli_test(hidden_elsewhere ARGS "shot|--hidden|--launch|x|--out|${_cli_work}/x.png" EXIT 2
+        ERROR "--hidden applies only to starting the app and dev")
     if(NOT WIN32)
         add_test(NAME caliper_cli_api
                  COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")
@@ -263,6 +265,15 @@ if(TARGET caliper)
             list(APPEND _api_env "CALIPER_TEST_VIEWER_EXE=$<TARGET_FILE:caliper_viewer>")
         endif()
         set_tests_properties(caliper_cli_api PROPERTIES LABELS "cli;shot;api" TIMEOUT 180
+            ENVIRONMENT "${_api_env}"
+            SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        # The real app with its window never shown (--hidden, the mechanism of
+        # tests/glfw_background.h) and Caliper API: every endpoint, the capture
+        # of the hidden window's frame, the stream on /v3/stream, and a normal
+        # close on SIGTERM. Skipped without a Metal device.
+        add_test(NAME caliper_cli_app_hidden
+                 COMMAND caliper_tests "--test-case=api: the hidden app serves*")
+        set_tests_properties(caliper_cli_app_hidden PROPERTIES LABELS "cli;api" TIMEOUT 180
             ENVIRONMENT "${_api_env}"
             SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
     endif()

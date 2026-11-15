@@ -99,7 +99,7 @@ Opens the page of the applet with that manifest id, as a click on its row on the
 
 The frame the app draws, as an opaque PNG, read back at the end of the next frame without drawing an extra one:
 
-- In the app's window, the PNG is the frame the window presents, at the window's framebuffer size in pixels (twice the window's size in points on a Retina display). The renderer copies that frame on the GPU as it presents it, and a later frame picks the copy up, so the frame loop never waits for it. This works on Metal. On the GL and Vulkan renderers the window's frame cannot be read back yet, and a capture is answered with 501 and the reason.
+- In the app's window, the PNG is the frame the window presents, at the window's framebuffer size in pixels (twice the window's size in points on a Retina display). This works with the window hidden too ([`--hidden`](cli.md#the-hidden-window)), which is how tests and agents drive the whole app with nothing on screen. The renderer copies that frame on the GPU as it presents it, and a later frame picks the copy up, so the frame loop never waits for it. This works on Metal. On the GL and Vulkan renderers the window's frame cannot be read back yet, and a capture is answered with 501 and the reason.
 - In the windowless mode, the PNG is the offscreen canvas at the end of a frame, of the size `caliper shot --size` gives, 1600 by 1000 by default.
 
 A capture waits for the app's frames like every call that needs the frame thread, so it is answered with 504 when no frame is drawn within 5 seconds. The PNG is encoded on a thread of its own, so the frame loop does not wait for the encoder either.

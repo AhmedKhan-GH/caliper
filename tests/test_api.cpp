@@ -855,4 +855,126 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(open_socket(port) == (api_sock)-1);
     CHECK(p.text.find(token, p.text.find("(also in")) == std::string::npos);   // printed once
 }
+
+// ---- the app itself, hidden (--hidden), as a process -------------------------------------
+// Runs the caliper executable as the app with its window never shown
+// (--hidden: no Dock icon, no menu bar, no focus) and Caliper API on, with
+// its data folder, user applets folder and window size set for the test. A
+// client reads the token from the API file and uses every endpoint; the
+// capture is the frame the hidden window presents, read back on Metal. SIGTERM
+// closes the app normally. Without a Metal device the app falls back to GL,
+// which cannot read its window back, and the run is reported as skipped.
+namespace {
+bool decode_png(const std::string& body, int* w, int* h, std::vector<uint8_t>* px) {
+    int n = 0;
+    unsigned char* p = stbi_load_from_memory((const unsigned char*)body.data(), (int)body.size(), w, h, &n, 4);
+    if (!p) return false;
+    px->assign(p, p + (size_t)*w * (size_t)*h * 4);
+    stbi_image_free(p);
+    return true;
+}
+}  // namespace
+
+TEST_CASE("api: the hidden app serves every endpoint through its window and stops on SIGTERM") {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
+    if (!exe || !*exe || !applets || !*applets) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_APPLETS is not set: run the ctest entry caliper_cli_app_hidden");
+        return;
+    }
+    TempDir t("app-hidden");
+    const std::string data = t.str("data");
+    fs::create_directories(t.str("user-applets"));
+    Proc p;
+    REQUIRE(p.start(exe, {"--hidden", "--applets", applets, "--api", "--api-port", "0"},
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+                     "CALIPER_WINDOW_SIZE=640x400"}));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (p.text.find("[api] Caliper API on ") == std::string::npos && std::chrono::steady_clock::now() < deadline &&
+           p.pid > 0) {
+        p.read_some(20);
+        if (::waitpid(p.pid, &p.status, WNOHANG) == p.pid) p.pid = -1;
+    }
+    p.read_some(50);
+    REQUIRE_MESSAGE(p.text.find("[api] Caliper API on ") != std::string::npos, p.text);
+    if (p.text.find("[renderer] metal") == std::string::npos) {
+        const char* require = std::getenv("CALIPER_REQUIRE_GPU");
+        REQUIRE_MESSAGE(!(require && std::string(require) == "1"), p.text);
+        MESSAGE("caliper --hidden --api: run skipped: no GPU (no Metal device)");
+        return;
+    }
+    // Never shown, never focused, no Dock icon or menu bar.
+    CHECK_MESSAGE(p.text.find("[hidden] the window is not shown (visible 0, focused 0, background policy 1") !=
+                      std::string::npos,
+                  p.text);
+
+    // The token, read from the API file as a client reads it.
+    const std::string api_file = (fs::path(data) / "api.json").string();
+    REQUIRE(fs::exists(api_file));
+    std::ifstream af(api_file);
+    const Json api = parse_json(std::string((std::istreambuf_iterator<char>(af)), std::istreambuf_iterator<char>()));
+    uint64_t port64 = 0;
+    REQUIRE(api.find("port")->get_u64(&port64));
+    const uint16_t port = (uint16_t)port64;
+    const std::string token = api.find("token")->as_string();
+    CHECK(api.find("stream_url")->as_string() == "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream");
+
+    Response info = http(port, "GET", "/v0/info", bearer(token));
+    REQUIRE(info.status == 200);
+    CHECK(parse_json(info.body).find("services")->size() > 0);
+    auto status_of = [&](const std::string& id) {
+        Response r = http(port, "GET", "/v0/applets", bearer(token));
+        REQUIRE(r.status == 200);
+        const Json j = parse_json(r.body);
+        for (const Json& e : j.find("applets")->items())
+            if (e.find("id")->as_string() == id) return e.find("status")->as_string();
+        return std::string("absent");
+    };
+    CHECK(status_of("dev.caliper.hello") == "READY");
+
+    // A capture: the frame the hidden window presents, at its framebuffer's
+    // size (640 x 400 points, one or two pixels per point), not one colour.
+    auto capture = [&](std::vector<uint8_t>* px) {
+        Response r = http(port, "GET", "/v0/capture.png?token=" + token);
+        REQUIRE_MESSAGE(r.status == 200, r.body);
+        CHECK(r.headers["content-type"] == "image/png");
+        int w = 0, h = 0;
+        REQUIRE(decode_png(r.body, &w, &h, px));
+        CHECK(((w == 640 && h == 400) || (w == 1280 && h == 800)));
+        std::unordered_set<uint32_t> colours;
+        for (size_t i = 0; i < (size_t)w * (size_t)h; ++i) {
+            uint32_t c;
+            std::memcpy(&c, px->data() + 4 * i, 4);
+            colours.insert(c);
+        }
+        CHECK(colours.size() > 1);
+    };
+    std::vector<uint8_t> landing, page;
+    capture(&landing);
+
+    // Launch the hello fixture: the window then shows its page.
+    Response launched = http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer(token));
+    REQUIRE_MESSAGE(launched.status == 200, launched.body);
+    CHECK(parse_json(launched.body).find("id")->as_string() == "dev.caliper.hello");
+    CHECK(status_of("dev.caliper.hello") == "ACTIVE");
+    capture(&page);
+    CHECK(page.size() == landing.size());
+    CHECK(page != landing);
+
+    // The stream's handshake on the protocol's path.
+    std::string role, why;
+    REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token, &role, &why),
+                    why);
+    CHECK(role == CALIPER_NET_ROLE_HUB);
+
+    // SIGTERM closes the hidden window as a click would: the teardown runs, the
+    // API file goes, nothing listens, no layout was written.
+    REQUIRE(p.pid > 0);
+    ::kill(p.pid, SIGTERM);
+    CHECK_MESSAGE(p.wait(20000) == 0, p.text);
+    CHECK_FALSE(fs::exists(api_file));
+    CHECK_FALSE(fs::exists(fs::path(data) / "imgui.ini"));
+    CHECK(open_socket(port) == (api_sock)-1);
+    CHECK(p.text.find("the window became visible") == std::string::npos);
+}
 #endif
