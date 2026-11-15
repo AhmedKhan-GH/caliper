@@ -14,7 +14,7 @@ On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the
 2. Done: the SDK installs as the `caliper-sdk` package, with the headers, the CMake config, the pinned UI stack and `caliper_add_applet()`; see [SDK package](../references/sdk-package.md).
 3. Make the host name no applet. Done: windows dock by role, the core build compiles no applets, and CI builds the core without applets and checks that the host names none. Still to do: CI starts the empty core and checks that the landing screen shows its empty state.
 4. Load applets from outside the repository. Done: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder, and the search order with one copy chosen per id. Still to do: shipped applets signed in the app bundle.
-5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>` and `dev`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see [Command line](../references/cli.md).
+5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see [Command line](../references/cli.md). `caliper shot` draws an applet's page as the app draws it, with nothing on screen, and writes it as a PNG. It is the first piece of the capture service that Phase 2 promotes.
 6. Done: the minimal embedding package, which is the `caliper-embed` package with its one shared library, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository and run offscreen; see [Embed Caliper in a program](../guides/embed-caliper.md).
 7. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
 8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
@@ -26,7 +26,7 @@ Plan: [Applets outside the core](applets-outside-the-core.md).
 
 ## Phase 2: promote proven features
 
-Each promotion is a new service version. In order: capture and automation; the layout grid and text scale; tours; the Python sidecar; the `caliper::viz` components (annotation scene, colour by value, catalog tree); a quiet job kind. Development builds treat ImGui errors as failures.
+Each promotion is a new service version. In order: capture and automation, which starts from `caliper shot`; the layout grid and text scale; tours; the Python sidecar; the `caliper::viz` components (annotation scene, colour by value, catalog tree); a quiet job kind. Development builds treat ImGui errors as failures.
 
 Phase 2 starts by settling one decision: every applet splits into a computation that runs natively and an interface that compiles to WebAssembly, and the SDK lets interface code use only services that have a wire form. Applets built before the rule stay native-only until they are ported. [Applets in the browser](streaming-and-embedding.md#applets-in-the-browser) describes the split.
 
@@ -52,13 +52,13 @@ The [Python API](../references/python-api.md) and the embeddable `libcaliper` ([
 
 ### Command line
 
-The command line is subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>` and `dev`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Command line](../references/cli.md) describes them.
+The command line is subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Command line](../references/cli.md) describes them.
 
 `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
 
 ### MCP
 
-An MCP server comes in [Phase 3](#phase-3-agent-built-panels), beside the command layer, and uses the capture service that Phase 2 adds. Besides building applets in the app, it is for:
+An MCP server comes in [Phase 3](#phase-3-agent-built-panels), beside the command layer, and uses the capture service that Phase 2 adds, starting from `caliper shot`. Besides building applets in the app, it is for:
 
 - visualising the work of any agent;
 - watching training runs;

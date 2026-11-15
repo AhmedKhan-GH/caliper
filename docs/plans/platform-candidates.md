@@ -37,7 +37,9 @@ native. Applets built before the rule stay native-only until they are ported.
   applet failed, while the same capture started from outside it worked. A host
   service that owns capture, scripting and recording gives every applet
   screenshots for documentation and tests, and demo recordings, through one
-  interface.
+  interface. Its first piece is built: `caliper shot` draws an applet's page
+  as the app draws it, with nothing on screen, and writes it as a PNG (see
+  [Command line](../references/cli.md#caliper-shot)).
 - **ImGui errors went unnoticed.** One pane produced a constant stream of ImGui
   runtime errors, and nothing showed them. Development builds of the host
   should.

@@ -1,6 +1,6 @@
 # Command line
 
-The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs and exits without opening a window: `list`, `check`, `install`, `new`, `info` and `--help` never start the app, so they are safe in scripts and CI. Only `caliper` with no subcommand and `caliper dev` start the app. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
+The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs and exits without opening a window: `list`, `check`, `install`, `new`, `info`, `shot` and `--help` never start the app, so they are safe in scripts and CI. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
 usage: caliper [--applets <dir>]...
@@ -10,20 +10,22 @@ usage: caliper [--applets <dir>]...
        caliper install <folder>
        caliper new <name> [<dir>]
        caliper info
+       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
+                    [--frames <N>] --out <file.png>
        caliper --help
 ```
 
-Results go to standard output, and errors go to standard error, each starting with `caliper:`. No subcommand opens the metrics, data or artifacts store. `list`, `check`, `info`, `new` and `--help` create nothing in the app-data folder, and `install` writes only the user applets folder.
+Results go to standard output, and errors go to standard error, each starting with `caliper:`. Apart from `shot`, which runs an applet and opens the stores in a temporary folder or in `CALIPER_DATA_DIR` (see [caliper shot](#caliper-shot)), no subcommand opens the metrics, data or artifacts store. `list`, `check`, `info`, `new` and `--help` create nothing in the app-data folder, `install` writes only the user applets folder, and `shot` without `CALIPER_DATA_DIR` creates nothing there either.
 
 ## Starting the app
 
-`caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev` and `list`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
+`caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev`, `list` and `shot`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
 
 `caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build folder, such as `build`, or its build output, `build/applets` (see [Build folders](#build-folders)). The Activity pane's `scanned` line names the folder that was searched. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
 
 ## The search order
 
-The app, `caliper dev` and `caliper list` search these folders, in this order:
+The app, `caliper dev`, `caliper list` and `caliper shot` search these folders, in this order:
 
 1. The development folders: the `dev` folder, then the `--applets` folders in the order given.
 2. The folders in `CALIPER_APPLET_PATH`, separated by `:` (`;` on Windows), in the order given.
@@ -125,6 +127,48 @@ service caliper.data.v1
 service caliper.ui.v1_1
 ```
 
+### caliper shot
+
+Draws the app's applet page for one applet without a window, and writes the last frame as a PNG. It runs the code that the app runs for the applet page (`src/host/ui/applet_page.h`): the page bar and the status bar, unless `CALIPER_CHROMELESS=1`, the dock space, docking by role, the applet's own frame and the jobs tray. It finds the applet in [the search order](#the-search-order), with the `--applets` folders first, launches it as the app launches an applet, draws the frames at about 60 a second, and writes the last one:
+
+```text
+caliper shot --applets build --launch com.example.my-viewer --out page.png
+wrote /home/me/my-viewer/page.png: com.example.my-viewer at 1600x1000 after 60 frames
+```
+
+| Option | Meaning |
+|---|---|
+| `--launch <id>` | The manifest id of the applet to launch. Required. |
+| `--out <file.png>` | The image to write. Its folder must exist, and a file already there is replaced. Required. |
+| `--size <W>x<H>` | The size of the image in pixels, each side from 1 to 16384. The default is `1600x1000`. |
+| `--frames <N>` | The number of frames drawn, from 1 to 100000; the image is the last one. The default is 60, one second. |
+
+Each option takes its value as the next argument or after `=`, as in `--size=800x500`, and may be given once. Any of them with another subcommand is a usage error.
+
+The page is drawn at a scale of 1, so a 1600x1000 image shows what a window of 1600 by 1000 points shows on a display without scaling, and the image is opaque. As in the app, an applet's windows do not appear in the first frame and are docked in place from the second; give enough frames for the applet to load what it shows.
+
+Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, the canvas that the embedding core uses in `CALIPER_CANVAS_OFFSCREEN` mode, and reads the frame back from it. It starts no GLFW and creates no window, and on macOS it first sets the activation policy to `NSApplicationActivationPolicyProhibited`, so the process has no Dock icon and no menu bar. The offscreen canvas needs Metal on macOS or Vulkan on Windows. With the OpenGL fallback (`CALIPER_RENDERER=gl`, and on Linux), or when no GPU can make the canvas, `shot` prints `caliper: shot cannot draw offscreen: ...` and exits with 1.
+
+`shot` never reads or writes the saved window layout, `imgui.ini`, so every image shows the layout of a first run, with each window where its dock role puts it. Where the stores and the applet's data folder go depends on `CALIPER_DATA_DIR`:
+
+- When `CALIPER_DATA_DIR` is set and not empty, the stores and the applet's data folder `data/<id>/` are in that folder, as they are for the app, so an image can show data that the applet saved there.
+- When it is not set, `shot` creates a temporary folder under the system's temporary folder (`TMPDIR` on macOS and Linux, `TMP` or `TEMP` on Windows), uses it as the app-data folder, and removes it before it exits. The applet starts with an empty data folder, and nothing is written in the app-data folder.
+
+In both cases `shot` searches the user applets folder, as the app does, and only reads it. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
+
+The applet runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own variables, such as `CALIPER_EMBED_AUTOTRAIN`, apply as usual, so leave them unset for an image of the applet's first state.
+
+`shot` exits with 0 when it has written the image, with 2 for a wrong command line, and with 1 when:
+
+- no folder holds an applet with the id: `caliper: no applet with the id <id> in the search folders (caliper list shows them)`;
+- the applet cannot be launched, with its status from `caliper list`: `caliper: <id> cannot be launched (REFUSED): <reason>`;
+- its `on_init` fails or it faults while launching: `caliper: <id> failed to launch: <reason>`;
+- it faults in a frame and is quarantined: `caliper: <id> was quarantined: <reason>`;
+- the renderer cannot draw offscreen, as described above;
+- the image's folder does not exist, or the image cannot be written: `caliper: cannot write <file>: <reason>`.
+
+The id and the image's folder are checked before anything is drawn or created.
+
 ### caliper --help
 
 Prints the usage to standard output and exits with 0. `-h` and `help` do the same.
@@ -134,14 +178,16 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder. |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets` with a subcommand that does not take it, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, and `shot` when its applet cannot be launched or is quarantined, or when the renderer cannot draw offscreen. |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets` with a subcommand that does not take it, an option of `shot` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `CALIPER_APPLET_PATH` | Adds development folders after the `--applets` folders. A build folder in it stands for its `applets/` subfolder, as described in [Build folders](#build-folders). Read when starting the app, by `dev` and by `list`. |
-| `CALIPER_USER_APPLETS_DIR` | Replaces the user applets folder, for the app, `dev`, `list` and `install`. |
+| `CALIPER_APPLET_PATH` | Adds development folders after the `--applets` folders. A build folder in it stands for its `applets/` subfolder, as described in [Build folders](#build-folders). Read when starting the app, and by `dev`, `list` and `shot`. |
+| `CALIPER_USER_APPLETS_DIR` | Replaces the user applets folder, for the app, `dev`, `list`, `install` and `shot`. |
+| `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
+| `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar and the status bar, in the app and in `shot`. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.

@@ -29,7 +29,7 @@ The `hello` applet and `throwing_applet` are built first, because the loader tes
 
 ## The pixel-exact graphics suite
 
-`caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the geometry path. It opens a window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference, which is the same reference the staged upload path uses.
+`caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the geometry path. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference, which is the same reference the staged upload path uses.
 
 The suite runs once per backend that the platform offers:
 
@@ -39,9 +39,17 @@ The suite runs once per backend that the platform offers:
 
 `caliper_export_tests` does the same for `caliper.export.v1`: it drives the service as an embedder would and decodes the PNG it wrote. Its sidecar, atomic-write and sugar cases need no GPU.
 
+Both suites open their windows hidden and never show or focus them, and on macOS the test process shows no Dock icon and no menu bar while it runs. GLFW's own initialisation would give it both: unless the init hint `GLFW_COCOA_MENUBAR` is false, it builds a menu bar and sets the activation policy to `NSApplicationActivationPolicyRegular`. The suites start GLFW through `tests/glfw_background.h` instead, which sets that hint to false and sets the policy to `NSApplicationActivationPolicyProhibited` before and after `glfwInit()` (`src/host/background_process.h`). One case in each suite checks that the policy still holds once the window exists.
+
 ## Embedding and live streaming
 
 `caliper_embed_tests` drives `libcaliper` as a third-party embedder would: it creates an offscreen core, loads the `hello` applet, pumps frames, reads pixels back and shuts down, and it checks the refusal gates. `caliper_live_tests` and `caliper_live_views_tests` cover live streaming, on macOS only, in one process over an offscreen core. See [Live streaming](live-streaming.md).
+
+## The command line
+
+The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as a user runs it, through `tests/cli_run.cmake`: each checks the exit code and what the run printed. They run with `CALIPER_APPLET_PATH` unset, the user applets folder in the build tree, and `CALIPER_DATA_DIR` on a folder of their own that must still not exist after the run, which proves that the read-only subcommands create nothing in the app-data folder. `caliper_cli_new_builds` (labels `cli` and `sdk`) configures, builds and tests the project that `caliper new` writes against this build's installed SDK.
+
+`caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../references/cli.md#caliper-shot) on the `hello` fixture through `tests/shot_run.cmake`, and `caliper_png_check` checks that the image has the requested size and is not one flat colour. The first runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone afterwards and that nothing was created under `HOME`; the second runs with it and checks that the applet's data folder is there and that no `imgui.ini` was written. Without a GPU both are reported as skipped, unless `CALIPER_REQUIRE_GPU=1` makes that a failure.
 
 ## Applet and adapter tests
 
@@ -73,4 +81,4 @@ A suite that needs a GPU must not report success when it found none. `tests/gpu_
 ctest --test-dir cmake-build-release --output-on-failure
 ```
 
-Three ctest labels select a suite: `gfx` (`caliper_gfx_tests`), `export` (`caliper_export_tests`) and `torch` (`caliper_torch_tests`). For example, `ctest --test-dir cmake-build-release -L gfx` runs only the pixel-exact graphics suite. CI runs the whole set on macOS and Windows; see [Continuous integration](../guides/ci.md).
+A ctest label selects a group: `gfx` (`caliper_gfx_tests`), `export` (`caliper_export_tests`), `torch` (`caliper_torch_tests`), `cli` (the command-line tests), `shot` (the `caliper shot` runs), `sdk` and `embed` (the package tests) and `boundary` (`caliper_host_names_no_applet`). For example, `ctest --test-dir cmake-build-release -L gfx` runs only the pixel-exact graphics suite. CI runs the whole set on macOS and Windows; see [Continuous integration](../guides/ci.md).
