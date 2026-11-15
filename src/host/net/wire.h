@@ -48,7 +48,10 @@ namespace wire {
 // localhost with the server's port (else 403), the Origin header is absent or
 // accepted (else 403), and the token parameter equals the session token,
 // compared in constant time (else 403). Returns 0 to accept, else the status.
-int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port);
+// `path` is CALIPER_NET_PATH except for a server that mounts the endpoint
+// elsewhere: Caliper API serves the same stream at /v0/stream (api/api_server.h).
+int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port,
+                   const std::string& path = CALIPER_NET_PATH);
 // The single rules, for a server that serves plain HTTP on the same port (the
 // Host check applies to those requests too).
 bool host_allowed(const std::string& host, uint16_t port);

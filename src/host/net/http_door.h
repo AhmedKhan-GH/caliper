@@ -26,9 +26,16 @@
 //     a wildcard). Static files need no token: they are public code, no data.
 //   - Without a folder, "/" and "/index.html" answer with a short plain page
 //     given by the server (the hub says where the viewer assets are).
+//   - A server that answers other requests itself (Caliper API, api/
+//     api_server.h) gives the door a handler and the path it mounts the stream
+//     at. Then every request whose path is not the stream's goes to the
+//     handler after the Host check, whatever its method, and the door serves
+//     no files and no page.
+#include "caliper/live_net.h"
 #include "net/ws.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,14 +71,23 @@ struct DoorStats {
     uint64_t files = 0;
     uint64_t refused_host = 0, refused_origin = 0, refused_token = 0;
     uint64_t not_found = 0, bad_method = 0, not_upgrade = 0;
+    uint64_t handed_over = 0;   // requests given to the handler
 };
 
 class HttpDoor {
 public:
+    // Answers a request the door does not serve itself; it must answer it
+    // through the server, now or later.
+    using Handler = std::function<void(ConnId, const HttpRequest&)>;
+
     // `token` is the session token; `port` the port the server listens on;
     // `files` may be null; `fallback_page` answers "/" without files.
-    HttpDoor(std::string token, uint16_t port, const StaticFiles* files, std::string fallback_page)
-        : token_(std::move(token)), port_(port), files_(files), fallback_(std::move(fallback_page)) {}
+    // `stream_path` is where the stream is upgraded, and `other`, when set,
+    // takes every request on another path (see the rules above).
+    HttpDoor(std::string token, uint16_t port, const StaticFiles* files, std::string fallback_page,
+             std::string stream_path = CALIPER_NET_PATH, Handler other = nullptr)
+        : token_(std::move(token)), port_(port), files_(files), fallback_(std::move(fallback_page)),
+          stream_path_(std::move(stream_path)), other_(std::move(other)) {}
 
     // Answers one Event::Request on `server`: accepts the upgrade (true; an
     // Event::Open follows) or responds and closes (false).
@@ -83,6 +99,8 @@ private:
     uint16_t port_;
     const StaticFiles* files_;
     std::string fallback_;
+    std::string stream_path_;
+    Handler other_;
     DoorStats stats_;
 };
 

@@ -280,6 +280,27 @@ struct Hub::Impl {
     HubStats published;
     uint64_t last_publish_ms = 0, last_expire_ms = 0;
 
+    // Responses to on_request's requests, queued by Hub::respond() on any
+    // thread and written by the loop.
+    struct Reply {
+        ConnId conn = 0;
+        int status = 0;
+        std::string type, body;
+        std::vector<std::pair<std::string, std::string>> headers;
+    };
+    std::mutex replies_mu;
+    std::vector<Reply> replies;
+    bool running = false;            // under replies_mu: run() takes replies
+
+    void write_replies() {
+        std::vector<Reply> r;
+        {
+            std::lock_guard<std::mutex> g(replies_mu);
+            r.swap(replies);
+        }
+        for (Reply& x : r) server.respond(x.conn, x.status, x.type, x.body, x.headers);
+    }
+
     void log(const std::string& line) {
         if (opt.log) opt.log(line);
     }
@@ -1617,12 +1638,19 @@ struct Hub::Impl {
     }
 
     void run(const std::atomic<bool>& stop) {
+        {
+            std::lock_guard<std::mutex> g(replies_mu);
+            running = true;
+        }
         while (!stop.load()) {
             uint64_t now = now_us();
-            const int wait = timeout_ms(now);
+            int wait = timeout_ms(now);
+            if (opt.tick_ms > 0) wait = std::min(wait, opt.tick_ms);
             publish(wait > 0);   // current whenever the loop is about to wait
             std::vector<Event> evs = server.poll(wait);
             for (Event& e : evs) handle(e);
+            write_replies();
+            if (opt.on_tick) opt.on_tick();
             tick();
             now = now_us();
             for (auto& kv : peers) {
@@ -1634,6 +1662,11 @@ struct Hub::Impl {
                 }
             }
             ++c.loops;
+        }
+        {
+            std::lock_guard<std::mutex> g(replies_mu);
+            running = false;
+            replies.clear();
         }
         // Shut down: BYE to every connection, then the close handshake.
         for (auto& kv : peers)
@@ -1666,7 +1699,8 @@ bool Hub::listen(std::string* err) {
         "This is a Caliper hub. It serves no viewer page because it was started without --assets.\n"
         "The Python package ships the viewer page in caliper/_web/; start the hub with\n"
         "--assets <that folder> to open the stream in a browser at this address.\n";
-    m.door = std::make_unique<HttpDoor>(m.opt.token, m.server.port(), &m.files, note);
+    m.door = std::make_unique<HttpDoor>(m.opt.token, m.server.port(), &m.files, note,
+                                        m.opt.stream_path, m.opt.on_request);
     m.publish(true);
     return true;
 }
@@ -1678,7 +1712,19 @@ std::string Hub::viewer_url() const {
     return "http://127.0.0.1:" + std::to_string(port()) + "/?" CALIPER_NET_TOKEN_PARAM "=" + impl_->opt.token;
 }
 
-std::string Hub::stream_url() const { return "ws://127.0.0.1:" + std::to_string(port()) + CALIPER_NET_PATH; }
+std::string Hub::stream_url() const {
+    return "ws://127.0.0.1:" + std::to_string(port()) + impl_->opt.stream_path;
+}
+
+void Hub::respond(ConnId c, int status, std::string content_type, std::string body,
+                  std::vector<std::pair<std::string, std::string>> headers) {
+    // Woken under the lock: once run() has cleared `running`, nothing touches
+    // the server from another thread.
+    std::lock_guard<std::mutex> g(impl_->replies_mu);
+    if (!impl_->running) return;
+    impl_->replies.push_back({c, status, std::move(content_type), std::move(body), std::move(headers)});
+    impl_->server.wake();
+}
 
 void Hub::run() {
     if (!impl_->door) return;

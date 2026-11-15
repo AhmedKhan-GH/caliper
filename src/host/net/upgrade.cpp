@@ -66,8 +66,9 @@ bool token_equal(const std::string& a, const std::string& b) {
     return diff == 0;
 }
 
-int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port) {
-    if (r.path != CALIPER_NET_PATH) return 404;
+int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port,
+                   const std::string& path) {
+    if (r.path != path) return 404;
     if (!host_allowed(r.host, port)) return 403;
     if (r.has_origin && !origin_allowed(r.origin)) return 403;
     std::string token;

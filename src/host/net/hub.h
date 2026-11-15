@@ -45,12 +45,22 @@
 // SECURITY. 127.0.0.1 only, the session token, the Host and Origin checks of
 // http_door.h. The hub forwards data and events; it never runs anything a
 // message names and carries no host command.
+//
+// EMBEDDED. A server with endpoints of its own (Caliper API, api/
+// api_server.h) runs a hub on its port: it mounts the stream at another path
+// and takes every other request through HubOptions::on_request, answering it
+// with Hub::respond() from any thread.
+#include "caliper/live_net.h"
+#include "net/ws.h"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace caliper_net {
 
@@ -81,6 +91,17 @@ struct HubOptions {
     // One line per session that starts, resumes or ends (the CLI prints them);
     // null for silence. Never given the token. Called on the hub's thread.
     std::function<void(const std::string&)> log;
+
+    // For a server that embeds the hub. The stream is upgraded at
+    // stream_path. When on_request is set, every request on another path goes
+    // to it, on the hub's thread after the Host check, and the hub serves no
+    // files and no note; the request is answered through Hub::respond().
+    // on_tick runs on the hub's thread once per loop round, and at least
+    // every tick_ms when that is above 0.
+    std::string stream_path = CALIPER_NET_PATH;
+    std::function<void(ConnId, const HttpRequest&)> on_request;
+    std::function<void()> on_tick;
+    int tick_ms = 0;
 };
 
 // Counters and sizes, as of the end of the hub's last loop round.
@@ -115,7 +136,12 @@ public:
     uint16_t port() const;
     const std::string& token() const;
     std::string viewer_url() const;    // http://127.0.0.1:<port>/?token=<token>
-    std::string stream_url() const;    // ws://127.0.0.1:<port>/v3/stream (no token)
+    std::string stream_url() const;    // ws://127.0.0.1:<port><stream_path> (no token)
+
+    // Any thread: answers a request that on_request took, with a plain HTTP
+    // response after which the connection closes. Ignored once run() ended.
+    void respond(ConnId c, int status, std::string content_type, std::string body,
+                 std::vector<std::pair<std::string, std::string>> headers = {});
 
     // Runs until stop(), then sends BYE `shutdown` on every connection, closes
     // them with 1001 and stops listening.
