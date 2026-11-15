@@ -34,6 +34,9 @@ struct PollState {
     std::vector<PolledView> views;
     uint64_t polls = 0, updates = 0, errors = 0;
     bool producer_alive = true;
+    // The source maps producer stamps from another clock (a network source):
+    // every apply carries CALIPER_LIVE_APPLY_STAMP_RELATIVE.
+    bool relative_stamps = false;
 };
 
 // Applies what is new; returns how many snapshots were applied.

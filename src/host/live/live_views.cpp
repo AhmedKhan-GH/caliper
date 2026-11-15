@@ -59,7 +59,8 @@ namespace caliper_live_views {
 namespace {
 
 constexpr uint32_t kKnownFlags = CALIPER_LIVE_APPLY_RAW | CALIPER_LIVE_APPLY_AUTO_VMIN |
-                                 CALIPER_LIVE_APPLY_AUTO_VMAX | CALIPER_LIVE_APPLY_WAIT_GPU;
+                                 CALIPER_LIVE_APPLY_AUTO_VMAX | CALIPER_LIVE_APPLY_WAIT_GPU |
+                                 CALIPER_LIVE_APPLY_STAMP_RELATIVE;
 constexpr int64_t kMaxTexDim = 16384;
 
 const char* kind_name(int32_t k) {
@@ -772,6 +773,7 @@ extern "C" int caliper_core_live_apply(CaliperCore* core, const CaliperLiveSnaps
     t.stamp_ns = s.stamp_ns;
     const uint64_t now = now_ns();
     t.latency_ms = (s.stamp_ns && now > s.stamp_ns) ? (double)(now - s.stamp_ns) * 1e-6 : 0.0;
+    t.latency_relative = (s.flags & CALIPER_LIVE_APPLY_STAMP_RELATIVE) != 0;
     t.last_apply_ms = ms_since(t0);
     core->last_error.clear();
     return 1;

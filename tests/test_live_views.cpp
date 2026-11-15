@@ -943,6 +943,11 @@ TEST_CASE("live_views/hover: a CPU payload is copied at apply, so hover reads va
     CHECK(v->tex_cpu != (const uint8_t*)caller.data());
     CHECK(std::memcmp(v->tex_cpu, r.data(), r.size() * 4) == 0);
     CHECK(std::string(info(c.core, "hov").path) == "cpu-staged");   // a native backend's path
+    CHECK_FALSE(v->latency_relative);
+    // A network source marks its mapped stamps; the view labels the latency.
+    CaliperLiveSnapshot sr = snap("hov", CALIPER_LIVE_KIND_HEATMAP, &t, 0, CALIPER_LIVE_APPLY_STAMP_RELATIVE);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sr) == 1, c.err());
+    CHECK(caliper_live_views::find(c.core, "hov")->latency_relative);
 
     // An RGBA image keeps its bytes the same way.
     std::vector<uint8_t> px((size_t)W * H * 4);

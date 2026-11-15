@@ -342,6 +342,7 @@ void start() {
             }, view.c_str(), json.c_str());
         };
         g.net = std::make_unique<NetSource>(o, cb);
+        g.poll.relative_stamps = true;   // live_clock.h: latency above the fastest message
         g.net->connect();
     }
 

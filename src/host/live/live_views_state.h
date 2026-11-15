@@ -77,6 +77,7 @@ struct View {
     // Telemetry (caliper_core_live_view_info).
     uint64_t    updates = 0, creates = 0, dropped = 0, seq = 0, stamp_ns = 0;
     double      last_apply_ms = 0.0, latency_ms = 0.0;
+    bool        latency_relative = false;   // CALIPER_LIVE_APPLY_STAMP_RELATIVE
     bool        imported = false;
     std::string path;
     int64_t     count = 0;

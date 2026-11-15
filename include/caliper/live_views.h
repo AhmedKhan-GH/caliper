@@ -110,7 +110,12 @@ enum {
     CALIPER_LIVE_APPLY_RAW       = 1u << 0,  /* heatmap/image: draw 1:1 at canvas (0,0), no chrome (tests) */
     CALIPER_LIVE_APPLY_AUTO_VMIN = 1u << 1,  /* vmin = stats[0] */
     CALIPER_LIVE_APPLY_AUTO_VMAX = 1u << 2,  /* vmax = stats[1] */
-    CALIPER_LIVE_APPLY_WAIT_GPU  = 1u << 3   /* block until the GPU read completed (tests only) */
+    CALIPER_LIVE_APPLY_WAIT_GPU  = 1u << 3,  /* block until the GPU read completed (tests only) */
+    /* stamp_ns was mapped from a producer's own clock (a network source,
+     * src/host/live/live_clock.h): the latency is the delay above the fastest
+     * recent message, not including a constant transit time, and the view
+     * labels it "rel lat" */
+    CALIPER_LIVE_APPLY_STAMP_RELATIVE = 1u << 4
 };
 
 typedef struct CaliperLiveSnapshot {

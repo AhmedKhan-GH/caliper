@@ -145,10 +145,12 @@ void pause_button(CaliperLiveViewsState* S) {
         S->paused = !S->paused;
 }
 
-// "seq 41  lat 2.3 ms  upd 41  drop 0  [paused]"
+// "seq 41  lat 2.3 ms  upd 41  drop 0  [paused]"; "rel lat" when the stamps came
+// from another clock (CALIPER_LIVE_APPLY_STAMP_RELATIVE).
 void telemetry(char* buf, size_t cap, const CaliperLiveViewsState* S, const View& v) {
-    std::snprintf(buf, cap, "seq %llu  lat %.1f ms  upd %llu  drop %llu%s",
-                  (unsigned long long)v.seq, v.latency_ms, (unsigned long long)v.updates,
+    std::snprintf(buf, cap, "seq %llu  %s %.1f ms  upd %llu  drop %llu%s",
+                  (unsigned long long)v.seq, v.latency_relative ? "rel lat" : "lat", v.latency_ms,
+                  (unsigned long long)v.updates,
                   (unsigned long long)v.dropped, S->paused ? "  [paused]" : "");
 }
 
