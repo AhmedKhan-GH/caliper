@@ -6,7 +6,7 @@ This page is the only place for the order and status of work. Each phase links t
 
 ## Where things stand
 
-On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, Caliper Embed, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, Caliper LIB, the Python package, and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
+On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, the Python client and nine applets that live in the tree but that the core build does not compile. The Python client streams its live views to the Caliper app through shared memory, and over a WebSocket on the loopback interface to notebook widgets, browser tabs and the `caliper serve` hub, with data views computed on the device. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
 
 ## Phase 1: one core with versioned applets
 
@@ -75,7 +75,15 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 ## Streaming and embedding
 
-Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package, which Phase 1 built, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
+[Streaming and embedding](streaming-and-embedding.md) gives the plan for using Caliper from other programs. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
+
+1. Done: the minimal embedding package, built in Phase 1; see [Embed Caliper in a program](../guides/embed-caliper.md).
+2. Done: network streaming for Python scripts and notebooks. The live protocol has a WebSocket transport, wire protocol v3, in which the latest snapshot of each view wins and a series travels as deltas. `caliper.serve()` serves a script's live views and a viewer page on the loopback interface with a session token, and `caliper.widget()` shows a view in a notebook. Data views let a viewer ask for a slice, selection or reduction of a tensor, which the producer computes on the device. [Network streaming](../explanations/network-streaming.md) describes the design, and [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md) uses it.
+3. Done: the hub, `caliper serve`, a subcommand of the `caliper` binary that relays the same protocol from producers to viewers and outlives the producers.
+4. Done: the first browser views, small views written for the browser in the `web/` package: the `<caliper-view>` element, the notebook widget and the viewer page. They draw with WebGPU where it is available and with Canvas 2D otherwise.
+5. A spike tried Caliper's view layer in WebAssembly with WebGPU in a browser. It was a spike only, and nothing from it ships. Still to do: the web viewer itself, which is Caliper's view layer compiled to WebAssembly, and applets in the browser, which wait for the split that [Phase 2](#phase-2-promote-proven-features) settles.
+6. Still to do: WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
+7. Then the rest of C++ embedding, Rust bindings and Swift.
 
 ## Data and Cloud
 
@@ -83,7 +91,7 @@ Run history, comparison between runs, and recording and replaying a session are 
 
 ## Renderers
 
-This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). It is not part of the current work.
+This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). It is not part of the current work. The WebAssembly and WebGPU spike of that section was a spike only, and the steps below are still to do.
 
 Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the normal path, at full speed and with zero-copy from torch. Nothing routes them through another layer.
 

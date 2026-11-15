@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package is built, and the rest is planned for after Phase 1. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Caliper LIB](../references/python-api.md) and [Embedding Caliper](../references/embedding.md).
+This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first part of data streaming are built: the WebSocket transport, `caliper.serve()`, the notebook widget, the first browser views, data views of tensors and the `caliper serve` hub. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
 
 ## The order of surfaces
 
@@ -14,9 +14,9 @@ The tools that ML engineers use come first, and consumer surfaces come last:
 
 ## Data streaming
 
-Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the WebAssembly view layer, the [web viewer](#the-web-viewer). Data streaming powers notebooks, `caliper.serve()` and the hub.
+Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data, today with small views written for the browser and later with the WebAssembly view layer, the [web viewer](#the-web-viewer). Data streaming powers notebooks, `caliper.serve()` and the hub, which are built; [Network streaming](../explanations/network-streaming.md) describes them.
 
-- The live protocol gains a network transport: WebSocket first, and WebTransport later.
+- The live protocol has a network transport. The WebSocket transport is built, and WebTransport comes later.
 - The latest snapshot wins for each live view, and a series is sent as deltas.
 - Streaming never blocks training.
 - The zero-copy claim applies only to viewing on the same machine. A viewer on the network receives copies.
@@ -27,17 +27,21 @@ Large data is handled by sampling and by data views rather than sent whole:
 - **Data views.** A data view is a slice, selection, projection or aggregation of a tensor or table, such as one layer, one head, a window of steps, a subset of rows, or a mean over the batch. The viewer requests it, the producer computes it on the device where the data lives, and only the view's result is streamed. This is the same idea as a tensor view or a database view.
 - A zoom or a selection is a request for a different data view.
 
+Data views of tensors are built: a producer names the dimensions of a tensor, and a viewer indexes and reduces them within a budget. Data views of tables, such as a subset of rows, are still planned.
+
 A data view decides which data travels, and a live view, such as a series or a histogram, decides how the viewer draws it.
 
 ## The web viewer
 
 The web viewer is Caliper's view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly and drawn by the WebGPU renderer. It has no applet loader, no DuckDB and no tensor bridge. It ships as a JavaScript and TypeScript package with a `<caliper-view>` element and a Jupyter widget.
 
+The first browser views come before the web viewer and are built. They are small views written for the browser over the same protocol, in the `web/` package: the `<caliper-view>` element, the notebook widget and the viewer page that `caliper.serve()` serves. They draw with WebGPU where it is available and with Canvas 2D otherwise. A spike tried the web viewer's approach, Caliper's view layer in WebAssembly with WebGPU. It was a spike only, and the web viewer itself is still planned.
+
 No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends. An applet reaches a browser through the split described in [Applets in the browser](#applets-in-the-browser): its interface, compiled to WebAssembly, draws there from the data stream. An applet that has not been ported to the split is shown only in the native app.
 
 ## Serving
 
-Two modes serve the web viewer, both with the same protocol, built in this order:
+Two modes serve the browser views, both with the same protocol. Both are built:
 
 1. **`caliper.serve()` in Python.** The script itself serves the viewer page and its stream.
 2. **`caliper serve`, a subcommand of the `caliper` binary.** It runs a hub. Any number of scripts send to it, any number of browsers or Caliper apps watch it, and it outlives the scripts.
