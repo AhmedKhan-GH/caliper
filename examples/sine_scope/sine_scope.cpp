@@ -1,5 +1,5 @@
 // SineScope — the "Your first ML applet" tutorial, assembled and buildable.
-// docs/wiki/tutorials/first-ml-applet.md embeds the marked sections below
+// docs/tutorials/first-ml-applet.md embeds the marked sections below
 // VERBATIM (pymdownx.snippets sections), so the tutorial and this source
 // cannot drift: the strict docs build fails if they do.
 //

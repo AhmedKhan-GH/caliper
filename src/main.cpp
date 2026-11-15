@@ -51,7 +51,7 @@ public:
             return false;
         }
 
-        // Renderer seam (PLATFORM.md §5.4): backend selection (env
+        // Renderer seam (docs/explanations/rendering.md): backend selection (env
         // CALIPER_RENDERER + platform default, GL fallback) now lives in
         // libcaliper's core_lifecycle so every embedder gets the same policy.
         // The host still owns the window and drives init()/the fallback below.

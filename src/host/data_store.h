@@ -1,6 +1,6 @@
 #pragma once
 // caliper_host::DataStore — SQL over the host's embedded DuckDB, results out
-// as Arrow C streams (backs caliper.data.v1, PLATFORM.md §7.7).
+// as Arrow C streams (backs caliper.data.v1, docs/references/service-data-v1.md).
 //
 // Stream model: query()/open_dataset() fully materialize the result, then
 // hand back a self-contained ArrowArrayStream (the producer state owns the

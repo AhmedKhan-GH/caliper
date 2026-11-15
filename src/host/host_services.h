@@ -17,7 +17,7 @@ namespace caliper_host {
 void set_applet_log_sink(void (*sink)(void* userdata, CaliperLogLevel level,
                                       const char* message_utf8),
                          void* userdata);
-// Host-side service registry (PLATFORM.md §6b). Call services_init() once
+// Host-side service registry (docs/references/abi.md). Call services_init() once
 // after the ImGui/ImPlot/ImPlot3D contexts exist; tables are static and live
 // for the process lifetime (the ABI's pointer-validity guarantee).
 void services_init();

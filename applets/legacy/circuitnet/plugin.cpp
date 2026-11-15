@@ -1,7 +1,7 @@
 #include <caliper/caliper.hpp>
 #include "circuitnet.h"
 
-// Epoch-2 entry (PLATFORM.md §6a). All applet logic stays in CircuitNetApplet;
+// Epoch-2 entry (docs/references/abi.md). All applet logic stays in CircuitNetApplet;
 // this file is only the bridge. ui::connect is handled by the macro.
 class CircuitNetPlugin final : public caliper::Applet {
 public:

@@ -1,5 +1,5 @@
 #pragma once
-// Caliper C++ sugar (PLATFORM.md §8). Header-only, optional by design: a C
+// Caliper C++ sugar (docs/references/sugar.md). Header-only, optional by design: a C
 // applet can implement abi.h by hand. Requires C++20 (designated inits).
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>
@@ -484,7 +484,7 @@ inline CaliperGeomDrawV1_3 geom_draw_v1_3_defaults() {
     return d;   // zero instance tail -> non-instanced (additive default)
 }
 
-// caliper.export.v1 sugar (PUBLISHING.md §3). Mirrors caliper::Geometry's
+// caliper.export.v1 sugar (docs/references/service-export-v1.md). Mirrors caliper::Geometry's
 // draw_primitives overload set: the export ABI carries only v1.3 records, so
 // v1.1/v1.2-shaped draws are widened to zero-tailed 256-byte records with the
 // SAME idiom Geometry uses (base.base = ...), then passed at stride 256. The

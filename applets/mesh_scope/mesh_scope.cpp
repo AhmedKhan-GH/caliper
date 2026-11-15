@@ -2,7 +2,7 @@
 // MeshScope — a small MLP's learned 2-D function surface, drawn with ZERO
 // copies of the vertex data (id dev.caliper.mesh-scope 0.1.0).
 //
-// The ML-visualization exemplar for caliper.geometry.v1_1 (GEOMETRY.md §9.3):
+// The ML-visualization exemplar for caliper.geometry.v1_1 (docs/references/service-geometry-v1.md):
 // a 2->64->64->1 tanh net trains live against a fixed target surface; every
 // optimizer step its prediction over a 72x72 grid is written into imported
 // device tensors and drawn the SAME frame as Lambert-lit indexed triangles

@@ -1,5 +1,5 @@
 #pragma once
-/* caliper.log.v1 — structured logs into the host console (PLATFORM.md §7.1).
+/* caliper.log.v1 — structured logs into the host console (docs/references/service-log-v1.md).
  * IMMUTABLE once published: new capability = log_v2, alongside. */
 #include <stdint.h>
 

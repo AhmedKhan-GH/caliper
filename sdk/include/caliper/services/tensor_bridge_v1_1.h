@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.tensor_bridge.v1_1 — ADDITIVE revision of tensor_bridge.v1 (D24,
- * docs/metal-pipelining.md §4): the SAME six operations, prefix-identical
+ * docs/decisions/d024-stream-ordered-handoff-through-caps.md): the SAME six operations, prefix-identical
  * layout, plus one query — caps(). Bit 0 set means the host honors
  * stream-ordered handoff: a non-NULL CaliperTensor.stream orders the device
  * update on the producer's stream/queue (CUstream on CUDA, MTLCommandQueue*

@@ -1,5 +1,5 @@
 #pragma once
-// Headless fake CaliperHost (PLATFORM.md §16 "fixture host"): TDD applets and
+// Headless fake CaliperHost (docs/explanations/testing.md, "fixture host"): TDD applets and
 // sugar without launching UI. Vends log.v1 only; get_service returns NULL for
 // everything else. ONE live fixture per process (C tables carry no user data,
 // so the thunks route through a static active pointer).

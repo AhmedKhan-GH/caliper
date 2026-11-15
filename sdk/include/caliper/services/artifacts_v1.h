@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.artifacts.v1 — content-addressed artifact store: the MLflow
- * artifact idea without the server (PLATFORM.md §7.8). Checkpoints/exports
+ * artifact idea without the server (docs/references/service-artifacts-v1.md). Checkpoints/exports
  * are keyed by sha256 (64 hex chars + NUL), deduplicated, and lineage-tracked
  * to the run that produced them. IMMUTABLE once published. Callable from
  * applet job threads; the host serializes internally. */

@@ -26,7 +26,7 @@
 #include <string>
 #include <type_traits>
 
-// ABI hygiene (PLATFORM.md §6c): POD, struct_size-prefixed, C-safe.
+// ABI hygiene (docs/explanations/compatibility.md): POD, struct_size-prefixed, C-safe.
 static_assert(std::is_standard_layout_v<CaliperHost>);
 static_assert(std::is_standard_layout_v<CaliperFrameInfo>);
 static_assert(std::is_standard_layout_v<CaliperAppletAPI>);

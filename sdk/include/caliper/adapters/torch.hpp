@@ -1,6 +1,6 @@
 #pragma once
 /* caliper/adapters/torch.hpp — header-only bridge from a torch::Tensor to the
- * frozen CaliperTensor (PLATFORM.md §7.2). It compiles against the APPLET's
+ * frozen CaliperTensor (docs/references/tensor.md). It compiles against the APPLET's
  * libtorch and is NEVER included by the host: torch stays out of the ABI (D11).
  * The host links no torch; it consumes only the CaliperTensor this produces.
  *
@@ -159,7 +159,7 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
     if (t.is_cuda()) {
         // Unlike MPS there is no buffer-object cast: data_ptr() IS the device
         // address (storage offset already applied), and the Vulkan backend
-        // copies from it in-VRAM (ZEROCOPY.md). Contiguity was enforced above;
+        // copies from it in-VRAM (docs/explanations/zero-copy.md). Contiguity was enforced above;
         // views with a nonzero storage offset are therefore fine here.
         out.data = t.data_ptr();
         out.device = CALIPER_DEV_CUDA;
@@ -188,7 +188,7 @@ inline std::optional<CaliperTensor> synced_to_tensor(const at::Tensor& t) {
     return to_tensor(t);
 }
 
-// M2 (docs/metal-pipelining.md §4, D24): hand over ORDER instead of a drained
+// M2 (D24, docs/decisions/d024-stream-ordered-handoff-through-caps.md): hand over ORDER instead of a drained
 // device. When the host's bridge-v1.1 caps carry
 // CALIPER_BRIDGE_CAP_STREAM_ORDERED, populate t.stream with the producer's
 // stream/queue and SKIP the full-device drain; the renderer GPU-orders its

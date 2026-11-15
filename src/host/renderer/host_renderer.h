@@ -49,7 +49,7 @@ struct HostGeomDraw {
     uint64_t instance_attr_offset = 0;
 };
 
-// Host-internal renderer seam (PLATFORM.md §5.4). The ABI never sees this;
+// Host-internal renderer seam (docs/explanations/rendering.md). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
 class HostRenderer {
 public:
@@ -227,7 +227,7 @@ public:
     // the gfx suite can still prove the buffer path below it.
     virtual void debug_force_buffer_path(bool /*force*/) {}
 
-    // D24 (docs/metal-pipelining.md §4): true when this backend honors a
+    // D24 (docs/decisions/d024-stream-ordered-handoff-through-caps.md): true when this backend honors a
     // non-NULL CaliperTensor.stream by GPU-ordering the device update after
     // the producer's stream/queue. Surfaced to applets as bridge-v1.1 caps()
     // bit 0. Default false: a backend that ignores stream must never let an
@@ -250,6 +250,6 @@ std::unique_ptr<HostRenderer> make_metal_renderer();
 // Vulkan factory (vulkan_renderer.cpp, Phase 4; Windows-only translation unit
 // today). Same contract as the Metal factory: un-init'd, caller falls back to
 // GL if init() fails. Device-resident CUDA tensors via VK_KHR_external_memory
-// + the runtime-loaded CUDA driver API (ZEROCOPY.md). Not defined elsewhere.
+// + the runtime-loaded CUDA driver API (docs/explanations/zero-copy.md). Not defined elsewhere.
 std::unique_ptr<HostRenderer> make_vulkan_renderer();
 }

@@ -429,7 +429,7 @@ const CaliperGeometryV1_3 kGeom13 = {sizeof(CaliperGeometryV1_3),
     &geo_caps, &geo_create_view, &geo_release_view, &geo_draw_points,
     &geo_create_view_ex, &geo_draw_primitives_v13, nullptr};
 
-// --- caliper.export.v1: the terminal sink (PUBLISHING.md §3, Rung E) ---------
+// --- caliper.export.v1: the terminal sink (docs/references/service-export-v1.md) ---------
 // A veneer by composition: temp geom_create_view_ex(DEPTH) → the EXISTING
 // draw_primitives host path (every gate, every byte-exact behavior reused) →
 // debug_readback_rgba8 (renderer-side) → stb PNG + JSON sidecar → destroy the
@@ -565,7 +565,7 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     // The pixels are in hand; a refusal above left the disk exactly as it was.
     // Refusal purity extends to the filesystem: 0 must mean the disk is
     // exactly as it was, and a PNG without its sidecar is a screenshot, not a
-    // figure (PUBLISHING.md invariant). The pair commit stages both files and
+    // figure (D38, docs/decisions/d038-export-is-a-terminal-sink.md). The pair commit stages both files and
     // sets a previous PNG aside rather than deleting it — the E1-review fix
     // "rolled back" with fs::remove(path), which destroyed the previous good
     // export when the new one's sidecar failed.
@@ -695,7 +695,7 @@ void ex_end_sequence(uint64_t seq) {
         // user looks (caliper.log.v1) and where a v1_1 applet can ask
         // (last_error), keep the frames — they are the user's work — and
         // finalize anyway so the next sequence can begin. A frame folder
-        // without sequence.json is not a figure (PUBLISHING.md).
+        // without sequence.json is not a figure (D38).
         const std::string text = "sequence sidecar write failed: " + sidecar +
                                  " (" + std::to_string(g_seq.frame_count) +
                                  " frame(s) kept, provenance missing): " + why;

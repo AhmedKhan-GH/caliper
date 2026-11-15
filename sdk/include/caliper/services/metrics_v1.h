@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.metrics.v1 — TensorBoard vocabulary (experiment/run/tag/step),
- * ImPlot immediacy (PLATFORM.md §7.6). IMMUTABLE once published. Callable
+ * ImPlot immediacy (docs/references/service-metrics-v1.md). IMMUTABLE once published. Callable
  * from applet job threads; the host serializes internally. image() accepts
  * CPU-resident HWC u8 tensors in v1 (GPU-resident paths arrive with the
  * tensor bridge). */

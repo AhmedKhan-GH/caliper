@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 0 exit proof (PLATFORM.md §17): the SDK installs to a prefix and a
+# SDK install proof: the SDK installs to a prefix and a
 # standalone consumer builds against it via find_package — no monorepo paths.
 set -euo pipefail
 BUILD_DIR="${1:-build}"

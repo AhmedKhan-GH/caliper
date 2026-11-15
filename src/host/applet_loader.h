@@ -46,7 +46,7 @@ struct AppletEntry {
     bool stale_initialized = false;   // initialize() had succeeded: cleanup first
 };
 
-// Manifest-first loader (PLATFORM.md §14): scan() never dlopens; launch()
+// Manifest-first loader (docs/explanations/compatibility.md): scan() never dlopens; launch()
 // performs dlopen -> descriptor sanity -> guarded create/initialize.
 class AppletLoader {
 public:

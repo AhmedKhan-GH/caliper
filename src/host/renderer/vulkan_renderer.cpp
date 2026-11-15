@@ -1,9 +1,9 @@
-// Vulkan backend for the HostRenderer seam (PLATFORM.md §5.4, Phase 4).
+// Vulkan backend for the HostRenderer seam (docs/explanations/rendering.md).
 // Sibling to metal_renderer.mm / gl_renderer.cpp; make_vulkan_renderer()
 // constructs it and main.cpp selects it as the Windows default, falling back
 // to the GL backend if init() fails (no Vulkan driver, remote desktop, ...).
 //
-// Zero-copy story (ZEROCOPY.md, Windows/NVIDIA): discrete GPUs have no
+// Zero-copy story (docs/explanations/zero-copy.md, Windows/NVIDIA): discrete GPUs have no
 // unified memory, so "zero-copy" means the tensor bytes never leave VRAM.
 // The bridge hands us a CaliperTensor whose data is a CUDA device pointer
 // (torch's own allocation). We keep a per-texture VkBuffer allocated with
@@ -12,13 +12,13 @@
 // update is then:
 //   1. one cuMemcpyDtoD  (torch tensor -> shared buffer, in-VRAM)
 //   2. one Vulkan pass    (shared buffer -> VkImage, colormap on-GPU for f32)
-// = 0 host copies + 1 in-VRAM copy, exactly the budget ZEROCOPY.md's table
-// gives this path. Note the direction deviates from the doc's sketch (CUDA
+// = 0 host copies + 1 in-VRAM copy, exactly the budget the table in
+// docs/explanations/zero-copy.md gives this path. Note the direction deviates from the usual sketch (CUDA
 // exports / Vulkan imports): torch's caching allocator does not produce
 // exportable allocations, so the renderer exports and CUDA imports. Same
 // residency guarantee, same crossing count.
 //
-// Synchronization (V4, spec D21 upgraded): the handoff is GPU-ordered via a
+// Synchronization (V4, D28 upgraded): the handoff is GPU-ordered via a
 // per-texture SHARED TIMELINE SEMAPHORE (VK_KHR_timeline_semaphore exported
 // opaque-Win32, cuImportExternalSemaphore). Per update: CUDA's stream-ordered
 // copy signals base+1, the Vulkan pass GPU-waits base+1 and signals base+2,
@@ -33,7 +33,7 @@
 // elided when the adapter populates CaliperTensor.stream under bridge-v1.1
 // caps (M2a, D24) — the copy+signal then ride the producer's stream.
 //
-// Direct path (D25, docs/vulkan-update-costs.md W2): where it is available,
+// Direct path (D25, docs/decisions/d025-cuda-writes-the-vulkan-image.md): where it is available,
 // the steps above are replaced by one CUDA kernel, launched on the producer's
 // stream, that reads the tensor in place and writes the VkImage through a
 // surface object = 0 host copies + 0 in-VRAM copies, for any torch tensor. The
@@ -325,7 +325,7 @@ public:
     }
 
     // Vulkan imports CUDA VRAM only when a UUID-matched CUDA device is paired
-    // (spec §3.4/D20). Otherwise the backend still renders, but via CPU staging,
+    // (D27). Otherwise the backend still renders, but via CPU staging,
     // so it advertises CPU and the bridge won't accept CUDA tensors.
     CaliperDeviceKind interop_device() const override {
         return interop_ok_ ? CALIPER_DEV_CUDA : CALIPER_DEV_CPU;
@@ -1193,7 +1193,7 @@ public:
         return id;
     }
 
-    // One view frame, atomically (GEOMETRY.md §5.4). Gate EVERY draw against the
+    // One view frame, atomically (docs/references/service-geometry-v1.md). Gate EVERY draw against the
     // renderer's OWN imported_ table first (defense in depth, §2.3) — nothing is
     // encoded or cleared unless all draws pass, so a refusal leaves the view's
     // pixels exactly as they were. Then barrier the imported buffers, clear, and
@@ -2759,7 +2759,7 @@ private:
                 break;
             }
         }
-        // D20: no CUDA device matches the Vulkan device's UUID (hybrid laptop,
+        // D27: no CUDA device matches the Vulkan device's UUID (hybrid laptop,
         // or the Vulkan device isn't the NVIDIA one) -> interop OFF. Never fall
         // back to device 0, which would pair with the wrong GPU.
         if (matched < 0) return false;

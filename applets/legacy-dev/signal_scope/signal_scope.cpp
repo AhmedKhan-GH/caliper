@@ -5,7 +5,7 @@
 // directory to start a new applet. The numbered EXEMPLAR comments are the
 // teaching points; everything else is ordinary application code.
 //
-// The rules it embodies (PLATFORM.md §6):
+// The rules it embodies (docs/references/abi.md):
 //   - talk to the host ONLY through services obtained by name
 //   - render ONLY through ImGui/ImPlot (no raw GL/Metal — that is what keeps
 //     the host's renderer swappable under you, forever)

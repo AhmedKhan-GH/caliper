@@ -5,7 +5,7 @@
 
 namespace caliper_host {
 
-// Parsed caliper.toml (PLATFORM.md §10.3). Unknown keys/tables are ignored
+// Parsed caliper.toml (docs/references/manifest.md). Unknown keys/tables are ignored
 // for forward compatibility; missing required fields are errors.
 struct AppletManifest {
     std::string id;        // reverse-DNS; see is_valid_applet_id

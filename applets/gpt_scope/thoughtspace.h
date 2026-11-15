@@ -1,7 +1,7 @@
 // ============================================================================
 // ThoughtSpace — pure-compute geometry + attribute layout for GPTScope's
 // residual-stream constellation (see
-//   docs/superpowers/specs/2026-07-07-gptscope-thoughtspace-design.md §4).
+//   docs/references/applets.md).
 //
 // This header is PURE COMPUTE: torch tensors in, torch tensors written in
 // place. No ImGui, no host headers, no model, no applet state. A separate

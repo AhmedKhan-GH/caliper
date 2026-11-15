@@ -3,7 +3,7 @@
  * Apache Arrow specification (arrow.apache.org/docs/format/CDataInterface.html
  * — the spec explicitly invites copying these definitions into downstream
  * projects; they are ABI-frozen upstream). This is how tabular results cross
- * caliper.data.v1 (PLATFORM.md §7.7) without any Arrow or DuckDB library type
+ * caliper.data.v1 (docs/references/service-data-v1.md) without any Arrow or DuckDB library type
  * in the frozen ABI: plain C structs + release callbacks.
  *
  * Ownership rule (per the spec): the producer fills a struct and sets

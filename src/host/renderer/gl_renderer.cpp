@@ -1,4 +1,4 @@
-// GL backend for the HostRenderer seam (PLATFORM.md §5.4). This is the
+// GL backend for the HostRenderer seam (docs/explanations/rendering.md). This is the
 // extraction of the OpenGL/ImGui-backend code that used to live inline in
 // src/main.cpp — behavior-identical. The Metal backend (C2) is a sibling
 // translation unit implementing the same interface; make_renderer() picks.

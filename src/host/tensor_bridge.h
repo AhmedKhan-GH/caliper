@@ -1,5 +1,5 @@
 #pragma once
-// TensorBridge — host-side core of caliper.tensor_bridge.v1 (PLATFORM.md §7.4).
+// TensorBridge — host-side core of caliper.tensor_bridge.v1 (docs/references/service-tensor-bridge-v1.md).
 // Pure logic over the HostRenderer texture seam: it validates a CaliperTensor
 // against the frozen v1 acceptance rules, colormaps/expands it into RGBA8 on the
 // CPU staging path, or forwards a device tensor to the backend's device path —

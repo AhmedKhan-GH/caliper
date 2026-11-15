@@ -18,7 +18,7 @@
 // the learned 3-D bottleneck sharpens. ImPlot3D (not raw GL) => renderer-
 // agnostic (§6c): Metal by default, GL on CALIPER_RENDERER=gl.
 //
-// Threading discipline (docs/wiki/howto/ml-applet-cookbook.md is the full
+// Threading discipline (docs/guides/ml-applet-cookbook.md is the full
 // treatment): the worker publishes under a mutex with generation counters —
 // OWNED std::vector copies for plot data, and device-resident tensor HANDLES
 // for the weight display tensors (handle swaps are refcount bumps; the frame

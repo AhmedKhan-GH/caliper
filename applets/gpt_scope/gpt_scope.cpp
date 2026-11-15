@@ -1406,7 +1406,7 @@ void GPTScopeApplet::draw_ui() {
                 if (i) ImGui::SameLine(0, 0);
                 ImGui::TextColored(c, "%c", vis(probe_text[(size_t)i]));
             }
-            // "zero-copy" wording discipline (PLATFORM.md §7.4): the imported
+            // "zero-copy" wording discipline (docs/references/service-tensor-bridge-v1.md): the imported
             // line appears only while the texture's latest content actually
             // came through update_texture_from_alloc.
             ImGui::TextDisabled("heatmap: %s",

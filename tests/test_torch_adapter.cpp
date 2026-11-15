@@ -263,7 +263,7 @@ TEST_CASE("stream_to_tensor: handoff survives a concurrently-encoding training t
 TEST_CASE("synced_to_tensor: drain survives a concurrently-encoding training thread") {
     if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     // The drain-path twin of the stress case above (the fix backported to main
-    // as 8b0a010, kept through the metal-pipelining merge): the frame thread
+    // as 8b0a010): the frame thread
     // drains via synced_to_tensor — the no-caps / GL-fallback route — while a
     // worker thread continuously enqueues MPS kernels.
     // torch::mps::synchronize() is just as unserialized as get_command_buffer()
@@ -355,8 +355,7 @@ TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training threa
     if (!cuda_ok()) CALIPER_SKIP_NO_CUDA();
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
     __has_include(<cuda_runtime_api.h>)
-    // CUDA twin of the MPS stress case above (docs/m2a-windows-verification.md
-    // T4, finding 2). On MPS the equivalent race SIGABRTed within a few hundred
+    // CUDA twin of the MPS stress case above (docs/explanations/vulkan-cuda.md). On MPS the equivalent race SIGABRTed within a few hundred
     // handoffs because torch's public stream calls are not internally
     // serialized. The CUDA handoff is only a getCurrentCUDAStream() handle
     // read and CUDA driver calls are thread-safe by API contract, so no

@@ -1,6 +1,6 @@
 #pragma once
-// Explicit DuckDB resource limits for the host's three stores (PLATFORM.md
-// §11), applied to the DBConfig each store opens with. The numbers — a rule
+// Explicit DuckDB resource limits for the host's three stores (D5,
+// docs/decisions/d005-runtime-packs.md), applied to the DBConfig each store opens with. The numbers — a rule
 // over this machine's RAM and cores — and the environment overrides live in
 // duckdb_sizing.h, which carries no DuckDB type.
 //

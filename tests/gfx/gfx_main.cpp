@@ -1,5 +1,5 @@
 // caliper_gfx_tests — windowed, pixel-exact proof of the tensor->texture path
-// (PLATFORM.md §16). NOT part of the headless ctest default; registered under
+// (docs/explanations/testing.md). NOT part of the headless ctest default; registered under
 // the "gfx" label and requires a GUI session. If glfwInit() fails (headless
 // CI), every case is reported skipped — counted, and the binary exits with the
 // skip code so ctest shows "Skipped", not "Passed" (gpu_skip.h). With
@@ -3584,7 +3584,7 @@ TEST_CASE("gfx/Vulkan+CUDA: direct-image driver table resolves") {
     CHECK(sizeof(cudadrv::ExternalSemaphoreWaitParams) == 144);
 }
 
-// W0 of docs/vulkan-update-costs.md: what one tensor update costs by size, on
+// Update cost measurement (docs/explanations/vulkan-cuda.md): what one tensor update costs by size, on
 // the path the renderer picks. "call" is the frame-thread time inside
 // update_texture; "done" adds the wait for the GPU to finish it; "frame" is
 // the mean and worst whole frame with the texture drawn and updated each frame.
@@ -3663,7 +3663,7 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
 // + timeline semaphore create/export/import — while an UPDATE is just a
 // stream-ordered copy + compute pass. This case times both patterns at the
 // applet's real sizes and prints µs/op so the fix (create-once + update) is
-// justified by measurement, not vibes (D21).
+// justified by measurement, not vibes (D28).
 TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-shaped") {
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");

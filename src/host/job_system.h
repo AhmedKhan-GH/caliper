@@ -50,7 +50,7 @@ private:
     const std::shared_ptr<JobOwner>* prev_;
 };
 
-// Thread-per-job v1 (PLATFORM.md §7.5), the pattern extracted from repnet's
+// Thread-per-job v1 (docs/references/service-jobs-v1.md), the pattern extracted from repnet's
 // train_engine (atomic stop flag polled by the loop; state published under a
 // mutex). Two ways in:
 //   submit()          host-internal work: trusted, NOT crash-guarded, so a

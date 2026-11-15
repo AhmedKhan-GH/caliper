@@ -252,8 +252,8 @@ if(WIN32)
 endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
 # DuckDB's own CMakeLists hard-sets CMAKE_MSVC_RUNTIME_LIBRARY to the STATIC
-# CRT for its whole subtree, which conflicts with our /MD policy (PLATFORM.md
-# D7: host + applet DLLs must share one heap) and fails the final link with
+# CRT for its whole subtree, which conflicts with our /MD policy (D7,
+# docs/decisions/d007-dynamic-crt-on-windows.md: host + applet DLLs must share one heap) and fails the final link with
 # LNK2005 (msvcprtd vs duckdb_static). Re-apply our runtime choice to every
 # target DuckDB created, recursively.
 if(WIN32)

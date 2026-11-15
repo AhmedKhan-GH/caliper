@@ -1,5 +1,5 @@
 #pragma once
-/* caliper/tensor.h — the tensor interchange TYPE (PLATFORM.md §7.2), not a
+/* caliper/tensor.h — the tensor interchange TYPE (docs/references/tensor.md), not a
  * service. DLPack-aligned on purpose: torch/numpy/mlx interop is a cast away.
  * FROZEN once shipped. Reuses CaliperDeviceKind (memory-domain naming). */
 #include <stdint.h>

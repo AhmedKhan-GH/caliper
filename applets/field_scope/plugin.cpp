@@ -1,7 +1,7 @@
 #include <caliper/caliper.hpp>
 #include "field_scope.h"
 
-// Epoch-2 entry (PLATFORM.md §6a) — the established adapter shape: all logic
+// Epoch-2 entry (docs/references/abi.md) — the established adapter shape: all logic
 // lives in FieldScopeApplet, this file is only the ABI bridge. id/version are
 // byte-identical to field_scope.caliper.toml (the loader rejects disagreement).
 class FieldScopePlugin final : public caliper::Applet {

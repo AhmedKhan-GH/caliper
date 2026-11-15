@@ -1,7 +1,7 @@
 #include <caliper/caliper.hpp>
 #include "embed_model.h"
 
-// Epoch-2 entry (PLATFORM.md §6a). All applet logic lives in EmbedScopeApplet;
+// Epoch-2 entry (docs/references/abi.md). All applet logic lives in EmbedScopeApplet;
 // this file is only the ABI bridge — the established adapter shape. ui::connect
 // is handled by the macro. The id/version below are byte-identical to
 // embed_scope.caliper.toml (the loader rejects any disagreement).

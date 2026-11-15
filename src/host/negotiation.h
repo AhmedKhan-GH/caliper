@@ -16,8 +16,8 @@ struct Negotiation {
     std::string reason;               // friendly card text when !ok
 };
 
-// PLATFORM.md §14 order (Phase-1 subset — packs/platform checks arrive
-// Phase 4): epoch supported → min_host satisfied → required services present.
+// Negotiation order (docs/explanations/compatibility.md; packs/platform checks are not
+// done here): epoch supported → min_host satisfied → required services present.
 Negotiation negotiate(const AppletManifest& m, const HostCaps& caps);
 
 // Card text for a required service this host can't vend. One string, two

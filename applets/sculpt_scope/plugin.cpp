@@ -1,7 +1,7 @@
 #include <caliper/caliper.hpp>
 #include "sculpt_scope.h"
 
-// Epoch-2 entry (PLATFORM.md §6a): all logic lives in SculptScopeApplet; this
+// Epoch-2 entry (docs/references/abi.md): all logic lives in SculptScopeApplet; this
 // file is only the ABI bridge. id/version are byte-identical to the manifest
 // (sculpt_scope.caliper.toml) — the loader rejects disagreement.
 class SculptScopePlugin final : public caliper::Applet {

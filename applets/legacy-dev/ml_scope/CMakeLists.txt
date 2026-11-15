@@ -1,4 +1,4 @@
-# The ML exemplar (PLATFORM.md §17 Phase 2). Links the in-tree libtorch the
+# The ML exemplar (docs/tutorials/first-ml-applet.md). Links the in-tree libtorch the
 # same way repnet_demo does — runtime packs replace this at Phase 4.
 # curl + zlib are macOS system libs and exemplar-only deps: they cover the
 # cancellable MNIST download + gunzip that runs inside the job. The host links
