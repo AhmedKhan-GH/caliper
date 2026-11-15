@@ -17,15 +17,17 @@ The tools that ML engineers use come first, and consumer surfaces come last:
 Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the WebAssembly view layer, the [web viewer](#the-web-viewer). Data streaming powers notebooks, `caliper.serve()` and the hub.
 
 - The live protocol gains a network transport: WebSocket first, and WebTransport later.
-- The latest snapshot wins for each view, and a series is sent as deltas.
+- The latest snapshot wins for each live view, and a series is sent as deltas.
 - Streaming never blocks training.
 - The zero-copy claim applies only to viewing on the same machine. A viewer on the network receives copies.
 
-Large data is handled with sampling and views rather than sent whole:
+Large data is handled by sampling and by data views rather than sent whole:
 
-- Reduction runs on the device, so a snapshot is reduced before it leaves the GPU.
-- Level of detail sends only what is visible at the viewer's screen resolution, and refines the region the viewer zooms into, as map tiles do. Bandwidth then follows the viewer's screen pixels, not the size of the data.
-- A weak client is served the same way, with a coarser level of detail.
+- **Sampling.** The producer samples a large tensor or series on the device, so that a snapshot carries a sample of the data rather than all of it.
+- **Data views.** A data view is a slice, selection, projection or aggregation of a tensor or table, such as one layer, one head, a window of steps, a subset of rows, or a mean over the batch. The viewer requests it, the producer computes it on the device where the data lives, and only the view's result is streamed. This is the same idea as a tensor view or a database view.
+- A zoom or a selection is a request for a different data view.
+
+A data view decides which data travels, and a live view, such as a series or a histogram, decides how the viewer draws it.
 
 ## The web viewer
 
