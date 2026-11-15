@@ -1,7 +1,7 @@
 #pragma once
 /* caliper/adapters/torch.hpp — header-only bridge from a torch::Tensor to the
  * frozen CaliperTensor (docs/references/tensor.md). It compiles against the APPLET's
- * libtorch and is NEVER included by the host: torch stays out of the ABI (D11).
+ * libtorch and is NEVER included by the host: torch stays out of the ABI.
  * The host links no torch; it consumes only the CaliperTensor this produces.
  *
  * Exemplar teaching points baked into the contract:
@@ -19,7 +19,7 @@
  *     from torch::mps::synchronize() (see synced_to_tensor), i.e. sync-then-
  *     update. That sync is a FULL device barrier — it blocks the calling CPU
  *     thread until every MPS stream drains — so pay it once at the handoff, not
- *     needlessly per frame. stream_to_tensor (M2/D24) supersedes this when the
+ *     needlessly per frame. stream_to_tensor (M2) supersedes this when the
  *     host's bridge-v1.1 caps() grants stream-ordered handoff.
  */
 #include <optional>
@@ -188,7 +188,7 @@ inline std::optional<CaliperTensor> synced_to_tensor(const at::Tensor& t) {
     return to_tensor(t);
 }
 
-// M2 (D24, docs/decisions/d024-stream-ordered-handoff-through-caps.md): hand over ORDER instead of a drained
+// M2: hand over ORDER instead of a drained
 // device. When the host's bridge-v1.1 caps carry
 // CALIPER_BRIDGE_CAP_STREAM_ORDERED, populate t.stream with the producer's
 // stream/queue and SKIP the full-device drain; the renderer GPU-orders its

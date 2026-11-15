@@ -300,13 +300,13 @@ public:
     void free_shared(CaliperTextureId tex) const {
         if (t_ && t_->free_shared) t_->free_shared(tex);
     }
-    // v1.1 capability bits — 0 on a v1-only or headless host (D24). Query
+    // v1.1 capability bits — 0 on a v1-only or headless host. Query
     // once per handoff site and pass to adapters::stream_to_tensor; bit
     // CALIPER_BRIDGE_CAP_STREAM_ORDERED means a non-NULL CaliperTensor.stream
     // replaces the adapter's device drain.
     uint32_t caps() const { return (t11_ && t11_->caps) ? t11_->caps() : 0u; }
     // v1.2 imported-allocation ops — inert (0/false/no-op) on a host without
-    // the v1_2 service or the CALIPER_BRIDGE_CAP_IMPORT_ALLOC bit (D24). Hand
+    // the v1_2 service or the CALIPER_BRIDGE_CAP_IMPORT_ALLOC bit. Hand
     // import_allocation an OS shareable handle from cuMemExportToShareableHandle;
     // a 0 return means the applet stays on the v1 D2D-copy path.
     CaliperAllocId import_allocation(void* h, uint64_t size, uint32_t type) const {
@@ -334,7 +334,7 @@ private:
 // Typed wrapper over caliper.geometry.v1: instanced 3-D points drawn directly
 // from an imported allocation (bridge v1.2) into an offscreen view texture.
 // Falsy when the host doesn't vend the service; every method null-guards so
-// it stays inert on hosts without the geometry path (D24). FRAME-THREAD ONLY,
+// it stays inert on hosts without the geometry path. FRAME-THREAD ONLY,
 // same as Bridge.
 class Geometry {
 public:

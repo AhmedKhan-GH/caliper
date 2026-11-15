@@ -18,7 +18,7 @@
 // exportable allocations, so the renderer exports and CUDA imports. Same
 // residency guarantee, same crossing count.
 //
-// Synchronization (V4, D28 upgraded): the handoff is GPU-ordered via a
+// Synchronization (V4): the handoff is GPU-ordered via a
 // per-texture SHARED TIMELINE SEMAPHORE (VK_KHR_timeline_semaphore exported
 // opaque-Win32, cuImportExternalSemaphore). Per update: CUDA's stream-ordered
 // copy signals base+1, the Vulkan pass GPU-waits base+1 and signals base+2,
@@ -31,9 +31,9 @@
 // shape) remains as the per-texture fallback. The adapter-side
 // torch::cuda::synchronize() at the handoff is the v1 ABI contract and stays;
 // elided when the adapter populates CaliperTensor.stream under bridge-v1.1
-// caps (M2a, D24) — the copy+signal then ride the producer's stream.
+// caps (M2a) — the copy+signal then ride the producer's stream.
 //
-// Direct path (D25, docs/decisions/d025-cuda-writes-the-vulkan-image.md): where it is available,
+// Direct path (docs/explanations/vulkan-cuda.md): where it is available,
 // the steps above are replaced by one CUDA kernel, launched on the producer's
 // stream, that reads the tensor in place and writes the VkImage through a
 // surface object = 0 host copies + 0 in-VRAM copies, for any torch tensor. The
@@ -324,14 +324,14 @@ public:
         return true;
     }
 
-    // Vulkan imports CUDA VRAM only when a UUID-matched CUDA device is paired
-    // (D27). Otherwise the backend still renders, but via CPU staging,
+    // Vulkan imports CUDA VRAM only when a UUID-matched CUDA device is paired.
+    // Otherwise the backend still renders, but via CPU staging,
     // so it advertises CPU and the bridge won't accept CUDA tensors.
     CaliperDeviceKind interop_device() const override {
         return interop_ok_ ? CALIPER_DEV_CUDA : CALIPER_DEV_CPU;
     }
 
-    // M2a (D24): only the pipelined path GPU-orders after t.stream; the
+    // M2a: only the pipelined path GPU-orders after t.stream; the
     // synchronous fallback must keep the v1 drained contract, so advertise
     // stream handoff only when pipelining is actually live.
     bool honors_stream_ordered_handoff() const override { return pipelined_ok_; }
@@ -619,7 +619,7 @@ public:
     bool init_tex_image(Tex& t, int w, int h, bool exportable) {
         t.w = w; t.h = h;
         // CUDA has no notion of image layouts, so an image it writes rests in
-        // GENERAL for its whole life, sampling included (D25).
+        // GENERAL for its whole life, sampling included.
         t.direct.exportable = exportable;
         t.rest_layout = exportable ? VK_IMAGE_LAYOUT_GENERAL
                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -755,7 +755,7 @@ public:
         if (src < base || (src - base) + bytes > alloc)
             return dev_bail("tensor extent exceeds CUDA allocation");
 
-        // D25: the kernel reads the tensor where it lies, so this path needs no
+        // Direct path: the kernel reads the tensor where it lies, so this path needs no
         // shared buffer at all. Any refusal lands on the buffer path below.
         if (!force_buffer_path_ && update_direct(dst, t, src, lut256, vmin, vmax)) {
             dev_note("CUDA interop OK — zero-copy (kernel reads the tensor, writes the image)");
@@ -1900,7 +1900,7 @@ private:
         Buffer lut;                          // per-texture LUT (256 RGBA8)
         bool pipelined = false;              // sync objects created OK
     };
-    // D25 direct path (per texture): the VkImage's memory imported into CUDA and
+    // Direct path (per texture): the VkImage's memory imported into CUDA and
     // reachable by a kernel as a surface object. Imported lazily, on the first
     // direct update; a texture that never gets a device tensor pays only for
     // the exportable allocation.
@@ -2365,7 +2365,7 @@ private:
 
         // V4: pipelined device updates queued this frame must complete before
         // ImGui samples their textures — GPU-side timeline waits, not fences.
-        // D25: the frame timeline tells a kernel when this frame stops sampling.
+        // Direct path: the frame timeline tells a kernel when this frame stops sampling.
         const uint32_t sig_count = frame_timeline_ ? 2 : 1;
         const VkSemaphore sig_sems[2] = {rend_done, frame_timeline_};
         const uint64_t sig_vals[2] = {0, frame_value_ + 1};  // binary: ignored
@@ -2733,7 +2733,7 @@ private:
                          : "sync mode: synchronous (timeline semaphores unavailable)");
     }
 
-    // D25: the direct path needs the pipelined objects, the optional driver
+    // The direct path needs the pipelined objects, the optional driver
     // table, and a frame loop that signals when frames finish. The offscreen
     // canvas composites without the frame's timeline waits, so it stays on the
     // buffer path, whose Vulkan pass the composite's queue order covers.
@@ -2759,7 +2759,7 @@ private:
                 break;
             }
         }
-        // D27: no CUDA device matches the Vulkan device's UUID (hybrid laptop,
+        // No CUDA device matches the Vulkan device's UUID (hybrid laptop,
         // or the Vulkan device isn't the NVIDIA one) -> interop OFF. Never fall
         // back to device 0, which would pair with the wrong GPU.
         if (matched < 0) return false;
@@ -3580,7 +3580,7 @@ private:
         }
 
         // CUDA side, ordered on the PRODUCER's stream when the adapter
-        // supplied one (M2a, D24) — stream order puts the copy after the
+        // supplied one (M2a) — stream order puts the copy after the
         // producer's kernels, so the adapter's torch::cuda::synchronize() is
         // elided. NULL keeps the legacy default stream (v1 drained handoff).
         const cudadrv::Api* cu = cudadrv::api();
@@ -3635,7 +3635,7 @@ private:
         return true;
     }
 
-    // ---- D25 direct update: one kernel, tensor in place, image written --------
+    // ---- Direct update: one kernel, tensor in place, image written ------------
     // One-time setup: the kernels, plus the frame timeline a kernel waits on.
     // Frames submitted before the timeline existed never signal it, so let them
     // finish first. Any failure turns the path off for this renderer.
@@ -4091,7 +4091,7 @@ private:
     bool interop_ok_ = false;           // …AND a UUID-matched CUDA device paired
     bool timeline_ok_ = false;          // device exports timeline semaphores
     bool pipelined_ok_ = false;         // interop + timeline: V4 pipelining live
-    bool direct_failed_ = false;        // D25 kernels or frame timeline failed to set up
+    bool direct_failed_ = false;        // direct-path kernels or frame timeline failed to set up
     bool force_buffer_path_ = false;    // test-only
     // id_set -> current front set, for textures with a second image.
     std::unordered_map<VkDescriptorSet, VkDescriptorSet> swapped_sets_;

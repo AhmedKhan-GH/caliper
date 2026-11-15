@@ -58,7 +58,7 @@ using namespace caliper_host;
 
 namespace {
 
-// One CaliperCore per process in v0 (D5 already binds the process to one
+// One CaliperCore per process in v0 (the process is already bound to one
 // libtorch; full de-singletonization is not L2a). This lock makes the refusal
 // honest — a second create() returns NULL while one is live.
 //

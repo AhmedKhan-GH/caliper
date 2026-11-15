@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: '3.12'
       # The docs (MkDocs Material) are served under /docs/ on the same Pages
-      # site; --strict keeps the snippet-embedded headers honest (D15).
+      # site; --strict keeps the snippet-embedded headers honest.
       # awesome-nav builds the navigation from the docs/ folders and their .nav.yml files.
       - run: pip install mkdocs-material mkdocs-awesome-nav
       - run: mkdocs build --strict

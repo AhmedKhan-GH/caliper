@@ -12,7 +12,7 @@
 //   (GlobalMemoryStatusEx), sys.power.battery (CallNtPowerInformation);
 //   probe tier — sys.gpu.util / sys.gpu.temp / sys.gpu.power via NVML,
 //   runtime-loaded from the NVIDIA driver's nvml.dll (never a linked SDK, per
-//   D11 / the cuda_driver.cpp house pattern). No NVIDIA driver → no GPU
+//   the cuda_driver.cpp house pattern). No NVIDIA driver → no GPU
 //   channels. CPU temperature and fan RPM are admin-gated on Windows and
 //   therefore DO NOT EXIST here.
 //

@@ -25,7 +25,7 @@
  * §3.2) — the store serializes internally. IMMUTABLE once published; a future
  * read entry lands as metrics.v1_2.
  *
- * Stream ownership mirrors caliper.data.v1 EXACTLY (D3): on success the host
+ * Stream ownership mirrors caliper.data.v1 EXACTLY: on success the host
  * fills *out with a live ArrowArrayStream; the CALLER drains it (get_schema/
  * get_next until a released empty array) and MUST call out->release(out) once.
  * On failure (false) *out is untouched and last_error() explains — a host-owned

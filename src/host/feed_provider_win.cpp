@@ -39,7 +39,7 @@ int64_t now_ns() {
 
 // ---------------------------------------------------------------------------
 // Minimal NVML surface, runtime-loaded from the driver's nvml.dll (house
-// pattern: cuda_driver.cpp — never link a vendor SDK, D11). No driver, a
+// pattern: cuda_driver.cpp — never link a vendor SDK). No driver, a
 // missing export, or a failed init → the GPU channels simply don't register.
 // Probed on this box (RTX 500 Ada, driver 596.47): all exports resolve;
 // temperature reads 100%; utilization intermittently returns rc 999 while the

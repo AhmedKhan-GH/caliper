@@ -1,6 +1,6 @@
 #pragma once
 // Minimal CUDA *driver API* surface, loaded from nvcuda.dll / libcuda.so at
-// runtime (D11, docs/decisions/d011-host-without-libtorch.md: the host links no ML framework and no CUDA
+// runtime (the host links no ML framework and no CUDA
 // toolkit — the driver library ships with the GPU driver itself, so this adds
 // zero build- or run-time dependencies on machines without NVIDIA hardware).
 //
@@ -210,7 +210,7 @@ struct VmmApi {
 const VmmApi* vmm_api();
 
 // ---------------------------------------------------------------------------
-// OPTIONAL direct-image surface (D25, docs/decisions/d025-cuda-writes-the-vulkan-image.md): what the
+// OPTIONAL direct-image surface (docs/explanations/vulkan-cuda.md): what the
 // renderer needs to launch a kernel that writes a VkImage. A SEPARATE table for
 // the same reason as vmm_api(): a hole here costs only the direct path, and the
 // renderer stays on its buffer path. Layouts mirror cuda.h's v1 ABI.

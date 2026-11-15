@@ -1,6 +1,6 @@
 #pragma once
 // caliper_host::MetricsStore — the DuckDB-backed run/tag/step store behind
-// caliper.metrics.v1 (D5: DuckDB is a host implementation detail).
+// caliper.metrics.v1 (DuckDB is a host implementation detail).
 //
 // TensorBoard vocabulary: an experiment groups runs; each run carries tagged
 // series indexed by step (scalars, histograms, images) plus a hparams JSON blob.

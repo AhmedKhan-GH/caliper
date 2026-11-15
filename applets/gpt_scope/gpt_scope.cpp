@@ -445,7 +445,7 @@ CaliperTextureId upload_mapped(const caliper::Bridge& bridge, bool& stage_cpu,
     auto view = [&](bool cpu) -> std::optional<CaliperTensor> {
         if (cpu) { host_t = dev_t.to(torch::kCPU);
                    return caliper::adapters::to_tensor(host_t); }
-        // Device handoff (M2/D24): with a stream-honoring host the bridge's
+        // Device handoff (M2): with a stream-honoring host the bridge's
         // in-VRAM copy is GPU-ordered after the producer stream — no drain.
         // On a v1 host this drains (synced) exactly as before.
         return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());

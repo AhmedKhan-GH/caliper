@@ -2,7 +2,7 @@
 /* caliper.device.v1 — the host's negotiated compute device (docs/references/
  * service-device-v1.md). IMMUTABLE once published. Kinds name the MEMORY/API DOMAIN, not a
  * framework backend: METAL covers torch-MPS, MLX, and ggml-Metal alike. The
- * host detects without linking any ML framework (D11); applets map the kind
+ * host detects without linking any ML framework; applets map the kind
  * to their framework's device (torch: METAL -> torch::kMPS). */
 #include <stdint.h>
 

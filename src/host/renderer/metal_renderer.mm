@@ -462,7 +462,7 @@ public:
     CaliperDeviceKind interop_device() const override { return CALIPER_DEV_METAL; }
 
     // M2b shipped: a non-NULL t.stream is GPU-ordered after the producer
-    // queue in both device paths above (D24).
+    // queue in both device paths above.
     bool honors_stream_ordered_handoff() const override { return true; }
 
     // Metal owns no GL context: the window must be created with NO_API so GLFW
@@ -1702,7 +1702,7 @@ private:
         MTLSize groups = MTLSizeMake((p.w + 15) / 16, (p.h + 15) / 16, 1);
         [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];
         [enc endEncoding];
-        // No CPU wait (M1/D23): the frame's command buffer commits AFTER this
+        // No CPU wait (M1): the frame's command buffer commits AFTER this
         // one on the same queue_, so draw ordering is free by commit order; cb
         // retains src, lutbuf, and dst until the GPU retires it (default,
         // non-`unretained` encoding), so lifetime is free too. Test readbacks
@@ -1741,7 +1741,7 @@ private:
             destinationLevel:0
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
-        [cb commit];   // no CPU wait (M1/D23): same-queue commit order + retention
+        [cb commit];   // no CPU wait (M1): same-queue commit order + retention
         last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "blit-imported" : "blit";
@@ -1778,7 +1778,7 @@ private:
     NSMutableDictionary<NSNumber*, id<MTLTexture>>* textures_ = nil;
     std::unordered_map<uint64_t, id<MTLTexture>> depth_textures_;
 
-    // M2b: per-texture producer-ordering events (D23 — MTLSharedEvent appears
+    // M2b: per-texture producer-ordering events (MTLSharedEvent appears
     // ONLY where cross-queue ordering genuinely exists). Values are a per-
     // texture monotonic timeline, the Metal analog of Vulkan's semaphores.
     NSMutableDictionary<NSNumber*, id<MTLSharedEvent>>* events_ = nil;

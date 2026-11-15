@@ -5,7 +5,7 @@
  * on Windows), CPU-staged only on the GL fallback (§5.4). The ABI never names a
  * graphics API: textures cross as opaque CaliperTextureId, and the host keeps
  * an id -> backend-handle table so the renderer stays swappable forever.
- * IMMUTABLE once published; the host never links torch (D11) — the bridge
+ * IMMUTABLE once published; the host never links torch — the bridge
  * consumes CaliperTensor only.
  *
  * v1 acceptance rules (violations return 0/false and emit a caliper.log.v1 line

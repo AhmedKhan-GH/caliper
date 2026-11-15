@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.tensor_bridge.v1_2 — ADDITIVE revision of tensor_bridge.v1_1 (same
- * D24 pattern): the SAME seven members, prefix-identical layout, plus three
+ * pattern): the SAME seven members, prefix-identical layout, plus three
  * entry points for imported external allocations. Caps bit 1 set means the
  * host can import an applet-exported device allocation (CUDA VMM shareable
  * handle) and run device texture updates directly FROM it — zero copies of

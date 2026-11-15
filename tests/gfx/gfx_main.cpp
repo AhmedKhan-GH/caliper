@@ -708,7 +708,7 @@ TEST_CASE("gfx/Metal: short device buffer is rejected (no GPU fault)") {
 
 // M1 pipelining proof (the Vulkan burst test's twin): several device updates
 // enqueued back-to-back with NO readback between them, so successive compute
-// passes are in flight together, ordered only by queue commit order (D23).
+// passes are in flight together, ordered only by queue commit order.
 // The final readback must equal the LAST write byte-for-byte. Fresh source
 // buffers per generation keep CPU writes outside the contract (a NULL-stream
 // caller owns producer quiescence); dropping each buffer's last strong ref
@@ -3292,7 +3292,7 @@ void vk_draw_frame(HostRenderer* r, CaliperTextureId id) {
 }
 }  // namespace
 
-// D25: the kernel's output against the CPU reference, on the inputs where a
+// Direct path: the kernel's output against the CPU reference, on the inputs where a
 // float pipeline can differ: rounding boundaries, NaN, infinities, denormals,
 // signed zero, and degenerate or inverted ranges. Contraction would fail here.
 TEST_CASE("gfx/Vulkan+CUDA: direct f32 is byte-exact on edge values and ranges") {
@@ -3394,7 +3394,7 @@ TEST_CASE("gfx/Vulkan+CUDA: direct updates interleaved with frames stay in order
     bk.bridge->release_texture(id);
 }
 
-// D25's second image: the id an applet holds never changes, and what a frame
+// The direct path's second image: the id an applet holds never changes, and what a frame
 // actually draws, read back from the draw list, is always the newest write. A
 // frame left drawing the old image would show training one update behind.
 TEST_CASE("gfx/Vulkan+CUDA: frames draw the newest image, under a stable id") {
@@ -3663,7 +3663,7 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
 // + timeline semaphore create/export/import — while an UPDATE is just a
 // stream-ordered copy + compute pass. This case times both patterns at the
 // applet's real sizes and prints µs/op so the fix (create-once + update) is
-// justified by measurement, not vibes (D28).
+// justified by measurement, not vibes.
 TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-shaped") {
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");

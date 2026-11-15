@@ -2,7 +2,7 @@
 /* caliper/adapters/exportable_pool.hpp — a torch MemPool whose blocks are
  * cuMemCreate'd with a shareable handle type, so the bridge can IMPORT them
  * (tensor_bridge.v1_2) and update textures with zero copies of the data.
- * Applet-side only (D11). Every failure degrades to "not pool-backed": the
+ * Applet-side only: the host links no ML framework. Every failure degrades to "not pool-backed": the
  * caller falls back to the v1/v1.1 path (stream_to_tensor + update_texture).
  *
  * The file has three clearly-marked sections:

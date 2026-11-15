@@ -12,8 +12,8 @@ struct DeviceInfo {
     uint64_t free_memory_hint = 0;   // bytes; 0 = unknown
 };
 
-// Detect-once, cached for the process lifetime. Never links an ML framework
-// (D11): Metal is queried directly on Apple; CUDA detection arrives with
+// Detect-once, cached for the process lifetime. Never links an ML framework:
+// Metal is queried directly on Apple; CUDA detection arrives with
 // Phase 4 hardware (until then non-Apple reports CPU).
 const DeviceInfo& device_info();
 

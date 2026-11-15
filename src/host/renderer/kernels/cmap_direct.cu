@@ -1,5 +1,5 @@
-// CUDA twins of colormap.comp and the u8 blit (D25,
-// docs/decisions/d025-cuda-writes-the-vulkan-image.md). The renderer launches these on the producer's stream; they read the
+// CUDA twins of colormap.comp and the u8 blit for the direct image path
+// (docs/explanations/vulkan-cuda.md). The renderer launches these on the producer's stream; they read the
 // tensor in place and write the texture's VkImage through a surface object.
 //
 // The output must stay BYTE-IDENTICAL to the CPU reference map_f32_to_rgba8
@@ -8,7 +8,7 @@
 // every rounding boundary found no input where it does. Never build this with
 // -use_fast_math, which changes the division. NaN handling matches the reference.
 //
-// The host links no toolkit (D11): the build embeds the checked-in PTX. After
+// The host links no toolkit: the build embeds the checked-in PTX. After
 // editing this file, regenerate it from a developer prompt with:
 //   nvcc -ptx -m64 -arch=sm_75 -fmad=false -allow-unsupported-compiler
 //        -o cmap_direct.ptx cmap_direct.cu

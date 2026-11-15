@@ -19,7 +19,7 @@
 //     forward) and reports the service's presence; it uploads no textures yet.
 //
 // Checkpoint save/load is DEFERRED by design: it is the first honest demand for
-// caliper.artifacts.v1 (the D16 demand-driven clause). The UI shows a disabled
+// caliper.artifacts.v1. The UI shows a disabled
 // "save checkpoint" button whose tooltip says exactly that.
 #include "gpt_model.h"
 

@@ -4,7 +4,7 @@
 // against the frozen v1 acceptance rules, colormaps/expands it into RGBA8 on the
 // CPU staging path, or forwards a device tensor to the backend's device path —
 // and keeps the id -> backend-handle bookkeeping (§5.4). It never links torch
-// (D11) and never names a graphics API; the renderer stays swappable.
+// and never names a graphics API; the renderer stays swappable.
 //
 // This lives in the exe / gfx-test link scope, NOT caliper_host_lib: it depends
 // on the HostRenderer interface only (header), so unit tests drive it with a
@@ -73,7 +73,7 @@ public:
                                   CaliperTextureId* out_texture);
     void             free_shared(CaliperTextureId tex);
 
-    // Bridge-v1.1 capability bits (D24). Bit 0 = the active renderer honors
+    // Bridge-v1.1 capability bits. Bit 0 = the active renderer honors
     // stream-ordered handoff, so adapters may skip the device drain. Bit 1
     // (v1.2) = the renderer can import an applet-exported device allocation.
     uint32_t caps() const;

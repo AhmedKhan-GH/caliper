@@ -252,8 +252,8 @@ if(WIN32)
 endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
 # DuckDB's own CMakeLists hard-sets CMAKE_MSVC_RUNTIME_LIBRARY to the STATIC
-# CRT for its whole subtree, which conflicts with our /MD policy (D7,
-# docs/decisions/d007-dynamic-crt-on-windows.md: host + applet DLLs must share one heap) and fails the final link with
+# CRT for its whole subtree, which conflicts with our /MD policy (host +
+# applet DLLs must share one heap) and fails the final link with
 # LNK2005 (msvcprtd vs duckdb_static). Re-apply our runtime choice to every
 # target DuckDB created, recursively.
 if(WIN32)
@@ -515,8 +515,8 @@ endif()
 # ============================================================================
 # Category 4: PyTorch (Large dependency)
 # ============================================================================
-# APPLET-ONLY. libcaliper / the caliper exe / embed_host never link libtorch
-# (D11): TORCH_LIBRARIES is consumed by applets/*, examples/sine_scope and the
+# APPLET-ONLY. libcaliper / the caliper exe / embed_host never link libtorch:
+# TORCH_LIBRARIES is consumed by applets/*, examples/sine_scope and the
 # torch-labelled tests, never appended to CALIPER_DEPENDENCY_LIBS. With
 # CALIPER_WITH_TORCH=OFF the whole category is skipped (no download, no
 # find_package(Torch)) and TORCH_LIBRARIES stays empty.
@@ -648,7 +648,7 @@ if(WIN32)
     set_property(TARGET torch APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS NOMINMAX)
 
     # TORCH_LIBRARIES is deliberately NOT appended to CALIPER_DEPENDENCY_LIBS:
-    # only applets / torch tests link it (torch-free libcaliper, D11).
+    # only applets / torch tests link it (torch-free libcaliper).
 
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
@@ -714,7 +714,7 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
     # TORCH_LIBRARIES is deliberately NOT appended to CALIPER_DEPENDENCY_LIBS:
-    # only applets / torch tests link it (torch-free libcaliper, D11).
+    # only applets / torch tests link it (torch-free libcaliper).
 
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 

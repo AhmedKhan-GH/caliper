@@ -1,5 +1,5 @@
 #pragma once
-// How large the host's three DuckDB stores may grow (D5, docs/decisions/d005-runtime-packs.md), as a
+// How large the host's three DuckDB stores may grow, as a
 // rule over the machine rather than fixed numbers. DuckDB's own defaults are
 // ALL hardware threads and 80% of physical RAM — per instance; three of those
 // inside a UI host that also runs applet job threads and libtorch is 3x

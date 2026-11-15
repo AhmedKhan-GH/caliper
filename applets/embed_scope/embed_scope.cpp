@@ -1,7 +1,7 @@
 // ============================================================================
 // EmbedScope — the 3D embedding projector (Phase 2F′, Task F5).
 //
-// The exemplar that un-parks the last two services (D16 demand-driven clause):
+// The exemplar that un-parks the last two services, frozen only once an applet needed them:
 //   • jobs.v1     — training runs off the frame thread, cancel honored per step.
 //   • device.v1   — the host picks the device; METAL -> torch::kMPS.
 //   • metrics.v1  — loss/accuracy stream to the Runs dashboard (optional).

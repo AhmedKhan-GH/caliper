@@ -13,7 +13,7 @@
  * physically cannot #include it. An applet embedding a core would be a category
  * error; the include topology forbids it.
  *
- * C, not C++ (mirrors D1, the applet contract): a host built years apart from
+ * C, not C++ (like the applet contract): a host built years apart from
  * libcaliper must still embed it. C++ sugar for host authors can ship later.
  *
  * ---------------------------------------------------------------------------
@@ -32,8 +32,8 @@
  *  - ONE ImGui CONTEXT PER CANVAS, owned by the core. The embedder never
  *    touches ImGui state; the allocator handoff stays internal.
  *
- *  - ONE CaliperCore PER PROCESS in v0 (the one-libtorch-per-process policy,
- *    D5, already binds the process). caliper_core_create refuses a second live
+ *  - ONE CaliperCore PER PROCESS in v0 (the one-libtorch-per-process policy
+ *    already binds the process). caliper_core_create refuses a second live
  *    core with a NULL return; shut the first down first.
  *
  *  - CRASH CONTAINMENT. An applet fault is caught by the core's existing crash
@@ -89,7 +89,7 @@ extern "C" {
 typedef struct CaliperCore CaliperCore;
 
 /* Which HostRenderer backend the core embeds. GL is intentionally ABSENT: its
- * context ownership is GLFW-coupled chrome (D13, the frozen fallback), never an
+ * context ownership is GLFW-coupled chrome (the frozen fallback), never an
  * embed target. DEFAULT resolves to the platform backend (Metal on Apple,
  * Vulkan on Windows) honoring CALIPER_RENDERER. A core whose resolved backend
  * cannot embed refuses at attach_canvas ("embed requires Metal or Vulkan"). */
@@ -256,7 +256,7 @@ const char* caliper_core_last_error(CaliperCore* core);
  * for `id` (the applets' own vocabulary: "caliper.metrics.v1", "caliper.jobs.v1",
  * "caliper.artifacts.v1", "caliper.data.v1", ...). Cast the result to the matching
  * Caliper<Name>V1 struct from the caliper/services headers and call its thunks
- * as an applet would — no renderer/torch/ImGui type crosses the seam (D3: the
+ * as an applet would — no renderer/torch/ImGui type crosses the seam (the
  * interchange is C ABI + CaliperTensor + Arrow C streams). C++ hosts may use the
  * caliper.hpp sugar.
  *
@@ -299,7 +299,7 @@ const char* caliper_core_last_error(CaliperCore* core);
  *      * caliper.ui.v1                           (the ImGui/ImPlot contexts —
  *                                                 meaningless to a host anyway)
  *
- * P3 caveat (D5, one torch per process, never the host's): a host pushes
+ * P3 caveat (one torch per process, never the host's): a host pushes
  * PARAMETERS; an APPLET's worker produces device tensors. The bridge's host-side
  * use is CPU-staged uploads on the frame thread only. */
 const void* caliper_core_get_service(CaliperCore* core, const char* id);
@@ -336,7 +336,7 @@ const void* caliper_core_get_service(CaliperCore* core, const char* id);
  *     (wrong GPU, buffer shorter than byte_offset + extent, no import cap), the
  *     call FAILS — the core never quietly downloads a METAL tensor to the host.
  *   tensor->stream is passed through (a non-NULL MTLCommandQueue* GPU-orders the
- *   read after that queue's committed work, bridge v1.1 D24); NULL is the normal
+ *   read after that queue's committed work, bridge v1.1); NULL is the normal
  *   case for a caller that synchronized first.
  *
  * SYNC / MEMORY-STABILITY CONTRACT (from tensor_bridge_v1_2.h, verbatim in

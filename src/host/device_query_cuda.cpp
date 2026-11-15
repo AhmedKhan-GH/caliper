@@ -2,7 +2,7 @@
 #include "cuda_driver.h"
 // Non-Apple device query with real CUDA detection (Phase 4). Uses the driver
 // API loaded at runtime (cuda_driver.h) so the host still links no ML
-// framework and no CUDA toolkit (D11). No NVIDIA driver -> CPU defaults,
+// framework and no CUDA toolkit. No NVIDIA driver -> CPU defaults,
 // same behavior as the old stub.
 namespace caliper_host {
 

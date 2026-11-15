@@ -324,7 +324,7 @@ const CaliperTensorBridgeV1 kBridge = {sizeof(CaliperTensorBridgeV1),
     &br_texture_from_tensor, &br_update_texture, &br_release_texture,
     &br_texture_from_tensor_mapped, &br_alloc_shared, &br_free_shared};
 
-// v1.1 (D24): the same six thunks plus caps(). Bit 0 reflects the ACTIVE
+// v1.1: the same six thunks plus caps(). Bit 0 reflects the ACTIVE
 // renderer (Metal/Vulkan honor it once M2 lands there; GL and headless never
 // do) — 0 with no renderer bound, so adapters keep draining.
 uint32_t br_caps(void) {
@@ -565,7 +565,7 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     // The pixels are in hand; a refusal above left the disk exactly as it was.
     // Refusal purity extends to the filesystem: 0 must mean the disk is
     // exactly as it was, and a PNG without its sidecar is a screenshot, not a
-    // figure (D38, docs/decisions/d038-export-is-a-terminal-sink.md). The pair commit stages both files and
+    // figure (docs/references/service-export-v1.md). The pair commit stages both files and
     // sets a previous PNG aside rather than deleting it — the E1-review fix
     // "rolled back" with fs::remove(path), which destroyed the previous good
     // export when the new one's sidecar failed.
@@ -695,7 +695,7 @@ void ex_end_sequence(uint64_t seq) {
         // user looks (caliper.log.v1) and where a v1_1 applet can ask
         // (last_error), keep the frames — they are the user's work — and
         // finalize anyway so the next sequence can begin. A frame folder
-        // without sequence.json is not a figure (D38).
+        // without sequence.json is not a figure.
         const std::string text = "sequence sidecar write failed: " + sidecar +
                                  " (" + std::to_string(g_seq.frame_count) +
                                  " frame(s) kept, provenance missing): " + why;

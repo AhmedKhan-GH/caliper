@@ -98,7 +98,7 @@ const VmmApi* load_vmm() {
     return &v;
 }
 
-// Optional direct-image table (D25). Same shape as load_vmm().
+// Optional direct-image table. Same shape as load_vmm().
 const DirectApi* load_direct() {
     if (api() == nullptr) return nullptr;
     void* lib = lib_open();

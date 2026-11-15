@@ -84,7 +84,7 @@ public:
     // GPU, so the caller may rewrite the source buffer on return (embed v1.2
     // views: CALIPER_VIEW_FLAG_WAIT_GPU). No-op when nothing is pending and on
     // CPU-staged backends, whose uploads are already synchronous. Never on the
-    // default hot path — the device updates themselves stay wait-free (M1/D23).
+    // default hot path — the device updates themselves stay wait-free (M1).
     virtual void device_update_wait() {}
 
     // Live views (src/host/live), additive. A NON-blocking completion probe for
@@ -197,7 +197,7 @@ public:
     // EITHER the exe's swapchain path OR an embed canvas, never both, so the
     // swapchain path (and its byte-exact geometry rows) is untouched. Default =
     // unsupported: GL refuses (embed requires Metal or Vulkan — GL's context is
-    // GLFW-coupled chrome, D13). The frame-order contract matches the swapchain
+    // GLFW-coupled chrome). The frame-order contract matches the swapchain
     // path: canvas_new_frame CLEARS (opens the pass), canvas_render composites.
     enum CanvasMode { CANVAS_WINDOW = 0, CANVAS_OFFSCREEN = 1 };
     virtual bool canvas_supported() const { return false; }
@@ -223,11 +223,11 @@ public:
         return {};
     }
 
-    // Test-only: keep device updates off the Vulkan direct-image path (D25), so
+    // Test-only: keep device updates off the Vulkan direct-image path, so
     // the gfx suite can still prove the buffer path below it.
     virtual void debug_force_buffer_path(bool /*force*/) {}
 
-    // D24 (docs/decisions/d024-stream-ordered-handoff-through-caps.md): true when this backend honors a
+    // Stream-ordered handoff: true when this backend honors a
     // non-NULL CaliperTensor.stream by GPU-ordering the device update after
     // the producer's stream/queue. Surfaced to applets as bridge-v1.1 caps()
     // bit 0. Default false: a backend that ignores stream must never let an

@@ -2,7 +2,7 @@
 // caliper_host — the SQL→Arrow C stream producer, shared verbatim by the two
 // host stores that expose a read surface across the ABI: caliper.data.v1
 // (DataStore) and caliper.metrics.v1_1 (MetricsStore). ONE Arrow C stream
-// contract (D3): the producer owns a fully materialized DuckDB result, so the
+// contract: the producer owns a fully materialized DuckDB result, so the
 // stream outlives the originating store call and never touches the connection
 // again — a consumer may drain it on any thread while the store keeps serving.
 //

@@ -39,7 +39,7 @@ add_custom_target(caliper_git_stamp
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# D7 (docs/decisions/d007-dynamic-crt-on-windows.md): dynamic CRT so host + applet DLLs share one heap. DuckDB
+# Dynamic CRT so host + applet DLLs share one heap (docs/explanations/compatibility.md). DuckDB
 # under /MD is unverified until the first Windows session — CALIPER_STATIC_CRT
 # is the escape hatch if it breaks.
 option(CALIPER_STATIC_CRT "Use static MSVC runtime (/MT) — pre-D7 behavior" OFF)
@@ -201,7 +201,7 @@ add_library(caliper_host_lib STATIC
     src/host/sha256.cpp
 )
 target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
-# DuckDB is a host implementation detail (D5, docs/decisions/d005-runtime-packs.md): it backs
+# DuckDB is a host implementation detail: it backs
 # MetricsStore but no DuckDB type crosses metrics_store.h (pimpl). Link PRIVATE
 # so the ABI seam stays clean; <duckdb.hpp> flows via duckdb_static's INTERFACE.
 target_link_libraries(caliper_host_lib
@@ -213,7 +213,7 @@ target_link_libraries(caliper_host_lib
             core_functions_extension)
 
 # Device query (caliper.device.v1): Metal-API-only on Apple, no ML framework
-# linked (D11). The Metal/Foundation frameworks flow PUBLIC so consumers of
+# linked. The Metal/Foundation frameworks flow PUBLIC so consumers of
 # caliper_host_lib (the caliper executable, the test binary) link them too.
 if(APPLE)
     target_sources(caliper_host_lib PRIVATE
@@ -226,7 +226,7 @@ if(APPLE)
         "-framework Metal" "-framework Foundation" "-framework IOKit")
 else()
     # Real CUDA detection (Phase 4) via the runtime-loaded driver API — still
-    # no ML framework and no CUDA toolkit linked (D11). Machines without an
+    # no ML framework and no CUDA toolkit linked. Machines without an
     # NVIDIA driver fall through to the same CPU defaults as the old stub.
     target_sources(caliper_host_lib PRIVATE
         src/host/device_query_cuda.cpp
@@ -315,8 +315,8 @@ if(WIN32)
         "${CALIPER_SPV_DIR}/geom_frag_spv.h"
         "${CALIPER_SPV_DIR}/geom_tex_frag_spv.h")
 
-    # The direct-image kernels (D25) ship as checked-in PTX, embedded here so
-    # no build needs the CUDA toolkit (D11). See kernels/cmap_direct.cu.
+    # The direct-image kernels ship as checked-in PTX, embedded here so
+    # no build needs the CUDA toolkit. See kernels/cmap_direct.cu.
     set(CALIPER_DIRECT_PTX "${CMAKE_SOURCE_DIR}/src/host/renderer/kernels/cmap_direct.ptx")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CALIPER_DIRECT_PTX}")
     file(READ "${CALIPER_DIRECT_PTX}" CALIPER_DIRECT_PTX_HEX HEX)
