@@ -7,6 +7,7 @@ Guides answer one practical question each. They assume you have finished the [tu
 | [Debug an applet](debug-an-applet.md) | How do I attach a debugger, read the logs and find out why an applet was refused or quarantined? |
 | [Embed Caliper in a program](embed-caliper.md) | How do I run Caliper applets inside a view of my own program with the `caliper-embed` package? |
 | [Attach to a running script](attach-to-a-running-script.md) | How do I open a live view of a Python script that is already running? |
+| [Run a hub](run-a-hub.md) | How do I stream several scripts to one address and keep a run viewable after its script ends? |
 | [Verify on Windows hardware](verify-on-windows.md) | How do I check a change on the Vulkan and CUDA paths with an NVIDIA GPU? |
 | [Continuous integration](ci.md) | What runs on each push, what is cached, and what do I do when a run fails? |
 

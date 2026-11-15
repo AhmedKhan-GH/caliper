@@ -1,6 +1,6 @@
 # Caliper CLI
 
-The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs and exits without opening a window: `list`, `check`, `install`, `new`, `info`, `shot` and `--help` never start the app, so they are safe in scripts and CI. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
+The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
 usage: caliper [--applets <dir>]...
@@ -12,6 +12,7 @@ usage: caliper [--applets <dir>]...
        caliper info
        caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
                     [--frames <N>] --out <file.png>
+       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
        caliper --help
 ```
 
@@ -169,6 +170,40 @@ The applet runs as it runs in the app: its `on_init`, its frames and any jobs it
 
 The id and the image's folder are checked before anything is drawn or created.
 
+### caliper serve
+
+Runs the hub of [wire protocol v3](wire-protocol.md): producers, such as training scripts, connect out to it and each becomes a session, and viewers (the browser viewer page, the notebook widget, the Caliper app) connect to it, list the sessions and attach to one. It needs no window, renderer or GPU, and listens on 127.0.0.1 only. [Run a hub](../guides/run-a-hub.md) explains how to use it, what it keeps and its limits.
+
+| Option | Meaning |
+|---|---|
+| `--port <n>` | The port to listen on, 0 to 65535. The default is 7340. 0 takes any free port. |
+| `--token-file <file>` | Read the session token from the first line of `<file>` instead of making a random one. The token must be 22 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. On macOS and Linux, the file must not be readable or writable by other users (`chmod 600`). |
+| `--assets <dir>` | Serve the viewer page and its files from `<dir>`, such as the `caliper/_web/` folder of the Python package. Without it, `/` answers with a short note that says where the page is. |
+
+The options also take the form `--port=<n>`, and they apply only to `serve`. The token is never given on the command line, where other users could read it from the process list. Without `--token-file`, the hub makes a random token of 32 characters (24 random bytes) for this run.
+
+`serve` prints the viewer link and the producer address, then one line for each session that starts, resumes, ends or is forgotten:
+
+```text
+viewers   http://127.0.0.1:7340/?token=<token>
+producers ws://127.0.0.1:7340/v3/stream (address and token in <hub file>)
+stop with Ctrl-C
+session clp-41222-9f03ab started (train.py, pid 41222)
+```
+
+The **hub file** tells producers on the same machine where the hub is. It is `hub.json` in the app-data folder, or the path in `CALIPER_HUB_FILE` when that is set and not empty. The hub writes it when it starts, readable and writable by its owner only (mode 0600), and removes it when it stops. It holds one JSON object:
+
+| Key | Value |
+|---|---|
+| `version` | 1 |
+| `pid` | The hub's process id |
+| `port` | The port it listens on |
+| `token` | The session token |
+| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
+| `url` | The viewer link, with the token |
+
+SIGINT (Ctrl-C) or SIGTERM stops the hub: it sends BYE `shutdown` on every connection, closes them with code 1001, removes the hub file, prints `hub stopped` and exits with 0. It exits with 1 when the port is taken, the token file cannot be used, or the `--assets` folder does not exist. When the default port is taken, another hub is probably running; start this one with `--port`.
+
 ### caliper --help
 
 Prints the usage to standard output and exits with 0. `-h` and `help` do the same.
@@ -178,8 +213,8 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, and `shot` when its applet cannot be launched or is quarantined, or when the renderer cannot draw offscreen. |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets` with a subcommand that does not take it, an option of `shot` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, or when the renderer cannot draw offscreen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets` with a subcommand that does not take it, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## Environment variables
 
@@ -189,5 +224,6 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | `CALIPER_USER_APPLETS_DIR` | Replaces the user applets folder, for the app, `dev`, `list`, `install` and `shot`. |
 | `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
 | `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
+| `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.
