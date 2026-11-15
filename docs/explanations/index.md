@@ -9,3 +9,4 @@ Explanations describe how Caliper works and why it is built that way. They are f
 | [Live streaming](live-streaming.md) | How a Python process streams tensors to the app through shared memory |
 | [Compatibility and epochs](compatibility.md) | How the ABI and the services grow without breaking applets |
 | [Trust model](trust-model.md) | What the host checks before loading an applet, and how it contains a fault |
+| [UI principles](ui-principles.md) | The rules for text, layout and behaviour in the host and in every applet |
