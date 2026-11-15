@@ -1,6 +1,6 @@
 # caliper.jobs.v1
 
-Service id `caliper.jobs.v1` — background compute with progress + cancel (PLATFORM.md §7.5). This page embeds the header verbatim; the docs build fails if the file moves.
+Service id `caliper.jobs.v1` — background compute with progress and cancel. This page embeds the header verbatim; the docs build fails if the file moves.
 
 ```c
 --8<-- "sdk/include/caliper/services/jobs_v1.h"
@@ -61,8 +61,7 @@ jobs are attributed.
 
 **Cancellation is cooperative.** `request_cancel(job)` sets a flag; it does not
 interrupt your function. Your job must poll `ctl->cancelled(ctl)` in its inner
-loop and return promptly when it reads true. The framework contract (PLATFORM.md
-§16) is that a well-behaved job honours cancel within **≤ 100 ms** — this is a
+loop and return promptly when it reads true. The contract is that a well-behaved job honours cancel within **≤ 100 ms** — this is a
 *tested guarantee*, not advice, and the exemplar's teardown relies on it (below).
 A job that ignores `cancelled()` and runs for a minute is a bug in the applet,
 not the host.

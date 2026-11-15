@@ -7,7 +7,7 @@ incompatible, negotiation refuses it and the landing screen shows one of the
 messages below as the applet's status text — no code from the applet is
 executed.
 
-The checks run in a fixed order (PLATFORM.md §14): **ABI epoch → minimum host
+The checks run in a fixed order (see [Compatibility](../explanations/compatibility.md)): **ABI epoch → minimum host
 version → required services**. The first failing check wins, so only one message
 is ever shown. These strings are contractual: the loader and the landing screen
 reuse them verbatim.
@@ -35,7 +35,7 @@ catches a manifest whose `required` list leaves out a service the binary needs.
 ## Loader statuses
 
 Negotiation is only the first gate. Once an applet passes it, the **loader**
-(PLATFORM.md §14/§15) is what actually finds the binary, `dlopen`s it, checks the
+is what actually finds the binary, `dlopen`s it, checks the
 descriptor against the manifest, and runs the lifecycle under the crash guard.
 Each of those steps has its own failure, and the loader sorts them into two
 statuses:

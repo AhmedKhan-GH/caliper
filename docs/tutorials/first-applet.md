@@ -136,12 +136,12 @@ value), checkboxes, and the live training controls the ML applets use.
 ## 4. Build it
 
 The `CMakeLists.txt` links the two SDK targets and drops the dylib plus a copy
-of the manifest into `build/applets/`, where the host scans for applets:
+of the manifest into `cmake-build-release/applets/`, where the host scans for applets:
 
 ```bash
-cmake -B build
-cmake --build build --target hello_applet
-ls build/applets/            # libhello.dylib + hello.caliper.toml
+cmake --preset release
+cmake --build --preset release --target hello_applet
+ls cmake-build-release/applets/   # libhello.dylib + hello.caliper.toml
 ```
 
 In-tree the build links `caliper::sdk` and `caliper::ui_stack` directly; an
@@ -155,7 +155,7 @@ and press Enter (or double-click the row) to open it. The host's epoch-2 loader
 discovers it by reading its `<stem>.caliper.toml` manifest and the
 `caliper_applet_descriptor` export — the two signals every applet you build this
 way must ship. If the row is missing, check that both are present (the dylib and
-its manifest sit side by side in `build/applets/`); if its status is `REFUSED`,
+its manifest sit side by side in `cmake-build-release/applets/`); if its status is `REFUSED`,
 `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
 [refusal reference](../references/refusals.md)). Esc, or the `esc Home` button,

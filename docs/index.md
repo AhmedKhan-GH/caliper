@@ -1,38 +1,34 @@
 # Caliper
 
-Caliper renders live ImGui graphics from GPU-resident tensors. Its Metal/MPS and Vulkan/CUDA paths keep accepted dense tensors and geometry off the CPU staging path; OpenGL remains a CPU-staged fallback.
+Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. An applet supplies ImGui user interface and compute, and talks to the host through a frozen C ABI and a set of named service tables.
 
-The desktop host owns rendering and the frame loop. C++ applets supply UI and compute through ABI epoch 2 and named service tables.
+Tensors reach the screen without a trip through the CPU on the Metal and Vulkan paths. The OpenGL path is a fallback that stages tensor data through the CPU inside the host. A Python package can open a live session from a running training script and show it in the Caliper viewer.
 
-!!! warning "Development status"
-    Current host: **0.6.0** · SDK: **0.1.0** · ABI epoch: **2**. Build Caliper from source. The repository does not currently publish packaged binaries, separate SDK releases, runtime packs, or an applet registry.
+Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 2.
 
-## Choose a path
+## Where to start
 
-- **[Development basics](tutorials/development-basics.md)** — understand the host, applet, and build model.
-- **[Your first applet](tutorials/first-applet.md)** — build the smallest ABI-epoch-2 UI applet.
-- **[Your first ML applet](tutorials/first-ml-applet.md)** — add jobs, metrics, device selection, and tensor views.
-- **[Embedding Caliper](references/embedding.md)** — inspect the embeddable host interface.
-- **[ABI and services](references/abi.md)** — read the contract and service reference.
+- [Development basics](tutorials/development-basics.md) explains the host, the applet and the build.
+- [Your first applet](tutorials/first-applet.md) builds the smallest UI applet.
+- [Your first ML applet](tutorials/first-ml-applet.md) adds jobs, metrics, device selection and tensor views.
+- [Embedding Caliper](references/embedding.md) describes the embeddable host interface.
+- [The ABI](references/abi.md) is the contract between host and applets.
 
-## Backend behavior
+## Backends
 
-| Backend | Current behavior |
-|---|---|
-| **Metal / MPS** | macOS default. Accepted MPS buffers are processed by Metal without host staging. |
-| **Vulkan / CUDA** | Windows default. Device-local external-memory interop; some paths make one device-to-device copy inside VRAM. |
-| **OpenGL 3.3** | Compatibility fallback. Tensor uploads are CPU-staged inside the host. |
+| Backend | Where it is used | How tensors reach the screen |
+|---|---|---|
+| Metal and MPS | macOS default | Metal processes accepted MPS buffers directly, without host staging. |
+| Vulkan and CUDA | Windows default | A CUDA kernel writes a tensor update straight into the Vulkan image, with no copy ([D25](decisions/d025-cuda-writes-the-vulkan-image.md)). |
+| OpenGL 3.3 | Fallback on every platform | The host stages tensor uploads through the CPU. |
 
-See [Rendering](explanations/rendering.md) and [`caliper.tensor_bridge.v1`](references/service-tensor-bridge-v1.md) for the exact backend and acceptance rules.
+[Rendering](explanations/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](references/service-tensor-bridge-v1.md) lists what each backend accepts.
 
-## Documentation map
+## The documentation
 
-- **[Tutorials](tutorials/index.md)** — start-to-finish development paths.
-- **[Guides](guides/index.md)** — debugging, attaching to scripts and continuous integration.
-- **[References](references/index.md)** — ABI, manifest, service tables, adapters, embedding, and C++ sugar.
-- **[Explanations](explanations/index.md)** — rendering, compatibility, trust, and the architecture.
-- **[Decisions](decisions/index.md)** — the project decision log.
-
-## Source of truth
-
-Reference pages embed current headers and examples with checked snippets, and `mkdocs build --strict` fails on missing sources, links, or anchors. `PLATFORM.md` is a planning and design specification; where it describes future repository topology or distribution, those parts are not current shipped behavior.
+- [Tutorials](tutorials/index.md) are start-to-finish lessons.
+- [Guides](guides/index.md) are task recipes for debugging, attaching to scripts and continuous integration.
+- [References](references/index.md) list the ABI, the manifest, the service tables, the adapters, embedding, the C++ sugar and the folders and environment variables.
+- [Explanations](explanations/index.md) cover rendering, compatibility, trust and the architecture.
+- [Decisions](decisions/index.md) is the log of design decisions.
+- [Plans](plans/index.md) holds the roadmap and the designs that are not built yet.

@@ -13,8 +13,9 @@ embedded **verbatim from that source file**; the docs build fails if they
 drift. Run the finished thing first if you like:
 
 ```bash
-cmake --build build --target sine_scope
-CALIPER_AUTOLAUNCH=dev.example.sine-scope ./build/caliper
+cmake --preset release
+cmake --build --preset release --target sine_scope
+CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper
 ```
 
 Prereqs: [Development basics](development-basics.md) (the mental model),
@@ -113,7 +114,7 @@ Cleanup grows its symmetric duties — cancel, bounded wait, release:
 --8<-- "examples/sine_scope/sine_scope.cpp:cleanup"
 ```
 
-**Run it** (`CALIPER_AUTOLAUNCH=dev.example.sine-scope ./build/caliper`):
+**Run it** (`CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper`):
 you should see the flat line snap into a sine within seconds while the
 heatmap's blocks reorganize.
 
@@ -132,8 +133,7 @@ Each remaining service is a small delta from here:
 - **`metrics.v1`** — persistence for two lines:
   `run = metrics.begin_run("sine", "mlp32")` once, then
   `metrics.scalar(run, "train/loss", step, loss)` in the loop. Your run now
-  survives restarts in the host's metrics store. The host's Runs dashboard was removed on 2026-07-03, so the app
-  has no view of stored runs today.
+  survives restarts in the host's metrics store. The host has no view of stored runs.
 - **`artifacts.v1`** — Save/Load buttons so a trained model outlives the
   process.
   Load-then-eval *without retraining* is the demo magic.

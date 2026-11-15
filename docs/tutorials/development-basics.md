@@ -32,8 +32,8 @@ toolchains and system prerequisites must still be installed; see the root
 | Library | Comes from | You link it via | Notes |
 |---|---|---|---|
 | SDK headers (ABI, services, sugar, adapters) | `sdk/include/` in this repo | `caliper::sdk` | Header-only INTERFACE target — nothing compiles into the SDK itself |
-| ImGui (docking) + ImPlot + ImPlot3D + FileDialog | `third_party/` submodules, **pinned** | `caliper::ui_stack` | Compiled once in-tree. **Never bring your own copy** — the pin is part of the ABI (§9 of PLATFORM.md): your applet and the host must agree on ImGui's memory layout byte-for-byte |
-| libtorch | `third_party/libtorch/` (vendored) | `"${TORCH_LIBRARIES}"` + the rpath block | The current root executable links the configured Torch libraries, and ML applets may link them as well. |
+| ImGui (docking) + ImPlot + ImPlot3D + FileDialog | `third_party/` submodules, **pinned** | `caliper::ui_stack` | Compiled once in-tree. **Never bring your own copy** — the pin is part of the ABI (see [D4](../decisions/d004-ui-stack-pin-defines-the-epoch.md)): your applet and the host must agree on ImGui's memory layout byte-for-byte |
+| libtorch | Downloaded by CMake into `third_party/` (`libtorch/` on macOS and Linux, `libtorch-release/` or `libtorch-debug/` on Windows) | `"${TORCH_LIBRARIES}"` + the rpath block | Only applets and torch tests link it. The `caliper` executable and `libcaliper` do not ([D11](../decisions/d011-host-without-libtorch.md)). |
 | curl, zlib | macOS system SDK | `CURL::libcurl`, `ZLIB::ZLIB` | Only if you download/decompress data. Data acquisition is applet business — the host has no downloader |
 | DuckDB | host-internal | **you can't** | Deliberately unreachable. You get its powers through services: `metrics.v1`, `artifacts.v1`, `data.v1`. No DuckDB type ever crosses the ABI |
 
@@ -54,15 +54,15 @@ examples/hello/
 
 - **Manifest**: id (reverse-DNS), name, version, summary, required/optional
   service lists. The `id` and `version` must be **byte-identical** between
-  the manifest and the descriptor in plugin.cpp, or the loader refuses (the
+  the manifest and the descriptor in the `CALIPER_APPLET` macro call, or the loader refuses (the
   applet is listed with the reason, not a crash). See [manifest reference](../references/manifest.md).
 - **The macro**: the `CALIPER_APPLET(...)` at the bottom of your `.cpp`
   generates the epoch-2 C ABI glue — the descriptor plus exception walls on
   every entry point. You never write `extern "C"` yourself.
-- **The class**: three lifecycle methods. `initialize(Host&)` — probe your
-  services (required ones you assert; optional ones degrade). `draw_ui()` —
+- **The class**: three lifecycle methods. `on_init(Host&)` — probe your
+  services (required ones you assert; optional ones degrade). `on_frame(const Frame&)` —
   called every frame on the frame thread; submit ImGui windows, read
-  worker-published state. `cleanup()` — cancel jobs, bounded-wait, release
+  worker-published state. `on_cleanup()` — cancel jobs, bounded-wait, release
   textures, return.
 - **CMakeLists**: copy hello's verbatim for a UI-only applet, or SineScope's
   (`examples/sine_scope/`) for an ML applet. The only parts you edit: target name, source
@@ -102,14 +102,15 @@ training job and the bridge — that path is
 #    no root CMake edits, just build:
 mkdir applets/my_applet   # + the three files (copy examples/hello/ to start)
 
-# 2. build — your dylib + manifest land in build/applets/
-cmake --build build --target my_applet -j
+# 2. build — your dylib + manifest land in cmake-build-release/applets/
+cmake --preset release
+cmake --build --preset release --target my_applet
 
 # 3. run — it appears as a row in the landing screen's Instruments pane
-./build/caliper
+./cmake-build-release/caliper
 
 # 4. iterate fast — skip the landing screen every rebuild:
-CALIPER_AUTOLAUNCH=dev.example.my-applet ./build/caliper
+CALIPER_AUTOLAUNCH=dev.example.my-applet ./cmake-build-release/caliper
 #    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI;
 #     CALIPER_WINDOW_SIZE=1440x900 fixes the window size for screenshots)
 ```
@@ -117,10 +118,10 @@ CALIPER_AUTOLAUNCH=dev.example.my-applet ./build/caliper
 !!! warning "`--clean-first` on a single applet target prunes its siblings"
     The applet list is a `CONFIGURE_DEPENDS` glob, so **all** applets are
     configured but only the target you name gets built. A partial
-    `cmake --build build --target my_applet --clean-first` cleans the whole
+    `cmake --build --preset release --target my_applet --clean-first` cleans the whole
     build tree first, then rebuilds only `my_applet` — leaving the other
-    applets' dylibs and manifests missing from `build/applets/` until a full
-    `cmake --build build` restores them. If the Instruments pane suddenly
+    applets' dylibs and manifests missing from `cmake-build-release/applets/` until a full
+    `cmake --build --preset release` restores them. If the Instruments pane suddenly
     lists only one applet, this is why: rebuild without `--clean-first`, or
     build the default target to bring every applet back.
 
@@ -134,11 +135,12 @@ pattern. Applet logic that reads services can be unit-tested headlessly.
 
 **Your data lives at** `~/Library/Application Support/Caliper/data/<your-id>/`
 — the host creates it and hands it to you as `host.data_dir()`. Downloads,
-caches, scratch files go there and nowhere else.
+caches, scratch files go there and nowhere else. [Folders and environment variables](../references/environment.md)
+lists the folder on every platform.
 
 ## The landing screen
 
-`./build/caliper` opens on the landing screen: a command bar along the top,
+`./cmake-build-release/caliper` opens on the landing screen: a command bar along the top,
 four docked panes, and a status bar along the bottom. It is drawn with ImGui,
 so it looks the same on Metal, Vulkan and GL.
 
@@ -254,8 +256,9 @@ cmake --build --preset release
 ctest --preset release            # prints the output of failing suites
 ```
 
-Four suites need a GPU for some of their cases: `caliper_gfx_tests`,
-`caliper_export_tests`, `caliper_embed_tests` and `caliper_torch_tests`. A case
+Six suites need a GPU for some of their cases: `caliper_gfx_tests`,
+`caliper_export_tests`, `caliper_embed_tests`, `caliper_torch_tests`,
+`caliper_live_tests` and `caliper_live_views_tests`. A case
 that finds no device skips and is counted, and the suite prints a summary when
 it ends:
 
@@ -286,7 +289,7 @@ would report the suite as passed.
 
 ## The rules (each one guards something real)
 
-- **No raw GL/Metal/Vulkan calls in applets** (§6c). Draw through
+- **No raw GL/Metal/Vulkan calls in applets** ([D32](../decisions/d032-data-flows-one-way.md)). Draw through
   ImGui/ImPlot/ImPlot3D; get tensors on screen through `tensor_bridge.v1`.
   This is what makes your applet run identically on both backends.
 - **Bridge and data.v1 calls: frame thread only.** Torch ops: worker thread
