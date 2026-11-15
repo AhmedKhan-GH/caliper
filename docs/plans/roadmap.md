@@ -6,18 +6,19 @@ This page is the only place for the order and status of work. Each phase links t
 
 ## Where things stand
 
-On 15 November 2026, `main` holds the host, the SDK with its 18 service ids, the embeddable core, the Python client and nine applets compiled in the tree. The inspector applet is being developed on the `inspector` branch and is not on `main`. The versioning contract is written, and the loader enforces its epoch, `min_host` and service checks but not yet the rest of it. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
+On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, the embeddable core, the Python client and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
 
 ## Phase 1: one core with versioned applets
 
 1. Done: the versioning contract and the promotion rule are written in [Compatibility and epochs](../explanations/compatibility.md#versioning).
-2. Ship the SDK as an installed package: the headers, the CMake config, the pinned UI stack and the sugar libraries.
-3. Make the host name no applet: windows dock by role, the core build compiles no applets, and CI builds and starts an empty core.
-4. Load applets from outside the repository: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder and the search order, and shipped applets signed in the app bundle.
+2. Done: the SDK installs as the `caliper-sdk` package, with the headers, the CMake config, the pinned UI stack and `caliper_add_applet()`; see [SDK package](../references/sdk-package.md).
+3. Make the host name no applet. Done: windows dock by role, the core build compiles no applets, and CI builds the core without applets and checks that the host names none. Still to do: CI starts the empty core and checks that the landing screen shows its empty state.
+4. Load applets from outside the repository. Done: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder, and the search order with one copy chosen per id. Still to do: shipped applets signed in the app bundle.
 5. Add the `caliper` subcommands listed under [Command line](#command-line), which also gives their status.
-6. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
-7. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
-8. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
+6. Ship the minimal embedding package, as [Streaming and embedding](streaming-and-embedding.md#the-embedding-package) describes. It is being built on a branch and is not merged yet.
+7. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
+8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
+9. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
 
 OpenGLlama comes back with the inspector work, as an applet beside the inspector. Nothing about it changes before then.
 
@@ -55,14 +56,14 @@ Phase 1 adds subcommands to the `caliper` binary rather than a separate program,
 |---|---|
 | `caliper list` | Lists the applets that the host finds, with their status. |
 | `caliper check <folder>` | Runs the loader's checks on the applet in a folder without loading it. |
-| `caliper info` | Prints the host's version, ABI epoch and services. |
+| `caliper info` | Prints the host's version, the ABI epoch, the SDK version, the libtorch version, the UI-stack hash and the services. |
 | `caliper new <name> [dir]` | Creates an applet from a template. |
 | `caliper install <folder>` | Installs an applet from a local folder into the user applets folder. |
 | `caliper dev <folder>` | Starts the app with that folder first in the search order, without hot reload. |
 
 The `--applets <dir>` flag and the `CALIPER_APPLET_PATH` variable add development paths to the search.
 
-The subcommands, the flag and the variable are being built on a branch and are not merged yet.
+The subcommands, the flag and the variable are built.
 
 `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
 
@@ -80,13 +81,17 @@ An MCP server comes in [Phase 3](#phase-3-agent-built-panels), beside the comman
 
 If agents need to see the screen sooner, the capture service moves earlier, not MCP.
 
+## Streaming and embedding
+
+Using Caliper from other programs is planned work after Phase 1, apart from the minimal embedding package in Phase 1, and it is not part of the current work. [Streaming and embedding](streaming-and-embedding.md) gives the plan. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Video streaming of a running Caliper comes after them.
+
 ## Renderers
 
-This work comes after Phase 1, alongside the planned web build of Caliper. It is not part of the current work.
+This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). It is not part of the current work.
 
 Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the normal path, at full speed and with zero-copy from torch. Nothing routes them through another layer.
 
-1. Add one WebGPU backend behind `HostRenderer`, with two roles. In the browser it runs on the browser's own WebGPU, as part of the web build. As the native fallback it runs through Dawn, Google's WebGPU library, which is an optional build component, and the host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
+1. Add one WebGPU backend behind `HostRenderer`, with two roles. In the browser it runs on the browser's own WebGPU, as part of the web viewer. As the native fallback it runs through Dawn, Google's WebGPU library, which is an optional build component, and the host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
 2. Retire the GLEW OpenGL fallback once the Dawn path covers its cases. There is no separate hand-written OpenGL or CPU renderer.
 3. Evaluate writing each shader once and translating it for each backend, for example with the Slang shading language. This Slang is not the SystemVerilog library of the same name that `third_party/` vendors.
 
@@ -147,7 +152,7 @@ These ideas come from earlier designs and are not built. Each needs a decision b
 - **SDK conformance.** A conformance checker, and a set of reference applets built against each SDK release.
 - **Isolation and reach.** Applets in a separate process and scripting bindings.
 - **Live streaming.** Several viewers per session, f16, bf16 and RGB zero-copy kernels, a smaller wheel without the stores, and an arm64 wheel job.
-- **Embedding.** Several canvases per core, an `api_version` query and a canvas-info query.
+- **Embedding.** A canvas-info query.
 - **Zero-copy.** Device-backed `alloc_shared` on Metal and a pool of exportable Vulkan images.
 - **Geometry.** Thick lines and ribbons, MSAA, a culling flag and volumetric rendering.
 - **Telemetry sources.** Feed channels registered by applets or read from serial, UDP or MQTT.

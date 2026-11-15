@@ -32,8 +32,9 @@ applets remain the path for panels that outgrow the spec.
   schema, shape and rate.
 - **No capture.** The agent cannot render a panel to an image to check its own work. A host automation and capture
   service is already a [platform candidate](platform-candidates.md).
-- **A hard-coded layout.** The default dock layout names specific applets in `src/main.cpp`
-  ([Applets outside the core](applets-outside-the-core.md)), so an agent cannot place panels.
+- **Layout only by role.** Applets dock their windows by the roles they give through
+  [`caliper.ui.v1_1`](../references/service-ui-v1-1.md), and nothing places a window by command, so an agent cannot
+  place panels.
 
 ## Three ways an agent could build an applet
 
@@ -74,6 +75,9 @@ early. Tensors get a small fixed set of operations that run on the GPU: slice, r
   spec never touches memory directly.
 - **A saved applet** becomes a manifest plus a spec, with no library file. The loader learns this second kind of
   applet.
+- **The browser.** Spec applets are designed to run in the web viewer unchanged
+  ([Streaming and embedding](streaming-and-embedding.md#spec-applets)). Their primitives are the live view types, and
+  a spec binds only to sources that have a wire form.
 
 An illustrative spec, not a settled format:
 
@@ -124,7 +128,7 @@ panels = ["heat", { split = "vertical", panels = ["mean", "loss"] }]
 3. **A primitive library.** The drawing in `live_views_draw.cpp` and in the scopes moves into the `caliper::viz` layer
    that [Platform candidates](platform-candidates.md) already proposes, with declared input
    slots.
-4. **A data-driven dock layout,** so that panels can be placed by command instead of by `src/main.cpp`.
+4. **A data-driven dock layout,** so that panels can be placed by command and not only by the roles applets declare.
 5. **A capture service** that renders a panel offscreen to an image and its state, so the agent can see its result.
 6. **The agent.** The command layer is exposed over MCP first, so Claude Code or Codex can build panels from outside.
    That proves the tool surface before the app gets its own chat pane. [Agent integration](#agent-integration) describes
