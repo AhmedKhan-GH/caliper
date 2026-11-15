@@ -34,13 +34,14 @@ the original applet and one existing scope onto the new host or SDK version.
 - **ImGui errors went unnoticed.** One pane produced a constant stream of ImGui
   runtime errors, and nothing showed them. Development builds of the host
   should.
-- **Applets cannot yet live outside the repository.** The applet needed a full
-  copy of the repository and a patch. See
-  [Applets outside the core](applets-outside-the-core.md).
+- **Applets could not live outside the repository.** The applet needed a full
+  copy of the repository and a patch. Applets now build against the installed
+  SDK and load from development folders; see [SDK package](../references/sdk-package.md)
+  and [Applets outside the core](applets-outside-the-core.md).
 
 ## Order
 
-1. Building applets outside the repository, and the sidecar service
+1. The sidecar service
 2. The layout grid and the text scale
 3. The tour service
 4. Automation and capture

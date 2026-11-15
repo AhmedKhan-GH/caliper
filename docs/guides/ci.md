@@ -25,13 +25,15 @@ The test executables that link libtorch need its DLLs beside them, because Windo
 Each lane runs these steps:
 1. **Check out,** then `./init-submodules.sh`. The script wipes `third_party/` and the build directories, then initializes the submodules. Some pins can't be fetched from their remotes, and the script falls back to the default branch for those.
 2. **Restore the caches.** This happens after the script, because the script would otherwise delete them.
-3. **Configure** with `cmake --preset release -DCALIPER_WITH_SLANG=OFF` and sccache as the compiler launcher. slang is vendored but nothing links it.
-4. **Build** with `cmake --build cmake-build-release --parallel`.
+3. **Configure** with `cmake --preset release -DCALIPER_WITH_SLANG=OFF` and sccache as the compiler launcher. slang is vendored but nothing links it. `CALIPER_SDK_PROBE_DIR` points the `caliper_sdk_install` test at the runner's temporary folder, outside the checkout.
+4. **Build** with `cmake --build cmake-build-release --parallel`. The core build compiles no applets.
 5. **Test** with `ctest --test-dir cmake-build-release --output-on-failure --timeout 600`.
    - The GPU suites (gfx, export, embed, torch) skip when the runner has no usable device, and ctest reports them as skipped.
    - Set `CALIPER_REQUIRE_GPU=1` in a lane that must have a GPU, to turn those skips into failures.
 6. **On failure,** upload `Testing/Temporary/LastTest.log` as an artifact.
-7. **Always** print `sccache --show-stats`.
+7. **Build the applets against the installed SDK** with `scripts/build_applets_against_sdk.sh`, which installs the SDK from the core build and builds `examples/hello`, `examples/sine_scope` and every scope in its own build folder, with only `-DCMAKE_PREFIX_PATH` pointing at the SDK, as a developer outside the repository would. The Windows lane skips `embed_scope` and `gpt_scope`, because they need curl and zlib, which Windows provides only inside the core build.
+8. **Check that the host names no applet** with `scripts/check_host_names_no_applet.py`, on macOS only.
+9. **Always** print `sccache --show-stats`.
 
 To reproduce a lane locally, run the same configure, build and test commands. The README's [Quick start](https://github.com/AhmedKhan-GH/caliper#quick-start) covers the prerequisites.
 

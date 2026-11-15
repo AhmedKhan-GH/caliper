@@ -28,11 +28,14 @@ From the repository root:
 
 ```bat
 git submodule update --init --recursive
-cmake --preset release
+cmake --preset release -DCALIPER_BUILD_APPLETS=ON
 cmake --build --preset release
 ```
 
-The `release` preset builds into `cmake-build-release` with tests enabled. The first configure downloads libtorch
+The `release` preset builds into `cmake-build-release` with tests enabled. The core build compiles no applets by
+default; `CALIPER_BUILD_APPLETS=ON` builds the scopes into `cmake-build-release\applets\`, which the host scans. On
+Windows this is how `embed_scope` and `gpt_scope` build, because they need the curl and zlib that the core build
+provides. The first configure downloads libtorch
 (about 2 GB) and fetches the Vulkan headers, volk and glslang, which is why no SDK is needed. The build compiles the
 shaders to SPIR-V and embeds them, so a mistake in a shader or in the parameter block layout shows up as a build error.
 

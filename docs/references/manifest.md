@@ -20,12 +20,13 @@ libsine_scope.so         (Linux)
 
 The layout is flat: one folder holds any number of applets, and there are no subfolders or bundles. The loader lists each folder for files that end in `.caliper.toml`, parses each one, and then looks for `<stem>.dylib`, `<stem>.dll` or `<stem>.so`, with or without the `lib` prefix, beside it. A manifest without its library is shown as a failed applet.
 
-The host scans two folders at startup:
+The host scans these folders at startup, in this order:
 
-1. `applets/` under the app-data root: `~/Library/Application Support/Caliper/applets` on macOS and `%APPDATA%\Caliper\applets` on Windows.
-2. `applets/` next to the `caliper` executable.
+1. The development folders given with `--applets <dir>` and in `CALIPER_APPLET_PATH`.
+2. The user applets folder, `applets/` under the app-data root: `~/Library/Application Support/Caliper/applets` on macOS and `%APPDATA%\Caliper\applets` on Windows.
+3. `applets/` next to the `caliper` executable.
 
-Dropping a manifest and its library into either folder installs an applet. See [Debug an applet](../guides/debug-an-applet.md) for the paths on each platform.
+Dropping a manifest and its library into the user applets folder installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) describes. [Folders and environment variables](environment.md) gives the folders on each platform and the variables that change them.
 
 ## Schema
 
@@ -42,15 +43,8 @@ Dropping a manifest and its library into either folder installs an applet. See [
 | `[services]`| `required` | array of strings  | No       | Service IDs the applet cannot run without, e.g. `["caliper.ui.v1"]`.    |
 | `[services]`| `optional` | array of strings  | No       | Service IDs the applet uses if present, e.g. `["caliper.log.v1"]`.      |
 | `[build]`   | `sdk`      | string            | No       | SDK version that built the applet. Written by the build.                |
-| `[build]`   | `ui_stack` | string            | No       | Hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig` the applet was compiled against. Written by the build. |
+| `[build]`   | `ui_stack` | string            | No       | Hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog sources, the `imconfig` and the UI-stack definitions the applet was compiled against. Written by the build. |
 | `[data]`    | `schema`   | integer           | No       | Version of the applet's stored data. Must be an integer ≥ 1.            |
-
-!!! note "Status"
-    The keys below are specified but not parsed yet, so the loader ignores them like any unknown key.
-
-    - The loader does not parse `[compat].torch`.
-    - The loader does not parse the `[build]` table, and `caliper_add_applet()`, which writes it, does not exist yet.
-    - The loader does not parse `[data].schema`.
 
 Notes:
 
@@ -69,17 +63,23 @@ Notes:
   lists the same.
 - **`[compat].torch` must match exactly.** The host refuses the applet when the
   value differs from the version of the libtorch that the host provides, or
-  when the host provides no libtorch. See
+  when the host provides no libtorch. `caliper_add_applet(... TORCH)` writes
+  the key into the built manifest. A value that is not a non-empty string is a
+  manifest error. See
   [Each applet's version and what it requires](../explanations/compatibility.md#each-applets-version-and-what-it-requires).
 - **The `[build]` table is written by the build, never by hand.**
   `caliper_add_applet()` copies the manifest that the author writes to the
-  folder beside the built library and adds the table to that copy. `sdk` is a
-  record for diagnosis, which the host never compares. `ui_stack`, when
-  present, must equal the host's own hash, or the applet is refused. See
+  folder beside the built library and adds the table to that copy, and it
+  refuses a source manifest that already has one
+  ([SDK package](sdk-package.md#the-stamped-manifest)). `sdk` is a record for
+  diagnosis, which the host shows in the Inspector and never compares.
+  `ui_stack`, when present, must be a non-empty string equal to the host's own
+  hash, or the applet is refused. See
   [The SDK version](../explanations/compatibility.md#the-sdk-version).
 - **`[data].schema` versions the applet's stored data.** The host refuses an
   applet whose schema is lower than the highest schema that has opened its
-  data folder. An applet without the key is never checked. See
+  data folder. An applet without the key is never checked, and a value that
+  is not an integer of at least 1 is a manifest error. See
   [The version of each applet's stored data](../explanations/compatibility.md#the-version-of-each-applets-stored-data).
 
 ## Applet ids

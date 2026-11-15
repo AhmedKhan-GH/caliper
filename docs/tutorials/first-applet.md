@@ -8,13 +8,14 @@ lifecycle methods. Continue to `examples/sine_scope/` for a small ML-oriented
 example. The in-tree applets demonstrate larger combinations of services; no
 single exemplar should be treated as covering the entire service catalog.
 
-The whole applet lives in `examples/hello/`:
+The whole applet lives in `examples/hello/`, and it builds the same way in a
+folder of your own outside the repository:
 
 ```
 examples/hello/
 ├── hello.caliper.toml   # the manifest — identity + what the host must provide
 ├── hello.cpp            # the applet — one class + one macro
-└── CMakeLists.txt       # the build — links caliper::sdk + caliper::ui_stack
+└── CMakeLists.txt       # the build — find_package(caliper-sdk) + caliper_add_applet()
 ```
 
 ## 1. The manifest
@@ -135,27 +136,71 @@ value), checkboxes, and the live training controls the ML applets use.
 
 ## 4. Build it
 
-The `CMakeLists.txt` links the two SDK targets and drops the dylib plus a copy
-of the manifest into `cmake-build-release/applets/`, where the host scans for applets:
+An applet builds against the installed SDK, in a folder of its own outside the
+Caliper repository. First build Caliper and install the SDK from your checkout:
 
 ```bash
 cmake --preset release
-cmake --build --preset release --target hello_applet
-ls cmake-build-release/applets/   # libhello.dylib + hello.caliper.toml
+cmake --build --preset release
+cmake --install cmake-build-release --prefix "$HOME/caliper-sdk" --component sdk
 ```
 
-In-tree the build links `caliper::sdk` and `caliper::ui_stack` directly; an
-out-of-tree applet swaps those two lines for a `find_package`/CPM fetch of a
-tagged SDK release under the *same* target names — nothing else changes.
+Then copy hello to a folder of your own and build it there:
 
-## 5. See it in the app
+```bash
+mkdir -p "$HOME/caliper-applets"
+cp -R examples/hello "$HOME/caliper-applets/hello"
+cd "$HOME/caliper-applets/hello"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/caliper-sdk" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ls build/applets/   # libhello.dylib + hello.caliper.toml
+```
+
+The `CMakeLists.txt` is short:
+
+```cmake title="examples/hello/CMakeLists.txt"
+--8<-- "examples/hello/CMakeLists.txt"
+```
+
+When the folder is built on its own, as here, the `if` block declares the
+project and finds the SDK. Inside the Caliper repository the same folder is also
+part of the core build, as the fixture the loader tests load, and the core build
+provides `caliper_add_applet()` itself; an applet of your own can drop the `if`
+and keep its three lines. `caliper_add_applet()` checks the manifest when you
+configure, builds the library against `caliper::sdk` and `caliper::ui_stack`,
+and writes a copy of the manifest beside it with a `[build]` table that records
+the SDK version and the UI-stack hash. [SDK package](../references/sdk-package.md)
+describes the function and the package.
+
+## 5. Load it into Caliper
+
+The host reads its applet folders when it starts. Copy the library and its
+manifest into the user applets folder:
+
+```bash
+mkdir -p "$HOME/Library/Application Support/Caliper/applets"
+cp build/applets/libhello.dylib build/applets/hello.caliper.toml \
+   "$HOME/Library/Application Support/Caliper/applets/"
+```
+
+On Windows the user applets folder is `%APPDATA%\Caliper\applets\`, and the
+library is `hello.dll`. Then start Caliper from your checkout with
+`./cmake-build-release/caliper`.
+
+The release preset also builds its own copy of Hello beside the executable, in
+`cmake-build-release/applets/`, because the loader tests load it. The host
+searches the user applets folder first, so at equal versions it loads your copy
+and lists the other one as `SHADOWED`. The host keeps a library loaded until it
+quits, so after each rebuild copy the two files again and restart Caliper.
+
+## 6. See it in the app
 
 Hello appears as a row in the landing screen's **Instruments** pane; select it
 and press Enter (or double-click the row) to open it. The host's epoch-2 loader
 discovers it by reading its `<stem>.caliper.toml` manifest and the
 `caliper_applet_descriptor` export — the two signals every applet you build this
-way must ship. If the row is missing, check that both are present (the dylib and
-its manifest sit side by side in `cmake-build-release/applets/`); if its status is `REFUSED`,
+way must ship. If the row is missing, check that both are present side by side
+in the user applets folder; if its status is `REFUSED`,
 `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
 [refusal reference](../references/refusals.md)). Esc, or the `esc Home` button,

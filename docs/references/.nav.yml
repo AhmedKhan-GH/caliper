@@ -3,6 +3,7 @@ nav:
   - The applet contract:
       - abi.md
       - manifest.md
+      - sdk-package.md
       - refusals.md
       - sugar.md
       - tensor.md

@@ -47,7 +47,11 @@ The suite runs once per backend that the platform offers:
 
 `caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. Five small executables test the learning and simulation code of single applets: `caliper_sculpt_tests`, `caliper_mesh_tests`, `caliper_em_pic_tests`, `caliper_surface_tests` and `caliper_twin_tests`. They link libtorch and are built only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.
 
-`scripts/test-sdk-install.sh` is not a ctest test. It installs the SDK to a temporary prefix and builds `tests/sdk_install_probe` against it with `find_package(caliper-sdk)`, which proves an outside project can consume the installed headers.
+## Package and boundary tests
+
+`caliper_sdk_install` (label `sdk`) proves that an applet can build against the installed SDK alone. It installs the SDK component of the build into a work folder, copies `tests/sdk_install_probe` and `examples/hello` there, and builds each copy with only `-DCMAKE_PREFIX_PATH` pointing at the install. It then runs the probe, which draws a headless frame with the installed UI stack and calls the fixture host, checks that hello's library and its stamped manifest exist with the expected `[build]` lines, and fails if either build refers to a file in the source tree. `tests/sdk_install_probe/run.cmake` holds the steps, and `CALIPER_SDK_PROBE_DIR` sets the work folder, which CI points outside the checkout. See [SDK package](../references/sdk-package.md).
+
+`caliper_host_names_no_applet` (label `boundary`) runs `scripts/check_host_names_no_applet.py`. The script collects the `[applet]` id and name of every manifest under `applets/` and `examples/`, and every window title that their sources pass to `ImGui::Begin()` as a string literal, and fails if any of them is a whole string literal in the code of `src/` or `include/`. Comments are skipped, so a header may cite an applet id as an example. The test is registered only when CMake finds Python 3.
 
 ## Tests that need a GPU
 

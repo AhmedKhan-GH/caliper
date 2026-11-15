@@ -8,15 +8,20 @@ inspection inside `on_init` / `on_frame` / `on_cleanup`.
 
 ## Attach a debugger to the running host
 
-Build both the host and your applet with debug info (the default `Debug`
-configuration), then launch and attach:
+Build both the host and your applet with debug info, then launch and attach.
+The host builds with the `debug` preset in your Caliper checkout, and the
+applet builds in its own folder against the installed SDK, as in
+[Your first applet](../tutorials/first-applet.md#4-build-it), with
+`-DCMAKE_BUILD_TYPE=Debug`. Load the applet as
+[Load it into Caliper](../tutorials/first-applet.md#5-load-it-into-caliper)
+describes.
 
 **LLDB (command line)**
 
 ```bash
-cmake --build build --target caliper hello_applet
-./build/caliper &                      # note the PID it prints, or use pgrep
-lldb -p "$(pgrep -f 'build/caliper')"
+cmake --preset debug && cmake --build --preset debug      # in the Caliper checkout
+./cmake-build-debug/caliper &          # note the PID it prints, or use pgrep
+lldb -p "$(pgrep -f 'cmake-build-debug/caliper')"
 ```
 
 At the `(lldb)` prompt set a breakpoint by symbol or file:line and continue —
@@ -73,8 +78,8 @@ malformed manifest, an `id`/`version` that disagrees with the descriptor, an
 unmet required service, or an ABI-epoch mismatch. The same rows name the fault
 for applets that crashed and were quarantined, and the Activity pane logs each
 `launch failed` and `quarantined` event with the applet's name. If an applet
-doesn't appear at all, check the two discovery signals side by side in
-`build/applets/`: the dylib and its `<stem>.caliper.toml`.
+doesn't appear at all, check the two discovery signals side by side in the
+folder you loaded it from: the dylib and its `<stem>.caliper.toml`.
 
 A background job that faults or throws prints one line on the host's stderr,
 `[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`, and the jobs

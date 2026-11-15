@@ -7,14 +7,14 @@ curve settling through the scattered points in real time, and its weight matrix 
 heatmap. Synthetic data keeps it self-contained (no downloads); the last
 two stages show where real datasets and the remaining services attach.
 
-**SineScope is built in this repo** — `examples/sine_scope/`, the SineScope
-row in the landing screen's Instruments pane. Every code block below is
-embedded **verbatim from that source file**; the docs build fails if they
-drift. Run the finished thing first if you like:
+**SineScope lives in this repo** — `examples/sine_scope/`. Every code block
+below is embedded **verbatim from that source file**; the docs build fails if
+they drift. The release preset builds a copy beside the executable, because the
+embedding tests load it, so you can run the finished thing first if you like:
 
 ```bash
 cmake --preset release
-cmake --build --preset release --target sine_scope
+cmake --build --preset release
 CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper
 ```
 
@@ -30,12 +30,38 @@ so the applet still runs without the bridge:
 --8<-- "examples/sine_scope/sine_scope.caliper.toml"
 ```
 
-The CMake file is hello's plus the torch lines — this is the *entire* ML
-build delta:
+The CMake file is hello's plus one word, `TORCH` — this is the *entire* ML
+build delta. `TORCH` links the libtorch the host was built with, which the SDK
+names, and stamps its version into the built manifest, so the host refuses the
+applet if it ever runs beside another libtorch:
 
 ```cmake title="examples/sine_scope/CMakeLists.txt"
 --8<-- "examples/sine_scope/CMakeLists.txt"
 ```
+
+### Build and load your copy
+
+Build your copy in a folder of its own against the installed SDK, as
+[Your first applet](first-applet.md#4-build-it) does for hello. The SDK must
+come from a core build with libtorch, which the release preset is:
+
+```bash
+mkdir -p "$HOME/caliper-applets"
+cp -R examples/sine_scope "$HOME/caliper-applets/sine_scope"
+cd "$HOME/caliper-applets/sine_scope"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/caliper-sdk" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+mkdir -p "$HOME/Library/Application Support/Caliper/applets"
+cp build/applets/libsine_scope.dylib build/applets/sine_scope.caliper.toml \
+   "$HOME/Library/Application Support/Caliper/applets/"
+```
+
+On Windows the user applets folder is `%APPDATA%\Caliper\applets\`, and the
+library is `sine_scope.dll`. The host searches the user applets folder before
+the folder beside the executable, so at equal versions it loads your copy
+rather than the one the release preset built. It reads its folders when it
+starts and keeps a library loaded until it quits, so after each rebuild copy the
+two files again and restart Caliper.
 
 ## Stage 1 — the model and the state spine
 
@@ -124,7 +150,7 @@ Everything above holds; only acquisition changes. The rules:
 fetch **inside the job**, cache in `host.data_dir()`, write atomically
 (`.tmp` + rename), self-heal corrupt caches, make the transfer cancellable
 via curl's progress callback, and add `CURL::libcurl`/`ZLIB::ZLIB` to the
-CMake links.
+CMake links, found with `find_package(CURL)` and `find_package(ZLIB)`.
 
 ## Stage 6 — the rest of the framework, one line each
 

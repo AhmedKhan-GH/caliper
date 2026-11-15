@@ -10,7 +10,7 @@ The terms below are used across these pages with one meaning each.
 
 **libcaliper.** The host core as a library behind a small C interface, so that another program can run the applet canvas inside a view it owns. It owns the applet canvas, the renderer and the one libtorch of the process. See [Embedding Caliper](embedding.md).
 
-**SDK.** The headers in `sdk/include/caliper`: the C ABI, the service tables, the interchange types, the C++ sugar and the adapters. An applet is built against the SDK. See the [ABI](abi.md).
+**SDK.** The `caliper-sdk` package that applets build against: the headers in `sdk/include/caliper` (the C ABI, the service tables, the interchange types, the C++ sugar and the adapters), the pinned UI-stack sources, the fixture host and `caliper_add_applet()`. See [SDK package](sdk-package.md) and the [ABI](abi.md).
 
 **Service.** A named, immutable C function table that the host vends through `get_service("caliper.x.vN")`. The [Service catalog](services.md) lists them all.
 

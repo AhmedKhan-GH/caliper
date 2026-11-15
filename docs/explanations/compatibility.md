@@ -1,6 +1,6 @@
 # Compatibility and epochs
 
-This page explains how the ABI, the services, the SDK, the applets and their stored data are versioned, and how each changes without breaking applets that are already built. The ABI and the negotiation at load are implemented, and the start of [Versioning](#versioning) says which parts of the versioning contract are enforced. The loader does not download dependencies.
+This page explains how the ABI, the services, the SDK, the applets and their stored data are versioned, and how each changes without breaking applets that are already built. Everything this page describes is implemented. The loader does not download dependencies.
 
 The host is a **service registry, not a struct of fields**. Applets obtain capabilities by name through a single extension point:
 
@@ -56,15 +56,6 @@ On Windows the dynamic CRT is the default, so that the CRT state of the host and
 
 Four layers are versioned separately, so that a change in one rarely forces a change in another.
 
-!!! note "Status"
-    The epoch check, the `min_host` check, both required-services checks and the descriptor's agreement with its manifest are enforced today. The following parts are specified on this page and not yet enforced:
-
-    - The loader does not read `[compat].torch`.
-    - The loader does not read the `[build]` table, and `caliper_add_applet()`, which writes it, does not exist yet.
-    - The loader lists every copy of an applet id as its own entry instead of choosing one.
-    - The loader searches no development paths, only the user applets folder and the folder beside the executable.
-    - The loader does not read `[data].schema` and keeps no data-schema stamp.
-
 | Layer | What it versions | Scheme | Declared in |
 |---|---|---|---|
 | [The host ABI epoch and service revisions](#the-host-abi-epoch-and-service-revisions) | The entry points, the `CaliperHost` layout and the UI-stack pin; each service table | An integer epoch, 2 today; a service id with a revision suffix | `[compat].abi_epoch` and `[services]` |
@@ -98,10 +89,10 @@ Under these rules an applet built years ago keeps running on a new host, and a n
 
 The SDK is the installed `caliper-sdk` package, and it is versioned by semver. A patch version fixes the SDK without changing what it offers. A minor version adds services, sugar or build helpers within the same epoch, so an applet that builds with one minor version builds with every later one. The major version changes when the epoch changes, so each major version of the SDK builds applets for one epoch. `find_package(caliper-sdk <version>)` accepts only an installed SDK with the same major version, at or above the one requested.
 
-The build records how an applet was built. `caliper_add_applet()` copies the manifest that the author writes to the folder beside the built library and adds a `[build]` table to the copy. Nobody writes the `[build]` table by hand. It holds two keys:
+The build records how an applet was built. `caliper_add_applet()` copies the manifest that the author writes to the folder beside the built library and adds a `[build]` table to the copy ([SDK package](../references/sdk-package.md#the-stamped-manifest)). Nobody writes the `[build]` table by hand. It holds two keys:
 
 - `[build].sdk` is the SDK version that built the applet. It is a record for diagnosis, for example when reading a bug report, and the host never compares it. Compatibility is decided by the epoch, the UI-stack hash and service negotiation, not by comparing SDK versions. An applet built with a newer minor version therefore runs on any host of its epoch that serves the services it requires, and a host that lacks one of them refuses the applet by naming that service.
-- `[build].ui_stack` is a hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig` that the applet was compiled against. An applet shares the host's ImGui context, so a mismatch that the epoch number does not catch, such as a changed `imconfig`, would crash in ways that are hard to trace. When the key is present and differs from the host's own hash, the host refuses the applet before it opens the library. A manifest without the key is not checked.
+- `[build].ui_stack` is a hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog sources, the `imconfig` and the UI-stack definitions that the applet was compiled against ([The UI-stack hash](../references/sdk-package.md#the-ui-stack-hash)). An applet shares the host's ImGui context, so a mismatch that the epoch number does not catch, such as a changed `imconfig`, would crash in ways that are hard to trace. When the key is present and differs from the host's own hash, the host refuses the applet before it opens the library. A manifest without the key, or a host built without a hash, is not checked.
 
 ### Each applet's version and what it requires
 
@@ -115,17 +106,17 @@ An applet's `[applet].version` is strict semver, chosen by its author, and the d
 | Optional services | `[services].optional` | Always. The applet probes these services at run time and falls back when one is missing. |
 | libtorch | `[compat].torch` | The value equals the version of the libtorch that the host provides. Applets that do not link libtorch leave the key out. |
 
-A process loads one libtorch, which the host provides for every applet in it (see [Embedding](architecture.md#embedding)), and the libtorch C++ ABI differs between versions. An applet that links libtorch can therefore run only beside the exact version it was built against. A host that provides no libtorch, such as one built with `CALIPER_WITH_TORCH=OFF`, refuses every applet that sets `[compat].torch`.
+A process loads one libtorch, which the host provides for every applet in it (see [Embedding](architecture.md#embedding)), and the libtorch C++ ABI differs between versions. An applet that links libtorch can therefore run only beside the exact version it was built against. A host that provides no libtorch, such as one built with `CALIPER_WITH_TORCH=OFF`, refuses every applet that sets `[compat].torch`. `caliper_add_applet(... TORCH)` writes the key into the built manifest, with the version of the libtorch that the SDK names.
 
 #### Several copies of one applet
 
-Several copies of one applet id can be installed at once, for example a copy shipped with the app, a newer one in the user applets folder and a development build. The host loads one copy per id. It takes the highest version whose library is present and that passes every check made before the library is opened: the requirements above, the [UI-stack hash](#the-sdk-version) and the [data schema](#the-version-of-each-applets-stored-data). When the newest copy is refused, the host falls back to the next highest, and so on. The choice uses only those checks, so choosing a copy never runs applet code.
+Several copies of one applet id can be installed at once, for example a copy shipped with the app, a newer one in the user applets folder and a development build. The host loads one copy per id. It takes the highest version whose library is present and that passes every check made before the library is opened: the requirements above, the [UI-stack hash](#the-sdk-version) and the [data schema](#the-version-of-each-applets-stored-data). When the newest copy is refused, the host falls back to the next highest, and so on. The choice uses only those checks, so choosing a copy never runs applet code. The landing screen still lists every copy: a refused copy with its reason, and each other copy that passed as `SHADOWED`, with a text that names the chosen copy.
 
 The host searches in this order:
 
-1. The development paths (see [Loading during development](../plans/applets-outside-the-core.md#loading-during-development)).
+1. The development folders: those given with `--applets <dir>`, in order, then those in `CALIPER_APPLET_PATH` (see [Folders and environment variables](../references/environment.md)).
 2. The user applets folder.
-3. The applets shipped with the app.
+3. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 
 Version decides, and the search order only breaks ties between equal versions, in favour of the copy found first. A development build therefore replaces an installed copy only when its version is at least as high, and a user-installed update replaces a shipped copy without changing the app.
 
@@ -134,7 +125,7 @@ Version decides, and the search order only breaks ties between equal versions, i
 Each applet owns a data folder, `data/<id>/` under the app-data root, which the host passes to it as `applet_data_dir`. The folder is named by the applet's id, so every version of the applet opens the same folder. `[data].schema` is an integer of at least 1 that versions what the applet stores there.
 
 - The applet migrates its own data upward in `initialize()`. A version that finds data written under a lower schema converts it before using it. The host never migrates the data.
-- The host records the highest schema that has opened the folder in a small stamp file inside it. It updates the stamp before it calls `initialize()`, because migration begins there, so data that a failed `initialize()` left half-migrated is still marked. The stamp belongs to the host, and the applet does not write or remove it.
+- The host records the highest schema that has opened the folder in a small stamp file inside it, `.caliper-data.toml`. It raises the stamp before it calls `create()` and `initialize()`, because migration begins there, so data that a failed `initialize()` left half-migrated is still marked. The stamp belongs to the host, and the applet does not write or remove it.
 - The host refuses an applet whose declared schema is lower than the recorded one, before it opens the library. Together with the fallback in [Several copies of one applet](#several-copies-of-one-applet), this means that falling back to an older version of an applet never opens data that the older version cannot read.
 - An applet that declares no schema is never checked and leaves the stamp unchanged.
 
@@ -155,14 +146,18 @@ Sugar that is compiled into the applet, such as the `caliper::viz` components, n
 
 ## Negotiation at load
 
-The checks run in order, and the first five happen **before `dlopen`**. The first failure becomes the applet's status on the landing screen, with the reason (see [Refusal messages](../references/refusals.md)), instead of a loader crash:
+The checks run in order, and the first nine happen **before `dlopen`**. The first failure becomes the applet's status on the landing screen, with the reason (see [Refusal messages](../references/refusals.md)), instead of a loader crash:
 
 1. manifest parses, with a valid, path-safe `id`
 2. platform binary present
 3. the manifest's `abi_epoch` equals the host's epoch
 4. `min_host` satisfied
-5. required services available (the manifest's list)
-6. *then* `dlopen`
-7. descriptor sanity — id / version / epoch agree with the manifest
-8. required services available (the binary's own list)
-9. `create` and `initialize`
+5. `[build].ui_stack` equals the host's UI-stack hash, when both are present
+6. `[compat].torch` equals the host's libtorch version, when the key is present
+7. required services available (the manifest's list)
+8. `[data].schema` is not lower than the recorded schema, when the key is present
+9. of the copies of one id that pass, the highest version is chosen
+10. *then* `dlopen`, after the data-schema check runs again
+11. descriptor sanity — id / version / epoch agree with the manifest
+12. required services available (the binary's own list)
+13. the data-schema stamp is raised, then `create` and `initialize` run

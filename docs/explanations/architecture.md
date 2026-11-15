@@ -1,16 +1,16 @@
 # Architecture
 
-Caliper has four layers, with a single dependency rule: arrows point down only. The repository holds all of them. The applets are separate shared libraries that the host loads at run time.
+Caliper has four layers, with a single dependency rule: arrows point down only. The repository holds all of them, but the core build compiles no applet. The applets are separate shared libraries that the host loads at run time.
 
 ## Layers
 
 ```text
 +------------------------------------------------------------------+
 | APPLETS  shared libraries, each beside a <stem>.caliper.toml      |
-|   embed, field, flow, gpt, instance, mesh, pulse, sculpt and      |
-|   twin scopes (the nine applets on main)                          |
+|   built against the installed SDK; the nine scopes in applets/    |
+|   and the two tutorial applets in examples/                       |
 +------------------------------------------------------------------+
-| SDK  sdk/include/caliper (the contract)                           |
+| SDK  the caliper-sdk package (sdk/ in this repository)            |
 |   abi.h          frozen C entry ABI, versioned by an epoch        |
 |   tensor.h       CaliperTensor interchange type                   |
 |   arrow_c.h      Arrow C Data Interface                           |
@@ -18,8 +18,10 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 |   caliper.hpp    header-only C++ sugar                            |
 |   adapters/      header-only torch and allocation helpers         |
 |   sdk/testing    the fixture host                                 |
+|   sdk/cmake      the CMake package and caliper_add_applet()       |
 +------------------------------------------------------------------+
-| UI STACK  third_party, pinned ImGui, ImPlot and ImPlot3D          |
+| UI STACK  pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog,     |
+|   shipped as sources in the SDK                                   |
 +------------------------------------------------------------------+
 | HOST  the caliper executable and libcaliper                       |
 |   window and frame loop, HostRenderer, applet loader,            |
@@ -31,7 +33,7 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 
 **Only `caliper.ui.v1` may know the toolkit or the renderer.** Every other service describes data, such as tensors, tables, geometry and files, and never an ImGui, Metal, Vulkan or OpenGL type. That keeps the services usable by a host that draws with a different toolkit, and it is why a renderer change needs no applet rebuild. The one service that hands applets the ImGui, ImPlot and ImPlot3D contexts is [`caliper.ui.v1`](../references/service-ui-v1.md).
 
-The repository holds the host, the SDK and the applets together. A plan to move the applets out of the core, with the host and the SDK versioned on their own, is in [Applets outside the core](../plans/applets-outside-the-core.md).
+The applets still live in this repository, but the core build compiles none of them, and the `caliper` target depends on none. Each applet builds against the installed SDK package with `find_package(caliper-sdk)` and `caliper_add_applet()`, as an applet outside the repository would ([SDK package](../references/sdk-package.md)). `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders inside the core build, and `examples/hello` and `examples/sine_scope` build with the tests, because the tests load them. Moving the applets to their own repositories is planned in [Applets outside the core](../plans/applets-outside-the-core.md).
 
 ## Platform rules
 

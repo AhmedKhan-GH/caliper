@@ -36,8 +36,8 @@ Third-party code is vendored as git submodules under `third_party/`. Initialize 
 | Path | Contents |
 |---|---|
 | `src/`, `include/` | the host, the embeddable core and its C interfaces |
-| `sdk/` | the applet SDK: the ABI, the service headers, the C++ sugar, the adapters and the test fixture host |
-| `applets/`, `examples/` | the applets built in this repository, and the tutorial and embedding examples |
+| `sdk/` | the applet SDK: the ABI, the service headers, the C++ sugar, the adapters, the test fixture host and the `caliper-sdk` CMake package |
+| `applets/`, `examples/` | the first-party applets and the tutorial and embedding examples; each applet builds against the installed SDK, and the core build compiles none of them |
 | `python/` | the `caliper` Python package |
 | `tests/` | the test suites, including the pixel-exact `tests/gfx` suite |
 | `docs/` | the documentation, published as the docs site (`mkdocs.yml`) |

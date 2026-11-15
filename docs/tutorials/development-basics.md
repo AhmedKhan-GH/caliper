@@ -31,15 +31,16 @@ toolchains and system prerequisites must still be installed; see the root
 
 | Library | Comes from | You link it via | Notes |
 |---|---|---|---|
-| SDK headers (ABI, services, sugar, adapters) | `sdk/include/` in this repo | `caliper::sdk` | Header-only INTERFACE target — nothing compiles into the SDK itself |
-| ImGui (docking) + ImPlot + ImPlot3D + FileDialog | `third_party/` submodules, **pinned** | `caliper::ui_stack` | Compiled once in-tree. **Never bring your own copy** — the pin is part of the ABI (see [Compatibility and epochs](../explanations/compatibility.md)): your applet and the host must agree on ImGui's memory layout byte-for-byte |
-| libtorch | Downloaded by CMake into `third_party/` (`libtorch/` on macOS and Linux, `libtorch-release/` or `libtorch-debug/` on Windows) | `"${TORCH_LIBRARIES}"` + the rpath block | Only applets and torch tests link it. The `caliper` executable and `libcaliper` do not ([Platform rules](../explanations/architecture.md#platform-rules)). |
+| SDK headers (ABI, services, sugar, adapters) | The installed `caliper-sdk` package (`include/caliper/`), from `sdk/include/` in this repo | `caliper::sdk` | Header-only INTERFACE target — nothing compiles into the SDK itself |
+| ImGui (docking) + ImPlot + ImPlot3D + FileDialog | The pinned sources in the SDK package, the same ones the host was built from | `caliper::ui_stack` | Compiled inside your applet's build, with no window or graphics backend. **Never bring your own copy** — the pin is part of the ABI (see [Compatibility and epochs](../explanations/compatibility.md)): your applet and the host must agree on ImGui's memory layout byte-for-byte |
+| libtorch | The libtorch the core build downloaded, which the SDK names | `caliper_add_applet(... TORCH)` | It links the host's libtorch and no other version, and stamps that version into the manifest. The `caliper` executable and `libcaliper` do not link it ([Platform rules](../explanations/architecture.md#platform-rules)). |
 | curl, zlib | macOS system SDK | `CURL::libcurl`, `ZLIB::ZLIB` | Only if you download/decompress data. Data acquisition is applet business — the host has no downloader |
 | DuckDB | host-internal | **you can't** | Deliberately unreachable. You get its powers through services: `metrics.v1`, `artifacts.v1`, `data.v1`. No DuckDB type ever crosses the ABI |
 
-The division is deliberate: what must be *shared* (UI stack) is pinned and
-provided; what is *yours* (torch, curl) you link privately; what is
-*persistent* (DuckDB) hides behind frozen service tables.
+The division is deliberate: what must be *shared* (UI stack, libtorch) is
+pinned and provided; what is *yours* (curl) you link privately; what is
+*persistent* (DuckDB) hides behind frozen service tables. [SDK package](../references/sdk-package.md)
+describes what the installed SDK holds.
 
 ## Anatomy of an applet
 
@@ -49,7 +50,7 @@ Three files, one folder. This is the entire footprint:
 examples/hello/
 ├── hello.caliper.toml    the manifest — checked BEFORE your code loads
 ├── hello.cpp             your applet class + the CALIPER_APPLET macro
-└── CMakeLists.txt        ~12 lines (hello) to ~40 (with torch)
+└── CMakeLists.txt        find_package(caliper-sdk) + caliper_add_applet()
 ```
 
 - **Manifest**: id (reverse-DNS), name, version, summary, required/optional
@@ -65,14 +66,14 @@ examples/hello/
   worker-published state. `on_cleanup()` — cancel jobs, bounded-wait, release
   textures, return.
 - **CMakeLists**: copy hello's verbatim for a UI-only applet, or SineScope's
-  (`examples/sine_scope/`) for an ML applet. The only parts you edit: target name, source
-  files, manifest filename.
+  (`examples/sine_scope/`) for an ML applet, which adds `TORCH`. The only parts you
+  edit: project and target name, source files, manifest filename.
 
 ### The smallest complete applet, in full
 
-This is everything — all three files. It is **built in this repo** as
-`examples/hello/` (the Hello row in the landing screen's Instruments
-pane), and the listings
+This is everything — all three files. They live in this repository as
+`examples/hello/`, which builds on its own against the installed SDK and inside
+the core build as the fixture the loader tests load, and the listings
 below are the actual files, embedded verbatim — they cannot drift from what
 compiles. [Your first applet](first-applet.md) walks this same file line by
 line:
@@ -98,35 +99,44 @@ training job and the bridge — that path is
 ## The development loop
 
 ```bash
-# 1. create — the applets/* glob auto-discovers it (CONFIGURE_DEPENDS);
-#    no root CMake edits, just build:
-mkdir applets/my_applet   # + the three files (copy examples/hello/ to start)
-
-# 2. build — your dylib + manifest land in cmake-build-release/applets/
+# 1. once, in your Caliper checkout: build the host and install the SDK
 cmake --preset release
-cmake --build --preset release --target my_applet
+cmake --build --preset release
+cmake --install cmake-build-release --prefix "$HOME/caliper-sdk" --component sdk
 
-# 3. run — it appears as a row in the landing screen's Instruments pane
+# 2. create: a folder of your own, outside the checkout (copy examples/hello/ to start)
+mkdir -p "$HOME/caliper-applets"
+cp -R examples/hello "$HOME/caliper-applets/my_applet"
+
+# 3. build: the library and its stamped manifest land in build/applets/
+cd "$HOME/caliper-applets/my_applet"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/caliper-sdk" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+A copy of hello still calls itself hello. Before you build it as your own
+applet, give it its own id and stem: the `id` and `name` in the manifest and
+the same fields in the `CALIPER_APPLET` macro, then the target, `OUTPUT_NAME`
+and manifest file name in `CMakeLists.txt`.
+
+### Loading your applet
+
+The host reads its applet folders when it starts, and it keeps a library loaded
+until it quits. Copy the library and its manifest from `build/applets/` into the
+user applets folder, `~/Library/Application Support/Caliper/applets/` on macOS
+or `%APPDATA%\Caliper\applets\` on Windows, then start Caliper from your
+checkout. After each rebuild, copy the two files again and restart Caliper.
+
+```bash
 ./cmake-build-release/caliper
-
-# 4. iterate fast — skip the landing screen every rebuild:
+# skip the landing screen on every restart:
 CALIPER_AUTOLAUNCH=dev.example.my-applet ./cmake-build-release/caliper
 #    (CALIPER_EXIT_AFTER=<sec> exists too — clean-exit soak for CI;
 #     CALIPER_WINDOW_SIZE=1440x900 fixes the window size for screenshots)
 ```
 
-!!! warning "`--clean-first` on a single applet target prunes its siblings"
-    The applet list is a `CONFIGURE_DEPENDS` glob, so **all** applets are
-    configured but only the target you name gets built. A partial
-    `cmake --build --preset release --target my_applet --clean-first` cleans the whole
-    build tree first, then rebuilds only `my_applet` — leaving the other
-    applets' dylibs and manifests missing from `cmake-build-release/applets/` until a full
-    `cmake --build --preset release` restores them. If the Instruments pane suddenly
-    lists only one applet, this is why: rebuild without `--clean-first`, or
-    build the default target to bring every applet back.
-
-In CLion the same works via the CMake tool window — reload the project once
-after creating the folder, then the `my_applet` target exists.
+In CLion, open the applet's folder as a project of its own and add
+`-DCMAKE_PREFIX_PATH=<sdk prefix>` to its CMake options.
 
 **Testing without a window:** the fixture host
 (`caliper::sdk_testing`, `<caliper/fixture_host.h>`) fakes `get_service`

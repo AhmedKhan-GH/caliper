@@ -51,7 +51,7 @@
 # 1. Initialize submodules
 git submodule update --init --recursive
 
-# 2. Configure and build (the applets download LibTorch)
+# 2. Configure and build (the configure step downloads LibTorch)
 cmake --preset release
 cmake --build --preset release
 
@@ -60,7 +60,12 @@ cmake --build --preset release
 .\cmake-build-release\caliper.exe        # Windows
 ```
 
-`--preset release-notorch` builds the host without LibTorch or the applets, into
+The core build compiles no applets. Applets build against the installed SDK
+(`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in
+its own folder; [Your first applet](docs/tutorials/first-applet.md) walks through
+it, and [SDK package](docs/references/sdk-package.md) describes the package.
+
+`--preset release-notorch` builds the host without LibTorch, into
 `cmake-build-notorch/`. The presets need CMake 3.25 or later.
 
 ## Prerequisites
@@ -88,13 +93,13 @@ cmake --build --preset release
 | `USE_CUDA` | ON | Build the CUDA support. It turns itself OFF when no CUDA toolkit is found, and the `release-notorch` preset sets it OFF. |
 | `USE_MPS` | ON on macOS when the Metal compiler is found, otherwise OFF | Build the Metal Performance Shaders support |
 | `BUILD_TESTS` | OFF | Build the test suites. The `release`, `debug` and `release-notorch` presets set it ON. |
-| `CALIPER_WITH_TORCH` | ON | Download and link LibTorch for the applets and the adapter tests |
-| `CALIPER_BUILD_APPLETS` | ON | Build `applets/`; forced OFF without LibTorch |
+| `CALIPER_WITH_TORCH` | ON | Download LibTorch for the adapter tests and for the SDK, which names it for the applets that link it |
+| `CALIPER_BUILD_APPLETS` | OFF | Also build `applets/` inside the core build; forced OFF without LibTorch |
 | `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension (nanobind) |
 | `CALIPER_WITH_SLANG` | ON | Configure the vendored slang library |
 | `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp library |
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
-| `CALIPER_BUILD_EXAMPLES` | ON | Build the example applets in `examples/` (`hello` and `sine_scope`) |
+| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applets `hello` and `sine_scope` build with the tests instead. |
 | `CALIPER_BUILD_OPENGLLAMA` | OFF | Build the archived opengllama applet; needs `CALIPER_WITH_LLAMA` |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
@@ -133,7 +138,7 @@ rm -rf third_party/libtorch-release       # or third_party/libtorch on macOS and
 cmake --preset release -DUSE_CUDA=OFF
 ```
 
-To build without LibTorch, use the `release-notorch` preset or set `CALIPER_WITH_TORCH=OFF`. That skips the download, the applets and the torch tests.
+To build without LibTorch, use the `release-notorch` preset or set `CALIPER_WITH_TORCH=OFF`. That skips the download and the torch tests, and the SDK installed from such a build cannot build applets that link LibTorch.
 
 At run time LibTorch chooses the device. The same archive runs on the CPU when no GPU backend is available, and a CUDA archive on a machine without a usable GPU or driver falls back to the CPU.
 
@@ -153,7 +158,7 @@ caliper/
 ├── src/                        # The caliper executable (main.cpp) and the host (src/host/)
 ├── sdk/                        # The applet SDK: headers, CMake package, test fixtures
 ├── include/caliper/            # The embedding and live-session C headers
-├── applets/                    # Applets built with the host (plus legacy/ and legacy-dev/)
+├── applets/                    # First-party applets, each built against the SDK (plus legacy/ and legacy-dev/)
 ├── examples/                   # hello, sine_scope, embed_host and the Python example
 ├── python/                     # The caliper Python package and its extension
 ├── tests/                      # Test suites

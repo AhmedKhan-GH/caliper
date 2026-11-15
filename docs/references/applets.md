@@ -1,14 +1,17 @@
 # Applets
 
-This page lists the applets that the `main` branch builds. Each entry gives the
+This page lists the applets on the `main` branch. Each entry gives the
 applet's manifest id, what it shows, the service revisions it asks for and what
 it does when a capability is missing. The service lists come from each
 applet's `*.caliper.toml`; every applet also requires `caliper.ui.v1` and
 `caliper.log.v1`, which the entries leave out. The manifest format is in
 [Manifest](manifest.md), and the services are in the [catalog](services.md).
 
-Nine applets live under `applets/` and build by default. Two tutorial applets and
-an embedding example live under `examples/`.
+Nine applets live under `applets/`. Two tutorial applets and an embedding example
+live under `examples/`. The core build compiles no applet: each applet folder
+builds on its own against the installed SDK, as [SDK package](sdk-package.md)
+describes, and `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders
+inside the core build.
 
 Several applets share one pattern, described in
 [Zero-copy](../explanations/zero-copy.md). A worker thread computes with torch and
@@ -213,8 +216,9 @@ actually drew the current frame, and says which fallback ran when it did not
 
 ## Tutorial applets
 
-These live in `examples/` and are built when `CALIPER_BUILD_EXAMPLES` is on, which
-is the default.
+These live in `examples/`. Each builds on its own against the installed SDK, and
+the core build also builds them with the tests, because the tests load them:
+Hello always, and SineScope in a build with libtorch.
 
 - **Hello** (`dev.caliper.hello`, `examples/hello`). A UI-only applet that shows
   the framebuffer size and DPI scale. It requires only `caliper.ui.v1` and
