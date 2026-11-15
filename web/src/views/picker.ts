@@ -1,12 +1,18 @@
 // The data view picker in a view's header, built from what the view offers:
 // a source menu when there are several sources, and one control per dimension
 // that chooses an index, "all" (the dimension is kept) or a reduction over it.
+// A source with no more dimensions than the view's kind must keep has nothing
+// to choose but "all", so it gets no dimension controls, and a view with one
+// such source gets no picker.
 
 import { KIND_IDS, REDUCTIONS, type DataView, type Reduction, type SourceInfo, type ViewEntry } from '../protocol/messages.js';
 
 type Choice = { kind: 'all' } | { kind: 'index'; i: number } | { kind: 'reduce'; op: Reduction };
 
 const MAX_OPTIONS = 256;
+
+/** The dimensions a data view of each kind keeps at the least (wire protocol v3, "Resolving a data view"). */
+const MIN_KEPT: Record<number, number> = { [KIND_IDS.heatmap]: 2, [KIND_IDS.image]: 2, [KIND_IDS.points]: 1 };
 
 export class Picker {
   readonly el = document.createElement('span');
@@ -75,7 +81,8 @@ export class Picker {
   private render(): void {
     this.el.replaceChildren();
     const e = this.entry;
-    if (!e || !this.source || (e.sources.length < 2 && this.source.dims.length === 0)) return;
+    const choosable = !!this.source && this.source.dims.length > (MIN_KEPT[e?.kind ?? 0] ?? 0);
+    if (!e || !this.source || (e.sources.length < 2 && !choosable)) return;
     if (e.sources.length > 1) {
       const sel = document.createElement('select');
       sel.className = 'source';
@@ -92,7 +99,7 @@ export class Picker {
       });
       this.el.append(sel);
     }
-    for (const d of this.source.dims) {
+    for (const d of choosable ? this.source.dims : []) {
       const wrap = document.createElement('label');
       wrap.className = 'dim';
       const name = document.createElement('span');
