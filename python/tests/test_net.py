@@ -32,11 +32,28 @@ from websockets.exceptions import ConnectionClosed  # noqa: E402
 MPS = torch.backends.mps.is_available()
 DEVICES = ["cpu", pytest.param("mps", marks=pytest.mark.skipif(not MPS, reason="no MPS device"))]
 
+try:
+    from caliper import _netio  # noqa: F401
+    NATIVE = True
+except ImportError:
+    NATIVE = False
+# Every test with a server runs on both senders: the native one (caliper._netio,
+# when it is built) and the pure-Python one.
+MODES = ["python", pytest.param("native", marks=pytest.mark.skipif(
+    not NATIVE, reason="caliper._netio is not built (python scripts/build_netio.py)"))]
+
+
+@pytest.fixture(params=MODES)
+def mode(request, monkeypatch):
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    monkeypatch.setenv("CALIPER_NETIO", "1" if request.param == "native" else "0")
+    return request.param
+
 
 @pytest.fixture
-def server(monkeypatch):
-    monkeypatch.setenv("CALIPER_SESSION", "0")
+def server(mode):
     s = caliper.serve(port=0)
+    assert (type(s).__name__ == "NativeServer") == (mode == "native")
     yield s
     s.close()
 
@@ -58,7 +75,7 @@ class Client:
 
     async def __aenter__(self):
         kw = {"origin": self.origin} if self.origin else {}
-        self.ws = await connect(self.url, max_size=None, compression=None, ping_interval=None,
+        self.ws = await connect(self.url, max_size=None, compression=None, ping_interval=None, close_timeout=1,
                                 max_queue=self.max_queue, **kw).__aenter__()
         await self.send(w.Hello("viewer", software={"name": "test", "version": "0"}))
         self.welcome = await self.expect(w.Welcome)
@@ -178,8 +195,7 @@ def test_serve_twice_and_close(server):
     s2.close()
 
 
-def test_context_manager(monkeypatch):
-    monkeypatch.setenv("CALIPER_SESSION", "0")
+def test_context_manager(mode):
     with caliper.serve() as s:
         assert not s.closed
     assert s.closed and caliper._server is None
@@ -297,20 +313,25 @@ def test_first_message_must_be_hello(server):
     assert run(go()) == w.CLOSE_PROTOCOL_ERROR
 
 
-def test_handshake_timeout_4003(server, monkeypatch):
+def test_handshake_timeout_4003(mode, monkeypatch):
     monkeypatch.setattr(w, "HANDSHAKE_TIMEOUT_MS", 300)
+    server = caliper.serve()
 
     async def go():
         async with connect(server.stream_url, max_size=None) as ws:
             with pytest.raises(ConnectionClosed):
                 await asyncio.wait_for(ws.recv(), 5)
             return ws.close_code
-    assert run(go()) == w.CLOSE_HANDSHAKE_TIMEOUT
+    try:
+        assert run(go()) == w.CLOSE_HANDSHAKE_TIMEOUT
+    finally:
+        server.close()
 
 
-def test_idle_ping_then_4004(server, monkeypatch):
+def test_idle_ping_then_4004(mode, monkeypatch):
     monkeypatch.setattr(w, "PING_INTERVAL_MS", 200)
     monkeypatch.setattr(w, "IDLE_TIMEOUT_MS", 600)
+    server = caliper.serve()
 
     async def go():
         async with Client(server) as c:
@@ -320,7 +341,10 @@ def test_idle_ping_then_4004(server, monkeypatch):
                 while True:
                     await c.ws.recv()
             return c.ws.close_code
-    assert run(go()) == w.CLOSE_IDLE_TIMEOUT
+    try:
+        assert run(go()) == w.CLOSE_IDLE_TIMEOUT
+    finally:
+        server.close()
 
 
 def test_handshake_sessions_views_ping(server):
@@ -357,54 +381,44 @@ def _wait(pred, timeout=5.0):
 # ---------------------------------------------------------------------------
 # static files
 # ---------------------------------------------------------------------------
-def test_viewer_page_without_assets(server, monkeypatch, tmp_path):
-    monkeypatch.setenv("CALIPER_WEB_DIR", str(tmp_path))     # an asset folder with no build
-    st, h, body = _http(server.port, "/", {"Host": f"127.0.0.1:{server.port}"})
-    assert st == 200 and h["content-type"].startswith("text/html")
-    assert b"not built" in body and h["cache-control"] == "no-store"
-    assert _http(server.port, "/caliper-view.js", {"Host": f"127.0.0.1:{server.port}"})[0] == 404
+def test_viewer_page_without_assets(mode, monkeypatch, tmp_path):
+    monkeypatch.setenv("CALIPER_WEB_DIR", str(tmp_path))            # an empty folder
+    with caliper.serve() as server:
+        st, h, body = _http(server.port, "/", {"Host": f"127.0.0.1:{server.port}"})
+        assert st == 200 and h["content-type"].startswith("text/html")
+        assert b"not built" in body and h["cache-control"] == "no-store"
+        assert _http(server.port, "/caliper-view.js", {"Host": f"127.0.0.1:{server.port}"})[0] == 404
 
 
-def test_static_files_from_assets(server, monkeypatch):
+def test_static_files_from_assets(mode, monkeypatch, tmp_path):
     files = {"index.html": b"<!doctype html><p>page", "caliper-view.js": b"export {}",
              "views.wasm": b"\0asm\1\0\0\0", "fonts/a.woff2": b"wOF2"}
+    for name, body in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(body)
+    (tmp_path / ".hidden").write_bytes(b"secret")
+    monkeypatch.setenv("CALIPER_WEB_DIR", str(tmp_path))
     types_ = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
               "wasm": "application/wasm", "woff2": "font/woff2"}
-    fake = types.ModuleType("caliper._assets")
-    fake.asset_names = lambda: sorted(files)
-
-    def name_for_url_path(p):
-        p = p.split("?", 1)[0]
-        if ".." in p:
-            raise ValueError(p)
-        return p[1:] or "index.html"
-
-    def read_asset(n):
-        if n not in files:
-            raise FileNotFoundError(n)
-        return files[n]
-    fake.name_for_url_path = name_for_url_path
-    fake.read_asset = read_asset
-    fake.content_type = lambda n: types_[n.rsplit(".", 1)[1]]
-    monkeypatch.setitem(sys.modules, "caliper._assets", fake)
-    monkeypatch.setattr(caliper, "_assets", fake, raising=False)
-    host = {"Host": f"127.0.0.1:{server.port}"}
-    for path, name in [("/", "index.html"), ("/?token=x", "index.html"),
-                       ("/caliper-view.js", "caliper-view.js"), ("/views.wasm", "views.wasm"),
-                       ("/fonts/a.woff2", "fonts/a.woff2")]:
-        st, h, body = _http(server.port, path, host)
-        assert st == 200 and body == files[name], path
-        assert h["content-type"] == types_[name.rsplit(".", 1)[1]]
-        assert h["cache-control"] == "no-store"
-        assert "access-control-allow-origin" not in h
-    st, h, _ = _http(server.port, "/views.wasm", dict(host, Origin="http://127.0.0.1:8888"))
-    assert st == 200 and h["access-control-allow-origin"] == "http://127.0.0.1:8888"
-    assert h["vary"] == "Origin"
-    st, h, _ = _http(server.port, "/views.wasm", dict(host, Origin="https://evil.example"))
-    assert st == 200 and "access-control-allow-origin" not in h
-    assert _http(server.port, "/missing.js", host)[0] == 404
-    assert _http(server.port, "/../x", host)[0] == 404
-    assert _http(server.port, "/", {"Host": "evil.example"})[0] == 403
+    with caliper.serve() as server:
+        host = {"Host": f"127.0.0.1:{server.port}"}
+        for path, name in [("/", "index.html"), ("/?token=x", "index.html"),
+                           ("/caliper-view.js", "caliper-view.js"), ("/views.wasm", "views.wasm"),
+                           ("/fonts/a.woff2", "fonts/a.woff2")]:
+            st, h, body = _http(server.port, path, host)
+            assert st == 200 and body == files[name], path
+            assert h["content-type"] == types_[name.rsplit(".", 1)[1]]
+            assert h["cache-control"] == "no-store"
+            assert "access-control-allow-origin" not in h
+        st, h, _ = _http(server.port, "/views.wasm", dict(host, Origin="http://127.0.0.1:8888"))
+        assert st == 200 and h["access-control-allow-origin"] == "http://127.0.0.1:8888"
+        assert h["vary"] == "Origin"
+        st, h, _ = _http(server.port, "/views.wasm", dict(host, Origin="https://evil.example"))
+        assert st == 200 and "access-control-allow-origin" not in h
+        assert _http(server.port, "/missing.js", host)[0] == 404
+        assert _http(server.port, "/.hidden", host)[0] == 404
+        assert _http(server.port, "/../x", host)[0] == 404
+        assert _http(server.port, "/", {"Host": "evil.example"})[0] == 403
 
 
 # ---------------------------------------------------------------------------
@@ -748,8 +762,7 @@ def test_event_queue_is_bounded(server):
 # ---------------------------------------------------------------------------
 # shutdown
 # ---------------------------------------------------------------------------
-def test_close_with_a_viewer_connected(monkeypatch):
-    monkeypatch.setenv("CALIPER_SESSION", "0")
+def test_close_with_a_viewer_connected(mode):
     server = caliper.serve()
     port = server.port
     W = torch.randn(32, 32)
@@ -782,3 +795,177 @@ def test_viewer_disconnect_detaches(server):
             assert _wait(lambda: server.transport.attached())
     run(go())
     assert _wait(lambda: not server.transport.attached())
+
+
+# ---------------------------------------------------------------------------
+# stress: abrupt viewers, shutdown under load, floods, memory
+# ---------------------------------------------------------------------------
+DEV = "mps" if MPS else "cpu"
+
+
+def _raw_viewer(server):
+    """A WebSocket viewer on a bare socket (to reset it in the middle of a frame)."""
+    import base64
+    s = socket.create_connection(("127.0.0.1", server.port), timeout=10)
+    key = base64.b64encode(os.urandom(16)).decode()
+    s.sendall((f"GET /v3/stream?token={server.token} HTTP/1.1\r\nHost: 127.0.0.1:{server.port}\r\n"
+               f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+               "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        head += s.recv(1)
+    assert b" 101 " in head.split(b"\r\n")[0]
+    return s
+
+
+def _raw_send(s, payload: bytes) -> None:
+    import struct as st
+    mask = os.urandom(4)
+    n = len(payload)
+    if n < 126:
+        hdr = bytes((0x82, 0x80 | n))
+    elif n < 65536:
+        hdr = bytes((0x82, 0x80 | 126)) + st.pack("!H", n)
+    else:
+        hdr = bytes((0x82, 0x80 | 127)) + st.pack("!Q", n)
+    m = np.frombuffer(mask * (n // 4 + 1), np.uint8)[:n]
+    s.sendall(hdr + mask + (np.frombuffer(payload, np.uint8) ^ m).tobytes())
+
+
+def test_viewer_resets_in_the_middle_of_a_frame(server):
+    W = torch.randn(2048, 2048, device=DEV)
+    show = lambda: caliper.show(W, name="big", rate=0)  # noqa: E731
+    s = _raw_viewer(server)
+    _raw_send(s, w.encode(w.Hello("viewer")))
+    end = time.monotonic() + 10
+    while "big" not in server.stats()["views"] and time.monotonic() < end:
+        show()
+        time.sleep(0.01)
+    _raw_send(s, w.encode(w.Subscribe(1, "big", 1, 240.0, {"budget": {"max_extent": 2048}})))
+    got = 0
+    while got < 6 << 20:                    # into the middle of a 16 MB snapshot frame
+        show()
+        got += len(s.recv(1 << 20))
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct_linger_zero())
+    s.close()                               # RST, mid-frame
+    for _ in range(50):
+        show()
+    assert _wait(lambda: not server.stats()["connections"])
+    small = torch.randn(64, 64, device=DEV)
+
+    async def go():                         # the server serves the next viewer as before
+        async with Client(server) as c:
+            await c.subscribe(1, "small", pump=lambda: caliper.show(small, name="small", rate=0))
+            sn = await c.expect(w.Snapshot, pump=lambda: caliper.show(small, name="small", rate=0))
+            assert sn.data.array().shape == (64, 64)
+    run(go())
+
+
+def struct_linger_zero() -> bytes:
+    import struct as st
+    return st.pack("ii", 1, 0)
+
+
+def test_shutdown_with_frames_queued(mode):
+    server = caliper.serve()
+    port = server.port
+    W = torch.randn(2048, 2048, device=DEV)
+    show = lambda: caliper.show(W, name="big", rate=0)  # noqa: E731
+
+    async def go():
+        async with Client(server, max_queue=1) as c:
+            await c.subscribe(1, "big", {"budget": {"max_extent": 2048}}, max_rate=240, pump=show)
+            await c.expect(w.Snapshot, pump=show)
+            loop = asyncio.get_running_loop()
+            end = time.monotonic() + 1.0
+            while time.monotonic() < end:     # the viewer reads nothing: its socket fills
+                show()
+                await asyncio.sleep(0)
+            t0 = time.monotonic()
+            await loop.run_in_executor(None, server.close)
+            return time.monotonic() - t0
+    took = run(go(), 60)
+    assert took < 8, took
+    assert server.closed and caliper._server is None
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+    assert _wait(lambda: not any(t.name == "caliper.net" and t.is_alive()
+                                 for t in threading.enumerate()))
+
+
+def test_flood_of_control_messages(server):
+    """A viewer flooding SUBSCRIBE and EVENT: the training thread's calls stay
+    fast, the event queue stays bounded, and the connection still answers."""
+    W = torch.randn(64, 64, device=DEV)
+    caliper.show(W, name="w", rate=0)
+
+    async def go():
+        async with Client(server, max_queue=4096) as c:
+            await c.subscribe(1, "w", pump=lambda: caliper.show(W, name="w", rate=0))
+            frames = [w.encode(w.Subscribe(1 + i % 50, "w", i, 30.0)) for i in range(5_000)]
+            frames += [w.encode(w.Event("w", "hover", {"row": i, "col": 0})) for i in range(5_000)]
+            loop = asyncio.get_running_loop()
+            worst = []
+
+            def calls():
+                end = time.monotonic() + 2.0
+                while time.monotonic() < end:
+                    t0 = time.perf_counter()
+                    caliper.show(W, name="w", rate=0)
+                    worst.append(time.perf_counter() - t0)
+            fut = loop.run_in_executor(None, calls)
+            for f in frames:
+                await c.ws.send(f)
+            await fut
+            await c.send(w.Ping(9))
+            pong = await c.expect(w.Pong, timeout=60)
+            return pong, max(worst), float(np.median(worst))
+    pong, worst, med = run(go(), 120)
+    assert pong.nonce == 9
+    assert med < 0.002, med                  # a call stays cheap during the flood
+    assert len(server.events()) <= w.MAX_QUEUED_EVENTS
+
+
+def _rss_now_mb() -> float:
+    out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
+                         text=True).stdout
+    return int(out.strip()) / 1024
+
+
+def test_memory_flat_long_run(server):
+    W = torch.randn(1024, 1024, device=DEV)
+    Z = torch.randn(100_000, 3, device=DEV)
+    L = torch.randint(0, 4, (100_000,), device=DEV).float()
+
+    def step(i=[0]):
+        i[0] += 1
+        W.add_(1e-3)
+        caliper.show(W, name="w")
+        caliper.points(Z, L, name="z", classes=4)
+        caliper.series(float(i[0]), name="loss")
+
+    async def go():
+        async with Client(server) as c:
+            for v in ("w", "z", "loss"):
+                await c.subscribe(len(c.views) + hash(v) % 1000, v, pump=step)
+            loop = asyncio.get_running_loop()
+
+            async def drain():
+                while True:
+                    await c.ws.recv()
+            reader = asyncio.ensure_future(drain())
+
+            def run_for(seconds):
+                end = time.monotonic() + seconds
+                while time.monotonic() < end:
+                    step()
+            await loop.run_in_executor(None, run_for, 2.0)          # warm-up
+            gc.collect()
+            rss0 = _rss_now_mb()
+            await loop.run_in_executor(None, run_for, 6.0)
+            gc.collect()
+            rss1 = _rss_now_mb()
+            reader.cancel()
+            return rss0, rss1
+    rss0, rss1 = run(go(), 90)
+    assert rss1 - rss0 < 40, (rss0, rss1)

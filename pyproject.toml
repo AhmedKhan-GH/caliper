@@ -27,7 +27,7 @@ cmake.build-type = "Release"
 # Source dir is the repo root (the root CMake uses ${CMAKE_SOURCE_DIR}); only the
 # module and its transitive deps are built, and only the "python" install
 # component (the root's SDK install rules stay out of the wheel).
-build.targets = ["_native", "_live", "caliper_viewer"]
+build.targets = ["_native", "_live", "_netio", "caliper_viewer"]
 install.components = ["python"]
 wheel.packages = ["python/caliper"]
 sdist.include = ["python", "pyproject.toml"]

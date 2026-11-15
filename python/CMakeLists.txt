@@ -59,6 +59,18 @@ target_link_libraries(_live PRIVATE
 target_link_options(_live PRIVATE "LINKER:-exported_symbol,_PyInit__live")
 install(TARGETS _live LIBRARY DESTINATION caliper COMPONENT python)
 
+# caliper._netio — the native sender of caliper.serve() (python/src/_netio.cpp):
+# sockets, the protocol's upgrade checks, encoding and sending on a thread that
+# never takes the GIL. It links only caliper_net (src/host/net), no libcaliper;
+# python/netio/CMakeLists.txt builds the same module on its own.
+nanobind_add_module(_netio NB_STATIC src/_netio.cpp)
+target_link_libraries(_netio PRIVATE caliper_net)
+set_target_properties(_netio PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    target_link_options(_netio PRIVATE "LINKER:-exported_symbol,_PyInit__netio")
+endif()
+install(TARGETS _netio LIBRARY DESTINATION caliper COMPONENT python)
+
 # The viewer process ships inside the wheel as caliper/bin/caliper-viewer.
 if(TARGET caliper_viewer)
     set_target_properties(caliper_viewer PROPERTIES OUTPUT_NAME caliper-viewer)

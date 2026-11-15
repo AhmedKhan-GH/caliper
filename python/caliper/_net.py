@@ -1032,7 +1032,16 @@ class NetServer:
         try:
             self._loop.run_forever()
         finally:
+            # Finish every task here, on this loop: a websockets task left
+            # pending (a stalled viewer at shutdown) would otherwise be
+            # collected on another thread, whose loop would get its async
+            # generators to close.
             try:
+                left = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+                for t in left:
+                    t.cancel()
+                if left:
+                    self._loop.run_until_complete(asyncio.wait(left, timeout=2.0))
                 self._loop.run_until_complete(self._loop.shutdown_asyncgens())
             except Exception:
                 pass
@@ -1233,6 +1242,31 @@ def current_server() -> NetServer | None:
     return s if s is not None and not s.closed else None
 
 
+_said_python_sender = False
+
+
+def _make_server(port: int) -> NetServer:
+    """The native sender (caliper._netio) when it is built, else the Python
+    sender, which says once what that costs. ``CALIPER_NETIO=0`` forces the
+    Python sender."""
+    global _said_python_sender
+    if os.environ.get("CALIPER_NETIO", "1") != "0":
+        try:
+            from . import _netio  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            from ._net_native import NativeServer
+            return NativeServer(port)
+        if not _said_python_sender:
+            _said_python_sender = True
+            print("caliper: the native network sender (caliper._netio) is not built, so serve() "
+                  "sends from Python, which costs a training loop about 5 to 9 % of its steps "
+                  "while a viewer watches; build it with `python scripts/build_netio.py`.",
+                  file=sys.stderr, flush=True)
+    return NetServer(port)
+
+
 def serve(port: int = 0) -> NetServer:
     """Start (or return) the stream server of this process. See caliper.serve."""
     import caliper
@@ -1240,7 +1274,7 @@ def serve(port: int = 0) -> NetServer:
         s = current_server()
         if s is not None:
             return s
-        s = NetServer(port)
+        s = _make_server(port)
         route = NetRoute(s)
         s._route = route
         caliper._extra_routes.append(route)
