@@ -1111,8 +1111,10 @@ class NetServer:
 
 
 class NetRoute:
-    """The route caliper/__init__.py keeps for the server (as ``_Route``)."""
+    """The route caliper/__init__.py keeps for the server (as ``_Route``).
+    Series reach it through ``caliper._series_tap``, not its ring."""
     sync = False
+    taps_series = True
 
     def __init__(self, server: NetServer):
         self.server = server

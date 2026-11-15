@@ -275,8 +275,9 @@ class NetRing:
         return False
 
     # -- series (caliper.series, before its route loop) -------------------------
-    def tap(self, name: str, value) -> None:
-        """Retain one series call: a number or a tensor of values."""
+    def tap(self, name: str, value) -> bool:
+        """Retain one series call: a number or a tensor of values. Returns True
+        while a viewer watches the series."""
         s = self.series.get(name)
         if s is None:
             v = self._view(name, KIND_SERIES, time.perf_counter())
@@ -287,19 +288,21 @@ class NetRing:
         cls = value.__class__
         if (cls is float or cls is int) and not s.refs:
             s.q.append((float(value), time.monotonic_ns()))
-            return
+            if s.watched:
+                self._wake()
+            return s.watched
         import torch
         if cls is float or cls is int or cls is bool:
             t = float(value)
             n = 1
         else:
             t = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
-            t = t.detach().reshape(-1)
+            t = t.detach()                       # reshaped when the chunk is made
             n = t.numel()
             if n == 0:
                 raise ValueError("series: empty value")
             if n > SERIES_CAPACITY:
-                t = t[-SERIES_CAPACITY:]
+                t = t.reshape(-1)[-SERIES_CAPACITY:]
                 n = SERIES_CAPACITY
         s.refs.append(t)
         s.nref += n
@@ -307,6 +310,7 @@ class NetRing:
         cadence = self.default_interval if s.watched else SERIES_IDLE_FLUSH_S
         if s.nref >= SERIES_CHUNK or now - s.flush_t >= cadence:
             self._flush_series(s, now)
+        return s.watched
 
     def _flush_series(self, s: SeriesState, now: float) -> None:
         import torch
@@ -323,6 +327,7 @@ class NetRing:
                 if floats:
                     parts.append(torch.tensor(floats, dtype=torch.float32).to(dev))
                     floats = []
+                r = r.reshape(-1)
                 parts.append(r.to(dev) if r.device != dev else r)
             else:
                 floats.append(r)
@@ -340,6 +345,8 @@ class NetRing:
             ev.record()
         s.q.append(Chunk(buf, n, time.monotonic_ns(), ev))
         self.counters["series_chunks"] += 1
+        if s.watched:
+            self._wake()
 
     # -- lifetime --------------------------------------------------------------------
     def flush(self, name: str | None = None, timeout: float = 5.0) -> int:

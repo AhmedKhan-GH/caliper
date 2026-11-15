@@ -311,20 +311,19 @@ def series(value, name: str = "series", rate=None):
     Every call appends; the view is updated at most ``rate`` times per second."""
     _name_ok(name)
     tap = _series_tap               # caliper.serve() keeps every value for late viewers
-    if tap is not None:
-        tap(name, value)
+    tapped = tap is not None and tap(name, value)
     for r in _routes or _auto_routes():
-        if r.transport.attached():
+        if r.transport.attached() and not getattr(r, "taps_series", False):
             break
     else:
-        return False
+        return tapped
     now = time.perf_counter()
-    taken = False
+    taken = tapped
     sync = None
     with LOCK:
         sp = None
         for r in _routes:
-            if not r.transport.attached():
+            if not r.transport.attached() or getattr(r, "taps_series", False):
                 continue
             if sp is None:
                 sp = plan_series(value)
