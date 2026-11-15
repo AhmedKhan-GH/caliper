@@ -1,6 +1,6 @@
 # Caliper CLI
 
-The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
+The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `build`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
 usage: caliper [--applets <dir>]... [--api [--api-port <n>]]
@@ -9,6 +9,7 @@ usage: caliper [--applets <dir>]... [--api [--api-port <n>]]
        caliper check <folder>
        caliper install <folder>
        caliper new <name> [<dir>]
+       caliper build <folder>
        caliper info
        caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
                     [--frames <N>] --out <file.png> [--api [--api-port <n>]]
@@ -121,7 +122,47 @@ created <dir> for applet dev.example.my-viewer
   tests/test_my_viewer.cpp
 ```
 
-The comment at the top of the generated `CMakeLists.txt` gives the next steps: configure with `-DCMAKE_PREFIX_PATH=<sdk prefix>`, build, run `ctest --test-dir build`, and run `caliper dev build/applets`.
+The comment at the top of the generated `CMakeLists.txt` gives the next steps: configure with `-DCMAKE_PREFIX_PATH=<sdk prefix>`, build, run `ctest --test-dir build`, and run `caliper dev build/applets`. [caliper build](#caliper-build) does the first two and the checks in one step.
+
+### caliper build <folder>
+
+Configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of [caliper check](#caliper-check) on the result. The folder must hold a `CMakeLists.txt` that finds `caliper-sdk`, such as one that `caliper new` writes. The build goes into `<folder>/build`, in the Release configuration, and the library and its manifest land in `<folder>/build/applets`, where `caliper dev` and `caliper install` take them. It runs these steps, and prints what CMake prints as it comes:
+
+```sh
+cmake -S <folder> -B <folder>/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<sdk prefix>
+cmake --build <folder>/build --config Release --parallel <cores>
+caliper check <folder>/build
+```
+
+```text
+caliper build my-viewer
+using the Caliper SDK in /home/me/caliper-sdk
+configuring /home/me/my-viewer/build with /usr/local/bin/cmake
+...
+using the applets in /home/me/my-viewer/build/applets
+READY  dev.example.my-viewer  0.1.0  /home/me/my-viewer/build/applets
+1 of 1 applets pass the checks
+```
+
+The SDK's prefix is found without being named. `build` takes the first of these that holds `lib/cmake/caliper-sdk/caliper-sdk-config.cmake`:
+
+1. `CALIPER_SDK_DIR`, when it is set and not empty. A folder without the SDK is an error.
+2. The prefix the executable is installed in: the folder above the executable's folder, then the executable's folder.
+3. `caliper-sdk` in the home folder, where the [tutorials](../tutorials/development-basics.md#the-development-loop) install the SDK.
+
+When none of them holds the SDK, `build` says where it looked and lets CMake search its own places, such as `CMAKE_PREFIX_PATH` in the environment and the system prefixes.
+
+`build` runs `CALIPER_CMAKE` when it is set and not empty, else `cmake` from `PATH`, else, on macOS, the command of CMake.app in `/Applications`. CMake chooses the generator and the compiler as usual, so `CMAKE_GENERATOR` and `CXX` in the environment apply. A folder that was built before is configured and built again incrementally.
+
+`build` exits with 0 when the build passes the checks, with 2 for a wrong command line, and with 1 when:
+
+- `<folder>` is not a folder or holds no `CMakeLists.txt`;
+- no cmake is found: `caliper: cmake was not found: install CMake 3.18 or later and put it on PATH, or set CALIPER_CMAKE to its path`, or `CALIPER_CMAKE` names something that is not a program;
+- `CALIPER_SDK_DIR` names a folder without the SDK;
+- the configure fails. When CMake found no working C++ compiler, no build tool for its generator, or no SDK, a last line says which and how to install it, such as `caliper: no Caliper SDK was found. Install it from a Caliper build with cmake --install <build folder> --prefix <prefix> --component sdk, then set CALIPER_SDK_DIR=<prefix> or use the prefix ~/caliper-sdk`;
+- the build fails, or an applet in the build folder fails the checks.
+
+`build` is built and tested on macOS. On Windows it says that it is not available yet and exits with 1; configure and build there with CMake as [SDK package](sdk-package.md#using-the-package) describes.
 
 ### caliper info
 
@@ -224,7 +265,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
+| 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
 | 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--api` or `--api-port` with a subcommand that does not take it, `--api-port` without `--api`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## Environment variables
@@ -237,5 +278,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
 | `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
 | `CALIPER_API` | `1` serves [Caliper API](api.md) as `--api` does, when starting the app and with `dev` and `shot`. |
+| `CALIPER_SDK_DIR` | The prefix of the installed SDK that `build` uses, when it is set and not empty. |
+| `CALIPER_CMAKE` | The cmake that `build` runs, when it is set and not empty. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.
