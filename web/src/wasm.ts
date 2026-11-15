@@ -6,6 +6,7 @@
 // draw with its own TypeScript views instead.
 
 import type { DataView } from './protocol/messages.js';
+import type { ViewFacts } from './views/info.js';
 
 export interface WasmSelect {
   view: string;
@@ -33,7 +34,10 @@ export interface WasmOptions {
   header?: boolean;
   /** The HTTP origin of the stream's server, with a trailing slash. */
   assetBase: string;
+  /** Every selection the module's views make; the module has already sent it to the producer. */
   onSelect(event: WasmSelect | Record<string, unknown>): void;
+  /** What the element's header says about the view, as it changes. */
+  onInfo?(facts: ViewFacts): void;
   onDataView(dataView: DataView): void;
 }
 

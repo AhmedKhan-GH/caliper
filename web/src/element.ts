@@ -10,8 +10,11 @@
 // the WebAssembly views the shared socket carries only the metadata (VIEWS,
 // no subscription), the module streams the view on its own connection, the
 // picker sends its choice through the module's setDataView, and the module's
-// data view reply updates the picker. The WebAssembly views emit no
-// selections yet; renderer="ts" gives selections for every kind.
+// data view reply updates the picker. A selection, pick or hover in a
+// WebAssembly view goes to the producer on the module's connection, with the
+// same detail the TypeScript views send, and its selections come out of the
+// element as caliper-select events just the same; the header line about the
+// view comes from the facts the module reports.
 
 import { acquire, release } from './client/socket.js';
 import type { StreamClient, StreamListener } from './client/stream.js';
@@ -26,6 +29,7 @@ import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
 import { assetBase, hasAdapter, mountWasm, wasmKinds, type WasmHandle } from './wasm.js';
+import { factsInfo } from './views/info.js';
 import { C, FONT_MONO, FONT_TEXT } from './views/theme.js';
 
 const STYLE = `
@@ -164,8 +168,15 @@ export class CaliperView extends HTMLElement {
     return {
       view: this.names.join(','), renderer: this.renderer, drawer: this.drawer, wasmReady: this.wasmReady,
       subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
-      adapter: this.device ? adapterInfo() : null, wasmStats: this.wasm?.stats ?? null, ...(this.live?.debug() ?? {}),
+      adapter: this.device ? adapterInfo() : null, wasmStats: this.wasm?.stats ?? null, info: this.parts.info.textContent,
+      ...(this.wasm ? this.wasmDebug() : {}), ...(this.live?.debug() ?? {}),
     };
+  }
+
+  /** A WebAssembly view's counters under the names the TypeScript views use. */
+  private wasmDebug(): Record<string, unknown> {
+    const s = (this.wasm?.stats ?? {}) as Record<string, unknown>;
+    return { kind: this.kind(), updates: s.updates ?? 0, selected: s.selected ?? 0 };
   }
 
   /** Resolves once pending drawing is done, including the GPU's work. */
@@ -285,9 +296,15 @@ export class CaliperView extends HTMLElement {
     this.parts.wasm.hidden = false;
     return mountWasm(this.parts.wasm, {
       src, view, kind, header: false, assetBase: base,
+      // The module sent the selection to the producer itself; the page hears it here.
       onSelect: (e) => {
         const event = 'detail' in e && 'type' in e ? e : { view, type: 'select', detail: e };
         this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));
+      },
+      onInfo: (facts) => {
+        if (this.drawer !== 'wasm' && !this.deciding) return;
+        const text = factsInfo(facts);
+        if (text !== null) this.parts.info.textContent = text;
       },
       // The reply to the module's own subscription or data view request.
       onDataView: (dv) => {
@@ -377,6 +394,7 @@ export class CaliperView extends HTMLElement {
         console.warn('caliper-view:', e);
       }
       this.wasm = null;
+      this.parts.info.textContent = '';
     }
     this.parts.wasm.replaceChildren();
     this.parts.wasm.hidden = true;

@@ -8,6 +8,7 @@ import { PointsGpu } from '../render/points-gpu.js';
 import { COLORMAPS, LIMITS, snapshotRange, type SnapshotMsg } from '../protocol/messages.js';
 import type { LiveView, ViewHost } from './base.js';
 import { Orbit, ortho, type Mat4 } from './camera.js';
+import { pointsInfo } from './info.js';
 import { attachGestures } from './interact.js';
 import { drawAxes, fitCanvas, Plot2D } from './plot.js';
 import { C, FONT_TEXT, fmt } from './theme.js';
@@ -184,8 +185,7 @@ export class PointsView implements LiveView {
     this.projKey = '';
     if (!this.fitted) this.fit();
     if (this.r instanceof PointsGpu) this.r.upload(this.pos, this.colors, n);
-    const label = this.classes ? `${this.classes} classes` : s.aux ? 'values' : '';
-    this.host.info(`${n} points  ${dims}-D${label ? `  ${label}` : ''}`);
+    this.host.info(pointsInfo(n, dims, this.classes, !!s.aux));
     if (this.hoverPx) this.onHover(this.hoverPx.x, this.hoverPx.y);
   }
 

@@ -4,6 +4,7 @@
 
 import type { SnapshotMsg } from '../protocol/messages.js';
 import { toggle, type LiveView, type ViewHost } from './base.js';
+import { histogramInfo } from './info.js';
 import { attachGestures } from './interact.js';
 import { drawAxes, fitCanvas, Plot2D } from './plot.js';
 import { C, fmt } from './theme.js';
@@ -80,7 +81,7 @@ export class HistogramView implements LiveView {
     this.seq = s.seq;
     let total = 0;
     for (const c of this.counts) total += c;
-    this.host.info(`${n} bins  ${fmt(this.lo)} … ${fmt(this.hi)}  n ${fmt(total)}`);
+    this.host.info(histogramInfo(n, this.lo, this.hi, total));
     if (this.hoverPx) this.onHover(this.hoverPx.x, this.hoverPx.y);
   }
 

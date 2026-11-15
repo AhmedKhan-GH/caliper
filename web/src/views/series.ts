@@ -6,6 +6,7 @@
 import { PALETTE } from '../render/colormap.js';
 import type { SeriesMsg, SnapshotMsg } from '../protocol/messages.js';
 import { toggle, type LiveView, type ViewHost } from './base.js';
+import { seriesInfo } from './info.js';
 import { attachGestures } from './interact.js';
 import { drawAxes, fitCanvas, Plot2D } from './plot.js';
 import { C, fmt } from './theme.js';
@@ -134,7 +135,7 @@ export class SeriesView implements LiveView {
     if (!ring) return;
     ring.write(d.start, d.values);
     const last = ring.get(ring.end - 1);
-    this.host.info(`${ring.end} steps  last ${fmt(last)}`);
+    this.host.info(seriesInfo(ring.end, last));
     if (this.hoverPx) this.onHover(this.hoverPx.x, this.hoverPx.y);
   }
 

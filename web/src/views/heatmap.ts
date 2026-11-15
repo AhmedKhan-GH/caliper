@@ -7,6 +7,7 @@ import { Heatmap2D } from '../render/heatmap-2d.js';
 import { HeatmapGpu } from '../render/heatmap-gpu.js';
 import { COLORMAPS, snapshotRange, type PayloadAxis, type SnapshotMsg } from '../protocol/messages.js';
 import type { LiveView, ViewHost } from './base.js';
+import { heatmapInfo, imageInfo } from './info.js';
 import { attachGestures } from './interact.js';
 import { drawAxes, fitCanvas, Plot2D } from './plot.js';
 import { C, FONT_TEXT, fmt } from './theme.js';
@@ -90,8 +91,7 @@ export class HeatmapView implements LiveView {
     }
     this.r.upload(s.data, rows, cols, this.image, this.lo, this.hi, this.lut);
     if (this.hover && (this.hover.r >= rows || this.hover.c >= cols)) this.hover = null;
-    const shape = this.image ? `${rows}×${cols} RGBA` : `${rows}×${cols}  ${fmt(this.lo)} … ${fmt(this.hi)}`;
-    this.host.info(shape);
+    this.host.info(this.image ? imageInfo(rows, cols) : heatmapInfo(rows, cols, this.lo, this.hi));
     if (this.hoverPx) this.onHover(this.hoverPx.x, this.hoverPx.y);
   }
 
