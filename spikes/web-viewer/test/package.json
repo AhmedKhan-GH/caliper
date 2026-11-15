@@ -1,0 +1,12 @@
+{
+  "name": "caliper-web-viewer-spike-test",
+  "private": true,
+  "description": "Headless Chromium check of the web viewer spike (docs/plans/web-viewer-spike.md).",
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.0"
+  }
+}
