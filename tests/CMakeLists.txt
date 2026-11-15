@@ -179,6 +179,24 @@ if(TARGET caliper)
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_new_build.cmake")
     set_tests_properties(caliper_cli_new_builds PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
 
+    # `caliper build`: the template configured, built and checked against
+    # this build's installed SDK, then its clear errors for a missing SDK,
+    # CMake or compiler (tests/cli_build.cmake). POSIX only, as build is.
+    caliper_cli_test(build_operand ARGS "build" EXIT 2 ERROR "build takes one folder")
+    caliper_cli_test(build_applets ARGS "build|${_cli_work}|--applets|${_cli_work}" EXIT 2
+        ERROR "--applets applies only to starting the app, dev, list and shot")
+    if(NOT WIN32)
+        add_test(NAME caliper_cli_build COMMAND "${CMAKE_COMMAND}"
+            "-DEXE=$<TARGET_FILE:caliper>"
+            "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-build"
+            "-DGENERATOR=${CMAKE_GENERATOR}"
+            "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_build.cmake")
+        set_tests_properties(caliper_cli_build PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
+    endif()
+
     # `caliper shot`: the command-line errors first, which need no GPU and
     # create nothing; an unknown id is found before any folder is made.
     caliper_cli_test(shot_needs_launch ARGS "shot|--out|${_cli_work}/x.png" EXIT 2
