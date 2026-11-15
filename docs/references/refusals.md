@@ -1,0 +1,123 @@
+# Refusal messages
+
+Before the host loads any applet code, it runs a pure **negotiation** check over
+the applet's manifest and the host's own capabilities (see
+[Manifest](manifest.md) and [ABI (epoch 2)](abi.md)). If the applet is
+incompatible, negotiation refuses it and the landing screen shows one of the
+messages below as the applet's status text — no code from the applet is
+executed.
+
+The checks run in a fixed order (PLATFORM.md §14): **ABI epoch → minimum host
+version → required services**. The first failing check wins, so only one message
+is ever shown. These strings are contractual: the loader and the landing screen
+reuse them verbatim.
+
+## Negotiation refusals
+
+| Message template | When it fires | What to do |
+|------------------|---------------|------------|
+| `Built for ABI epoch {applet_epoch}; this host speaks {host_epoch} — check for an applet update.` | The applet's `abi_epoch` does not equal the host's ABI epoch. | Install a build of the applet that targets this host's epoch, or update the host to one that speaks the applet's epoch. |
+| `Requires host {min_host} or newer; this host is {host_version}.` | The manifest sets a `min_host` floor and the host's version is older than it (compared numerically, not lexically). | Update the host to at least `{min_host}`. Only fires when `min_host` is set; an empty `min_host` imposes no floor. |
+| `Requires a capability this host doesn't have: {service_id}.` | A service listed in the manifest's `required` array is not vended by this host. `{service_id}` is the **first** missing service in declaration order. | Run the applet on a host that provides `{service_id}`, or use an applet build that doesn't require it. Optional services never cause a refusal. |
+
+Placeholders in `{braces}` are filled at runtime: `{applet_epoch}` / `{host_epoch}`
+are integers, `{min_host}` / `{host_version}` are semver strings like `0.6.0`, and
+`{service_id}` is a service id like `caliper.jobs.v1`.
+
+The required-services check runs a second time inside `launch()`. After the
+`dlopen` and the descriptor checks, the loader walks the binary's own
+`required_services` list (set by the `CALIPER_APPLET` macro's `.services`)
+against the host's services. A service missing there gives the same
+`Requires a capability this host doesn't have: {service_id}.` message and the
+same `Refused` status, before `create()` runs; the binary stays mapped. This
+catches a manifest whose `required` list leaves out a service the binary needs.
+
+## Loader statuses
+
+Negotiation is only the first gate. Once an applet passes it, the **loader**
+(PLATFORM.md §14/§15) is what actually finds the binary, `dlopen`s it, checks the
+descriptor against the manifest, and runs the lifecycle under the crash guard.
+Each of those steps has its own failure, and the loader sorts them into two
+statuses:
+
+- **Failed** — the applet is broken but the host is fine: a bad manifest, a
+  missing or unloadable binary, a descriptor that contradicts its manifest, or a
+  lifecycle hook that returned an honest "no". Re-launchable once the cause is
+  fixed.
+- **Quarantined** — the applet *faulted* (a signal: SIGSEGV/SIGBUS/SIGFPE/SIGILL,
+  including a stack overflow, or a C++ exception escaping an entry point) while
+  the host held it, or a job it submitted faulted. The loader never calls the
+  faulted instance again — no retry — and the dylib stays mapped. What happens
+  next depends on the kind of fault:
+    - **After a C++ exception** the stack unwound normally and the process is
+      unharmed. The loader keeps the instance, uncalled, and the Inspector
+      offers `⌘R Restart`: the loader runs the old instance's `cleanup()` (if
+      its `initialize()` had succeeded) and `destroy()`, both guarded, then
+      launches a fresh one in the same process. Restart reuses the library
+      already loaded, so a rebuilt dylib needs a Caliper restart.
+    - **After a signal** memory may be corrupt. The instance is abandoned with
+      no `cleanup`/`destroy` (running destructors inside a corrupted image is
+      worse than the leak), and the applet stays quarantined until Caliper
+      itself restarts; the Inspector says `restart Caliper to reload`. On
+      Windows every SEH exception counts as a signal, including a C++ throw
+      MSVC could not unwind through the C ABI.
+
+Ordering matters: `scan()` is manifest-first and never `dlopen`s, so parse,
+missing-binary, and negotiation results are all decided before any applet code
+runs. Everything from `load failed` downward happens only inside `launch()`.
+
+### Failed messages
+
+| Message template | When it fires | What to do |
+|------------------|---------------|------------|
+| _(manifest parser text, passed through verbatim)_ | `scan()` could not parse `caliper.toml` — malformed TOML or a missing/invalid required field. The error is whatever the [manifest](manifest.md) parser reported. | Fix the manifest as the message describes; see [Manifest](manifest.md) for the required fields and formats. |
+| `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): {id}` | The parser's own message for an `id` that breaks the [id rules](manifest.md#applet-ids): a character outside `[a-z0-9.-]`, an empty segment (`..`, a leading or trailing dot), or more than 128 characters. | Rename the applet to a lowercase reverse-DNS id, and use the same id in the descriptor. |
+| `applet id is not path-safe: {id}` | The loader's own check of the id, made before it builds the applet's data folder path. The parser refuses the same ids first, so this appears only for a manifest that reached the loader another way. | As above. |
+| `applet binary not found next to {manifest_filename}` | `scan()` found the manifest but no sibling shared library. The loader looks for `<stem>` and `lib<stem>` with the platform extension (`.dylib`/`.so`/`.dll`) beside `<stem>.caliper.toml`. | Ship the compiled applet library next to its manifest, named to match the manifest's stem. |
+| `load failed: {dlerror}` | `dlopen`/`LoadLibrary` failed at `launch()` — a corrupt image, a wrong architecture, or an unresolved dependency. `{dlerror}` is the OS loader's own text. | Rebuild the applet for this platform/arch and make sure its dependencies resolve. |
+| `missing export caliper_applet_descriptor` | The library loaded but does not export the one required symbol. Usually a non-applet library, or one built without `CALIPER_APPLET` / the `CALIPER_EXPORT` visibility attribute. | Build with the SDK's `CALIPER_APPLET` macro (or export the descriptor by hand) so the symbol is visible. |
+| `descriptor missing or truncated` | The descriptor getter returned NULL, or a `struct_size` smaller than this host's `CaliperAppletDescriptor` — an ABI too old to trust. | Rebuild against the current SDK headers for this epoch. |
+| `descriptor ABI epoch disagrees with manifest` | The compiled-in `abi_epoch` does not match the epoch the host negotiated from the manifest. The binary and its manifest were built against different epochs. | Rebuild the binary and manifest together against one SDK epoch. |
+| `descriptor id disagrees with manifest` | The descriptor's `id` is NULL or differs from the manifest's `id`. The manifest describes a different applet than the binary. | Make the manifest `id` and the descriptor `id` identical (rebuild if the descriptor is stale). |
+| `descriptor version disagrees with manifest` | The descriptor's `version` is NULL or differs from the manifest's `version`. | Bump manifest and descriptor to the same version and rebuild. |
+| `descriptor function table incomplete` | One of the required `api` entry points (`create`, `destroy`, `initialize`, `frame`, `cleanup`) is NULL. | Provide all five lifecycle functions; the `CALIPER_APPLET` macro wires them for you. |
+| `create() returned null` | `create()` ran cleanly but returned no instance — the applet declined to construct itself (e.g. an internal precondition failed). | Investigate the applet's `create`; return a valid instance or surface the real error from `initialize` instead. |
+| `initialize() returned false` | `initialize()` ran cleanly but reported failure. The loader then calls `destroy()` on the instance and marks the applet Failed. | Check the applet's own logs for why init refused (a required service or resource it couldn't obtain). |
+
+### Quarantined messages
+
+| Message template | When it fires | What to do |
+|------------------|---------------|------------|
+| `crashed in create(): {fault}` | The applet faulted inside `create()`. The instance never existed; nothing to clean up. | Fix the fault in the applet's constructor path, then restart it (see below). |
+| `crashed in initialize(): {fault}` | The applet faulted inside `initialize()`. After a signal the instance is abandoned — `destroy()` is **not** called on it; after an exception it is kept for Restart, which calls `destroy()` (not `cleanup()`, since `initialize()` never succeeded). | Fix the fault in the applet's init path, then restart it. |
+| `crashed in frame(): {fault}` | The applet faulted during a `frame()` call. The instance's `frame()` is never called again; after a signal the instance is abandoned, after an exception it is kept for Restart. | Fix the fault in the applet's per-frame path, then restart it. |
+| `crashed during teardown: {fault}` | The applet faulted in `cleanup()` or `destroy()` while shutting down. Teardown stops; the dylib is left mapped. After an exception in `cleanup()`, the `destroy()` still owed is made by Restart. | Fix the fault in the applet's teardown path, then restart it. |
+| `crashed in background job "{label}": {fault}` | A job the applet submitted through `caliper.jobs.v1` — from one of its entry points, or from another of its jobs — faulted or threw (see [jobs.v1](service-jobs-v1.md)). The loader quarantines the applet before its next `frame()` or at teardown, whichever comes first; a `frame()` already running finishes. A job that threw leaves the applet restartable; a job that took a signal does not. | Fix the fault in the job function, then restart the applet. |
+| `crashed while restarting: {fault}` | Restart's guarded `cleanup()` or `destroy()` of the old instance faulted. The applet is quarantined again with this reason; after a throw from `cleanup()`, a later Restart tries the old instance's `destroy()` again. | Fix the fault in the applet's teardown path; after a signal, restart Caliper. |
+
+`{fault}` is the crash guard's description of the fault: a signal such as
+`SIGSEGV (invalid memory access)`, `C++ exception: <what()>`, or
+`C++ exception (non-std type)`. `{label}` is the label the job was submitted
+with, `{dlerror}` is the platform loader's message, `{manifest_filename}` is the
+manifest file the applet was scanned from, and `{id}` is the manifest's
+`applet.id`.
+
+"Restart it" above means `⌘R Restart` in the Inspector when the fault was a
+C++ exception, and a restart of Caliper when it was a signal (see
+[Loader statuses](#loader-statuses)).
+
+!!! note
+    The landing screen shows these statuses. An applet that is not
+    `Ready`/`Active` keeps its row in the Instruments pane, with `REFUSED`,
+    `FAILED` or `QUARANTINED` in the Status column. With the row selected, the
+    Inspector's Status field shows the exact `status_text` from the tables above
+    (the negotiation refusal, `Failed`, or `Quarantined` message), and the
+    `⏎ Launch` button is disabled. Beside it is the same text for a refused or
+    failed applet, `⌘R Restart` for one quarantined by a C++ exception, and
+    `restart Caliper to reload` for one quarantined by a signal. A launch that
+    fails is also logged in the Activity pane as `launch failed` with the
+    reason, and a quarantine while the applet runs (in `frame()`, or from one
+    of its jobs) as `quarantined`, preceded by a `job failed` row when a job
+    caused it. Restarts are logged as `restart` and `restart failed`. The
+    landing screen reads the statuses every frame, so a mid-session quarantine
+    shows up as soon as the host returns to it.

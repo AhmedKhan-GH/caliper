@@ -1,13 +1,19 @@
 site_name: Caliper Documentation
 site_url: https://ahmedkhan-gh.github.io/caliper/docs/
-docs_dir: docs/wiki
+docs_dir: docs
 site_dir: build/wiki-site
 # In the repository, not on the site: guides written around the applets, which are not shipped.
+# The old design documents below are mined and deleted in the following commits.
 exclude_docs: |
-  howto/ml-applet-cookbook.md
-  howto/port-v1-applet.md
+  guides/ml-applet-cookbook.md
+  report/
+  superpowers/
+  /*.md
+  !/index.md
 theme:
   name: material
+  # Icons, fonts and the stylesheet live outside docs/, which holds documents only.
+  custom_dir: docs-theme
   logo: assets/caliper-icon.svg
   favicon: assets/caliper-icon.svg
   font: false
@@ -21,8 +27,6 @@ theme:
     - search.suggest
 extra:
   homepage: /caliper/
-extra_css:
-  - stylesheets/sternbild.css
 markdown_extensions:
   - admonition
   - toc:
@@ -34,40 +38,45 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Tutorials:
+      - tutorials/index.md
       - Development basics: tutorials/development-basics.md
       - Your first applet: tutorials/first-applet.md
       - Your first ML applet: tutorials/first-ml-applet.md
       - Watch PyTorch training live: tutorials/live-pytorch.md
-  - How-to:
-      - Debug an applet: howto/debug-an-applet.md
-      - Attach to a running script: howto/attach-to-a-running-script.md
-  - Reference:
-      - ABI (epoch 2): reference/abi.md
-      - Manifest (caliper.toml): reference/manifest.md
-      - Refusal messages: reference/refusals.md
-      - Tensor (caliper/tensor.h): reference/tensor.md
-      - Arrow C Data Interface: reference/arrow.md
-      - Adapters (torch): reference/adapters.md
-      - Torch objects on each platform: reference/torch-on-each-platform.md
+  - Guides:
+      - guides/index.md
+      - Debug an applet: guides/debug-an-applet.md
+      - Attach to a running script: guides/attach-to-a-running-script.md
+      - Continuous integration: guides/ci.md
+  - References:
+      - references/index.md
+      - ABI (epoch 2): references/abi.md
+      - Manifest (caliper.toml): references/manifest.md
+      - Refusal messages: references/refusals.md
+      - Tensor (caliper/tensor.h): references/tensor.md
+      - Arrow C Data Interface: references/arrow.md
+      - Adapters (torch): references/adapters.md
+      - Torch objects on each platform: references/torch-on-each-platform.md
       - Services:
-          - caliper.ui.v1: reference/services/ui-v1.md
-          - caliper.log.v1: reference/services/log-v1.md
-          - caliper.jobs.v1: reference/services/jobs-v1.md
-          - caliper.device.v1: reference/services/device-v1.md
-          - caliper.metrics.v1: reference/services/metrics-v1.md
-          - caliper.tensor_bridge.v1: reference/services/tensor-bridge-v1.md
-          - caliper.geometry.v1 / v1_1 / v1_2 / v1_3: reference/services/geometry-v1.md
-          - caliper.export.v1 / v1_1: reference/services/export-v1.md
-          - caliper.artifacts.v1: reference/services/artifacts-v1.md
-          - caliper.data.v1: reference/services/data-v1.md
-          - caliper.feed.v1: reference/services/feed-v1.md
-      - C++ sugar: reference/sugar.md
-      - Embedding (libcaliper): reference/embedding.md
-      - Python API (caliper): reference/python-api.md
-  - Explanation:
-      - Architecture: explanation/architecture.md
-      - Rendering: explanation/rendering.md
-      - Live streaming: explanation/live-streaming.md
-      - Compatibility & epochs: explanation/compatibility.md
-      - Trust model: explanation/trust-model.md
+          - caliper.ui.v1: references/service-ui-v1.md
+          - caliper.log.v1: references/service-log-v1.md
+          - caliper.jobs.v1: references/service-jobs-v1.md
+          - caliper.device.v1: references/service-device-v1.md
+          - caliper.metrics.v1: references/service-metrics-v1.md
+          - caliper.tensor_bridge.v1: references/service-tensor-bridge-v1.md
+          - caliper.geometry.v1 / v1_1 / v1_2 / v1_3: references/service-geometry-v1.md
+          - caliper.export.v1 / v1_1: references/service-export-v1.md
+          - caliper.artifacts.v1: references/service-artifacts-v1.md
+          - caliper.data.v1: references/service-data-v1.md
+          - caliper.feed.v1: references/service-feed-v1.md
+      - C++ sugar: references/sugar.md
+      - Embedding (libcaliper): references/embedding.md
+      - Python API (caliper): references/python-api.md
+  - Explanations:
+      - explanations/index.md
+      - Architecture: explanations/architecture.md
+      - Rendering: explanations/rendering.md
+      - Live streaming: explanations/live-streaming.md
+      - Compatibility & epochs: explanations/compatibility.md
+      - Trust model: explanations/trust-model.md
   - Decisions: decisions/index.md

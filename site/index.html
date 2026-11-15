@@ -1709,12 +1709,12 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
       <div class="xp-block">
         <div class="xp-k">Available</div>
         <dl class="xp-api">
-          <dt><a href="docs/reference/python-api/#view-calls">show, points, series, histogram</a></dt><dd>Send a tensor to a heatmap, a scatter, a curve or a histogram. The call returns at once; the copy runs on the tensor&#x27;s own GPU stream.</dd>
-          <dt><a href="docs/reference/python-api/#watch">watch(model)</a></dt><dd>Shows each module&#x27;s activations, and optionally its gradients, through forward and gradient hooks.</dd>
-          <dt><a href="docs/reference/python-api/#routes-and-lifetime">session()</a></dt><dd>Opens the shared-memory session the Caliper app attaches to with F4, Attach to process.</dd>
-          <dt><a href="docs/reference/python-api/#routes-and-lifetime">window(), run(train)</a></dt><dd>Opens a Caliper window inside the script&#x27;s own process; run trains on a worker thread so the window stays responsive.</dd>
-          <dt><a href="docs/reference/python-api/#inspection-and-test-helpers">offscreen()</a></dt><dd>Renders without a window and reads back pixels, values and counters, so tests can check what a view shows.</dd>
-          <dt><a href="docs/reference/python-api/#caliperlive">caliper.live</a></dt><dd>Lists the running sessions and starts a viewer for one, for tools that attach on their own.</dd>
+          <dt><a href="docs/references/python-api/#view-calls">show, points, series, histogram</a></dt><dd>Send a tensor to a heatmap, a scatter, a curve or a histogram. The call returns at once; the copy runs on the tensor&#x27;s own GPU stream.</dd>
+          <dt><a href="docs/references/python-api/#watch">watch(model)</a></dt><dd>Shows each module&#x27;s activations, and optionally its gradients, through forward and gradient hooks.</dd>
+          <dt><a href="docs/references/python-api/#routes-and-lifetime">session()</a></dt><dd>Opens the shared-memory session the Caliper app attaches to with F4, Attach to process.</dd>
+          <dt><a href="docs/references/python-api/#routes-and-lifetime">window(), run(train)</a></dt><dd>Opens a Caliper window inside the script&#x27;s own process; run trains on a worker thread so the window stays responsive.</dd>
+          <dt><a href="docs/references/python-api/#inspection-and-test-helpers">offscreen()</a></dt><dd>Renders without a window and reads back pixels, values and counters, so tests can check what a view shows.</dd>
+          <dt><a href="docs/references/python-api/#caliperlive">caliper.live</a></dt><dd>Lists the running sessions and starts a viewer for one, for tools that attach on their own.</dd>
         </dl>
         <a class="link xp-more" href="docs/tutorials/live-pytorch/">Watch PyTorch training live →</a>
       </div>
@@ -1826,17 +1826,17 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <div class="xp-block">
           <div class="xp-k">Interfaces</div>
           <dl class="xp-api">
-            <dt><a href="docs/reference/sugar/">caliper::Applet</a></dt><dd>The class an applet derives from: the host calls on_init once, on_frame every frame and on_cleanup when the applet closes.</dd>
-            <dt><a href="docs/reference/services/device-v1/">caliper::Device</a></dt><dd>Reports the GPU the app is running on (Metal, CUDA or the CPU), so the applet trains on the same device.</dd>
-            <dt><a href="docs/reference/services/tensor-bridge-v1/">caliper::Bridge</a></dt><dd>Turns a GPU tensor into a texture the interface can draw, colormapped on the GPU without a copy to the CPU.</dd>
-            <dt><a href="docs/reference/services/geometry-v1/">caliper::Geometry</a></dt><dd>Draws points, lines, meshes and instanced shapes straight from vertex data the applet keeps in GPU memory.</dd>
-            <dt><a href="docs/reference/services/jobs-v1/">caliper::Jobs</a></dt><dd>Runs work such as training on a background thread, with progress shown in the app and a cancel the applet checks.</dd>
-            <dt><a href="docs/reference/services/metrics-v1/">caliper::Metrics</a></dt><dd>Records each run&#x27;s scalars and hyperparameters, so loss curves and run comparisons outlast the session.</dd>
-            <dt><a href="docs/reference/services/data-v1/">caliper::Data</a></dt><dd>Runs SQL over the app&#x27;s built-in analytical store and returns Arrow tables; datasets can be registered and shared between applets.</dd>
-            <dt><a href="docs/reference/services/artifacts-v1/">caliper::Artifacts</a></dt><dd>Stores checkpoints and exports by their content, so identical files are kept once and each records where it came from.</dd>
-            <dt><a href="docs/reference/services/export-v1/">caliper::Export</a></dt><dd>Re-renders a view offscreen at any resolution and saves a pixel-exact PNG, alone or as a sequence, with a JSON record of how it was made.</dd>
+            <dt><a href="docs/references/sugar/">caliper::Applet</a></dt><dd>The class an applet derives from: the host calls on_init once, on_frame every frame and on_cleanup when the applet closes.</dd>
+            <dt><a href="docs/references/service-device-v1/">caliper::Device</a></dt><dd>Reports the GPU the app is running on (Metal, CUDA or the CPU), so the applet trains on the same device.</dd>
+            <dt><a href="docs/references/service-tensor-bridge-v1/">caliper::Bridge</a></dt><dd>Turns a GPU tensor into a texture the interface can draw, colormapped on the GPU without a copy to the CPU.</dd>
+            <dt><a href="docs/references/service-geometry-v1/">caliper::Geometry</a></dt><dd>Draws points, lines, meshes and instanced shapes straight from vertex data the applet keeps in GPU memory.</dd>
+            <dt><a href="docs/references/service-jobs-v1/">caliper::Jobs</a></dt><dd>Runs work such as training on a background thread, with progress shown in the app and a cancel the applet checks.</dd>
+            <dt><a href="docs/references/service-metrics-v1/">caliper::Metrics</a></dt><dd>Records each run&#x27;s scalars and hyperparameters, so loss curves and run comparisons outlast the session.</dd>
+            <dt><a href="docs/references/service-data-v1/">caliper::Data</a></dt><dd>Runs SQL over the app&#x27;s built-in analytical store and returns Arrow tables; datasets can be registered and shared between applets.</dd>
+            <dt><a href="docs/references/service-artifacts-v1/">caliper::Artifacts</a></dt><dd>Stores checkpoints and exports by their content, so identical files are kept once and each records where it came from.</dd>
+            <dt><a href="docs/references/service-export-v1/">caliper::Export</a></dt><dd>Re-renders a view offscreen at any resolution and saves a pixel-exact PNG, alone or as a sequence, with a JSON record of how it was made.</dd>
           </dl>
-          <a class="link xp-more" href="docs/reference/torch-on-each-platform/">Torch objects on each platform →</a>
+          <a class="link xp-more" href="docs/references/torch-on-each-platform/">Torch objects on each platform →</a>
         </div>
       </div>
       <div class="sub-minor" id="example-app"><div class="kicker">LibTorch · Metal or CUDA</div><h4>C++ Example</h4></div>
