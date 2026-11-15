@@ -44,6 +44,8 @@ target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk calipe
 # own server on 127.0.0.1, and the codec against the golden frames in
 # tests/fixtures/wire_v3. Portable and headless, so it rides the fast suite.
 target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_wire.cpp)
+# The hub (src/host/net/hub.h) in-process with fake producers and viewers.
+target_sources(caliper_tests PRIVATE test_net_hub.cpp)
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
