@@ -430,6 +430,7 @@ public:
             s->aux.resize(aux_n * 4);
             std::memcpy(s->aux.data(), reinterpret_cast<const void*>(aux_ptr), aux_n * 4);
         }
+        if (stats_ptr == 0) host_stats(*s);
         std::shared_ptr<const Snap> snap = std::move(s);
         std::lock_guard<std::mutex> g(mu_);
         ++published_;
@@ -444,6 +445,35 @@ public:
             st->second.snap = snap;
         }
         wake_all();
+    }
+
+    // The stats of a snapshot whose producer did not compute them on its device,
+    // from the payload as sent (NaN left out; NaN when nothing is left):
+    // heatmap [min, max]; points [aux min, aux max, x min, x max, y min, y max,
+    // z min, z max] (z 0 for 2-D points). Run with the GIL released.
+    static void host_stats(Snap& s) {
+        const double nan = std::nan("");
+        auto range = [&](const float* p, size_t n, size_t stride, double* lo, double* hi) {
+            float a = INFINITY, b = -INFINITY;
+            for (size_t i = 0; i < n; ++i) {
+                const float v = p[i * stride];
+                if (v < a) a = v;
+                if (v > b) b = v;
+            }
+            *lo = a <= b ? (double)a : nan;
+            *hi = a <= b ? (double)b : nan;
+        };
+        const float* f = reinterpret_cast<const float*>(s.data.data());
+        if (s.kind == CALIPER_NET_KIND_HEATMAP && s.dtype == CALIPER_NET_DTYPE_F32) {
+            s.stats.assign(2, nan);
+            range(f, s.data.size() / 4, 1, &s.stats[0], &s.stats[1]);
+        } else if (s.kind == CALIPER_NET_KIND_POINTS && s.dtype == CALIPER_NET_DTYPE_F32 && s.shape.size() == 2) {
+            const size_t n = (size_t)s.shape[0], d = (size_t)s.shape[1];
+            s.stats.assign(8, 0.0);
+            if (s.has_aux) range(reinterpret_cast<const float*>(s.aux.data()), s.aux.size() / 4, 1,
+                                 &s.stats[0], &s.stats[1]);
+            for (size_t k = 0; k < d && k < 3; ++k) range(f + k, n, d, &s.stats[2 + 2 * k], &s.stats[3 + 2 * k]);
+        }
     }
 
     void series_append(const std::string& view, uint64_t ptr, size_t n, uint64_t stamp_ns) {

@@ -442,8 +442,8 @@ def test_heatmap_pooled_to_budget(server, device):
             assert np.allclose(a, ref, atol=1e-5)
             assert s.axes == [{"dim": "row", "start": 0, "step": 1, "count": 700, "size": 512},
                               {"dim": "col", "start": 0, "step": 1, "count": 1000, "size": 512}]
-            lo, hi = s.stats
-            assert lo == pytest.approx(W.min().cpu().item()) and hi == pytest.approx(W.max().cpu().item())
+            lo, hi = s.stats                     # [min, max] of the payload as sent
+            assert lo == pytest.approx(float(a.min())) and hi == pytest.approx(float(a.max()))
             assert s.flags == w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX and s.data_view == r.data_view
             # a new budget through VIEW_REQUEST
             await c.send(w.ViewRequest(9, 1, "w", {"budget": {"max_extent": 100, "pool": "max"}}))
@@ -452,6 +452,21 @@ def test_heatmap_pooled_to_budget(server, device):
             s = await c.expect(w.Snapshot, pump=show, pred=lambda m: m.data.shape == (100, 100))
             ref = F.adaptive_max_pool2d(W.cpu()[None, None], (100, 100))[0, 0].numpy()
             assert np.array_equal(s.data.array(), ref)
+    run(go())
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_mosaic_range_leaves_out_the_padding(server, device):
+    x = torch.rand(10, 6, 5, device=device) + 2.0          # 10 channels: a 4x3 mosaic, 2 cells NaN
+    show = lambda: caliper.show(x, name="mosaic", rate=0)  # noqa: E731
+
+    async def go():
+        async with Client(server) as c:
+            await c.subscribe(1, "mosaic", pump=show)
+            s = await c.expect(w.Snapshot, pump=show)
+            a = s.data.array()
+            assert np.isnan(a).any() and a.shape == (18, 20)
+            assert s.stats == pytest.approx([float(np.nanmin(a)), float(np.nanmax(a))])
     run(go())
 
 

@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 
 from . import _wire
 from ._net_ring import Group, NetRing, canonical
-from ._ring import KIND_SERIES, SnapshotMeta, Slot
+from ._ring import KIND_HEATMAP, KIND_POINTS, KIND_SERIES, SnapshotMeta, Slot
 
 __all__ = ["serve", "current_server", "NetServer", "NetTransport", "Link"]
 
@@ -645,7 +645,10 @@ class _Producer:
         stage, red = p.stage, p.red
         data = stage.data.numpy().copy()
         aux = stage.aux.numpy().copy() if stage.aux is not None else None
-        stats = stage.stats[:red.stats_count].numpy().tolist() if red.stats_count else []
+        if red.stats is None:
+            stats = host_stats(p.kind, data, aux)
+        else:
+            stats = stage.stats[:red.stats_count].numpy().tolist() if red.stats_count else []
         stage.busy = False
         self.counters["published"] += 1
         snap = SnapData(p.view, p.view_id, p.seq, p.stamp_ns, p.kind, p.group.resolved,
@@ -654,6 +657,25 @@ class _Producer:
             subs = list(p.group.subs)
         for link, sub in subs:
             link.offer_snapshot(sub, snap)
+
+
+def host_stats(kind: int, data, aux) -> list:
+    """The stats of a snapshot from its payload as sent (NaN left out, NaN when
+    nothing is left), as caliper._netio computes them: heatmap [min, max];
+    points [aux min, aux max, x min, x max, y min, y max, z min, z max]."""
+    import numpy as np
+
+    def rng(a):
+        a = a[~np.isnan(a)] if a.size else a
+        return [float(a.min()), float(a.max())] if a.size else [float("nan")] * 2
+    if kind == KIND_HEATMAP:
+        return rng(data.reshape(-1))
+    if kind == KIND_POINTS:
+        out = rng(aux) if aux is not None else [0.0, 0.0]
+        for k in range(3):
+            out += rng(data[:, k]) if k < data.shape[1] else [0.0, 0.0]
+        return out
+    return []
 
 
 class _NetMeta(SnapshotMeta):

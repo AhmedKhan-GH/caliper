@@ -154,6 +154,8 @@ class _NativeProducer(_Producer):
                         busy = True
                         break
                     self.nio.series_append(st.name, item.buf.data_ptr(), item.n, item.stamp_ns)
+                    if len(st.pool) < 4:
+                        st.pool.append(item.buf)              # copied: the training thread may reuse it
                 q.popleft()
             if floats:
                 self._append(st.name, floats, stamp)
@@ -172,12 +174,15 @@ class _NativeProducer(_Producer):
         if gid is not None:
             data = stage.data
             aux = stage.aux
+            axes = g.__dict__.get("axes_json")
+            if axes is None or g.__dict__.get("axes") != red.axes:
+                axes = json.dumps(red.axes, sort_keys=True)
+                g.__dict__["axes"], g.__dict__["axes_json"] = red.axes, axes
             self.nio.publish(
-                gid, p.view, p.seq, p.stamp_ns, int(p.kind),
-                json.dumps(red.axes, sort_keys=True), json.dumps(red.tile, sort_keys=True)
-                if red.tile is not None else "",
+                gid, p.view, p.seq, p.stamp_ns, int(p.kind), axes,
+                json.dumps(red.tile, sort_keys=True) if red.tile is not None else "",
                 int(red.colormap), int(red.flags), float(red.vmin), float(red.vmax),
-                stage.stats.data_ptr(), int(red.stats_count),
+                stage.stats.data_ptr() if red.stats is not None else 0, int(red.stats_count),
                 int(red.points_dims or 0), int(red.label_count if red.label_count is not None else -1),
                 int(_DTYPE[str(data.dtype)]), list(data.shape), data.data_ptr(),
                 data.numel() * data.element_size(),

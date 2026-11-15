@@ -42,6 +42,7 @@ from ._ring import DEFAULT_RATE_HZ, KIND_SERIES, rate_interval
 OFFER_REFRESH_S = 1.0          # an unsubscribed view's offer is rechecked this often
 STAGE_SETS = 3                 # pinned staging sets per group: in flight, pending, free
 SERIES_CHUNK = 64              # tensor values gathered before a chunk is moved to the host
+SERIES_WATCHED_S = 1.0 / 30    # chunk cadence of a series a viewer watches
 SERIES_IDLE_FLUSH_S = 1.0      # chunk cadence of a series nobody watches
 SERIES_CAPACITY = 4096         # values kept of one huge tensor call (as caliper.series)
 
@@ -138,6 +139,7 @@ class SeriesState:
                                                  # not safe from two threads)
     flush_t: float = -math.inf
     watched: bool = False                        # some subscription (read on the training thread)
+    pool: list = field(default_factory=list)     # pinned chunk buffers the pump has finished with
 
 
 class NetRing:
@@ -332,7 +334,7 @@ class NetRing:
         s.nref += n
         s.thread = threading.get_ident()
         now = time.perf_counter()
-        cadence = self.default_interval if s.watched else SERIES_IDLE_FLUSH_S
+        cadence = SERIES_WATCHED_S if s.watched else SERIES_IDLE_FLUSH_S
         if s.nref >= SERIES_CHUNK or now - s.flush_t >= cadence:
             self._flush_series(s, now)
         return s.watched
@@ -345,6 +347,9 @@ class NetRing:
         if not refs:
             return
         dev = next((r.device for r in refs if isinstance(r, torch.Tensor)), torch.device("cpu"))
+        if all(isinstance(r, torch.Tensor) and r.ndim == 0 and r.device == dev for r in refs):
+            self._move(s, torch.stack(refs), n, dev)          # the common case: loss.detach()
+            return
         parts = []
         floats = []
         for r in refs:
@@ -358,12 +363,22 @@ class NetRing:
                 floats.append(r)
         if floats:
             parts.append(torch.tensor(floats, dtype=torch.float32).to(dev))
-        chunk = parts[0] if len(parts) == 1 else torch.cat(parts)
-        if chunk.dtype != torch.float32:
-            chunk = chunk.float()
+        self._move(s, parts[0] if len(parts) == 1 else torch.cat(parts), n, dev)
+
+    def _move(self, s: SeriesState, chunk, n: int, dev) -> None:
+        """Queue chunk's n values to pinned host memory (a buffer the pump has
+        finished with when there is one) and record an event."""
+        import torch
         pin = dev.type != "cpu"
-        buf = torch.empty(n, dtype=torch.float32, pin_memory=pin)
-        buf.copy_(chunk, non_blocking=pin)
+        buf = None
+        while s.pool:
+            b = s.pool.pop()
+            if b.numel() >= n:
+                buf = b
+                break
+        if buf is None:
+            buf = torch.empty(max(n, SERIES_CHUNK), dtype=torch.float32, pin_memory=pin)
+        buf[:n].copy_(chunk, non_blocking=pin)                # casts to float32 if needed
         ev = None
         if dev.type == "mps":
             ev = torch.mps.Event()
