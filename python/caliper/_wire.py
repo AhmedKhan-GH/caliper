@@ -247,8 +247,9 @@ class Frame:
 
 
 def encode_frame(type_: int, meta: dict, sections=(), *, flags: int = 0,
-                 minor: int = MINOR) -> bytes:
-    """Encode one frame. ``meta["sections"]`` is written from ``sections``."""
+                 minor: int = MINOR, as_bytearray: bool = False):
+    """Encode one frame. ``meta["sections"]`` is written from ``sections``.
+    ``as_bytearray=True`` returns the frame without a final copy into bytes."""
     sections = list(sections)
     meta = dict(meta)
     if sections:
@@ -277,8 +278,9 @@ def encode_frame(type_: int, meta: dict, sections=(), *, flags: int = 0,
     mo = HEADER_BYTES + 4 * len(sections)
     out[mo:mo + len(mbytes)] = mbytes
     for s, off, n in zip(sections, offsets, lens):
-        out[off:off + n] = memoryview(s.data).cast("B")
-    return bytes(out)
+        if n:          # numpy copies without holding the GIL
+            np.frombuffer(out, np.uint8, n, off)[:] = np.frombuffer(s.data, np.uint8, n)
+    return out if as_bytearray else bytes(out)
 
 
 def _no_constant(name):
@@ -888,9 +890,10 @@ MESSAGES = {cls.TYPE: cls for cls in (Hello, Welcome, Bye, Error, Ping, Pong, Se
                                       Snapshot, Series, Event)}
 
 
-def encode(msg, *, minor: int = MINOR) -> bytes:
-    """The frame bytes of a message object."""
-    return encode_frame(msg.TYPE, msg.to_meta(), msg.to_sections(), minor=minor)
+def encode(msg, *, minor: int = MINOR, as_bytearray: bool = False):
+    """The frame bytes of a message object (a bytearray with ``as_bytearray``)."""
+    return encode_frame(msg.TYPE, msg.to_meta(), msg.to_sections(), minor=minor,
+                        as_bytearray=as_bytearray)
 
 
 def decode(buf):

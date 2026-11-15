@@ -217,7 +217,9 @@ def _dispatch(kind, name, rate, make, a, b, c, d, e):
                 continue
             if plan is None:
                 plan = make(a, b, c, d, e)
-            if ring.take(name, plan, now):
+            take_call = getattr(ring, "take_call", None)   # the serve() route also wants the call
+            if (take_call(name, plan, now, (a, b, c, d, e)) if take_call is not None
+                    else ring.take(name, plan, now)):
                 taken = True
                 if r.sync:
                     sync = r
@@ -308,6 +310,9 @@ def series(value, name: str = "series", rate=None):
     series ``name`` (a ring of the last 4096 values, on the value's device).
     Every call appends; the view is updated at most ``rate`` times per second."""
     _name_ok(name)
+    tap = _series_tap               # caliper.serve() keeps every value for late viewers
+    if tap is not None:
+        tap(name, value)
     for r in _routes or _auto_routes():
         if r.transport.attached():
             break
@@ -625,3 +630,23 @@ def widget(name: str, kind: str | None = None, *, height: int = 320):
     ``data_view`` traits carry what the viewer picks back to Python."""
     from ._widget import widget as _widget
     return _widget(name, kind, height=height)
+
+
+# ---------------------------------------------------------------------------
+# network stream (caliper.serve: wire protocol v3 over a WebSocket on 127.0.0.1)
+# ---------------------------------------------------------------------------
+__all__ += ["serve"]
+_server = None                      # the running caliper._net.NetServer (read by the widget)
+_series_tap = None                  # its series tap while it runs
+
+
+def serve(port: int = 0):
+    """Stream every view of this process to viewers on this machine: the
+    browser page at the URL this prints (``http://127.0.0.1:<port>/?token=<token>``),
+    the notebook widget and the Caliper app. ``port=0`` picks a free port.
+    Returns the server (``url``, ``port``, ``token``, ``stream_url``,
+    ``session``, ``stats()``, ``on_event(fn)``, ``events()``, ``close()``; also a
+    context manager); a second call returns the running server. Loopback only,
+    with a session token. :func:`close` stops it."""
+    from ._net import serve as _serve
+    return _serve(port)
