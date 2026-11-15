@@ -18,6 +18,7 @@ from __future__ import annotations
 import enum
 import json
 import math
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -246,10 +247,12 @@ class Frame:
         return None
 
 
-def encode_frame(type_: int, meta: dict, sections=(), *, flags: int = 0,
-                 minor: int = MINOR, as_bytearray: bool = False):
-    """Encode one frame. ``meta["sections"]`` is written from ``sections``.
-    ``as_bytearray=True`` returns the frame without a final copy into bytes."""
+def frame_parts(type_: int, meta: dict, sections=(), *, flags: int = 0, minor: int = MINOR):
+    """One frame as a list of buffers that concatenate to its bytes, without
+    copying the sections: the header, section table and metadata in one bytes
+    object, then for each section its zero padding (if any) and its data.
+    Returns ``(parts, frame_len)``. A sender can hand the list to a socket as
+    it is (``sendmsg``); :func:`encode_frame` joins it."""
     sections = list(sections)
     meta = dict(meta)
     if sections:
@@ -271,20 +274,47 @@ def encode_frame(type_: int, meta: dict, sections=(), *, flags: int = 0,
     frame_len = pos
     if frame_len > MAX_FRAME_BYTES:
         raise WireError("too_big", f"frame of {frame_len} bytes", CLOSE_TOO_BIG)
-    out = bytearray(frame_len)
-    HEADER.pack_into(out, 0, MAGIC, MAJOR, minor, int(type_), flags, frame_len, len(mbytes),
-                     len(sections), 0)
-    struct.pack_into(f"<{len(lens)}I", out, HEADER_BYTES, *lens)
-    mo = HEADER_BYTES + 4 * len(sections)
-    out[mo:mo + len(mbytes)] = mbytes
+    head = HEADER.pack(MAGIC, MAJOR, minor, int(type_), flags, frame_len, len(mbytes),
+                       len(sections), 0) + struct.pack(f"<{len(lens)}I", *lens) + mbytes
+    parts = [head]
+    end = len(head)
     for s, off, n in zip(sections, offsets, lens):
-        if n:          # numpy copies without holding the GIL
-            np.frombuffer(out, np.uint8, n, off)[:] = np.frombuffer(s.data, np.uint8, n)
-    return out if as_bytearray else bytes(out)
+        if off > end:
+            parts.append(bytes(off - end))
+        if n:
+            parts.append(memoryview(s.data).cast("B"))
+        end = off + n
+    return parts, frame_len
+
+
+def encode_frame(type_: int, meta: dict, sections=(), *, flags: int = 0,
+                 minor: int = MINOR, as_bytearray: bool = False):
+    """Encode one frame. ``meta["sections"]`` is written from ``sections``.
+    ``as_bytearray=True`` returns a bytearray."""
+    parts, _ = frame_parts(type_, meta, sections, flags=flags, minor=minor)
+    out = b"".join(parts)
+    return bytearray(out) if as_bytearray else out
 
 
 def _no_constant(name):
     raise ValueError(f"{name} is not JSON")
+
+
+_JSON_STRING = re.compile(rb'"(?:[^"\\]|\\.)*"', re.S)
+_OPEN = np.zeros(256, np.int8)
+_OPEN[[ord("{"), ord("[")]] = 1
+_OPEN[[ord("}"), ord("]")]] = -1
+
+
+def json_depth(text: bytes) -> int:
+    """The deepest nesting of objects and arrays in JSON text, found without
+    parsing it (strings are skipped), so that a hostile peer cannot make the
+    parser recurse. Linear time; about a millisecond per MiB."""
+    if b"[" not in text and b"{" not in text:
+        return 0
+    bare = _JSON_STRING.sub(b"", text) if b'"' in text else text
+    steps = _OPEN[np.frombuffer(bare, np.uint8)]
+    return int(np.cumsum(steps, dtype=np.int64).max(initial=0))
 
 
 def _depth(v, d=1) -> int:
@@ -329,11 +359,13 @@ def decode_frame(buf) -> Frame:
         pos += ln
     if pos != frame_len:
         raise WireError("malformed", f"layout ends at {pos}, frame_len {frame_len}")
+    raw = bytes(mv[table_end:meta_end])
+    if json_depth(raw) > MAX_JSON_DEPTH:
+        raise WireError("malformed", f"metadata nested deeper than {MAX_JSON_DEPTH}")
     try:
-        text = bytes(mv[table_end:meta_end]).decode("utf-8")
-        meta = json.loads(text, parse_constant=_no_constant)
-    except (UnicodeDecodeError, ValueError) as e:
-        raise WireError("malformed", f"metadata: {e}") from None
+        meta = json.loads(raw.decode("utf-8"), parse_constant=_no_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        raise WireError("malformed", f"metadata: {type(e).__name__}: {e}") from None
     if not isinstance(meta, dict):
         raise WireError("malformed", "metadata is not a JSON object")
     if _depth(meta) > MAX_JSON_DEPTH:
@@ -894,6 +926,11 @@ def encode(msg, *, minor: int = MINOR, as_bytearray: bool = False):
     """The frame bytes of a message object (a bytearray with ``as_bytearray``)."""
     return encode_frame(msg.TYPE, msg.to_meta(), msg.to_sections(), minor=minor,
                         as_bytearray=as_bytearray)
+
+
+def encode_parts(msg, *, minor: int = MINOR):
+    """A message object as :func:`frame_parts`: ``(buffers, frame_len)``."""
+    return frame_parts(msg.TYPE, msg.to_meta(), msg.to_sections(), minor=minor)
 
 
 def decode(buf):

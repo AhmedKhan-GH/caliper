@@ -180,6 +180,25 @@ def test_every_truncation_rejected(name):
         _reject(buf[:n], "truncated", 4000)
 
 
+@pytest.mark.parametrize("depth", [17, 1000, 100_000])
+def test_deep_metadata_rejected_without_recursion(depth):
+    """A hostile peer's deeply nested metadata is malformed (4000), never a
+    RecursionError in the receiver."""
+    for opener, closer in ((b"[", b"]"), (b'{"a":', b"}")):
+        meta = b'{"x":' + opener * depth + closer * depth + b"}"
+        _reject(bytes(GEN._raw(w.MsgType.PING, meta)), "malformed", 4000)
+    unclosed = b'{"x":' + b"[" * 200_000 + b"}"
+    _reject(bytes(GEN._raw(w.MsgType.PING, unclosed)), "malformed", 4000)
+
+
+def test_depth_ignores_brackets_in_strings():
+    meta = {"nonce": 3, "note": "[[[[[[[[[[[[[[[[[[[[{{{{{{{{{{{{{{{{{{ \\\" ]]"}
+    assert w.decode(w.encode_frame(w.MsgType.PING, meta)) == w.Ping(3)
+    nested = {"a": [[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]}                 # depth 16: allowed
+    assert w.decode_frame(w.encode_frame(0x7777, nested)).meta == nested
+    assert w.json_depth(b'{"a":[[["]]]]]]"]]]}') == 4
+
+
 def test_trailing_bytes_and_layout():
     _reject(PING + b"\0", "malformed", 4000)
     _reject(_patch(PING, "<I", 16, len(PING) - 24 + 1), "malformed", 4000)

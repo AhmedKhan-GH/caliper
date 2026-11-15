@@ -102,10 +102,10 @@ class Client:
         return await self.expect(w.ViewReply, pred=lambda m: m.request_id == 100 + sub, pump=pump)
 
 
-def _http(port, path, headers):
-    """A raw HTTP/1.1 GET; returns (status, headers dict, body)."""
+def _http(port, path, headers, method="GET"):
+    """A raw HTTP/1.1 request; returns (status, headers dict, body)."""
     with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
-        lines = [f"GET {path} HTTP/1.1"] + [f"{k}: {v}" for k, v in headers.items()]
+        lines = [f"{method} {path} HTTP/1.1"] + [f"{k}: {v}" for k, v in headers.items()]
         s.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
         data = b""
         while True:
@@ -241,6 +241,13 @@ def test_other_paths_404(server):
     h = {"Host": f"127.0.0.1:{server.port}"}
     assert _http(server.port, "/v3/other", h)[0] == 404
     assert _http(server.port, "/../etc/passwd", h)[0] == 404
+
+
+@pytest.mark.parametrize("method", ["POST", "HEAD", "PUT", "OPTIONS"])
+def test_only_get(server, method):
+    h = {"Host": f"127.0.0.1:{server.port}", "Content-Length": "0"}
+    st, hdrs, _ = _http(server.port, "/", h, method)
+    assert st == 405 and hdrs["allow"] == "GET"
 
 
 def test_producer_refused_4002(server):

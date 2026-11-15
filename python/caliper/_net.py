@@ -40,6 +40,7 @@ import os
 import queue
 import re
 import secrets
+import struct
 import sys
 import threading
 import time
@@ -58,7 +59,7 @@ __all__ = ["serve", "current_server", "NetServer", "NetTransport", "Link"]
 SERIES_RETAIN = 1 << 20            # values of each series the producer keeps (>= SERIES_RETAIN_MIN)
 MAX_CONNECTIONS = 64
 WRITE_LIMIT = 1 << 16              # the socket buffer a send waits to drain below
-POLL_S = 0.001                     # the pump's event poll while snapshots are in flight
+POLL_S = 0.002                     # the pump's event poll while snapshots are in flight
 SCRIPT_MAX = 127
 
 _log = logging.getLogger("caliper.net")
@@ -200,9 +201,10 @@ class Link:
     """The producer's side of one connection after the handshake.
 
     ``handle(frame)`` processes one received frame and may raise
-    :class:`_Fatal`; ``next_frame(now)`` returns ``(bytes, None)`` for the next
-    frame to send, or ``(None, wait)`` with the seconds until a rate-limited
-    frame is due (None: nothing pending). ``wake`` is set when something new
+    :class:`_Fatal`; ``next_frame(now)`` returns ``(frame, None)`` for the next
+    frame to send, either bytes or (for snapshots and series) the pair
+    ``(buffers, frame_len)`` of ``_wire.encode_parts``, or ``(None, wait)``
+    with the seconds until a rate-limited frame is due (None: nothing pending). ``wake`` is set when something new
     may be sendable. Network thread only."""
 
     def __init__(self, producer: "_Producer", peer: str = ""):
@@ -227,6 +229,16 @@ class Link:
         if _VIEWS not in self.control:
             self.control.append(_VIEWS)
         self.wake.set()
+
+    def start_upstream(self) -> None:
+        """After a hub's WELCOME on an outbound producer connection (not built
+        yet): the hub is this session's one viewer, so the link is attached and
+        sends VIEWS; everything else is the same as for a viewer."""
+        self.follows_default = False
+        if not self.attached:
+            self.attached = True
+            self.p.attached_changed(+1)
+        self.queue_views()
 
     def start(self) -> None:
         """After WELCOME: the session list and the server's default attachment."""
@@ -385,8 +397,8 @@ class Link:
             s.last_sent = now
             self.stats["series_sent"] += 1
             self.stats["series_values"] += stop - start
-            return _wire.encode(_wire.Series(s.sub, s.view, start, h.total, h.stamp_ns, vals),
-                                as_bytearray=True), None
+            return _wire.encode_parts(_wire.Series(s.sub, s.view, start, h.total, h.stamp_ns,
+                                                   vals)), None
         best = None
         for s in self.subs.values():
             if s.snap is None:
@@ -405,13 +417,13 @@ class Link:
         return None, wait
 
     @staticmethod
-    def _snapshot_frame(sub: int, snap: SnapData) -> bytes:
+    def _snapshot_frame(sub: int, snap: SnapData):
         r = snap.red
-        return _wire.encode(_wire.Snapshot(
+        return _wire.encode_parts(_wire.Snapshot(
             sub, snap.view, snap.seq, snap.stamp_ns, snap.kind, snap.resolved, snap.data,
             aux=snap.aux, colormap=r.colormap, flags=r.flags, vmin=r.vmin, vmax=r.vmax,
             stats=snap.stats, axes=r.axes, tile=r.tile, points_dims=r.points_dims,
-            label_count=r.label_count), as_bytearray=True)
+            label_count=r.label_count))
 
     def close(self) -> None:
         if self.closed:
@@ -691,6 +703,37 @@ def _static_file(path: str):
     return _response(200, body, _assets.content_type(name))
 
 
+def _ws_header(n: int) -> bytes:
+    """RFC 6455 header of an unmasked, unfragmented binary frame of n bytes."""
+    if n < 126:
+        return bytes((0x82, n))
+    if n < 65536:
+        return struct.pack("!BBH", 0x82, 126, n)
+    return struct.pack("!BBQ", 0x82, 127, n)
+
+
+async def _send_parts(ws, parts: list, n: int) -> None:
+    """Send one binary message given as buffers without copying them.
+
+    websockets copies a message twice while it frames it; for megabyte
+    snapshots that is most of the network thread's time, and it holds the GIL
+    the training loop needs. A server frame is unmasked, so this writes the
+    2 to 10 header bytes and the buffers to the connection's transport in one
+    call (asyncio sends a list with sendmsg, no copy), then waits for the write
+    buffer with websockets' own flow control. Nothing else can write in between:
+    the call does not yield. Falls back to ``ws.send`` when the connection is
+    not open or the attributes are missing."""
+    from websockets.protocol import State
+    transport = getattr(ws, "transport", None)
+    proto = getattr(ws, "protocol", None)
+    if transport is None or proto is None or proto.state is not State.OPEN \
+            or transport.is_closing():
+        await ws.send(b"".join(parts))
+        return
+    transport.writelines([_ws_header(n), *parts])
+    await ws.drain()
+
+
 class _Listener:
     """The websockets server on 127.0.0.1 and the connections it accepts."""
 
@@ -716,6 +759,10 @@ class _Listener:
         if not host_ok(request.headers.get("Host"), self.port):
             s.counters["refused_host"] += 1
             return _response(403, b"Forbidden: Host\n")
+        if getattr(request, "method", "GET") != "GET":
+            r = _response(405, b"Method Not Allowed\n")
+            r.headers["Allow"] = "GET"
+            return r
         path, _, query = request.path.partition("?")
         if path == _wire.PATH:
             if not origin_ok(request.headers.get("Origin")):
@@ -852,9 +899,14 @@ class _Listener:
                     except asyncio.TimeoutError:
                         pass
                     continue
-            await ws.send(frame)
+            if type(frame) is tuple:
+                parts, n = frame
+                await _send_parts(ws, parts, n)
+            else:
+                await ws.send(frame)
+                n = len(frame)
             link.stats["frames_out"] += 1
-            link.stats["bytes_out"] += len(frame)
+            link.stats["bytes_out"] += n
 
     async def shutdown(self) -> None:
         bye = _wire.encode(_wire.Bye(_wire.BYE_SHUTDOWN, "the producer is closing"))
