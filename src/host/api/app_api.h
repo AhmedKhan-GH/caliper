@@ -15,7 +15,9 @@
 //
 // The caller answers the calls of the frame thread itself (main.cpp, shot.cpp):
 // applets with applets_json() (host_cli.h), launch by its own navigation, and
-// capture by reading its canvas back at the end of a frame.
+// capture by reading back a frame it drew: shot reads its offscreen canvas at
+// the end of a frame, and the app the frame its window presents
+// (window_captures.h).
 // ============================================================================
 #include "api/api_server.h"
 #include "host_cli.h"

@@ -30,7 +30,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 // §2.1 (held-open NTFS handle) and the Vulkan VMM shareable-handle blocks below
@@ -541,6 +544,58 @@ Quad make_topleft_quad(uint32_t flat) {
 TEST_CASE("export live: the test process has no Dock icon or menu bar") {
     if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     CHECK(caliper_host::background_activation_policy_active());
+}
+
+// Caliper API's capture in the app's window (api/window_captures.h): the
+// Metal window path copies the frame it presents, with no extra render. The
+// window is the hidden one of this binary (glfw_background.h), so the
+// swapchain path really runs and nothing appears on screen.
+TEST_CASE("export live: the window's presented frame is read back for a capture (window path)") {
+    if (!env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+    HostRenderer& r = *env().renderer;
+    REQUIRE(r.window_capture_supported());
+    int fw = 0, fh = 0;
+    glfwGetFramebufferSize(env().window, &fw, &fh);
+    REQUIRE(fw > 0);
+    REQUIRE(r.window_capture_request());
+    std::vector<uint8_t> px;
+    int w = 0, h = 0;
+    HostRenderer::WindowCapture got = HostRenderer::WindowCapture::Pending;
+    int frames = 0;
+    for (; frames < 200 && got == HostRenderer::WindowCapture::Pending; ++frames) {
+        r.new_frame();
+        // A red square at the top left of the frame, over the clear colour.
+        ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2(16, 16), IM_COL32(255, 0, 0, 255));
+        r.render(fw, fh);
+        got = r.window_capture_poll(&px, &w, &h);
+        if (got == HostRenderer::WindowCapture::Pending)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    MESSAGE("the read-back was ready after " << frames << " frames");
+    REQUIRE(got == HostRenderer::WindowCapture::Ready);
+    CHECK(w == fw);
+    CHECK(h == fh);
+    REQUIRE(px.size() == (size_t)w * (size_t)h * 4);
+    auto at = [&](int x, int y) { return px.data() + ((size_t)y * (size_t)w + (size_t)x) * 4; };
+    // Top row first, RGBA, opaque: red at the top left, the clear colour
+    // (0.05, 0.05, 0.08) at the bottom right.
+    CHECK(at(1, 1)[0] == 255);
+    CHECK(at(1, 1)[1] == 0);
+    CHECK(at(1, 1)[2] == 0);
+    CHECK(at(w - 2, h - 2)[0] < 30);
+    CHECK(at(w - 2, h - 2)[2] < 40);
+    CHECK(at(w - 2, h - 2)[3] == 255);
+    std::unordered_set<uint32_t> colours;
+    for (size_t i = 0; i < (size_t)w * (size_t)h; ++i) {
+        uint32_t c;
+        std::memcpy(&c, px.data() + 4 * i, 4);
+        colours.insert(c);
+    }
+    CHECK(colours.size() > 1);
+    // Nothing armed: the next poll reports none, and frames go on.
+    CHECK(r.window_capture_poll(&px, &w, &h) == HostRenderer::WindowCapture::None);
+    r.new_frame();
+    r.render(fw, fh);
 }
 
 TEST_CASE("export live: caps track the geometry primitives cap when a renderer is bound") {

@@ -234,6 +234,25 @@ public:
     virtual bool canvas_read_pixels(uint8_t* /*dst*/, int /*stride*/) { return false; }
     virtual void canvas_shutdown() {}
 
+    // ---- Window capture (the swapchain path; Caliper API's capture in the
+    // app, api/window_captures.h) -------------------------------------------
+    // A read-back of the window's frame as it is presented, with no extra
+    // render and no wait on the frame thread. window_capture_request(), called
+    // before new_frame(), asks for the frame that the next render() presents
+    // to be copied out as it is presented; window_capture_poll() says, without
+    // waiting, whether that copy has finished on the GPU and then hands it
+    // over: tightly packed opaque RGBA8 at the framebuffer's size, top row
+    // first. A frame without a drawable leaves the request armed for the next
+    // one. Default: unsupported (request returns false). Metal implements it;
+    // the GL and Vulkan backends keep the default.
+    enum class WindowCapture { None, Pending, Ready, Failed };
+    virtual bool window_capture_supported() const { return false; }
+    virtual bool window_capture_request() { return false; }
+    virtual WindowCapture window_capture_poll(std::vector<uint8_t>* /*rgba*/, int* /*w*/,
+                                              int* /*h*/) {
+        return WindowCapture::None;
+    }
+
     // Test-only: copy a texture's pixels back to host RGBA8 (w*h*4 bytes), or
     // empty on failure. GL/Metal read back their handle directly in the gfx
     // harness; Vulkan's CaliperTextureId is an opaque descriptor set, so the

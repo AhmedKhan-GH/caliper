@@ -3,7 +3,7 @@
 Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), and returns a capture of the frame the app draws. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
-    Version 0, built and tested on macOS. A capture needs the windowless mode, `caliper shot --api`; the app in its window answers a capture with 501, because the frame of a window cannot be read back yet. Driving the app's state from outside, beyond launching an applet, comes with the command layer of [Phase 3](../plans/roadmap.md#phase-3-agent-built-panels).
+    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. Driving the app's state from outside, beyond launching an applet, comes with the command layer of [Phase 3](../plans/roadmap.md#phase-3-agent-built-panels).
 
 | Method and path | What it does |
 |---|---|
@@ -47,7 +47,7 @@ The session token is new for each run: 32 characters of `A-Z`, `a-z`, `0-9`, `_`
 
 `caliper shot` draws the app's applet page into an offscreen canvas and shows nothing on screen ([caliper shot](cli.md#caliper-shot)). With `--api`, it serves the API while it draws its frames, so it is the app without a window: `--frames` sets how long it runs, at about 60 frames a second, and SIGINT (Ctrl-C) or SIGTERM ends the frames early. Either way it then writes its image of the applet it shows, as usual, stops the API, removes the API file and exits with 0. The API file goes to the app-data folder also when `shot` keeps its stores in a temporary folder.
 
-A capture is read from the offscreen canvas at the end of a frame, with the read-back that `caliper shot` uses for its image. That is why captures work in this mode and not in the window.
+A capture is read from the offscreen canvas at the end of a frame, with the read-back that `caliper shot` uses for its image.
 
 ## Security
 
@@ -97,7 +97,12 @@ Opens the page of the applet with that manifest id, as a click on its row on the
 
 ### GET /v0/capture.png
 
-The frame the app draws, as an opaque PNG of the canvas's size in pixels, read back at the end of the next frame. In the windowless mode that is the size `caliper shot --size` gives, 1600 by 1000 by default. The app in its window answers 501 with the reason. The PNG is encoded on a thread of its own, so the frame loop does not wait for the encoder.
+The frame the app draws, as an opaque PNG, read back at the end of the next frame without drawing an extra one:
+
+- In the app's window, the PNG is the frame the window presents, at the window's framebuffer size in pixels (twice the window's size in points on a Retina display). The renderer copies that frame on the GPU as it presents it, and a later frame picks the copy up, so the frame loop never waits for it. This works on Metal. On the GL and Vulkan renderers the window's frame cannot be read back yet, and a capture is answered with 501 and the reason.
+- In the windowless mode, the PNG is the offscreen canvas at the end of a frame, of the size `caliper shot --size` gives, 1600 by 1000 by default.
+
+A capture waits for the app's frames like every call that needs the frame thread, so it is answered with 504 when no frame is drawn within 5 seconds. The PNG is encoded on a thread of its own, so the frame loop does not wait for the encoder either.
 
 ### GET /v3/stream
 
@@ -136,7 +141,7 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 | 409 | The applet cannot be launched, or failed to launch. |
 | 413 | The request has a body. |
 | 426 | A GET of `/v3/stream` or `/v0/stream` that is not a WebSocket upgrade. |
-| 501 | A capture in the app's window. |
+| 501 | A capture in the app's window on the GL or Vulkan renderer, which cannot read the window's frame back. |
 | 503 | Too many requests wait for the app, or the app is closing. |
 | 504 | The app did not take the request within 5 s. |
 

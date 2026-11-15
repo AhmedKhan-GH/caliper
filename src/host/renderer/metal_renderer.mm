@@ -29,9 +29,11 @@
 #include <backends/imgui_impl_metal.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
 
 namespace caliper_host {
@@ -728,6 +730,7 @@ public:
                 ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
                                                frame_cmd_, frame_enc_);
                 [frame_enc_ endEncoding];
+                copy_for_capture();                // before present, in the same command buffer
                 [frame_cmd_ presentDrawable:drawable_];
                 [frame_cmd_ commit];
             } else if (frame_cmd_) {
@@ -739,7 +742,86 @@ public:
         }
     }
 
+    // ---- Window capture: the presented frame, copied in the frame's own
+    // command buffer after the ImGui pass and before present, never waited
+    // for on the frame thread. ----
+    bool window_capture_supported() const override { return layer_ != nil; }
+
+    bool window_capture_request() override {
+        if (layer_ == nil) return false;
+        const int s = cap_state_->load();
+        if (s == kCapArmed || s == kCapCopying) return true;   // the next result serves it
+        cap_buf_ = nil;
+        if (!cap_readable_) {
+            layer_.framebufferOnly = NO;   // drawables from now on can be a blit source
+            cap_readable_ = true;
+        }
+        cap_state_->store(kCapArmed);
+        return true;
+    }
+
+    WindowCapture window_capture_poll(std::vector<uint8_t>* rgba, int* w, int* h) override {
+        const int s = cap_state_->load();
+        if (s == kCapNone) return WindowCapture::None;
+        if (s == kCapArmed || s == kCapCopying) return WindowCapture::Pending;
+        if (s == kCapFailed || cap_buf_ == nil) {
+            cap_buf_ = nil;
+            cap_state_->store(kCapNone);
+            return WindowCapture::Failed;
+        }
+        // BGRA8Unorm (the layer's format) to opaque RGBA8.
+        const size_t n = (size_t)cap_w_ * (size_t)cap_h_;
+        const uint8_t* src = (const uint8_t*)cap_buf_.contents;
+        rgba->resize(n * 4);
+        uint8_t* dst = rgba->data();
+        for (size_t i = 0; i < n; ++i) {
+            dst[4 * i + 0] = src[4 * i + 2];
+            dst[4 * i + 1] = src[4 * i + 1];
+            dst[4 * i + 2] = src[4 * i + 0];
+            dst[4 * i + 3] = 255;
+        }
+        *w = cap_w_;
+        *h = cap_h_;
+        cap_buf_ = nil;
+        cap_state_->store(kCapNone);
+        return WindowCapture::Ready;
+    }
+
+    // In render(), for an armed capture: blit this frame's drawable into a
+    // shared buffer before it is presented. A drawable still framebuffer-only
+    // (made before the request) leaves the capture armed for the next frame.
+    void copy_for_capture() {
+        if (cap_state_->load() != kCapArmed || drawable_ == nil) return;
+        id<MTLTexture> t = drawable_.texture;
+        if (t == nil || t.framebufferOnly || t.pixelFormat != MTLPixelFormatBGRA8Unorm) return;
+        const NSUInteger w = t.width, h = t.height, bpr = w * 4;
+        id<MTLBuffer> buf = [device_ newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
+        if (buf == nil) {
+            cap_state_->store(kCapFailed);
+            return;
+        }
+        id<MTLBlitCommandEncoder> blit = [frame_cmd_ blitCommandEncoder];
+        [blit copyFromTexture:t
+                  sourceSlice:0 sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(w, h, 1)
+                     toBuffer:buf destinationOffset:0
+       destinationBytesPerRow:bpr
+     destinationBytesPerImage:bpr * h];
+        [blit endEncoding];
+        cap_buf_ = buf;
+        cap_w_ = (int)w;
+        cap_h_ = (int)h;
+        cap_state_->store(kCapCopying);
+        std::shared_ptr<std::atomic<int>> state = cap_state_;
+        [frame_cmd_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            state->store(cb.status == MTLCommandBufferStatusCompleted ? kCapReady : kCapFailed);
+        }];
+    }
+
     void shutdown() override {
+        cap_buf_ = nil;
+        cap_state_->store(kCapNone);
         ImGui_ImplMetal_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
@@ -1758,6 +1840,17 @@ private:
     id<MTLLibrary>              geom_lib_ = nil;
     std::unordered_map<uint32_t, id<MTLRenderPipelineState>> geom_pipelines_;
     std::unordered_map<uint32_t, id<MTLDepthStencilState>> depth_states_;
+
+    // Window capture (window_capture_*). The state is shared with the copy's
+    // completion handler, which may run after a frame and on another thread:
+    // 0 none, 1 armed (the next presented frame is copied), 2 copying,
+    // 3 ready, 4 failed. framebufferOnly is turned off for good on the first
+    // request, since a drawable that is framebuffer-only cannot be copied.
+    enum : int { kCapNone = 0, kCapArmed = 1, kCapCopying = 2, kCapReady = 3, kCapFailed = 4 };
+    std::shared_ptr<std::atomic<int>> cap_state_ = std::make_shared<std::atomic<int>>(kCapNone);
+    id<MTLBuffer>                cap_buf_ = nil;
+    int                          cap_w_ = 0, cap_h_ = 0;
+    bool                         cap_readable_ = false;
 
     // Per-frame transients created in new_frame(), consumed in render().
     id<CAMetalDrawable>          drawable_  = nil;

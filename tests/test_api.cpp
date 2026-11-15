@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 
 #include "api/api_server.h"
+#include "api/window_captures.h"
 #include "caliper/live_net.h"
 #include "net/json.h"
 #include "net/wire.h"
@@ -594,6 +595,91 @@ TEST_CASE("api: the server refuses a token that is not a session token, and a po
     same.token = kToken;
     caliper_api::Server second(same);
     CHECK_FALSE(second.start(&err));
+}
+
+// ---- the window's captures (api/window_captures.h) --------------------------------------
+namespace {
+// A renderer whose window read-back the test scripts: requests are counted, and
+// poll() returns what `next` says.
+struct ScriptedRenderer final : caliper_host::HostRenderer {
+    bool supported = true;
+    int requests = 0;
+    WindowCapture next = WindowCapture::Pending;
+    int w = 3, h = 2;
+    bool init(GLFWwindow*) override { return true; }
+    void new_frame() override {}
+    void render(int, int) override {}
+    void shutdown() override {}
+    const char* name() const override { return "scripted"; }
+    uint64_t tex_create_rgba8(int, int) override { return 0; }
+    bool tex_upload_rgba8(uint64_t, const void*, int, int) override { return false; }
+    void tex_release(uint64_t) override {}
+    uint64_t tex_imtexture_id(uint64_t) override { return 0; }
+    bool tex_update_from_device(uint64_t, const CaliperTensor&, const uint32_t*, float, float) override {
+        return false;
+    }
+    void window_hints() override {}
+    bool window_capture_supported() const override { return supported; }
+    bool window_capture_request() override {
+        if (!supported) return false;
+        ++requests;
+        return true;
+    }
+    WindowCapture window_capture_poll(std::vector<uint8_t>* rgba, int* pw, int* ph) override {
+        if (next == WindowCapture::Ready) {
+            rgba->assign((size_t)w * (size_t)h * 4, 7);
+            *pw = w;
+            *ph = h;
+        }
+        return next;
+    }
+};
+}  // namespace
+
+TEST_CASE("api: a capture in the window waits for the read-back of a presented frame, never the frame loop") {
+    ScriptedRenderer r;
+    caliper_host::WindowCaptures caps;
+    std::vector<std::pair<uint64_t, std::string>> answers;   // ticket, "WxH" or "status: reason"
+    auto done = [&](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
+        CHECK(rgba.size() == (size_t)w * h * 4);
+        answers.emplace_back(t, std::to_string(w) + "x" + std::to_string(h));
+    };
+    auto fail = [&](uint64_t t, int status, const std::string& why) {
+        answers.emplace_back(t, std::to_string(status) + ": " + why);
+    };
+    // Two calls of one frame arm one read-back.
+    caps.add(1);
+    caps.add(2);
+    caps.before_frame(r, fail);
+    CHECK(r.requests == 1);
+    caps.after_frame(r, done, fail);   // still copying: nothing answered, nothing waited for
+    CHECK(answers.empty());
+    // A call while that copy is in flight waits for the next read-back.
+    caps.add(3);
+    caps.before_frame(r, fail);
+    CHECK(r.requests == 1);
+    r.next = caliper_host::HostRenderer::WindowCapture::Ready;
+    caps.after_frame(r, done, fail);
+    REQUIRE(answers.size() == 2);
+    CHECK(answers[0] == std::make_pair(uint64_t(1), std::string("3x2")));
+    CHECK(answers[1] == std::make_pair(uint64_t(2), std::string("3x2")));
+    CHECK(caps.pending() == 1);
+    caps.before_frame(r, fail);
+    CHECK(r.requests == 2);
+    r.next = caliper_host::HostRenderer::WindowCapture::Failed;
+    caps.after_frame(r, done, fail);
+    REQUIRE(answers.size() == 3);
+    CHECK(answers[2].first == 3);
+    CHECK(answers[2].second.rfind("500: could not read the window's frame back from the scripted renderer", 0) == 0);
+    CHECK(caps.pending() == 0);
+    // A renderer that cannot read its window back answers 501 with the reason.
+    r.supported = false;
+    caps.add(4);
+    caps.before_frame(r, fail);
+    REQUIRE(answers.size() == 4);
+    CHECK(answers[3].second == "501: " + caliper_host::WindowCaptures::unsupported("scripted"));
+    CHECK(answers[3].second.find("caliper shot --api") != std::string::npos);
+    CHECK(caps.pending() == 0);
 }
 
 // ---- caliper shot --api as a process ------------------------------------------------------

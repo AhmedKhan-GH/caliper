@@ -20,6 +20,7 @@
 #include "host/renderer/host_renderer.h"
 #include "host/live/live_attach.h"
 #include "host/api/app_api.h"
+#include "host/api/window_captures.h"
 #include "app_paths.h"
 
 #include <string>
@@ -31,12 +32,6 @@
 #include <cstring>
 #include <filesystem>
 #include <system_error>
-
-// Caliper API's answer to GET /v0/capture.png in the window: the window's
-// frame cannot be read back, and `caliper shot --api` draws offscreen.
-static const char kWindowCaptureUnavailable[] =
-    "the app draws into a window, whose frame cannot be read back; start it windowless with "
-    "caliper shot --api to capture its frame";
 
 enum class AppPage {
     Landing,
@@ -202,8 +197,14 @@ public:
             note_live_events();
 
             // Caliper API (--api): the calls that read or change the app run
-            // here, between frames, as CALIPER_AUTOLAUNCH launches.
-            if (api_.running()) serve_api();
+            // here, between frames, as CALIPER_AUTOLAUNCH launches. A capture
+            // arms the read-back of the frame drawn next (window_captures.h).
+            if (api_.running()) {
+                serve_api();
+                captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
+                    api_.reply_error(t, status, why);
+                });
+            }
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
@@ -291,6 +292,16 @@ public:
 
             renderer_->render(dw, dh);
 
+            // Caliper API's captures: a read-back that has finished on the GPU
+            // answers its calls; one still copying is picked up by a later frame.
+            if (api_.running())
+                captures_.after_frame(
+                    *renderer_,
+                    [this](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
+                        api_.reply_capture(t, w, h, std::move(rgba));
+                    },
+                    [this](uint64_t t, int status, const std::string& why) { api_.reply_error(t, status, why); });
+
             // Deferred detach (esc Home on the live page), for the same reason
             // as the applet teardown below: the views' textures and imports are
             // released only after the frame that drew them has been rendered.
@@ -314,8 +325,13 @@ public:
     // said on stderr and in Activity, and the app runs without it.
     void start_api(const caliper_host::CommandLine& cl) {
         std::string why;
-        if (!api_.start(cl, kWindowCaptureUnavailable, caliper::app_data_location(), std::cout,
-                        &why)) {
+        // A capture reads the window's frame back where the renderer can
+        // (Metal); elsewhere it is answered 501 with the reason.
+        const std::string capture_unavailable =
+            renderer_->window_capture_supported()
+                ? std::string()
+                : caliper_host::WindowCaptures::unsupported(renderer_->name());
+        if (!api_.start(cl, capture_unavailable, caliper::app_data_location(), std::cout, &why)) {
             std::cerr << "[api] not started: " << why << std::endl;
             landing_.log("api not started", why);
             return;
@@ -377,8 +393,8 @@ private:
         glfwSetWindowTitle(window_, "Caliper");
     }
 
-    // Caliper API's calls of this frame (api/api_server.h). Capture is never
-    // one of them here: the API answers it with 501 in the window.
+    // Caliper API's calls of this frame (api/api_server.h). A capture waits
+    // for the read-back of a presented frame (captures_).
     void serve_api() {
         for (const caliper_api::Call& c : api_.take()) {
             switch (c.kind) {
@@ -389,7 +405,7 @@ private:
                     api_launch(c);
                     break;
                 case caliper_api::Call::Kind::Capture:
-                    api_.reply_error(c.ticket, 501, kWindowCaptureUnavailable);
+                    captures_.add(c.ticket);
                     break;
             }
         }
@@ -760,6 +776,7 @@ private:
     int32_t live_pid_ = 0;
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
     caliper_host::AppApi api_;        // Caliper API (--api); not running without it
+    caliper_host::WindowCaptures captures_;   // the API's captures of the window's frame
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
     bool chromeless_ = false;         // CALIPER_CHROMELESS=1: applet page without bars
