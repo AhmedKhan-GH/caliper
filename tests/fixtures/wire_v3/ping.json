@@ -1,0 +1,21 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 36,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 12,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 5
+  },
+  "meta": {
+    "nonce": 17
+  },
+  "meta_offset": 24,
+  "name": "ping",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "ping"
+}

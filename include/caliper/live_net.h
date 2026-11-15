@@ -25,12 +25,13 @@
  * ENDPOINT AND HANDSHAKE
  *   One WebSocket endpoint, CALIPER_NET_PATH, on 127.0.0.1 only. The session
  *   token travels as the query parameter CALIPER_NET_TOKEN_PARAM of the upgrade
- *   request. Before the upgrade the server answers HTTP 403 when the token is
- *   missing or wrong (compared in constant time), when the Host header is not
- *   "127.0.0.1:<port>" or "localhost:<port>", or when the Origin header is not
- *   accepted (the page states the Origin rule exactly). No subprotocol, no
- *   permessage-deflate. Then the client sends HELLO, the server answers
- *   WELCOME, and nothing else may precede them.
+ *   request. Before the upgrade the server answers HTTP 404 for another path,
+ *   and HTTP 403 when the Host header is not "127.0.0.1:<port>" or
+ *   "localhost:<port>", when the Origin header is not accepted (the page
+ *   states the Origin rule exactly), or when the token is missing or wrong
+ *   (compared in constant time). No subprotocol, no permessage-deflate. Then
+ *   the client sends HELLO, the server answers WELCOME, and nothing but BYE
+ *   may precede them.
  *
  * FRAMES
  *   Every WebSocket message is ONE binary frame (a text message closes the

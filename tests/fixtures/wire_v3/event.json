@@ -1,0 +1,29 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 109,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 85,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 64
+  },
+  "meta": {
+    "detail": {
+      "col": 2,
+      "row": 1,
+      "value": 1.0
+    },
+    "seq": 42,
+    "sub": 1,
+    "type": "pick",
+    "view": "attn"
+  },
+  "meta_offset": 24,
+  "name": "event",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "event"
+}

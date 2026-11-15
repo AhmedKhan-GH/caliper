@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""Generate the golden frames of wire protocol v3 (docs/references/wire-protocol.md).
+
+Every implementation of the protocol decodes these files in its tests: the
+Python codec (python/tests/test_wire.py also checks that this script reproduces
+them byte for byte), the native NetSource, the hub and the TypeScript viewer.
+
+  <name>.bin           the exact bytes of one frame (one WebSocket message)
+  <name>.json          what a decoder must find in it: the header fields, the
+                       section lengths and offsets, the metadata object and the
+                       section values (flattened, row-major)
+  invalid/<name>.bin   a frame every decoder must reject
+  invalid/expect.json  per invalid file: the reason and the close code
+
+Run it from anywhere: ``python tests/fixtures/wire_v3/generate.py`` rewrites
+the files, ``--check`` only compares them. It needs numpy and no torch.
+"""
+from __future__ import annotations
+
+import json
+import struct
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[2] / "python"))
+
+import numpy as np  # noqa: E402
+
+from caliper import _wire as w  # noqa: E402
+
+SESSION = {"id": "clp-4242-a1b2c3", "script": "train.py", "pid": 4242,
+           "start_unix_ms": 1763200000000}
+PRODUCER_SOFTWARE = {"name": "caliper-python", "version": "0.1.0"}
+VIEWER_SOFTWARE = {"name": "caliper-web", "version": "0.1.0"}
+
+# The views of the example session: a heatmap with two sources, a points view
+# and a series.
+ATTN = {"id": 1, "name": "attn", "kind": int(w.Kind.HEATMAP),
+        "sources": [{"name": layer, "dtype": "f32",
+                     "dims": [{"name": "head", "size": 4}, {"name": "query", "size": 2},
+                              {"name": "key", "size": 3}]} for layer in ("layer0", "layer1")],
+        "default": {"index": {"head": 0}}}
+EMBEDDING = {"id": 2, "name": "embedding", "kind": int(w.Kind.POINTS),
+             "sources": [{"name": "z", "dtype": "f32", "dims": [{"name": "point", "size": 1000}]}],
+             "default": {"budget": {"max_points": 4}}}
+LOSS = {"id": 3, "name": "loss", "kind": int(w.Kind.SERIES), "sources": []}
+
+STAMP = 81234567890123
+
+
+def valid_vectors() -> dict[str, bytes]:
+    attn_default = w.resolve_data_view(ATTN, None)
+    attn_request = {"source": "layer1", "index": {}, "reduce": {"head": "mean"},
+                    "budget": {"max_extent": 256}}
+    try:
+        w.resolve_data_view(ATTN, {"index": {"head": 9}})
+        raise AssertionError("head 9 resolved")
+    except w.MessageError as e:
+        bad_index = e.message
+    emb = w.resolve_data_view(EMBEDDING, {})
+    emb_layout = w.payload_layout(EMBEDDING, emb)
+    attn_layout = w.payload_layout(ATTN, attn_default)
+
+    heat = np.array([[-1.5, -0.5, 0.0], [0.25, 0.5, 1.0]], dtype=np.float32)
+    pts = np.array([[0.0, 1.0], [-2.0, 0.5], [1.5, -1.0], [0.25, 2.0]], dtype=np.float32)
+    labels = np.array([0.0, 1.0, 2.0, 1.0], dtype=np.float32)
+    bbox = [float(pts[:, 0].min()), float(pts[:, 0].max()),
+            float(pts[:, 1].min()), float(pts[:, 1].max()), 0.0, 0.0]
+
+    msgs = {
+        "hello": w.Hello(w.ROLE_VIEWER, [], VIEWER_SOFTWARE),
+        "hello_producer": w.Hello(w.ROLE_PRODUCER, [w.CAP_EVENTS], PRODUCER_SOFTWARE, SESSION),
+        "welcome": w.Welcome(w.ROLE_PRODUCER, [w.CAP_EVENTS], PRODUCER_SOFTWARE, SESSION),
+        "bye": w.Bye(w.BYE_SHUTDOWN, "the producer is exiting"),
+        "error": w.Error(w.ERR_UNKNOWN_VIEW, "no view 'attn2'", False,
+                         in_reply_to=int(w.MsgType.SUBSCRIBE), request_id=5, sub=2, view="attn2"),
+        "ping": w.Ping(17),
+        "pong": w.Pong(17),
+        "sessions": w.Sessions([dict(SESSION, state=w.SESSION_LIVE, views=3),
+                                {"id": "clp-4100-0f9e8d", "script": "sweep.py", "pid": 4100,
+                                 "start_unix_ms": 1763190000000, "state": w.SESSION_ENDED,
+                                 "views": 1}]),
+        "attach": w.Attach(SESSION["id"]),
+        "views": w.Views([ATTN, EMBEDDING, LOSS], SESSION["id"]),
+        "subscribe": w.Subscribe(1, "attn", 7, 30.0),
+        "unsubscribe": w.Unsubscribe(1),
+        "view_request": w.ViewRequest(8, 1, "attn", attn_request),
+        "view_reply": w.ViewReply(8, 1, "attn", w.resolve_data_view(ATTN, attn_request)),
+        "view_reply_error": w.ViewReply(9, 1, "attn", error={"code": w.ERR_BAD_DATA_VIEW,
+                                                             "message": bad_index}),
+        "snapshot": w.Snapshot(1, "attn", 42, STAMP, w.Kind.HEATMAP, attn_default, heat,
+                               colormap=w.COLORMAP_RDBU,
+                               flags=w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX,
+                               stats=[-1.5, 1.0], axes=attn_layout["axes"]),
+        "snapshot_points": w.Snapshot(2, "embedding", 7, STAMP + 500, w.Kind.POINTS, emb, pts,
+                                      aux=labels, stats=[0.0, 0.0] + bbox,
+                                      axes=emb_layout["axes"], points_dims=2, label_count=3),
+        "series": w.Series(3, "loss", 0, 3, STAMP + 1000,
+                           np.array([2.5, 1.25, 0.75], dtype=np.float32)),
+        "event": w.Event("attn", w.EVENT_PICK, {"row": 1, "col": 2, "value": 1.0}, sub=1, seq=42),
+        "event_select": w.Event("embedding", w.EVENT_SELECT,
+                                {"indices": [0, 2], "row_ids": [0, 500]}, sub=2, seq=7),
+    }
+    out = {name: w.encode(m) for name, m in msgs.items()}
+    # Forward compatibility: a later minor, unknown flags, a nonzero reserved
+    # field and an unknown metadata key, on a known and on an unknown type.
+    ping = bytearray(w.encode_frame(w.MsgType.PING, {"nonce": 17, "future_key": [1, 2]},
+                                    flags=0x8001, minor=9))
+    struct.pack_into("<H", ping, 22, 5)
+    out["ping_future"] = bytes(ping)
+    out["unknown_type"] = w.encode_frame(0x0777, {"future": True}, minor=9)
+    return out
+
+
+def _raw(type_: int, meta: bytes, sections: list[bytes] = (), *, major: int = w.MAJOR) -> bytearray:
+    """A frame from literal metadata bytes, laid out by the rules (no checks)."""
+    pos = w.HEADER_BYTES + 4 * len(sections) + len(meta)
+    offs = []
+    for s in sections:
+        pos = (pos + 7) & ~7
+        offs.append(pos)
+        pos += len(s)
+    out = bytearray(pos)
+    w.HEADER.pack_into(out, 0, w.MAGIC, major, w.MINOR, type_, 0, pos, len(meta), len(sections), 0)
+    struct.pack_into(f"<{len(sections)}I", out, w.HEADER_BYTES, *[len(s) for s in sections])
+    mo = w.HEADER_BYTES + 4 * len(sections)
+    out[mo:mo + len(meta)] = meta
+    for s, o in zip(sections, offs):
+        out[o:o + len(s)] = s
+    return out
+
+
+def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, str, int]]:
+    ping, series = valid["ping"], valid["series"]
+    P, M, B = w.CLOSE_PROTOCOL_ERROR, w.CLOSE_UNSUPPORTED_MAJOR, w.CLOSE_TOO_BIG
+
+    def patch(buf, fmt, off, value):
+        b = bytearray(buf)
+        struct.pack_into(fmt, b, off, value)
+        return bytes(b)
+
+    f32 = np.array([1.0, 2.0, 3.0], dtype=np.float32).tobytes()
+    deep = b'{"a":' + b"[" * 16 + b"]" * 16 + b"}"
+    return {
+        "short": (ping[:6], "truncated", P),
+        "bad_magic": (patch(ping, "<I", 0, 0x584C4143), "bad_magic", P),
+        "major_4": (patch(ping, "<H", 4, 4), "unsupported_major", M),
+        "major_4_short": (patch(ping, "<H", 4, 4)[:8], "unsupported_major", M),
+        "header_only": (ping[:20], "truncated", P),
+        "frame_too_big": (patch(ping, "<I", 12, w.MAX_FRAME_BYTES + 8), "too_big", B),
+        "meta_too_big": (patch(ping, "<I", 16, w.MAX_META_BYTES + 1), "too_big", B),
+        "too_many_sections": (patch(ping, "<H", 20, w.MAX_SECTIONS + 1), "too_big", B),
+        "truncated": (series[:-4], "truncated", P),
+        "trailing_bytes": (ping + bytes(8), "malformed", P),
+        "layout_mismatch": (patch(ping, "<I", 16, len(ping) - w.HEADER_BYTES - 1), "malformed", P),
+        "meta_not_json": (bytes(_raw(w.MsgType.PING, b"{nonce:17}")), "malformed", P),
+        "meta_not_object": (bytes(_raw(w.MsgType.PING, b"[17]")), "malformed", P),
+        "meta_nan": (bytes(_raw(w.MsgType.PING, b'{"nonce":NaN}')), "malformed", P),
+        "meta_too_deep": (bytes(_raw(w.MsgType.PING, deep)), "malformed", P),
+        "sections_missing": (bytes(_raw(w.MsgType.SERIES, b'{"sub":3}', [f32])), "malformed", P),
+        "section_length_mismatch": (bytes(_raw(
+            w.MsgType.SERIES,
+            b'{"sections":[{"dtype":0,"name":"values","shape":[4]}],"start":0,"stamp_ns":1,'
+            b'"sub":3,"total":4,"view":"loss"}', [f32])), "malformed", P),
+    }
+
+
+def _values(sec) -> list:
+    if sec.encoding != w.Encoding.RAW:
+        return []
+    return [x.item() for x in sec.array().reshape(-1)]
+
+
+def describe(name: str, buf: bytes) -> dict:
+    f = w.decode_frame(buf)
+    h = w.HEADER.unpack_from(buf, 0)
+    count = h[7]
+    lens = list(struct.unpack_from(f"<{count}I", buf, w.HEADER_BYTES))
+    secs = []
+    for s in f.sections:
+        secs.append({"name": s.name, "dtype": s.dtype, "shape": list(s.shape),
+                     "encoding": s.encoding, "length": s.data.nbytes, "values": _values(s)})
+    # Section offsets by the layout rule (decode_frame has checked it).
+    pos = w.HEADER_BYTES + 4 * count + h[6]
+    for s, ln in zip(secs, lens):
+        pos = (pos + 7) & ~7
+        s["offset"] = pos
+        pos += ln
+    try:
+        type_name = w.MsgType(f.type).name.lower()
+    except ValueError:
+        type_name = None
+    return {
+        "name": name,
+        "type_name": type_name,
+        "header": {"magic": h[0], "major": h[1], "minor": h[2], "type": h[3], "flags": h[4],
+                   "frame_len": h[5], "meta_len": h[6], "section_count": h[7], "reserved": h[8]},
+        "section_lengths": lens,
+        "meta_offset": w.HEADER_BYTES + 4 * count,
+        "meta": f.meta,
+        "sections": secs,
+    }
+
+
+def _json(obj) -> bytes:
+    return (json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def render() -> dict[str, bytes]:
+    """Every file of the fixture folder, by path relative to it."""
+    files = {}
+    valid = valid_vectors()
+    for name, buf in valid.items():
+        files[f"{name}.bin"] = buf
+        files[f"{name}.json"] = _json(describe(name, buf))
+    expect = {}
+    for name, (buf, reason, code) in invalid_vectors(valid).items():
+        files[f"invalid/{name}.bin"] = buf
+        expect[f"{name}.bin"] = {"reason": reason, "close_code": code}
+    files["invalid/expect.json"] = _json(expect)
+    return files
+
+
+def main(argv: list[str]) -> int:
+    files = render()
+    check = "--check" in argv
+    bad = []
+    for rel, data in sorted(files.items()):
+        p = HERE / rel
+        if check:
+            if not p.exists() or p.read_bytes() != data:
+                bad.append(rel)
+            continue
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+    on_disk = {str(p.relative_to(HERE)) for p in HERE.rglob("*") if p.suffix in (".bin", ".json")}
+    extra = sorted(on_disk - set(files))
+    if check and (bad or extra):
+        print("differ: " + ", ".join(bad + extra), file=sys.stderr)
+        return 1
+    if extra:
+        print("not generated (remove them): " + ", ".join(extra), file=sys.stderr)
+    print(f"{len(files)} files {'match' if check else 'written'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

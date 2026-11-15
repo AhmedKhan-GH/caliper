@@ -1,0 +1,70 @@
+{
+  "bad_magic.bin": {
+    "close_code": 4000,
+    "reason": "bad_magic"
+  },
+  "frame_too_big.bin": {
+    "close_code": 1009,
+    "reason": "too_big"
+  },
+  "header_only.bin": {
+    "close_code": 4000,
+    "reason": "truncated"
+  },
+  "layout_mismatch.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "major_4.bin": {
+    "close_code": 4001,
+    "reason": "unsupported_major"
+  },
+  "major_4_short.bin": {
+    "close_code": 4001,
+    "reason": "unsupported_major"
+  },
+  "meta_nan.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "meta_not_json.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "meta_not_object.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "meta_too_big.bin": {
+    "close_code": 1009,
+    "reason": "too_big"
+  },
+  "meta_too_deep.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "section_length_mismatch.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "sections_missing.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "short.bin": {
+    "close_code": 4000,
+    "reason": "truncated"
+  },
+  "too_many_sections.bin": {
+    "close_code": 1009,
+    "reason": "too_big"
+  },
+  "trailing_bytes.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "truncated.bin": {
+    "close_code": 4000,
+    "reason": "truncated"
+  }
+}

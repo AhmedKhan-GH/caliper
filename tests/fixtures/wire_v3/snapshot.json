@@ -1,0 +1,92 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 456,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 404,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 48
+  },
+  "meta": {
+    "axes": [
+      {
+        "count": 2,
+        "dim": "query",
+        "size": 2,
+        "start": 0,
+        "step": 1
+      },
+      {
+        "count": 3,
+        "dim": "key",
+        "size": 3,
+        "start": 0,
+        "step": 1
+      }
+    ],
+    "colormap": 2,
+    "data_view": {
+      "budget": {
+        "max_extent": 512,
+        "pool": "mean"
+      },
+      "index": {
+        "head": 0
+      },
+      "reduce": {},
+      "source": "layer0"
+    },
+    "flags": 3,
+    "kind": 1,
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "data",
+        "shape": [
+          2,
+          3
+        ]
+      }
+    ],
+    "seq": 42,
+    "stamp_ns": 81234567890123,
+    "stats": [
+      -1.5,
+      1.0
+    ],
+    "sub": 1,
+    "view": "attn",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 28,
+  "name": "snapshot",
+  "section_lengths": [
+    24
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 24,
+      "name": "data",
+      "offset": 432,
+      "shape": [
+        2,
+        3
+      ],
+      "values": [
+        -1.5,
+        -0.5,
+        0.0,
+        0.25,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "type_name": "snapshot"
+}

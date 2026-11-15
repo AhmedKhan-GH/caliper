@@ -1,0 +1,34 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 172,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 148,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 36
+  },
+  "meta": {
+    "data_view": {
+      "budget": {
+        "max_extent": 256,
+        "pool": "mean"
+      },
+      "index": {},
+      "reduce": {
+        "head": "mean"
+      },
+      "source": "layer1"
+    },
+    "request_id": 8,
+    "sub": 1,
+    "view": "attn"
+  },
+  "meta_offset": 24,
+  "name": "view_reply",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "view_reply"
+}

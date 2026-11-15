@@ -1,0 +1,116 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 504,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 424,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 48
+  },
+  "meta": {
+    "axes": [
+      {
+        "count": 1000,
+        "dim": "point",
+        "size": 4,
+        "start": 0,
+        "step": 1
+      }
+    ],
+    "colormap": 0,
+    "data_view": {
+      "budget": {
+        "max_points": 4
+      },
+      "index": {},
+      "reduce": {},
+      "source": "z"
+    },
+    "flags": 0,
+    "kind": 3,
+    "label_count": 3,
+    "points_dims": 2,
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "data",
+        "shape": [
+          4,
+          2
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "aux",
+        "shape": [
+          4
+        ]
+      }
+    ],
+    "seq": 7,
+    "stamp_ns": 81234567890623,
+    "stats": [
+      0.0,
+      0.0,
+      -2.0,
+      1.5,
+      -1.0,
+      2.0,
+      0.0,
+      0.0
+    ],
+    "sub": 2,
+    "view": "embedding",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 32,
+  "name": "snapshot_points",
+  "section_lengths": [
+    32,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 32,
+      "name": "data",
+      "offset": 456,
+      "shape": [
+        4,
+        2
+      ],
+      "values": [
+        0.0,
+        1.0,
+        -2.0,
+        0.5,
+        1.5,
+        -1.0,
+        0.25,
+        2.0
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 16,
+      "name": "aux",
+      "offset": 488,
+      "shape": [
+        4
+      ],
+      "values": [
+        0.0,
+        1.0,
+        2.0,
+        1.0
+      ]
+    }
+  ],
+  "type_name": "snapshot"
+}

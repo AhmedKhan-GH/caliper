@@ -28,6 +28,7 @@ nav:
   - Hosts and clients:
       - embedding.md
       - python-api.md
+      - wire-protocol.md
   - Applets and environment:
       - applets.md
       - environment.md
