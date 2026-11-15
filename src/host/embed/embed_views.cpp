@@ -272,8 +272,8 @@ void caliper_embed_views_draw(CaliperCore* core) {
         // Title = the view name; the ### id keeps it apart from applet windows.
         const std::string label = v.name + "###caliper.view." + v.name;
         if (ImGui::Begin(label.c_str(), nullptr,
-                         ImGuiWindowFlags_NoScrollbar |
-                         ImGuiWindowFlags_NoScrollWithMouse)) {
+                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                             (core->views_bare ? ImGuiWindowFlags_NoTitleBar : 0))) {
             ImGui::Text("%dx%d %s %s %s updates=%llu last=%.2fms", v.w, v.h,
                         v.mapped ? "f32" : "u8", view_device_name(v.device),
                         v.path.c_str(), (unsigned long long)v.updates,

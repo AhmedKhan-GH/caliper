@@ -8,7 +8,11 @@ embedding whose clusters separate, a histogram of the weights and an input
 image. It computes every data view a viewer asks for with numpy, as a real
 producer would on its device.
 
-    python mock_server.py --wire path/to/_wire.py [--port 0] [--dist web/dist]
+    python mock_server.py --wire path/to/_wire.py [--port 0] [--dist web/dist] [--wasm DIR]
+
+With --wasm it also serves Caliper's WebAssembly views from DIR (the three
+files caliper-views-loader.js, caliper-views.js and caliper-views.wasm), as
+caliper.serve() does from the package.
 
 It prints the viewer page's URL on the first line, then one JSON line for
 each EVENT a viewer sends.
@@ -36,6 +40,8 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Response
 
 W = None  # the _wire module
+
+WASM_FILES = ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")
 
 
 def load_wire(path: str):
@@ -200,8 +206,8 @@ ORIGIN = re.compile(r"^(https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?|vscode-
 
 
 class Producer:
-    def __init__(self, run: Run, token: str, dist: Path, session_id: str):
-        self.run, self.token, self.dist = run, token, dist
+    def __init__(self, run: Run, token: str, dist: Path, session_id: str, wasm: Path | None = None):
+        self.run, self.token, self.dist, self.wasm = run, token, dist, wasm
         self.identity = {"id": session_id, "script": "train_mock.py", "pid": os.getpid(),
                          "start_unix_ms": int(time.time() * 1000)}
         self.seq = 0
@@ -233,10 +239,13 @@ class Producer:
         if name == "index.html" and not secrets.compare_digest(token, self.token):
             return self.text(403, "bad token")
         f = self.dist / name
+        if self.wasm is not None and name in WASM_FILES:
+            f = self.wasm / name
         if "/" in name or not f.is_file():
             return self.text(404, "not found")
         body = f.read_bytes()
-        ctype = "text/javascript" if name.endswith(".js") else mimetypes.guess_type(name)[0] or "application/octet-stream"
+        ctype = ("text/javascript" if name.endswith(".js") else "application/wasm" if name.endswith(".wasm")
+                 else mimetypes.guess_type(name)[0] or "application/octet-stream")
         return Response(200, "OK", Headers([("Content-Type", ctype), ("Content-Length", str(len(body))),
                                             ("Access-Control-Allow-Origin", "*"), ("Cache-Control", "no-store")]), body)
 
@@ -325,6 +334,7 @@ async def main():
     ap.add_argument("--wire", required=True, help="path of python/caliper/_wire.py")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--dist", default=str(here.parent / "dist"))
+    ap.add_argument("--wasm", default=None, help="folder of the WebAssembly views' three files")
     ap.add_argument("--points", type=int, default=4000)
     ap.add_argument("--dims", type=int, default=3, choices=(2, 3))
     ap.add_argument("--seed", type=int, default=7)
@@ -332,7 +342,7 @@ async def main():
     W = load_wire(a.wire)
     run = Run(a.points, a.dims, a.seed)
     token = secrets.token_urlsafe(24)
-    prod = Producer(run, token, Path(a.dist), "mock")
+    prod = Producer(run, token, Path(a.dist), "mock", Path(a.wasm) if a.wasm else None)
     async with serve(prod.handler, "127.0.0.1", a.port, process_request=prod.process_request,
                      compression=None, max_size=W.MAX_FRAME_BYTES) as server:
         prod.port = server.sockets[0].getsockname()[1]

@@ -1,8 +1,9 @@
 // The adapter to Caliper's own view layer compiled to WebAssembly. Its loader
 // module, caliper-views-loader.js, is served by the stream's server and
-// exports mountCaliperViews(container, options). Everything the element knows
-// about it is in this file; any failure here makes the element draw with its
-// own TypeScript views instead.
+// exports mountCaliperViews(container, options) and CALIPER_VIEWS_KINDS, the
+// one list of the live view kinds the WebAssembly views draw. Everything the
+// element knows about it is in this file; any failure here makes the element
+// draw with its own TypeScript views instead.
 
 import type { DataView } from './protocol/messages.js';
 
@@ -14,7 +15,9 @@ export interface WasmSelect {
 
 export interface WasmHandle {
   destroy(): void;
-  setDataView(dataView: DataView): void;
+  setDataView(dataView: DataView): boolean | void;
+  /** Resolves once the first snapshot is drawn (the real loader has it; a stub may not). */
+  ready?: Promise<void>;
   onSelect?: ((event: WasmSelect | Record<string, unknown>) => void) | null;
   onDataView?: ((dataView: DataView) => void) | null;
 }
@@ -24,6 +27,8 @@ export interface WasmOptions {
   view: string;
   kind?: string;
   height?: number;
+  /** False: the element draws the view's header, so the WebAssembly view has no title bar. */
+  header?: boolean;
   /** The HTTP origin of the stream's server, with a trailing slash. */
   assetBase: string;
   onSelect(event: WasmSelect | Record<string, unknown>): void;
@@ -32,6 +37,8 @@ export interface WasmOptions {
 
 interface Loader {
   mountCaliperViews(container: HTMLElement, options: WasmOptions): WasmHandle | Promise<WasmHandle>;
+  /** The kinds the WebAssembly views draw; a loader without the list is taken to draw every kind. */
+  CALIPER_VIEWS_KINDS?: readonly string[];
 }
 
 export const LOADER_FILE = 'caliper-views-loader.js';
@@ -60,6 +67,16 @@ function load(base: string): Promise<Loader | null> {
     loaders.set(base, p);
   }
   return p;
+}
+
+/**
+ * The live view kinds the WebAssembly views served from base draw (the
+ * loader's CALIPER_VIEWS_KINDS), or null when the loader is missing.
+ */
+export async function wasmKinds(base: string): Promise<readonly string[] | null> {
+  const loader = await load(base);
+  if (!loader) return null;
+  return loader.CALIPER_VIEWS_KINDS ?? ['heatmap', 'image', 'points', 'series', 'histogram'];
 }
 
 let adapter: Promise<boolean> | null = null;

@@ -32,14 +32,16 @@ test('auto uses the WebAssembly views when an adapter and the loader are there, 
   }
   expect(r).toBe('wasm');
   const stub = await harness.evaluate(() => (window as unknown as { caliperStub: Stub }).caliperStub);
-  expect(stub.given).toEqual({ src: `ws://127.0.0.1:${port}/v3/stream?token=t`, view: 'loss', kind: 'series', height: 240, assetBase: `http://127.0.0.1:${port}/` });
+  // The element keeps its header and asks for a view without a title bar of its own.
+  expect(stub.given).toEqual({ src: `ws://127.0.0.1:${port}/v3/stream?token=t`, view: 'loss', kind: 'series', header: false, assetBase: `http://127.0.0.1:${port}/` });
   expect(stub.hasCallbacks).toBe(true);
-  // The element's header and body give way to the WebAssembly views.
   expect(await harness.evaluate(() => {
     const root = document.getElementById('v')!.shadowRoot!;
-    return [(root.querySelector('.plate') as HTMLElement).hidden, root.querySelector('.stub')?.textContent];
-  })).toEqual([true, 'wasm views: loss']);
-  // The data view property reaches the handle; the handle's callbacks become the element's events.
+    return [(root.querySelector('.plate') as HTMLElement).hidden, root.querySelector('.name')?.textContent,
+            root.querySelector('.body .wasm .stub')?.textContent];
+  })).toEqual([false, 'loss', 'wasm views: loss']);
+  // The data view property reaches the handle; a selection becomes the element's event, and the
+  // handle's data view reply sets the element's data view without an event (the user picked nothing).
   const events = await harness.evaluate(() => {
     const el = document.getElementById('v') as HTMLElement & { dataView: unknown };
     const seen: unknown[] = [];
@@ -49,13 +51,13 @@ test('auto uses the WebAssembly views when an adapter and the loader are there, 
     const h = (window as unknown as { caliperStub: Stub }).caliperStub.handle;
     h.onSelect({ steps: [3, 9] });
     h.onDataView({ budget: { max_backfill: 10 } });
-    return { seen, dataViews: h.dataViews };
+    return { seen, dataViews: h.dataViews, dataView: el.dataView };
   });
   expect(events.dataViews).toEqual([{ budget: { max_backfill: 10 } }]);
   expect(events.seen).toEqual([
     ['select', { view: 'loss', type: 'select', detail: { steps: [3, 9] } }],
-    ['dataview', { budget: { max_backfill: 10 } }],
   ]);
+  expect(events.dataView).toEqual({ budget: { max_backfill: 10 } });
   await harness.evaluate(() => document.getElementById('v')!.remove());
   expect(await harness.evaluate(() => (window as unknown as { caliperStub: Stub }).caliperStub.handle.destroyed)).toBe(true);
 });

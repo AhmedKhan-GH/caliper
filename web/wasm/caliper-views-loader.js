@@ -8,6 +8,7 @@
 //     view,         // the view to show; '' or absent: every view of the session
 //     kind,         // 'heatmap' | 'image' | 'points' | 'series' | 'histogram', optional
 //     height,       // CSS pixels, optional (default: fill the container)
+//     header,       // false: the page shows the view's name itself, so the view has no title bar
 //     assetBase,    // where caliper-views.js and .wasm are; default: beside this file
 //     onSelect,     // (detail) => {}, for selections (the views do not emit any yet)
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
@@ -20,6 +21,10 @@
 // on the page, so the second mount does not fetch or compile again. Every
 // listener sits on the mount's own canvas, which is created inside `container`
 // (never looked up in the document), so a container inside a shadow root works.
+
+// The live view kinds these views draw. A page draws the other kinds itself
+// (the <caliper-view> element uses its TypeScript views for them).
+export const CALIPER_VIEWS_KINDS = Object.freeze(['heatmap', 'image', 'series', 'histogram']);
 
 const compiled = new Map();   // assetBase -> Promise<{ factory, wasm }>
 
@@ -56,7 +61,7 @@ export function preloadCaliperViews(assetBase) {
 }
 
 export async function mountCaliperViews(container, options = {}) {
-  const { src = '', view = '', kind = '', height, assetBase, onSelect, onDataView } = options;
+  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onDataView } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -74,7 +79,7 @@ export async function mountCaliperViews(container, options = {}) {
   try {
     module = await factory({
       canvas,
-      caliperConfig: { src, view, kind },
+      caliperConfig: { src, view, kind, header: header ? 'true' : 'false' },
       instantiateWasm: (imports, receive) => {
         WebAssembly.instantiate(wasm, imports).then((instance) => receive(instance, wasm));
         return {};

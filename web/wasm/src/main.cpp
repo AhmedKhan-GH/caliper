@@ -8,7 +8,7 @@
 //
 // One module instance draws on one canvas (Module.canvas) and shows one view,
 // or every view of the session when no view is named. The instance reads its
-// settings from Module.caliperConfig: {src, view, kind}.
+// settings from Module.caliperConfig: {src, view, kind, header}.
 //
 // Start-up is asynchronous because a browser hands out a WebGPU device only
 // through promises: main() requests the adapter, the adapter callback requests
@@ -57,6 +57,7 @@ struct Config {
     std::string src;    // ws://127.0.0.1:<port>/v3/stream?token=<token>
     std::string view;   // "" = every view
     int32_t kind = 0;   // 0 = any
+    bool header = true; // false: the page draws the view's header (no title bars)
 };
 
 struct Page {
@@ -326,6 +327,7 @@ void start() {
     caliper_host::services_set_renderer(g.renderer);
     g.core = caliper_core_create_hosted(r.release());
     if (!g.core) return fail("caliper_core_create_hosted refused");
+    g.core->views_bare = !g.cfg.header;
 
     if (g.cfg.src.empty()) {
         fail("no stream: set caliperConfig.src to the ws:// URL of a Caliper stream");
@@ -438,6 +440,7 @@ int main() {
     g.cfg.src = config_string("src");
     g.cfg.view = config_string("view");
     g.cfg.kind = kind_of(config_string("kind"));
+    g.cfg.header = config_string("header") != "false";
 
     g.instance = wgpuCreateInstance(nullptr);
     if (!g.instance) {

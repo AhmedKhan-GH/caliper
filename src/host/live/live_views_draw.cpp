@@ -137,7 +137,8 @@ bool begin_window(CaliperCore* core, View& v, ImVec2 content) {
     ImGui::SetNextWindowPos(ImVec2(v.pos_x, v.pos_y), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
     return ImGui::Begin(window_label(v).c_str(), nullptr,
-                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                            (core->views_bare ? ImGuiWindowFlags_NoTitleBar : 0));
 }
 
 void pause_button(CaliperLiveViewsState* S) {

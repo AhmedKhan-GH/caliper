@@ -44,6 +44,7 @@ const handle = await mountCaliperViews(container, {
   view,         // the view to show; '' or absent: every view of the session
   kind,         // 'heatmap', 'image', 'points', 'series' or 'histogram'; optional
   height,       // CSS pixels; optional, the default fills the container
+  header,       // false: the page shows the view's name, so the view has no title bar (default true)
   assetBase,    // the folder of caliper-views.js and .wasm; default: the loader's own folder
   onSelect,     // (detail, view) => {}; the views emit no selections yet
   onDataView,   // (dataView, view) => {}; every data view the producer resolved
@@ -53,6 +54,8 @@ handle.setDataView({ index: { layer: 2 } });     // a VIEW_REQUEST; false when i
 handle.stats;                                    // the module's counters
 handle.destroy();                                // BYE, the GPU released, the canvas removed
 ```
+
+The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`). The views send no selections yet, so `onSelect` is never called.
 
 The loader creates the canvas inside `container` and hands that element to the module, so a container inside a shadow root works and nothing is looked up in the document. `preloadCaliperViews(assetBase)` starts the download and compilation early.
 

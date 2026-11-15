@@ -2,6 +2,7 @@
 
 Runs without torch or the native extensions."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -34,7 +35,9 @@ def test_assets_are_found_in_the_source_tree(monkeypatch):
         assert name in names
         assert _assets.asset_path(name) == (PACKAGE_WEB / name).resolve()
         assert _assets.read_asset(name) == (PACKAGE_WEB / name).read_bytes()
-    assert _assets.read_asset("caliper-widget.js").count(b"export default") == 1
+    # One default export (the anywidget module), written either way a bundler writes it.
+    widget = _assets.read_asset("caliper-widget.js")
+    assert len(re.findall(rb"export default|export\s*\{[^}]*\bas default\b", widget)) == 1
     assert b"caliper-view" in _assets.read_asset("index.html")
 
 
@@ -115,9 +118,21 @@ def test_missing_asset_names_the_build_command(tmp_path, monkeypatch):
     assert _assets.asset_names() == []
 
 
-def run_build_web(*args, cwd=None):
-    return subprocess.run([sys.executable, str(BUILD_WEB), *map(str, args)], cwd=cwd,
+def run_build_web(*args, cwd=None, wasm=None):
+    # Without a WebAssembly build unless one is given: a checkout's own
+    # web/wasm/build must not change what these tests see.
+    wasm_args = ["--wasm-build", wasm if wasm is not None else REPO / "web" / "wasm" / "no-such-build"]
+    return subprocess.run([sys.executable, str(BUILD_WEB), *map(str, args), *map(str, wasm_args)], cwd=cwd,
                           capture_output=True, text=True)
+
+
+def fake_wasm_build(root: Path) -> Path:
+    build = root / "wasm-build"
+    build.mkdir()
+    for name in _assets.WASM_VIEWS:
+        (build / name).write_bytes(b"\0asm\1\0\0\0" if name.endswith(".wasm") else f"// {name}\n".encode())
+    (build / "demo.html").write_text("<!doctype html>")   # not one of the three: not copied
+    return build
 
 
 @requires_npm
@@ -170,4 +185,47 @@ def test_checked_in_placeholders_match_their_fixture(tmp_path):
     web = tmp_path / "web"
     shutil.copytree(FIXTURE, web, ignore=shutil.ignore_patterns("dist", "node_modules"))
     r = run_build_web("--web", web, "--check")
+    assert r.returncode == 0, r.stderr
+
+
+def test_wasm_views_content_types():
+    assert _assets.content_type("caliper-views-loader.js") == "text/javascript; charset=utf-8"
+    assert _assets.content_type("caliper-views.js") == "text/javascript; charset=utf-8"
+    assert _assets.content_type("caliper-views.wasm") == "application/wasm"
+
+
+@requires_npm
+def test_build_web_copies_the_wasm_views_from_their_build(tmp_path):
+    web = tmp_path / "web"
+    shutil.copytree(FIXTURE, web, ignore=shutil.ignore_patterns("dist", "node_modules"))
+    out = tmp_path / "out"
+    wasm = fake_wasm_build(tmp_path)
+    r = run_build_web("--web", web, "--out", out, wasm=wasm)
+    assert r.returncode == 0, r.stderr
+    assert sorted(p.name for p in out.iterdir()) == sorted(_assets.REQUIRED + _assets.WASM_VIEWS)
+    for name in _assets.WASM_VIEWS:
+        assert (out / name).read_bytes() == (wasm / name).read_bytes()
+    r = run_build_web("--web", web, "--out", out, "--check", "--no-install", wasm=wasm)
+    assert r.returncode == 0, r.stderr
+    (out / "caliper-views.wasm").write_bytes(b"\0asm\2\0\0\0")
+    r = run_build_web("--web", web, "--out", out, "--check", "--no-install", wasm=wasm)
+    assert r.returncode == 1
+    assert "differs from the build: caliper-views.wasm" in r.stderr
+
+
+@requires_npm
+def test_build_web_keeps_the_checked_in_wasm_views_without_a_build(tmp_path):
+    web = tmp_path / "web"
+    shutil.copytree(FIXTURE, web, ignore=shutil.ignore_patterns("dist", "node_modules"))
+    out = tmp_path / "out"
+    out.mkdir()
+    for name in _assets.WASM_VIEWS:
+        (out / name).write_bytes(b"checked in")
+    r = run_build_web("--web", web, "--out", out)
+    assert r.returncode == 0, r.stderr
+    assert "the checked-in views are kept" in r.stdout
+    for name in _assets.WASM_VIEWS:
+        assert (out / name).read_bytes() == b"checked in"
+    # Nothing to compare them with: --check compares the rest only.
+    r = run_build_web("--web", web, "--out", out, "--check", "--no-install")
     assert r.returncode == 0, r.stderr

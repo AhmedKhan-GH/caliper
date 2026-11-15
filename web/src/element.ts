@@ -1,6 +1,17 @@
 // The <caliper-view> element: one live view of a Caliper stream, with a header
 // (name, data view picker, status dot) and a drawing area. Elements with the
 // same src share one socket; the `source` property takes any StreamClient.
+//
+// What draws the area is decided per view once its kind is known: with
+// renderer="auto" (the default), Caliper's own views compiled to WebAssembly
+// (wasm.ts) draw the kinds their loader lists in CALIPER_VIEWS_KINDS when
+// WebGPU gives an adapter, and this element's TypeScript views draw the rest,
+// so one page can mix both. The header is the element's in both cases: with
+// the WebAssembly views the shared socket carries only the metadata (VIEWS,
+// no subscription), the module streams the view on its own connection, the
+// picker sends its choice through the module's setDataView, and the module's
+// data view reply updates the picker. The WebAssembly views emit no
+// selections yet; renderer="ts" gives selections for every kind.
 
 import { acquire, release } from './client/socket.js';
 import type { StreamClient, StreamListener } from './client/stream.js';
@@ -14,7 +25,7 @@ import { HistogramView } from './views/histogram.js';
 import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
-import { assetBase, hasAdapter, mountWasm, type WasmHandle } from './wasm.js';
+import { assetBase, hasAdapter, mountWasm, wasmKinds, type WasmHandle } from './wasm.js';
 import { C, FONT_MONO, FONT_TEXT } from './views/theme.js';
 
 const STYLE = `
@@ -45,8 +56,8 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
 .body { position: relative; flex: 1; min-height: 0; }
 .body canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .body canvas.overlay { z-index: 1; cursor: crosshair; touch-action: none; }
-.plate[hidden], .wasm[hidden] { display: none; }
-.wasm { height: 100%; position: relative; }
+.plate[hidden], .wasm[hidden], canvas.overlay[hidden] { display: none; }
+.wasm { position: absolute; inset: 0; }
 .tip { position: absolute; z-index: 2; pointer-events: none; background: rgba(24, 23, 21, .94); border: 1px solid ${C.rule};
   border-radius: 4px; padding: 4px 7px; font: 11.5px/1.45 ${FONT_MONO}; color: ${C.parchment}; white-space: pre; }
 .msg { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; padding: 16px;
@@ -87,6 +98,10 @@ export class CaliperView extends HTMLElement {
   private ro: ResizeObserver | null = null;
   private offLost: (() => void) | null = null;
   private wasm: WasmHandle | null = null;
+  private wasmReady = false;
+  /** null until the view's kind is known; then which views draw it. */
+  private drawer: 'wasm' | 'ts' | null = null;
+  private deciding = false;
   private readonly picker = new Picker((dv) => this.pick(dv));
   private readonly root: ShadowRoot;
   private readonly parts: {
@@ -147,7 +162,8 @@ export class CaliperView extends HTMLElement {
   /** Read-only state for tests and debugging. */
   debugState(): Record<string, unknown> {
     return {
-      view: this.names.join(','), renderer: this.renderer, subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
+      view: this.names.join(','), renderer: this.renderer, drawer: this.drawer, wasmReady: this.wasmReady,
+      subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
       adapter: this.device ? adapterInfo() : null, ...(this.live?.debug() ?? {}),
     };
   }
@@ -194,10 +210,10 @@ export class CaliperView extends HTMLElement {
     p.dot.setAttribute('role', 'status');
     head.append(p.name, this.picker.el, p.info, p.tools, p.dot);
     p.tip.hidden = true;
-    p.body.append(p.overlay, p.tip, p.msg);
-    plate.append(head, p.body);
     p.wasm.hidden = true;
-    this.root.append(style, plate, p.wasm);
+    p.body.append(p.wasm, p.overlay, p.tip, p.msg);
+    plate.append(head, p.body);
+    this.root.append(style, plate);
     this.ro = new ResizeObserver(() => {
       this.live?.resize();
       this.request('data');
@@ -220,50 +236,89 @@ export class CaliperView extends HTMLElement {
     this.gotData = false;
     this.current = this.pending = null;
     this.resolved = null;
+    this.drawer = null;
+    this.deciding = false;
+    this.wasmReady = false;
     const gen = ++this.generation;
     const view = this.getAttribute('view') ?? '';
     const src = this.getAttribute('src');
-    // renderer="auto" (the default) uses the WebAssembly views when WebGPU
-    // gives an adapter and their module loads; "wasm" tries them whatever the
-    // adapter; "ts" uses this element's own views. A stream given through the
-    // source property always uses the element's own views.
-    const mode = this.getAttribute('renderer') ?? 'auto';
-    const base = src && assetBase(src);
-    if (!this.sourceProp && base && view && (mode === 'auto' || mode === 'wasm')) {
-      this.tryWasm(gen, mode, src!, base, view);
-      return;
-    }
-    this.attachTs(gen, view, src);
+    this.attach(gen, view, src);
   }
 
-  private async tryWasm(gen: number, mode: string, src: string, base: string, view: string): Promise<void> {
-    const ok = mode === 'wasm' || (await hasAdapter());
-    const handle = ok && gen === this.generation ? await mountWasm(this.parts.wasm, {
-      src, view, kind: this.getAttribute('kind') ?? undefined, height: Number(this.getAttribute('height')) || undefined, assetBase: base,
-      onSelect: (e) => {
-        const event = 'detail' in e && 'type' in e ? e : { view, type: 'select', detail: e };
-        this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));
-      },
-      onDataView: (dv) => {
-        this.resolved = dv;
-        this.dispatchEvent(new CustomEvent('caliper-dataview', { detail: dv, bubbles: true, composed: true }));
-      },
-    }) : null;
+  /**
+   * Decides, once the view's kind is known, what draws it: renderer="auto"
+   * (the default) uses the WebAssembly views for the kinds their loader lists
+   * when WebGPU gives an adapter; "wasm" uses them for those kinds whatever
+   * the adapter; "ts" uses this element's own views. The element's own views
+   * also draw a stream given through the source property, several series in
+   * one plate, and anything the WebAssembly views fail to mount.
+   */
+  private async decide(gen: number): Promise<void> {
+    const kind = this.kind();
+    if (this.drawer || this.deciding || !kind) return;
+    this.deciding = true;
+    const mode = this.getAttribute('renderer') ?? 'auto';
+    const src = this.getAttribute('src');
+    const base = src && assetBase(src);
+    let handle: WasmHandle | null = null;
+    if (!this.sourceProp && base && this.names.length === 1 && (mode === 'auto' || mode === 'wasm')) {
+      const kinds = await wasmKinds(base);
+      const ok = !!kinds && kinds.includes(kind) && (mode === 'wasm' || (await hasAdapter()));
+      if (ok && gen === this.generation) handle = await this.mountWasm(src!, base, kind);
+    }
     if (gen !== this.generation) {
       handle?.destroy();
       return;
     }
-    if (!handle) {
-      this.attachTs(gen, view, src);
+    this.deciding = false;
+    if (handle) {
+      this.useWasm(handle);
       return;
     }
-    this.wasm = handle;
-    this.parts.plate.hidden = true;
-    this.parts.wasm.hidden = false;
-    if (this.wanted) handle.setDataView(this.wanted);
+    this.drawer = 'ts';
+    this.subscribe();
+    this.views(this.client?.views ?? []);
   }
 
-  private attachTs(gen: number, view: string, src: string | null): void {
+  private mountWasm(src: string, base: string, kind: Kind): Promise<WasmHandle | null> {
+    const view = this.names[0];
+    this.parts.wasm.hidden = false;
+    return mountWasm(this.parts.wasm, {
+      src, view, kind, header: false, assetBase: base,
+      onSelect: (e) => {
+        const event = 'detail' in e && 'type' in e ? e : { view, type: 'select', detail: e };
+        this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));
+      },
+      // The reply to the module's own subscription or data view request.
+      onDataView: (dv) => {
+        if (this.drawer !== 'wasm') return;
+        this.resolved = dv;
+        this.wanted = null;
+        this.picker.show(dv);
+      },
+    });
+  }
+
+  private useWasm(handle: WasmHandle): void {
+    this.wasm = handle;
+    this.drawer = 'wasm';
+    this.parts.overlay.hidden = true;
+    this.parts.wasm.hidden = false;
+    if (this.wanted) handle.setDataView(this.wanted);
+    const gen = this.generation;
+    const ready = handle.ready ?? Promise.resolve();
+    ready.then(() => {
+      if (gen !== this.generation) return;
+      this.wasmReady = true;
+      this.message(null);
+      this.status();
+    });
+    this.message('Waiting for data');
+    this.status();
+  }
+
+  /** The stream for the header: the element's shared client, without subscriptions until it draws itself. */
+  private attach(gen: number, view: string, src: string | null): void {
     let client = this.sourceProp;
     if (!client && src) {
       client = acquire(src);
@@ -303,9 +358,15 @@ export class CaliperView extends HTMLElement {
     // Several series may share one plate: view="loss,val_loss".
     const known = (n: string) => client!.views.some((v) => v.name === n);
     this.names = view.includes(',') && !known(view) ? view.split(',').map((s) => s.trim()).filter(Boolean) : [view];
-    this.subs = this.names.map((n, i) => client!.subscribe(n, i === 0 ? this.wanted ?? undefined : undefined));
     this.views(client.views);
     this.status();
+  }
+
+  /** The element's own views draw: subscribe on the shared client. */
+  private subscribe(): void {
+    const client = this.client;
+    if (!client) return;
+    this.subs = this.names.map((n, i) => client.subscribe(n, i === 0 ? this.wanted ?? undefined : undefined));
   }
 
   private detach(): void {
@@ -316,10 +377,10 @@ export class CaliperView extends HTMLElement {
         console.warn('caliper-view:', e);
       }
       this.wasm = null;
-      this.parts.wasm.replaceChildren();
     }
+    this.parts.wasm.replaceChildren();
     this.parts.wasm.hidden = true;
-    this.parts.plate.hidden = false;
+    this.parts.overlay.hidden = false;
     if (this.client) for (const s of this.subs) this.client.unsubscribe(s);
     this.subs = [];
     this.unlisten?.();
@@ -346,9 +407,10 @@ export class CaliperView extends HTMLElement {
     const e = this.entry();
     this.picker.offer(e);
     if (this.resolved) this.picker.show(this.resolved);
+    if (!this.drawer) this.decide(this.generation);
     const k = this.kind();
-    if (k) this.ensureLive(k);
-    if (this.gotData) return;
+    if (k && this.drawer === 'ts') this.ensureLive(k);
+    if (this.gotData || this.wasmReady) return;
     const missing = !e && this.client?.state === 'open';
     this.message(missing ? `No view named ${this.names.join(', ')} yet` : 'Waiting for data');
   }
@@ -385,19 +447,21 @@ export class CaliperView extends HTMLElement {
 
   private status(): void {
     const c = this.client;
-    const state = !c || c.state === 'ended' ? 'ended' : c.state === 'open' && this.gotData ? 'connected' : 'waiting';
+    const drawn = this.drawer === 'wasm' ? this.wasmReady : this.gotData;
+    const state = !c || c.state === 'ended' ? 'ended' : c.state === 'open' && drawn ? 'connected' : 'waiting';
     const dot = this.parts.dot;
     if (dot.dataset.state !== state) {
       dot.dataset.state = state;
       dot.title = state === 'connected' ? 'Connected' : state === 'waiting' ? 'Waiting for data' : 'Ended';
       dot.setAttribute('aria-label', dot.title);
     }
-    if (state === 'ended' && !this.gotData) this.message('The stream has ended');
+    if (state === 'ended' && !drawn) this.message('The stream has ended');
   }
 
   private pick(dv: DataView): void {
     this.wanted = dv;
-    if (this.client && this.subs.length) this.client.requestDataView(this.subs[0], dv);
+    if (this.wasm) this.wasm.setDataView(dv);
+    else if (this.client && this.subs.length) this.client.requestDataView(this.subs[0], dv);
     this.dispatchEvent(new CustomEvent('caliper-dataview', { detail: dv, bubbles: true, composed: true }));
   }
 

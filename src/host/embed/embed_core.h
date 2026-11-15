@@ -113,6 +113,10 @@ struct CaliperCore {
     // whose top-left (logical points) is (area_x, area_y); 0 for every other core.
     bool  hosted = false;
     float area_x = 0.0f, area_y = 0.0f;
+    // A host that draws each view's name, status and data view picker in its
+    // own header (the browser element, web/wasm) sets this: view windows then
+    // have no title bar. Every other core keeps the title bar.
+    bool  views_bare = false;
 
     void log(int level, const std::string& msg) {
         if (log_fn) log_fn(userdata, level, msg.c_str());

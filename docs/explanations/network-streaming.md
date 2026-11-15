@@ -54,10 +54,17 @@ same machine through a live session or the own window; a viewer on the network
 receives copies.
 
 The viewers in the browser live in the `web/` package: the `<caliper-view>`
-element, the notebook widget built on it, and the viewer page. Where WebGPU is
-available, they draw with Caliper's own view layer compiled to WebAssembly, the
-[web viewer](../plans/streaming-and-embedding.md#the-web-viewer). Where it is
-absent, small views written for the browser in TypeScript draw with Canvas 2D.
+element, the notebook widget built on it, and the viewer page. The element
+decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
+view layer compiled to WebAssembly (`web/wasm`, the
+[web viewer](../plans/streaming-and-embedding.md#the-web-viewer)) draws the
+kinds its loader lists, which are heatmaps, images, series and histograms, and
+small views written for the browser in TypeScript draw points. Without an
+adapter the TypeScript views draw every kind, with Canvas 2D where they need
+it. The element's header, with the view's name, its status and the data view
+picker, is the same either way. The WebAssembly views do not send selections
+yet, so an element that needs them sets `renderer="ts"`, which keeps the
+TypeScript views for every kind.
 
 ## Snapshots reduced on the device
 
