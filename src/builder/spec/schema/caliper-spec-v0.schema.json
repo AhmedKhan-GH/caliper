@@ -1,0 +1,400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:caliper:schema:spec:v0",
+  "title": "Caliper spec, version 0, canonical JSON form",
+  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. See docs/plans/spec-format.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["caliper_spec", "applet"],
+  "properties": {
+    "caliper_spec": { "const": 0 },
+    "applet": { "$ref": "#/$defs/applet" },
+    "source": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/source" } },
+    "panel": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/panel" } },
+    "layout": { "$ref": "#/$defs/layout_node" },
+    "x": { "$ref": "#/$defs/extension" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "label": { "type": "string", "maxLength": 256 },
+    "safe_integer": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+    "axis": { "type": "integer", "minimum": -8, "maximum": 7 },
+    "range": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+    "colormap": { "enum": ["viridis", "magma", "rdbu", "greys"] },
+    "binding": {
+      "type": "string",
+      "maxLength": 320,
+      "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$"
+    },
+    "catalog_id": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^(table|tensor|live|feed|metric):.+$"
+    },
+    "extension": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/extension_value" }
+    },
+    "extension_value": {
+      "anyOf": [
+        { "type": "string", "maxLength": 65536 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "array", "items": { "$ref": "#/$defs/extension_value" } },
+        { "$ref": "#/$defs/extension" }
+      ]
+    },
+
+    "applet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "type": "string", "maxLength": 4096 },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "catalog": { "$ref": "#/$defs/catalog_id" },
+        "sql": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "from": { "$ref": "#/$defs/id" },
+        "transform": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/transform" } },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "oneOf": [
+        { "required": ["catalog"] },
+        { "required": ["sql"] },
+        { "required": ["from"] }
+      ]
+    },
+
+    "transform": {
+      "oneOf": [
+        { "$ref": "#/$defs/transform_slice" },
+        { "$ref": "#/$defs/transform_reduce" },
+        { "$ref": "#/$defs/transform_normalise" }
+      ]
+    },
+    "transform_slice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "axis"],
+      "properties": {
+        "op": { "const": "slice" },
+        "axis": { "$ref": "#/$defs/axis" },
+        "index": { "$ref": "#/$defs/safe_integer" },
+        "start": { "$ref": "#/$defs/safe_integer" },
+        "stop": { "$ref": "#/$defs/safe_integer" },
+        "step": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "if": { "required": ["index"] },
+      "then": { "properties": { "start": false, "stop": false, "step": false } }
+    },
+    "transform_reduce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "axis", "fn"],
+      "properties": {
+        "op": { "const": "reduce" },
+        "axis": {
+          "anyOf": [
+            { "$ref": "#/$defs/axis" },
+            { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/axis" } }
+          ]
+        },
+        "fn": { "enum": ["mean", "sum", "min", "max", "std", "var", "norm", "argmax", "argmin", "entropy"] },
+        "keepdims": { "type": "boolean" },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "if": { "properties": { "fn": { "enum": ["argmax", "argmin"] } } },
+      "then": {
+        "properties": {
+          "axis": { "anyOf": [ { "type": "integer" }, { "type": "array", "maxItems": 1 } ] }
+        }
+      }
+    },
+    "transform_normalise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "mode"],
+      "properties": {
+        "op": { "const": "normalise" },
+        "mode": { "enum": ["minmax", "zscore", "softmax", "l2"] },
+        "axis": { "$ref": "#/$defs/axis" },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+
+    "panel": {
+      "oneOf": [
+        { "$ref": "#/$defs/panel_series" },
+        { "$ref": "#/$defs/panel_heatmap" },
+        { "$ref": "#/$defs/panel_points" },
+        { "$ref": "#/$defs/panel_histogram" },
+        { "$ref": "#/$defs/panel_table" },
+        { "$ref": "#/$defs/panel_image" },
+        { "$ref": "#/$defs/panel_text" }
+      ]
+    },
+    "panel_series": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "bind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "series" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["y"],
+          "properties": {
+            "x": { "$ref": "#/$defs/binding" },
+            "y": {
+              "anyOf": [
+                { "$ref": "#/$defs/binding" },
+                { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/binding" } }
+              ]
+            }
+          }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x_label": { "$ref": "#/$defs/label" },
+            "y_label": { "$ref": "#/$defs/label" },
+            "x_range": { "$ref": "#/$defs/range" },
+            "y_range": { "$ref": "#/$defs/range" },
+            "x_log": { "type": "boolean" },
+            "y_log": { "type": "boolean" },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "panel_heatmap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "bind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "heatmap" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["values"],
+          "properties": { "values": { "$ref": "#/$defs/binding" } }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x_label": { "$ref": "#/$defs/label" },
+            "y_label": { "$ref": "#/$defs/label" },
+            "colormap": { "$ref": "#/$defs/colormap" },
+            "range": { "$ref": "#/$defs/range" },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "panel_points": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "bind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "points" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "$ref": "#/$defs/binding" },
+            "y": { "$ref": "#/$defs/binding" },
+            "z": { "$ref": "#/$defs/binding" },
+            "positions": { "$ref": "#/$defs/binding" },
+            "color": { "$ref": "#/$defs/binding" },
+            "size": { "$ref": "#/$defs/binding" }
+          },
+          "oneOf": [
+            { "required": ["x", "y"], "properties": { "positions": false } },
+            { "required": ["positions"], "properties": { "x": false, "y": false, "z": false } }
+          ]
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x_label": { "$ref": "#/$defs/label" },
+            "y_label": { "$ref": "#/$defs/label" },
+            "z_label": { "$ref": "#/$defs/label" },
+            "colormap": { "$ref": "#/$defs/colormap" },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "panel_histogram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "bind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "histogram" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["values"],
+          "properties": { "values": { "$ref": "#/$defs/binding" } }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x_label": { "$ref": "#/$defs/label" },
+            "y_label": { "$ref": "#/$defs/label" },
+            "bins": { "type": "integer", "minimum": 1, "maximum": 65536 },
+            "range": { "$ref": "#/$defs/range" },
+            "y_log": { "type": "boolean" },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "panel_table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "bind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "table" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows"],
+          "properties": { "rows": { "$ref": "#/$defs/id" } }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+            },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "panel_image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "bind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "image" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["values"],
+          "properties": { "values": { "$ref": "#/$defs/binding" } }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "colormap": { "$ref": "#/$defs/colormap" },
+            "range": { "$ref": "#/$defs/range" },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "panel_text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "primitive": { "const": "text" },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "value": { "$ref": "#/$defs/binding" } }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "text": { "type": "string", "maxLength": 16384 },
+            "x": { "$ref": "#/$defs/extension" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "anyOf": [
+        { "required": ["bind"], "properties": { "bind": { "required": ["value"] } } },
+        { "required": ["options"], "properties": { "options": { "required": ["text"] } } }
+      ]
+    },
+
+    "layout_node": {
+      "oneOf": [
+        { "$ref": "#/$defs/id" },
+        { "$ref": "#/$defs/layout_split" },
+        { "$ref": "#/$defs/layout_tabs" }
+      ]
+    },
+    "layout_split": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["split", "children"],
+      "properties": {
+        "split": { "enum": ["horizontal", "vertical"] },
+        "ratio": { "type": "number", "minimum": 0.05, "maximum": 0.95 },
+        "title": { "$ref": "#/$defs/title" },
+        "children": { "type": "array", "minItems": 2, "maxItems": 64, "items": { "$ref": "#/$defs/layout_node" } },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "if": { "required": ["ratio"] },
+      "then": { "properties": { "children": { "maxItems": 2 } } }
+    },
+    "layout_tabs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tabs"],
+      "properties": {
+        "tabs": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/layout_node" } },
+        "title": { "$ref": "#/$defs/title" },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    }
+  }
+}

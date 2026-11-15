@@ -289,10 +289,10 @@ The layout is a tree of nodes. A node is one of three things:
 | split | `split` | `horizontal` or `vertical` | Yes | | `horizontal` puts the children side by side, left to right; `vertical` stacks them top to bottom. |
 | | `ratio` | number, 0.05 to 0.95 | No | `0.5` | The share of the first child. Only a split with exactly two children takes it; a split with more children shares its space equally. |
 | | `children` | 2 to 64 nodes | Yes | | The children, in order. |
-| | `title` | text, at most 256 characters | No | | The tab label, when the split is a child of tabs. |
+| | `title` | text, at most 256 characters, not empty | No | | The tab label, when the split is a child of tabs. |
 | | `x` | table | No | none | Extensions. |
 | tabs | `tabs` | 1 to 64 nodes | Yes | | The tabs, in order. A panel's tab label is its title. |
-| | `title` | text, at most 256 characters | No | | The tab label, when these tabs are themselves a child of tabs. |
+| | `title` | text, at most 256 characters, not empty | No | | The tab label, when these tabs are themselves a child of tabs. |
 | | `x` | table | No | none | Extensions. |
 
 The root is the `layout` key, so it is usually a `[layout]` table, but `layout = "<panel>"` is also a valid root. A table with both `split` and `tabs`, or neither, a split with fewer than two children, tabs with none and a `ratio` on a split of more than two children are `spec.bad_layout`. A panel id that is not a panel of the spec is `spec.unknown_panel`, and a panel placed twice is `spec.duplicate_placement`. A panel that the layout does not place is not drawn, and the validator warns with `spec.unplaced_panel`. The tree is at most 8 nodes deep (`spec.too_deep`) and has at most 256 nodes (`spec.too_many`).
@@ -340,6 +340,12 @@ The writer does not keep comments, blank lines or the author's key order. That i
 The canonical JSON form is the document's tables as JSON objects, under the same keys, so the arrays of tables are the arrays `"source"`, `"panel"` and `"transform"`. Keys are sorted in byte order, the text is compact UTF-8, and the empty arrays and tables that the TOML writer leaves out are left out. The JSON Schema `src/builder/spec/schema/caliper-spec-v0.schema.json` (draft 2020-12) describes this form. The web viewer reads it, so it holds nothing that is specific to TOML.
 
 The schema checks the structure, the types, the keys of each table, the enumerations, the ranges, the slots and options of each primitive and the three source forms. It does not check what needs the whole document or the catalog: references, cycles, layout placement, shapes and columns. A document that the schema accepts may still fail validation; a document that validates always passes the schema.
+
+The schema, embedded from its file so that this page cannot drift from it:
+
+```json
+--8<-- "src/builder/spec/schema/caliper-spec-v0.schema.json"
+```
 
 ## Versioning
 
