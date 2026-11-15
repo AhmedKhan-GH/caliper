@@ -80,14 +80,17 @@ An MCP server comes in [Phase 3](#phase-3-agent-built-panels), beside the comman
 
 If agents need to see the screen sooner, the capture service moves earlier, not MCP.
 
-## Renderer fallback
+## Renderers
 
-Drawing already falls back from Metal or Vulkan to OpenGL when the native backend fails to start. The plan keeps that fallback, makes it robust and adds a CPU renderer below it, so that each step is slower but works and says so. This serves headless CI, virtual machines and machines with broken graphics drivers.
+This work comes after Phase 1, alongside the planned web build of Caliper. It is not part of the current work.
 
-1. Harden the OpenGL path: replace GLEW with a modern loader, and run the OpenGL graphics tests in CI.
-2. Add a CPU renderer as the last fallback.
+Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the normal path, at full speed and with zero-copy from torch. Nothing routes them through another layer.
 
-The backends are described in [Rendering](../explanations/rendering.md).
+1. Add one WebGPU backend behind `HostRenderer`, with two roles. In the browser it runs on the browser's own WebGPU, as part of the web build. As the native fallback it runs through Dawn, Google's WebGPU library, which is an optional build component, and the host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
+2. Retire the GLEW OpenGL fallback once the Dawn path covers its cases. There is no separate hand-written OpenGL or CPU renderer.
+3. Evaluate writing each shader once and translating it for each backend, for example with the Slang shading language. This Slang is not the SystemVerilog library of the same name that `third_party/` vendors.
+
+Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers that exist today are described in [Rendering](../explanations/rendering.md).
 
 ## Smaller work
 
@@ -103,6 +106,8 @@ The backends are described in [Rendering](../explanations/rendering.md).
 ## Not now
 
 A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts.
+
+Linux is not planned for now.
 
 A second native host is not needed now. `examples/embed_host` stays as the embedding example and test. Revisit this only for a single-applet app or for embedding Caliper in another product.
 
@@ -140,10 +145,10 @@ These ideas come from earlier designs and are not built. Each needs a decision b
 - **`.caliperapp` bundles.** A bundle folder with per-platform binaries, and manifest keys for platforms, authors, licence and runtimes.
 - **Hot reload.** Which entry points reloading a rebuilt applet needs, such as `save_state`, `load_state`, `on_suspend` and `on_resume`.
 - **SDK conformance.** A conformance checker, and a set of reference applets built against each SDK release.
-- **Isolation and reach.** Applets in a separate process, scripting bindings, and a Linux build.
+- **Isolation and reach.** Applets in a separate process and scripting bindings.
 - **Live streaming.** Several viewers per session, f16, bf16 and RGB zero-copy kernels, a smaller wheel without the stores, and an arm64 wheel job.
 - **Embedding.** Several canvases per core, an `api_version` query and a canvas-info query.
-- **Zero-copy.** Device-backed `alloc_shared` on Metal, a pool of exportable Vulkan images, and Linux Vulkan through `OPAQUE_FD` handles.
+- **Zero-copy.** Device-backed `alloc_shared` on Metal and a pool of exportable Vulkan images.
 - **Geometry.** Thick lines and ribbons, MSAA, a culling flag and volumetric rendering.
 - **Telemetry sources.** Feed channels registered by applets or read from serial, UDP or MQTT.
 - **GPTScope follow-ups.** Point picking and a learned projection in ThoughtSpace, induction-head metrics and activation patching.

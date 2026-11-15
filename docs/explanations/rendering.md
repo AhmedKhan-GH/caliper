@@ -25,7 +25,7 @@ backend is its own translation unit, and the host picks one at startup.
 |---|---|---|---|
 | Metal | Default on macOS | A compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | No CPU staging. Apple-only translation unit |
 | Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](vulkan-cuda.md). Windows-only translation unit |
-| OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback. `tex_update_from_device` always returns `false` |
+| OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback, loaded through GLEW. `tex_update_from_device` always returns `false` |
 
 `core_select_renderer()` in `src/host/core_lifecycle.cpp` picks the default: Metal on macOS and Vulkan on Windows.
 `CALIPER_RENDERER=gl` selects OpenGL on either. If the native backend fails to initialize (no driver, a remote
@@ -34,6 +34,8 @@ for the same tensor: the gfx test suite runs one matrix per backend and compares
 the CPU reference conversion (`map_f32_to_rgba8` and `expand_u8_to_rgba8`). The suite has an environment for OpenGL,
 for Metal, for Vulkan (the CPU-staged rows, which run on any Vulkan driver) and for Vulkan with CUDA (the device
 rows, which run when the paired CUDA device is the only one in the machine).
+
+The plan for the renderers is in the [roadmap](../plans/roadmap.md#renderers).
 
 The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
 with ImGui, so they look the same on every backend.

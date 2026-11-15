@@ -106,7 +106,7 @@ mismatch crashes in ways that are hard to trace.
 | Source | The applet's own repository. First-party applets in `caliper-applets`; private applets in private repositories |
 | Releases | The applet repository's releases, as `<id>-<version>-<platform>.caliperapp.zip`; the registry points to them |
 | Shipped with the app | `Caliper.app/Contents/PlugIns/`, signed with the app |
-| Installed by the user | macOS `~/Library/Application Support/Caliper/applets/<id>.caliperapp/`; Windows `%APPDATA%\Caliper\applets\`; Linux `~/.local/share/caliper/applets/` |
+| Installed by the user | macOS `~/Library/Application Support/Caliper/applets/<id>.caliperapp/`; Windows `%APPDATA%\Caliper\applets\` |
 | Applet data | `~/Library/Application Support/Caliper/data/<id>/` |
 | Rebuildable caches | `~/Library/Caches/Caliper/<id>/` |
 | Shared runtimes | `~/Library/Application Support/Caliper/runtimes/`, if [runtime packs](roadmap.md#undecided) are adopted |
