@@ -55,13 +55,21 @@ target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_D
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
 
+# ---- the wire protocol v3 codec (shared with the native NetSource) ---------------
+add_library(caliper_wire STATIC
+    ${CALIPER_ROOT}/src/host/net/wire.cpp
+    ${CALIPER_ROOT}/src/host/net/json.cpp)
+target_include_directories(caliper_wire PUBLIC ${CALIPER_ROOT}/src/host ${CALIPER_ROOT}/include)
+
 # ---- the module ----------------------------------------------------------------
 add_executable(caliper-views
     src/main.cpp
+    src/net_source.cpp
+    src/source_poll.cpp
     src/web_services.cpp
     ${TP}/imgui/backends/imgui_impl_glfw.cpp
 )
-target_link_libraries(caliper-views PRIVATE caliper_view_layer)
+target_link_libraries(caliper-views PRIVATE caliper_view_layer caliper_wire websocket.js)
 target_link_options(caliper-views PRIVATE
     --use-port=emdawnwebgpu
     -sUSE_GLFW=3
@@ -72,7 +80,9 @@ target_link_options(caliper-views PRIVATE
     -sFILESYSTEM=0
     -sALLOW_MEMORY_GROWTH=1
     -sERROR_ON_UNDEFINED_SYMBOLS=1
-    "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$specialHTMLTargets"
+    "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$specialHTMLTargets"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view"
+    "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_options(caliper-views PRIVATE --closure=1)
