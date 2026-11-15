@@ -121,12 +121,26 @@ those canvases and never paints applet pixels.
   first down first.
 - **One canvas per core.** `caliper_core_attach_canvas` refuses a second canvas.
   A canvas-info query and several canvases per core are not provided.
-- **`CaliperCoreDesc.data_dir` roots the stores.** A non-`NULL` directory (created
-  if missing) holds metrics, artifacts and applet data for that core, and the
-  window layout at `<data_dir>/imgui.ini`. `NULL` keeps the operating system
-  default, which is what the `caliper` executable passes, and nothing is
-  written to the process's working directory. The override lasts for the one
-  live core and is cleared on shutdown.
+- **`CaliperCoreDesc.data_dir` moves the app-data folder.** A non-`NULL`
+  directory (created if missing) takes the place of the
+  [app-data folder](environment.md#the-app-data-folder) for that core: the
+  metrics, data and artifacts stores, the applets' data folders `data/<id>/`,
+  and the user applets folder `applets/` that the core searches, unless
+  `CALIPER_USER_APPLETS_DIR` names another one. The window layout is kept at
+  `<data_dir>/imgui.ini`. The override lasts for the one live core and is
+  cleared on shutdown.
+- **Without `data_dir`, `CALIPER_DATA_DIR` decides.** With `NULL` the core uses
+  the folder that `CALIPER_DATA_DIR` names when it is set and not empty, and
+  the operating system's folder otherwise, for the same contents. It keeps no
+  window layout then: no `imgui.ini` is read or written anywhere, so every run
+  starts with the default layout and nothing lands in the process's working
+  directory. `CALIPER_DATA_DIR` is read once, when the process first looks the
+  folder up.
+- **Live session files follow `CALIPER_DATA_DIR` first.** The session files
+  under `live/` (see [Live streaming](../explanations/live-streaming.md#sessions))
+  are found in an explicit root when the caller gives one, else in
+  `CALIPER_DATA_DIR`, and only then in the core's `data_dir` or the operating
+  system's folder (`src/host/live/live_shm.h`).
 - **`CaliperCoreDesc.applets_dir` is searched first.** It takes the place of the
   `caliper` executable's `--applets` folders in the
   [search order](cli.md#the-search-order), and like them a folder that holds no

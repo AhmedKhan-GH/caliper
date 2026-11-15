@@ -51,6 +51,10 @@ The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as 
 
 `caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../references/cli.md#caliper-shot) on the `hello` fixture through `tests/shot_run.cmake`, and `caliper_png_check` checks that the image has the requested size and is not one flat colour. The first runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone afterwards and that nothing was created under `HOME`; the second runs with it and checks that the applet's data folder is there and that no `imgui.ini` was written. Without a GPU both are reported as skipped, unless `CALIPER_REQUIRE_GPU=1` makes that a failure.
 
+## Where the tests keep data
+
+No test reads or writes the user's app-data folder. ctest runs every test binary that opens the stores (`caliper_tests`, `caliper_export_tests`, `caliper_embed_tests` and the live suites) with `CALIPER_DATA_DIR` on `tests/app-data/<binary>` in the build folder, and every command-line test with a `CALIPER_DATA_DIR` of its own, as described above. Because `CALIPER_DATA_DIR` moves the whole app-data folder, the stores, the applets' data folders, `imgui.ini`, the live session files and the default user applets folder all stay in the build folder. A test that needs another root, such as the embedding tests of `CaliperCoreDesc.data_dir`, sets its own.
+
 ## Applet and adapter tests
 
 `caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. Five small executables test the learning and simulation code of single applets: `caliper_sculpt_tests`, `caliper_mesh_tests`, `caliper_em_pic_tests`, `caliper_surface_tests` and `caliper_twin_tests`. They link libtorch and are built only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.

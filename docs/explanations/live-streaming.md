@@ -52,7 +52,8 @@ The training process is the **client**. Its first call opens a local live
 session: POSIX shared memory plus a **session file**
 `<data_root>/live/<pid>.json`, where `data_root` is the client's `data_dir`,
 else `$CALIPER_DATA_DIR`, else Caliper's app-data folder (macOS default
-`~/Library/Application Support/Caliper`). The file is written atomically at open
+`~/Library/Application Support/Caliper`, or the `data_dir` of an embedding
+core in the same process). The file is written atomically at open
 and on every view change, removed at close, and names the pid and its start
 time (against pid reuse), the session token, the script, the views and the
 segment names.

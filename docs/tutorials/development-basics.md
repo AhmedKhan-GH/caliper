@@ -153,7 +153,8 @@ pattern. Applet logic that reads services can be unit-tested headlessly.
 **Your data lives at** `~/Library/Application Support/Caliper/data/<your-id>/`
 — the host creates it and hands it to you as `host.data_dir()`. Downloads,
 caches, scratch files go there and nowhere else. [Folders and environment variables](../references/environment.md)
-lists the folder on every platform.
+lists the folder on every platform; `CALIPER_DATA_DIR` moves the whole
+app-data folder, and your data folder with it.
 
 ## The landing screen
 

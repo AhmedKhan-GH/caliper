@@ -113,6 +113,13 @@ by the applet's manifest id, so two applets never collide:
 - **Linux:** `$XDG_DATA_HOME/caliper/` (or `~/.local/share/caliper/`; the folder name is lowercase)
 - **Windows:** `%APPDATA%/Caliper/`
 
+`CALIPER_DATA_DIR` moves the whole root, and every applet's data folder with
+it: with `CALIPER_DATA_DIR=/tmp/caliper-try`, an applet with the id
+`com.example.viewer` gets `/tmp/caliper-try/data/com.example.viewer/`. That is
+a quick way to run an applet against an empty data folder without touching the
+real one. `caliper shot` uses a temporary root of its own unless
+`CALIPER_DATA_DIR` is set; see [Command line](../references/cli.md#caliper-shot).
+
 The host also keeps `.caliper-data.toml` there for an applet that declares a data
 schema; leave that file alone. For example, an applet can build `data_dir() + "/settings.txt"` and
 persist a single value across relaunches. (The `signal_scope` applet in

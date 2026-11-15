@@ -239,8 +239,10 @@ render thread (benchmarks, CI, `render()`); `fps` is the render thread's frame
 rate; `rate` the route's default snapshot rate; `activate=False` shows the window
 without taking focus from the terminal; `heartbeat=True` adds a view named
 `caliper.render` that scrolls one texel per rendered frame, so a screenshot
-shows whether the canvas is repainting. The window's core keeps its data under
-`$CALIPER_DATA_DIR`, or a private temporary directory removed on close.
+shows whether the canvas is repainting. The window's core keeps its data, which is its
+stores, the applets' data folders and its `imgui.ini`, in the `data_dir` given,
+else in `$CALIPER_DATA_DIR`, else in a private temporary directory removed on
+close.
 
 The window's limits: macOS delivers input only to the main thread, so input
 waits during long steps unless `run()` gives the main thread to Caliper
@@ -344,7 +346,7 @@ dtype or device reallocates its slots.
 | Variable | Effect |
 |---|---|
 | `CALIPER_SESSION` | `0` stops the first view call from opening a session (default `1`) |
-| `CALIPER_DATA_DIR` | Root of the session files (`<root>/live`) for the script, the Caliper app's session list and `caliper-viewer`; also the in-process core's data directory |
+| `CALIPER_DATA_DIR` | Root of the session files (`<root>/live`) for the script, the Caliper app's session list and `caliper-viewer`; also the in-process core's data directory when no `data_dir` is given. For the Caliper app it moves the whole app-data folder ([Folders and environment variables](environment.md#the-app-data-folder)) |
 | `CALIPER_VIEWER` | Path of `caliper-viewer` for `auto_launch` and `viewer_executable()` |
 | `CALIPER_PY_LOG` | Non-empty and not `0`: echo the in-process core's log lines to stderr |
 | `CALIPER_PY_LIVE_APPLY` | `0`: in-process heatmaps and images use the embed v1.2 view path (`view_tensor` with `WAIT_GPU` on the frame thread) instead of the typed live views |
