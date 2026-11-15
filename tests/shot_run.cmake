@@ -68,8 +68,9 @@ if(NOT code EQUAL 0)
     message(FATAL_ERROR "the shot is not a ${SIZE} image with content")
 endif()
 
-# What the run left behind.
-file(GLOB left RELATIVE "${WORK_DIR}/tmp" "${WORK_DIR}/tmp/*")
+# What the run left behind. Only shot's own temporary data folder is looked
+# for: a GPU driver may keep caches of its own in the temporary folder.
+file(GLOB left RELATIVE "${WORK_DIR}/tmp" "${WORK_DIR}/tmp/caliper-shot-*")
 if(left)
     message(FATAL_ERROR "the run left ${left} in its temporary folder")
 endif()

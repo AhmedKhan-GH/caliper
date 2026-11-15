@@ -20,7 +20,10 @@ fi
 core_build="$1"
 work="$2"
 shift 2
-root="$(cd "$(dirname "$0")/.." && pwd)"
+# Under Git Bash on Windows, pwd -W gives the folder as D:/a/b, which native
+# programs such as cmake read without MSYS path conversion; elsewhere it fails
+# and pwd gives the usual path.
+root="$(cd "$(dirname "$0")/.." && { pwd -W 2>/dev/null || pwd; })"
 
 if [ $# -eq 0 ]; then
     set -- "$root/examples/hello" "$root/examples/sine_scope"

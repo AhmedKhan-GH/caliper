@@ -127,8 +127,10 @@ if(TARGET caliper)
         MATCH "1 of 1 applets pass the checks")
     # An applet's build folder, its manifests only in build/applets as
     # caliper_add_applet() leaves them: check uses that subfolder and says so.
+    # Printed folders use the platform's separator, '\' on Windows, so the
+    # patterns accept either.
     caliper_cli_test(check_build_folder ARGS "check|${_cli_work}/applet-build" EXIT 0
-        MATCH "^using the applets in .*applet-build/applets.*1 of 1 applets pass the checks"
+        MATCH "^using the applets in .*applet-build[/\\]applets.*1 of 1 applets pass the checks"
         CLEAN "${_cli_work}/applet-build"
         STAGE "${CMAKE_BINARY_DIR}/test-applets|${_cli_work}/applet-build/applets")
     caliper_cli_test(check_missing ARGS "check|${_cli_work}/nowhere" EXIT 1
@@ -139,7 +141,7 @@ if(TARGET caliper)
     # Without CALIPER_USER_APPLETS_DIR install writes applets/ under the
     # app-data folder, and nothing else there.
     caliper_cli_test(install_default ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
-        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*app-data-install_default/applets"
+        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*app-data-install_default[/\\]applets"
         DEFAULT_USER_APPLETS ALLOW "applets")
     caliper_cli_test(new ARGS "new|com.example.cli-made|${_cli_work}/cli-made" EXIT 0
         MATCH "created .*cli-made for applet com\\.example\\.cli-made"
@@ -170,7 +172,7 @@ if(TARGET caliper)
     caliper_cli_test(shot_option_elsewhere ARGS "list|--frames|3" EXIT 2
         ERROR "--frames applies only to shot")
     caliper_cli_test(shot_unknown_applet
-        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.example.nowhere|--out|${_cli_work}/x.png"
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.example.nowhere|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 ERROR "no applet with the id dev\\.example\\.nowhere")
 
     # Then real shots of the hello fixture: the image has the requested size

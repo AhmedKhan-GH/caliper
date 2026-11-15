@@ -11,7 +11,12 @@
 #include <map>
 
 #ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #ifndef NOMINMAX
+    #define NOMINMAX   // windows.h's min and max macros break std::min and std::max
+  #endif
   #include <windows.h>
 #else
   #include <dlfcn.h>

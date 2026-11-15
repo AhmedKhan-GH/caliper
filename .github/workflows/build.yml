@@ -151,5 +151,8 @@ jobs:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      # The host must name no applet, checked here as on macOS. The runner's
+      # Python is `python`; `python3` is not on PATH in every Windows image.
+      - run: python scripts/check_host_names_no_applet.py
       - if: always()
         run: sccache --show-stats

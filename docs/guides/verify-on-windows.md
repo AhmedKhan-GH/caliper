@@ -135,6 +135,25 @@ backend is built without the SDK, so install the Vulkan SDK separately and enabl
 example with `VK_INSTANCE_LAYERS`. Run the gfx suite and a live applet that exercises the path, and read the output for
 complaints in that area. Findings that predate your change belong in the record as such, not as blockers.
 
+## Watch the first Windows CI run
+
+The Windows lane of `.github/workflows/build.yml` runs the same steps as the macOS lane: the core build without
+applets, the whole ctest suite with the command-line tests and `caliper_cli_new_builds`, the SDK and embedding package
+tests, the out-of-tree builds of `hello`, `sine_scope` and the scopes, and the check that the host names no applet.
+Several of these pieces have only run on macOS so far. When the lane first runs them, read its log for the following.
+
+| Piece | What to look for |
+|---|---|
+| Command-line tests (`caliper_cli_*`) | The executable prints folders with `\` on Windows. The patterns of `check_build_folder` and `install_default` accept either separator; a new failure that quotes a folder is most likely another pattern that expects `/`. |
+| `caliper_cli_new_builds` | The project that `caliper new` writes is configured and built with MSVC inside the test. Its test executable compiles the applet source, so it exports `caliper_applet_descriptor` and MSVC writes an import library beside it, which is expected. `caliper check` must then find the library and the manifest together in `build/applets`. |
+| `caliper_sdk_install` | The check that the probe and `hello` builds name nothing in the source tree searches `CMakeCache.txt` and `build.ninja` for paths with `/`. A path that Ninja writes with `\` would pass unnoticed, so the check is weaker on Windows, not stricter. |
+| `caliper_embed_install` | `embed_host` gets `caliper_embed.dll` beside it from its own post-build copy. An exit code of `0xc0000135` means the embedding library needs a DLL of its own that is not beside it or on `PATH`; `dumpbin /dependents caliper_embed.dll` names it. |
+| `caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` | Without a GPU both report `run skipped: no GPU`. On a machine with Vulkan, `caliper shot` draws into the Vulkan offscreen canvas, which has not drawn the applet page before: open the PNG and compare it with a macOS shot of the same applet. |
+| The data-schema stamp | The `LockFileEx` branch of the stamp lock in `src/host/applet_loader.cpp` compiles for the first time. When the stamp is raised, the new file is renamed over the old one; if another process has the old one open at that moment, Windows refuses the rename and the launch fails with `could not record the data schema`. Watch the loader tests for that message. |
+| `scripts/build_applets_against_sdk.sh` | The lane runs it in Git Bash (`shell: bash`). The script takes its own folder with `pwd -W`, so CMake receives `D:/a/...` paths; the work folder comes from `cygpath -m`. |
+| `CALIPER_APPLET_PATH` | Folders are separated by `;` on Windows, so a drive letter's `:` stays in its folder. Set it as `C:\a;D:\b` from cmd or PowerShell. |
+| Hidden windows | The gfx and export suites open hidden windows. On Windows a hidden window has no taskbar button, so the background helper that keeps the macOS test process out of the Dock does nothing there. |
+
 ## What to record
 
 Write down enough that another person can repeat the check and compare numbers:
