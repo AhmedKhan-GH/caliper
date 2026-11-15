@@ -12,7 +12,7 @@ cmake --build --preset release
 cmake --install cmake-build-release --prefix <sdk prefix> --component sdk
 ```
 
-The package records the libtorch of the build that installed it. An SDK installed from a build with `CALIPER_WITH_TORCH=OFF`, such as the `release-notorch` preset, names no libtorch and cannot build applets that link it.
+The package records the version and the absolute path of the libtorch of the build that installed it. An SDK used on another machine, or after that libtorch moves, needs `-DCALIPER_TORCH_DIR=<libtorch root>` pointing at a copy of the same version (see [Variables](#variables)). An SDK installed from a build with `CALIPER_WITH_TORCH=OFF`, such as the `release-notorch` preset, names no libtorch and cannot build applets that link it.
 
 ## What it installs
 
@@ -45,7 +45,7 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=<sdk prefix>
 cmake --build build
 ```
 
-`find_package(caliper-sdk 0.2)` accepts an installed SDK with major version 0 at or above 0.2.
+`find_package(caliper-sdk 0.2)` accepts an installed SDK with major version 0 at or above 0.2, and `find_package(caliper-sdk)` with no version accepts any installed SDK. While the major version is 0, that includes a later 0.x SDK built for another ABI epoch; `caliper_add_applet()` then stops the configure, because the manifest's `abi_epoch` must equal the SDK's epoch.
 
 ### Targets
 
@@ -55,7 +55,7 @@ cmake --build build
 | `caliper::ui_stack` | A static library compiled inside the applet's build from the pinned sources, with position-independent code and the host's UI-stack definitions. It holds no GLFW, GLEW or ImGui backend, because an applet draws into the host's ImGui context and never talks to a window or a graphics API. |
 | `caliper::sdk_testing` | The fixture host and doctest, for an applet's own tests without a window. See [C++ sugar](sugar.md). |
 
-The UI stack ships as sources rather than prebuilt libraries because a prebuilt static library would tie every applet to the compiler, standard library, build type and runtime library of the SDK build: on Windows a Release `/MD` library does not link into a Debug applet, and ImGuiFileDialog uses the STL. Compiling the sources with the applet's own toolchain avoids that, and the UI-stack hash still names exactly what was compiled. The cost is a few seconds of compile time in each applet build folder.
+The UI stack ships as sources rather than prebuilt libraries because a prebuilt static library would tie every applet to the compiler, standard library, build type and runtime library of the SDK build: on Windows a Release `/MD` library does not link into a Debug applet, and ImGuiFileDialog uses the STL. Compiling the sources with the applet's own toolchain avoids that, and the UI-stack hash names the commits, the `imconfig.h` and the definitions they were compiled from. The cost is a few seconds of compile time in each applet build folder.
 
 ### Variables
 
@@ -65,7 +65,7 @@ The UI stack ships as sources rather than prebuilt libraries because a prebuilt 
 | `CALIPER_SDK_ABI_EPOCH` | The ABI epoch the headers speak, `2` |
 | `CALIPER_UI_STACK_HASH` | The [UI-stack hash](#the-ui-stack-hash) |
 | `CALIPER_TORCH_VERSION` | The version of the host's libtorch, or empty when the SDK was built without libtorch |
-| `CALIPER_TORCH_DIR` | Where that libtorch is. It defaults to the libtorch of the build that installed the SDK. A cache variable, so `-DCALIPER_TORCH_DIR=<libtorch root>` points it at another copy of the same version. |
+| `CALIPER_TORCH_DIR` | Where that libtorch is. It defaults to the absolute path of the libtorch of the build that installed the SDK, recorded in the package. A cache variable, so `-DCALIPER_TORCH_DIR=<libtorch root>` points it at another copy of the same version. |
 
 ## caliper_add_applet()
 
@@ -112,7 +112,7 @@ sdk = "0.2.0"
 ui_stack = "<the UI-stack hash>"
 ```
 
-With `TORCH`, the copy also gets `torch = "<version>"` in its `[compat]` table, unless the source already states it. The copy is refreshed after every link, and a changed stamp relinks the library, so the two never disagree. The keys are described in [Manifest](manifest.md#schema), and how the host uses them in [Compatibility and epochs](../explanations/compatibility.md#versioning).
+With `TORCH`, the copy also gets `torch = "<version>"` in its `[compat]` table, unless the source already states it. The copy is written into the build folder at configure time and copied beside the library after every link. Under the Ninja and Makefile generators a changed copy also relinks the library, through `LINK_DEPENDS`, so the manifest beside the library never falls behind. The Xcode and Visual Studio generators ignore `LINK_DEPENDS`: after a change to the manifest alone, the copy beside the library stays stale until the next link, so delete the library or rebuild with `--clean-first`. The keys are described in [Manifest](manifest.md#schema), and how the host uses them in [Compatibility and epochs](../explanations/compatibility.md#versioning).
 
 ### Linking libtorch
 
@@ -139,8 +139,8 @@ imconfig=<SHA-256 of imgui/imconfig.h>
 definitions=<the UI-stack definitions, sorted and joined with ",">
 ```
 
-A commit is the checked-out commit of the library's own git checkout. Without one it is the commit the superproject pins, and without that it is `sha256:` followed by the SHA-256 of the library's main source file. The core build computes the hash in `cmake/CaliperUiStack.cmake`, compiles it into the host, and installs the lines as `share/caliper-sdk/ui_stack/ui_stack.txt`.
+A commit is the checked-out commit of the library's own git checkout. Without one it is the commit the superproject pins, and without that it is `sha256:` followed by the SHA-256 of the library's main source file. The hash therefore covers the ImGui version number, the committed state of each library, the content of `imconfig.h` and the definitions. An uncommitted edit to the sources of ImGui, ImPlot, ImPlot3D or ImGuiFileDialog does not change it, so a pin that is changed on purpose is committed first. The core build computes the hash in `cmake/CaliperUiStack.cmake`, compiles it into the host, and installs the lines as `share/caliper-sdk/ui_stack/ui_stack.txt`.
 
 ## Applets in this repository
 
-`caliper_add_applet()` is the same file in the core build and in the package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON`; `examples/hello` builds with the tests as the loader-test fixture, and `examples/sine_scope` builds with the tests in a build with libtorch. Every applet folder under `applets/` and `examples/` also builds on its own against the installed SDK, and `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
+`caliper_add_applet()` is the same file in the core build and in the package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON`; `examples/hello` builds with the tests as the loader-test fixture, and `examples/sine_scope` builds with the tests in a build with libtorch. Every applet folder under `applets/` and `examples/` also builds on its own against the installed SDK, and `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does. The core build no longer deletes applet libraries it did not build, so an older build folder can keep libraries from in-tree builds that predate `caliper_add_applet()`; their manifests have no `[build]` table, so the host does not check them against the UI-stack hash. Delete the build's `applets/` folder after turning `CALIPER_BUILD_APPLETS` off, and when reusing such a build folder.

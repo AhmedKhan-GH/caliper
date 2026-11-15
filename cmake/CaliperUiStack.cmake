@@ -102,7 +102,9 @@ file(WRITE "${CMAKE_BINARY_DIR}/caliper-ui-stack.txt.new"
 configure_file("${CMAKE_BINARY_DIR}/caliper-ui-stack.txt.new"
     "${CMAKE_BINARY_DIR}/caliper-ui-stack.txt" COPYONLY)
 
-# A changed header or imconfig reconfigures, which recomputes the hash.
+# A changed header or imconfig reconfigures, which recomputes the hash. Of these
+# files only IMGUI_VERSION_NUM in imgui.h and the content of imconfig.h are
+# inputs; an uncommitted edit to the other sources leaves the hash unchanged.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_ui_imgui}/imgui.h" "${_ui_imgui}/imconfig.h" "${_ui_implot}/implot.h"
     "${_ui_implot3d}/implot3d.h" "${_ui_igfd}/ImGuiFileDialog.h"

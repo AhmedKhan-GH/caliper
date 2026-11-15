@@ -43,7 +43,7 @@ Dropping a manifest and its library into the user applets folder, or running `ca
 | `[services]`| `required` | array of strings  | No       | Service IDs the applet cannot run without, e.g. `["caliper.ui.v1"]`.    |
 | `[services]`| `optional` | array of strings  | No       | Service IDs the applet uses if present, e.g. `["caliper.log.v1"]`.      |
 | `[build]`   | `sdk`      | string            | No       | SDK version that built the applet. Written by the build.                |
-| `[build]`   | `ui_stack` | string            | No       | Hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog sources, the `imconfig` and the UI-stack definitions the applet was compiled against. Written by the build. |
+| `[build]`   | `ui_stack` | string            | No       | Hash of the ImGui version number, the checked-out commits of ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, the `imconfig.h` and the UI-stack definitions the applet was compiled against. Written by the build. See [The UI-stack hash](sdk-package.md#the-ui-stack-hash). |
 | `[data]`    | `schema`   | integer           | No       | Version of the applet's stored data. Must be an integer ≥ 1.            |
 
 Notes:

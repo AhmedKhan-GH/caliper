@@ -16,12 +16,15 @@ package](#the-caliper-embed-package), as `embed_host` does in the
 This page describes the embedder-facing contract. It is not the applet-facing
 ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](abi.md) and the
 [C++ sugar](sugar.md). `caliper/embed.h` lives on a separate include root, so an
-applet cannot `#include` it. Embedding a core from inside an applet would be a
-category error, and the include topology rules it out: the installed headers
-sit under `include/caliper-embed`, which no SDK target exposes, and
-`caliper_sdk_install` checks that an applet source including `caliper/embed.h`
-fails to compile against every SDK target, even with both packages in one
-prefix.
+applet cannot `#include <caliper/embed.h>`. Embedding a core from inside an
+applet would be a category error, and the include topology rules that spelling
+out: the installed headers sit under `include/caliper-embed`, which no SDK
+target names, and `caliper_sdk_install` checks that an applet source including
+`<caliper/embed.h>` fails to compile against every SDK target, even with both
+packages in one prefix. With both packages in one prefix, the header is still
+reachable as `<caliper-embed/caliper/embed.h>` through the SDK's `include/`
+root. Install the two packages into separate prefixes when the separation must
+be complete.
 
 The embed ABI has run on both ecosystems: Metal on Apple Silicon and
 Vulkan with an `HWND` on Windows. `CALIPER_EMBED_API_VERSION` is 1. The labels
