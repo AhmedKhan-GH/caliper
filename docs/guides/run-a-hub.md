@@ -1,6 +1,6 @@
 # Run a hub
 
-The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects out to it as a producer, and viewers connect to it, list the sessions and attach to one. This page covers starting the hub, connecting scripts and viewers to it, what it keeps after a script ends, and its limits. The protocol it speaks is [wire protocol v3](../references/wire-protocol.md), and every option is in [Command line](../references/cli.md#caliper-serve).
+The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects out to it as a producer, and viewers connect to it, list the sessions and attach to one. This page covers starting the hub, connecting scripts and viewers to it, what it keeps after a script ends, and its limits. The protocol it speaks is [wire protocol v3](../references/wire-protocol.md), and every option is in [Caliper CLI](../references/cli.md#caliper-serve).
 
 ## When to use a hub
 
@@ -34,7 +34,7 @@ caliper serve --token-file ~/.caliper-hub-token
 
 The token is never given on the command line, because other users can read a process's arguments.
 
-To open the stream in a browser, the hub must also serve the viewer page. The Python package ships it in its `caliper/_web/` folder; pass that folder:
+To open the stream in a browser, the hub must also serve the viewer page. Caliper LIB ships it in its `caliper/_web/` folder; pass that folder:
 
 ```sh
 caliper serve --assets "$(python -c 'import caliper, os; print(os.path.join(os.path.dirname(caliper.__file__), "_web"))')"
@@ -49,7 +49,7 @@ A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a produc
 Scripts on the same machine find the hub through the **hub file**, which the hub writes when it starts and removes when it stops. It is `hub.json` in the app-data folder (`~/Library/Application Support/Caliper/hub.json` on macOS), or the path in `CALIPER_HUB_FILE`. Only its owner can read it, because it holds the token along with the port.
 
 !!! note "Python specifics pending"
-    The Python call that connects a script to a hub, `caliper.connect(url=None)`, is being built on the native sender. How it takes the address, where it looks for the token, and how it reconnects will be described here and in the [Python API](../references/python-api.md) when it lands.
+    The Python call that connects a script to a hub, `caliper.connect(url=None)`, is being built on the native sender. How it takes the address, where it looks for the token, and how it reconnects will be described here and in the [Caliper LIB](../references/python-api.md) reference when it lands.
 
 A script that loses its connection and connects again with the same id, pid and start time **resumes** its session. The hub closes the old connection, if it is still open, with BYE `replaced`, keeps the session's viewers attached and subscribes again to every view they watch.
 

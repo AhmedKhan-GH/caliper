@@ -33,7 +33,7 @@ uv pip install --python .venv/bin/python --reinstall-package caliper "$(ls dist/
 .venv/bin/jupyter lab examples/notebooks/live_training.ipynb
 ```
 
-The server needs nothing beyond the package, which depends on `websockets`. In
+The server needs nothing beyond Caliper LIB, which depends on `websockets`. In
 VS Code, open the notebook and choose `.venv/bin/python` as its kernel.
 
 The notebook reads one setting from the environment: `CALIPER_NOTEBOOK_STEPS`
@@ -171,7 +171,7 @@ tensor:
 
 The producer applies the index first, then the reduction, then the budget,
 which pools a heatmap or samples points that would exceed the viewer's limit.
-The [Python API](../references/python-api.md#data-views) lists every field.
+The [Caliper LIB](../references/python-api.md#data-views) reference lists every field.
 
 ## What you see
 
@@ -287,7 +287,7 @@ browser tab.
 
 ## Next
 
-- [Python API](../references/python-api.md#serve) documents `serve`, `widget`
+- [Caliper LIB](../references/python-api.md#serve) documents `serve`, `widget`
   and the data view arguments.
 - [Network streaming](../explanations/network-streaming.md) explains the
   transport, data views and the security position.

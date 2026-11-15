@@ -7,7 +7,7 @@ copies each snapshot from the device into a socket, and adds data views, which
 decide which part of a large tensor travels at all.
 
 To use it, start with [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md).
-The calls are in the [Python API](../references/python-api.md#serve) reference,
+The calls are in the [Caliper LIB](../references/python-api.md#serve) reference,
 and the [Wire protocol](../references/wire-protocol.md) reference defines every
 message on the stream. This page explains the design and does not repeat the
 protocol.
@@ -188,5 +188,5 @@ interface.
 - **One stream over TCP.** A WebSocket delivers messages in order, so a large
   snapshot delays the messages behind it. WebTransport is planned as a later
   transport.
-- **macOS only.** The Python package, and with it the server, is built and
+- **macOS only.** Caliper LIB, and with it the server, is built and
   tested only on macOS.

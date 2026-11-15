@@ -178,7 +178,7 @@ Runs the hub of [wire protocol v3](wire-protocol.md): producers, such as trainin
 |---|---|
 | `--port <n>` | The port to listen on, 0 to 65535. The default is 7340. 0 takes any free port. |
 | `--token-file <file>` | Read the session token from the first line of `<file>` instead of making a random one. The token must be 22 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. On macOS and Linux, the file must not be readable or writable by other users (`chmod 600`). |
-| `--assets <dir>` | Serve the viewer page and its files from `<dir>`, such as the `caliper/_web/` folder of the Python package. Without it, `/` answers with a short note that says where the page is. |
+| `--assets <dir>` | Serve the viewer page and its files from `<dir>`, such as the `caliper/_web/` folder of Caliper LIB. Without it, `/` answers with a short note that says where the page is. |
 
 The options also take the form `--port=<n>`, and they apply only to `serve`. The token is never given on the command line, where other users could read it from the process list. Without `--token-file`, the hub makes a random token of 32 characters (24 random bytes) for this run.
 
