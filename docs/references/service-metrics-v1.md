@@ -1,6 +1,6 @@
-# caliper.metrics.v1
+# caliper.metrics.v1 and v1_1
 
-Service id `caliper.metrics.v1` — TensorBoard vocabulary with ImPlot immediacy (PLATFORM.md §7.6). This page embeds the header verbatim; the docs build fails if the file moves.
+Service id `caliper.metrics.v1` is a write-only metrics log in TensorBoard's vocabulary. `caliper.metrics.v1_1` adds one read entry, `query()`, and is described [below](#calipermetricsv1_1). This page embeds both headers verbatim; the docs build fails if a file moves.
 
 ```c
 --8<-- "sdk/include/caliper/services/metrics_v1.h"
@@ -23,7 +23,7 @@ The vocabulary is TensorBoard's, deliberately: **experiment / run / tag / step**
   (per-epoch cadence hides the learning transient on fast-converging datasets) —
   you choose the axis by choosing the step. Sharing the step domain lets loss and
   accuracy line up. The store keeps points ordered by step and queries them back
-  ordered (the §16 contract: 10k scalars written and read back in order).
+  ordered (10k scalars written are read back in order).
 - **`hparams_json(run, json_utf8)`** attaches a flat JSON blob of hyperparameters
   to the run (`{"lr":0.001,"batch":256,...}`) so runs are comparable.
 - **`histogram` / `image`** log a distribution or a picture at a step.
@@ -50,12 +50,62 @@ defaults and the precedence are in
 
 `image()` accepts **CPU-resident, contiguous, HWC `u8`** tensors only. The host
 gate enforces this: a tensor that is non-contiguous, not on the CPU, or not
-`u8`-HWC is logged and **dropped**, never misinterpreted. GPU-resident image
-paths (no CPU staging) arrive with `caliper.tensor_bridge.v1` in Phase 2C.
+`u8`-HWC is logged and **dropped**, never misinterpreted. There is no GPU-resident
+path for metrics images.
 
 ### The payoff
 
 Metrics is an **optional** service: probe it, and stream only when present. Every
 applet that logs a scalar this way has its runs persisted in the host's metrics
-store, with no storage code of its own. The host's Runs dashboard was removed on 2026-07-03 (it showed a run list,
-per-tag plots and EMA smoothing), so stored runs have no view in the app today.
+store, with no storage code of its own. The host has no run browser, so stored
+runs are read back through `caliper.metrics.v1_1.query` or from SQL tools.
+
+## caliper.metrics.v1_1
+
+`caliper.metrics.v1` is write-only across the ABI and immutable, so a consumer
+such as an embedding host ([Embedding Caliper](embedding.md#reaching-services-from-a-host))
+cannot list runs or read scalars through it. `caliper.metrics.v1_1` is the
+additive read revision ([D30](../decisions/d030-additive-service-revisions.md)).
+Its table starts with the byte-identical v1 writer prefix, and appends two
+entries: `query` and `last_error`.
+
+```c
+--8<-- "sdk/include/caliper/services/metrics_v1_1.h"
+```
+
+### query
+
+`query(sql_utf8, out)` runs one SQL statement against the metrics store and
+streams the result as Arrow ([Arrow interchange](arrow.md)).
+
+- **One SELECT only.** The host parses the text without executing it and refuses
+  anything that is not exactly one `SELECT` statement. That blocks statement
+  chaining (`SELECT 1; DROP TABLE runs`) and every `INSERT`, `UPDATE`, `DELETE`
+  and DDL statement. A read-only introspection `PRAGMA` that DuckDB rewrites into
+  a `SELECT` is accepted; setter pragmas parse as non-`SELECT` and are refused.
+  This differs from `caliper.data.v1`'s `query`, which runs any SQL against a
+  separate store, because this one runs on the live writer connection.
+- **Stream ownership.** On success the host fills `*out` with a live
+  `ArrowArrayStream`. The caller drains it (`get_schema`, then `get_next` until a
+  released empty array) and must call `out->release(out)` exactly once. This is
+  the same rule as `caliper.data.v1`.
+- **Failure.** `query` returns `false`, leaves `*out` untouched and sets the
+  error.
+- **`last_error()`** returns the reason the last `query` on the calling thread
+  failed. The string is host-owned, never `NULL`, thread-local, and valid until
+  the next `metrics.v1_1` call on the same thread.
+- **Threads.** Applet job threads and a host UI thread that is not the frame
+  thread may all call it. The store serializes every writer and reader through
+  one DuckDB connection under one mutex.
+
+### Why reads use query and not ATTACH
+
+A consumer could in principle open the metrics database file read-only with
+DuckDB `ATTACH`. That second instance sees only checkpointed state, so rows an
+applet logged a moment ago would be missing. `query` runs on the writer's own
+connection and sees fresh rows immediately, and it keeps DuckDB types on the
+host side of the ABI ([D3](../decisions/d003-no-framework-types-across-the-abi.md)).
+The reasoning is recorded in [D37](../decisions/d037-metrics-reads-through-query.md).
+
+The header is immutable once published. A future read entry would arrive as
+`caliper.metrics.v1_2`.
