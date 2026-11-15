@@ -103,6 +103,11 @@ private:
         WGPUBindGroup   bind = nullptr;
         uint32_t        lut_cache[256] = {};
         bool            lut_valid = false;
+        // The colormap's index thresholds for the range they were made for.
+        WGPUBuffer      thresholds = nullptr;
+        float           th_vmin = 0.0f, th_vmax = 0.0f;
+        uint32_t        th_mode = 0;
+        bool            th_valid = false;
         // A geometry render target (geom_create_view_ex): its depth buffer.
         WGPUTexture     depth = nullptr;
         WGPUTextureView depth_view = nullptr;

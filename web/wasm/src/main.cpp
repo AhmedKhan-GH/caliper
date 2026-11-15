@@ -265,7 +265,9 @@ bool start_points_check(caliper_live_views::View& v) {
     struct Want { int px, py; uint32_t rgba; };
     auto wants = std::make_shared<std::vector<Want>>();
     const float* aux = (const float*)v.cur.aux_cpu;
-    const uint64_t stride = std::max<uint64_t>(1, n / 256);
+    // Up to 1,024 candidates, evenly spread, of which those no other point
+    // covers are compared (at most 256).
+    const uint64_t stride = std::max<uint64_t>(1, n / 1024);
     for (uint64_t i = 0; i < n && wants->size() < 256; i += stride) {
         const Proj& a = pr[i];
         if (!a.ok || a.x < 1 || a.y < 1 || a.x >= W - 1 || a.y >= H - 1 || a.z < 0 || a.z > 1) continue;

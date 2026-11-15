@@ -13,7 +13,9 @@
 // until the module has drawn N frames, applied snapshots and (when a heatmap
 // is shown) finished its colormap check, prints the module's report
 // (module.caliperStats) as JSON and saves a screenshot. With --hover it then
-// moves the mouse there and saves <shot>-hover.png. With --dataview it asks
+// moves the mouse there and saves <shot>-hover.png. It exits with 1 when the
+// module reports an error or any of its texture or points checks found a
+// difference. With --dataview it asks
 // for that data view (VIEW_REQUEST) before the screenshot and reports the
 // data views the producer resolved. With --resize it then changes the page's
 // viewport and saves <shot>-resized.png. With --input it clicks at X,Y, turns
@@ -180,7 +182,11 @@ try {
   console.log('report:', JSON.stringify(report, null, 2));
   if (error) console.log('error:', error);
   console.log('console:\n' + [...new Set(log)].slice(0, 40).join('\n'));
-  failed = !!error || !report || !!report.error;
+  // Every texture and points check must have found nothing different.
+  const bad = String(report?.checks ?? '').split(';').filter(Boolean)
+    .filter((c) => Number(c.split(':')[2]) !== 0);
+  if (bad.length) console.log('checks that found differences:', bad.join(' '));
+  failed = !!error || !report || !!report.error || bad.length > 0;
 } catch (e) {
   console.log('error:', String(e));
 } finally {

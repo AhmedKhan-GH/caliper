@@ -9,8 +9,11 @@
 
 #include <emscripten/emscripten.h>
 
+#include "tensor_bridge.h"   // map_f32_to_rgba8: the colormap's reference
+
 #include <caliper/services/geometry_v1_1.h>   // CALIPER_GEOM_*
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -18,41 +21,53 @@ namespace caliper_host {
 
 namespace {
 
-// WGSL port of the Metal cmap_f32 kernel (metal_renderer.mm) and of the Vulkan
-// shaders/colormap.comp, written by hand. Same index rule as the CPU reference
-// map_f32_to_rgba8 (idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5,
-// truncated; vmax == vmin -> 0; NaN -> 0) and the same packed LUT. WGSL lets
-// an implementation assume no NaN reaches float arithmetic, so the NaN test is
-// done on the bits rather than with v != v. Push constants do not exist in
-// WebGPU, so the parameters are a uniform buffer.
+// The heatmap colormap, written in WGSL by hand. It gives exactly the bytes of
+// the CPU reference map_f32_to_rgba8 (tensor_bridge.cpp), on every adapter:
+// WGSL allows a division 2.5 ULP of error and lets an implementation assume
+// no NaN or infinity, so recomputing idx = clamp((v - vmin)/(vmax - vmin), 0,
+// 1) * 255 + 0.5 on the GPU differed from the reference by one level for a
+// few texels on Metal. Instead the CPU finds, for each index k in 1..255, the
+// threshold T[k]: the first float at which the reference gives index k or
+// more (the last one, for a decreasing range). The reference is monotone in
+// v, because every IEEE operation in it is, so the index of v is the number
+// of thresholds it has passed, which the shader finds with a binary search of
+// exact float comparisons. mode 0 is a flat range (vmax == vmin: index 0), 1
+// an increasing and 2 a decreasing one; NaN takes index 0, tested on the bits.
+// Push constants do not exist in WebGPU, so the parameters are a uniform.
 const char* kColormapWgsl = R"wgsl(
 struct CmapParams {
     w: u32, h: u32, sx: u32, sy: u32,
-    vmin: f32, vmax: f32, pad0: u32, pad1: u32,
+    vmin: f32, vmax: f32, mode: u32, pad1: u32,
 };
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<storage, read> lut: array<u32>;
 @group(0) @binding(2) var<uniform> p: CmapParams;
 @group(0) @binding(3) var dst: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var<storage, read> th: array<f32>;   // T[1..255]
 
 fn is_nan_bits(v: f32) -> bool {
     let b = bitcast<u32>(v);
     return (b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u;
 }
 
+fn index_of(v: f32) -> u32 {
+    if (is_nan_bits(v) || p.mode == 0u) { return 0u; }
+    // The first k in 1..255 whose threshold v has not passed; the index is k - 1.
+    var lo = 1u;
+    var hi = 256u;
+    loop {
+        if (lo >= hi) { break; }
+        let mid = (lo + hi) / 2u;
+        let passed = select(v <= th[mid], th[mid] <= v, p.mode == 1u);
+        if (passed) { lo = mid + 1u; } else { hi = mid; }
+    }
+    return lo - 1u;
+}
+
 @compute @workgroup_size(16, 16)
 fn cmap_f32(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= p.w || gid.y >= p.h) { return; }
-    let v = src[gid.y * p.sy + gid.x * p.sx];
-    var idx = 0u;
-    if (!is_nan_bits(v)) {
-        let denom = p.vmax - p.vmin;
-        var t = 0.0;
-        if (denom != 0.0) { t = (v - p.vmin) / denom; }
-        t = clamp(t, 0.0, 1.0);
-        idx = u32(t * 255.0 + 0.5);
-    }
-    let c = lut[idx];
+    let c = lut[index_of(src[gid.y * p.sy + gid.x * p.sx])];
     let rgba = vec4<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu),
                          f32((c >> 16u) & 0xffu), f32((c >> 24u) & 0xffu)) / 255.0;
     textureStore(dst, vec2<i32>(gid.xy), rgba);
@@ -62,9 +77,60 @@ fn cmap_f32(@builtin(global_invocation_id) gid: vec3<u32>) {
 struct CmapParams {   // matches the WGSL struct (32 bytes)
     uint32_t w, h, sx, sy;
     float vmin, vmax;
-    uint32_t pad0, pad1;
+    uint32_t mode, pad1;
 };
 static_assert(sizeof(CmapParams) == 32, "WGSL uniform layout");
+
+// Floats in their numeric order as unsigned keys (-inf lowest, +inf highest).
+uint32_t float_key(float f) {
+    uint32_t u;
+    std::memcpy(&u, &f, 4);
+    return (u & 0x80000000u) ? ~u : (u | 0x80000000u);
+}
+float key_float(uint32_t k) {
+    const uint32_t u = (k & 0x80000000u) ? (k & 0x7fffffffu) : ~k;
+    float f;
+    std::memcpy(&f, &u, 4);
+    return f;
+}
+
+// The reference's index of v, from the reference itself (an identity LUT).
+int reference_index(float v, float vmin, float vmax) {
+    static uint32_t ident[256];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t i = 0; i < 256; ++i) ident[i] = i;
+        init = true;
+    }
+    uint8_t out[4];
+    caliper_host::map_f32_to_rgba8(&v, 1, 1, ident, vmin, vmax, out);
+    return out[0];
+}
+
+// T[1..255] for [vmin, vmax] (T[0] unused) and the mode, as the shader reads them.
+uint32_t colormap_thresholds(float vmin, float vmax, float* T) {
+    const float denom = vmax - vmin;
+    if (!(denom != 0.0f)) return 0u;
+    const bool inc = denom > 0.0f;
+    const uint32_t lo_key = float_key(-INFINITY), hi_key = float_key(INFINITY);
+    T[0] = 0.0f;
+    for (int k = 1; k < 256; ++k) {
+        uint32_t lo = lo_key, hi = hi_key;
+        if (inc) {   // the first v with index >= k (+inf has 255)
+            while (lo < hi) {
+                const uint32_t mid = lo + (hi - lo) / 2;
+                if (reference_index(key_float(mid), vmin, vmax) >= k) hi = mid; else lo = mid + 1;
+            }
+        } else {     // the last v with index >= k (-inf has 255)
+            while (lo < hi) {
+                const uint32_t mid = lo + (hi - lo + 1) / 2;
+                if (reference_index(key_float(mid), vmin, vmax) >= k) lo = mid; else hi = mid - 1;
+            }
+        }
+        T[k] = key_float(lo);
+    }
+    return inc ? 1u : 2u;
+}
 
 WGPUStringView sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
 
@@ -212,6 +278,7 @@ void WebGpuRenderer::free_tex(Tex& t) {
     release_buf(t.src);
     release_buf(t.lut);
     release_buf(t.params);
+    release_buf(t.thresholds);
     release_view(t.view);
     release_tex(t.texture);
     release_view(t.depth_view);
@@ -344,15 +411,17 @@ bool WebGpuRenderer::tex_update_mapped_from_host(uint64_t id, const float* data,
         t->lut = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
         t->params = make_buffer(device_, sizeof(CmapParams),
                                 WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
-        WGPUBindGroupEntry e[4];
+        t->thresholds = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+        WGPUBindGroupEntry e[5];
         for (auto& x : e) x = WGPU_BIND_GROUP_ENTRY_INIT;
         e[0].binding = 0; e[0].buffer = t->src;    e[0].size = bytes;
         e[1].binding = 1; e[1].buffer = t->lut;    e[1].size = 1024;
         e[2].binding = 2; e[2].buffer = t->params; e[2].size = sizeof(CmapParams);
         e[3].binding = 3; e[3].textureView = t->view;
+        e[4].binding = 4; e[4].buffer = t->thresholds; e[4].size = 1024;
         WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
         bd.layout = cmap_layout_;
-        bd.entryCount = 4;
+        bd.entryCount = 5;
         bd.entries = e;
         t->bind = wgpuDeviceCreateBindGroup(device_, &bd);
         t->lut_valid = false;
@@ -363,7 +432,17 @@ bool WebGpuRenderer::tex_update_mapped_from_host(uint64_t id, const float* data,
         t->lut_valid = true;
         wgpuQueueWriteBuffer(queue_, t->lut, 0, lut256, 1024);
     }
-    const CmapParams p{(uint32_t)w, (uint32_t)h, 1u, (uint32_t)w, vmin, vmax, 0u, 0u};
+    // The thresholds change with the range only (an AUTO range changes with
+    // most snapshots; computing them takes some 8,000 reference evaluations).
+    if (!t->th_valid || t->th_vmin != vmin || t->th_vmax != vmax) {
+        float T[256];
+        t->th_mode = colormap_thresholds(vmin, vmax, T);
+        if (t->th_mode) wgpuQueueWriteBuffer(queue_, t->thresholds, 0, T, sizeof T);
+        t->th_vmin = vmin;
+        t->th_vmax = vmax;
+        t->th_valid = true;
+    }
+    const CmapParams p{(uint32_t)w, (uint32_t)h, 1u, (uint32_t)w, vmin, vmax, t->th_mode, 0u};
     wgpuQueueWriteBuffer(queue_, t->params, 0, &p, sizeof p);
 
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);

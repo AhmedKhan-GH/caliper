@@ -92,7 +92,7 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
       }));
     expect(canvases).toEqual([true, true, true, true, true, true]);
     // Each module read its texture back: the image is exactly the bytes that were sent, and the
-    // heatmap is the CPU reference colormap within one level (README.md, "The colormap").
+    // heatmap exactly the CPU reference colormap (web/wasm/README.md, "The colormap").
     const checks = async (view: string) => {
       const st = (await state(page, view)).wasmStats as { checks?: string } | null;
       return st?.checks ?? '';
@@ -101,8 +101,8 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     await expect.poll(() => checks('weights'), { timeout: 15_000 }).toMatch(/^weights:1:\d+:\d+$/);
     const [, , imageBad, imageMax] = (await checks('input')).split(':').map(Number);
     expect([imageBad, imageMax]).toEqual([0, 0]);
-    const [, , , heatMax] = (await checks('weights')).split(':').map(Number);
-    expect(heatMax).toBeLessThanOrEqual(1);
+    const [, , heatBad, heatMax] = (await checks('weights')).split(':').map(Number);
+    expect([heatBad, heatMax]).toEqual([0, 0]);
     // The histogram holds the producer's bins.
     const hist = (await state(page, 'weight_hist')).wasmStats as { viewInfo?: string };
     expect(hist.viewInfo).toMatch(/weight_hist:kind=5,updates=\d+,count=\d+/);

@@ -14,6 +14,10 @@ Views:
   loss         series, a noisy decaying curve, several values per tick
   histogram    histogram of 64 bins over [-4, 4], a drifting normal sample
   image        image (H, W, 4) u8, a moving colour pattern
+  edges        heatmap (64, 64) f32 of colormap edge cases on a fixed decreasing
+               range (vmin 1, vmax -1): values on each side of every index
+               boundary, NaN and the infinities, alternating with an increasing
+               range [-3, 5] every other snapshot
   embedding    points (N, D) f32 in 8 clusters with categorical labels, turning
                slowly (--points N, --dims 2 or 3)
 
@@ -59,7 +63,7 @@ class Session:
         self.start_ms = int(time.time() * 1000)
         self.w, self.h = heat_w, heat_h
         self.t0 = time.monotonic()
-        self.seq = {"activations": 0, "histogram": 0, "image": 0, "embedding": 0}
+        self.seq = {"activations": 0, "histogram": 0, "image": 0, "embedding": 0, "edges": 0}
         self.n, self.dims = points, dims
         rng = np.random.default_rng(7)
         self.labels = (np.arange(points) % 8).astype(np.float32)
@@ -78,6 +82,9 @@ class Session:
             {"id": 2, "name": "loss", "kind": int(w.Kind.SERIES), "sources": []},
             {"id": 3, "name": "histogram", "kind": int(w.Kind.HISTOGRAM),
              "sources": [{"name": "values", "dtype": "f32", "dims": [{"name": "sample", "size": 4096}]}]},
+            {"id": 6, "name": "edges", "kind": int(w.Kind.HEATMAP),
+             "sources": [{"name": "edges", "dtype": "f32", "dims": [{"name": "row", "size": 64},
+                                                                  {"name": "col", "size": 64}]}]},
             {"id": 5, "name": "embedding", "kind": int(w.Kind.POINTS),
              "sources": [{"name": "hidden", "dtype": "f32", "dims": [{"name": "sample", "size": points}]}]},
             {"id": 4, "name": "image", "kind": int(w.Kind.IMAGE),
@@ -122,6 +129,19 @@ class Session:
         z = (float(lo[2]), float(hi[2])) if self.dims == 3 else (0.0, 0.0)
         stats = [0.0, 7.0, float(lo[0]), float(hi[0]), float(lo[1]), float(hi[1]), *z]
         return p, stats
+
+    def edges(self, vmin: float, vmax: float) -> np.ndarray:
+        """Values on both sides of every index boundary of [vmin, vmax], and NaN and +-inf."""
+        lo, hi = np.float32(vmin), np.float32(vmax)
+        k = np.arange(256, dtype=np.float32)
+        b = lo + (k - np.float32(0.5)) / np.float32(255) * (hi - lo)
+        vals = np.concatenate([b, np.nextafter(b, np.float32(np.inf)), np.nextafter(b, np.float32(-np.inf)),
+                               np.nextafter(np.nextafter(b, np.float32(np.inf)), np.float32(np.inf)),
+                               np.array([np.nan, np.inf, -np.inf, 0.0, -0.0, lo, hi, 1e30, -1e30],
+                                        dtype=np.float32)])
+        out = np.resize(vals, 64 * 64).astype(np.float32)
+        self.rng.shuffle(out)
+        return out.reshape(64, 64)
 
     def histogram(self) -> np.ndarray:
         t = time.monotonic() - self.t0
@@ -226,6 +246,11 @@ async def serve_viewer(ws, session: Session, rate: float):
                 elif name == "histogram":
                     snap = w.Snapshot(sub_id, name, session.seq[name], stamp, int(w.Kind.HISTOGRAM),
                                       sub["data_view"], session.histogram(), stats=[-4.0, 4.0])
+                elif name == "edges":
+                    vmin, vmax = (1.0, -1.0) if session.seq[name] % 2 else (-3.0, 5.0)
+                    snap = w.Snapshot(sub_id, name, session.seq[name], stamp, int(w.Kind.HEATMAP),
+                                      sub["data_view"], session.edges(vmin, vmax), colormap=1,
+                                      flags=0, vmin=vmin, vmax=vmax)
                 elif name == "embedding":
                     data, stats = session.points()
                     snap = w.Snapshot(sub_id, name, session.seq[name], stamp, int(w.Kind.POINTS),

@@ -79,6 +79,12 @@ A notebook page imports the loader from another origin, so each of the three nee
 
 Every listener sits on the instance's own canvas: pointer events with pointer capture for drags, the wheel, keys while the canvas has focus (a click gives it focus) and focus changes. The page keeps a wheel turn or a key only when ImGui does not want it. Each frame the canvas's backing store is sized to its CSS box times the device pixel ratio, so the canvas follows its element and text is rasterised at the screen's density. The views look as they do in the native app: the module embeds the app's faces (IBM Plex Sans Condensed and Source Code Pro, unchanged from `assets/fonts`, both under the SIL Open Font License 1.1) and applies its style with `sternbild::load_fonts_from_memory` and `sternbild::apply_style`.
 
+## The colormap
+
+A heatmap is colormapped on the GPU by a compute shader written in WGSL (`kColormapWgsl` in `src/host/renderer/webgpu_renderer.cpp`), and it gives exactly the bytes of the CPU reference `map_f32_to_rgba8` on every adapter. Recomputing the reference's formula on the GPU did not: WGSL allows a division 2.5 ULP of error and lets an implementation assume that no NaN or infinity reaches float arithmetic, and on Metal a few texels of a large heatmap came out one level away from the reference. The shader therefore does no arithmetic on the value. For each index k from 1 to 255 the CPU finds, by a binary search over the floats that runs the reference itself, the threshold at which the reference first gives index k or more (the last such float for a decreasing range). The reference is monotone in the value, because each IEEE operation in it is, so a value's index is the number of thresholds it has passed, and the shader finds that number with eight exact float comparisons. NaN takes index 0, tested on the bits, and a flat range gives index 0 everywhere, as in the reference. The thresholds change only with the range, and computing them takes about 8,000 evaluations of the reference, well under a millisecond.
+
+The module's check compares each heatmap texture with the reference over the same snapshot. It found no differing texel on SwiftShader and on Metal at 256 × 192, 1024 × 1024, 1536 × 1536 and 2048 × 2048, nor for the synthetic producer's `edges` view, whose values lie on both sides of every index boundary of an increasing and a decreasing range, with NaN and both infinities among them. The native Metal and Vulkan shaders keep their own formulas and their own byte-exact tests.
+
 ## Points
 
 WebGPU draws a point as one pixel, so the renderer draws each point of a points view as an instanced quad of the native point size (`src/host/renderer/webgpu_renderer.cpp`, `kPointsWgsl`), with the native colour rule and depth test. A points payload arrives as bytes, so the live views hand it to the renderer with `HostRenderer::import_host_allocation`, which copies it into a GPU buffer; released buffers are reused for the next snapshot of the same size, because creating and destroying a buffer per snapshot backed the GPU queue up by seconds. Hover is the native one, over a copy of the positions. Measured headless on the Mac's GPU, 100,000 points streamed at 60 snapshots per second orbit at 56 to 60 frames per second. The module's checks compare the render target with the palette colour of each sampled point that no other point covers, on both adapters.
@@ -104,3 +110,35 @@ CALIPER_PYTHON=<python> node check.mjs --build <build dir> --out <shot.png> --vi
 ```
 
 The check starts `stream_server.py`, which serves the build directory and the stream on one port on 127.0.0.1, opens `demo.html` in headless Chromium, waits for frames and applied snapshots, prints the module's counters as JSON and saves screenshots. `swiftshader` uses Chromium's software WebGPU adapter and `metal` the Mac's GPU. The module also reads back each heatmap and image texture once and compares it, byte for byte, with what the CPU makes of the same snapshot (the reference colormap for a heatmap, the bytes themselves for an image); its counters list the results as `checks`.
+
+## In CI
+
+A CI job on a macOS runner builds the module and runs the headless checks on SwiftShader, which needs no GPU. It needs cmake, ninja, Node and Python 3.12 or later, and caches the emsdk folder, whose `upstream/emscripten/cache` holds the downloaded `emdawnwebgpu` port.
+
+```sh
+# Emscripten, pinned
+git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+"$RUNNER_TEMP/emsdk/emsdk" install 6.0.13
+"$RUNNER_TEMP/emsdk/emsdk" activate 6.0.13
+
+# The module
+EMSDK="$RUNNER_TEMP/emsdk" web/wasm/build.sh web/wasm/build Release
+
+# The checks of the module (Playwright's Chromium headless shell, SwiftShader)
+python3 -m venv "$RUNNER_TEMP/py" && "$RUNNER_TEMP/py/bin/pip" install numpy websockets
+(cd web/wasm/test && npm ci && npx playwright-core install chromium-headless-shell)
+export CALIPER_PYTHON="$RUNNER_TEMP/py/bin/python"
+(cd web/wasm/test &&
+  node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader &&
+  node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap &&
+  node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2 &&
+  node multi.mjs --build ../build --out "$RUNNER_TEMP/shots/multi.png" --destroy 1 &&
+  node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png")
+
+# The element with these views (the web package's tests), and the packaged copies
+(cd web && npm ci && npx playwright install chromium-headless-shell &&
+  CALIPER_WASM_DIR=../web/wasm/build npx playwright test --project=swiftshader --project=canvas2d)
+"$RUNNER_TEMP/py/bin/python" scripts/build_web.py --check --wasm-build web/wasm/build
+```
+
+Each `check.mjs` run exits with 1 when the module reports an error or a check finds a differing texel or point; the `webgpu` project of the web package's tests and the 100,000-point measurement need a GPU and are left out. `build_web.py --check` fails when the module checked into `python/caliper/_web` is not the one just built; a job that should not depend on the exact compiler output can leave that line out.
