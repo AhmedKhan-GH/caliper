@@ -64,7 +64,7 @@ export class Orbit {
   fit(bbox: number[]): void {
     this.target = [(bbox[0] + bbox[1]) / 2, (bbox[2] + bbox[3]) / 2, (bbox[4] + bbox[5]) / 2];
     this.radius = Math.max(1e-6, Math.hypot(bbox[1] - bbox[0], bbox[3] - bbox[2], bbox[5] - bbox[4]) / 2);
-    this.dist = (this.radius / Math.sin(FOV / 2)) * 1.05;
+    this.dist = (this.radius / Math.sin(FOV / 2)) * 0.85;
     this.az = 0.7;
     this.el = 0.35;
   }

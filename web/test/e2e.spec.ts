@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { expect, REPO, serve, shotPath, WEB, wireModule } from './util.js';
+import { expect, gpuPath, REPO, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 
@@ -53,7 +53,7 @@ test('the viewer page shows every view of the stream', async ({ page, producer }
   await expect(page.locator('.wordmark')).toHaveText('Caliper');
   await expect(page.locator('#script')).toHaveText('train_mock.py');
   await expect(page.locator('#state .text')).toHaveText('connected');
-  const gpu = info.project.name === 'canvas2d' ? 'canvas2d' : 'webgpu';
+  const gpu = gpuPath(info);
   const got = await page.evaluate(() => [...document.querySelectorAll('caliper-view')].map((e) => {
     const s = (e as HTMLElement & { debugState(): Record<string, unknown> }).debugState();
     return [s.view, s.kind, s.renderer];

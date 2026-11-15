@@ -80,33 +80,45 @@ export function shotPath(info: TestInfo, name: string): string {
 export function goldenFrames(): string {
   const inTree = path.join(REPO, 'tests', 'fixtures', 'wire_v3');
   if (fs.existsSync(path.join(inTree, 'snapshot.bin'))) return inTree;
-  return fromGit('tests/fixtures/wire_v3', path.join(WEB, 'test-results', 'wire_v3'));
+  return fromGit('tests/fixtures/wire_v3');
 }
 
 /** The Python codec _wire.py: the checkout's own, or a copy from git. */
 export function wireModule(): string {
   const inTree = path.join(REPO, 'python', 'caliper', '_wire.py');
   if (fs.existsSync(inTree)) return inTree;
-  return path.join(fromGit('python/caliper/_wire.py', path.join(WEB, 'test-results', 'wire-py')), '_wire.py');
+  return path.join(fromGit('python/caliper/_wire.py'), '_wire.py');
 }
 
-function fromGit(what: string, dest: string): string {
+/**
+ * Copies a file or folder of another branch into web/.cache/<object id>/
+ * (ignored by git). Workers that race write their own copy and rename it into
+ * place, so a reader never sees a half-written folder.
+ */
+function fromGit(what: string): string {
   const refs = [process.env.CALIPER_WIRE_REF, 'sprint2', 'sprint2-proto'].filter(Boolean) as string[];
-  const git = (...args: string[]) => execFileSync('git', ['-C', REPO, ...args]);
+  const git = (...args: string[]) => execFileSync('git', ['-C', REPO, ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
   for (const ref of refs) {
-    let files: string[];
+    let id: string;
     try {
-      files = git('ls-tree', '-r', '--name-only', ref, what).toString().split('\n').filter(Boolean);
+      id = git('rev-parse', `${ref}:${what}`).toString().trim();
     } catch {
       continue;
     }
-    if (!files.length) continue;
-    fs.rmSync(dest, { recursive: true, force: true });
+    const dest = path.join(WEB, '.cache', id);
+    if (fs.existsSync(dest)) return dest;
+    const files = git('ls-tree', '-r', '--name-only', ref, what).toString().split('\n').filter(Boolean);
+    const tmp = `${dest}.${process.pid}`;
     for (const f of files) {
-      const rel = files.length === 1 && f === what ? path.basename(f) : path.relative(what, f);
-      const out = path.join(dest, rel);
+      const rel = f === what ? path.basename(f) : path.relative(what, f);
+      const out = path.join(tmp, rel);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       fs.writeFileSync(out, git('show', `${ref}:${f}`));
+    }
+    try {
+      fs.renameSync(tmp, dest);
+    } catch {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
     return dest;
   }
