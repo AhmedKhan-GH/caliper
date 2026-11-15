@@ -217,6 +217,7 @@ class NativeServer(NetServer):
         self.transport.server = self
         self._idle = True
         self.ring = NetRing(engine, wake=self._wake)
+        self.transport.ring = self.ring
         self.nio = _netio.Server(-1 if port is None else port, self.token,
                                  _wire.canonical_json(self.identity).decode(),
                                  _wire.canonical_json(self.software).decode(), _asset_table(),

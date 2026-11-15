@@ -89,6 +89,8 @@ class ViewState:
     groups: dict = field(default_factory=dict)  # key -> Group
     last: float = -math.inf
     seq: int = 0
+    seen: float = -math.inf                     # perf_counter of its last call through due()
+    cand: float = 0.0                           # when it may next have work (see next_due)
 
     def entry(self) -> dict:
         e = {"id": self.id, "name": self.name, "kind": int(self.kind),
@@ -154,6 +156,11 @@ class NetRing:
         self.series: dict[str, SeriesState] = {}
         self.pending: list[Pending] = []
         self.views_version = 0
+        # The earliest perf_counter at which any recently called view may have
+        # work: until then NetTransport.attached() is False and a view call
+        # returns after that check, as with no viewer. 0 forces calls through
+        # (a new view, a subscription change).
+        self.next_due = 0.0
         self._next_id = 1
         self._wake = wake or (lambda: None)
         self.closed = False
@@ -169,6 +176,7 @@ class NetRing:
             with self.lock:
                 self.views[name] = v
                 self.views_version += 1
+            self.next_due = 0.0
             self._wake()
         return v
 
@@ -209,14 +217,34 @@ class NetRing:
     def due(self, name: str, interval: float, now: float) -> bool:
         v = self.views.get(name)
         if v is None or now - v.offer_t >= OFFER_REFRESH_S or self._stale(v):
+            self.next_due = 0.0
             return True                     # register or refresh the offer; no device work
+        v.seen = now
         if not v.groups:
             self.counters["unsubscribed"] += 1
+            v.cand = v.offer_t + OFFER_REFRESH_S
+            self._next(now)
             return False
         if now - v.last < interval:
             self.counters["skipped"] += 1
+            v.cand = v.last + interval
+            self._next(now)
             return False
+        v.cand = now + interval             # take_call follows
         return True
+
+    def _next(self, now: float) -> None:
+        """next_due from the views called within the last second (a view not
+        called for longer waits at most for the next due time when it is)."""
+        nd = math.inf
+        for v in list(self.views.values()):
+            if now - v.seen < 1.0 and v.cand < nd:
+                nd = v.cand
+        self.next_due = 0.0 if nd == math.inf else nd
+
+    def changed(self) -> None:
+        """A subscription opened or closed (network thread): recheck at once."""
+        self.next_due = 0.0
 
     def take(self, name: str, plan, now: float) -> bool:
         return self.take_call(name, plan, now, None)

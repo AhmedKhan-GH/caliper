@@ -509,6 +509,7 @@ class _Producer:
 
     def attached_changed(self, delta: int) -> None:
         self.transport.n_attached = max(0, self.transport.n_attached + delta)
+        self.ring.changed()
 
     # -- subscriptions ------------------------------------------------------------
     def resolve(self, name: str, request: dict | None):
@@ -549,6 +550,7 @@ class _Producer:
             g.subs[(link, s.sub)] = s.max_rate
             g.update_rate()
             s.group = g
+        self.ring.changed()
 
     def leave(self, link: Link, s: Sub) -> None:
         s.snap = None
@@ -569,6 +571,7 @@ class _Producer:
                 v = self.ring.views.get(g.view)
                 if v is not None and v.groups.get(g.key) is g:
                     del v.groups[g.key]
+        self.ring.changed()
 
     def history(self, st) -> _History | None:
         h = self.hist.get(st)
@@ -691,15 +694,18 @@ class _NetMeta(SnapshotMeta):
 # ===========================================================================
 class NetTransport:
     """Where the network route's slots live (pinned host memory) and where
-    completed snapshots go (the links). ``attached()`` is one attribute read."""
+    completed snapshots go (the links). ``attached()`` is True while a viewer
+    is attached and some view may be due now: an attribute read and a clock
+    read, so a call between due times costs what it costs with no viewer."""
 
     def __init__(self):
         self.n_attached = 0
         self.producer: _Producer | None = None
         self.server: "NetServer | None" = None
+        self.ring = None
 
     def attached(self) -> bool:
-        return self.n_attached > 0
+        return self.n_attached > 0 and time.perf_counter() >= self.ring.next_due
 
     def alloc(self, name, spec, slot, role, shape, dtype):
         import torch
@@ -1026,6 +1032,7 @@ class NetServer:
         self._pump_wake: _Wake | None = None
         self._pump_idle = True
         self.ring = NetRing(engine, wake=self._wake)
+        self.transport.ring = self.ring
         self.producer = _Producer(self.ring, self.identity, self.transport)
         self.transport.producer = self.producer
         self._listener = _Listener(self)
