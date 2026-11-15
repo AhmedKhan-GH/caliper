@@ -353,3 +353,96 @@ TEST_CASE("cli: check and install take a build folder whose applets are in apple
     CHECK(none.code == 1);
     CHECK(none.err == "caliper: no applets in " + t.str("empty") + "\n");
 }
+
+namespace {
+// Names in `dir` that start with ".": the temporary and set-aside copies an
+// install may leave behind if it fails to clean up.
+std::vector<std::string> hidden_in(const fs::path& dir) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (const auto& e : fs::recursive_directory_iterator(dir, ec))
+        if (e.path().filename().string().rfind('.', 0) == 0)
+            out.push_back(e.path().string());
+    return out;
+}
+void write(const fs::path& p, const std::string& text) {
+    fs::create_directories(p.parent_path());
+    std::ofstream(p) << text;
+}
+} // namespace
+
+TEST_CASE("cli: install copies an applet's asset folder and replaces it on update") {
+    TempDir t("assets");
+    const CliContext ctx = context(t);
+    fake_applet(t.path / "build", "a", "x.a", "1.0.0");
+    write(t.path / "build" / "assets" / "a" / "old.txt", "v1");
+    write(t.path / "build" / "assets" / "other" / "x.txt", "not a's");
+    const std::string build = t.str("build");
+    REQUIRE(run({"install", build.c_str()}, ctx).code == 0);
+    CHECK(slurp(t.path / "user" / "assets" / "a" / "old.txt") == "v1");
+    CHECK_FALSE(fs::exists(t.path / "user" / "assets" / "other"));
+
+    fs::remove(t.path / "build" / "assets" / "a" / "old.txt");
+    write(t.path / "build" / "assets" / "a" / "new.txt", "v2");
+    fake_applet(t.path / "build", "a", "x.a", "1.1.0");
+    REQUIRE(run({"install", build.c_str()}, ctx).code == 0);
+    CHECK(slurp(t.path / "user" / "assets" / "a" / "new.txt") == "v2");
+    CHECK_FALSE(fs::exists(t.path / "user" / "assets" / "a" / "old.txt"));
+    CHECK(hidden_in(t.path / "user").empty());
+}
+
+TEST_CASE("cli: an install that fails part-way puts everything back") {
+    TempDir t("rollback");
+    const fs::path src = t.path / "src", dst = t.path / "dst";
+    write(src / "liba.dylib", "new library");
+    write(src / "assets" / "a" / "new.txt", "new asset");
+    write(src / "a.caliper.toml", "new manifest");
+    write(src / "libb.dylib", "b library");
+    write(src / "b.caliper.toml", "b manifest");
+    write(dst / "liba.dylib", "old library");
+    write(dst / "assets" / "a" / "old.txt", "old asset");
+    write(dst / "a.caliper.toml", "old manifest");
+    const std::vector<cli_detail::InstallCopy> copies = {
+        {src / "liba.dylib", dst / "liba.dylib"},
+        {src / "assets" / "a", dst / "assets" / "a"},
+        {src / "a.caliper.toml", dst / "a.caliper.toml"},
+        {src / "libb.dylib", dst / "libb.dylib"},
+        {src / "b.caliper.toml", dst / "b.caliper.toml"},
+    };
+    for (int fail_at = 0; fail_at < (int)copies.size(); fail_at++) {
+        CAPTURE(fail_at);
+        std::string why;
+        CHECK_FALSE(cli_detail::install_all(copies, why, fail_at));
+        CHECK_FALSE(why.empty());
+        CHECK(slurp(dst / "liba.dylib") == "old library");
+        CHECK(slurp(dst / "assets" / "a" / "old.txt") == "old asset");
+        CHECK_FALSE(fs::exists(dst / "assets" / "a" / "new.txt"));
+        CHECK(slurp(dst / "a.caliper.toml") == "old manifest");
+        CHECK_FALSE(fs::exists(dst / "libb.dylib"));
+        CHECK_FALSE(fs::exists(dst / "b.caliper.toml"));
+        CHECK(hidden_in(dst).empty());
+    }
+    std::string why;
+    REQUIRE(cli_detail::install_all(copies, why));
+    CHECK(slurp(dst / "liba.dylib") == "new library");
+    CHECK(slurp(dst / "assets" / "a" / "new.txt") == "new asset");
+    CHECK_FALSE(fs::exists(dst / "assets" / "a" / "old.txt"));
+    CHECK(slurp(dst / "b.caliper.toml") == "b manifest");
+    CHECK(hidden_in(dst).empty());
+}
+
+TEST_CASE("cli: an install that cannot stage a file installs nothing") {
+    TempDir t("stage-fail");
+    const CliContext ctx = context(t);
+    fake_applet(t.path / "build", "a", "x.a", "1.0.0");
+    fake_applet(t.path / "build", "b", "x.b", "1.0.0");
+    write(t.path / "build" / "assets" / "b" / "data.txt", "b's");
+    write(t.path / "user" / "assets", "a file where a folder must go");
+    const Run r = run({"install", t.str("build").c_str()}, ctx);
+    CHECK(r.code == 1);
+    CHECK(r.err.rfind("caliper: nothing installed; ", 0) == 0);
+    CHECK_FALSE(fs::exists(t.path / "user" / lib_name("a")));
+    CHECK_FALSE(fs::exists(t.path / "user" / "a.caliper.toml"));
+    CHECK_FALSE(fs::exists(t.path / "user" / "b.caliper.toml"));
+    CHECK(hidden_in(t.path / "user").empty());
+}

@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <iterator>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <ostream>
@@ -240,16 +241,81 @@ inline bool write_file(const fs::path& path, const std::string& text) {
     return !ec;
 }
 
-// Copies a file through a temporary copy renamed over the destination, so
-// a library is never seen half-written.
-inline bool copy_file_atomic(const fs::path& from, const fs::path& to) {
-    const fs::path tmp = to.string() + ".tmp";
+// One file or folder that install places, from the checked folder into the
+// user applets folder.
+struct InstallCopy {
+    fs::path from;
+    fs::path to;
+};
+
+// Places every copy, all or nothing. Each source is first copied to a
+// temporary name beside its destination; only when every copy is staged are
+// they renamed into place, in the order given, a destination that exists
+// being moved aside first. If a step fails, everything this call placed is
+// removed, everything it moved aside is put back, and every temporary is
+// removed. `fail_at` makes the rename of that copy fail, for the tests.
+inline bool install_all(const std::vector<InstallCopy>& copies, std::string& error,
+                        int fail_at = -1) {
+    const std::string suffix =
+        ".install-" + std::to_string(std::chrono::steady_clock::now()
+                                         .time_since_epoch().count());
+    struct Step {
+        fs::path tmp, to, aside;
+        bool moved_aside = false, placed = false;
+    };
+    std::vector<Step> steps;
     std::error_code ec;
-    fs::copy_file(from, tmp, fs::copy_options::overwrite_existing, ec);
-    if (ec) return false;
-    fs::rename(tmp, to, ec);
-    if (ec) fs::remove(tmp, ec);
-    return !ec;
+    auto cleanup = [&] {
+        for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
+            std::error_code e;
+            if (it->placed) fs::remove_all(it->to, e);
+            if (it->moved_aside) fs::rename(it->aside, it->to, e);
+            fs::remove_all(it->tmp, e);
+        }
+    };
+    // Hidden temporary names: the loader never takes them for applets.
+    for (const InstallCopy& c : copies) {
+        Step st;
+        st.to = c.to;
+        st.tmp = c.to.parent_path() / ("." + c.to.filename().string() + suffix);
+        st.aside = c.to.parent_path() / ("." + c.to.filename().string() + suffix + ".old");
+        steps.push_back(st);
+        fs::create_directories(c.to.parent_path(), ec);
+        if (fs::is_directory(c.from, ec))
+            fs::copy(c.from, st.tmp, fs::copy_options::recursive, ec);
+        else
+            fs::copy_file(c.from, st.tmp, ec);
+        if (ec) {
+            error = "could not copy " + c.from.string() + ": " + ec.message();
+            cleanup();
+            return false;
+        }
+    }
+    for (size_t i = 0; i < steps.size(); i++) {
+        Step& st = steps[i];
+        if (fs::exists(fs::symlink_status(st.to, ec))) {
+            fs::rename(st.to, st.aside, ec);
+            if (ec) {
+                error = "could not replace " + st.to.string() + ": " + ec.message();
+                cleanup();
+                return false;
+            }
+            st.moved_aside = true;
+        }
+        if ((int)i == fail_at)
+            ec = std::make_error_code(std::errc::io_error);
+        else
+            fs::rename(st.tmp, st.to, ec);
+        if (ec) {
+            error = "could not place " + st.to.string() + ": " + ec.message();
+            cleanup();
+            return false;
+        }
+        st.placed = true;
+    }
+    for (const Step& st : steps)
+        if (st.moved_aside) fs::remove_all(st.aside, ec);
+    return true;
 }
 
 inline std::string replace_all(std::string s, const std::string& from,
@@ -318,20 +384,32 @@ inline int run_install(const CommandLine& cl, const CliContext& ctx, std::ostrea
         err << "caliper: cannot create " << ctx.user_dir << "\n";
         return 1;
     }
+    // Per applet: its library, then its asset folder assets/<stem>/ beside
+    // the library when there is one (where an applet that reads files from
+    // beside its library keeps them), then its manifest last, so a
+    // manifest never names a library or assets not yet in place. One
+    // transaction for the whole folder: a failure installs nothing.
     const fs::path dest(ctx.user_dir);
+    std::vector<cli_detail::InstallCopy> copies;
     for (int i = 0; i < L.count(); i++) {
         const AppletEntry& a = L.at(i);
         const fs::path lib(a.dylib_path), manifest(a.manifest_path);
-        // The library first: a manifest never names a library not yet there.
-        if (!cli_detail::copy_file_atomic(lib, dest / lib.filename()) ||
-            !cli_detail::copy_file_atomic(manifest, dest / manifest.filename())) {
-            err << "caliper: could not copy " << a.manifest.id << " into "
-                << dest.string() << "\n";
-            return 1;
-        }
-        out << "installed " << a.manifest.id << " " << a.manifest.version << " in "
-            << dest.string() << "\n";
+        std::string stem = manifest.filename().string();
+        stem.resize(stem.size() - std::string(".caliper.toml").size());
+        copies.push_back({lib, dest / lib.filename()});
+        const fs::path assets = lib.parent_path() / "assets" / stem;
+        if (fs::is_directory(assets, ec))
+            copies.push_back({assets, dest / "assets" / stem});
+        copies.push_back({manifest, dest / manifest.filename()});
     }
+    std::string why;
+    if (!cli_detail::install_all(copies, why)) {
+        err << "caliper: nothing installed; " << why << "\n";
+        return 1;
+    }
+    for (int i = 0; i < L.count(); i++)
+        out << "installed " << L.at(i).manifest.id << " " << L.at(i).manifest.version
+            << " in " << dest.string() << "\n";
     return 0;
 }
 

@@ -72,13 +72,15 @@ An applet passes when it is `READY` or `SHADOWED`. `check` exits with 0 when eve
 
 ### caliper install <folder>
 
-Runs the same checks on a local folder, and when every applet passes, copies each library and then its manifest into the user applets folder. A build folder is resolved as for `check`, with the same `using the applets in` line. Each file is copied to a temporary name and renamed over the destination, so the host never sees half a library. The output is the lines of `check`, then one line per applet:
+Runs the same checks on a local folder, and when every applet passes, copies each applet into the user applets folder: its library, then its asset folder `assets/<stem>/` beside the library when there is one, then its manifest. An applet that reads files from beside its library keeps them in that folder, and its own build stages them there, as the in-tree applets do; an installed asset folder replaces the old one as a whole. Other files beside the library are not copied. A build folder is resolved as for `check`, with the same `using the applets in` line.
+
+The install is all or nothing for the whole folder. Every file and asset folder is first copied to a hidden temporary name beside its destination, and only then renamed into place, each manifest after its library and assets, so the host never sees half a library or a manifest without its library. When a step fails, `install` removes what it placed, puts back what it replaced, and leaves the user applets folder as it was. The output is the lines of `check`, then one line per applet:
 
 ```text
 installed dev.caliper.pulse-scope 0.1.0 in <user applets folder>
 ```
 
-When any applet fails a check, `install` copies nothing, prints `caliper: nothing installed; N of M applets do not pass the checks`, and exits with 1. It also exits with 1 when `<folder>` is the user applets folder itself, when that folder cannot be created, or when a copy fails. A URL in place of a folder is a usage error (`caliper: install takes a local folder, not <url>`), with exit code 2.
+When any applet fails a check, `install` copies nothing, prints `caliper: nothing installed; N of M applets do not pass the checks`, and exits with 1. It also exits with 1 when `<folder>` is the user applets folder itself, when that folder cannot be created, or when a copy fails, which it reports as `caliper: nothing installed; <reason>`. A URL in place of a folder is a usage error (`caliper: install takes a local folder, not <url>`), with exit code 2.
 
 ### caliper new <name> [<dir>]
 
