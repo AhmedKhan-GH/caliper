@@ -664,6 +664,7 @@ void TwinScopeApplet::draw_ui() {
         (state->bridge_caps & CALIPER_BRIDGE_CAP_STREAM_ORDERED) != 0;
 
     ImGui::SetNextWindowSize(ImVec2(1180.f, 800.f), ImGuiCond_FirstUseEver);
+    caliper::ui::dock_hint(state->host, "TwinScope: the surface twin", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("TwinScope: the surface twin");
 
     // ----------------------------- toolbar -----------------------------------

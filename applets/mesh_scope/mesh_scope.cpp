@@ -434,6 +434,7 @@ void MeshScopeApplet::draw_ui() {
     // happens under embed_host, where no dock layout sizes us (instance_scope
     // precedent; docked layouts override this harmlessly).
     ImGui::SetNextWindowSize(ImVec2(1120, 860), ImGuiCond_FirstUseEver);
+    caliper::ui::dock_hint(st->host, "MeshScope: Surface", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("MeshScope: Surface");
 
     // ---- toolbar: controls + honest status (last frame's provenance) ----

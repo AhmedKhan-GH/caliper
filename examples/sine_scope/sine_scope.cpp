@@ -174,6 +174,7 @@ public:
             }
         }
 
+        caliper::ui::dock_hint(st->host, "SineScope", CALIPER_DOCK_CENTRAL);
         ImGui::Begin("SineScope");
 
         // Dev hook (not part of the tutorial): CALIPER_SINE_AUTOTRAIN=1

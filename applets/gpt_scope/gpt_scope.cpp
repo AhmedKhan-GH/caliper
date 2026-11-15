@@ -1202,6 +1202,7 @@ void GPTScopeApplet::draw_ui() {
     //    top-1 next char, GREEN if it matches the actual next char, else a
     //    red->yellow ramp by p(correct). Bottom row = the probe text itself.
     // =====================================================================
+    caliper::ui::dock_hint(st->host, "GPTScope: Logit Lens", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("GPTScope: Logit Lens");
     ImGui::TextDisabled(
         "ln_f + unembed applied to the residual stream at every depth — where "
@@ -1244,6 +1245,7 @@ void GPTScopeApplet::draw_ui() {
     //    by layer. Click a point -> that head's (T,T) attention as a MAGMA
     //    bridge texture (the heatmap redeemed: on demand, with a question).
     // =====================================================================
+    caliper::ui::dock_hint(st->host, "GPTScope: Heads", CALIPER_DOCK_SIDE_BOTTOM);
     ImGui::Begin("GPTScope: Heads");
     ImGui::TextDisabled(
         "each point is one head. x = mean attended distance (i-j), y = "
@@ -1426,6 +1428,7 @@ void GPTScopeApplet::draw_ui() {
     //    PCA of W_E to 3-D, each point drawn AS its glyph, colored by class.
     //    Fixed axes after first fit (EmbedScope's policy) + Refit button.
     // =====================================================================
+    caliper::ui::dock_hint(st->host, "GPTScope: Embeddings", CALIPER_DOCK_SIDE_BOTTOM);
     ImGui::Begin("GPTScope: Embeddings");
     ImGui::TextDisabled(
         "top-3 PCs of the token embedding W_E. each point is a character glyph. "
@@ -1492,6 +1495,7 @@ void GPTScopeApplet::draw_ui() {
     //    (a) per-layer attn-write vs MLP-write norms into the residual stream.
     //    (b) per-layer gradient-norm lines over steps (who is learning NOW).
     // =====================================================================
+    caliper::ui::dock_hint(st->host, "GPTScope: Residual", CALIPER_DOCK_SIDE_BOTTOM);
     ImGui::Begin("GPTScope: Residual");
     ImGui::TextDisabled("division of labor: how big a vector each sublayer adds "
                         "to the residual stream, and which groups are learning now.");
@@ -1539,6 +1543,7 @@ void GPTScopeApplet::draw_ui() {
     //    top-8 bar chart for the last position, and the probe text tinted by
     //    per-position loss.
     // =====================================================================
+    caliper::ui::dock_hint(st->host, "GPTScope: Sample", CALIPER_DOCK_SIDE_BOTTOM);
     ImGui::Begin("GPTScope: Sample");
     {
         float temp = st->temp.load();
@@ -1621,6 +1626,7 @@ void GPTScopeApplet::draw_ui() {
     // space live. (design 2026-07-07-gptscope-thoughtspace.)
     // =====================================================================
     {
+        caliper::ui::dock_hint(st->host, "GPTScope: ThoughtSpace", CALIPER_DOCK_CENTRAL);
         const bool ts_open = ImGui::Begin("GPTScope: ThoughtSpace");
         // Pay-per-look: the worker skips the whole probe unless this is drawn.
         st->thoughtspace_wanted.store(ts_open);
@@ -1745,6 +1751,7 @@ void GPTScopeApplet::draw_ui() {
     // =====================================================================
     // 6. GPTScope: Training — controls, loss + val perplexity, metrics, Save/Load.
     // =====================================================================
+    caliper::ui::dock_hint(st->host, "GPTScope: Training", CALIPER_DOCK_SIDE_TOP);
     ImGui::Begin("GPTScope: Training");
     ImGui::TextDisabled("mini-GPT (char): 4 layers · 4 heads · 128 embd · block 128");
     ImGui::TextDisabled("device: %s (%s)", st->device.name,

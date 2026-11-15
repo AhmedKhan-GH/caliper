@@ -26,6 +26,7 @@ public:
         }
         ImGui::SetNextWindowPos({40, 60}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({520, 360}, ImGuiCond_FirstUseEver);
+        caliper::ui::dock_hint(host_, "Hello, Caliper", CALIPER_DOCK_CENTRAL);
         ImGui::Begin("Hello, Caliper");
         ImGui::Text("ABI epoch %d applet via CALIPER_APPLET macro", CALIPER_ABI_EPOCH);
         ImGui::Text("framebuffer: %d x %d px   dpi_scale: %.1f",

@@ -216,7 +216,7 @@ void caliper_core_event(CaliperCore* core, const CaliperInputEvent* event);
 
 /* --- Applet control (reuses the loader's manifest discovery) ------------- */
 
-/* Load + launch the applet whose manifest id matches (e.g. "dev.caliper.hello").
+/* Load + launch the applet whose manifest id matches (e.g. "dev.example.my-applet").
  * Returns 1 on success, 0 if unknown/refused/failed (last_error set). A canvas
  * must be attached FIRST — an applet's launch/first frame touches the renderer's
  * ImGui backend, so load before attach_canvas is an honest refusal, not a crash.

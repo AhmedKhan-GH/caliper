@@ -244,6 +244,7 @@ void PulseScopeApplet::draw_ui() {
     }
 
     ImGui::SetNextWindowSize(ImVec2(760, 900), ImGuiCond_FirstUseEver);
+    caliper::ui::dock_hint(st->host, "PulseScope", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("PulseScope");
 
     ImGui::SetWindowFontScale(1.6f);

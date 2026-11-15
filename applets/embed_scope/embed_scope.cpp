@@ -710,6 +710,7 @@ void EmbedScopeApplet::draw_ui() {
     // Three docked windows — the host dockspace tiles them (Cloud central,
     // Training and Data in a side column). No SetNextWindowPos/Size anywhere:
     // placement is the host's job, rearranging is the user's.
+    caliper::ui::dock_hint(st->host, "EmbedScope: Training", CALIPER_DOCK_SIDE_TOP);
     ImGui::Begin("EmbedScope: Training");
 
     ImGui::TextDisabled("device: %s (%s)", st->device.name,
@@ -884,6 +885,7 @@ void EmbedScopeApplet::draw_ui() {
     }
 
     // The centerpiece: the live 3-D embedding scatter, filling its own window.
+    caliper::ui::dock_hint(st->host, "EmbedScope: Cloud", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("EmbedScope: Cloud");
     if (gen == 0)
         ImGui::TextDisabled(
@@ -987,6 +989,7 @@ void EmbedScopeApplet::draw_ui() {
 
     // Live tensors — the bridge's real-time surface: weight heatmaps that
     // reorganize every optimizer step, not every eval tick.
+    caliper::ui::dock_hint(st->host, "EmbedScope: Tensors", CALIPER_DOCK_SIDE_BOTTOM);
     ImGui::Begin("EmbedScope: Tensors");
     if (!st->bridge) {
         ImGui::TextDisabled("tensor_bridge.v1 absent (ok) — no live tensors");
@@ -1062,6 +1065,7 @@ void EmbedScopeApplet::draw_ui() {
     ImGui::End();   // EmbedScope: Tensors
 
     // data.v1 panel.
+    caliper::ui::dock_hint(st->host, "EmbedScope: Data", CALIPER_DOCK_SIDE_BOTTOM);
     ImGui::Begin("EmbedScope: Data");
     ImGui::SeparatorText("data.v1 — SQL over the live embedding table");
     if (!st->data) {

@@ -360,6 +360,7 @@ void SculptScopeApplet::draw_ui() {
         sx = st->sub_x; sy = st->sub_y; sz = st->sub_z;
     }
 
+    caliper::ui::dock_hint(st->host, "SculptScope: Learned Cloud", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("SculptScope: Learned Cloud");
 
     // ---- toolbar: controls + honest status (last frame's provenance) ----

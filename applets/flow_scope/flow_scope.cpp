@@ -381,7 +381,8 @@ void FlowScopeApplet::draw_ui() {
     }
 
     // No SetNextWindowSize: this window docks into the host's central node
-    // (main.cpp central_windows list), so it fills the viewport work area.
+    // (the dock hint below), so it fills the viewport work area.
+    caliper::ui::dock_hint(st->host, "FlowScope: Field", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("FlowScope: Field");
 
     // ---- toolbar panel: controls + honest status (from last frame's draw) --

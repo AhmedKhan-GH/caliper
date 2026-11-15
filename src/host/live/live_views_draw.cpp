@@ -72,7 +72,7 @@ V3 norm3(V3 a) {
     return l > 0 ? V3{a.x / l, a.y / l, a.z / l} : V3{0, 0, 1};
 }
 
-// Right-handed lookAt, column-major (flow_scope's).
+// Right-handed lookAt, column-major.
 void look_at(V3 eye, V3 at, V3 up, float* m) {
     const V3 f = norm3(sub(at, eye));
     const V3 s = norm3(cross(f, up));
@@ -82,7 +82,7 @@ void look_at(V3 eye, V3 at, V3 up, float* m) {
     std::memcpy(m, t, sizeof(t));
 }
 
-// z in [0,1] perspective (Metal NDC), column-major (flow_scope's).
+// z in [0,1] perspective (Metal NDC), column-major.
 void perspective(float fovy, float aspect, float zn, float zf, float* m) {
     const float f = 1.0f / std::tan(fovy * 0.5f);
     std::memset(m, 0, 16 * sizeof(float));

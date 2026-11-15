@@ -388,6 +388,7 @@ void FieldScopeApplet::draw_ui() {
         sx = st->sub_x; sy = st->sub_y; sz = st->sub_z;
     }
 
+    caliper::ui::dock_hint(st->host, "FieldScope: EM Field", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("FieldScope: EM Field");
 
     const float bar_h = ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.f;

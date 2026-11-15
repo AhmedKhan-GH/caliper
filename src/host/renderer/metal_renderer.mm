@@ -1064,7 +1064,7 @@ public:
             [enc endEncoding];
             [cb commit];   // no CPU wait: same-queue_ commit order covers the frame's
                            // sampling; producer (MPS) writes are already CPU-drained
-                           // before publish (flow_scope sync contract).
+                           // before publish (the geometry.v1 sync contract).
             last_device_path_ = "points-imported";
             last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;

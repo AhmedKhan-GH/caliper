@@ -1,10 +1,10 @@
 #include <iostream>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
-#include <imgui_internal.h>   // DockBuilder* — first-run applet dock layout
 #include <implot.h>
 #include <implot3d.h>
 
+#include "ui/dock_layout.h"
 #include "ui/landing_screen.h"
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
@@ -124,6 +124,12 @@ public:
         std::cerr << "[renderer] " << renderer_->name() << std::endl;
         landing_.log("renderer", renderer_->name());
         caliper_host::services_init();
+        // caliper.ui.v1_1 dock hints go to the applet page's layout.
+        caliper_host::set_dock_hint_sink(
+            [](void* layout, const char* title, uint32_t role) {
+                static_cast<caliper_host::DockLayout*>(layout)->hint(title, role);
+            },
+            &dock_layout_);
         // Hand the live renderer to the bridge (caliper.tensor_bridge.v1); it is
         // cleared before renderer teardown in cleanup(). Do this right after the
         // renderer is up so the first applet frame can vend textures.
@@ -287,73 +293,11 @@ public:
                     0, ImGui::GetMainViewport(),
                     ImGuiDockNodeFlags_PassthruCentralNode);
 
-                // Dock-by-title layout, attempted once per process. Two cases:
-                //  - fresh dockspace (no imgui.ini history): build the full
-                //    tiled layout (showcase central, panels in a side column,
-                //    Runs right).
-                //  - restored dockspace: dock ONLY windows that have no saved
-                //    settings yet (e.g. an applet grew new windows since the
-                //    ini was written). Anything the user ever placed is
-                //    untouched — their layout wins.
-                if (!dock_layout_built_) {
-                    // Titles are the exact Begin() strings from applet source.
-                    static const char* const central_windows[] = {
-                        "EmbedScope: Cloud",   // the showcase
-                        "GPTScope: Logit Lens",// the mech-interp centerpiece
-                        "GPTScope: ThoughtSpace", // residual constellation (3-D)
-                        "FlowScope: Field",    // the geometry.v1 exemplar
-                        "FieldScope: EM Field",// PIC plasma — the physics exemplar
-                        "SculptScope: Learned Cloud", // net's own tensor drawn live
-                        "MeshScope: Surface", // indexed triangles + lines via geometry.v1_1
-                        "Hello, Caliper",      // examples/hello (tutorial)
-                        "SineScope",           // examples/sine_scope (tutorial)
-                    };
-                    static const char* const side_top_windows[] = {
-                        "EmbedScope: Training", "GPTScope: Training"};
-                    static const char* const side_bot_windows[] = {
-                        "EmbedScope: Tensors", "EmbedScope: Data",
-                        "GPTScope: Heads", "GPTScope: Embeddings",
-                        "GPTScope: Residual", "GPTScope: Sample"};
-                    auto unseen = [](const char* w) {
-                        return ImGui::FindWindowSettingsByID(ImHashStr(w)) ==
-                               nullptr;
-                    };
-                    ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock_id);
-                    const bool fresh = node && node->IsEmpty();
-                    bool any_unseen = false;
-                    for (const char* w : central_windows) any_unseen |= unseen(w);
-                    for (const char* w : side_top_windows) any_unseen |= unseen(w);
-                    for (const char* w : side_bot_windows) any_unseen |= unseen(w);
-                    if (node && (fresh || any_unseen)) {
-                        ImGuiID central = dock_id;
-                        ImGuiID right = 0;
-                        if (fresh) {
-                            ImGui::DockBuilderSetNodeSize(
-                                dock_id, ImGui::GetMainViewport()->WorkSize);
-                            right = ImGui::DockBuilderSplitNode(
-                                central, ImGuiDir_Right, 0.32f, nullptr,
-                                &central);
-                        } else if (ImGuiDockNode* c =
-                                       ImGui::DockBuilderGetCentralNode(dock_id)) {
-                            central = c->ID;
-                        }
-                        ImGuiID side = ImGui::DockBuilderSplitNode(
-                            central, ImGuiDir_Right, 0.30f, nullptr, &central);
-                        ImGuiID side_bot = ImGui::DockBuilderSplitNode(
-                            side, ImGuiDir_Down, 0.40f, nullptr, &side);
-                        for (const char* w : central_windows)
-                            if (fresh || unseen(w))
-                                ImGui::DockBuilderDockWindow(w, central);
-                        for (const char* w : side_top_windows)
-                            if (fresh || unseen(w))
-                                ImGui::DockBuilderDockWindow(w, side);
-                        for (const char* w : side_bot_windows)
-                            if (fresh || unseen(w))
-                                ImGui::DockBuilderDockWindow(w, side_bot);
-                        ImGui::DockBuilderFinish(dock_id);
-                    }
-                    dock_layout_built_ = true;
-                }
+                // Docking by role (ui/dock_layout.h): windows the applet
+                // hinted, or began without a hint, and that have no saved
+                // layout are placed the first time they appear. A layout the
+                // user arranged is never touched.
+                dock_layout_.apply(dock_id);
 
                 double now = glfwGetTime();
                 int ww = 0, wh = 0;
@@ -373,7 +317,9 @@ public:
                 const caliper_host::UiCheckpoint ui_checkpoint =
                     caliper_host::UiCheckpoint::store();
                 double t0 = glfwGetTime();
+                dock_layout_.begin_applet_frame();
                 bool alive = loader_.frame(active_applet_, fi);
+                dock_layout_.end_applet_frame();
                 watchdog_.feed((glfwGetTime() - t0) * 1000.0);
 
                 if (!alive) {                 // quarantined mid-frame
@@ -524,6 +470,7 @@ public:
         // writes land safely.
         caliper_host::host_job_system().cancel_all_and_join();
         loader_.close_all();
+        caliper_host::set_dock_hint_sink(nullptr, nullptr);
         // An attached session's views go while the bridge still has the
         // renderer; the loop ended after rendering the last frame that drew them.
         live_.detach();
@@ -879,7 +826,7 @@ private:
         std::string reason;   // the message without its "failed: " prefix
     };
     std::vector<FailedJob> failed_jobs_;   // oldest first; see note_failed_jobs
-    bool dock_layout_built_ = false;  // first-run applet dock layout attempted
+    caliper_host::DockLayout dock_layout_;  // applet windows docked by role
     bool popup_open_prev_ = false;    // a popup was open at the end of last frame
     // F4 Attach to process: the live sessions the landing lists, the one
     // attached session (hosted core) and what Activity names it by.

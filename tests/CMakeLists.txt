@@ -57,6 +57,9 @@ target_sources(caliper_tests PRIVATE test_loader.cpp)
 # UI recovery after an applet fault (src/host/ui/ui_recovery.h, header-only):
 # headless ImGui/ImPlot/ImPlot3D contexts handed to the throwing fixture.
 target_sources(caliper_tests PRIVATE test_ui_recovery.cpp)
+# Docking by role on the applet page (src/host/ui/dock_layout.h, header-only)
+# on a headless ImGui context.
+target_sources(caliper_tests PRIVATE test_dock_layout.cpp)
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)

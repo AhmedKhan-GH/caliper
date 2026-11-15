@@ -357,6 +357,7 @@ void InstanceScopeApplet::draw_ui() {
     // the HUD height and never leave >=64px for create_view (docked layouts
     // override this harmlessly).
     ImGui::SetNextWindowSize(ImVec2(1120, 860), ImGuiCond_FirstUseEver);
+    caliper::ui::dock_hint(st->host, "InstanceScope", CALIPER_DOCK_CENTRAL);
     ImGui::Begin("InstanceScope");
 
     // ---- the hero pitch: BIG, front and center ----
