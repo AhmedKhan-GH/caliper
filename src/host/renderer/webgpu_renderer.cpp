@@ -1,4 +1,4 @@
-// webgpu_renderer.cpp: the web viewer spike's WebGPU backend (see
+// webgpu_renderer.cpp: the browser's WebGPU backend (see
 // webgpu_renderer.h). Browser-only: it targets Emscripten's emdawnwebgpu port,
 // so the surface is a canvas, presentation happens when the frame callback
 // returns to the browser, and every completion is a callback, never a wait.
@@ -172,7 +172,7 @@ void WebGpuRenderer::render(int fb_w, int fb_h) {
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
     wgpuQueueSubmit(queue_, 1, &cmd);
 
-    // Submit -> done latency of this frame's work (spike instrumentation).
+    // Submit -> done latency of this frame's work (instrumentation).
     // No present call: the browser presents the canvas when this callback
     // returns to its event loop.
     WGPUQueueWorkDoneCallbackInfo cb = WGPU_QUEUE_WORK_DONE_CALLBACK_INFO_INIT;
@@ -265,8 +265,8 @@ bool WebGpuRenderer::tex_upload_rgba8(uint64_t id, const void* data, int w, int 
 
 // The ImGui backend caches one bind group per texture view and never learns
 // that a view was released; a later view at the same address would reuse a
-// stale bind group. The spike never releases a texture while drawing it, but
-// a full viewer must invalidate that cache here.
+// stale bind group. The views never release a texture while drawing it; a
+// release that could race a draw must invalidate that cache here.
 void WebGpuRenderer::tex_release(uint64_t id) {
     auto it = tex_.find(id);
     if (it == tex_.end()) return;
@@ -356,7 +356,7 @@ bool WebGpuRenderer::tex_update_mapped_from_host(uint64_t id, const float* data,
     return true;
 }
 
-// ---- spike instrumentation ---------------------------------------------------
+// ---- instrumentation -----------------------------------------------------------
 void WebGpuRenderer::readback_async(uint64_t id, std::function<void(std::vector<uint8_t>)> done) {
     Tex* t = find(id);
     if (!t) { done({}); return; }

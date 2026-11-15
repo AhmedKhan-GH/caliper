@@ -1,6 +1,6 @@
 # Web viewer spike
 
-This page reports a spike that asked one question. Can a WebGPU backend behind `HostRenderer`, together with an Emscripten build of Caliper's view layer (Dear ImGui, ImPlot and the live views), draw one heatmap and one series in a browser? The answer is yes. The prototype lives in `spikes/web-viewer/`, outside the main build, and this page records what it proved, what it cost and what the full [web viewer](streaming-and-embedding.md#the-web-viewer) still needs.
+This page reports a spike that asked one question. Can a WebGPU backend behind `HostRenderer`, together with an Emscripten build of Caliper's view layer (Dear ImGui, ImPlot and the live views), draw one heatmap and one series in a browser? The answer is yes. The prototype has since become the `web/wasm/` target, outside the main native build, and this page records what it proved, what it cost and what the full [web viewer](streaming-and-embedding.md#the-web-viewer) still needs.
 
 ## The result
 
@@ -21,16 +21,16 @@ The following was not verified: keyboard and text input, canvas resizing, HiDPI 
 - **WebGPU binding.** Emscripten's `emdawnwebgpu` port (`--use-port=emdawnwebgpu`, Dawn package v20260423.175430 as pinned by the SDK). This SDK no longer has the older `-sUSE_WEBGPU` binding, so `emdawnwebgpu` is the only choice. It provides the standard `webgpu.h`, which is also what Dawn offers natively, so the same backend code could later serve the native Dawn fallback that the [roadmap](roadmap.md#renderers) plans.
 - **Window and input.** Emscripten's built-in GLFW (`-sUSE_GLFW=3`) with `GLFW_NO_API`, so the canvas gets a WebGPU context, and the unchanged `imgui_impl_glfw` for input. This keeps the native shape of `HostRenderer::init(GLFWwindow*)`.
 - **Start-up.** A browser hands out a WebGPU device only through promises. The page host requests the adapter and the device with callbacks and starts the frame loop from the device callback, so the build needs neither Asyncify nor JSPI.
-- **The page host** (`spikes/web-viewer/src/web_main.cpp`) plays the part the Caliper app plays natively. It owns the GLFW window, the ImGui and ImPlot contexts and the renderer, and draws the view layer through a hosted core (`caliper_core_create_hosted` and `caliper_core_hosted_frame`).
-- **The renderer** (`spikes/web-viewer/src/webgpu_renderer.cpp`) implements the swapchain path (`init`, `new_frame`, `render`, `shutdown`) through `imgui_impl_wgpu`, RGBA8 textures, and the WGSL colormap. Everything else keeps the interface's default refusal: there are no device tensors, no imported allocations, no geometry and no embed canvas.
+- **The page host** (`web/wasm/src/main.cpp`) plays the part the Caliper app plays natively. It owns the GLFW window, the ImGui and ImPlot contexts and the renderer, and draws the view layer through a hosted core (`caliper_core_create_hosted` and `caliper_core_hosted_frame`).
+- **The renderer** (`src/host/renderer/webgpu_renderer.cpp`) implements the swapchain path (`init`, `new_frame`, `render`, `shutdown`) through `imgui_impl_wgpu`, RGBA8 textures, and the WGSL colormap. Everything else keeps the interface's default refusal: there are no device tensors, no imported allocations, no geometry and no embed canvas.
 - **One additive seam.** The tensor bridge chooses its GPU path by the tensor's device, and in a browser every snapshot is host memory, so the bridge would always colormap on the CPU. The spike adds `HostRenderer::tex_update_mapped_from_host`, which defaults to `false`, and the bridge tries it before CPU staging. Native backends do not override it, so their behaviour is unchanged.
 - **Release flags.** `-O3`, Closure over the JavaScript glue, `-sFILESYSTEM=0` (the viewer never opens a file) and `-sALLOW_MEMORY_GROWTH=1`.
 
 To build and check it, with an activated emsdk and with cmake and ninja on the path:
 
 ```sh
-EMSDK=<emsdk> spikes/web-viewer/build.sh <build dir> Release
-cd spikes/web-viewer/test && npm install
+EMSDK=<emsdk> web/wasm/build.sh <build dir> Release
+cd web/wasm/test && npm install
 node check.mjs <build dir> <screenshot.png> swiftshader 600
 node check.mjs <build dir> <screenshot.png> metal 600 1024x1024
 ```
@@ -44,12 +44,12 @@ The check serves the build from a static server bound to 127.0.0.1, waits for th
 | `src/host/live/live_views.cpp` | Unchanged | Its own non-Apple block stands in for `live_views_metal.mm` |
 | `src/host/live/live_views_draw.cpp` | Unchanged | |
 | `src/host/live/live_unsupported.cpp` | Unchanged | The existing stand-in for `live_core.cpp` and `live_attach.cpp` on platforms without the shared-memory session |
-| `src/host/embed/embed_core.cpp` | Unchanged | Its create, shutdown and applet paths reference 22 native-only symbols (the applet loader, the service registry, the job system, the app paths and the core lifecycle). The hosted core never reaches them, so the linker drops them |
+| `src/host/embed/embed_core.cpp` | Unchanged in the spike, split since | Its create, shutdown and applet paths reference 22 native-only symbols (the applet loader, the service registry, the job system, the app paths and the core lifecycle). In the spike the hosted core never reached them and the linker dropped them. The views and the hosted core now live in `embed_views.cpp`, which the browser build compiles without `embed_core.cpp` |
 | `src/host/tensor_bridge.cpp` | Changed, 7 lines | Tries the new hook before CPU staging |
 | `src/host/renderer/host_renderer.h` | Changed, 13 lines | Adds `tex_update_mapped_from_host` with a default of `false` |
-| `src/host/host_services.cpp` | Replaced | `spikes/web-viewer/src/web_stubs.cpp` provides the three functions the views use (`services_set_renderer`, `services_renderer`, `services_bridge`); the real file pulls in DuckDB, the stores and the job system |
+| `src/host/host_services.cpp` | Replaced | `web/wasm/src/web_services.cpp` provides the three functions the views use (`services_set_renderer`, `services_renderer`, `services_bridge`); the real file pulls in DuckDB, the stores and the job system |
 | `live_core.cpp`, `live_attach.cpp`, `live_client.mm`, `live_session.mm`, `live_activity.mm`, `live_views_metal.mm`, `viewer_main.mm` | Not compiled | The shared-memory transport and the macOS viewer shell |
-| `metal_renderer.mm`, `vulkan_renderer.cpp`, `gl_renderer.cpp` | Not compiled | Replaced by `spikes/web-viewer/src/webgpu_renderer.cpp` |
+| `metal_renderer.mm`, `vulkan_renderer.cpp`, `gl_renderer.cpp` | Not compiled | Replaced by `src/host/renderer/webgpu_renderer.cpp` |
 | Dear ImGui, ImPlot, `imgui_impl_wgpu`, `imgui_impl_glfw` | Unchanged | ImPlot3D, the node editor and the text editor were not needed |
 
 The plan says the web viewer has no tensor bridge. Today the heatmap and image live views are built on the embed v1.2 tensor views, which go through `TensorBridge`, so the spike kept the bridge. It is plain C++ and compiled with only the new hook added. Dropping it would mean giving the texture live views their own path to the renderer.

@@ -930,8 +930,8 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
         const uint32_t* lut = e.mapped ? colormap_lut(e.colormap) : nullptr;
         return renderer_.tex_update_from_device(e.tex, *t, lut, e.vmin, e.vmax);
     }
-    // A backend that colormaps host memory on its GPU (the web viewer spike's
-    // WebGPU renderer) takes the f32 bytes as they are; every other backend
+    // A backend that colormaps host memory on its GPU (the browser's WebGPU
+    // renderer, web/wasm) takes the f32 bytes as they are; every other backend
     // returns false and keeps the CPU staging below.
     if (e.mapped &&
         renderer_.tex_update_mapped_from_host(e.tex, (const float*)t->data, e.w, e.h,

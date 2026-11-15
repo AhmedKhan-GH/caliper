@@ -1,11 +1,11 @@
-// Headless check of the web viewer spike (docs/plans/web-viewer-spike.md).
+// Headless check of Caliper's views in the browser (web/wasm/README.md).
 //
 //   node check.mjs <site dir> <screenshot.png> [swiftshader|metal] [frames] [WxH]
 //
-// Serves <site dir> (index.html, caliper_web_spike.js and .wasm) from a static
+// Serves <site dir> (demo.html, caliper-views.js and .wasm) from a static
 // server bound to 127.0.0.1, loads it in headless Chromium with WebGPU enabled,
 // waits until the module has drawn `frames` frames and finished its colormap
-// check, prints the module's own report (globalThis.caliperSpike) as JSON and
+// check, prints the module's own report (globalThis.caliperViews?.caliperStats) as JSON and
 // saves a screenshot. It then moves the mouse over the series plot and saves a
 // second screenshot (<screenshot>-hover.png), which shows the plot's hover
 // tooltip if input reaches ImGui. WxH sets the heatmap size (default 256x192).
@@ -33,7 +33,7 @@ const wantFrames = Number(framesArg);
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm' };
 const server = http.createServer((req, res) => {
   const name = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname);
-  const file = path.join(siteDir, name === '/' ? 'index.html' : name);
+  const file = path.join(siteDir, name === '/' ? 'demo.html' : name);
   if (!file.startsWith(path.resolve(siteDir)) || !fs.existsSync(file)) {
     res.writeHead(404).end();
     return;
@@ -74,10 +74,10 @@ try {
   });
   console.log('navigator.gpu:', JSON.stringify(gpu));
   await page.waitForFunction(
-    (n) => globalThis.caliperSpike && (globalThis.caliperSpike.error ||
-      (globalThis.caliperSpike.frames >= n && globalThis.caliperSpike.checkState === 2)),
+    (n) => globalThis.caliperViews?.caliperStats && (globalThis.caliperViews?.caliperStats.error ||
+      (globalThis.caliperViews?.caliperStats.frames >= n && globalThis.caliperViews?.caliperStats.checkState === 2)),
     wantFrames, { timeout: 120000, polling: 250 });
-  report = await page.evaluate(() => globalThis.caliperSpike);
+  report = await page.evaluate(() => globalThis.caliperViews?.caliperStats);
   await page.screenshot({ path: shotPath });
   // Hover the series plot (the second window, tiled to the right of the heatmap).
   await page.mouse.move(470, 140);
@@ -85,7 +85,7 @@ try {
   await page.screenshot({ path: shotPath.replace(/\.png$/, '') + '-hover.png' });
 } catch (e) {
   error = String(e);
-  report = await page.evaluate(() => globalThis.caliperSpike ?? null).catch(() => null);
+  report = await page.evaluate(() => globalThis.caliperViews?.caliperStats ?? null).catch(() => null);
   await page.screenshot({ path: shotPath }).catch(() => {});
 }
 console.log('report:', JSON.stringify(report, null, 2));

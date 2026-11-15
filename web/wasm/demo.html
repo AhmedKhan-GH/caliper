@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caliper views</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #181715; overflow: hidden; }
+  canvas { display: block; width: 1280px; height: 800px; }
+</style>
+</head>
+<body>
+<canvas id="views" width="1280" height="800" tabindex="-1"></canvas>
+<script type="module">
+  // Loads the module beside this page onto the canvas. The module publishes
+  // its counters as module.caliperStats; the tests read them.
+  import createCaliperViews from './caliper-views.js';
+  globalThis.caliperViews = await createCaliperViews({
+    canvas: document.getElementById('views'),
+    print: (t) => console.log(t),
+    printErr: (t) => console.error(t),
+  });
+</script>
+</body>
+</html>

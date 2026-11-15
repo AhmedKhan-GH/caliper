@@ -1,5 +1,4 @@
-// web_main.cpp: the page host of the web viewer spike
-// (docs/plans/web-viewer-spike.md). It plays the part the Caliper app plays
+// main.cpp: the page host of Caliper's views in the browser (web/wasm). It plays the part the Caliper app plays
 // natively: it owns the window (a canvas through Emscripten's GLFW), the ImGui
 // and ImPlot contexts and the renderer, and it draws Caliper's real view layer
 // through a hosted core (caliper_core_create_hosted). A synthetic source
@@ -12,7 +11,7 @@
 // through promises: main() requests the adapter, the adapter callback requests
 // the device, and the device callback builds everything and starts the frame
 // loop. No Asyncify is needed.
-#include "webgpu_renderer.h"
+#include "renderer/webgpu_renderer.h"
 
 #include "caliper/embed.h"
 #include "caliper/live_views.h"
@@ -147,15 +146,15 @@ struct Page {
 };
 Page g;
 
-// The module's report to the page and the test: globalThis.caliperSpike. Keys
+// The module's report to the page and the tests: Module.caliperStats. Keys
 // are passed as strings so that Closure's property renaming leaves them alone.
 void put(const char* key, double v) {
-    EM_ASM({ (globalThis["caliperSpike"] = globalThis["caliperSpike"] || {})[UTF8ToString($0)] = $1; },
+    EM_ASM({ (Module["caliperStats"] = Module["caliperStats"] || {})[UTF8ToString($0)] = $1; },
            key, v);
 }
 void put(const char* key, const char* v) {
     EM_ASM({
-        (globalThis["caliperSpike"] = globalThis["caliperSpike"] || {})[UTF8ToString($0)] =
+        (Module["caliperStats"] = Module["caliperStats"] || {})[UTF8ToString($0)] =
             UTF8ToString($1);
     }, key, v);
 }
@@ -196,7 +195,7 @@ void publish() {
 
 void fail(const std::string& why) {
     g.error = why;
-    std::fprintf(stderr, "[spike] %s\n", why.c_str());
+    std::fprintf(stderr, "[caliper-views] %s\n", why.c_str());
     publish();
 }
 
@@ -292,7 +291,7 @@ void frame() {
     // The page host's own status line (not a live view).
     ImGui::SetNextWindowPos(ImVec2(8.0f, (float)win_h - 88.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)win_w - 16.0f, 80.0f), ImGuiCond_Always);
-    ImGui::Begin("web viewer spike", nullptr,
+    ImGui::Begin("status", nullptr,
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
     ImGui::Text("adapter: %s", g.adapter_text.c_str());
     const double n = g.cpu_n ? (double)g.cpu_n : 1.0;
@@ -343,7 +342,7 @@ void start() {
 
     if (!glfwInit()) return fail("glfwInit failed");
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // the canvas gets a WebGPU context
-    g.window = glfwCreateWindow(1280, 800, "Caliper web viewer spike", nullptr, nullptr);
+    g.window = glfwCreateWindow(1280, 800, "Caliper views", nullptr, nullptr);
     if (!g.window) return fail("glfwCreateWindow failed");
 
     ImGui::CreateContext();
@@ -352,9 +351,9 @@ void start() {
     io.IniFilename = nullptr;   // no file system in the page
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOther(g.window, true);
-    ImGui_ImplGlfw_InstallEmscriptenCallbacks(g.window, "#canvas");
+    ImGui_ImplGlfw_InstallEmscriptenCallbacks(g.window, "!canvas");
 
-    auto r = std::make_unique<WebGpuRenderer>(g.instance, g.adapter, g.device, "#canvas");
+    auto r = std::make_unique<WebGpuRenderer>(g.instance, g.adapter, g.device, "!canvas");
     if (!r->init(g.window)) return fail("WebGPU renderer init failed");
     g.renderer = r.get();
     caliper_host::services_set_renderer(g.renderer);
@@ -399,6 +398,9 @@ void on_adapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUString
 }  // namespace
 
 int main() {
+    // "!canvas" names this module instance's own canvas (Module.canvas), so
+    // several instances on one page never look a canvas up in the document.
+    EM_ASM({ specialHTMLTargets["!canvas"] = Module["canvas"]; });
     const int w = EM_ASM_INT({ return Number(new URLSearchParams(location.search).get('w')) || 0; });
     const int h = EM_ASM_INT({ return Number(new URLSearchParams(location.search).get('h')) || 0; });
     if (w > 0 && h > 0 && w <= 4096 && h <= 4096) { g_heat_w = w; g_heat_h = h; }

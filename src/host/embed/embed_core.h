@@ -7,6 +7,7 @@
 
 #include "caliper/embed.h"
 
+#include <atomic>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -70,7 +71,11 @@ struct CaliperLiveViewsState;
 // l1-survey §7 / the report). That is why v0 is one-core-per-process.
 struct CaliperCore {
     std::unique_ptr<caliper_host::HostRenderer> renderer;
-    std::unique_ptr<caliper_host::AppletLoader> loader;
+    // The deleter is a function pointer set where the loader is made
+    // (embed_core.cpp), so destroying a core without one (a hosted core, the
+    // browser's views) references nothing of the applet loader.
+    std::unique_ptr<caliper_host::AppletLoader, void (*)(caliper_host::AppletLoader*)> loader{
+        nullptr, nullptr};
     caliper_host::FrameWatchdog                 watchdog;
 
     CaliperLogFn   log_fn = nullptr;
@@ -115,6 +120,18 @@ struct CaliperCore {
     }
     void fail(const std::string& why) { last_error = why; log(2, why); }
 };
+
+// The one-core-per-process slot (embed_views.cpp). caliper_core_create and
+// caliper_core_create_hosted claim it with a compare-exchange from nullptr to
+// the reserved sentinel before building anything, publish the built core, and
+// release it to nullptr on failure or destroy.
+std::atomic<CaliperCore*>& caliper_core_slot();
+inline CaliperCore* caliper_core_slot_reserved() { return reinterpret_cast<CaliperCore*>(1); }
+
+// v1.2 view hooks (embed_views.cpp) for embed_core.cpp: draw every v1.2 view
+// into the current ImGui frame; release every v1.2 view through the bridge.
+void caliper_embed_views_draw(CaliperCore* core);
+void caliper_embed_views_destroy_all(CaliperCore* core);
 
 // Live-module hooks called by embed_core.cpp (defined in src/host/live/
 // live_core.cpp). frame: draw the live typed views into the current ImGui

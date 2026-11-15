@@ -1,7 +1,7 @@
 {
-  "name": "caliper-web-viewer-spike-test",
+  "name": "caliper-views-wasm-test",
   "private": true,
-  "description": "Headless Chromium check of the web viewer spike (docs/plans/web-viewer-spike.md).",
+  "description": "Headless Chromium checks of Caliper's views in the browser (web/wasm).",
   "type": "module",
   "scripts": {
     "check": "node check.mjs"

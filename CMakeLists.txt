@@ -474,6 +474,7 @@ add_library(libcaliper STATIC
     src/host/renderer/gl_renderer.cpp
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
+    src/host/embed/embed_views.cpp
     ${CALIPER_LIVE_SOURCES}
 )
 if(APPLE)

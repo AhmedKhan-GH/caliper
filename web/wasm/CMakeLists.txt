@@ -1,0 +1,84 @@
+# web/wasm: Caliper's view layer compiled to WebAssembly and drawn by the
+# WebGPU HostRenderer (src/host/renderer/webgpu_renderer.*). It is its own
+# Emscripten project, not part of the native build; web/wasm/README.md has the
+# build command:
+#
+#   EMSDK=<emsdk> web/wasm/build.sh <build dir>
+#
+# The output is caliper-views.wasm and its JavaScript glue caliper-views.js,
+# an ES module whose default export is createCaliperViews(moduleArgs).
+cmake_minimum_required(VERSION 3.22)
+project(caliper_views_web C CXX)
+
+if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR "web/wasm builds with Emscripten only (emcmake cmake ...)")
+endif()
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+get_filename_component(CALIPER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(TP "${CALIPER_ROOT}/third_party")
+
+option(CALIPER_WEB_CLOSURE "Run the Closure compiler over the JavaScript glue (Release)" ON)
+
+# ---- the view layer, without the native embed core ---------------------------
+# The live views, the embed v1.2 views and the hosted core (embed_views.cpp,
+# split out of embed_core.cpp so the applet loader, the service registry, the
+# job system and the app paths stay out), the tensor bridge, the WebGPU
+# renderer, Dear ImGui and ImPlot. live_unsupported.cpp is the existing
+# stand-in for the shared-memory attach, which a browser does not have.
+add_library(caliper_view_layer STATIC
+    ${CALIPER_ROOT}/src/host/live/live_views.cpp
+    ${CALIPER_ROOT}/src/host/live/live_views_draw.cpp
+    ${CALIPER_ROOT}/src/host/live/live_unsupported.cpp
+    ${CALIPER_ROOT}/src/host/embed/embed_views.cpp
+    ${CALIPER_ROOT}/src/host/tensor_bridge.cpp
+    ${CALIPER_ROOT}/src/host/renderer/webgpu_renderer.cpp
+    ${TP}/imgui/imgui.cpp
+    ${TP}/imgui/imgui_draw.cpp
+    ${TP}/imgui/imgui_tables.cpp
+    ${TP}/imgui/imgui_widgets.cpp
+    ${TP}/imgui/backends/imgui_impl_wgpu.cpp
+    ${TP}/implot/implot.cpp
+    ${TP}/implot/implot_items.cpp
+)
+target_include_directories(caliper_view_layer PUBLIC
+    ${CALIPER_ROOT}/src/host
+    ${CALIPER_ROOT}/src
+    ${CALIPER_ROOT}/include
+    ${CALIPER_ROOT}/sdk/include
+    ${TP}/imgui
+    ${TP}/imgui/backends
+    ${TP}/implot)
+target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
+# The WebGPU port must be named when compiling too: it provides webgpu.h.
+target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
+
+# ---- the module ----------------------------------------------------------------
+add_executable(caliper-views
+    src/main.cpp
+    src/web_services.cpp
+    ${TP}/imgui/backends/imgui_impl_glfw.cpp
+)
+target_link_libraries(caliper-views PRIVATE caliper_view_layer)
+target_link_options(caliper-views PRIVATE
+    --use-port=emdawnwebgpu
+    -sUSE_GLFW=3
+    -sMODULARIZE=1
+    -sEXPORT_ES6=1
+    -sEXPORT_NAME=createCaliperViews
+    -sENVIRONMENT=web
+    -sFILESYSTEM=0
+    -sALLOW_MEMORY_GROWTH=1
+    -sERROR_ON_UNDEFINED_SYMBOLS=1
+    "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$specialHTMLTargets"
+)
+if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_link_options(caliper-views PRIVATE --closure=1)
+endif()
+
+add_custom_command(TARGET caliper-views POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/demo.html
+            $<TARGET_FILE_DIR:caliper-views>/demo.html)

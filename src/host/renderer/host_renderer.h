@@ -74,7 +74,7 @@ public:
                                         const uint32_t* lut256 /*nullable*/,
                                         float vmin, float vmax) = 0;
 
-    // Web viewer spike (docs/plans/web-viewer-spike.md), additive: colormap a
+    // The browser's views (web/wasm), additive: colormap a
     // HOST-memory row-major (h,w) f32 buffer into texture `tex` on the GPU. A
     // browser receives every snapshot as bytes in its own memory, so the
     // bridge's device path above (keyed on the tensor's device) never runs

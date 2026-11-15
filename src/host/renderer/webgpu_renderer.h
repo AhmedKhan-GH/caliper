@@ -1,6 +1,6 @@
-// webgpu_renderer.h: the web viewer spike's WebGPU backend behind
-// HostRenderer (docs/plans/web-viewer-spike.md). It runs on the browser's own
-// WebGPU through Emscripten's emdawnwebgpu port (webgpu.h).
+// webgpu_renderer.h: the WebGPU backend behind HostRenderer for Caliper's
+// views in the browser (web/wasm). It runs on the browser's own WebGPU through
+// Emscripten's emdawnwebgpu port (webgpu.h).
 //
 // Only what the heatmap and series live views call is implemented: the
 // swapchain path (init/new_frame/render/shutdown) drawing ImGui through
@@ -8,7 +8,7 @@
 // tex_update_mapped_from_host. Everything else keeps the interface's default,
 // which is an honest refusal: no device tensors, no imported allocations, no
 // geometry (so the live views refuse POINTS with their own reason), no embed
-// canvas. Each such path is marked "not implemented in the spike" below.
+// canvas. Each such path is marked "not in the browser renderer" below.
 #pragma once
 
 #include "renderer/host_renderer.h"
@@ -43,7 +43,7 @@ public:
     void tex_release(uint64_t tex) override;
     uint64_t tex_imtexture_id(uint64_t tex) override;
 
-    // Not implemented in the spike: a browser has no device tensors (every
+    // Not in the browser renderer: a browser has no device tensors (every
     // snapshot arrives as bytes in WebAssembly memory), so the bridge never
     // reaches this with a payload the renderer could read in place.
     bool tex_update_from_device(uint64_t, const CaliperTensor&, const uint32_t*, float,
@@ -58,7 +58,7 @@ public:
     // GLFW_NO_API is set by the page host before glfwCreateWindow.
     void window_hints() override {}
 
-    // ---- spike instrumentation (not part of HostRenderer) -----------------
+    // ---- instrumentation (not part of HostRenderer) ------------------------
     // Copy texture `tex` (renderer id or ImTextureID) back to tightly packed
     // RGBA8 and hand it to `done` once the GPU finished (asynchronous: the
     // browser cannot block on a buffer map). `done` gets an empty vector on
