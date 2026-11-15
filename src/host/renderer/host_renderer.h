@@ -74,6 +74,19 @@ public:
                                         const uint32_t* lut256 /*nullable*/,
                                         float vmin, float vmax) = 0;
 
+    // Web viewer spike (docs/plans/web-viewer-spike.md), additive: colormap a
+    // HOST-memory row-major (h,w) f32 buffer into texture `tex` on the GPU. A
+    // browser receives every snapshot as bytes in its own memory, so the
+    // bridge's device path above (keyed on the tensor's device) never runs
+    // there; this is the browser's counterpart. Default false: the bridge then
+    // colormaps on the CPU exactly as before, which every native backend keeps.
+    virtual bool tex_update_mapped_from_host(uint64_t /*tex*/, const float* /*src*/,
+                                             int /*w*/, int /*h*/,
+                                             const uint32_t* /*lut256*/,
+                                             float /*vmin*/, float /*vmax*/) {
+        return false;
+    }
+
     // Diagnostic: which path the last device update took ("compute"/"blit" on
     // Metal). Lifted onto the interface (C2 review) so the bridge and gfx tests
     // read it without dynamic_cast; GL and other CPU-staged backends default.
