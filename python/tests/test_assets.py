@@ -41,6 +41,18 @@ def test_assets_are_found_in_the_source_tree(monkeypatch):
     assert b"caliper-view" in _assets.read_asset("index.html")
 
 
+def test_the_package_ships_the_wasm_views(monkeypatch):
+    monkeypatch.delenv("CALIPER_WEB_DIR", raising=False)
+    names = _assets.asset_names()
+    for name in _assets.WASM_VIEWS:
+        assert name in names
+    assert _assets.read_asset("caliper-views.wasm")[:4] == b"\0asm"
+    loader = _assets.read_asset("caliper-views-loader.js")
+    assert b"export async function mountCaliperViews" in loader
+    assert b"export const CALIPER_VIEWS_KINDS" in loader
+    assert b"createCaliperViews" in _assets.read_asset("caliper-views.js")
+
+
 def test_assets_are_found_with_pythonpath(tmp_path):
     # Imported from the source tree (PYTHONPATH=python) in a fresh interpreter,
     # from an unrelated working directory.
