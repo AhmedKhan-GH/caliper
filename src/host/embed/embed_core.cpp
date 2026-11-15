@@ -1097,3 +1097,11 @@ int caliper_core_colormap_lut(int32_t colormap, uint32_t out256[256]) {
     std::memcpy(out256, lut, 256 * sizeof(uint32_t));
     return 1;
 }
+
+// ---------------------------------------------------------------------------
+// version (v1.4): the encoding of the header this library was built from, so an
+// embedder can compare it with the CALIPER_EMBED_VERSION it compiled against.
+// ---------------------------------------------------------------------------
+uint32_t caliper_embed_api_version(void) {
+    return CALIPER_EMBED_VERSION;
+}

@@ -128,6 +128,22 @@ int bright_pixels(const std::vector<uint8_t>& px) {
 
 }  // namespace
 
+// Defined in embed_c_check.c, which includes the embed headers as C.
+extern "C" uint32_t caliper_embed_c_check_version(void);
+
+TEST_CASE("embed/version: the library reports the version of its header; no core needed") {
+    const uint32_t v = caliper_embed_api_version();
+    CHECK(v == (uint32_t)CALIPER_EMBED_VERSION);
+    CHECK((v >> 16) == (uint32_t)CALIPER_EMBED_API_VERSION);
+    CHECK(((v >> 8) & 0xffu) == (uint32_t)CALIPER_EMBED_VERSION_MINOR);
+    CHECK((v & 0xffu) == (uint32_t)CALIPER_EMBED_VERSION_PATCH);
+    // The encoding is part of the interface: (major << 16) | (minor << 8) | patch.
+    CHECK(CALIPER_EMBED_MAKE_VERSION(1, 4, 0) == 0x010400);
+    CHECK(CALIPER_EMBED_MAKE_VERSION(2, 0, 3) == 0x020003);
+    // The call has C linkage and is reachable from C.
+    CHECK(caliper_embed_c_check_version() == v);
+}
+
 TEST_CASE("embed/gate: one core per process; create-destroy cycles twice") {
     CaliperCoreDesc d = base_desc();
 

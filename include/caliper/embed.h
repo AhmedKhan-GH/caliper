@@ -409,6 +409,43 @@ int caliper_core_view_readback(CaliperCore* core, const char* name, void* buf, s
  * Each entry packs r | g<<8 | b<<16 | a<<24. Needs no core; callable from any thread. */
 int caliper_core_colormap_lut(int32_t colormap, uint32_t out256[256]);
 
+/* ---------------------------------------------------------------------------
+ * v1.4 — the version call. Additive: no struct changed, so
+ * CALIPER_EMBED_API_VERSION stays 1.
+ * ---------------------------------------------------------------------------
+ * CALIPER_EMBED_VERSION is the version of THIS header, encoded as
+ * (major << 16) | (minor << 8) | patch:
+ *   - major is CALIPER_EMBED_API_VERSION, which bumps when a struct grows (the
+ *     struct_size gate above);
+ *   - minor counts the additive sections on that major: v1.1 (services, data_dir,
+ *     log routing), v1.2 (tensor views), v1.3 (typed live views,
+ *     caliper/live_views.h) and v1.4 (this call). The next additive section
+ *     bumps it;
+ *   - patch counts library fixes that change no declaration.
+ * caliper_embed_api_version() returns the same encoding for the library the
+ * process loaded. An embedder built against this header runs on a library of
+ * the same major whose minor is at least CALIPER_EMBED_VERSION_MINOR:
+ *
+ *   uint32_t lib = caliper_embed_api_version();
+ *   if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
+ *       ((lib >> 8) & 0xff) < CALIPER_EMBED_VERSION_MINOR)
+ *       ... the library is of another major or older than this header.
+ *
+ * The macros are plain integer constant expressions, usable in #if. The call
+ * needs no core and is callable from any thread.
+ * ------------------------------------------------------------------------- */
+#define CALIPER_EMBED_MAKE_VERSION(major, minor, patch) \
+    (((major) << 16) | ((minor) << 8) | (patch))
+#define CALIPER_EMBED_VERSION_MAJOR CALIPER_EMBED_API_VERSION
+#define CALIPER_EMBED_VERSION_MINOR 4
+#define CALIPER_EMBED_VERSION_PATCH 0
+#define CALIPER_EMBED_VERSION                                   \
+    CALIPER_EMBED_MAKE_VERSION(CALIPER_EMBED_VERSION_MAJOR,     \
+                               CALIPER_EMBED_VERSION_MINOR,     \
+                               CALIPER_EMBED_VERSION_PATCH)
+
+uint32_t caliper_embed_api_version(void);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

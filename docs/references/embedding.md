@@ -17,11 +17,12 @@ category error, and the include topology rules it out.
 
 The embed ABI has run on both ecosystems: Metal on Apple Silicon and
 Vulkan with an `HWND` on Windows. `CALIPER_EMBED_API_VERSION` is 1. The labels
-v1.1, v1.2 and v1.3 in this page and in the headers name additive sections of that
-one version, not new version numbers. The
-additions since the first version (service access, per-core data root, applet
-log routing, built-in tensor views) are additive: no struct changed, so a caller
-built against the first header still links and runs.
+v1.1 to v1.4 in this page and in the headers name additive sections of that one
+version, and they are also its minor numbers: the interface is version 1.4.0
+([Versions](#versions)). The additions since the first version (service access,
+per-core data root, applet log routing, built-in tensor views, typed live views,
+the version call) are additive: no struct changed, so a caller built against the
+first header still links and runs.
 
 ## The core calls
 
@@ -78,6 +79,7 @@ caliper_core_shutdown(core);
 | `caliper_core_get_service(core, id)` | The service table an applet receives for `id`, or `NULL` ([below](#reaching-services-from-a-host)). |
 | `caliper_core_view_tensor`, `_view_remove`, `_view_count`, `_view_info`, `_view_readback` | Built-in tensor views ([below](#built-in-tensor-views)). |
 | `caliper_core_colormap_lut(colormap, out256)` | The built-in 256-entry colormap table. Needs no core. |
+| `caliper_embed_api_version()` | The version of the interface the loaded library implements, encoded like `CALIPER_EMBED_VERSION` ([below](#versions)). Needs no core. |
 
 The typed live-view calls (`caliper_core_live_*`) are declared in
 `caliper/live_views.h` and described under [typed live views](#typed-live-views).
@@ -120,9 +122,6 @@ those canvases and never paints applet pixels.
   With `log_fn` unset both go to stderr. The core calls `log_fn` from the frame
   thread for its own lines and from any thread for applet lines, so a sink that
   touches shared UI state must marshal to its UI thread.
-- **There is no `api_version` getter.** The compile-time macros
-  `CALIPER_EMBED_API_VERSION` and `CALIPER_EMBED_HAVE_VIEWS` are the only
-  version signals.
 - **Window mode has no automated test.** The windowed canvas is checked by
   running `embed_host` on each platform. Automated byte-exactness rides the
   offscreen `read_pixels` tests, which pass on both backends.
@@ -132,6 +131,37 @@ those canvases and never paints applet pixels.
 
 All calls except the any-thread services below belong to one thread, the one
 that calls `caliper_core_frame`.
+
+## Versions
+
+`embed.h` versions the interface in one encoding,
+`(major << 16) | (minor << 8) | patch`, which `CALIPER_EMBED_MAKE_VERSION`
+builds:
+
+| Part | Macro | Meaning |
+|---|---|---|
+| Major | `CALIPER_EMBED_VERSION_MAJOR`, equal to `CALIPER_EMBED_API_VERSION` | Bumps when a struct grows, which the `struct_size` gate enforces. It is 1. |
+| Minor | `CALIPER_EMBED_VERSION_MINOR` | Counts the additive sections on that major: v1.1 (services, `data_dir`, log routing), v1.2 (tensor views), v1.3 (typed live views) and v1.4 (the version call). It is 4. |
+| Patch | `CALIPER_EMBED_VERSION_PATCH` | Counts library fixes that change no declaration. It is 0. |
+
+`CALIPER_EMBED_VERSION` is the version of the header an embedder compiled
+against, and `caliper_embed_api_version()` returns the version of the library
+the process loaded. The library returns the `CALIPER_EMBED_VERSION` of the
+header it was built from. An embedder runs on a library of the same major whose
+minor is at least the header's:
+
+```c
+uint32_t lib = caliper_embed_api_version();
+if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
+    ((lib >> 8) & 0xff) < CALIPER_EMBED_VERSION_MINOR) {
+    /* another major, or a library older than this header: do not embed it */
+}
+```
+
+The macros are integer constant expressions, so `#if` can test them, and the
+call needs no core and may run on any thread. `CALIPER_EMBED_HAVE_VIEWS`
+remains defined as 1 for code that tested for the views before the version
+call existed.
 
 ## Reaching services from a host
 

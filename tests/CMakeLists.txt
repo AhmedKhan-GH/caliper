@@ -278,7 +278,8 @@ endif()  # CALIPER_WITH_TORCH (caliper_torch_tests)
 # gfx suite when none is present: counted, exit 77 -> ctest "Skipped"); the
 # gate cases are GPU-free.
 # ---------------------------------------------------------------------------
-add_executable(caliper_embed_tests test_embed.cpp)
+# embed_c_check.c compiles the embed headers as C and checks the version macros.
+add_executable(caliper_embed_tests test_embed.cpp embed_c_check.c)
 # libcaliper ONLY (no CALIPER_DEPENDENCY_LIBS): this binary links exactly as a
 # third-party embedder (the Python extension) would, so it proves libcaliper's
 # own link interface is self-sufficient.
