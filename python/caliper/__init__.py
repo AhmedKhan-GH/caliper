@@ -43,6 +43,8 @@ from dataclasses import dataclass
 
 from ._convert import (CMAPS, SERIES_CAPACITY, check_range, cmap_index, plan_histogram,
                        plan_points, plan_series, plan_show)
+from . import _dataview
+from ._dataview import DataViewError
 from ._ring import (DEFAULT_RATE_HZ, KIND_HEATMAP, KIND_HISTOGRAM, KIND_IMAGE, KIND_POINTS,
                     KIND_SERIES, LOCK, Publisher, SnapshotRing, rate_interval)
 
@@ -217,6 +219,8 @@ def _dispatch(kind, name, rate, make, a, b, c, d, e):
                 continue
             if plan is None:
                 plan = make(a, b, c, d, e)
+                if plan is None:                 # a data view source without a tensor yet
+                    break
             take_call = getattr(ring, "take_call", None)   # the serve() route also wants the call
             if (take_call(name, plan, now, (a, b, c, d, e)) if take_call is not None
                     else ring.take(name, plan, now)):
@@ -244,7 +248,7 @@ def _cmap(cmap) -> int:
 # the calls
 # ---------------------------------------------------------------------------
 def show(t, name: str = "tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
-         _raw: bool = False):
+         dims=None, data_view=None, _raw: bool = False):
     """Show/update view ``name`` with tensor ``t``. Returns at once.
 
     * 2-D -> heatmap (float32; autoscaled on the GPU unless vmin/vmax given)
@@ -252,6 +256,10 @@ def show(t, name: str = "tensor", cmap="viridis", vmin=None, vmax=None, rate=Non
     * (C,H,W) other C -> channel mosaic heatmap;  (N,C,H,W) -> first item
     ``rate``: snapshots per second for this view (default 60, 0 = every call;
     the offscreen test mode defaults to every call).
+    ``dims``: one name per dimension of t (for an image, of all but the RGB(A)
+    one); the view then offers t as a source that a viewer can index, reduce
+    and tile, and shows its data view instead of the rules above.
+    ``data_view``: the view's default data view (see :func:`set_data_view`).
 
     Returns True if a snapshot was taken, False when the call was rate limited,
     the ring was full or nothing is attached; a :class:`ShowStats` in the
@@ -265,6 +273,9 @@ def show(t, name: str = "tensor", cmap="viridis", vmin=None, vmax=None, rate=Non
             break
     else:
         return False
+    if dims is not None or data_view is not None:
+        return _dispatch(KIND_HEATMAP, name, rate, _dv_show_plan, t, cm, vmin, vmax,
+                         (_raw, name, dims, data_view))
     return _dispatch(KIND_HEATMAP, name, rate, plan_show, t, cm, vmin, vmax, _raw)
 
 
@@ -273,10 +284,14 @@ def _points_plan(z, labels, classes, cm, rng):
 
 
 def points(z, labels=None, name: str = "points", classes=None, cmap="viridis", vmin=None,
-           vmax=None, rate=None):
+           vmax=None, rate=None, *, dims=None, data_view=None):
     """Scatter of ``z`` (N, 2) or (N, 3) (2-D: pan/zoom, 3-D: orbit), coloured by
     ``labels`` (N,): categorical with ``classes=K`` (labels 0..K-1), otherwise
-    colormapped over their range. Same return values as :func:`show`."""
+    colormapped over their range. ``dims``: one name per dimension of z but the
+    coordinates, ending with the point dimension, which makes z a source of
+    data views (labels follow the kept dimension, and above the budget points
+    and labels are sampled with a stride); ``data_view``: the default data
+    view. Same return values as :func:`show`."""
     _name_ok(name)
     cm = _cmap(cmap)
     if vmin is not None or vmax is not None:
@@ -286,6 +301,9 @@ def points(z, labels=None, name: str = "points", classes=None, cmap="viridis", v
             break
     else:
         return False
+    if dims is not None or data_view is not None:
+        return _dispatch(KIND_POINTS, name, rate, _dv_points_plan, z, labels, classes, cm,
+                         (vmin, vmax, name, dims, data_view))
     return _dispatch(KIND_POINTS, name, rate, _points_plan, z, labels, classes, cm, (vmin, vmax))
 
 
@@ -293,15 +311,20 @@ def _hist_plan(t, bins, _c, _d, _e):
     return plan_histogram(t, bins)
 
 
-def histogram(t, name: str = "histogram", bins: int = 64, rate=None):
+def histogram(t, name: str = "histogram", bins: int = 64, rate=None, *, dims=None,
+              data_view=None):
     """Histogram of every element of ``t`` over its [min, max], binned on the
-    tensor's device. Same return values as :func:`show`."""
+    tensor's device. ``dims`` and ``data_view`` as for :func:`show`; the
+    histogram bins the data view. Same return values as :func:`show`."""
     _name_ok(name)
     for r in _routes or _auto_routes():
         if r.transport.attached():
             break
     else:
         return False
+    if dims is not None or data_view is not None:
+        return _dispatch(KIND_HISTOGRAM, name, rate, _dv_hist_plan, t, bins, name, dims,
+                         data_view)
     return _dispatch(KIND_HISTOGRAM, name, rate, _hist_plan, t, bins, None, None, None)
 
 
@@ -341,14 +364,193 @@ def series(value, name: str = "series", rate=None):
 
 
 def watch(model, activations: bool = True, gradients: bool = False, every: int = 1,
-          include=None, rate=None):
+          include=None, rate=None, groups=True):
     """Show a module's activations (forward hooks, channel mosaics) and/or its
     parameter gradients (heatmaps) as views named ``<module>.act`` and
     ``<module>.<param>.grad``. Returns a handle; ``handle.remove()`` removes the hooks.
-    ``include``: module names / glob patterns, or a predicate(name, module)."""
+    ``include``: module names / glob patterns, or a predicate(name, module).
+    ``groups``: also offer the grouped views ``weights``, ``activations`` and
+    ``gradients``, one heatmap each whose data view picks the module or
+    parameter (a str prefixes their names with ``<str>.``; False: none)."""
     from ._watch import watch as _w
     return _w(model, activations=activations, gradients=gradients, every=every,
-              include=include, rate=rate)
+              include=include, rate=rate, groups=groups)
+
+
+# ---------------------------------------------------------------------------
+# data views: which data travels (a slice, selection, projection or
+# aggregation of a tensor, computed on its device; see caliper._dataview)
+# ---------------------------------------------------------------------------
+__all__ += ["offer", "update", "data_view", "set_data_view", "DataViewError"]
+
+_DV_KINDS = {"heatmap": KIND_HEATMAP, "image": KIND_IMAGE, "points": KIND_POINTS,
+             "histogram": KIND_HISTOGRAM}
+_DV_OPTIONS = {"heatmap": ("cmap", "vmin", "vmax"), "image": (),
+               "points": ("labels", "classes", "cmap", "vmin", "vmax"), "histogram": ("bins",)}
+
+
+def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=None, rate=None,
+          **options):
+    """Offer ``sources`` as the sources of view ``name``; a viewer, or
+    :func:`set_data_view`, picks one of them and a data view of it.
+
+    ``sources`` maps source names to tensors (read at each snapshot, so a tensor
+    updated in place stays current) or to callables that return the current
+    tensor or None (called under ``torch.no_grad()``: once now to learn the
+    shape, then only when the source is selected and a snapshot is due). A
+    single tensor or callable is one source named ``name``. ``dims`` names the
+    dimensions: one tuple for every source, or a dict of tuples per source
+    (default ``dim0``, ``dim1``, ...); an image source has one more dimension,
+    RGB(A), and a points source a last one with 2 or 3 coordinates, which are
+    not named. ``kind`` is "heatmap", "image", "points" or "histogram".
+    ``data_view`` is the view's default data view. ``options`` are the matching
+    call's arguments: ``cmap``, ``vmin`` and ``vmax`` (heatmap, points),
+    ``labels`` (a tensor or callable, along the kept dimension) and ``classes``
+    (points), ``bins`` (histogram).
+
+    The view takes snapshots when the training loop calls :func:`update`.
+    Replaces an earlier view of the same name. Returns the default data view,
+    resolved, or None while no source has a tensor."""
+    _name_ok(name)
+    kind = _dataview._kind(kind)
+    if kind == "series":
+        raise ValueError("a series view has no sources; use caliper.series")
+    opts = _dv_options(kind, options)
+    _dataview.REGISTRY.offer_view(name, sources, kind, dims, default=data_view, rate=rate,
+                                  options=opts)
+    return _dataview.REGISTRY.resolved(name)
+
+
+def update(name: str | None = None):
+    """Take a snapshot of every view registered with :func:`offer` (and the
+    ``weights`` view of :func:`watch`) that is due, or of view ``name`` only.
+    Same return values as :func:`show`; for every view, True if any took one."""
+    e = None
+    if name is not None:
+        e = _dataview.REGISTRY.get(name)
+        if e is None:
+            raise ValueError(f"no view {name!r} was offered")
+    for r in _routes or _auto_routes():
+        if r.transport.attached():
+            break
+    else:
+        return False
+    if e is not None:
+        return _dv_snapshot(e)
+    taken = False
+    for e in _dataview.REGISTRY.fetchable():
+        taken = bool(_dv_snapshot(e)) or taken
+    return taken
+
+
+def data_view(name: str):
+    """The default data view of view ``name``, resolved: a dict with
+    ``source``, ``index``, ``reduce`` and ``budget``, and ``tile`` for a tiled
+    heatmap. None when the view offers no data views or has no data yet."""
+    return _dataview.REGISTRY.resolved(name)
+
+
+def set_data_view(name: str, request=None):
+    """Set the default data view of view ``name`` (any thread; used from the
+    next snapshot). ``request`` is a dict, or its JSON text, with any of
+    ``source``, ``index``, ``reduce``, ``tile`` and ``budget``. A member it
+    names replaces the current one as a whole (``budget`` key by key), and the
+    others stay, so ``{}`` changes nothing; None returns to the default the view
+    was registered with. Returns the resolved data view; raises
+    :class:`DataViewError` when it does not fit the view, which keeps the data
+    view it had. A request for a view that does not exist yet, or has no data
+    yet, is kept and checked at its first snapshot; then None is returned."""
+    return _dataview.REGISTRY.request(name, request)
+
+
+def _dv_options(kind, options):
+    allowed = _DV_OPTIONS[kind]
+    for k in options:
+        if k not in allowed:
+            raise TypeError(f"offer(kind={kind!r}) got an unexpected option {k!r}")
+    o = dict(options)
+    if kind in ("heatmap", "points"):
+        o["cmap"] = _cmap(o.get("cmap", "viridis"))
+    if o.get("vmin") is not None or o.get("vmax") is not None:
+        check_range(o.get("vmin"), o.get("vmax"))
+    if "bins" in o and not 1 <= int(o["bins"]) <= 1 << 16:
+        raise ValueError("histogram: bins must be in [1, 65536]")
+    return o
+
+
+def _dv_plan(kind, x, prog, o, raw=False):
+    """The snapshot plan of payload ``x`` of a data view, tagged with it."""
+    if kind == "heatmap":
+        plan = plan_show(x, o.get("cmap", 0), o.get("vmin"), o.get("vmax"), raw)
+    elif kind == "image":
+        from ._convert import _image_plan
+        plan = _image_plan(x, raw)
+    elif kind == "points":
+        lab = o.get("labels")
+        if callable(lab):
+            lab = lab()
+        if lab is not None:
+            lab = _dataview.take_rows(lab, prog)
+        plan = plan_points(x, lab, o.get("classes"), o.get("cmap", 0), o.get("vmin"),
+                           o.get("vmax"))
+    else:
+        plan = plan_histogram(x, o.get("bins", 64))
+    return _dataview.tag(plan, prog)
+
+
+def _dv_entry_plan(entry, tensor, _c, _d, _e):
+    x, prog = _dataview.REGISTRY.prepare(entry, tensor)
+    return None if x is None else _dv_plan(entry.kind, x, prog, entry.options)
+
+
+def _dv_show_plan(t, cm, vmin, vmax, extra):
+    raw, name, dims, dv = extra
+    e, x = _dataview.REGISTRY.for_call(name, "show", dims, dv, t)
+    x, prog = _dataview.REGISTRY.prepare(e, x)
+    if x is None:
+        return None
+    return _dv_plan(e.kind, x, prog, {"cmap": cm, "vmin": vmin, "vmax": vmax}, raw)
+
+
+def _dv_points_plan(z, labels, classes, cm, extra):
+    vmin, vmax, name, dims, dv = extra
+    e, x = _dataview.REGISTRY.for_call(name, "points", dims, dv, z)
+    x, prog = _dataview.REGISTRY.prepare(e, x)
+    if x is None:
+        return None
+    return _dv_plan("points", x, prog, {"labels": labels, "classes": classes, "cmap": cm,
+                                        "vmin": vmin, "vmax": vmax})
+
+
+def _dv_hist_plan(t, bins, name, dims, dv):
+    e, x = _dataview.REGISTRY.for_call(name, "histogram", dims, dv, t)
+    x, prog = _dataview.REGISTRY.prepare(e, x)
+    if x is None:
+        return None
+    return _dv_plan("histogram", x, prog, {"bins": bins})
+
+
+def _dv_snapshot(entry, tensor=None):
+    """Snapshot registry view ``entry`` when due; ``tensor`` is its selected
+    source's tensor when a hook passes it."""
+    return _dispatch(_DV_KINDS[entry.kind], entry.name, entry.rate, _dv_entry_plan, entry, tensor,
+                     None, None, None)
+
+
+def _dv_hook(entry, source, t):
+    """watch's hooks: ``t`` (None: fetch it) is source ``source`` of the grouped
+    view ``entry``. Unless it is the selected source only its shape is
+    recorded, and nothing happens while nothing is attached."""
+    for r in _routes:
+        if r.transport.attached():
+            break
+    else:
+        return False
+    if entry.state[2] != source:
+        if t is not None:
+            _dataview.REGISTRY.observe(entry, source, t)
+        return False
+    return _dv_snapshot(entry, t)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +691,7 @@ def remove(name: str) -> bool:
     """Remove view ``name`` from every transport. Returns True if the in-process
     core had it."""
     found = False
+    _dataview.REGISTRY.remove(name)
     with LOCK:
         for r in _routes:
             r.ring.forget(name)

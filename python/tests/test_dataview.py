@@ -1,8 +1,10 @@
 """Data views (caliper._dataview): resolution by the wire protocol's rules,
 including hostile requests; the payload layout; application on the CPU and on
 MPS against numpy implementations of the same rules; the registry under
-concurrent requests; and the no-readback rule, checked in the source and with
-a busy MPS queue. The timings of apply on MPS print as a table."""
+concurrent requests; show/points/histogram with dims, offer/update and
+watch's grouped views through a fake transport; and the no-readback rule,
+checked in the source and with a busy MPS queue. The timings of apply on MPS
+print as a table."""
 import ast
 import json
 import math
@@ -453,8 +455,94 @@ def test_apply_refuses_a_tensor_of_another_shape():
 
 
 # ---------------------------------------------------------------------------
-# the registry
+# the calls with dims, the registry
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("device", DEVICES)
+def test_show_with_dims_and_a_default(fake, device):
+    attn = torch.randn(2, 3, 4, 24, 600).to(device)
+    dims = ("layer", "sequence", "head", "query", "key")
+    default = {"index": {"layer": 1, "sequence": 0, "head": 0}}
+    assert caliper.show(attn, "attention", cmap="magma", dims=dims, data_view=default) is True
+    got = fake.last("attention")
+    assert torch.allclose(got["payload"].cpu(), F.adaptive_avg_pool1d(attn[1, 0, 0].cpu()[None], 512)[0])
+    assert got["data_view"] == caliper.data_view("attention") == {
+        "source": "attention", "index": {"layer": 1, "sequence": 0, "head": 0}, "reduce": {},
+        "budget": {"max_extent": 512, "pool": "mean"}}
+    assert [a["size"] for a in got["axes"]] == [24, 512] and got["tile"] is None
+    assert got["meta"].colormap == 2 - 1                       # magma
+    view = dv.REGISTRY.offer("attention").to_json()
+    assert view["kind"] == 1 and view["sources"][0]["dims"][4] == {"name": "key", "size": 600}
+
+    rv = caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 1},
+                                             "reduce": {"head": "max"}})
+    assert rv["reduce"] == {"head": "max"}
+    caliper.show(attn, "attention", cmap="magma", dims=dims, data_view=default)
+    want = F.adaptive_avg_pool1d(attn[0, 1].amax(0).cpu()[None], 512)[0]
+    assert torch.allclose(fake.last("attention")["payload"].cpu(), want, atol=1e-6)
+
+    with pytest.raises(DataViewError, match="out of range"):
+        caliper.set_data_view("attention", {"index": {"layer": 7}})
+    assert caliper.data_view("attention") == rv                # refused: kept the one it had
+    assert caliper.set_data_view("attention", {}) == rv          # {} changes nothing
+    assert caliper.set_data_view("attention", None)["index"] == default["index"]
+
+
+def test_show_without_dims_is_unchanged(fake):
+    x = torch.randn(6, 5, 5)
+    caliper.show(x, "plain")
+    got = fake.last("plain")
+    assert tuple(got["payload"].shape) == (10, 15)                # today's channel mosaic
+    assert got["data_view"] is None and caliper.data_view("plain") is None
+    assert dv.REGISTRY.get("plain") is None
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_show_an_image_source(fake, device):
+    imgs = torch.rand(5, 3, 20, 30).to(device)
+    caliper.show(imgs, "inputs", dims=("batch", "height", "width"), data_view={"index": {"batch": 2}})
+    got = fake.last("inputs")
+    assert dv.REGISTRY.get("inputs").kind == "image"
+    want = (imgs[2].permute(1, 2, 0).clamp(0, 1) * 255 + 0.5).to(torch.uint8)
+    assert tuple(got["payload"].shape) == (20, 30, 4)
+    assert torch.equal(got["payload"][..., :3].cpu(), want.cpu())
+    with pytest.raises(ValueError, match="dims"):
+        caliper.show(torch.rand(5, 7, 20, 30), "notimg", dims=("batch", "height", "width"))
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_points_with_dims_sample_points_and_labels(fake, device):
+    z = torch.randn(3, 2000, 2).to(device)
+    labels = (torch.arange(2000) % 7).to(device)
+    assert caliper.set_data_view("emb", {"index": {"layer": 1}, "budget": {"max_points": 500}}) is None
+    caliper.points(z, labels, "emb", classes=7, dims=("layer", "point"))
+    got = fake.last("emb")
+    rows = dv.REGISTRY.rows("emb")
+    assert rows.shape == (500,) and got["data_view"]["budget"] == {"max_points": 500}
+    assert torch.equal(got["payload"][:, :2].cpu(), z[1, rows].cpu())
+    assert torch.equal(got["aux"].cpu(), labels[rows].float().cpu())
+
+
+def test_histogram_with_dims(fake):
+    x = torch.randn(4, 100)
+    caliper.histogram(x, "h", bins=10, dims=("layer", "value"), data_view={"index": {"layer": 2}})
+    got = fake.last("h")
+    assert got["payload"].sum().item() == 100 and got["data_view"]["index"] == {"layer": 2}
+
+
+def test_a_shape_change_falls_back_to_the_default_with_a_warning(fake):
+    dims = ("batch", "y", "x")
+    caliper.show(torch.zeros(4, 8, 8), "act", dims=dims)
+    caliper.set_data_view("act", {"index": {"batch": 3}})
+    x4 = torch.arange(4.0)[:, None, None].expand(4, 8, 8)
+    caliper.show(x4, "act", dims=dims)
+    assert fake.last("act")["payload"][0, 0].item() == 3.0
+    with pytest.warns(RuntimeWarning, match="does not fit"):
+        caliper.show(x4[:2], "act", dims=dims)
+    assert fake.last("act")["payload"][0, 0].item() == 0.0       # the default, item 0
+    caliper.show(x4, "act", dims=dims)
+    assert fake.last("act")["payload"][0, 0].item() == 3.0       # the request comes back
+
+
 def test_registry_under_concurrent_requests():
     reg = dv.Registry()
     e = reg.register("attn", "heatmap", [dv.Source("attn", ("layer", "head", "q", "k"))],
@@ -493,6 +581,177 @@ def test_registry_under_concurrent_requests():
     assert errors == [] and accepted[0] > 100
     reg.request("attn", {"index": {"layer": 2, "head": 5}})
     assert reg.prepare(e, x)[0][0, 0].item() == 205
+
+
+def test_pending_requests_are_bounded():
+    for i in range(dv.PENDING_LIMIT):
+        assert caliper.set_data_view(f"later{i}", {}) is None
+    with pytest.raises(DataViewError, match="unknown view"):
+        caliper.set_data_view("one-too-many", {})
+    caliper.set_data_view("later0", None)                       # None drops it
+
+
+def test_offer_and_update(fake):
+    calls = {"a": 0, "b": 0}
+    ta, tb = torch.randn(4, 6), torch.randn(5, 7)
+
+    def make(name, t):
+        def get():
+            calls[name] += 1
+            return t
+        return get
+
+    rv = caliper.offer("probe", {"a": make("a", ta), "b": make("b", tb)}, dims=("row", "col"))
+    assert calls == {"a": 1, "b": 1} and rv["source"] == "a"     # each callable ran once
+    assert caliper.update() is True
+    assert calls == {"a": 2, "b": 1}                             # the other source does no work
+    assert torch.equal(fake.last("probe")["payload"], ta)
+    caliper.set_data_view("probe", {"source": "b"})
+    caliper.update("probe")
+    assert calls == {"a": 2, "b": 2} and torch.equal(fake.last("probe")["payload"], tb)
+
+    w = torch.zeros(3, 3)
+    caliper.offer("w", w, rate=1e-3)                             # a reference, read each snapshot
+    caliper.update("w")
+    w.add_(1)
+    caliper.update("w")                                          # not due: rate 0.001 Hz
+    assert fake.last("w")["payload"].sum().item() == 0
+    caliper.offer("w2", w)
+    caliper.update("w2")
+    assert fake.last("w2")["payload"].sum().item() == 9
+
+    caliper.offer("pts", {"p": torch.randn(50, 2)}, "points", dims=("point",),
+                  labels=lambda: torch.arange(50), classes=50, data_view={"budget": {"max_points": 10}})
+    caliper.update("pts")
+    assert torch.equal(fake.last("pts")["aux"], torch.arange(0, 50, 5).float())
+    caliper.offer("none", lambda: None)
+    assert caliper.update("none") is False and fake.last("none") is None
+    with pytest.raises(TypeError, match="unexpected option"):
+        caliper.offer("x", ta, "heatmap", bins=3)
+    with pytest.raises(ValueError, match="no sources"):
+        caliper.offer("x", ta, "series")
+    with pytest.raises(ValueError, match="was offered"):
+        caliper.update("never")
+    caliper.remove("probe")
+    assert caliper.data_view("probe") is None
+
+
+# ---------------------------------------------------------------------------
+# watch
+# ---------------------------------------------------------------------------
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 6, 3, padding=1)
+        self.fc1 = nn.Linear(6 * 8 * 8, 16)
+        self.fc2 = nn.Linear(16, 3)
+
+    def forward(self, x):
+        x = F.max_pool2d(F.relu(self.conv1(x)), 2)
+        return self.fc2(F.relu(self.fc1(x.flatten(1))))
+
+
+def _step(net, x):
+    loss = net(x).square().mean()
+    loss.backward()
+
+
+def _hook_count(net):
+    return sum(len(m._forward_hooks) for m in net.modules())
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_watch_groups_beside_the_existing_views(fake, device):
+    torch.manual_seed(0)
+    net = Net().to(device)
+    x = torch.randn(4, 1, 16, 16, device=device)
+    h = caliper.watch(net, activations=True, gradients=True)
+    try:
+        assert h.modules == ["conv1", "fc1", "fc2"]               # as before
+        assert set(h.views) == {"conv1.act", "fc1.act", "fc2.act", "conv1.weight.grad",
+                                "fc1.weight.grad", "fc2.weight.grad"}
+        assert _hook_count(net) == 3 and len(h) == 6
+        assert h.groups == ["weights", "activations", "gradients"]
+        _step(net, x)
+        assert caliper.flush(timeout=5.0) == 0
+        names = {p["name"] for p in fake.published}
+        assert set(h.views) | set(h.groups) <= names
+        with torch.no_grad():
+            c1 = net.conv1(x)
+        assert torch.allclose(fake.last("activations")["payload"], c1[0, 0])     # batch 0, channel 0
+        assert torch.equal(fake.last("weights")["payload"], net.conv1.weight.detach().reshape(6, 9))
+        assert torch.equal(fake.last("gradients")["payload"], net.conv1.weight.grad.reshape(6, 9))
+        acts = dv.REGISTRY.offer("activations").to_json()
+        assert [s["name"] for s in acts["sources"]] == ["conv1", "fc1", "fc2"]
+        assert [d["name"] for d in acts["sources"][0]["dims"]] == ["batch", "channel", "height", "width"]
+        assert [d["name"] for d in acts["sources"][1]["dims"]] == ["batch", "feature"]
+
+        caliper.set_data_view("weights", {"source": "fc2.weight"})   # same dims: the source alone
+        with pytest.raises(DataViewError, match="no dim"):
+            caliper.set_data_view("activations", {"source": "fc1"})  # the default's index names channel
+        caliper.set_data_view("activations", {"source": "fc1", "index": {}})
+        caliper.set_data_view("gradients", {"source": "fc1.weight"})
+        _step(net, x)
+        with torch.no_grad():
+            f1 = net.fc1(F.max_pool2d(F.relu(net.conv1(x)), 2).flatten(1))
+        assert torch.allclose(fake.last("activations")["payload"], f1, atol=1e-6)
+        assert torch.equal(fake.last("weights")["payload"], net.fc2.weight.detach())
+        assert torch.equal(fake.last("gradients")["payload"], net.fc1.weight.grad)
+    finally:
+        h.remove()
+    assert _hook_count(net) == 0 and dv.REGISTRY.get("weights") is None
+    h2 = caliper.watch(net, groups="enc")
+    assert h2.groups == ["enc.weights", "enc.activations"]
+    h2.remove()
+    h3 = caliper.watch(net, groups=False)
+    assert h3.groups == [] and dv.REGISTRY.names() == []
+    h3.remove()
+
+
+class _Ops(torch.utils._python_dispatch.TorchDispatchMode):
+    def __init__(self):
+        super().__init__()
+        self.ops = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        self.ops.append(str(func))
+        return func(*args, **(kwargs or {}))
+
+
+def test_watch_sources_nobody_views_do_no_work(fake, monkeypatch):
+    monkeypatch.setattr(caliper, "show", lambda *a, **k: False)   # leave the per-module views out
+    net = Net()
+    x = torch.randn(2, 1, 16, 16)
+    h = caliper.watch(net, gradients=True)
+    prepared = []
+    real = dv.REGISTRY.prepare
+
+    def spy(entry, tensor=None):
+        prepared.append((entry.name, entry.state[2]))
+        return real(entry, tensor)
+    monkeypatch.setattr(dv.REGISTRY, "prepare", spy)
+    try:
+        _step(net, x)
+        assert sorted(prepared) == [("activations", "conv1"), ("gradients", "conv1.weight"),
+                                    ("weights", "conv1.weight")]
+        hook = next(iter(net.fc1._forward_hooks.values()))
+        inp, out = torch.randn(2, 384), torch.randn(2, 16)
+        with _Ops() as rec:
+            hook(net.fc1, (inp,), out)                        # not the selected source
+        assert rec.ops == []
+        hook2 = next(iter(net.conv1._forward_hooks.values()))
+        out2 = torch.randn(2, 6, 16, 16)
+        with _Ops() as rec:
+            hook2(net.conv1, (x,), out2)
+        assert rec.ops                                        # the selected source does work
+        caliper.close()                                       # nothing attached at all
+        prepared.clear()
+        observed = []
+        monkeypatch.setattr(dv.REGISTRY, "observe", lambda *a: observed.append(a))
+        _step(net, x)
+        assert prepared == [] and observed == []
+    finally:
+        h.remove()
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +806,8 @@ def test_apply_never_waits_for_the_device(fake):
         for p, t in progs:
             dv.apply(t, p)
         dv.take_rows(labels, progs[-1][0])
+        caliper.show(cases[0][2], "busy", dims=("layer", "head", "query", "key"))
+        caliper.points(cases[-1][2], labels, "busy-points", dims=("point",))
 
     run_all()                                       # compile the graphs first
     torch.mps.synchronize()
