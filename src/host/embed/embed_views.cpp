@@ -273,11 +273,13 @@ void caliper_embed_views_draw(CaliperCore* core) {
         const std::string label = v.name + "###caliper.view." + v.name;
         if (ImGui::Begin(label.c_str(), nullptr,
                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                             (core->views_bare ? ImGuiWindowFlags_NoTitleBar : 0))) {
-            ImGui::Text("%dx%d %s %s %s updates=%llu last=%.2fms", v.w, v.h,
-                        v.mapped ? "f32" : "u8", view_device_name(v.device),
-                        v.path.c_str(), (unsigned long long)v.updates,
-                        v.last_update_ms);
+                             (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                     ImGuiWindowFlags_NoMove : 0))) {
+            if (!core->views_bare)
+                ImGui::Text("%dx%d %s %s %s updates=%llu last=%.2fms", v.w, v.h,
+                            v.mapped ? "f32" : "u8", view_device_name(v.device),
+                            v.path.c_str(), (unsigned long long)v.updates,
+                            v.last_update_ms);
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             const float s = std::min(avail.x / img.x, avail.y / img.y);
             if (s > 0.0f) {

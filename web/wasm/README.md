@@ -44,7 +44,7 @@ const handle = await mountCaliperViews(container, {
   view,         // the view to show; '' or absent: every view of the session
   kind,         // 'heatmap', 'image', 'points', 'series' or 'histogram'; optional
   height,       // CSS pixels; optional, the default fills the container
-  header,       // false: the page shows the view's name, so the view has no title bar (default true)
+  header,       // false: the page draws the view's header, so the view shows itself alone (default true)
   assetBase,    // the folder of caliper-views.js and .wasm; default: the loader's own folder
   onSelect,     // (detail, view) => {}; the views emit no selections yet
   onDataView,   // (dataView, view) => {}; every data view the producer resolved
@@ -54,6 +54,8 @@ handle.setDataView({ index: { layer: 2 } });     // a VIEW_REQUEST; false when i
 handle.stats;                                    // the module's counters
 handle.destroy();                                // BYE, the GPU released, the canvas removed
 ```
+
+With `header: false` a view shows only itself: no title bar, no diagnostics line (size, path, sequence number, latency, updates, drops) and no Pause or Fit button, while hover values stay (`CaliperCore::views_bare`; the native app keeps all of it). In the browser the views also take the page palette (`src/page_style.cpp`): the view's ground is the plate colour, a series line is parchment, hover marks are bronze, and rules and tick labels are drawn as the TypeScript views draw them, so the two renderers of the element look alike.
 
 The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`). The views send no selections yet, so `onSelect` is never called.
 
@@ -97,4 +99,4 @@ CALIPER_PYTHON=<python> node check.mjs --build <build dir> --out <shot.png> --ad
 CALIPER_PYTHON=<python> node check.mjs --build <build dir> --out <shot.png> --view loss --kind series --hover 400,150
 ```
 
-The check starts `stream_server.py`, which serves the build directory and the stream on one port on 127.0.0.1, opens `demo.html` in headless Chromium, waits for frames and applied snapshots, prints the module's counters as JSON and saves screenshots. `swiftshader` uses Chromium's software WebGPU adapter and `metal` the Mac's GPU. When a heatmap is shown, the module also reads its texture back and counts the texels that differ from the CPU colormap.
+The check starts `stream_server.py`, which serves the build directory and the stream on one port on 127.0.0.1, opens `demo.html` in headless Chromium, waits for frames and applied snapshots, prints the module's counters as JSON and saves screenshots. `swiftshader` uses Chromium's software WebGPU adapter and `metal` the Mac's GPU. The module also reads back each heatmap and image texture once and compares it, byte for byte, with what the CPU makes of the same snapshot (the reference colormap for a heatmap, the bytes themselves for an image); its counters list the results as `checks`.

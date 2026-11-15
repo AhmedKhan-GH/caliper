@@ -70,6 +70,7 @@ add_executable(caliper-views
     src/source_poll.cpp
     src/web_services.cpp
     src/web_input.cpp
+    src/page_style.cpp
     src/fonts.cpp
 )
 # fonts.cpp embeds the native app's faces from assets/fonts (C23 #embed).

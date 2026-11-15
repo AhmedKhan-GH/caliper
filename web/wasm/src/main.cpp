@@ -16,6 +16,7 @@
 // the frame loop. No Asyncify is needed.
 #include "fonts.h"
 #include "net_source.h"
+#include "page_style.h"
 #include "source_poll.h"
 #include "web_input.h"
 
@@ -81,11 +82,20 @@ struct Page {
     double fps = 0.0;
 
     // The byte check of the WGSL colormap against the CPU reference.
-    int check_state = 0;                  // 0 not run, 1 pending, 2 done
-    long long check_mismatch = -1;        // texels that differ
-    int check_maxdiff = -1;               // largest channel difference
+    // Every texture view is checked once: its texture read back and compared,
+    // byte for byte, with what the CPU makes of the same snapshot.
+    struct Check {
+        std::string view;
+        int kind = 0;
+        long long mismatch = -1;          // texels that differ (-2: readback failed)
+        int maxdiff = -1;                 // largest channel difference
+    };
+    std::vector<Check> checks;            // done, in order
+    bool check_pending = false;
     std::vector<uint8_t> check_expect;
-    uint64_t check_frame = 0;
+    std::string check_view;
+    int check_kind = 0;
+    uint64_t check_next = 90;             // the frame of the next check
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -174,9 +184,27 @@ void publish() {
     const struct mallinfo mi = mallinfo();
     put("heapSize", (double)emscripten_get_heap_size());
     put("heapUsed", (double)mi.uordblks);
-    put("checkState", g.check_state);
-    put("checkMismatch", (double)g.check_mismatch);
-    put("checkMaxDiff", g.check_maxdiff);
+    // checkState 2 once every texture view drawn so far has been checked;
+    // checkMismatch / checkMaxDiff sum and take the maximum over them, and
+    // checks lists each one as "view:kind:mismatch:maxdiff".
+    bool all = !g.checks.empty() && !g.check_pending;
+    long long mism = 0;
+    int maxd = 0;
+    std::string list;
+    for (const auto& c : g.checks) {
+        mism = c.mismatch < 0 || mism < 0 ? -1 : mism + c.mismatch;
+        maxd = std::max(maxd, c.maxdiff);
+        list += (list.empty() ? "" : ";") + c.view + ":" + std::to_string(c.kind) + ":" +
+                std::to_string(c.mismatch) + ":" + std::to_string(c.maxdiff);
+    }
+    for (const auto& tv : g.core ? g.core->views : std::vector<caliper_embed_views::TensorView>{})
+        if (tv.tex && std::none_of(g.checks.begin(), g.checks.end(),
+                                   [&](const Page::Check& c) { return c.view == tv.name; }))
+            all = false;
+    put("checkState", all ? 2 : g.checks.empty() && !g.check_pending ? 0 : 1);
+    put("checkMismatch", g.checks.empty() ? -1.0 : (double)mism);
+    put("checkMaxDiff", g.checks.empty() ? -1 : maxd);
+    put("checks", list.c_str());
     put("adapter", g.adapter_text.c_str());
     put("error", g.error.c_str());
 }
@@ -187,34 +215,52 @@ void fail(const std::string& why) {
     publish();
 }
 
-// Read the first heatmap's texture back and compare it, byte for byte, with
-// the CPU reference map_f32_to_rgba8 over the snapshot it was mapped from.
+// Read the next unchecked texture view back and compare it, byte for byte,
+// with what the CPU makes of the snapshot it was drawn from: the reference
+// colormap map_f32_to_rgba8 for a heatmap, the bytes themselves for an image.
 void start_check() {
     for (auto& tv : g.core->views) {
+        if (!tv.tex || std::any_of(g.checks.begin(), g.checks.end(),
+                                   [&](const Page::Check& c) { return c.view == tv.name; }))
+            continue;
         const caliper_live::Snapshot* s = g.net ? g.net->shown(tv.name) : nullptr;
-        if (!tv.tex || !tv.mapped || !s || s->kind != CALIPER_LIVE_KIND_HEATMAP) continue;
-        g.check_expect.assign((size_t)tv.w * tv.h * 4, 0);
-        caliper_host::map_f32_to_rgba8((const float*)((const uint8_t*)s->host_base + s->byte_offset),
-                                       tv.w, tv.h, caliper_host::colormap_lut(tv.colormap), tv.vmin,
-                                       tv.vmax, g.check_expect.data());
-        g.check_state = 1;
+        if (!s) continue;
+        const uint8_t* bytes = (const uint8_t*)s->host_base + s->byte_offset;
+        const size_t n = (size_t)tv.w * tv.h * 4;
+        if (tv.mapped && s->kind == CALIPER_LIVE_KIND_HEATMAP) {
+            g.check_expect.assign(n, 0);
+            caliper_host::map_f32_to_rgba8((const float*)bytes, tv.w, tv.h,
+                                           caliper_host::colormap_lut(tv.colormap), tv.vmin, tv.vmax,
+                                           g.check_expect.data());
+        } else if (!tv.mapped && s->kind == CALIPER_LIVE_KIND_IMAGE) {
+            g.check_expect.assign(bytes, bytes + n);
+        } else {
+            continue;
+        }
+        g.check_pending = true;
+        g.check_view = tv.name;
+        g.check_kind = (int)s->kind;
         g.renderer->readback_async(tv.tex, [](std::vector<uint8_t> got) {
+            Page::Check c;
+            c.view = g.check_view;
+            c.kind = g.check_kind;
             if (got.size() != g.check_expect.size()) {
-                g.check_mismatch = -2;   // readback failed
+                c.mismatch = -2;   // readback failed
             } else {
                 long long bad = 0;
                 int maxd = 0;
                 for (size_t i = 0; i < got.size(); i += 4) {
                     int d = 0;
-                    for (int c = 0; c < 4; ++c)
-                        d = std::max(d, std::abs((int)got[i + c] - (int)g.check_expect[i + c]));
+                    for (int k = 0; k < 4; ++k)
+                        d = std::max(d, std::abs((int)got[i + k] - (int)g.check_expect[i + k]));
                     if (d) ++bad;
                     maxd = std::max(maxd, d);
                 }
-                g.check_mismatch = bad;
-                g.check_maxdiff = maxd;
+                c.mismatch = bad;
+                c.maxdiff = maxd;
             }
-            g.check_state = 2;
+            g.checks.push_back(c);
+            g.check_pending = false;
             publish();
         });
         return;
@@ -291,10 +337,10 @@ void frame() {
     if (g.frames == 30) { g.t_mark = t1; g.frames_mark = g.frames; }
     if (g.frames > 30 && t1 > g.t_mark)
         g.fps = (double)(g.frames - g.frames_mark) * 1000.0 / (t1 - g.t_mark);
-    // The colormap check runs once, 60 frames after the first heatmap update.
-    if (g.check_state == 0 && g.renderer->colormap_dispatches() > 0) {
-        if (!g.check_frame) g.check_frame = g.frames + 60;
-        else if (g.frames >= g.check_frame) start_check();
+    // From frame 90 on, one texture view is checked every 30 frames.
+    if (!g.check_pending && g.frames >= g.check_next) {
+        g.check_next = g.frames + 30;
+        start_check();
     }
     if (g.frames % 15 == 0) publish();
 }
@@ -319,6 +365,7 @@ void start() {
     const caliper_web::EmbeddedFont ui = caliper_web::ui_font(), mono = caliper_web::mono_font();
     sternbild::load_fonts_from_memory(ui.data, ui.size, mono.data, mono.size);
     sternbild::apply_style();
+    caliper_web::apply_page_style(!g.cfg.header);
     caliper_web::input_install();
 
     auto r = std::make_unique<WebGpuRenderer>(g.instance, g.adapter, g.device, "!canvas");

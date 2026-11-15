@@ -138,7 +138,8 @@ bool begin_window(CaliperCore* core, View& v, ImVec2 content) {
     ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
     return ImGui::Begin(window_label(v).c_str(), nullptr,
                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                            (core->views_bare ? ImGuiWindowFlags_NoTitleBar : 0));
+                            (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                    ImGuiWindowFlags_NoMove : 0));
 }
 
 void pause_button(CaliperLiveViewsState* S) {
@@ -218,13 +219,15 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     HostRenderer* r = core->renderer.get();
     const bool open = begin_window(core, v, ImVec2(320.0f, 260.0f));
     if (!open) { ImGui::End(); return; }
-    if (ImGui::SmallButton("Fit")) v.fit_pending = true;
-    ImGui::SameLine();
-    pause_button(S);
-    ImGui::SameLine();
-    char tel[160];
-    telemetry(tel, sizeof tel, S, v);
-    ImGui::Text("points N=%lld %d-D  %s", (long long)v.count, v.dims, tel);
+    if (!core->views_bare) {
+        if (ImGui::SmallButton("Fit")) v.fit_pending = true;
+        ImGui::SameLine();
+        pause_button(S);
+        ImGui::SameLine();
+        char tel[160];
+        telemetry(tel, sizeof tel, S, v);
+        ImGui::Text("points N=%lld %d-D  %s", (long long)v.count, v.dims, tel);
+    }
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     if (avail.x < 4.0f || avail.y < 4.0f) { ImGui::End(); return; }
@@ -300,7 +303,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         v.dirty = true;
         v.hover_dirty = true;
     }
-    if ((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false) && v.have_cur)
+    // F, or a double click on the points, fits the camera to them again.
+    if ((((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
+         (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && v.have_cur)
         fit_points(v, aspect);
 
     // ---- GPU: redraw the render target when something changed
@@ -413,16 +418,18 @@ void decimate_series(View& v, size_t buckets) {
 void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 200.0f));
     if (!open) { ImGui::End(); return; }
-    pause_button(S);
-    ImGui::SameLine();
-    char tel[160];
-    telemetry(tel, sizeof tel, S, v);
     const size_t n = v.values.size();
-    if (n)
-        ImGui::Text("series n=%zu  latest %.6g @ step %llu  %s", n, v.values.back(),
-                    (unsigned long long)(v.first + n - 1), tel);
-    else
-        ImGui::Text("series (no values yet)  %s", tel);
+    if (!core->views_bare) {
+        pause_button(S);
+        ImGui::SameLine();
+        char tel[160];
+        telemetry(tel, sizeof tel, S, v);
+        if (n)
+            ImGui::Text("series n=%zu  latest %.6g @ step %llu  %s", n, v.values.back(),
+                        (unsigned long long)(v.first + n - 1), tel);
+        else
+            ImGui::Text("series (no values yet)  %s", tel);
+    }
     if (ImPlot::BeginPlot("##caliper.series", ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
         ImPlot::SetupAxes("step", nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
         if (n) {
@@ -455,12 +462,14 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
 void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 200.0f));
     if (!open) { ImGui::End(); return; }
-    pause_button(S);
-    ImGui::SameLine();
-    char tel[160];
-    telemetry(tel, sizeof tel, S, v);
     const size_t B = v.values.size();
-    ImGui::Text("histogram bins=%zu [%.4g, %.4g]  %s", B, v.lo, v.hi, tel);
+    if (!core->views_bare) {
+        pause_button(S);
+        ImGui::SameLine();
+        char tel[160];
+        telemetry(tel, sizeof tel, S, v);
+        ImGui::Text("histogram bins=%zu [%.4g, %.4g]  %s", B, v.lo, v.hi, tel);
+    }
     if (ImPlot::BeginPlot("##caliper.histogram", ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
         ImPlot::SetupAxes(nullptr, "count", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
         if (B) {
@@ -499,31 +508,35 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
     // on its first windowed draw); RAW views have no chrome by design.
     if (!tv || !tv->tex || !tv->placed || (tv->flags & CALIPER_VIEW_FLAG_RAW)) return;
     if (ImGui::Begin(window_label(v).c_str())) {   // appends to that window
-        char tel[160];
-        telemetry(tel, sizeof tel, S, v);
-        char line[200];
-        std::snprintf(line, sizeof line, "%s  %s", v.kind == CALIPER_LIVE_KIND_HEATMAP ? "heatmap" : "image", tel);
         const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         const ImGuiStyle& st = ImGui::GetStyle();
-        const ImVec2 ts = ImGui::CalcTextSize(line);
-        const float bh = ImGui::GetFrameHeight();
-        const float y = wp.y + ws.y - st.WindowPadding.y - bh;
-        const float x = wp.x + st.WindowPadding.x;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(ImVec2(x - 2.0f, y), ImVec2(std::min(wp.x + ws.x - st.WindowPadding.x, x + ts.x + 4.0f), y + bh),
-                          IM_COL32(0, 0, 0, 150), 3.0f);
-        dl->AddText(ImVec2(x, y + (bh - ts.y) * 0.5f), IM_COL32(230, 230, 235, 255), line);
-        const float btn_w = ImGui::CalcTextSize("Resume").x + st.FramePadding.x * 2.0f;
-        ImGui::SetCursorScreenPos(ImVec2(wp.x + ws.x - st.WindowPadding.x - btn_w, y));
-        pause_button(S);
-        const bool on_button = ImGui::IsItemHovered();
+        bool on_button = false;
+        if (!core->views_bare) {
+            char tel[160];
+            telemetry(tel, sizeof tel, S, v);
+            char line[200];
+            std::snprintf(line, sizeof line, "%s  %s", v.kind == CALIPER_LIVE_KIND_HEATMAP ? "heatmap" : "image", tel);
+            const ImVec2 ts = ImGui::CalcTextSize(line);
+            const float bh = ImGui::GetFrameHeight();
+            const float y = wp.y + ws.y - st.WindowPadding.y - bh;
+            const float x = wp.x + st.WindowPadding.x;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(ImVec2(x - 2.0f, y), ImVec2(std::min(wp.x + ws.x - st.WindowPadding.x, x + ts.x + 4.0f), y + bh),
+                              IM_COL32(0, 0, 0, 150), 3.0f);
+            dl->AddText(ImVec2(x, y + (bh - ts.y) * 0.5f), IM_COL32(230, 230, 235, 255), line);
+            const float btn_w = ImGui::CalcTextSize("Resume").x + st.FramePadding.x * 2.0f;
+            ImGui::SetCursorScreenPos(ImVec2(wp.x + ws.x - st.WindowPadding.x - btn_w, y));
+            pause_button(S);
+            on_button = ImGui::IsItemHovered();
+        }
 
-        // Hover: the image rect exactly as views_draw lays it out (info line,
-        // then the image scaled to fit the rest, centred horizontally).
+        // Hover: the image rect exactly as views_draw lays it out (the info
+        // line unless bare, then the image scaled to fit the rest, centred
+        // horizontally).
         const ImVec2 img((float)tv->w / core->scale, (float)tv->h / core->scale);
         const ImVec2 cs = ImGui::GetCursorStartPos();
         const float x_start = wp.x + cs.x;
-        const float top = wp.y + cs.y + ImGui::GetTextLineHeightWithSpacing();
+        const float top = wp.y + cs.y + (core->views_bare ? 0.0f : ImGui::GetTextLineHeightWithSpacing());
         const float aw = wp.x + ws.x - st.WindowPadding.x - x_start;
         const float ah = wp.y + ws.y - st.WindowPadding.y - top;
         const float sc = (img.x > 0 && img.y > 0) ? std::min(aw / img.x, ah / img.y) : 0.0f;

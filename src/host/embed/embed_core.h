@@ -115,7 +115,9 @@ struct CaliperCore {
     float area_x = 0.0f, area_y = 0.0f;
     // A host that draws each view's name, status and data view picker in its
     // own header (the browser element, web/wasm) sets this: view windows then
-    // have no title bar. Every other core keeps the title bar.
+    // show the view alone, with no title bar, no diagnostics line (size,
+    // path, seq, latency, updates, drops) and no Pause or Fit button; hover
+    // values and the plot stay. Every other core keeps all of them.
     bool  views_bare = false;
 
     void log(int level, const std::string& msg) {

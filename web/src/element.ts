@@ -164,7 +164,7 @@ export class CaliperView extends HTMLElement {
     return {
       view: this.names.join(','), renderer: this.renderer, drawer: this.drawer, wasmReady: this.wasmReady,
       subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
-      adapter: this.device ? adapterInfo() : null, ...(this.live?.debug() ?? {}),
+      adapter: this.device ? adapterInfo() : null, wasmStats: this.wasm?.stats ?? null, ...(this.live?.debug() ?? {}),
     };
   }
 

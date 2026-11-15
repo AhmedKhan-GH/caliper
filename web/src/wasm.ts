@@ -18,6 +18,8 @@ export interface WasmHandle {
   setDataView(dataView: DataView): boolean | void;
   /** Resolves once the first snapshot is drawn (the real loader has it; a stub may not). */
   ready?: Promise<void>;
+  /** The module's counters (the real loader has them; a stub may not). */
+  readonly stats?: Record<string, unknown>;
   onSelect?: ((event: WasmSelect | Record<string, unknown>) => void) | null;
   onDataView?: ((dataView: DataView) => void) | null;
 }
