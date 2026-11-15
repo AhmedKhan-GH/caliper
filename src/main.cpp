@@ -708,6 +708,12 @@ int main(int argc, char** argv) {
                 (std::filesystem::path(caliper::app_data_location()) / "data").string();
         }
         ctx.applet_path_env = std::getenv("CALIPER_APPLET_PATH");
+        if (cl.command == Command::Serve) {
+            // Producers on this machine find the hub here (0600, removed on exit).
+            const char* hub_file = std::getenv("CALIPER_HUB_FILE");
+            ctx.hub_file = hub_file && *hub_file ? std::string(hub_file)
+                                                 : caliper::app_data_path("hub.json");
+        }
         return caliper_host::run_subcommand(cl, ctx, std::cout, std::cerr);
     }
     if (cl.command == Command::Dev) {

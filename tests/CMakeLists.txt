@@ -205,6 +205,19 @@ if(TARGET caliper)
         set_tests_properties(${name} PROPERTIES LABELS "cli;shot" TIMEOUT 180
             SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
     endforeach()
+
+    caliper_cli_test(serve_operand ARGS "serve|extra" EXIT 2 ERROR "serve takes no operands")
+    caliper_cli_test(serve_option_elsewhere ARGS "list|--port|1" EXIT 2
+        ERROR "--port applies only to serve")
+    # caliper serve as a process (tests/test_cli.cpp): it prints its link,
+    # serves a viewer and a producer, stops on SIGTERM with BYE to both and
+    # leaves neither its hub file nor a listening socket. POSIX only.
+    if(NOT WIN32)
+        add_test(NAME caliper_cli_serve
+                 COMMAND caliper_tests "--test-case=cli: caliper serve runs as a process*")
+        set_tests_properties(caliper_cli_serve PROPERTIES LABELS cli
+            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

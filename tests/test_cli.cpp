@@ -4,11 +4,28 @@
 // so only its parsing is tested.
 #include <doctest/doctest.h>
 #include "host_cli.h"
+#include "net/wire.h"
+#include "net/ws.h"
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
+#endif
 namespace fs = std::filesystem;
 using namespace caliper_host;
 using Command = CommandLine::Command;
@@ -110,6 +127,17 @@ TEST_CASE("cli: subcommands and their operands parse") {
     auto made = parse({"new", "my-viewer", "/tmp/x"});
     CHECK(made.command == Command::New);
     CHECK(made.operands == std::vector<std::string>{"my-viewer", "/tmp/x"});
+
+    auto serve = parse({"serve"});
+    CHECK(serve.error.empty());
+    CHECK(serve.command == Command::Serve);
+    CHECK(serve.port == -1);
+    auto served = parse({"serve", "--port", "0", "--token-file=/t", "--assets", "/web"});
+    CHECK(served.error.empty());
+    CHECK(served.port == 0);
+    CHECK(served.token_file == "/t");
+    CHECK(served.assets_dir == "/web");
+    CHECK(parse({"--port=8080", "serve"}).port == 8080);
 }
 
 TEST_CASE("cli: wrong command lines are usage errors") {
@@ -128,6 +156,15 @@ TEST_CASE("cli: wrong command lines are usage errors") {
     CHECK(parse({"--applets"}).error == "--applets needs a folder");
     CHECK(parse({"--applets", "--help"}).error == "--applets needs a folder");
     CHECK(parse({"list", "--applets=--x"}).error == "--applets needs a folder");
+    CHECK(parse({"serve", "x"}).error == "serve takes no operands");
+    CHECK(parse({"serve", "--port"}).error == "--port needs a number");
+    CHECK(parse({"serve", "--port", "65536"}).error == "--port needs a number from 0 to 65535, not 65536");
+    CHECK(parse({"serve", "--port", "-1"}).error == "--port needs a number from 0 to 65535, not -1");
+    CHECK(parse({"serve", "--token-file"}).error == "--token-file needs a file");
+    CHECK(parse({"serve", "--assets="}).error == "--assets needs a folder");
+    CHECK(parse({"list", "--port", "1"}).error == "--port applies only to serve");
+    CHECK(parse({"serve", "--applets", "/x"}).error ==
+          "--applets applies only to starting the app, dev, list and shot");
 }
 
 TEST_CASE("cli: shot takes its options in either spelling, with defaults") {
@@ -197,6 +234,28 @@ TEST_CASE("cli: the -psn_ argument Finder passes is ignored") {
     auto dev = parse({"dev", "-psn_0_1", "/a"});
     CHECK(dev.error.empty());
     CHECK(dev.applet_dirs == std::vector<std::string>{"/a"});
+}
+
+TEST_CASE("cli: serve refuses a token file it cannot use, before it listens") {
+    TempDir t("serve-refuse");
+    CommandLine cl = parse({"serve", "--port", "0"});
+    cl.token_file = t.str("missing");
+    CliContext ctx;
+    std::ostringstream out, err;
+    CHECK(run_serve(cl, ctx, out, err) == 1);
+    CHECK(err.str().find("cannot read the token file") != std::string::npos);
+    std::ofstream(t.str("short")) << "too-short\n";
+    fs::permissions(t.str("short"), fs::perms::owner_read | fs::perms::owner_write);
+    cl.token_file = t.str("short");
+    std::ostringstream out2, err2;
+    CHECK(run_serve(cl, ctx, out2, err2) == 1);
+    CHECK(err2.str().find("does not start with a session token") != std::string::npos);
+    cl.token_file.clear();
+    cl.assets_dir = t.str("no-such-folder");
+    std::ostringstream out3, err3;
+    CHECK(run_serve(cl, ctx, out3, err3) == 1);
+    CHECK(err3.str().find("not a folder") != std::string::npos);
+    CHECK(out.str().empty());
 }
 
 TEST_CASE("cli: info prints the versions and every service") {
@@ -508,3 +567,211 @@ TEST_CASE("cli: an install that cannot stage a file installs nothing") {
     CHECK_FALSE(fs::exists(t.path / "user" / "b.caliper.toml"));
     CHECK(hidden_in(t.path / "user").empty());
 }
+
+// ---- caliper serve as a process --------------------------------------------
+// Runs the caliper executable named by CALIPER_TEST_CALIPER_EXE (the ctest
+// entry caliper_cli_serve sets it) as a user runs it: it must print its link,
+// write the hub file, serve a viewer and a producer, stop on SIGTERM with BYE
+// to both, exit with 0, and leave neither the hub file nor a listening socket.
+// POSIX only (it sends a signal).
+#ifndef _WIN32
+namespace {
+
+struct Proc {
+    pid_t pid = -1;
+    int out = -1;
+    std::string text;
+    int status = -1;
+
+    bool start(const std::string& exe, const std::vector<std::string>& args, const std::vector<std::string>& env_add) {
+        int fds[2];
+        if (::pipe(fds) != 0) return false;
+        posix_spawn_file_actions_t fa;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_adddup2(&fa, fds[1], 1);
+        posix_spawn_file_actions_adddup2(&fa, fds[1], 2);
+        posix_spawn_file_actions_addclose(&fa, fds[0]);
+        std::vector<std::string> argv_s = {exe};
+        argv_s.insert(argv_s.end(), args.begin(), args.end());
+        std::vector<char*> argv;
+        for (auto& a : argv_s) argv.push_back(a.data());
+        argv.push_back(nullptr);
+        std::vector<std::string> env_s;
+        for (char** e = environ; *e; ++e) env_s.emplace_back(*e);
+        env_s.insert(env_s.end(), env_add.begin(), env_add.end());
+        std::vector<char*> envp;
+        for (auto& e : env_s) envp.push_back(e.data());
+        envp.push_back(nullptr);
+        const int rc = posix_spawn(&pid, exe.c_str(), &fa, nullptr, argv.data(), envp.data());
+        posix_spawn_file_actions_destroy(&fa);
+        ::close(fds[1]);
+        out = fds[0];
+        ::fcntl(out, F_SETFL, ::fcntl(out, F_GETFL) | O_NONBLOCK);
+        return rc == 0;
+    }
+    void read_some(int ms) {
+        pollfd p{out, POLLIN, 0};
+        if (::poll(&p, 1, ms) <= 0) return;
+        char buf[4096];
+        for (;;) {
+            const ssize_t r = ::read(out, buf, sizeof buf);
+            if (r <= 0) break;
+            text.append(buf, (size_t)r);
+        }
+    }
+    bool read_until(const std::string& needle, int ms) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (text.find(needle) == std::string::npos && std::chrono::steady_clock::now() < end) read_some(20);
+        return text.find(needle) != std::string::npos;
+    }
+    // The exit code, or -1 when it did not exit within `ms` (then it is killed).
+    int wait(int ms) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < end) {
+            read_some(10);
+            if (::waitpid(pid, &status, WNOHANG) == pid) {
+                pid = -1;
+                read_some(0);
+                return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            }
+        }
+        return -1;
+    }
+    ~Proc() {
+        if (pid > 0) {
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0);
+        }
+        if (out >= 0) ::close(out);
+    }
+};
+
+// A client that says HELLO and collects what the hub sends.
+struct HubClient {
+    caliper_net::Client c;
+    std::vector<caliper_net::wire::Message> got;
+    bool open = false, closed = false;
+    uint16_t code = 0;
+    void poll() {
+        for (auto& e : c.poll(5)) {
+            using T = caliper_net::Event::Type;
+            if (e.type == T::Open) open = true;
+            if (e.type == T::Closed) {
+                closed = true;
+                code = e.code;
+            }
+            if (e.type == T::Message) {
+                caliper_net::wire::Message m;
+                if (caliper_net::wire::decode(e.data.data(), e.data.size(), &m).ok()) got.push_back(m);
+            }
+        }
+    }
+    template <typename T>
+    const T* find() const {
+        for (const auto& m : got)
+            if (auto* p = std::get_if<T>(&m)) return p;
+        return nullptr;
+    }
+    bool until(const std::function<bool()>& f, int ms = 5000) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (!f() && std::chrono::steady_clock::now() < end) poll();
+        return f();
+    }
+    void send(const caliper_net::wire::Message& m) {
+        std::vector<uint8_t> b;
+        REQUIRE(caliper_net::wire::encode(m, &b));
+        c.send(b.data(), b.size());
+    }
+};
+
+}  // namespace
+
+TEST_CASE("cli: caliper serve runs as a process, serves, stops on SIGTERM and leaves nothing behind") {
+    namespace wire = caliper_net::wire;
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE is not set: run the ctest entry caliper_cli_serve");
+        return;
+    }
+    TempDir t("serve-process");
+    const std::string token = "cli_serve_token-0123456789abcdef";
+    std::ofstream(t.str("token")) << token << "\n";
+    fs::permissions(t.str("token"), fs::perms::owner_read | fs::perms::owner_write);
+    const std::string hub_file = t.str("hub.json");
+
+    Proc p;
+    REQUIRE(p.start(exe, {"serve", "--port", "0", "--token-file", t.str("token")}, {"CALIPER_HUB_FILE=" + hub_file}));
+    REQUIRE_MESSAGE(p.read_until("stop with Ctrl-C", 10000), p.text);
+    // viewers   http://127.0.0.1:<port>/?token=<token>
+    const std::string tag = "viewers   http://127.0.0.1:";
+    const size_t at = p.text.find(tag);
+    REQUIRE(at != std::string::npos);
+    const int port = std::atoi(p.text.c_str() + at + tag.size());
+    REQUIRE(port > 0);
+    CHECK(p.text.find("http://127.0.0.1:" + std::to_string(port) + "/?token=" + token + "\n") != std::string::npos);
+    CHECK(p.text.find("producers ws://127.0.0.1:" + std::to_string(port) + "/v3/stream") != std::string::npos);
+    // The hub file: owner only, with the address and the token.
+    REQUIRE(fs::exists(hub_file));
+    CHECK((fs::status(hub_file).permissions() & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+    std::ifstream hf(hub_file);
+    const std::string hub_text((std::istreambuf_iterator<char>(hf)), std::istreambuf_iterator<char>());
+    CHECK(hub_text.find("\"token\":\"" + token + "\"") != std::string::npos);
+    CHECK(hub_text.find("\"port\":" + std::to_string(port)) != std::string::npos);
+
+    const std::string url = "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token;
+    std::string err;
+    HubClient producer, viewer;
+    REQUIRE(producer.c.connect(url, &err));
+    REQUIRE(producer.until([&] { return producer.open; }));
+    wire::Hello ph;
+    ph.role = CALIPER_NET_ROLE_PRODUCER;
+    ph.session = wire::Identity{"cli-session", "train.py", 77, 1}.to_json();
+    producer.send(ph);
+    REQUIRE(producer.until([&] { return producer.find<wire::Welcome>() != nullptr; }));
+    CHECK(producer.find<wire::Welcome>()->role == CALIPER_NET_ROLE_HUB);
+    REQUIRE(viewer.c.connect(url, &err));
+    REQUIRE(viewer.until([&] { return viewer.open; }));
+    wire::Hello vh;
+    vh.role = CALIPER_NET_ROLE_VIEWER;
+    viewer.send(vh);
+    REQUIRE(viewer.until([&] {
+        auto* s = viewer.find<wire::Sessions>();
+        return s && s->list.size() == 1 && viewer.find<wire::Views>();
+    }));
+    CHECK(viewer.find<wire::Sessions>()->list[0].identity.id == "cli-session");
+    REQUIRE(p.read_until("session cli-session started", 5000));
+
+    ::kill(p.pid, SIGTERM);
+    REQUIRE(viewer.until([&] { return viewer.closed; }));
+    REQUIRE(producer.until([&] { return producer.closed; }));
+    REQUIRE(viewer.find<wire::Bye>());
+    CHECK(viewer.find<wire::Bye>()->reason == CALIPER_NET_BYE_SHUTDOWN);
+    CHECK(viewer.code == CALIPER_NET_CLOSE_GOING_AWAY);
+    REQUIRE(producer.find<wire::Bye>());
+    CHECK(producer.code == CALIPER_NET_CLOSE_GOING_AWAY);
+    CHECK(p.wait(5000) == 0);
+    CHECK(p.text.find("hub stopped") != std::string::npos);
+    CHECK(p.text.find(token, p.text.find("producers")) == std::string::npos);   // the log never repeats it
+
+    // Nothing left: no hub file, nothing listening on the port.
+    CHECK_FALSE(fs::exists(hub_file));
+    for (const auto& e : fs::directory_iterator(t.path))
+        CHECK_MESSAGE(e.path().filename() == "token", e.path().string());
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)port);
+    inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+    CHECK(::connect(fd, (sockaddr*)&a, sizeof a) != 0);
+    ::close(fd);
+
+    // A token file other users can read is refused, and nothing is written.
+    fs::permissions(t.str("token"), fs::perms::owner_read | fs::perms::owner_write | fs::perms::others_read);
+    Proc q;
+    REQUIRE(q.start(exe, {"serve", "--port", "0", "--token-file", t.str("token")}, {"CALIPER_HUB_FILE=" + hub_file}));
+    CHECK(q.wait(5000) == 1);
+    CHECK(q.text.find("chmod 600") != std::string::npos);
+    CHECK_FALSE(fs::exists(hub_file));
+}
+#endif
+
