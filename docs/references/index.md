@@ -22,6 +22,7 @@ The [service catalog](services.md) lists every service id the host serves, with 
 | Page | Service |
 |---|---|
 | [caliper.ui.v1](service-ui-v1.md) | The ImGui context and allocators |
+| [caliper.ui.v1_1](service-ui-v1-1.md) | Adds dock hints, which give each window a role in the docked layout |
 | [caliper.log.v1](service-log-v1.md) | Log lines |
 | [caliper.jobs.v1](service-jobs-v1.md) | Background jobs with progress and cancellation |
 | [caliper.device.v1](service-device-v1.md) | The compute devices the host found |

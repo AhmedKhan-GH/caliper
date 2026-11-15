@@ -4,6 +4,7 @@
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>
 #include <caliper/services/ui_v1.h>
+#include <caliper/services/ui_v1_1.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
@@ -627,6 +628,25 @@ inline bool connect(const CaliperHost* h) {
     ImPlot::SetCurrentContext(ui->implot_context());
     ImPlot3D::SetCurrentContext(ui->implot3d_context());
     return true;
+}
+
+// Tells the host where the window titled `window_title` docks the first time
+// it appears (caliper.ui.v1_1): CALIPER_DOCK_CENTRAL, CALIPER_DOCK_SIDE_TOP or
+// CALIPER_DOCK_SIDE_BOTTOM. Call it beside the window's Begin(), every frame
+// if that is simplest. On a host without caliper.ui.v1_1 it does nothing, so
+// an applet that uses it still requires only caliper.ui.v1.
+inline void dock_hint(const CaliperHost* h, const char* window_title,
+                      uint32_t role) {
+    if (!h || !h->get_service || !window_title) return;
+    auto* ui = static_cast<const CaliperUiV1_1*>(h->get_service(h, CALIPER_UI_V1_1));
+    if (ui && ui->struct_size >= sizeof(CaliperUiV1_1) && ui->dock_hint)
+        ui->dock_hint(window_title, role);
+}
+inline void dock_hint(const Host& host, const char* window_title, uint32_t role) {
+    dock_hint(host.raw(), window_title, role);
+}
+inline void dock_hint(const Host* host, const char* window_title, uint32_t role) {
+    if (host) dock_hint(host->raw(), window_title, role);
 }
 } // namespace ui
 

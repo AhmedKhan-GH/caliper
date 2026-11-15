@@ -1274,3 +1274,42 @@ TEST_CASE("export live: a sidecar-write failure rolls the PNG back, directory un
 #endif  // CALIPER_HAVE_VULKAN
 
 CALIPER_GPU_TEST_MAIN()
+
+// The id list the loader negotiates against and the tables the host vends are
+// kept in two places (negotiation.cpp, host_services.cpp); they must agree.
+TEST_CASE("services: every advertised id is vended") {
+    for (const std::string& id : service_ids()) {
+        CAPTURE(id);
+        CHECK(services_get(id.c_str()) != nullptr);
+    }
+    CHECK(services_get("caliper.nope.v1") == nullptr);
+}
+
+TEST_CASE("ui v1_1: the v1 prefix is ui.v1's, and dock_hint reaches the sink") {
+    const auto* v1 = static_cast<const CaliperUiV1*>(services_get(CALIPER_UI_V1));
+    const auto* v11 = static_cast<const CaliperUiV1_1*>(services_get(CALIPER_UI_V1_1));
+    REQUIRE(v1 != nullptr);
+    REQUIRE(v11 != nullptr);
+    CHECK(v11->struct_size == sizeof(CaliperUiV1_1));
+    CHECK(v1->struct_size == sizeof(CaliperUiV1));
+    CHECK(v11->imgui_context == v1->imgui_context);
+    CHECK(v11->imgui_allocators == v1->imgui_allocators);
+    REQUIRE(v11->dock_hint != nullptr);
+
+    v11->dock_hint("Window", CALIPER_DOCK_SIDE_TOP);   // no sink: nothing happens
+    static std::vector<std::pair<std::string, uint32_t>> seen;
+    seen.clear();
+    set_dock_hint_sink(
+        [](void* user, const char* title, uint32_t role) {
+            CHECK(user == &seen);
+            seen.emplace_back(title, role);
+        },
+        &seen);
+    v11->dock_hint("Window", CALIPER_DOCK_SIDE_TOP);
+    v11->dock_hint(nullptr, CALIPER_DOCK_CENTRAL);      // ignored
+    set_dock_hint_sink(nullptr, nullptr);
+    v11->dock_hint("After", CALIPER_DOCK_CENTRAL);
+    REQUIRE(seen.size() == 1);
+    CHECK(seen[0].first == "Window");
+    CHECK(seen[0].second == (uint32_t)CALIPER_DOCK_SIDE_TOP);
+}

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <set>
 #include <string>
 #include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log sink)
@@ -17,6 +18,13 @@ namespace caliper_host {
 void set_applet_log_sink(void (*sink)(void* userdata, CaliperLogLevel level,
                                       const char* message_utf8),
                          void* userdata);
+// caliper.ui.v1_1 dock_hint routing: every hint an applet gives is passed to
+// the sink with its window title and role (CaliperDockRole). The caliper
+// executable installs one for its applet page's docked layout; with none
+// installed a hint does nothing. UI thread only. Pass nullptr to remove it.
+void set_dock_hint_sink(void (*sink)(void* userdata, const char* window_title,
+                                     uint32_t role),
+                        void* userdata);
 // Host-side service registry (docs/references/abi.md). Call services_init() once
 // after the ImGui/ImPlot/ImPlot3D contexts exist; tables are static and live
 // for the process lifetime (the ABI's pointer-validity guarantee).

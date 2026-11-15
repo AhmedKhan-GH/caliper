@@ -19,6 +19,7 @@
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/ui_v1.h>
+#include <caliper/services/ui_v1_1.h>
 #include <cstdio>
 
 // Defined by the build on the host library; empty when it does not.
@@ -102,6 +103,7 @@ std::string data_schema_reason(uint32_t stored, uint32_t applet) {
 const std::set<std::string>& host_service_ids() {
     static const std::set<std::string> ids = {
         CALIPER_UI_V1,
+        CALIPER_UI_V1_1,
         CALIPER_LOG_V1,
         CALIPER_JOBS_V1,
         CALIPER_DEVICE_V1,

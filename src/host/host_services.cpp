@@ -19,6 +19,7 @@
                             // which also compiles app_paths.cpp (CMakeLists)
 #include <caliper/services/log_v1.h>
 #include <caliper/services/ui_v1.h>
+#include <caliper/services/ui_v1_1.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
 #include <caliper/services/metrics_v1.h>
@@ -103,6 +104,19 @@ void ui_allocators(CaliperImGuiAllocFn* out_alloc, CaliperImGuiFreeFn* out_free,
 }
 const CaliperUiV1 kUi = {sizeof(CaliperUiV1), &ui_imgui, &ui_implot,
                          &ui_implot3d, &ui_allocators};
+
+// --- caliper.ui.v1_1: v1 plus dock_hint (docs/references/service-ui-v1-1.md) ---
+// The hint goes to the page that owns the docked layout (the caliper exe's
+// applet page installs the sink). Without a sink, as in the embed core, a
+// hint changes nothing. Read and written on the UI thread only.
+void (*g_dock_hint_sink)(void*, const char*, uint32_t) = nullptr;
+void* g_dock_hint_userdata = nullptr;
+void ui_dock_hint(const char* title, uint32_t role) {
+    if (g_dock_hint_sink && title && *title)
+        g_dock_hint_sink(g_dock_hint_userdata, title, role);
+}
+const CaliperUiV1_1 kUi11 = {sizeof(CaliperUiV1_1), &ui_imgui, &ui_implot,
+                             &ui_implot3d, &ui_allocators, &ui_dock_hint};
 
 // --- caliper.metrics.v1: DuckDB-backed run/tag/step store (§7.6/§11) ---
 // One process-wide store, opened in services_init(). If the disk open fails we
@@ -816,9 +830,15 @@ void set_applet_log_sink(void (*sink)(void*, CaliperLogLevel, const char*),
     g_applet_log_userdata = userdata;
 }
 
+void set_dock_hint_sink(void (*sink)(void*, const char*, uint32_t), void* userdata) {
+    g_dock_hint_sink = sink;
+    g_dock_hint_userdata = userdata;
+}
+
 const void* services_get(const char* id) {
     if (!id) return nullptr;
     if (std::strcmp(id, CALIPER_UI_V1) == 0)     return &kUi;
+    if (std::strcmp(id, CALIPER_UI_V1_1) == 0)   return &kUi11;
     if (std::strcmp(id, CALIPER_LOG_V1) == 0)    return &kLog;
     if (std::strcmp(id, CALIPER_JOBS_V1) == 0)   return &kJobs;
     if (std::strcmp(id, CALIPER_DEVICE_V1) == 0) return &kDevice;

@@ -1,6 +1,6 @@
 # Service catalog
 
-The host serves 18 service ids on `main`, which are 11 services and their additive revisions. An applet obtains a service by id from `CaliperHost.get_service`, which returns `NULL` for an id the host does not serve. An applet lists the ids it cannot run without in its manifest; see [Manifest](manifest.md). The ids are defined in `sdk/include/caliper/services/`, and the host serves them from `src/host/host_services.cpp`.
+The host serves 19 service ids on `main`, which are 11 services and their additive revisions. An applet obtains a service by id from `CaliperHost.get_service`, which returns `NULL` for an id the host does not serve. An applet lists the ids it cannot run without in its manifest; see [Manifest](manifest.md). The ids are defined in `sdk/include/caliper/services/`, and the host serves them from `src/host/host_services.cpp`.
 
 ## Revisions
 
@@ -11,6 +11,7 @@ A revision of a service is a new id with a `_N` suffix after the version, for ex
 | Id | Purpose | Page | Additive over | Threading |
 |---|---|---|---|---|
 | `caliper.ui.v1` | The ImGui, ImPlot and ImPlot3D contexts and the host's allocator pair | [ui](service-ui-v1.md) | | UI thread only |
+| `caliper.ui.v1_1` | Adds `dock_hint`, the role of each window in the host's docked layout | [ui v1_1](service-ui-v1-1.md) | `ui.v1` | UI thread only |
 | `caliper.log.v1` | Pre-formatted log lines into the host console | [log](service-log-v1.md) | | Any thread. Resolve the table in `on_init` and cache it. |
 | `caliper.jobs.v1` | Background work with progress and cancellation | [jobs](service-jobs-v1.md) | | A job runs on a host worker thread and polls `cancelled()` |
 | `caliper.device.v1` | The compute device the host found: CPU, CUDA or Metal | [device](service-device-v1.md) | | Not stated in the header |

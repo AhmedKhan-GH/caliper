@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include <caliper/abi.h>
 #include <caliper/services/ui_v1.h>
+#include <caliper/services/ui_v1_1.h>
 #include <caliper/services/log_v1.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/device_v1.h>
@@ -550,4 +551,52 @@ TEST_CASE("export v1_1 is an additive, prefix-compatible superset of v1") {
     CHECK(std::string(CALIPER_EXPORT_V1_1) == "caliper.export.v1_1");
     // Prefix parity in the id vocabulary too: v1_1 keeps the v1 dotted stem.
     CHECK(std::string(CALIPER_EXPORT_V1_1).rfind("caliper.export.v1", 0) == 0);
+}
+
+TEST_CASE("ui v1_1 is an additive, prefix-compatible superset of v1") {
+    static_assert(std::is_standard_layout_v<CaliperUiV1_1>);
+    // The frozen v1 table, slot for slot.
+    CHECK(offsetof(CaliperUiV1_1, struct_size) == offsetof(CaliperUiV1, struct_size));
+    CHECK(offsetof(CaliperUiV1_1, imgui_context) == offsetof(CaliperUiV1, imgui_context));
+    CHECK(offsetof(CaliperUiV1_1, implot_context) == offsetof(CaliperUiV1, implot_context));
+    CHECK(offsetof(CaliperUiV1_1, implot3d_context) ==
+          offsetof(CaliperUiV1, implot3d_context));
+    CHECK(offsetof(CaliperUiV1_1, imgui_allocators) ==
+          offsetof(CaliperUiV1, imgui_allocators));
+    // The one appended entry, right after the v1 table.
+    CHECK(offsetof(CaliperUiV1_1, dock_hint) == sizeof(CaliperUiV1));
+    CHECK(sizeof(CaliperUiV1) == 40);
+    CHECK(sizeof(CaliperUiV1_1) == 48);
+    CHECK(std::string(CALIPER_UI_V1) == "caliper.ui.v1");
+    CHECK(std::string(CALIPER_UI_V1_1) == "caliper.ui.v1_1");
+    // Role values are fixed integers.
+    CHECK(CALIPER_DOCK_CENTRAL == 0);
+    CHECK(CALIPER_DOCK_SIDE_TOP == 1);
+    CHECK(CALIPER_DOCK_SIDE_BOTTOM == 2);
+}
+
+TEST_CASE("sugar: ui::dock_hint reaches ui.v1_1 and is silent without it") {
+    caliper::testing::FixtureHost fx;
+    caliper::ui::dock_hint(fx.host(), "Main view", CALIPER_DOCK_CENTRAL);
+    caliper::Host host(fx.host());
+    caliper::ui::dock_hint(host, "Controls", CALIPER_DOCK_SIDE_TOP);
+    caliper::ui::dock_hint(&host, "Details", CALIPER_DOCK_SIDE_BOTTOM);
+    REQUIRE(fx.dock_hints().size() == 3);
+    CHECK(fx.dock_role("Main view") == CALIPER_DOCK_CENTRAL);
+    CHECK(fx.dock_role("Controls") == CALIPER_DOCK_SIDE_TOP);
+    CHECK(fx.dock_role("Details") == CALIPER_DOCK_SIDE_BOTTOM);
+    CHECK(fx.dock_role("Never hinted") == -1);
+
+    // A host that serves only ui.v1: nothing happens and nothing crashes.
+    CaliperHost bare{};
+    bare.struct_size = sizeof bare;
+    bare.get_service = [](const CaliperHost*, const char* id) -> const void* {
+        static const CaliperUiV1 v1{sizeof(CaliperUiV1), nullptr, nullptr, nullptr,
+                                    nullptr};
+        return std::string(id) == CALIPER_UI_V1 ? &v1 : nullptr;
+    };
+    caliper::ui::dock_hint(&bare, "Main view", CALIPER_DOCK_SIDE_TOP);
+    caliper::ui::dock_hint((const caliper::Host*)nullptr, "x", 0);
+    caliper::ui::dock_hint((const CaliperHost*)nullptr, "x", 0);
+    CHECK(fx.dock_hints().size() == 3);
 }

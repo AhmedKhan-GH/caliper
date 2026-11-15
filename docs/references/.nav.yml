@@ -12,6 +12,7 @@ nav:
   - Services:
       - services.md
       - service-ui-v1.md
+      - service-ui-v1-1.md
       - service-log-v1.md
       - service-jobs-v1.md
       - service-device-v1.md
