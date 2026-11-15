@@ -4,8 +4,9 @@ the loss, attention and embedding widgets draw and change; choosing a layer
 and a head in the attention widget's picker changes its data view; a
 selection in the embedding widget reaches ``embedding_widget.selection``; and
 ``attention_widget.data_view = {...}`` from Python reaches the widget. Run
-in the "metal" mode (WebAssembly views on WebGPU) and the "canvas2d" mode
-(the element's own views).
+in the "metal" mode, where Caliper's WebAssembly views draw all three widgets
+on WebGPU and make the selection, and the "canvas2d" mode, where the
+element's own TypeScript views do.
 
     CALIPER_HEADLESS_DIR=<scratch> CALIPER_TEST_ARTIFACTS=<shots> \\
     PYTHONPATH=python .venv/bin/python -m pytest --noconftest \\
@@ -96,11 +97,13 @@ def test_live_training_notebook(tmp_path, mode):
         if mode == "canvas2d":
             assert set(renderers.values()) == {"canvas2d"}, renderers
         else:
-            assert renderers["attention"] == "wasm" and renderers["loss"] == "wasm", renderers
+            # The WebAssembly views draw every kind the demo shows.
+            assert set(renderers.values()) == {"wasm"}, renderers
 
         # Each widget draws, and updates while the cell trains. The embedding
-        # barely moves during the loss plateau, so for it the point view's own
-        # frame count shows the updates (it is always the element's own view).
+        # barely moves during the loss plateau, so for it the view's own count
+        # shows the updates: the snapshots the WebAssembly views applied, or
+        # the frames the element's points view drew.
         for n in names:
             area = nb.page.locator(f'caliper-view[view="{n}"] canvas:visible').first
             before = nb.page.evaluate(STATE, n)
@@ -112,7 +115,8 @@ def test_live_training_notebook(tmp_path, mode):
             least = 0.001 if n == "embedding" else 0.005          # 256 small points
             assert png_stats(first).nonblank(least), (n, png_stats(first).to_dict())
             if n == "embedding":
-                assert after["frames"] > before["frames"], (before, after)
+                key = "updates" if mode == "metal" else "frames"
+                assert after[key] > before[key], (before, after)
             else:
                 assert changed(first, second), f"{n} did not change while training"
         nb.screenshot(shots / f"notebook-{mode}-training.png")
@@ -131,9 +135,11 @@ def test_live_training_notebook(tmp_path, mode):
 
         # A rectangle selection in the embedding (shift + alt drag), after a
         # double click fits the view to the points, which move while it trains.
+        # The visible canvas takes the events: the WebAssembly views' own, or
+        # the overlay above the element's points view.
         emb = nb.page.locator('caliper-view[view="embedding"] canvas:visible').first
         emb.scroll_into_view_if_needed()
-        box = emb.bounding_box()                  # the overlay canvas above it takes the events
+        box = emb.bounding_box()
         nb.page.mouse.dblclick(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
         nb.page.wait_for_timeout(300)
         x0, y0 = box["x"] + box["width"] * 0.03, box["y"] + box["height"] * 0.03
@@ -148,6 +154,8 @@ def test_live_training_notebook(tmp_path, mode):
         nb.page.keyboard.up("Alt")
         nb.page.keyboard.up("Shift")
         nb.wait(f"() => (({STATE})('embedding') || {{}}).selected > 0", timeout=20)
+        assert nb.page.evaluate(STATE, "embedding")["renderer"] == renderers["embedding"]
+        nb.page.wait_for_timeout(300)
         nb.page.locator('caliper-view[view="embedding"]').screenshot(
             path=str(shots / f"notebook-{mode}-embedding-selection.png"))
 
