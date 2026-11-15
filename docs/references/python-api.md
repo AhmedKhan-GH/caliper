@@ -269,6 +269,142 @@ renders a frame (at most 60 per second), so `view_info`, `view_readback` and
 `caliper.render()` returns the composited frame as an `(H, W, 4)` uint8 array
 to display.
 
+<!-- Network streaming block (sprint 2): serve, widget and data views. Each
+"TO CONFIRM" comment below marks a signature or behaviour that follows the
+sprint contracts and is to be checked against the code at integration. -->
+
+## Network streaming
+
+`caliper.serve()` serves the script's live views over a WebSocket on the
+loopback interface, `caliper.widget()` shows one of them in a notebook cell,
+and data views let a viewer choose which part of a tensor travels.
+[Network streaming](../explanations/network-streaming.md) explains the design,
+the [Wire protocol](wire-protocol.md) reference defines the messages, and
+[Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md)
+uses all three. `websockets` is a dependency of the package. The widget needs
+the extra `caliper[notebook]`, which adds anywidget.
+
+### serve
+
+```python
+server = caliper.serve(port=0)
+```
+
+Start the server of this process and print its link,
+`http://127.0.0.1:<port>/?token=<token>`.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `port` | `int` | 0 | TCP port on 127.0.0.1; 0 lets the system choose a free one |
+
+The server listens on 127.0.0.1 only and makes a new random session token.
+It is one more route: every view call is offered to it, and a view takes a
+snapshot for the server only while a viewer subscribes to that view. Snapshots
+for the server are reduced on the device by the view's data view and copied
+off it; the call still returns at once.
+
+| Address | Serves |
+|---|---|
+| `http://127.0.0.1:<port>/?token=<token>` | The viewer page: every view of the stream in a grid |
+| `ws://127.0.0.1:<port>/v3/stream?token=<token>` | The stream, as the [Wire protocol](wire-protocol.md) reference defines it |
+
+A request without the right token is refused. The stream carries snapshots,
+series, subscriptions, data view requests and viewer events, and never host
+commands.
+
+| Member | Meaning |
+|---|---|
+| `url` | The viewer page's link, with the token |
+| `port` | The port the server listens on |
+| `token` | The session token |
+| `close()` | Stop the server and end the stream to every viewer |
+
+<!-- TO CONFIRM: the class name of the returned server; what a second serve()
+call does while one is open; whether close() may be called twice and whether it
+runs at interpreter exit. -->
+
+### widget
+
+```python
+w = caliper.widget(name, kind=None, *, height=320)
+```
+
+An anywidget widget that shows the live view `name` in a notebook cell. It
+reads the server's WebSocket stream directly, not the notebook's message
+channel, so it keeps updating while a cell runs. It is an ipywidgets widget, so
+`HBox` and `VBox` lay several out together.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | `str` | | The view to show. The widget may be created before the view's first call |
+| `kind` | `str` or `None` | `None` | `"series"`, `"heatmap"`, `"image"`, `"points"` or `"histogram"`; `None` takes the kind from the stream |
+| `height` | `int` | 320 | Height in CSS pixels |
+
+<!-- TO CONFIRM: whether widget() needs serve() first or starts a server
+itself, and what an unknown kind raises. -->
+
+Its traits, synced through anywidget:
+
+| Trait | Type | Meaning |
+|---|---|---|
+| `src` | `str` | The stream's `ws://` URL, with the token |
+| `view` | `str` | The view's name |
+| `kind` | `str` or `None` | The live view's kind |
+| `height` | `int` | Height in CSS pixels |
+| `data_view` | `dict` | Both directions: the browser writes the data view the user picked, and setting it from Python makes the widget request that data view |
+| `selection` | `dict` | Written by the browser: the latest selection, from the view's `select` event |
+
+<!-- TO CONFIRM: the exact content of `selection` (the whole event
+{"view", "type", "detail"} or only its detail). -->
+
+Traits travel over the notebook's message channel, which the kernel reads only
+while no cell runs. A selection made during a long cell reaches `selection`
+when the cell ends. A data view chosen in the widget's own picker goes to the
+producer over the stream and takes effect during the cell.
+
+### Data views
+
+```python
+caliper.show(t, name="tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
+             dims=None, data_view=None)
+```
+
+<!-- TO CONFIRM: the names `dims` and `data_view`; whether points() and
+histogram() take them too; how watch() offers data views of activations. -->
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `dims` | sequence of `str` or `None` | `None` | One name for each dimension of `t`. Naming the dimensions makes `t` a source that a viewer can index and reduce |
+| `data_view` | `dict` or `None` | `None` | The view's default data view, in the form below |
+
+A data view request is a dict in which every field is optional. An empty dict
+means the view's default.
+
+| Field | Form | Meaning |
+|---|---|---|
+| `source` | `str` | The source to read |
+| `index` | `{"<dim>": i}`, `{"<dim>": [start, stop]}` or `{"<dim>": [start, stop, step]}` | An integer selects one position and drops the dimension; a range keeps the dimension |
+| `reduce` | `{"<dim>": op}`, with `op` one of `"mean"`, `"max"`, `"min"` and `"norm"` | Reduces over the dimension and removes it |
+| `budget` | `{"max_extent": n, "max_points": n}` | The largest heatmap extent and the largest number of points the viewer wants |
+
+The producer applies the index, then the reduction, then the budget, which
+pools a heatmap or samples points, all on the tensor's device. The dimensions
+that remain are drawn by the layout rules of [show](#show); two make a heatmap.
+
+<!-- TO CONFIRM: what happens when the dimensions that remain do not fit the
+live view, and the default budget. -->
+
+A view with named dimensions advertises an offer to its viewers: its sources,
+each with its name, its dimensions and their sizes, and its dtype, and its
+default data view. A viewer builds its picker from the offer. Each reply carries
+the resolved data view, which is the request with every default filled in.
+
+```python
+caliper.show(attention, "attention", dims=("layer", "sequence", "head", "query", "key"),
+             data_view={"index": {"layer": 1, "sequence": 0, "head": 0}})
+widget.data_view = {"index": {"layer": 0, "sequence": 0}, "reduce": {"head": "max"}}
+```
+
 ## Inspection and test helpers
 
 These read the in-process core and raise `RuntimeError` without a `window()` or

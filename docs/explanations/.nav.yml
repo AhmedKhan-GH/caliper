@@ -7,6 +7,7 @@ nav:
   - zero-copy.md
   - vulkan-cuda.md
   - live-streaming.md
+  - network-streaming.md
   - testing.md
   - ui-principles.md
   - glob: "*"
