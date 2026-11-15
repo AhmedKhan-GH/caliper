@@ -43,19 +43,19 @@
   img { display: block; max-width: 100%; height: auto; }
   code { font: 0.92em var(--mono); color: var(--parchment); }
   .wrap { max-width: var(--max); margin: 0 auto; padding: 0 28px; }
-  .caps { font-family: var(--display); text-transform: uppercase; font-weight: normal; }
+  .caps { font-family: var(--text); text-transform: uppercase; font-weight: normal; }
 
   /* Corners: the 45-degree cut is kept for what matters, the mark and the primary action, as in the app marks'
      frames. Everything else, buttons, chips, cards, code and figures, takes a small radius, and the app's own
      window keeps the desktop's rounded corners. */
 
   /* Buttons: inscriptional caps on a ruled plate. */
-  .btn { --c: 8px; display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px 11px; font: 14px/1 var(--display);
+  .btn { --c: 8px; display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px 11px; font: 14px/1 var(--text);
          letter-spacing: .16em; text-transform: uppercase; cursor: pointer; transition: background .15s, color .15s; }
   .btn-primary { color: var(--deep); background: var(--parchment); border: 1px solid var(--parchment); border-radius: 4px; }
   .btn-primary:hover { background: #f4eee3; border-color: #f4eee3; }
   /* A download that isn't out yet: greyed and not a link, as on the Falcon site. */
-  .btn .sep { font-family: var(--text); }   /* the display face has no middle dot */
+  .btn .sep { font-family: var(--text); }   /* the middle dot stays in the text face */
   .btn-soon { color: var(--deep); background: var(--bronze); border: 1px solid var(--bronze); border-radius: 4px; opacity: .45; filter: saturate(.55); cursor: not-allowed; }   /* filled gold, greyed: not out yet */
   .soon-grid { display: grid; gap: 20px; margin-top: 20px; }
   .soon-small { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 34px; }
@@ -66,7 +66,7 @@
   .soon-small .soon-fig { margin-top: 0; }
   .soon-card { scroll-margin-top: 90px; display: flex; flex-direction: column; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; overflow: hidden; }
   .soon-copy { padding: 22px 22px 20px; }
-  .soon-card h3 { margin: 0; font: 14px/1.4 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--parchment); }
+  .soon-card h3 { margin: 0; font: 14px/1.4 var(--text); letter-spacing: .2em; text-transform: uppercase; color: var(--parchment); }
   .soon-card p { margin: 10px 0 0; font-size: 15px; line-height: 1.6; color: var(--secondary); }
   .soon-fig { margin-top: auto; padding: 18px 16px 16px; border-top: 1px solid var(--rule-faint); overflow-x: auto; }
   .soon-fig svg.hw { min-width: 0; }
@@ -147,7 +147,7 @@
   .brand { display: flex; align-items: center; gap: 12px; }
   .brand img { width: 36px; height: 36px; }
   .brand span { font: 17px/1 var(--display); letter-spacing: .22em; padding-top: 2px; }
-  nav .links { display: flex; gap: 26px; margin-left: auto; color: var(--secondary); font: 13px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
+  nav .links { display: flex; gap: 26px; margin-left: auto; color: var(--secondary); font: 13px/1 var(--text); letter-spacing: .18em; text-transform: uppercase; }
   nav .links a:hover { color: var(--parchment); }
   nav .btn { padding: 10px 16px 9px; font-size: 12px; }
   nav .links .soon { opacity: .45; cursor: not-allowed; }   /* no download yet: not a link */
@@ -168,17 +168,17 @@
   .hero .wrap { position: relative; }
   .hero-mark { display: block; width: 136px; height: 136px; margin: 0 auto 26px; overflow: visible; }
   /* The name is the hero's headline; the trailing letter-space is padded on the left so the word sits centred. */
-  .hero h1 { font: clamp(44px, 10.5vw, 116px)/1 var(--display); letter-spacing: .16em; padding-left: .16em; margin: 0 auto;
+  .hero h1 { font: clamp(44px, 10.5vw, 116px)/1 var(--text); letter-spacing: .16em; padding-left: .16em; margin: 0 auto;
              text-shadow: 0 18px 44px rgba(0, 0, 0, .55); }
-  .tagline { font: clamp(15px, 2vw, 22px)/1.4 var(--display); letter-spacing: .2em; padding-left: .2em; text-transform: uppercase;
+  .tagline { font: clamp(15px, 2vw, 22px)/1.4 var(--text); letter-spacing: .2em; padding-left: .2em; text-transform: uppercase;
              color: var(--secondary); margin: 22px auto 26px; max-width: 980px; text-wrap: balance; }
-  .eyebrow { font: 13px/1 var(--display); letter-spacing: .26em; color: var(--bronze); text-transform: uppercase; }
-  h1 { font: clamp(30px, 4.4vw, 54px)/1.14 var(--display); letter-spacing: .07em; text-transform: uppercase; margin: 18px auto 22px; max-width: 980px; font-weight: normal; }
+  .eyebrow { font: 13px/1 var(--text); letter-spacing: .26em; color: var(--bronze); text-transform: uppercase; }
+  h1 { font: clamp(30px, 4.4vw, 54px)/1.14 var(--text); letter-spacing: .07em; text-transform: uppercase; margin: 18px auto 22px; max-width: 980px; font-weight: normal; }
   .lede { color: var(--secondary); font-size: clamp(17px, 1.9vw, 20px); max-width: 720px; margin: 0 auto 36px; }
   .actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
   .fine { color: var(--faint); font-size: 14px; margin-top: 18px; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 34px auto 0; }
-  .chip { padding: 6px 13px 5px; border: 1px solid var(--rule); border-radius: 3px; background: var(--plate); font: 12px/1.4 var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--secondary); }
+  .chip { padding: 6px 13px 5px; border: 1px solid var(--rule); border-radius: 3px; background: var(--plate); font: 12px/1.4 var(--text); letter-spacing: .18em; text-transform: uppercase; color: var(--secondary); }
   /* The screenshot is the real macOS window: rounded like the desktop draws it, with its edge and shadow. */
   .shot { margin: 64px auto 0; max-width: 1100px; }
   .hero .shot { max-width: none; width: min(1220px, calc(100vw - 56px)); margin-left: 50%; transform: translateX(-50%); }
@@ -190,12 +190,12 @@
   section > .wrap { border-top: 1px solid var(--rule-faint); padding-top: 64px; }
   .label { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
   .label::before { content: ""; width: 28px; height: 1px; background: var(--bronze); }
-  h2 { font: clamp(24px, 3vw, 36px)/1.2 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0 0 18px; font-weight: normal; }
+  h2 { font: clamp(24px, 3vw, 36px)/1.2 var(--text); letter-spacing: .06em; text-transform: uppercase; margin: 0 0 18px; font-weight: normal; }
   .intro { color: var(--secondary); max-width: 720px; margin: 0 0 40px; font-size: 18px; }
   p { margin: 0 0 16px; }
   .muted { color: var(--secondary); }
   .two { display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: start; }
-  .link { font: 13px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--bronze); }
+  .link { font: 13px/1 var(--text); letter-spacing: .18em; text-transform: uppercase; color: var(--bronze); }
   .link:hover { color: var(--bronze-hover); }
 
   /* The pipeline figure: three cut plates joined by rules. */
@@ -205,8 +205,8 @@
   .toc { padding: 72px 0 0; }
   .toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 28px; border-top: 1px solid var(--rule-faint); }
   .toc ol > li { padding-top: 18px; }
-  .toc-n { display: block; font: 12px/1 var(--display); letter-spacing: .24em; color: var(--bronze); }
-  .toc-s { display: block; margin-top: 10px; font: 14px/1.35 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); }
+  .toc-n { display: block; font: 12px/1 var(--text); letter-spacing: .24em; color: var(--bronze); }
+  .toc-s { display: block; margin-top: 10px; font: 14px/1.35 var(--text); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); }
   .toc ul { list-style: none; margin: 10px 0 0; padding: 0; }
   .toc ul a { display: block; padding: 3px 0; font-size: 14.5px; line-height: 1.45; color: var(--secondary); }
   .toc a:hover { color: var(--bronze-hover); }
@@ -214,8 +214,8 @@
   @media (max-width: 520px) { .toc ol { grid-template-columns: minmax(0, 1fr); } }
   .mech-fig:last-child { margin-bottom: 0; }
   .mech-head { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 48px; margin-bottom: 22px; align-items: start; }
-  .mech-head .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
-  .mech-head h3 { font: 22px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; }
+  .mech-head .kicker { font: 12px/1 var(--text); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
+  .mech-head h3 { font: 22px/1.25 var(--text); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; }
   .mech-head p { font-size: 16px; }
   .hw-plate { background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 22px 22px 14px; overflow-x: auto; }
   .hw { display: block; width: 100%; min-width: 820px; height: auto; }
@@ -244,10 +244,10 @@
   .hw .bracket { fill: none; stroke: var(--faint); }
   .hw .leader { stroke: var(--rule); }
   .hw .rulefaint { stroke: var(--rule); }
-  .hw .t { font-family: var(--display); font-size: 12.5px; letter-spacing: .16em; fill: var(--parchment); }
+  .hw .t { font-family: var(--text); font-size: 12.5px; letter-spacing: .16em; fill: var(--parchment); }
   .hw .t.dim { fill: var(--faint); }
   .hw .n { font-family: var(--text); font-size: 12.5px; fill: var(--secondary); }
-  .hw .k { font-family: var(--display); font-size: 11px; letter-spacing: .24em; fill: var(--faint); }
+  .hw .k { font-family: var(--text); font-size: 11px; letter-spacing: .24em; fill: var(--faint); }
   .hw .v { font-family: var(--text); font-size: 17px; fill: var(--parchment); }
   .hw .v.tensor { fill: #c9a273; }
   .hw .v.texture { fill: #7aa3d1; }
@@ -264,7 +264,7 @@
   .code-title { position: relative; padding-left: 20px; }
   .code-title::before { content: ""; position: absolute; left: 1px; top: 3px; width: 5px; height: 5px; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: rotate(-45deg); transition: transform .15s; }
   .code-panel[open] .code-title::before { transform: rotate(45deg); top: 1px; }
-  .code-title { font: 11px/1.3 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--secondary); }
+  .code-title { font: 11px/1.3 var(--text); letter-spacing: .22em; text-transform: uppercase; color: var(--secondary); }
   .code-title { flex: 0 1 auto; }
   .code-file { flex: 1 1 0; min-width: 8em; font: 12px/1.3 var(--mono); color: var(--faint); text-align: right; }
   .code-file:hover { color: var(--bronze); }
@@ -278,7 +278,7 @@
   /* Python streaming: the code, then what happens between the two processes. */
   .snippet { max-width: 860px; margin: 30px 0 20px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 6px; overflow: hidden; }
   .snippet-head { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px 9px; border-bottom: 1px solid var(--rule-faint);
-                  font: 11px/1.3 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--faint); }
+                  font: 11px/1.3 var(--text); letter-spacing: .22em; text-transform: uppercase; color: var(--faint); }
   .snippet-head a { font: 12px/1.3 var(--mono); letter-spacing: 0; text-transform: none; color: var(--faint); }
   .snippet-head a:hover { color: var(--bronze); }
   .hw .mono { font-family: var(--mono); font-size: 13.5px; fill: var(--parchment); }
@@ -322,7 +322,7 @@
   /* Cross-platform development: the platforms, two canvas mockups of graphics built from model data, the draw call. */
   .dev-stack { margin: 28px 0 24px; border-top: 1px solid var(--rule-faint); }
   .dev-row { display: grid; grid-template-columns: 9em 1fr; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule-faint); }
-  .dev-row .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); }
+  .dev-row .k { font: 11px/1 var(--text); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); }
   .dev-items { display: flex; flex-wrap: wrap; gap: 10px 26px; }
   .dev-item { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; color: var(--parchment); }
   .dev-item img { width: 22px; height: 22px; border-radius: 5px; background: #f2eee6; }
@@ -351,17 +351,17 @@
   .sub-head { margin-top: 88px; scroll-margin-top: 90px; }
   .sub-head.sub-first { margin-top: 34px; }
   .sub-minor { margin-top: 56px; scroll-margin-top: 90px; }
-  .sub-minor .kicker { font: 11px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 10px; }
-  .sub-minor h4 { font: 17px/1.3 var(--display); letter-spacing: .1em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
+  .sub-minor .kicker { font: 11px/1 var(--text); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 10px; }
+  .sub-minor h4 { font: 17px/1.3 var(--text); letter-spacing: .1em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
   .build-two { margin-top: 26px; }
   #products .soon-big { margin-top: 34px; }
   .sub-head + .xp { margin-top: 26px; }
-  .sub-head .kicker { font: 12px/1 var(--display); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
-  .sub-head h3 { font: 22px/1.25 var(--display); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
+  .sub-head .kicker { font: 12px/1 var(--text); letter-spacing: .22em; color: var(--bronze); text-transform: uppercase; margin-bottom: 12px; }
+  .sub-head h3 { font: 22px/1.25 var(--text); letter-spacing: .06em; text-transform: uppercase; margin: 0; font-weight: normal; color: var(--parchment); }
   .lib-lede { max-width: 46em; margin: 16px 0 30px; font-size: 17px; line-height: 1.6; color: var(--secondary); }
   #lib .xp-api { grid-template-columns: 290px minmax(0, 1fr); }
   @media (max-width: 760px) { #lib .xp-api { grid-template-columns: minmax(0, 1fr); } }
-  .xp-k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
+  .xp-k { font: 11px/1 var(--text); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
   .xp-api { display: grid; grid-template-columns: max-content 1fr; margin: 0; border-top: 1px solid var(--rule-faint); }
   .xp-api dt, .xp-api dd { margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule-faint); }
   .xp-api dt { font: 13.5px/1.5 var(--mono); color: var(--parchment); padding-right: 28px; }
@@ -373,7 +373,7 @@
             border-bottom: 1px solid var(--rule-faint); font-size: 14.5px; color: var(--secondary); }
   .xp-row code { font: 13px/1.5 var(--mono); color: var(--parchment); }
   .xp-row > code { color: var(--parchment); }
-  .xp-head span { font: 11px/1.6 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--faint); }
+  .xp-head span { font: 11px/1.6 var(--text); letter-spacing: .2em; text-transform: uppercase; color: var(--faint); }
   @media (max-width: 760px) {
     .xp-api { grid-template-columns: 1fr; } .xp-api dt { border-bottom: 0; padding-bottom: 0; }
     .xp-row { grid-template-columns: 1fr 1fr; } .xp-row > code { grid-column: 1 / -1; } .xp-head span:first-child { display: none; }
@@ -387,7 +387,7 @@
   .libs a:hover .lib-name { color: var(--bronze-hover); }
   .platforms { display: grid; grid-template-columns: 6.5em 1fr; margin: 4px 0 20px; border-top: 1px solid var(--rule-faint); }
   .platforms dt, .platforms dd { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--rule-faint); font-size: 15px; }
-  .platforms dt { font: 12px/1.6 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
+  .platforms dt { font: 12px/1.6 var(--text); letter-spacing: .16em; text-transform: uppercase; color: var(--parchment); padding-top: 10px; }
   .platforms dd { color: var(--secondary); }
   @media (max-width: 1000px) { .libs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .tl-plate { position: relative; }
@@ -397,7 +397,7 @@
   @media (max-width: 520px) { .libs { grid-template-columns: 1fr; } }
   .trace-plate { margin-top: 16px; background: var(--deep); border: 1px solid var(--rule-faint); border-radius: 8px; padding: 14px 22px 8px; }
   .trace-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
-  .trace-bar .k { font: 11px/1 var(--display); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
+  .trace-bar .k { font: 11px/1 var(--text); letter-spacing: .24em; text-transform: uppercase; color: var(--faint); margin-right: 4px; }
   .tb-play { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border: 1px solid var(--rule); border-radius: 4px; background: var(--plate); cursor: pointer; }
   .tb-play:hover { background: var(--plate-hover); border-color: var(--faint); }
   .tb-play svg { width: 12px; height: 12px; fill: var(--parchment); }
@@ -415,8 +415,8 @@
   .trace-svg .vsync { stroke: #3ca99c; stroke-dasharray: 3 4; }
   .trace-svg .band { fill: rgba(232, 224, 208, .035); stroke: var(--rule); stroke-dasharray: 2 3; }
   .trace-svg .band-l { font-family: var(--mono); font-size: 11px; fill: var(--faint); }
-  .trace-svg .vsync-l { font-family: var(--display); font-size: 10px; letter-spacing: .22em; fill: #3ca99c; }
-  .trace-svg .lane-name { font-family: var(--display); font-size: 11px; letter-spacing: .16em; fill: var(--parchment); }
+  .trace-svg .vsync-l { font-family: var(--text); font-size: 10px; letter-spacing: .22em; fill: #3ca99c; }
+  .trace-svg .lane-name { font-family: var(--text); font-size: 11px; letter-spacing: .16em; fill: var(--parchment); }
   .trace-svg .lane-sub { font-family: var(--text); font-size: 12.5px; fill: var(--faint); }
   .trace-svg .track { fill: #1a1916; }
   .trace-svg .seg { cursor: pointer; }
@@ -446,7 +446,7 @@
   .trace-svg .now-a[href]:hover .now-c { fill: var(--bronze-hover); }
   .trace-svg .mem .box { fill: #171614; stroke: var(--rule-faint); transition: stroke .15s; }
   .trace-svg .mem.on .box { stroke: var(--bronze-hover); }
-  .trace-svg .mem-name { font-family: var(--display); font-size: 11px; letter-spacing: .18em; fill: var(--parchment); }
+  .trace-svg .mem-name { font-family: var(--text); font-size: 11px; letter-spacing: .18em; fill: var(--parchment); }
   .trace-svg .mem-sub { font-family: var(--text); font-size: 12px; fill: var(--faint); }
   .trace-svg .mem-tag { font-family: var(--mono); font-size: 11px; fill: #3ca99c; }
   .trace-svg .cells rect { fill: #32302c; }
@@ -486,7 +486,7 @@
   .house-name { font: 24px/1 var(--display); letter-spacing: .3em; color: var(--parchment); }
   .house-url { font: 15px/1 var(--text); letter-spacing: .04em; color: var(--faint); }
   .house:hover .house-url { color: var(--bronze-hover); }
-  footer .links { display: flex; gap: 22px; flex-wrap: wrap; font: 12px/1 var(--display); letter-spacing: .18em; text-transform: uppercase; }
+  footer .links { display: flex; gap: 22px; flex-wrap: wrap; font: 12px/1 var(--text); letter-spacing: .18em; text-transform: uppercase; }
   footer a:hover { color: var(--parchment); }
 
   @media (max-width: 900px) {

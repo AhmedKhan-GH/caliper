@@ -72,10 +72,12 @@
 
 body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 
-/* Header: the mark and the name in the display face, on the deep ground, ruled underneath. */
+/* Header: the mark and the site name (the name is a wordmark, in the display face), on the deep ground, ruled underneath.
+   The current page title beside it is a heading, in the text face. */
 .md-header { background: var(--deep); border-bottom: 1px solid var(--rule-faint); box-shadow: none; }
 .md-header__button.md-logo img, .md-header__button.md-logo svg { height: 1.85rem; width: auto; }
 .md-header__title { font-family: var(--display); font-size: .8rem; letter-spacing: .18em; text-transform: uppercase; }
+.md-header__title .md-header__topic + .md-header__topic, .md-header__topic[data-md-component="header-topic"] { font-family: var(--text, "Plex Condensed"); }
 .md-tabs { background: var(--deep); border-bottom: 1px solid var(--rule-faint); }
 
 /* Search: a plate with a hairline, small radius. */
@@ -90,17 +92,17 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 /* Navigation: section titles as the landing page's eyebrows, the current page in bronze. */
 .md-nav { font-size: .72rem; }
 .md-nav__title, .md-nav__item--section > .md-nav__link {
-  font-family: var(--display); font-size: .62rem; letter-spacing: .22em; text-transform: uppercase; color: var(--bronze);
+  font-family: var(--text, "Plex Condensed"); font-size: .62rem; letter-spacing: .22em; text-transform: uppercase; color: var(--bronze);
 }
 .md-nav__link { color: var(--secondary); }
 .md-nav__link:hover, .md-nav__link:focus { color: var(--parchment); }
 .md-nav__link--active, .md-nav__item .md-nav__link--active { color: var(--bronze-hover); }
 .md-sidebar { scrollbar-color: var(--rule) transparent; }
 
-/* Type: headings in the display face, capitals, as on the landing page; inline code in them keeps its case. */
+/* Type: headings in the text face, capitals, as on the landing page; inline code in them keeps its case. */
 .md-typeset { font-size: .82rem; line-height: 1.7; }
 .md-typeset h1, .md-typeset h2, .md-typeset h3 {
-  font-family: var(--display); font-weight: normal; text-transform: uppercase; color: var(--parchment);
+  font-family: var(--text, "Plex Condensed"); font-weight: normal; text-transform: uppercase; color: var(--parchment);
 }
 .md-typeset h1 { font-size: 1.75rem; letter-spacing: .06em; line-height: 1.2; margin-bottom: 1.2em; }
 .md-typeset h2 { font-size: 1.15rem; letter-spacing: .07em; margin-top: 2.2em; padding-top: 1.1em; border-top: 1px solid var(--rule-faint); }
@@ -122,10 +124,10 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 .md-clipboard { color: var(--faint); }
 .md-clipboard:hover { color: var(--bronze); }
 
-/* Tables: rules only, display-face heads. */
+/* Tables: rules only, text-face heads. */
 .md-typeset table:not([class]) { border: 1px solid var(--rule-faint); border-radius: 6px; background: var(--ground); font-size: .74rem; }
 .md-typeset table:not([class]) th {
-  background: var(--plate); color: var(--faint); font-family: var(--display); font-weight: normal; font-size: .6rem;
+  background: var(--plate); color: var(--faint); font-family: var(--text, "Plex Condensed"); font-weight: normal; font-size: .6rem;
   letter-spacing: .2em; text-transform: uppercase; border-bottom: 1px solid var(--rule);
 }
 .md-typeset table:not([class]) td { border-top: 1px solid var(--rule-faint); }
@@ -137,7 +139,7 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
   box-shadow: none; font-size: .78rem;
 }
 .md-typeset .admonition-title, .md-typeset summary {
-  background: none !important; color: var(--parchment); font-family: var(--display); font-weight: normal;
+  background: none !important; color: var(--parchment); font-family: var(--text, "Plex Condensed"); font-weight: normal;
   font-size: .62rem; letter-spacing: .2em; text-transform: uppercase; border: 0;
 }
 .md-typeset .admonition-title::before, .md-typeset summary::before { background-color: var(--bronze); }
@@ -145,7 +147,7 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 /* Footer and the page-to-page links. */
 .md-footer, .md-footer-meta { background: var(--deep); border-top: 1px solid var(--rule-faint); }
 .md-footer__title { font-family: var(--text, "Plex Condensed"); }
-.md-footer__direction { font-family: var(--display); letter-spacing: .2em; text-transform: uppercase; font-size: .55rem; color: var(--faint); }
+.md-footer__direction { font-family: var(--text, "Plex Condensed"); letter-spacing: .2em; text-transform: uppercase; font-size: .55rem; color: var(--faint); }
 
 /* Every admonition type wears the same bronze rule and icon; Material's per-type colours go. */
 .md-typeset :is(.admonition, details) { border-color: var(--rule-faint) !important; border-left-color: var(--bronze) !important; }
