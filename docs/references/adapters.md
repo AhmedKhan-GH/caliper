@@ -181,7 +181,9 @@ The members an applet uses:
 
 The returned `BridgeRef` goes to the `*_from_alloc` calls of
 [`caliper.tensor_bridge.v1_2`](service-tensor-bridge-v1.md). Release and import calls belong to the frame thread, and the pool's
-destructor releases the imports it made. FieldScope, FlowScope, GPTScope, SculptScope,
+destructor releases the imports it made. Torch may free a block from any
+thread, so the pool queues the release of that block's import and drains the
+queue on the frame thread, in `to_bridge` and in the destructor. FieldScope, FlowScope, GPTScope, SculptScope,
 MeshScope, InstanceScope and TwinScope all allocate their drawn buffers this way (see
 [Applets](applets.md)). The platform differences are in
 [Torch on each platform](torch-on-each-platform.md).

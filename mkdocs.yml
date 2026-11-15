@@ -3,10 +3,9 @@ site_url: https://ahmedkhan-gh.github.io/caliper/docs/
 docs_dir: docs
 site_dir: build/wiki-site
 # In the repository, not on the site: the cookbook is written around the applets, which are
-# not shipped, and report/ holds a LaTeX paper.
+# not shipped.
 exclude_docs: |
   guides/ml-applet-cookbook.md
-  report/
 # Broken anchors fail the strict build too, like broken links.
 validation:
   anchors: warn

@@ -174,7 +174,11 @@ host still draws from it.
 
 Every miss returns `false` and the caller falls back to the copying path: no capability bit, an import the host
 declined, a misaligned offset, a window that runs past the allocation, a released allocation. A failed import is
-never a crash or a wrong image. The import memory-stability contract applies: the bytes must not be rewritten until
+never a crash or a wrong image, and a refusal leaves the pixels and the reported path untouched. The bridge and the
+renderer each check the window in a form where no sum can overflow, and an allocation id is never reused, so an update
+after a release always refuses. The `gfx/Vulkan+CUDA` rows drive real `cuMemCreate` blocks through these gates and
+compare each readback byte for byte with the CPU reference; [Verify on Windows hardware](../guides/verify-on-windows.md)
+lists them. The import memory-stability contract applies: the bytes must not be rewritten until
 the next update of the same texture.
 
 ## Derived graphics
