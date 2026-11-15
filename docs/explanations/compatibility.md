@@ -1,6 +1,6 @@
 # Compatibility and epochs
 
-This page explains how the ABI and the services change over time without breaking applets that are already built. The ABI and the service negotiation described here are implemented. The loader does not download dependencies.
+This page explains how the ABI, the services, the SDK, the applets and their stored data are versioned, and how each changes without breaking applets that are already built. The ABI and the negotiation at load are implemented, and the start of [Versioning](#versioning) says which parts of the versioning contract are enforced. The loader does not download dependencies.
 
 The host is a **service registry, not a struct of fields**. Applets obtain capabilities by name through a single extension point:
 
@@ -17,19 +17,6 @@ struct CaliperHost {
 ```
 
 New capabilities arrive as new service ids, never as changes to the base ABI, so the base ABI stays small and stable while the host grows. The price is that every applet must cope with a service that is missing, which the fallback rule in [Architecture](architecture.md#platform-rules) asks of it anyway.
-
-## Growth rules
-
-These four rules let the contract grow without breaking an applet that is already built:
-
-1. **A published service table is immutable.** A new capability ships as a new service id that carries a revision suffix: `caliper.metrics.v1_1`, `caliper.tensor_bridge.v1_2`, `caliper.geometry.v1_3`. The new table starts with a byte-identical copy of the previous table and appends its new entries, and the host keeps serving every older id unchanged. An applet that asks for `caliper.geometry.v1` still gets the original table. Where a revision adds behaviour that a host may not provide, a `caps()` bit says so, one bit per revision. A change that cannot be made by appending is an incompatible change and gets a new major id, such as `caliper.metrics.v2`, served beside the old one. No service has needed one so far.
-2. **Hosts may provide any set of services.** Applets declare `required_services` and probe optional ones at run time. A missing required service is refused at the manifest check, and the landing screen lists the applet as `REFUSED` with the reason.
-3. **`struct_size` is always the first field.** A reader never touches bytes beyond the size the writer declared.
-4. **The ABI epoch changes only for** an entry-point change, a `CaliperHost` layout change, or a UI-stack pin change.
-
-Under these rules an applet built years ago keeps running on a new host, and a new applet checks for a newer id and falls back when the host lacks it, with no epoch bump. The cost is that hosts and applets of different ages must be tested against each other, and the ABI tests pin every frozen layout.
-
-A service, or a revision of one, is published only when an applet needs it. A frozen table cannot be taken back, so it is extracted from working code rather than designed ahead of use. `caliper.data.v1` and `caliper.artifacts.v1` were frozen when EmbedScope needed them, and each geometry revision was added for an applet that needed it.
 
 ## ABI hygiene
 
@@ -67,19 +54,104 @@ On Windows the dynamic CRT is the default, so that the CRT state of the host and
 
 ## Versioning
 
-Every moving part has its own scheme, so a change in one rarely forces a change in another:
+Four layers are versioned separately, so that a change in one rarely forces a change in another.
 
-| Thing | Scheme | Changes when |
+!!! note "Status"
+    The epoch check, the `min_host` check, both required-services checks and the descriptor's agreement with its manifest are enforced today. The following parts are specified on this page and not yet enforced:
+
+    - The loader does not read `[compat].torch`.
+    - The loader does not read the `[build]` table, and `caliper_add_applet()`, which writes it, does not exist yet.
+    - The loader lists every copy of an applet id as its own entry instead of choosing one.
+    - The loader searches no development paths, only the user applets folder and the folder beside the executable.
+    - The loader does not read `[data].schema` and keeps no data-schema stamp.
+
+| Layer | What it versions | Scheme | Declared in |
+|---|---|---|---|
+| [The host ABI epoch and service revisions](#the-host-abi-epoch-and-service-revisions) | The entry points, the `CaliperHost` layout and the UI-stack pin; each service table | An integer epoch, 2 today; a service id with a revision suffix | `[compat].abi_epoch` and `[services]` |
+| [The SDK version](#the-sdk-version) | The installed `caliper-sdk` package | Semver | `[build].sdk`, written by the build |
+| [Each applet's version](#each-applets-version-and-what-it-requires) | The applet and what it requires | Semver, chosen by the applet's author | `[applet].version`, `[compat]` and `[services]` |
+| [The version of stored data](#the-version-of-each-applets-stored-data) | The applet's data folder | An integer of at least 1, chosen by the applet's author | `[data].schema` |
+
+The host application has a semver version of its own, which an applet compares against in `[compat].min_host`. The keys are listed in [Manifest](../references/manifest.md#schema).
+
+### The host ABI epoch and service revisions
+
+The ABI epoch is an integer, 2 today, that versions the frozen contract: the entry points in [`abi.h`](../references/abi.md), the `CaliperHost` layout and the UI-stack pin. A host speaks exactly one epoch, and the epoch check is exact equality. Before it opens an applet's library, the host compares `[compat].abi_epoch` with its own epoch and refuses an applet built for an older or a newer epoch. After opening the library, it checks that the descriptor carries the same epoch.
+
+Within an epoch, each service is versioned by its id. `caliper.geometry.v1` is the first version of a table, `caliper.geometry.v1_1` to `caliper.geometry.v1_3` are revisions that append to it, and a major id such as `caliper.metrics.v2` is reserved for an incompatible change. No service has needed a major id so far.
+
+!!! note "Why epochs, not a rolling ABI"
+    Applets write raw ImGui against the host's headers and share its ImGui context, so the UI-stack pin, which is the exact ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig`, is part of the epoch. Changing the pin is therefore an epoch change. The cost is an applet rebuild, not a silent break. The UI-stack hash in [The SDK version](#the-sdk-version) checks the pin itself when an applet loads. See the [Architecture](architecture.md) page.
+
+#### Growth rules
+
+These four rules let the contract grow without breaking an applet that is already built:
+
+1. **A published service table is immutable.** A new capability ships as a new service id with a revision suffix, such as `caliper.metrics.v1_1`, `caliper.tensor_bridge.v1_2` or `caliper.geometry.v1_3`. The new table starts with a byte-identical copy of the previous table and appends its new entries, and the host keeps serving every older id unchanged, so an applet that asks for `caliper.geometry.v1` still gets the original table. Where a revision adds behaviour that a host may not provide, a `caps()` bit says so, one bit per revision. A change that cannot be made by appending gets a new major id, served beside the old one.
+2. **Hosts may provide any set of services.** An applet lists the services it cannot run without in `[services].required` and probes optional ones at run time. A host that lacks a required service refuses the applet, and the landing screen lists it as `REFUSED` with the reason.
+3. **`struct_size` is always the first field.** A reader never touches bytes beyond the size the writer declared.
+4. **The ABI epoch changes only for** an entry-point change, a `CaliperHost` layout change or a UI-stack pin change.
+
+Under these rules an applet built years ago keeps running on a new host, and a new applet checks for a newer id and falls back when the host lacks it, with no epoch bump. The cost is that hosts and applets of different ages must be tested against each other, and the ABI tests pin every frozen layout.
+
+### The SDK version
+
+The SDK is the installed `caliper-sdk` package, and it is versioned by semver. A patch version fixes the SDK without changing what it offers. A minor version adds services, sugar or build helpers within the same epoch, so an applet that builds with one minor version builds with every later one. The major version changes when the epoch changes, so each major version of the SDK builds applets for one epoch. `find_package(caliper-sdk <version>)` accepts only an installed SDK with the same major version, at or above the one requested.
+
+The build records how an applet was built. `caliper_add_applet()` copies the manifest that the author writes to the folder beside the built library and adds a `[build]` table to the copy. Nobody writes the `[build]` table by hand. It holds two keys:
+
+- `[build].sdk` is the SDK version that built the applet. It is a record for diagnosis, for example when reading a bug report, and the host never compares it. Compatibility is decided by the epoch, the UI-stack hash and service negotiation, not by comparing SDK versions. An applet built with a newer minor version therefore runs on any host of its epoch that serves the services it requires, and a host that lacks one of them refuses the applet by naming that service.
+- `[build].ui_stack` is a hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig` that the applet was compiled against. An applet shares the host's ImGui context, so a mismatch that the epoch number does not catch, such as a changed `imconfig`, would crash in ways that are hard to trace. When the key is present and differs from the host's own hash, the host refuses the applet before it opens the library. A manifest without the key is not checked.
+
+### Each applet's version and what it requires
+
+An applet's `[applet].version` is strict semver, chosen by its author, and the descriptor compiled into the library must carry the same string. The manifest also states what the applet requires, and the host checks each requirement before it opens the library:
+
+| Requirement | Key | The host accepts the applet when |
 |---|---|---|
-| ABI epoch | An integer, 2 today | The entry points, the `CaliperHost` layout or the UI-stack pin change. A host serves exactly one epoch. |
-| SDK | Semver | Minor versions add services, sugar or adapters within an epoch. |
-| Services | Id with a revision suffix: `.v1`, `.v1_1`, `.v1_2`, `.v1_3` | A revision appends entries and never changes an older table. A major id such as `.v2` is for an incompatible change. |
-| Host application | Semver | The interface or features change. An applet states the oldest host it supports in `min_host`. |
-| Applets | Semver, chosen by the applet author | The applet author decides. |
+| ABI epoch | `[compat].abi_epoch` | The value equals the host's epoch. |
+| Oldest host | `[compat].min_host` | The host's version is at least this one, compared numerically. Without the key there is no floor. |
+| Required services | `[services].required` | The host serves every id. The refusal names the first missing one, and the binary's own list is checked again after the library is opened. |
+| Optional services | `[services].optional` | Always. The applet probes these services at run time and falls back when one is missing. |
+| libtorch | `[compat].torch` | The value equals the version of the libtorch that the host provides. Applets that do not link libtorch leave the key out. |
 
-### The epoch check
+A process loads one libtorch, which the host provides for every applet in it (see [Embedding](architecture.md#embedding)), and the libtorch C++ ABI differs between versions. An applet that links libtorch can therefore run only beside the exact version it was built against. A host that provides no libtorch, such as one built with `CALIPER_WITH_TORCH=OFF`, refuses every applet that sets `[compat].torch`.
 
-The epoch check is exact equality. The host compares the manifest's `abi_epoch` with the one epoch it speaks, and any difference is a refusal. The host does not load an applet built for an older epoch or a newer one.
+#### Several copies of one applet
+
+Several copies of one applet id can be installed at once, for example a copy shipped with the app, a newer one in the user applets folder and a development build. The host loads one copy per id. It takes the highest version whose library is present and that passes every check made before the library is opened: the requirements above, the [UI-stack hash](#the-sdk-version) and the [data schema](#the-version-of-each-applets-stored-data). When the newest copy is refused, the host falls back to the next highest, and so on. The choice uses only those checks, so choosing a copy never runs applet code.
+
+The host searches in this order:
+
+1. The development paths (see [Loading during development](../plans/applets-outside-the-core.md#loading-during-development)).
+2. The user applets folder.
+3. The applets shipped with the app.
+
+Version decides, and the search order only breaks ties between equal versions, in favour of the copy found first. A development build therefore replaces an installed copy only when its version is at least as high, and a user-installed update replaces a shipped copy without changing the app.
+
+### The version of each applet's stored data
+
+Each applet owns a data folder, `data/<id>/` under the app-data root, which the host passes to it as `applet_data_dir`. The folder is named by the applet's id, so every version of the applet opens the same folder. `[data].schema` is an integer of at least 1 that versions what the applet stores there.
+
+- The applet migrates its own data upward in `initialize()`. A version that finds data written under a lower schema converts it before using it. The host never migrates the data.
+- The host records the highest schema that has opened the folder in a small stamp file inside it. It updates the stamp before it calls `initialize()`, because migration begins there, so data that a failed `initialize()` left half-migrated is still marked. The stamp belongs to the host, and the applet does not write or remove it.
+- The host refuses an applet whose declared schema is lower than the recorded one, before it opens the library. Together with the fallback in [Several copies of one applet](#several-copies-of-one-applet), this means that falling back to an older version of an applet never opens data that the older version cannot read.
+- An applet that declares no schema is never checked and leaves the stamp unchanged.
+
+An author raises the schema when a change to the stored data makes it unreadable for older versions of the applet, and keeps it when older versions can still read the data.
+
+## The promotion rule
+
+A feature moves into the core only when a second applet needs it. Until then it stays in the applet that built it. A published table cannot be taken back, so a service is extracted from working code rather than designed ahead of use. `caliper.data.v1` and `caliper.artifacts.v1` were frozen when EmbedScope needed them, and each geometry revision was added for an applet that needed it.
+
+A promoted feature arrives as a new service id or as a new revision of an existing service, never as a change to a published table (see [Growth rules](#growth-rules)). From then on:
+
+- An applet that needs the feature declares the new service id. A host that lacks the service refuses the applet when the id is in `[services].required`, and the applet falls back when the id is in `[services].optional`.
+- An applet that bundles its own copy of the feature keeps working unchanged, because nothing it depends on was altered. It can move to the service in a later release of its own.
+
+Sugar that is compiled into the applet, such as the `caliper::viz` components, needs nothing from the host at run time. It arrives in a minor version of the SDK, changes no table, and reaches an applet when the applet is rebuilt.
+
+[Platform candidates](../plans/platform-candidates.md) lists the features that are candidates for promotion and the order in which they move.
 
 ## Negotiation at load
 
@@ -94,6 +166,3 @@ The checks run in order, and the first five happen **before `dlopen`**. The firs
 7. descriptor sanity — id / version / epoch agree with the manifest
 8. required services available (the binary's own list)
 9. `create` and `initialize`
-
-!!! note "Why epochs, not a rolling ABI"
-    The UI-stack pin, which is the exact ImGui, ImPlot and ImPlot3D commits, is part of the epoch, because applets write raw ImGui against those headers. Changing the pin is therefore an epoch change. The cost is an applet rebuild, not a silent break. See the [Architecture](architecture.md) page.

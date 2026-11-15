@@ -38,8 +38,19 @@ Dropping a manifest and its library into either folder installs an applet. See [
 | `[applet]`  | `tag`      | string            | No       | Free-form category label, e.g. `EDA`. Shown in the Instruments table, which sorts by it by default. |
 | `[compat]`  | `abi_epoch`| integer           | Yes      | ABI epoch the applet was built against. Must be an integer ≥ 1.          |
 | `[compat]`  | `min_host` | string            | No       | Minimum host version floor, strict semver `x.y.z`. Omit for no floor.   |
+| `[compat]`  | `torch`    | string            | No       | Exact libtorch version the applet was built against, e.g. `"2.5.1"`. Present only for applets that link libtorch. |
 | `[services]`| `required` | array of strings  | No       | Service IDs the applet cannot run without, e.g. `["caliper.ui.v1"]`.    |
 | `[services]`| `optional` | array of strings  | No       | Service IDs the applet uses if present, e.g. `["caliper.log.v1"]`.      |
+| `[build]`   | `sdk`      | string            | No       | SDK version that built the applet. Written by the build.                |
+| `[build]`   | `ui_stack` | string            | No       | Hash of the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig` the applet was compiled against. Written by the build. |
+| `[data]`    | `schema`   | integer           | No       | Version of the applet's stored data. Must be an integer ≥ 1.            |
+
+!!! note "Status"
+    The keys below are specified but not parsed yet, so the loader ignores them like any unknown key.
+
+    - The loader does not parse `[compat].torch`.
+    - The loader does not parse the `[build]` table, and `caliper_add_applet()`, which writes it, does not exist yet.
+    - The loader does not parse `[data].schema`.
 
 Notes:
 
@@ -56,6 +67,20 @@ Notes:
   `CALIPER_APPLET` macro's `.services`). A service the binary requires but the
   manifest leaves out is still refused when the host lacks it, so keep the two
   lists the same.
+- **`[compat].torch` must match exactly.** The host refuses the applet when the
+  value differs from the version of the libtorch that the host provides, or
+  when the host provides no libtorch. See
+  [Each applet's version and what it requires](../explanations/compatibility.md#each-applets-version-and-what-it-requires).
+- **The `[build]` table is written by the build, never by hand.**
+  `caliper_add_applet()` copies the manifest that the author writes to the
+  folder beside the built library and adds the table to that copy. `sdk` is a
+  record for diagnosis, which the host never compares. `ui_stack`, when
+  present, must equal the host's own hash, or the applet is refused. See
+  [The SDK version](../explanations/compatibility.md#the-sdk-version).
+- **`[data].schema` versions the applet's stored data.** The host refuses an
+  applet whose schema is lower than the highest schema that has opened its
+  data folder. An applet without the key is never checked. See
+  [The version of each applet's stored data](../explanations/compatibility.md#the-version-of-each-applets-stored-data).
 
 ## Applet ids
 

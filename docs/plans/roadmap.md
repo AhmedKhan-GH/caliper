@@ -6,11 +6,11 @@ This page is the only place for the order and status of work. Each phase links t
 
 ## Where things stand
 
-On 15 November 2026, `main` holds the host, the SDK with its 18 service ids, the embeddable core, the Python client and nine applets compiled in the tree. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
+On 15 November 2026, `main` holds the host, the SDK with its 18 service ids, the embeddable core, the Python client and nine applets compiled in the tree. The inspector applet is being developed on the `inspector` branch and is not on `main`. The versioning contract is written, and the loader enforces its epoch, `min_host` and service checks but not yet the rest of it. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
 
 ## Phase 1: one core with versioned applets
 
-1. Write the versioning contract into [Compatibility and epochs](../explanations/compatibility.md). It has four layers: the host ABI and service versions, the SDK version, each applet's version and what it requires, and the schema version of each applet's stored data. It also states the promotion rule: when a feature moves into the core, applets that need it declare the new service version, and applets that bundle their own copy keep working.
+1. Done: the versioning contract and the promotion rule are written in [Compatibility and epochs](../explanations/compatibility.md#versioning).
 2. Ship the SDK as an installed package: the headers, the CMake config, the pinned UI stack and the sugar libraries.
 3. Make the host name no applet: windows dock by role, the core build compiles no applets, and CI builds and starts an empty core.
 4. Load applets from outside the repository: development paths, the user applets folder and the search order, and shipped applets signed in the app bundle.
