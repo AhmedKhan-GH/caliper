@@ -133,6 +133,9 @@ class SeriesState:
     q: collections.deque = field(default_factory=collections.deque)  # floats (v, stamp) and Chunks
     refs: list = field(default_factory=list)     # training thread: values not yet in a chunk
     nref: int = 0
+    thread: int = 0                              # the thread that gathered refs (device work
+                                                 # happens only there: torch's MPS stream is
+                                                 # not safe from two threads)
     flush_t: float = -math.inf
     watched: bool = False                        # some subscription (read on the training thread)
 
@@ -306,6 +309,7 @@ class NetRing:
                 n = SERIES_CAPACITY
         s.refs.append(t)
         s.nref += n
+        s.thread = threading.get_ident()
         now = time.perf_counter()
         cadence = self.default_interval if s.watched else SERIES_IDLE_FLUSH_S
         if s.nref >= SERIES_CHUNK or now - s.flush_t >= cadence:
@@ -354,9 +358,10 @@ class NetRing:
         queued snapshots and chunks have completed on the device. Returns how
         many are still in flight. Not for the training loop."""
         now = time.perf_counter()
+        me = threading.get_ident()
         for s in list(self.series.values()):
-            if (name is None or s.name == name) and s.refs:
-                self._flush_series(s, now)
+            if (name is None or s.name == name) and s.refs and s.thread == me:
+                self._flush_series(s, now)       # on another thread they wait for the next call
         self._wake()
         deadline = time.perf_counter() + timeout
         while True:

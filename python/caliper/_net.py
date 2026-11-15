@@ -59,7 +59,9 @@ __all__ = ["serve", "current_server", "NetServer", "NetTransport", "Link"]
 SERIES_RETAIN = 1 << 20            # values of each series the producer keeps (>= SERIES_RETAIN_MIN)
 MAX_CONNECTIONS = 64
 WRITE_LIMIT = 1 << 16              # the socket buffer a send waits to drain below
-POLL_S = 0.002                     # the pump's event poll while snapshots are in flight
+POLL_S = 0.004                     # the pump's event poll while snapshots are in flight
+                                   # (they spend ~15 ms in torch's queue; every wake of
+                                   # this thread costs the training loop GIL time)
 SCRIPT_MAX = 127
 
 _log = logging.getLogger("caliper.net")
@@ -190,6 +192,47 @@ class Sub:
     next: int = 0                            # series: the next absolute index to send
 
 
+class _Wake:
+    """``set()`` and ``await wait(timeout)`` like an asyncio.Event, without the
+    task that ``asyncio.wait_for`` creates on every wait (each costs the
+    training loop GIL time). Network thread only."""
+    __slots__ = ("_flag", "_fut")
+
+    def __init__(self):
+        self._flag = False
+        self._fut = None
+
+    def set(self) -> None:
+        self._flag = True
+        f = self._fut
+        if f is not None and not f.done():
+            f.set_result(None)
+
+    def clear(self) -> None:
+        self._flag = False
+
+    def is_set(self) -> bool:
+        return self._flag
+
+    async def wait(self, timeout: float | None = None) -> None:
+        if self._flag:
+            return
+        loop = asyncio.get_running_loop()
+        f = self._fut = loop.create_future()
+        h = loop.call_later(max(timeout, 0.0), _resolve, f) if timeout is not None else None
+        try:
+            await f
+        finally:
+            self._fut = None
+            if h is not None:
+                h.cancel()
+
+
+def _resolve(f) -> None:
+    if not f.done():
+        f.set_result(None)
+
+
 # ===========================================================================
 # one connection's protocol (no sockets)
 # ===========================================================================
@@ -215,7 +258,7 @@ class Link:
         self.subs: dict[int, Sub] = {}
         self.attached = False
         self.follows_default = True
-        self.wake = asyncio.Event()
+        self.wake = _Wake()
         self.closed = False
         self.stats = collections.Counter()
         self.software: dict | None = None
@@ -894,10 +937,7 @@ class _Listener:
                 link.wake.clear()
                 frame, wait = link.next_frame(mono())
                 if frame is None:
-                    try:
-                        await asyncio.wait_for(link.wake.wait(), wait)
-                    except asyncio.TimeoutError:
-                        pass
+                    await link.wake.wait(wait)
                     continue
             if type(frame) is tuple:
                 parts, n = frame
@@ -960,7 +1000,7 @@ class NetServer:
         self.transport = NetTransport()
         self.transport.server = self
         self._loop = asyncio.new_event_loop()
-        self._pump_wake: asyncio.Event | None = None
+        self._pump_wake: _Wake | None = None
         self._pump_idle = True
         self.ring = NetRing(engine, wake=self._wake)
         self.producer = _Producer(self.ring, self.identity, self.transport)
@@ -999,7 +1039,7 @@ class NetServer:
             self._loop.close()
 
     async def _start(self, port: int) -> None:
-        self._pump_wake = asyncio.Event()
+        self._pump_wake = _Wake()
         await self._listener.start(port)
         self._pump_task = asyncio.ensure_future(self._pump())
 
@@ -1028,10 +1068,7 @@ class NetServer:
             self._pump_wake.clear()
             if self.ring.pending:                   # raced with a wake
                 continue
-            try:
-                await asyncio.wait_for(self._pump_wake.wait(), 0.25)
-            except asyncio.TimeoutError:
-                pass
+            await self._pump_wake.wait(0.25)
             self._pump_idle = False
 
     # -- events --------------------------------------------------------------------
@@ -1108,7 +1145,9 @@ class NetServer:
             return
         if self._loop.is_running() and threading.current_thread() is not self._thread:
             try:
-                self.ring.flush(timeout=1.0)          # gathered series values, queued snapshots
+                # gathered series values (moved only if this thread gathered
+                # them) and queued snapshots
+                self.ring.flush(timeout=1.0)
                 asyncio.run_coroutine_threadsafe(self._drain(1.0), self._loop).result(3)
             except Exception:
                 pass
