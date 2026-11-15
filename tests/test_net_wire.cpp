@@ -9,6 +9,7 @@
 
 #include "net/json.h"
 #include "net/wire.h"
+#include "net/ws.h"
 
 #include <cmath>
 #include <cstring>
@@ -523,4 +524,50 @@ TEST_CASE("net/wire: truncations and bit flips of the golden frames never crash"
     MESSAGE(iterations << " mutated frames: " << ok << " decoded, " << bad_frame << " refused as frames, " << bad_msg
                                      << " refused as messages");
     CHECK(ok + bad_frame + bad_msg == (size_t)iterations);
+}
+
+TEST_CASE("net/wire: the upgrade checks of the reference page, in order") {
+    const std::string tok = "abcdefghijklmnopqrstuv";
+    auto req = [&](std::string path, std::string query, std::string host, const char* origin = nullptr) {
+        HttpRequest r;
+        r.method = "GET";
+        r.path = path;
+        r.query = query;
+        r.host = host;
+        r.has_origin = origin != nullptr;
+        r.origin = origin ? origin : "";
+        r.websocket = true;
+        return r;
+    };
+    const std::string q = "token=" + tok;
+    CHECK(upgrade_status(req("/v3/stream", q, "127.0.0.1:8765"), tok, 8765) == 0);
+    CHECK(upgrade_status(req("/v3/stream", q, "LocalHost:8765"), tok, 8765) == 0);
+    CHECK(upgrade_status(req("/v3/stream/", q, "127.0.0.1:8765"), tok, 8765) == 404);
+    CHECK(upgrade_status(req("/", q, "evil.example"), tok, 8765) == 404);   // the path first
+    CHECK(upgrade_status(req("/v3/stream", q, "127.0.0.1"), tok, 8765) == 403);
+    CHECK(upgrade_status(req("/v3/stream", q, "127.0.0.1:8766"), tok, 8765) == 403);
+    CHECK(upgrade_status(req("/v3/stream", q, "evil.example:8765"), tok, 8765) == 403);
+    CHECK(upgrade_status(req("/v3/stream", q, "localhost"), tok, 80) == 0);     // port 80: no port needed
+    CHECK(upgrade_status(req("/v3/stream", "", "127.0.0.1:8765"), tok, 8765) == 403);
+    CHECK(upgrade_status(req("/v3/stream", "token=" + tok + "x", "127.0.0.1:8765"), tok, 8765) == 403);
+    CHECK(upgrade_status(req("/v3/stream", "token=" + tok.substr(1), "127.0.0.1:8765"), tok, 8765) == 403);
+    CHECK(upgrade_status(req("/v3/stream", "a=1&token=" + tok, "127.0.0.1:8765"), tok, 8765) == 0);
+    CHECK(upgrade_status(req("/v3/stream", q, "127.0.0.1:8765"), "", 8765) == 403);
+    for (const char* ok : {"null", "http://127.0.0.1:8765", "http://localhost:8888", "https://LOCALHOST",
+                           "http://[::1]:9", "vscode-webview://1abc-def", "http://127.0.0.1"}) {
+        CAPTURE(std::string(ok));
+        CHECK(origin_allowed(ok));
+        CHECK(upgrade_status(req("/v3/stream", q, "127.0.0.1:8765", ok), tok, 8765) == 0);
+    }
+    for (const char* bad : {"", "http://evil.example", "http://127.0.0.1.evil.example", "http://localhost:8888/",
+                            "http://user@localhost", "ftp://localhost", "http://localhost:", "http://localhost:abc",
+                            "vscode-webview://", "vscode-webview://x/y", "file://", "Null"}) {
+        CAPTURE(std::string(bad));
+        CHECK_FALSE(origin_allowed(bad));
+        CHECK(upgrade_status(req("/v3/stream", q, "127.0.0.1:8765", bad), tok, 8765) == 403);
+    }
+    CHECK(token_equal("abc", "abc"));
+    CHECK_FALSE(token_equal("abd", "abc"));
+    CHECK_FALSE(token_equal("ab", "abc"));
+    CHECK_FALSE(token_equal("abcd", "abc"));
 }

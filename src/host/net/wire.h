@@ -37,7 +37,23 @@
 #include <vector>
 
 namespace caliper_net {
+
+struct HttpRequest;   // ws.h
+
 namespace wire {
+
+// ---- the upgrade request (the reference page, "The upgrade request") --------------
+// The server's checks before it upgrades, in the page's order: the path is
+// exactly CALIPER_NET_PATH (else 404), the Host header names 127.0.0.1 or
+// localhost with the server's port (else 403), the Origin header is absent or
+// accepted (else 403), and the token parameter equals the session token,
+// compared in constant time (else 403). Returns 0 to accept, else the status.
+int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port);
+// The single rules, for a server that serves plain HTTP on the same port (the
+// Host check applies to those requests too).
+bool host_allowed(const std::string& host, uint16_t port);
+bool origin_allowed(const std::string& origin);
+bool token_equal(const std::string& a, const std::string& b);   // constant time in b's length
 
 // ---- frames -------------------------------------------------------------------------
 
