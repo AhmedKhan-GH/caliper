@@ -61,10 +61,12 @@ public:
     const std::vector<std::pair<std::string, uint32_t>>& dock_hints() const {
         return hints_;
     }
-    // The role last hinted for `window_title`, or -1 when it was never hinted.
+    // The role of `window_title` as the host sees it, which is the first one
+    // hinted for that title (later hints change nothing); -1 when it was
+    // never hinted.
     int64_t dock_role(const std::string& window_title) const {
-        for (auto it = hints_.rbegin(); it != hints_.rend(); ++it)
-            if (it->first == window_title) return it->second;
+        for (const auto& [title, role] : hints_)
+            if (title == window_title) return role;
         return -1;
     }
 

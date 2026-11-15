@@ -10,16 +10,24 @@
 //   CALIPER_DOCK_SIDE_TOP      the side column, upper part
 //   CALIPER_DOCK_SIDE_BOTTOM   the side column, lower part
 //
-// A window the applet gives no hint is placed in the centre. Only a window
-// with no saved layout (no imgui.ini entry) is placed, so a layout the user
-// arranged always wins, and a window is considered once per process, so
-// moving it afterwards is never undone.
+// Windows of one role share one node, as tabs. The node of a side role is the
+// one this unit made for it, or else the node where a window of that role is
+// docked already, such as one restored from imgui.ini; only when neither
+// exists is a side column split off the central node.
 //
-// The side column is split off the central node when a window first needs
-// it, and on a dock space with no saved layout at all it is built before the
-// first frame of the applet page, so the first windows dock in the frame
-// they first appear. Otherwise a hint that arrives after its window's first
-// Begin() takes effect on the next frame.
+// A window the applet gives no hint is placed in the centre when it is an
+// ordinary window: not a child window, popup, tooltip or modal, and without
+// ImGuiWindowFlags_NoDocking, NoSavedSettings, NoMove, NoResize, NoTitleBar
+// or AlwaysAutoResize. Any other window keeps the placement ImGui gives it.
+// Only a window with no saved layout (no imgui.ini entry) is placed, so a
+// layout the user arranged always wins, and a window is considered once per
+// process, so moving it afterwards is never undone. Nothing is written to
+// imgui.ini for a window with NoSavedSettings.
+//
+// On a dock space with no saved layout at all the side column is built
+// before the first frame of the applet page, so the first windows dock in
+// the frame they first appear. Otherwise a window that needs a new node, or
+// whose hint arrives after its first Begin(), is placed on the next frame.
 //
 // Header-only and free of any renderer: the unit test drives it on a
 // headless ImGui context.
@@ -44,13 +52,23 @@ public:
     static constexpr float kSideShareOfCentral = 0.30f;
     static constexpr float kSideBottomShare = 0.40f;
 
+    // The flags that keep a window without a hint where ImGui puts it.
+    static constexpr ImGuiWindowFlags kNotOrdinary =
+        ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup |
+        ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_Modal |
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_DockNodeHost;
+
     // caliper.ui.v1_1 dock_hint, on the UI thread. The first hint for a title
     // counts; every later one returns after a hash lookup.
     void hint(const char* window_title, uint32_t role) {
         if (!window_title || !*window_title || !ImGui::GetCurrentContext()) return;
         const ImGuiID id = ImHashStr(window_title);
+        role = normal_role(role);
         if (!known_.emplace(id, role).second) return;
-        place(window_title, id, normal_role(role));
+        place(window_title, id, role);
     }
 
     // Once per frame on the applet page, after DockSpaceOverViewport() and
@@ -76,10 +94,11 @@ public:
         pending_.clear();
     }
 
-    // Bracket the applet's frame. Every window the applet began in between
-    // without a hint is placed as CALIPER_DOCK_CENTRAL. Child windows, popups,
-    // tooltips and windows that opt out of docking or of saved settings are
-    // left alone.
+    // Bracket the applet's frame. Every ordinary window (see the header) the
+    // applet began in between without a hint is placed as
+    // CALIPER_DOCK_CENTRAL. A hinted window that turned out to have
+    // NoSavedSettings loses the imgui.ini entry its hint made, and is docked
+    // on the next frame instead.
     void begin_applet_frame() {
         first_begin_ = ImGui::GetCurrentContext()
                            ? ImGui::GetCurrentContext()->WindowsActiveCount
@@ -88,21 +107,30 @@ public:
     void end_applet_frame() {
         ImGuiContext* g = ImGui::GetCurrentContext();
         if (!g) return;
-        constexpr ImGuiWindowFlags kSkip =
-            ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup |
-            ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_DockNodeHost;
+        for (size_t i = 0; i < via_settings_.size();) {
+            ImGuiWindow* w = ImGui::FindWindowByID(via_settings_[i]);
+            if (!w) {   // not begun yet: look again after a later frame
+                i++;
+                continue;
+            }
+            if (w->Flags & ImGuiWindowFlags_NoSavedSettings) {
+                if (ImGuiWindowSettings* s = ImGui::FindWindowSettingsByID(w->ID))
+                    s->WantDelete = true;
+                pending_.push_back({w->Name, known_[w->ID]});
+            }
+            via_settings_.erase(via_settings_.begin() + (std::ptrdiff_t)i);
+        }
         for (ImGuiWindow* w : g->Windows) {
-            if (!w->Active || w->IsFallbackWindow || (w->Flags & kSkip) ||
+            if (!w->Active || w->IsFallbackWindow || (w->Flags & kNotOrdinary) ||
                 w->BeginOrderWithinContext < first_begin_)
                 continue;
-            if (!known_.emplace(w->ID, CALIPER_DOCK_CENTRAL).second) continue;
+            if (!known_.emplace(w->ID, (uint32_t)CALIPER_DOCK_CENTRAL).second) continue;
             place(w->Name, w->ID, CALIPER_DOCK_CENTRAL);
         }
     }
 
-    // The node a window of `role` docks into now, or 0 when the side column
-    // does not exist yet. For tests and diagnostics.
+    // The node a window of `role` docks into now, or 0 when there is none
+    // yet. For tests and diagnostics.
     ImGuiID node_for_role(uint32_t role) { return node_for(normal_role(role), false); }
 
 private:
@@ -128,6 +156,7 @@ private:
         if (!w && dockspace_ != 0) {
             if (const ImGuiID node = node_for(role, false)) {
                 ImGui::DockBuilderDockWindow(title, node);
+                via_settings_.push_back(id);
                 return;
             }
         }
@@ -148,17 +177,40 @@ private:
         return c ? c->ID : dockspace_;
     }
 
+    // The node of a window of `role` that is docked in this dock space now,
+    // outside the central node (a side window the user moved to the centre
+    // does not take the side role's node with it), or 0.
+    ImGuiID docked_node_of(uint32_t role) const {
+        const ImGuiID centre = central();
+        for (const auto& [id, r] : known_) {
+            if (r != role) continue;
+            if (ImGuiWindow* w = ImGui::FindWindowByID(id);
+                w && w->DockId != centre && alive(w->DockId))
+                return w->DockId;
+        }
+        return 0;
+    }
+
+    // The node made for a side role if it is still there, else the node of a
+    // window of that role that is docked already.
+    void adopt(uint32_t role, ImGuiID& node) const {
+        if (!alive(node)) node = docked_node_of(role);
+    }
+
     ImGuiID node_for(uint32_t role, bool create) {
         if (role == CALIPER_DOCK_CENTRAL) return central();
-        if (!alive(side_top_) || !alive(side_bottom_)) {
+        adopt(CALIPER_DOCK_SIDE_TOP, side_top_);
+        adopt(CALIPER_DOCK_SIDE_BOTTOM, side_bottom_);
+        ImGuiID& node = role == CALIPER_DOCK_SIDE_TOP ? side_top_ : side_bottom_;
+        if (!alive(node)) {
             if (!create) return 0;
             build_side(kSideShareOfCentral);
         }
-        return role == CALIPER_DOCK_SIDE_TOP ? side_top_ : side_bottom_;
+        return node;
     }
 
-    // Splits the side column off the central node, or restores the half of
-    // it that the user emptied (an emptied node removes itself).
+    // Splits the side column off the central node, or the missing half of
+    // it off the half that exists (an emptied node removes itself).
     void build_side(float share) {
         const bool top = alive(side_top_), bottom = alive(side_bottom_);
         if (top && bottom) return;
@@ -180,8 +232,9 @@ private:
         }
     }
 
-    std::unordered_map<ImGuiID, uint32_t> known_;   // window id -> first role
+    std::unordered_map<ImGuiID, uint32_t> known_;   // window id -> its role
     std::vector<Pending> pending_;
+    std::vector<ImGuiID> via_settings_;   // docked through settings, not yet begun
     ImGuiID dockspace_ = 0;
     ImGuiID side_top_ = 0;
     ImGuiID side_bottom_ = 0;

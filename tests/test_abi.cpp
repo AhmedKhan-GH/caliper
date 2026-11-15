@@ -586,6 +586,10 @@ TEST_CASE("sugar: ui::dock_hint reaches ui.v1_1 and is silent without it") {
     CHECK(fx.dock_role("Controls") == CALIPER_DOCK_SIDE_TOP);
     CHECK(fx.dock_role("Details") == CALIPER_DOCK_SIDE_BOTTOM);
     CHECK(fx.dock_role("Never hinted") == -1);
+    // The first hint for a title counts, as in the host.
+    caliper::ui::dock_hint(fx.host(), "Main view", CALIPER_DOCK_SIDE_BOTTOM);
+    CHECK(fx.dock_role("Main view") == CALIPER_DOCK_CENTRAL);
+    CHECK(fx.dock_hints().size() == 4);
 
     // A host that serves only ui.v1: nothing happens and nothing crashes.
     CaliperHost bare{};
@@ -598,5 +602,5 @@ TEST_CASE("sugar: ui::dock_hint reaches ui.v1_1 and is silent without it") {
     caliper::ui::dock_hint(&bare, "Main view", CALIPER_DOCK_SIDE_TOP);
     caliper::ui::dock_hint((const caliper::Host*)nullptr, "x", 0);
     caliper::ui::dock_hint((const CaliperHost*)nullptr, "x", 0);
-    CHECK(fx.dock_hints().size() == 3);
+    CHECK(fx.dock_hints().size() == 4);
 }
