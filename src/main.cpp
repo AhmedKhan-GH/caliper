@@ -221,6 +221,7 @@ public:
                 ctx.sessions = &sessions_;
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
                 ctx.after_bars = [this] { jobs_tray_.draw(); };
+                ctx.attach_url = [this](const std::string& u) { attach_stream(u); };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
@@ -415,6 +416,26 @@ private:
         const auto& st = live_.status();
         live_script_ = st.script.empty() ? script : st.script;
         live_pid_ = st.pid ? st.pid : (e ? e->pid : 0);
+        live_frame_t_ = 0.0;
+        page_ = AppPage::Live;
+        set_live_title();
+        note_live_events();   // "attached"
+    }
+
+    // The attach pane's stream link (wire protocol v3, live_net_source.h):
+    // attach through a hosted core as for a session; a refusal (nothing
+    // listens, a wrong token) stays on the landing and says why in Activity.
+    // The link holds the session token, so only the part before '?' is shown.
+    void attach_stream(const std::string& link) {
+        const std::string shown = link.substr(0, link.find('?'));
+        std::string err;
+        if (!live_.attach_url(renderer_.get(), link, &err)) {
+            landing_.log("attach failed", shown, err);
+            return;
+        }
+        const auto& st = live_.status();
+        live_script_ = !st.script.empty() ? st.script : !st.session.empty() ? st.session : shown;
+        live_pid_ = st.pid;
         live_frame_t_ = 0.0;
         page_ = AppPage::Live;
         set_live_title();

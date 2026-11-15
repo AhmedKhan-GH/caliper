@@ -116,13 +116,68 @@ the script's terminal does not close it and it outlives the script.
 | Flag | Effect |
 |---|---|
 | `--session <token>` | Attach to this session at once |
+| `--url <link>` | Attach to a network stream by its link (see [Attach to a stream by its link](#attach-to-a-stream-by-its-link)) |
 | `--data-dir <root>` | Session-file root (default `$CALIPER_DATA_DIR`, else the app-data folder) |
 | `--exit-after <s>` | Close the window after `s` seconds |
 | `--size <w>x<h>` | Window size in points (default 1280x800) |
 | `--stats` | Print a stats line to stderr every 2 s: fps, updates, step-to-screen median/p95/max, skipped and client-dropped counts, each view's renderer path, RSS and footprint |
 | `--latency-log <file>` | Write every latency sample (`t_ns lat_ms` per line); implies `--stats` |
-| `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` |
+| `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` or `--url`, and prints one `received` line per view when it exits |
 | `--dump-dir <dir>` | With `--headless`: write each view's pixels or values to `<dir>` whenever its sequence number changes |
+
+## Attach to a stream by its link
+
+A script that streams with `caliper.serve()` sends its views over a WebSocket on
+127.0.0.1 ([wire protocol v3](../references/wire-protocol.md)) instead of shared
+memory, so it has no session file and does not appear in the session lists
+above. Attach to it with the link it prints. Two forms are accepted, with
+`localhost` in place of `127.0.0.1`:
+
+- the page link, `http://127.0.0.1:<port>/?token=<token>`;
+- the stream link, `ws://127.0.0.1:<port>/v3/stream?token=<token>`.
+
+A server that holds several sessions, such as the `caliper serve` hub, needs
+the one to show: add `&session=<session id>` to the link. With one session the
+server attaches the viewer to it.
+
+The token in the link is the stream's only secret. The viewer never prints it,
+and messages show the link without its query. Only links to 127.0.0.1 or
+`localhost` are accepted.
+
+**In the Caliper app**, press F4 and paste the link into the field under the
+session list, then press Enter or click `Attach link`. A refusal stays on the
+landing, and Activity says why: nothing listens on that port, or the server
+refused the token (HTTP 403).
+
+**With caliper-viewer**, pass `--url`:
+
+```sh
+caliper-viewer --url "http://127.0.0.1:8765/?token=$TOKEN"
+```
+
+Without a window, the viewer runs for a while and prints what it received,
+which is how a script that streams is checked in a terminal or CI:
+
+```sh
+caliper-viewer --headless --url "ws://127.0.0.1:8765/v3/stream?token=$TOKEN" --exit-after 5 --stats
+```
+
+```text
+[caliper-viewer] received session=clp-41222-9f03ab script=train.py pid=41222 alive=1 views=3 updates=381
+[caliper-viewer] received view=weights kind=heatmap updates=127 seq=135 series=0
+[caliper-viewer] received view=loss kind=series updates=127 seq=135 series=135
+[caliper-viewer] received view=acts kind=histogram updates=127 seq=135 series=0
+```
+
+`updates` counts the snapshots the viewer drew, `seq` is the last one's number,
+and `series` is the number of values a series holds. The exit status is 2 when
+the attach fails.
+
+The viewer subscribes to every view of the session with the view's default
+data view and draws it like a shared-memory view. When the connection drops,
+the views keep their last pixels, the status says the session ended, and the
+viewer reconnects; a series continues from the values the producer retained.
+When the script ends, the views keep their last pixels.
 
 ## What caliper-viewer shows
 
@@ -235,9 +290,10 @@ CaliperLiveSessionInfo s[16];
 for (int i = 0; i < 16; ++i) s[i].struct_size = sizeof s[i];
 int n = caliper_live_list_sessions(s, 16);      /* newest first; -1 + caliper_live_last_error() */
 
-/* Attach: by token, by pid, or show the built-in session list. */
+/* Attach: by token, by pid, by a stream link, or show the built-in session list. */
 caliper_core_live_attach(core, s[0].session);
 caliper_core_live_attach_pid(core, pid, NULL);  /* NULL = the default data root */
+caliper_core_live_attach_url(core, "ws://127.0.0.1:8765/v3/stream?token=...");
 caliper_core_live_picker(core, 1, NULL);        /* list with Attach buttons; Detach returns to it */
 
 /* Every frame, before caliper_core_frame. */
@@ -253,6 +309,7 @@ caliper_core_live_detach(core);                 /* release claims, clear the hea
 | `caliper_live_list_sessions(out, cap)` / `_in(root, out, cap)` | List sessions newest first, reclaiming stale ones; returns the count |
 | `caliper_core_live_attach(core, token)` | Attach by token; refuses an unknown token, another protocol version and a session another live viewer holds |
 | `caliper_core_live_attach_pid(core, pid, root)` | Attach to the session of process `pid` |
+| `caliper_core_live_attach_url(core, link)` | Attach to a stream by its link; waits up to 2 s for the server and fails with the reason when nothing listens or the server refuses |
 | `caliper_core_live_picker(core, enable, root)` | The session list drawn by the core while not attached |
 | `caliper_core_live_poll(core)` | Once per frame: apply the newest completed snapshot of every view, write the heartbeat; -1 when not attached |
 | `caliper_core_live_detach(core)` | Drop the views and claims, clear the heartbeat |
