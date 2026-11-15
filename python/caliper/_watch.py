@@ -28,9 +28,10 @@ data view picks the source, so that one widget can switch between layers.
   sources and dims of ``weights``.
 
 A view has at most 64 sources (the wire protocol's limit); a group keeps the
-first 64 with a warning. Only the selected source does tensor work: the hook
-of any other source records its shape (metadata) while something is attached,
-and returns.
+first 64 with a warning. A source does tensor work only when a route needs it:
+the window and the session need the default data view's source, a server the
+sources its subscriptions select. The hook of any other source records its
+shape (metadata) while something is attached, and returns.
 """
 from __future__ import annotations
 
@@ -193,10 +194,8 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
                     pkg.show(t, view, rate=rate)
                     if ga is not None:
                         pkg._dv_hook(ga, label, t)
-                if wsrc:
-                    sel = gw.state[2]
-                    if sel in wsrc:
-                        pkg._dv_hook(gw, sel, None)
+                for src in wsrc:              # usually one: the module's weight
+                    pkg._dv_hook(gw, src, None)
             h._handles.append(mod.register_forward_hook(fwd))
             h.views.append(view)
             hooked = True
@@ -217,7 +216,7 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
                         pkg.show(g2, view, cmap="rdbu", rate=rate)
                         if gg is not None:
                             pkg._dv_hook(gg, src, g2)
-                    if wtrigger and gw.state[2] == src:
+                    if wtrigger:
                         pkg._dv_hook(gw, src, None)
 
                 if hasattr(p, "register_post_accumulate_grad_hook"):

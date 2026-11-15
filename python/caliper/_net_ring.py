@@ -186,9 +186,27 @@ class NetRing:
         return v
 
     # -- the ring interface (caliper._dispatch, under caliper's module lock) ----
+    def wants(self, name: str, source: str) -> bool:
+        """Whether a call carrying source ``source`` of view ``name`` (a view
+        with several sources, caliper._dataview) has a use here: a subscription
+        selects that source, or the view's offer is to be registered or
+        refreshed (no device work)."""
+        v = self.views.get(name)
+        if v is None or time.perf_counter() - v.offer_t >= OFFER_REFRESH_S or self._stale(v):
+            return True
+        return any(g.resolved.get("source") == source for g in list(v.groups.values()))
+
+    def _stale(self, v: ViewState) -> bool:
+        """The engine says the view's offer changed (a source got its shape)."""
+        sig = getattr(self.engine, "view_signature", None)
+        if sig is None:
+            return False
+        s = sig(v.name)
+        return s is not None and s != v.sig
+
     def due(self, name: str, interval: float, now: float) -> bool:
         v = self.views.get(name)
-        if v is None or now - v.offer_t >= OFFER_REFRESH_S:
+        if v is None or now - v.offer_t >= OFFER_REFRESH_S or self._stale(v):
             return True                     # register or refresh the offer; no device work
         if not v.groups:
             self.counters["unsubscribed"] += 1
@@ -212,7 +230,10 @@ class NetRing:
             groups = list(v.groups.values())
         stamp = time.monotonic_ns()
         taken = 0
+        serves = getattr(self.engine, "serves", None)
         for g in groups:
+            if serves is not None and not serves(call, g.resolved):
+                continue                    # another source's group, or a data view that no longer fits
             if now - g.last < g.interval:
                 self.counters["rate_limited"] += 1
                 continue

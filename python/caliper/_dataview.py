@@ -65,7 +65,8 @@ from dataclasses import dataclass
 __all__ = [
     "DataViewError", "SourceSpec", "Offer", "Program", "Source", "Registry", "REGISTRY",
     "parse_request", "resolve", "layout", "compile_view", "apply", "take_rows", "source_rows",
-    "tag", "dtype_name", "KINDS", "REDUCE_OPS", "POOL_OPS",
+    "DataCall", "DVWrite", "payload_plan", "finish", "lazy_plan", "net_plan", "dtype_name",
+    "KINDS", "REDUCE_OPS", "POOL_OPS",
 ]
 
 # The values of the wire protocol (caliper/live_net.h).
@@ -537,7 +538,9 @@ def apply(tensor, program: Program):
     return _apply(_as_tensor(tensor), program)
 
 
-def _apply(x, p: Program):
+def _apply(x, p: Program, pre: bool = False):
+    """``apply`` on a detached tensor. With ``pre``, returns (payload, the data
+    view before it is tiled, pooled or sampled), whose range a heatmap reports."""
     import torch
     if p.kind == "image":
         ch = _channel_axis(x.shape, x.dtype == torch.uint8)
@@ -559,6 +562,7 @@ def _apply(x, p: Program):
             x = x.float()                   # integers, bool and half types work in f32
         for op, ax in p.steps:
             x = _reduce(x, ax, op)
+        before = x
         if p.perm is not None:
             x = x.permute(p.perm)
         if p.pool and p.pool[1]:
@@ -571,9 +575,11 @@ def _apply(x, p: Program):
             if dtype0 == torch.uint8:
                 x = x.clamp_(0, 255)
             x = x.to(dtype0)
+    else:
+        before = x
     if p.sample is not None:
         x = x.index_select(0, _stride(p.sample[0], p.sample[1], x.device))
-    return x
+    return (x, before) if pre else x
 
 
 def _reduce(x, ax, op):
@@ -726,19 +732,138 @@ def source_rows(program: Program, indices=None):
     return a["start"] + a["step"] * ((i * a["count"]) // a["size"])
 
 
-def tag(plan, program: Program):
-    """Make ``plan`` (a caliper._convert.Plan) record its data view on each
-    slot it writes: ``slot.data_view`` (the resolved data view), ``slot.axes``
-    and ``slot.tile`` (its payload layout), so a transport publishes every
-    payload with the data view it was computed with."""
-    write = plan.write
-    rv, axes, tile = program.resolved, program.axes, program.tile
+# ---------------------------------------------------------------------------
+# view calls and their snapshot plans
+# ---------------------------------------------------------------------------
+class DataCall:
+    """One view call of a view with data views, as the routes see it: the
+    registry entry, the source the call carries, its tensor (``tensor()``
+    fetches a registered source once, when a route needs it) and the call's
+    options (``cmap``, ``vmin``, ``vmax``, ``raw``, ``labels``, ``classes``,
+    ``bins``)."""
+    __slots__ = ("entry", "source", "x", "opts", "fetched", "_labels")
 
-    def tagged(slot):
-        write(slot)
-        slot.data_view, slot.axes, slot.tile = rv, axes, tile
-    plan.write = tagged
-    return plan
+    def __init__(self, entry, source: str, x, opts: dict):
+        self.entry, self.source, self.opts = entry, source, opts
+        self.x, self.fetched, self._labels = x, x is not None, ()
+
+    def tensor(self):
+        if not self.fetched:
+            self.fetched = True
+            src = self.entry.sources.get(self.source)
+            t = None if src is None else src.fetch()
+            if t is not None:
+                from ._convert import _as_tensor
+                t = _as_tensor(t)
+                REGISTRY._observe(self.entry.kind, src, t)
+            self.x = t
+        return self.x
+
+    def labels(self):
+        if self._labels == ():
+            lab = self.opts.get("labels")
+            self._labels = lab() if callable(lab) else lab
+        return self._labels
+
+
+class DVWrite:
+    """The ``write`` of a data view's snapshot plan. It computes the payload on
+    the device only when a route writes a slot; the network route finds the
+    view call here (``call``) and computes each subscription's data view."""
+    __slots__ = ("call", "program")
+
+    def __init__(self, call: DataCall, program):
+        self.call, self.program = call, program
+
+    def __call__(self, slot) -> None:
+        p = self.program
+        y, pre = _apply(self.call.tensor(), p, pre=True)
+        finish(slot, p, pre, payload_plan(p, y, self.call))
+
+
+def payload_plan(p: Program, y, call: DataCall):
+    """The caliper._convert plan that writes payload ``y`` of data view ``p``."""
+    from ._convert import _image_plan, plan_histogram, plan_points, plan_show
+    o = call.opts
+    if p.kind == "heatmap":
+        return plan_show(y, o.get("cmap", 0), o.get("vmin"), o.get("vmax"), o.get("raw", False))
+    if p.kind == "image":
+        return _image_plan(y, o.get("raw", False))
+    if p.kind == "points":
+        lab = call.labels()
+        if lab is not None:
+            lab = take_rows(lab, p)
+        return plan_points(y, lab, o.get("classes"), o.get("cmap", 0), o.get("vmin"), o.get("vmax"))
+    return plan_histogram(y, int(o.get("bins", 64)))
+
+
+def finish(slot, p: Program, pre, plan) -> None:
+    """Write ``plan`` into ``slot`` and record the data view on the slot
+    (``slot.data_view``, ``slot.axes``, ``slot.tile``). A pooled or tiled
+    heatmap reports the range of the data before pooling, padding excluded
+    (the rule of protocol v2), not that of its payload."""
+    import torch
+    from ._ring import FLAG_AUTO_VMAX, FLAG_AUTO_VMIN
+    plan.write(slot)
+    if p.kind == "heatmap" and plan.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX) and (
+            p.tile is not None or (p.pool and p.pool[1])):
+        torch.aminmax(pre if pre.dtype == torch.float32 else pre.float(), out=(slot.lo, slot.hi))
+    slot.data_view, slot.axes, slot.tile = p.resolved, p.axes, p.tile
+
+
+def lazy_plan(call: DataCall, p: Program):
+    """The snapshot plan of the view's default data view ``p`` for the routes
+    that draw it (window, session): the layout of the caliper._convert plan the
+    payload will have, with a write that computes it. Building it queues
+    nothing on the device."""
+    import torch
+    from ._convert import Plan, _range_flags
+    from ._ring import (FLAG_AUTO_VMAX, FLAG_AUTO_VMIN, FLAG_RAW, KIND_HEATMAP, KIND_HISTOGRAM,
+                        KIND_IMAGE, KIND_POINTS, STATS_FLOATS)
+    x, o = call.x, call.opts
+    dev = x.device
+    write = DVWrite(call, p)
+    raw = FLAG_RAW if o.get("raw") else 0
+    if p.kind == "heatmap":
+        flags, lo, hi = _range_flags(o.get("vmin"), o.get("vmax"))
+        shape = tuple(p.extent)
+        return Plan(KIND_HEATMAP, shape, torch.float32, dev, (KIND_HEATMAP, shape, dev, "dv"), write,
+                    None, colormap=o.get("cmap", 0), vmin=lo, vmax=hi, flags=flags | raw,
+                    stats_count=2)
+    if p.kind == "image":
+        c = x.shape[_channel_axis(x.shape, x.dtype == torch.uint8)]
+        shape = (*p.extent, 4)
+
+        def init(slot):
+            slot.payload[..., 3].fill_(255)
+        return Plan(KIND_IMAGE, shape, torch.uint8, dev, (KIND_IMAGE, shape, dev, c), write,
+                    init if c == 3 else None, flags=raw, stats_count=0)
+    if p.kind == "points":
+        n, d = p.extent[0], x.shape[-1]
+        has = call.labels() is not None
+        classes = o.get("classes")
+        count = int(classes) if classes else 0
+        flags, lo, hi = _range_flags(o.get("vmin"), o.get("vmax")) if has and not count \
+            else (0, 0.0, 1.0)
+
+        def init(slot):
+            slot.payload.zero_()
+            slot.stats.zero_()
+        return Plan(KIND_POINTS, (n, 3), torch.float32, dev, (KIND_POINTS, (n, 3), dev, d, has),
+                    write, init, aux_shape=(n,) if has else None, colormap=o.get("cmap", 0),
+                    vmin=lo, vmax=hi, flags=flags, points_dims=d, label_count=count,
+                    stats_count=STATS_FLOATS)
+    bins = int(o.get("bins", 64))
+    return Plan(KIND_HISTOGRAM, (bins,), torch.float32, dev, (KIND_HISTOGRAM, (bins,), dev), write,
+                flags=FLAG_AUTO_VMIN | FLAG_AUTO_VMAX, stats_count=2)
+
+
+def net_plan(call: DataCall):
+    """A plan that only carries ``call`` to the network route (a source that
+    only a subscription selects): no layout, no device work."""
+    from ._convert import Plan
+    kind = KINDS[call.entry.kind]
+    return Plan(kind, (), None, None, (kind, "dv-net"), DVWrite(call, None))
 
 
 # ---------------------------------------------------------------------------
@@ -1159,13 +1284,41 @@ class Registry:
                           f"({err}); using the default", RuntimeWarning, stacklevel=4)
         return rv
 
-    def prepare(self, entry: _Entry, tensor=None):
-        """Apply the view's default data view to its selected source: ``tensor``
-        when the call passes it, else the source's callable. Returns (payload
-        tensor on its device, Program), or (None, None) when there is no tensor.
-        The resolution is cached per default and dim sizes."""
+    def default_program(self, entry: _Entry, x):
+        """The Program of the view's default data view for ``x``, a tensor of its
+        selected source, or None when a request settled just now selects
+        another source. The resolution is cached per default and dim sizes."""
         version, _, sel = entry.state
         src = entry.sources.get(sel)
+        if src is None:
+            return None
+        self._observe(entry.kind, src, x)
+        if entry.pending is not None:
+            self._settle(entry)
+            version, _, now = entry.state
+            if now != sel:                        # the request picked another source: next call
+                return None
+        key = (version, sel, src.meta)
+        c = entry.cache
+        if c is None or c[0] != key:
+            specs = entry.specs()
+            rv = self._effective(entry, specs)
+            c = entry.cache = (key, rv, compile_view(Offer(entry.kind, specs), rv))
+        return c[2]
+
+    def default_plan(self, call: DataCall):
+        """The lazy snapshot plan of the view's default data view for ``call``
+        (see :func:`lazy_plan`), or None when there is no tensor."""
+        if call.source != call.entry.state[2] or call.tensor() is None:
+            return None
+        p = self.default_program(call.entry, call.x)
+        return None if p is None else lazy_plan(call, p)
+
+    def prepare(self, entry: _Entry, tensor=None):
+        """Apply the view's default data view to its selected source: ``tensor``
+        when given, else the source's callable. Returns (payload tensor on its
+        device, Program), or (None, None) when there is no tensor."""
+        src = entry.sources.get(entry.state[2])
         if src is None:
             return None, None
         if tensor is None:
@@ -1174,19 +1327,8 @@ class Registry:
                 return None, None
         from ._convert import _as_tensor
         x = _as_tensor(tensor)
-        self._observe(entry.kind, src, x)
-        if entry.pending is not None:
-            self._settle(entry)
-            version, _, now = entry.state
-            if now != sel:                        # the request picked another source: next call
-                return None, None
-        key = (version, sel, src.meta)
-        c = entry.cache
-        if c is None or c[0] != key:
-            specs = entry.specs()
-            rv = self._effective(entry, specs)
-            c = entry.cache = (key, rv, compile_view(Offer(entry.kind, specs), rv))
-        return _apply(x, c[2]), c[2]
+        p = self.default_program(entry, x)
+        return (None, None) if p is None else (_apply(x, p), p)
 
     def fetchable(self) -> list:
         """Views whose selected source the registry fetches itself (callables,

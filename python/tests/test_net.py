@@ -564,7 +564,7 @@ def test_bad_requests(server):
             r = await c.expect(w.ViewReply)
             assert r.error["code"] == w.ERR_UNKNOWN_VIEW
             await c.subscribe(2, "w", pump=show)
-            for req in ({"index": {"row": [0, 4]}}, {"reduce": {"row": "mean"}},
+            for req in ({"index": {"row": [4, 0]}}, {"reduce": {"row": "mean"}},
                         {"source": "other"}, {"budget": {"max_extent": 0}}, {"tile": "row"}):
                 await c.send(w.ViewRequest(7, 2, "w", req))
                 r = await c.expect(w.ViewReply, pred=lambda m: m.request_id == 7)

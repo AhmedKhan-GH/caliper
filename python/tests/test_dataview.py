@@ -724,12 +724,12 @@ def test_watch_sources_nobody_views_do_no_work(fake, monkeypatch):
     x = torch.randn(2, 1, 16, 16)
     h = caliper.watch(net, gradients=True)
     prepared = []
-    real = dv.REGISTRY.prepare
+    real = dv.DVWrite.__call__
 
-    def spy(entry, tensor=None):
-        prepared.append((entry.name, entry.state[2]))
-        return real(entry, tensor)
-    monkeypatch.setattr(dv.REGISTRY, "prepare", spy)
+    def spy(self, slot):                                     # where device work starts
+        prepared.append((self.call.entry.name, self.call.source))
+        return real(self, slot)
+    monkeypatch.setattr(dv.DVWrite, "__call__", spy)
     try:
         _step(net, x)
         assert sorted(prepared) == [("activations", "conv1"), ("gradients", "conv1.weight"),

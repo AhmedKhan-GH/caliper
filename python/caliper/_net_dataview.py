@@ -20,27 +20,45 @@ else about data views:
   has finished.
 
 plus ``signature(call)``, a cheap hashable that changes when the offer may
-have changed. A :class:`Call` carries the view call: its kind, the view name,
-the ``caliper._convert`` plan (the normalised payload writer of protocol v2)
-and the raw call arguments. Series never reach an engine: their values travel
-as they are.
+have changed, and two optional members: ``serves(call, resolved)``, whether
+the call carries what a subscription's data view reads (a view with several
+sources gets one call per source), and ``forget(name)``. A :class:`Call`
+carries the view call: its kind, the view name, the ``caliper._convert`` plan
+(the normalised payload writer of protocol v2) and the raw call arguments.
+Series never reach an engine: their values travel as they are.
 
-:class:`DefaultEngine` is the engine of this module: the default data view of
-each kind with the budget reductions (heatmaps and images pooled to
-``max_extent``, points stride-sampled to ``max_points`` with their labels),
-computed from the plan's payload. It refuses any other request with
-``bad_data_view``. ``make_engine()`` is the one place that picks the engine.
+:class:`DataViewEngine` is the engine (``make_engine()`` is the one place that
+picks it). It computes every data view with caliper._dataview, on the call's
+device, so a subscription's snapshot is the same payload the window and the
+session draw for the same data view:
+
+* a view with named dims (``dims=`` or ``data_view=`` on a call,
+  ``caliper.offer``, ``caliper.watch``'s grouped views) offers the sources
+  and dims of caliper._dataview's registry, and its call carries the source
+  tensor (a :class:`caliper._dataview.DataCall` in the plan's ``write``);
+* any other view offers one source, ``data``, over the payload of its call
+  (heatmap and image dims ``row`` and ``col``, points ``point``, a histogram
+  none), so a viewer can still range it, which is how it zooms, and pool or
+  sample it to a budget.
+
+Each subscription group's data view is resolved and checked again when the
+source's sizes change; one that no longer fits gets no snapshots until it
+fits again, and nothing raises on the training thread.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import json
+from collections import OrderedDict
+
+from . import _dataview as dv
 from . import _wire
 from ._ring import (FLAG_AUTO_VMAX, FLAG_AUTO_VMIN, KIND_HEATMAP, KIND_HISTOGRAM, KIND_IMAGE,
                     KIND_POINTS, STATS_FLOATS, RingSlot)
 
-__all__ = ["Call", "Reduced", "Engine", "DefaultEngine", "make_engine"]
+__all__ = ["Call", "Reduced", "Engine", "DataViewEngine", "make_engine"]
 
 
 @dataclass(eq=False)
@@ -101,210 +119,201 @@ def snap_flags(flags: int) -> int:
 
 
 _SOURCE = "data"
-_DTYPE_NAME = {"torch.float32": "f32", "torch.uint8": "u8"}
+_PLAIN_DIMS = {KIND_HEATMAP: ("row", "col"), KIND_IMAGE: ("row", "col"), KIND_POINTS: ("point",),
+               KIND_HISTOGRAM: ()}
+_PROGRAMS = 256                 # compiled data views kept by an engine
 
 
-def _axis(dim: str, count: int, size: int) -> dict:
-    return {"dim": dim, "start": 0, "step": 1, "count": int(count), "size": int(size)}
+def _bad(e: Exception):
+    return _wire.MessageError(_wire.ERR_BAD_DATA_VIEW, str(e))
 
 
-_POOL_INDEX: dict = {}
+def _canonical(d: dict) -> str:
+    return json.dumps(d, sort_keys=True, separators=(",", ":"))
 
 
-def _pool_index(n: int, m: int, device):
-    """Gather indices for pooling n positions into m cells by the protocol's
-    rule: cell i covers [floor(i n / m), ceil((i + 1) n / m)) (torch's adaptive
-    pooling). Returns (idx (m * k,), valid (m, k), counts (m,), k), cached on
-    the device; short cells repeat their last position where valid is False."""
-    key = (n, m, device)
-    have = _POOL_INDEX.get(key)
-    if have is not None:
-        return have
-    import torch
-    i = torch.arange(m, dtype=torch.int64)
-    start = i * n // m
-    stop = -((-(i + 1) * n) // m)
-    counts = stop - start
-    k = int(counts.max())
-    j = torch.arange(k, dtype=torch.int64)
-    idx = torch.minimum(start[:, None] + j, stop[:, None] - 1)
-    valid = j[None, :] < counts[:, None]
-    have = (idx.reshape(-1).to(device), valid.to(device),
-            counts.to(torch.float32).to(device), k)
-    _POOL_INDEX[key] = have
-    return have
-
-
-def pool_axis(x, dim: int, m: int, op: str = "mean"):
-    """Pool dimension ``dim`` of ``x`` to ``m`` cells (``mean``, ``max`` or
-    ``min``) by the protocol's cell rule, on x's device. A NaN stays inside its
-    own cell. (torch's adaptive pooling refuses sizes that do not divide on MPS.)"""
-    import torch
-    n = x.shape[dim]
-    if m >= n:
-        return x
-    if n % m == 0:
-        g = x.unflatten(dim, (m, n // m))
-        return g.mean(dim + 1) if op == "mean" else (g.amax(dim + 1) if op == "max"
-                                                     else g.amin(dim + 1))
-    idx, valid, counts, k = _pool_index(n, m, x.device)
-    g = x.index_select(dim, idx).unflatten(dim, (m, k))
-    if op == "max":
-        return g.amax(dim + 1)
-    if op == "min":
-        return g.amin(dim + 1)
-    shape = [1] * g.dim()
-    shape[dim], shape[dim + 1] = m, k
-    g = torch.where(valid.view(shape), g, torch.zeros((), dtype=g.dtype, device=g.device))
-    cshape = [1] * (g.dim() - 1)
-    cshape[dim] = m
-    return g.sum(dim + 1) / counts.view(cshape)
-
-
-class DefaultEngine:
-    """Default data views and budgets, computed from the plan's payload.
-
-    The plan is written once per call into a scratch slot on the call's device
-    (reused across calls: every write is ordered on the device's stream), then
-    each subscription group pools or samples it to its budget."""
+class DataViewEngine:
+    """Data views for the network route, computed by caliper._dataview (see
+    the module docstring). Everything on the call's device is queued work."""
 
     def __init__(self):
-        self._scratch: dict = {}        # view name -> (plan key, RingSlot)
-        self._index: dict = {}          # (device, N, n) -> stride sample rows, on the device
-        self._stats: dict = {}          # view name -> (key, f32[8]) sample stats for points
+        self._scratch: dict = {}           # (view name, plan key) -> RingSlot
+        self._programs: OrderedDict = OrderedDict()   # (name, signature, resolved) -> Program
+        self._stats: dict = {}             # (view name, key) -> f32[8] stats of a point sample
 
     def forget(self, name: str) -> None:
-        """View ``name`` was removed: drop its scratch buffers."""
-        self._scratch.pop(name, None)
-        self._stats.pop(name, None)
+        """View ``name`` was removed: drop its scratch buffers and programs."""
+        for d in (self._scratch, self._stats):
+            for k in [k for k in d if k[0] == name]:
+                del d[k]
+        for k in [k for k in self._programs if k[0] == name]:
+            del self._programs[k]
 
-    # -- what a view offers ----------------------------------------------------
+    # -- what a view offers ----------------------------------------------------------------
+    @staticmethod
+    def _dv(call: Call):
+        w = call.plan.write
+        return w.call if isinstance(w, dv.DVWrite) else None
+
     def signature(self, call: Call):
+        c = self._dv(call)
+        if c is not None:
+            return ("dv", id(c.entry), dv.REGISTRY.generation)
         return (call.kind, call.plan.key)
 
+    @staticmethod
+    def view_signature(name: str):
+        """The signature of a view with data views without a call (None for any
+        other view): it changes when the registry does, so the route refreshes
+        the offer as soon as a source of the view gets or changes its shape."""
+        e = dv.REGISTRY.get(name)
+        return None if e is None else ("dv", id(e), dv.REGISTRY.generation)
+
+    @staticmethod
+    def _plain(call: Call) -> dv.Offer:
+        p = call.plan
+        dims = _PLAIN_DIMS.get(call.kind, ())
+        dtype = "u8" if call.kind == KIND_IMAGE else "f32"
+        spec = dv.SourceSpec(_SOURCE, dims, tuple(int(n) for n in p.shape[:len(dims)]), dtype)
+        return dv.Offer(dv.KIND_NAMES[call.kind], (spec,), None, call.name)
+
     def offer(self, call: Call) -> dict:
-        p = call.plan
-        if call.kind in (KIND_HEATMAP, KIND_IMAGE):
-            dims = [{"name": "row", "size": int(p.shape[0])}, {"name": "col", "size": int(p.shape[1])}]
-        elif call.kind == KIND_POINTS:
-            dims = [{"name": "point", "size": int(p.shape[0])}]
-        else:
-            dims = []
-        return {"sources": [{"name": _SOURCE, "dims": dims,
-                             "dtype": _DTYPE_NAME.get(str(p.dtype), "f32")}],
-                "default": {}}
+        c = self._dv(call)
+        if c is None:
+            o = self._plain(call).to_json()
+            return {"sources": o["sources"], "default": {}}
+        o = dv.REGISTRY.offer(c.entry.name)
+        if o is None:
+            return {"sources": [], "default": {}}
+        o = o.to_json()
+        return {"sources": o["sources"], "default": o.get("default") or {}}
 
-    # -- resolving -------------------------------------------------------------
+    # -- resolving (the network thread) -------------------------------------------------
     def resolve(self, view: dict, request: dict | None) -> dict:
-        r = _wire.resolve_data_view(view, request)
-        if r.get("index") or r.get("reduce") or r.get("tile") is not None:
-            raise _wire.MessageError(
-                _wire.ERR_BAD_DATA_VIEW,
-                "this producer offers each view's default data view with a budget only; "
-                "'index', 'reduce' and 'tile' are not available")
-        return r
+        try:
+            return dv.resolve(view, request)
+        except dv.DataViewError as e:
+            raise _bad(e) from None
 
-    # -- computing ---------------------------------------------------------------
-    def _slot(self, call: Call) -> RingSlot:
-        """The plan written into the view's scratch slot (once per call)."""
-        slot = call.cache.get("slot")
-        if slot is not None:
-            return slot
+    # -- computing (the training thread) ------------------------------------------------
+    def _program(self, call: Call, resolved: dict):
+        """The compiled data view of a subscription group for this call's
+        source sizes, or None when it does not fit them (any more)."""
+        key = (call.name, self.signature(call), _canonical(resolved))
+        p = self._programs.get(key)
+        if p is not None:
+            self._programs.move_to_end(key)
+            return p if p is not False else None
+        c = self._dv(call)
+        off = (dv.Offer(c.entry.kind, c.entry.specs()) if c is not None else self._plain(call))
+        try:
+            again = dv._resolve(off, dv._explicit(resolved), off.kind)
+            p = dv.compile_view(off, resolved) if again == resolved else False
+        except dv.DataViewError:
+            p = False
+        self._programs[key] = p
+        while len(self._programs) > _PROGRAMS:
+            self._programs.popitem(last=False)
+        return p if p is not False else None
+
+    def serves(self, call: Call, resolved: dict) -> bool:
+        """Whether this call carries the source ``resolved`` reads, with a
+        tensor that fits it. A view with several sources gets a call per
+        source; a group of another source waits for its own call."""
+        c = self._dv(call)
+        if c is not None:
+            if resolved.get("source") != c.source:
+                return False
+            x = c.tensor()
+            if x is None:
+                return False
+            p = self._program(call, resolved)
+            if p is None:
+                return False
+            import torch
+            return dv.dim_sizes(p.kind, x.shape, x.dtype == torch.uint8) == p.sizes
+        return self._program(call, resolved) is not None
+
+    def _scratch_slot(self, name: str, plan) -> RingSlot:
         import torch
-        p = call.plan
-        have = self._scratch.get(call.name)
-        if have is None or have[0] != p.key:
-            dev = p.device
-            payload = torch.empty(p.shape, dtype=p.dtype, device=dev)
+        key = (name, plan.key)
+        slot = self._scratch.get(key)
+        if slot is None:
+            dev = plan.device
+            payload = torch.empty(plan.shape, dtype=plan.dtype, device=dev)
             stats = torch.zeros(STATS_FLOATS, dtype=torch.float32, device=dev)
-            aux = torch.empty(p.aux_shape, dtype=torch.float32, device=dev) if p.aux_shape else None
+            aux = torch.empty(plan.aux_shape, dtype=torch.float32, device=dev) if plan.aux_shape else None
             slot = RingSlot(0, payload, stats, aux, None, stats[0], stats[1], stats[2:8:2], stats[3:8:2])
-            if p.init is not None:
-                p.init(slot)
-            self._scratch[call.name] = (p.key, slot)
-        else:
-            slot = have[1]
-        p.write(slot)
-        call.cache["slot"] = slot
+            if plan.init is not None:
+                plan.init(slot)
+            self._scratch[key] = slot
         return slot
 
     def apply(self, call: Call, resolved: dict) -> Reduced:
-        p = call.plan
-        slot = self._slot(call)
-        budget = resolved.get("budget", {})
-        common = dict(colormap=p.colormap, flags=snap_flags(p.flags), vmin=p.vmin, vmax=p.vmax)
-        if call.kind == KIND_HEATMAP:
-            return self._heatmap(slot, budget, common)
-        if call.kind == KIND_IMAGE:
-            return self._image(slot, budget, common)
-        if call.kind == KIND_POINTS:
-            return self._points(call, slot, budget, common)
+        p = self._program(call, resolved)
+        if p is None:                      # NetRing asks serves() first; this is a guard
+            raise _bad(dv.DataViewError("the data view does not fit the view's data any more"))
+        c = self._dv(call)
+        if c is not None:
+            y, pre = dv._apply(c.x, p, pre=True)
+            plan = dv.payload_plan(p, y, c)
+            slot = self._scratch_slot(call.name, plan)
+            dv.finish(slot, p, pre, plan)
+            return self._reduced(plan, slot, p, slot.payload, slot.aux, slot.stats)
+        return self._apply_plain(call, p)
+
+    def _reduced(self, plan, slot, p, data, aux, stats) -> Reduced:
+        common = dict(colormap=plan.colormap, flags=snap_flags(plan.flags), vmin=plan.vmin,
+                      vmax=plan.vmax, axes=p.axes, tile=p.tile)
+        if plan.kind == KIND_HEATMAP or plan.kind == KIND_HISTOGRAM:
+            return Reduced(data, stats=stats[:2], stats_count=2, **common)
+        if plan.kind == KIND_IMAGE:
+            return Reduced(data, **common)
+        d = plan.points_dims
+        if data.shape[1] != d:
+            data = data[:, :d].contiguous()
+        return Reduced(data, aux=aux, stats=stats, stats_count=STATS_FLOATS, points_dims=d,
+                       label_count=plan.label_count, **common)
+
+    def _base(self, call: Call) -> RingSlot:
+        """The plan of a view without dims written once per call into its
+        scratch slot: its payload is the view's source."""
+        slot = call.cache.get("slot")
+        if slot is None:
+            slot = self._scratch_slot(call.name, call.plan)
+            call.plan.write(slot)
+            call.cache["slot"] = slot
+        return slot
+
+    def _apply_plain(self, call: Call, p) -> Reduced:
+        import torch
+        plan = call.plan
+        slot = self._base(call)
         if call.kind == KIND_HISTOGRAM:
-            return Reduced(slot.payload, stats=slot.stats[:2], stats_count=2, **common)
-        raise _wire.MessageError(_wire.ERR_UNSUPPORTED, f"kind {call.kind} has no data view")
-
-    @staticmethod
-    def _heatmap(slot, budget, common) -> Reduced:
-        x = slot.payload
-        h, w = x.shape
-        ext = budget.get("max_extent", _wire.DEFAULT_MAX_EXTENT)
-        oh, ow = min(h, ext), min(w, ext)
-        if (oh, ow) != (h, w):
-            pool = budget.get("pool", "mean")
-            x = pool_axis(pool_axis(x, 0, oh, pool), 1, ow, pool).contiguous()
-        # stats: the plan's range over the data before pooling (protocol v2's
-        # rule; a mosaic's NaN padding is left out of it)
-        return Reduced(x, stats=slot.stats[:2], stats_count=2,
-                       axes=[_axis("row", h, oh), _axis("col", w, ow)], **common)
-
-    @staticmethod
-    def _image(slot, budget, common) -> Reduced:
-        import torch
-        x = slot.payload
-        h, w, _ = x.shape
-        ext = budget.get("max_extent", _wire.DEFAULT_MAX_EXTENT)
-        oh, ow = min(h, ext), min(w, ext)
-        if (oh, ow) != (h, w):
-            y = pool_axis(pool_axis(x.float(), 0, oh), 1, ow)
-            x = y.add_(0.5).clamp_(0.0, 255.0).to(torch.uint8).contiguous()
-        return Reduced(x, axes=[_axis("row", h, oh), _axis("col", w, ow)], **common)
-
-    def _points(self, call, slot, budget, common) -> Reduced:
-        import torch
-        p = call.plan
-        n_all = p.shape[0]
-        d = p.points_dims
-        n = min(n_all, budget.get("max_points", _wire.DEFAULT_MAX_POINTS))
-        pts, aux = slot.payload, slot.aux
-        if n == n_all:
-            data = pts[:, :d] if d == 2 else pts
-            if d == 2:
-                data = data.contiguous()
-            stats = slot.stats                          # computed over every point
-        else:
-            key = (pts.device, n_all, n)
-            idx = self._index.get(key)
-            if idx is None:                             # stride sample: row floor(i * N / n)
-                idx = torch.arange(n, dtype=torch.int64, device=pts.device).mul_(n_all).floor_divide_(n)
-                self._index[key] = idx
-            data = pts.index_select(0, idx)
-            if d == 2:
-                data = data[:, :2].contiguous()
-            if aux is not None:
-                aux = aux.index_select(0, idx)
-            have = self._stats.get(call.name)
-            if have is None or have[0] != p.key:
-                have = (p.key, torch.zeros(STATS_FLOATS, dtype=torch.float32, device=pts.device))
-                self._stats[call.name] = have
-            stats = have[1]
-            torch.aminmax(data, dim=0, out=(stats[2:2 + 2 * d:2], stats[3:3 + 2 * d:2]))
-            if aux is not None and p.label_count == 0 and p.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX):
-                torch.aminmax(aux, out=(stats[0], stats[1]))
-        return Reduced(data, aux=aux, stats=stats, stats_count=STATS_FLOATS,
-                       axes=[_axis("point", n_all, n)], points_dims=d,
-                       label_count=p.label_count, **common)
+            return self._reduced(plan, slot, p, slot.payload, None, slot.stats)
+        if call.kind != KIND_POINTS:
+            # a heatmap reports the range of its whole payload (protocol v2's rule)
+            y = dv._apply(slot.payload, p)
+            return self._reduced(plan, slot, p, y.contiguous(), None, slot.stats)
+        d = plan.points_dims
+        src = slot.payload if d == 3 else slot.payload[:, :d]
+        y = dv._apply(src, p)
+        aux = slot.aux
+        if p.sample is None and p.row_slice is None:
+            return self._reduced(plan, slot, p, y.contiguous(), aux, slot.stats)
+        if aux is not None:
+            aux = dv.take_rows(aux, p)
+        key = (call.name, plan.key)
+        stats = self._stats.get(key)
+        if stats is None:
+            stats = self._stats[key] = torch.zeros(STATS_FLOATS, dtype=torch.float32,
+                                                   device=y.device)
+        torch.aminmax(y, dim=0, out=(stats[2:2 + 2 * d:2], stats[3:3 + 2 * d:2]))
+        if aux is not None and plan.label_count == 0 and plan.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX):
+            torch.aminmax(aux, out=(stats[0], stats[1]))
+        return self._reduced(plan, slot, p, y.contiguous(), aux, stats)
 
 
 def make_engine() -> Engine:
     """The engine a new network route uses."""
-    return DefaultEngine()
+    return DataViewEngine()

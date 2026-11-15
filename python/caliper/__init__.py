@@ -423,23 +423,29 @@ def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=Non
 
 def update(name: str | None = None):
     """Take a snapshot of every view registered with :func:`offer` (and the
-    ``weights`` view of :func:`watch`) that is due, or of view ``name`` only.
-    Same return values as :func:`show`; for every view, True if any took one."""
-    e = None
+    ``weights`` view of :func:`watch`) that is due, or of view ``name`` only:
+    of the source each route needs (the default data view's for the window and
+    the session, the subscriptions' for a server). Same return values as
+    :func:`show`; for every view, True if any took one."""
+    entries = None
     if name is not None:
         e = _dataview.REGISTRY.get(name)
         if e is None:
             raise ValueError(f"no view {name!r} was offered")
+        entries = [e]
     for r in _routes or _auto_routes():
         if r.transport.attached():
             break
     else:
         return False
-    if e is not None:
-        return _dv_snapshot(e)
     taken = False
-    for e in _dataview.REGISTRY.fetchable():
-        taken = bool(_dv_snapshot(e)) or taken
+    for e in entries or _dataview.REGISTRY.fetchable():
+        for src, s in list(e.sources.items()):
+            if s.get is not None:
+                got = _dv_dispatch(e, src)
+                if name is not None and got.__class__ is not bool:
+                    return got                       # a ShowStats in the offscreen mode
+                taken = bool(got) or taken
     return taken
 
 
@@ -478,79 +484,92 @@ def _dv_options(kind, options):
     return o
 
 
-def _dv_plan(kind, x, prog, o, raw=False):
-    """The snapshot plan of payload ``x`` of a data view, tagged with it."""
-    if kind == "heatmap":
-        plan = plan_show(x, o.get("cmap", 0), o.get("vmin"), o.get("vmax"), raw)
-    elif kind == "image":
-        from ._convert import _image_plan
-        plan = _image_plan(x, raw)
-    elif kind == "points":
-        lab = o.get("labels")
-        if callable(lab):
-            lab = lab()
-        if lab is not None:
-            lab = _dataview.take_rows(lab, prog)
-        plan = plan_points(x, lab, o.get("classes"), o.get("cmap", 0), o.get("vmin"),
-                           o.get("vmax"))
-    else:
-        plan = plan_histogram(x, o.get("bins", 64))
-    return _dataview.tag(plan, prog)
-
-
-def _dv_entry_plan(entry, tensor, _c, _d, _e):
-    x, prog = _dataview.REGISTRY.prepare(entry, tensor)
-    return None if x is None else _dv_plan(entry.kind, x, prog, entry.options)
+def _dv_call_plan(call):
+    """make() of a call with dims or data_view: the lazy plan of the view's
+    default data view (no device work until a route writes it)."""
+    p = _dataview.REGISTRY.default_program(call.entry, call.x)
+    return None if p is None else _dataview.lazy_plan(call, p)
 
 
 def _dv_show_plan(t, cm, vmin, vmax, extra):
     raw, name, dims, dv = extra
     e, x = _dataview.REGISTRY.for_call(name, "show", dims, dv, t)
-    x, prog = _dataview.REGISTRY.prepare(e, x)
-    if x is None:
-        return None
-    return _dv_plan(e.kind, x, prog, {"cmap": cm, "vmin": vmin, "vmax": vmax}, raw)
+    return _dv_call_plan(_dataview.DataCall(e, name, x, {"cmap": cm, "vmin": vmin, "vmax": vmax,
+                                                          "raw": raw}))
 
 
 def _dv_points_plan(z, labels, classes, cm, extra):
     vmin, vmax, name, dims, dv = extra
     e, x = _dataview.REGISTRY.for_call(name, "points", dims, dv, z)
-    x, prog = _dataview.REGISTRY.prepare(e, x)
-    if x is None:
-        return None
-    return _dv_plan("points", x, prog, {"labels": labels, "classes": classes, "cmap": cm,
-                                        "vmin": vmin, "vmax": vmax})
+    return _dv_call_plan(_dataview.DataCall(e, name, x, {"labels": labels, "classes": classes,
+                                                          "cmap": cm, "vmin": vmin, "vmax": vmax}))
 
 
 def _dv_hist_plan(t, bins, name, dims, dv):
     e, x = _dataview.REGISTRY.for_call(name, "histogram", dims, dv, t)
-    x, prog = _dataview.REGISTRY.prepare(e, x)
-    if x is None:
-        return None
-    return _dv_plan("histogram", x, prog, {"bins": bins})
+    return _dv_call_plan(_dataview.DataCall(e, name, x, {"bins": bins}))
 
 
-def _dv_snapshot(entry, tensor=None):
-    """Snapshot registry view ``entry`` when due; ``tensor`` is its selected
-    source's tensor when a hook passes it."""
-    return _dispatch(_DV_KINDS[entry.kind], entry.name, entry.rate, _dv_entry_plan, entry, tensor,
-                     None, None, None)
+def _dv_dispatch(entry, source, tensor=None):
+    """Offer source ``source`` of registry view ``entry`` (offer(), watch's
+    groups) to every attached route that is due and needs it: the window and
+    the session draw the view's default data view, so only its source; a
+    server needs the sources its subscriptions select (``ring.wants``). The
+    tensor of a registered source is fetched only when a route needs it."""
+    now = time.perf_counter()
+    taken = False
+    sync = None
+    name = entry.name
+    with LOCK:
+        call = plan = net = None
+        for r in _routes:
+            if not r.transport.attached():
+                continue
+            ring = r.ring
+            take_call = getattr(ring, "take_call", None)
+            if take_call is None:
+                if entry.state[2] != source:
+                    continue
+            elif not ring.wants(name, source):
+                continue
+            iv = ring.default_interval if entry.rate is None else rate_interval(entry.rate)
+            if not ring.due(name, iv, now):
+                continue
+            if call is None:
+                call = _dataview.DataCall(entry, source, tensor, entry.options)
+            if take_call is None:
+                if plan is None:
+                    plan = _dataview.REGISTRY.default_plan(call)
+                    if plan is None:
+                        continue
+                ok = ring.take(name, plan, now)
+            else:
+                if net is None:
+                    net = plan if plan is not None else _dataview.net_plan(call)
+                ok = take_call(name, net, now, None)
+            if ok:
+                taken = True
+                if r.sync:
+                    sync = r
+        if sync is not None:
+            sync.complete(name)
+            res = _sync_result(sync, name, plan.kind, now)
+    _after(_window)
+    return res if sync is not None else taken
 
 
 def _dv_hook(entry, source, t):
     """watch's hooks: ``t`` (None: fetch it) is source ``source`` of the grouped
-    view ``entry``. Unless it is the selected source only its shape is
-    recorded, and nothing happens while nothing is attached."""
+    view ``entry``. A source no route needs records its shape (metadata) and
+    returns; nothing happens while nothing is attached."""
     for r in _routes:
         if r.transport.attached():
             break
     else:
         return False
-    if entry.state[2] != source:
-        if t is not None:
-            _dataview.REGISTRY.observe(entry, source, t)
-        return False
-    return _dv_snapshot(entry, t)
+    if t is not None:
+        _dataview.REGISTRY.observe(entry, source, t)
+    return _dv_dispatch(entry, source, t)
 
 
 # ---------------------------------------------------------------------------
