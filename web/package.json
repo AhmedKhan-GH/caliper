@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node build.mjs && playwright test"
+    "test": "node build.mjs --test && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "1.65.0",
