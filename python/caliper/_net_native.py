@@ -32,7 +32,7 @@ import time
 from . import _wire
 from ._net import (MAX_CONNECTIONS, SERIES_RETAIN, Link, NetServer, NetTransport, _Producer,
                    _script_name)
-from ._net_ring import Chunk, NetRing
+from ._net_ring import NetRing
 from ._ring import KIND_SERIES
 
 __all__ = ["NativeServer"]
@@ -191,12 +191,15 @@ class NativeServer(NetServer):
     :class:`caliper._net.NetServer` (url, port, token, stream_url, session,
     closed, stats(), on_event(), events(), close())."""
 
-    def __init__(self, port: int = 0, *, engine=None):
+    def __init__(self, port: int | None = 0, *, engine=None):
+        """``port=None`` starts a producer without a listener (caliper.connect()
+        before caliper.serve()); :meth:`listen` adds one later."""
         from . import _netio
         import secrets
-        port = int(port)
-        if not 0 <= port <= 65535:
-            raise ValueError(f"port must be in 0..65535, got {port}")
+        if port is not None:
+            port = int(port)
+            if not 0 <= port <= 65535:
+                raise ValueError(f"port must be in 0..65535, got {port}")
         self.token = secrets.token_urlsafe(24)
         self.counters = collections.Counter()
         self.closed = False
@@ -209,18 +212,44 @@ class NativeServer(NetServer):
         self.transport.server = self
         self._idle = True
         self.ring = NetRing(engine, wake=self._wake)
-        self.nio = _netio.Server(port, self.token, _wire.canonical_json(self.identity).decode(),
+        self.nio = _netio.Server(-1 if port is None else port, self.token,
+                                 _wire.canonical_json(self.identity).decode(),
                                  _wire.canonical_json(self.software).decode(), _asset_table(),
                                  MAX_CONNECTIONS, SERIES_RETAIN, int(_wire.HANDSHAKE_TIMEOUT_MS),
                                  int(_wire.PING_INTERVAL_MS), int(_wire.IDLE_TIMEOUT_MS))
         self.producer = _NativeProducer(self.ring, self.identity, self.transport, self.nio)
         self.transport.producer = self.producer
         self._events_thread = None
+        self.port = 0
+        self.url = self.stream_url = None
+        self.hub = None
+        if port is not None:
+            self._set_urls()
+        self._thread = threading.Thread(target=self._run, name="caliper.net", daemon=True)
+        self._thread.start()
+
+    def _set_urls(self) -> None:
         self.port = self.nio.port
         self.url = f"http://127.0.0.1:{self.port}/?token={self.token}"
         self.stream_url = f"ws://127.0.0.1:{self.port}{_wire.PATH}?{_wire.TOKEN_PARAM}={self.token}"
-        self._thread = threading.Thread(target=self._run, name="caliper.net", daemon=True)
-        self._thread.start()
+
+    @property
+    def listening(self) -> bool:
+        return self.nio.listening
+
+    def listen(self, port: int = 0) -> None:
+        """Start listening for viewers (a producer that connect() started)."""
+        if not self.nio.listening:
+            self.nio.listen(int(port))
+        self._set_urls()
+
+    # -- the connection to a hub ---------------------------------------------------------
+    def connect_hub(self, url: str) -> "HubConnection":
+        """Connect out to a hub at ``url`` (ws://127.0.0.1:<port>/v3/stream?token=<token>),
+        reconnecting with back-off on a loss; never blocks."""
+        self.nio.connect_upstream(url, _wire.canonical_json(self.identity).decode())
+        self.hub = HubConnection(self, url)
+        return self.hub
 
     # -- the pump thread -------------------------------------------------------------------
     def _wake(self) -> None:
@@ -310,7 +339,7 @@ class NativeServer(NetServer):
         self.ring.close()
         self.transport.n_attached = 0
         _unroute(self)
-        self.nio.close()                              # BYE, close 1001, joins the native thread
+        self.nio.close()                              # BYE, close 1001, joins the native threads
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(5)
         q = self.producer._event_q
@@ -320,3 +349,55 @@ class NativeServer(NetServer):
     def __repr__(self) -> str:
         state = "closed" if self.closed else "running"
         return f"<caliper.NetServer (native sender) {self.url} {state}>"
+
+
+class HubConnection:
+    """What ``caliper.connect()`` returns: this process's connection to a hub.
+
+    ``url`` is the hub's stream (without the token), ``session`` the session id
+    the hub assigned (the proposed one until it answered), ``state`` one of
+    ``connecting``, ``connected``, ``waiting`` (to retry), ``replaced`` (another
+    connection of this session took over) and ``closed``. ``close()`` ends the
+    connection to the hub only; ``caliper.close()`` ends everything."""
+
+    def __init__(self, producer: NativeServer, url: str):
+        self._p = producer
+        self.url = url.split("?", 1)[0]
+
+    def _state(self) -> dict:
+        return self._p.nio.upstream()
+
+    @property
+    def state(self) -> str:
+        return self._state()["state"]
+
+    @property
+    def connected(self) -> bool:
+        return self._state()["connected"]
+
+    @property
+    def session(self) -> str:
+        return self._state()["session"] or self._p.identity["id"]
+
+    def stats(self) -> dict:
+        d = self._state()
+        d.pop("url", None)
+        return d
+
+    def wait_connected(self, timeout: float = 10.0) -> bool:
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if self.connected:
+                return True
+            time.sleep(0.01)
+        return self.connected
+
+    def close(self) -> None:
+        self._p.nio.disconnect_upstream()
+        if self._p.hub is self:
+            self._p.hub = None
+        if not self._p.listening:                    # nothing else to serve
+            self._p.close()
+
+    def __repr__(self) -> str:
+        return f"<caliper.HubConnection {self.url} {self.state} session={self.session}>"

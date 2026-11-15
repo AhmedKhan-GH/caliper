@@ -35,6 +35,7 @@ import asyncio
 import collections
 import hmac
 import itertools
+import json
 import logging
 import os
 import queue
@@ -1267,6 +1268,21 @@ def _make_server(port: int) -> NetServer:
     return NetServer(port)
 
 
+def _add_route(s) -> None:
+    """Make ``s`` this process's network route (under caliper.LOCK)."""
+    import caliper
+    global _producer
+    route = NetRoute(s)
+    s._route = route
+    caliper._extra_routes.append(route)
+    caliper._set_routes()
+    caliper._series_tap = s.ring.tap
+    _producer = s
+
+
+_producer = None                     # the route's server: serve()'s, or connect()'s without a listener
+
+
 def serve(port: int = 0) -> NetServer:
     """Start (or return) the stream server of this process. See caliper.serve."""
     import caliper
@@ -1274,20 +1290,96 @@ def serve(port: int = 0) -> NetServer:
         s = current_server()
         if s is not None:
             return s
-        s = _make_server(port)
-        route = NetRoute(s)
-        s._route = route
-        caliper._extra_routes.append(route)
-        caliper._set_routes()
-        caliper._series_tap = s.ring.tap
+        p = _producer
+        if p is not None and not p.closed and not getattr(p, "listening", True):
+            p.listen(port)               # connect() came first: one producer, now listening too
+            s = p
+        else:
+            s = _make_server(port)
+            _add_route(s)
         caliper._server = s
     print(s.url, flush=True)
     return s
 
 
+# ---------------------------------------------------------------------------
+# caliper.connect(): the producer's connection out to a `caliper serve` hub
+# ---------------------------------------------------------------------------
+def hub_file() -> str:
+    """Where `caliper serve` writes its hub file: $CALIPER_HUB_FILE, else
+    hub.json in Caliper's app-data folder (the hub's own rule)."""
+    p = os.environ.get("CALIPER_HUB_FILE")
+    if p:
+        return p
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        base = os.path.join(home, "Library", "Application Support", "Caliper")
+    elif os.name == "nt":
+        base = os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
+    return os.path.join(base, "hub.json")
+
+
+def hub_stream_url(url: str | None = None) -> str:
+    """The hub's stream URL with its token: ``url`` (a ws:// stream URL, or the
+    http:// viewer link the hub prints), else $CALIPER_HUB_URL, else the hub file."""
+    from urllib.parse import parse_qs, urlsplit
+    src = url or os.environ.get("CALIPER_HUB_URL")
+    if not src:
+        path = hub_file()
+        try:
+            with open(path, encoding="utf-8") as f:
+                info = json.load(f)
+        except FileNotFoundError:
+            raise RuntimeError(f"caliper.connect(): no hub runs (no hub file {path}); start one with "
+                               "`caliper serve`, or pass its URL") from None
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"caliper.connect(): cannot read the hub file {path}: {e}") from None
+        token, port = info.get("token"), info.get("port")
+        if not isinstance(token, str) or not isinstance(port, int):
+            raise RuntimeError(f"caliper.connect(): the hub file {path} has no port and token")
+        base = info.get("stream_url") or f"ws://127.0.0.1:{port}{_wire.PATH}"
+        return f"{base.split('?', 1)[0]}?{_wire.TOKEN_PARAM}={token}"
+    u = urlsplit(src)
+    token = parse_qs(u.query).get(_wire.TOKEN_PARAM, [""])[0]
+    if u.scheme not in ("ws", "http") or not u.hostname or not token:
+        raise ValueError(f"caliper.connect(): expected ws://127.0.0.1:<port>/v3/stream?token=<token> "
+                         f"or the hub's http:// link, got {src!r}")
+    if u.hostname not in ("127.0.0.1", "localhost"):
+        raise ValueError("caliper.connect(): the hub must be on this machine (127.0.0.1)")
+    port = u.port or 80
+    return f"ws://127.0.0.1:{port}{_wire.PATH}?{_wire.TOKEN_PARAM}={token}"
+
+
+def connect(url: str | None = None):
+    """Connect this process to a `caliper serve` hub. See caliper.connect."""
+    import caliper
+    ws_url = hub_stream_url(url)
+    try:
+        from . import _netio  # noqa: F401
+    except ImportError:
+        raise RuntimeError("caliper.connect() needs the native sender (caliper._netio); build it "
+                           "with `python scripts/build_netio.py`") from None
+    with caliper.LOCK:
+        p = _producer if _producer is not None and not _producer.closed else None
+        if p is None:
+            from ._net_native import NativeServer
+            p = NativeServer(None)
+            _add_route(p)
+        elif not hasattr(p, "connect_hub"):
+            raise RuntimeError("caliper.connect() needs the native sender, and caliper.serve() runs "
+                               "on the Python sender (CALIPER_NETIO=0)")
+        return p.connect_hub(ws_url)
+
+
 def _unroute(server: NetServer) -> None:
     import caliper
+    global _producer
     with caliper.LOCK:
+        if _producer is server:
+            _producer = None
         route = getattr(server, "_route", None)
         if route is not None and route in caliper._extra_routes:
             caliper._extra_routes.remove(route)

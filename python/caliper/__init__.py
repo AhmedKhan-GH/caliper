@@ -871,3 +871,19 @@ def serve(port: int = 0):
     with a session token. :func:`close` stops it."""
     from ._net import serve as _serve
     return _serve(port)
+
+
+__all__ += ["connect"]
+
+
+def connect(url: str | None = None):
+    """Stream every view of this process to a `caliper serve` hub on this
+    machine, as well as to serve()'s viewers if it runs. ``url`` is the hub's
+    stream URL with its token (or the viewer link it prints); without it,
+    $CALIPER_HUB_URL, then the hub file ($CALIPER_HUB_FILE, or hub.json in
+    Caliper's app-data folder). Returns at once; the connection retries with
+    back-off and never blocks training. Returns the connection (``url``,
+    ``session``, ``state``, ``connected``, ``stats()``, ``close()``). Needs the
+    native sender (caliper._netio). :func:`close` ends it."""
+    from ._net import connect as _connect
+    return _connect(url)

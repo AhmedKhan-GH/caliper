@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import gc
+import json
 import os
 import resource
 import socket
@@ -969,3 +970,228 @@ def test_memory_flat_long_run(server):
             return rss0, rss1
     rss0, rss1 = run(go(), 90)
     assert rss1 - rss0 < 40, (rss0, rss1)
+
+
+# ---------------------------------------------------------------------------
+# caliper.connect(): the producer's connection to a hub (a fake hub built from
+# the codec; the real hub is tested at integration)
+# ---------------------------------------------------------------------------
+class FakeHub:
+    """A hub that accepts producers: WELCOME with an assigned session id
+    (the proposal plus "-hub" the first time, the proposal afterwards), then
+    records what arrives; tests drive it through call()."""
+
+    def __init__(self, token="hubtoken-0123456789abcdefghij"):
+        self.token = token
+        self.hellos, self.msgs, self.closes = [], [], []
+        self.ws = None
+        self.loop = asyncio.new_event_loop()
+        self.ready = threading.Event()
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+        assert self.ready.wait(10)
+
+    @property
+    def url(self):
+        return f"ws://127.0.0.1:{self.port}/v3/stream?token={self.token}"
+
+    def _run(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self._start())
+        self.ready.set()
+        self.loop.run_forever()
+
+    async def _start(self):
+        from websockets.asyncio.server import serve
+
+        async def handler(ws):
+            if ws.request.path != f"/v3/stream?token={self.token}":
+                await ws.close(4000)
+                return
+            hello = w.decode(await ws.recv())
+            self.hellos.append(hello)
+            sid = hello.session["id"]
+            if len(self.hellos) == 1:
+                sid += "-hub"
+            await ws.send(w.encode(w.Welcome("hub", [], {"name": "fake-hub", "version": "0"},
+                                             dict(hello.session, id=sid))))
+            self.ws = ws
+            try:
+                async for m in ws:
+                    self.msgs.append(w.decode(m))
+            except ConnectionClosed:
+                pass
+            self.closes.append(ws.close_code)
+
+        self.server = await serve(handler, "127.0.0.1", 0, compression=None, max_size=None,
+                                  ping_interval=None)
+        self.port = self.server.sockets[0].getsockname()[1]
+
+    def call(self, coro, timeout=10):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
+
+    def send(self, msg):
+        async def go():
+            await self.ws.send(w.encode(msg))
+        self.call(go())
+
+    def drop(self, code=1011):
+        async def go():
+            await self.ws.close(code)
+        self.call(go())
+
+    def wait_for(self, pred, timeout=10.0, pump=None):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            for m in list(self.msgs):
+                if pred(m):
+                    return m
+            if pump is not None:
+                pump()
+            time.sleep(0.01)
+        raise TimeoutError(f"got {[type(m).__name__ for m in self.msgs]}")
+
+    def close(self):
+        async def go():
+            self.server.close()
+            await self.server.wait_closed()
+        try:
+            self.call(go())
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+needs_native = pytest.mark.skipif(not NATIVE, reason="caliper.connect() needs caliper._netio")
+
+
+@pytest.fixture
+def hub(monkeypatch):
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    monkeypatch.setenv("CALIPER_NETIO", "1")
+    h = FakeHub()
+    yield h
+    caliper.close()
+    h.close()
+
+
+@needs_native
+def test_connect_streams_to_a_hub(hub):
+    conn = caliper.connect(hub.url)
+    assert conn.wait_connected()
+    (hello,) = hub.hellos
+    assert hello.role == "producer" and hello.session["pid"] == os.getpid()
+    assert conn.session == hello.session["id"] + "-hub"              # the hub's assignment
+    W = torch.randn(300, 200, device=DEV)
+    show = lambda: caliper.show(W, name="w", rate=0)  # noqa: E731
+    views = hub.wait_for(lambda m: isinstance(m, w.Views) and any(v["name"] == "w" for v in m.views),
+                         pump=show)
+    assert views.session == conn.session
+    hub.send(w.Subscribe(7, "w", 70))
+    reply = hub.wait_for(lambda m: isinstance(m, w.ViewReply) and m.request_id == 70, pump=show)
+    assert reply.data_view["budget"]["max_extent"] == 512
+    snap = hub.wait_for(lambda m: isinstance(m, w.Snapshot) and m.sub == 7, pump=show)
+    assert snap.data.array().shape == (300, 200)
+    assert np.allclose(snap.data.array(), W.cpu().numpy())
+    for i in range(100):
+        caliper.series(float(i), name="loss")
+    hub.wait_for(lambda m: isinstance(m, w.Views) and any(v["name"] == "loss" for v in m.views))
+    hub.send(w.Subscribe(8, "loss", 80))
+    vals = []
+    end = time.monotonic() + 10
+    while len(vals) < 100 and time.monotonic() < end:
+        vals = [x for m in hub.msgs if isinstance(m, w.Series) and m.sub == 8
+                for x in m.values.array().tolist()]
+        time.sleep(0.02)
+    assert vals == [float(i) for i in range(100)]                   # the backfill
+    hub.send(w.Event("w", "pick", {"row": 3, "col": 4}, sub=7))
+    s = _net.current_server() or _net._producer
+    assert _wait(lambda: [e["detail"] for e in s.events()] == [{"row": 3, "col": 4}])
+    assert caliper._server is None                                  # nothing listens for viewers
+
+
+@needs_native
+def test_connect_reconnects_and_resumes(hub):
+    conn = caliper.connect(hub.url)
+    assert conn.wait_connected()
+    assigned = conn.session
+    hub.drop()
+    assert _wait(lambda: len(hub.hellos) == 2, timeout=10)
+    assert hub.hellos[1].session["id"] == assigned                  # proposes the assigned id
+    assert conn.wait_connected() and conn.stats()["connects"] == 2
+    hub.send(w.Bye(w.BYE_REPLACED, "another connection of this session"))
+    assert _wait(lambda: conn.state == "replaced", timeout=5)
+    time.sleep(1.5)
+    assert len(hub.hellos) == 2                                     # no reconnect after replaced
+
+
+@needs_native
+def test_connect_never_blocks_training(monkeypatch):
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    monkeypatch.setenv("CALIPER_NETIO", "1")
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()                                                       # nothing listens there
+    try:
+        t0 = time.perf_counter()
+        conn = caliper.connect(f"ws://127.0.0.1:{port}/v3/stream?token=" + "x" * 32)
+        assert time.perf_counter() - t0 < 0.5
+        W = torch.randn(64, 64, device=DEV)
+        worst = 0.0
+        end = time.monotonic() + 1.5
+        while time.monotonic() < end:
+            t0 = time.perf_counter()
+            caliper.show(W, name="w")
+            caliper.series(1.0, name="s")
+            worst = max(worst, time.perf_counter() - t0)
+        assert worst < 0.05
+        assert conn.state in ("connecting", "waiting") and conn.stats()["attempts"] >= 2
+        assert not conn.connected
+    finally:
+        caliper.close()
+
+
+@needs_native
+def test_connect_finds_the_hub(hub, monkeypatch, tmp_path):
+    f = tmp_path / "hub.json"
+    f.write_text(json.dumps({"pid": 1, "port": hub.port, "token": hub.token, "version": 1,
+                             "stream_url": f"ws://127.0.0.1:{hub.port}/v3/stream",
+                             "url": f"http://127.0.0.1:{hub.port}/?token={hub.token}"}))
+    monkeypatch.setenv("CALIPER_HUB_FILE", str(f))
+    monkeypatch.delenv("CALIPER_HUB_URL", raising=False)
+    assert _net.hub_file() == str(f)
+    assert _net.hub_stream_url() == hub.url
+    monkeypatch.setenv("CALIPER_HUB_URL", f"http://localhost:{hub.port}/?token=abcdefghijklmnopqrstuvwx")
+    assert _net.hub_stream_url() == f"ws://127.0.0.1:{hub.port}/v3/stream?token=abcdefghijklmnopqrstuvwx"
+    assert _net.hub_stream_url(hub.url) == hub.url
+    monkeypatch.delenv("CALIPER_HUB_URL")
+    conn = caliper.connect()                                        # through the hub file
+    assert conn.wait_connected()
+    monkeypatch.setenv("CALIPER_HUB_FILE", str(tmp_path / "missing.json"))
+    with pytest.raises(RuntimeError, match="no hub runs"):
+        _net.hub_stream_url()
+    with pytest.raises(ValueError):
+        _net.hub_stream_url("ws://example.com:7340/v3/stream?token=abc")
+
+
+@needs_native
+def test_serve_and_connect_share_one_producer(hub):
+    conn = caliper.connect(hub.url)
+    server = caliper.serve()                                        # starts listening on the same producer
+    assert conn.wait_connected() and server is _net._producer
+    W = torch.randn(64, 64, device=DEV)
+    show = lambda: caliper.show(W, name="w", rate=0)  # noqa: E731
+    hub.wait_for(lambda m: isinstance(m, w.Views) and any(v["name"] == "w" for v in m.views), pump=show)
+    hub.send(w.Subscribe(1, "w", 1))
+
+    async def go():
+        async with Client(server) as c:
+            await c.subscribe(2, "w", pump=show)
+            return await c.expect(w.Snapshot, pump=show)
+    local = run(go())
+    remote = hub.wait_for(lambda m: isinstance(m, w.Snapshot), pump=show)
+    assert local.data.array().shape == remote.data.array().shape == (64, 64)
+    assert server.stats()["views"]["w"]["groups"] == 1               # computed once for both
+    caliper.close()
+    assert _wait(lambda: w.CLOSE_GOING_AWAY in hub.closes)
+    assert any(isinstance(m, w.Bye) and m.reason == w.BYE_SHUTDOWN for m in hub.msgs)

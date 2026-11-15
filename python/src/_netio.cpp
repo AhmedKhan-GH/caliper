@@ -54,6 +54,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -161,6 +162,7 @@ struct Sub {
 
 struct Link {
     ConnId id = 0;
+    bool upstream = false;                    // the producer's own connection to a hub
     uint64_t opened_ms = 0;
     bool helloed = false;
     bool attached = false;
@@ -213,18 +215,86 @@ public:
         caliper_net::Options opt;
         opt.max_message_bytes = CALIPER_NET_MAX_FRAME_BYTES;
         opt.max_connections = (size_t)std::max(max_connections, 1) * 2 + 16;   // HTTP requests too
+        opt_ = opt;
         server_ = std::make_unique<caliper_net::Server>(opt);
-        if (!server_->listen((uint16_t)port, &err)) throw std::runtime_error("listen: " + err);
+        if (port >= 0 && !server_->listen((uint16_t)port, &err)) throw std::runtime_error("listen: " + err);
         thread_ = std::thread([this] { loop(); });
     }
 
     ~NetIO() { close(); }
 
     uint16_t port() const { return server_->port(); }
+    bool listening() const { return server_->listening(); }
+
+    // Start listening later (a producer that connected to a hub first): done on
+    // the native thread, which owns the server.
+    uint16_t listen(int port) {
+        std::promise<std::string> done;
+        std::future<std::string> f = done.get_future();
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            listen_port_ = port;
+            listen_done_ = &done;
+        }
+        server_->wake();
+        const std::string err = f.get();
+        if (!err.empty()) throw std::runtime_error("listen: " + err);
+        return server_->port();
+    }
+
+    // ---- the producer's connection to a hub (caliper.connect) -------------------------
+    void connect_upstream(std::string url, std::string identity_json) {
+        Json id;
+        std::string err;
+        if (!Json::parse(identity_json.data(), identity_json.size(), &id, &err) || !id.is_object())
+            throw std::invalid_argument("identity: " + err);
+        disconnect_upstream();
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            up_url_ = std::move(url);
+            up_identity_ = std::move(id);
+            up_state_ = "connecting";
+            up_error_.clear();
+            up_attempts_ = 0;
+            up_replaced_ = false;
+        }
+        up_stop_ = false;
+        up_thread_ = std::thread([this] { up_loop(); });
+    }
+
+    void disconnect_upstream() {
+        if (!up_thread_.joinable()) return;
+        up_stop_ = true;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            if (client_) client_->wake();
+        }
+        up_cv_.notify_all();
+        up_thread_.join();
+    }
+
+    struct UpState {
+        std::string state, session, error, url;
+        uint64_t attempts = 0, connects = 0;
+        bool connected = false;
+    };
+    UpState upstream() {
+        std::lock_guard<std::mutex> g(mu_);
+        UpState u;
+        u.state = up_state_;
+        u.session = up_session_;
+        u.error = up_error_;
+        u.attempts = up_attempts_;
+        u.connects = up_connects_;
+        u.connected = up_state_ == "connected";
+        u.url = up_url_;
+        return u;
+    }
     int attached() const { return attached_.load(std::memory_order_relaxed); }
 
     // ---- Python-thread calls (the GIL is released around them) ----------------------
     void close() {
+        disconnect_upstream();
         if (stop_.exchange(true)) {
             if (thread_.joinable()) thread_.join();
             return;
@@ -271,7 +341,7 @@ public:
         views_ = std::move(v);
         for (auto& [id, l] : links_)
             if (l.attached) l.views_pending = true;
-        server_->wake();
+        wake_all();
     }
 
     bool send(ConnId c, std::string frame) {
@@ -279,7 +349,7 @@ public:
         auto it = links_.find(c);
         if (it == links_.end()) return false;
         it->second.control.push_back(std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
-        server_->wake();
+        wake_all();
         return true;
     }
 
@@ -312,7 +382,7 @@ public:
             gr.members.insert({c, sub});
         }
         l.subs[sub] = std::move(s);
-        server_->wake();
+        wake_all();
         return true;
     }
 
@@ -373,7 +443,7 @@ public:
             if (st->second.snap) ++lt->second.superseded;
             st->second.snap = snap;
         }
-        server_->wake();
+        wake_all();
     }
 
     void series_append(const std::string& view, uint64_t ptr, size_t n, uint64_t stamp_ns) {
@@ -382,7 +452,7 @@ public:
         h.retain = retain_;
         h.append(reinterpret_cast<const float*>(ptr), n, stamp_ns);
         series_values_ += n;
-        server_->wake();
+        wake_all();
     }
 
     struct Stats {
@@ -440,9 +510,17 @@ private:
             const int timeout = next_timeout_ms();
             std::vector<caliper_net::Event> evs = server_->poll(timeout);
             std::lock_guard<std::mutex> g(mu_);
+            if (listen_done_) {
+                std::string err;
+                if (!server_->listening() && !server_->listen((uint16_t)listen_port_, &err) && err.empty())
+                    err = "listen failed";
+                listen_done_->set_value(err);
+                listen_done_ = nullptr;
+            }
             for (auto& e : evs) handle(e);
             timers();
-            for (auto& [id, l] : links_) pump(l);
+            for (auto& [id, l] : links_)
+                if (!l.upstream) pump(l);
         }
         std::vector<ConnId> open;
         {
@@ -452,6 +530,7 @@ private:
             bye.message = "the producer is closing";
             SharedBytes b = encode(bye);
             for (auto& [id, l] : links_) {
+                if (l.upstream) continue;
                 // what is queued for it goes first, then BYE
                 pump(l, /*final=*/true);
                 if (server_->is_open(id)) server_->send(id, b);
@@ -459,9 +538,19 @@ private:
         }
         server_->shutdown(CALIPER_NET_CLOSE_GOING_AWAY, 2000);
         std::lock_guard<std::mutex> g(mu_);
-        for (auto& [id, l] : links_) push_ctl("closed", id);
-        links_.clear();
-        attached_.store(0);
+        if (listen_done_) {
+            listen_done_->set_value("closed");
+            listen_done_ = nullptr;
+        }
+        for (auto it = links_.begin(); it != links_.end();) {
+            if (it->second.upstream) {
+                ++it;
+                continue;
+            }
+            push_ctl("closed", it->first);
+            if (it->second.attached) attached_.fetch_sub(1);
+            it = links_.erase(it);
+        }
     }
 
     int next_timeout_ms() {
@@ -470,7 +559,7 @@ private:
         const uint64_t now = now_ns();
         uint64_t wait = (uint64_t)kMaxPollMs * 1'000'000;
         for (auto& [id, l] : links_) {
-            if (server_->queued_bytes(id) >= kRoom) continue;
+            if (l.upstream || server_->queued_bytes(id) >= kRoom) continue;
             for (auto& [n, s] : l.subs) {
                 bool has = s.snap != nullptr;
                 if (s.series) {
@@ -483,6 +572,31 @@ private:
             }
         }
         return (int)((wait + 999'999) / 1'000'000);
+    }
+
+    // The socket operations of a link: the server's connections, or the
+    // client of the hub connection (touched only by the thread that owns it).
+    bool xsend(Link& l, const SharedBytes& f) {
+        return l.upstream ? (client_ && client_->send(f)) : server_->send(l.id, f);
+    }
+    void xclose(Link& l, uint16_t code, const std::string& reason) {
+        if (!l.upstream) server_->close(l.id, code, reason);
+        else if (client_) client_->close(code, reason);
+        l.closing = true;
+    }
+    size_t xqueued(const Link& l) const {
+        return l.upstream ? (client_ ? client_->queued_bytes() : 0) : server_->queued_bytes(l.id);
+    }
+    bool xopen(const Link& l) const {
+        return l.upstream ? (client_ && client_->state() == caliper_net::Client::State::Open)
+                          : server_->is_open(l.id);
+    }
+    uint64_t xlast_input(const Link& l) const {
+        return l.upstream ? (client_ ? client_->last_input_ms() : 0) : server_->last_input_ms(l.id);
+    }
+    void wake_all() {                         // under mu_
+        server_->wake();
+        if (client_) client_->wake();
     }
 
     void push_ctl(const char* kind, ConnId c, std::vector<uint8_t> frame = {}) {
@@ -505,9 +619,8 @@ private:
         e.code = code;
         e.message = msg;
         e.fatal = true;
-        server_->send(l.id, encode(e));
-        server_->close(l.id, close_code, msg.substr(0, 120));
-        l.closing = true;
+        xsend(l, encode(e));
+        xclose(l, close_code, msg.substr(0, 120));
     }
 
     void drop_sub(Link& l, uint32_t sub) {
@@ -614,16 +727,14 @@ private:
     void on_message(Link& l, caliper_net::Event& e) {
         if (l.closing) return;
         if (!e.binary) {
-            server_->close(l.id, CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "binary frames only");
-            l.closing = true;
+            xclose(l, CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "binary frames only");
             return;
         }
         l.pinged = false;
         wire::Message m;
         const wire::DecodeResult r = wire::decode(e.data.data(), e.data.size(), &m);
         if (r.status == wire::DecodeResult::Status::BadFrame) {
-            server_->close(l.id, (uint16_t)r.close_code, r.reason);
-            l.closing = true;
+            xclose(l, (uint16_t)r.close_code, r.reason);
             return;
         }
         if (!l.helloed) {
@@ -632,8 +743,7 @@ private:
                 return;
             }
             if (std::holds_alternative<wire::Bye>(m)) {
-                server_->close(l.id, CALIPER_NET_CLOSE_NORMAL);
-                l.closing = true;
+                xclose(l, CALIPER_NET_CLOSE_NORMAL, "");
                 return;
             }
             auto* h = std::get_if<wire::Hello>(&m);
@@ -697,14 +807,11 @@ private:
             } else {
                 attach(l, a->session ? *a->session : std::string());
             }
-        } else if (std::holds_alternative<wire::Bye>(m)) {
-            server_->close(l.id, CALIPER_NET_CLOSE_NORMAL, "bye");
-            l.closing = true;
+        } else if (auto* bye = std::get_if<wire::Bye>(&m)) {
+            if (l.upstream && bye->reason == CALIPER_NET_BYE_REPLACED) up_replaced_ = true;
+            xclose(l, CALIPER_NET_CLOSE_NORMAL, "bye");
         } else if (auto* er = std::get_if<wire::Error>(&m)) {
-            if (er->fatal) {
-                server_->close(l.id, CALIPER_NET_CLOSE_NORMAL, "peer error");
-                l.closing = true;
-            }
+            if (er->fatal) xclose(l, CALIPER_NET_CLOSE_NORMAL, "peer error");
         } else if (std::holds_alternative<wire::Subscribe>(m) || std::holds_alternative<wire::Unsubscribe>(m) ||
                    std::holds_alternative<wire::ViewRequest>(m) || std::holds_alternative<wire::Event>(m)) {
             to_python(l, m, e.data);
@@ -760,37 +867,37 @@ private:
 
     void timers() {
         const uint64_t now = caliper_net::monotonic_ms();
-        for (auto& [id, l] : links_) {
-            if (l.closing) continue;
-            if (!l.helloed) {
-                if (now - l.opened_ms >= (uint64_t)handshake_ms_) {
-                    server_->close(id, CALIPER_NET_CLOSE_HANDSHAKE_TIMEOUT, "no hello");
-                    l.closing = true;
-                }
-                continue;
-            }
-            const uint64_t idle = now - server_->last_input_ms(id);
-            if (idle >= (uint64_t)idle_ms_) {
-                server_->close(id, CALIPER_NET_CLOSE_IDLE_TIMEOUT, "idle");
-                l.closing = true;
-            } else if (idle >= (uint64_t)ping_ms_ && !l.pinged) {
-                queue(l, wire::Ping{++l.nonce});
-                l.pinged = true;
-            }
+        for (auto& [id, l] : links_)
+            if (!l.upstream) timer(l, now);
+    }
+
+    void timer(Link& l, uint64_t now) {
+        if (l.closing) return;
+        if (!l.helloed) {
+            if (now - l.opened_ms >= (uint64_t)handshake_ms_)
+                xclose(l, CALIPER_NET_CLOSE_HANDSHAKE_TIMEOUT, "no hello");
+            return;
+        }
+        const uint64_t idle = now - xlast_input(l);
+        if (idle >= (uint64_t)idle_ms_) {
+            xclose(l, CALIPER_NET_CLOSE_IDLE_TIMEOUT, "idle");
+        } else if (idle >= (uint64_t)ping_ms_ && !l.pinged) {
+            queue(l, wire::Ping{++l.nonce});
+            l.pinged = true;
         }
     }
 
     // Send what the connection has room for: control frames, then series,
     // then snapshots, each subscription at its own rate.
     void pump(Link& l, bool final = false) {
-        if (l.closing || !server_->is_open(l.id)) return;
+        if (l.closing || !xopen(l)) return;
         const uint64_t now = now_ns();
-        while (final || server_->queued_bytes(l.id) < kRoom) {
+        while (final || xqueued(l) < kRoom) {
             SharedBytes f;
             if (l.views_pending && l.control.empty()) {
                 wire::Views v;
                 if (l.attached) {
-                    v.session = ident_.id;
+                    v.session = l.upstream && !up_session_.empty() ? up_session_ : ident_.id;
                     v.views = views_;
                 }
                 f = encode(v);
@@ -802,7 +909,7 @@ private:
                 f = next_data(l, now, final);
             }
             if (!f) break;
-            if (!server_->send(l.id, f)) break;
+            if (!xsend(l, f)) break;
             ++l.frames_out;
             l.bytes_out += f->size();
         }
@@ -865,6 +972,141 @@ private:
         return encode(m);
     }
 
+    // ---- the hub connection's thread ------------------------------------------------------
+    // Connect, HELLO as a producer, WELCOME from the hub; then the connection is
+    // one more link (the hub is this session's one viewer). On a loss it waits
+    // (0.5 s, doubling to 30 s) and connects again, proposing the session id the
+    // hub assigned, so the hub resumes the session. BYE `replaced` ends it.
+    void up_loop() {
+        int backoff_ms = 500;
+        while (!up_stop_.load()) {
+            std::string url;
+            Json hello_id;
+            {
+                std::lock_guard<std::mutex> g(mu_);
+                client_ = std::make_unique<caliper_net::Client>(opt_);
+                url = up_url_;
+                hello_id = up_identity_;
+                if (!up_session_.empty()) hello_id.set("id", up_session_);
+                ++up_attempts_;
+                up_state_ = "connecting";
+            }
+            std::string err;
+            bool ok = client_->connect(url, &err);
+            const ConnId cid = next_up_id_++;
+            const uint64_t t0 = caliper_net::monotonic_ms();
+            bool helloed = false, closed = !ok;
+            while (ok && !closed && !up_stop_.load()) {
+                int timeout = kMaxPollMs;
+                std::vector<caliper_net::Event> evs = client_->poll(timeout);
+                std::lock_guard<std::mutex> g(mu_);
+                for (auto& e : evs) {
+                    using T = caliper_net::Event::Type;
+                    if (e.type == T::Open) {
+                        wire::Hello h;
+                        h.role = CALIPER_NET_ROLE_PRODUCER;
+                        h.capabilities = {CALIPER_NET_CAP_EVENTS};
+                        h.software = software_;
+                        h.session = hello_id;
+                        client_->send(encode(h));
+                    } else if (e.type == T::Message && !helloed) {
+                        wire::Message m;
+                        const wire::DecodeResult r = wire::decode(e.data.data(), e.data.size(), &m);
+                        auto* w = r.ok() ? std::get_if<wire::Welcome>(&m) : nullptr;
+                        wire::Identity got;
+                        if (!w || w->role != CALIPER_NET_ROLE_HUB || !wire::Identity::parse(w->session, &got)) {
+                            err = "the hub's first message was not a WELCOME with a session";
+                            client_->close(CALIPER_NET_CLOSE_PROTOCOL_ERROR, "no welcome");
+                            closed = true;
+                            break;
+                        }
+                        helloed = true;
+                        up_session_ = got.id;
+                        up_state_ = "connected";
+                        ++up_connects_;
+                        backoff_ms = 500;
+                        Link l;
+                        l.id = cid;
+                        l.upstream = true;
+                        l.helloed = true;
+                        l.follows_default = false;
+                        l.opened_ms = caliper_net::monotonic_ms();
+                        links_[cid] = std::move(l);
+                        push_ctl("opened", cid);
+                        set_attached(links_[cid], true);
+                        links_[cid].views_pending = true;
+                    } else if (e.type == T::Message) {
+                        auto it = links_.find(cid);
+                        if (it != links_.end()) on_message(it->second, e);
+                    } else if (e.type == T::Closed) {
+                        closed = true;
+                        err = e.reason.empty() ? "closed with " + std::to_string(e.code) : e.reason;
+                    }
+                }
+                if (closed) break;
+                if (!helloed && caliper_net::monotonic_ms() - t0 >= (uint64_t)handshake_ms_) {
+                    err = "no WELCOME from the hub";
+                    client_->close(CALIPER_NET_CLOSE_HANDSHAKE_TIMEOUT, "no welcome");
+                    closed = true;
+                    break;
+                }
+                auto it = links_.find(cid);
+                if (it != links_.end()) {
+                    timer(it->second, caliper_net::monotonic_ms());
+                    pump(it->second);
+                }
+            }
+            if (up_stop_.load() && client_ && client_->state() == caliper_net::Client::State::Open) {
+                std::lock_guard<std::mutex> g(mu_);
+                auto it = links_.find(cid);
+                if (it != links_.end()) pump(it->second, /*final=*/true);
+                wire::Bye bye;
+                bye.reason = CALIPER_NET_BYE_SHUTDOWN;
+                bye.message = "the producer is closing";
+                client_->send(encode(bye));
+                client_->close(CALIPER_NET_CLOSE_GOING_AWAY, "shutdown");
+            }
+            if (up_stop_.load()) {                // let the close go out, briefly
+                const uint64_t end = caliper_net::monotonic_ms() + 1000;
+                while (client_->state() != caliper_net::Client::State::Closed &&
+                       caliper_net::monotonic_ms() < end)
+                    client_->poll(20);
+            }
+            {
+                std::lock_guard<std::mutex> g(mu_);
+                auto it = links_.find(cid);
+                if (it != links_.end()) {
+                    for (auto sub = it->second.subs.begin(); sub != it->second.subs.end();)
+                        drop_sub(it->second, (sub++)->first);
+                    if (it->second.attached) attached_.fetch_sub(1);
+                    push_ctl("closed", cid);
+                    links_.erase(it);
+                }
+                client_.reset();
+                if (!err.empty()) up_error_ = err;
+                up_state_ = up_stop_.load() ? "closed" : up_replaced_ ? "replaced" : "waiting";
+            }
+            if (up_stop_.load() || up_replaced_) break;
+            std::unique_lock<std::mutex> lk(up_mu_);
+            up_cv_.wait_for(lk, std::chrono::milliseconds(backoff_ms), [this] { return up_stop_.load(); });
+            backoff_ms = std::min(backoff_ms * 2, 30000);
+        }
+    }
+
+    caliper_net::Options opt_;
+    std::unique_ptr<caliper_net::Client> client_;   // the hub connection (its thread; pointer under mu_)
+    std::thread up_thread_;
+    std::atomic<bool> up_stop_{false};
+    std::atomic<bool> up_replaced_{false};
+    std::mutex up_mu_;
+    std::condition_variable up_cv_;
+    std::string up_url_, up_state_ = "closed", up_error_, up_session_;
+    Json up_identity_;
+    uint64_t up_attempts_ = 0, up_connects_ = 0;
+    ConnId next_up_id_ = ConnId(1) << 62;     // never a server connection id
+    int listen_port_ = 0;
+    std::promise<std::string>* listen_done_ = nullptr;
+
     std::unique_ptr<caliper_net::Server> server_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
@@ -906,6 +1148,26 @@ NB_MODULE(_netio, m) {
              nb::arg("max_connections"), nb::arg("series_retain"), nb::arg("handshake_ms"),
              nb::arg("ping_ms"), nb::arg("idle_ms"), R())
         .def_prop_ro("port", &NetIO::port)
+        .def_prop_ro("listening", &NetIO::listening)
+        .def("listen", &NetIO::listen, R())
+        .def("connect_upstream", &NetIO::connect_upstream, R())
+        .def("disconnect_upstream", &NetIO::disconnect_upstream, R())
+        .def("upstream", [](NetIO& self) {
+                 NetIO::UpState u;
+                 {
+                     nb::gil_scoped_release release;
+                     u = self.upstream();
+                 }
+                 nb::dict d;
+                 d["state"] = u.state;
+                 d["session"] = u.session;
+                 d["error"] = u.error;
+                 d["attempts"] = u.attempts;
+                 d["connects"] = u.connects;
+                 d["connected"] = u.connected;
+                 d["url"] = u.url;
+                 return d;
+             })
         .def("attached", &NetIO::attached)
         .def("close", &NetIO::close, R())
         .def("wake", &NetIO::wake, R())
