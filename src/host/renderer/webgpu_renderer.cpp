@@ -93,7 +93,10 @@ WebGpuRenderer::WebGpuRenderer(WGPUInstance instance, WGPUAdapter adapter, WGPUD
     queue_ = wgpuDeviceGetQueue(device_);
 }
 
-WebGpuRenderer::~WebGpuRenderer() { shutdown(); }
+WebGpuRenderer::~WebGpuRenderer() {
+    *alive_ = false;
+    shutdown();
+}
 
 bool WebGpuRenderer::init(GLFWwindow*) {
     WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvas =
@@ -175,16 +178,19 @@ void WebGpuRenderer::render(int fb_w, int fb_h) {
     // Submit -> done latency of this frame's work (instrumentation).
     // No present call: the browser presents the canvas when this callback
     // returns to its event loop.
+    struct Submitted {
+        std::shared_ptr<bool> alive;
+        WebGpuRenderer* renderer;
+        double t0;
+    };
     WGPUQueueWorkDoneCallbackInfo cb = WGPU_QUEUE_WORK_DONE_CALLBACK_INFO_INIT;
     cb.mode = WGPUCallbackMode_AllowSpontaneous;
-    cb.callback = [](WGPUQueueWorkDoneStatus status, WGPUStringView, void* u1, void* u2) {
-        double* t0 = static_cast<double*>(u2);
-        if (status == WGPUQueueWorkDoneStatus_Success)
-            static_cast<WebGpuRenderer*>(u1)->on_work_done(*t0);
-        delete t0;
+    cb.callback = [](WGPUQueueWorkDoneStatus status, WGPUStringView, void* u1, void*) {
+        Submitted* s = static_cast<Submitted*>(u1);
+        if (status == WGPUQueueWorkDoneStatus_Success && *s->alive) s->renderer->on_work_done(s->t0);
+        delete s;
     };
-    cb.userdata1 = this;
-    cb.userdata2 = new double(emscripten_get_now());
+    cb.userdata1 = new Submitted{alive_, this, emscripten_get_now()};
     wgpuQueueOnSubmittedWorkDone(queue_, cb);
 
     wgpuCommandBufferRelease(cmd);

@@ -14,9 +14,12 @@ This folder builds Caliper's own view layer (the live views, Dear ImGui and ImPl
 | `src/web_input.*` | The canvas size, the device pixel ratio, pointer, wheel, keyboard and focus input, and the mouse cursor |
 | `src/fonts.*` | The native app's two faces from `assets/fonts`, embedded in the module |
 | `src/web_services.cpp` | The tensor bridge vending that `host_services.cpp` does natively |
+| `caliper-views-loader.js` | The loader: `mountCaliperViews(container, options)`, an ES module with no dependencies |
 | `demo.html` | A page that loads the module onto one canvas and connects it to a stream named in its URL |
 | `test/stream_server.py` | A synthetic producer: one session with a heatmap, a series, a histogram and an image, served over wire protocol v3 with `python/caliper/_wire.py` |
-| `test/check.mjs` | The headless check (Playwright, headless Chromium only) |
+| `test/check.mjs` | The headless check of one page (Playwright, headless Chromium only) |
+| `test/multi.mjs`, `test/pages/multi.html` | The headless check of several mounts on one page through the loader |
+| `test/cross_origin.mjs` | The headless check of the loader imported from another origin, as a notebook page does |
 
 The view-layer library compiles these shared files unchanged: `src/host/live/live_views.cpp`, `live_views_draw.cpp` and `live_unsupported.cpp`, `src/host/embed/embed_views.cpp` (the embed v1.2 views and the hosted core, split out of `embed_core.cpp`), `src/host/tensor_bridge.cpp` and the WebGPU renderer. It does not compile `embed_core.cpp`, so nothing of the applet loader, the service registry, the job system or the app paths is referenced.
 
@@ -29,6 +32,43 @@ EMSDK=<emsdk> web/wasm/build.sh <build dir>
 ```
 
 The output is `<build dir>/caliper-views.wasm` and its JavaScript glue `<build dir>/caliper-views.js`, an ES module whose default export is `createCaliperViews(moduleArgs)`. `moduleArgs.canvas` is the canvas the instance draws on; every instance looks up only its own canvas, so several instances can share a page. The build was measured with Emscripten 6.0.13. Its first run downloads Emscripten's `emdawnwebgpu` port into the emsdk cache.
+
+## Mounting the views on a page
+
+`caliper-views-loader.js` is the one entry point for a page, the `<caliper-view>` element and the notebook widget:
+
+```js
+import { mountCaliperViews } from '<assetBase>caliper-views-loader.js';
+const handle = await mountCaliperViews(container, {
+  src,          // 'ws://127.0.0.1:<port>/v3/stream?token=<token>'
+  view,         // the view to show; '' or absent: every view of the session
+  kind,         // 'heatmap', 'image', 'points', 'series' or 'histogram'; optional
+  height,       // CSS pixels; optional, the default fills the container
+  assetBase,    // the folder of caliper-views.js and .wasm; default: the loader's own folder
+  onSelect,     // (detail, view) => {}; the views emit no selections yet
+  onDataView,   // (dataView, view) => {}; every data view the producer resolved
+});
+await handle.ready;                              // the first snapshot is drawn
+handle.setDataView({ index: { layer: 2 } });     // a VIEW_REQUEST; false when it could not be sent
+handle.stats;                                    // the module's counters
+handle.destroy();                                // BYE, the GPU released, the canvas removed
+```
+
+The loader creates the canvas inside `container` and hands that element to the module, so a container inside a shadow root works and nothing is looked up in the document. `preloadCaliperViews(assetBase)` starts the download and compilation early.
+
+Each mount is its own module instance with its own canvas, WebGPU device, heap and WebSocket. The compiled WebAssembly module is fetched and compiled once per page and shared by every mount. This was chosen over one instance drawing several canvases after measuring the two costs that matter, with three mounts made one after another on one page (`test/multi.mjs`). Start-up: each mount drew its first snapshot 33 to 43 ms after `mountCaliperViews` was called on the Mac's GPU, and 74 to 99 ms on SwiftShader, most of it the WebGPU device request and the connection; the second and third mounts were no slower than the first. Memory: an instance reserves a 16 MB heap, of which one view uses 1.2 to 1.9 MB. One instance with several canvases would need a surface, an ImGui context and a socket per canvas inside one module, which is not worth that saving.
+
+## Serving
+
+A server that hands the views to a page, such as `caliper.serve()`, serves three files from one folder, the `assetBase`:
+
+| File | Content type |
+|---|---|
+| `caliper-views-loader.js` | `text/javascript` |
+| `caliper-views.js` | `text/javascript` |
+| `caliper-views.wasm` | `application/wasm` (the loader falls back to compiling from the bytes under another type, more slowly) |
+
+A notebook page imports the loader from another origin, so each of the three needs `Access-Control-Allow-Origin` for the page's origin, for example the loopback origins that the stream's Origin rule accepts, or `*`. The requests are simple CORS GETs without credentials, so no preflight is answered and no other CORS header is needed. Nothing needs cross-origin isolation, because the module uses no threads and no SharedArrayBuffer. The fonts are inside the module, so there are no other files.
 
 ## Input, size and look
 

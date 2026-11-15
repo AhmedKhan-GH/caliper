@@ -20,6 +20,7 @@
 #include "web_input.h"
 
 #include "caliper/embed.h"
+#include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
 #include "host_services.h"
@@ -84,6 +85,9 @@ struct Page {
     int check_maxdiff = -1;               // largest channel difference
     std::vector<uint8_t> check_expect;
     uint64_t check_frame = 0;
+
+    bool ready = false;                   // the first snapshot was applied
+    bool destroyed = false;
 
     float css_w = 0.0f, css_h = 0.0f;     // the canvas's CSS box
     int fb_w = 0, fb_h = 0;               // its backing store
@@ -247,7 +251,13 @@ void draw_status(float w, float h) {
 void frame() {
     const double t0 = emscripten_get_now();
 
-    if (g.net) caliper_web::poll_source(g.core, *g.net, g.poll);
+    if (g.net && caliper_web::poll_source(g.core, *g.net, g.poll) > 0 && !g.ready) {
+        g.ready = true;   // the first snapshot is drawn this frame
+        EM_ASM({
+            var f = Module["onReady"];
+            if (f) f();
+        });
+    }
     const double t_poll = emscripten_get_now();
 
     const caliper_web::FrameSize fs = caliper_web::input_new_frame();
@@ -361,6 +371,7 @@ void on_adapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUString
     dd.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
     dd.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason,
                                             WGPUStringView m, void*, void*) {
+        if (g.destroyed) return;   // caliper_views_destroy() destroyed it
         std::fprintf(stderr, "[webgpu] device lost (%d): %.*s\n", (int)reason,
                      (int)(m.length == WGPU_STRLEN ? std::strlen(m.data) : m.length), m.data);
     };
@@ -384,6 +395,37 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_set_data_view(const char* json) {
         return 0;
     }
     return 1;
+}
+
+// Ends this instance: BYE to the producer, no more frames, every view, GPU
+// resource and context released, the input listeners removed. The page drops
+// the canvas and the module afterwards; an instance is not reused.
+EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
+    if (g.destroyed) return;
+    g.destroyed = true;
+    emscripten_cancel_main_loop();
+    if (g.net) g.net->close(CALIPER_NET_BYE_NORMAL);
+    caliper_web::input_uninstall();
+    if (g.core) {
+        caliper_web::remove_polled_views(g.core, g.poll);
+        caliper_core_destroy_hosted(g.core);   // releases the views; the renderer is ours
+        g.core = nullptr;
+    }
+    caliper_host::services_set_renderer(nullptr);   // drops the bridge before its renderer
+    delete g.renderer;                              // shutdown(): textures, ImGui backend, surface
+    g.renderer = nullptr;
+    g.net.reset();
+    if (ImPlot::GetCurrentContext()) ImPlot::DestroyContext();
+    if (ImGui::GetCurrentContext()) ImGui::DestroyContext();
+    if (g.device) {
+        wgpuDeviceDestroy(g.device);
+        wgpuDeviceRelease(g.device);
+        g.device = nullptr;
+    }
+    if (g.adapter) wgpuAdapterRelease(g.adapter);
+    if (g.instance) wgpuInstanceRelease(g.instance);
+    g.adapter = nullptr;
+    g.instance = nullptr;
 }
 
 }  // extern "C"

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Caliper views, several on one page</title>
+<style>
+  html, body { margin: 0; padding: 8px; background: #181715; color: #d0c9ba; font: 12px sans-serif; }
+  .cell { width: 600px; margin: 0 0 8px 0; }
+</style>
+</head>
+<body>
+<script type="module">
+  // Several mounts on one page, each inside a shadow root as the
+  // <caliper-view> element does it, mounted one after another and timed.
+  // ?token=T names the stream on this page's host; ?views=a:kind,b:kind lists
+  // the mounts; ?destroy=i destroys mount i once all are drawn.
+  import { mountCaliperViews, preloadCaliperViews } from './caliper-views-loader.js';
+  const q = new URLSearchParams(location.search);
+  const src = `ws://${location.host}/v3/stream?token=${encodeURIComponent(q.get('token') || '')}`;
+  const list = (q.get('views') || 'activations:heatmap,loss:series,histogram:histogram')
+    .split(',').map((s) => s.split(':'));
+  const out = globalThis.caliperMulti = { mounts: [], handles: [], done: false };
+  const t0 = performance.now();
+  await preloadCaliperViews('./');
+  out.preloadMs = performance.now() - t0;
+  for (const [view, kind] of list) {
+    const host = document.createElement('div');
+    host.className = 'cell';
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const container = document.createElement('div');
+    container.style.height = '240px';
+    root.appendChild(container);
+    const m = { view, kind, dataViews: [] };
+    const start = performance.now();
+    const h = await mountCaliperViews(container, {
+      src, view, kind, height: 240, assetBase: './',
+      onDataView: (dv) => m.dataViews.push(dv),
+    });
+    m.mountMs = performance.now() - start;
+    await h.ready;
+    m.firstFrameMs = performance.now() - start;
+    out.mounts.push(m);
+    out.handles.push(h);
+  }
+  const d = q.get('destroy');
+  if (d !== null) {
+    out.handles[Number(d)].destroy();
+    out.destroyed = Number(d);
+  }
+  out.done = true;
+</script>
+</body>
+</html>

@@ -94,14 +94,17 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_options(caliper-views PRIVATE --closure=1)
 endif()
 
+# The loader and the demo page sit beside the module in the build directory,
+# which is the set of files a server hands out (README.md, "Serving").
 add_custom_command(TARGET caliper-views POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/caliper-views-loader.js
             ${CMAKE_CURRENT_SOURCE_DIR}/demo.html
-            $<TARGET_FILE_DIR:caliper-views>/demo.html)
+            $<TARGET_FILE_DIR:caliper-views>/)

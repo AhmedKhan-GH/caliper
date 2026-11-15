@@ -3,8 +3,10 @@
 It serves one session over wire protocol v3 on 127.0.0.1, with the shared
 codec in python/caliper/_wire.py and the websockets package, the way
 caliper.serve() does: the WebSocket endpoint /v3/stream?token=<token>, and the
-files of a build directory over plain HTTP on the same port (so a test page
-and its module come from the producer's own origin, as with caliper.serve()).
+files of a build directory (then of test/pages) over plain HTTP on the same
+port, so a test page and its module come from the producer's own origin, as
+with caliper.serve(). Static files carry Access-Control-Allow-Origin: *, which
+a page of another origin needs to load the module (README.md, "Serving").
 
 Views:
   activations  heatmap (H, W) f32, a moving 2-D pattern; its source has a
@@ -224,7 +226,7 @@ async def serve_viewer(ws, session: Session, rate: float):
         send_task.cancel()
 
 
-def make_request_handler(site: Path | None, token: str):
+def make_request_handler(site: Path | None, token: str, pages: Path | None = None):
     def process_request(connection, request):
         parts = urlsplit(request.path)
         if parts.path == "/v3/stream":
@@ -232,11 +234,16 @@ def make_request_handler(site: Path | None, token: str):
             if not hmac.compare_digest(got.encode(), token.encode()):
                 return connection.respond(403, "Forbidden\n")
             return None   # go on with the upgrade
-        if site is None:
-            return connection.respond(404, "Not Found\n")
         name = parts.path.lstrip("/") or "demo.html"
-        path = (site / name).resolve()
-        if not path.is_file() or site.resolve() not in path.parents:
+        path = None
+        for root in (site, pages):   # the build directory first, then the test pages
+            if root is None:
+                continue
+            p = (root / name).resolve()
+            if p.is_file() and root.resolve() in p.parents:
+                path = p
+                break
+        if path is None:
             return connection.respond(404, "Not Found\n")
         ctype = {".wasm": "application/wasm", ".js": "text/javascript", ".html": "text/html",
                  ".ttf": "font/ttf"}.get(path.suffix) or mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -250,6 +257,7 @@ def make_request_handler(site: Path | None, token: str):
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--site", type=Path, default=None)
+    ap.add_argument("--pages", type=Path, default=HERE / "pages")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--rate", type=float, default=60.0)
     ap.add_argument("--heat", default="256x192")
@@ -268,7 +276,7 @@ async def main() -> None:
     async def handler(ws):
         await serve_viewer(ws, session, args.rate)
 
-    async with serve(handler, "127.0.0.1", args.port, process_request=make_request_handler(args.site, token),
+    async with serve(handler, "127.0.0.1", args.port, process_request=make_request_handler(args.site, token, args.pages),
                      compression=None, max_size=w.MAX_FRAME_BYTES, ping_interval=None) as server:
         port = server.sockets[0].getsockname()[1]
         print("READY", port, token, flush=True)

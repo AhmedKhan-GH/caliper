@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -111,6 +112,9 @@ private:
 
     double gpu_ms_sum_ = 0.0;
     uint64_t gpu_n_ = 0;
+    // False once this renderer is gone: a work-done callback that arrives
+    // after the page destroyed it must not touch it.
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 }  // namespace caliper_host
