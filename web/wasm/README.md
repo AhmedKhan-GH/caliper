@@ -11,6 +11,8 @@ This folder builds Caliper's own view layer (the live views, Dear ImGui and ImPl
 | `src/main.cpp` | The page host: the canvas, the ImGui and ImPlot contexts, the renderer and a hosted core that draws the views |
 | `src/net_source.*` | The viewer side of wire protocol v3 on the browser's WebSocket, as a `caliper_live::Source` |
 | `src/source_poll.*` | The per-frame poll of a `Source` into the live views, in the order `live_core.cpp` uses for shared memory |
+| `src/web_input.*` | The canvas size, the device pixel ratio, pointer, wheel, keyboard and focus input, and the mouse cursor |
+| `src/fonts.*` | The native app's two faces from `assets/fonts`, embedded in the module |
 | `src/web_services.cpp` | The tensor bridge vending that `host_services.cpp` does natively |
 | `demo.html` | A page that loads the module onto one canvas and connects it to a stream named in its URL |
 | `test/stream_server.py` | A synthetic producer: one session with a heatmap, a series, a histogram and an image, served over wire protocol v3 with `python/caliper/_wire.py` |
@@ -27,6 +29,10 @@ EMSDK=<emsdk> web/wasm/build.sh <build dir>
 ```
 
 The output is `<build dir>/caliper-views.wasm` and its JavaScript glue `<build dir>/caliper-views.js`, an ES module whose default export is `createCaliperViews(moduleArgs)`. `moduleArgs.canvas` is the canvas the instance draws on; every instance looks up only its own canvas, so several instances can share a page. The build was measured with Emscripten 6.0.13. Its first run downloads Emscripten's `emdawnwebgpu` port into the emsdk cache.
+
+## Input, size and look
+
+Every listener sits on the instance's own canvas: pointer events with pointer capture for drags, the wheel, keys while the canvas has focus (a click gives it focus) and focus changes. The page keeps a wheel turn or a key only when ImGui does not want it. Each frame the canvas's backing store is sized to its CSS box times the device pixel ratio, so the canvas follows its element and text is rasterised at the screen's density. The views look as they do in the native app: the module embeds the app's faces (IBM Plex Sans Condensed and Source Code Pro, unchanged from `assets/fonts`, both under the SIL Open Font License 1.1) and applies its style with `sternbild::load_fonts_from_memory` and `sternbild::apply_style`.
 
 ## The stream
 

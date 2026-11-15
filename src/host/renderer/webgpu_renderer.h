@@ -55,7 +55,8 @@ public:
                                      float vmax) override;
     const char* last_device_path() const override { return last_path_; }
 
-    // GLFW_NO_API is set by the page host before glfwCreateWindow.
+    // No GLFW in the browser: init() takes no window (the canvas is named by
+    // the selector), and there are no window hints.
     void window_hints() override {}
 
     // ---- instrumentation (not part of HostRenderer) ------------------------

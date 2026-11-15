@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -268,6 +269,29 @@ bool load_fonts(const FontPaths& paths) {
                   << paths.display_font
                   << "; the wordmark uses the UI face" << std::endl;
     }
+    return g_fonts.ok();
+}
+
+bool load_fonts_from_memory(const void* ui_ttf, size_t ui_size, const void* mono_ttf,
+                            size_t mono_size) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImFontAtlas* atlas = io.Fonts;
+    g_fonts = Fonts{};
+    // The atlas owns and frees what it is given, so each face gets an
+    // ImGui-allocated copy, as read_face() would have read it.
+    auto add = [&](const void* bytes, size_t size, const char* name, float px) -> ImFont* {
+        if (!bytes || size <= 100) return nullptr;
+        FaceFile face;
+        face.data = ImGui::MemAlloc(size);
+        std::memcpy(face.data, bytes, size);
+        face.size = int(size);
+        face.metrics = face_metrics(static_cast<const unsigned char*>(bytes), size);
+        return add_face(atlas, face, name, px, face_config());
+    };
+    g_fonts.ui = add(ui_ttf, ui_size, k_ui_file, font_size::ui);
+    if (!g_fonts.ui && atlas->Fonts.empty()) atlas->AddFontDefault();
+    g_fonts.mono = add(mono_ttf, mono_size, k_mono_file, font_size::mono);
+    if (g_fonts.ui) io.FontDefault = g_fonts.ui;
     return g_fonts.ok();
 }
 

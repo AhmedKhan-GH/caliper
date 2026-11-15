@@ -4,6 +4,7 @@
 //                  [--view NAME] [--kind KIND] [--frames N] [--heat WxH]
 //                  [--viewport WxH] [--scale S] [--hover X,Y] [--page demo.html]
 //                  [--python PYTHON] [--seconds S] [--dataview JSON]
+//                  [--resize WxH] [--input X,Y]
 //
 // Starts the synthetic producer (stream_server.py) on 127.0.0.1, which serves
 // the build directory over HTTP and the stream on /v3/stream on one port, as
@@ -13,7 +14,10 @@
 // (module.caliperStats) as JSON and saves a screenshot. With --hover it then
 // moves the mouse there and saves <shot>-hover.png. With --dataview it asks
 // for that data view (VIEW_REQUEST) before the screenshot and reports the
-// data views the producer resolved. Every process it starts
+// data views the producer resolved. With --resize it then changes the page's
+// viewport and saves <shot>-resized.png. With --input it clicks at X,Y, turns
+// the wheel and presses keys there, and reports what reached ImGui. Every
+// process it starts
 // is stopped before it exits. Headless only: it never opens a visible browser.
 //
 // Adapters. Playwright's headless Chromium (chromium-headless-shell) gives
@@ -102,10 +106,28 @@ try {
     if (!sent) error = 'set_data_view refused';
     await page.waitForTimeout(1000);
   }
+  if (opt.input) {
+    const [ix, iy] = opt.input.split(',').map(Number);
+    await page.mouse.click(ix, iy);
+    await page.mouse.wheel(0, 240);
+    await page.keyboard.press('KeyF');
+    await page.keyboard.type('ab');
+    await page.waitForTimeout(300);
+  }
   if (Number(opt.seconds) > 0) await page.waitForTimeout(Number(opt.seconds) * 1000);
   const report = await page.evaluate(() => ({ ...globalThis.caliperViews?.caliperStats,
                                               dataViews: globalThis.caliperDataViews }));
   await page.screenshot({ path: opt.out });
+  if (opt.resize) {
+    const [rw, rh] = opt.resize.split('x').map(Number);
+    await page.setViewportSize({ width: rw, height: rh });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: opt.out.replace(/\.png$/, '') + '-resized.png' });
+    report.resized = await page.evaluate(() => {
+      const s = globalThis.caliperViews.caliperStats;
+      return { cssW: s.cssW, cssH: s.cssH, fbW: s.fbW, fbH: s.fbH };
+    });
+  }
   if (opt.hover) {
     const [hx, hy] = opt.hover.split(',').map(Number);
     await page.mouse.move(hx, hy);

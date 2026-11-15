@@ -35,6 +35,8 @@ add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/embed/embed_views.cpp
     ${CALIPER_ROOT}/src/host/tensor_bridge.cpp
     ${CALIPER_ROOT}/src/host/renderer/webgpu_renderer.cpp
+    ${CALIPER_ROOT}/src/host/ui/sternbild_fonts.cpp
+    ${CALIPER_ROOT}/src/host/ui/sternbild_theme.cpp
     ${TP}/imgui/imgui.cpp
     ${TP}/imgui/imgui_draw.cpp
     ${TP}/imgui/imgui_tables.cpp
@@ -67,12 +69,16 @@ add_executable(caliper-views
     src/net_source.cpp
     src/source_poll.cpp
     src/web_services.cpp
-    ${TP}/imgui/backends/imgui_impl_glfw.cpp
+    src/web_input.cpp
+    src/fonts.cpp
 )
+# fonts.cpp embeds the native app's faces from assets/fonts (C23 #embed).
+set_source_files_properties(src/fonts.cpp PROPERTIES
+    COMPILE_OPTIONS "--embed-dir=${CALIPER_ROOT}/assets/fonts;-Wno-c23-extensions"
+    OBJECT_DEPENDS "${CALIPER_ROOT}/assets/fonts/IBMPlexSansCondensed-Regular.ttf;${CALIPER_ROOT}/assets/fonts/SourceCodePro-Regular.ttf")
 target_link_libraries(caliper-views PRIVATE caliper_view_layer caliper_wire websocket.js)
 target_link_options(caliper-views PRIVATE
     --use-port=emdawnwebgpu
-    -sUSE_GLFW=3
     -sMODULARIZE=1
     -sEXPORT_ES6=1
     -sEXPORT_NAME=createCaliperViews
@@ -80,7 +86,7 @@ target_link_options(caliper-views PRIVATE
     -sFILESYSTEM=0
     -sALLOW_MEMORY_GROWTH=1
     -sERROR_ON_UNDEFINED_SYMBOLS=1
-    "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$specialHTMLTargets"
+    "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
     "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8"
 )

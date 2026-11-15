@@ -16,6 +16,7 @@
 // needs no extra work.
 // ============================================================================
 
+#include <cstddef>
 #include <string>
 
 struct ImFont;
@@ -60,6 +61,14 @@ FontPaths default_font_paths();
 // fonts().display null (the wordmark falls back to the UI face). An empty
 // display_font asks for no Display face, and nothing is reported.
 bool load_fonts(const FontPaths& paths = default_font_paths());
+
+// The same faces from memory, for a host without a file system (the
+// browser's views, web/wasm, embed the in-repo files in the module). The bytes
+// are copied; there is no symbol fallback and no Display face. Sets
+// io.FontDefault to the UI face; false (and the built-in font) when a face
+// does not load.
+bool load_fonts_from_memory(const void* ui_ttf, size_t ui_size, const void* mono_ttf,
+                            size_t mono_size);
 
 // The loaded faces; all null until load_fonts() has run.
 const Fonts& fonts();

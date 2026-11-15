@@ -160,7 +160,7 @@ void WebGpuRenderer::render(int fb_w, int fb_h) {
     ca.view = view;
     ca.loadOp = WGPULoadOp_Clear;
     ca.storeOp = WGPUStoreOp_Store;
-    ca.clearValue = WGPUColor{0.063, 0.063, 0.078, 1.0};
+    ca.clearValue = WGPUColor{0x18 / 255.0, 0x17 / 255.0, 0x15 / 255.0, 1.0};   // sternbild::col::ground
     WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
     rp.colorAttachmentCount = 1;
     rp.colorAttachments = &ca;

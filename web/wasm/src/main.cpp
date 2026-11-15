@@ -14,8 +14,10 @@
 // through promises: main() requests the adapter, the adapter callback requests
 // the device, and the device callback builds everything, connects and starts
 // the frame loop. No Asyncify is needed.
+#include "fonts.h"
 #include "net_source.h"
 #include "source_poll.h"
+#include "web_input.h"
 
 #include "caliper/embed.h"
 #include "caliper/live_views.h"
@@ -23,12 +25,12 @@
 #include "host_services.h"
 #include "renderer/webgpu_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut, map_f32_to_rgba8 (the CPU reference)
+#include "ui/sternbild_fonts.h"
+#include "ui/sternbild_theme.h"
 
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
 #include <implot.h>
 
-#include <GLFW/glfw3.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
 #include <webgpu/webgpu.h>
@@ -59,7 +61,6 @@ struct Page {
     WGPUInstance instance = nullptr;
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
-    GLFWwindow* window = nullptr;
     WebGpuRenderer* renderer = nullptr;   // owned by the hosted core
     CaliperCore* core = nullptr;
     std::unique_ptr<NetSource> net;
@@ -81,6 +82,9 @@ struct Page {
     int check_maxdiff = -1;               // largest channel difference
     std::vector<uint8_t> check_expect;
     uint64_t check_frame = 0;
+
+    float css_w = 0.0f, css_h = 0.0f;     // the canvas's CSS box
+    int fb_w = 0, fb_h = 0;               // its backing store
 };
 Page g;
 
@@ -148,6 +152,17 @@ void publish() {
         per += b;
     }
     put("viewInfo", per.c_str());
+    const caliper_web::InputCounts ic = caliper_web::input_counts();
+    put("inputPointer", ic.pointer);
+    put("inputButtons", ic.buttons);
+    put("inputWheel", ic.wheel);
+    put("inputKeys", ic.keys);
+    put("inputChars", ic.chars);
+    put("lastKey", ic.last_key);
+    put("cssW", g.css_w);
+    put("cssH", g.css_h);
+    put("fbW", g.fb_w);
+    put("fbH", g.fb_h);
     put("checkState", g.check_state);
     put("checkMismatch", (double)g.check_mismatch);
     put("checkMaxDiff", g.check_maxdiff);
@@ -232,20 +247,23 @@ void frame() {
     }
     const double t_poll = emscripten_get_now();
 
-    int fb_w = 0, fb_h = 0, win_w = 0, win_h = 0;
-    glfwGetFramebufferSize(g.window, &fb_w, &fb_h);
-    glfwGetWindowSize(g.window, &win_w, &win_h);
-    const float scale = win_w > 0 ? (float)fb_w / (float)win_w : 1.0f;
+    const caliper_web::FrameSize fs = caliper_web::input_new_frame();
+    if (fs.fb_w <= 0 || fs.fb_h <= 0) return;   // hidden (no CSS box): nothing to draw
+    const float scale = (float)fs.fb_w / fs.css_w;
+    g.css_w = fs.css_w;
+    g.css_h = fs.css_h;
+    g.fb_w = fs.fb_w;
+    g.fb_h = fs.fb_h;
 
     g.renderer->new_frame();
-    ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    pin_single_view((float)win_w, (float)win_h);
-    caliper_core_hosted_frame(g.core, 0.0f, 0.0f, (float)win_w, (float)win_h, scale);
-    draw_status((float)win_w, (float)win_h);
+    pin_single_view(fs.css_w, fs.css_h);
+    caliper_core_hosted_frame(g.core, 0.0f, 0.0f, fs.css_w, fs.css_h, scale);
+    draw_status(fs.css_w, fs.css_h);
     ImGui::Render();
+    caliper_web::input_end_frame();
     const double t_ui = emscripten_get_now();
-    g.renderer->render(fb_w, fb_h);
+    g.renderer->render(fs.fb_w, fs.fb_h);
 
     const double t1 = emscripten_get_now();
     ++g.frames;
@@ -279,24 +297,18 @@ void start() {
         wgpuAdapterInfoFreeMembers(info);
     }
 
-    if (!glfwInit()) return fail("glfwInit failed");
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // the canvas gets a WebGPU context
-    double cw = 0.0, ch = 0.0;
-    emscripten_get_element_css_size("!canvas", &cw, &ch);
-    g.window = glfwCreateWindow(cw > 0.0 ? (int)cw : 640, ch > 0.0 ? (int)ch : 320, "Caliper views",
-                                nullptr, nullptr);
-    if (!g.window) return fail("glfwCreateWindow failed");
-
     ImGui::CreateContext();
     ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;   // no file system in the page
-    ImGui::StyleColorsDark();
-    ImGui_ImplGlfw_InitForOther(g.window, true);
-    ImGui_ImplGlfw_InstallEmscriptenCallbacks(g.window, "!canvas");
+    // The native app's look (src/main.cpp): its faces, then its style.
+    const caliper_web::EmbeddedFont ui = caliper_web::ui_font(), mono = caliper_web::mono_font();
+    sternbild::load_fonts_from_memory(ui.data, ui.size, mono.data, mono.size);
+    sternbild::apply_style();
+    caliper_web::input_install();
 
     auto r = std::make_unique<WebGpuRenderer>(g.instance, g.adapter, g.device, "!canvas");
-    if (!r->init(g.window)) return fail("WebGPU renderer init failed");
+    if (!r->init(nullptr)) return fail("WebGPU renderer init failed");
     g.renderer = r.get();
     caliper_host::services_set_renderer(g.renderer);
     g.core = caliper_core_create_hosted(r.release());
