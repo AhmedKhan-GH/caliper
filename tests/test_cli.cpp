@@ -3,6 +3,7 @@
 // touches the user's applets and no window ever opens. `dev` starts the app,
 // so only its parsing is tested.
 #include <doctest/doctest.h>
+#include "cli_build.h"
 #include "host_cli.h"
 #include "net/wire.h"
 #include "net/ws.h"
@@ -367,6 +368,117 @@ TEST_CASE("cli: info and list as JSON hold what the text forms print") {
           "Built against libtorch 9.9.9; this host provides no libtorch.");
     CHECK(list->at(1).find("status")->as_string() == "READY");
     CHECK(list->at(1).find("reason")->as_string().empty());
+}
+
+TEST_CASE("cli: build takes one folder and no --applets") {
+    auto b = parse({"build", "/a"});
+    CHECK(b.error.empty());
+    CHECK(b.command == Command::Build);
+    CHECK(b.operands == std::vector<std::string>{"/a"});
+    CHECK(parse({"build"}).error == "build takes one folder");
+    CHECK(parse({"build", "/a", "/b"}).error == "build takes one folder");
+    CHECK(parse({"build", "/a", "--applets", "/x"}).error ==
+          "--applets applies only to starting the app, dev, list and shot");
+    CHECK(parse({"build", "/a", "--api"}).error == "--api applies only to starting the app, dev and shot");
+    CHECK(std::string(usage_text()).find("caliper build <folder>\n") != std::string::npos);
+}
+
+TEST_CASE("cli: build finds the SDK prefix in its order") {
+    TempDir t("build-sdk");
+    auto make_sdk = [&](const fs::path& prefix) {
+        fs::create_directories(prefix / "lib/cmake/caliper-sdk");
+        std::ofstream(prefix / sdk_config_file()) << "# caliper-sdk\n";
+    };
+    const fs::path exe_dir = t.path / "prefix-a" / "bin";
+    fs::create_directories(exe_dir);
+    const std::string home = t.str("home");
+
+    // Nothing anywhere: every candidate is tried, none is chosen.
+    SdkSearch none = find_sdk_prefix(nullptr, exe_dir.string(), home.c_str());
+    CHECK(none.prefix.empty());
+    CHECK(none.error.empty());
+    CHECK(none.tried == std::vector<std::string>{t.str("prefix-a"), exe_dir.string(),
+                                                 (fs::path(home) / "caliper-sdk").string()});
+    // The home folder's caliper-sdk, then the executable's prefix before it.
+    make_sdk(fs::path(home) / "caliper-sdk");
+    CHECK(find_sdk_prefix(nullptr, exe_dir.string(), home.c_str()).prefix ==
+          (fs::path(home) / "caliper-sdk").string());
+    make_sdk(t.path / "prefix-a");
+    CHECK(find_sdk_prefix("", exe_dir.string(), home.c_str()).prefix == t.str("prefix-a"));
+    // CALIPER_SDK_DIR wins, and must hold the SDK.
+    make_sdk(t.path / "named");
+    CHECK(find_sdk_prefix(t.str("named").c_str(), exe_dir.string(), home.c_str()).prefix == t.str("named"));
+    SdkSearch wrong = find_sdk_prefix(t.str("empty").c_str(), exe_dir.string(), home.c_str());
+    CHECK(wrong.prefix.empty());
+    CHECK(wrong.error.find("CALIPER_SDK_DIR is " + t.str("empty") + ", which holds no Caliper SDK") == 0);
+    // No executable folder and no home: nothing to try.
+    CHECK(find_sdk_prefix(nullptr, "", nullptr).tried.empty());
+}
+
+TEST_CASE("cli: build finds cmake by CALIPER_CMAKE, then PATH, then the fallbacks") {
+    TempDir t("build-cmake");
+    auto make_program = [&](const fs::path& p, bool executable) {
+        fs::create_directories(p.parent_path());
+        std::ofstream(p) << "#!/bin/sh\n";
+        fs::permissions(p, executable ? fs::perms::owner_all : fs::perms::owner_read | fs::perms::owner_write);
+    };
+#ifdef _WIN32
+    const char* name = "cmake.exe";
+    const std::string sep = ";";
+#else
+    const char* name = "cmake";
+    const std::string sep = ":";
+#endif
+    make_program(t.path / "one" / name, false);   // not executable: skipped on POSIX
+    make_program(t.path / "two" / name, true);
+    make_program(t.path / "app" / "cmake", true);
+    std::string err;
+    const std::string path = t.str("missing") + sep + sep + t.str("one") + sep + t.str("two");
+#ifndef _WIN32
+    CHECK(find_cmake(nullptr, path.c_str(), {}, &err) == (t.path / "two" / name).string());
+#endif
+    CHECK(find_cmake("", t.str("missing").c_str(), {t.str("app/cmake")}, &err) == t.str("app/cmake"));
+    CHECK(find_cmake(t.str("app/cmake").c_str(), path.c_str(), {}, &err) == t.str("app/cmake"));
+    CHECK(find_cmake(t.str("nope").c_str(), path.c_str(), {}, &err).empty());
+    CHECK(err == "CALIPER_CMAKE is " + t.str("nope") + ", which is not a program");
+    CHECK(find_cmake(nullptr, t.str("missing").c_str(), {t.str("nope")}, &err).empty());
+    CHECK(err.rfind("cmake was not found", 0) == 0);
+    CHECK(find_cmake(nullptr, nullptr, {}, &err).empty());
+}
+
+TEST_CASE("cli: build reads what a failed configure lacked from CMake's output") {
+    CHECK(configure_lack("-- The CXX compiler identification is unknown\nCMake Error ...") ==
+          BuildLack::Compiler);
+    CHECK(configure_lack("CMake Error at CMakeLists.txt:8 (project):\n  No CMAKE_CXX_COMPILER could be "
+                         "found.") == BuildLack::Compiler);
+    CHECK(configure_lack("The CMAKE_CXX_COMPILER:\n\n    /x/c++\n\n  is not a full path to an existing "
+                         "compiler tool.") == BuildLack::Compiler);
+    CHECK(configure_lack("CMake Error: CMake was unable to find a build program corresponding to \"Ninja\".") ==
+          BuildLack::BuildTool);
+    CHECK(configure_lack("  Could not find a package configuration file provided by \"caliper-sdk\"\n"
+                         "  (requested version 0.2.0) with any of the following names:") == BuildLack::Sdk);
+    CHECK(configure_lack("  Could not find a configuration file for package \"caliper-sdk\" that is "
+                         "compatible with requested version \"0.3.0\".") == BuildLack::SdkVersion);
+    CHECK(configure_lack("CMake Error at CMakeLists.txt:12 (caliper_add_applet): abi_epoch") ==
+          BuildLack::Unknown);
+}
+
+TEST_CASE("cli: build refuses what is not an applet folder before it runs anything") {
+    TempDir t("build-refuse");
+    const CliContext ctx = context(t);
+    const std::string missing = t.str("missing");
+    CommandLine cl = parse({"build", missing.c_str()});
+    std::ostringstream out, err;
+    CHECK(run_subcommand(cl, ctx, out, err) == 1);
+    CHECK(err.str() == "caliper: not a folder: " + missing + "\n");
+    fs::create_directories(t.path / "plain");
+    const std::string plain = t.str("plain");
+    cl = parse({"build", plain.c_str()});
+    std::ostringstream out2, err2;
+    CHECK(run_subcommand(cl, ctx, out2, err2) == 1);
+    CHECK(err2.str().find("has no CMakeLists.txt") != std::string::npos);
+    CHECK(out.str().empty());
+    CHECK(out2.str().empty());
 }
 
 TEST_CASE("cli: check passes a good folder and fails a bad one") {

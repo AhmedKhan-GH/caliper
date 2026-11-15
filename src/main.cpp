@@ -789,7 +789,8 @@ int main(int argc, char** argv) {
         // folder; the others create nothing in the app-data folder.
         const bool reads_applets = cl.command == Command::List ||
                                    cl.command == Command::Check ||
-                                   cl.command == Command::Install;
+                                   cl.command == Command::Install ||
+                                   cl.command == Command::Build;
         caliper_host::CliContext ctx;
         ctx.caps = caliper_host::host_caps();
         ctx.sdk_version = caliper_host::host_sdk_version();
@@ -801,6 +802,7 @@ int main(int argc, char** argv) {
                 (std::filesystem::path(caliper::app_data_location()) / "data").string();
         }
         ctx.applet_path_env = std::getenv("CALIPER_APPLET_PATH");
+        ctx.exe_dir = caliper::executable_dir();   // build: the SDK may be installed beside it
         if (cl.command == Command::Serve) {
             // Producers on this machine find the hub here (0600, removed on exit).
             const char* hub_file = std::getenv("CALIPER_HUB_FILE");

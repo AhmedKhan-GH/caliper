@@ -14,6 +14,7 @@
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
 //   caliper new <name> [<dir>]                create an applet from a template
+//   caliper build <folder>                    configure and build it, then check it
 //   caliper info                              print versions and served services
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
 //                [--frames <N>] --out <file.png> [--api [--api-port <n>]]
@@ -73,7 +74,7 @@
 namespace caliper_host {
 
 struct CommandLine {
-    enum class Command { Run, Help, Dev, List, Check, Install, New, Info, Shot, Serve };
+    enum class Command { Run, Help, Dev, List, Check, Install, New, Build, Info, Shot, Serve };
     Command command = Command::Run;
     std::vector<std::string> applet_dirs;   // dev's folder, then --applets, in order
     std::vector<std::string> operands;      // the subcommand's operands
@@ -101,6 +102,7 @@ inline const char* usage_text() {
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
+           "       caliper build <folder>\n"
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
            "                    [--frames <N>] --out <file.png> [--api [--api-port <n>]]\n"
@@ -297,6 +299,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             else if (arg == "check") cl.command = C::Check;
             else if (arg == "install") cl.command = C::Install;
             else if (arg == "new") cl.command = C::New;
+            else if (arg == "build") cl.command = C::Build;
             else if (arg == "info") cl.command = C::Info;
             else if (arg == "shot") cl.command = C::Shot;
             else if (arg == "serve") cl.command = C::Serve;
@@ -332,6 +335,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         case C::Check: operands(1, 1, "check"); break;
         case C::Install: operands(1, 1, "install"); break;
         case C::New: operands(1, 2, "new"); break;
+        case C::Build: operands(1, 1, "build"); break;
         case C::Shot:
             operands(0, 0, "shot");
             if (cl.error.empty() && cl.launch_id.empty())
@@ -341,7 +345,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
     }
     if (cl.error.empty() && !cl.applet_dirs.empty() &&
-        (cl.command == C::Check || cl.command == C::Install ||
+        (cl.command == C::Check || cl.command == C::Install || cl.command == C::Build ||
          cl.command == C::New || cl.command == C::Info || cl.command == C::Serve))
         cl.error = "--applets applies only to starting the app, dev, list and shot";
     if (cl.error.empty() && !shot_options.empty() && cl.command != C::Shot)
@@ -366,6 +370,7 @@ struct CliContext {
     std::string data_root;              // <app data>/data, for data-schema stamps
     const char* applet_path_env = nullptr;   // CALIPER_APPLET_PATH
     std::string hub_file;               // serve: where producers find the hub ("" none)
+    std::string exe_dir;                // build: the executable's folder, for the SDK search
 };
 
 namespace cli_detail {
@@ -1007,6 +1012,10 @@ inline int run_serve(const CommandLine& cl, const CliContext& ctx, std::ostream&
     return 0;
 }
 
+// ---- caliper build <folder> ----------------------------------------------------
+// CMake against the installed SDK, then check (cli_build.h, cli_build.cpp).
+int run_build(const CommandLine& cl, const CliContext& ctx, std::ostream& out, std::ostream& err);
+
 // Runs a subcommand that needs no window. Not for Run, Dev or Help, which
 // main() handles.
 inline int run_subcommand(const CommandLine& cl, const CliContext& ctx,
@@ -1017,6 +1026,7 @@ inline int run_subcommand(const CommandLine& cl, const CliContext& ctx,
         case C::Check: return run_check(cl, ctx, out, err);
         case C::Install: return run_install(cl, ctx, out, err);
         case C::New: return run_new(cl, ctx, out, err);
+        case C::Build: return run_build(cl, ctx, out, err);
         case C::Info: return run_info(cl, ctx, out, err);
         case C::Serve: return run_serve(cl, ctx, out, err);
         default: return 2;

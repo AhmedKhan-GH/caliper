@@ -74,8 +74,9 @@ target_sources(caliper_tests PRIVATE test_work_area.cpp)
 # (src/host/host_cli.h); the acceptance check for applets built outside the
 # core runs only when CALIPER_TEST_APPLET_DIR is set.
 target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
-# The command line's subcommands (src/host/host_cli.h) on temporary folders.
-target_sources(caliper_tests PRIVATE test_cli.cpp)
+# The command line's subcommands (src/host/host_cli.h) on temporary folders,
+# with caliper build's own source, which the executable compiles too.
+target_sources(caliper_tests PRIVATE test_cli.cpp ${CMAKE_SOURCE_DIR}/src/host/cli_build.cpp)
 # Caliper API v0 (src/host/api/api_server.h): the routes, the token, the Host
 # and Origin refusals and the limits, with the server in this process; the
 # ctest entry caliper_cli_api runs the same binary against `caliper shot --api`.
