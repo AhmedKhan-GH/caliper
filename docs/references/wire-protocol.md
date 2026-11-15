@@ -654,7 +654,7 @@ Controls let a viewer reach back into the running script: pause, resume and sing
 
 ### The checkpoint
 
-A script opts in by calling a checkpoint in its training loop, once per step, on its training thread (`caliper.step()` in Python). The checkpoint is the only safe point: only there does the producer apply parameter values, run actions or hold the loop. At each checkpoint the training thread, in this order:
+A script opts in by calling a checkpoint in its training loop, once per step, on its training thread (`caliper.step()` in Caliper LIB, the Python package). The checkpoint is the only safe point: only there does the producer apply parameter values, run actions or hold the loop. At each checkpoint the training thread, in this order:
 
 1. sets every pending parameter value, in the order the parameters were registered;
 2. runs the queued actions one at a time, in the order they were accepted;
@@ -701,8 +701,8 @@ A producer handles the CONTROL messages of one connection in the order they arri
 
 A viewer sends CONTROL only when all three hold: the WELCOME of the server it is connected to announced `controls` and set `control` true, and the session it is attached to lists `controls` among its capabilities. A viewer that may not control still shows the run state, the parameters and the actions, without letting them be changed. A selection is not a control: every viewer may select.
 
-- **`caliper.serve()`** accepts CONTROL from every connection that holds the session token. A server option makes it refuse every CONTROL; its WELCOME then sets `control` false, and a CONTROL is answered `forbidden`.
-- **The hub** forwards no control unless it was started with `--allow-control`, which is off by default. Without it, its WELCOME sets `control` false, to viewers and to producers, and it answers every CONTROL itself with `forbidden`.
+- **`caliper.serve()`** of Caliper LIB accepts CONTROL from every connection that holds the session token. A server option makes it refuse every CONTROL; its WELCOME then sets `control` false, and a CONTROL is answered `forbidden`.
+- **The hub**, `caliper serve` of Caliper CLI, forwards no control unless it was started with `--allow-control`, which is off by default. Without it, its WELCOME sets `control` false, to viewers and to producers, and it answers every CONTROL itself with `forbidden`.
 
 ### Controls through a hub
 
