@@ -1,6 +1,6 @@
 # caliper.artifacts.v1
 
-Service id `caliper.artifacts.v1` — content-addressed artifact store: deduplicated, lineage-tracked checkpoints and exports (PLATFORM.md §7.8). This page embeds the header verbatim.
+Service id `caliper.artifacts.v1` — content-addressed artifact store: deduplicated, lineage-tracked checkpoints and exports. This page embeds the header verbatim.
 
 ```c
 --8<-- "sdk/include/caliper/services/artifacts_v1.h"
@@ -30,7 +30,7 @@ thread**.
 - **Run lineage.** The `run` argument links a blob to the `caliper.metrics.v1`
   run that produced it (**`run = 0` means unlinked** — a standalone export with no
   training provenance). The host can list a run's artifacts back (the
-  `by_run` query the §16 contract exercises), so a checkpoint always knows which
+  host's `by_run` query), so a checkpoint always knows which
   run made it.
 - **Unknown is inert, never fatal.** An unknown digest or name returns
   `false`/`nullptr` — never an exception across the C boundary. If the store

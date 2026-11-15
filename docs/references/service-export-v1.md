@@ -1,46 +1,44 @@
-# caliper.export.v1 / v1_1
+# caliper.export.v1 and v1_1
 
-Service id `caliper.export.v1` — the **terminal sink** of the publishing track
-(`PUBLISHING.md` §3, Rung E) — and its additive revision `caliper.export.v1_1`,
+Service id `caliper.export.v1`, and its additive revision `caliper.export.v1_1`,
 which adds `last_error()` (see [below](#caliperexportv1_1-last_error)). Export
 re-renders a submitted draw list **offscreen** at any requested resolution and
 writes a pixel-exact PNG next to a JSON **provenance sidecar**: 4K figures and
-numbered frame sequences from a live
-session, deterministic and stamped. It composes pieces that already ship and are
-already byte-exact tested — it adds **no new render code**. This page embeds the
-headers verbatim; the docs build fails if an embedded file moves.
+numbered frame sequences from a live session, deterministic and stamped. It
+composes pieces that already exist and are byte-exact tested, and adds no new
+render code. This page embeds the headers verbatim; the docs build fails if an
+embedded file moves.
 
-The boundary is deliberate and stated once in `PUBLISHING.md`: Caliper exports
-**pixel-exact view images + a sidecar**, and does **not** compose figures. Axes,
-captions, typography, and subfigure layout belong to the paper toolchain
-(matplotlib / TikZ) that consumes these PNGs. The instrument's claim — *the
-pixels are the tensors* — survives export bit-for-bit; a typography engine would
-add scope with zero claim.
+## Export is a terminal sink
 
-!!! info "Platform status (honest, stated once)"
-    **macOS / Metal:** **run-proven.** The E1 battery is green live on Metal (a
-    known FLAT quad exported and decoded back to the CPU reference pixels;
-    double-export byte-identity; refusal purity; sidecar golden; a finalized
-    sequence). The E2 example applets produced real artifacts from a live session — a
-    3840×2160 figure + sidecar (`backend=metal`) and a 300-frame
-    sequence assembled into a 10 s clip via the documented ffmpeg
-    line. **Windows / Vulkan:** **run-proven.** The full battery ran live on
-    the Vulkan box (RTX 500 Ada, Windows 11) — 14 cases, 0 skipped: the same
-    decoded-quad byte-exactness, double-export byte-identity, and refusal
-    purity (sentinel byte-identical after a refused export), plus the
-    NTFS-specific claims verified on the box, not from docs:
-    `std::filesystem::rename` **atomically replaces** a pre-existing target
-    (`MoveFileExW(MOVEFILE_REPLACE_EXISTING)` semantics confirmed); a target
-    held open without `FILE_SHARE_DELETE` makes the rename **fail cleanly**
-    (refusal, temp removed, original byte-identical); and a sidecar-write
-    failure **rolls the PNG back** rather than orphaning it. The E2 example applets
-    reproduced on Vulkan: a 3840×2160 figure + sidecar
-    (`backend=vulkan platform=windows`) and a finalized 300-frame sequence
-    from each of two example applets, plus a deliberate mid-record kill
-    whose `sequence.json` finalized with the honest partial count. When the geometry
-    primitives cap is absent (headless, or a host without the renderer path) the
-    export cap bit is unset and **every entry point is inert** — no file is ever
-    written. This is the degradation ladder, not a bug.
+Export is the one place where pixels leave the data flow described in
+[D32](../decisions/d032-data-flows-one-way.md). The readback it performs feeds a
+file on disk, and nothing returns to compute: no export call hands pixels, a
+texture or a tensor back to the applet. Caliper exports **pixel-exact view
+images plus a sidecar** and does not compose figures. Axes, captions, typography
+and subfigure layout belong to the paper toolchain (matplotlib, TikZ) that
+consumes these PNGs. The claim that the pixels are the tensors survives export
+bit for bit; a typography engine would add scope and no claim. The decision is
+[D38](../decisions/d038-export-is-a-terminal-sink.md).
+
+## Platform behaviour
+
+Export runs on macOS with Metal and on Windows with Vulkan. On both, a known flat
+quad exports and decodes back to the CPU reference pixels, a second export of the
+same view is byte-identical, and a refused export leaves the disk unchanged. A
+sequence finalizes with its sidecar, and a sequence cut short by a killed process
+still finalizes with the honest partial frame count.
+
+On Windows the filesystem behaviour is verified on NTFS: `std::filesystem::rename`
+atomically replaces an existing target, a target held open without
+`FILE_SHARE_DELETE` makes the rename fail cleanly (the export is refused, the
+temp file is removed and the original is byte-identical), and a sidecar-write
+failure rolls the PNG back rather than orphaning it.
+
+When the geometry primitives capability is absent (headless, or a host without
+the renderer path) the export capability bit is unset and **every entry point is
+inert**: no file is written. This is the degradation ladder in
+[D33](../decisions/d033-honest-fallbacks.md), not a bug.
 
 ```c
 --8<-- "sdk/include/caliper/services/export_v1.h"
@@ -79,13 +77,13 @@ the `caliper_core_frame()` thread only. Calling from any other thread races the
 renderer's texture/geometry maps. The sequence bookkeeping (one sequence live at
 a time in v0) is guarded by a mutex, but that mutex serializes **bookkeeping
 only** — it does **not** make export safe against a renderer running on another
-thread. The E2 exemplars capture **inline on the frame thread** for exactly this
+thread. MeshScope and TwinScope capture **inline on the frame thread** for exactly this
 reason: they snapshot the worker-published slot under the usual mutex, then
 export from the same arrays they draw, on the same thread they draw on. (A truly
 background export would need a serialization mutex around the renderer's shared
-maps — a host change beyond this rung.)
+maps, which the host does not provide.)
 
-## The sidecar — a figure without it is a screenshot
+## The sidecar: a figure without it is a screenshot
 
 Every export writes `<path>.json` next to the PNG (for a sequence, one
 `sequence.json` for the whole run). It carries the provenance that makes a PNG
@@ -106,8 +104,8 @@ Every export writes `<path>.json` next to the PNG (for a sequence, one
 `git_commit` is compiled in at configure time (the same mechanism that plumbs
 the version string). `state` is the caller's own JSON, copied **verbatim** (step,
 seed, hparams — whatever the applet chooses) or `null`. A sequence sidecar adds
-`frame_count`. This is a house invariant: **a figure without its sidecar is a
-screenshot; Caliper exports figures.**
+`frame_count`. This is the rule in [D38](../decisions/d038-export-is-a-terminal-sink.md):
+**a figure without its sidecar is a screenshot; Caliper exports figures.**
 
 A sequence's `sequence.json` is written by `end_sequence()`. If that write
 fails, the frames already written are kept, the handle is finalized anyway (so
@@ -146,7 +144,7 @@ reasons `draw_primitives` does — missing gate/renderer, `cam == NULL`, `w`/`h`
 `0` or `> CALIPER_EXPORT_MAX_DIM` (16384), an unwritable path, a readback
 failure, or any draw the geometry gate battery rejects — with the **same reason
 strings**. (The atomic-rename-over-existing-file guarantee is verified on POSIX
-**and on NTFS**, including the held-open-handle refusal; see the platform status
+**and on NTFS**, including the held-open-handle refusal; see platform behaviour
 above. The pair commit with its `.caliper_bak` backup is tested on macOS.)
 
 ## Determinism contract, and its scope
@@ -171,8 +169,7 @@ documented ffmpeg line:
 ffmpeg -framerate 30 -i frame_%06d.png -pix_fmt yuv420p out.mp4
 ```
 
-This is the exact line the E2 run used to turn a 300-frame sequence
-into its 10 s clip.
+A 300-frame sequence at 30 fps becomes a 10 s clip this way.
 
 ## What is not exportable — the ImPlot / metrics split
 
@@ -181,11 +178,11 @@ exportable views** — they are not tensors re-rendered offscreen, so export doe
 not touch them. Their paper path is the one that already ships: the numbers go to
 **SQL via [`caliper.metrics.v1_1`](service-metrics-v1.md)** and into matplotlib
 downstream. Export is for the 3-D views whose pixels *are* the tensors; charts
-are for the metrics surface. (`PUBLISHING.md` §3, the honest split.)
+are for the metrics surface. 
 
 ## Worked shape — export a figure and record a clip
 
-Modelled on the E2 example applets.
+Modelled on the MeshScope and TwinScope export buttons.
 The applet already draws its 3-D view every frame from worker-published,
 mutex-snapshotted slot tensors; export reuses **those same arrays**, on the frame
 thread:

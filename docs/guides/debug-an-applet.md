@@ -105,13 +105,68 @@ or drop dotfiles in `$HOME`. On the current host this resolves under the app-dat
 root:
 
 - **macOS:** `~/Library/Application Support/Caliper/`
-- **Linux:** `$XDG_DATA_HOME/Caliper/` (or `~/.local/share/Caliper/`)
+- **Linux:** `$XDG_DATA_HOME/caliper/` (or `~/.local/share/caliper/`; the folder name is lowercase)
 - **Windows:** `%APPDATA%/Caliper/`
 
 Under loader v2 the host namespaces this directory per applet id, so two applets
 never collide; either way, `host.data_dir()` is the accessor and your code stays
-the same. The `signal_scope` exemplar shows the pattern — it builds
-`data_dir() + "/settings.txt"` and persists a single value across relaunches.
+the same. For example, an applet can build `data_dir() + "/settings.txt"` and
+persist a single value across relaunches. (The `signal_scope` applet in
+`applets/legacy-dev/` does this, but it is archived and the default build does
+not compile it.)
 
 When a stored file looks wrong, inspect it directly on disk under that root
 (it's plain files, not a database), delete it to reset to defaults, and relaunch.
+
+## Find what stalls the frame
+
+A window that runs at 2 fps while the applet "does nothing" is a frame-thread
+stall. Start with what the host already tells you, then narrow the cause with
+timers, working from the outside in.
+
+**The frame watchdog.** The host times the applet's `on_frame` call. When it
+exceeds about 250 ms for three consecutive frames, the menu bar shows
+`slow: long work belongs in background jobs` and the flag stays until the applet
+is relaunched (see [the trust model](../explanations/trust-model.md#frame-watchdog)).
+The watchdog times only `on_frame`. A stall in rendering, in presenting or in a
+different thread's contention with the frame thread does not raise it, so a
+frame that feels slow with no flag raised points away from your frame function.
+
+**The probe ladder.** Add temporary timers and log the result through
+`caliper.log.v1`. Go down one rung at a time, because a timer on a lower rung
+cannot see time spent on a higher one:
+
+1. **The frame gap around rendering.** Compare the time between two consecutive
+   frames with the time spent inside your `on_frame`. If the gap is long and
+   `on_frame` is short, the time is spent outside your code, in the host's
+   render or present step or waiting on a lock your frame thread shares with a
+   worker.
+2. **The loop phases.** Time each phase of the host's frame loop separately:
+   event polling, the applet frame, the UI draw, the render and the present. This
+   names the phase that owns the gap.
+3. **The applet's draw phases.** If the applet frame owns the time, time each
+   window's drawing block, each texture update and each service call inside
+   `on_frame`.
+
+Timers inside the applet alone mislead. They show the applet as innocent when the
+cost is in the host, and they show a long `on_frame` without saying which call
+inside it blocked.
+
+**The usual cause is I/O on the frame thread.** The rule is that the frame thread
+does no I/O: no file access, no network call, no SQL query and no store call
+([D39](../decisions/d039-no-io-on-the-frame-thread.md)). The cost of that work
+differs by platform and by session age, so it can look fine on one machine and
+freeze the window on another. EmbedScope froze at about 2 fps on Windows because
+it rebuilt a table in the on-disk data store on the frame thread twice a second,
+and each rebuild took longer than the last. The fixes that apply to any applet:
+
+- Run the work on a thread the applet owns, or in a job for work the user cares
+  about, and publish the result to the frame thread under a lock with a
+  generation counter.
+- Build tables for live visualization as `TEMP` tables, which live in memory and
+  do not write to the store's log. See
+  [`caliper.data.v1`](../references/service-data-v1.md#persistence-and-high-frequency-rebuilds).
+- Create a texture once and call `update_texture` afterwards. On Vulkan with CUDA
+  a create costs several times an update, so releasing and re-creating a texture
+  every refresh is a frame-thread cost.
+- Run expensive probes only while the window that shows them is open.

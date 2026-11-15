@@ -57,6 +57,31 @@ failing call, so one thread's failure never clobbers another's diagnostic. If th
 store failed to open at start-up the service is still vended but inert (every call
 `false` + a `last_error`).
 
+### Persistence and high-frequency rebuilds
+
+The store is a file, `data.duckdb`, in the app-data folder, and every ordinary
+table in it is written to disk through DuckDB's write-ahead log. That suits a
+dataset you register once. It does not suit a table that an applet rebuilds
+several times a second to show live state: each `CREATE OR REPLACE TABLE`
+appends to the log and adds to the catalog, so the cost of a rebuild grows over
+a session. EmbedScope measured 80 ms growing to 500 ms per rebuild on Windows.
+
+Build live-visualization tables as `TEMP` tables instead:
+
+```sql
+CREATE OR REPLACE TEMP TABLE embed_points(label INT, pred INT, x REAL, y REAL, z REAL)
+```
+
+A `TEMP` table lives in memory and is gone when the host exits, so nothing
+reaches the log. The service keeps one connection, so a `TEMP` table made by one
+call is visible to every later call from any thread. Use an ordinary table only
+for data that should outlive the session.
+
+Run the rebuild on a thread the applet owns, never on the frame thread. A query
+is file and catalog work whose cost differs by platform, and a slow one on the
+frame thread stalls every window. See
+[D39](../decisions/d039-no-io-on-the-frame-thread.md).
+
 ### Resource limits
 
 The host runs three DuckDB stores: `data.duckdb` for this service,

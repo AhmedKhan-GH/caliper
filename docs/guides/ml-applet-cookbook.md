@@ -11,7 +11,7 @@ open it beside this page.
 ## 1. The threading spine
 
 One training **worker** (a `jobs.v1` job), one **frame thread** (your
-`draw_ui`). Everything they share lives under **one mutex**, published with
+`on_frame`). Everything they share lives under **one mutex**, published with
 **generation counters**:
 
 ```cpp
@@ -34,7 +34,7 @@ void publish(State* st, std::vector<float> x, std::vector<float> y,
 }
 
 // FRAME: copy out under the lock, render the copies.
-void draw_ui(State* st) {
+void on_frame(State* st) {
     std::vector<float> ex, ey, ez; uint64_t gen;
     {
         std::lock_guard<std::mutex> lk(st->mtx);
@@ -48,9 +48,12 @@ void draw_ui(State* st) {
 - The worker publishes **owned copies** (`std::vector`) for plot data, or
   **tensor handles** for device-resident display tensors (§3) — never raw
   pointers into transient worker state.
-- The frame thread is the ONLY thread that touches `tensor_bridge.v1` and
-  `data.v1`. All torch *operations* stay on the worker; the frame thread may
-  hold and pass tensor handles but never launches kernels.
+- The frame thread is the ONLY thread that touches `tensor_bridge.v1`. All torch
+  *operations* stay on the worker; the frame thread may hold and pass tensor
+  handles but never launches kernels.
+- The frame thread does no I/O at all: no file, network, SQL or store call
+  ([D39](../decisions/d039-no-io-on-the-frame-thread.md)). `data.v1` work runs on
+  a thread the applet owns (§10).
 - Generation counters make every downstream stage cheap: nothing re-uploads,
   re-splits, or re-queries unless its `gen` moved.
 
@@ -79,7 +82,7 @@ for (int64_t b = 0; b < n; b += kBatch) {
 | Stream | Cadence | Why |
 |---|---|---|
 | Live layer: current batch, weight tensors, cloud | **every optimizer step** | weights only change when the optimizer steps — per-step IS every change |
-| Derived aggregates: SQL centroids, misclassified | **throttled (~2 Hz)**, on the frame side (§10) | rebuilt on the *frame thread*; at step rate it would stutter the UI |
+| Derived aggregates: SQL centroids, misclassified | **throttled (~2 Hz)**, staged by the frame thread, rebuilt on an applet-owned worker thread (§10) | the rebuild is I/O-class work that never runs on the frame thread; at step rate it would also queue faster than it finishes |
 | Quality metrics → `metrics.v1` | **every `kEvalEvery` steps** | metrics want statistical stability, not liveness; they persist to the metrics store |
 
 Don't add a config knob for cadence unless a *measured* cost forces one.
@@ -96,7 +99,8 @@ training device and hand over **handles** (refcount bumps, no data moves):
 ```cpp
 // WORKER, per step (inside NoGradGuard):
 auto wc = model->conv1->weight.detach();            // (8,1,3,3), on-device
-const float km = wc.abs().max().item<float>();      // colormap range
+const float km = std::max(wc.abs().max().item<float>(), 1e-6f);
+wc = wc / km;                                       // fixed [-1,1] range (§5)
 torch::Tensor dc[8];
 for (int k = 0; k < 8; k++)                         // §4: sharp blocks
     dc[k] = wc[k][0].repeat_interleave(16, 0)
@@ -104,7 +108,6 @@ for (int k = 0; k < 8; k++)                         // §4: sharp blocks
 {
     std::lock_guard<std::mutex> lk(st->mtx);
     for (int k = 0; k < 8; k++) st->disp_conv[k] = dc[k];    // handle swap
-    st->w_km = std::max(km, 1e-6f);
     st->live_gen++;
 }
 ```
@@ -114,10 +117,11 @@ Frame side — upload the **latest** state at most once per frame:
 ```cpp
 // FRAME, when live_gen advanced past tex_gen:
 for (int k = 0; k < 8; k++) {
-    if (st->conv_tex[k]) st->bridge.release_texture(st->conv_tex[k]);
     auto ct = caliper::adapters::to_tensor(disp_conv[k]);    // no torch ops!
-    st->conv_tex[k] = ct ? st->bridge.texture_from_tensor_mapped(
-                               &*ct, CALIPER_CMAP_MAGMA, -w_km, w_km) : 0;
+    if (!ct) continue;
+    if (!(st->conv_tex[k] && st->bridge.update_texture(st->conv_tex[k], &*ct)))
+        st->conv_tex[k] = st->bridge.texture_from_tensor_mapped(
+            &*ct, CALIPER_CMAP_MAGMA, -1.f, 1.f);            // first time only
 }
 st->tex_gen = lgen;
 // draw: ImGui::Image(caliper::Bridge::imtex(st->conv_tex[k]), {48, 48});
@@ -156,12 +160,17 @@ Sharp under any sampler, zero ABI involvement, stays device-resident.
 ## 5. Texture lifecycle
 
 Bridge textures are **frame-thread-owned**: create/update/release only in
-`draw_ui` and `cleanup()`. Gate rebuilds on a gen counter; release-then-
-create when a mapped texture's value range evolves (the range is baked at
-creation). Cleanup order matters:
+`on_frame` and `on_cleanup()`. Gate updates on a gen counter. **Create each
+texture once and call `update_texture` afterwards.** A mapped texture bakes its
+value range in at creation, so normalize on the worker to a constant range
+(here `[-1, 1]`) instead of re-creating the texture to chase the data. On Vulkan
+with CUDA a create costs about 1.4 ms against 0.27 ms for an update, and nine
+re-creations per generation was enough to blow the 60 fps budget on every batch.
+Re-create only when the shape changes or an update is refused. Cleanup order
+matters:
 
 ```cpp
-void cleanup() {
+void on_cleanup() {
     st->jobs.request_cancel(st->job_id);            // 1. stop the worker
     for (int i = 0; i < 1000 && st->jobs.is_running(st->job_id); i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -230,7 +239,7 @@ int xferinfo(void* p, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
 }
 ```
 
-Your `cleanup()` then does cancel → bounded wait → release (§5). The host
+Your `on_cleanup()` then does cancel → bounded wait → release (§5). The host
 additionally joins all workers before teardown, so sloppiness degrades
 instead of crashing — but honor the contract; the bounded wait is what
 keeps app exit fast.
@@ -253,13 +262,15 @@ std::filesystem::rename(path + ".tmp", path);
 ```
 
 Pair `curl_global_init` (in `on_init`) with `curl_global_cleanup` (in
-`cleanup`, after the worker join). Prefer mirrors that tolerate automation —
-the exemplar uses the S3 MNIST mirror; the classic host 403s.
+`on_cleanup`, after the worker join). Prefer mirrors that tolerate automation —
+the exemplar uses an S3 MNIST mirror, because the classic host refuses automated requests.
 
 ## 9. Checkpoints via `artifacts.v1`
 
-Save on the frame thread — serialize to bytes, `put` with the run id for
-free lineage:
+The exemplar saves on the frame thread when Save is clicked: it serializes the
+model to bytes and calls `put` with the run id for free lineage. That is one
+store call per click and an exception to the no-I/O rule above; a large
+checkpoint belongs in a job.
 
 ```cpp
 std::ostringstream oss(std::ios::binary);
@@ -282,36 +293,98 @@ if (p) { st->load_path = p;
 
 ## 10. SQL over live data (`data.v1`)
 
-Rebuild the table from the latest snapshot, ask real questions, drain with
-the helper. Frame-thread only, throttled (§2):
+A live table is rebuilt from the latest snapshot several times a second. That is
+I/O-class work, so it follows two rules: the table is a **`TEMP` table**, and the
+rebuild runs on a **worker thread the applet owns**, never on the frame thread
+([D39](../decisions/d039-no-io-on-the-frame-thread.md)). EmbedScope first rebuilt
+an ordinary table on the frame thread; each rebuild appended to the store's
+write-ahead log, grew from 80 ms to 500 ms over a session on Windows, and held the
+window at about 2 fps. A `TEMP` table lives in memory, so a rebuild does not
+touch the log or grow the catalog.
+
+The frame thread only stages inputs and wakes the worker:
 
 ```cpp
-// DDL/INSERT still hand back an (empty) stream — release it:
+// FRAME, throttled to ~2 Hz: stage copies under the lock, wake the worker.
+const double now = ImGui::GetTime();
+if (now - last_sql > 0.5) {
+    {
+        std::lock_guard<std::mutex> lk(st->mtx);
+        st->sqx = ex; st->sqy = ey; st->sqz = ez;       // owned copies
+        st->sql_lbl = lbl; st->sql_prd = prd; st->sql_n = n;
+        st->sql_pending = true;                          // overwrites: coalesces
+    }
+    if (!st->sql_thread.joinable())
+        st->sql_thread = std::thread(sql_worker, st);    // one thread, lazily
+    st->sql_cv.notify_one();
+    last_sql = now;
+}
+```
+
+The worker sleeps on a condition variable, copies the newest staged inputs, and
+rebuilds. Because staging overwrites, a slow rebuild skips to the newest snapshot
+instead of queueing. It uses a plain thread and not a `jobs.v1` job because the
+rebuild is internal plumbing, not work the user asked for, and it should not
+appear in the Jobs panel:
+
+```cpp
+void sql_worker(State* st) {
+    for (;;) {
+        /* copy inputs under st->mtx after cv.wait(sql_pending || sql_exit) */
+        refresh_data(st, ex, ey, ez, lbl, prd, n);     // all data.v1 work is here
+    }
+}
+
+// DDL/INSERT still hand back an (empty) stream, so drain it:
 auto exec = [&](const std::string& sql) {
     ArrowArrayStream s{};
     if (!st->data.query(sql.c_str(), &s)) return false;
     if (s.release) s.release(&s);
     return true;
 };
-exec("CREATE OR REPLACE TABLE embed_points(label INT, pred INT, "
+exec("CREATE OR REPLACE TEMP TABLE embed_points(label INT, pred INT, "
      "x REAL, y REAL, z REAL)");
-exec(batched_insert_sql);                        // one VALUES list per publish
+exec(batched_insert_sql);                        // one VALUES list per snapshot
 
 ArrowArrayStream cs{};
 std::vector<std::vector<double>> cols;
 if (st->data.query("SELECT label, AVG(x), AVG(y), AVG(z) "
                    "FROM embed_points GROUP BY label", &cs))
     caliper::Data::drain_numeric(&cs, nullptr, &cols);   // releases cs
+// then commit the results under st->mtx in one step
 ```
 
-Throttle the rebuild on the frame side (`ImGui::GetTime()` gate, ~2 Hz) so
-the plot never waits on SQL. If the service is absent, say so in the panel
-and keep running — every optional service degrades to a visible
-"absent (ok)" line, never a crash.
+Stage the results into locals and commit them under the mutex once at the end, so
+the frame thread never sees a half-built panel. `on_cleanup()` sets the exit flag
+under the mutex, notifies, and joins the thread; an in-flight rebuild bounds the
+wait. If the service is absent, say so in the panel and keep running: every
+optional service degrades to a visible "absent (ok)" line, never a crash. Use an
+ordinary table only for data that must outlive the session.
+
+## 11. Pay for a probe only while it is visible
+
+An interpretability probe, such as a logit lens, a residual-stream capture or an
+embedding projection, can cost as much as the training step it observes. Run it
+only while the window that shows it is open. GPTScope's ThoughtSpace window does
+this with an atomic flag:
+
+```cpp
+// FRAME: the flag mirrors whether the window was drawn this frame.
+const bool open = ImGui::Begin("GPTScope: ThoughtSpace");
+st->thoughtspace_wanted.store(open);
+...
+// WORKER: skip the whole probe and projection unless someone is looking.
+if (st->thoughtspace_wanted.load() && elapsed(last_ts) >= 1.0 / kProbeHz)
+    publish_thoughtspace(st, model, dev, dev.is_cuda());
+```
+
+A closed or collapsed window costs nothing, and the probe resumes on the next
+cadence tick after it opens. Pair the gate with a status line that says the first
+probe is still pending, so an empty window does not read as a fault.
 
 ---
 
 **The one-sentence summary:** worker computes and publishes generations;
 frame pulls the latest and renders; every stream updates at the rate its
-nature dictates; the camera has an owner; and everything optional degrades
-visibly instead of failing silently. That's a Caliper ML demo.
+nature dictates; the camera has an owner; and every probe runs only while someone is
+looking; and everything optional degrades visibly instead of failing silently. That's a Caliper ML demo.

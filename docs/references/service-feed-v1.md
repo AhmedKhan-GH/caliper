@@ -1,14 +1,14 @@
 # caliper.feed.v1
 
-Service id `caliper.feed.v1` — live telemetry ingestion, the first rung of the
-physical-twin ladder (feed spec §3). The **host** owns telemetry providers,
-buffers their samples in per-channel ring buffers with timestamps + sequence
-numbers, and vends this tiny **pull-based, any-thread, non-blocking** read
-surface. Applets copy samples into their own tensors on their job threads
-(tensors → pixels stays downstream); embedders reach the same surface through
-`caliper_core_get_service` (Compass shows machine telemetry in native panes for
-free). This page embeds the header verbatim; the docs build fails if the file
-moves.
+Service id `caliper.feed.v1`: live telemetry from the machine the host runs on.
+The **host** owns the telemetry providers, buffers their samples in per-channel
+ring buffers with timestamps and sequence numbers, and vends a small
+**pull-based, any-thread, non-blocking** read surface. Applets copy samples into
+their own tensors on their job threads, so data still flows from tensors to
+pixels. Embedders reach the same surface through `caliper_core_get_service`. The
+decision behind this shape is
+[D35](../decisions/d035-telemetry-is-a-host-service.md). This page embeds the
+header verbatim; the docs build fails if the file moves.
 
 ```c
 --8<-- "sdk/include/caliper/services/feed_v1.h"
@@ -19,11 +19,11 @@ moves.
 A **channel** is one named f32 time series (`id` like `"sys.cpu.util"`, a
 display name, units, a nominal rate hint). A **sample** is
 `{ seq, t_ns, value, reserved0 }` — `seq` is per-channel monotonic from 1;
-`t_ns` is the host steady clock (mach_absolute-derived ns), the **same epoch
+`t_ns` is the host steady clock (nanoseconds from the platform's monotonic clock), the **same epoch
 across channels** so a reader can align series on one timeline.
 
 - **`caps()`** — bit 0 (`CALIPER_FEED_CAP_LIVE`) is set **iff** at least one
-  channel is registered on this host. No provider (Linux v0) or no channels →
+  channel is registered on this host. No provider (Linux) or no channels →
   `0`, and every read yields nothing. Honest degradation, never fake data.
 - **`channel_count()` / `channel_info(index, info)`** — enumerate the channels
   this host actually vends. **Enumerate dynamically**; never assume a fixed set
@@ -53,49 +53,50 @@ Every entry point is **any-thread and non-blocking** — one mutex per channel
 (writer = the provider thread; readers = anyone, any cadence). Applet job
 threads and embedder UI threads read the same surface concurrently and safely.
 No callbacks cross the ABI: no reentrancy or threading contract to defend, and
-no per-subscriber host state. Push can layer on later without breaking this
-surface (`reserved0` holds the slot).
+no per-subscriber host state. The sample struct and the service table each carry a `reserved0` slot, so a
+push surface could be added without breaking this one. The service has no
+applet-registered or external sources: every channel comes from a host provider.
 
-## Platform status
+## Providers
 
-| Platform | Provider | caps | Channels |
-|---|---|---|---|
-| **macOS (Apple Silicon)** | **live, verified** | `LIVE` | 7 (below) |
-| **Windows** | **live, verified** (feed spec §6.2) | `LIVE` | 6 (below) |
-| Linux | none yet | `0` (inert) | none |
+The macOS (Apple Silicon) provider and the Windows provider each register their
+channels at host start. Linux has no provider, so `caps()` is `0` and every read
+yields nothing. Every provider is **privilege-honest**: each signal is read
+without elevated rights, and a channel that would need root, entitlements or a
+kernel driver does not exist rather than half-existing. Each channel is sampled
+at a nominal 10 Hz into a ring of 4096 samples.
 
-The macOS provider is **privilege-honest**: every signal is sudo-free; a channel
-that would need root/entitlements does not exist rather than half-existing.
-Verified live on this box (M-series, macOS 26), guaranteed + best-effort tiers:
+macOS channels:
 
-| Channel id | Name | Units | Notes |
+| Channel id | Name | Units | Source |
 |---|---|---|---|
 | `sys.cpu.util` | CPU Utilization | `%` | `host_processor_info` deltas |
-| `sys.mem.used` | Memory Used | `%` | `host_statistics64` (**used**, not kernel pressure — the name must not overclaim) |
-| `sys.thermal.state` | Thermal State | *(unitless)* | `NSProcessInfo` code **0..3** = nominal / fair / serious / critical — a **reader labels the number**, the ABI carries a bare float |
-| `sys.gpu.util` | GPU Utilization | `%` | IOAccelerator PerformanceStatistics |
+| `sys.mem.used` | Memory Used | `%` | `host_statistics64`; used memory, not kernel pressure, so the name does not overclaim |
+| `sys.thermal.state` | Thermal State | none | `NSProcessInfo` code 0 to 3 for nominal, fair, serious, critical; the ABI carries a bare float and the reader labels it |
+| `sys.gpu.util` | GPU Utilization | `%` | IOAccelerator performance statistics |
 | `sys.fan.rpm` | Fan Speed | `rpm` | userland AppleSMC |
 | `sys.temp.battery` | Battery Temperature | `degC` | userland AppleSMC |
 | `sys.power.battery` | Battery Power | `W` | IOPMPowerSource |
 
-The Windows provider is privilege-honest the same way: every signal reads
-**without elevation**; a channel that would need admin or a kernel driver does
-not exist rather than half-existing (so CPU temperature and fan RPM are absent
-— Windows has no unprivileged path to them). Verified live on this box
-(RTX 500 Ada laptop, Windows 11), guaranteed + probe tiers:
+The thermal channel always registers. Every other channel registers only when
+its source reads successfully on the machine.
 
-| Channel id | Name | Units | Notes |
+Windows channels:
+
+| Channel id | Name | Units | Source |
 |---|---|---|---|
 | `sys.cpu.util` | CPU Utilization | `%` | `GetSystemTimes` deltas |
-| `sys.mem.used` | Memory Used | `%` | `GlobalMemoryStatusEx` `dwMemoryLoad` (**used**, the same non-overclaiming name) |
-| `sys.gpu.util` | GPU Utilization | `%` | NVML, runtime-loaded from the driver's `nvml.dll` — RTD3-parked ticks fail and are skipped, loss visible |
-| `sys.gpu.temp` | GPU Temperature | `degC` | NVML — the box's only privilege-free temperature |
-| `sys.gpu.power` | GPU Power | `W` | NVML, gated against the device-reported enforced power limit (wake-transition junk reads) |
-| `sys.power.battery` | Battery Power | `W` | `CallNtPowerInformation`, negative = discharge (same convention as macOS); absent on desktop boxes |
+| `sys.mem.used` | Memory Used | `%` | `GlobalMemoryStatusEx` `dwMemoryLoad` |
+| `sys.gpu.util` | GPU Utilization | `%` | NVML, loaded at runtime from the driver's `nvml.dll`; failed ticks are skipped and the loss is visible |
+| `sys.gpu.temp` | GPU Temperature | `degC` | NVML |
+| `sys.gpu.power` | GPU Power | `W` | NVML, gated against the device-reported enforced power limit |
+| `sys.power.battery` | Battery Power | `W` | `CallNtPowerInformation`; negative means discharging, as on macOS; absent on desktops |
 
-The NVML channels are this box's set: no NVIDIA driver → no GPU channels
-(fail-closed probe at start, never a linked SDK).
+Windows exposes no unprivileged path to CPU temperature or fan speed, so those
+channels do not exist there. The NVML channels exist only when an NVIDIA driver
+is present; the probe fails closed at start and no SDK is linked.
 
-Whatever is unavailable is simply **not a channel** — never a faked value; a
-consumer displays whatever enumerates. On Linux in v0 every entry point is
-inert and consumers degrade honestly (one line, nothing drawn).
+Whatever is unavailable is simply not a channel, never a faked value. A consumer
+displays whatever enumerates, and on a host with no channels it says so in one
+line and draws nothing. PulseScope does exactly this (see
+[Applets](applets.md)).
