@@ -89,6 +89,16 @@ public:
     double gpu_ms_mean() const { return gpu_n_ ? gpu_ms_sum_ / (double)gpu_n_ : 0.0; }
     uint64_t gpu_frames() const { return gpu_n_; }
     uint64_t colormap_dispatches() const { return dispatches_; }
+    // What the renderer holds now (a long session must not grow these): live
+    // textures, imported or staged buffers, spare buffers, and released
+    // texture views waiting for the end of the frame.
+    size_t texture_count() const { return tex_.size(); }
+    size_t allocation_count() const { return allocs_.size() + spare_allocs_.size(); }
+    size_t retired_view_count() const { return retired_views_.size(); }
+    // Releases the texture views released since the last frame was recorded.
+    // render() calls it; a host that skips a frame (a hidden canvas) calls it
+    // instead, outside any ImGui frame.
+    void release_retired();
     WGPUTextureFormat surface_format() const { return surface_format_; }
 
 private:
@@ -150,7 +160,7 @@ private:
     WGPURenderPipeline points_pipelines_[5] = {};   // [0] no depth target; [1 + flags] with one
     std::unordered_map<uint64_t, Alloc> allocs_;
     std::vector<DrawSlot> slots_;
-    std::vector<WGPUTextureView> retired_views_;   // tex_release(): kept until shutdown
+    std::vector<WGPUTextureView> retired_views_;   // tex_release(): released after this frame's render
     // Released host allocations, kept for reuse: a points view gets a payload
     // of the same size every snapshot, and creating and destroying a GPU
     // buffer per snapshot is far slower than writing into one again.

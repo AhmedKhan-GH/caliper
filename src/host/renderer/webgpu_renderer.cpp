@@ -215,15 +215,20 @@ void WebGpuRenderer::new_frame() {
     if (imgui_ready_) ImGui_ImplWGPU_NewFrame();
 }
 
+void WebGpuRenderer::release_retired() {
+    for (auto& v : retired_views_) release_view(v);
+    retired_views_.clear();
+}
+
 void WebGpuRenderer::render(int fb_w, int fb_h) {
-    if (!surface_ || fb_w <= 0 || fb_h <= 0) return;
+    if (!surface_ || fb_w <= 0 || fb_h <= 0) return release_retired();
     if (fb_w != surf_w_ || fb_h != surf_h_) configure_surface(fb_w, fb_h);
     WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
     wgpuSurfaceGetCurrentTexture(surface_, &st);
     if (st.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
         st.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
         if (st.texture) wgpuTextureRelease(st.texture);
-        return;
+        return release_retired();
     }
     WGPUTextureView view = wgpuTextureCreateView(st.texture, nullptr);
 
@@ -266,6 +271,8 @@ void WebGpuRenderer::render(int fb_w, int fb_h) {
     wgpuCommandEncoderRelease(enc);
     wgpuTextureViewRelease(view);
     wgpuTextureRelease(st.texture);
+    // The views released during this frame: its bind groups are gone now.
+    release_retired();
 }
 
 void WebGpuRenderer::on_work_done(double submitted_ms) {
@@ -288,8 +295,7 @@ void WebGpuRenderer::free_tex(Tex& t) {
 void WebGpuRenderer::shutdown() {
     for (auto& kv : tex_) free_tex(kv.second);
     tex_.clear();
-    for (auto& v : retired_views_) release_view(v);
-    retired_views_.clear();
+    release_retired();
     for (auto& kv : allocs_) release_buf(kv.second.buffer);
     allocs_.clear();
     for (auto& a : spare_allocs_) release_buf(a.buffer);
@@ -356,13 +362,14 @@ bool WebGpuRenderer::tex_upload_rgba8(uint64_t id, const void* data, int w, int 
     return true;
 }
 
-// The ImGui backend caches one bind group per texture view (keyed by the
-// view's address) and is never told that a view went away, so a new view at a
-// released one's address would be drawn with the old bind group. A released
-// texture is therefore destroyed (its memory goes back at once), but its view
-// object is kept until shutdown, so no address is ever reused. A texture is
-// released only on a shape change, a data view change or a resize, so the
-// kept objects stay few and small.
+// A released texture is destroyed at once (its memory goes back), and its view
+// is released after this frame's render. The ImGui backend makes one bind
+// group per texture view while it records a frame, keyed by the view's
+// address, and releases all of them at the end of that frame, so no bind
+// group outlives the frame and a later view at the same address gets its own.
+// Holding the view to the end of the frame keeps an image drawn earlier in
+// this frame valid until the frame is recorded. So nothing released survives
+// the frame, however often textures are recreated.
 void WebGpuRenderer::tex_release(uint64_t id) {
     auto it = tex_.find(id);
     if (it == tex_.end()) return;
