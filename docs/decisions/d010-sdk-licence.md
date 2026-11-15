@@ -1,17 +1,17 @@
-# D10. The SDK licence
+# D10. The licence
 
 | Date | Status |
 |---|---|
-| 2026-06-10 | Proposed |
+| 2026-11-15 | Accepted |
 
 ## Decision
 
-The SDK is released under the MIT licence. The host may be licensed separately. Apache-2.0 is acceptable if a patent grant is wanted.
+The whole Caliper framework, the host and the SDK alike, is released under the Apache License 2.0. The copyright holder is Ahmed Khan.
 
 ## Reason
 
-Outside applet authors need a permissive SDK, and MIT matches the licences of ImGui and ImPlot. The choice must be made before the first applet from outside the project.
+Applet authors need a permissive licence, and Apache-2.0 is as permissive as MIT, which ImGui and ImPlot use. It adds an explicit patent grant, and it gives no rights to the Caliper name.
 
 ## Notes
 
-The repository has no LICENSE file yet, so the question is open.
+This replaces the proposal of 2026-06-10, which suggested MIT for the SDK and a separate licence for the host. The repository's `LICENSE` holds the licence text, and `NOTICE` holds the copyright line.

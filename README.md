@@ -247,7 +247,7 @@ model.to(device);
 
 ## License
 
-The licence for Caliper has not been chosen yet. See [decision D10](docs/decisions/d010-sdk-licence.md).
+Caliper is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Ahmed Khan. See [decision D10](docs/decisions/d010-sdk-licence.md).
 
 ## Third-party licenses
 
