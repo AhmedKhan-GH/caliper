@@ -77,33 +77,38 @@ target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 add_test(NAME caliper_tests COMMAND caliper_tests)
+# The stores this binary opens go to a work folder, never the user's app-data.
+set_tests_properties(caliper_tests PROPERTIES ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_tests")
 
 # ---------------------------------------------------------------------------
 # The caliper executable's subcommands, run as a user runs them. Each runs and
 # exits without a window (host_cli.h); `caliper dev` and plain `caliper` start
 # the app, so no test runs them. The applets folder of this build stands in
-# for an outside build folder, and CALIPER_USER_APPLETS_DIR points install at
-# a folder inside the build tree.
+# for an outside build folder. Every entry runs with a controlled environment:
+# CALIPER_APPLET_PATH unset, CALIPER_USER_APPLETS_DIR in the build tree, and
+# CALIPER_DATA_DIR on a folder of its own that must still not exist after the
+# run (only `install` without CALIPER_USER_APPLETS_DIR may create applets/ in
+# it), which proves that the subcommands open no store and create nothing in
+# the app-data folder.
 # ---------------------------------------------------------------------------
 if(TARGET caliper)
     set(_cli_work "${CMAKE_CURRENT_BINARY_DIR}/cli-work")
-    set(_cli_env "CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
     function(caliper_cli_test name)
-        cmake_parse_arguments(PARSE_ARGV 1 t "" "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE" "")
+        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_APPLETS"
+            "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE;ALLOW" "")
+        set(data "${_cli_work}/app-data-${name}")
+        set(env "--unset=CALIPER_APPLET_PATH|CALIPER_DATA_DIR=${data}")
+        if(NOT t_DEFAULT_USER_APPLETS)
+            string(APPEND env "|CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
+        endif()
         set(defs -DEXE=$<TARGET_FILE:caliper> "-DARGS=${t_ARGS}" -DEXIT=${t_EXIT}
-                 "-DENV=${_cli_env}")
-        if(DEFINED t_MATCH)
-            list(APPEND defs "-DMATCH=${t_MATCH}")
-        endif()
-        if(DEFINED t_ERROR)
-            list(APPEND defs "-DERROR=${t_ERROR}")
-        endif()
-        if(DEFINED t_CLEAN)
-            list(APPEND defs "-DCLEAN=${t_CLEAN}")
-        endif()
-        if(DEFINED t_STAGE)
-            list(APPEND defs "-DSTAGE=${t_STAGE}")
-        endif()
+                 "-DENV=${env}" "-DDATA_DIR=${data}")
+        foreach(opt MATCH ERROR CLEAN STAGE ALLOW)
+            if(DEFINED t_${opt})
+                list(APPEND defs "-D${opt}=${t_${opt}}")
+            endif()
+        endforeach()
         add_test(NAME caliper_cli_${name}
                  COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_run.cmake)
         set_tests_properties(caliper_cli_${name} PROPERTIES LABELS cli)
@@ -112,6 +117,8 @@ if(TARGET caliper)
     caliper_cli_test(help ARGS "--help" EXIT 0 MATCH "usage: caliper")
     caliper_cli_test(bad_option ARGS "--frobnicate" EXIT 2
         ERROR "unknown option: --frobnicate")
+    caliper_cli_test(applets_needs_folder ARGS "--applets|--help" EXIT 2
+        ERROR "--applets needs a folder")
     caliper_cli_test(info ARGS "info" EXIT 0
         MATCH "abi_epoch 2.*service caliper\\.ui\\.v1_1")
     caliper_cli_test(list ARGS "list|--applets|${CMAKE_BINARY_DIR}/applets" EXIT 0
@@ -129,9 +136,16 @@ if(TARGET caliper)
     caliper_cli_test(install ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
         MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*user-applets"
         CLEAN "${_cli_work}/user-applets")
+    # Without CALIPER_USER_APPLETS_DIR install writes applets/ under the
+    # app-data folder, and nothing else there.
+    caliper_cli_test(install_default ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
+        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*app-data-install_default/applets"
+        DEFAULT_USER_APPLETS ALLOW "applets")
     caliper_cli_test(new ARGS "new|com.example.cli-made|${_cli_work}/cli-made" EXIT 0
         MATCH "created .*cli-made for applet com\\.example\\.cli-made"
         CLEAN "${_cli_work}/cli-made")
+    caliper_cli_test(new_reserved ARGS "new|test|${_cli_work}/reserved" EXIT 2
+        ERROR "the CMake target \"test\" is reserved")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -210,6 +224,9 @@ if(WIN32)
     target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_VULKAN=1)
 endif()
 add_test(NAME caliper_export_tests COMMAND caliper_export_tests)
+# The stores this binary opens go to a work folder, never the user's app-data.
+set_tests_properties(caliper_export_tests PROPERTIES ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_export_tests")
 set_tests_properties(caliper_export_tests PROPERTIES LABELS "export"
     SKIP_RETURN_CODE 77)
 
@@ -315,6 +332,9 @@ if(APPLE AND CALIPER_WITH_TORCH)
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
 endif()
 add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
+# The stores this binary opens go to a work folder, never the user's app-data.
+set_tests_properties(caliper_embed_tests PROPERTIES ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_embed_tests")
 set_tests_properties(caliper_embed_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
@@ -335,6 +355,9 @@ if(APPLE)
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 add_test(NAME caliper_live_tests COMMAND caliper_live_tests)
+# The stores this binary opens go to a work folder, never the user's app-data.
+set_tests_properties(caliper_live_tests PROPERTIES ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_live_tests")
 set_tests_properties(caliper_live_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # caliper_live_views_tests — the typed live views (caliper/live_views.h): apply
@@ -352,6 +375,9 @@ if(APPLE)
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 add_test(NAME caliper_live_views_tests COMMAND caliper_live_views_tests)
+# The stores this binary opens go to a work folder, never the user's app-data.
+set_tests_properties(caliper_live_views_tests PROPERTIES ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_live_views_tests")
 set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
 endif()  # APPLE (live tests)
 

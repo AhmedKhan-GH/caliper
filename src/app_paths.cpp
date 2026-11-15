@@ -19,7 +19,8 @@ namespace caliper {
 
 namespace {
 
-fs::path compute_app_data_dir() {
+// The OS default app-data folder. Computes the path only; creates nothing.
+fs::path os_app_data_dir() {
 #ifdef __APPLE__
     const char* home = std::getenv("HOME");
     fs::path base = fs::path(home ? home : "/tmp")
@@ -44,12 +45,18 @@ fs::path compute_app_data_dir() {
         base = fs::path(home ? home : "/tmp") / ".local" / "share" / "caliper";
     }
 #endif
-
-    std::error_code ec;
-    fs::create_directories(base, ec);
-    // Even if create_directories fails, return the path; callers can fail
-    // gracefully when their own file ops error out.
     return base;
+}
+
+// CALIPER_DATA_DIR when it is set and not empty, else the OS default; read
+// once, at the first lookup. Creates nothing.
+const std::string& default_app_data_dir() {
+    static const std::string dir = [] {
+        if (const char* env = std::getenv("CALIPER_DATA_DIR"); env && *env)
+            return fs::path(env).string();
+        return os_app_data_dir().string();
+    }();
+    return dir;
 }
 
 } // anonymous namespace
@@ -69,9 +76,19 @@ void set_app_data_dir_override(const std::string& dir) {
 
 const std::string& app_data_dir() {
     if (!g_override_root.empty()) return g_override_root;
-    // Computed once and cached. The directory is created on first call.
-    static const std::string cached = compute_app_data_dir().string();
-    return cached;
+    // Created once, at the first call. Even if that fails the path is
+    // returned; callers fail gracefully when their own file operations do.
+    static const bool created = [] {
+        std::error_code ec;
+        fs::create_directories(default_app_data_dir(), ec);
+        return true;
+    }();
+    (void)created;
+    return default_app_data_dir();
+}
+
+std::string app_data_location() {
+    return g_override_root.empty() ? default_app_data_dir() : g_override_root;
 }
 
 std::string app_data_path(const std::string& filename) {
@@ -104,7 +121,7 @@ std::string shipped_applets_dir() {
 std::string user_applets_dir() {
     if (const char* dir = std::getenv("CALIPER_USER_APPLETS_DIR"); dir && *dir)
         return dir;
-    return app_data_path("applets");
+    return (fs::path(app_data_location()) / "applets").string();
 }
 
 } // namespace caliper

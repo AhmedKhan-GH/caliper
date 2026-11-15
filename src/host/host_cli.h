@@ -31,6 +31,7 @@
 #include "applet_loader.h"
 #include "negotiation.h"
 #include <algorithm>
+#include <iterator>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -67,6 +68,9 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     bool have_command = false;
     for (int i = 1; i < argc; i++) {
         const std::string arg = argv[i] ? argv[i] : "";
+        // macOS passes -psn_<number> to an app that Finder launches on older
+        // systems; it is not ours to read.
+        if (arg.rfind("-psn_", 0) == 0) continue;
         if (arg == "--help" || arg == "-h") {
             cl.command = C::Help;
             cl.operands.clear();
@@ -80,7 +84,8 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             } else {
                 dir = arg.substr(kApplets.size() + 1);
             }
-            if (dir.empty()) {
+            // "--applets --help" names no folder: an option is never one.
+            if (dir.empty() || dir.rfind("--", 0) == 0) {
                 cl.error = "--applets needs a folder";
                 return cl;
             }
@@ -359,6 +364,26 @@ inline NewAppletNames new_applet_names(const std::string& arg) {
                   " (use lowercase letters, digits and '-', starting with a letter, "
                   "or a full id such as com.example.my-viewer)";
         return n;
+    }
+    // The stem names the CMake targets <stem> and <stem>_tests, so it must
+    // not be a name CMake reserves (some generators compare them without
+    // case) or the name of the SDK's own target.
+    std::string stem = n.short_name;
+    std::replace(stem.begin(), stem.end(), '-', '_');
+    static const char* const kReserved[] = {
+        "all", "all_build", "clean", "depend", "edit_cache", "help", "install",
+        "list_install_components", "package", "package_source", "preinstall",
+        "rebuild_cache", "run_tests", "test", "zero_check"};
+    for (const std::string& target : {stem, stem + "_tests"}) {
+        const bool reserved =
+            std::find_if(std::begin(kReserved), std::end(kReserved),
+                         [&](const char* r) { return target == r; }) != std::end(kReserved) ||
+            target.rfind("caliper_", 0) == 0;
+        if (reserved) {
+            n.error = "not a usable applet name: " + arg + " (the CMake target \"" +
+                      target + "\" is reserved; choose another name)";
+            return n;
+        }
     }
     bool word_start = true;
     for (char c : n.short_name) {

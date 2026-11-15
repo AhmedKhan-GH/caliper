@@ -12,7 +12,7 @@ The host keeps everything it writes under one folder, computed in `src/app_paths
 | Windows | `%APPDATA%\Caliper\` (the Roaming AppData known folder). If Windows cannot resolve it, `caliper-data/` under the current directory. |
 | Linux | `$XDG_DATA_HOME/caliper/` when `XDG_DATA_HOME` is set and not empty, otherwise `~/.local/share/caliper/`. The folder name is lowercase. |
 
-The host creates the folder on first use. An embedding host can move the whole tree with `CaliperCoreDesc.data_dir`; see [Embedding](embedding.md).
+The host creates the folder on first use. `CALIPER_DATA_DIR`, when it is set and not empty, replaces the folder for every Caliper process that reads it, and an embedding host can move the whole tree with `CaliperCoreDesc.data_dir`, which wins over both; see [Embedding](embedding.md). The read-only subcommands of the command line create nothing here, and `caliper install` writes only the user applets folder.
 
 Inside it:
 
@@ -42,7 +42,7 @@ The `caliper` executable reads these. The first six are development hooks for sc
 | `CALIPER_APPLET_PATH` | Folders to search for applets before the user applets folder and the shipped applets, separated by `:` (`;` on Windows), searched in the order given and after any `--applets` folders. A folder that holds no manifest but whose `applets/` subfolder does, such as an applet's build folder, stands for that subfolder (see [Build folders](cli.md#build-folders)). The embed core reads it too, after its `applets_dir`. | `src/main.cpp`, `src/host/embed/embed_core.cpp` |
 | `CALIPER_FONTS_DIR` | A folder that holds the UI fonts. It is searched before `assets/fonts` next to the executable and the source tree. | `src/host/ui/sternbild_fonts.cpp` |
 | `CALIPER_DISPLAY_FONT` | The path of the display font file, in place of `fonts/SternbildDisplay-Regular.otf` in the app-data folder. | `src/host/ui/sternbild_fonts.cpp` |
-| `CALIPER_DATA_DIR` | The folder used for live session files, in place of the app-data folder. The viewer sets it from its `--data-dir` flag. | `src/host/live/live_shm.h`, `src/host/live/viewer_main.mm` |
+| `CALIPER_DATA_DIR` | The app-data folder, in place of the one for the OS: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, `applets/`. It is read once, at the first lookup. An embedder's `CaliperCoreDesc.data_dir` wins over it. The viewer sets it from its `--data-dir` flag, and the test suite sets it to a work folder so that no test opens the user's stores. | `src/app_paths.cpp`, `src/host/live/live_shm.h`, `src/host/live/viewer_main.mm` |
 | `CALIPER_DUCKDB_THREADS`, `CALIPER_DUCKDB_MEMORY_LIMIT` | The thread count (an integer from 1 to 1024) and the memory limit (a DuckDB size string such as `4GB`) for all three stores. By default each store takes a share of the machine's RAM and cores. | `src/host/duckdb_sizing.h` |
 | `CALIPER_DUCKDB_<STORE>_THREADS`, `CALIPER_DUCKDB_<STORE>_MEMORY_LIMIT` | The same limits for one store, where `<STORE>` is `METRICS`, `DATA` or `ARTIFACTS`. They win over the variables above. An unusable value is ignored and a `[duckdb]` line on stderr says so. | `src/host/duckdb_sizing.h`, `src/host/duckdb_config.h` |
 
@@ -80,7 +80,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder: each is negotiated, opened, checked, created and destroyed with the capabilities the `caliper` executable advertises. Without it the case is skipped. | `tests/test_applet_acceptance.cpp` |
 | `CALIPER_THROWING_WHERE` | Chooses where the test applet fails: `create`, `initialize`, `frame`, `frame-fault`, `frame-imgui`, `frame-imgui-fault`, `cleanup`, `job`, `job-fault` or `none`. The crash-guard and UI-recovery tests set it. | `tests/fixtures/throwing_applet/throwing_applet.cpp` |
 
-The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CALIPER_HELLO_*` and `CALIPER_DATA_DIR` themselves to exercise the code that reads them. See [Development basics](../tutorials/development-basics.md) for how the GPU skip variables behave.
+The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CALIPER_HELLO_*` and `CALIPER_DATA_DIR` themselves to exercise the code that reads them. ctest runs every test binary that opens the stores, and every command-line test, with `CALIPER_DATA_DIR` on a folder in the build tree, and runs the command-line tests with `CALIPER_APPLET_PATH` unset. See [Development basics](../tutorials/development-basics.md) for how the GPU skip variables behave.
 
 ## Python variables
 

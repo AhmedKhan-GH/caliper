@@ -13,11 +13,11 @@ usage: caliper [--applets <dir>]...
        caliper --help
 ```
 
-Results go to standard output, and errors go to standard error, each starting with `caliper:`.
+Results go to standard output, and errors go to standard error, each starting with `caliper:`. No subcommand opens the metrics, data or artifacts store. `list`, `check`, `info`, `new` and `--help` create nothing in the app-data folder, and `install` writes only the user applets folder.
 
 ## Starting the app
 
-`caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev` and `list`; with any other subcommand it is a usage error.
+`caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev` and `list`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
 
 `caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build folder, such as `build`, or its build output, `build/applets` (see [Build folders](#build-folders)). The Activity pane's `scanned` line names the folder that was searched. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
 
@@ -85,6 +85,7 @@ When any applet fails a check, `install` copies nothing, prints `caliper: nothin
 Creates an applet project from a template built into the executable. `<name>` is either a short name or a full applet id:
 
 - A short name is lowercase letters, digits and `-`, starts with a letter, does not end with `-`, and has at most 64 characters. The applet's id is `dev.example.<name>`.
+- The stem names the CMake targets `<stem>` and `<stem>_tests`, so neither may be a name that CMake or one of its generators reserves (`all`, `all_build`, `clean`, `depend`, `edit_cache`, `help`, `install`, `list_install_components`, `package`, `package_source`, `preinstall`, `rebuild_cache`, `run_tests`, `test` and `zero_check`) or start with `caliper_`, which the SDK uses. `new` refuses such a name with `caliper: not a usable applet name: <name> (the CMake target "<target>" is reserved; choose another name)`.
 - A full id, such as `com.example.my-viewer`, is used as given, and its last part is the short name.
 
 From the short name, `new` derives the stem (hyphens become underscores: `my_viewer`), the display name (`My Viewer`) and the class name (`MyViewerApplet`). The project goes into `<dir>`, or into a folder named after the short name in the current folder. `new` writes nothing and exits with 1 when the folder already exists, and exits with 2 for a name that breaks the rules above.

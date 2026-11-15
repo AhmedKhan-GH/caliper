@@ -849,8 +849,9 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cl.command != Command::Run && cl.command != Command::Dev) {
-        // A subcommand runs and exits here; the app never starts. Only the
-        // ones that read installed applets touch the app-data folder.
+        // A subcommand runs and exits here; the app never starts, and no
+        // store opens. Only install writes, and only to the user applets
+        // folder; the others create nothing in the app-data folder.
         const bool reads_applets = cl.command == Command::List ||
                                    cl.command == Command::Check ||
                                    cl.command == Command::Install;
@@ -860,7 +861,9 @@ int main(int argc, char** argv) {
         if (reads_applets) {
             ctx.user_dir = caliper::user_applets_dir();
             ctx.shipped_dir = caliper::shipped_applets_dir();
-            ctx.data_root = caliper::app_data_path("data");
+            // Read only: nothing is created in the app-data folder.
+            ctx.data_root =
+                (std::filesystem::path(caliper::app_data_location()) / "data").string();
         }
         ctx.applet_path_env = std::getenv("CALIPER_APPLET_PATH");
         return caliper_host::run_subcommand(cl, ctx, std::cout, std::cerr);

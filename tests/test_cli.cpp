@@ -126,6 +126,17 @@ TEST_CASE("cli: wrong command lines are usage errors") {
     CHECK(parse({"check", "/f", "--applets", "/x"}).error ==
           "--applets applies only to starting the app, dev and list");
     CHECK(parse({"--applets"}).error == "--applets needs a folder");
+    CHECK(parse({"--applets", "--help"}).error == "--applets needs a folder");
+    CHECK(parse({"list", "--applets=--x"}).error == "--applets needs a folder");
+}
+
+TEST_CASE("cli: the -psn_ argument Finder passes is ignored") {
+    auto cl = parse({"-psn_0_12345"});
+    CHECK(cl.error.empty());
+    CHECK(cl.command == Command::Run);
+    auto dev = parse({"dev", "-psn_0_1", "/a"});
+    CHECK(dev.error.empty());
+    CHECK(dev.applet_dirs == std::vector<std::string>{"/a"});
 }
 
 TEST_CASE("cli: info prints the versions and every service") {
@@ -248,6 +259,31 @@ TEST_CASE("cli: new derives an id, a stem and names from one argument") {
         CAPTURE(bad);
         CHECK_FALSE(new_applet_names(bad).error.empty());
     }
+}
+
+TEST_CASE("cli: new refuses names whose CMake targets are reserved") {
+    // CMake (or one of its generators) reserves these target names; the stem
+    // is the applet's target and <stem>_tests its test's.
+    for (const char* name : {"all", "clean", "help", "install", "package", "package-source",
+                             "preinstall", "rebuild-cache", "edit-cache", "test",
+                             "zero-check", "all-build", "run", "depend",
+                             "com.example.test", "caliper-sdk-ui-stack"}) {
+        CAPTURE(name);
+        const auto n = new_applet_names(name);
+        CHECK(n.error.find("is reserved; choose another name") != std::string::npos);
+    }
+    CHECK(new_applet_names("run").error.find("\"run_tests\"") != std::string::npos);
+    for (const char* name : {"tests", "testing", "installer", "my-test", "allot"}) {
+        CAPTURE(name);
+        CHECK(new_applet_names(name).error.empty());
+    }
+    TempDir t("reserved");
+    const CliContext ctx = context(t);
+    const Run r = run({"new", "install", t.str("x").c_str()}, ctx);
+    CHECK(r.code == 2);
+    CHECK(r.err == "caliper: not a usable applet name: install (the CMake target "
+                   "\"install\" is reserved; choose another name)\n");
+    CHECK_FALSE(fs::exists(t.path / "x"));
 }
 
 TEST_CASE("cli: new writes a project from the template and never overwrites") {
