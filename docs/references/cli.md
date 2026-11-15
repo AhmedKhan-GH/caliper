@@ -19,7 +19,7 @@ Results go to standard output, and errors go to standard error, each starting wi
 
 `caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev` and `list`; with any other subcommand it is a usage error.
 
-`caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build output, such as `build/applets`. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
+`caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build folder, such as `build`, or its build output, `build/applets` (see [Build folders](#build-folders)). The Activity pane's `scanned` line names the folder that was searched. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
 
 ## The search order
 
@@ -30,7 +30,11 @@ The app, `caliper dev` and `caliper list` search these folders, in this order:
 3. The user applets folder: `CALIPER_USER_APPLETS_DIR` when it is set and not empty, otherwise `applets/` under the app-data folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 
-A folder named twice is searched once, at its first position, and empty entries are skipped. When several folders hold copies of one applet id, the host loads the highest version that passes every check, and at equal versions the copy found first; the other copies that pass are `SHADOWED`. [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) states the rule, and [Folders and environment variables](environment.md) gives the folders on each platform.
+Each development folder, from items 1 and 2, is resolved as described in [Build folders](#build-folders). A folder named twice is searched once, at its first position, and empty entries are skipped. When several folders hold copies of one applet id, the host loads the highest version that passes every check, and at equal versions the copy found first; the other copies that pass are `SHADOWED`. [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) states the rule, and [Folders and environment variables](environment.md) gives the folders on each platform.
+
+## Build folders
+
+`caliper_add_applet()` puts an applet's library and manifest in the `applets/` folder of its build folder. So that the build folder itself can be named, a development folder that holds no manifest (`<stem>.caliper.toml`) of its own, but whose `applets/` subfolder holds one, stands for that subfolder. This applies to the `dev` folder, the `--applets` folders, the folders in `CALIPER_APPLET_PATH`, and the folders given to `check` and `install`. A folder that holds a manifest of its own is used as given, even when it also has an `applets/` subfolder. The user applets folder and the `applets/` folder beside the executable are always used as given.
 
 ## Subcommands
 
@@ -56,11 +60,19 @@ READY  dev.caliper.pulse-scope  0.1.0  <folder>
 1 of 1 applets pass the checks
 ```
 
-An applet passes when it is `READY` or `SHADOWED`. `check` exits with 0 when every applet passes, and with 1 when any does not, when `<folder>` is not a folder (`caliper: not a folder: <folder>`), or when it holds no applet (`caliper: no applets in <folder>`).
+When `<folder>` is a build folder whose applets are in its `applets/` subfolder (see [Build folders](#build-folders)), `check` uses that subfolder and says so first:
+
+```text
+using the applets in <folder>/applets
+READY  dev.caliper.pulse-scope  0.1.0  <folder>/applets
+1 of 1 applets pass the checks
+```
+
+An applet passes when it is `READY` or `SHADOWED`. `check` exits with 0 when every applet passes, and with 1 when any does not, when `<folder>` is not a folder (`caliper: not a folder: <folder>`), or when neither it nor its `applets/` subfolder holds an applet (`caliper: no applets in <folder>`).
 
 ### caliper install <folder>
 
-Runs the same checks on a local folder, and when every applet passes, copies each library and then its manifest into the user applets folder. Each file is copied to a temporary name and renamed over the destination, so the host never sees half a library. The output is the lines of `check`, then one line per applet:
+Runs the same checks on a local folder, and when every applet passes, copies each library and then its manifest into the user applets folder. A build folder is resolved as for `check`, with the same `using the applets in` line. Each file is copied to a temporary name and renamed over the destination, so the host never sees half a library. The output is the lines of `check`, then one line per applet:
 
 ```text
 installed dev.caliper.pulse-scope 0.1.0 in <user applets folder>
@@ -126,7 +138,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 
 | Variable | Effect |
 |---|---|
-| `CALIPER_APPLET_PATH` | Adds development folders after the `--applets` folders. Read when starting the app, by `dev` and by `list`. |
+| `CALIPER_APPLET_PATH` | Adds development folders after the `--applets` folders. A build folder in it stands for its `applets/` subfolder, as described in [Build folders](#build-folders). Read when starting the app, by `dev` and by `list`. |
 | `CALIPER_USER_APPLETS_DIR` | Replaces the user applets folder, for the app, `dev`, `list` and `install`. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.
