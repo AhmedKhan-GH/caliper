@@ -5,10 +5,14 @@ Every implementation of the protocol decodes these files in its tests: the
 Python codec (python/tests/test_wire.py also checks that this script reproduces
 them byte for byte), the native NetSource, the hub and the TypeScript viewer.
 
-  <name>.bin           the exact bytes of one frame (one WebSocket message)
+  <name>.bin           the exact bytes of one frame (one WebSocket message) of
+                       a 3.0 sender, with minor 0 in its header
   <name>.json          what a decoder must find in it: the header fields, the
                        section lengths and offsets, the metadata object and the
                        section values (flattened, row-major)
+  v3_1/<name>.bin      the frames that 3.1 adds (minor 1): its new messages and
+  v3_1/<name>.json     the keys it adds to 3.0 messages. A 3.0 decoder finds
+                       them well formed; their new types are unknown to it.
   invalid/<name>.bin   a frame every decoder must reject
   invalid/expect.json  per invalid file: the reason and the close code
 
@@ -47,6 +51,24 @@ EMBEDDING = {"id": 2, "name": "embedding", "kind": int(w.Kind.POINTS),
 LOSS = {"id": 3, "name": "loss", "kind": int(w.Kind.SERIES), "sources": []}
 
 STAMP = 81234567890123
+
+# 3.1: item spaces. The embedding's points and the logits' rows are samples of
+# the test set (item space "test"); the loss is indexed by training step.
+EMBEDDING_ITEMS = dict(EMBEDDING, sources=[
+    {"name": "z", "dtype": "f32", "dims": [{"name": "point", "size": 1000, "items": "test"}]}])
+LOGITS = {"id": 4, "name": "logits", "kind": int(w.Kind.HEATMAP),
+          "sources": [{"name": "logits", "dtype": "f32",
+                       "dims": [{"name": "sample", "size": 1000, "items": "test"},
+                                {"name": "class", "size": 10}]}]}
+LOSS_ITEMS = dict(LOSS, items="step")
+
+# 3.1: the controls of the example script.
+LR = {"name": "lr", "type": w.PARAM_NUMBER, "value": 0.001, "pending": 0.01, "min": 1e-05,
+      "max": 0.1, "log": True, "help": "learning rate"}
+AUGMENT = {"name": "augment", "type": w.PARAM_BOOLEAN, "value": True}
+OPTIMIZER = {"name": "optimizer", "type": w.PARAM_CHOICE, "value": "adam",
+             "choices": ["adam", "sgd"]}
+SAVE = {"name": "save checkpoint", "running": False, "queued": True}
 
 
 def valid_vectors() -> dict[str, bytes]:
@@ -115,8 +137,46 @@ def valid_vectors() -> dict[str, bytes]:
     return out
 
 
-def _raw(type_: int, meta: bytes, sections: list[bytes] = (), *, major: int = w.MAJOR) -> bytearray:
-    """A frame from literal metadata bytes, laid out by the rules (no checks)."""
+def valid_vectors_31() -> dict[str, bytes]:
+    """The frames 3.1 adds, written with the codec's minor (1)."""
+    hub_software = {"name": "caliper-hub", "version": "0.1.0"}
+    msgs = {
+        "hello": w.Hello(w.ROLE_VIEWER, [w.CAP_CONTROLS, w.CAP_SELECTION], VIEWER_SOFTWARE),
+        "welcome": w.Welcome(w.ROLE_PRODUCER, [w.CAP_CONTROLS, w.CAP_EVENTS, w.CAP_SELECTION],
+                             PRODUCER_SOFTWARE, SESSION, control=True),
+        "welcome_hub_read_only": w.Welcome(w.ROLE_HUB, [w.CAP_CONTROLS, w.CAP_SELECTION],
+                                           hub_software, control=False),
+        "views_items": w.Views([EMBEDDING_ITEMS, LOGITS, LOSS_ITEMS], SESSION["id"]),
+        "controls": w.Controls({"state": w.RUN_PAUSED, "step": 1200}, [LR, AUGMENT, OPTIMIZER],
+                               [SAVE]),
+        "controls_none": w.Controls({"state": w.RUN_NONE}, [], []),
+        "control_pause": w.Control(11, w.OP_PAUSE),
+        "control_step": w.Control(12, w.OP_STEP, count=5),
+        "control_set": w.Control(13, w.OP_SET, "lr", 0.5),
+        "control_run": w.Control(14, w.OP_RUN, "save checkpoint"),
+        "control_reply_set": w.ControlReply(13, w.OP_SET, w.STATUS_OK, "lr",
+                                            w.param_value(LR, 0.5)),
+        "control_reply_queued": w.ControlReply(14, w.OP_RUN, w.STATUS_QUEUED, "save checkpoint"),
+        "control_reply_done": w.ControlReply(14, w.OP_RUN, w.STATUS_OK, "save checkpoint",
+                                             message="saved ckpt-1200.pt"),
+        "control_reply_error": w.ControlReply(
+            15, w.OP_PAUSE, w.STATUS_ERROR,
+            error={"code": w.ERR_FORBIDDEN, "message": "this hub does not allow control"}),
+        "event_select_items": w.Event("embedding", w.EVENT_SELECT,
+                                      {"indices": [0, 2], "row_ids": [0, 500], "space": "test",
+                                       "items": [0, 500]}, sub=2, seq=7),
+        "selection": w.Selection("test", [0, 500], "embedding",
+                                 details={"fields": ["label", "loss"], "items": [0, 500],
+                                          "values": [[7, 0.125], [2, 1.5]]}),
+        "selection_clear": w.Selection("step", []),
+    }
+    return {f"v3_1/{name}": w.encode(m) for name, m in msgs.items()}
+
+
+def _raw(type_: int, meta: bytes, sections: list[bytes] = (), *, major: int = w.MAJOR,
+         minor: int = 0) -> bytearray:
+    """A frame from literal metadata bytes, laid out by the rules (no checks).
+    Minor 0: the invalid frames are those of a 3.0 sender."""
     pos = w.HEADER_BYTES + 4 * len(sections) + len(meta)
     offs = []
     for s in sections:
@@ -124,7 +184,7 @@ def _raw(type_: int, meta: bytes, sections: list[bytes] = (), *, major: int = w.
         offs.append(pos)
         pos += len(s)
     out = bytearray(pos)
-    w.HEADER.pack_into(out, 0, w.MAGIC, major, w.MINOR, type_, 0, pos, len(meta), len(sections), 0)
+    w.HEADER.pack_into(out, 0, w.MAGIC, major, minor, type_, 0, pos, len(meta), len(sections), 0)
     struct.pack_into(f"<{len(sections)}I", out, w.HEADER_BYTES, *[len(s) for s in sections])
     mo = w.HEADER_BYTES + 4 * len(sections)
     out[mo:mo + len(meta)] = meta
@@ -213,7 +273,7 @@ def render() -> dict[str, bytes]:
     """Every file of the fixture folder, by path relative to it."""
     files = {}
     valid = valid_vectors()
-    for name, buf in valid.items():
+    for name, buf in [*valid.items(), *valid_vectors_31().items()]:
         files[f"{name}.bin"] = buf
         files[f"{name}.json"] = _json(describe(name, buf))
     expect = {}

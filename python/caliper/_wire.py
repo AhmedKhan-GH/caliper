@@ -6,8 +6,10 @@ their constants (``python/tests/test_wire.py`` checks that the three agree).
 It has no sockets and imports no torch: :func:`encode` turns a message object
 into the bytes of one WebSocket message, :func:`decode` turns those bytes back
 into a message object, and :func:`resolve_data_view` and :func:`payload_layout`
-apply the data view rules a producer needs. numpy is used only for payload
-sections (a decoded section is a zero-copy view of the received buffer).
+apply the data view rules a producer needs. :func:`param_value` and
+:func:`selection_items` apply the rules of 3.1's controls and linked selection.
+numpy is used only for payload sections (a decoded section is a zero-copy view
+of the received buffer).
 
 A frame is a 24-byte little-endian header, ``section_count`` uint32 section
 lengths, a UTF-8 JSON metadata object, then the payload sections, each starting
@@ -31,11 +33,12 @@ __all__ = [
     "encode", "decode", "Hello", "Welcome", "Bye", "Error", "Ping", "Pong", "Sessions",
     "Attach", "Views", "Subscribe", "Unsubscribe", "ViewRequest", "ViewReply", "Snapshot",
     "Series", "Event", "Unknown", "resolve_data_view", "payload_layout",
+    "Controls", "Control", "ControlReply", "Selection", "param_value", "selection_items",
 ]
 
 # --- version, endpoint (caliper/live_net.h) ---------------------------------
 MAJOR = 3
-MINOR = 0
+MINOR = 1
 MAGIC = 0x574C4143                 # bytes b"CALW" read as a little-endian uint32
 PATH = "/v3/stream"
 TOKEN_PARAM = "token"
@@ -64,6 +67,10 @@ class MsgType(enum.IntEnum):
     SNAPSHOT = 0x0030
     SERIES = 0x0031
     EVENT = 0x0040
+    CONTROLS = 0x0050              # 3.1, capability "controls"
+    CONTROL = 0x0051
+    CONTROL_REPLY = 0x0052
+    SELECTION = 0x0060             # 3.1, capability "selection"
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -125,11 +132,27 @@ ERR_NOT_ATTACHED = "not_attached"
 ERR_UNSUPPORTED = "unsupported"
 ERR_LIMIT = "limit"
 ERR_INTERNAL = "internal"
+ERR_FORBIDDEN = "forbidden"                # 3.1: CONTROL_REPLY errors
+ERR_UNKNOWN_CONTROL = "unknown_control"
+ERR_BAD_VALUE = "bad_value"
+ERR_TIMEOUT = "timeout"
+ERR_ACTION_FAILED = "action_failed"
 EVENT_SELECT, EVENT_PICK, EVENT_HOVER = "select", "pick", "hover"
 REDUCE_OPS = ("mean", "sum", "max", "min", "norm")
 POOL_OPS = ("mean", "max", "min")
 CAP_EVENTS = "events"
 CAP_ARROW_IPC = "arrow_ipc"
+CAP_CONTROLS = "controls"                  # 3.1
+CAP_SELECTION = "selection"                # 3.1
+RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING = (
+    "none", "running", "pausing", "paused", "stepping")
+RUN_STATES = (RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING)
+OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN = "pause", "resume", "step", "set", "run"
+OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN)
+PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE = "number", "integer", "boolean", "choice"
+PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE)
+STATUS_OK, STATUS_QUEUED, STATUS_ERROR = "ok", "queued", "error"
+STATUSES = (STATUS_OK, STATUS_QUEUED, STATUS_ERROR)
 
 MAX_FRAME_BYTES = 64 << 20
 MAX_META_BYTES = 1 << 20
@@ -158,6 +181,17 @@ MAX_QUEUED_EVENTS = 256
 HANDSHAKE_TIMEOUT_MS = 10_000
 PING_INTERVAL_MS = 10_000
 IDLE_TIMEOUT_MS = 30_000
+MAX_PARAMS = 64                            # 3.1
+MAX_ACTIONS = 64
+MAX_CHOICES = 64
+TEXT_MAX = 1024
+CONTROL_RATE_HZ = 30
+ACTION_WAIT_MS = 600_000
+MAX_ITEM_SPACES = 16
+MAX_DETAIL_ITEMS = 32
+MAX_DETAIL_FIELDS = 16
+DETAIL_TEXT_MAX = 256
+DETAILS_TIMEOUT_MS = 2000
 
 _U32 = (1 << 32) - 1
 
@@ -521,10 +555,13 @@ class Welcome(_Msg):
     software: dict | None = None
     session: dict | None = None                  # a producer's own identity, or the hub's
                                                  # assignment to a connecting producer
+    control: bool | None = None                  # 3.1: whether CONTROL from this client is
+                                                 # accepted (to a producer: forwarded)
 
     def to_meta(self):
         return _drop_none({"role": self.role, "capabilities": list(self.capabilities),
-                           "software": self.software, "session": self.session})
+                           "software": self.software, "session": self.session,
+                           "control": self.control})
 
     @classmethod
     def from_frame(cls, f):
@@ -532,7 +569,8 @@ class Welcome(_Msg):
         return cls(_req(m, "role", lambda v: v in (ROLE_PRODUCER, ROLE_HUB), "producer or hub"),
                    _opt(m, "capabilities", _strs, "a list of strings", []),
                    _opt(m, "software", _obj, "an object"),
-                   _opt(m, "session", _identity, "a session identity"))
+                   _opt(m, "session", _identity, "a session identity"),
+                   _opt(m, "control", lambda v: isinstance(v, bool), "a boolean"))
 
 
 @dataclass
@@ -637,9 +675,11 @@ def _view_entry(v) -> bool:
         if not (_obj(s) and _name(s.get("name")) and isinstance(s.get("dims"), list)):
             return False
         for d in s["dims"]:
-            if not (_obj(d) and _name(d.get("name")) and _uint(d.get("size"))):
+            if not (_obj(d) and _name(d.get("name")) and _uint(d.get("size"))
+                    and (d.get("items") is None or _name(d["items"]))):
                 return False
-    return v.get("default") is None or _obj(v.get("default"))
+    return ((v.get("default") is None or _obj(v.get("default")))
+            and (v.get("items") is None or _name(v["items"])))
 
 
 @dataclass
@@ -899,14 +939,293 @@ class Event(_Msg):
     def from_frame(cls, f):
         m = f.meta
         detail = _req(m, "detail", _obj, "an object")
-        for key in ("indices", "row_ids"):
+        for key in ("indices", "row_ids", "items"):
             lst = detail.get(key)
             if lst is not None and not (isinstance(lst, list) and len(lst) <= MAX_EVENT_INDICES
                                         and all(_uint(x) for x in lst)):
                 _bad(f"detail.{key} must be at most {MAX_EVENT_INDICES} unsigned integers")
+        if (detail.get("space") is None) != (detail.get("items") is None) or (
+                detail.get("space") is not None and not _name(detail["space"])):
+            _bad("detail.space (an item space name) and detail.items go together")
         return cls(_req(m, "view", _name, "a view name"), _req(m, "type", _str, "a string"),
                    detail, _opt(m, "sub", _u32, "a uint32"), _opt(m, "seq", _uint, "an integer"),
                    _opt(m, "data_view", _obj, "an object"))
+
+
+# ---------------------------------------------------------------------------
+# 3.1: controls (capability "controls") and linked selection ("selection")
+# ---------------------------------------------------------------------------
+def _text(v) -> bool:
+    return isinstance(v, str) and len(v.encode("utf-8")) <= TEXT_MAX
+
+
+def _finite(v) -> bool:
+    return _is_num(v) and math.isfinite(v)
+
+
+def _bool(v) -> bool:
+    return isinstance(v, bool)
+
+
+_INT_EXACT = 1 << 53
+
+
+def _fits_type(p: dict, v) -> bool:
+    """Whether ``v`` is a value of parameter ``p``'s type (its range aside)."""
+    t = p["type"]
+    if t == PARAM_NUMBER:
+        return _finite(v)
+    if t == PARAM_INTEGER:
+        return _is_int(v) and abs(v) <= _INT_EXACT
+    if t == PARAM_BOOLEAN:
+        return _bool(v)
+    return isinstance(v, str) and v in p["choices"]
+
+
+def _param_entry(p) -> bool:
+    if not (_obj(p) and _name(p.get("name")) and p.get("type") in PARAM_TYPES):
+        return False
+    t = p["type"]
+    if t in (PARAM_NUMBER, PARAM_INTEGER):
+        bound = _finite if t == PARAM_NUMBER else (lambda x: _is_int(x) and abs(x) <= _INT_EXACT)
+        lo, hi = p.get("min"), p.get("max")
+        if any(x is not None and not bound(x) for x in (lo, hi)):
+            return False
+        if lo is not None and hi is not None and lo > hi:
+            return False
+        log = p.get("log")
+        if log is not None and not _bool(log):
+            return False
+        if log and not (lo is not None and lo > 0 and hi is not None):
+            return False
+    elif t == PARAM_CHOICE:
+        ch = p.get("choices")
+        if not (isinstance(ch, list) and 1 <= len(ch) <= MAX_CHOICES
+                and all(_name(c) for c in ch) and len(set(ch)) == len(ch)):
+            return False
+    if p.get("help") is not None and not _text(p["help"]):
+        return False
+    if "value" not in p or not _fits_type(p, p["value"]):
+        return False
+    return p.get("pending") is None or _fits_type(p, p["pending"])
+
+
+def _action_entry(a) -> bool:
+    return (_obj(a) and _name(a.get("name")) and _bool(a.get("running"))
+            and _bool(a.get("queued")) and (a.get("help") is None or _text(a["help"])))
+
+
+def _run_obj(r) -> bool:
+    return (_obj(r) and r.get("state") in RUN_STATES
+            and (r.get("step") is None or _uint(r["step"]))
+            and (r.get("steps_left") is None or _uint(r["steps_left"])))
+
+
+def _unique_names(entries) -> bool:
+    names = [e["name"] for e in entries]
+    return len(set(names)) == len(names)
+
+
+@dataclass
+class Controls(_Msg):
+    """Producer to viewer: the run state and every parameter and action the
+    script registered. Sent after VIEWS, and again whole whenever any of it
+    changes; a newer one replaces an unsent older one.
+
+    ``run`` is ``{"state", "step", "steps_left"}``; a parameter is ``{"name",
+    "type", "value", "pending", "min", "max", "log", "choices", "help"}``
+    (``pending``: accepted, applied at the next checkpoint); an action is
+    ``{"name", "running", "queued", "help"}``."""
+    TYPE: ClassVar[MsgType] = MsgType.CONTROLS
+    run: dict
+    params: list = field(default_factory=list)
+    actions: list = field(default_factory=list)
+
+    def to_meta(self):
+        return {"run": dict(self.run), "params": list(self.params),
+                "actions": list(self.actions)}
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        return cls(_req(m, "run", _run_obj, "a run state"),
+                   _req(m, "params", lambda v: isinstance(v, list) and len(v) <= MAX_PARAMS
+                        and all(_param_entry(p) for p in v) and _unique_names(v),
+                        f"at most {MAX_PARAMS} parameters with unique names"),
+                   _req(m, "actions", lambda v: isinstance(v, list) and len(v) <= MAX_ACTIONS
+                        and all(_action_entry(a) for a in v) and _unique_names(v),
+                        f"at most {MAX_ACTIONS} actions with unique names"))
+
+
+def _set_value(v) -> bool:
+    return _finite(v) or _bool(v) or _name(v)
+
+
+@dataclass
+class Control(_Msg):
+    """Viewer to producer: pause, resume, ``count`` steps, set parameter
+    ``name`` to ``value``, or run action ``name``. Never code: a producer acts
+    only on the parameters and actions its script registered."""
+    TYPE: ClassVar[MsgType] = MsgType.CONTROL
+    request_id: int
+    op: str                                      # "pause", "resume", "step", "set", "run"
+    name: str | None = None                      # set, run
+    value: Any = None                            # set
+    count: int | None = None                     # step: default 1
+
+    def to_meta(self):
+        return _drop_none({"request_id": self.request_id, "op": self.op, "name": self.name,
+                           "value": self.value, "count": self.count})
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        rid = _req(m, "request_id", _u32, "a uint32")
+        op = _req(m, "op", lambda v: v in OPS, "pause, resume, step, set or run")
+        name = _opt(m, "name", _name, "a parameter or action name")
+        if op in (OP_SET, OP_RUN) and name is None:
+            _bad(f"'{op}' needs 'name'")
+        value = None
+        if op == OP_SET:
+            value = _req(m, "value", _set_value, "a number, a boolean or a choice")
+        count = None
+        if op == OP_STEP:
+            count = _opt(m, "count", lambda v: _u32(v) and v >= 1, "a positive uint32")
+        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count)
+
+
+def _reply_error(v) -> bool:
+    return _obj(v) and _str(v.get("code")) and (v.get("message") is None or _text(v["message"]))
+
+
+@dataclass
+class ControlReply(_Msg):
+    """Producer to the viewer that sent a CONTROL: ``status`` "ok", "error"
+    (with ``error`` = {"code", "message"}) or, for ``run``, first "queued" and
+    later one more reply, "ok" or "error". ``value`` is the value a ``set``
+    was accepted with, after clamping; ``message`` an action's result text."""
+    TYPE: ClassVar[MsgType] = MsgType.CONTROL_REPLY
+    request_id: int
+    op: str
+    status: str
+    name: str | None = None
+    value: Any = None
+    message: str | None = None
+    error: dict | None = None
+
+    def to_meta(self):
+        return _drop_none({"request_id": self.request_id, "op": self.op, "status": self.status,
+                           "name": self.name, "value": self.value, "message": self.message,
+                           "error": self.error})
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        status = _req(m, "status", lambda v: v in STATUSES, "ok, queued or error")
+        op = _req(m, "op", lambda v: v in OPS, "a control op")
+        err = _opt(m, "error", _reply_error, "{code, message}")
+        if (err is None) == (status == STATUS_ERROR):
+            _bad("a control_reply carries 'error' exactly when its status is 'error'")
+        if status == STATUS_QUEUED and op != OP_RUN:
+            _bad("only 'run' is queued")
+        return cls(_req(m, "request_id", _u32, "a uint32"), op, status,
+                   _opt(m, "name", _name, "a parameter or action name"),
+                   _opt(m, "value", _set_value, "a number, a boolean or a choice"),
+                   _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err)
+
+
+def _ascending(v) -> bool:
+    return all(a < b for a, b in zip(v, v[1:]))
+
+
+def _cell(v) -> bool:
+    return (v is None or _bool(v) or _finite(v)
+            or (isinstance(v, str) and len(v.encode("utf-8")) <= DETAIL_TEXT_MAX))
+
+
+def _details(d) -> bool:
+    if not _obj(d):
+        return False
+    fields, items, values = d.get("fields"), d.get("items"), d.get("values")
+    return (isinstance(fields, list) and len(fields) <= MAX_DETAIL_FIELDS
+            and all(_name(x) for x in fields) and len(set(fields)) == len(fields)
+            and isinstance(items, list) and len(items) <= MAX_DETAIL_ITEMS
+            and all(_uint(x) for x in items)
+            and isinstance(values, list) and len(values) == len(items)
+            and all(isinstance(row, list) and len(row) == len(fields)
+                    and all(_cell(c) for c in row) for row in values))
+
+
+@dataclass
+class Selection(_Msg):
+    """Producer to viewer: the current selection of item space ``space``,
+    ``items`` ascending without repeats (empty: nothing selected). ``view``
+    names the view a viewer selected in (None: the script set it). ``details``
+    is ``{"fields", "items", "values"}``, the script's fields of the first
+    selected items; ``details_error`` says why they are missing."""
+    TYPE: ClassVar[MsgType] = MsgType.SELECTION
+    space: str
+    items: list
+    view: str | None = None
+    truncated: bool = False
+    details: dict | None = None
+    details_error: str | None = None
+
+    def to_meta(self):
+        return _drop_none({"space": self.space, "items": list(self.items), "view": self.view,
+                           "truncated": True if self.truncated else None,
+                           "details": self.details, "details_error": self.details_error})
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        return cls(_req(m, "space", _name, "an item space name"),
+                   _req(m, "items", lambda v: isinstance(v, list) and len(v) <= MAX_EVENT_INDICES
+                        and all(_uint(x) for x in v) and _ascending(v),
+                        f"at most {MAX_EVENT_INDICES} ascending unsigned integers"),
+                   _opt(m, "view", _name, "a view name"),
+                   _opt(m, "truncated", _bool, "a boolean", False),
+                   _opt(m, "details", _details, "{fields, items, values} within the limits"),
+                   _opt(m, "details_error", _text, f"a string of at most {TEXT_MAX} bytes"))
+
+
+def param_value(param: dict, value):
+    """The value a producer accepts for ``param`` (a parameter entry of
+    CONTROLS) from a CONTROL ``set``: a number or integer clamped to ``min``
+    and ``max``, a boolean, or one of the choices. An integer takes a whole
+    number (``64.0`` is 64). Raises :class:`MessageError` with ``bad_value``
+    for a value of another type, a fraction for an integer, or an unknown
+    choice."""
+    t = param["type"]
+    if t == PARAM_BOOLEAN or t == PARAM_CHOICE:
+        if not _fits_type(param, value):
+            raise MessageError(ERR_BAD_VALUE, f"{param['name']!r} takes "
+                               + ("true or false" if t == PARAM_BOOLEAN else
+                                  f"one of {param['choices']}") + f", not {value!r}")
+        return value
+    if t == PARAM_NUMBER:
+        if not _finite(value):
+            raise MessageError(ERR_BAD_VALUE, f"{param['name']!r} takes a number, not {value!r}")
+        v = float(value)
+    else:
+        if not (_finite(value) and float(value).is_integer() and abs(value) <= _INT_EXACT):
+            raise MessageError(ERR_BAD_VALUE, f"{param['name']!r} takes a whole number, "
+                               f"not {value!r}")
+        v = int(value)
+    lo, hi = param.get("min"), param.get("max")
+    if lo is not None and v < lo:
+        v = type(v)(lo)
+    if hi is not None and v > hi:
+        v = type(v)(hi)
+    return v
+
+
+def selection_items(items) -> tuple[list, bool]:
+    """Item ids as SELECTION carries them, from a select event's ``items``:
+    ascending, without repeats, cut to the first MAX_EVENT_INDICES; and
+    whether they were cut."""
+    ids = sorted({int(i) for i in items})
+    return ids[:MAX_EVENT_INDICES], len(ids) > MAX_EVENT_INDICES
 
 
 @dataclass
@@ -919,7 +1238,8 @@ class Unknown:
 
 MESSAGES = {cls.TYPE: cls for cls in (Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach,
                                       Views, Subscribe, Unsubscribe, ViewRequest, ViewReply,
-                                      Snapshot, Series, Event)}
+                                      Snapshot, Series, Event, Controls, Control, ControlReply,
+                                      Selection)}
 
 
 def encode(msg, *, minor: int = MINOR, as_bytearray: bool = False):

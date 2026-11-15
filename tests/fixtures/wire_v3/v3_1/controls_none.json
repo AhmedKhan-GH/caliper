@@ -1,0 +1,25 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 73,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 49,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 80
+  },
+  "meta": {
+    "actions": [],
+    "params": [],
+    "run": {
+      "state": "none"
+    }
+  },
+  "meta_offset": 24,
+  "name": "v3_1/controls_none",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "controls"
+}

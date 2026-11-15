@@ -1,5 +1,6 @@
 """Wire protocol v3 (caliper/_wire.py): round trips, the golden frames in
-tests/fixtures/wire_v3, rejection of bad frames, data view resolution, and
+tests/fixtures/wire_v3 (3.0) and wire_v3/v3_1 (what 3.1 adds), rejection of bad
+frames, data view resolution, the controls and linked selection of 3.1, and
 agreement between include/caliper/live_net.h, _wire.py and the reference page.
 
 Needs numpy and pytest only: _wire imports no torch and no native extension, so
@@ -35,7 +36,12 @@ def _generator():
 
 
 GEN = _generator()
-VALID = sorted(p.stem for p in FIXTURES.glob("*.bin"))
+VALID_30 = sorted(p.stem for p in FIXTURES.glob("*.bin"))
+VALID_31 = sorted(f"v3_1/{p.stem}" for p in (FIXTURES / "v3_1").glob("*.bin"))
+VALID = VALID_30 + VALID_31
+LATER_MINOR = ("ping_future", "unknown_type")
+TYPES_30 = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x20, 0x21, 0x22, 0x23, 0x24, 0x30,
+            0x31, 0x40}
 EXPECT = json.loads((FIXTURES / "invalid" / "expect.json").read_text())
 
 
@@ -66,6 +72,31 @@ def test_generator_reproduces_every_file():
 def test_one_golden_frame_per_message_type():
     covered = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
     assert {int(t) for t in w.MsgType} <= covered
+
+
+def test_golden_frames_keep_their_minor():
+    """The 3.0 frames stay what a 3.0 sender wrote (minor 0), so implementations
+    that only know 3.0 keep passing; the frames 3.1 adds carry minor 1."""
+    for n in VALID_30:
+        want = 9 if n in LATER_MINOR else 0
+        assert w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).minor == want, n
+    assert len(VALID_31) >= 15
+    for n in VALID_31:
+        assert w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).minor == w.MINOR == 1, n
+    for n in sorted(p.name for p in (FIXTURES / "invalid").glob("*.bin")):
+        buf = (FIXTURES / "invalid" / n).read_bytes()
+        if len(buf) >= 8:
+            assert struct.unpack_from("<H", buf, 6)[0] == 0, n
+
+
+def test_31_frames_are_well_formed_for_30():
+    """A 3.0 receiver accepts every 3.1 frame: the frame rules did not change,
+    the new types are new ids, and the 3.0 types only gained optional keys."""
+    new = {int(t) for t in w.MsgType} - TYPES_30
+    assert new == {0x50, 0x51, 0x52, 0x60}
+    for n in VALID_31:
+        f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
+        assert f.type in TYPES_30 | new and f.flags == 0, n
 
 
 @pytest.mark.parametrize("name", VALID)
@@ -105,7 +136,7 @@ def test_golden_frame_matches_description(name):
 def test_golden_frame_round_trips(name):
     buf = (FIXTURES / f"{name}.bin").read_bytes()
     msg = w.decode(buf)
-    if name in ("ping_future", "unknown_type"):
+    if name in LATER_MINOR:
         return                                  # sent by a later minor; covered below
     assert w.encode(msg, minor=w.decode_frame(buf).minor) == buf
 
@@ -303,6 +334,136 @@ def test_metadata_is_canonical_utf8():
     text = buf[24:24 + struct.unpack_from("<I", buf, 16)[0]].decode("utf-8")
     assert text == '{"message":"fertig, schöne Grüße","reason":"normal"}'
     assert f.meta["message"] == "fertig, schöne Grüße"
+
+
+# ---------------------------------------------------------------------------
+# 3.1: controls and linked selection
+# ---------------------------------------------------------------------------
+def _decoded(name):
+    return w.decode((FIXTURES / f"v3_1/{name}.bin").read_bytes())
+
+
+def test_31_golden_messages():
+    c = _decoded("controls")
+    assert c.run == {"state": "paused", "step": 1200}
+    assert [p["name"] for p in c.params] == ["lr", "augment", "optimizer"]
+    assert c.actions == [GEN.SAVE]
+    assert _decoded("controls_none") == w.Controls({"state": "none"}, [], [])
+    assert _decoded("control_step") == w.Control(12, "step", count=5)
+    assert _decoded("control_set") == w.Control(13, "set", "lr", 0.5)
+    assert _decoded("control_reply_set").value == 0.1          # clamped to max
+    assert _decoded("control_reply_queued").status == "queued"
+    assert _decoded("control_reply_error").error["code"] == w.ERR_FORBIDDEN
+    assert _decoded("welcome").control is True
+    assert _decoded("welcome_hub_read_only").control is False
+    assert w.decode((FIXTURES / "welcome.bin").read_bytes()).control is None   # a 3.0 server
+    sel = _decoded("selection")
+    assert (sel.space, sel.items, sel.view, sel.truncated) == ("test", [0, 500], "embedding", False)
+    assert sel.details["values"][1] == [2, 1.5]
+    assert _decoded("selection_clear") == w.Selection("step", [])
+    ev = _decoded("event_select_items")
+    assert (ev.detail["space"], ev.detail["items"]) == ("test", [0, 500])
+    v = _decoded("views_items")
+    assert v.views[0]["sources"][0]["dims"][0]["items"] == "test" and v.views[2]["items"] == "step"
+
+
+@pytest.mark.parametrize("type_, meta", [
+    (w.MsgType.CONTROL, {"op": "pause"}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "jump"}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "set", "value": 1}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "set", "name": "lr"}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "set", "name": "lr", "value": [1]}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "set", "name": "lr", "value": {"x": 1}}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "run"}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "step", "count": 0}),
+    (w.MsgType.CONTROL, {"request_id": 1, "op": "step", "count": 1.5}),
+    (w.MsgType.CONTROL_REPLY, {"request_id": 1, "op": "pause", "status": "error"}),
+    (w.MsgType.CONTROL_REPLY, {"request_id": 1, "op": "pause", "status": "ok",
+                               "error": {"code": "forbidden"}}),
+    (w.MsgType.CONTROL_REPLY, {"request_id": 1, "op": "set", "status": "queued"}),
+    (w.MsgType.CONTROL_REPLY, {"request_id": 1, "op": "run", "status": "done"}),
+    (w.MsgType.CONTROL_REPLY, {"request_id": 1, "op": "run", "status": "ok",
+                               "message": "x" * (w.TEXT_MAX + 1)}),
+    (w.MsgType.CONTROLS, {"params": [], "actions": []}),
+    (w.MsgType.CONTROLS, {"run": {"state": "sleeping"}, "params": [], "actions": []}),
+    (w.MsgType.CONTROLS, {"run": {"state": "none"}, "actions": []}),
+    (w.MsgType.CONTROLS, {"run": {"state": "none"}, "params": [GEN.LR, GEN.LR], "actions": []}),
+    (w.MsgType.CONTROLS, {"run": {"state": "none"}, "params": [], "actions": [{"name": "a"}]}),
+    (w.MsgType.SELECTION, {"space": "test", "items": [3, 1]}),
+    (w.MsgType.SELECTION, {"space": "test", "items": [1, 1]}),
+    (w.MsgType.SELECTION, {"space": "", "items": []}),
+    (w.MsgType.SELECTION, {"space": "test", "items": list(range(w.MAX_EVENT_INDICES + 1))}),
+    (w.MsgType.SELECTION, {"space": "test", "items": [1],
+                           "details": {"fields": ["a"], "items": [1], "values": [[1, 2]]}}),
+    (w.MsgType.SELECTION, {"space": "test", "items": [1],
+                           "details": {"fields": ["a"], "items": [1],
+                                       "values": [["x" * (w.DETAIL_TEXT_MAX + 1)]]}}),
+    (w.MsgType.EVENT, {"view": "x", "type": "select", "detail": {"space": "test"}}),
+    (w.MsgType.EVENT, {"view": "x", "type": "select", "detail": {"items": [1]}}),
+    (w.MsgType.WELCOME, {"role": "hub", "control": 1}),
+    (w.MsgType.VIEWS, {"views": [{"id": 1, "name": "s", "kind": 4, "sources": [], "items": ""}]}),
+])
+def test_invalid_31_message_is_bad_request(type_, meta):
+    with pytest.raises(w.MessageError) as e:
+        w.decode(_frame(type_, meta))
+    assert e.value.code == w.ERR_BAD_REQUEST
+
+
+@pytest.mark.parametrize("param", [
+    {"name": "p", "type": "number", "value": 1.0, "min": 2.0, "max": 1.0},
+    {"name": "p", "type": "number", "value": 1.0, "log": True},
+    {"name": "p", "type": "number", "value": 1.0, "min": 0.0, "max": 1.0, "log": True},
+    {"name": "p", "type": "integer", "value": 1.5},
+    {"name": "p", "type": "integer", "value": 1, "min": 0.5},
+    {"name": "p", "type": "boolean", "value": 1},
+    {"name": "p", "type": "choice", "value": "c", "choices": ["a", "b"]},
+    {"name": "p", "type": "choice", "value": "a", "choices": []},
+    {"name": "p", "type": "choice", "value": "a", "choices": ["a", "a"]},
+    {"name": "p", "type": "text", "value": "a"},
+    {"name": "p", "type": "number", "value": 1.0, "pending": True},
+    {"name": "p", "type": "number"},
+])
+def test_bad_parameter_entry(param):
+    with pytest.raises(w.MessageError):
+        w.decode(w.encode(w.Controls({"state": "running"}, [param], [])))
+
+
+def test_parameter_values_validated_and_clamped():
+    lr = GEN.LR
+    assert w.param_value(lr, 0.5) == 0.1 and w.param_value(lr, 0) == 1e-05
+    assert w.param_value(lr, 3e-3) == 3e-3 and isinstance(w.param_value(lr, 1), float)
+    batch = {"name": "batch", "type": "integer", "value": 64, "min": 8, "max": 512}
+    assert w.param_value(batch, 64.0) == 64 and isinstance(w.param_value(batch, 64.0), int)
+    assert w.param_value(batch, 4) == 8 and w.param_value(batch, 10 ** 6) == 512
+    free = {"name": "seed", "type": "integer", "value": 0}
+    assert w.param_value(free, -7) == -7
+    assert w.param_value(GEN.AUGMENT, False) is False
+    assert w.param_value(GEN.OPTIMIZER, "sgd") == "sgd"
+    for p, bad in [(lr, True), (lr, "0.1"), (batch, 64.5), (batch, False), (free, 2.0 ** 60),
+                   (GEN.AUGMENT, 0), (GEN.AUGMENT, "true"), (GEN.OPTIMIZER, "SGD"),
+                   (GEN.OPTIMIZER, 1)]:
+        with pytest.raises(w.MessageError) as e:
+            w.param_value(p, bad)
+        assert e.value.code == w.ERR_BAD_VALUE, (p["name"], bad)
+
+
+def test_selection_items():
+    assert w.selection_items([500, 0, 500, 7]) == ([0, 7, 500], False)
+    ids, cut = w.selection_items(range(w.MAX_EVENT_INDICES + 10, -1, -1))
+    assert cut and ids == list(range(w.MAX_EVENT_INDICES))
+    assert w.selection_items([]) == ([], False)
+
+
+def test_selection_truncated_written_only_when_true():
+    assert "truncated" not in w.decode_frame(w.encode(w.Selection("s", [1]))).meta
+    assert w.decode(w.encode(w.Selection("s", [1], truncated=True))).truncated is True
+
+
+def test_control_drops_fields_of_other_ops():
+    """A receiver keeps only the fields of the op: 'count' of a set, 'name' of a pause."""
+    m = w.decode(_frame(w.MsgType.CONTROL, {"request_id": 2, "op": "pause", "name": "lr",
+                                            "count": 3, "args": {"x": 1}}))
+    assert m == w.Control(2, "pause")
 
 
 # ---------------------------------------------------------------------------

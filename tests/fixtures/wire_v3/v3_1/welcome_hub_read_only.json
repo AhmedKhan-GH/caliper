@@ -1,0 +1,30 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 146,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 122,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 2
+  },
+  "meta": {
+    "capabilities": [
+      "controls",
+      "selection"
+    ],
+    "control": false,
+    "role": "hub",
+    "software": {
+      "name": "caliper-hub",
+      "version": "0.1.0"
+    }
+  },
+  "meta_offset": 24,
+  "name": "v3_1/welcome_hub_read_only",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "welcome"
+}

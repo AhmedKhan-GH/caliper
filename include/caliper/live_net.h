@@ -81,6 +81,13 @@
  *   version only adds those. A sender uses an addition only when the peer's
  *   minor (the header of its HELLO or WELCOME) or one of its capabilities
  *   says the peer knows it.
+ *   3.1 adds controls (capability "controls": the run state, parameters and
+ *   actions a script registers, CONTROLS, CONTROL, CONTROL_REPLY and the
+ *   WELCOME key "control") and linked selection (capability "selection":
+ *   item spaces in VIEWS, "space" and "items" in a select event, SELECTION).
+ *   Every 3.1 addition, new keys of 3.0 messages included, is used only with
+ *   a peer that announced its capability; the minor alone never enables one.
+ *   3.0 messages keep their meaning and encoding.
  *
  * FLOW CONTROL
  *   Nothing in the protocol lets a slow viewer block a producer. Per connection
@@ -92,11 +99,23 @@
  *   that makes backfill possible: a producer retains appended values whether or
  *   not anyone subscribes, without synchronising with the device.
  *
+ * CONTROLS (3.1)
+ *   A script registers parameters and actions and calls a checkpoint in its
+ *   training loop. A viewer sends CONTROL (pause, resume, step, set a
+ *   parameter, run an action); the producer validates it, applies it on the
+ *   training thread at the next checkpoint, answers the sender with
+ *   CONTROL_REPLY and announces the new state to every viewer with CONTROLS.
+ *   A hub forwards CONTROL to the session's producer only when it was started
+ *   to allow control; WELCOME's "control" tells a viewer whether it may.
+ *
  * SECURITY
  *   Loopback (127.0.0.1) and the session token only, until a dedicated security
- *   review. The stream carries data and viewer events (selections, picks,
- *   hovers that Python code can read). It never carries host commands or the
- *   command layer, and no message makes a producer run code.
+ *   review. The stream carries data, viewer events (selections, picks, hovers
+ *   that Python code can read) and, from 3.1, control requests that name a
+ *   parameter or an action the script registered. It never carries host
+ *   commands or the command layer. No message carries code, and the only code
+ *   a message makes a producer run is an action the script registered, by its
+ *   exact name and with no argument from the viewer.
  * ===========================================================================*/
 #ifndef CALIPER_LIVE_NET_H
 #define CALIPER_LIVE_NET_H
@@ -109,7 +128,7 @@ extern "C" {
 
 /* --- version, endpoint ---------------------------------------------------- */
 #define CALIPER_NET_PROTOCOL_MAJOR 3u
-#define CALIPER_NET_PROTOCOL_MINOR 0u
+#define CALIPER_NET_PROTOCOL_MINOR 1u
 #define CALIPER_NET_MAGIC          0x574c4143u   /* bytes "CALW" as a little-endian uint32 */
 #define CALIPER_NET_PATH           "/v3/stream"
 #define CALIPER_NET_TOKEN_PARAM    "token"
@@ -126,7 +145,7 @@ typedef struct CaliperNetFrameHeader {
     uint16_t major;          /* offset  4: CALIPER_NET_PROTOCOL_MAJOR               */
     uint16_t minor;          /* offset  6: the sender's minor version               */
     uint16_t type;           /* offset  8: CaliperNetMessageType                    */
-    uint16_t flags;          /* offset 10: CALIPER_NET_FRAME_*; none in 3.0, so 0   */
+    uint16_t flags;          /* offset 10: CALIPER_NET_FRAME_*; none in 3.1, so 0   */
     uint32_t frame_len;      /* offset 12: bytes of the whole frame, header included */
     uint32_t meta_len;       /* offset 16: bytes of the JSON metadata               */
     uint16_t section_count;  /* offset 20: 0..CALIPER_NET_MAX_SECTIONS              */
@@ -136,7 +155,7 @@ typedef struct CaliperNetFrameHeader {
 /* C99 has no static_assert: an array of negative size fails the build. */
 typedef char caliper_net_header_size_check[sizeof(CaliperNetFrameHeader) == 24 ? 1 : -1];
 
-/* Frame flags: none are defined in 3.0. A receiver ignores bits it does not
+/* Frame flags: none are defined in 3.1. A receiver ignores bits it does not
  * know; a flag that changes how a frame decodes is only sent to a peer that
  * announced the capability for it. */
 #define CALIPER_NET_FRAME_FLAGS_NONE 0x0000u
@@ -160,7 +179,13 @@ typedef enum CaliperNetMessageType {
     CALIPER_NET_MSG_VIEW_REPLY   = 0x0024,  /* P -> V/H, H -> V   resolved data view or error  */
     CALIPER_NET_MSG_SNAPSHOT     = 0x0030,  /* P -> V/H, H -> V   sections "data" (+ "aux")    */
     CALIPER_NET_MSG_SERIES       = 0x0031,  /* P -> V/H, H -> V   section "values"             */
-    CALIPER_NET_MSG_EVENT        = 0x0040   /* V -> P/H, H -> P   select, pick, hover          */
+    CALIPER_NET_MSG_EVENT        = 0x0040,  /* V -> P/H, H -> P   select, pick, hover          */
+    /* 3.1, capability "controls" */
+    CALIPER_NET_MSG_CONTROLS     = 0x0050,  /* P -> V/H, H -> V   run state, parameters, actions */
+    CALIPER_NET_MSG_CONTROL      = 0x0051,  /* V -> P/H, H -> P   pause, resume, step, set, run */
+    CALIPER_NET_MSG_CONTROL_REPLY = 0x0052, /* P -> V/H, H -> V   the answer to one CONTROL     */
+    /* 3.1, capability "selection" */
+    CALIPER_NET_MSG_SELECTION    = 0x0060   /* P -> V/H, H -> V   the selection of an item space */
 } CaliperNetMessageType;
 
 /* --- live view kinds (values of CaliperLiveKind, caliper/live.h) ----------- */
@@ -173,7 +198,7 @@ typedef enum CaliperNetKind {
 } CaliperNetKind;
 
 /* --- section dtypes (values of CaliperDType, caliper/tensor.h) -------------
- * 3.0 producers send F32 and U8 payloads only (I64 nowhere yet); the rest are
+ * 3.1 producers send F32 and U8 payloads only (I64 nowhere yet); the rest are
  * defined so that a receiver can name what it refuses. */
 typedef enum CaliperNetDType {
     CALIPER_NET_DTYPE_F32  = 0,   /* 4 bytes */
@@ -234,6 +259,12 @@ typedef enum CaliperNetEncoding {
 #define CALIPER_NET_ERR_UNSUPPORTED          "unsupported"
 #define CALIPER_NET_ERR_LIMIT                "limit"
 #define CALIPER_NET_ERR_INTERNAL             "internal"
+/* 3.1: CONTROL_REPLY errors */
+#define CALIPER_NET_ERR_FORBIDDEN            "forbidden"       /* this connection may not control */
+#define CALIPER_NET_ERR_UNKNOWN_CONTROL      "unknown_control" /* no parameter or action of that name */
+#define CALIPER_NET_ERR_BAD_VALUE            "bad_value"       /* a value of the wrong type or choice */
+#define CALIPER_NET_ERR_TIMEOUT              "timeout"         /* a queued action did not start in time */
+#define CALIPER_NET_ERR_ACTION_FAILED        "action_failed"   /* the action raised; message says why */
 
 #define CALIPER_NET_EVENT_SELECT "select"
 #define CALIPER_NET_EVENT_PICK   "pick"
@@ -251,6 +282,33 @@ typedef enum CaliperNetEncoding {
 
 #define CALIPER_NET_CAP_EVENTS    "events"     /* producer: Python code reads viewer events */
 #define CALIPER_NET_CAP_ARROW_IPC "arrow_ipc"  /* reserved                                  */
+#define CALIPER_NET_CAP_CONTROLS  "controls"   /* 3.1: run state, parameters and actions    */
+#define CALIPER_NET_CAP_SELECTION "selection"  /* 3.1: item spaces and linked selection     */
+
+/* 3.1: CONTROLS "run.state" */
+#define CALIPER_NET_RUN_NONE      "none"       /* the script has called no checkpoint yet   */
+#define CALIPER_NET_RUN_RUNNING   "running"
+#define CALIPER_NET_RUN_PAUSING   "pausing"    /* a pause waits for the next checkpoint     */
+#define CALIPER_NET_RUN_PAUSED    "paused"     /* the training thread waits in a checkpoint */
+#define CALIPER_NET_RUN_STEPPING  "stepping"   /* runs steps_left steps, then pauses        */
+
+/* 3.1: CONTROL "op" */
+#define CALIPER_NET_OP_PAUSE      "pause"
+#define CALIPER_NET_OP_RESUME     "resume"
+#define CALIPER_NET_OP_STEP       "step"       /* "count" steps (default 1), then pause     */
+#define CALIPER_NET_OP_SET        "set"        /* parameter "name" to "value"               */
+#define CALIPER_NET_OP_RUN        "run"        /* action "name", no argument                */
+
+/* 3.1: parameter "type" */
+#define CALIPER_NET_PARAM_NUMBER  "number"     /* finite, clamped to [min, max]             */
+#define CALIPER_NET_PARAM_INTEGER "integer"    /* whole, clamped to [min, max]              */
+#define CALIPER_NET_PARAM_BOOLEAN "boolean"
+#define CALIPER_NET_PARAM_CHOICE  "choice"     /* one of "choices"                          */
+
+/* 3.1: CONTROL_REPLY "status" */
+#define CALIPER_NET_STATUS_OK     "ok"         /* done (an action: finished without error)  */
+#define CALIPER_NET_STATUS_QUEUED "queued"     /* an action waits; one more reply follows   */
+#define CALIPER_NET_STATUS_ERROR  "error"      /* refused or failed: see "error"            */
 
 /* --- limits and defaults ---------------------------------------------------- */
 #define CALIPER_NET_MAX_FRAME_BYTES     (64u << 20)  /* any frame                          */
@@ -280,6 +338,18 @@ typedef enum CaliperNetEncoding {
 #define CALIPER_NET_HANDSHAKE_TIMEOUT_MS 10000u
 #define CALIPER_NET_PING_INTERVAL_MS    10000u       /* ping after this long without input */
 #define CALIPER_NET_IDLE_TIMEOUT_MS     30000u       /* close after this long without input */
+/* 3.1 */
+#define CALIPER_NET_MAX_PARAMS          64u          /* parameters of a session            */
+#define CALIPER_NET_MAX_ACTIONS         64u          /* actions of a session               */
+#define CALIPER_NET_MAX_CHOICES         64u          /* choices of a choice parameter      */
+#define CALIPER_NET_TEXT_MAX            1024u        /* bytes: help texts, reply messages  */
+#define CALIPER_NET_CONTROL_RATE_HZ     30u          /* "set" requests per parameter, at most */
+#define CALIPER_NET_ACTION_WAIT_MS      600000u      /* a queued action not started by then fails */
+#define CALIPER_NET_MAX_ITEM_SPACES     16u          /* item spaces of a session           */
+#define CALIPER_NET_MAX_DETAIL_ITEMS    32u          /* items in a selection's details     */
+#define CALIPER_NET_MAX_DETAIL_FIELDS   16u          /* fields in a selection's details    */
+#define CALIPER_NET_DETAIL_TEXT_MAX     256u         /* bytes of a string in the details   */
+#define CALIPER_NET_DETAILS_TIMEOUT_MS  2000u        /* the script's details callback, at most */
 
 /* Item size in bytes of a CaliperNetDType, 0 for an unknown one. */
 static inline uint32_t caliper_net_dtype_size(int32_t dtype) {

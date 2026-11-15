@@ -1,0 +1,75 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 449,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 425,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 32
+  },
+  "meta": {
+    "session": "clp-4242-a1b2c3",
+    "views": [
+      {
+        "default": {
+          "budget": {
+            "max_points": 4
+          }
+        },
+        "id": 2,
+        "kind": 3,
+        "name": "embedding",
+        "sources": [
+          {
+            "dims": [
+              {
+                "items": "test",
+                "name": "point",
+                "size": 1000
+              }
+            ],
+            "dtype": "f32",
+            "name": "z"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "kind": 1,
+        "name": "logits",
+        "sources": [
+          {
+            "dims": [
+              {
+                "items": "test",
+                "name": "sample",
+                "size": 1000
+              },
+              {
+                "name": "class",
+                "size": 10
+              }
+            ],
+            "dtype": "f32",
+            "name": "logits"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "items": "step",
+        "kind": 4,
+        "name": "loss",
+        "sources": []
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "v3_1/views_items",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "views"
+}

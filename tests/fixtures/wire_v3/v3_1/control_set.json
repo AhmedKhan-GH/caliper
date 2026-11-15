@@ -1,0 +1,24 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 76,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 52,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 81
+  },
+  "meta": {
+    "name": "lr",
+    "op": "set",
+    "request_id": 13,
+    "value": 0.5
+  },
+  "meta_offset": 24,
+  "name": "v3_1/control_set",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "control"
+}

@@ -1,0 +1,39 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 152,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 128,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 64
+  },
+  "meta": {
+    "detail": {
+      "indices": [
+        0,
+        2
+      ],
+      "items": [
+        0,
+        500
+      ],
+      "row_ids": [
+        0,
+        500
+      ],
+      "space": "test"
+    },
+    "seq": 7,
+    "sub": 2,
+    "type": "select",
+    "view": "embedding"
+  },
+  "meta_offset": 24,
+  "name": "v3_1/event_select_items",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "event"
+}
