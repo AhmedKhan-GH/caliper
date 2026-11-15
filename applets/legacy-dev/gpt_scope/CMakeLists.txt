@@ -1,5 +1,5 @@
 # GPTScope — the flagship applet (Task E1). Links the in-tree libtorch the same
-# way repnet_demo/ml_scope do (runtime packs replace this at Phase 4). curl is a
+# way ml_scope does (runtime packs replace this at Phase 4). curl is a
 # macOS system lib covering the cancellable TinyShakespeare download inside the
 # job — no zlib: the corpus is plain text. The host links neither: data
 # acquisition is applet business.

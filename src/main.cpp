@@ -847,7 +847,7 @@ private:
         if (path.compare(0, h.size(), h) != 0) return path;
         if (path.size() == h.size()) return "~";
         const char next = path[h.size()];
-        if (next != '/' && next != '\\') return path;   // "/Users/ahmedx" is not home
+        if (next != '/' && next != '\\') return path;   // "/Users/namex" is not home
         return "~" + path.substr(h.size());
     }
 

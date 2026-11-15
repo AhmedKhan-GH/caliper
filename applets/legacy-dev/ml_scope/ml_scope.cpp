@@ -5,7 +5,7 @@
 //   ML-EXEMPLAR 2 — the host picks the device (caliper.device.v1); the applet
 //     maps the KIND to its framework: METAL -> torch::kMPS here.
 //   ML-EXEMPLAR 3 — publish training state to the UI under a mutex; the frame
-//     reads a copy. (repnet's snapshot pattern, minimal form.)
+//     reads a copy. (the snapshot pattern, in its minimal form.)
 //   ML-EXEMPLAR 4 — weight visualization crosses caliper.tensor_bridge.v1, never
 //     a CPU-staged copy hand-rolled in the applet (that would teach the exact
 //     pattern the platform exists to delete). Delivered form: ML-EXEMPLAR 7.

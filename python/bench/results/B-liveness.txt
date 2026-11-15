@@ -1,9 +1,9 @@
 03:21:42 viewer pid 5416; CGWindowList windows of that pid: [{'id': 8159, 'bounds': (-135.0, 89.0, 1280.0, 832.0)}]
-03:21:43 t=1.0 s into the trainer's sleep: screencapture -l 8159 -> /Users/ahmed/CLionProjects/caliper-python/python/bench/results/B-liveness-t1.png
+03:21:43 t=1.0 s into the trainer's sleep: screencapture -l 8159 -> python/bench/results/B-liveness-t1.png
 03:21:43 t=1.5 s: SIGUSR1 -> viewer posts move+click on its status window title bar through its own AppKit event queue
-03:21:45 t=3.0 s: screencapture -> /Users/ahmed/CLionProjects/caliper-python/python/bench/results/B-liveness-t3.png
+03:21:45 t=3.0 s: screencapture -> python/bench/results/B-liveness-t3.png
 03:21:45 t=3.5 s: SIGUSR2 -> mouse-move to the window centre
-03:21:46 t=4.5 s: screencapture -> /Users/ahmed/CLionProjects/caliper-python/python/bench/results/B-liveness-t4.5.png
+03:21:46 t=4.5 s: screencapture -> python/bench/results/B-liveness-t4.5.png
 03:21:51 trainer: SLEEP_END 1255702806292625
 03:21:51 trainer: RESUMED steps=2346 stats={"shows": 4785, "rate_skipped": 4542, "snapshots": 243, "published": 242, "busy_dropped": 0, "pending": 1, "seq": 242, "viewer_seq": 242, "viewer_skipped": 5, "segment": "/clp-5404-v1", "segment_bytes": 12648448}
 03:21:51 png sha256 prefixes t1 ec57407fcb850c1c t3 1c1597ce153e5440 t4.5 9cff0a0f4a398af6 (differ = repainted)
