@@ -16,6 +16,8 @@ struct CaliperHost {
 };
 ```
 
+New capabilities arrive as new service ids, never as changes to the base ABI, so the base ABI stays small and stable while the host grows. The price is that every applet must cope with a service that is missing, which the fallback rule in [Architecture](architecture.md#platform-rules) asks of it anyway.
+
 ## Growth rules
 
 These four rules let the contract grow without breaking an applet that is already built:
@@ -24,6 +26,10 @@ These four rules let the contract grow without breaking an applet that is alread
 2. **Hosts may provide any set of services.** Applets declare `required_services` and probe optional ones at run time. A missing required service is refused at the manifest check, and the landing screen lists the applet as `REFUSED` with the reason.
 3. **`struct_size` is always the first field.** A reader never touches bytes beyond the size the writer declared.
 4. **The ABI epoch changes only for** an entry-point change, a `CaliperHost` layout change, or a UI-stack pin change.
+
+Under these rules an applet built years ago keeps running on a new host, and a new applet checks for a newer id and falls back when the host lacks it, with no epoch bump. The cost is that hosts and applets of different ages must be tested against each other, and the ABI tests pin every frozen layout.
+
+A service, or a revision of one, is published only when an applet needs it. A frozen table cannot be taken back, so it is extracted from working code rather than designed ahead of use. `caliper.data.v1` and `caliper.artifacts.v1` were frozen when EmbedScope needed them, and each geometry revision was added for an applet that needed it.
 
 ## ABI hygiene
 

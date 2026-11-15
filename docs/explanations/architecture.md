@@ -33,6 +33,15 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 
 The repository holds the host, the SDK and the applets together. A plan to move the applets out of the core, with the host and the SDK versioned on their own, is in [Applets outside the core](../plans/applets-outside-the-core.md).
 
+## Platform rules
+
+These rules hold across the host, the SDK and every applet.
+
+- **Applets run in the host's process and call it through a C ABI.** An applet is a native library that the host loads. It talks to the host through plain C functions, with the optional header-only [C++ sugar](../references/sugar.md) on top, and never through C++ interfaces or a protocol between processes. An applet in the host's frame loop can hand over a tensor without copying it, and a C ABI stays stable across compilers and standard libraries. The cost is that an applet crash can take the host down; the [Trust model](trust-model.md) describes how far the host contains that.
+- **The host links no ML framework.** The `caliper` executable and `libcaliper` link neither libtorch nor the CUDA toolkit. The tensor bridge talks to Metal and to the CUDA driver directly, the stores use an embedded DuckDB, and torch is a concern of the applets that use it. The host stays small, and torch arrives only with an applet that needs it.
+- **Data flows one way, from tensors to pixels.** Tensors become textures and geometry, ImGui shows them, and nothing flows back. There is no render-to-tensor readback, and applets cannot supply shaders: appearance comes from a fixed menu of shading modes. Showing the state of a model is the purpose of the instrument, shaders from applets would break the boundary between applet and host and weaken its security, and a fixed menu keeps every image reproducible against the CPU reference. [Rendering](rendering.md#data-flows-one-way) lists what this rules out and what it does not.
+- **A missing capability falls back to a slower path that works, and says so.** The host never draws a wrong image and never prints a status line that is not true, and it claims zero-copy only when the zero-copy path drew. Applets then run on every machine, and users can trust what the instrument reports. The cost is a second, tested path for every capability.
+
 ## The frame loop
 
 The host owns the GLFW window, the rendering backend, the ImGui, ImPlot and ImPlot3D contexts, and the frame clock. Per frame:
@@ -41,13 +50,15 @@ The host owns the GLFW window, the rendering backend, the ImGui, ImPlot and ImPl
 2. The active applet's `on_frame` renders its UI and may consume GPU results produced by its own background jobs.
 3. Host **ends** the frame and swaps buffers.
 
-Applets never create windows or touch the graphics API. Long work never runs on the frame thread — that is what the `caliper.jobs.v1` service is for, and the host's watchdog flags applets that stall the loop (see the [Trust model](trust-model.md)).
+Applets never create windows or touch the graphics API.
+
+The frame thread does no I/O: no file access, no network call, no SQL query and no store call. The cost of I/O differs by machine and grows with the age of a session, so a call that is fast on one machine freezes the window on another. Work that takes longer than about 5 ms runs on another thread: a `caliper.jobs.v1` job for work that a user watches or cancels, and a thread the applet owns for its own upkeep. A table that is rebuilt several times a second for live display is a DuckDB `TEMP` table, because the persistent store is for data that is saved on purpose and read back. The host's watchdog flags applets that stall the loop (see the [Trust model](trust-model.md)).
 
 !!! note "Renderer-agnostic by contract"
     The ABI never mentions a graphics API. Textures cross the boundary as an opaque `CaliperTextureId`, and applets render only through ImGui and ImPlot. Metal on macOS and Vulkan on Windows are the default backends, and OpenGL 3.3 core is a frozen fallback chosen with `CALIPER_RENDERER=gl`. Because the contract hides the backend, a backend change needs no epoch bump and no applet rebuild. See [Rendering](rendering.md) for the `HostRenderer` seam and the backends.
 
 ## Embedding
 
-`libcaliper` is the host without the window. It holds the applet loader, the service registry, the services, `HostRenderer`, the tensor bridge and the geometry path behind a small C interface, so another program can run the applet canvas inside a view it owns. The `caliper` executable is the first embedder. The embedder supplies a native view and its input events. `libcaliper` owns the applet canvas end to end: the ImGui context, the renderer, the bridge and the geometry all run inside it, and the embedder's own chrome wraps around the canvas and never paints applet pixels. This is decision [D36](../decisions/d036-libcaliper-owns-the-canvas.md).
+`libcaliper` is the host without the window. It holds the applet loader, the service registry, the services, `HostRenderer`, the tensor bridge and the geometry path behind a small C interface, so another program can run the applet canvas inside a view it owns. The `caliper` executable is the first embedder. The embedder supplies a native view and its input events. `libcaliper` owns the applet canvas end to end: the ImGui context, the renderer, the bridge and the geometry all run inside it, and the embedder's own chrome wraps around the canvas and never paints applet pixels. A toolkit such as wxWidgets paints through its own drawing backends and cannot paint pixels that applets produce on the GPU, and a single owner of the canvas keeps the applet contract the same in every host. This is decision [D36](../decisions/d036-libcaliper-owns-the-canvas.md).
 
 A process has one libtorch, and the core owns it. An embedder must not link its own torch, and `caliper_core_create` refuses a second live core in the same process. The interface is described in [Embedding Caliper](../references/embedding.md).

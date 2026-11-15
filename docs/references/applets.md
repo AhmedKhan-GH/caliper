@@ -77,7 +77,10 @@ actually drew the current frame, and says which fallback ran when it did not
 ## GPTScope
 
 - **Manifest id:** `dev.caliper.gpt-scope`, version 0.2.0. GPTScope is the
-  flagship applet ([D16](../decisions/d016-gpt-scope-is-the-flagship.md)).
+  flagship applet ([D16](../decisions/d016-gpt-scope-is-the-flagship.md)). It
+  was written the way an outside author would write an applet, on the full
+  service stack from the start, so it tests the platform better than older code
+  moved onto the services would.
 - **Shows:** mechanistic interpretability of a character-level GPT that trains
   live on TinyShakespeare (4 layers, 4 heads, 128 dimensions, block size 128).
   Seven windows each answer one question about the model:
