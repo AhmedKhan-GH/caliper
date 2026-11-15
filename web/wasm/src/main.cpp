@@ -10,6 +10,13 @@
 // or every view of the session when no view is named. The instance reads its
 // settings from Module.caliperConfig: {src, view, kind, header}.
 //
+// What a person does in a view (a selection, a pick, a hover) comes out of
+// the view layer's event sink: it goes to the producer as an EVENT through
+// the NetSource and to the page through Module.onEvent(view, type, detail).
+// The facts the page's header shows about a view (its size, range, last
+// value) go to Module.onInfo(view, facts) when they change, at most ten times
+// a second.
+//
 // Start-up is asynchronous because a browser hands out a WebGPU device only
 // through promises: main() requests the adapter, the adapter callback requests
 // the device, and the device callback builds everything, connects and starts
@@ -103,6 +110,16 @@ struct Page {
 
     float css_w = 0.0f, css_h = 0.0f;     // the canvas's CSS box
     int fb_w = 0, fb_h = 0;               // its backing store
+
+    // The header facts last sent to the page, per view, and when.
+    struct Info {
+        std::string view, facts;
+        bool pending = false;
+        double sent_ms = -1e9;
+    };
+    std::vector<Info> infos;
+    uint64_t events_sent = 0;
+    bool publish_soon = false;            // a selection or pick: publish after this frame
 };
 Page g;
 
@@ -149,6 +166,9 @@ void publish() {
     put("uiMs", g.ui_sum / n);
     put("encodeMs", g.enc_sum / n);
     put("gpuMs", g.renderer ? g.renderer->gpu_ms_mean() : 0.0);
+    put("textures", g.renderer ? (double)g.renderer->texture_count() : 0.0);
+    put("allocations", g.renderer ? (double)g.renderer->allocation_count() : 0.0);
+    put("retiredViews", g.renderer ? (double)g.renderer->retired_view_count() : 0.0);
     put("dispatches", g.renderer ? (double)g.renderer->colormap_dispatches() : 0.0);
     put("rendererPath", g.renderer ? g.renderer->last_device_path() : "");
     put("state", g.net ? g.net->state_text().c_str() : "starting");
@@ -163,10 +183,10 @@ void publish() {
         info.struct_size = sizeof info;
         if (!v.shown || !caliper_core_live_view_info(g.core, v.name.c_str(), &info)) continue;
         char b[256];
-        std::snprintf(b, sizeof b, "%s%s:kind=%d,updates=%llu,count=%lld,path=%s,w=%d,h=%d,latency=%.2f",
+        std::snprintf(b, sizeof b, "%s%s:kind=%d,updates=%llu,count=%lld,path=%s,w=%d,h=%d,latency=%.2f,creates=%llu",
                       per.empty() ? "" : ";", v.name.c_str(), info.kind,
                       (unsigned long long)info.updates, (long long)info.count, info.path, info.width,
-                      info.height, info.latency_ms);
+                      info.height, info.latency_ms, (unsigned long long)info.creates);
         per += b;
         // A points view: the index of the point under the mouse, -1 for none.
         if (info.kind == CALIPER_LIVE_KIND_POINTS)
@@ -174,6 +194,33 @@ void publish() {
                 per += ",hover=" + std::to_string(lv->hover_idx);
     }
     put("viewInfo", per.c_str());
+    // Where each view drew its data (CSS pixels in the canvas, and the data
+    // window there), what it has selected, and how many events went out: for
+    // tests, as JSON {"view": {"area": [x, y, w, h], "window": [x0, x1, y0, y1],
+    // "yDown": bool, "selected": n}}.
+    std::string geo = "{";
+    double selected = 0.0;
+    if (g.core && g.core->live_views)
+        for (const auto& v : g.core->live_views->views) {
+            if (!v->geo_valid) continue;
+            const double sel = v->kind == CALIPER_LIVE_KIND_POINTS ? (double)v->sel_count
+                               : (v->kind == CALIPER_LIVE_KIND_HEATMAP || v->kind == CALIPER_LIVE_KIND_IMAGE)
+                                   ? (double)((v->sel_r1 - v->sel_r0) * (v->sel_c1 - v->sel_c0))
+                                   : (double)(v->sel_s1 - v->sel_s0);
+            if (v->name == g.cfg.view || g.cfg.view.empty()) selected += sel;
+            char b[512];
+            std::snprintf(b, sizeof b,
+                          "%s\"%s\":{\"area\":[%.9g,%.9g,%.9g,%.9g],\"window\":[%.17g,%.17g,%.17g,%.17g],"
+                          "\"yDown\":%s,\"selected\":%.0f}",
+                          geo.size() > 1 ? "," : "", v->name.c_str(), v->geo_area[0], v->geo_area[1],
+                          v->geo_area[2], v->geo_area[3], v->geo_window[0], v->geo_window[1], v->geo_window[2],
+                          v->geo_window[3], v->geo_ydown ? "true" : "false", sel);
+            geo += b;
+        }
+    geo += "}";
+    put("geometry", geo.c_str());
+    put("selected", selected);
+    put("events", (double)g.events_sent);
     const caliper_web::InputCounts ic = caliper_web::input_counts();
     put("inputPointer", ic.pointer);
     put("inputButtons", ic.buttons);
@@ -391,6 +438,85 @@ void draw_status(float w, float h) {
     dl->AddText(p, IM_COL32(0xd0, 0xc9, 0xba, 255), text.c_str());
 }
 
+// ---- the header facts ---------------------------------------------------------
+std::string num(double v) {
+    if (!std::isfinite(v)) return "null";
+    char b[40];
+    std::snprintf(b, sizeof b, "%.9g", v);
+    return b;
+}
+
+// What the page's header says about a view, as the element's own views say
+// it (web/src/views/info.ts formats it): JSON facts by kind.
+std::string facts(const caliper_live_views::View& v) {
+    char b[256];
+    switch (v.kind) {
+        case CALIPER_LIVE_KIND_HEATMAP:
+        case CALIPER_LIVE_KIND_IMAGE:
+            for (const auto& tv : g.core->views)
+                if (tv.name == v.name && tv.tex) {
+                    std::snprintf(b, sizeof b, "{\"kind\":\"%s\",\"rows\":%d,\"cols\":%d,\"lo\":%s,\"hi\":%s}",
+                                  v.kind == CALIPER_LIVE_KIND_HEATMAP ? "heatmap" : "image", tv.h, tv.w,
+                                  num(tv.vmin).c_str(), num(tv.vmax).c_str());
+                    return b;
+                }
+            return {};
+        case CALIPER_LIVE_KIND_POINTS:
+            std::snprintf(b, sizeof b, "{\"kind\":\"points\",\"n\":%lld,\"dims\":%d,\"classes\":%d,\"values\":%s}",
+                          (long long)v.count, v.dims, v.label_count, v.cur.aux ? "true" : "false");
+            return b;
+        case CALIPER_LIVE_KIND_SERIES:
+            if (v.values.empty()) return {};
+            std::snprintf(b, sizeof b, "{\"kind\":\"series\",\"end\":%llu,\"last\":%s}",
+                          (unsigned long long)(v.first + v.values.size()), num(v.values.back()).c_str());
+            return b;
+        case CALIPER_LIVE_KIND_HISTOGRAM: {
+            double total = 0.0;
+            for (float c : v.values) total += c;
+            std::snprintf(b, sizeof b, "{\"kind\":\"histogram\",\"bins\":%zu,\"lo\":%s,\"hi\":%s,\"total\":%s}",
+                          v.values.size(), num(v.lo).c_str(), num(v.hi).c_str(), num(total).c_str());
+            return b;
+        }
+        default:
+            return {};
+    }
+}
+
+// Sends each view's facts when they changed, at most every 100 ms per view.
+void send_infos() {
+    if (!g.core || !g.core->live_views) return;
+    const double t = emscripten_get_now();
+    for (const auto& v : g.core->live_views->views) {
+        auto it = std::find_if(g.infos.begin(), g.infos.end(), [&](const Page::Info& i) { return i.view == v->name; });
+        if (it == g.infos.end()) {
+            g.infos.push_back({v->name, {}, false, -1e9});
+            it = g.infos.end() - 1;
+        }
+        std::string f = facts(*v);
+        if (f.empty() || f == it->facts) continue;
+        if (t - it->sent_ms < 100.0) continue;   // the next frame after the interval sends the newest
+        it->facts = std::move(f);
+        it->sent_ms = t;
+        EM_ASM({
+            var cb = Module["onInfo"];
+            if (cb) cb(UTF8ToString($0), JSON.parse(UTF8ToString($1)));
+        }, it->view.c_str(), it->facts.c_str());
+    }
+}
+
+// The view layer's events: to the producer, and to the page.
+void on_event(const caliper_live_views::LiveEvent& e) {
+    if (g.net) {
+        const uint64_t key = g.net->key_of(e.view);
+        if (key && g.net->send_event(key, e.type, e.detail)) ++g.events_sent;
+    }
+    EM_ASM({
+        var cb = Module["onEvent"];
+        if (cb) cb(UTF8ToString($0), UTF8ToString($1), JSON.parse(UTF8ToString($2)));
+    }, e.view.c_str(), e.type, e.detail.c_str());
+    if (std::strcmp(e.type, "hover") != 0) g.publish_soon = true;
+}
+
 void frame() {
     const double t0 = emscripten_get_now();
 
@@ -404,7 +530,10 @@ void frame() {
     const double t_poll = emscripten_get_now();
 
     const caliper_web::FrameSize fs = caliper_web::input_new_frame();
-    if (fs.fb_w <= 0 || fs.fb_h <= 0) return;   // hidden (no CSS box): nothing to draw
+    if (fs.fb_w <= 0 || fs.fb_h <= 0) {   // hidden (no CSS box): nothing to draw
+        g.renderer->release_retired();    // what this poll's applies released
+        return;
+    }
     const float scale = (float)fs.fb_w / fs.css_w;
     g.css_w = fs.css_w;
     g.css_h = fs.css_h;
@@ -438,7 +567,9 @@ void frame() {
         g.check_next = g.frames + 30;
         start_check();
     }
-    if (g.frames % 15 == 0) publish();
+    send_infos();
+    if (g.frames % 15 == 0 || g.publish_soon) publish();
+    g.publish_soon = false;
 }
 
 void start() {
@@ -471,6 +602,7 @@ void start() {
     g.core = caliper_core_create_hosted(r.release());
     if (!g.core) return fail("caliper_core_create_hosted refused");
     g.core->views_bare = !g.cfg.header;
+    caliper_live_views::set_event_sink(g.core, on_event);
 
     if (g.cfg.src.empty()) {
         fail("no stream: set caliperConfig.src to the ws:// URL of a Caliper stream");

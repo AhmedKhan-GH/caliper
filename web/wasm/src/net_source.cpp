@@ -52,6 +52,33 @@ std::string str_or(const Json* j, const char* fallback) {
     return j && j->is_string() ? j->as_string() : std::string(fallback);
 }
 
+int64_t int_or(const Json* j, int64_t fallback) {
+    int64_t v = 0;
+    return j && j->get_i64(&v) ? v : fallback;
+}
+
+// A snapshot's axes and tile (wire protocol v3, Payload axes).
+caliper_live::PayloadMap payload_map(const Json& axes, const Json& tile) {
+    caliper_live::PayloadMap m;
+    if (axes.is_array())
+        for (size_t i = 0; i < axes.size(); ++i) {
+            const Json& a = axes.at(i);
+            if (!a.is_object()) continue;
+            caliper_live::PayloadAxis ax;
+            ax.dim = str_or(a.find("dim"), "");
+            ax.start = int_or(a.find("start"), 0);
+            ax.step = int_or(a.find("step"), 1);
+            ax.count = int_or(a.find("count"), 0);
+            ax.size = int_or(a.find("size"), 0);
+            m.axes.push_back(std::move(ax));
+        }
+    if (tile.is_object()) {
+        m.tile_rows = int_or(tile.find("rows"), 0);
+        m.tile_cols = int_or(tile.find("cols"), 0);
+    }
+    return m;
+}
+
 }  // namespace
 
 NetSource::NetSource(Options opt, Callbacks cb) : opt_(std::move(opt)), cb_(std::move(cb)) {}
@@ -296,6 +323,8 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
             s.label_count = m.label_count ? (int32_t)*m.label_count : 0;
             s.seq = m.seq;
             s.stamp_ns = m.stamp_ns;
+            p.map = payload_map(m.axes, m.tile);
+            p.data_view = m.data_view;
             v->fresh = true;
         } else if constexpr (std::is_same_v<T, wire::Series>) {
             View* v = by_sub(m.sub);
@@ -342,9 +371,50 @@ void NetSource::heartbeat() {
 }
 
 bool NetSource::request_data_view(const std::string& json, std::string* err) {
-    View* v = views_.size() == 1 ? &views_[0] : nullptr;
-    if (!v || !v->sub) {
+    if (views_.size() != 1 || !views_[0].sub) {
         if (err) *err = "no single subscribed view yet";
+        return false;
+    }
+    return request_data_view(views_[0].id, json, err);
+}
+
+uint64_t NetSource::key_of(const std::string& name) const {
+    for (const auto& v : views_)
+        if (v.name == name && v.sub) return v.id;
+    return 0;
+}
+
+bool NetSource::send_event(uint64_t key, const std::string& type, const std::string& detail_json) {
+    View* v = by_id(key);
+    if (!v || !v->sub || closed_) return false;
+    Json detail;
+    std::string perr;
+    if (!Json::parse(detail_json.data(), detail_json.size(), &detail, &perr) || !detail.is_object()) {
+        std::fprintf(stderr, "[caliper-views] event detail is not a JSON object: %s\n", perr.c_str());
+        return false;
+    }
+    wire::Event e;
+    e.view = v->name;
+    e.type = type;
+    e.detail = std::move(detail);
+    e.sub = v->sub;
+    // What the viewer was showing: the snapshot's seq and data view, or for a
+    // series (no snapshots) the data view its subscription resolved.
+    if (v->shown.meta.host_base) {
+        e.seq = v->shown.meta.seq;
+        e.data_view = v->shown.data_view;
+    } else if (!v->data_view.empty()) {
+        Json dv;
+        if (Json::parse(v->data_view.data(), v->data_view.size(), &dv, nullptr)) e.data_view = dv;
+    }
+    send_msg(e);
+    return true;
+}
+
+bool NetSource::request_data_view(uint64_t key, const std::string& json, std::string* err) {
+    View* v = by_id(key);
+    if (!v || !v->sub) {
+        if (err) *err = "the view is not subscribed";
         return false;
     }
     Json dv;
@@ -396,6 +466,7 @@ bool NetSource::take(uint64_t key, uint64_t after_seq, caliper_live::Snapshot* o
     s.host_base = v->shown.bytes.data();
     s.byte_offset = 0;
     s.stats = v->shown.stats.empty() ? nullptr : v->shown.stats.data();
+    s.map = &v->shown.map;
     *out = s;
     out->stamp_ns = clock_.to_viewer(s.stamp_ns);
     return true;

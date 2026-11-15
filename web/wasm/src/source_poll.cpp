@@ -3,6 +3,7 @@
 
 #include "caliper/live.h"
 #include "caliper/live_views.h"
+#include "live/live_views_state.h"   // set_payload_map
 
 #include <algorithm>
 
@@ -68,6 +69,8 @@ bool apply(CaliperCore* core, PolledView& v, const caliper_live::Snapshot& s, bo
         return false;
     }
     v.error.clear();
+    // How the payload maps onto the source, for the view's events.
+    caliper_live_views::set_payload_map(core, v.name.c_str(), s.map ? *s.map : caliper_live::PayloadMap{});
     return true;
 }
 

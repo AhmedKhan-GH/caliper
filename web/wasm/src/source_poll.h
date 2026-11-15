@@ -7,7 +7,9 @@
 // caliper_core_live_apply, then drew() or unclaim(). The differences are only
 // where a snapshot lives: here mtl_buffer is null and host_base holds the
 // bytes, so the payload is a CPU tensor, which the live views copy when they
-// apply it; no claim outlives the apply and nothing waits on the GPU.
+// apply it; no claim outlives the apply and nothing waits on the GPU. After
+// an apply the snapshot's payload map goes to the view, which reports events
+// in source indices with it.
 #pragma once
 
 #include "live/live_source.h"

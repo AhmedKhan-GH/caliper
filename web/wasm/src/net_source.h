@@ -5,7 +5,8 @@
 // API): HELLO, WELCOME, SESSIONS (the server's default attach), VIEWS,
 // SUBSCRIBE / VIEW_REPLY for the views this instance shows, SNAPSHOT (the
 // latest wins), SERIES deltas with their backfill, VIEW_REQUEST for a new
-// data view, PING / PONG both ways and BYE. Frames go through the shared C++
+// data view, EVENT for what a person did in a view, PING / PONG both ways and
+// BYE. Frames go through the shared C++
 // codec (src/host/net/wire.h).
 //
 // Everything runs on the browser's main thread: the socket callbacks run
@@ -56,6 +57,8 @@ public:
     // A new data view for the shown view (VIEW_REQUEST). False when there is
     // no single subscribed view yet or the JSON is not an object.
     bool request_data_view(const std::string& data_view_json, std::string* err);
+    // The view key of a view name, 0 when it is not shown.
+    uint64_t key_of(const std::string& name) const;
 
     // Connection state for the page host's status line.
     const std::string& state_text() const { return state_; }
@@ -85,6 +88,9 @@ public:
     void drew(uint64_t, uint64_t, uint64_t) override {}
     uint64_t producer_dropped(uint64_t) override { return 0; }
     void heartbeat() override;
+    // EVENT with the subscription, seq and data view of what the view shows.
+    bool send_event(uint64_t key, const std::string& type, const std::string& detail_json) override;
+    bool request_data_view(uint64_t key, const std::string& data_view_json, std::string* err) override;
 
     // Socket callbacks (public for the C trampolines in net_source.cpp).
     void on_open();
@@ -95,7 +101,9 @@ private:
     struct Payload {
         std::vector<uint8_t> bytes;   // data, then aux at aux_offset (8-aligned)
         std::vector<float> stats;
-        caliper_live::Snapshot meta;  // host_base / stats are set at take()
+        caliper_live::Snapshot meta;  // host_base / stats / map are set at take()
+        caliper_live::PayloadMap map; // the snapshot's axes and tile
+        caliper_net::Json data_view;  // the snapshot's resolved data view
     };
     struct View {
         uint64_t id = 0;              // the producer's view id = the Source key

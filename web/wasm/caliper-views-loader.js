@@ -10,11 +10,17 @@
 //     height,       // CSS pixels, optional (default: fill the container)
 //     header,       // false: the page shows the view's name itself, so the view has no title bar
 //     assetBase,    // where caliper-views.js and .wasm are; default: beside this file
-//     onSelect,     // (detail) => {}, for selections (the views do not emit any yet)
+//     onSelect,     // (detail, view) => {}, every selection; {} clears it
+//     onEvent,      // ({ view, type, detail }) => {}, every select, pick and hover
+//     onInfo,       // (facts, view) => {}, what a header says about the view, as it changes
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
 //   });
 //   handle.setDataView({ index: { layer: 2 } });   // a VIEW_REQUEST
 //   handle.destroy();
+//
+// A selection, pick or hover goes to the producer as an EVENT on the mount's
+// own connection, with the same detail the <caliper-view> element's
+// TypeScript views send (wire protocol v3, "Events"), and to these callbacks.
 //
 // Each mount is its own module instance with its own canvas, WebGPU device,
 // heap and WebSocket; the compiled WebAssembly module is shared by every mount
@@ -61,7 +67,7 @@ export function preloadCaliperViews(assetBase) {
 }
 
 export async function mountCaliperViews(container, options = {}) {
-  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onDataView } = options;
+  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onDataView } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -86,7 +92,11 @@ export async function mountCaliperViews(container, options = {}) {
       },
       onReady: () => ready(),
       onDataView: (v, dataView) => { if (onDataView && (!view || v === view)) onDataView(dataView, v); },
-      onSelect: (v, detail) => { if (onSelect) onSelect(detail, v); },
+      onEvent: (v, type, detail) => {
+        if (onEvent) onEvent({ view: v, type, detail });
+        if (type === 'select' && onSelect) onSelect(detail, v);
+      },
+      onInfo: (v, facts) => { if (onInfo && (!view || v === view)) onInfo(facts, v); },
       print: () => {},
       printErr: (t) => console.warn('[caliper-views]', t),
     });

@@ -39,6 +39,10 @@ void apply_page_style(bool bare) {
     ps.Colors[ImPlotCol_TitleText] = v4(kParchment);
     ps.Colors[ImPlotCol_Crosshairs] = v4(kRule);
     ps.Colors[ImPlotCol_Selection] = v4(kBronze);
+    // A fitted y range reaches 6% of the data's span above and below it, as
+    // the TypeScript series does (ImPlot adds half the padding on each side),
+    // so that a loss near zero is not drawn on the plot's bottom border.
+    ps.FitPadding = ImVec2(0.0f, 0.12f);
     // Items take the colormap's colours in order: a series line or the
     // histogram's bars first (parchment), then the hover mark (bronze).
     static const ImU32 kItems[] = {kParchment, kBronze, kSecondary, kFaint};
