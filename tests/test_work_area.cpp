@@ -1,5 +1,6 @@
-// The work area of a page (src/host/ui/work_area.h): the dock space ends
-// above every bar of the page, in the very frame a bar appears. Driven on a headless ImGui
+// The work area of a page (src/host/ui/work_area.h): when the jobs tray takes
+// its strip, and that the dock space ends above the strip, the status bar and
+// the page bar, in the very frame a bar appears. Driven on a headless ImGui
 // context the way the host draws a page: the bars as viewport side bars, then
 // the dock space over the work area they leave.
 #include <doctest/doctest.h>
@@ -7,6 +8,8 @@
 #include <cstdint>
 #include <functional>
 
+using caliper_host::JobsTrayPresence;
+using caliper_host::kJobsTrayHeight;
 
 namespace {
 
@@ -14,7 +17,6 @@ constexpr float kWidth = 1400.0f;
 constexpr float kHeight = 900.0f;
 constexpr float kPageBar = 28.0f;
 constexpr float kStatusBar = 22.0f;
-constexpr float kJobsTrayHeight = 28.0f;   // a bar that comes and goes above the status bar
 
 struct Page {
     ImGuiContext* ctx = nullptr;
@@ -74,6 +76,55 @@ struct Page {
 };
 
 } // namespace
+
+TEST_CASE("work area: a job shorter than the open delay never opens the tray") {
+    JobsTrayPresence p;
+    CHECK_FALSE(p.update(0.0, true));
+    CHECK_FALSE(p.update(0.4, true));
+    CHECK_FALSE(p.update(0.45, false));   // it ended
+    CHECK_FALSE(p.update(10.0, false));
+    // The delay counts from the start of the current stretch only.
+    CHECK_FALSE(p.update(10.1, true));
+    CHECK_FALSE(p.update(10.5, true));
+    CHECK(p.update(10.6, true));
+}
+
+TEST_CASE("work area: the tray opens after the delay and closes after the close delay") {
+    JobsTrayPresence p;
+    CHECK_FALSE(p.update(0.0, true));
+    CHECK(p.update(JobsTrayPresence::kOpenDelay, true));
+    CHECK(p.update(5.0, true));
+    // The last job ends: the strip stays for the close delay, then goes.
+    CHECK(p.update(5.1, false));
+    CHECK(p.update(5.1 + JobsTrayPresence::kCloseDelay - 0.01, false));
+    CHECK_FALSE(p.update(5.1 + JobsTrayPresence::kCloseDelay, false));
+    CHECK_FALSE(p.open());
+}
+
+TEST_CASE("work area: jobs one after another keep one strip") {
+    JobsTrayPresence p;
+    p.update(0.0, true);
+    REQUIRE(p.update(1.0, true));
+    // Short gaps between jobs, each shorter than the close delay.
+    for (int i = 0; i < 10; i++) {
+        const double t = 1.0 + i;
+        CHECK(p.update(t + 0.2, false));
+        CHECK(p.update(t + 0.9, false));
+        CHECK(p.update(t + 1.0, true));
+    }
+}
+
+TEST_CASE("work area: clearing with nothing running closes the strip at once") {
+    JobsTrayPresence p;
+    p.update(0.0, true);
+    REQUIRE(p.update(1.0, true));
+    p.close();
+    CHECK_FALSE(p.open());
+    CHECK_FALSE(p.update(1.1, false));
+    // A new job opens it again only after the open delay.
+    CHECK_FALSE(p.update(2.0, true));
+    CHECK(p.update(2.0 + JobsTrayPresence::kOpenDelay, true));
+}
 
 TEST_CASE("work area: the dock space ends above the tray, the tray above the status bar") {
     Page page;

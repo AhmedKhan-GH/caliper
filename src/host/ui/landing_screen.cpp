@@ -370,10 +370,12 @@ void LandingScreen::draw(const Context& ctx) {
 
     ImGui::PushFont(sternbild::fonts().ui, font_size::ui);
 
-    // Chrome first: both bars are viewport side bars, so they are submitted
-    // before the dock space that fills the work area they leave.
+    // Chrome first: both bars, and the jobs tray's strip while it is open,
+    // are viewport side bars, so they are submitted before the dock space
+    // that fills the work area they leave.
     draw_command_bar();
     draw_status_bar(ctx);
+    if (ctx.after_bars) ctx.after_bars();
 
     // Overview first, details on demand, keyboard first: a row is always
     // selected while any is visible, so the Inspector has something to show
@@ -728,10 +730,10 @@ void LandingScreen::rebuild_rows(const AppletLoader& loader) {
 // moving a splitter, and that persists in the app-data imgui.ini like the
 // applet layout does.
 void LandingScreen::draw_dock_space() {
-    // The command and status bars are viewport side bars: they reserve their
-    // height from the work area, so the host is simply the work area they
-    // leave in this frame (work_area.h), with no bar heights to subtract, and
-    // it never runs under a bar that has just appeared.
+    // The command and status bars and the jobs tray are viewport side bars:
+    // they reserve their height from the work area, so the host is simply the
+    // work area they leave in this frame (work_area.h), with no bar heights
+    // to subtract, and it never runs under a bar that has just appeared.
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImRect area = caliper_host::work_area();
     const float height = std::max(1.0f, area.GetHeight());

@@ -27,6 +27,8 @@
 //                                 quarantined by a C++ exception)
 //                   Activity     (host log: renderer, scans, launches, jobs,
 //                                 live sessions attached, ended, detached)
+//   jobs tray     above the status bar while a job runs or a failure is kept
+//                 (drawn by the host through Context::after_bars)
 //   status bar    backend · GPU · memory · applet count (facts, no actions)
 //
 // Patterns named in the implementation: status bar (VS Code / JetBrains),
@@ -59,6 +61,10 @@ public:
         // has no live sessions; the F4 button then says why.
         caliper_live::SessionList* sessions = nullptr;
         std::function<void(const std::string&)> attach;
+        // Called after the command bar and the status bar, before the dock
+        // space: the host's jobs tray takes its strip above the status bar
+        // here, and the panes fill what is left.
+        std::function<void()> after_bars;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;

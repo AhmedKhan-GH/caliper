@@ -183,15 +183,18 @@ ImU32 row_text(bool selected, ImU32 rest = col::parchment);  // bronze when sele
 // Fixed strips. Each is a viewport side bar (ImGui::BeginViewportSideBar)
 // across the main viewport: the command bar at the top, h metric::command_bar
 // (ground, rule under); the status bar at the bottom, h metric::status_bar
-// (deep, rule above). A side bar reserves its height from the viewport's
-// work area, so a dock space laid out from WorkPos / WorkSize (the landing's
-// host, DockSpaceOverViewport on the applet page) never runs under it; draw
-// the bars before the dock space each frame. Between begin/end the caller
-// lays out inline content.
+// (deep, rule above); the tray bar, h `height` (ground, rule above), which
+// takes its place above the status bar when it is begun after it. A side bar
+// reserves its height from the viewport's work area, so a dock space laid out
+// from the work area (ui/work_area.h) never runs under it; draw the bars
+// before the dock space each frame. Between begin/end the caller lays out
+// inline content.
 void command_bar_begin();
 void command_bar_end();
 void status_bar_begin();
 void status_bar_end();
+void tray_bar_begin(float height);
+void tray_bar_end();
 // Inline status item: text in `c`, preceded by a faint " · " separator after
 // the first item on the line.
 void status_item(const char* text, ImU32 c = col::secondary);

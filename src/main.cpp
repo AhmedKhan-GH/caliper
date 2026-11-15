@@ -199,6 +199,17 @@ public:
 
             renderer_->new_frame();
 
+            // Jobs tray (§7.5), on every page while a job runs or a failure
+            // is kept (ui/applet_page.h): this frame's jobs and whether its
+            // strip is open. Each page draws the strip between its status
+            // bar and its dock space, so the dock space ends above it.
+            // Failures are kept until cleared, see note_failed_jobs.
+            {
+                auto views = caliper_host::host_job_system().views();
+                note_failed_jobs(views);
+                jobs_tray_.begin_frame(std::move(views), glfwGetTime());
+            }
+
             if (page_ == AppPage::Landing) {
                 // The workstation home, identical on every backend. It reads
                 // loader_ live each frame, so statuses are always fresh.
@@ -209,6 +220,7 @@ public:
                 ctx.restart = [this](int i) { restart_applet(i); };
                 ctx.sessions = &sessions_;
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
+                ctx.after_bars = [this] { jobs_tray_.draw(); };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
@@ -239,7 +251,8 @@ public:
                 // the dock space, docking by role and the applet's frame
                 // (ui/applet_page.h, which `caliper shot` draws too).
                 const caliper_host::AppletPage::Result page = page_view_.draw(
-                    loader_, active_applet_, fi, renderer_->name(), chromeless_);
+                    loader_, active_applet_, fi, renderer_->name(), chromeless_,
+                    &jobs_tray_);
                 if (page.home) go_back = true;
 
                 if (!page.alive) {            // quarantined mid-frame
@@ -257,15 +270,6 @@ public:
                 // freed MTLTexture). We only flag it here; the applet keeps
                 // drawing valid textures through this frame's render.
                 if (go_back) pending_home_ = active_applet_;
-            }
-
-            // Jobs tray (§7.5): visible on every page while jobs exist
-            // (ui/applet_page.h). Failures are kept until cleared, see
-            // note_failed_jobs.
-            {
-                auto views = caliper_host::host_job_system().views();
-                note_failed_jobs(views);
-                jobs_tray_.draw(views);
             }
 
             // Sampled after every window of the frame: next frame's Esc test
@@ -559,6 +563,7 @@ private:
             if (!st.alive) sternbild::status_item("session ended");
         }
         sternbild::status_bar_end();
+        jobs_tray_.draw();   // above the status bar while it is open
 
         // Its own dock space id, so the applet page's docked layout never
         // shows through on this page (and the reverse). The views tile the

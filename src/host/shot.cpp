@@ -227,10 +227,11 @@ int run_shot(const CommandLine& cl) {
         fi.delta_sec = dt;
 
         s.renderer->canvas_new_frame();
-        const AppletPage::Result r = page.draw(loader, idx, fi, s.renderer->name(), chromeless);
-        const auto views = host_job_system().views();
+        auto views = host_job_system().views();
         tray.note_failures(views);
-        tray.draw(views);
+        tray.begin_frame(std::move(views), now);
+        const AppletPage::Result r =
+            page.draw(loader, idx, fi, s.renderer->name(), chromeless, &tray);
         s.renderer->canvas_render();
         alive = r.alive;
     }

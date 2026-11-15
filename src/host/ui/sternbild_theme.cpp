@@ -1090,6 +1090,17 @@ void status_bar_end() {
     ImGui::End();
 }
 
+void tray_bar_begin(float height) {
+    // The jobs tray: frame-height padding centres a progress bar or a word
+    // button in the strip, and the rule above parts it from the work area.
+    strip_begin("##sternbild_tray_bar", ImGuiDir_Down, height, ImGui::GetFrameHeight(),
+                col::ground);
+    strip_rule(false);
+    ImGui::AlignTextToFramePadding();
+}
+
+void tray_bar_end() { ImGui::End(); }
+
 void status_item(const char* text, ImU32 c) {
     const int frame = ImGui::GetFrameCount();
     const ImGuiID window = ImGui::GetCurrentWindowRead()->ID;
