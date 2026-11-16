@@ -3,8 +3,8 @@
 // A thin internal layer, namespace caliper_gfx, shaped to WebGPU's model and default limits:
 // buffers, textures, samplers, programs, pipelines, bind groups, draw lists and frames. Each
 // backend (Metal, Vulkan, WebGPU in a browser and on Dawn) implements it once. Nothing of it
-// crosses the ABI. Nothing draws through it yet; the renderers keep their own paths until each
-// migration step moves a client.
+// crosses the ABI. The browser's WebGPU renderer draws through it; the native renderers keep
+// their own paths until each migration step moves a client.
 //
 // Decisions taken where the design's sketch was incomplete or inconsistent (each is also in the
 // report of the step that added this header):

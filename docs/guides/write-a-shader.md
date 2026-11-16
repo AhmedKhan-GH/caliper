@@ -1,6 +1,6 @@
 # Write a shader
 
-The shaders of the graphics layer in `src/host/gfx/` are written once, in WGSL, and translated to MSL for Metal and to SPIR-V for Vulkan at developer time. The translated sources are committed, so building Caliper needs no Rust and no shader tool. Only a developer who changes a shader runs the translator, and a CI check makes sure that nobody forgets to. The renderers in `src/host/renderer/` still use their own hand-written shaders; nothing draws through these programs yet.
+The shaders of the graphics layer in `src/host/gfx/` are written once, in WGSL, and translated to MSL for Metal and to SPIR-V for Vulkan at developer time. The translated sources are committed, so building Caliper needs no Rust and no shader tool. Only a developer who changes a shader runs the translator, and a CI check makes sure that nobody forgets to. The renderers in `src/host/renderer/` still use their own hand-written shaders; so far only the graphics suite's layer and scene rows draw through these programs, on Metal.
 
 ## Where the sources are
 
