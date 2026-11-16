@@ -43,6 +43,8 @@ interface PanelEntry { version: string; prepared: PreparedPanel | null; busy: bo
 /** What a test reads of the page. */
 export interface SpecPageState {
   status: string;
+  /** The state the whole page shows in place of the applet, or null. */
+  state: string | null;
   applet: string;
   title: string;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
@@ -133,7 +135,10 @@ export class SpecPage {
       return;
     }
     if (!env.ok) {
-      this.whole = { label: env.error?.code === 'applet.not_found' ? 'Missing applet' : 'No spec', detail: env.error?.code ?? '' };
+      const code = env.error?.code ?? '';
+      const label = code === 'applet.not_found' ? 'Missing applet'
+        : code === 'http.401' || code === 'http.403' ? 'Access refused' : code === 'http.404' ? 'No command layer' : 'No spec';
+      this.whole = { label, detail: code === 'applet.not_found' ? this.applet : code };
       this.spec = null;
       this.specText = '';
       this.setStatus('connected');
@@ -287,6 +292,7 @@ export class SpecPage {
     const spec = this.spec;
     return {
       status: this.status,
+      state: this.whole?.label ?? null,
       applet: this.applet,
       title: spec ? spec.applet.title ?? spec.applet.id : '',
       panels: this.layout.panels.map((lp) => {

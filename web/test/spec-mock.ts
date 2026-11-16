@@ -138,7 +138,7 @@ export async function openSpec(page: Page, applet: string): Promise<void> {
 }
 
 export interface PageState {
-  status: string; applet: string; title: string;
+  status: string; state: string | null; applet: string; title: string;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string; rect: Json }[];
   tabs: { path: string; labels: string[]; active: number }[];
   requests: number;

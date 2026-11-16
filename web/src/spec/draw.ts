@@ -294,44 +294,59 @@ function drawPoints(ctx: CanvasRenderingContext2D, p: PreparedPanel, c: Rect): v
   if (P.classes.length) drawClassLegend(ctx, P.colorName, P.classes, c);
 }
 
-/** A simple orthographic box and cloud, turned as ImPlot3D turns a new plot. */
+/** ImPlot3D's initial rotation of a new plot, as a quaternion (x, y, z, w). */
+const ROT = [-0.513269, -0.212596, -0.318184, 0.76819];
+
+function rotate(p: [number, number, number]): [number, number, number] {
+  const [qx, qy, qz, w] = ROT;
+  const uv = [qy * p[2] - qz * p[1], qz * p[0] - qx * p[2], qx * p[1] - qy * p[0]];
+  const uuv = [qy * uv[2] - qz * uv[1], qz * uv[0] - qx * uv[2], qx * uv[1] - qy * uv[0]];
+  return [p[0] + 2 * (w * uv[0] + uuv[0]), p[1] + 2 * (w * uv[1] + uuv[1]), p[2] + 2 * (w * uv[2] + uuv[2])];
+}
+
+/** A 3-D cloud in its box as ImPlot3D turns a new plot, the box filling 0.84 of the panel; the far walls on the plot's ground. */
 function drawPoints3d(ctx: CanvasRenderingContext2D, p: PreparedPanel, c: Rect, base: number): void {
   const P = p.points!;
   const lim = [fitLimits(P.x, false, 0.02), fitLimits(P.y, false, 0.02), fitLimits(P.z!, false, 0.02)];
   if (lim.some((l) => !l)) return;
-  fill(ctx, c.x, c.y, c.w, c.h, COL.ground);
-  // ImPlot3D's default view: turned about z by -45 degrees, then tilted about x.
-  const az = -Math.PI / 4, el = Math.PI / 6;
-  const proj = (u: number, v: number, w: number): [number, number] => {
-    const x1 = u * Math.cos(az) - v * Math.sin(az), y1 = u * Math.sin(az) + v * Math.cos(az);
-    return [x1, -(w * Math.cos(el) - y1 * Math.sin(el))];
-  };
-  const norm = (i: number, a: number) => (a - lim[i]![0]) / (lim[i]![1] - lim[i]![0]) - 0.5;
+  const corner = (i: number): [number, number, number] => [i & 1 ? 0.5 : -0.5, i & 2 ? 0.5 : -0.5, i & 4 ? 0.5 : -0.5];
   let mx = 0, my = 0;
   for (let i = 0; i < 8; i++) {
-    const [qx, qy] = proj(i & 1 ? 0.5 : -0.5, i & 2 ? 0.5 : -0.5, i & 4 ? 0.5 : -0.5);
-    mx = Math.max(mx, Math.abs(qx));
-    my = Math.max(my, Math.abs(qy));
+    const q = rotate(corner(i));
+    mx = Math.max(mx, Math.abs(q[0]));
+    my = Math.max(my, Math.abs(q[1]));
   }
   const s = Math.min((0.84 * c.w) / (2 * mx), (0.84 * c.h) / (2 * my));
   const cx = c.x + c.w / 2, cy = c.y + c.h / 2;
-  const at = (u: number, v: number, w: number): [number, number] => {
-    const [qx, qy] = proj(u, v, w);
-    return [cx + qx * s, cy + qy * s];
+  const at = (v: [number, number, number]): [number, number] => {
+    const q = rotate(v);
+    return [cx + q[0] * s, cy - q[1] * s];
   };
-  ctx.strokeStyle = COL.rule;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (const [a, b] of [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) {
-    const pa = at(a & 1 ? 0.5 : -0.5, a & 2 ? 0.5 : -0.5, a & 4 ? 0.5 : -0.5);
-    const pb = at(b & 1 ? 0.5 : -0.5, b & 2 ? 0.5 : -0.5, b & 4 ? 0.5 : -0.5);
-    ctx.moveTo(pa[0], pa[1]);
-    ctx.lineTo(pb[0], pb[1]);
+  // The far wall of each axis: the face whose centre turns away from the viewer.
+  const faces: number[][] = [];
+  for (let axis = 0; axis < 3; axis++) {
+    const centre: [number, number, number] = [0, 0, 0];
+    centre[axis] = -0.5;
+    const far = rotate(centre)[2] < 0 ? 0 : 1;
+    faces.push([0, 1, 2, 3, 4, 5, 6, 7].filter((i) => ((i >> axis) & 1) === far));
   }
-  ctx.stroke();
+  for (const f of faces) {
+    const [a, b, d, e] = f;   // corners of a face in bit order: a, b, d, e with b^d diagonal
+    const pts = [at(corner(a)), at(corner(b)), at(corner(e)), at(corner(d))];
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fillStyle = COL.deep;
+    ctx.fill();
+    ctx.strokeStyle = COL.rule;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  const norm = (i: number, a: number) => (a - lim[i]![0]) / (lim[i]![1] - lim[i]![0]) - 0.5;
   for (let i = 0; i < P.x.length; i++) {
-    const [X, Y] = at(norm(0, P.x[i]), norm(1, P.y[i]), norm(2, P.z![i]));
-    const h = 0.25 * base * (P.scale ? P.scale[i] : 1);
+    const [X, Y] = at([norm(0, P.x[i]), norm(1, P.y[i]), norm(2, P.z![i])]);
+    // ImPlot3D's square marker of size 0.5 * base reaches 0.5 * base / sqrt(2) each way.
+    const h = Math.SQRT1_2 * 0.5 * base * (P.scale ? P.scale[i] : 1);
     ctx.fillStyle = P.rgba ? `rgb(${P.rgba[i * 4]},${P.rgba[i * 4 + 1]},${P.rgba[i * 4 + 2]})` : COL.flatPoint;
     ctx.fillRect(X - h, Y - h, 2 * h, 2 * h);
   }

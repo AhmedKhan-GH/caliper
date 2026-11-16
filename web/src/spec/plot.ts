@@ -86,7 +86,8 @@ export function logTicks(lo: number, hi: number, fmt: (v: number) => string): Ti
       if (t < lo || t > hi) continue;
       if (decadesOnly && d1 - d0 > 12 && m !== 1) continue;
       const label = decadesOnly ? m === 1 : m === 1 || m === 2 || m === 5;
-      out.push({ value: t, major: true, label: label ? fmt(t) : '', show: true });
+      // Ticks that a plot is given are minor ones in ImPlot (AddTicksCustom).
+      out.push({ value: t, major: false, label: label ? fmt(t) : '', show: true });
     }
   return out;
 }
@@ -148,17 +149,23 @@ export class Plot2D {
     this.rect = { x: canvas.x + padL, y: canvas.y, w: Math.max(1, plotW), h: Math.max(1, plotH) };
     const r = this.rect;
     fill(ctx, r.x, r.y, r.w, r.h, COL.deep);
-    // The grid: majors in the grid colour, minors at a quarter of its alpha.
+    // The grid: majors in the grid colour, minors at a quarter of its alpha,
+    // fading out as they crowd and gone at one per five pixels (RenderGridLinesX).
+    const minorAlpha = (n: number, len: number) => {
+      const density = n / len;
+      return density < 0.2 ? MINOR_ALPHA * Math.min(1, Math.max(0, 1 - (density - 0.1) / 0.1)) : 0;
+    };
+    const ax = minorAlpha(this.xt.length, r.w), ay = minorAlpha(this.yt.length, r.h);
     for (const t of this.xt) {
       const X = Math.round(this.px(t.value));
-      if (X < r.x || X > r.x + r.w) continue;
-      ctx.globalAlpha = t.major ? 1 : MINOR_ALPHA;
+      if (X < r.x || X > r.x + r.w || (!t.major && !ax)) continue;
+      ctx.globalAlpha = t.major ? 1 : ax;
       fill(ctx, X, r.y, 1, r.h, COL.ruleFaint);
     }
     for (const t of this.yt) {
       const Y = Math.round(this.py(t.value));
-      if (Y < r.y || Y > r.y + r.h) continue;
-      ctx.globalAlpha = t.major ? 1 : MINOR_ALPHA;
+      if (Y < r.y || Y > r.y + r.h || (!t.major && !ay)) continue;
+      ctx.globalAlpha = t.major ? 1 : ay;
       fill(ctx, r.x, Y, r.w, 1, COL.ruleFaint);
     }
     ctx.globalAlpha = 1;
