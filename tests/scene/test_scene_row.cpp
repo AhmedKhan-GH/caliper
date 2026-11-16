@@ -2,8 +2,7 @@
 // compiled into a draw list, whose draw is then rasterised the way vs_points and fs_points
 // place a square point (the quad of size_px around the projected centre, pixel centres inside
 // it covered), from the bytes its vertex bindings name. The result must equal the row's
-// reference byte for byte. The GPU row draws the same list on Metal once the layer's core and
-// Metal backend are on the branch.
+// reference byte for byte. The GPU row draws the same list on Metal (tests/gfx/gfx_scene.cpp).
 #include "scene_row_fixture.h"
 #include "fake_resources.h"
 

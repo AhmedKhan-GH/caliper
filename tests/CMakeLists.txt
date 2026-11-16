@@ -376,6 +376,11 @@ if(APPLE)
     target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
     set_source_files_properties(gfx/gfx_layer.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The scene core's rows: scenes compiled by caliper_scene and drawn through the layer on Metal.
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene.cpp)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_scene)
+    set_source_files_properties(gfx/gfx_scene.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 
 # On Windows the same §16 matrix runs on the Vulkan backend (CPU-staged path),

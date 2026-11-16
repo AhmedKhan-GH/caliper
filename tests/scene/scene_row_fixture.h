@@ -5,10 +5,10 @@
 // top-left), holding one points batch: three square points one pixel wide at the centres of
 // chosen pixels, each with its own RGBA colour from a colour stream, in one buffer at nonzero
 // offsets, as the existing geometry rows place their points. The reference is the clear colour
-// everywhere and each point's colour at its pixel. The GPU row draws the compiled list on the
-// Metal backend with the generated programs and compares the readback with reference() byte for
-// byte; until the layer's core and Metal backend are on the branch, caliper_scene_tests checks
-// the compiled draw against the reference on the CPU.
+// everywhere and each point's colour at its pixel. The GPU row (tests/gfx/gfx_scene.cpp) draws the
+// compiled list on the layer's Metal backend with the generated programs and compares the
+// readback with reference() byte for byte; caliper_scene_tests checks the compiled draw against
+// the reference on the CPU.
 #pragma once
 
 #include "scene/camera.h"
