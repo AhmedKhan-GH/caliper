@@ -20,7 +20,8 @@ budget, the handoff and `session/close` ([How it stays an ACP agent](#how-it-sta
 bundle (item 13), built from the session with its bounds and cuts ([The context bundle](#the-context-bundle)); and the
 capability probe with its cache and the person's overrides (item 16,
 [Capabilities and degradations](#capabilities-and-degradations)); and the provider conformance suite (item 18,
-[below](#the-provider-conformance-suite)). The inline surface on a panel (item 14, in part), with the agent over `AcpClient`, is built too
+[below](#the-provider-conformance-suite)); the widget agent's settings in the app with one key per provider (item 17,
+[Presets](#presets)) and the GPU note (item 19, [GPU contention](#gpu-contention)). The inline surface on a panel (item 14, in part), with the agent over `AcpClient`, is built too
 ([The inline prompt and the preview](#the-inline-prompt-and-the-preview)). **Planned:** everything else on this page. The [work items](#work-items) give the
 sizes and the order.
 
@@ -328,11 +329,17 @@ setup steps instead.
 
 ## With no provider set up
 
-The widget agent needs a provider: a Claude API key today, and later any configured preset, where a local server needs
-no key. When none is set up, ⌘K still opens the inline prompt, but its only action is Ask in chat, with the same
-handoff: Enter sends the request to the side chat. The row shows the tag NO PROVIDER and a Setup action, which opens
-the widget agent's settings, where Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`) is linked; the
-surface writes no sentence of its own. The sidecar is not started.
+The widget agent needs a provider: a preset chosen in its settings, with its key where the preset needs one; a local
+server needs none. When none is set up, ⌘K still opens the inline prompt, but its only action is Ask in chat, with the
+same handoff: Enter sends the request to the side chat. The row shows the tag NO PROVIDER and a Setup action, which
+opens the widget agent's settings; the surface writes no sentence of its own. The sidecar is not started.
+
+**As built**, "no provider" is exactly `agent_launch()`'s refusal (`src/host/builder/agent_settings.h`): no preset
+chosen, an address that is not valid, an OpenAI-compatible preset without a model, a required key that is not set, or
+a model known to lack tool calling (the person's override, or a probe answer younger than 30 days). The settings name
+the case in a tag: No provider, Invalid address, No model, No key or No tool calling. A model that the sidecar learns
+lacks tool calling only at run time still refuses `session/new` with `agent.no_tools`, which the surface shows as a
+failure.
 
 ## One journal, one history, one queue
 
@@ -441,8 +448,31 @@ through it could not be confirmed.
 ### Presets
 
 The widget agent's settings offer presets, each of which fills the base URL; the person then picks the model and,
-where needed, enters a key. The sidecar reaches every preset today, from its command line; the settings that offer
-them are planned.
+where needed, enters a key. The sidecar reaches every preset from its command line, and the settings in the app offer
+them.
+
+**Built: the settings in the app** (`src/host/builder/agent_settings.h`, the reference Widget agent,
+`docs/references/widget-agent.md`, under The settings in the app). Decisions made while building them:
+
+- **Where they open.** A popup over any page, from the landing screen's ⌘, Agent, from the key ⌘, on any page, and from
+  the inline surface's Setup (no provider) and Model (after a refusal). One placement rule at every size: 62 percent
+  of the work area's width, centred, the top at 12 percent of the work area's height, and the content's height. A pane
+  of its own was not chosen: the settings are visited rarely, and a popup reaches them from the landing and from ⌘K on
+  the spec page without a change of page.
+- **What is stored.** `widget-agent.json` in the app-data folder, beside the side chat's `side-chat.json`: the chosen
+  preset and, for each preset, its base URL, model and effort. Never a key, never in the workspace. The probe's
+  answers and the overrides stay in the probe's own cache, `model-capabilities.json` in the same folder, which the
+  sidecar reads with `--cache-dir`, so each answer has one place.
+- **No provider until a preset is chosen.** A key already in the Keychain does not choose Claude by itself; the person
+  chooses the preset once.
+- **The Claude preset's models and efforts** come from `presets.json` (`models`, `efforts`), which a test keeps equal
+  to the sidecar's `claude.py`. Each of the four models takes all five efforts, as the `claude-api` skill's table and
+  the installed `anthropic` SDK 2.8.0 (`OutputConfigParam.effort`, and `EffortCapability` of the Models API) give.
+- **The key row only writes**, through `KeyStore::set()`, `has()` and `remove()`; a test with a counting store checks
+  that nothing reached `do_read()`. A hidden app's store is an in-memory one (`app_key_store()`).
+- **Tests and captures** use an in-memory store, the offline switch and a fake model server on loopback
+  (`src/builder/agent/tests/fake_openai_serve.py`); the hidden app's input driver gained `widget <action>` and
+  `settings open|close|until`.
 
 **Built: the presets as data.** The table below is one file, `src/builder/agent/caliper_agent/presets.json`, which the
 sidecar reads (`caliper_agent/presets.py`, `--preset <id>`) and the key store embeds at build time, so both know the
@@ -661,6 +691,12 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   widget agent's base URL is a loopback address, and the side chat's header shows the same note when the person has
   marked the side chat's agent as running on a local model. The app cannot tell where an outside agent's model runs,
   so the side chat relies on that setting.
+- **Built: the widget agent's note.** The note is the noun phrase "Shared GPU" (`agent_gpu_note()`): shown under the
+  presets in the settings and after the model in the ⌘K prompt row (the agent's label), while the app's live session
+  is attached (`caliper_live::Attachment::attached()`, true while the app holds a training script's stream, until it
+  detaches) and the chosen base URL is a loopback address, for Ollama, LM Studio or Custom alike. A test in the hidden app
+  attaches to the stream of the producer of the live acceptance test with the Ollama preset chosen and sees the note,
+  then detaches and sees it gone. The side chat's setting and note are not built.
 - **The advice**, in Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`):
   during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;
@@ -778,8 +814,8 @@ and L six to ten; each figure is rough.
 | 14 | In part: the inline surface on a panel, the prompt, the preview drawn in place, Accept, Reject and Refine, Ask in chat handed to the page, and the agent over `AcpClient`. Left: the selection, dropped-file and property entry points, connecting the surface in the app's page, and the packaging of `caliper-agent` and a Python runtime | M, 4 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
 | 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
-| 17 | The presets and one key per provider in the settings. Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` and its checks and warnings, and the scrubbing of every documented key shape. Left: the settings pane | S, 1 day |
+| 17 | Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` with its checks and warnings, the scrubbing of every documented key shape, and the settings in the app (`agent_settings.h`) with the agent made from them | None left |
 | 18 | Done: the provider conformance suite (`caliper-agent-conformance`), its scripted and fake-server modes and its reference page | None left |
-| 19 | The GPU contention note | S, 1 day |
+| 19 | Done: the GPU contention note of the widget agent ("Shared GPU" in the settings and the ⌘K prompt row). Left: the side chat's setting and note | S, half a day |
 
 The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](windows-parity.md) page.

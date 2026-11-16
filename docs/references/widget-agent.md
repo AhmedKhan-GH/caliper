@@ -322,3 +322,57 @@ caliper-widget-shot --workspace <dir> --applet <id> --panel <id> --prompt <text>
 It opens the applet as the workspace's open spec, so give it a copy of a workspace. It prints a JSON summary: the
 files and their states, the panel's rectangle, the undo steps before and after Accept, and whether the open spec
 changed before Accept.
+
+## The settings in the app
+
+The widget agent's settings are a popup over any page (`src/host/builder/agent_settings.h`). It opens from the
+landing screen's **⌘, Agent**, from the key ⌘, (Ctrl+, on Windows) on any page, and from the inline surface's
+**Setup** (no provider) and **Model** (after a refusal). Its width is 62 percent of the work area, its top is 12 percent
+of the work area's height below the work area's top, and its height is its content's; Escape or esc Close closes it.
+
+| Row | What it holds |
+|---|---|
+| Provider | The presets of `presets.json`, one chosen |
+| Base URL | Fixed text for Claude, OpenAI, Gemini and OpenRouter; a field for Ollama, LM Studio and Custom, with the tags Remote address, Unencrypted and Invalid address |
+| Model | A field, and as choices the Claude preset's four models or the server's list after **List** (`caliper-agent probe --list-models`) |
+| Effort | Claude only: low, medium, high, xhigh and max, which each of its four models takes |
+| Key | Set or Not set; a password field with Save, or Replace and Remove; no row for Ollama and LM Studio, nor for Custom before its address is valid |
+| Capabilities | Tool calling, vision and the context length with where each came from (probe, server, known, override, assumed), Yes, No and Auto for the person's override (`caliper-agent probe --set`), and **Probe** (`--refresh`) |
+| Note | Shared GPU, while a live run is attached and the base URL is a loopback address |
+
+The settings never read a key back. They call `KeyStore::set()`, `has()` and `remove()` only, and wipe the field's
+text when it is saved or cancelled. A hidden app's key store is an in-memory one, so it never touches the Keychain.
+The probe runs as a child process with the key placed only in its environment, and with `CALIPER_AGENT_OFFLINE` passed
+through when the app has it.
+
+**`widget-agent.json`**, in the app-data folder beside `side-chat.json`, holds the choice and never a key:
+
+```json
+{"version": 1, "preset": "ollama",
+ "providers": {"ollama": {"base_url": "http://localhost:11434/v1", "model": "qwen3.8:27b"},
+               "anthropic": {"model": "claude-haiku-5-5", "effort": "low"}}}
+```
+
+A file that does not parse counts as no choice, and an unknown preset is dropped. The probe's answers and the
+person's overrides are kept apart, in `model-capabilities.json` in the same folder, which the agent reads with
+`--cache-dir`.
+
+**The agent's start.** The inline surface's agent is made from the settings each time they change while the prompt is
+closed. It starts `caliper-agent` with `--preset`, `--base-url` (Ollama, LM Studio and Custom), `--model`, `--effort`
+(Claude) and `--cache-dir`, and `place_key_in_environment()` puts the provider's key in its environment: in
+`ANTHROPIC_API_KEY` for Claude, in `CALIPER_MODEL_API_KEY` for the others, and none for a local server. ⌘K has no
+provider, and offers Setup and Ask in chat, when no preset is chosen, the address is not valid, an OpenAI-compatible
+preset has no model, a required key is not set, or the model is known to lack tool calling (the person's override, or
+a probe answer younger than 30 days). The settings name that state in a tag: No provider, Invalid address, No model,
+No key or No tool calling. While the GPU note applies, the prompt row shows it after the model the session reports.
+
+**caliper-agent-settings-shot** is a development tool, not installed, that draws the settings offscreen in a named
+state, with an in-memory key store and, for the local scenarios, a fake model server on loopback that it starts with
+the given interpreter:
+
+```
+caliper-agent-settings-shot --scenario claude|key-set|local|no-tools|gpu-note --out <file.png> --data-dir <dir>
+                            [--size WxH] [--python <interpreter>] [--agent-dir <src/builder/agent>] [--frames N]
+```
+
+It prints a JSON summary: the state, whether a key is set, the GPU note, the model choices and every text shown.

@@ -101,14 +101,14 @@ instead.
 - **The side chat** runs any ACP agent on whatever model that agent supports, local models included, and Caliper needs
   nothing extra for it. The worked example is opencode with a model served by Ollama, which
   ACP integration (`design/acp-integration.md`) sets up step by step.
-- **The widget agent** will offer presets for local model servers, Ollama and LM Studio among them, with no key. A
+- **The widget agent** offers presets for local model servers, Ollama and LM Studio, with no key, in its settings. A
   model must be able to call tools to drive Caliper; Caliper checks that, and also whether the model can look at
-  images, when you choose it. Caliper will publish which models do the widget agent's work well, from a set of test
-  tasks.
+  images, when you choose Probe. [Widget agent conformance](../references/widget-agent-conformance.md) lists how
+  models did on a set of test tasks.
 
 A local model shares your computer with everything else. On a Mac it uses the same GPU and the same memory as a
-training run that streams into Caliper, so both slow down, and Caliper shows a note while a run is live. The setup
-guide gives advice for that case.
+training run that streams into Caliper, so both slow down, and the widget agent's settings and its ⌘K prompt show
+Shared GPU while a run is attached. The setup guide gives advice for that case.
 
 ## Privacy
 
