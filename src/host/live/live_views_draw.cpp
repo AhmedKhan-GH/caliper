@@ -38,6 +38,7 @@
 #include "live/live_views_state.h"
 
 #include "renderer/host_renderer.h"
+#include "tensor_bridge.h"   // colormap_lut
 
 #include <caliper/services/geometry_v1_1.h>
 
@@ -45,6 +46,8 @@
 #include <implot.h>
 
 #include <algorithm>
+#include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1261,6 +1264,71 @@ std::string cells_detail(const View& v, int64_t r0, int64_t r1, int64_t c0, int6
     return d.str();
 }
 
+// Evenly spaced round integer ticks in [lo, hi], about n of them (plot.ts).
+std::vector<int64_t> index_ticks(double lo, double hi, int n) {
+    std::vector<int64_t> out;
+    if (!(hi >= lo) || !std::isfinite(lo) || !std::isfinite(hi)) return out;
+    const double raw = std::max(hi - lo, 1e-9) / std::max(1, n);
+    const double mag = std::pow(10.0, std::floor(std::log10(raw)));
+    const double r = raw / mag;
+    const double step = std::max(1.0, std::round((r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag));
+    for (double t = std::ceil(lo / step) * step; t <= hi + step * 1e-9 && out.size() < 64; t += step)
+        out.push_back((int64_t)std::llround(t));
+    return out;
+}
+
+// The browser element's axes around a heatmap or image (web/src/views/plot.ts,
+// drawAxes): a frame, ticks at cell centres labelled with source indices
+// through the payload axes (a mosaic's per cell), the dims' names, and for a
+// heatmap the colorbar at the right. Cells [x0, x1) x [y0, y1) are in view.
+void draw_cell_axes(const View& v, const TensorView& tv, ImDrawList* dl, float ax, float ay, float aw, float ah,
+                    double x0, double x1, double y0, double y1) {
+    const ImU32 rule = IM_COL32(0x5a, 0x57, 0x51, 255), faint = IM_COL32(0xa4, 0x9d, 0x8f, 255);
+    ImFont* mono = nullptr;   // the host's mono face when it loaded one (by its file name), else the current
+    for (ImFont* f : ImGui::GetIO().Fonts->Fonts)
+        if (std::strstr(f->GetDebugName(), "Code") || std::strstr(f->GetDebugName(), "Mono")) { mono = f; break; }
+    const float fs = 10.5f;
+    dl->AddRect(ImVec2(std::round(ax) - 0.5f, std::round(ay) - 0.5f),
+                ImVec2(std::round(ax + aw) + 0.5f, std::round(ay + ah) + 0.5f), rule);
+    const CellAxes cax = cell_axes(v);
+    auto label = [&](const caliper_live::PayloadAxis* a, int64_t i) {
+        const int64_t per = cax.tile && a && a->size > 0 ? a->size : INT64_MAX;
+        return std::to_string(source_index(a, per == INT64_MAX ? i : i % per));
+    };
+    auto text = [&](ImVec2 p, const std::string& s, float align_x, float align_y) {
+        const ImVec2 ts = mono ? mono->CalcTextSizeA(fs, FLT_MAX, 0.0f, s.c_str()) : ImGui::CalcTextSize(s.c_str());
+        dl->AddText(mono, fs, ImVec2(p.x - ts.x * align_x, p.y - ts.y * align_y), faint, s.c_str());
+    };
+    const float sx = aw / (float)(x1 - x0), sy = ah / (float)(y1 - y0);
+    for (int64_t c : index_ticks(std::max(x0 - 0.5, 0.0), std::min(x1 - 0.5, (double)tv.w - 1), std::max(2, (int)(aw / 70)))) {
+        const float x = std::round(ax + (float)(c + 0.5 - x0) * sx) + 0.5f;
+        if (x < ax - 0.5f || x > ax + aw + 0.5f) continue;
+        dl->AddLine(ImVec2(x, ay + ah + 0.5f), ImVec2(x, ay + ah + 4.5f), rule);
+        text(ImVec2(x, ay + ah + 6.0f), label(cax.col, c), 0.5f, 0.0f);
+    }
+    for (int64_t r : index_ticks(std::max(y0 - 0.5, 0.0), std::min(y1 - 0.5, (double)tv.h - 1), std::max(2, (int)(ah / 36)))) {
+        const float y = std::round(ay + (float)(r + 0.5 - y0) * sy) + 0.5f;
+        if (y < ay - 0.5f || y > ay + ah + 0.5f) continue;
+        dl->AddLine(ImVec2(ax - 0.5f, y), ImVec2(ax - 4.5f, y), rule);
+        text(ImVec2(ax - 6.0f, y), label(cax.row, r), 1.0f, 0.5f);
+    }
+    if (cax.col && !cax.col->dim.empty()) text(ImVec2(ax + aw, ay + ah + 19.0f), cax.col->dim, 1.0f, 0.0f);
+    if (cax.row && !cax.row->dim.empty()) text(ImVec2(ax - 6.0f, ay - 4.0f), cax.row->dim, 1.0f, 1.0f);
+    if (v.kind == CALIPER_LIVE_KIND_HEATMAP) {
+        // The colorbar: the colormap from its top (index 255) to its bottom.
+        const uint32_t* lut = caliper_host::colormap_lut(tv.colormap);
+        const float bx = ax + aw + 8.0f, bw = 8.0f;
+        const int n = std::max(2, (int)std::floor(ah));
+        for (int i = 0; lut && i < n; ++i) {
+            const int idx = (int)std::lround(255.0 * (1.0 - (double)i / (n - 1)));
+            const uint32_t c = lut[idx];
+            dl->AddRectFilled(ImVec2(bx, ay + i * ah / n), ImVec2(bx + bw, ay + (i + 1) * ah / n + 0.5f),
+                              IM_COL32(c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff, 255));
+        }
+        dl->AddRect(ImVec2(bx - 0.5f, ay - 0.5f), ImVec2(bx + bw + 0.5f, ay + ah + 0.5f), rule);
+    }
+}
+
 void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     TensorView* tv = nullptr;
     for (auto& t : core->views)
@@ -1291,53 +1359,68 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
             on_button = ImGui::IsItemHovered();
         }
 
-        // The content area and how cells map onto it: k screen units per cell
-        // and the cell (wx0, wy0) at the area's top left. Without an event sink
-        // this is views_draw's own layout (the image scaled to fit, centred
-        // horizontally, at the top). With one, the view pans and zooms like the
-        // browser element's heatmap and draws the image itself: the wheel zooms
-        // about the pointer, a drag pans, a double click fits it again (centred).
+        // The plot area and how cells map onto it: kx and ky screen units per
+        // cell across and down, and the cell (wx0, wy0) at the area's top left.
+        // Without an event sink this is views_draw's own layout (the image
+        // scaled to fit, centred horizontally, at the top). With one, the view
+        // pans and zooms like the browser element's heatmap and draws the
+        // image itself: the wheel zooms about the pointer, a drag pans, a
+        // double click fits it again. A bare view on a page (the browser) also
+        // takes the element's layout: axes of row and column indices around
+        // the plot area, a colorbar beside a heatmap, a heatmap stretched to
+        // the area and an image at equal aspect.
         const ImVec2 img((float)tv->w / core->scale, (float)tv->h / core->scale);
         const ImVec2 cs = ImGui::GetCursorStartPos();
-        const float ax = wp.x + cs.x;
-        const float ay = wp.y + cs.y + (core->views_bare ? 0.0f : ImGui::GetTextLineHeightWithSpacing());
-        const float aw = wp.x + ws.x - st.WindowPadding.x - ax;
-        const float ah = wp.y + ws.y - st.WindowPadding.y - ay;
+        const bool ev = (bool)S->events;
+        const bool page = ev && core->views_bare;
+        const bool image = v.kind == CALIPER_LIVE_KIND_IMAGE;
+        // Margins of the element's heatmap view: tick labels left and below, a
+        // colorbar right of a heatmap (web/src/views/heatmap.ts).
+        const float ml = page ? 46.0f : 0.0f, mt = page ? 16.0f : 0.0f;
+        const float mr = page ? (image ? 10.0f : 26.0f) : 0.0f, mb = page ? 32.0f : 0.0f;
+        const float ax = wp.x + cs.x + ml;
+        const float ay = wp.y + cs.y + (core->views_bare ? 0.0f : ImGui::GetTextLineHeightWithSpacing()) + mt;
+        const float aw = wp.x + ws.x - st.WindowPadding.x - ax - mr;
+        const float ah = wp.y + ws.y - st.WindowPadding.y - ay - mb;
         const ImVec2 m = ImGui::GetIO().MousePos;
         ImGuiIO& io = ImGui::GetIO();
         // A CPU payload's copy, or the MTLBuffer the v1.2 view still imports.
         const bool live_buf = v.tex_cpu && (v.tex_cpu == v.tex_copy.data() ||
                                             (tv->alloc && tv->alloc_buf == v.tex_buf));
         const uint8_t* cpu = live_buf ? v.tex_cpu : nullptr;
-        const bool ev = (bool)S->events;
         tv->drawn_by_live = ev;
         if (aw < 1.0f || ah < 1.0f || tv->w <= 0 || tv->h <= 0) { ImGui::End(); return; }
         const double W = tv->w, H = tv->h;
+        // The fit: equal units across and down (an image, or a heatmap off a
+        // page), or a heatmap stretched to the area on a page.
         const double kfit = std::min(aw / W, ah / H);
-        double k, wx0, wy0;
+        const double kxfit = page && !image ? aw / W : kfit, kyfit = page && !image ? ah / H : kfit;
+        double kx, ky, wx0, wy0;
         if (!ev) {
             const float sc = (img.x > 0 && img.y > 0) ? std::min(aw / img.x, ah / img.y) : 0.0f;
-            k = kfit;
-            wx0 = -std::max(0.0, ((double)aw - img.x * sc) * 0.5) / k;
+            kx = ky = kfit;
+            wx0 = -std::max(0.0, ((double)aw - img.x * sc) * 0.5) / kx;
             wy0 = 0.0;
         } else {
             if (v.zoom_w != tv->w || v.zoom_h != tv->h) v.zoom_fitted = true;   // another payload shape
             v.zoom_w = tv->w;
             v.zoom_h = tv->h;
             if (v.zoom_fitted) {
-                v.zoom_k = kfit;
+                v.zoom_kx = kxfit;
+                v.zoom_ky = kyfit;
                 v.zoom_cx = W * 0.5;
                 v.zoom_cy = H * 0.5;
             }
-            k = v.zoom_k;
-            wx0 = v.zoom_cx - aw * 0.5 / k;
-            wy0 = v.zoom_cy - ah * 0.5 / k;
+            kx = v.zoom_kx;
+            ky = v.zoom_ky;
+            wx0 = v.zoom_cx - aw * 0.5 / kx;
+            wy0 = v.zoom_cy - ah * 0.5 / ky;
         }
         auto at = [&](ImVec2 p, double* cx, double* cy) {
-            *cx = wx0 + (p.x - ax) / k;
-            *cy = wy0 + (p.y - ay) / k;
+            *cx = wx0 + (p.x - ax) / kx;
+            *cy = wy0 + (p.y - ay) / ky;
         };
-        auto px = [&](double cx, double cy) { return ImVec2(ax + (float)((cx - wx0) * k), ay + (float)((cy - wy0) * k)); };
+        auto px = [&](double cx, double cy) { return ImVec2(ax + (float)((cx - wx0) * kx), ay + (float)((cy - wy0) * ky)); };
         auto cell = [&](ImVec2 p, int64_t* r, int64_t* c) {
             if (p.x < ax || p.y < ay || p.x >= ax + aw || p.y >= ay + ah) return false;
             double cx, cy;
@@ -1363,26 +1446,32 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
             // drag released in the frame it moved still pans.
             if ((g.down || released) && !g.selecting && g.moved && (m.x != g.lx || m.y != g.ly)) {
                 v.zoom_fitted = false;
-                v.zoom_cx -= (m.x - g.lx) / v.zoom_k;
-                v.zoom_cy -= (m.y - g.ly) / v.zoom_k;
+                v.zoom_cx -= (m.x - g.lx) / v.zoom_kx;
+                v.zoom_cy -= (m.y - g.ly) / v.zoom_ky;
             }
             g.lx = m.x;
             g.ly = m.y;
             if (hovered && io.MouseWheel != 0.0f) {
                 double cx, cy;
                 at(m, &cx, &cy);
-                const double nk = std::clamp(v.zoom_k * std::exp(0.15 * (double)io.MouseWheel), kfit * 1e-2, kfit * 1e4);
+                const double f = std::clamp(v.zoom_kx * std::exp(0.15 * (double)io.MouseWheel), kxfit * 1e-2, kxfit * 1e4) / v.zoom_kx;
                 v.zoom_fitted = false;
-                v.zoom_k = nk;
-                v.zoom_cx = cx - (m.x - (ax + aw * 0.5)) / nk;
-                v.zoom_cy = cy - (m.y - (ay + ah * 0.5)) / nk;
+                v.zoom_kx *= f;
+                v.zoom_ky *= f;
+                v.zoom_cx = cx - (m.x - (ax + aw * 0.5)) / v.zoom_kx;
+                v.zoom_cy = cy - (m.y - (ay + ah * 0.5)) / v.zoom_ky;
             }
             if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) v.zoom_fitted = true;
-            if (!v.zoom_fitted) {
-                k = v.zoom_k;
-                wx0 = v.zoom_cx - aw * 0.5 / k;
-                wy0 = v.zoom_cy - ah * 0.5 / k;
+            if (v.zoom_fitted) {
+                v.zoom_kx = kxfit;
+                v.zoom_ky = kyfit;
+                v.zoom_cx = W * 0.5;
+                v.zoom_cy = H * 0.5;
             }
+            kx = v.zoom_kx;
+            ky = v.zoom_ky;
+            wx0 = v.zoom_cx - aw * 0.5 / kx;
+            wy0 = v.zoom_cy - ah * 0.5 / ky;
             if (g.down || released) {
                 double cx, cy;
                 at(m, &cx, &cy);
@@ -1420,11 +1509,11 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
             // a physical pixel or more so that cells read as cells.
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->PushClipRect(ImVec2(ax, ay), ImVec2(ax + aw, ay + ah), true);
-            const double c0 = std::max(wx0, 0.0), c1 = std::min(wx0 + aw / k, W);
-            const double r0 = std::max(wy0, 0.0), r1 = std::min(wy0 + ah / k, H);
+            const double c0 = std::max(wx0, 0.0), c1 = std::min(wx0 + aw / kx, W);
+            const double r0 = std::max(wy0, 0.0), r1 = std::min(wy0 + ah / ky, H);
             if (c1 > c0 && r1 > r0) {
                 const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
-                const bool magnify = k * core->scale >= 1.0;
+                const bool magnify = std::min(kx, ky) * core->scale >= 1.0;
                 if (magnify && pio.DrawCallback_SetSamplerNearest) dl->AddCallback(pio.DrawCallback_SetSamplerNearest, nullptr);
                 dl->AddImage((ImTextureID)tv->tex, px(c0, r0), px(c1, r1),
                              ImVec2((float)(c0 / W), (float)(r0 / H)), ImVec2((float)(c1 / W), (float)(r1 / H)));
@@ -1469,11 +1558,12 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
                 }
             }
             dl->PopClipRect();
+            if (page) draw_cell_axes(v, *tv, dl, ax, ay, aw, ah, wx0, wx0 + aw / kx, wy0, wy0 + ah / ky);
         }
         v.geo_valid = true;
         v.geo_area[0] = ax; v.geo_area[1] = ay; v.geo_area[2] = aw; v.geo_area[3] = ah;
-        v.geo_window[0] = wx0; v.geo_window[1] = wx0 + aw / k;
-        v.geo_window[2] = wy0; v.geo_window[3] = wy0 + ah / k;
+        v.geo_window[0] = wx0; v.geo_window[1] = wx0 + aw / kx;
+        v.geo_window[2] = wy0; v.geo_window[3] = wy0 + ah / ky;
         v.geo_ydown = true;
 
         int64_t r = 0, c = 0;

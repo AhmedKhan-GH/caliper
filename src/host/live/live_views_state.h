@@ -172,9 +172,10 @@ struct View {
     // SERIES / HISTOGRAM: the selected steps [s0, s1) or bins [b0, b1), s1 == s0: none.
     int64_t sel_s0 = 0, sel_s1 = 0;
     // HEATMAP / IMAGE pan and zoom: the cell at the centre of the area (cx, cy)
-    // and the screen units per cell (k). fitted: follow the fit to the area.
+    // and the screen units per cell across and down (kx, ky). fitted: follow
+    // the fit to the area.
     bool    zoom_fitted = true;
-    double  zoom_cx = 0.0, zoom_cy = 0.0, zoom_k = 1.0;
+    double  zoom_cx = 0.0, zoom_cy = 0.0, zoom_kx = 1.0, zoom_ky = 1.0;
     int     zoom_w = 0, zoom_h = 0;       // the payload size the zoom was made on
     // SERIES / HISTOGRAM: follow (the axes fit the data every frame) or keep
     // the user's pan and zoom, and a log scale for y. fit_once: fit next frame.
