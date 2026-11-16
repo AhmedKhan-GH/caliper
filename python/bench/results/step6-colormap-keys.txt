@@ -156,3 +156,31 @@ The CPU in the same moment (CALIPER_CMAP_BENCH=1 caliper_tests --test-case="colo
 [cmap-bench] derive_keys(2, -1): median 81.0 us, p95 95.0 us, 7931 evaluations of the reference; load 3.93
 [cmap-bench] derive_keys(0, 3.40282e+38): median 63.1 us, p95 77.4 us, 5854 evaluations of the reference; load 3.93
 [cmap-bench] cache hit: block() median 3.7 ns, fill() with the 4,112-byte copy median 45.7 ns; 18000000 hits, 4 misses; load 3.93
+
+## After integration onto the scene view (s4-cmapint, head a10865e4)
+
+The same row at the integration of step 6 onto the head that holds the scene view and the WebGPU backend, with no slot
+held and a 1-minute load of 7.72 at the start (CALIPER_GFX_CMAP_BENCH=1 caliper_gfx_tests --test-case="gfx/Metal
+colormap: timing*" -s):
+1024 x 1024, smooth field: integer decision, as the layer compiles it (fast math, 16 x 8) median    15.2 us, p95    16.8 us per pass,  1.20x the float pass (+2.5 us); 40 samples of 16 dispatches; load 7.26
+1024 x 1024, smooth field: float pass (renderer: default fast math, 16 x 16)        median    12.7 us, p95    14.2 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 7.26
+1024 x 1024, smooth field: integer decision with safe math                          median    33.3 us, p95    33.9 us per pass,  2.62x the float pass (+20.6 us); 40 samples of 16 dispatches; load 7.26
+1024 x 1024, uniform random values: integer decision, as the layer compiles it (fast math, 16 x 8) median    11.8 us, p95    15.7 us per pass,  1.23x the float pass (+2.3 us); 40 samples of 16 dispatches; load 7.26
+1024 x 1024, uniform random values: float pass (renderer: default fast math, 16 x 16)        median     9.6 us, p95    12.9 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 7.26
+1024 x 1024, uniform random values: integer decision with safe math                          median    24.7 us, p95    33.5 us per pass,  2.58x the float pass (+15.1 us); 40 samples of 16 dispatches; load 7.26
+2048 x 2048, smooth field: integer decision, as the layer compiles it (fast math, 16 x 8) median    32.6 us, p95    37.4 us per pass,  1.25x the float pass (+6.4 us); 40 samples of 16 dispatches; load 7.26
+2048 x 2048, smooth field: float pass (renderer: default fast math, 16 x 16)        median    26.2 us, p95    26.4 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 7.26
+2048 x 2048, smooth field: integer decision with safe math                          median    62.2 us, p95    65.9 us per pass,  2.38x the float pass (+36.0 us); 40 samples of 16 dispatches; load 7.26
+2048 x 2048, uniform random values: integer decision, as the layer compiles it (fast math, 16 x 8) median    34.9 us, p95    41.6 us per pass,  1.20x the float pass (+5.8 us); 40 samples of 16 dispatches; load 7.26
+2048 x 2048, uniform random values: float pass (renderer: default fast math, 16 x 16)        median    29.1 us, p95    32.6 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 7.26
+2048 x 2048, uniform random values: integer decision with safe math                          median    62.6 us, p95    66.8 us per pass,  2.15x the float pass (+33.5 us); 40 samples of 16 dispatches; load 7.26
+
+| Heatmap | Float pass | Integer pass, built form | Difference |
+|---|---|---|---|
+| 1,024², smooth field | 12.7 µs | 15.2 µs | +2.5 µs, 1.20x |
+| 1,024², uniform random values | 9.6 µs | 11.8 µs | +2.3 µs, 1.23x |
+| 2,048², smooth field | 26.2 µs | 32.6 µs | +6.4 µs, 1.25x |
+| 2,048², uniform random values | 29.1 µs | 34.9 µs | +5.8 µs, 1.20x |
+
+The differences and ratios match the quiet window above (within 0.7 µs and 0.03x), within the 20 µs threshold. At
+1,024² both passes take 3 to 6 µs more than at load 3.93, at this higher load; at 2,048² they are within 0.4 µs.
