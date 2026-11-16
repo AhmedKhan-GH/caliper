@@ -375,6 +375,7 @@ add_library(caliper_scene STATIC
     src/host/scene/path.cpp
     src/host/scene/scene_tree.cpp
     src/host/scene/camera.cpp
+    src/host/scene/compile.cpp
 )
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_scene PUBLIC caliper::sdk)

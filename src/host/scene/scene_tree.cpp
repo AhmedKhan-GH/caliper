@@ -368,6 +368,24 @@ static bool validate_batch(const Batch& b, uint32_t want_dims, std::string* erro
         for (const std::string& l : b.labels)
             if (l.size() > kMaxLabelBytes) return fail(error, "a label is at most 63 bytes");
     }
+    // The index clamp and the edge gather read these arrays through storage bindings, whose
+    // offsets WebGPU aligns to 256 bytes and whose rows the gather reads packed.
+    auto storage = [&](Role role, uint32_t packed) -> bool {
+        const BatchArray* a = b.array(role);
+        if (!a || a->count <= 1) return true;
+        if (a->offset % kStorageOffsetAlign != 0)
+            return fail(error, std::string(prim) + " " + role_name(role) +
+                                   ": read through a storage binding, so its byte offset is a multiple of 256");
+        if (packed && a->stride != packed)
+            return fail(error, std::string(prim) + " " + role_name(role) + ": the edge gather reads packed rows of " +
+                                   std::to_string(packed) + " bytes");
+        return true;
+    };
+    if (b.primitive == Primitive::Mesh && !storage(Role::Indices, 0)) return false;
+    if (b.primitive == Primitive::Lines && b.line_mode == LineMode::Edges) {
+        if (!storage(Role::Indices, 0) || !storage(Role::Positions, want_dims * 4)) return false;
+        if (!b.per_edge && (!storage(Role::Colors, 4) || !storage(Role::Values, 4))) return false;
+    }
     if (b.primitive != Primitive::Image && b.dims() != want_dims && n > 0)
         return fail(error, std::string(prim) + ": " + std::to_string(want_dims) + "-D data is needed here");
     if (!(b.width_px > 0.0f) || !(b.size_px >= 0.0f)) return fail(error, std::string(prim) + ": sizes are positive");

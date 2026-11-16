@@ -189,6 +189,17 @@ TEST_CASE("batches describe arrays and are validated, never copied") {
     CHECK_FALSE(t.set_batch(e, edges, false, &err));   // 4 rows read as per vertex (6) by default
     edges.per_edge = true;
     CHECK(t.set_batch(e, edges, false, &err));
+    // The clamp and the gather read through storage bindings: offsets aligned to 256, rows packed.
+    Batch misaligned = lines3(6, LineMode::Edges, 4);
+    misaligned.arrays[1].offset = 128;
+    CHECK_FALSE(t.set_batch(e, misaligned, false, &err));
+    CHECK(err.find("256") != std::string::npos);
+    misaligned = lines3(6, LineMode::Edges, 4);
+    misaligned.arrays[0].stride = 16;
+    CHECK_FALSE(t.set_batch(e, misaligned, false, &err));
+    Batch mesh_misaligned = mesh3(4, 2);
+    mesh_misaligned.arrays[1].offset = 12;
+    CHECK_FALSE(t.set_batch(e, mesh_misaligned, false, &err));
 
     // Mesh: one of colours, values and uvs; uvs need a texture.
     Batch mesh = mesh3(4, 2);

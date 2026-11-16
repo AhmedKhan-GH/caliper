@@ -125,6 +125,7 @@ add_executable(caliper_scene_tests
     scene/test_scene_store.cpp
     scene/test_scene_matrices.cpp
     scene/test_scene_cameras.cpp
+    scene/test_scene_compile.cpp
 )
 target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
 if(TARGET caliper_gfx)

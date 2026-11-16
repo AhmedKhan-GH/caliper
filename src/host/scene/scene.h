@@ -22,6 +22,9 @@
 //  - The world bounds of a scene cover its 3-D batches and its cameras' centres. Batches in a
 //    camera's pixel space are left out, because their place depends on the plane distance,
 //    which depends on the bounds.
+//  - Arrays that the index clamp and the edge gather read through storage bindings (a mesh's
+//    indices; an edge batch's pairs, positions and per-vertex colours) sit at byte offsets that
+//    are multiples of 256, WebGPU's storage offset alignment, and the gather's rows are packed.
 //  - An image batch carries the layer texture that the view filled from its buffer with
 //    fill_texture_from_buffer, since filling is the view's work on the layer; the store keeps
 //    only the handle and the size.
@@ -63,6 +66,8 @@ inline constexpr uint32_t kMaxClassId = 65535;
 inline constexpr uint32_t kClassTableSide = 256;        // 256 x 256 texels: ids 0 to 65,535
 inline constexpr uint32_t kMaxImageSide = 8192;
 inline constexpr uint32_t kMaxUnitsBytes = 15;
+// WebGPU's minStorageBufferOffsetAlignment: arrays the index clamp and the edge gather read.
+inline constexpr uint32_t kStorageOffsetAlign = 256;
 
 // The points view's flat light grey, packed r | g << 8 | b << 16 | a << 24.
 inline constexpr uint32_t kDefaultRgba = 0xff000000u | (230u << 16) | (220u << 8) | 220u;
