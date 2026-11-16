@@ -85,7 +85,7 @@ What `caliper list` prints for the applets the running app found, in the same or
 
 ### POST /v0/applets/{id}/launch
 
-Opens the page of the applet with that manifest id, as a click on its row on the landing screen does. The page shown before goes first, as Home takes it: an open applet is torn down, and an attached live session is detached. When the new applet fails to launch, the app stays on the landing screen with the reason in the Activity pane, and the windowless mode launches the applet it showed before again.
+Opens the page of the applet with that manifest id, as a click on its row on the landing screen does. For a [spec applet](manifest.md#spec-applets) it is the spec page ([Caliper CLI](cli.md#the-spec-page)): the answer comes once the spec has been validated, and the page opens with the session's `applet.open` a frame or two later. The page shown before goes first, as Home takes it: an open applet is torn down, and an attached live session is detached. When the new applet fails to launch, the app stays on the landing screen with the reason in the Activity pane, and the windowless mode launches the applet it showed before again.
 
 ```json
 {"already_open":false,"id":"com.example.my-viewer","status":"ACTIVE","version":"0.1.0"}

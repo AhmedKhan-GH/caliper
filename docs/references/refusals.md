@@ -177,4 +177,4 @@ When the loader lists a spec applet it makes only the cheap checks, in this orde
 
 `{spec}` is the spec's file name, `{manifest_filename}` the manifest's, `{spec_version}` and `{host_version}` are spec format versions (the host reads version 0), and `{line}` and `{column}` count from 1.
 
-A spec applet that passes every check stays `READY` when it is launched, because the loader only lists it and the page that draws it is the app's. Until the app draws that page, a launch fails with `A spec applet opens as a page, which this version of Caliper does not draw yet.`, which the Activity pane logs as `launch failed`, and the applet stays `READY`.
+A spec applet that passes every check opens on the app's spec page when it is launched ([The spec page](cli.md#the-spec-page)), and is `ACTIVE` while the page shows it. The loader itself only lists and validates it: a program that calls `AppletLoader::launch()` on one, rather than the app, gets `A spec applet opens as a page, which this version of Caliper does not draw yet.`, and the applet stays `READY`.
