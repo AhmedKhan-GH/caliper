@@ -312,13 +312,15 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     CHECK(history["result"]["undo"][1]["group"] == "turn-1");
     CHECK(history["result"]["undo"][1]["origin"] == "mcp");
 
-    // Undo through history.undo removes the panel; redo brings it back.
-    const json undone = command(port, "history.undo", json::object(), "mcp");
+    // Undo and redo are the person's: an agent's call is refused. A program
+    // undoes through history.undo, which removes the panel; redo brings it back.
+    CHECK(command(port, "history.undo", json::object(), "mcp")["error"]["code"] == "command.not_allowed");
+    const json undone = command(port, "history.undo", json::object());
     INFO(undone.dump());
     REQUIRE(undone["ok"] == true);
     CHECK(app.session->open_spec()->spec.panels.empty());
     CHECK(app.session->open_spec()->spec.applet.id == "dash");
-    CHECK(command(port, "history.redo", json::object(), "mcp")["ok"] == true);
+    CHECK(command(port, "history.redo", json::object())["ok"] == true);
     CHECK(app.session->open_spec()->spec.panels.size() == 1);
 
     // An edit that names a stacked preview in X-Caliper-Preview applies to the
@@ -551,7 +553,8 @@ TEST_CASE("api commands: caliper-mcp drives a session through the app's API serv
     const json tools = child.request("tools", "tools/list", json::object());
     REQUIRE(tools.contains("result"));
     std::size_t agents_may = 0;  // caliper-mcp offers no tool for the person's undo and redo
-    for (const auto& c : caliper_builder::command_table_to_json()["commands"]) agents_may += c["agents"] == true;
+    const json table = caliper_builder::command_table_to_json();
+    for (const auto& c : table["commands"]) agents_may += c["agents"] == true;
     CHECK(tools["result"]["tools"].size() == agents_may);
     const json result = child.call("new", "spec_new", {{"id", "from-mcp"}, {"title", "From MCP"}});
     INFO(result.dump());
