@@ -830,10 +830,24 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 const bool sel = selected_ == r->key && selected_column_.empty();
                 const ImVec2 p = ImGui::GetCursorScreenPos();
                 const ImRect rowr(p, v2(p.x + w, p.y + row));
-                // A file just dropped offers ⌘K at its row's right end.
+                // A file just dropped offers ⌘K at its row's right end. Its
+                // target is submitted before the row's, so that it takes the
+                // pointer there and the row everywhere else.
                 const bool cmdk = widget_.open_file && !fresh_loader(r->key).empty();
+                ImRect cmdk_r;
+                bool cmdk_clicked = false;
+                if (cmdk) {
+                    const float kw = key_button_width(L, "\xE2\x8C\x98K", "");
+                    cmdk_r = ImRect(v2(rowr.Max.x - pad - kw, rowr.Min.y + std::round(2.0f * s)),
+                                    v2(rowr.Max.x - pad, rowr.Max.y - std::round(2.0f * s)));
+                    ImGui::SetCursorScreenPos(cmdk_r.Min);
+                    ImGui::PushID(r->key.c_str());
+                    cmdk_clicked = ImGui::InvisibleButton("##cmdk.source", cmdk_r.GetSize());
+                    ImGui::PopID();
+                    d.item("cmdk:source:" + r->key, cmdk_r);
+                    ImGui::SetCursorScreenPos(p);
+                }
                 ImGui::PushID(r->key.c_str());
-                if (cmdk) ImGui::SetNextItemAllowOverlap();
                 ImGui::InvisibleButton("##row", rowr.GetSize());
                 const bool hovered = ImGui::IsItemHovered();
                 if (ImGui::IsItemActivated()) {
@@ -866,16 +880,17 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 x += std::round(18.0f * s);
                 float right_end = rowr.Max.x - pad;
                 if (cmdk) {
-                    const float kw = key_button_width(L, "\xE2\x8C\x98K", "");
-                    const ImRect kr(v2(right_end - kw, rowr.Min.y + std::round(2.0f * s)), v2(right_end, rowr.Max.y - std::round(2.0f * s)));
+                    // Drawn over the row's fill; its target is the one above.
+                    const ImVec2 back = ImGui::GetCursorScreenPos();
                     ImGui::PushID(r->key.c_str());
-                    if (widget_key("##cmdk.source", kr, true)) {
+                    widget_key("##cmdk.source.draw", cmdk_r, true);
+                    ImGui::PopID();
+                    ImGui::SetCursorScreenPos(back);
+                    right_end = cmdk_r.Min.x - std::round(6.0f * s);
+                    if (cmdk_clicked) {
                         select(r->key);
                         open_file_prompt();
                     }
-                    ImGui::PopID();
-                    d.item("cmdk:source:" + r->key, kr);
-                    right_end -= kw + std::round(6.0f * s);
                 }
                 const std::string shape = r->shape_text;
                 const float shape_w = std::min(extent(L.mono, L.mono_size, shape).x, w * 0.55f);
