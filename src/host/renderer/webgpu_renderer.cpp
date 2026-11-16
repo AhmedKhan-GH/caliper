@@ -46,8 +46,8 @@ namespace {
 // from the reference by one level for a few texels on Metal. Instead the CPU
 // finds, for each index k in 1..255, the threshold T[k]: the first float at
 // which the reference gives index k or more (the last one, for a decreasing
-// range), with colormap_thresholds (tensor_bridge.h), which the Metal renderer
-// shares. The reference is monotone in v, because every IEEE operation in it
+// range), with colormap_thresholds (tensor_bridge.h). The reference is
+// monotone in v, because every IEEE operation in it
 // is, so the index of v is the number of thresholds it has passed, which the
 // shader finds with a binary search of exact float comparisons. mode 0 is a
 // range whose width vmax - vmin is zero, infinite or NaN, where the reference
