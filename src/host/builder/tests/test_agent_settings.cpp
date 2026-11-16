@@ -113,6 +113,16 @@ const acp::EnvVar* find_var(const acp::SpawnOptions& s, const std::string& name)
     return nullptr;
 }
 
+// Waits on the settings' state until no probe runs, then takes its answer. The
+// deadline is sized for a slow runner; a probe still running after it fails
+// the test here instead of letting it go on with no answer.
+void settle(AgentSettings& s) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(150);
+    while (s.busy() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    REQUIRE_MESSAGE(!s.busy(), "the probe did not answer within 150 s");
+    s.frame();
+}
+
 }  // namespace
 
 TEST_SUITE_BEGIN("settings");
@@ -555,18 +565,14 @@ TEST_CASE("agent settings: List and Probe through caliper-agent on a fake local 
     o.source = CALIPER_BUILDER_SOURCE_DIR;
     o.probe_env = {{"CALIPER_AGENT_OFFLINE", "1"}};
     s.start(o);
-    auto settle = [&s] {
-        for (int i = 0; i < 1200 && s.busy(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        s.frame();
-    };
     s.choose_preset("ollama");
     s.set_base_url(server->base_url());
     s.list_models();
-    settle();
+    settle(s);
     CHECK(s.model_choices() == std::vector<std::string>{"local-a", "local-b"});
     s.set_model("local-b");
     s.probe(true);
-    settle();
+    settle(s);
     AgentCapabilities c = s.capabilities();
     CHECK(c.tools == std::optional<bool>(true));
     CHECK(c.tools_source == "probe");
@@ -575,13 +581,13 @@ TEST_CASE("agent settings: List and Probe through caliper-agent on a fake local 
     CHECK(s.state().empty());
     // The person's override, kept in the probe's cache, which the app's agent reads too.
     s.set_override("tools", "no");
-    settle();
+    settle(s);
     CHECK(s.state() == "No tool calling");
     const double now =
         (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     CHECK(agent_launch(s.data(), &keys, dir, now).why == "No tool calling");
     s.set_override("tools", "auto");
-    settle();
+    settle(s);
     CHECK(s.state().empty());
     // A server that refuses tools.
     auto no_tools = test::FakeModelServer::start(python, agent_dir, {"--models", "text-only", "--refuse-tools"}, &why);
@@ -589,7 +595,7 @@ TEST_CASE("agent settings: List and Probe through caliper-agent on a fake local 
     s.set_base_url(no_tools->base_url());
     s.set_model("text-only");
     s.probe(true);
-    settle();
+    settle(s);
     CHECK(s.capabilities().tools == std::optional<bool>(false));
     CHECK(s.state() == "No tool calling");
     const std::string cache = read_text((fs::path(dir) / "model-capabilities.json").string());
