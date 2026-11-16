@@ -73,9 +73,14 @@
 //                        names begin with <prefix> (the API's agent files)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
+//   patience <seconds>   the steps after it wait for their target up to that
+//                        many seconds instead of kPatience frames, such as a
+//                        real agent's turn on a local model; 0 goes back to
+//                        kPatience
 //   quit                 close the app
-// A step whose target is not there yet waits for it, up to kPatience frames,
-// then the script stops with an error.
+// A step whose target is not there yet waits for it, up to kPatience frames
+// (or the seconds of the last `patience`), then the script stops with an
+// error.
 //
 // Header-only; frame thread. Call feed() once per frame BEFORE ImGui::NewFrame.
 // ============================================================================
@@ -97,6 +102,7 @@
 #include <functional>
 
 #include <cfloat>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -450,6 +456,13 @@ public:
             if (s.verb == "append") out << line << "\n";
             if (!out) return void(error_ = s.verb + ": cannot write " + file);
             next(s.verb + " " + std::filesystem::path(file).filename().string());
+        } else if (s.verb == "patience") {
+            char* end = nullptr;
+            const double seconds = std::strtod(s.arg.c_str(), &end);
+            if (s.arg.empty() || !end || *end != '\0' || !(seconds >= 0.0) || seconds > 86400.0)
+                return void(error_ = "patience takes a number of seconds from 0 to 86400");
+            patience_s_ = seconds;
+            next(seconds > 0.0 ? "patience " + s.arg + " s" : "patience " + std::to_string(kPatience) + " frames");
         } else if (s.verb == "quit") {
             quit_ = true;
             next("quit");
@@ -473,10 +486,15 @@ private:
         frames_ = 0;
         armed_ = false;
         drag_frame_ = 0;
+        step_start_ = std::chrono::steady_clock::now();
     }
 
     void patience(const std::string& why) {
-        if (frames_ > kPatience) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
+        const bool over =
+            patience_s_ > 0.0
+                ? std::chrono::duration<double>(std::chrono::steady_clock::now() - step_start_).count() > patience_s_
+                : frames_ > kPatience;
+        if (over) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
     }
 
     // A chord of "cmd", "shift" and one key, joined by '+'.
@@ -545,6 +563,9 @@ private:
     std::string shots_;
     size_t at_ = 0;
     int frames_ = 0;
+    // When the current step began, and the seconds a step may wait (0: kPatience frames).
+    std::chrono::steady_clock::time_point step_start_ = std::chrono::steady_clock::now();
+    double patience_s_ = 0.0;
     bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false;
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;

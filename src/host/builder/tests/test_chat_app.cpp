@@ -353,4 +353,57 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
     CHECK(run.err.find("[chat] Caliper API stopped") == std::string::npos);
 }
 
+// A real agent's turn on a local model takes minutes, longer than the
+// kPatience frames a step of the input script waits by default, so the
+// script's `patience <seconds>` sets how long the steps after it may wait.
+TEST_CASE("chat app: a step of the input script waits as long as patience says, then stops the script" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const fs::path root = fresh("chat-patience");
+    const fs::path ws = root / "ws", data = root / "data";
+    for (const fs::path& d : {ws, data, root / "apps"}) fs::create_directories(d);
+    const fs::path gate = root / "gate", never = root / "never";
+    // The gate appears while the first wait-file waits; nothing ever writes `never`.
+    const std::string ui = "wait 10; patience 0; patience 3; touch " + gate.string() + "; wait-file " +
+                           gate.string() + "; wait-file " + never.string() + "; quit";
+    acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", ws.string()};
+    o.env = {{"CALIPER_DATA_DIR", data.string()},
+             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_WINDOW_SIZE", "640x400"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", ui},
+             {"CALIPER_EXIT_AFTER", "20"}};
+    o.env_remove = {"CALIPER_API", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"};
+    acp::RunLimits lim;
+    lim.timeout_ms = 90000;
+    const auto started = std::chrono::steady_clock::now();
+    const auto run = acp::run_process(o, lim);
+    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    CHECK(run.err.find("[ui] patience 1800 frames") != std::string::npos);
+    CHECK(run.err.find("[ui] patience 3 s") != std::string::npos);
+    CHECK(run.err.find("[ui] found gate") != std::string::npos);
+    CHECK(run.err.find("[ui] stopped: wait-file " + never.string() + ": no file " + never.string()) !=
+          std::string::npos);
+    // A stopped script leaves the app running, so it ends at CALIPER_EXIT_AFTER;
+    // the default patience, 1800 frames, would not have stopped the step by then.
+    CHECK(took >= 3.0);
+    CHECK(run.status.success());
+
+    // A value that is not a number of seconds stops the script at once.
+    for (auto& v : o.env) {
+        if (v.name == "CALIPER_TEST_SPEC_UI") v.value = "patience soon; quit";
+        if (v.name == "CALIPER_EXIT_AFTER") v.value = "5";
+    }
+    const auto bad = acp::run_process(o, lim);
+    REQUIRE(bad.error.ok());
+    CHECK(bad.err.find("[ui] stopped: patience takes a number of seconds from 0 to 86400") != std::string::npos);
+}
+
 #endif
