@@ -186,7 +186,8 @@ The layer offers these pieces:
 Two backends exist. The Metal backend runs on the Metal renderer's own device and queue (`HostRenderer::native_device`
 and `native_queue`), so the layer creates no second device, and its work is ordered with the renderer's by commit
 order. It imports an `MTLBuffer` of that device, and page-aligned host memory, in place, and it copies other host
-memory. It keeps Metal's fast paths:
+memory. It runs the programs of the shader generator ([Write a shader](../guides/write-a-shader.md)), and it binds the
+buffer of storage sizes that their MSL reads. It keeps Metal's fast paths:
 
 - bind groups are resolved once into Metal objects;
 - dynamic offsets move with `setVertexBufferOffset`;
@@ -201,8 +202,9 @@ The layer's tests run in two suites:
 - `caliper_tests --test-case="gfx layer*"` runs the core on the recording backend. It covers the handles, the
   limits, the arena, deferred release, readback, the routes of import, and the refusal of bad frames.
 - `caliper_gfx_tests --test-case="gfx/Metal layer*"` runs the layer's rows of the graphics suite on Metal. One row
-  draws a list of quads with an indexed draw, depth, additive blending and the ID target. Another draws instanced
-  quads from an imported `MTLBuffer` and checks that the route is reported as in place, with zero bytes copied. Each
-  target is read back through the layer and compared byte for byte with a CPU reference. `CALIPER_GFX_CAPTURE_DIR`
-  writes PNG captures of the rows, and `CALIPER_GFX_LAYER_BENCH=1` runs a row that times the CPU encoding of 1,000
-  draws a frame on both backends.
+  draws a list of quads with an indexed draw, depth, additive blending and the ID target. Another draws the
+  generated points program from an imported `MTLBuffer`, and checks that the route is reported as in place, with
+  zero bytes copied. Each target is read back through the layer and compared byte for byte with a CPU reference.
+  Further rows run the generated index clamp as a dispatch and make every generated program's pipelines.
+  `CALIPER_GFX_CAPTURE_DIR` writes PNG captures of the rows, and `CALIPER_GFX_LAYER_BENCH=1` runs a row that times
+  the CPU encoding of 1,000 draws a frame on both backends.
