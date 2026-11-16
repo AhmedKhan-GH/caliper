@@ -506,3 +506,84 @@ TEST_CASE("net/hub 3.2: past CALIPER_NET_MAX_BATCHES batches the hub forgets a s
     CHECK(p->scene_subscribes == 2);
     CHECK(b->scene_log(9, true).front() == "reset");
 }
+
+// A viewer that stops reading: its connection holds one batch of 24 MB that its socket cannot
+// take, so every later scene message waits in the hub's queue for it. Returns the scene log of
+// `sub` the viewer had before it stopped.
+namespace {
+size_t stall(World32& w, const Runner& h, SceneProducer& p, Client& slow, uint32_t sub) {
+    w.peers.erase(std::find(w.peers.begin(), w.peers.end(), &slow));
+    const uint64_t out = h.hub->stats().scenes_out;
+    p.points("big", std::vector<float>(3 * 2000000, 0.25f));
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_out > out && h.hub->stats().queued_bytes > (8u << 20); }));
+    return slow.scene_log(sub).size();
+}
+// Reads `slow` again until `done` holds for its scene log of `sub`.
+bool resume(Client& slow, uint32_t sub, const std::function<bool(const std::vector<std::string>&)>& done) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (std::chrono::steady_clock::now() < end) {
+        slow.poll();
+        if (done(slow.scene_log(sub))) return true;
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    }
+    return false;
+}
+size_t clears_in(const std::vector<std::string>& log, size_t from) {
+    size_t n = 0;
+    for (size_t i = from; i < log.size(); ++i) n += log[i].rfind("clear ", 0) == 0;
+    return n;
+}
+}  // namespace
+
+// The hub's in-order queue of a viewer that stopped reading stays bounded: past 2 ×
+// CALIPER_NET_MAX_BATCHES messages, the hub's own state (a reset and every batch it keeps, which
+// hold the effect of every message so far) replaces what waits.
+TEST_CASE("net/hub 3.2: a viewer that stopped reading while the producer clears gets the hub's state") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto slow = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*slow, 4, "world");
+    REQUIRE(w.until([&] { return slow->scene_log(4).size() == 2; }));
+    const size_t before = stall(w, h, *p, *slow, 4);
+    const int n = 2 * (int)CALIPER_NET_MAX_BATCHES + 900;
+    const uint64_t in = h.hub->stats().scenes_in;
+    for (int i = 0; i < n; ++i) p->clear("c/" + std::to_string(i));
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == in + (uint64_t)n; }, 20000));
+    const std::string last = "clear c/" + std::to_string(n - 1);
+    REQUIRE(resume(*slow, 4, [&](const std::vector<std::string>& log) { return !log.empty() && log.back() == last; }));
+    const std::vector<std::string> log = slow->scene_log(4);
+    CHECK(clears_in(log, before) < 2 * CALIPER_NET_MAX_BATCHES);
+    CHECK(std::find(log.begin() + (long)before, log.end(), "reset") != log.end());
+}
+
+// A reset opens a new state of the scene and drops what a viewer has queued before it.
+TEST_CASE("net/hub 3.2: a reset drops what a viewer that stopped reading has queued before it") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto slow = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*slow, 4, "world");
+    REQUIRE(w.until([&] { return slow->scene_log(4).size() == 2; }));
+    const size_t before = stall(w, h, *p, *slow, 4);
+    const uint64_t in = h.hub->stats().scenes_in;
+    for (int i = 0; i < 100; ++i) p->clear("c/" + std::to_string(i));
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == in + 100; }));
+    // A viewer at a higher rate makes the hub subscribe again, and the producer sends its state.
+    auto fast = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*fast, 6, "world", 120.0);
+    REQUIRE(w.until([&] { return p->scene_subscribes == 2 && fast->scene_log(6).size() >= 3; }));
+    REQUIRE(resume(*slow, 4, [&](const std::vector<std::string>& log) {
+        return log.size() >= before + 4 && log.back() == "big:points" && log[log.size() - 3] == "reset";
+    }));
+    const std::vector<std::string> log = slow->scene_log(4);
+    CHECK(clears_in(log, before) == 0);
+    CHECK(std::vector<std::string>(log.begin() + (long)before, log.end()) ==
+          std::vector<std::string>{"big:points", "reset", ":lines", "big:points"});
+}

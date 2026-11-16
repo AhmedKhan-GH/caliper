@@ -105,6 +105,9 @@ struct SceneMsg {
     size_t tail_len() const { return frame ? frame->size() - tail : 0; }
 };
 using ScenePtr = std::shared_ptr<const SceneMsg>;
+// The messages a viewer's scene subscription may have waiting in order (a state, a reset and at
+// most CALIPER_NET_MAX_BATCHES batches, and as many clears); past it the hub's own state replaces them.
+constexpr size_t kSceneFirstMax = 2 * CALIPER_NET_MAX_BATCHES;
 // (path, part): the byte order of the paths, then points, lines, mesh.
 using SceneKey = std::pair<std::string, int>;
 int scene_part_order(const std::string& part) {
@@ -1878,11 +1881,14 @@ struct Hub::Impl {
             VSub* v = vsub(k);
             if (!v || !v->scene) continue;
             if (cl) {
+                if (cl->reset) v->scene_first.clear();   // a new state: nothing queued before it matters
                 for (auto q = v->scene_pending.begin(); q != v->scene_pending.end();)
                     q = scene_clears(*msg, *q->second) ? v->scene_pending.erase(q) : std::next(q);
                 v->scene_first.emplace_back(msg, false);
+                if (v->scene_first.size() > kSceneFirstMax) resync_scene(s, *ch, *v);
             } else if (state) {
                 v->scene_first.emplace_back(msg, false);
+                if (v->scene_first.size() > kSceneFirstMax) resync_scene(s, *ch, *v);
             } else {
                 ScenePtr& slot = v->scene_pending[key];
                 if (slot) ++c.scenes_superseded;
@@ -1923,6 +1929,23 @@ struct Hub::Impl {
         reset->meta = std::move(meta);
         v.scene_first.emplace_back(reset, true);
         for (const auto& kv : ch.scene_held) v.scene_first.emplace_back(kv.second, true);
+    }
+
+    // A viewer's in-order queue passed kSceneFirstMax (it stopped reading while the producer
+    // clears): the hub's own state replaces it, since it holds the effect of every message so far.
+    // While the hub holds no complete state, the producer's next state does instead: it opens with a
+    // reset, which drops what was queued before it, so the queue is dropped now.
+    void resync_scene(Session& s, Channel& ch, VSub& v) {
+        if (ch.scene_seen) {
+            join_scene(v, ch);
+            return;
+        }
+        v.scene_first.clear();
+        v.scene_pending.clear();
+        if (ch.scene_forgotten && ch.up_sub && !ch.up_request && s.producer) {
+            ch.scene_forgotten = false;
+            send_subscribe(s, ch);
+        }
     }
 
     bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
