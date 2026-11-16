@@ -295,7 +295,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 
 ## On Windows
 
-The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starting the app, with `dev` and with `shot`) and `--url` before anything starts. It prints one line, such as `caliper: caliper serve is not available on Windows yet`, and exits with 1. A wrong command line is still a usage error with exit code 2. The code of these pieces compiles on Windows, and the in-process tests of the WebSocket layer, the hub and Caliper API run in the Windows CI lane, but none of them has run on Windows as a process yet, and the network source that `--url` attaches through exists on macOS only. `CALIPER_API=1` is ignored on Windows, and a line on standard error says so. Every other subcommand behaves as this page describes.
+The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starting the app, with `dev` and with `shot`) and `--url` before anything starts. It prints one line, such as `caliper: caliper serve is not available on Windows yet`, and exits with 1. A wrong command line is still a usage error with exit code 2. The code of these pieces compiles on Windows but is untested there: the socket tests of the WebSocket layer, the hub and Caliper API do not run in the Windows CI lane, and the network source that `--url` attaches through exists on macOS only. `CALIPER_API=1` is ignored on Windows, and a line on standard error says so. Every other subcommand behaves as this page describes.
 
 ## Environment variables
 
