@@ -14,7 +14,7 @@ three files: caliper-views-loader.js, caliper-views.js and caliper-views.wasm.
 Building those needs the Emscripten SDK, which most checkouts do not have, so
 this script does not build them: it copies them from web/wasm's build folder
 (--wasm-build, default web/wasm/build, as written by
-`web/wasm/build.sh web/wasm/build`) when all three are there, and otherwise
+`python scripts/build_wasm.py`) when all three are there, and otherwise
 leaves the checked-in copies alone. --check compares them only when they are
 there to compare with.
 """

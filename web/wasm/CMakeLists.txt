@@ -1,9 +1,9 @@
 # web/wasm: Caliper's view layer compiled to WebAssembly and drawn by the
 # WebGPU HostRenderer (src/host/renderer/webgpu_renderer.*). It is its own
-# Emscripten project, not part of the native build; web/wasm/README.md has the
-# build command:
+# Emscripten project, not part of the native build, built with the Emscripten
+# release in emscripten-version.txt; web/wasm/README.md has the build command:
 #
-#   EMSDK=<emsdk> web/wasm/build.sh <build dir>
+#   python scripts/build_wasm.py
 #
 # The output is caliper-views.wasm and its JavaScript glue caliper-views.js,
 # an ES module whose default export is createCaliperViews(moduleArgs).

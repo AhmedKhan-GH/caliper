@@ -7,7 +7,7 @@ This folder builds Caliper's own view layer (the live views, Dear ImGui and ImPl
 | Path | What it is |
 |---|---|
 | `CMakeLists.txt` | The Emscripten project: the view-layer library `caliper_view_layer` and the module `caliper-views` |
-| `build.sh` | The one build command |
+| `emscripten-version.txt` | The Emscripten release the module is built with, in CI and by `scripts/build_wasm.py` |
 | `src/main.cpp` | The page host: the canvas, the ImGui and ImPlot contexts, the renderer and a hosted core that draws the views |
 | `src/net_source.*` | The viewer side of wire protocol v3 on the browser's WebSocket, as a `caliper_live::Source` |
 | `src/source_poll.*` | The per-frame poll of a `Source` into the live views, in the order `live_core.cpp` uses for shared memory |
@@ -42,13 +42,16 @@ The module has no GLFW: the renderer draws on the canvas's WebGPU surface, and `
 
 ## Building
 
-With an activated emsdk checkout, and cmake and ninja on the path:
+The module builds with Emscripten at the version in `emscripten-version.txt`, 6.0.13 at present, with CMake and Ninja on the path. From the repository root:
 
 ```sh
-EMSDK=<emsdk> web/wasm/build.sh <build dir>
+python scripts/build_wasm.py                    # emcc on PATH, as a sourced emsdk_env.sh puts it there
+EMSDK=<emsdk> python scripts/build_wasm.py      # or from an emsdk checkout with that version activated
 ```
 
-The output is `<build dir>/caliper-views.wasm` and its JavaScript glue `<build dir>/caliper-views.js`, an ES module whose default export is `createCaliperViews(moduleArgs)`. `moduleArgs.canvas` is the canvas the instance draws on; every instance looks up only its own canvas, so several instances can share a page. The build was measured with Emscripten 6.0.13. Its first run downloads Emscripten's `emdawnwebgpu` port into the emsdk cache.
+The script refuses another Emscripten version unless it is given `--any-version`, because the sizes and frame times below, and the WebGPU binding, belong to the pinned one. It builds into `web/wasm/build` (`--build-dir`; `--config Debug` for a debug build) and copies the three files a page loads, `caliper-views-loader.js`, `caliper-views.js` and `caliper-views.wasm`, into `python/caliper/_web/` and into the caliper package that the running Python has installed, if any. `--out <dir>` copies them elsewhere instead, and `--no-copy` only builds. The first build downloads Emscripten's `emdawnwebgpu` port into the emsdk cache.
+
+The output is `caliper-views.wasm` and its JavaScript glue `caliper-views.js`, an ES module whose default export is `createCaliperViews(moduleArgs)`, and beside them a copy of the loader and of `demo.html`. `moduleArgs.canvas` is the canvas the instance draws on; every instance looks up only its own canvas, so several instances can share a page.
 
 The WebGPU binding is that port (`--use-port=emdawnwebgpu`), whose Dawn package each Emscripten release pins; this SDK no longer has the older `-sUSE_WEBGPU` binding. The port provides the standard `webgpu.h`, which Dawn also offers natively, so the same renderer can later serve the native Dawn fallback that the roadmap plans. A browser hands out a WebGPU device only through promises, so `src/main.cpp` requests the adapter and the device with callbacks and starts the frame loop from the device's callback; the module needs neither Asyncify nor JSPI. The Release link runs Closure over the glue, has no file system (`-sFILESYSTEM=0`; the views never open a file) and caps the heap, as [Memory](#memory) describes.
 
@@ -203,7 +206,7 @@ git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/e
 "$RUNNER_TEMP/emsdk/emsdk" activate 6.0.13
 
 # The module
-EMSDK="$RUNNER_TEMP/emsdk" web/wasm/build.sh web/wasm/build Release
+EMSDK="$RUNNER_TEMP/emsdk" python3 scripts/build_wasm.py --no-copy
 
 # The checks of the module (Playwright's Chromium headless shell, SwiftShader)
 python3 -m venv "$RUNNER_TEMP/py" && "$RUNNER_TEMP/py/bin/pip" install numpy websockets
