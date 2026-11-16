@@ -58,6 +58,10 @@
 #include "net/wire.h"
 #include "net/ws.h"
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -496,12 +500,30 @@ public:
     // z min, z max] (z 0 for 2-D points). Run with the GIL released.
     static void host_stats(Snap& s) {
         const double nan = std::nan("");
-        auto range = [&](const float* p, size_t n, size_t stride, double* lo, double* hi) {
+        // On arm64 with NEON's minNum and maxNum, which leave a NaN out as the
+        // scalar compares below do (a NaN compares false and never replaces a
+        // bound); the scalar loops do the rest and the other targets.
+        auto range = [&](const float* p, size_t n, double* lo, double* hi) {
             float a = INFINITY, b = -INFINITY;
-            for (size_t i = 0; i < n; ++i) {
-                const float v = p[i * stride];
-                if (v < a) a = v;
-                if (v > b) b = v;
+            size_t i = 0;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+            if (n >= 8) {
+                float32x4_t a0 = vdupq_n_f32(INFINITY), a1 = a0, b0 = vdupq_n_f32(-INFINITY), b1 = b0;
+                for (; i + 8 <= n; i += 8) {
+                    const float32x4_t x = vld1q_f32(p + i), y = vld1q_f32(p + i + 4);
+                    a0 = vminnmq_f32(a0, x);
+                    b0 = vmaxnmq_f32(b0, x);
+                    a1 = vminnmq_f32(a1, y);
+                    b1 = vmaxnmq_f32(b1, y);
+                }
+                a = vminnmvq_f32(vminnmq_f32(a0, a1));
+                b = vmaxnmvq_f32(vmaxnmq_f32(b0, b1));
+            }
+#endif
+            for (; i < n; ++i) {
+                const float v = p[i];
+                a = v < a ? v : a;
+                b = v > b ? v : b;
             }
             *lo = a <= b ? (double)a : nan;
             *hi = a <= b ? (double)b : nan;
@@ -509,13 +531,58 @@ public:
         const float* f = reinterpret_cast<const float*>(s.data.data());
         if (s.kind == CALIPER_NET_KIND_HEATMAP && s.dtype == CALIPER_NET_DTYPE_F32) {
             s.stats.assign(2, nan);
-            range(f, s.data.size() / 4, 1, &s.stats[0], &s.stats[1]);
+            range(f, s.data.size() / 4, &s.stats[0], &s.stats[1]);
         } else if (s.kind == CALIPER_NET_KIND_POINTS && s.dtype == CALIPER_NET_DTYPE_F32 && s.shape.size() == 2) {
             const size_t n = (size_t)s.shape[0], d = (size_t)s.shape[1];
             s.stats.assign(8, 0.0);
-            if (s.has_aux) range(reinterpret_cast<const float*>(s.aux.data()), s.aux.size() / 4, 1,
+            if (s.has_aux) range(reinterpret_cast<const float*>(s.aux.data()), s.aux.size() / 4,
                                  &s.stats[0], &s.stats[1]);
-            for (size_t k = 0; k < d && k < 3; ++k) range(f + k, n, d, &s.stats[2 + 2 * k], &s.stats[3 + 2 * k]);
+            if (d < 1 || d > 3 || n * d * 4 > s.data.size()) return;
+            // one pass over the interleaved coordinates
+            float a[3] = {INFINITY, INFINITY, INFINITY}, b[3] = {-INFINITY, -INFINITY, -INFINITY};
+            size_t i = 0;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+            if (d == 3 || d == 2) {
+                const float32x4_t inf = vdupq_n_f32(INFINITY), ninf = vdupq_n_f32(-INFINITY);
+                float32x4_t lx = inf, ly = inf, lz = inf, hx = ninf, hy = ninf, hz = ninf;
+                if (d == 3) {
+                    for (; i + 4 <= n; i += 4) {
+                        const float32x4x3_t v = vld3q_f32(f + i * 3);
+                        lx = vminnmq_f32(lx, v.val[0]);
+                        hx = vmaxnmq_f32(hx, v.val[0]);
+                        ly = vminnmq_f32(ly, v.val[1]);
+                        hy = vmaxnmq_f32(hy, v.val[1]);
+                        lz = vminnmq_f32(lz, v.val[2]);
+                        hz = vmaxnmq_f32(hz, v.val[2]);
+                    }
+                    a[2] = vminnmvq_f32(lz);
+                    b[2] = vmaxnmvq_f32(hz);
+                } else {
+                    for (; i + 4 <= n; i += 4) {
+                        const float32x4x2_t v = vld2q_f32(f + i * 2);
+                        lx = vminnmq_f32(lx, v.val[0]);
+                        hx = vmaxnmq_f32(hx, v.val[0]);
+                        ly = vminnmq_f32(ly, v.val[1]);
+                        hy = vmaxnmq_f32(hy, v.val[1]);
+                    }
+                }
+                a[0] = vminnmvq_f32(lx);
+                b[0] = vmaxnmvq_f32(hx);
+                a[1] = vminnmvq_f32(ly);
+                b[1] = vmaxnmvq_f32(hy);
+            }
+#endif
+            for (; i < n; ++i) {
+                const float* q = f + i * d;
+                for (size_t k = 0; k < d; ++k) {
+                    a[k] = q[k] < a[k] ? q[k] : a[k];
+                    b[k] = q[k] > b[k] ? q[k] : b[k];
+                }
+            }
+            for (size_t k = 0; k < d; ++k) {
+                s.stats[2 + 2 * k] = a[k] <= b[k] ? (double)a[k] : nan;
+                s.stats[3 + 2 * k] = a[k] <= b[k] ? (double)b[k] : nan;
+            }
         }
     }
 
