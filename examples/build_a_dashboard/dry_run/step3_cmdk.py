@@ -28,7 +28,9 @@ endpoint variable of the environment is removed. The hidden app keeps keys in me
 
 The captures go to --out as step3-<request>-<what>-<W>x<H>.png; with --runs above 1, only the first run's.
 Each run's log (the app's standard error with the time of each line) and a summary of all runs
-(step3-summary.json) go to --work. The exit code is 0 when every run ended with the change accepted and
+(summary/step3-summary.json) go to --work, each run in a new folder of its own: the script never deletes anything, and a
+name that exists gets a suffix. Every process it starts is stopped by its pid when the script ends or is
+interrupted, and each hidden app also ends by itself after a while (CALIPER_EXIT_AFTER). The exit code is 0 when every run ended with the change accepted and
 undone, 1 when one did not, and 2 when something it needs is missing.
 """
 
@@ -104,7 +106,8 @@ def check_files(args) -> tuple[Path, Path, Path, Path]:
     if not python:
         raise Missing("No interpreter for caliper-agent: give --agent-python or set CALIPER_AGENT_PYTHON to a Python "
                       "that has the dependencies of src/builder/agent/pyproject.toml.")
-    probe = subprocess.run([python, "-c", "import pydantic_ai, anthropic, openai"], capture_output=True, text=True)
+    probe = subprocess.run([python, "-c", "import pydantic_ai, anthropic, openai"], capture_output=True, text=True,
+                           timeout=60)
     if probe.returncode != 0:
         raise Missing(f"{python} lacks caliper-agent's dependencies (pydantic-ai-slim, anthropic, openai).")
     data = Path(args.data or EXAMPLE / "data")
@@ -112,6 +115,9 @@ def check_files(args) -> tuple[Path, Path, Path, Path]:
     for f in (parquet, tensors):
         if not f.is_file():
             raise Missing(f"No {f}. Run examples/build_a_dashboard/make_data.py first, or give --data.")
+    if args.out.is_dir() and any(args.out.glob("step3-*.png")):
+        raise Missing(f"{args.out} already holds captures of step 3, which this script does not replace; give "
+                      "another --out.")
     return caliper, Path(python), parquet, tensors
 
 
@@ -133,6 +139,40 @@ def app_env(root: Path, python: Path, extra: dict) -> dict:
     return env
 
 
+# Every process the script started and has not seen end, stopped by its pid on SIGINT and SIGTERM.
+STARTED: list[subprocess.Popen] = []
+
+
+def stop_started(*_args) -> None:
+    for proc in list(STARTED):
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGTERM)
+    deadline = time.monotonic() + 30
+    for proc in list(STARTED):
+        try:
+            proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def on_signal(signum, _frame) -> None:
+    stop_started()
+    sys.exit(128 + signum)
+
+
+def fresh_folder(parent: Path, name: str) -> Path:
+    """A new folder `name` in `parent`, or `name-2`, `name-3`, ... when it exists; nothing is ever cleared."""
+    for n in range(1, 1000):
+        folder = parent / (name if n == 1 else f"{name}-{n}")
+        try:
+            folder.mkdir(parents=True)
+            return folder
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"no free folder name for {name} in {parent}")
+
+
 class AppRun:
     """One hidden app; its standard error is read line by line, each line with its time."""
 
@@ -142,6 +182,7 @@ class AppRun:
         self._log = log.open("w", encoding="utf-8")
         self.proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.PIPE, text=True, errors="replace")
+        STARTED.append(self.proc)
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
 
@@ -164,6 +205,8 @@ class AppRun:
                 code = self.proc.wait()
         self._reader.join(timeout=5)
         self._log.close()
+        if self.proc in STARTED:
+            STARTED.remove(self.proc)
         return code
 
     def stop(self) -> int:
@@ -179,10 +222,7 @@ class AppRun:
 
 def build_workspace(caliper: Path, python: Path, parquet: Path, tensors: Path, work: Path) -> Path:
     """The dashboard of two panels, built by a command script and saved as a spec applet."""
-    base = work / "base"
-    if base.exists():
-        shutil.rmtree(base)
-    base.mkdir(parents=True)
+    base = fresh_folder(work, "base")
     commands = [
         {"name": "data.import", "args": {"paths": [str(parquet), str(tensors)], "run": True}},
         {"name": "spec.new", "args": {"id": APPLET, "title": "Training run"}},
@@ -279,9 +319,7 @@ def png_size(path: Path) -> tuple[int, int]:
 
 
 def run_request(name: str, n: int, args, caliper: Path, python: Path, base: Path, work: Path) -> dict:
-    root = work / f"{name}-{n}"
-    if root.exists():
-        shutil.rmtree(root)
+    root = fresh_folder(work, f"{name}-{n}")
     shutil.copytree(base / "ws", root / "ws")
     shots = root / "shots"
     shots.mkdir(parents=True)
@@ -334,6 +372,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--turn-seconds", type=int, default=300, help="the longest a turn may take (default: 300)")
     args = parser.parse_args(argv)
 
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
     try:
         server = check_ollama(args.model)
         caliper, python, parquet, tensors = check_files(args)
@@ -355,7 +395,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"turn {o['turn_seconds']} s, "
                   f"surface {' > '.join(o['surface'])}, agent {o['agent_edits']}"
                   + (f", stopped: {o['stopped']}" if o["stopped"] else ""))
-    (work / "step3-summary.json").write_text(json.dumps(outcomes, indent=1), encoding="utf-8")
+    (fresh_folder(work, "summary") / "step3-summary.json").write_text(json.dumps(outcomes, indent=1),
+                                                                     encoding="utf-8")
     print(f"step3_cmdk: {sum(o['ok'] for o in outcomes)} of {len(outcomes)} runs ok; captures in {args.out}")
     return 0 if all(o["ok"] for o in outcomes) else 1
 
