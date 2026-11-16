@@ -30,9 +30,9 @@ in SELECTION, with the details of the selected units (the norms of their
 input and output weights) computed off the network thread.
 
 With --all-kinds it also streams "units", a points view of the hidden
-units placed by their two output weights and coloured by the norm of their
-input weights (its point dim indexes "units" with --selection), and
-"fc1 values", a histogram of the first layer's weights.
+units placed by their two output weights and coloured by the class they vote
+for, the larger of the two (its point dim indexes "units" with --selection),
+and "fc1 values", a histogram of the first layer's weights.
 
 When it exits it prints one JSON line: {"id", "steps", "loss_values",
 "snapshots_sent", "events", "lr", "saves", "selects", "selection"}.
@@ -356,16 +356,15 @@ class Stream:
             counts, _ = np.histogram(w, bins=32, range=(lo, hi))
             return W.Snapshot(sub, s["view"], seq, time.monotonic_ns(), int(W.Kind.HISTOGRAM), s["resolved"],
                               counts.astype(np.float32), stats=[lo, hi])
-        pos, val = a
+        pos, cls = a
         (ax,) = W.payload_layout(view, s["resolved"])["axes"]
         rows = slice(ax["start"], ax["start"] + ax["count"] * ax["step"], ax["step"])
         pos = np.ascontiguousarray(pos[rows][:ax["size"]], dtype=np.float32)
-        val = np.ascontiguousarray(val[rows][:ax["size"]], dtype=np.float32)
-        stats = [float(val.min()), float(val.max()), float(pos[:, 0].min()), float(pos[:, 0].max()),
+        cls = np.ascontiguousarray(cls[rows][:ax["size"]], dtype=np.float32)
+        stats = [0.0, 1.0, float(pos[:, 0].min()), float(pos[:, 0].max()),
                  float(pos[:, 1].min()), float(pos[:, 1].max())]
         return W.Snapshot(sub, s["view"], seq, time.monotonic_ns(), int(W.Kind.POINTS), s["resolved"], pos,
-                          aux=val, colormap=0, flags=W.SNAP_AUTO_VMIN | W.SNAP_AUTO_VMAX, stats=stats,
-                          axes=[ax], points_dims=2, label_count=0)
+                          aux=cls, stats=stats, axes=[ax], points_dims=2, label_count=2)
 
     def _subscribe(self, msg: W.Subscribe, ws) -> None:
         v = self.views.get(msg.view)
@@ -474,7 +473,7 @@ def train(stream: Stream, seconds: float, device: str) -> int:
         stream.publish("fc1.weight", w1)
         stream.publish("fc2.weight", w2)
         if "units" in stream.views:
-            stream.publish("units", (w2.T.copy(), np.linalg.norm(w1, axis=1)))
+            stream.publish("units", (w2.T.copy(), np.argmax(w2, axis=0).astype(np.float32)))
             stream.publish("fc1 values", w1)
         time.sleep(0.004)
     return steps

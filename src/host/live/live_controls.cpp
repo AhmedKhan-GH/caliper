@@ -142,11 +142,19 @@ void draw_param(RunControls& rc, const ControlsLook& look, const ControlParam& p
         int64_t v = 0;
         if (shown.is_number()) v = (int64_t)std::llround(shown.as_double());
         if (p.has_min && p.has_max) {
+            // The slider carries no text; the exact value is in its own field beside it.
             ImGui::SetNextItemWidth(kSliderW);
             int64_t lo = (int64_t)std::llround(p.min), hi = (int64_t)std::llround(p.max);
-            const ImGuiSliderFlags f = (p.log ? ImGuiSliderFlags_Logarithmic : 0) | ImGuiSliderFlags_AlwaysClamp;
-            if (ImGui::SliderScalar("##v", ImGuiDataType_S64, &v, &lo, &hi, "%lld", f)) rc.set(p.name, Json(v));
+            const ImGuiSliderFlags f = (p.log ? ImGuiSliderFlags_Logarithmic : 0) | ImGuiSliderFlags_AlwaysClamp |
+                                       ImGuiSliderFlags_NoInput;
+            if (ImGui::SliderScalar("##v", ImGuiDataType_S64, &v, &lo, &hi, "", f)) rc.set(p.name, Json(v));
             if (ImGui::IsItemDeactivatedAfterEdit()) rc.set(p.name, Json(v));
+            remember("slider:" + p.name);
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::SetNextItemWidth(kFieldW);
+            int64_t e = v;
+            ImGui::InputScalar("##exact", ImGuiDataType_S64, &e);
+            if (ImGui::IsItemDeactivatedAfterEdit()) rc.set(p.name, Json(std::clamp(e, lo, hi)));
         } else {
             ImGui::SetNextItemWidth(kFieldW);
             ImGui::InputScalar("##v", ImGuiDataType_S64, &v);
@@ -155,11 +163,19 @@ void draw_param(RunControls& rc, const ControlsLook& look, const ControlParam& p
     } else {   // number
         double v = shown.is_number() ? shown.as_double() : 0.0;
         if (p.has_min && p.has_max) {
+            // The slider carries no text; the exact value is in its own field beside it.
             ImGui::SetNextItemWidth(kSliderW);
             double lo = p.min, hi = p.max;
-            const ImGuiSliderFlags f = (p.log ? ImGuiSliderFlags_Logarithmic : 0) | ImGuiSliderFlags_AlwaysClamp;
-            if (ImGui::SliderScalar("##v", ImGuiDataType_Double, &v, &lo, &hi, "%.4g", f)) rc.set(p.name, Json(v));
+            const ImGuiSliderFlags f = (p.log ? ImGuiSliderFlags_Logarithmic : 0) | ImGuiSliderFlags_AlwaysClamp |
+                                       ImGuiSliderFlags_NoInput;
+            if (ImGui::SliderScalar("##v", ImGuiDataType_Double, &v, &lo, &hi, "", f)) rc.set(p.name, Json(v));
             if (ImGui::IsItemDeactivatedAfterEdit()) rc.set(p.name, Json(v));
+            remember("slider:" + p.name);
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::SetNextItemWidth(kFieldW);
+            double e = v;
+            ImGui::InputDouble("##exact", &e, 0.0, 0.0, "%.4g");
+            if (ImGui::IsItemDeactivatedAfterEdit()) rc.set(p.name, Json(std::clamp(e, lo, hi)));
         } else {
             ImGui::SetNextItemWidth(kFieldW);
             ImGui::InputDouble("##v", &v, 0.0, 0.0, "%.4g");
@@ -519,7 +535,8 @@ void draw_run_bar(RunControls& rc, const ControlsLook& look, float width) {
     for (const ControlParam& p : c.params) {
         float w = ImGui::CalcTextSize(p.name.c_str()).x + st.ItemSpacing.x;
         if (p.type == CALIPER_NET_PARAM_BOOLEAN) w += ImGui::GetFrameHeight();
-        else if (p.type == CALIPER_NET_PARAM_CHOICE || (p.has_min && p.has_max)) w += kSliderW;
+        else if (p.type == CALIPER_NET_PARAM_CHOICE) w += kSliderW;
+        else if (p.has_min && p.has_max) w += kSliderW + 4.0f + kFieldW;
         else w += kFieldW;
         items.push_back({&p, nullptr, w + pending_w});
     }
@@ -665,6 +682,18 @@ int min_kept(uint32_t kind) {
                                                                                  : 0;
 }
 
+// A compact menu: the preview and a small chevron in the faint ink, in place
+// of ImGui's square arrow button.
+bool small_combo(const char* id, const char* preview, float width, ImU32 faint) {
+    ImGui::SetNextItemWidth(width);
+    const bool open = ImGui::BeginCombo(id, preview, ImGuiComboFlags_NoArrowButton | ImGuiComboFlags_HeightLarge);
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    const float cx = b.x - 8.0f, cy = std::floor((a.y + b.y) * 0.5f) + 0.5f;
+    const ImVec2 pts[3] = {ImVec2(cx - 3.5f, cy - 1.5f), ImVec2(cx, cy + 2.0f), ImVec2(cx + 3.5f, cy - 1.5f)};
+    ImGui::GetWindowDrawList()->AddPolyline(pts, 3, faint, 0, 1.0f);
+    return open;
+}
+
 std::string choice_label(int what, int64_t index, const std::string& op) {
     return what == 1 ? std::to_string(index) : what == 2 ? op : "all";
 }
@@ -748,16 +777,15 @@ float DataViewPicker::draw(Source* src, uint64_t key, const std::string& view, u
         ImGui::SameLine(0.0f, 10.0f);
         if (ImGui::GetCursorScreenPos().x + w > right) ImGui::NewLine();
     };
-    const float combo_w = ImGui::CalcTextSize("norm").x + ImGui::GetFrameHeight() + 2.0f * gs.FramePadding.x + 14.0f;
+    const float combo_w = ImGui::CalcTextSize("norm").x + 2.0f * gs.FramePadding.x + 22.0f;
     const std::string prefix = "picker:" + view + ":";
 
     if (sources.size() > 1) {
         float w = 0.0f;
         for (const SourceOffer& so : sources) w = std::max(w, ImGui::CalcTextSize(so.name.c_str()).x);
-        w += ImGui::GetFrameHeight() + 2.0f * gs.FramePadding.x + 8.0f;
+        w += 2.0f * gs.FramePadding.x + 22.0f;
         place(w);
-        ImGui::SetNextItemWidth(w);
-        if (ImGui::BeginCombo("##source", cur->name.c_str())) {
+        if (small_combo("##source", cur->name.c_str(), w, faint)) {
             for (const SourceOffer& so : sources) {
                 if (ImGui::Selectable(so.name.c_str(), so.name == cur->name) && so.name != cur->name) {
                     // Another source: its dims keep the choices of dims of the same name.
@@ -790,9 +818,8 @@ float DataViewPicker::draw(Source* src, uint64_t key, const std::string& view, u
             ImGui::PopStyleColor();
             ImGui::SameLine(0.0f, 4.0f);
             ImGui::PushID(d.name.c_str());
-            ImGui::SetNextItemWidth(combo_w);
             const std::string shown = field && c.what == 1 ? "index" : choice_label(c.what, c.index, c.op);
-            if (ImGui::BeginCombo("##dim", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+            if (small_combo("##dim", shown.c_str(), combo_w, faint)) {
                 auto entry = [&](const std::string& label, const Choice& pick) {
                     if (ImGui::Selectable(label.c_str(), c == pick) && !(c == pick)) {
                         c = pick;

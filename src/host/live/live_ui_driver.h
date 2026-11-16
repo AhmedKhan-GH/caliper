@@ -13,6 +13,7 @@
 //   set <param> <text>    ctrl+click the parameter's slider or field, type <text>, Enter
 //   toggle <param>        a click on a boolean parameter's box
 //   select <view>         a shift-drag across the top quarter of the view's image or plot area
+//   leave                 the pointer leaves the window (no hover is left behind)
 //   wait <frames>         nothing for that many frames
 //   state <run state>     wait until the run state is <run state> (paused, running, ...)
 // A step whose target has not been drawn waits for it, up to kPatience frames,
@@ -27,6 +28,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -69,6 +71,11 @@ public:
         ++frames_;
         if (s.verb == "wait") {
             if (frames_ >= std::atoi(s.a.c_str())) next("waited " + s.a + " frames");
+            return;
+        }
+        if (s.verb == "leave") {
+            io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+            next("left the window");
             return;
         }
         if (s.verb == "state") {
