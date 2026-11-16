@@ -2,16 +2,16 @@
 
   v3_2/<name>.bin, .json       the frames of a 3.2 sender (minor 2): HELLO and
                                WELCOME with the capability "scenes", VIEWS with
-                               a scene, VIEWS with a scene whose keys are
-                               null (the defaults), the resolved default scene
+                               scenes, VIEWS with a scene whose keys are null
+                               (the defaults), the resolved default scene
                                data view,
-                               SCENE_UPDATE of each part built (points, lines
-                               as segments and strips, mesh) and SCENE_CLEAR.
-                               Every implementation decodes them and encodes
-                               them back to the same bytes, except DECODE_ONLY
-  DECODE_ONLY                  frames with sections this subset ignores (a
-                               stamp, normals): they decode, and the ignored
-                               sections do not come back on encoding
+                               SCENE_UPDATE of every part and form,
+                               SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES,
+                               with and without their stamps. Every
+                               implementation decodes them and encodes them
+                               back to the same bytes, except DECODE_ONLY
+  DECODE_ONLY                  frames with a section no part has: it decodes,
+                               and the section does not come back on encoding
   v3_2/invalid/<name>.bin      a 3.2 frame every decoder refuses
   v3_2/invalid/expect.json     per file: {"reason", "close_code"} for a frame
                                that is not well formed, or {"error"}, the
@@ -43,7 +43,7 @@ PLANE_SHARE = {"id": 6, "name": "plane share", "kind": int(w.Kind.SERIES), "sour
 NULLS = {"id": 7, "name": "defaults", "kind": int(w.Kind.SCENE), "sources": [],
          "scene": {"space": None, "up": None, "units": None}}
 
-DECODE_ONLY = ("v3_2/scene_update_points_stamped", "v3_2/scene_update_mesh_normals")
+DECODE_ONLY = ("v3_2/scene_update_points_future",)
 
 
 def _f32(rows) -> np.ndarray:
@@ -76,11 +76,31 @@ GRID_TRIANGLES = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
 FLAT = _f32([[0, 0], [1, 0], [0, 1]])                                       # a 2-D triangle
 
 
-def _update(sub, view, seq, stamp, path, part, arrays, params, **kw):
-    return w.SceneUpdate(sub, view, seq, stamp, path, part, arrays, params, **kw)
+def _update(sub, view, seq, stamp_ns, path, part, arrays, params, **kw):
+    return w.SceneUpdate(sub, view, seq, stamp_ns, path, part, arrays, params, **kw)
+
+
+# The draft's stamp: step 1,200 at 1,763,200,000,123,456,789 ns.
+STAMP_T = np.array([1200, 1763200000123456789], dtype=np.int64)
+WORLD = {"id": 7, "name": "world", "kind": int(w.Kind.SCENE), "sources": [],
+         "scene": {"space": "3d", "up": "+z", "units": "m",
+                   "view_camera": {"target": [0.0, 0.0, 0.5], "azimuth": 30.0, "elevation": 25.0}}}
+OVERLAY = {"id": 8, "name": "overlay", "kind": int(w.Kind.SCENE), "sources": [],
+           "scene": {"space": "2d", "up": "-y", "units": "px"}}
+# A 1 x 1 PNG of one orange pixel, the bytes of an encoded image.
+PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489000000"
+                    "0d4944415478da63f8dfc0f01f000680027fcf1209f10000000049454e44ae426082")
+
+
+def _matrix(tx, ty, tz) -> list:
+    """A translation as a column-major 4 x 4 matrix."""
+    m = np.eye(4, dtype=np.float32)
+    m[:3, 3] = (tx, ty, tz)
+    return m.T.reshape(-1).tolist()
 
 
 def valid_vectors() -> dict[str, bytes]:
+    u8, i32, u16 = np.uint8, np.int32, np.uint16
     msgs = {
         "hello": w.Hello(w.ROLE_VIEWER, [w.CAP_CONTROLS, w.CAP_SCENES, w.CAP_SELECTION],
                          VIEWER_SOFTWARE),
@@ -89,11 +109,15 @@ def valid_vectors() -> dict[str, bytes]:
                              PRODUCER_SOFTWARE, SESSION, control=True),
         "views_scene": w.Views([LANDSCAPE, PLANE_SHARE], SESSION["id"]),
         "views_scene_nulls": w.Views([NULLS], SESSION["id"]),
+        "views_scene_camera": w.Views([WORLD, OVERLAY], SESSION["id"]),
         "view_reply_scene": w.ViewReply(9, 2, "landscape",
                                         data_view=w.resolve_data_view(LANDSCAPE, {})),
-        # The draft's example frame without its stamp (timelines are not built).
+        # The draft's example frame, with and without its stamp.
         "scene_update_points": _update(2, "world", 12, STAMP + 1377, "world/cloud", w.PART_POINTS,
                                        {"positions": CLOUD, "colors": RGB}, {}),
+        "scene_update_points_stamped": _update(2, "world", 12, STAMP + 1377, "world/cloud",
+                                               w.PART_POINTS, {"positions": CLOUD, "colors": RGB},
+                                               {}, stamp=STAMP_T),
         "scene_update_points_color": _update(
             2, "landscape", 41, STAMP + 3000, "current", w.PART_POINTS, {"positions": CURRENT},
             {"color": [255, 80, 80, 255], "stats": _stats(None, CURRENT)}),
@@ -102,6 +126,10 @@ def valid_vectors() -> dict[str, bytes]:
             {"positions": MARKERS, "values": MARKER_VALUES, "radii": MARKER_RADII},
             {"colormap": w.COLORMAP_MAGMA, "flags": w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX,
              "vmin": 0.0, "vmax": 1.0, "stats": _stats(MARKER_VALUES, MARKERS)}, static=True),
+        "scene_update_points_labels": _update(
+            2, "world", 20, STAMP + 3150, "graph/nodes", w.PART_POINTS,
+            {"positions": CLOUD, "class_ids": np.array([0, 1, 1], i32)},
+            {"labels": ["a", "b", "c"]}, stamp=STAMP_T),
         "scene_update_lines_segments": _update(
             2, "landscape", 1, STAMP + 3200, "", w.PART_LINES, {"positions": FRAME},
             {"mode": w.LINES_SEGMENTS, "color": [160, 160, 160, 255], "width": 1.0,
@@ -116,36 +144,112 @@ def valid_vectors() -> dict[str, bytes]:
             {"positions": TWO_STRIPS, "strip_lengths": np.array([3, 2], dtype=np.int32),
              "colors": np.array([[255, 160, 0, 255], [0, 160, 255, 255]], dtype=np.uint8)},
             {"mode": w.LINES_STRIPS, "color_per": w.COLOR_PER_STRIP, "width": 3.0}),
+        # Index-pair edges: a triangle of three edges, one value each.
+        "scene_update_lines_edges": _update(
+            2, "world", 21, STAMP + 3450, "graph/edges", w.PART_LINES,
+            {"positions": CLOUD, "indices": np.array([[0, 1], [1, 2], [2, 0]], i32),
+             "values": _f32([0.25, 0.5, 1.0])},
+            {"mode": w.LINES_EDGES, "color_per": w.COLOR_PER_EDGE, "width": 1.5,
+             "colormap": w.COLORMAP_MAGMA, "flags": 0, "vmin": 0.0, "vmax": 1.0}, stamp=STAMP_T),
+        "scene_update_arrows": _update(
+            2, "world", 22, STAMP + 3460, "field", w.PART_ARROWS,
+            {"origins": _f32([[0, 0, 0], [1, 0, 0]]), "vectors": _f32([[0, 0, 1], [0, 0.5, 0]]),
+             "colors": RGB[:2]}, {"width": 2.0}, stamp=STAMP_T),
+        "scene_update_boxes": _update(
+            2, "world", 23, STAMP + 3470, "arm/link0", w.PART_BOXES,
+            {"centers": _f32([[0, 0, 0.25]]), "half_sizes": _f32([[0.0625, 0.0625, 0.25]]),
+             "rotations": _f32([[0, 0, 0, 1]]), "class_ids": np.array([1], i32)},
+            {"labels": ["link"], "width": 2.0}, static=True),
+        "scene_update_boxes_2d": _update(
+            3, "overlay", 4, STAMP + 3480, "rig/left/cars", w.PART_BOXES,
+            {"centers": _f32([[10, 20], [40.5, 8]]), "half_sizes": _f32([[4, 3], [2.5, 2]]),
+             "colors": RGB[1:]}, {"labels": ["car"], "fill": True}, stamp=STAMP_T),
         "scene_update_mesh": _update(
             2, "landscape", 39, STAMP + 3500, "surface", w.PART_MESH,
             {"positions": GRID, "indices": GRID_TRIANGLES, "values": GRID_VALUES},
             {"colormap": w.COLORMAP_VIRIDIS, "flags": 0, "vmin": -4.0, "vmax": 2.0,
              "stats": _stats(GRID_VALUES, GRID)}),
+        "scene_update_mesh_normals": _update(
+            2, "landscape", 39, STAMP + 3500, "surface", w.PART_MESH,
+            {"positions": GRID, "indices": GRID_TRIANGLES,
+             "normals": np.tile(np.array([0, 0, 1], dtype=np.float32), (4, 1))}, {}),
+        "scene_update_mesh_textured": _update(
+            2, "world", 24, STAMP + 3550, "floor", w.PART_MESH,
+            {"positions": GRID, "indices": GRID_TRIANGLES,
+             "uvs": _f32([[0, 0], [1, 0], [0, 1], [1, 1]]),
+             "texture": np.array([[[255, 0, 0, 255], [0, 255, 0, 255]],
+                                  [[0, 0, 255, 255], [255, 255, 255, 255]]], u8)},
+            {}, static=True),
         "scene_update_mesh_colors": _update(
             3, "flat", 2, STAMP + 3600, "shapes/tri", w.PART_MESH,
             {"positions": FLAT, "colors": RGB}, {}, static=True, state=True),
+        "scene_update_image_color": _update(
+            2, "world", 25, STAMP + 3650, "rig/left/rgb", w.PART_IMAGE,
+            {"pixels": np.arange(24, dtype=u8).reshape(2, 3, 4) * 10},
+            {"form": w.FORM_COLOR, "opacity": 1.0}, stamp=STAMP_T),
+        "scene_update_image_depth": _update(
+            2, "world", 26, STAMP + 3660, "rig/left/depth", w.PART_IMAGE,
+            {"pixels": np.array([[500, 1000, 0], [1500, 2000, 2500]], u16)},
+            {"form": w.FORM_DEPTH, "scale": 0.001, "cloud": True, "colormap": w.COLORMAP_VIRIDIS,
+             "flags": w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX, "vmin": 0.0, "vmax": 1.0,
+             "stats": [0.5, 2.5]}, stamp=STAMP_T),
+        "scene_update_image_depth_f32": _update(
+            3, "overlay", 5, STAMP + 3670, "elevation", w.PART_IMAGE,
+            {"pixels": _f32([[-1, 0.5], [0.25, 1]])},
+            {"form": w.FORM_DEPTH, "colormap": w.COLORMAP_RDBU, "flags": 0, "vmin": -1.0,
+             "vmax": 1.0}, static=True),
+        "scene_update_image_segmentation": _update(
+            2, "world", 27, STAMP + 3680, "rig/left/classes", w.PART_IMAGE,
+            {"pixels": np.array([[0, 1, 1], [2, 2, 0]], u8)},
+            {"form": w.FORM_SEGMENTATION, "opacity": 0.5}, stamp=STAMP_T),
+        "scene_update_image_segmentation_u16": _update(
+            3, "overlay", 6, STAMP + 3690, "labels", w.PART_IMAGE,
+            {"pixels": np.array([[0, 300], [65535, 7]], u16)},
+            {"form": w.FORM_SEGMENTATION, "opacity": 0.75}),
+        "scene_update_image_encoded": _update(
+            2, "world", 28, STAMP + 3700, "rig/right/rgb", w.PART_IMAGE,
+            {"pixels": np.frombuffer(PNG, u8)},
+            {"form": w.FORM_ENCODED, "format": w.FORMAT_PNG, "opacity": 1.0}, stamp=STAMP_T),
+        "scene_update_camera": _update(
+            2, "world", 29, STAMP + 3710, "rig/left", w.PART_CAMERA, {},
+            {"fx": 525.0, "fy": 525.0, "cx": 319.5, "cy": 239.5, "width": 640, "height": 480,
+             "convention": w.CONVENTION_RDF}, static=True),
+        "scene_update_camera_rub": _update(
+            2, "world", 30, STAMP + 3720, "sim/eye", w.PART_CAMERA, {},
+            {"fx": 300.0, "fy": 300.0, "cx": 160.0, "cy": 120.0, "width": 320, "height": 240,
+             "convention": w.CONVENTION_RUB, "plane_distance": 0.25}, stamp=STAMP_T),
+        "scene_transforms": w.SceneTransforms(
+            2, "world", 31, STAMP + 3730, ["arm/link0", "arm/link0/link1"],
+            _f32([_matrix(0, 0, 0), _matrix(0, 0, 0.5)]), stamp=STAMP_T),
+        "scene_transforms_stamps": w.SceneTransforms(
+            2, "world", 32, STAMP + 3740, ["a", "b"], _f32([_matrix(1, 0, 0), _matrix(0, 2, 0)]),
+            stamps=np.array([[1200, 1763200000123456789], [1201, 1763200000128456789]], np.int64)),
+        "scene_transforms_static": w.SceneTransforms(
+            2, "world", 33, STAMP + 3750, ["rig/left", "rig/right"],
+            _f32([_matrix(-0.0625, -2.5, 1.25), _matrix(0.0625, -2.5, 1.25)]), static=True,
+            state=True),
+        "scene_classes": w.SceneClasses(
+            2, "world", 34, STAMP + 3760,
+            [{"id": 0, "label": "floor", "color": [128, 128, 128, 255]},
+             {"id": 1, "label": "obstacle", "color": [230, 80, 60, 255]},
+             {"id": 65535, "label": "unknown", "color": [0, 0, 0, 0]}], static=True),
+        "scene_classes_stamped": w.SceneClasses(2, "world", 35, STAMP + 3770, [], stamp=STAMP_T),
         "scene_clear_reset": w.SceneClear(2, "landscape", 41, STAMP + 3700, "", reset=True,
                                           state=True),
         "scene_clear": w.SceneClear(2, "world", 15, STAMP + 3800, "world/cloud", recursive=True,
                                     parts=[w.PART_POINTS, w.PART_MESH]),
+        "scene_clear_stamped": w.SceneClear(2, "world", 36, STAMP + 3810, "arm", recursive=True,
+                                            parts=[w.PART_TRANSFORM, w.PART_BOXES],
+                                            stamp=STAMP_T),
     }
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
-    # Decode only: the draft's example frame itself, with its stamp section
-    # (step 1,200 at 1,763,200,000,123,456,789 ns), and a mesh with normals.
-    stamp = np.array([1200, 1763200000123456789], dtype=np.int64)
-    out["v3_2/scene_update_points_stamped"] = w.encode_frame(
+    # Decode only: a section that no part has, which decoders ignore.
+    out["v3_2/scene_update_points_future"] = w.encode_frame(
         w.MsgType.SCENE_UPDATE,
         {"part": "points", "path": "world/cloud", "seq": 12, "stamp_ns": STAMP + 1377, "sub": 2,
          "view": "world"},
-        [w.Section.from_array("positions", CLOUD), w.Section.from_array("colors", RGB),
-         w.Section.from_array("stamp", stamp)], minor=M)
-    normals = np.tile(np.array([0, 0, 1], dtype=np.float32), (4, 1))
-    out["v3_2/scene_update_mesh_normals"] = w.encode_frame(
-        w.MsgType.SCENE_UPDATE,
-        {"part": "mesh", "path": "surface", "seq": 39, "stamp_ns": STAMP + 3500, "sub": 2,
-         "view": "landscape"},
-        [w.Section.from_array("positions", GRID), w.Section.from_array("indices", GRID_TRIANGLES),
-         w.Section.from_array("normals", normals)], minor=M)
+        [w.Section.from_array("positions", CLOUD), w.Section.from_array("future", _f32([1, 2, 3]))],
+        minor=M)
     return out
 
 
@@ -174,6 +278,14 @@ def _frame(part: str, path: str, sections: dict, **keys) -> bytes:
                           [w.Section.from_array(n, a) for n, a in sections.items()], minor=M)
 
 
+def _message(type_: int, **meta) -> bytes:
+    """A frame of another scene message from literal keys and sections."""
+    sections = meta.pop("sections", {})
+    base = {"seq": 1, "stamp_ns": STAMP, "sub": 2, "view": "s", **meta}
+    return w.encode_frame(type_, base, [w.Section.from_array(n, a) for n, a in sections.items()],
+                          minor=M)
+
+
 def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
     P = w.CLOSE_PROTOCOL_ERROR
     bad = {"error": w.ERR_BAD_REQUEST}
@@ -181,11 +293,20 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
     mesh = valid["v3_2/scene_update_mesh"]
     pos_meta = (b'{"part":"points","path":"p","sections":[{"dtype":0,"name":"positions",'
                 b'"shape":[3,3]}],"seq":1,"stamp_ns":1,"sub":2,"view":"s"}')
+    u16_meta = (b'{"form":"depth","part":"image","path":"d","sections":[{"dtype":6,"name":"pixels",'
+                b'"shape":[2,2]}],"seq":1,"stamp_ns":1,"sub":2,"view":"s"}')
     deep = "/".join(f"s{i}" for i in range(17))
+    u8, i32 = np.uint8, np.int32
+    camera = {"fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0, "width": 640, "height": 480,
+              "convention": "rdf"}
+    mats = _f32([_matrix(0, 0, 0), _matrix(1, 0, 0)])
+    T, K = w.MsgType.SCENE_TRANSFORMS, w.MsgType.SCENE_CLASSES
     return {
         "truncated_mesh": (mesh[:-4], {"reason": "truncated", "close_code": P}),
         "positions_length_mismatch": (_raw(w.MsgType.SCENE_UPDATE, pos_meta, [bytes(32)]),
                                       {"reason": "malformed", "close_code": P}),
+        "u16_length_mismatch": (_raw(w.MsgType.SCENE_UPDATE, u16_meta, [bytes(6)]),
+                                {"reason": "malformed", "close_code": P}),
         "indices_i64": (_frame("mesh", "surface", {"positions": GRID,
                                                    "indices": GRID_TRIANGLES.astype(np.int64)}),
                         bad),
@@ -204,10 +325,6 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
         "segments_odd": (_frame("lines", "", {"positions": CLOUD}, mode="segments"), bad),
         "mode_missing": (_frame("lines", "", {"positions": FRAME}), bad),
         "part_unknown": (_frame("blob", "p", {"positions": CLOUD}), bad),
-        "part_arrows": (_frame("arrows", "p", {"origins": CLOUD, "vectors": CLOUD}), unsupported),
-        "lines_edges": (_frame("lines", "g", {"positions": CLOUD,
-                                              "indices": np.array([[0, 1], [1, 2]], np.int32)},
-                               mode="edges"), unsupported),
         "split_piece": (_frame("points", "p", {"positions": CLOUD},
                                split={"update": 1, "piece": 0, "pieces": 2, "first": [0],
                                       "rows": [6]}), unsupported),
@@ -217,4 +334,93 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
                                             {"path": "world", "reset": True, "seq": 1,
                                              "stamp_ns": STAMP, "sub": 2, "view": "s"}, minor=M),
                              bad),
+        # stamps
+        "stamp_static": (_frame("points", "p", {"positions": CLOUD, "stamp": STAMP_T},
+                                static=True), bad),
+        "stamp_f32": (_frame("points", "p", {"positions": CLOUD, "stamp": _f32([1, 2])}), bad),
+        "stamp_too_long": (_frame("points", "p", {"positions": CLOUD,
+                                                  "stamp": np.zeros(9, np.int64)}), bad),
+        "stamp_rank_2": (_frame("points", "p", {"positions": CLOUD,
+                                                "stamp": np.zeros((1, 2), np.int64)}), bad),
+        "clear_stamp_static": (_message(w.MsgType.SCENE_CLEAR, path="a", static=True,
+                                        sections={"stamp": STAMP_T}), bad),
+        # points and lines
+        "labels_count": (_frame("points", "p", {"positions": CLOUD}, labels=["a", "b"]), bad),
+        "labels_long": (_frame("points", "p", {"positions": CLOUD}, labels=["x" * 64]), bad),
+        "class_ids_rows": (_frame("points", "p", {"positions": CLOUD,
+                                                  "class_ids": np.array([1, 2], i32)}), bad),
+        "edges_indices_missing": (_frame("lines", "g", {"positions": CLOUD}, mode="edges"), bad),
+        "edges_2e": (_frame("lines", "g", {"positions": CLOUD,
+                                           "indices": np.array([[0, 1, 2], [1, 2, 0]], i32)},
+                            mode="edges"), bad),
+        "edges_color_per_strip": (_frame("lines", "g", {"positions": CLOUD,
+                                                        "indices": np.array([[0, 1]], i32)},
+                                         mode="edges", color_per="strip"), bad),
+        "edges_strip_lengths": (_frame("lines", "g", {"positions": CLOUD,
+                                                      "strip_lengths": np.array([3], i32),
+                                                      "indices": np.array([[0, 1]], i32)},
+                                       mode="edges"), bad),
+        "edge_values_rows": (_frame("lines", "g", {"positions": CLOUD,
+                                                   "indices": np.array([[0, 1]], i32),
+                                                   "values": _f32([1, 2])},
+                                    mode="edges", color_per="edge"), bad),
+        # arrows and boxes
+        "arrows_vectors_missing": (_frame("arrows", "p", {"origins": CLOUD}), bad),
+        "arrows_vectors_rows": (_frame("arrows", "p", {"origins": CLOUD, "vectors": CLOUD[:2]}),
+                                bad),
+        "boxes_rotations_2d": (_frame("boxes", "b", {"centers": FLAT, "half_sizes": FLAT,
+                                                     "rotations": np.zeros((3, 4), np.float32)}),
+                               bad),
+        "boxes_half_sizes_dims": (_frame("boxes", "b", {"centers": CLOUD, "half_sizes": FLAT}),
+                                  bad),
+        # meshes
+        "mesh_uvs_without_texture": (_frame("mesh", "m", {"positions": FLAT,
+                                                          "uvs": np.zeros((3, 2), np.float32)}),
+                                     bad),
+        "mesh_uvs_and_colors": (_frame("mesh", "m", {"positions": FLAT, "colors": RGB,
+                                                     "uvs": np.zeros((3, 2), np.float32),
+                                                     "texture": np.zeros((1, 1, 4), u8)}), bad),
+        "mesh_texture_rgb": (_frame("mesh", "m", {"positions": FLAT,
+                                                  "uvs": np.zeros((3, 2), np.float32),
+                                                  "texture": np.zeros((1, 1, 3), u8)}), bad),
+        "mesh_normals_2d": (_frame("mesh", "m", {"positions": FLAT,
+                                                 "normals": np.zeros((3, 2), np.float32)}), bad),
+        # images
+        "image_form_missing": (_frame("image", "i", {"pixels": np.zeros((2, 2), u8)}), bad),
+        "image_form_unknown": (_frame("image", "i", {"pixels": np.zeros((2, 2), u8)},
+                                      form="video"), bad),
+        "image_pixels_missing": (_frame("image", "i", {}, form="color"), bad),
+        "image_depth_u8": (_frame("image", "i", {"pixels": np.zeros((2, 2), u8)}, form="depth"),
+                           bad),
+        "image_color_rgb": (_frame("image", "i", {"pixels": np.zeros((1, 2, 3), u8)},
+                                   form="color"), bad),
+        "image_side": (_frame("image", "i", {"pixels": np.zeros((8193, 1), u8)}, form="color"),
+                       bad),
+        "image_encoded_format_missing": (_frame("image", "i", {"pixels": np.frombuffer(PNG, u8)},
+                                                form="encoded"), bad),
+        "image_opacity_range": (_frame("image", "i", {"pixels": np.zeros((2, 2), u8)},
+                                       form="segmentation", opacity=1.5), bad),
+        # cameras
+        "camera_fx_missing": (_frame("camera", "c", {}, **{k: v for k, v in camera.items()
+                                                          if k != "fx"}), bad),
+        "camera_convention_missing": (_frame("camera", "c", {}, **{
+            k: v for k, v in camera.items() if k != "convention"}), bad),
+        "camera_width_fraction": (_frame("camera", "c", {}, **dict(camera, width=640.5)), bad),
+        "camera_height_zero": (_frame("camera", "c", {}, **dict(camera, height=0)), bad),
+        # entity transforms
+        "transforms_root": (_message(T, paths=["", "a"], sections={"matrices": mats}), bad),
+        "transforms_repeat": (_message(T, paths=["a", "a"], sections={"matrices": mats}), bad),
+        "transforms_rows": (_message(T, paths=["a"], sections={"matrices": mats}), bad),
+        "transforms_matrices_missing": (_message(T, paths=["a"]), bad),
+        "transforms_stamps_rows": (_message(T, paths=["a", "b"], sections={
+            "matrices": mats, "stamps": np.zeros((1, 2), np.int64)}), bad),
+        "transforms_stamp_and_stamps": (_message(T, paths=["a", "b"], sections={
+            "matrices": mats, "stamp": STAMP_T, "stamps": np.zeros((2, 2), np.int64)}), bad),
+        # class tables
+        "classes_order": (_message(K, classes=[{"id": 2, "label": "b", "color": [0, 0, 0, 255]},
+                                               {"id": 1, "label": "a", "color": [0, 0, 0, 255]}]),
+                          bad),
+        "classes_id_range": (_message(K, classes=[{"id": 65536, "label": "x",
+                                                   "color": [0, 0, 0, 255]}]), bad),
+        "classes_color_missing": (_message(K, classes=[{"id": 1, "label": "x"}]), bad),
     }

@@ -649,16 +649,86 @@ Section named(const Section& s, const char* name) {
     return o;
 }
 
-// ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; the 3.2 block of caliper/live_net.h) ----
-// The checks and their order follow the block at the end of _wire.py. The
-// public functions come first; the decoders and encoders sit in the anonymous
+// ---- protocol 3.2 draft: the scenes subset (the 3.2 block of caliper/live_net.h) ----
+// The checks and their order follow the block at the end of _wire.py line for
+// line, so that the codecs answer every frame with the same code. The public
+// functions come first; the decoders and encoders sit in the anonymous
 // namespace again, for decode(), to_meta() and encode().
+}  // namespace
+
+namespace {
+constexpr int kPartCount = 7;
+const char* const kParts[kPartCount] = {CALIPER_NET_PART_POINTS, CALIPER_NET_PART_LINES, CALIPER_NET_PART_ARROWS,
+                                        CALIPER_NET_PART_BOXES,  CALIPER_NET_PART_MESH,  CALIPER_NET_PART_IMAGE,
+                                        CALIPER_NET_PART_CAMERA};
+enum { kPoints, kLines, kArrows, kBoxes, kMesh, kImage, kCamera };
+// The array sections of each part in the order a sender writes them (PART_SECTIONS).
+const char* const kPartSections[kPartCount][8] = {
+    {"positions", "colors", "values", "class_ids", "radii", nullptr},
+    {"positions", "strip_lengths", "indices", "colors", "values", nullptr},
+    {"origins", "vectors", "colors", "values", nullptr},
+    {"centers", "half_sizes", "rotations", "colors", "class_ids", nullptr},
+    {"positions", "indices", "normals", "colors", "values", "uvs", "texture", nullptr},
+    {"pixels", nullptr},
+    {nullptr}};
+// The keys of each part in the order their types are checked (PART_KEYS).
+const char* const kPartKeys[kPartCount][11] = {
+    {"color", "radius", "labels", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
+    {"mode", "color_per", "color", "width", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
+    {"color", "width", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
+    {"color", "labels", "fill", "width", "stats", nullptr},
+    {"color", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
+    {"form", "opacity", "scale", "cloud", "colormap", "flags", "vmin", "vmax", "format", "stats", nullptr},
+    {"fx", "fy", "cx", "cy", "width", "height", "convention", "plane_distance", nullptr}};
+const char* const kCameraRequired[] = {"fx", "fy", "cx", "cy", "width", "height", "convention", nullptr};
+
+bool is_positive_num(const Json& v) { return is_finite(v) && v.as_double() > 0; }
+
+// A VIEWS scene's "view_camera" as a viewer reads it (_view_camera): null for none, for a 2-D scene and
+// for a value it cannot read.
+Json view_camera_of(const Json& sc, bool is3d) {
+    const Json* vc = sc.find("view_camera");
+    if (!vc || vc->is_null() || !is3d) return Json();
+    if (vc->is_string()) return !vc->as_string().empty() && entity_path_ok(vc->as_string()) ? *vc : Json();
+    if (!vc->is_object()) return Json();
+    Json out = Json::object();
+    for (const auto& kv : vc->members()) {
+        const std::string& k = kv.first;
+        const Json& v = kv.second;
+        if (k != "target" && k != "distance" && k != "azimuth" && k != "elevation") return Json();
+        if (v.is_null()) continue;
+        if (k == "target") {
+            if (!v.is_array() || v.size() != 3) return Json();
+            for (const Json& x : v.items())
+                if (!is_finite(x)) return Json();
+        } else if (k == "distance") {
+            if (!is_positive_num(v)) return Json();
+        } else if (k == "azimuth") {
+            if (!is_finite(v)) return Json();
+        } else if (!is_finite(v) || v.as_double() < -89 || v.as_double() > 89) {
+            return Json();
+        }
+        out.set(k, v);
+    }
+    return out;
+}
 }  // namespace
 
 const Section* SceneUpdate::array(const std::string& name) const {
     for (const Section& s : arrays)
         if (s.name == name) return &s;
     return nullptr;
+}
+
+int scene_part_index(const std::string& p) {
+    for (int i = 0; i < kPartCount; ++i)
+        if (p == kParts[i]) return i;
+    return -1;
+}
+
+const char* const* scene_part_sections(int part) {
+    static const char* const none[1] = {nullptr};
+    return part >= 0 && part < kPartCount ? kPartSections[part] : none;
 }
 
 bool entity_path_ok(const std::string& v) {
@@ -714,6 +784,7 @@ bool scene_view_info(const Json& entry, SceneView* out, std::string* err) {
     if (!units || units->is_null()) v.units = "m";
     else if (units->is_string() && units->as_string().size() <= CALIPER_NET_UNITS_MAX) v.units = units->as_string();
     else return fail("scene units must be a string of at most 15 bytes, got " + show(*units));
+    v.view_camera = view_camera_of(*sc, is3d);
     if (out) *out = std::move(v);
     return true;
 }
@@ -754,21 +825,6 @@ bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, s
 
 namespace {
 
-const char* const kScenePartKeys[3][10] = {
-    {"color", "radius", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
-    {"mode", "color_per", "color", "width", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
-    {"color", "colormap", "flags", "vmin", "vmax", "stats", nullptr}};
-const char* const kScenePartSections[3][5] = {{"positions", "colors", "values", "radii", nullptr},
-                                              {"positions", "strip_lengths", "colors", "values", nullptr},
-                                              {"positions", "indices", "colors", "values", nullptr}};
-
-int scene_part_index(const std::string& p) {
-    if (p == CALIPER_NET_PART_POINTS) return 0;
-    if (p == CALIPER_NET_PART_LINES) return 1;
-    if (p == CALIPER_NET_PART_MESH) return 2;
-    return -1;
-}
-
 [[noreturn]] void unsupported(const std::string& msg) { throw MsgError{CALIPER_NET_ERR_UNSUPPORTED, msg}; }
 
 bool is_path(const Json& v) { return v.is_string() && entity_path_ok(v.as_string()); }
@@ -780,34 +836,69 @@ bool is_rgba(const Json& v) {
     }
     return true;
 }
-bool is_positive(const Json& v) { return is_finite(v) && v.as_double() > 0; }
 bool is_stats(const Json& v) {
     if (!v.is_array() || v.size() > CALIPER_NET_MAX_STATS) return false;
     for (const Json& x : v.items())
         if (!(x.is_null() || x.is_number())) return false;
     return true;
 }
+bool is_labels(const Json& v) {
+    if (!v.is_array() || v.size() < 1 || v.size() > CALIPER_NET_MAX_LABELS) return false;
+    for (const Json& x : v.items())
+        if (!x.is_string() || x.as_string().size() > CALIPER_NET_NAME_MAX) return false;
+    return true;
+}
+bool is_side(const Json& v) {
+    int64_t i = 0;
+    return v.get_i64(&i) && i >= 1 && i <= (int64_t)CALIPER_NET_MAX_IMAGE_SIDE;
+}
 
-// The check of a part key and what it expects, as _KEY_CHECKS.
-bool key_ok(const std::string& key, const Json& v, const char** what) {
+// The check of a part key and what it expects, as _KEY_CHECKS (a camera's width is its image width).
+bool key_ok(int part, const std::string& key, const Json& v, const char** what) {
     if (key == "color") { *what = "[r, g, b, a] of integers from 0 to 255"; return is_rgba(v); }
-    if (key == "radius" || key == "width") { *what = "a positive number"; return is_positive(v); }
+    if (part == kCamera && key == "width") { *what = "an integer from 1 to 8192"; return is_side(v); }
+    if (key == "radius" || key == "width" || key == "scale" || key == "fx" || key == "fy" ||
+        key == "plane_distance") {
+        *what = "a positive number";
+        return is_positive_num(v);
+    }
+    if (key == "labels") { *what = "a list of 1 to 4096 strings of at most 63 bytes"; return is_labels(v); }
     if (key == "colormap") { *what = "an integer"; return is_int(v); }
     if (key == "flags") { *what = "an unsigned integer"; return is_uint(v); }
     if (key == "vmin" || key == "vmax") { *what = "a number"; return is_num(v); }
-    if (key == "stats") { *what = "a list of numbers or nulls"; return is_stats(v); }
-    if (key == "mode") { *what = "segments or strips"; return one_of(v, {"segments", "strips", "edges"}); }
-    *what = "vertex or strip";   // color_per
-    return one_of(v, {"vertex", "strip", "edge"});
+    if (key == "stats") { *what = "at most 64 numbers or nulls"; return is_stats(v); }
+    if (key == "mode") {
+        *what = "segments, strips or edges";
+        return one_of(v, {CALIPER_NET_LINES_SEGMENTS, CALIPER_NET_LINES_STRIPS, CALIPER_NET_LINES_EDGES});
+    }
+    if (key == "color_per") {
+        *what = "vertex, strip or edge";
+        return one_of(v, {CALIPER_NET_COLOR_PER_VERTEX, CALIPER_NET_COLOR_PER_STRIP, CALIPER_NET_COLOR_PER_EDGE});
+    }
+    if (key == "fill" || key == "cloud") { *what = "a boolean"; return v.is_bool(); }
+    if (key == "form") {
+        *what = "color, depth, segmentation or encoded";
+        return one_of(v, {CALIPER_NET_FORM_COLOR, CALIPER_NET_FORM_DEPTH, CALIPER_NET_FORM_SEGMENTATION,
+                          CALIPER_NET_FORM_ENCODED});
+    }
+    if (key == "opacity") {
+        *what = "a number from 0 to 1";
+        return is_finite(v) && v.as_double() >= 0 && v.as_double() <= 1;
+    }
+    if (key == "format") { *what = "jpeg or png"; return one_of(v, {CALIPER_NET_FORMAT_JPEG, CALIPER_NET_FORMAT_PNG}); }
+    if (key == "cx" || key == "cy") { *what = "a finite number"; return is_finite(v); }
+    if (key == "height") { *what = "an integer from 1 to 8192"; return is_side(v); }
+    *what = "rdf or rub";   // convention
+    return one_of(v, {CALIPER_NET_CONVENTION_RDF, CALIPER_NET_CONVENTION_RUB});
 }
 
 Json scene_part_keys(const Json& m, int part) {
     Json out = Json::object();
-    for (const char* const* k = kScenePartKeys[part]; *k; ++k) {
+    for (const char* const* k = kPartKeys[part]; *k; ++k) {
         const Json* v = m.find(*k);
         if (!v || v->is_null()) continue;
         const char* what = "";
-        if (!key_ok(*k, *v, &what)) bad(std::string("'") + *k + "' must be " + what + ", got " + show(*v));
+        if (!key_ok(part, *k, *v, &what)) bad(std::string("'") + *k + "' must be " + what + ", got " + show(*v));
         if (std::string(*k) == "stats") {
             Json a = Json::array();
             for (const Json& x : v->items()) a.push(x.is_null() ? Json(std::nan("")) : Json(x.as_double()));
@@ -817,6 +908,11 @@ Json scene_part_keys(const Json& m, int part) {
         }
     }
     return out;
+}
+
+std::string str_key(const Json& params, const char* key) {
+    const Json* v = params.find(key);
+    return v ? v->as_string() : std::string();
 }
 
 // The section `name` of a part, or nullptr; `shape` holds the rows it must have (-1: any) and its rank.
@@ -832,17 +928,27 @@ const Section* part_section(const Frame& f, const char* name, int64_t dtype, std
     return s;
 }
 
-const Section* scene_positions(const Frame& f, const char* part, int64_t* n) {
-    const Section* pos = f.section("positions");
-    if (!pos) bad(std::string("a ") + part + " part needs a 'positions' section");
-    part_section(f, "positions", CALIPER_NET_DTYPE_F32, {-1, -1});
-    *n = pos->shape[0];
-    const int64_t d = pos->shape[1];
-    if (d != 2 && d != 3) bad("'positions' is (N, 2) or (N, 3)");
-    if (*n > (int64_t)CALIPER_NET_MAX_BATCH_POINTS)
-        bad(std::to_string(*n) + " positions, more than " + std::to_string(CALIPER_NET_MAX_BATCH_POINTS) +
-            " in a batch");
-    return pos;
+void required(const Frame& f, const char* part, const char* name) {
+    if (!f.section(name)) bad(std::string("a ") + part + " part needs a '" + name + "' section");
+}
+
+// A required f32 (N, D) section, D 2 or 3, N at most `limit` (_rows_section).
+const Section* rows_section(const Frame& f, const char* part, const char* name, uint64_t limit, const char* what,
+                            int64_t* n, int64_t* d) {
+    required(f, part, name);
+    const Section* s = part_section(f, name, CALIPER_NET_DTYPE_F32, {-1, -1});
+    *n = s->shape[0];
+    *d = s->shape[1];
+    if (*d != 2 && *d != 3) bad(std::string("'") + name + "' is (N, 2) or (N, 3)");
+    if (*n > (int64_t)limit)
+        bad(std::to_string(*n) + " " + what + ", more than " + std::to_string(limit) + " in a batch");
+    return s;
+}
+
+bool has_array(const std::vector<Section>& arrays, const char* name) {
+    for (const Section& s : arrays)
+        if (s.name == name) return true;
+    return false;
 }
 
 void scene_colours(const Frame& f, int64_t rows, std::vector<Section>* arrays) {
@@ -853,92 +959,252 @@ void scene_colours(const Frame& f, int64_t rows, std::vector<Section>* arrays) {
     if (v) arrays->push_back(*v);
 }
 
+void label_count(const Json& params, int64_t n) {
+    const Json* l = params.find("labels");
+    if (l && l->size() != 1 && (int64_t)l->size() != n)
+        bad(std::to_string(l->size()) + " labels for " + std::to_string(n) +
+            " items: give one label for all or one per item");
+}
+
+void class_ids(const Frame& f, int64_t n, std::vector<Section>* arrays) {
+    if (const Section* s = part_section(f, "class_ids", CALIPER_NET_DTYPE_I32, {n})) arrays->push_back(*s);
+}
+
+void decode_points(const Frame& f, const Json& params, std::vector<Section>* arrays) {
+    int64_t n = 0, d = 0;
+    arrays->push_back(*rows_section(f, CALIPER_NET_PART_POINTS, "positions", CALIPER_NET_MAX_BATCH_POINTS,
+                                    "positions", &n, &d));
+    scene_colours(f, n, arrays);
+    class_ids(f, n, arrays);
+    if (const Section* r = part_section(f, "radii", CALIPER_NET_DTYPE_F32, {n})) arrays->push_back(*r);
+    label_count(params, n);
+}
+
+void decode_lines(const Frame& f, const Json& params, std::vector<Section>* arrays) {
+    if (!params.find("mode")) bad("a lines part needs 'mode'");
+    const std::string md = str_key(params, "mode");
+    const std::string color_per = str_key(params, "color_per");
+    const bool has_cp = params.find("color_per") != nullptr;
+    int64_t n = 0, d = 0;
+    arrays->push_back(*rows_section(f, CALIPER_NET_PART_LINES, "positions", CALIPER_NET_MAX_BATCH_POINTS,
+                                    "positions", &n, &d));
+    if (md != CALIPER_NET_LINES_EDGES && f.section("indices")) bad("lines of mode '" + md + "' take no 'indices'");
+    int64_t rows = n;
+    if (md == CALIPER_NET_LINES_SEGMENTS) {
+        if (n % 2) bad("segments need an even number of vertices, got " + std::to_string(n));
+        if (f.section("strip_lengths")) bad("segments take no 'strip_lengths'");
+        if (has_cp && color_per != CALIPER_NET_COLOR_PER_VERTEX) bad("segments take color_per 'vertex'");
+    } else if (md == CALIPER_NET_LINES_STRIPS) {
+        const Section* sl = part_section(f, "strip_lengths", CALIPER_NET_DTYPE_I32, {-1});
+        if (!sl) bad("strips need a 'strip_lengths' section");
+        const int64_t cnt = sl->shape[0];
+        if (cnt > (int64_t)CALIPER_NET_MAX_BATCH_ITEMS)
+            bad(std::to_string(cnt) + " strips, more than " + std::to_string(CALIPER_NET_MAX_BATCH_ITEMS) +
+                " in a batch");
+        int64_t total = 0;
+        for (int64_t i = 0; i < cnt; ++i) {
+            int32_t len;
+            std::memcpy(&len, sl->data + 4 * i, 4);
+            if (len < 1) bad("every strip length is at least 1");
+            total += len;
+        }
+        if (total != n)
+            bad("the strip lengths add up to " + std::to_string(total) + ", not to the " + std::to_string(n) +
+                " vertices");
+        arrays->push_back(*sl);
+        if (color_per == CALIPER_NET_COLOR_PER_EDGE) bad("strips take color_per 'vertex' or 'strip'");
+        if (color_per == CALIPER_NET_COLOR_PER_STRIP) rows = cnt;
+    } else {
+        if (f.section("strip_lengths")) bad("edges take no 'strip_lengths'");
+        const Section* idx = part_section(f, "indices", CALIPER_NET_DTYPE_I32, {-1, 2});
+        if (!idx) bad("edges need an 'indices' section, (E, 2) i32");
+        if (idx->shape[0] > (int64_t)CALIPER_NET_MAX_BATCH_POINTS)
+            bad(std::to_string(idx->shape[0]) + " edges, more than " + std::to_string(CALIPER_NET_MAX_BATCH_POINTS) +
+                " in a batch");
+        arrays->push_back(*idx);
+        if (color_per == CALIPER_NET_COLOR_PER_STRIP) bad("edges take color_per 'vertex' or 'edge'");
+        if (color_per == CALIPER_NET_COLOR_PER_EDGE) rows = idx->shape[0];
+    }
+    scene_colours(f, rows, arrays);
+}
+
+void decode_arrows(const Frame& f, std::vector<Section>* arrays) {
+    int64_t n = 0, d = 0;
+    arrays->push_back(
+        *rows_section(f, CALIPER_NET_PART_ARROWS, "origins", CALIPER_NET_MAX_BATCH_ITEMS, "arrows", &n, &d));
+    required(f, CALIPER_NET_PART_ARROWS, "vectors");
+    arrays->push_back(*part_section(f, "vectors", CALIPER_NET_DTYPE_F32, {n, d}));
+    scene_colours(f, n, arrays);
+}
+
+void decode_boxes(const Frame& f, const Json& params, std::vector<Section>* arrays) {
+    int64_t n = 0, d = 0;
+    arrays->push_back(
+        *rows_section(f, CALIPER_NET_PART_BOXES, "centers", CALIPER_NET_MAX_BATCH_ITEMS, "boxes", &n, &d));
+    required(f, CALIPER_NET_PART_BOXES, "half_sizes");
+    arrays->push_back(*part_section(f, "half_sizes", CALIPER_NET_DTYPE_F32, {n, d}));
+    if (const Section* r = part_section(f, "rotations", CALIPER_NET_DTYPE_F32, {n, 4})) {
+        if (d != 3) bad("'rotations' are for 3-D boxes only");
+        arrays->push_back(*r);
+    }
+    if (const Section* c = part_section(f, "colors", CALIPER_NET_DTYPE_U8, {n, 4})) arrays->push_back(*c);
+    class_ids(f, n, arrays);
+    label_count(params, n);
+}
+
+void decode_mesh(const Frame& f, std::vector<Section>* arrays) {
+    int64_t n = 0, d = 0;
+    arrays->push_back(*rows_section(f, CALIPER_NET_PART_MESH, "positions", CALIPER_NET_MAX_BATCH_POINTS,
+                                    "positions", &n, &d));
+    if (const Section* idx = part_section(f, "indices", CALIPER_NET_DTYPE_I32, {-1, 3})) {
+        if (idx->shape[0] > (int64_t)CALIPER_NET_MAX_BATCH_POINTS)
+            bad(std::to_string(idx->shape[0]) + " triangles, more than " +
+                std::to_string(CALIPER_NET_MAX_BATCH_POINTS) + " in a batch");
+        arrays->push_back(*idx);
+    } else if (n % 3) {
+        bad("a mesh without 'indices' needs a multiple of 3 vertices, got " + std::to_string(n));
+    }
+    if (const Section* nrm = part_section(f, "normals", CALIPER_NET_DTYPE_F32, {n, 3})) arrays->push_back(*nrm);
+    scene_colours(f, n, arrays);
+    const Section* uv = part_section(f, "uvs", CALIPER_NET_DTYPE_F32, {n, 2});
+    const Section* tex = part_section(f, "texture", CALIPER_NET_DTYPE_U8, {-1, -1, 4});
+    if (uv && (has_array(*arrays, "colors") || has_array(*arrays, "values")))
+        bad("'uvs' and 'colors' or 'values' together");
+    if (!uv != !tex) bad("'uvs' and 'texture' go together");
+    if (tex) {
+        const int64_t side = CALIPER_NET_MAX_IMAGE_SIDE;
+        if (tex->shape[0] < 1 || tex->shape[0] > side || tex->shape[1] < 1 || tex->shape[1] > side)
+            bad("a texture is 1 to 8192 pixels on a side");
+        arrays->push_back(*uv);
+        arrays->push_back(*tex);
+    }
+}
+
+// The pixels each image form takes (_FORM_PIXELS).
+bool pixels_fit(const std::string& form, const Section& p) {
+    const int64_t dt = p.dtype;
+    const size_t r = p.shape.size();
+    if (form == CALIPER_NET_FORM_COLOR) return dt == CALIPER_NET_DTYPE_U8 && (r == 3 || r == 2);
+    if (form == CALIPER_NET_FORM_DEPTH) return (dt == CALIPER_NET_DTYPE_F32 || dt == CALIPER_NET_DTYPE_U16) && r == 2;
+    if (form == CALIPER_NET_FORM_SEGMENTATION)
+        return (dt == CALIPER_NET_DTYPE_U16 || dt == CALIPER_NET_DTYPE_U8) && r == 2;
+    return dt == CALIPER_NET_DTYPE_U8 && r == 1;   // encoded
+}
+
+void decode_image(const Frame& f, const Json& params, std::vector<Section>* arrays) {
+    if (!params.find("form")) bad("an image part needs 'form'");
+    const std::string form = str_key(params, "form");
+    required(f, CALIPER_NET_PART_IMAGE, "pixels");
+    const Section* p = f.section("pixels");
+    if (p->encoding != CALIPER_NET_ENCODING_RAW || !pixels_fit(form, *p))
+        bad("the pixels of a " + form + " image cannot be dtype " + std::to_string(p->dtype) + " of rank " +
+            std::to_string(p->shape.size()));
+    if (form == CALIPER_NET_FORM_COLOR && p->shape.size() == 3 && p->shape[2] != 4)
+        bad("colour pixels are (H, W, 4) or (H, W)");
+    if (form == CALIPER_NET_FORM_ENCODED) {
+        if (p->shape[0] > (int64_t)CALIPER_NET_MAX_ENCODED_BYTES)
+            bad("an encoded frame of " + std::to_string(p->shape[0]) + " bytes, more than 16777216");
+        if (!params.find("format")) bad("an encoded image needs 'format'");
+    } else if (p->shape[0] > (int64_t)CALIPER_NET_MAX_IMAGE_SIDE || p->shape[1] > (int64_t)CALIPER_NET_MAX_IMAGE_SIDE) {
+        bad("an image is at most 8192 pixels on a side");
+    }
+    arrays->push_back(*p);
+}
+
+void decode_camera(const Json& params) {
+    for (const char* const* k = kCameraRequired; *k; ++k)
+        if (!params.find(*k)) bad(std::string("a camera part needs '") + *k + "'");
+}
+
+// The stamp sections of a message (_stamp): `stamp` i64 (T,), and where rows >= 0 `stamps` i64 (rows, T),
+// T from 1 to CALIPER_NET_MAX_TIMELINES; a static item carries neither.
+void scene_stamp(const Frame& f, bool is_static, int64_t rows, std::optional<Section>* stamp,
+                 std::optional<Section>* stamps = nullptr) {
+    const Section* s = f.section("stamp");
+    const Section* ss = rows >= 0 ? f.section("stamps") : nullptr;
+    if (s && ss) bad("'stamp' and 'stamps' together");
+    if (is_static && (s || ss)) bad("a static item carries no stamp");
+    const int64_t tmax = CALIPER_NET_MAX_TIMELINES;
+    if (s && !(s->is(CALIPER_NET_DTYPE_I64, 1) && s->shape[0] >= 1 && s->shape[0] <= tmax))
+        bad("'stamp' must be i64 (T,) with T from 1 to 8");
+    if (ss && !(ss->is(CALIPER_NET_DTYPE_I64, 2) && ss->shape[0] == rows && ss->shape[1] >= 1 && ss->shape[1] <= tmax))
+        bad("'stamps' must be i64 (" + std::to_string(rows) + ", T) with T from 1 to 8");
+    if (s) *stamp = *s;
+    if (ss && stamps) *stamps = *ss;
+}
+
+template <typename M>
+void scene_common(const Json& m, M& out) {
+    out.sub = u32(req(m, "sub", is_u32, "a uint32"));
+    out.view = req(m, "view", is_name, "a view name").as_string();
+    out.seq = u64(req(m, "seq", is_uint, "an unsigned integer"));
+    out.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
+}
+
+template <typename M>
+void scene_flags(const Json& m, M& out) {
+    if (const Json* v = opt(m, "static", is_bool, "a boolean")) out.is_static = v->as_bool();
+    if (const Json* v = opt(m, "state", is_bool, "a boolean")) out.state = v->as_bool();
+    if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) out.cursor = u32(*v);
+}
+
 SceneUpdate scene_update(const Frame& f) {
     const Json& m = f.meta;
     SceneUpdate u;
-    u.sub = u32(req(m, "sub", is_u32, "a uint32"));
-    u.view = req(m, "view", is_name, "a view name").as_string();
-    u.seq = u64(req(m, "seq", is_uint, "an unsigned integer"));
-    u.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
+    scene_common(m, u);
     u.path = req(m, "path", is_path, "an entity path").as_string();
     u.part = req(m, "part", is_str, "a string").as_string();
-    if (u.part == "arrows" || u.part == "boxes" || u.part == "image" || u.part == "camera")
-        unsupported("the part '" + u.part + "' is not built yet");
     const int part = scene_part_index(u.part);
     if (part < 0) bad("unknown part '" + u.part + "'");
-    if (const Json* sp = m.find("split"); sp && !sp->is_null()) unsupported("split updates are not built yet");
-    u.params = scene_part_keys(m, part);
-    int64_t n = 0;
-    if (part == 0) {
-        u.arrays.push_back(*scene_positions(f, CALIPER_NET_PART_POINTS, &n));
-        scene_colours(f, n, &u.arrays);
-        if (const Section* r = part_section(f, "radii", CALIPER_NET_DTYPE_F32, {n})) u.arrays.push_back(*r);
-    } else if (part == 1) {
-        const Json* mode = u.params.find("mode");
-        if (!mode) bad("a lines part needs 'mode'");
-        const std::string md = mode->as_string();
-        const Json* cp = u.params.find("color_per");
-        const std::string color_per = cp ? cp->as_string() : std::string();
-        if (md == "edges") unsupported("lines of mode 'edges' (index-pair edges) are not built yet");
-        u.arrays.push_back(*scene_positions(f, CALIPER_NET_PART_LINES, &n));
-        if (f.section("indices")) bad("lines of mode '" + md + "' take no 'indices'");
-        int64_t rows = n;
-        if (md == CALIPER_NET_LINES_SEGMENTS) {
-            if (n % 2) bad("segments need an even number of vertices, got " + std::to_string(n));
-            if (f.section("strip_lengths")) bad("segments take no 'strip_lengths'");
-            if (cp && color_per != CALIPER_NET_COLOR_PER_VERTEX) bad("segments take color_per 'vertex'");
-        } else {
-            const Section* sl = part_section(f, "strip_lengths", CALIPER_NET_DTYPE_I32, {-1});
-            if (!sl) bad("strips need a 'strip_lengths' section");
-            const int64_t cnt = sl->shape[0];
-            if (cnt > (int64_t)CALIPER_NET_MAX_BATCH_ITEMS)
-                bad(std::to_string(cnt) + " strips, more than " + std::to_string(CALIPER_NET_MAX_BATCH_ITEMS) +
-                    " in a batch");
-            int64_t total = 0;
-            for (int64_t i = 0; i < cnt; ++i) {
-                int32_t len;
-                std::memcpy(&len, sl->data + 4 * i, 4);
-                if (len < 1) bad("every strip length is at least 1");
-                total += len;
-            }
-            if (total != n)
-                bad("the strip lengths add up to " + std::to_string(total) + ", not to the " + std::to_string(n) +
-                    " vertices");
-            u.arrays.push_back(*sl);
-            if (color_per == "edge") bad("strips take color_per 'vertex' or 'strip'");
-            if (color_per == CALIPER_NET_COLOR_PER_STRIP) rows = cnt;
-        }
-        scene_colours(f, rows, &u.arrays);
-    } else {
-        u.arrays.push_back(*scene_positions(f, CALIPER_NET_PART_MESH, &n));
-        if (const Section* idx = part_section(f, "indices", CALIPER_NET_DTYPE_I32, {-1, 3})) {
-            if (idx->shape[0] > (int64_t)CALIPER_NET_MAX_BATCH_POINTS)
-                bad(std::to_string(idx->shape[0]) + " triangles, more than " +
-                    std::to_string(CALIPER_NET_MAX_BATCH_POINTS) + " in a batch");
-            u.arrays.push_back(*idx);
-        } else if (n % 3) {
-            bad("a mesh without 'indices' needs a multiple of 3 vertices, got " + std::to_string(n));
-        }
-        scene_colours(f, n, &u.arrays);
-    }
-    if (const Json* v = opt(m, "static", is_bool, "a boolean")) u.is_static = v->as_bool();
-    if (const Json* v = opt(m, "state", is_bool, "a boolean")) u.state = v->as_bool();
+    scene_flags(m, u);
     if (const Json* v = opt(m, "axes", is_list, "a list")) u.axes = *v;
     if (const Json* v = opt(m, "items", is_name, "an item space name")) u.items = v->as_string();
+    if (const Json* sp = m.find("split"); sp && !sp->is_null()) unsupported("split updates are not built yet");
+    u.params = scene_part_keys(m, part);
+    switch (part) {
+        case kPoints: decode_points(f, u.params, &u.arrays); break;
+        case kLines: decode_lines(f, u.params, &u.arrays); break;
+        case kArrows: decode_arrows(f, &u.arrays); break;
+        case kBoxes: decode_boxes(f, u.params, &u.arrays); break;
+        case kMesh: decode_mesh(f, &u.arrays); break;
+        case kImage: decode_image(f, u.params, &u.arrays); break;
+        default: decode_camera(u.params); break;
+    }
+    scene_stamp(f, u.is_static, -1, &u.stamp);
     return u;
 }
 
+bool is_transform_paths(const Json& v) {
+    if (!v.is_array() || v.size() < 1 || v.size() > CALIPER_NET_MAX_TRANSFORMS) return false;
+    for (const Json& p : v.items())
+        if (!p.is_string() || p.as_string().empty() || !entity_path_ok(p.as_string())) return false;
+    return true;
+}
+
+SceneTransforms scene_transforms(const Frame& f) {
+    const Json& m = f.meta;
+    SceneTransforms t;
+    scene_common(m, t);
+    scene_flags(m, t);
+    t.paths = strs(req(m, "paths", is_transform_paths, "a list of 1 to 1024 entity paths other than the root"));
+    if (std::set<std::string>(t.paths.begin(), t.paths.end()).size() != t.paths.size())
+        bad("'paths' names an entity twice");
+    if (!f.section("matrices")) bad("a scene_transforms needs a 'matrices' section");
+    t.matrices = *part_section(f, "matrices", CALIPER_NET_DTYPE_F32, {(int64_t)t.paths.size(), 16});
+    scene_stamp(f, t.is_static, (int64_t)t.paths.size(), &t.stamp, &t.stamps);
+    return t;
+}
+
 bool is_clear_part(const Json& v) {
-    return one_of(v, {"points", "lines", "mesh", "arrows", "boxes", "image", "camera", "transform"});
+    return one_of(v, {CALIPER_NET_PART_POINTS, CALIPER_NET_PART_LINES, CALIPER_NET_PART_ARROWS, CALIPER_NET_PART_BOXES,
+                      CALIPER_NET_PART_MESH, CALIPER_NET_PART_IMAGE, CALIPER_NET_PART_CAMERA,
+                      CALIPER_NET_PART_TRANSFORM});
 }
 
 SceneClear scene_clear(const Frame& f) {
     const Json& m = f.meta;
     SceneClear c;
-    c.sub = u32(req(m, "sub", is_u32, "a uint32"));
-    c.view = req(m, "view", is_name, "a view name").as_string();
-    c.seq = u64(req(m, "seq", is_uint, "an unsigned integer"));
-    c.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
+    scene_common(m, c);
     c.path = req(m, "path", is_path, "an entity path").as_string();
     if (const Json* v = opt(m, "recursive", is_bool, "a boolean")) c.recursive = v->as_bool();
     if (const Json* v = opt(m, "parts", [](const Json& x) {
@@ -949,55 +1215,116 @@ SceneClear scene_clear(const Frame& f) {
         }, "a list of parts"))
         c.parts = strs(*v);
     if (const Json* v = opt(m, "reset", is_bool, "a boolean")) c.reset = v->as_bool();
-    if (const Json* v = opt(m, "static", is_bool, "a boolean")) c.is_static = v->as_bool();
-    if (const Json* v = opt(m, "state", is_bool, "a boolean")) c.state = v->as_bool();
+    scene_flags(m, c);
     if (c.reset && !c.path.empty()) bad("a reset clears the root: its 'path' is \"\"");
+    scene_stamp(f, c.is_static, -1, &c.stamp);
     return c;
+}
+
+bool is_class_entry(const Json& e) {
+    if (!e.is_object()) return false;
+    const Json* id = e.find("id");
+    const Json* label = e.find("label");
+    const Json* color = e.find("color");
+    int64_t i = 0;
+    return id && id->is_int() && id->get_i64(&i) && i >= 0 && i <= (int64_t)CALIPER_NET_MAX_CLASS_ID && label &&
+           label->is_string() && label->as_string().size() <= CALIPER_NET_NAME_MAX && color && is_rgba(*color);
+}
+
+SceneClasses scene_classes(const Frame& f) {
+    const Json& m = f.meta;
+    SceneClasses k;
+    scene_common(m, k);
+    scene_flags(m, k);
+    k.classes = req(m, "classes", [](const Json& v) {
+        if (!v.is_array() || v.size() > CALIPER_NET_MAX_CLASSES) return false;
+        for (const Json& e : v.items())
+            if (!is_class_entry(e)) return false;
+        return true;
+    }, "a list of at most 4096 {id, label, color} entries");
+    int64_t prev = -1;
+    for (const Json& e : k.classes.items()) {
+        int64_t i = 0;
+        e.find("id")->get_i64(&i);
+        if (i <= prev) bad("'classes' must be in ascending id order without repeats");
+        prev = i;
+    }
+    scene_stamp(f, k.is_static, -1, &k.stamp);
+    return k;
+}
+
+template <typename M>
+void scene_write_flags(Json& m, const M& x) {
+    if (x.is_static) m.set("static", true);
+    if (x.state) m.set("state", true);
+    if (x.cursor) m.set("cursor", *x.cursor);
+}
+
+template <typename M>
+void scene_write_common(Json& m, const M& x) {
+    m.set("sub", x.sub);
+    m.set("view", x.view);
+    m.set("seq", x.seq);
+    m.set("stamp_ns", x.stamp_ns);
 }
 
 // The metadata and sections that SceneUpdate.to_meta() and to_sections() write.
 void scene_update_to_meta(const SceneUpdate& u, Json& m, std::vector<Section>& sections) {
-    m.set("sub", u.sub);
-    m.set("view", u.view);
-    m.set("seq", u.seq);
-    m.set("stamp_ns", u.stamp_ns);
+    scene_write_common(m, u);
     m.set("path", u.path);
     m.set("part", u.part);
+    const bool camera = u.part == CALIPER_NET_PART_CAMERA;
     for (const auto& kv : u.params.members()) {
+        const std::string& k = kv.first;
         const Json& v = kv.second;
         if (v.is_null()) continue;
-        if (kv.first == "stats") {
+        if (k == "stats") {
             Json a = Json::array();
             for (const Json& x : v.items())
                 a.push(x.is_number() && std::isfinite(x.as_double()) ? Json(x.as_double()) : Json());
             m.set("stats", a);
-        } else if (kv.first == "vmin" || kv.first == "vmax" || kv.first == "radius" || kv.first == "width") {
-            m.set(kv.first, v.as_double());
+        } else if (camera && (k == "width" || k == "height")) {
+            m.set(k, v);
+        } else if (v.is_number() && (k == "vmin" || k == "vmax" || k == "radius" || k == "width" || k == "opacity" ||
+                                     k == "scale" || k == "fx" || k == "fy" || k == "cx" || k == "cy" ||
+                                     k == "plane_distance")) {
+            m.set(k, v.as_double());
         } else {
-            m.set(kv.first, v);
+            m.set(k, v);
         }
     }
-    if (u.is_static) m.set("static", true);
-    if (u.state) m.set("state", true);
+    scene_write_flags(m, u);
     if (!u.axes.is_null()) m.set("axes", u.axes);
     if (u.items) m.set("items", *u.items);
-    const int part = scene_part_index(u.part);
-    if (part < 0) return;
-    for (const char* const* k = kScenePartSections[part]; *k; ++k)
+    for (const char* const* k = scene_part_sections(scene_part_index(u.part)); *k; ++k)
         if (const Section* s = u.array(*k)) sections.push_back(*s);
+    if (u.stamp) sections.push_back(named(*u.stamp, "stamp"));
 }
 
-void scene_clear_to_meta(const SceneClear& c, Json& m) {
-    m.set("sub", c.sub);
-    m.set("view", c.view);
-    m.set("seq", c.seq);
-    m.set("stamp_ns", c.stamp_ns);
+void scene_transforms_to_meta(const SceneTransforms& t, Json& m, std::vector<Section>& sections) {
+    scene_write_common(m, t);
+    m.set("paths", str_list(t.paths));
+    scene_write_flags(m, t);
+    sections.push_back(named(t.matrices, "matrices"));
+    if (t.stamps) sections.push_back(named(*t.stamps, "stamps"));
+    else if (t.stamp) sections.push_back(named(*t.stamp, "stamp"));
+}
+
+void scene_clear_to_meta(const SceneClear& c, Json& m, std::vector<Section>& sections) {
+    scene_write_common(m, c);
     m.set("path", c.path);
     if (c.recursive) m.set("recursive", true);
     if (c.reset) m.set("reset", true);
-    if (c.is_static) m.set("static", true);
-    if (c.state) m.set("state", true);
+    scene_write_flags(m, c);
     if (c.parts) m.set("parts", str_list(*c.parts));
+    if (c.stamp) sections.push_back(named(*c.stamp, "stamp"));
+}
+
+void scene_classes_to_meta(const SceneClasses& k, Json& m, std::vector<Section>& sections) {
+    scene_write_common(m, k);
+    m.set("classes", k.classes);
+    scene_write_flags(m, k);
+    if (k.stamp) sections.push_back(named(*k.stamp, "stamp"));
 }
 // ---- end of the protocol 3.2 draft block ----
 
@@ -1123,8 +1450,12 @@ Encoded to_meta(const Message& msg) {
         if (s->details_error) m.set("details_error", *s->details_error);
     } else if (const auto* su = std::get_if<SceneUpdate>(&msg)) {
         scene_update_to_meta(*su, m, e.sections);
+    } else if (const auto* st = std::get_if<SceneTransforms>(&msg)) {
+        scene_transforms_to_meta(*st, m, e.sections);
     } else if (const auto* sc = std::get_if<SceneClear>(&msg)) {
-        scene_clear_to_meta(*sc, m);
+        scene_clear_to_meta(*sc, m, e.sections);
+    } else if (const auto* sk = std::get_if<SceneClasses>(&msg)) {
+        scene_classes_to_meta(*sk, m, e.sections);
     } else if (const auto* u = std::get_if<Unknown>(&msg)) {
         m = u->meta.is_object() ? u->meta : Json::object();
         m.erase("sections");
@@ -1429,7 +1760,9 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
             case CALIPER_NET_MSG_CONTROL_REPLY: *out = control_reply(f); break;
             case CALIPER_NET_MSG_SELECTION: *out = selection(f); break;
             case CALIPER_NET_MSG_SCENE_UPDATE: *out = scene_update(f); break;
+            case CALIPER_NET_MSG_SCENE_TRANSFORMS: *out = scene_transforms(f); break;
             case CALIPER_NET_MSG_SCENE_CLEAR: *out = scene_clear(f); break;
+            case CALIPER_NET_MSG_SCENE_CLASSES: *out = scene_classes(f); break;
             default: *out = Unknown{f.type, f.meta, f.sections}; break;
         }
     } catch (const MsgError& e) {
@@ -1481,7 +1814,9 @@ const char* type_name(uint16_t type) {
         case CALIPER_NET_MSG_CONTROL_REPLY: return "control_reply";
         case CALIPER_NET_MSG_SELECTION: return "selection";
         case CALIPER_NET_MSG_SCENE_UPDATE: return "scene_update";
+        case CALIPER_NET_MSG_SCENE_TRANSFORMS: return "scene_transforms";
         case CALIPER_NET_MSG_SCENE_CLEAR: return "scene_clear";
+        case CALIPER_NET_MSG_SCENE_CLASSES: return "scene_classes";
         default: return "?";
     }
 }

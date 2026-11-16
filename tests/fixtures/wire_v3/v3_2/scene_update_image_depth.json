@@ -1,0 +1,91 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 368,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 297,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "cloud": true,
+    "colormap": 0,
+    "flags": 3,
+    "form": "depth",
+    "part": "image",
+    "path": "rig/left/depth",
+    "scale": 0.001,
+    "sections": [
+      {
+        "dtype": 6,
+        "name": "pixels",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 26,
+    "stamp_ns": 81234567893783,
+    "stats": [
+      0.5,
+      2.5
+    ],
+    "sub": 2,
+    "view": "world",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_image_depth",
+  "section_lengths": [
+    12,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 6,
+      "encoding": 0,
+      "length": 12,
+      "name": "pixels",
+      "offset": 336,
+      "shape": [
+        2,
+        3
+      ],
+      "values": [
+        500,
+        1000,
+        0,
+        1500,
+        2000,
+        2500
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 352,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

@@ -1,0 +1,102 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 296,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 221,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "form": "color",
+    "opacity": 1.0,
+    "part": "image",
+    "path": "rig/left/rgb",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "pixels",
+        "shape": [
+          2,
+          3,
+          4
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 25,
+    "stamp_ns": 81234567893773,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_image_color",
+  "section_lengths": [
+    24,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 24,
+      "name": "pixels",
+      "offset": 256,
+      "shape": [
+        2,
+        3,
+        4
+      ],
+      "values": [
+        0,
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90,
+        100,
+        110,
+        120,
+        130,
+        140,
+        150,
+        160,
+        170,
+        180,
+        190,
+        200,
+        210,
+        220,
+        230
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 280,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

@@ -1,0 +1,54 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 319,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 295,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 32
+  },
+  "meta": {
+    "session": "clp-4242-a1b2c3",
+    "views": [
+      {
+        "id": 7,
+        "kind": 6,
+        "name": "world",
+        "scene": {
+          "space": "3d",
+          "units": "m",
+          "up": "+z",
+          "view_camera": {
+            "azimuth": 30.0,
+            "elevation": 25.0,
+            "target": [
+              0.0,
+              0.0,
+              0.5
+            ]
+          }
+        },
+        "sources": []
+      },
+      {
+        "id": 8,
+        "kind": 6,
+        "name": "overlay",
+        "scene": {
+          "space": "2d",
+          "units": "px",
+          "up": "-y"
+        },
+        "sources": []
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "v3_2/views_scene_camera",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "views"
+}

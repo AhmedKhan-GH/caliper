@@ -1,0 +1,82 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 288,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 230,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "form": "segmentation",
+    "opacity": 0.5,
+    "part": "image",
+    "path": "rig/left/classes",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "pixels",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 27,
+    "stamp_ns": 81234567893803,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_image_segmentation",
+  "section_lengths": [
+    6,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 6,
+      "name": "pixels",
+      "offset": 264,
+      "shape": [
+        2,
+        3
+      ],
+      "values": [
+        0,
+        1,
+        1,
+        2,
+        2,
+        0
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 272,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}
