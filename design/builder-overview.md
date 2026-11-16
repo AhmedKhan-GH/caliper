@@ -84,9 +84,9 @@ These items need the app's main loop, its window or its API server, or build the
 | 13 | **Done: the context bundle**, built from the session with its bounds and cuts, as ACP content blocks with the tool scope from the rule that the sidecar reads too (`build_context_bundle()`, [Widget agent](widget-agent.md#the-context-bundle)); the inline surface (14) calls it | None left |
 | 14 | **Built in part: the widget agent's inline surface**: the prompt on a panel, the preview drawn in place with its diff card, Accept, Reject and Refine, the declined, handoff and no-provider states, and the agent over `AcpClient` with `session/close` (`src/host/builder/widget_surface.h`, [Widget agent](widget-agent.md)). Left: the selection, dropped-file and property entry points, the connection to the app's spec page, model choice from the prompt row, and the packaging of `caliper-agent` with a Python runtime | M, 4 days |
 | 15 | **Pydantic AI as the provider layer: adopted**, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the capability probe (16) build on it | S, 1 day |
-| 16 | **The capability probe and its cache**, with the person's override | S, 2 days |
-| 17 | **The presets and one key per provider** in the widget agent's settings | M, 3 days |
-| 18 | **The provider conformance suite**, with stubs by default and real runs on demand | M, 4 days |
+| 16 | **Done: the capability probe and its cache**, with the person's override: `caliper-agent probe`, tool calling, vision and context length per provider and model, and a session refused when the model cannot call tools ([Widget agent](widget-agent.md#capabilities-and-degradations)) | None left |
+| 17 | **Built without its pane: the presets and one key per provider**: the presets as data, the key store with one key per provider, and the sidecar's `--preset` with its checks. Left: the settings pane in the app | S, 2 days |
+| 18 | **Done: the provider conformance suite**, `caliper-agent-conformance`, twelve widget tasks with stubs by default and real runs on demand, with the offline switch `CALIPER_AGENT_OFFLINE` set in every test that starts the sidecar | None left |
 | 19 | **The GPU contention note** while a training run is live | S, 1 day |
 
 ### Where the pieces sit
