@@ -16,8 +16,9 @@ session ([below](#preview-and-apply-on-the-command-layer)); the `_meta` argument
 carries the widget session's fields; widget sessions in the sidecar (item 12): the target, the tool scope from one
 rule kept as data, the preview header, the widget system prompt, images and embedded context in prompts, the turn
 budget, the handoff and `session/close` ([How it stays an ACP agent](#how-it-stays-an-acp-agent)); and the context
-bundle (item 13), built from the session with its bounds and cuts ([The context bundle](#the-context-bundle)). **Planned:**
-everything else on this page. The [work items](#work-items) give the
+bundle (item 13), built from the session with its bounds and cuts ([The context bundle](#the-context-bundle)); and the
+inline surface on a panel (item 14, in part), with the agent over `AcpClient`
+([The inline prompt and the preview](#the-inline-prompt-and-the-preview)). **Planned:** everything else on this page. The [work items](#work-items) give the
 sizes and the order.
 
 ## The role
@@ -51,44 +52,70 @@ always works on data that is already in the catalog.
 
 ## The inline prompt and the preview
 
-The prompt opens inside the target's panel, at its bottom edge, so the panel stays visible:
+The prompt opens inside the target's panel, at its top under the panel's title strip, and the panel's content is drawn
+below it, so the prompt covers nothing, as the [builder overview](builder-overview.md)'s placement sketch has it:
 
 ```
-┌─ Loss and accuracy ──────────────────────────────── ⋯ ┐
-│                                                       │
-│   the panel as it is now                              │
-│                                                       │
-│  ┌─────────────────────────────────────────────────┐  │
-│  │ ⌘K  Use a linear y axis                       ⏎ │  │
-│  │     Claude Haiku 5.5 · low          Ask in chat │  │
-│  └─────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────┘
+┌─ Loss and accuracy ──────────────────────── 4,000 steps ┐
+│ ┌─────────────────────────────────────────────────────┐ │
+│ │ ⌘K  Use a linear y axis▏ model · effort [Ask in chat] │ │
+│ └─────────────────────────────────────────────────────┘ │
+│   the panel as it is now, below the prompt row          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-When the agent has finished, the panel is drawn from the preview and a card shows the agent's one-sentence summary
-and the diff of the spec's canonical TOML:
+While the agent works, the row shows the request as it was sent, the live diamond and the agent's latest step (the
+command it calls), and esc Cancel. When it has finished, the panel is drawn from the preview, its title strip carries
+a bronze PREVIEW tag and rule, and a compact diff under the row lists the changed keys:
 
 ```
-┌─ Loss and accuracy ───────────────── Preview ────── ⋯ ┐
-│                                                       │
-│   the panel drawn from the preview                    │
-│                                                       │
-│  ┌─────────────────────────────────────────────────┐  │
-│  │ Turns off the log scale of the y axis.          │  │
-│  │ - options = { x_label = "Step", y_log = true }  │  │
-│  │ + options = { x_label = "Step" }                │  │
-│  │                                                 │  │
-│  │ [Accept ⏎]   [Reject esc]   [Refine…]           │  │
-│  └─────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────┘
+┌─ Loss and accuracy  PREVIEW ─────────────── 4,000 steps ┐
+│ ┌─────────────────────────────────────────────────────┐ │
+│ │ ⌘K  Use a linear y axis  model · effort [Ask in chat] │ │
+│ └─────────────────────────────────────────────────────┘ │
+│   Turns off the log scale of the y axis.                │
+│   y_log    true (struck) → false                        │
+│   [⏎ Accept] [esc Reject] [Refine]              [Diff]  │
+│   the panel drawn from the preview                      │
+└─────────────────────────────────────────────────────────┘
 ```
 
-- **Accept** applies the change as one undo step. **Reject** discards it and leaves no trace. **Refine** keeps the
-  prompt open for a follow-up, which continues the same conversation on top of the current preview.
-- A change that adds a panel, such as a table of a selection, draws the new panel in a dashed frame where the layout
-  would place it.
-- A diff longer than 12 lines is folded, with a control that shows it all.
-- The agent's summarized thinking is shown folded above the card, as the side chat shows thoughts.
+- **Accept** applies the change as one undo step. **Reject** discards it and leaves no trace. **Refine** opens the
+  prompt again for a follow-up, which continues the same conversation on top of the current preview; Escape from the
+  follow-up goes back to the card. Enter is Accept, Escape is Reject.
+- **The compact diff** has one line for each changed key of the target panel (relative to it, options without their
+  `options.` prefix), then the other panels and sources that changed, added or removed. The old value is struck
+  through in the faint tone and the new value is in parchment, since colour belongs to data in the house style. Past
+  six lines the rest folds into "+N". **Diff** shows the full unified diff of the canonical TOML instead, scrolling,
+  with the agent's whole reply above it.
+- **The agent's reply** is one line, elided when longer; its whole text is in the Diff view. It is the agent's
+  content; the surface itself writes no sentences, only nouns and tags.
+- **Other states** use the same card: DECLINED with the model and Rephrase, Retry and Model (the three ways forward of
+  [Refusals](#refusals)); a handoff's reason as a tag (LOADER, PROJECT CODE, EXPLANATION, NEW DASHBOARD, ANOTHER
+  TARGET, OUTSIDE SCOPE) with the agent's reason and Ask in chat, Rephrase and esc Close; CONFLICT when the open spec
+  changed so that an edit no longer applies, with Refine on a new preview; STOPPED or FAILED with the error code,
+  Retry and Close; LIMIT when the turn budget ended the turn; NO CHANGE when the agent answered without an edit.
+- **A small panel.** The surface lays itself out as plain rectangles in the panel. As the panel shrinks, the reply
+  line goes first, then the diff lines past the first, then the model label of the row, then the keys of the buttons;
+  below the minimum height (the rows and 48 px of content at text scale 1) the surface takes the whole panel.
+- A change that adds a panel, such as a table of a selection, will draw the new panel in a dashed frame where the
+  layout would place it; this is not built yet.
+- The agent's summarized thinking is kept by the surface but not shown yet.
+
+**Built.** `src/host/builder/widget_surface.h` holds the surface, `widget_agent.h` the `WidgetAgent` interface with a
+scripted agent for tests and screenshots, and `widget_agent_acp.h` the agent over `AcpClient`, which starts
+`caliper-agent` once with the key placed only in its environment by the key store, opens a session for each ⌘K with
+`_meta.caliper.widget` and the context bundle's scope, sends the bundle before the session's first request, and ends
+the session with `session/close` (`AcpClient::close_session()`). The surface owns the preview's life: `preview.begin`
+from the `ui` origin when the first prompt is submitted, `preview.discard` on Reject, Escape, cancel, a handoff or a
+failure, and `preview.commit` from the `ui` origin on Accept; what needs the session waits while a long command holds
+it. The spec runtime keeps a band of the panel free for it (`SpecRuntime::set_reserve()`) and marks a preview's strip.
+`caliper-widget-shot` drives the surface through a scripted scenario offscreen and writes a PNG at each state. The
+page's side is one object and two calls: own a `WidgetSurface`, call `attach()` on the spec runtime once, then
+`frame()` each frame before the runtime draws, which reads ⌘K (Ctrl+K on Windows) on the focused panel and Escape,
+and `overlay()` from the runtime's overlay. Not built yet: the selection, dropped-file and property entry points in
+the app, the dashed frame of a new panel, the thoughts, the choice of model from the settings (the label shows what
+the session's config options report), and the packaging of `caliper-agent` with a Python runtime.
 
 ## The context bundle
 
@@ -293,9 +320,9 @@ setup steps instead.
 
 The widget agent needs a provider: a Claude API key today, and later any configured preset, where a local server needs
 no key. When none is set up, ⌘K still opens the inline prompt, but its only action is Ask in chat, with the same
-handoff, and one line says that the widget agent needs a provider and links to
-Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`). The sidecar is not
-started.
+handoff: Enter sends the request to the side chat. The row shows the tag NO PROVIDER and a Setup action, which opens
+the widget agent's settings, where Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`) is linked; the
+surface writes no sentence of its own. The sidecar is not started.
 
 ## One journal, one history, one queue
 
@@ -592,6 +619,19 @@ For a local server:
 - **A dropped file with no open spec** previews on an empty spec, and Accept creates the spec from the `ui` origin
   first.
 - **Ctrl+K on Windows** in place of ⌘K.
+- **The prompt at the top of the panel**, under its title strip, with the card under it and the content below both,
+  as the builder overview's placement sketch has it, in place of the bottom edge sketched first: the panel keeps its
+  content visible and nothing is drawn over it.
+- **A compact diff of changed keys** on the card, with the full TOML diff behind Diff, in place of TOML lines on the
+  card, so that the card stays a few lines.
+- **No sentences on the surface.** The refusal and the missing provider are tags (DECLINED, NO PROVIDER) with noun
+  actions, as the UI principles ask; only the agent's reply and its handoff reason, which are its content, are
+  sentences, and the reply is one elided line.
+- **Cancel discards the preview** and keeps the request in the prompt to send again, so a cancelled turn leaves
+  nothing; the next prompt opens a new preview and a new agent session.
+- **One sidecar for every ⌘K**, started at the first and kept; each ⌘K opens a session and closes it with
+  `session/close` when its prompt closes.
+- **A scripted agent names itself "Scripted"**, so that no screenshot credits a model that did not run.
 - **Claude on its native API** and other models through an OpenAI-compatible API, so that Claude's features are kept.
 - **Pydantic AI as the provider layer**, after a spike that checked cancellation, retries, Claude's features, stop
   reasons, other models and the footprint.
@@ -614,7 +654,7 @@ and L six to ten; each figure is rough.
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | Done: widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget, the handoff and `session/close` | None left |
 | 13 | Done: the context bundle, built from the session with its bounds and cuts, as ACP content blocks with the tool scope and `session/new`'s `_meta` (`build_context_bundle()`); calling it from the inline surface comes with item 14 | None left |
-| 14 | The inline surface: the four entry points, the inline prompt, the preview drawn in place, Accept, Reject and Refine, and Ask in chat; with the packaging of `caliper-agent` and a Python runtime | L, 8 days |
+| 14 | In part: the inline surface on a panel, the prompt, the preview drawn in place, Accept, Reject and Refine, Ask in chat handed to the page, and the agent over `AcpClient`. Left: the selection, dropped-file and property entry points, connecting the surface in the app's page, and the packaging of `caliper-agent` and a Python runtime | M, 4 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
 | 16 | The capability probe and its cache, with the override | S, 2 days |
 | 17 | The presets and one key per provider in the settings, with `KeyStore` knowing the presets' ids | M, 3 days |

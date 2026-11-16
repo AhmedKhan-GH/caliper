@@ -78,19 +78,21 @@ There is no review setting for the widget agent: every change it proposes is a p
 4. When the request is bigger than one target, choose **Ask in chat**, which sends it, with what the widget agent knew,
    to the side chat.
 
-If something goes wrong, the prompt says so in plain words:
+If something goes wrong, the prompt shows it with a short tag, such as DECLINED or NO PROVIDER, and the actions that
+help:
 
 - **No provider is set up.** ⌘K offers only Ask in chat. Enter a key as above.
 - **The Claude API did not accept the API key.** The key was revoked or mistyped; create a new one and enter it.
 - **The Claude API is rate limited.** The agent waits and tries again on its own, and says how long it waits. If it
   gives up, try again later or raise your account's limits in the Console.
 - **The model is not available to this key.** Pick another model, or ask the account's owner for access.
-- **The model declined this request.** The request ends, nothing is changed, and the prompt says that the model
-  declined it. This can happen with ordinary work too, for example with chemistry or biology data, so you can rephrase
-  the request, try it again, or switch to another model or provider, such as a local model. Automatic fallback to
-  another model is off for now.
-- **The preview is out of date.** The spec changed while the preview was open, for example through the side chat.
-  Choose Refine to start again from the current spec.
+- **The model declined this request.** The request ends, nothing is changed, and the prompt shows DECLINED with the
+  model's name. This can happen with ordinary work too, for example with chemistry or biology data, so you can
+  rephrase the request (Rephrase), try it again (Retry), or switch to another model or provider, such as a local model
+  (Model). Automatic fallback to another model is off for now.
+- **The preview is out of date.** The spec changed while the preview was open, for example through the side chat,
+  so that the change no longer applies, and the prompt shows CONFLICT. Choose Refine to start again from the current
+  spec.
 
 ## Use a local model
 

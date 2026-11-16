@@ -7,8 +7,10 @@ session is opened, which commands it may use, what a prompt may hold, and what e
 [Set up the widget agent](../guides/set-up-the-widget-agent.md) shows the person's side.
 
 !!! note "Status"
-    The agent and its widget sessions are built and tested in `src/builder/agent/`; the inline prompt in the app that
-    opens them is not built yet.
+    The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
+    on a panel is built and tested as a component in `src/host/builder/` ([The inline surface](#the-inline-surface));
+    it is not yet connected to the app's page, and the entry points on a selection, a dropped file and a property are
+    not built yet.
 
 ## Starting the agent
 
@@ -157,3 +159,60 @@ tokens. A prompt that reaches a limit ends with `max_turn_requests` and a though
 `session/cancel` stops a running prompt, which answers `cancelled`; the preview stays as it is. `session/close`, which
 the agent declares as `sessionCapabilities.close`, cancels a running prompt, waits up to 10 seconds for it to end,
 forgets the session and answers `{}`. A sidecar keeps at most 16 sessions.
+
+## The inline surface
+
+The inline surface is the app's side of a widget session on a panel (`src/host/builder/widget_surface.h`). ⌘K
+(Ctrl+K on Windows) on the focused panel opens a one-line prompt at the top of that panel, under its title strip; the
+panel's content is drawn below the prompt, so the prompt covers nothing.
+
+**The session.** The surface opens one widget session for each prompt that it opens:
+
+1. When the first request is submitted, it sends `preview.begin` from the `ui` origin, scoped to the panel, with an id
+   that starts with `widget-`.
+2. It builds the [context bundle](#the-context-bundle) on that preview and opens the session with `session/new`,
+   whose `_meta.caliper.widget` holds the target, the preview and the bundle's scope.
+3. It sends the request as `session/prompt`, with the bundle's blocks before the request on the session's first
+   prompt only.
+4. When the turn ends, it reads `preview.diff` and draws the panel from the preview.
+5. Accept sends `preview.commit` from the `ui` origin, which files one undo step. Reject, Escape, a cancel, a handoff
+   or a failure sends `preview.discard`. A follow-up (Refine) is another `session/prompt` on the same preview.
+6. Closing the prompt ends the session with `session/close`.
+
+One `caliper-agent` process serves every ⌘K. It is started at the first ⌘K with the provider's key placed only in its
+environment, and it is kept running.
+
+**States and actions.** Each state shows a tag and its actions:
+
+| State | What the panel shows | Actions |
+|---|---|---|
+| Prompt | The input, the model and effort the session reports | Enter, Ask in chat, Escape |
+| Running | The request, the agent's latest step | esc Cancel (discards the preview, keeps the request) |
+| Preview | The panel drawn from the preview, PREVIEW in its title strip, the agent's reply on one line, and the changed keys with old and new values | ⏎ Accept, esc Reject, Refine, Diff (the full diff and the whole reply), Ask in chat |
+| DECLINED | The model that declined | Rephrase, Retry, Model, Ask in chat |
+| A handoff | The handoff's kind as a tag (LOADER, PROJECT CODE, EXPLANATION, NEW DASHBOARD, ANOTHER TARGET, OUTSIDE SCOPE) and the agent's reason | Ask in chat, Rephrase, esc Close |
+| CONFLICT | The open spec changed so that an edit no longer applies | Refine (a new preview from the current spec), esc Reject, Diff |
+| STOPPED, FAILED | The error code | Retry, esc Close |
+| NO PROVIDER | The input; no agent starts | Setup, Ask in chat (Enter) |
+
+Ask in chat hands the request, the target, the conversation so far and the preview's diff, marked as not applied, to
+the side chat, and closes the prompt.
+
+**Layout.** The prompt row, the diff and the action row are rectangles inside the panel. As a panel shrinks, the reply
+line goes first, then the diff lines past the first (folded into "+N"), then the model label, then the buttons' keys.
+Below the minimum height, which is the rows plus 48 pixels of content at text scale 1, the surface takes the whole
+panel.
+
+**caliper-widget-shot** is a development tool, not installed, that drives the surface on one panel of a saved spec
+applet through a scripted scenario, with a scripted agent and no model, and writes a PNG of the offscreen canvas at
+each state:
+
+```
+caliper-widget-shot --workspace <dir> --applet <id> --panel <id> --prompt <text> --out-dir <dir>
+                    [--size WxH] [--prefix NAME] [--frames N] [--edit JSON] [--reply TEXT]
+                    [--scenario accept|declined|handoff|unavailable|refine]
+```
+
+It opens the applet as the workspace's open spec, so give it a copy of a workspace. It prints a JSON summary: the
+files and their states, the panel's rectangle, the undo steps before and after Accept, and whether the open spec
+changed before Accept.
