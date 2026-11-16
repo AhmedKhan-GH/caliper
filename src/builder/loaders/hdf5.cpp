@@ -1,7 +1,7 @@
 // The HDF5 reader. This build has no libhdf5 (the build never fetches or
 // installs one), so the reader is a refusal that points to the safe routes:
 // a conversion to safetensors or .npy, or the Python loader, which reads the
-// file with h5py. docs/design/loaders.md ("HDF5") records the plan.
+// file with h5py. design/loaders.md ("HDF5") records the plan.
 #include <caliper_builder/loaders/tensor_readers.h>
 
 namespace caliper_builder {

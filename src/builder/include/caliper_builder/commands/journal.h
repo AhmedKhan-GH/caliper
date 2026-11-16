@@ -1,5 +1,5 @@
 #pragma once
-// The command journal (docs/design/command-layer.md, The journal): append-only
+// The command journal (design/command-layer.md, The journal): append-only
 // JSON Lines at <workspace>/journal/commands.jsonl, one event per line:
 //   {"seq", "ts", "origin", "name", "args", "ok", "group", "event"}
 // with "error" (the code) when ok is false and "seqs" (the seq of every do

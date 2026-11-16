@@ -8,8 +8,8 @@ against the Claude API with the person's key and speaks the agent side of ACP, s
 same `AcpClient`, and a small key store on the C++ side that keeps the key in the operating system's credential store.
 It elaborates section 12 of the sprint 3 contracts, which named it the BYOK agent (bring your own key).
 
-The person's side is in [Agent roles](../explanations/agent-roles.md) and
-[Set up the widget agent](../guides/set-up-the-widget-agent.md).
+The person's side is in [Agent roles](../docs/explanations/agent-roles.md) and
+[Set up the widget agent](../docs/guides/set-up-the-widget-agent.md).
 
 **Built on this branch:** the sidecar `caliper-agent` (the Python package `caliper_agent` in `src/builder/agent/`),
 its tests (pytest, run by ctest as `builder_agent_py`, with one end-to-end test through the real C++ client), and the
@@ -480,7 +480,7 @@ capability checks and degradations that do not depend on the library.
   the app.
 - **What leaves the machine.** The conversation, including tool results (catalog entries, samples of data, spec text,
   captures), is sent to the Claude API under the user's key and its data terms. The user docs say so, in
-  [Agent roles](../explanations/agent-roles.md).
+  [Agent roles](../docs/explanations/agent-roles.md).
 - **The key in memory.** The key lives in the sidecar's memory and, until the process ends, in the initial environment
   block of the process, which processes of the same user can read on macOS. Other users cannot.
 - **Logging.** The SDK and HTTP loggers are kept at warning level, `ANTHROPIC_LOG` is removed, and OpenTelemetry is

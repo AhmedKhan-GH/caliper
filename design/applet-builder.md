@@ -6,7 +6,7 @@ what stands in the way, a proposed design and the changes it needs. Nothing here
 are listed at the end.
 
 !!! note "Status"
-    This proposal is being built. [Builder overview](../design/builder-overview.md) maps the parts, says what is built and what waits, and links to the page of each part. Two things changed since this page was written: a WYSIWYG builder pane and agents inside the app are now part of the plan, and the app has two agent roles, a side chat that runs the user's own agent ([ACP integration](../design/acp-integration.md)) and an inline widget agent ([Widget agent](../design/widget-agent.md)). Where this page and those pages differ, those pages hold.
+    This proposal is being built. Builder overview (`design/builder-overview.md`) maps the parts, says what is built and what waits, and links to the page of each part. Two things changed since this page was written: a WYSIWYG builder pane and agents inside the app are now part of the plan, and the app has two agent roles, a side chat that runs the user's own agent (ACP integration (`design/acp-integration.md`)) and an inline widget agent (`design/widget-agent.md`). Where this page and those pages differ, those pages hold.
 
 The proposal in one sentence: the agent builds applets as **data**, a declarative panel spec that one host-side
 runtime draws, and it edits them through a **command layer** that an in-app agent and outside agents share. Compiled
@@ -237,7 +237,7 @@ Caliper ── spawns ──► claude-agent-acp / codex-acp / gemini …
 
 ## Open decisions
 
-- **Which agents to support first** through ACP. Decided: Caliper detects Claude Code, Codex, Gemini CLI and opencode, and any other ACP agent can be added by its command ([ACP integration](../design/acp-integration.md)); the built-in agent became the widget agent ([Widget agent](../design/widget-agent.md)).
+- **Which agents to support first** through ACP. Decided: Caliper detects Claude Code, Codex, Gemini CLI and opencode, and any other ACP agent can be added by its command, as `design/acp-integration.md` describes; the built-in agent became the widget agent (`design/widget-agent.md`).
 - **Sharing.** Whether spec-built applets can be shared and installed like compiled ones, and through which registry.
 - **The first primitives.** Which visuals and controls the spec supports first, and which stay compiled-only.
 - **Scripting.** Whether custom logic should eventually come from Lua, WASM or a Python sidecar, or wait until specs

@@ -1,5 +1,5 @@
 #pragma once
-// The descriptor table: every command of v0 (docs/design/command-layer.md, The
+// The descriptor table: every command of v0 (design/command-layer.md, The
 // commands of v0) with its summary, its argument and result schemas, an
 // example of its arguments and its flags, as data with no handlers. A
 // registry adds it with CommandRegistry::add_all(command_table()), and the

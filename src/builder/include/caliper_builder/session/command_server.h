@@ -4,7 +4,7 @@
 // listens on 127.0.0.1 only. It serves caliper-builder-host, the development
 // stand-in that lets caliper-mcp and caliper-agent be tested end to end before
 // the app is wired; the app's own API server replaces it at the wiring
-// (docs/design/builder-session.md, The stand-in host).
+// (design/builder-session.md, The stand-in host).
 //
 //   GET  /v0/commands         the descriptor table, command_table_to_json()
 //   POST /v0/commands/{name}  the `args` object as a JSON body; the result

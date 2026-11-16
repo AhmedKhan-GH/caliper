@@ -1,5 +1,5 @@
 // caliper-mcp: the stdio MCP server that an outside agent launches to drive
-// the running Caliper app (docs/design/mcp-server.md). Standard output carries
+// the running Caliper app (design/mcp-server.md). Standard output carries
 // MCP messages only; diagnostics go to standard error.
 #include <caliper_builder/mcp/server.h>
 

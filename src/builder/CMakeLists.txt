@@ -1,6 +1,6 @@
 # The builder libraries of sprint 3: the spec format, the catalog, the loaders,
 # the command layer, the session that binds them, caliper-mcp, the ACP client
-# and the caliper-agent sidecar (docs/design/builder-overview.md).
+# and the caliper-agent sidecar (design/builder-overview.md).
 #
 # This folder configures in two ways:
 #   - on its own, as a small project that needs no host build:

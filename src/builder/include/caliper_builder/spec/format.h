@@ -1,7 +1,7 @@
 #pragma once
 // Reading and writing a spec in its two forms: TOML, the source of truth on
 // disk, and the canonical JSON form, which the JSON Schema describes and the
-// browser reads (docs/design/spec-format.md).
+// browser reads (design/spec-format.md).
 //
 // Parsing checks the text, the values (no dates, no null, finite numbers, safe
 // integers, valid UTF-8), the size and nesting of the document, the types, the

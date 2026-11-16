@@ -1,6 +1,6 @@
 #pragma once
 // The built-in validator for the subset of JSON Schema that command
-// descriptors use (docs/design/command-layer.md, The schema subset): type (a
+// descriptors use (design/command-layer.md, The schema subset): type (a
 // name or a list), properties, required, additionalProperties (a boolean or a
 // schema), items, minItems, maxItems, enum, minimum, maximum, minLength and
 // maxLength (in code points), pattern (ECMAScript, searched, on strings of at

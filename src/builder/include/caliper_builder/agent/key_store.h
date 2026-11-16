@@ -30,7 +30,7 @@
 //
 // No automated test calls the system store, because touching the login
 // keychain can show a system prompt; it is compiled on macOS and checked by the
-// manual check in docs/design/byok-agent.md.
+// manual check in design/byok-agent.md.
 //
 // Error codes: keystore.bad_provider, keystore.bad_key, keystore.not_found,
 // keystore.unsupported, keystore.failed.

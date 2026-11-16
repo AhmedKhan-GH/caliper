@@ -40,7 +40,7 @@ Someone drops data into the app, makes loaders and builds visuals from inside th
 
 Built as libraries and tools under `src/builder/`, with tests, and not yet wired into the app: the spec format and its validator, the loaders and their readers, the catalog, the command layer, the session that binds them, `caliper-mcp`, the ACP client and the sidecar `caliper-agent`. Still to do, in the app: the command endpoints of Caliper API, the spec runtime and the spec applet kind, drag and drop, the builder pane, the side chat and the widget agent's inline surface.
 
-Plan: [Builder overview](../design/builder-overview.md), which links to the page of each part; [Applet builder](applet-builder.md) is the earlier proposal.
+Plan: Builder overview (`design/builder-overview.md`), which links to the page of each part; [Applet builder](applet-builder.md) is the earlier proposal.
 
 ## Phase 4: the registry
 

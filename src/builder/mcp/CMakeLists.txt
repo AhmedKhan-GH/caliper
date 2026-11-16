@@ -1,5 +1,5 @@
 # The mcp module: caliper-mcp, the stdio MCP server that an outside agent
-# launches to drive the running Caliper app (docs/design/mcp-server.md).
+# launches to drive the running Caliper app (design/mcp-server.md).
 #   caliper_builder_mcp   the protocol engine, the loopback HTTP client, the
 #                         API file, the tools and the resources
 #   caliper-mcp           the executable

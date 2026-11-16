@@ -1,6 +1,6 @@
 # caliper_builder_loaders: the tensor type and transforms, the tensor and
 # tabular readers, the loader recipe and the workspace's loader store
-# (docs/design/loaders.md).
+# (design/loaders.md).
 if(NOT CALIPER_BUILDER_HAVE_DUCKDB)
     message(STATUS "caliper_builder: the loaders module needs DuckDB and is skipped")
     return()

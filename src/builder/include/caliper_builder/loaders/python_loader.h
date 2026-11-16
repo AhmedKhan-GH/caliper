@@ -1,7 +1,7 @@
 #pragma once
 // The Python loader: a loader whose reader is "python" runs the user's script
 // out of process, and Caliper reads back only files of formats its own readers
-// already read safely. docs/design/loaders.md ("The Python loader") is the
+// already read safely. design/loaders.md ("The Python loader") is the
 // reference; LoaderStore::run() is the caller.
 //
 // The recipe names the script and, optionally, the interpreter and a limit:

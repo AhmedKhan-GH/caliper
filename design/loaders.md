@@ -1,6 +1,6 @@
 # Loaders
 
-This page designs the loaders of the applet builder: saved, declarative recipes that turn files into catalog sources. A loader names a file or a glob, a reader and either SQL or tensor transforms, and running it produces tables in the workspace database and tensors that the catalog lists. It elaborates the loader part of the sprint 3 contracts, and the [Applet builder](../plans/applet-builder.md) page gives the wider design.
+This page designs the loaders of the applet builder: saved, declarative recipes that turn files into catalog sources. A loader names a file or a glob, a reader and either SQL or tensor transforms, and running it produces tables in the workspace database and tensors that the catalog lists. It elaborates the loader part of the sprint 3 contracts, and the [Applet builder](../docs/plans/applet-builder.md) page gives the wider design.
 
 The library `caliper_builder_loaders` in `src/builder/loaders/` is built on the `sprint3-loaders` branch, with its public headers in `src/builder/include/caliper_builder/loaders/`, and the `sprint3-pyloader` branch adds [the Python loader](#the-python-loader). It is not wired into the app yet; that waits for sprint 2 to merge. The [last section](#what-is-built-and-what-is-planned) lists what is built and what is only planned.
 

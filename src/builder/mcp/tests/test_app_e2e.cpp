@@ -228,8 +228,8 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     CHECK(cmd_error["message"].get<std::string>().find("no command layer yet") != std::string::npos);
     MESSAGE(command->name << ": " << cmd_error["code"].get<std::string>());
 
-    const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/design/mcp-server.md"}});
-    CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# MCP server", 0) == 0);
+    const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/references/manifest.md"}});
+    CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# Manifest", 0) == 0);
 
     // caliper-mcp stops when its input ends, and never showed the token.
     server->close_stdin();

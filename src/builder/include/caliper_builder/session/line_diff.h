@@ -1,7 +1,7 @@
 #pragma once
 // unified_line_diff(): a unified diff of two texts, line by line, as `diff -u`
 // prints it, for showing a spec edit to a person before or after it applies
-// (docs/design/builder-session.md, Diffs).
+// (design/builder-session.md, Diffs).
 //
 // The diff starts with "--- <before label>" and "+++ <after label>", then
 // one hunk per group of changed lines with `context` unchanged lines around

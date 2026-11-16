@@ -1,7 +1,7 @@
 #pragma once
 // Session: the headless object that binds the builder libraries for one
 // workspace, which the app will own after the wiring
-// (docs/design/builder-session.md).
+// (design/builder-session.md).
 //
 // Session::open() opens a workspace folder (sprint 3 contracts, section 2):
 // the LoaderStore and its workspace.duckdb, a Catalog with the loader outputs'

@@ -1,5 +1,5 @@
 #pragma once
-// Approval (docs/design/command-layer.md, Approval). An ApprovalPolicy decides
+// Approval (design/command-layer.md, Approval). An ApprovalPolicy decides
 // allow, deny or ask for an invocation, given its descriptor and the
 // invocation itself (its origin and its arguments). The default policy allows
 // everything from the ui and builder origins and every command that is not

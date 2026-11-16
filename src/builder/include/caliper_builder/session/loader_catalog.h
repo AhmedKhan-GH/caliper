@@ -1,6 +1,6 @@
 #pragma once
 // LoaderCatalogProvider: the catalog provider for the outputs of loaders, a
-// thin adapter over a LoaderStore (docs/design/builder-session.md, The
+// thin adapter over a LoaderStore (design/builder-session.md, The
 // catalog). It lists, describes and samples the `table` and `tensor` sources
 // that loader runs recorded in caliper.sources.
 //

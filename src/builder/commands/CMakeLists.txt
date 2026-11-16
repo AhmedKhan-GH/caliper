@@ -1,4 +1,4 @@
-# caliper_builder_commands: the command layer of docs/design/command-layer.md:
+# caliper_builder_commands: the command layer of design/command-layer.md:
 # the command model, the schema validator, the undo history, the journal, the
 # registry with its approval policy, the queue and the descriptor table.
 add_library(caliper_builder_commands STATIC

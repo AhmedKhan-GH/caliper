@@ -1,8 +1,8 @@
 # Builder overview
 
-This page is the map of the builder: the work that lets someone drop data into Caliper, make loaders and build visuals from inside the app. A person builds by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, dropped file or property, or from an agent outside the app over MCP. Everything that is built is data, a spec or a loader, and never code that runs in the app's process. The page says which parts are built, which wait, and where each part is described. The [roadmap](../plans/roadmap.md#phase-3-agent-built-panels) gives the order and status.
+This page is the map of the builder: the work that lets someone drop data into Caliper, make loaders and build visuals from inside the app. A person builds by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, dropped file or property, or from an agent outside the app over MCP. Everything that is built is data, a spec or a loader, and never code that runs in the app's process. The page says which parts are built, which wait, and where each part is described. The [roadmap](../docs/plans/roadmap.md#phase-3-agent-built-panels) gives the order and status.
 
-[Applet builder](../plans/applet-builder.md) is the earlier proposal that this work follows. It left a WYSIWYG editor and an agent inside the app for later; both are now part of the plan.
+[Applet builder](../docs/plans/applet-builder.md) is the earlier proposal that this work follows. It left a WYSIWYG editor and an agent inside the app for later; both are now part of the plan.
 
 ## The parts
 
@@ -37,7 +37,7 @@ This page is the map of the builder: the work that lets someone drop data into C
 | Widget agent | An inline agent on one target: Caliper gives it a context bundle and a tool scope, and it proposes a change that is drawn in place as a preview | [Widget agent](widget-agent.md) |
 | `caliper-agent` | The widget agent's process: a sidecar that runs an agent loop with Claude through the person's API key today, and other models through the planned provider layer | [Widget agent sidecar](byok-agent.md) |
 
-The side chat and the widget agent are two roles, not two interchangeable backends, and [Agent roles](../explanations/agent-roles.md) explains when to use each. Both are ACP agents that the app drives with one `AcpClient`, so messages, diffs, approvals and cancellation work the same for both, and "Ask in chat" hands a widget request to the side chat with its context.
+The side chat and the widget agent are two roles, not two interchangeable backends, and [Agent roles](../docs/explanations/agent-roles.md) explains when to use each. Both are ACP agents that the app drives with one `AcpClient`, so messages, diffs, approvals and cancellation work the same for both, and "Ask in chat" hands a widget request to the side chat with its context.
 
 ## What is built
 

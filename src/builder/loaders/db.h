@@ -1,6 +1,6 @@
 #pragma once
 // Db: the workspace database (workspace.duckdb, or an in-memory database in
-// tests) opened with the safety settings of docs/design/loaders.md ("What the
+// tests) opened with the safety settings of design/loaders.md ("What the
 // database may read"). It hides DuckDB behind a small interface so that only
 // db.cpp includes duckdb.hpp; every DuckDB call is wrapped so that no
 // exception leaves it.

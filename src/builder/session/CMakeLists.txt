@@ -1,4 +1,4 @@
-# The session module (docs/design/builder-session.md):
+# The session module (design/builder-session.md):
 #   caliper_builder_session        Session, which binds the spec, catalog,
 #                                  commands and loaders libraries for one
 #                                  workspace, with the spec edits, the line

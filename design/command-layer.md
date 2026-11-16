@@ -1,6 +1,6 @@
 # Command layer
 
-The command layer is the one surface through which everything acts on a workspace: the app's UI, the WYSIWYG builder, the side chat and the widget agent, outside agents over MCP and programs over Caliper API. Each action is a typed command with a JSON Schema for its arguments and one for its result, so every client gets the same validation, the same undo history, the same journal and the same approval rules. This page elaborates sections 7 and 8 of the sprint 3 contracts and records the decisions taken while building the library. The [Applet builder](../plans/applet-builder.md) page gives the background, and the [Trust model](../explanations/trust-model.md) explains why everything an agent builds is data.
+The command layer is the one surface through which everything acts on a workspace: the app's UI, the WYSIWYG builder, the side chat and the widget agent, outside agents over MCP and programs over Caliper API. Each action is a typed command with a JSON Schema for its arguments and one for its result, so every client gets the same validation, the same undo history, the same journal and the same approval rules. This page elaborates sections 7 and 8 of the sprint 3 contracts and records the decisions taken while building the library. The [Applet builder](../docs/plans/applet-builder.md) page gives the background, and the [Trust model](../docs/explanations/trust-model.md) explains why everything an agent builds is data.
 
 ## What is built and what is planned
 

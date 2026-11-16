@@ -394,7 +394,7 @@ The web viewer reads the canonical JSON and draws a spec with the same primitive
 
 ## The manifest of a spec applet
 
-A saved spec applet is a folder in the workspace, `applets/<id>/`, with two files: the manifest `<id>.caliper.toml` and the spec `<id>.spec.toml`. It has no library. The manifest follows [Manifest](../references/manifest.md) with these differences:
+A saved spec applet is a folder in the workspace, `applets/<id>/`, with two files: the manifest `<id>.caliper.toml` and the spec `<id>.spec.toml`. It has no library. The manifest follows [Manifest](../docs/references/manifest.md) with these differences:
 
 ```toml
 [applet]

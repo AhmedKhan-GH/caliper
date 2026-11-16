@@ -1,5 +1,5 @@
 #pragma once
-// The undo history of a workspace (docs/design/command-layer.md, Undo): one undo
+// The undo history of a workspace (design/command-layer.md, Undo): one undo
 // stack and one redo stack of steps, each step one or more records that undo
 // and redo together.
 //

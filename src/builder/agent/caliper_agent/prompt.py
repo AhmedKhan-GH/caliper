@@ -3,7 +3,7 @@
 It is one fixed text: no time, no session id, no user name and no setting is
 put into it, because it sits at the front of every request with the tools and
 is cached with them. What changes between sessions or turns travels in the
-messages. docs/design/byok-agent.md gives its outline and the reasons.
+messages. design/byok-agent.md gives its outline and the reasons.
 """
 
 SYSTEM_PROMPT = """\

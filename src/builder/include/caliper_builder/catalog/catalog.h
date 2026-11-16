@@ -1,6 +1,6 @@
 #pragma once
 // The catalog: the providers that each origin implements, and Catalog, which
-// merges them (docs/design/catalog.md).
+// merges them (design/catalog.md).
 //
 // A CatalogProvider lists, describes and samples the sources of one origin
 // (loader outputs, live views, feed channels, metrics, or an in-memory set for

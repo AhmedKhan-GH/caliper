@@ -1,4 +1,4 @@
-# The agent module (docs/design/byok-agent.md):
+# The agent module (design/byok-agent.md):
 #   caliper_builder_agent  the key store of the agent pane's BYOK backend: an
 #                          interface, an in-memory store for tests and the macOS
 #                          Keychain store (compiled on macOS, never called by a

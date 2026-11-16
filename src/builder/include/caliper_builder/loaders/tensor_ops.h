@@ -6,7 +6,7 @@
 // loader and in a spec. Its JSON form is {"op": "slice", "axis": 1, "start": 0,
 // "stop": 4}, {"op": "reduce", "axis": [2, 3], "fn": "mean", "keepdims": false}
 // or {"op": "normalise", "mode": "softmax", "axis": -1}. The rules, which a GPU
-// version must match, are in docs/design/loaders.md ("Tensor outputs and
+// version must match, are in design/loaders.md ("Tensor outputs and
 // transforms"):
 //   - axes may be negative and count from the end; a list may not repeat one;
 //   - slice keeps the dtype; reduce and normalise compute in double precision

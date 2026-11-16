@@ -1,7 +1,7 @@
 #pragma once
 // sample_tensor(): the statistics and the slice of a tensor for
 // catalog.sample, computed from its dtype, its shape and its bytes
-// (little-endian, row-major, contiguous), by the rules of docs/design/catalog.md:
+// (little-endian, row-major, contiguous), by the rules of design/catalog.md:
 // exact statistics up to 2^26 elements and a stride beyond; a slice of at most
 // 64 elements per axis and 4096 in all; non-finite values as "nan", "inf" and
 // "-inf"; f16 decoded exactly.

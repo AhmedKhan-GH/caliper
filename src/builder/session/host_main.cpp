@@ -1,7 +1,7 @@
 // caliper-builder-host: a headless development tool that stands in for the
 // command endpoints of the app's Caliper API, so that caliper-mcp and
 // caliper-agent can be tested end to end before the libraries are wired into
-// the app (docs/design/builder-session.md, The stand-in host). The app's own
+// the app (design/builder-session.md, The stand-in host). The app's own
 // API server replaces it at the wiring; it is not part of the product.
 //
 //   caliper-builder-host --workspace <dir> --api-dir <dir>

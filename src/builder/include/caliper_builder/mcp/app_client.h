@@ -1,6 +1,6 @@
 #pragma once
 // caliper_builder::mcp::AppClient: how caliper-mcp reaches the running app
-// through Caliper API (docs/design/mcp-server.md, "Reaching the app").
+// through Caliper API (design/mcp-server.md, "Reaching the app").
 //
 // - The API file is read at every call, so the client follows the app when it
 //   restarts on another port with another token. When a request is refused

@@ -10,8 +10,8 @@ data goes, what each may do, and when the widget agent hands a request to the ch
     Neither the side chat nor the widget agent's inline prompt is built yet. What exists today are the parts underneath
     them: the ACP client that runs an agent, Caliper's own agent `caliper-agent`, the store that keeps your key, and the
     command layer they act through. They are tested without the app's panes, which come once the parts are wired into
-    the app. The designs are in [ACP integration](../design/acp-integration.md),
-    [Widget agent](../design/widget-agent.md) and [Widget agent sidecar](../design/byok-agent.md).
+    the app. The designs are in ACP integration (`design/acp-integration.md`),
+    Widget agent (`design/widget-agent.md`) and Widget agent sidecar (`design/byok-agent.md`).
 
 ## What the two have in common
 
@@ -84,7 +84,7 @@ instead.
 
 - **The side chat** runs any ACP agent on whatever model that agent supports, local models included, and Caliper needs
   nothing extra for it. The worked example is opencode with a model served by Ollama, which
-  [ACP integration](../design/acp-integration.md#local-models-in-the-side-chat) sets up step by step.
+  ACP integration (`design/acp-integration.md`) sets up step by step.
 - **The widget agent** will offer presets for local model servers, Ollama and LM Studio among them, with no key. A
   model must be able to call tools to drive Caliper; Caliper checks that, and also whether the model can look at
   images, when you choose it. Caliper will publish which models do the widget agent's work well, from a set of test

@@ -1,7 +1,7 @@
 #pragma once
 // The agents Caliper knows how to start, and the parsing of a custom agent
 // command. The table holds the launch commands that the agents' own
-// repositories documented on 15 November 2026 (docs/design/acp-integration.md
+// repositories documented on 15 November 2026 (design/acp-integration.md
 // records the sources); a person can always give a command of their own.
 //
 // split_command_line() turns one line of text into an argument vector the way

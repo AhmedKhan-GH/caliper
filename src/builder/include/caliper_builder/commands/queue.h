@@ -1,6 +1,6 @@
 #pragma once
 // CommandQueue: brings invocations from any thread to the thread that drains
-// the queue (docs/design/command-layer.md, Threads and the queue).
+// the queue (design/command-layer.md, Threads and the queue).
 //
 // submit() may be called from any thread and returns a std::future of the
 // result; it refuses with command.queue_full when 1024 items already wait.

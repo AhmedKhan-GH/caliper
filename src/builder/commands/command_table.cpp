@@ -121,7 +121,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "width": {"type": "integer", "description": "The image's width in pixels."},
         "height": {"type": "integer", "description": "The image's height in pixels."}}})json"},
 
-    // The pieces of a spec, kept in line with docs/design/spec-format.md and the
+    // The pieces of a spec, kept in line with design/spec-format.md and the
     // spec library by the session module's test of the table. Extension tables
     // (`x`) are left out: a tool schema is closed, and spec.set_text carries them.
     {"binding", R"json({"type": "string", "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$"})json"},

@@ -1,6 +1,6 @@
 #pragma once
 // The loader format v0: a declarative recipe that turns files into catalog
-// sources. docs/design/loaders.md ("The loader format v0") is the reference.
+// sources. design/loaders.md ("The loader format v0") is the reference.
 //
 //   caliper_loader = 0
 //   [loader]   id, title, description

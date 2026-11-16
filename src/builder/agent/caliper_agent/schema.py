@@ -1,7 +1,7 @@
 """A validator for the JSON Schema subset of Caliper's command descriptors.
 
 The command layer checks every argument object against its full schema, with
-the keywords listed in docs/design/command-layer.md (`type`, `properties`,
+the keywords listed in design/command-layer.md (`type`, `properties`,
 `required`, `additionalProperties`, `items`, `minItems`, `maxItems`, `enum`,
 `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`). The sidecar runs the
 same checks on each tool input the model produced before it runs the tool,
