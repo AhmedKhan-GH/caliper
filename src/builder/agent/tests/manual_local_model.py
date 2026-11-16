@@ -104,8 +104,11 @@ def main() -> int:
             "--api-file", str(api_dir / "api.json")])
         env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "OPENAI_", "CALIPER_"))}
         env["PYTHONPATH"] = str(AGENT_DIR)
+        # The local server is on loopback; the switch keeps every other host out (offline.py).
+        env["CALIPER_AGENT_OFFLINE"] = "1"
         started = time.monotonic()
         proc = subprocess.run([args.harness, "--agent", agent, "--cwd", str(ws), "--env", "PYTHONPATH",
+                               "--env", "CALIPER_AGENT_OFFLINE",
                                "--prompt", PROMPT, "--permission", "allow", "--timeout", str(args.timeout),
                                "--stall", str(args.timeout)],
                               capture_output=True, text=True, env=env, timeout=args.timeout + 60)

@@ -651,6 +651,16 @@ models are used, in the test above, and the routing is a few lines of `agent.py`
 - **The test switch.** `CALIPER_AGENT_TEST_SCRIPT` replaces the model with a scripted file, answered by Pydantic AI's
   `FunctionModel` or, for the wire tests, by a stubbed Claude transport. It cannot send data anywhere, but it would let
   whoever sets the environment script the model's replies, so the key store removes it at spawn.
+- **The offline switch.** With `CALIPER_AGENT_OFFLINE=1` (`caliper_agent/offline.py`) the sidecar reaches no host off
+  loopback: it never builds the Claude provider on its real transport, nor an OpenAI-compatible provider whose base URL
+  is not a loopback address, and answers `session/new` and `session/prompt` with an error whose `data.code` is
+  `agent.offline`; a socket guard also refuses every name resolution and connection off loopback for the life of the
+  process. Only the scripted model, the stubbed transports and servers on loopback run. Every test and tool of
+  `src/builder/` that starts the sidecar sets it (the pytest fixtures, the C++ end-to-end tests, the CMake test
+  environments and the manual local-model run), since a test once lost its script switch at spawn and the sidecar
+  took its real route. `place_key_in_environment()` passes the switch to the child with the parent's value, even when
+  the spawn options remove or replace it, and keeps removing `CALIPER_AGENT_TEST_SCRIPT`. `tests/test_offline.py`
+  checks it with a proxy trap on loopback that must see no connection.
 - **The import path.** The sidecar must be started with `-I` (or `-P`) so the workspace folder is never on its import
   path.
 - **Prompt injection.** Everything a tool returns is workspace data. The system prompt says so, destructive commands

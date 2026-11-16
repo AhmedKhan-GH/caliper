@@ -37,6 +37,7 @@ from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.providers.openai_compatible import OpenAICompatibleProvider
 
 from .keyguard import Secret
+from .offline import check_provider
 from .provider import Capabilities, ModelInfo, Settings
 
 KEY_ENV = "CALIPER_MODEL_API_KEY"
@@ -65,6 +66,8 @@ class OpenAICompatProvider:
                  vision: bool = True, transport: Any = None, backoff_scale: float = 1.0,
                  max_tokens: int = MAX_TOKENS) -> None:
         self.base_url = check_base_url(base_url)
+        # With CALIPER_AGENT_OFFLINE set, only a server on loopback (or a test's transport).
+        check_provider("openai-compatible", base_url=self.base_url, stubbed=transport is not None)
         host = urlsplit(self.base_url).hostname or "the model server"
         self.name = f"The model server at {host}"
         self.models = (ModelInfo(model_id, model_id, f"{model_id} on {host}"),)

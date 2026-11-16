@@ -40,7 +40,7 @@ from typing import Any
 from pydantic_ai import Agent as GraphAgent
 
 from . import __version__
-from .acp import AUTH_REQUIRED, INVALID_PARAMS, METHOD_NOT_FOUND, Connection, RpcError
+from .acp import AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, Connection, RpcError
 from .caliper_api import CaliperApi
 from .keyguard import KeyStatus
 from .loop import REVIEW_DESTRUCTIVE_ONLY, REVIEW_SPEC_CHANGES, SessionState, TurnRunner, build_agent
@@ -86,8 +86,11 @@ class Agent:
     def __init__(self, conn: Connection, provider: Provider | None, key_status: str, tools: list[ToolSpec],
                  graph: GraphAgent, api: CaliperApi, *, default_model: str, default_effort: str,
                  usage_log: str | None = None, key_required: bool = True, commands: list[Command] | None = None,
-                 scope_rule: ScopeRule | None = None) -> None:
+                 scope_rule: ScopeRule | None = None, refusal: Exception | None = None) -> None:
         self._usage_log = usage_log
+        # Why no provider may run (offline.py): every session/new and
+        # session/prompt is then answered with this error.
+        self._refusal = refusal
         self._conn = conn
         self._provider = provider
         self._key_status = key_status
@@ -182,9 +185,15 @@ class Agent:
                          {"value": REVIEW_DESTRUCTIVE_ONLY, "name": "Ask only before deleting or overwriting"}]})
         return options
 
+    def _refuse_if_offline(self) -> None:
+        if self._refusal is not None:
+            raise RpcError(INTERNAL_ERROR, str(self._refusal),
+                           {"code": getattr(self._refusal, "code", "agent.offline"), "retryable": False})
+
     def _new_session(self, params: Any) -> dict:
         if not isinstance(params, dict):
             raise RpcError(INVALID_PARAMS, "session/new needs params.")
+        self._refuse_if_offline()
         cwd = params.get("cwd")
         if not isinstance(cwd, str) or not cwd or len(cwd) > 4096 or not os.path.isabs(cwd) or "\x00" in cwd:
             raise RpcError(INVALID_PARAMS, "session/new needs an absolute cwd.")
@@ -266,6 +275,7 @@ class Agent:
             raise RpcError(INVALID_PARAMS, "Unknown session.")
         if session.runner is not None:
             raise RpcError(INVALID_PARAMS, "A turn is already running in this session.")
+        self._refuse_if_offline()
         try:
             content = prompt_content(params.get("prompt"), vision=self._vision(session.state),
                                      max_chars=MAX_PROMPT_CHARS)

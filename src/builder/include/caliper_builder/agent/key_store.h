@@ -28,6 +28,14 @@
 //                            planned) and other systems, a store whose every
 //                            call fails with keystore.unsupported.
 //
+// The offline switch of the tests, CALIPER_AGENT_OFFLINE: with it the sidecar
+// reaches no model server off loopback (caliper_agent/offline.py). Every test
+// and tool of src/builder/ that starts the sidecar sets it. When this process
+// has it, place_key_in_environment() passes it to the child with this
+// process's value, even if `spawn` removes or replaces it, so code under test
+// cannot strip it; the sidecar's test switch, CALIPER_AGENT_TEST_SCRIPT, is
+// removed as before.
+//
 // No automated test calls the system store, because touching the login
 // keychain can show a system prompt; it is compiled on macOS and checked by the
 // manual check in design/byok-agent.md.
@@ -47,6 +55,7 @@ namespace caliper_builder::agent {
 constexpr const char* kAnthropicProvider = "anthropic";
 constexpr const char* kKeychainService = "caliper.agent-keys";
 constexpr std::size_t kMaxKeyBytes = 1024;
+constexpr const char* kOfflineVariable = "CALIPER_AGENT_OFFLINE";
 
 // The variable a provider's key is placed in, or nullptr for an unknown provider.
 const char* key_variable(const std::string& provider);
@@ -64,6 +73,11 @@ class KeyStore;
 // variable that could redirect the child, and leaves `spawn` unchanged on any
 // error. An AcpClient takes the result as `agent_env` and `agent_env_remove`.
 Error place_key_in_environment(KeyStore& store, const std::string& provider, acp::SpawnOptions* spawn);
+
+// When this process has CALIPER_AGENT_OFFLINE, sets it in `spawn->env` with
+// the same value and takes it out of `spawn->env_remove`; otherwise does
+// nothing. place_key_in_environment() calls it.
+void pass_offline_switch(acp::SpawnOptions* spawn);
 
 class KeyStore {
 public:

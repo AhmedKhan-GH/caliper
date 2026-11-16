@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 
 using namespace caliper_builder;
@@ -125,6 +126,48 @@ TEST_CASE("a key is placed in a child's environment and nothing that could redir
         CHECK(e.code == "keystore.bad_provider");
         CHECK_FALSE(mentions(e, kKey));
         CHECK(place_key_in_environment(store, kAnthropicProvider, nullptr).code == "keystore.failed");
+    }
+}
+
+namespace {
+void set_parent_env(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value ? value : "");
+#else
+    if (value) setenv(name, value, 1);
+    else unsetenv(name);
+#endif
+}
+}  // namespace
+
+TEST_CASE("the offline switch passes through to the child and cannot be stripped") {
+    MemoryKeyStore store;
+    REQUIRE(store.set(kAnthropicProvider, kKey).ok());
+    acp::SpawnOptions spawn;
+    spawn.env = {{"CALIPER_AGENT_OFFLINE", "0"}, {"CALIPER_AGENT_TEST_SCRIPT", "/x/script.json"}};
+    spawn.env_remove = {"CALIPER_AGENT_OFFLINE"};
+
+    SUBCASE("with the switch in this process") {
+        set_parent_env("CALIPER_AGENT_OFFLINE", "1");
+        REQUIRE(place_key_in_environment(store, kAnthropicProvider, &spawn).ok());
+        set_parent_env("CALIPER_AGENT_OFFLINE", nullptr);
+        REQUIRE(find_var(spawn, "CALIPER_AGENT_OFFLINE") != nullptr);
+        CHECK(find_var(spawn, "CALIPER_AGENT_OFFLINE")->value == "1");
+        int count = 0;
+        for (const auto& v : spawn.env) count += v.name == "CALIPER_AGENT_OFFLINE";
+        CHECK(count == 1);
+        CHECK(std::count(spawn.env_remove.begin(), spawn.env_remove.end(), std::string("CALIPER_AGENT_OFFLINE")) == 0);
+        // The test switch is still removed.
+        CHECK(find_var(spawn, "CALIPER_AGENT_TEST_SCRIPT") == nullptr);
+        CHECK(std::count(spawn.env_remove.begin(), spawn.env_remove.end(),
+                         std::string("CALIPER_AGENT_TEST_SCRIPT")) == 1);
+    }
+    SUBCASE("without it nothing about it changes") {
+        set_parent_env("CALIPER_AGENT_OFFLINE", nullptr);
+        REQUIRE(place_key_in_environment(store, kAnthropicProvider, &spawn).ok());
+        REQUIRE(find_var(spawn, "CALIPER_AGENT_OFFLINE") != nullptr);
+        CHECK(find_var(spawn, "CALIPER_AGENT_OFFLINE")->value == "0");
+        CHECK(std::count(spawn.env_remove.begin(), spawn.env_remove.end(), std::string("CALIPER_AGENT_OFFLINE")) == 1);
     }
 }
 

@@ -3,6 +3,7 @@
 #include <caliper_builder/agent/key_store.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <regex>
 #include <vector>
@@ -121,7 +122,20 @@ Error place_key_in_environment(KeyStore& store, const std::string& provider, acp
             spawn->env_remove.emplace_back(o);
     env.push_back(acp::EnvVar{variable, key});
     wipe(&key);
+    pass_offline_switch(spawn);
     return {};
+}
+
+void pass_offline_switch(acp::SpawnOptions* spawn) {
+    if (!spawn) return;
+    const char* value = std::getenv(kOfflineVariable);
+    if (!value) return;
+    auto& removed = spawn->env_remove;
+    removed.erase(std::remove(removed.begin(), removed.end(), std::string(kOfflineVariable)), removed.end());
+    auto& env = spawn->env;
+    env.erase(std::remove_if(env.begin(), env.end(), [](const acp::EnvVar& v) { return v.name == kOfflineVariable; }),
+              env.end());
+    env.push_back(acp::EnvVar{kOfflineVariable, value});
 }
 
 MemoryKeyStore::~MemoryKeyStore() {

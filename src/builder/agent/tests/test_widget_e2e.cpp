@@ -152,7 +152,9 @@ struct WidgetWorkspace {
         return {{"ANTHROPIC_API_KEY", kFakeKey},
                 {"CALIPER_AGENT_TEST_SCRIPT", script},
                 {"PYTHONPATH", builder + "/agent"},
-                {"PYTHONDONTWRITEBYTECODE", "1"}};
+                {"PYTHONDONTWRITEBYTECODE", "1"},
+                // No test reaches a model server off loopback (caliper_agent/offline.py).
+                {"CALIPER_AGENT_OFFLINE", "1"}};
     }
 
     // After the sidecar is done: the open spec, the history and the journal

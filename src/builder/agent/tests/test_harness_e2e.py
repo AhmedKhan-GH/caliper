@@ -48,11 +48,12 @@ def test_a_turn_through_the_cpp_client(tmp_path):
                                                "--command-table", str(COMMAND_TABLE), "--api-file", str(fake.api_file)])
     env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
     env["PYTHONPATH"] = str(AGENT_DIR)
+    env["CALIPER_AGENT_OFFLINE"] = "1"
     try:
         proc = subprocess.run(
             [HARNESS, "--agent", agent, "--cwd", str(workspace),
              "--env", f"ANTHROPIC_API_KEY={FAKE_KEY}", "--env", f"CALIPER_AGENT_TEST_SCRIPT={script}",
-             "--env", "PYTHONPATH", "--prompt", "Plot the loss and save the applet.",
+             "--env", "PYTHONPATH", "--env", "CALIPER_AGENT_OFFLINE", "--prompt", "Plot the loss and save the applet.",
              "--permission", "allow", "--timeout", "90"],
             capture_output=True, text=True, env=env, timeout=120)
     finally:
@@ -66,7 +67,8 @@ def test_a_turn_through_the_cpp_client(tmp_path):
     for line in lines:
         by_type.setdefault(line["type"], []).append(line)
 
-    assert by_type["harness"][0]["env_names"] == ["ANTHROPIC_API_KEY", "CALIPER_AGENT_TEST_SCRIPT", "PYTHONPATH"]
+    assert by_type["harness"][0]["env_names"] == ["ANTHROPIC_API_KEY", "CALIPER_AGENT_TEST_SCRIPT", "PYTHONPATH",
+                                                   "CALIPER_AGENT_OFFLINE"]
     init = by_type["initialized"][0]
     assert init["protocol_version"] == 1 and init["agent"]["name"] == "caliper-agent"
     assert by_type["session"][0]["session_id"].startswith("byok-")

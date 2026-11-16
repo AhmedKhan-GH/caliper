@@ -42,7 +42,9 @@ if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET 
         CALIPER_BUILDER_HOST_EXE="$<TARGET_FILE:caliper-builder-host>"
         CALIPER_ACP_HARNESS="$<TARGET_FILE:caliper-acp-harness>"
         CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}")
-    set_tests_properties(builder_agent_e2e PROPERTIES TIMEOUT 300 SKIP_REGULAR_EXPRESSION "builder_agent_e2e skipped")
+    # CALIPER_AGENT_OFFLINE: no test reaches a model server off loopback (caliper_agent/offline.py).
+    set_tests_properties(builder_agent_e2e PROPERTIES TIMEOUT 300 SKIP_REGULAR_EXPRESSION "builder_agent_e2e skipped"
+        ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
 
     # A widget session end to end: the sidecar, driven by caliper-acp-harness
     # and by a small client, edits a panel on a stacked preview of a session
@@ -55,7 +57,7 @@ if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET 
         CALIPER_ACP_HARNESS="$<TARGET_FILE:caliper-acp-harness>"
         CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}")
     set_tests_properties(builder_agent_widget PROPERTIES TIMEOUT 300
-        SKIP_REGULAR_EXPRESSION "builder_agent_widget skipped")
+        SKIP_REGULAR_EXPRESSION "builder_agent_widget skipped" ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
 endif()
 
 if(BUILD_TESTS)
@@ -67,7 +69,7 @@ if(BUILD_TESTS)
                     --basetemp=${CMAKE_CURRENT_BINARY_DIR}/pytest-tmp
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-        set(_agent_py_env "PYTHONDONTWRITEBYTECODE=1")
+        set(_agent_py_env "PYTHONDONTWRITEBYTECODE=1" "CALIPER_AGENT_OFFLINE=1")
         if(NOT WIN32)
             # The end-to-end test drives the sidecar through the real C++ client.
             list(APPEND _agent_py_env "CALIPER_ACP_HARNESS=$<TARGET_FILE:caliper-acp-harness>")

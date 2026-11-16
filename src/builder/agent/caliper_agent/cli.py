@@ -22,6 +22,12 @@ What happens at start, in this order:
    scope rule (widget_scopes.json beside the table) for widget sessions.
 5. ACP is served until the client closes stdin.
 
+With CALIPER_AGENT_OFFLINE=1 (offline.py), which every test and tool of the
+repository sets, a socket guard refuses every connection off loopback from
+the start, and a provider that would reach another host is never built: the
+sidecar still serves ACP, and answers `session/new` and `session/prompt` with
+an error whose `data.code` is `agent.offline`.
+
 Exit codes: 0 after the client closed the connection; 2 for bad usage or an
 unreadable command table.
 """
@@ -86,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
 
     reader, writer = _protocol_streams()
     install_guards()
+    from .offline import OfflineError, check_provider, install_socket_guard, offline
+    if offline():
+        install_socket_guard()
     claude_key, claude_status = take_key_from_environment(name=KEY_ENV)
     model_key, model_status = take_key_from_environment(name=MODEL_KEY_ENV)
     SCRUBBER.register(claude_key)
@@ -136,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     backoff = float(script.get("backoff_scale", 1.0)) if script is not None else 1.0
 
     provider = None
+    refusal: OfflineError | None = None
     if args.provider == "claude":
         model_ids = tuple(m.id for m in MODELS)
         if args.model is not None and args.model not in model_ids:
@@ -147,14 +157,19 @@ def main(argv: list[str] | None = None) -> int:
             if script is not None and script.get("route", "function") == "function":
                 provider = ScriptedProvider(script, compaction=not args.no_compaction)
             else:
-                provider = ClaudeProvider(claude_key, compaction=not args.no_compaction, backoff_scale=backoff,
-                                          transport=StubTransport(script) if script is not None else None)
+                try:
+                    check_provider("claude", stubbed=script is not None)
+                    provider = ClaudeProvider(claude_key, compaction=not args.no_compaction, backoff_scale=backoff,
+                                              transport=StubTransport(script) if script is not None else None)
+                except OfflineError as exc:
+                    refusal = exc
     else:
         if not args.base_url or not args.model:
             print("caliper-agent: --provider openai-compatible needs --base-url and --model.", file=sys.stderr)
             return 2
         key_status, key_required, default_model = model_status, False, args.model
         try:
+            check_provider("openai-compatible", base_url=args.base_url)
             provider = OpenAICompatProvider(args.base_url, args.model,
                                             model_key if model_status == KeyStatus.PRESENT else None,
                                             tools=args.model_tools == "yes", vision=args.model_vision == "yes",
@@ -162,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
         except BaseUrlError as exc:
             print(f"caliper-agent: {exc}", file=sys.stderr)
             return 2
+        except OfflineError as exc:
+            refusal = exc
+    if refusal is not None:
+        print(f"caliper-agent: {refusal}", file=sys.stderr)
 
     graph = build_agent(tools, SYSTEM_PROMPT)
 
@@ -170,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         api = CaliperApi(Path(args.api_file) if args.api_file else None)
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
-                      key_required=key_required, commands=commands, scope_rule=scope_rule)
+                      key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal)
         try:
             await conn.serve(agent.on_request, agent.on_notification)
         finally:

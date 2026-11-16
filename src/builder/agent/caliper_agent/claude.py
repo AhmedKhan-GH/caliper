@@ -43,6 +43,7 @@ from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from .keyguard import Secret
+from .offline import check_provider
 from .provider import Capabilities, ModelInfo, Settings
 
 API_BASE_URL = "https://api.anthropic.com"
@@ -101,6 +102,8 @@ class ClaudeProvider:
 
     def __init__(self, key: Secret, *, transport: Any = None, compaction: bool = True,
                  backoff_scale: float = 1.0) -> None:
+        # With CALIPER_AGENT_OFFLINE set, only a stubbed transport may stand in for the API.
+        check_provider("claude", stubbed=transport is not None)
         http_client = DefaultAsyncHttpxClient(transport=transport) if transport is not None else None
         self._client = AsyncAnthropic(
             api_key=key.reveal(),

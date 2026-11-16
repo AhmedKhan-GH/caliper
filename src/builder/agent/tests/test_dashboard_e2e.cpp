@@ -150,6 +150,7 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
                     "--env", "CALIPER_AGENT_TEST_SCRIPT=" + script,
                     "--env", "PYTHONPATH=" + builder + "/agent",
                     "--env", "PYTHONDONTWRITEBYTECODE=1",
+                    "--env", "CALIPER_AGENT_OFFLINE=1",  // no model server off loopback (offline.py)
                     "--prompt", "Build the run 42 dashboard from the files in data, and save it.",
                     "--permission", "allow",
                     "--timeout", "150"};

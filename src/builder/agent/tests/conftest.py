@@ -26,6 +26,11 @@ from typing import Any, Callable
 import pytest
 
 AGENT_DIR = Path(__file__).resolve().parent.parent
+# No test reaches a model server off loopback (caliper_agent/offline.py): the
+# switch is on in this process, for the code that runs in it, and in every
+# sidecar a test starts.
+OFFLINE_ENV = "CALIPER_AGENT_OFFLINE"
+os.environ[OFFLINE_ENV] = "1"
 COMMAND_TABLE = AGENT_DIR.parent / "commands" / "command_table.json"
 FAKE_KEY = "sk-ant-api03-TESTONLY-" + "Zx9" * 20 + "-fakeAA"
 FAKE_TOKEN = "fakeSessionToken_0123456789abcdef"
@@ -243,6 +248,7 @@ class AgentProcess:
                  extra_args: list[str] | None = None, cwd: Path | None = None) -> None:
         env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_") and k != "CALIPER_AGENT_TEST_SCRIPT"}
         env["PYTHONPATH"] = str(AGENT_DIR)
+        env[OFFLINE_ENV] = "1"
         if key is not None:
             env["ANTHROPIC_API_KEY"] = key
         if script is not None:
