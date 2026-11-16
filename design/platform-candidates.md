@@ -38,8 +38,8 @@ native. Applets built before the rule stay native-only until they are ported.
   service that owns capture, scripting and recording gives every applet
   screenshots for documentation and tests, and demo recordings, through one
   interface. It starts from the captures the host already takes:
-  [`caliper shot`](../references/cli.md#caliper-shot) and Caliper API's
-  [capture](../references/api.md#get-v0capturepng).
+  `caliper shot` (`docs/references/cli.md`) and Caliper API's
+  capture (`docs/references/api.md`).
 - **ImGui errors went unnoticed.** One pane produced a constant stream of ImGui
   runtime errors, and nothing showed them. Development builds of the host
   should.
@@ -53,4 +53,4 @@ native. Applets built before the rule stay native-only until they are ported.
 5. The `viz` components: annotation scene, colour by value, catalog tree
 6. The quiet job kind in `jobs.v1`
 
-Related: [UI principles](../explanations/ui-principles.md).
+Related: UI principles (`docs/explanations/ui-principles.md`).

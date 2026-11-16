@@ -1,8 +1,10 @@
 # Design
 
-The pages in this section are proposals for work that is not built yet. The rest of the site, the tutorials, guides, references and explanations, describes what Caliper is and does today; this section describes only what it may become.
+The pages in this folder are proposals for work that is not built yet. They are not part of the docs site: the docs site, built from `docs/`, describes what Caliper is and does today, for the people who build on it and the people who use it.
 
-The [roadmap](roadmap.md) is the one place for order and status. Each other page here is a technical proposal that the roadmap points to. When a proposal is built, its content moves into the guides, references and explanations, and the proposal page is deleted, so that nothing built is described only here.
+The [roadmap](roadmap.md) is the one place for order and status. Each other page here is a technical proposal that the roadmap points to. When a proposal is built, its content is folded into the reference under `docs/`, the tutorials, guides, references and explanations, and its page here is deleted. Git history keeps what the page said.
+
+These pages mention pages of the docs site by their paths under `docs/` rather than by links, because the docs site and these pages are built separately. From the repository root, `mkdocs build --strict -f design/mkdocs.yml` checks these pages, and `mkdocs serve -f design/mkdocs.yml -a 127.0.0.1:8001` shows them locally beside the docs site on its usual port.
 
 | Page | Proposal |
 |---|---|

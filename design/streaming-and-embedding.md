@@ -2,7 +2,7 @@
 
 This page plans what remains of using Caliper from other programs: the browser views beyond the live views, applets in a browser, the rest of C++ embedding, and the steps before a stream may leave the machine. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status.
 
-What is built is described in the reference: [Network streaming](../explanations/network-streaming.md) and [Live streaming](../explanations/live-streaming.md) explain the design, [Caliper LIB](../references/python-api.md), [Wire protocol v3](../references/wire-protocol.md), [Browser elements](../references/browser-elements.md), [Caliper CLI](../references/cli.md#caliper-serve) and [Caliper API](../references/api.md) list the interfaces, [Rendering](../explanations/rendering.md#the-webgpu-backend) describes the browser's renderer, and [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md), [Run a hub](../guides/run-a-hub.md), [Attach to a running script](../guides/attach-to-a-running-script.md), [Control a running script](../guides/control-a-running-script.md) and [Embedding Caliper](../references/embedding.md) show them in use.
+What is built is described in the docs site, under `docs/`: the explanations Network streaming, Live streaming and Rendering give the design; the references Caliper LIB, Wire protocol v3, Browser elements, Caliper CLI, Caliper API and Embedding Caliper list the interfaces; and the tutorial Watch a training run in a notebook and the guides Run a hub, Attach to a running script and Control a running script show them in use.
 
 ## The order of surfaces
 
@@ -36,7 +36,7 @@ No computation runs in the browser. libtorch does not run there, and the plan ad
 
 ## Limits in the browser
 
-The limits of the browser views as they are, such as the bounded heap, the second copy into the GPU process and the browsers that are untested, are listed under [Known limits](../explanations/network-streaming.md#known-limits) in Network streaming. Every later step works within them, and three more bound the work ahead:
+The limits of the browser views as they are, such as the bounded heap, the second copy into the GPU process and the browsers that are untested, are listed under Known limits in `docs/explanations/network-streaming.md`. Every later step works within them, and three more bound the work ahead:
 
 - **The WebGPU binding moves with Emscripten.** The core of `webgpu.h` is stable, but Emscripten's `emdawnwebgpu` port and its Emscripten-specific parts change, and each Emscripten release pins its own Dawn package, so an Emscripten update can need changes in the renderer.
 - **Headless tests depend on flags.** Headless Chromium presents a WebGPU canvas on SwiftShader only with `--use-angle=swiftshader`, and a Chromium update can change which flags work.
@@ -61,11 +61,11 @@ Metal and Vulkan stay the fast paths. The WebGPU renderer that draws the browser
 
 ## The embedding package
 
-The minimal embedding package is built ([Embedding Caliper](../references/embedding.md)). The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, rendering a frame to an image file, HiDPI work and a Qt widget.
+The minimal embedding package is built (see `docs/references/embedding.md`). The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, rendering a frame to an image file, HiDPI work and a Qt widget.
 
 ## Security
 
-Network streaming stays on the local machine, on the loopback interface and with the session token ([Security](../explanations/network-streaming.md#security)), until a dedicated security review, which comes before any session leaves the machine. The confidentiality of streamed data then rests on the transport and on the security of whoever hosts it: the session token, encryption and that review. The streaming socket never carries the command layer.
+Network streaming stays on the local machine, on the loopback interface and with the session token (see `docs/explanations/network-streaming.md`), until a dedicated security review, which comes before any session leaves the machine. The confidentiality of streamed data then rests on the transport and on the security of whoever hosts it: the session token, encryption and that review. The streaming socket never carries the command layer.
 
 ## Platforms
 

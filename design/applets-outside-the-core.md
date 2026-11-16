@@ -6,13 +6,13 @@ the host. This page holds the parts of that plan that are not built yet. The
 registry is a separate plan, [Applet registry](registry.md).
 
 The built parts are described in the living pages: the SDK package and
-`caliper_add_applet()` in [SDK package](../references/sdk-package.md), the
+`caliper_add_applet()` in SDK package (`docs/references/sdk-package.md`), the
 search order and the choice among copies of one applet in
-[Compatibility and epochs](../explanations/compatibility.md#several-copies-of-one-applet),
-dock hints in [caliper.ui.v1_1](../references/service-ui-v1-1.md), and the
-folders and variables in [Folders and environment variables](../references/environment.md).
+Compatibility and epochs (`docs/explanations/compatibility.md`),
+dock hints in caliper.ui.v1_1 (`docs/references/service-ui-v1-1.md`), and the
+folders and variables in Folders and environment variables (`docs/references/environment.md`).
 The `caliper` subcommands, including `dev` and `install <folder>`, are in
-[Caliper CLI](../references/cli.md). The roadmap lists the `.caliperapp` bundle
+Caliper CLI (`docs/references/cli.md`). The roadmap lists the `.caliperapp` bundle
 format and the entry points for hot reload under [Undecided](roadmap.md#undecided).
 
 ## The changes
