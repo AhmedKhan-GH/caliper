@@ -30,6 +30,8 @@ export const MSG = {
   control: 0x0051,
   control_reply: 0x0052,
   selection: 0x0060,
+  scene_update: 0x0070, // 3.2 draft
+  scene_clear: 0x0072, // 3.2 draft
 } as const;
 export type MessageType = keyof typeof MSG;
 
@@ -307,7 +309,8 @@ export interface UnknownMsg { type: 'unknown'; id: number; meta: Record<string, 
 export type Message =
   | HelloMsg | WelcomeMsg | ByeMsg | ErrorMsg | PingMsg | PongMsg | SessionsMsg | AttachMsg
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
-  | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg;
+  | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg
+  | SceneUpdateMsg | SceneClearMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
@@ -316,3 +319,105 @@ export function snapshotRange(s: SnapshotMsg): [number, number] {
   if (s.flags & SNAP_AUTO_VMAX && s.stats.length > 1) hi = s.stats[1];
   return [lo, hi];
 }
+
+// --- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; see the 3.2 block of include/caliper/live_net.h) ---
+
+export const PROTOCOL_MINOR_3_2 = 2;
+export const KIND_SCENE = 6;
+export const CAP_SCENES = 'scenes';
+
+export const PART_POINTS = 'points';
+export const PART_LINES = 'lines';
+export const PART_MESH = 'mesh';
+export type ScenePart = 'points' | 'lines' | 'mesh';
+export const SCENE_PARTS: readonly ScenePart[] = [PART_POINTS, PART_LINES, PART_MESH];
+/** In the draft, not built: answered `unsupported`. */
+export const DRAFTED_PARTS: readonly string[] = ['arrows', 'boxes', 'image', 'camera'];
+export const LINES_SEGMENTS = 'segments';
+export const LINES_STRIPS = 'strips';
+export const COLOR_PER_VERTEX = 'vertex';
+export const COLOR_PER_STRIP = 'strip';
+export const SPACE_3D = '3d';
+export const SPACE_2D = '2d';
+export const UP_AXES_3D: readonly string[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
+export const UP_AXES_2D: readonly string[] = ['-y', '+y'];
+
+export const LIMITS_32 = {
+  pathMax: 255,
+  pathSegmentsMax: 16,
+  unitsMax: 15,
+  maxEntities: 1024,
+  maxBatches: 2048,
+  maxBatchPoints: 4194304,
+  maxBatchItems: 1048576,
+} as const;
+
+/** The sections of each part, in the order a sender writes them. */
+export const PART_SECTIONS: Record<ScenePart, readonly string[]> = {
+  points: ['positions', 'colors', 'values', 'radii'],
+  lines: ['positions', 'strip_lengths', 'colors', 'values'],
+  mesh: ['positions', 'indices', 'colors', 'values'],
+};
+/** The keys of each part, beside the common ones. */
+export const PART_KEYS: Record<ScenePart, readonly string[]> = {
+  points: ['color', 'radius', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  lines: ['mode', 'color_per', 'color', 'width', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  mesh: ['color', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+};
+
+/** The resolved default scene data view (SCENE_DATA_VIEW of _wire.py). */
+export const SCENE_DATA_VIEW = {
+  entities: { include: ['**'], exclude: [] as string[] },
+  budget: { max_points: 100000, max_items: 100000, max_vertices: 1000000, max_extent: 1024 },
+};
+
+/** One section of a scene part; dtype 0 f32, 4 i32, 5 u8. */
+export interface SceneArray { dtype: number; shape: number[]; data: Float32Array | Int32Array | Uint8Array }
+
+/** One part of one entity of a scene. */
+export interface SceneUpdateMsg {
+  type: 'scene_update';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  path: string;
+  part: 'points' | 'lines' | 'mesh';
+  /** Only the part's known sections, e.g. positions, colors, values, radii, strip_lengths, indices. */
+  arrays: Record<string, SceneArray>;
+  params: {
+    mode?: 'segments' | 'strips';
+    color_per?: 'vertex' | 'strip';
+    color?: number[];
+    radius?: number;
+    width?: number;
+    colormap?: number;
+    flags?: number;
+    vmin?: number;
+    vmax?: number;
+    /** NaN where the producer sent null. */
+    stats?: number[];
+  };
+  static?: boolean;
+  state?: boolean;
+  axes?: PayloadAxis[];
+  items?: string;
+}
+
+/** Clears an entity, its subtree, some of its parts, or with reset the whole scene. */
+export interface SceneClearMsg {
+  type: 'scene_clear';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  path: string;
+  recursive?: boolean;
+  parts?: string[];
+  reset?: boolean;
+  static?: boolean;
+  state?: boolean;
+}
+
+/** The key "scene" of a VIEWS entry of kind 6, with its defaults filled in. */
+export interface SceneViewInfo { space: '3d' | '2d'; up: string; units: string }

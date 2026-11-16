@@ -528,6 +528,10 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         details: opt(f, 'details', isDetails, '{fields, items, values} within the limits', undefined),
         details_error: opt(f, 'details_error', isText, `a string of at most ${LIMITS_31.textMax} bytes`, undefined),
       };
+    case MSG.scene_update:
+      return decodeSceneUpdate(f);
+    case MSG.scene_clear:
+      return decodeSceneClear(f);
     default:
       return { type: 'unknown', id: t, meta: f.meta };
   }
@@ -608,5 +612,268 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
         space: msg.space, items: msg.items, view: msg.view, truncated: msg.truncated ? true : undefined, details: msg.details,
         details_error: msg.details_error,
       }));
+    case 'scene_update':
+      return encodeSceneUpdate(msg, minor);
+    case 'scene_clear':
+      return encodeSceneClear(msg, minor);
   }
+}
+
+// --- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; see the 3.2 block of include/caliper/live_net.h) ---
+// The same rules as the block at the end of python/caliper/_wire.py.
+
+import {
+  COLOR_PER_STRIP, COLOR_PER_VERTEX, DRAFTED_PARTS, LIMITS_32, LINES_SEGMENTS, LINES_STRIPS, PART_KEYS, PART_LINES, PART_MESH,
+  PART_POINTS, PART_SECTIONS, SCENE_DATA_VIEW, SCENE_PARTS, SPACE_2D, SPACE_3D, UP_AXES_2D, UP_AXES_3D,
+  type SceneArray, type SceneClearMsg, type SceneUpdateMsg, type SceneViewInfo,
+} from './messages.js';
+
+const PATH_SEGMENT = /^[A-Za-z0-9_.-]{1,63}$/;
+const CLEAR_PARTS = [...SCENE_PARTS, ...DRAFTED_PARTS, 'transform'];
+const MAX_STATS = 64;
+const DTYPE_NAME: Record<number, string> = { 0: 'f32', 1: 'f16', 2: 'bf16', 3: 'i64', 4: 'i32', 5: 'u8' };
+
+function i32(s: Section): Int32Array {
+  const n = s.bytes.byteLength / 4;
+  if (LITTLE && s.bytes.byteOffset % 4 === 0) return new Int32Array(s.bytes.buffer, s.bytes.byteOffset, n);
+  const out = new Int32Array(n);
+  const dv = new DataView(s.bytes.buffer, s.bytes.byteOffset, s.bytes.byteLength);
+  for (let i = 0; i < n; i++) out[i] = dv.getInt32(4 * i, true);
+  return out;
+}
+
+/** An entity path: 0 to 16 segments of [A-Za-z0-9_.-]{1,63} joined by '/', at most 255 bytes, never '.' or '..'. */
+export function entityPathOk(v: unknown): boolean {
+  if (typeof v !== 'string') return false;
+  if (v === '') return true;
+  if (v.length > LIMITS_32.pathMax || !/^[\x00-\x7f]*$/.test(v)) return false;
+  const segs = v.split('/');
+  return segs.length <= LIMITS_32.pathSegmentsMax && segs.every((x) => PATH_SEGMENT.test(x) && x !== '.' && x !== '..');
+}
+
+const isRgba = (v: unknown) => Array.isArray(v) && v.length === 4 && v.every((x) => isInt(x) && x >= 0 && x <= 255);
+const isPositive = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+const isStatList = (v: unknown) => Array.isArray(v) && v.length <= MAX_STATS && v.every((x) => x === null || isNum(x));
+const KEY_CHECKS: Record<string, [(v: unknown) => boolean, string]> = {
+  color: [isRgba, '[r, g, b, a] of integers from 0 to 255'],
+  radius: [isPositive, 'a positive number'],
+  width: [isPositive, 'a positive number'],
+  colormap: [isInt, 'an integer'],
+  flags: [isUint, 'an unsigned integer'],
+  vmin: [isNum, 'a number'],
+  vmax: [isNum, 'a number'],
+  stats: [isStatList, `at most ${MAX_STATS} numbers or nulls`],
+  mode: [(v) => v === LINES_SEGMENTS || v === LINES_STRIPS || v === 'edges', 'segments or strips'],
+  color_per: [(v) => v === COLOR_PER_VERTEX || v === COLOR_PER_STRIP || v === 'edge', 'vertex or strip'],
+};
+
+/** The section `name` of a scene part, or undefined; `shape` holds the rows it must have (null: any) and its rank. */
+function partSection(f: Frame, name: string, dtype: number, shape: (number | null)[]): Section | undefined {
+  const s = section(f, name);
+  if (!s) return undefined;
+  if (s.encoding !== 0 || s.dtype !== dtype || s.shape.length !== shape.length || shape.some((x, i) => x !== null && x !== s.shape[i]))
+    bad(f.type, `'${name}' must be ${DTYPE_NAME[dtype]} (${shape.map((x) => x ?? '_').join(', ')}), got dtype ${s.dtype} shape [${s.shape}]`);
+  return s;
+}
+
+function partPositions(f: Frame, part: string): { pos: Section; n: number } {
+  if (!section(f, 'positions')) bad(f.type, `a ${part} part needs a 'positions' section`);
+  const pos = partSection(f, 'positions', DTYPE.f32, [null, null])!;
+  const [n, d] = pos.shape;
+  if (d !== 2 && d !== 3) bad(f.type, `'positions' is (N, 2) or (N, 3), got [${pos.shape}]`);
+  if (n > LIMITS_32.maxBatchPoints) bad(f.type, `${n} positions, more than ${LIMITS_32.maxBatchPoints} in a batch`);
+  return { pos, n };
+}
+
+function sceneArray(s: Section): SceneArray {
+  const data = s.dtype === DTYPE.u8 ? u8(s) : s.dtype === DTYPE.i32 ? i32(s) : f32(s);
+  return { dtype: s.dtype, shape: s.shape, data };
+}
+
+function colours(f: Frame, rows: number, arrays: Record<string, SceneArray>): void {
+  const c = partSection(f, 'colors', DTYPE.u8, [rows, 4]);
+  const v = partSection(f, 'values', DTYPE.f32, [rows]);
+  if (c && v) bad(f.type, "'colors' and 'values' together");
+  if (c) arrays.colors = sceneArray(c);
+  if (v) arrays.values = sceneArray(v);
+}
+
+function unsupported(type: number, msg: string): never {
+  throw new MessageError('unsupported', msg, type);
+}
+
+function decodeScenePoints(f: Frame): Record<string, SceneArray> {
+  const { pos, n } = partPositions(f, PART_POINTS);
+  const arrays: Record<string, SceneArray> = { positions: sceneArray(pos) };
+  colours(f, n, arrays);
+  const r = partSection(f, 'radii', DTYPE.f32, [n]);
+  if (r) arrays.radii = sceneArray(r);
+  return arrays;
+}
+
+function decodeSceneLines(f: Frame, mode: string, colorPer: string | undefined): Record<string, SceneArray> {
+  if (mode === 'edges') unsupported(f.type, "lines of mode 'edges' (index-pair edges) are not built yet");
+  const { pos, n: v } = partPositions(f, PART_LINES);
+  const arrays: Record<string, SceneArray> = { positions: sceneArray(pos) };
+  if (section(f, 'indices')) bad(f.type, `lines of mode '${mode}' take no 'indices'`);
+  let rows = v;
+  if (mode === LINES_SEGMENTS) {
+    if (v % 2) bad(f.type, `segments need an even number of vertices, got ${v}`);
+    if (section(f, 'strip_lengths')) bad(f.type, "segments take no 'strip_lengths'");
+    if (colorPer !== undefined && colorPer !== COLOR_PER_VERTEX) bad(f.type, `segments take color_per 'vertex', got '${colorPer}'`);
+  } else {
+    const sl = partSection(f, 'strip_lengths', DTYPE.i32, [null]);
+    if (!sl) bad(f.type, "strips need a 'strip_lengths' section");
+    const lens = i32(sl);
+    if (lens.length > LIMITS_32.maxBatchItems) bad(f.type, `${lens.length} strips, more than ${LIMITS_32.maxBatchItems} in a batch`);
+    let total = 0;
+    for (const x of lens) {
+      if (x < 1) bad(f.type, 'every strip length is at least 1');
+      total += x;
+    }
+    if (total !== v) bad(f.type, `the strip lengths add up to ${total}, not to the ${v} vertices`);
+    arrays.strip_lengths = sceneArray(sl);
+    if (colorPer === 'edge') bad(f.type, "strips take color_per 'vertex' or 'strip'");
+    if (colorPer === COLOR_PER_STRIP) rows = lens.length;
+  }
+  colours(f, rows, arrays);
+  return arrays;
+}
+
+function decodeSceneMesh(f: Frame): Record<string, SceneArray> {
+  const { pos, n: v } = partPositions(f, PART_MESH);
+  const arrays: Record<string, SceneArray> = { positions: sceneArray(pos) };
+  const idx = partSection(f, 'indices', DTYPE.i32, [null, 3]);
+  if (idx) {
+    if (idx.shape[0] > LIMITS_32.maxBatchPoints) bad(f.type, `${idx.shape[0]} triangles, more than ${LIMITS_32.maxBatchPoints} in a batch`);
+    arrays.indices = sceneArray(idx);
+  } else if (v % 3) {
+    bad(f.type, `a mesh without 'indices' needs a multiple of 3 vertices, got ${v}`);
+  }
+  colours(f, v, arrays);
+  return arrays;
+}
+
+function scenePartKeys(f: Frame, part: keyof typeof PART_KEYS): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of PART_KEYS[part]) {
+    const v = f.meta[key];
+    if (v === undefined || v === null) continue;
+    const [ok, what] = KEY_CHECKS[key];
+    if (!ok(v)) bad(f.type, `'${key}' must be ${what}, got ${JSON.stringify(v)}`);
+    out[key] = v;
+  }
+  return out;
+}
+
+export function decodeSceneUpdate(f: Frame): SceneUpdateMsg {
+  const t = f.type;
+  const sub = req<number>(f, 'sub', isU32, 'a uint32');
+  const view = req<string>(f, 'view', isName, 'a view name');
+  const seq = req<number>(f, 'seq', isUint, 'an unsigned integer');
+  const stamp_ns = req<number>(f, 'stamp_ns', isUint, 'an unsigned integer');
+  const path = req<string>(f, 'path', entityPathOk, 'an entity path');
+  const part = req<string>(f, 'part', isStr, 'a string');
+  if (DRAFTED_PARTS.includes(part)) unsupported(t, `the part '${part}' is not built yet`);
+  if (!(SCENE_PARTS as readonly string[]).includes(part)) bad(t, `unknown part '${part}'`);
+  if (f.meta.split !== undefined && f.meta.split !== null) unsupported(t, 'split updates are not built yet');
+  const p = part as SceneUpdateMsg['part'];
+  const params = scenePartKeys(f, p);
+  let arrays: Record<string, SceneArray>;
+  if (p === PART_POINTS) {
+    arrays = decodeScenePoints(f);
+  } else if (p === PART_LINES) {
+    if (!('mode' in params)) bad(t, "a lines part needs 'mode'");
+    arrays = decodeSceneLines(f, params.mode as string, params.color_per as string | undefined);
+  } else {
+    arrays = decodeSceneMesh(f);
+  }
+  if (params.stats) params.stats = (params.stats as (number | null)[]).map((x) => (x === null ? NaN : x));
+  return {
+    type: 'scene_update', sub, view, seq, stamp_ns, path, part: p, arrays,
+    params: params as SceneUpdateMsg['params'],
+    static: opt(f, 'static', isBool, 'a boolean', false),
+    state: opt(f, 'state', isBool, 'a boolean', false),
+    axes: opt<PayloadAxis[] | undefined>(f, 'axes', Array.isArray, 'a list', undefined),
+    items: opt<string | undefined>(f, 'items', isName, 'an item space name', undefined),
+  };
+}
+
+export function decodeSceneClear(f: Frame): SceneClearMsg {
+  const c: SceneClearMsg = {
+    type: 'scene_clear',
+    sub: req(f, 'sub', isU32, 'a uint32'),
+    view: req(f, 'view', isName, 'a view name'),
+    seq: req(f, 'seq', isUint, 'an unsigned integer'),
+    stamp_ns: req(f, 'stamp_ns', isUint, 'an unsigned integer'),
+    path: req(f, 'path', entityPathOk, 'an entity path'),
+    recursive: opt(f, 'recursive', isBool, 'a boolean', false),
+    parts: opt<string[] | undefined>(f, 'parts', (v) => Array.isArray(v) && v.length > 0 && v.every((x) => CLEAR_PARTS.includes(x as string)), 'a list of parts', undefined),
+    reset: opt(f, 'reset', isBool, 'a boolean', false),
+    static: opt(f, 'static', isBool, 'a boolean', false),
+    state: opt(f, 'state', isBool, 'a boolean', false),
+  };
+  if (c.reset && c.path !== '') bad(f.type, 'a reset clears the root: its \'path\' is ""');
+  return c;
+}
+
+export function encodeSceneUpdate(m: SceneUpdateMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+  const meta: Record<string, unknown> = { sub: m.sub, view: m.view, seq: m.seq, stamp_ns: m.stamp_ns, path: m.path, part: m.part };
+  for (const [key, v] of Object.entries(m.params)) {
+    if (v === undefined || v === null) continue;
+    meta[key] = key === 'stats' ? (v as number[]).map((x) => (Number.isFinite(x) ? x : null)) : v;
+  }
+  if (m.static) meta.static = true;
+  if (m.state) meta.state = true;
+  if (m.axes !== undefined) meta.axes = m.axes;
+  if (m.items !== undefined) meta.items = m.items;
+  const sections: Section[] = [];
+  for (const name of PART_SECTIONS[m.part] ?? []) {
+    const a = m.arrays[name];
+    if (a) sections.push({ name, dtype: a.dtype, shape: a.shape, encoding: 0, bytes: new Uint8Array(a.data.buffer, a.data.byteOffset, a.data.byteLength) });
+  }
+  return frameAt(MSG.scene_update, meta, sections, minor);
+}
+
+export function encodeSceneClear(m: SceneClearMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+  const meta: Record<string, unknown> = { sub: m.sub, view: m.view, seq: m.seq, stamp_ns: m.stamp_ns, path: m.path };
+  for (const key of ['recursive', 'reset', 'static', 'state'] as const) if (m[key]) meta[key] = true;
+  if (m.parts !== undefined) meta.parts = m.parts;
+  return frameAt(MSG.scene_clear, meta, [], minor);
+}
+
+/** The key "scene" of a VIEWS entry of kind 6, checked, with its defaults filled in. Throws MessageError (bad_request). */
+export function sceneViewInfo(entry: ViewEntry): SceneViewInfo {
+  const fail = (msg: string): never => {
+    throw new MessageError('bad_request', msg);
+  };
+  const sc = entry.scene ?? {};
+  if (!isObj(sc)) fail(`'scene' must be an object, got ${JSON.stringify(sc)}`);
+  const o = sc as Record<string, unknown>;
+  const space = o.space ?? SPACE_3D;
+  if (space !== SPACE_3D && space !== SPACE_2D) fail(`scene space ${JSON.stringify(space)}; expected '3d' or '2d'`);
+  const axes = space === SPACE_3D ? UP_AXES_3D : UP_AXES_2D;
+  const up = o.up ?? (space === SPACE_3D ? '+y' : '-y');
+  if (typeof up !== 'string' || !axes.includes(up)) fail(`scene up ${JSON.stringify(up)}; a ${space} scene takes one of ${axes.join(', ')}`);
+  const units = o.units ?? 'm';
+  if (typeof units !== 'string' || utf8.encode(units).length > LIMITS_32.unitsMax)
+    fail(`scene units must be a string of at most ${LIMITS_32.unitsMax} bytes, got ${JSON.stringify(units)}`);
+  return { space: space as SceneViewInfo['space'], up: up as string, units: units as string };
+}
+
+/**
+ * The resolved data view of a scene subscription: only the default data view is built, so a request that is absent, {},
+ * or the resolved default itself. Throws MessageError (bad_data_view).
+ */
+export function resolveSceneDataView(view: ViewEntry, request?: DataViewSpec | null): typeof SCENE_DATA_VIEW {
+  const fail = (msg: string): never => {
+    throw new MessageError('bad_data_view', msg);
+  };
+  const isDefault = (v: unknown) => v === undefined || v === null || (isObj(v) && (Object.keys(v as object).length === 0
+    || canonicalJson(v) === canonicalJson(SCENE_DATA_VIEW)));
+  if (request !== undefined && request !== null && !isObj(request)) fail('a data view is a JSON object');
+  if (!isDefault(view.default)) fail("a scene's own default data view is not built yet");
+  if (!isDefault(request))
+    fail('only the default data view of a scene is built yet: send {} or none; entity filters and budgets come in a later increment');
+  return JSON.parse(JSON.stringify(SCENE_DATA_VIEW));
 }
