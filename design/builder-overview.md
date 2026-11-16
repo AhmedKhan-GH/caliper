@@ -41,7 +41,7 @@ The side chat and the widget agent are two roles, not two interchangeable backen
 
 ## What is built
 
-The parts above are built as libraries and tools under `src/builder/`, each with unit tests, and none is wired into the app yet. `src/builder/` configures on its own, without the host build, or from the root build.
+The parts above are built as libraries and tools under `src/builder/`, each with unit tests, and none is wired into the app yet. They build with the host: the root build adds `src/builder/` when `CALIPER_WITH_BUILDER` is on, which is the default except on Windows, and ctest runs the `builder_*` tests beside the host's, as Testing (`docs/explanations/testing.md`) describes. With the builder on, the host's static DuckDB also links its json extension, which the loaders' JSON and JSONL readers need; DuckDB loads it in every database the process opens, and it adds about 0.7 MB to the `caliper` executable. `src/builder/` still configures on its own against a DuckDB release, without the host build.
 
 - The spec library parses, validates and writes specs, and applies merge patches.
 - The loaders library reads CSV, TSV, Parquet, JSON and JSONL through DuckDB, and `.npy`, `.npz`, safetensors, PNG, JPEG and WAV natively. It refuses pickle-based files, and it runs a Python loader out of process for other formats, which loads torch checkpoints weights-only with a warning.
@@ -50,6 +50,8 @@ The parts above are built as libraries and tools under `src/builder/`, each with
 - `caliper-mcp` works against Caliper API v0 of the running app for the app's information, its applets, a launch and a capture, and against the command endpoints of the stand-in host for everything else.
 - The ACP client drives a session against a stub agent, and `caliper-acp-harness` runs one session headless.
 - `caliper-agent` runs its loop on Pydantic AI, with Claude on its native API and other models through an OpenAI-compatible API. Its tests use Pydantic AI's test models, a stubbed Claude transport and a fake OpenAI-compatible server, and run it against the real command layer through the stand-in host; no test calls a real model. It runs unscoped today, with every command of the table; the widget role is planned. Server-side refusal fallbacks are off, since Pydantic AI drops the reply's `fallback` block; a refusal ends the turn with a neutral message that offers to rephrase, retry, or switch the model or provider.
+
+On Windows the option is off until a Windows session compiles the builder with MSVC, because the Windows CI lane builds every target and runs every test; host code that uses the builder must therefore also build without it, for example behind `if(TARGET caliper_builder_session)`. The builder installs nothing, so the SDK and embed install components hold none of it, and the wheel's configure sets the option off. The json extension does reach `libcaliper` and the embedding library, since they link the host's DuckDB.
 
 ## The integration order after sprint 2
 

@@ -71,6 +71,10 @@ No test reads or writes the user's app-data folder. ctest runs every test binary
 
 `caliper_host_names_no_applet` (label `boundary`) runs `scripts/check_host_names_no_applet.py`. The script collects the `[applet]` id and name of every manifest under `applets/` and `examples/`, and every window title that their sources pass to `ImGui::Begin()` as a string literal, and fails if any of them is a whole string literal in the code of `src/` or `include/`. Comments are skipped, so a header may cite an applet id as an example. The test is registered only when CMake finds Python 3.
 
+## The builder's suites
+
+With `CALIPER_WITH_BUILDER` on, the default except on Windows, the build also compiles the builder under `src/builder/`, and ctest runs its tests beside the host's. Each module has a doctest executable registered as `builder_<module>`, such as `builder_spec`, `builder_loaders` and `builder_session`. Other entries run `caliper-mcp`, `caliper-acp-harness` and `caliper-builder-host` as child processes against a stub agent, and `builder_agent_py` runs the pytest suite of `caliper-agent`. The cases that run Python need `CALIPER_BUILDER_TEST_PYTHON` to name an interpreter with numpy, pyarrow and the test dependencies of `caliper-agent`; without it they are skipped and say so. `builder_mcp_app` runs `caliper-mcp` against the app when `CALIPER_BUILDER_TEST_APP` names a `caliper` executable, and is skipped otherwise. `ctest --test-dir cmake-build-release -R '^builder_'` runs only these suites.
+
 ## Tests that need a GPU
 
 A suite that needs a GPU must not report success when it found none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:

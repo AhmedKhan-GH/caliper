@@ -511,6 +511,7 @@ embedding process is free to load its own torch.
 | `CALIPER_WITH_SLANG` | ON | Configure the vendored slang (SystemVerilog) library. |
 | `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp and apply its local patches. `CALIPER_BUILD_OPENGLLAMA=ON` stops the configure with an error when this is OFF. |
 | `CALIPER_BUILD_VIEWER` | ON | `caliper_viewer`, the live-viewer process (Apple only). The wheel ships it as `caliper/bin/caliper-viewer`. |
+| `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Builds the builder under `src/builder/`, which `libcaliper` does not link and no package installs. It also links DuckDB's json extension into the host's DuckDB, so `libcaliper`, the embedding library and the `caliper` exe carry that extension. The wheel sets it OFF. |
 
 slang and llama.cpp are configured `EXCLUDE_FROM_ALL` and linked by nothing
 that `libcaliper`, the `caliper` exe or the tests need; llama.cpp only backs the
@@ -519,13 +520,14 @@ configure, and slang clones boost_regex and mimalloc over the network at
 configure time, which a pip build should not do. The Python build and the
 `release-notorch` preset therefore set both OFF: a fresh torch-free configure
 takes 6.5 s and clones neither. Two FetchContent clones remain, tomlplusplus
-(`caliper_host_lib`) and doctest (tests only).
+(`caliper_host_lib`) and doctest (tests only). With `CALIPER_WITH_BUILDER` on,
+the configure also downloads the nlohmann/json archive for the builder.
 
 The wheel's configure (`[tool.scikit-build.cmake.define]` in `pyproject.toml`)
 sets `CALIPER_BUILD_PYTHON` ON and `CALIPER_WITH_TORCH`,
 `CALIPER_BUILD_APPLETS`, `CALIPER_BUILD_EXAMPLES`, `BUILD_TESTS`, `USE_CUDA`,
-`CALIPER_WITH_SLANG` and `CALIPER_WITH_LLAMA` OFF, and builds only the
-`_native`, `_live` and `caliper_viewer` targets.
+`CALIPER_WITH_SLANG`, `CALIPER_WITH_LLAMA` and `CALIPER_WITH_BUILDER` OFF, and
+builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
 
 ### What an embedder links
 
