@@ -64,7 +64,7 @@ tensor = "layers.0.attn.weights"
 | `output.title` | string | the name | A title for people. |
 | `output.mode` | string | `"view"` | Tabular readers only. `"view"` reads the files on each query; `"table"` copies the rows into the database when the loader runs. |
 | `output.sql` | string | none | Tabular readers only. One `SELECT` statement over the relation `input`, which holds every row the reader read. |
-| `output.tensor` | string | see below | Tensor readers only. The name of one tensor in the file, or `"*"` for all of them. |
+| `output.tensor` | string | none | Tensor readers only. The name of one tensor in the file, or `"*"` for all of them. Required for `npz`, `safetensors` and `hdf5`; refused for `npy`, `image` and `wav`, whose files hold one tensor. |
 | `output.transform` | array of tables | empty | Tensor readers only. The tensor transforms of [Tensor outputs and transforms](#tensor-outputs-and-transforms), applied in order. |
 
 A recipe is at most 1 MiB of text, and an output's `sql` at most 64 KiB. The canonical writer emits the keys in the order of the table above and does not keep comments, as the spec writer does not; a `description` is the place for prose. Unknown keys are errors everywhere, and the loader format reserves no `x` table for extensions, unlike the spec: a recipe is small and a typo in it should never pass silently.
@@ -109,7 +109,7 @@ The reader options:
 - **`image`** decodes a PNG or a JPEG into `u8 [H, W, C]`, converting 16-bit PNG samples to 8 bits, and stores it as a derived tensor.
 - **`wav`** reads PCM with 8, 16, 24 or 32 bits per sample, IEEE float with 32 or 64 bits, and `WAVE_FORMAT_EXTENSIBLE` with either sub-format. It produces `[frames, channels]` with `rate_hz` set to the sample rate. 8-bit PCM is `u8` (unsigned, as WAV stores it), 16-bit `i16`, 24-bit `i32` (sign-extended, so the values keep their 24-bit range), 32-bit `i32`, and float `f32` or `f64`. Every format except 24-bit PCM is mapped where it lies.
 - **`hdf5`** is compiled as a refusal on the machines this branch was built on, because the build found no libhdf5; see [HDF5](#hdf5).
-- The tabular readers produce one `table` source per output, with the columns and DuckDB types read back from the database and the row count.
+- The tabular readers produce one `table` source per output, with the columns and DuckDB types read back from the database and the row count. The `json` and `jsonl` readers need DuckDB's JSON extension. The DuckDB release this branch builds against has it built in; the host's static DuckDB links only the `parquet` and `core_functions` extensions, so there both readers fail with `loader.json_not_available` until the host links `json` too. No reader needs any other extension, and none is ever loaded or installed at run time.
 
 ### Inferring the reader
 
@@ -121,6 +121,8 @@ When `input.reader` is absent, and when `data.import` makes a loader for a dropp
 4. If the extension is unknown, the bytes decide, for the binary formats only; a file that matches none is refused with `loader.no_reader`, which points to the Python loader.
 
 A recipe that names its reader skips inference, and the reader's own checks then report a file that is not what it claims to be. Every file of a glob must infer to the same reader.
+
+For a dropped file, `infer_loader()` makes the default loader: its id is the file's stem made into an id (lower case, other characters replaced by `_`, `f_` in front of a leading digit), with `-2`, `-3` and so on when the id is taken; its input path is relative to the workspace when the file lies inside it and absolute otherwise; it names its reader explicitly, so a later run does not depend on inference; and it has one output named after the stem with `-` replaced by `_`, so that SQL can name it unquoted. A multi-tensor file gets `tensor = "*"` with the prefix `<stem>_`, so a safetensors file `model.safetensors` with a tensor `layers.0.attn` gives the source `tensor:model_layers_0_attn`.
 
 ### Arrow IPC files
 
@@ -138,13 +140,13 @@ The `hdf5` reader uses libhdf5 when `find_package(HDF5)` finds it at configure t
 
 ## Globs
 
-`input.path` may be a glob. `*` matches any characters within one path segment, `?` matches one character, and a segment that is exactly `**` matches zero or more folders. The rest of the path is literal.
+`input.path` may be a glob. `*` matches any characters within one path segment, `?` matches one character, and a segment that is exactly `**` matches zero or more folders. The rest of the path is literal. As in a shell, `*` and `?` do not match a leading dot, so `*.csv` skips `.hidden.csv`; a pattern that starts with a dot matches it.
 
 - The fixed part of the pattern, before the first segment with a wildcard, is resolved first. The walk below it does not follow symbolic links to folders, goes at most 32 folders deep and visits at most 100,000 entries.
 - Every match is a regular file, and every match must be allowed by the rules of [Paths and confinement](#paths-and-confinement); one match outside them fails the run with `loader.path_not_allowed`. A glob that matches nothing fails with `loader.no_match`, and one that matches more than 10,000 files fails with `loader.too_many_files`.
 - Matches are sorted by path, so a run is deterministic.
 - A tabular reader gets the sorted list of files as one relation, so a glob of Parquet files is one table. A view keeps that list, and a file added later appears when the loader runs again.
-- A tensor reader reads each file on its own. When a glob matches several files, each source name gets the file's stem: `<name>_<stem>` for one tensor per file, and `<prefix><stem>_<tensor>` with `tensor = "*"`.
+- A tensor reader reads each file on its own. When a glob matches several files, each source name gets the file's stem: `<name>_<stem>` for one tensor per file, and `<prefix><stem>_<tensor>` with `tensor = "*"`; the title gets the file name in parentheses. A glob `images/*.png` with the output name `img` gives `tensor:img_cat` and `tensor:img_dog`.
 
 ## Tables, views and SQL
 
@@ -171,7 +173,7 @@ SELECT step, loss FROM input WHERE step > 0
 
 A tensor output selects tensors by `tensor`:
 
-- `tensor = "<name in the file>"` selects one tensor, and the source is `tensor:<name>`. For a single-tensor file (`npy`, `image`, `wav`) the key may be left out.
+- `tensor = "<name in the file>"` selects one tensor, and the source is `tensor:<name>`. A file without that tensor fails the run with `loader.tensor_not_found`. A single-tensor file (`npy`, `image`, `wav`) takes no `tensor` key, and its source is `tensor:<name>`.
 - `tensor = "*"` selects every tensor in the file, and each source is `tensor:<prefix><tensor name>`, with the tensor name lowered and every character outside `[a-z0-9_-]` replaced by `_`. A name longer than 64 characters keeps its first 55 and ends with `-` and 8 hexadecimal digits of a hash of the full name. Two sources that end with the same name fail the run with `loader.name_collision`.
 
 `output.transform` lists the tensor transforms of the contracts, the same vocabulary that a spec uses:
@@ -209,7 +211,7 @@ A tensor has at most 8 dimensions. A transform that names an axis the tensor doe
   workspace.duckdb                     views, tables, caliper.loaders and caliper.sources
 ```
 
-The text files are the source of truth, and `LoaderStore::rebuild()` recreates every database row from them: it drops the views and tables that loaders made, empties the two tables, reads every `.loader.toml` file and runs each loader again. Opening a workspace whose database is missing, or lacks the `caliper` schema, rebuilds it. A loader file that no longer parses is listed with `last_status = "error"` and its parse error, and makes no sources.
+The text files are the source of truth, and `LoaderStore::rebuild()` recreates every database row from them: it drops the views and tables that loaders made, empties the two tables, reads every `.loader.toml` file, runs each loader again and deletes the derived tensors that no source uses. Opening a workspace whose database is missing, or lacks the `caliper` schema, rebuilds it. Opening one whose database exists brings the rows in line with the files without running anything: a row whose file is gone is removed with its sources, and a file without a row, or whose text changed since it was saved (an edit by hand), is indexed with `last_status = "never"`. A loader file that does not parse, or whose id differs from its file name, is listed with `last_status = "error"` and the error, and makes no sources.
 
 Times are UTC in ISO 8601 (`2026-11-15T12:00:00Z`), stored as text so that they sort and read the same everywhere.
 
@@ -254,7 +256,29 @@ Times are UTC in ISO 8601 (`2026-11-15T12:00:00Z`), stored as text so that they 
 
 A tensor's bytes stay in its file and are mapped when a panel or `catalog.sample` uses them. A tensor that had to be converted (a deflated `npz` member, a big-endian or Fortran-order `npy`, `bf16`, 24-bit audio, a decoded image) or transformed is written to `tensors/<source-name>.npy`, a version 1 `.npy` file whose header is padded so that the data starts on a 64-byte boundary, and the row points into it. The library writes a derived file under a temporary name and renames it once the run's database transaction has committed, so a failed run leaves the previous outputs whole.
 
-The C++ side carries each output as a `LoadedSource`, whose fields are exactly those of the catalog entry of the contracts, plus the storage columns above. Its `to_json()` gives the catalog entry's JSON form, and the catalog's `CatalogProvider` for loader outputs is a thin adapter over `LoaderStore::sources()`, `describe()` and `sample()`, added when the catalog module and this one merge.
+The C++ side carries each output as a `LoadedSource`, whose fields are exactly those of the catalog entry of the contracts, plus the storage columns above. Its `to_json()` gives the catalog entry's JSON form, and the catalog's `CatalogProvider` for loader outputs is a thin adapter over `LoaderStore::sources()`, `describe()` and `sample()`, added when the catalog module and this one merge. `sample()` gives `{"id", "columns", "rows", "truncated"}` for a table, with at most `limit` rows (1 to 1,000), and `{"id", "dtype", "shape", "stats", "slice"}` for a tensor, from `tensor_stats` and `tensor_sample`. A source that does not exist fails with `catalog.not_found`.
+
+A run is atomic. The store drops the loader's previous views and tables and deletes its previous rows, creates the new outputs and records them in one DuckDB transaction, and commits; only then are the derived tensors renamed into place and the previous derived files that the run did not remake deleted. A failed run rolls the transaction back, deletes its temporary files and records the error in `caliper.loaders`, so the previous sources stay whole and queryable.
+
+## The C++ interface
+
+The public headers are in `src/builder/include/caliper_builder/loaders/`:
+
+| Header | What it gives |
+|---|---|
+| `tensor.h` | `DType`, `TensorData` (owned or mapped), `check_shape`, `half_to_float` |
+| `tensor_ops.h` | `TensorTransform`, its JSON form, `apply_transforms`, `tensor_stats`, `tensor_sample` |
+| `tensor_readers.h` | `read_npy`, `read_npz`, `read_safetensors`, `read_image`, `read_wav`, `read_hdf5`, `write_npy`, `ReaderLimits` |
+| `readers.h` | The reader names, their extensions, `sniff_format` and `validate_reader_options` |
+| `pickle.h` | `check_not_pickle` |
+| `loader.h` | `Loader`, `parse_loader`, `loader_from_json`, `write_loader`, `make_id` |
+| `inference.h` | `infer_reader`, `infer_loader` |
+| `paths.h` | `AllowedRoots`, `expand_input`, `path_allowed` |
+| `query.h` | `QueryResult`, `ColumnInfo` |
+| `loaded_source.h` | `LoadedSource` |
+| `store.h` | `LoaderStore`: `open`, `grant`, `save`, `get`, `list`, `remove`, `run`, `import_files`, `sources`, `describe`, `sample`, `load_tensor`, `query`, `rebuild` |
+
+DuckDB stays behind one source file, `db.cpp`, so no public header includes `duckdb.hpp`. Every method of `LoaderStore` takes one mutex, so the command handlers may call it from any thread; one store opens a workspace at a time in a process.
 
 ## The pickle policy
 
@@ -269,7 +293,7 @@ The refusal applies to:
 - an `.npz` member that is a pickle by its bytes or by its name;
 - a file whose extension has no reader, when its first byte is one of the opcodes `(`, `]`, `}` or `c` and its last byte is the STOP opcode `.`, which is how pickles of protocols 0 and 1 look, since they have no marker.
 
-The last rule is a heuristic, so it applies only where no reader claims the extension; a CSV file that happens to end with a full stop is never refused. `check_not_pickle()` in `pickle.h` applies all the rules. Inference runs it on every dropped file, and `run_loader` runs it on every matched file before any reader opens it, whatever reader the recipe names; the `npy` and `npz` readers also refuse the object dtype themselves.
+The last rule is a heuristic, so it applies only where no reader claims the extension; a CSV file that happens to end with a full stop is never refused. `check_not_pickle()` in `pickle.h` applies all the rules. Inference runs it on every dropped file, and `LoaderStore::run()` runs it on every matched file before any reader opens it, whatever reader the recipe names; the `npy` and `npz` readers also refuse the object dtype themselves.
 
 ## The Python loader
 
@@ -356,7 +380,6 @@ What the tests showed:
 - `INSTALL` fails, and `LOAD` of an extension that is not built in fails. `LOAD json` succeeds where JSON is built in, which loads nothing new.
 - `SET enable_external_access`, `SET allowed_directories` and every other `SET` fail once the configuration is locked.
 - The `query()` table function accepts only a single `SELECT`.
-
 - DuckDB refuses to change `temp_directory` once external access is disabled, so the store sets it first.
 - DuckDB parses the table-valued pragmas, such as `PRAGMA database_list` and `PRAGMA version`, as `SELECT` statements over pragma functions. They pass the check and only read.
 
@@ -372,7 +395,7 @@ A changed grant reopens the database with the new lists, because a locked config
 - It runs inside a transaction that is always rolled back, so it changes nothing even through a function with a side effect.
 - It streams the result and stops after `row_limit` rows, then reports whether more rows existed.
 - A watchdog thread interrupts the query when `timeout_ms` passes (`query.timeout`); the connection stays usable.
-- Values come back as JSON: numbers, strings, booleans and null, with other DuckDB types as their text form, and a non-finite float as `"NaN"`, `"Infinity"` or `"-Infinity"`.
+- Values come back as JSON: numbers, strings, booleans and null, with other DuckDB types as their text form, and a non-finite float as `"NaN"`, `"Infinity"` or `"-Infinity"`. A 128-bit integer, which is what `sum()` of a `BIGINT` column gives, is a number when it fits 64 bits and text otherwise.
 
 ## Errors
 
@@ -388,6 +411,10 @@ A changed grant reopens the database with the new lists, because a locked config
 | `loader.json_not_available` | The DuckDB build lacks its JSON extension. |
 | `loader.truncated`, `loader.malformed`, `loader.unsupported`, `loader.too_large` | A file is cut short, breaks its format, uses a feature the reader does not support, or exceeds a limit. |
 | `loader.tensor_not_found`, `loader.name_collision`, `loader.source_exists` | An output names a tensor that is not there, or a name clashes. |
+| `loader.not_found` | No saved loader has the id. |
+| `loader.io`, `loader.database` | A file or the database could not be opened, read or written. |
+| `catalog.not_found`, `catalog.not_a_tensor` | No source has the id, or a table was asked for as a tensor. |
+| `tensor.rank`, `tensor.too_large`, `tensor.shape` | A shape has more than 8 dimensions, overflows or is negative. |
 | `loader.sql_not_select` | An output's SQL, or a query, is not exactly one `SELECT`. |
 | `loader.sql` | DuckDB rejected the SQL; the message is DuckDB's. |
 | `query.timeout` | A query ran past its time limit. |
@@ -395,7 +422,7 @@ A changed grant reopens the database with the new lists, because a locked config
 
 ## What is built and what is planned
 
-Built on this branch, with tests: the tensor type and the three transforms with the statistics; the `npy`, `npz`, `safetensors`, `image` and `wav` readers; the pickle refusal; the tabular readers through DuckDB with the SQL check; the loader format's parser and writer, inference and globs; `run_loader` and `LoaderStore` with the safety settings and the query helper; and an end-to-end test that imports a Parquet file and a safetensors file into a workspace, runs both loaders and finds their sources again after reopening it.
+Built on this branch, with tests: the tensor type and the three transforms with the statistics; the `npy`, `npz`, `safetensors`, `image` and `wav` readers; the HDF5 refusal; the pickle refusal; the tabular readers through DuckDB with the SQL check; the loader format's parser and writer, inference and globs; `LoaderStore` with its runs, grants, rebuild, the safety settings and the query helper; and an end-to-end test that imports a Parquet file and a safetensors file into a workspace, runs both loaders, reads back a table source and a tensor source, and finds them again after reopening the workspace and after deleting its database.
 
 Planned: the `CatalogProvider` adapter (after the catalog module merges), the command handlers (a later stream), the Python loader, the Arrow IPC reader, the HDF5 reader where libhdf5 is found, stacking a glob of images into one tensor, and the GPU version of the transforms.
 
@@ -410,6 +437,15 @@ Planned: the `CatalogProvider` adapter (after the catalog module merges), the co
 | Derived tensors are `.npy` files. | One format the `npy` reader already maps, readable by numpy. |
 | Times are ISO 8601 text. | The host's DuckDB has no ICU, and text sorts and reads the same everywhere. |
 | `query` rolls back its transaction. | It keeps `query` read-only on a connection that also writes. |
+| A name that is an SQL keyword is allowed, with a warning. | The id grammar allows it, and quoting it works. |
 | Unknown keys are errors, with no `x` table. | A recipe is small, and a typo must not pass. |
 | `axis` is required for `slice` and `reduce`. | A missing axis is more often a mistake than a wish to reduce everything. |
 | Stored `npz` members are mapped without a CRC check. | Checking would read the whole archive at load time; a deflated member is checked as it is inflated. |
+| The Arrow IPC reader is a refusal for now. | See [Arrow IPC files](#arrow-ipc-files): it needs flatcc and an unstable DuckDB interface or a full type mapping. |
+| `.ckpt` is refused as a pickle, and `.pq` reads as Parquet. | The contracts' lists lack them; a Lightning checkpoint is a torch pickle, and `.pq` is a common Parquet extension. |
+| A single-tensor file refuses `tensor`, and a multi-tensor file needs it. | A missing selection on a checkpoint is more often a mistake than a wish for every tensor, and `"*"` says that wish plainly. |
+| The default loader names its reader. | A saved recipe then reads the same way even when a file's bytes change. |
+| Source names from file stems use `_`, not `-`. | A table name with `-` must be quoted in every query. |
+| A WAV data chunk that claims more bytes than the file holds is cut to what is there, with a warning. | Recorders that stop early leave such files, and the bytes that are there are valid. |
+| Loader outputs have `wire = true`. | The host can send a table's rows or a tensor's bytes to the browser viewer as a snapshot. |
+| A missing source is `catalog.not_found`. | `catalog.describe` and `catalog.sample` report it, and the code should not depend on the provider. |

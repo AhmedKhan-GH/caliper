@@ -64,6 +64,8 @@ public:
     std::string relation_type(const std::string& name);
     // Drops a view or table of the main schema if it exists.
     Error drop_relation(const std::string& name);
+    // Whether a name is a DuckDB keyword that must be quoted to name a table.
+    bool needs_quotes(const std::string& name);
 
     struct Impl;
 

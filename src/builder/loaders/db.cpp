@@ -4,8 +4,10 @@
 
 #include <duckdb.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <condition_variable>
 #include <filesystem>
 #include <mutex>
@@ -76,6 +78,21 @@ json value_json(const duckdb::Value& v) {
             return std::isfinite(d) ? json(d) : json(v.ToString());
         }
         case LogicalTypeId::VARCHAR: return v.GetValue<std::string>();
+        case LogicalTypeId::HUGEINT:
+        case LogicalTypeId::UHUGEINT: {
+            // A 128-bit integer is a JSON number when it fits 64 bits (sum() of BIGINT is one), text otherwise.
+            const std::string text = v.ToString();
+            errno = 0;
+            char* end = nullptr;
+            if (!text.empty() && text[0] == '-') {
+                const long long n = std::strtoll(text.c_str(), &end, 10);
+                if (errno == 0 && end && *end == '\0') return static_cast<int64_t>(n);
+            } else {
+                const unsigned long long n = std::strtoull(text.c_str(), &end, 10);
+                if (errno == 0 && end && *end == '\0') return static_cast<uint64_t>(n);
+            }
+            return text;
+        }
         default: return v.ToString();
     }
 }
@@ -319,6 +336,16 @@ Error Db::drop_relation(const std::string& name) {
     if (type == "VIEW") return execute("DROP VIEW " + sql_identifier(name));
     if (!type.empty()) return execute("DROP TABLE " + sql_identifier(name));
     return {};
+}
+
+bool Db::needs_quotes(const std::string& name) {
+    int64_t n = 0;
+    if (scalar("SELECT count(*) FROM duckdb_keywords() WHERE keyword_name = " + sql_literal(name) +
+                   " AND keyword_category <> 'unreserved'",
+               &n)) {
+        return false;
+    }
+    return n > 0;
 }
 
 bool sql_text_ok(const std::string& s, bool allow_tab) {
