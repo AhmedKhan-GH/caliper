@@ -109,7 +109,9 @@ the end of each turn in a word: DONE, STOPPED, DECLINED, LIMIT or FAILED.
 plate, bulleted and numbered lists, and paragraphs. Everything else shows as plain text with its marks taken out:
 headings, emphasis, a link's or an image's text (its address is dropped, and nothing in the text can be clicked or
 loads anything), HTML tags, quotes and table rows. A mark that is not closed yet, as the text streams in, is left out
-until its pair arrives. The conversation keeps the text as the agent sent it.
+until its pair arrives. Only the first 64 KiB of a message are read as Markdown, and a line longer than 2,000 bytes or
+a paragraph longer than 8,000 shows as plain text, so a long or malformed message costs no more to draw than its
+length. The conversation keeps the text as the agent sent it.
 
 **The agent's permission requests** are cards: the file, the change, and one button per option the agent offers.
 For a `*.spec.toml` the change is the compact diff that the inline surface and the approval cards show (a new panel's
