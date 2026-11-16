@@ -258,9 +258,10 @@ The refusal applies to:
 - any file whose bytes start with the pickle protocol marker, `\x80` followed by a protocol number from 2 to 5, which covers a `.bin` checkpoint written by `torch.save` with the legacy format;
 - any zip archive with a member named `data.pkl` or ending in `/data.pkl`, which is the layout of `torch.save`;
 - an `.npy` file, or an `.npz` member, whose dtype is `object` (`|O`), because numpy stores those as pickles;
-- an `.npz` member that is a pickle by its bytes or by its name.
+- an `.npz` member that is a pickle by its bytes or by its name;
+- a file whose extension has no reader, when its first byte is one of the opcodes `(`, `]`, `}` or `c` and its last byte is the STOP opcode `.`, which is how pickles of protocols 0 and 1 look, since they have no marker.
 
-Pickle protocols 0 and 1 have no marker, so a file of those protocols with an unknown extension is refused as `loader.no_reader` instead, which also points to the Python loader.
+The last rule is a heuristic, so it applies only where no reader claims the extension; a CSV file that happens to end with a full stop is never refused. `check_not_pickle()` in `pickle.h` applies all the rules. Inference runs it on every dropped file, and `run_loader` runs it on every matched file before any reader opens it, whatever reader the recipe names; the `npy` and `npz` readers also refuse the object dtype themselves.
 
 ## The Python loader
 

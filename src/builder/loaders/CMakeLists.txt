@@ -16,7 +16,9 @@ add_library(caliper_builder_loaders STATIC
     safetensors.cpp
     image.cpp
     wav.cpp
-    hdf5.cpp)
+    hdf5.cpp
+    readers.cpp
+    pickle.cpp)
 target_include_directories(caliper_builder_loaders PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 # stb_image is vendored in the tree; image.cpp compiles it with static linkage.
 target_include_directories(caliper_builder_loaders SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/stb")
@@ -43,6 +45,7 @@ caliper_builder_add_tests(loaders
         tests/test_npy_npz.cpp
         tests/test_safetensors.cpp
         tests/test_image_wav.cpp
+        tests/test_pickle.cpp
     LIBS ${_loaders_test_libs})
 if(TARGET caliper_builder_loaders_tests)
     target_include_directories(caliper_builder_loaders_tests SYSTEM PRIVATE
