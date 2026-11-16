@@ -433,19 +433,19 @@ class ItemSpace:
     def clear(self) -> None:
         self.select(())
 
-    def _set_details(self, details) -> None:
+    @staticmethod
+    def _details_source(details) -> tuple:
+        """(table, fields, function) of a details argument; a table is copied
+        to host lists here, outside the controls' lock."""
         if details is None:
-            self._table, self._fields, self._fn = None, [], None
-        elif callable(details):
-            self._table, self._fields, self._fn = None, [], details
-        else:
-            if hasattr(details, "items") and callable(details.items):
-                pairs = list(details.items())
-            else:
-                raise TypeError("details must be a mapping {field: sequence} or a function")
-            fields = _fields([k for k, _ in pairs])
-            self._table = {k: _column(v) for k, v in pairs}
-            self._fields, self._fn = fields, None
+            return None, [], None
+        if callable(details):
+            return None, [], details
+        if not (hasattr(details, "items") and callable(details.items)):
+            raise TypeError("details must be a mapping {field: sequence} or a function")
+        pairs = list(details.items())
+        fields = _fields([k for k, _ in pairs])
+        return {k: _column(v) for k, v in pairs}, fields, None
 
     def _lookup(self, ids) -> dict:
         """The details of ``ids`` from the static table."""
@@ -910,13 +910,14 @@ class Controls:
     def items(self, space, details=None) -> ItemSpace:
         """caliper.items(); see there."""
         _check_name(space, "item space")
+        source = ItemSpace._details_source(details)
         with self.lock:
             sp = self.spaces.get(space)
             if sp is None:
                 if len(self.spaces) >= MAX_ITEM_SPACES:
                     raise ValueError(f"at most {MAX_ITEM_SPACES} item spaces")
                 sp = self.spaces[space] = ItemSpace(self, space)
-        sp._set_details(details)
+            sp._table, sp._fields, sp._fn = source
         return sp
 
     # -- item spaces of views ------------------------------------------------------
