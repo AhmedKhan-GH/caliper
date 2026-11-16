@@ -3,7 +3,7 @@
 Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, and runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
-    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints are served while the app has a command layer, which comes from its builder session (`src/host/api/session_gateway.h`, in builds with `CALIPER_WITH_BUILDER`); an app without one answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
+    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
 
 | Method and path | What it does |
 |---|---|
@@ -139,6 +139,8 @@ Runs the command `{name}`, such as `spec.new` or `panel.patch`. The body is the 
 
 The answer is the command layer's result envelope, with 200 whether the command succeeded or not. The server gives each invocation an id, `api-<n>`.
 
+The commands act on the builder session's workspace, the folder of `--workspace` or `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder ([Caliper CLI](cli.md#the-workspace)). The default workspace is opened by the first command that arrives, so the first call may take a few milliseconds longer; a command that arrives while the workspace is still opening waits for it, and one that arrives when it cannot be opened answers `command.not_available` with the reason. The table of `GET /v0/commands` needs no workspace. When `applet.open` succeeds, from any origin, the app shows the spec page with that applet's spec, as Caliper CLI describes under [The workspace](cli.md#the-workspace).
+
 ```json
 {"id":"api-7","ok":true,"result":{"applied":true,"diff":"...","id":"note","warnings":[]}}
 {"id":"api-8","ok":false,"error":{"code":"spec.no_open_spec","message":"...","where":""}}
@@ -152,14 +154,15 @@ Everything the command layer refuses comes this way: a name that is not a comman
 {"id":"api-9","ok":false,"error":{"approval":"ap-3","code":"command.needs_approval","message":"...","where":""}}
 ```
 
-A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile.
+A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile. The app does not show pending approvals to the person yet, so for now a request held for approval ends with `command.approval_timeout`, and one from `api` stays pending; spec edits from `mcp` and `agent` are reviewed by default and therefore wait too.
 
 ### GET /v0/approvals/{id}
 
-What became of the command that waits, or waited, under approval `{id}`. `state` is `pending` while the person has not decided, `decided` with the command's result envelope in `result` once they have (the last 64 decisions are kept), and `unknown` for an id the command layer does not know or no longer keeps.
+What became of the command that waits, or waited, under approval `{id}`. `state` is `pending` while the person has not decided, `decided` with the command's result envelope in `result` once they have (the last 64 decisions are kept), and `unknown` for an id the command layer does not know or no longer keeps. A pending approval also gives what the person is asked about: the command's `name`, the `origin` that sent it, and its `review`, which for an edit of the open spec under review is the unified diff of the spec's canonical text and the validator's warnings, `{"diff", "warnings"}`, and is null for other commands. While a loader runs on the app's worker, the app answers from the pending approvals as they stood before it started, so a lookup never waits for the loader.
 
 ```json
-{"approval":"ap-3","result":null,"state":"pending"}
+{"approval":"ap-2","name":"panel.create","origin":"mcp","result":null,"review":{"diff":"--- run42-dashboard.spec.toml\n+++ ...","warnings":[]},"state":"pending"}
+{"approval":"ap-3","name":"applet.save","origin":"api","result":null,"review":null,"state":"pending"}
 {"approval":"ap-3","result":{"id":"api-9","ok":true,"result":{"id":"dash","manifest":"...","spec":"..."}},"state":"decided"}
 ```
 

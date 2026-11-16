@@ -12,15 +12,16 @@ Built on this branch, in `src/builder/session/` with headers in `src/builder/inc
 - the command table brought in line with the spec format, with a test that keeps it so;
 - the seam for the sources the app serves: `CatalogDataSource`, which gives the current tensor or table of a catalog id with its generation, `DataSources`, where the app registers one per kind with `Session::data_sources()`, the generation of a panel with its cheap probe `panel_generation()`, and the cache of transformed tensors;
 - the tests in `src/builder/session/tests/`, including the two acceptance tests of this phase;
-- the session in the app, in `src/host/builder/` ([below](#the-session-in-the-app)): the app, `caliper dev` and `caliper shot` own one session for the workspace of `--workspace`, `CALIPER_WORKSPACE` or `workspace/` under the app-data folder, drain its queue on the frame thread within a time budget, run the long commands on the host's job system, implement `SessionHost`, show each journaled command in the Activity pane, and close the session before the host's stores; with the command script, a testing and demo aid, and the tests `caliper_app_session` and `caliper_app_session_hidden`.
+- the session in the app, in `src/host/builder/` ([below](#the-session-in-the-app)): the app, `caliper dev` and `caliper shot` own one session for the workspace of `--workspace`, `CALIPER_WORKSPACE` or `workspace/` under the app-data folder, drain its queue on the frame thread within a time budget, run the long commands on the host's job system, implement `SessionHost`, show each journaled command in the Activity pane, and close the session before the host's stores; with the command script, a testing and demo aid, and the tests `caliper_app_session` and `caliper_app_session_hidden`;
+- the spec page, which draws the open spec with the spec runtime after `applet.open`, `panel.render` through the runtime's offscreen renderer, and the app's API server serving the command endpoints through the session (`AppSession::command_gateway()`), with the process test `caliper_app_route`.
 
 Built in the host, in `src/host/catalog_providers/`: the catalog providers and data sources for live views, feed channels and metrics, and `register_catalog_providers()`, which gives them to a session ([Catalog](catalog.md)).
 
 Planned:
 
-- the app's own API server serves `GET /v0/commands` and `POST /v0/commands/{name}` through the app's session and replaces `caliper-builder-host` (the API's side is built beside this; the two are connected when both land);
+- `caliper-builder-host` is removed and the tests of `caliper-mcp` and `caliper-agent` move to `caliper --hidden --api`;
 - the live, feed and metric catalog providers;
-- the spec runtime draws a panel from the data `Session::resolve()` gives, and implements the seam of `panel.render`.
+- the approval cards, so that the person sees and decides what an agent's command waits for.
 
 ## The session
 
@@ -161,7 +162,7 @@ The workspace is the folder of `--workspace <dir>`, else of `CALIPER_WORKSPACE` 
 
 ### Opening
 
-`start()` opens nothing. A workspace that the command line chose is opened on a worker once the first frame has been drawn; the default workspace is opened only when something first needs it, through `ensure_open()` or `wait_open()` (which the API's command endpoints will call) or a command script. So the app without `--workspace` starts as before and creates no folder. The frame thread adopts the opened session at its next `frame()`: it names itself to the registry as the frame thread and binds the host. A workspace that cannot be opened, such as a path that names a file, leaves the app without the builder; standard error and the Activity pane say why, `wait_open()` returns null and `open_error()` gives the reason.
+`start()` opens nothing. A workspace that the command line chose is opened on a worker once the first frame has been drawn; the default workspace is opened only when something first needs it, through `ensure_open()`, `wait_open()`, a command script or the first command of Caliper API. So the app without `--workspace` starts as before and creates no folder. The frame thread adopts the opened session at its next `frame()`: it names itself to the registry as the frame thread and binds the host. A workspace that cannot be opened, such as a path that names a file, leaves the app without the builder; standard error and the Activity pane say why, `wait_open()` returns null and `open_error()` gives the reason.
 
 ### The frame loop
 
@@ -175,12 +176,20 @@ The workspace is the folder of `--workspace <dir>`, else of `CALIPER_WORKSPACE` 
 
 The registry runs every command under one lock, and the store under another. A loader that runs on a worker holds both, so a frame that called the registry, the store or the catalog would wait for it. The app keeps the one lock and keeps the frame thread off it instead: while the worker runs, `frame()` does not touch the queue, the registry or the store, and later commands wait in the queue, in their order, until the worker is done. `worker_busy()` says so to other code of the frame thread, such as the spec runtime, which must not read the store then either. Splitting the registry's lock would let short commands pass a running loader, but it would also let them run against a workspace that the loader is changing, and it would change a library that the other builders use; the queue's order is what agents and the journal rely on.
 
+### Caliper API
+
+`AppSession::command_gateway()` is the gateway that the app and `caliper shot` set on their API server once it listens, and clear before the session closes. It serves the command table at once, without a workspace. A command that arrives before the workspace is open opens it, the default workspace on its first use, and goes to the queue as soon as the frame thread has adopted the session, from whichever of the frame thread and the server's thread first asks whether it is ready; a workspace that cannot be opened answers `command.not_available` with the reason, and a command held after the session closed answers `command.shutdown`. The gateway converts requests and answers approval lookups with the pieces of `src/host/api/session_gateway.h`, but `GET /v0/approvals/{id}` reads the pending approvals from a copy that each frame without a worker refreshes, because the registry's lock is held while a loader runs and the lookup runs on the frame thread. A pending approval's state carries the command's name, its origin and its review, the diff and the warnings of a spec edit, for the approval cards to come.
+
 ### SessionHost
 
 - `app.info` and `app.applets` answer what `GET /v0/info` and `GET /v0/applets` answer, from the same functions (`info_json()` and `applets_json()` in `host_cli.h`).
 - `app.launch` goes through the app's navigation, which `POST /v0/applets/{id}/launch` now shares (`launch_by_id()` in `main.cpp`): the page shown goes first and the applet's page opens. A 404 is `app.applet_not_found`, an applet that is not ready `app.launch_refused`, and one that fails to launch `app.launch_failed`, each with the API's message.
 - `capture.frame` reads back the frame the window presents next, on Metal, through the app's `WindowCaptures` under a ticket of its own beside the API's; in `caliper shot` the offscreen canvas at the end of the next frame. Where the app cannot read its window back, it answers `capture.unavailable` with the reason Caliper API gives with its 501. A read-back that does not arrive within 5 seconds also answers `capture.unavailable`. The result is `png_base64`, `width` and `height` at the framebuffer's size.
-- `panel.render` needs the spec runtime. Until the runtime gives `AppSession::set_panel_renderer()` an implementation of `PanelRenderer` (`src/host/builder/panel_renderer.h`), which has the signature of `SessionHost::render_panel()`, it answers `command.not_available`. The session finds the panel and resolves its data before it asks.
+- `panel.render` draws with the spec runtime: the app and `caliper shot` give `AppSession::set_panel_renderer()` a `PanelRenderSeam` (`src/host/builder/panel_renderer.h`, renamed from `PanelRenderer`, which is the runtime's own interface) over the runtime's `OffscreenPanelRenderer`, whose canvas is made on the first call between two frames and shares the app's font atlas. Without one it answers `command.not_available`. The session finds the panel and resolves its data before it asks, and hands a resolve error to the renderer with the data, so an offline panel is drawn in its state rather than refused.
+
+### The spec page
+
+The app shows the session's open spec on a page of its own beside the applet page and the live page (`src/host/builder/spec_page.h`). Every `applet.open` that succeeds, from any origin, opens it: the journal's observer counts those calls (`AppSession::applets_opened()`), and the app leaves the page it shows, as Home does, and enters the spec page between two frames. The trigger is the command rather than `app.launch`, because the loader does not know the spec applet kind yet; `SpecPage::request_open()` sends `applet.open` from the `ui` origin through the queue and is the seam for the landing screen's list of spec applets later. The page bar holds Home and the spec's title where an applet's name goes, the status bar the machine, the workspace's folder name, the numbers of panels and sources and `unsaved` while the open spec is dirty, and the jobs tray keeps its strip; `SpecRuntime::draw()` fills the work area those strips leave. The page reads `open_spec()` again only when the journal has recorded a command since it last looked (`AppSession::journaled()`), and the runtime resolves only panels whose fragment changed, and every panel again when the catalog's revision grows. While a long command runs on the worker, the page reads neither the session nor its catalog: it draws what it has, a panel that must be resolved meanwhile shows a busy state, and every panel is resolved again afterwards. `caliper shot` draws the same page for `--launch <workspace applet id>` or after an `applet.open`. The app links `caliper_sternbild_ui`, now defined at the root beside the executable, so the runtime and the app share one copy of the faces and one font atlas. Without the builder the page is a stub that never opens.
 
 ### Activity
 
@@ -192,7 +201,7 @@ The session's journal has an observer (`JournalOptions::on_append`). Every comma
 
 ### The command script
 
-`CALIPER_COMMAND_SCRIPT` names a file of JSON lines, each an invocation (`origin` defaults to `ui`; empty lines and lines starting with `#` are skipped). Once the workspace is open, a thread of its own submits them one at a time through the queue, as an outside client does, and writes each result to `CALIPER_COMMAND_RESULTS` as a JSON line, then `{"done": true, "commands", "failed"}`. It is the test-only path of the hidden app's process test until the API's command endpoints are connected, and it serves demos and screenshots later: `caliper shot` keeps drawing frames until the script is done.
+`CALIPER_COMMAND_SCRIPT` names a file of JSON lines, each an invocation (`origin` defaults to `ui`; empty lines and lines starting with `#` are skipped). Once the workspace is open, a thread of its own submits them one at a time through the queue, as an outside client does, and writes each result to `CALIPER_COMMAND_RESULTS` as a JSON line, then `{"done": true, "commands", "failed"}`. It served the hidden app's process test before the API's command endpoints were connected, and it serves demos and screenshots: `caliper shot` keeps drawing frames until the script is done. A line whose command asks for approval never holds the script: it answers `command.needs_approval` with its approval id, which stays pending, unless the line carries `"approve": true`, in which case the script approves it as the person would.
 
 ### The start-up cost
 
@@ -278,4 +287,4 @@ Both run headless in `test_acceptance.cpp`.
 - In the app, every command waits while a loader runs on the worker, reads included, because they all pass through the one queue in order.
 - `history.redo` of an import runs its loaders again on the frame thread, since the history commands must run there.
 - Going Home from an applet joins every job of the host's job system, so it waits for a running loader, up to the job system's 5-second limit.
-- The app has no approval UI yet: a command from `agent` or `mcp` that needs approval waits until its caller's time limit, and the command script should use the `ui` origin for destructive commands.
+- The app has no approval UI yet: a command from `agent` or `mcp` that needs approval, which includes their spec edits while review is on, waits until its caller's time limit, and the person sees nothing of it; the command script approves with `"approve": true`.

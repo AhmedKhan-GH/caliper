@@ -46,7 +46,7 @@ Results go to standard output, and errors go to standard error, each starting wi
 
 The app, `caliper dev` and `caliper shot` hold one builder session for a workspace: a folder of loaders, specs, saved spec applets, the command journal and the workspace's database, which the builder's commands act on. `--workspace <dir>`, or `--workspace=<dir>`, names the folder, and `CALIPER_WORKSPACE`, when it is set and not empty, names it when the option is not given. Without either, the workspace is `workspace/` in the app-data folder, which `CALIPER_DATA_DIR` moves with the rest ([Folders and environment variables](environment.md#the-app-data-folder)). A relative path is taken from the working directory. The option is accepted when starting the app and with `dev` and `shot`, may be given once and needs a value; with any other subcommand it is a usage error. The code is in `src/host/builder/app_session.h`.
 
-The session costs nothing at start-up. A workspace named by `--workspace` or `CALIPER_WORKSPACE` is opened on a worker thread once the app has drawn its first frame, and the folder and its layout are created when they are missing. The default workspace is opened only when something first needs it, so the app started without either creates nothing there. Once the workspace is open, standard error says so with the time it took, and the Activity pane shows a `workspace` line:
+The session costs nothing at start-up. A workspace named by `--workspace` or `CALIPER_WORKSPACE` is opened on a worker thread once the app has drawn its first frame, and the folder and its layout are created when they are missing. The default workspace is opened only when something first needs it, such as a command through Caliper API, so the app started without either creates nothing there. Once the workspace is open, standard error says so with the time it took, and the Activity pane shows a `workspace` line:
 
 ```text
 [session] workspace /home/me/work/ws (--workspace) opened in 6 ms
@@ -56,7 +56,11 @@ A workspace that cannot be opened, such as a path that names a file, leaves the 
 
 In a build without the builder (`CALIPER_WITH_BUILDER` off, the default on Windows), the option is still accepted, and a workspace that it or `CALIPER_WORKSPACE` names is reported as not opened, because the builder is not in the build.
 
-A testing and demo aid drives the session without Caliper API: `CALIPER_COMMAND_SCRIPT` names a file of JSON lines, one command each, such as `{"name": "spec.new", "args": {"id": "board", "title": "Board"}}`. The origin is `ui` unless a line gives another, and empty lines and lines that start with `#` are skipped. Once the workspace is open, the commands run one after another through the command queue, as a client's do, and when `CALIPER_COMMAND_RESULTS` names a file, each result is written there as one JSON line, `{"line", "name", "id", "ok", "result"}` or with `error` in place of `result`, followed by `{"done": true, "commands", "failed"}`. Standard error ends with `[session] script done: <n> commands, <m> failed`. A command that asks for approval waits for it, so a script uses the `ui` origin for anything destructive. With a script, the workspace opens after the first frame even when it is the default, and `shot` keeps drawing frames until the script is done. The variables are read only when the app, `dev` or `shot` start.
+#### The spec page
+
+Every `applet.open` that succeeds, whether it came from the command script, from Caliper API or from an agent through `caliper-mcp`, shows the spec page: the page shown before goes, as with Home, and the spec of that applet is drawn in the work area by the spec runtime, from the data that the workspace's loaders made. The page bar holds Home and the spec's title, where an applet's name goes on the applet page, and the status bar shows the renderer and the device, then the workspace's folder name and the numbers of panels and sources, and `unsaved` when the open spec has changed since it was saved. The jobs tray keeps its place above the status bar. Home or Esc go back to the landing screen. The page reads the open spec again after each command that changed the workspace, so a later edit, from any origin, shows at the next frame; it reads a panel's data again only when the panel changed or a loader ran. The window's title becomes `Caliper - <title>`, and the Activity pane shows an `open` line. In this build only `applet.open` opens the page; the landing screen does not list spec applets yet. `caliper shot` draws the same page ([caliper shot](#caliper-shot)), and `panel.render` draws one panel of the open spec with the same code on a canvas of its own. The code is in `src/host/builder/spec_page.h`.
+
+A testing and demo aid drives the session without Caliper API: `CALIPER_COMMAND_SCRIPT` names a file of JSON lines, one command each, such as `{"name": "spec.new", "args": {"id": "board", "title": "Board"}}`. The origin is `ui` unless a line gives another, and empty lines and lines that start with `#` are skipped. Once the workspace is open, the commands run one after another through the command queue, as a client's do, and when `CALIPER_COMMAND_RESULTS` names a file, each result is written there as one JSON line, `{"line", "name", "id", "ok", "result"}` or with `error` in place of `result`, followed by `{"done": true, "commands", "failed"}`. Standard error ends with `[session] script done: <n> commands, <m> failed`. A command that asks for the person's approval, such as a destructive one or, from `mcp` and `agent`, an edit of the open spec under review, never holds the script: its result is `command.needs_approval` with the approval id, the approval stays pending, and the script goes on. A line with `"approve": true` approves its command as the person would, when it asks, and its result then carries `"approved"` with the approval id. With a script, the workspace opens after the first frame even when it is the default, and `shot` keeps drawing frames until the script is done. The variables are read only when the app, `dev` or `shot` start.
 
 ### The hidden window
 
@@ -247,7 +251,7 @@ wrote /home/me/my-viewer/page.png: com.example.my-viewer at 1600x1000 after 60 f
 
 | Option | Meaning |
 |---|---|
-| `--launch <id>` | The manifest id of the applet to launch. Required. |
+| `--launch <id>` | The manifest id of the applet to launch, or the id of a spec applet saved in the workspace ([The spec page](#the-spec-page)). Required. |
 | `--out <file.png>` | The image to write. Its folder must exist, and a file already there is replaced. Required. |
 | `--size <W>x<H>` | The size of the image in pixels, each side from 1 to 16384. The default is `1600x1000`. |
 | `--frames <N>` | The number of frames drawn, from 1 to 100000; the image is the last one. The default is 60, one second. |
@@ -263,13 +267,20 @@ Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, th
 - When `CALIPER_DATA_DIR` is set and not empty, the stores and the applet's data folder `data/<id>/` are in that folder, as they are for the app, so an image can show data that the applet saved there.
 - When it is not set, `shot` creates a temporary folder under the system's temporary folder (`TMPDIR` on macOS and Linux, `TMP` or `TEMP` on Windows), uses it as the app-data folder, and removes it before it exits. The applet starts with an empty data folder, and nothing is written in the app-data folder.
 
-In both cases `shot` searches the user applets folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([The workspace](#the-workspace)); without them the workspace is `workspace/` in the folder above, the temporary one when `CALIPER_DATA_DIR` is not set, and it opens only when a command script needs it. The session's `capture.frame` reads the canvas back at the end of the frame drawn next. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
+In both cases `shot` searches the user applets folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([The workspace](#the-workspace)); without them the workspace is `workspace/` in the folder above, the temporary one when `CALIPER_DATA_DIR` is not set, and it opens only when a command script, a spec applet or a command of Caliper API needs it. The session's `capture.frame` reads the canvas back at the end of the frame drawn next. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
+
+When no search folder has an applet with the id of `--launch`, and the id is written as a workspace's applet id (a lowercase letter, then up to 63 lowercase letters, digits, `_` and `-`, with no dots), `shot` draws the spec page instead: once the workspace is open and the command script, if any, is done, it opens that applet of the workspace with `applet.open`, then draws at least 10 more frames so that the plots fit their data, and writes the last one. A command script can therefore build and save the applet in the same run. When the workspace has no such applet, `shot` exits with 1. Whatever `--launch` named, an `applet.open` that succeeds while `shot` runs, from the command script or through Caliper API, shows the spec page from then on, as in the app:
+
+```text
+CALIPER_COMMAND_SCRIPT=build.jsonl caliper shot --workspace ws --launch run42-dashboard --size 2560x1440 --out board.png
+wrote /home/me/board.png: Run 42 at 2560x1440 after 60 frames
+```
 
 The applet runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own variables, such as `CALIPER_EMBED_AUTOTRAIN`, apply as usual, so leave them unset for an image of the applet's first state.
 
 `shot` exits with 0 when it has written the image, with 2 for a wrong command line, and with 1 when:
 
-- no folder holds an applet with the id: `caliper: no applet with the id <id> in the search folders (caliper list shows them)`;
+- no folder holds an applet with the id: `caliper: no applet with the id <id> in the search folders (caliper list shows them)`, or, for an id written as a workspace's applet id, the workspace has none: `caliper: no applet with the id <id> in the search folders or the workspace (<code>: <reason>)`;
 - the applet cannot be launched, with its status from `caliper list`: `caliper: <id> cannot be launched (REFUSED): <reason>`;
 - its `on_init` fails or it faults while launching: `caliper: <id> failed to launch: <reason>`;
 - it faults in a frame and is quarantined: `caliper: <id> was quarantined: <reason>`;
