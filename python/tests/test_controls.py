@@ -859,3 +859,39 @@ def test_the_script_sets_a_selection(ctl, routes):
         s.select([-1])
     s.clear()
     assert t.selections()[-1]["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# the panel widget
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def server(monkeypatch):
+    srv = types.SimpleNamespace(port=40123, token="tok/en")
+    monkeypatch.setattr(caliper, "_server", srv, raising=False)
+    return srv
+
+
+@needs_anywidget
+def test_controls_panel_without_its_module(server, monkeypatch, tmp_path):
+    import anywidget
+    import caliper._widget  # noqa: F401  (its view widget reads the real assets)
+    monkeypatch.setenv("CALIPER_WEB_DIR", str(tmp_path))
+    with pytest.warns(RuntimeWarning, match="caliper-controls-widget.js"):
+        panel = caliper.controls()
+    assert set(panel.keys) - set(anywidget.AnyWidget().keys) == {"src", "height"}
+    assert panel.src == "ws://127.0.0.1:40123/v3/stream?token=tok%2Fen" and panel.height == 160
+    assert "is not in this build" in panel._esm
+
+
+@needs_anywidget
+def test_controls_panel_with_its_module(server, monkeypatch, tmp_path):
+    module = "export default { render({ model, el }) { el.textContent = 'panel'; } };\n"
+    (tmp_path / "caliper-controls-widget.js").write_text(module)
+    import caliper._widget  # noqa: F401
+    monkeypatch.setenv("CALIPER_WEB_DIR", str(tmp_path))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        panel = caliper.controls(height=200)
+    assert panel._esm == module and panel.height == 200
+    with pytest.raises(Exception):
+        caliper.controls(height=0)

@@ -11,11 +11,18 @@ the traits:
 * ``selection``: the last selection the browser reported (dict), as
   ``{"view": ..., "type": "select" | "pick" | "hover", "detail": {...}}``.
 
+``caliper.controls()`` is a second widget, the panel of the script's run
+controls, parameters and actions (wire protocol 3.1). Its browser module is
+the packaged ``caliper-controls-widget.js``, loaded when the first panel is
+made; its traits are ``src`` and ``height``, and everything else travels on
+the stream.
+
 Needs the notebook extra: ``pip install 'caliper[notebook]'``.
 """
 from __future__ import annotations
 
 import sys
+import warnings
 from urllib.parse import quote
 
 try:
@@ -143,3 +150,50 @@ def widget(name: str, kind: str | None = None, *, height: int = 320) -> CaliperW
     if kind is not None and kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)} or None, not {kind!r}")
     return CaliperWidget(src=_stream_url(), view=name, kind=kind, height=int(height))
+
+
+# ---------------------------------------------------------------------------
+# caliper.controls(): the panel of run controls, parameters and actions
+# ---------------------------------------------------------------------------
+CONTROLS_MODULE = "caliper-controls-widget.js"
+# Shown instead of the panel by a build whose assets lack its module.
+_CONTROLS_MISSING = (
+    "export default { render({ el }) { el.textContent = 'The Caliper controls panel is not in "
+    "this build: its module caliper-controls-widget.js is missing.'; } };")
+_controls_classes: dict = {}
+
+
+def _controls_class(esm):
+    """The widget class for the module ``esm`` (a path or the note above)."""
+    key = str(esm)
+    cls = _controls_classes.get(key)
+    if cls is None:
+        class CaliperControls(anywidget.AnyWidget):
+            """The run controls, parameters and actions of the stream's script,
+            drawn in the browser by ``<caliper-controls>``."""
+            _esm = esm
+            src = traitlets.Unicode("").tag(sync=True)
+            height = traitlets.Int(160).tag(sync=True)
+
+            @traitlets.validate("height")
+            def _check_height(self, proposal):
+                if proposal["value"] <= 0:
+                    raise traitlets.TraitError(f"height must be positive, not {proposal['value']}")
+                return proposal["value"]
+
+            def __repr__(self) -> str:
+                return f"<caliper controls, height {self.height}, {_redact(self.src)}>"
+        cls = _controls_classes[key] = CaliperControls
+    return cls
+
+
+def controls(*, height: int = 160):
+    """The controls panel of the running stream (see caliper.controls). When
+    the build lacks the panel's module, warns and returns a panel that says
+    so, so that a notebook still runs from top to bottom."""
+    try:
+        esm = _assets.asset_path(CONTROLS_MODULE)
+    except _assets.AssetMissing as e:
+        warnings.warn(f"caliper.controls(): {e}", RuntimeWarning, stacklevel=3)
+        esm = _CONTROLS_MISSING
+    return _controls_class(esm)(src=_stream_url(), height=int(height))
