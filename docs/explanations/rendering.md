@@ -289,6 +289,66 @@ The layer's tests run in three suites:
 - `web/test/wasm.spec.ts` runs the WebGPU backend in headless Chromium, on SwiftShader and on the machine's GPU, each
   with a default and a compatibility-mode device ([Testing](testing.md)).
 
+## The colormap by keys
+
+The renderer core decides a colormap's level with integer comparisons, so that no shader compiler's or adapter's
+float arithmetic can move a value to another colour. WGSL allows a division 2.5 ULP from exact and lets an
+implementation assume that no NaN or infinity occurs, so a shader that repeats the reference's float formula is exact
+only where the compiler happens to keep the reference's operations. The keys make it exact by construction:
+
+- **The key of a float.** A float's bits map to an unsigned key that orders floats numerically: `bits | 0x80000000`
+  for a positive float and `~bits` for a negative one. The reference `map_f32_to_rgba8` is monotone in the value,
+  because every IEEE operation in it is, so its level is monotone in the key.
+- **The keys of a range.** For a range (vmin, vmax), the CPU finds by binary search over keys, for every level k from
+  1 to 255, the first key whose reference level is at least k, evaluating `map_f32_to_rgba8` itself, about 6,000 to
+  8,000 times a range. A level that no float reaches gets the sentinel `0xffffffff`. A decreasing range flips every
+  key, so that the level only grows with the key. A degenerate range, an infinite end, an infinite span or a NaN end
+  maps every value to level 0, so all its keys are the sentinel.
+- **The decision.** The shader tests NaN on the bits, guesses the level with the usual float formula, and accepts the
+  guess only if two integer comparisons with the keys confirm it; it tries the two neighbouring levels next and a
+  binary search of eight integer steps last. The guess only chooses which comparisons run. The colour is the table's
+  32-bit entry, converted to [0, 1] and back at the store, an error far below the half level that would change a byte.
+
+The algorithm has two sources. The WGSL one is `cmap_color` in `src/host/gfx/shaders/common/colormap.wgsl`, which
+every generated program that colours by value uses: the vertex stages of points, lines, boxes and meshes, the image
+program, and `colormap_texture`, the compute form that writes an `rgba8unorm` texture from f32 values at an element
+base and row pitch, which the texture path is to run. The C++ one is `src/host/gfx/colormap_keys.h`, header-only
+C++17 with no GPU, whose decision functions are marked for a CUDA kernel to include. It holds the key of a float, the
+derivation of a range's keys, the fill of the `Cmap` uniform block (the range, the flip, 260 keys and the 256-entry
+table, 2,080 bytes), the integer decision exactly as the shader takes it, the range of a mapping whose ends may come
+from statistics, as the snapshot flags `AUTO_VMIN` and `AUTO_VMAX` take them, and `KeyBlockCache`, which keeps the
+blocks of one owner by colormap and the exact bits of the range and drops the least recently used. A target that
+derives keys links `src/host/tensor_bridge.cpp`, where the reference lives.
+
+The keys follow whatever the reference computes. Its index for a NaN quotient, which an infinite end or span gives, is
+defined as 0, and fusing its `t * 255 + 0.5` into one multiply-add, which the compiler does on arm64, changes no
+level for any t in [0, 1], so the reference and its keys are the same on every platform.
+
+The renderers' own colormaps do not use the keys yet: the Metal renderer's compute pass `cmap_f32`, the Vulkan
+renderer's `colormap.comp`, the CUDA kernel, the WebGPU renderer's pass with its float thresholds and the TypeScript
+views' WGSL each repeat the float formula or the thresholds, and each is deleted by the migration step that moves its
+client onto the layer. The Canvas 2D fallback of the browser views keeps its TypeScript port of the reference, which
+is compared with the C++.
+
+What proves it:
+
+- `caliper_tests --test-case="colormap keys*"` compares the C++ decision with `map_f32_to_rgba8` byte for byte on the
+  boundary sets of `tests/shaders/colormap_cases.h`: fourteen ranges that increase, decrease, are degenerate, span one
+  float step, have an infinite or NaN end, span subnormals, reach the largest floats or overflow, and for each range
+  every key and its two neighbours, the range's ends and their neighbours, signed zeros, infinities, quiet,
+  signalling and negative NaNs, subnormals, the largest floats and 65,536 random bit patterns. It also checks that a
+  wrong guess never changes a level, the keys' order, the AUTO ends and the cache.
+- `caliper_colormap_exhaustive` compares the C++ decision with the reference for all 2<sup>32</sup> inputs on each
+  of those ranges. It is a ctest entry under the label `slow` that skips unless `CALIPER_SLOW_TESTS=1`, and it runs
+  in up to 6 threads.
+- `caliper_gfx_tests --test-case="gfx/Metal colormap*"` runs the boundary sets through the layer's Metal backend with
+  the generated programs: `colormap_texture` as a dispatch and the vertex stage of `scene_points` as one point a pixel
+  wide on each pixel centre, each from a layer buffer and from an imported `MTLBuffer` that the layer reports as in
+  place with zero bytes copied, compared byte for byte with the reference.
+- `caliper_shader_tests` runs the colormap probe's MSL with fast math on and off, and `web/test/shaders.spec.ts` runs
+  the probe, `colormap_texture` and the points' vertex stage in headless Chromium on default and compatibility-mode
+  devices, against vectors that `caliper_colormap_cases` writes from the C++.
+
 ## The scene core
 
 The renderer core's scene core is in `src/host/scene/`, in the namespace `caliper_scene` and the library
@@ -333,8 +393,8 @@ It holds these parts:
 The scene core asks a `Resources` object for the handles its records name: pipelines of the generated programs, bind
 groups, the buffer of its constant streams, the buffers it owns for clamped indices and gathered edges, and the
 colormap blocks. `BackendResources` provides them over a backend of the graphics layer, with the backend's table of
-generated programs. The colormap blocks come from the caller, who derives each block's keys from the CPU reference
-`map_f32_to_rgba8` and caches the block by colormap and range.
+generated programs. The colormap blocks come from the caller, normally through `colormap_source` over a
+`KeyBlockCache` that the view owns ([The colormap by keys](#the-colormap-by-keys)).
 
 Its tests run in two suites:
 
