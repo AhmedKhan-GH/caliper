@@ -873,6 +873,8 @@ if(CALIPER_WITH_BUILDER)
     add_subdirectory(src/host/spec_runtime)
     # The widget agent's inline surface, its agents and caliper-widget-shot.
     include(src/host/builder/widget_surface.cmake)
+    # The side chat, caliper-chat-shot and their tests.
+    include(src/host/builder/side_chat.cmake)
 endif()
 
 # The builder session in the app (src/host/builder/app_session.h): with the
