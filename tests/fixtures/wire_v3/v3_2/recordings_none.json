@@ -1,0 +1,21 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 41,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 17,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 120
+  },
+  "meta": {
+    "recordings": []
+  },
+  "meta_offset": 24,
+  "name": "v3_2/recordings_none",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "recordings"
+}

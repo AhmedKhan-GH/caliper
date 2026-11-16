@@ -1,0 +1,80 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 264,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 164,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 49
+  },
+  "meta": {
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "values",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamps",
+        "shape": [
+          3,
+          2
+        ]
+      }
+    ],
+    "stamp_ns": 81234567891123,
+    "start": 0,
+    "sub": 3,
+    "total": 3,
+    "view": "loss"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/series_stamps",
+  "section_lengths": [
+    12,
+    48
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "values",
+      "offset": 200,
+      "shape": [
+        3
+      ],
+      "values": [
+        2.5,
+        1.25,
+        0.75
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 48,
+      "name": "stamps",
+      "offset": 216,
+      "shape": [
+        3,
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789,
+        1201,
+        1763200000128456789,
+        1202,
+        1763200000133456789
+      ]
+    }
+  ],
+  "type_name": "series"
+}

@@ -1,9 +1,9 @@
 # Wire protocol 3.2 draft
 
-This page specifies the part of wire protocol 3.2 that is built: the capability `scenes`, the live view kind `scene`, the messages SCENE_UPDATE with every part, SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES, the stamps they carry, the dtype `u16`, the VIEWS key `scene` with its starting camera, and the default data view of a scene. Everything else follows [Wire protocol v3](wire-protocol.md), whose frame layout, decoding order, terms and rules apply unchanged.
+This page specifies what is built of wire protocol 3.2. Producers, the hub and viewers build scenes: the capability `scenes`, the live view kind `scene`, the messages SCENE_UPDATE with every part, SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES, the VIEWS key `scene` with its starting camera, and the default data view of a scene. The codecs build the whole draft besides: timelines and stamps, the dtype `u16`, text logs, bar charts, split updates and the messages of recordings, which no producer or server sends yet ([Timelines, text logs, bar charts and recordings](#timelines-text-logs-bar-charts-and-recordings)). Everything else follows [Wire protocol v3](wire-protocol.md), whose frame layout, decoding order, terms and rules apply unchanged.
 
 !!! note "Status"
-    A draft. The minor version 2, the capability `scenes`, the kind 6, the message types `0x0070` to `0x0073` and the dtype 6 are proposals that the owners of the protocol have not confirmed, so they may still be renumbered. They are one line each in a separate block at the end of `include/caliper/live_net.h` and of each codec. Senders keep writing minor 1 in their frames until 3.2 is confirmed; a peer decides by the capability `scenes`, never by the minor version. Every 3.1 message keeps its meaning and its encoding.
+    A draft. The minor version 2, the capabilities, the kinds 6 to 8, the message types `0x0070` to `0x0074` and `0x0078` to `0x007B`, the dtype 6 and the error codes are proposals that the owners of the protocol have not confirmed, so they may still be renumbered. They are one line each in a separate block at the end of `include/caliper/live_net.h` and of each codec. Senders keep writing minor 1 in their frames until 3.2 is confirmed; a peer decides by a capability, never by the minor version. Every 3.1 message keeps its meaning and its encoding.
 
 ## What is built
 
@@ -14,12 +14,12 @@ This page specifies the part of wire protocol 3.2 that is built: the capability 
 | Messages | SCENE_UPDATE with the parts `points`, `lines` (segments, strips and index-pair edges), `arrows`, `boxes`, `mesh`, `image` (colour, depth, segmentation and encoded) and `camera`; SCENE_TRANSFORMS; SCENE_CLEAR; SCENE_CLASSES; the section `stamp` of each, and `stamps` of SCENE_TRANSFORMS |
 | Dtype | `u16` (6) |
 | Data view | The default scene data view, resolved |
-| Codecs | `python/caliper/_wire.py`, `src/host/net/wire.h` and `web/src/protocol/codec.ts`, with the golden frames of `tests/fixtures/wire_v3/v3_2` |
+| Codecs | `python/caliper/_wire.py`, `src/host/net/wire.h` and `web/src/protocol/codec.ts`, with the golden frames of `tests/fixtures/wire_v3/v3_2`: every message, key and section of the draft, the assembly of split updates in each, and their division in Python |
 | Producer | `caliper.scene` in Caliper LIB on `caliper.serve()`, the Python and the native sender ([Caliper LIB](python-api.md#scenes)) |
 | Hub | Forwards the scene messages to the viewers that announced `scenes` and keeps a scene's state for a late viewer ([Through a hub](#through-a-hub)) |
 | Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw the parts `points`, `lines` (segments and strips) and `mesh` with one scene view; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
 
-Not built: timelines (a producer of this version sends no stamp, and a receiver reads one and keeps it), split updates, scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
+Not built beyond the codecs: timelines (a producer of this version declares none and sends no stamp, and a receiver reads one and keeps it), text logs and bar charts in Caliper LIB and the viewers, split updates in the senders and viewers, and recordings in a server. Not built at all: scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
 
 ## The capability
 
@@ -64,6 +64,11 @@ Any other data view is answered with `bad_data_view`. The producer applies the b
 | `0x0071` | `scene_transforms` | producer to viewer or hub, hub to viewer | `matrices`, `stamps` or `stamp` | |
 | `0x0072` | `scene_clear` | producer to viewer or hub, hub to viewer | `stamp` | |
 | `0x0073` | `scene_classes` | producer to viewer or hub, hub to viewer | `stamp` | |
+| `0x0074` | `text` | producer to viewer or hub, hub to viewer | `text`, `offsets`, `levels`, `stamps` or `stamp` | |
+| `0x0078` | `recordings` | server to viewer | none | |
+| `0x0079` | `recording_open` | viewer to server | none | `views` or `error` |
+| `0x007a` | `cursor` | viewer to server | none | `time_state` |
+| `0x007b` | `time_state` | server to viewer | none | |
 
 Every scene message has the keys `sub`, `view`, `seq` and `stamp_ns`, and may carry `static`, `state` and `cursor`:
 
@@ -91,6 +96,7 @@ One part of one entity. `section_count` is 0 to 8.
 | `part` | string | `points`, `lines`, `arrows`, `boxes`, `mesh`, `image` or `camera` |
 | `axes` | array, optional | For a batch the budget sampled, the payload axis of its item dim, as in SNAPSHOT |
 | `items` | string, optional | The item space of 3.1 whose items the batch's rows are; only to a peer with `selection` |
+| `split` | object, optional | A piece of a split update ([Split updates](#split-updates)) |
 
 The sections and keys of each part, with N items and D = 3 in a 3-D scene or 2 in a 2-D scene and under a camera, in the order a sender writes them:
 
@@ -194,6 +200,21 @@ The hub announces `scenes` to producers and viewers. It removes the views of kin
 | `CALIPER_NET_MAX_ENCODED_BYTES` | 16,777,216 | Bytes of an encoded frame |
 | `CALIPER_NET_MAX_TRANSFORMS` | 1,024 | Entity transforms in one SCENE_TRANSFORMS |
 | `CALIPER_NET_MAX_TIMELINES` | 8 | Values of a stamp |
+| `CALIPER_NET_STAMP_TEXT_MAX` | 20 | Characters of stamp text |
+| `CALIPER_NET_MAX_PIECES` | 16 | Pieces of a split update |
+| `CALIPER_NET_MAX_UPDATE_BYTES` | 536,870,912 | Bytes of a whole split update |
+| `CALIPER_NET_MAX_INCOMPLETE_UPDATES` | 2 | Incomplete split updates a receiver holds per subscription |
+| `CALIPER_NET_TEXT_LINE_MAX` | 4,096 | Bytes of a text line |
+| `CALIPER_NET_TEXT_MAX_LINES` | 65,536 | Lines in one TEXT |
+| `CALIPER_NET_TEXT_RETAIN_MIN` | 4,096 | Lines a producer retains per text log, at least |
+| `CALIPER_NET_MAX_BARS` | 4,096 | Bars of a snapshot |
+| `CALIPER_NET_MAX_RECORDINGS` | 1,024 | Recordings in RECORDINGS |
+| `CALIPER_NET_MAX_RECORDED` | 64 | Recorded data views of a view in VIEWS |
+| `CALIPER_NET_MAX_CURSOR_STEP` | 1,000 | Positions a CURSOR `step` moves, either way |
+| `CALIPER_NET_CURSOR_RATE_HZ` | 30 | CURSOR messages a viewer sends a second, at most |
+| `CALIPER_NET_TIME_STATE_RATE_HZ` | 30 | TIME_STATE messages a server sends a second while playing, at most |
+| `CALIPER_NET_MAX_SPEED` | 64 | The fastest playback; the slowest, `CALIPER_NET_MIN_SPEED`, is 1/16 |
+| `CALIPER_NET_RECORDING_LINGER_MS` | 600,000 | How long an opened recording without viewers stays listed |
 | `CALIPER_NET_SCENE_DEFAULT_MAX_ITEMS` | 100,000 | Default `max_items` of a scene data view |
 | `CALIPER_NET_SCENE_LIMIT_MAX_ITEMS` | 1,048,576 | Largest `max_items` |
 | `CALIPER_NET_SCENE_DEFAULT_MAX_VERTICES` | 1,000,000 | Default `max_vertices` |
@@ -201,9 +222,16 @@ The hub announces `scenes` to producers and viewers. It removes the views of kin
 | `CALIPER_NET_SCENE_DEFAULT_MAX_EXTENT` | 1,024 | Default `max_extent` |
 | `CALIPER_NET_SCENE_LIMIT_MAX_EXTENT` | 8,192 | Largest `max_extent` |
 
-A batch must also fit in one frame of 64 MiB, since split updates are not built; Caliper LIB refuses a larger one at the call.
+A batch must also fit in one frame of 64 MiB, since Caliper LIB sends no split update yet; it refuses a larger one at the call.
 
 ## Error codes and the order of the checks
+
+| Code | Meaning |
+|---|---|
+| `unknown_recording` | RECORDING_OPEN named a recording the server does not list |
+| `bad_recording` | The recording's file failed a check of the recording format |
+| `not_seekable` | CURSOR for a session without a recording the server holds |
+| `bad_cursor` | CURSOR with malformed stamp text, a field of its op missing or out of range, an unknown timeline, or `follow` on an ended session |
 
 A scene message that breaks this page is answered with ERROR `bad_request`, as any invalid message. The three codecs check a message's keys and sections in the same order, so that all of them answer a frame with the same code: the common keys (`sub`, `view`, `seq`, `stamp_ns`), then for SCENE_UPDATE `path` and `part`, then `static`, `state`, `cursor`, `axes` and `items`, then the part's keys in the order of the table, then its sections in the order of the table, and last the stamp.
 
@@ -213,7 +241,7 @@ A receiver of this version handles the rest of the 3.2 draft by the rules of [Ve
 
 | What arrives | What the receiver does |
 |---|---|
-| A piece of a split update (the key `split`) | Ignores the message and answers ERROR `unsupported` |
+| A piece of a split update (the key `split`) at a viewer that does not assemble them yet | Ignores the message and answers ERROR `unsupported` |
 | A part or a form that the viewer does not draw yet: the native and browser scene views draw `points`, `lines` of mode `segments` and `strips` and `mesh` | Ignores the message, answers ERROR `unsupported` and says so in the scene view |
 | A section or key the viewer does not draw yet, such as `class_ids`, `labels`, `normals` or `stamp` | Ignores the section or key, says so in the scene view, and draws the rest of the message |
 | SCENE_TRANSFORMS or SCENE_CLASSES at a viewer that does not apply them yet | Ignores the message and says so in the scene view |
@@ -236,10 +264,77 @@ Where the draft of 3.2 is silent or ambiguous, this version reads it as follows:
 | An entry of the class table | `id`, `label` and `color` are all required; Caliper LIB fills a colour from the categorical palette when the script gives none |
 | `normals` of a mesh | (V, 3) in every space |
 | An empty class table, an empty batch | Well formed: they empty the table or remove the part |
+| The keys `first` and `rows` of `split` | Objects from array names to rows, so that a piece names the arrays it holds; the stamp is not cut and travels whole in every piece |
+| The order of the pieces | A sender sends piece 0 first; a receiver drops a piece of an update whose piece 0 it does not hold |
+| CURSOR | A missing or wrong `request_id` or `op` is `bad_request`; any other field of the op, `bad_cursor`. Fields of other ops are dropped, and `count` of `step` is required |
+| A decimated series | `indices` and `decimated` go together, and its values need not follow `start` one by one |
+| `static` and stamps | A static item carries no stamp section; TEXT and CONTROLS carry no `static`, as drafted |
+| TIME_STATE | `cursor` is always written, null while following and stamp text otherwise |
+| An empty snapshot | Carries no section at all |
+
+## Timelines, text logs, bar charts and recordings
+
+The codecs build these parts of the draft; no producer or server sends them yet. Each belongs to a capability, which a peer announces as it does `scenes`:
+
+| Capability | Adds |
+|---|---|
+| `timelines` | The VIEWS key `timelines`; the section `stamp` of SNAPSHOT and CONTROLS, `stamp` or `stamps` of SERIES and TEXT; the key `static` of SNAPSHOT |
+| `text` | The kind `text` (7) and TEXT |
+| `bars` | The kind `bars` (8), a SNAPSHOT of that kind |
+| `recordings` | RECORDINGS, RECORDING_OPEN, CURSOR and TIME_STATE; the session key `recording`; the VIEWS key `recorded`; the keys `cursor` and `empty` of data messages; the SERIES section `indices` and key `decimated` |
+
+### Timelines and stamps
+
+VIEWS may carry `timelines`: 2 to 8 objects `{"name", "kind", "epoch"}` in the order of their ids, `name` 1 to 63 bytes of `[A-Za-z0-9_.-]` and unique, `kind` `sequence` or `time`, `epoch` an optional boolean; the first two are `step` (sequence) and `time` (time). A stamp has one value per timeline. SNAPSHOT and CONTROLS take the section `stamp` i64 (T,); SERIES takes `stamps` i64 (M, T), a stamp per value, or `stamp` i64 (T,) for all; a SNAPSHOT with `static` true carries no stamp. **Stamp text**, where a stamp value travels in metadata, is decimal digits with an optional leading minus, at most 20 characters, within the signed 64-bit range, such as `"1763200000123456789"`.
+
+### text
+
+New lines of a text log of kind 7, appended as a series' values are. `section_count` is 3, or 4 with a stamp section.
+
+| Key or section | Meaning |
+|---|---|
+| `sub`, `view`, `stamp_ns` | As in SERIES |
+| `start`, `total` | The absolute index of the first line, and the lines appended so far; `start` + M ≤ `total` |
+| `dropped` | Optional: lines before `start` that the sender no longer held |
+| `cursor` | Optional, as in the scene messages |
+| Section `text` u8 (L,) | The lines' UTF-8 bytes, concatenated |
+| Section `offsets` i32 (M + 1,) | Line i is bytes `offsets[i]` to `offsets[i + 1]`; `offsets[0]` is 0, `offsets[M]` is L, and they never decrease |
+| Section `levels` u8 (M,) | 0 debug, 1 info, 2 warning, 3 error |
+| Section `stamps` i64 (M, T) or `stamp` i64 (T,) | The lines' stamps |
+
+M is 1 to 65,536, and each line is at most 4,096 bytes of valid UTF-8. A text log's data view is a series': `{"budget": {"max_backfill": n}}`.
+
+### Bar charts
+
+A bar chart is a SNAPSHOT of kind 8 with the section `data` f32 (B,), 1 ≤ B ≤ 4,096, and optionally the section `colors` u8 (B, 4), `labels`, exactly B strings of at most 63 bytes, `horizontal`, a boolean, and `stats` `[min, max]`. Its data view is a histogram's with exactly one kept dim of at most 4,096 positions, and its payload axis is that dim.
+
+### Split updates
+
+An update whose frame would pass 64 MiB travels as 2 to 16 SCENE_UPDATE pieces with the same `path`, `part`, `seq` and stamp and the key `split`:
+
+| `split` key | Meaning |
+|---|---|
+| `update` | The producer's counter of split updates in the scene |
+| `piece`, `pieces` | This piece's number from 0, and the number of pieces, 2 to 16 |
+| `first` | An object from the name of each array section of this piece to the first row of the whole array that it holds |
+| `rows` | Piece 0 only: an object from the name of each array of the update to its rows |
+
+A piece holds a contiguous range of rows of some arrays, cut along their first axis, and the stamp whole; piece 0 carries the part's keys. The codecs check a piece's `split` and that `first` names exactly its arrays, and put the update together: `SplitUpdates` in Python and TypeScript and `wire::SplitUpdates` in C++ allocate each array when its first rows arrive, refuse a whole update over 512 MiB (`CALIPER_NET_MAX_UPDATE_BYTES`), overlapping rows, a piece twice or a piece that differs from piece 0, and check the whole update as an unsplit one once every piece and row has arrived. A newer update of the same entity part discards an incomplete one, and at most 2 incomplete updates are held per subscription, the oldest going first. `split_update` in Python divides an update into pieces.
+
+### The recording messages
+
+| Message | Keys |
+|---|---|
+| RECORDINGS | `recordings`: at most 1,024 objects with `id` (1 to 63 bytes of `[A-Za-z0-9._-]`), `title`, `script`, `bytes`, `items`, `created_unix_ms` and `ended_unix_ms` (integers or null), `complete`, and `timelines`, each `{"name", "kind", "epoch", "min", "max"}` with `min` and `max` as stamp text |
+| RECORDING_OPEN | `request_id` (uint32) and `recording`, a recording's id |
+| CURSOR | `request_id`, `op` (`seek`, `play`, `pause`, `step` or `follow`); `seek` takes `timeline` and `value` (stamp text); `play` takes `timeline`, and optionally `speed` (1/16 to 64), `pace` (`recorded` or `even`) and `loop` (`[start, end]` as stamp text, start ≤ end, or null); `step` takes `timeline` and `count` (−1,000 to 1,000, not 0) |
+| TIME_STATE | `session`, `generation` (uint32), `state` (`following`, `paused` or `playing`), `timeline`, `cursor` (stamp text, null exactly while following), `ranges` (an object from timeline names to `[min, max]` stamp text), `live`; optionally `request_id`, `speed`, `pace` and `loop` |
+
+A session in SESSIONS may carry `recording`, `{"id", "seekable", "complete"}`. A view in VIEWS may carry `recorded`, at most 64 resolved data views. SNAPSHOT, SERIES, TEXT and the scene messages may carry `cursor`, the generation of the TIME_STATE they answer; a SNAPSHOT with `empty` true carries no section; SERIES may carry the section `indices` i64 (M,), the absolute index of each value of a decimated series, with the key `decimated`, the bucket size.
 
 ## Golden frames
 
-`tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, and SCENE_CLASSES. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
+`tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, the five pieces of a split update, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, SCENE_CLASSES, VIEWS with timelines and recorded data views, SESSIONS with a recording, SNAPSHOT with a stamp, static, empty and of a bar chart, SERIES with a stamp per value (the draft's example frame), one stamp and decimated, CONTROLS with a stamp, TEXT, and every recording message and CURSOR op. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
 
 This is `v3_2/scene_update_mesh.bin`: the surface of two triangles over four vertices, coloured by their values through viridis on the fixed range −4 to 2.
 

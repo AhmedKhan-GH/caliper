@@ -1,0 +1,35 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 225,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 201,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 16
+  },
+  "meta": {
+    "sessions": [
+      {
+        "id": "clp-4242-a1b2c3",
+        "pid": 4242,
+        "recording": {
+          "complete": true,
+          "id": "train-20261115-120314",
+          "seekable": true
+        },
+        "script": "train.py",
+        "start_unix_ms": 1763200000000,
+        "state": "ended",
+        "views": 3
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "v3_2/sessions_recording",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "sessions"
+}

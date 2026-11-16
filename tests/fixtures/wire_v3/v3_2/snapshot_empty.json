@@ -1,0 +1,36 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 212,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 188,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 48
+  },
+  "meta": {
+    "axes": [],
+    "colormap": 0,
+    "cursor": 3,
+    "data_view": {
+      "source": "layer0"
+    },
+    "empty": true,
+    "flags": 0,
+    "kind": 1,
+    "seq": 7,
+    "stamp_ns": 81234567894323,
+    "stats": [],
+    "sub": 1,
+    "view": "attn",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 24,
+  "name": "v3_2/snapshot_empty",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "snapshot"
+}

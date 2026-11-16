@@ -126,6 +126,16 @@ Json str_list(const std::vector<std::string>& v) {
     return a;
 }
 
+// ---- 3.2 draft: the checks of the 3.2 keys and sections of the 3.0 and 3.1 messages, defined
+// in the 3.2 block at the end ----
+bool is_recorded(const Json& v);
+bool is_recording_ref(const Json& v);
+bool is_timelines(const Json& v);
+void snapshot_32(const Frame& f, Snapshot& s);
+void series_32(const Frame& f, Series& s);
+void scene_stamp(const Frame& f, bool is_static, int64_t rows, std::optional<Section>* stamp,
+                 std::optional<Section>* stamps = nullptr);
+
 // ---- view entries -------------------------------------------------------------------------
 
 bool view_entry(const Json& v, ViewInfo* out) {
@@ -166,6 +176,8 @@ bool view_entry(const Json& v, ViewInfo* out) {
     const Json* items = v.find("items");   // 3.1: a series' item space
     if (items && !items->is_null() && !is_name(*items)) return false;
     if (items && items->is_string()) vi.items = items->as_string();
+    const Json* recorded = v.find("recorded");   // 3.2 draft
+    if (recorded && !recorded->is_null() && !is_recorded(*recorded)) return false;
     if (out) *out = std::move(vi);
     return true;
 }
@@ -229,9 +241,10 @@ Sessions sessions(const Frame& f) {
         for (const Json& x : v.items()) {
             const Json* st = x.find("state");
             const Json* views = x.find("views");
+            const Json* rec = x.find("recording");   // 3.2 draft
             if (!(is_identity(x) && st && st->is_string() &&
                   (st->as_string() == CALIPER_NET_SESSION_LIVE || st->as_string() == CALIPER_NET_SESSION_ENDED) &&
-                  views && is_uint(*views)))
+                  views && is_uint(*views) && (!rec || rec->is_null() || is_recording_ref(*rec))))
                 return false;
         }
         return true;
@@ -263,6 +276,8 @@ Views views(const Frame& f) {
         return true;
     }, "a list of views");
     if (const Json* s = opt(f.meta, "session", is_session_id, "a session id")) v.session = s->as_string();
+    if (const Json* t = opt(f.meta, "timelines", is_timelines, "2 to 8 timelines, step and time first"))
+        v.timelines = *t;   // 3.2 draft
     v.views = list;
     for (const Json& e : list.items()) {
         ViewInfo vi;
@@ -327,12 +342,15 @@ void check_payload(Snapshot& s) {
         case CALIPER_NET_KIND_IMAGE: want_dt = CALIPER_NET_DTYPE_U8; want_rank = 3; break;
         case CALIPER_NET_KIND_POINTS: want_dt = CALIPER_NET_DTYPE_F32; want_rank = 2; break;
         case CALIPER_NET_KIND_HISTOGRAM: want_dt = CALIPER_NET_DTYPE_F32; want_rank = 1; break;
+        case CALIPER_NET_KIND_BARS: want_dt = CALIPER_NET_DTYPE_F32; want_rank = 1; break;   // 3.2 draft
         default: return;   // an unknown kind: the caller ignores it
     }
     if (d.dtype != want_dt || d.shape.size() != want_rank)
         bad("kind " + std::to_string(s.kind) + ": 'data' is dtype " + std::to_string(d.dtype) + " rank " +
             std::to_string(d.shape.size()));
     if (s.kind == CALIPER_NET_KIND_IMAGE && d.shape[2] != 4) bad("an image's 'data' is (H, W, 4)");
+    if (s.kind == CALIPER_NET_KIND_BARS && (d.shape[0] < 1 || d.shape[0] > (int64_t)CALIPER_NET_MAX_BARS))
+        bad("a bar chart has 1 to 4096 bars, got " + std::to_string(d.shape[0]));
     if (s.kind == CALIPER_NET_KIND_POINTS) {
         if ((d.shape[1] != 2 && d.shape[1] != 3) || (s.points_dims && *s.points_dims != d.shape[1]))
             bad("points 'data' is (N, points_dims) with points_dims 2 or 3");
@@ -347,9 +365,15 @@ Snapshot snapshot(const Frame& f) {
     const Json& m = f.meta;
     Snapshot s;
     s.kind = i64(req(m, "kind", is_int, "a kind id"));
+    if (const Json* e = opt(m, "empty", [](const Json& v) { return v.is_bool(); }, "a boolean"))
+        s.empty = e->as_bool();   // 3.2 draft
     const Section* data = f.section("data");
-    if (!data) bad("a snapshot needs a 'data' section");
-    s.data = *data;
+    if (s.empty) {
+        if (!f.sections.empty()) bad("an empty snapshot carries no section");
+    } else if (!data) {
+        bad("a snapshot needs a 'data' section");
+    }
+    if (data) s.data = *data;
     if (const Section* aux = f.section("aux")) s.aux = *aux;
     if (const Json* st = opt(m, "stats", [](const Json& v) {
             if (!v.is_array() || v.size() > CALIPER_NET_MAX_STATS) return false;
@@ -375,7 +399,8 @@ Snapshot snapshot(const Frame& f) {
         }, "2 or 3"))
         s.points_dims = (int64_t)v->as_double();
     if (const Json* v = opt(m, "label_count", is_uint, "an unsigned integer")) s.label_count = u64(*v);
-    check_payload(s);
+    if (!s.empty) check_payload(s);
+    snapshot_32(f, s);   // 3.2 draft
     return s;
 }
 
@@ -391,10 +416,12 @@ Series series(const Frame& f) {
     s.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
     s.values = *v;
     const int64_t n = v->shape[0];
-    if (n < 1 || n > (int64_t)CALIPER_NET_SERIES_MAX_VALUES || s.start + (uint64_t)n < s.start ||
-        s.start + (uint64_t)n > s.total)
+    const bool sparse = f.section("indices") != nullptr;   // 3.2 draft: a decimated recorded series
+    if (n < 1 || n > (int64_t)CALIPER_NET_SERIES_MAX_VALUES ||
+        (!sparse && (s.start + (uint64_t)n < s.start || s.start + (uint64_t)n > s.total)))
         bad("series: " + std::to_string(n) + " values from " + std::to_string(s.start) + " with total " +
             std::to_string(s.total));
+    series_32(f, s);   // 3.2 draft
     return s;
 }
 
@@ -544,6 +571,7 @@ Controls controls(const Frame& f) {
             if (!action_entry(a)) return false;
         return unique_names(v);
     }, "at most 64 actions with unique names");
+    scene_stamp(f, false, -1, &c.stamp);   // 3.2 draft
     return c;
 }
 
@@ -1119,7 +1147,7 @@ void decode_camera(const Json& params) {
 // The stamp sections of a message (_stamp): `stamp` i64 (T,), and where rows >= 0 `stamps` i64 (rows, T),
 // T from 1 to CALIPER_NET_MAX_TIMELINES; a static item carries neither.
 void scene_stamp(const Frame& f, bool is_static, int64_t rows, std::optional<Section>* stamp,
-                 std::optional<Section>* stamps = nullptr) {
+                 std::optional<Section>* stamps) {
     const Section* s = f.section("stamp");
     const Section* ss = rows >= 0 ? f.section("stamps") : nullptr;
     if (s && ss) bad("'stamp' and 'stamps' together");
@@ -1131,6 +1159,64 @@ void scene_stamp(const Frame& f, bool is_static, int64_t rows, std::optional<Sec
         bad("'stamps' must be i64 (" + std::to_string(rows) + ", T) with T from 1 to 8");
     if (s) *stamp = *s;
     if (ss && stamps) *stamps = *ss;
+}
+
+bool is_rows_map(const Json& v) {
+    if (!v.is_object()) return false;
+    for (const auto& kv : v.members())
+        if (!is_uint(kv.second)) return false;
+    return true;
+}
+
+bool in_part(int part, const std::string& name) {
+    for (const char* const* k = scene_part_sections(part); *k; ++k)
+        if (name == *k) return true;
+    return false;
+}
+
+// The checks of a piece of a split update (_piece), in this order: the keys of `split` (update, pieces,
+// piece, first, then rows in piece 0 only), the part's keys in piece 0, and that `first` names exactly
+// the piece's array sections, each raw with at least one dimension, within `rows` in piece 0.
+void scene_piece(const Frame& f, const Json& m, int part, SceneUpdate& u) {
+    const Json& sp = u.split;
+    auto need = [&](const char* key, auto ok, const char* what) -> const Json& {
+        const Json* v = sp.find(key);
+        if (!v || v->is_null() || !ok(*v)) bad(std::string("'split.") + key + "' must be " + what);
+        return *v;
+    };
+    need("update", is_uint, "an unsigned integer");
+    int64_t pieces = 0, piece = 0;
+    need("pieces", [&](const Json& v) {
+        return v.is_int() && v.get_i64(&pieces) && pieces >= 2 && pieces <= (int64_t)CALIPER_NET_MAX_PIECES;
+    }, "an integer from 2 to 16");
+    need("piece", [&](const Json& v) { return v.is_int() && v.get_i64(&piece) && piece >= 0 && piece < pieces; },
+         "a piece number below 'pieces'");
+    const Json& first = need("first", is_rows_map, "an object of row numbers");
+    const Json* rows = nullptr;
+    if (piece == 0) {
+        rows = &need("rows", is_rows_map, "an object of row counts");
+    } else if (const Json* r = sp.find("rows"); r && !r->is_null()) {
+        bad("only piece 0 carries 'split.rows'");
+    }
+    if (piece == 0) u.params = scene_part_keys(m, part);
+    for (const Section& s : f.sections) {
+        if (s.name == "stamp" || !in_part(part, s.name)) continue;   // the stamp, or a section of no array
+        if (s.encoding != CALIPER_NET_ENCODING_RAW || s.shape.empty())
+            bad("a piece of '" + s.name + "' is a raw array of at least one dimension");
+        u.arrays.push_back(s);
+    }
+    bool same = first.size() == u.arrays.size();
+    for (const Section& s : u.arrays) same = same && first.find(s.name) != nullptr;
+    if (!same) bad("'split.first' does not name exactly the arrays of the piece");
+    if (rows) {
+        for (const auto& kv : rows->members())
+            if (!in_part(part, kv.first)) bad("'split.rows' names '" + kv.first + "', not an array of the part");
+        for (const Section& s : u.arrays) {
+            const Json* r = rows->find(s.name);
+            if (!r || u64(*first.find(s.name)) + (uint64_t)s.shape[0] > u64(*r))
+                bad("the rows of '" + s.name + "' in piece 0 pass 'split.rows'");
+        }
+    }
 }
 
 template <typename M>
@@ -1159,7 +1245,10 @@ SceneUpdate scene_update(const Frame& f) {
     scene_flags(m, u);
     if (const Json* v = opt(m, "axes", is_list, "a list")) u.axes = *v;
     if (const Json* v = opt(m, "items", is_name, "an item space name")) u.items = v->as_string();
-    if (const Json* sp = m.find("split"); sp && !sp->is_null()) unsupported("split updates are not built yet");
+    if (const Json* sp = opt(m, "split", is_obj, "an object")) {
+        u.split = *sp;
+        scene_piece(f, m, part, u);
+    } else {
     u.params = scene_part_keys(m, part);
     switch (part) {
         case kPoints: decode_points(f, u.params, &u.arrays); break;
@@ -1169,6 +1258,7 @@ SceneUpdate scene_update(const Frame& f) {
         case kMesh: decode_mesh(f, &u.arrays); break;
         case kImage: decode_image(f, u.params, &u.arrays); break;
         default: decode_camera(u.params); break;
+    }
     }
     scene_stamp(f, u.is_static, -1, &u.stamp);
     return u;
@@ -1296,6 +1386,7 @@ void scene_update_to_meta(const SceneUpdate& u, Json& m, std::vector<Section>& s
     scene_write_flags(m, u);
     if (!u.axes.is_null()) m.set("axes", u.axes);
     if (u.items) m.set("items", *u.items);
+    if (!u.split.is_null()) m.set("split", u.split);
     for (const char* const* k = scene_part_sections(scene_part_index(u.part)); *k; ++k)
         if (const Section* s = u.array(*k)) sections.push_back(*s);
     if (u.stamp) sections.push_back(named(*u.stamp, "stamp"));
@@ -1325,6 +1416,313 @@ void scene_classes_to_meta(const SceneClasses& k, Json& m, std::vector<Section>&
     m.set("classes", k.classes);
     scene_write_flags(m, k);
     if (k.stamp) sections.push_back(named(*k.stamp, "stamp"));
+}
+
+// ---- timelines, text logs, bar charts and the recording messages ----
+
+bool is_timeline_name(const Json& v) {
+    if (!v.is_string() || v.as_string().empty() || v.as_string().size() > 63) return false;
+    for (unsigned char c : v.as_string())
+        if (!(std::isalnum(c) || c == '_' || c == '.' || c == '-') || c >= 0x80) return false;
+    return true;
+}
+bool is_stamp_text(const Json& v) { return v.is_string() && stamp_text_ok(v.as_string()); }
+bool is_timeline_kind(const Json& v) { return one_of(v, {CALIPER_NET_TIMELINE_SEQUENCE, CALIPER_NET_TIMELINE_TIME}); }
+bool opt_bool(const Json& o, const char* key) {
+    const Json* v = o.find(key);
+    return !v || v->is_null() || v->is_bool();
+}
+
+bool is_timelines(const Json& v) {
+    if (!v.is_array() || v.size() < 2 || v.size() > CALIPER_NET_MAX_TIMELINES) return false;
+    std::set<std::string> names;
+    for (const Json& t : v.items()) {
+        if (!t.is_object()) return false;
+        const Json* n = t.find("name");
+        const Json* k = t.find("kind");
+        if (!(n && is_timeline_name(*n) && k && is_timeline_kind(*k) && opt_bool(t, "epoch"))) return false;
+        names.insert(n->as_string());
+    }
+    if (names.size() != v.size()) return false;
+    return v.at(0).find("name")->as_string() == "step" && v.at(0).find("kind")->as_string() == "sequence" &&
+           v.at(1).find("name")->as_string() == "time" && v.at(1).find("kind")->as_string() == "time";
+}
+
+bool is_recorded(const Json& v) {
+    if (!v.is_array() || v.size() > CALIPER_NET_MAX_RECORDED) return false;
+    for (const Json& x : v.items())
+        if (!x.is_object()) return false;
+    return true;
+}
+
+bool is_recording_ref(const Json& v) {
+    if (!v.is_object()) return false;
+    const Json* id = v.find("id");
+    const Json* seekable = v.find("seekable");
+    const Json* complete = v.find("complete");
+    return id && is_session_id(*id) && seekable && seekable->is_bool() && complete && complete->is_bool();
+}
+
+void snapshot_32(const Frame& f, Snapshot& s) {
+    const Json& m = f.meta;
+    if (s.kind == CALIPER_NET_KIND_BARS && !s.empty) {
+        const int64_t b = s.data.shape[0];
+        if (const Section* c = part_section(f, "colors", CALIPER_NET_DTYPE_U8, {b, 4})) s.colors = *c;
+        if (const Json* l = opt(m, "labels", [&](const Json& v) {
+                if (!v.is_array() || (int64_t)v.size() != b) return false;
+                for (const Json& x : v.items())
+                    if (!x.is_string() || x.as_string().size() > CALIPER_NET_NAME_MAX) return false;
+                return true;
+            }, "a label of at most 63 bytes per bar"))
+            s.labels = *l;
+        if (const Json* h = opt(m, "horizontal", is_bool, "a boolean")) s.horizontal = h->as_bool();
+    }
+    if (const Json* v = opt(m, "static", is_bool, "a boolean")) s.is_static = v->as_bool();
+    if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) s.cursor = u32(*v);
+    scene_stamp(f, s.is_static, -1, &s.stamp);
+}
+
+void series_32(const Frame& f, Series& s) {
+    const Json& m = f.meta;
+    const int64_t n = s.values.shape[0];
+    if (const Section* ix = part_section(f, "indices", CALIPER_NET_DTYPE_I64, {n})) s.indices = *ix;
+    if (const Json* d = opt(m, "decimated", [](const Json& v) {
+            int64_t i = 0;
+            return v.is_int() && v.get_i64(&i) && i >= 1;
+        }, "an integer >= 1"))
+        s.decimated = u64(*d);
+    if (s.indices.has_value() != s.decimated.has_value()) bad("'indices' and 'decimated' go together");
+    if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) s.cursor = u32(*v);
+    scene_stamp(f, false, n, &s.stamp, &s.stamps);
+}
+
+// Strict UTF-8, as Python's decode("utf-8") and a fatal TextDecoder read it.
+bool utf8_ok(const uint8_t* p, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        const uint8_t c = p[i];
+        if (c < 0x80) { ++i; continue; }
+        size_t len = 0;
+        uint32_t cp = 0, min = 0;
+        if ((c & 0xE0) == 0xC0) { len = 2; cp = c & 0x1F; min = 0x80; }
+        else if ((c & 0xF0) == 0xE0) { len = 3; cp = c & 0x0F; min = 0x800; }
+        else if ((c & 0xF8) == 0xF0) { len = 4; cp = c & 0x07; min = 0x10000; }
+        else return false;
+        if (i + len > n) return false;
+        for (size_t k = 1; k < len; ++k) {
+            if ((p[i + k] & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (p[i + k] & 0x3F);
+        }
+        if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+        i += len;
+    }
+    return true;
+}
+
+Text text(const Frame& f) {
+    const Json& m = f.meta;
+    const Section* t = f.section("text");
+    if (!t || !t->is(CALIPER_NET_DTYPE_U8, 1)) bad("a text message needs a (L,) u8 'text' section");
+    const Section* o = f.section("offsets");
+    if (!o || !o->is(CALIPER_NET_DTYPE_I32, 1) || o->shape[0] < 2)
+        bad("a text message needs an (M + 1,) i32 'offsets' section, M >= 1");
+    const int64_t n = o->shape[0] - 1;
+    if (n > (int64_t)CALIPER_NET_TEXT_MAX_LINES) bad(std::to_string(n) + " lines, more than 65536 in one message");
+    const Section* lv = part_section(f, "levels", CALIPER_NET_DTYPE_U8, {n});
+    if (!lv) bad("a text message needs an (M,) u8 'levels' section");
+    Text x;
+    x.sub = u32(req(m, "sub", is_u32, "a uint32"));
+    x.view = req(m, "view", is_name, "a view name").as_string();
+    x.start = u64(req(m, "start", is_uint, "an unsigned integer"));
+    x.total = u64(req(m, "total", is_uint, "an unsigned integer"));
+    x.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
+    if (const Json* v = opt(m, "dropped", is_uint, "an unsigned integer")) x.dropped = u64(*v);
+    if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) x.cursor = u32(*v);
+    if (x.start + (uint64_t)n < x.start || x.start + (uint64_t)n > x.total)
+        bad("text: " + std::to_string(n) + " lines from " + std::to_string(x.start) + " with total " +
+            std::to_string(x.total));
+    x.text = *t;
+    x.offsets = *o;
+    x.levels = *lv;
+    std::vector<int32_t> offs((size_t)n + 1);
+    std::memcpy(offs.data(), o->data, offs.size() * 4);
+    if (offs[0] != 0 || (int64_t)offs[(size_t)n] != t->shape[0])
+        bad("'offsets' must start at 0 and end at the bytes of 'text'");
+    for (int64_t i = 0; i < n; ++i)
+        if (offs[(size_t)i + 1] < offs[(size_t)i]) bad("'offsets' must not decrease");
+    for (int64_t i = 0; i < n; ++i)
+        if (offs[(size_t)i + 1] - offs[(size_t)i] > (int32_t)CALIPER_NET_TEXT_LINE_MAX) bad("a line is at most 4096 bytes");
+    for (int64_t i = 0; i < n; ++i)
+        if (lv->data[i] > CALIPER_NET_LEVEL_ERROR) bad("a level is 0 (debug), 1 (info), 2 (warning) or 3 (error)");
+    for (int64_t i = 0; i < n; ++i)
+        if (!utf8_ok(t->data + offs[(size_t)i], (size_t)(offs[(size_t)i + 1] - offs[(size_t)i])))
+            bad("a line of 'text' is not UTF-8");
+    scene_stamp(f, false, n, &x.stamp, &x.stamps);
+    return x;
+}
+
+bool is_recording_entry(const Json& e) {
+    if (!e.is_object()) return false;
+    auto has = [&](const char* k, auto ok) {
+        const Json* v = e.find(k);
+        return v && ok(*v);
+    };
+    if (!(has("id", is_session_id) && has("title", is_str) && has("script", is_str) && has("bytes", is_uint) &&
+          has("items", is_uint) && has("complete", [](const Json& v) { return v.is_bool(); })))
+        return false;
+    for (const char* k : {"created_unix_ms", "ended_unix_ms"}) {
+        const Json* v = e.find(k);
+        if (v && !v->is_null() && !is_uint(*v)) return false;
+    }
+    const Json* tl = e.find("timelines");
+    if (!tl || !tl->is_array() || tl->size() > CALIPER_NET_MAX_TIMELINES) return false;
+    for (const Json& t : tl->items()) {
+        if (!t.is_object()) return false;
+        const Json* n = t.find("name");
+        const Json* k = t.find("kind");
+        const Json* lo = t.find("min");
+        const Json* hi = t.find("max");
+        if (!(n && is_timeline_name(*n) && k && is_timeline_kind(*k) && opt_bool(t, "epoch") && lo &&
+              is_stamp_text(*lo) && hi && is_stamp_text(*hi)))
+            return false;
+    }
+    return true;
+}
+
+Recordings recordings(const Frame& f) {
+    Recordings r;
+    r.recordings = req(f.meta, "recordings", [](const Json& v) {
+        if (!v.is_array() || v.size() > CALIPER_NET_MAX_RECORDINGS) return false;
+        for (const Json& e : v.items())
+            if (!is_recording_entry(e)) return false;
+        return true;
+    }, "a list of at most 1024 recordings");
+    return r;
+}
+
+RecordingOpen recording_open(const Frame& f) {
+    RecordingOpen r;
+    r.request_id = u32(req(f.meta, "request_id", is_u32, "a uint32"));
+    r.recording = req(f.meta, "recording", is_session_id, "a recording id").as_string();
+    return r;
+}
+
+int64_t stamp_value(const std::string& s) { return std::stoll(s); }   // after stamp_text_ok
+
+bool is_speed(const Json& v) {
+    return is_finite(v) && v.as_double() >= CALIPER_NET_MIN_SPEED && v.as_double() <= CALIPER_NET_MAX_SPEED;
+}
+bool is_pace(const Json& v) { return one_of(v, {CALIPER_NET_PACE_RECORDED, CALIPER_NET_PACE_EVEN}); }
+bool is_loop(const Json& v) {
+    return v.is_array() && v.size() == 2 && is_stamp_text(v.at(0)) && is_stamp_text(v.at(1)) &&
+           stamp_value(v.at(0).as_string()) <= stamp_value(v.at(1).as_string());
+}
+
+[[noreturn]] void bad_cursor(const std::string& msg) { throw MsgError{CALIPER_NET_ERR_BAD_CURSOR, msg}; }
+
+Cursor cursor(const Frame& f) {
+    const Json& m = f.meta;
+    Cursor c;
+    c.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
+    c.op = req(m, "op", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_CURSOR_SEEK, CALIPER_NET_CURSOR_PLAY, CALIPER_NET_CURSOR_PAUSE,
+                          CALIPER_NET_CURSOR_STEP, CALIPER_NET_CURSOR_FOLLOW});
+    }, "seek, play, pause, step or follow").as_string();
+    auto get = [&](const char* key, auto ok, const char* what, bool need) -> const Json* {
+        const Json* v = m.find(key);
+        if (!v || v->is_null()) {
+            if (need) bad_cursor("'" + c.op + "' needs '" + key + "'");
+            return nullptr;
+        }
+        if (!ok(*v)) bad_cursor(std::string("'") + key + "' must be " + what);
+        return v;
+    };
+    const bool seek = c.op == CALIPER_NET_CURSOR_SEEK, play = c.op == CALIPER_NET_CURSOR_PLAY,
+               step = c.op == CALIPER_NET_CURSOR_STEP;
+    if (seek || play || step) c.timeline = get("timeline", is_timeline_name, "a timeline name", true)->as_string();
+    if (seek) c.value = get("value", is_stamp_text, "stamp text", true)->as_string();
+    if (step) {
+        const Json* n = get("count", [](const Json& v) {
+            int64_t i = 0;
+            return v.is_int() && v.get_i64(&i) && i != 0 && i >= -(int64_t)CALIPER_NET_MAX_CURSOR_STEP &&
+                   i <= (int64_t)CALIPER_NET_MAX_CURSOR_STEP;
+        }, "an integer from -1000 to 1000, not 0", true);
+        c.count = i64(*n);
+    }
+    if (play) {
+        if (const Json* v = get("speed", is_speed, "a number from 0.0625 to 64", false)) c.speed = v->as_double();
+        if (const Json* v = get("pace", is_pace, "recorded or even", false)) c.pace = v->as_string();
+        if (const Json* v = get("loop", is_loop, "[start, end] as stamp text", false)) c.loop = *v;
+    }
+    return c;
+}
+
+bool is_ranges(const Json& v) {
+    if (!v.is_object()) return false;
+    for (const auto& kv : v.members())
+        if (!is_timeline_name(Json(kv.first)) || !is_loop(kv.second)) return false;
+    return true;
+}
+
+TimeState time_state(const Frame& f) {
+    const Json& m = f.meta;
+    TimeState t;
+    if (const Json* v = opt(m, "request_id", is_u32, "a uint32")) t.request_id = u32(*v);
+    t.session = req(m, "session", is_session_id, "a session id").as_string();
+    t.generation = u32(req(m, "generation", is_u32, "a uint32"));
+    t.state = req(m, "state", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_TIME_FOLLOWING, CALIPER_NET_TIME_PAUSED, CALIPER_NET_TIME_PLAYING});
+    }, "following, paused or playing").as_string();
+    t.timeline = req(m, "timeline", is_timeline_name, "a timeline name").as_string();
+    if (const Json* v = opt(m, "cursor", is_stamp_text, "stamp text or null")) t.cursor = v->as_string();
+    if (const Json* v = opt(m, "speed", is_speed, "a number from 0.0625 to 64")) t.speed = v->as_double();
+    if (const Json* v = opt(m, "pace", is_pace, "recorded or even")) t.pace = v->as_string();
+    if (const Json* v = opt(m, "loop", is_loop, "[start, end] as stamp text")) t.loop = *v;
+    t.ranges = req(m, "ranges", is_ranges, "an object of [min, max] stamp text per timeline");
+    t.live = req(m, "live", is_bool, "a boolean").as_bool();
+    if ((t.state == CALIPER_NET_TIME_FOLLOWING) != !t.cursor.has_value())
+        bad("the cursor is null exactly while following");
+    return t;
+}
+
+void text_to_meta(const Text& x, Json& m, std::vector<Section>& sections) {
+    m.set("sub", x.sub);
+    m.set("view", x.view);
+    m.set("start", x.start);
+    m.set("total", x.total);
+    m.set("stamp_ns", x.stamp_ns);
+    if (x.dropped) m.set("dropped", *x.dropped);
+    if (x.cursor) m.set("cursor", *x.cursor);
+    sections.push_back(named(x.text, "text"));
+    sections.push_back(named(x.offsets, "offsets"));
+    sections.push_back(named(x.levels, "levels"));
+    if (x.stamps) sections.push_back(named(*x.stamps, "stamps"));
+    else if (x.stamp) sections.push_back(named(*x.stamp, "stamp"));
+}
+
+void cursor_to_meta(const Cursor& c, Json& m) {
+    m.set("request_id", c.request_id);
+    m.set("op", c.op);
+    if (c.timeline) m.set("timeline", *c.timeline);
+    if (c.value) m.set("value", *c.value);
+    if (c.count) m.set("count", *c.count);
+    if (c.speed) m.set("speed", *c.speed);
+    if (c.pace) m.set("pace", *c.pace);
+    if (!c.loop.is_null()) m.set("loop", c.loop);
+}
+
+void time_state_to_meta(const TimeState& t, Json& m) {
+    if (t.request_id) m.set("request_id", *t.request_id);
+    m.set("session", t.session);
+    m.set("generation", t.generation);
+    m.set("state", t.state);
+    m.set("timeline", t.timeline);
+    m.set("cursor", t.cursor ? Json(*t.cursor) : Json());
+    if (t.speed) m.set("speed", *t.speed);
+    if (t.pace) m.set("pace", *t.pace);
+    if (!t.loop.is_null()) m.set("loop", t.loop);
+    m.set("ranges", t.ranges);
+    m.set("live", t.live);
 }
 // ---- end of the protocol 3.2 draft block ----
 
@@ -1372,6 +1770,7 @@ Encoded to_meta(const Message& msg) {
     } else if (const auto* v = std::get_if<Views>(&msg)) {
         m.set("session", v->session ? Json(*v->session) : Json());
         m.set("views", v->views);
+        if (!v->timelines.is_null()) m.set("timelines", v->timelines);   // 3.2 draft
     } else if (const auto* s = std::get_if<Subscribe>(&msg)) {
         m.set("sub", s->sub);
         m.set("view", s->view);
@@ -1407,15 +1806,27 @@ Encoded to_meta(const Message& msg) {
         if (!s->tile.is_null()) m.set("tile", s->tile);
         if (s->points_dims) m.set("points_dims", *s->points_dims);
         if (s->label_count) m.set("label_count", *s->label_count);
-        e.sections.push_back(named(s->data, "data"));
+        if (!s->labels.is_null()) m.set("labels", s->labels);   // 3.2 draft
+        if (s->horizontal) m.set("horizontal", true);
+        if (s->is_static) m.set("static", true);
+        if (s->cursor) m.set("cursor", *s->cursor);
+        if (s->empty) m.set("empty", true);
+        if (!s->empty) e.sections.push_back(named(s->data, "data"));
         if (s->aux) e.sections.push_back(named(*s->aux, "aux"));
+        if (s->colors) e.sections.push_back(named(*s->colors, "colors"));
+        if (s->stamp) e.sections.push_back(named(*s->stamp, "stamp"));
     } else if (const auto* s = std::get_if<Series>(&msg)) {
         m.set("sub", s->sub);
         m.set("view", s->view);
         m.set("start", s->start);
         m.set("total", s->total);
         m.set("stamp_ns", s->stamp_ns);
+        if (s->decimated) m.set("decimated", *s->decimated);   // 3.2 draft
+        if (s->cursor) m.set("cursor", *s->cursor);
         e.sections.push_back(named(s->values, "values"));
+        if (s->stamps) e.sections.push_back(named(*s->stamps, "stamps"));
+        else if (s->stamp) e.sections.push_back(named(*s->stamp, "stamp"));
+        if (s->indices) e.sections.push_back(named(*s->indices, "indices"));
     } else if (const auto* v = std::get_if<Event>(&msg)) {
         m.set("view", v->view);
         m.set("type", v->type);
@@ -1427,6 +1838,7 @@ Encoded to_meta(const Message& msg) {
         m.set("run", c->run);
         m.set("params", c->params);
         m.set("actions", c->actions);
+        if (c->stamp) e.sections.push_back(named(*c->stamp, "stamp"));   // 3.2 draft
     } else if (const auto* c = std::get_if<Control>(&msg)) {
         m.set("request_id", c->request_id);
         m.set("op", c->op);
@@ -1456,6 +1868,17 @@ Encoded to_meta(const Message& msg) {
         scene_clear_to_meta(*sc, m, e.sections);
     } else if (const auto* sk = std::get_if<SceneClasses>(&msg)) {
         scene_classes_to_meta(*sk, m, e.sections);
+    } else if (const auto* tx = std::get_if<Text>(&msg)) {
+        text_to_meta(*tx, m, e.sections);
+    } else if (const auto* rs = std::get_if<Recordings>(&msg)) {
+        m.set("recordings", rs->recordings);
+    } else if (const auto* ro = std::get_if<RecordingOpen>(&msg)) {
+        m.set("request_id", ro->request_id);
+        m.set("recording", ro->recording);
+    } else if (const auto* cu = std::get_if<Cursor>(&msg)) {
+        cursor_to_meta(*cu, m);
+    } else if (const auto* ts = std::get_if<TimeState>(&msg)) {
+        time_state_to_meta(*ts, m);
     } else if (const auto* u = std::get_if<Unknown>(&msg)) {
         m = u->meta.is_object() ? u->meta : Json::object();
         m.erase("sections");
@@ -1763,6 +2186,11 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
             case CALIPER_NET_MSG_SCENE_TRANSFORMS: *out = scene_transforms(f); break;
             case CALIPER_NET_MSG_SCENE_CLEAR: *out = scene_clear(f); break;
             case CALIPER_NET_MSG_SCENE_CLASSES: *out = scene_classes(f); break;
+            case CALIPER_NET_MSG_TEXT: *out = text(f); break;
+            case CALIPER_NET_MSG_RECORDINGS: *out = recordings(f); break;
+            case CALIPER_NET_MSG_RECORDING_OPEN: *out = recording_open(f); break;
+            case CALIPER_NET_MSG_CURSOR: *out = cursor(f); break;
+            case CALIPER_NET_MSG_TIME_STATE: *out = time_state(f); break;
             default: *out = Unknown{f.type, f.meta, f.sections}; break;
         }
     } catch (const MsgError& e) {
@@ -1817,7 +2245,168 @@ const char* type_name(uint16_t type) {
         case CALIPER_NET_MSG_SCENE_TRANSFORMS: return "scene_transforms";
         case CALIPER_NET_MSG_SCENE_CLEAR: return "scene_clear";
         case CALIPER_NET_MSG_SCENE_CLASSES: return "scene_classes";
+        case CALIPER_NET_MSG_TEXT: return "text";
+        case CALIPER_NET_MSG_RECORDINGS: return "recordings";
+        case CALIPER_NET_MSG_RECORDING_OPEN: return "recording_open";
+        case CALIPER_NET_MSG_CURSOR: return "cursor";
+        case CALIPER_NET_MSG_TIME_STATE: return "time_state";
         default: return "?";
+    }
+}
+
+// ---- protocol 3.2 draft: stamp text, text lines and split updates ----
+
+bool stamp_text_ok(const std::string& v) {
+    if (v.empty() || v.size() > CALIPER_NET_STAMP_TEXT_MAX) return false;
+    const bool neg = v[0] == '-';
+    size_t i = neg ? 1 : 0;
+    if (i == v.size()) return false;
+    for (size_t k = i; k < v.size(); ++k)
+        if (v[k] < '0' || v[k] > '9') return false;
+    while (i + 1 < v.size() && v[i] == '0') ++i;   // leading zeros
+    const std::string digits = v.substr(i);
+    const std::string lim = neg ? "9223372036854775808" : "9223372036854775807";
+    return digits.size() < lim.size() || (digits.size() == lim.size() && digits <= lim);
+}
+
+std::string Text::line(size_t i) const {
+    int32_t a = 0, b = 0;
+    std::memcpy(&a, offsets.data + 4 * i, 4);
+    std::memcpy(&b, offsets.data + 4 * (i + 1), 4);
+    return std::string((const char*)text.data + a, (size_t)(b - a));
+}
+
+SplitUpdates::Result SplitUpdates::add(const SceneUpdate& piece, WholeUpdate* out, std::string* err) {
+    auto fail = [&](const std::string& m) {
+        if (err) *err = m;
+        return Result::Refused;
+    };
+    const Json& sp = piece.split;
+    const uint64_t uid = u64(*sp.find("update"));
+    const int64_t num = i64(*sp.find("piece"));
+    auto stamp_bytes = [](const SceneUpdate& u) {
+        return u.stamp ? std::vector<uint8_t>(u.stamp->data, u.stamp->data + u.stamp->size) : std::vector<uint8_t>();
+    };
+    if (num == 0) {
+        for (auto it = open_.begin(); it != open_.end();) {
+            if (it->update == uid || (it->p0.path == piece.path && it->p0.part == piece.part)) {
+                it = open_.erase(it);
+                ++discarded_;
+            } else {
+                ++it;
+            }
+        }
+        Assembly a;
+        a.update = uid;
+        a.p0 = piece;
+        a.p0.arrays.clear();
+        a.stamp_bytes = stamp_bytes(piece);
+        a.p0.stamp.reset();
+        a.pieces = i64(*sp.find("pieces"));
+        a.rows = *sp.find("rows");
+        open_.push_back(std::move(a));
+        while (open_.size() > CALIPER_NET_MAX_INCOMPLETE_UPDATES) {
+            open_.erase(open_.begin());
+            ++discarded_;
+        }
+    }
+    auto it = std::find_if(open_.begin(), open_.end(), [&](const Assembly& a) { return a.update == uid; });
+    if (it == open_.end()) {
+        ++dropped_;
+        return Result::Dropped;
+    }
+    Assembly& a = *it;
+    auto refuse = [&](const std::string& m) {
+        open_.erase(std::find_if(open_.begin(), open_.end(), [&](const Assembly& x) { return x.update == uid; }));
+        ++discarded_;
+        return fail(m);
+    };
+    // The checks of _Assembly.add, in its order.
+    if (piece.path != a.p0.path || piece.part != a.p0.part || piece.seq != a.p0.seq ||
+        i64(*sp.find("pieces")) != a.pieces || stamp_bytes(piece) != a.stamp_bytes)
+        return refuse("a piece's path, part, seq, pieces or stamp differ from its update's piece 0");
+    if (std::find(a.seen.begin(), a.seen.end(), num) != a.seen.end())
+        return refuse("piece " + std::to_string(num) + " arrived twice");
+    a.seen.push_back(num);
+    const Json& first = *sp.find("first");
+    for (const Section& s : piece.arrays) {
+        const Json* rows_j = a.rows.find(s.name);
+        if (!rows_j) return refuse("a piece holds '" + s.name + "', which 'split.rows' does not name");
+        const uint32_t item = s.dtype >= 0 && s.dtype <= 0x7fffffff ? caliper_net_dtype_size((int32_t)s.dtype) : 0u;
+        if (item == 0) return refuse("a piece of '" + s.name + "' has an unknown dtype");
+        const std::vector<int64_t> trailing(s.shape.begin() + 1, s.shape.end());
+        uint64_t rowbytes = item;
+        for (int64_t d : trailing) rowbytes *= (uint64_t)d;
+        const uint64_t rows = u64(*rows_j);
+        auto ai = std::find_if(a.arrays.begin(), a.arrays.end(), [&](const auto& x) { return x.first == s.name; });
+        if (ai == a.arrays.end()) {
+            const uint64_t total = rows * rowbytes;
+            if ((rowbytes && rows > CALIPER_NET_MAX_UPDATE_BYTES / rowbytes) ||
+                a.bytes + total > CALIPER_NET_MAX_UPDATE_BYTES)
+                return refuse("a split update of more than 536870912 bytes");
+            a.bytes += total;
+            Array arr;
+            arr.dtype = s.dtype;
+            arr.trailing = trailing;
+            arr.bytes.resize((size_t)total);
+            a.arrays.emplace_back(s.name, std::move(arr));
+            ai = a.arrays.end() - 1;
+        } else if (ai->second.dtype != s.dtype || ai->second.trailing != trailing) {
+            return refuse("the pieces of '" + s.name + "' differ in dtype or shape");
+        }
+        const int64_t f0 = (int64_t)u64(*first.find(s.name)), n = s.shape[0];
+        if ((uint64_t)(f0 + n) > rows) return refuse("rows of '" + s.name + "' pass its rows");
+        for (const auto& r : ai->second.ranges)
+            if (f0 < r.first + r.second && r.first < f0 + n) return refuse("two pieces hold the same rows of '" + s.name + "'");
+        ai->second.ranges.emplace_back(f0, n);
+        if (s.size) std::memcpy(ai->second.bytes.data() + (size_t)f0 * rowbytes, s.data, s.size);
+    }
+    if ((int64_t)a.seen.size() < a.pieces) return Result::Pending;
+    for (const auto& kv : a.rows.members()) {
+        auto ai = std::find_if(a.arrays.begin(), a.arrays.end(), [&](const auto& x) { return x.first == kv.first; });
+        int64_t got = 0;
+        if (ai != a.arrays.end())
+            for (const auto& r : ai->second.ranges) got += r.second;
+        if ((uint64_t)got != u64(kv.second)) return refuse("the pieces ended before every row of '" + kv.first + "' arrived");
+    }
+    // The whole update: piece 0's keys with the whole arrays and the stamp, checked as an unsplit update.
+    struct Keep {
+        std::vector<std::pair<std::string, Array>> arrays;
+        std::vector<uint8_t> stamp;
+    };
+    auto keep = std::make_shared<Keep>();
+    keep->arrays = std::move(a.arrays);
+    keep->stamp = std::move(a.stamp_bytes);
+    SceneUpdate p0 = std::move(a.p0);
+    const Json rows = a.rows;
+    open_.erase(std::find_if(open_.begin(), open_.end(), [&](const Assembly& x) { return x.update == uid; }));
+    Frame f;
+    f.type = CALIPER_NET_MSG_SCENE_UPDATE;
+    p0.split = Json();
+    f.meta = to_meta(Message(p0)).meta;
+    const int part = scene_part_index(p0.part);
+    for (const char* const* k = scene_part_sections(part); *k; ++k) {
+        for (const auto& kv : keep->arrays) {
+            if (kv.first != *k) continue;
+            std::vector<int64_t> shape{(int64_t)u64(*rows.find(kv.first))};
+            shape.insert(shape.end(), kv.second.trailing.begin(), kv.second.trailing.end());
+            f.sections.push_back(Section::make(kv.first, kv.second.dtype, shape, kv.second.bytes.data(),
+                                               kv.second.bytes.size()));
+        }
+    }
+    if (!keep->stamp.empty())
+        f.sections.push_back(Section::make("stamp", CALIPER_NET_DTYPE_I64, {(int64_t)keep->stamp.size() / 8},
+                                           keep->stamp.data(), keep->stamp.size()));
+    try {
+        SceneUpdate whole = scene_update(f);
+        if (out) {
+            out->update = std::move(whole);
+            out->keep = keep;
+        }
+        return Result::Whole;
+    } catch (const MsgError& e) {
+        ++discarded_;
+        return fail(e.message);
     }
 }
 

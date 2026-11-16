@@ -1,0 +1,37 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 238,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 214,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 123
+  },
+  "meta": {
+    "cursor": "5000",
+    "generation": 2,
+    "live": false,
+    "ranges": {
+      "step": [
+        "0",
+        "19999"
+      ],
+      "time": [
+        "1763208194000000000",
+        "1763208794000000000"
+      ]
+    },
+    "request_id": 2,
+    "session": "train-20261115-120314",
+    "state": "paused",
+    "timeline": "step"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/time_state_paused",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "time_state"
+}

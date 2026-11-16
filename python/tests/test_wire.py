@@ -41,7 +41,7 @@ VALID_30 = sorted(p.stem for p in FIXTURES.glob("*.bin"))
 VALID_31 = sorted(f"v3_1/{p.stem}" for p in (FIXTURES / "v3_1").glob("*.bin"))
 VALID = VALID_30 + VALID_31
 VALID_32 = sorted(f"v3_2/{p.stem}" for p in (FIXTURES / "v3_2").glob("*.bin"))   # test_wire_32.py
-TYPES_32 = {0x70, 0x71, 0x72, 0x73}
+TYPES_32 = {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B}
 LATER_MINOR = ("ping_future", "unknown_type")
 TYPES_30 = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x20, 0x21, 0x22, 0x23, 0x24, 0x30,
             0x31, 0x40}
@@ -586,7 +586,7 @@ def _c_value(text: str):
     if text.startswith('"'):
         return json.loads(text)
     text = re.sub(r"(?<=[0-9a-fA-F])(u|LL)\b", "", text)
-    if not re.fullmatch(r"[0-9a-fA-Fx()<< +-]+", text):
+    if not re.fullmatch(r"[0-9a-fA-Fx()<< +.-]+", text):
         raise ValueError(text)
     return eval(text, {"__builtins__": {}})   # digits, parentheses, shifts and signs only
 
@@ -642,6 +642,9 @@ def test_page_tables_match_header():
     for n, v in limits:
         assert consts[n] == int(v.replace(",", "")), n
     errs = set(re.findall(r"^\| `([a-z_]+)` \| ", page[page.index("## Error codes"):], re.M))
+    p32 = PAGE_32.read_text()                       # the 3.2 draft's codes, in its own section
+    p32 = p32[p32.index("## Error codes"):]
+    errs |= set(re.findall(r"^\| `([a-z_]+)` \| ", p32[:p32.index("\n## ", 3)], re.M))
     assert errs == {v for n, v in consts.items() if n.startswith("CALIPER_NET_ERR_")}
     dtypes = re.findall(r"^\| (\d) \| `(\w+)` \| (\d) \|", both, re.M)   # u16: the 3.2 page
     assert {int(i): int(s) for i, _, s in dtypes} == {int(k): v for k, v in w.DTYPE_SIZE.items()}

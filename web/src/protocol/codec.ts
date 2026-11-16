@@ -5,8 +5,8 @@
 // of 8. This module is the only one that knows the bytes.
 
 import {
-  CLOSE, CONTROL_OPS, DTYPE, DTYPE_SIZE, LIMITS, LIMITS_31, MSG, PROTOCOL_MAJOR, PROTOCOL_MINOR, RUN_STATES,
-  type ActionInfo, type ControlOp, type ControlReplyMsg, type DataView as DataViewSpec, type ErrorMsg, type Message,
+  CLOSE, CONTROL_OPS, DTYPE, DTYPE_SIZE, LIMITS, LIMITS_31, MSG, PROTOCOL_MAJOR, PROTOCOL_MINOR, PROTOCOL_MINOR_3_2, RUN_STATES,
+  type ActionInfo, type ControlOp, type ControlReplyMsg, type ControlsMsg, type SeriesMsg, type TimelineInfo, type DataView as DataViewSpec, type ErrorMsg, type Message,
   type MessageType, type ParamInfo, type ParamValue, type PayloadAxis, type RunInfo, type SelectionDetails,
   type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry,
 } from './messages.js';
@@ -245,7 +245,8 @@ const isViewEntry = (v: unknown) => {
       if (!isObj(d) || !isName(dd.name) || !isUint(dd.size) || !optName(dd.items)) return false;
     }
   }
-  return o.default === undefined || o.default === null || isObj(o.default);
+  return (o.default === undefined || o.default === null || isObj(o.default))
+    && (o.recorded === undefined || o.recorded === null || isRecorded(o.recorded));
 };
 
 // --- 3.1 checks (python/caliper/_wire.py has the same) -----------------------------
@@ -308,48 +309,77 @@ function section(f: Frame, name: string): Section | undefined {
 function decodeSnapshot(f: Frame): SnapshotMsg {
   const t = f.type;
   const kind = req<number>(f, 'kind', isInt, 'a kind id');
+  const empty = opt(f, 'empty', isBool, 'a boolean', false);
   const data = section(f, 'data');
-  if (!data) bad(t, "a snapshot needs a 'data' section");
+  if (empty) {
+    if (f.sections.length) bad(t, 'an empty snapshot carries no section');
+  } else if (!data) {
+    bad(t, "a snapshot needs a 'data' section");
+  }
   const auxSec = section(f, 'aux');
   const stats = opt<(number | null)[]>(f, 'stats', (v) => Array.isArray(v) && v.length <= 64 && v.every((x) => x === null || isNum(x)), 'a list of numbers or nulls', []);
+  const sub = req<number>(f, 'sub', isU32, 'a uint32');
+  const view = req<string>(f, 'view', isName, 'a view name');
+  const seq = req<number>(f, 'seq', isUint, 'an unsigned integer');
+  const stamp_ns = req<number>(f, 'stamp_ns', isUint, 'an unsigned integer');
+  const data_view = req<DataViewSpec>(f, 'data_view', isObj, 'an object');
+  const colormap = opt(f, 'colormap', isInt, 'an integer', 0);
+  const flags = opt(f, 'flags', isUint, 'an unsigned integer', 0);
+  const vmin = opt(f, 'vmin', isNum, 'a number', 0);
+  const vmax = opt(f, 'vmax', isNum, 'a number', 1);
+  const axes = opt<PayloadAxis[]>(f, 'axes', Array.isArray, 'a list', []);
+  const tile = opt(f, 'tile', isObj, 'an object', null);
   const pointsDims = opt<number | undefined>(f, 'points_dims', (v) => v === 2 || v === 3, '2 or 3', undefined);
-  const want: Record<number, [number, number]> = { 1: [DTYPE.f32, 2], 2: [DTYPE.u8, 3], 3: [DTYPE.f32, 2], 5: [DTYPE.f32, 1] };
-  const w = want[kind];
-  if (w && (data.dtype !== w[0] || data.shape.length !== w[1] || data.encoding !== 0))
-    bad(t, `kind ${kind}: 'data' is dtype ${data.dtype} shape [${data.shape}]`);
-  if (kind === 2 && data.shape[2] !== 4) bad(t, "an image's 'data' is (H, W, 4)");
+  const label_count = opt<number | undefined>(f, 'label_count', isUint, 'an unsigned integer', undefined);
   let dims: 2 | 3 | undefined;
   let aux: Float32Array | undefined;
-  if (kind === 3) {
-    if ((data.shape[1] !== 2 && data.shape[1] !== 3) || (pointsDims !== undefined && pointsDims !== data.shape[1]))
-      bad(t, "points 'data' is (N, points_dims) with points_dims 2 or 3");
-    dims = data.shape[1] as 2 | 3;
-    if (auxSec) {
-      if (auxSec.dtype !== DTYPE.f32 || auxSec.shape.length !== 1 || auxSec.shape[0] !== data.shape[0]) bad(t, "points 'aux' is (N,) f32");
-      aux = f32(auxSec);
+  if (!empty) {
+    const d = data!;
+    const want: Record<number, [number, number]> = { 1: [DTYPE.f32, 2], 2: [DTYPE.u8, 3], 3: [DTYPE.f32, 2], 5: [DTYPE.f32, 1], 8: [DTYPE.f32, 1] };
+    const w = want[kind];
+    if (w) {
+      // The encoding check is this viewer's own (the other codecs refuse a non-raw payload where it is read).
+      if (d.dtype !== w[0] || d.shape.length !== w[1] || d.encoding !== 0) bad(t, `kind ${kind}: 'data' is dtype ${d.dtype} shape [${d.shape}]`);
+      if (kind === 2 && d.shape[2] !== 4) bad(t, "an image's 'data' is (H, W, 4)");
+      if (kind === 8 && !(d.shape[0] >= 1 && d.shape[0] <= MAX_BARS)) bad(t, `a bar chart has 1 to ${MAX_BARS} bars, got ${d.shape[0]}`);
+      if (kind === 3) {
+        if ((d.shape[1] !== 2 && d.shape[1] !== 3) || (pointsDims !== undefined && pointsDims !== d.shape[1]))
+          bad(t, "points 'data' is (N, points_dims) with points_dims 2 or 3");
+        dims = d.shape[1] as 2 | 3;
+        if (auxSec) {
+          if (auxSec.dtype !== DTYPE.f32 || auxSec.shape.length !== 1 || auxSec.shape[0] !== d.shape[0]) bad(t, "points 'aux' is (N,) f32");
+          aux = f32(auxSec);
+        }
+      }
     }
   }
-  return {
-    type: 'snapshot',
-    sub: req(f, 'sub', isU32, 'a uint32'),
-    view: req(f, 'view', isName, 'a view name'),
-    seq: req(f, 'seq', isUint, 'an unsigned integer'),
-    stamp_ns: req(f, 'stamp_ns', isUint, 'an unsigned integer'),
-    kind,
-    data_view: req<DataViewSpec>(f, 'data_view', isObj, 'an object'),
-    data: data.dtype === DTYPE.u8 ? u8(data) : data.dtype === DTYPE.f32 ? f32(data) : new Float32Array(0),
-    shape: data.shape,
-    aux,
-    colormap: opt(f, 'colormap', isInt, 'an integer', 0),
-    flags: opt(f, 'flags', isUint, 'an unsigned integer', 0),
-    vmin: opt(f, 'vmin', isNum, 'a number', 0),
-    vmax: opt(f, 'vmax', isNum, 'a number', 1),
+  const m: SnapshotMsg = {
+    type: 'snapshot', sub, view, seq, stamp_ns, kind, data_view,
+    data: data && !empty ? (data.dtype === DTYPE.u8 ? u8(data) : data.dtype === DTYPE.f32 ? f32(data) : new Float32Array(0)) : new Float32Array(0),
+    shape: data && !empty ? data.shape : [],
+    aux, colormap, flags, vmin, vmax,
     stats: stats.map((x) => (x === null ? NaN : x)),
-    axes: opt<PayloadAxis[]>(f, 'axes', Array.isArray, 'a list', []),
-    tile: opt(f, 'tile', isObj, 'an object', null),
-    points_dims: dims,
-    label_count: opt<number | undefined>(f, 'label_count', isUint, 'an unsigned integer', undefined),
+    axes, tile, points_dims: dims, label_count,
   };
+  if (empty) m.empty = true;
+  // the 3.2 additions, checked after the 3.1 ones (_snapshot_32 of _wire.py)
+  if (kind === 8 && !empty) {
+    const b = data!.shape[0];
+    const c = partSection(f, 'colors', DTYPE.u8, [b, 4]);
+    const labels = opt<string[] | undefined>(f, 'labels', (v) => Array.isArray(v) && v.length === b && v.every((x) => typeof x === 'string' && utf8.encode(x).length <= NAME_MAX),
+      `${b} labels of at most ${NAME_MAX} bytes`, undefined);
+    const horizontal = opt(f, 'horizontal', isBool, 'a boolean', false);
+    if (c) m.colors = u8(c);
+    if (labels) m.labels = labels;
+    if (horizontal) m.horizontal = true;
+  }
+  const isStatic = opt(f, 'static', isBool, 'a boolean', false);
+  const cursor = opt<number | undefined>(f, 'cursor', isU32, 'a uint32', undefined);
+  const { stamp } = stampSections(f, isStatic);
+  if (isStatic) m.static = true;
+  if (cursor !== undefined) m.cursor = cursor;
+  if (stamp) m.stamp = i64(stamp);
+  return m;
 }
 
 /** Decodes one message. Throws WireError or MessageError. */
@@ -398,6 +428,7 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         sessions: req(f, 'sessions', (v) => Array.isArray(v) && v.every((s) => isIdentity(s)
           && ((s as SessionIdentity).state === 'live' || (s as SessionIdentity).state === 'ended')
           && isUint((s as SessionIdentity).views)
+          && ((s as SessionIdentity).recording == null || isRecordingRef((s as SessionIdentity).recording))
           && ((s as SessionIdentity).capabilities == null || isStrs((s as SessionIdentity).capabilities))), 'a list of sessions'),
       };
     case MSG.attach:
@@ -408,6 +439,7 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         type: 'views',
         views: req<ViewEntry[]>(f, 'views', (v) => Array.isArray(v) && v.every(isViewEntry), 'a list of views'),
         session: opt<string | null>(f, 'session', isSessionId, 'a session id', null),
+        timelines: opt<TimelineInfo[] | undefined>(f, 'timelines', isTimelines, '2 to 8 timelines, step and time first', undefined),
       };
     case MSG.subscribe:
       return {
@@ -446,19 +478,31 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
     case MSG.series: {
       const v = section(f, 'values');
       if (!v || v.dtype !== DTYPE.f32 || v.shape.length !== 1 || v.encoding !== 0) bad(t, "a series needs a (M,) f32 'values' section");
+      const sub = req<number>(f, 'sub', isU32, 'a uint32');
+      const view = req<string>(f, 'view', isName, 'a view name');
       const start = req<number>(f, 'start', isUint, 'an unsigned integer');
       const total = req<number>(f, 'total', isUint, 'an unsigned integer');
-      if (v.shape[0] < 1 || v.shape[0] > 262144 || start + v.shape[0] > total)
+      const stamp_ns = req<number>(f, 'stamp_ns', isUint, 'an unsigned integer');
+      const sparse = section(f, 'indices') !== undefined;
+      if (v.shape[0] < 1 || v.shape[0] > 262144 || (!sparse && start + v.shape[0] > total))
         bad(t, `series: ${v.shape[0]} values from ${start} with total ${total}`);
-      return {
-        type: 'series',
-        sub: req(f, 'sub', isU32, 'a uint32'),
-        view: req(f, 'view', isName, 'a view name'),
-        start,
-        total,
-        stamp_ns: req(f, 'stamp_ns', isUint, 'an unsigned integer'),
-        values: f32(v),
-      };
+      const out: SeriesMsg = { type: 'series', sub, view, start, total, stamp_ns, values: f32(v) };
+      // the 3.2 additions (_series_32 of _wire.py)
+      const n = v.shape[0];
+      const idx = partSection(f, 'indices', DTYPE.i64, [n]);
+      const decimated = opt<number | undefined>(f, 'decimated', (x) => isInt(x) && x >= 1, 'an integer >= 1', undefined);
+      if ((idx === undefined) !== (decimated === undefined)) bad(t, "'indices' and 'decimated' go together");
+      const cursor = opt<number | undefined>(f, 'cursor', isU32, 'a uint32', undefined);
+      const { stamp, stamps } = stampSections(f, false, n);
+      if (idx) out.indices = i64(idx);
+      if (decimated !== undefined) out.decimated = decimated;
+      if (cursor !== undefined) out.cursor = cursor;
+      if (stamp) out.stamp = i64(stamp);
+      if (stamps) {
+        out.stamps = i64(stamps);
+        out.stamps_t = stamps.shape[1];
+      }
+      return out;
     }
     case MSG.event: {
       const detail = req<Record<string, unknown>>(f, 'detail', isObj, 'an object');
@@ -477,8 +521,8 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         data_view: opt(f, 'data_view', isObj, 'an object', undefined),
       };
     }
-    case MSG.controls:
-      return {
+    case MSG.controls: {
+      const c: ControlsMsg = {
         type: 'controls',
         run: req(f, 'run', isRun, 'a run state'),
         params: req(f, 'params', (v) => Array.isArray(v) && v.length <= LIMITS_31.maxParams && v.every(isParam) && uniqueNames(v as ParamInfo[]),
@@ -486,6 +530,10 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         actions: req(f, 'actions', (v) => Array.isArray(v) && v.length <= LIMITS_31.maxActions && v.every(isAction) && uniqueNames(v as ActionInfo[]),
           `at most ${LIMITS_31.maxActions} actions with unique names`),
       };
+      const { stamp } = stampSections(f, false);
+      if (stamp) c.stamp = i64(stamp);
+      return c;
+    }
     case MSG.control: {
       const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'pause, resume, step, set or run');
       const name = opt<string | undefined>(f, 'name', isName, 'a parameter or action name', undefined);
@@ -536,6 +584,16 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
       return decodeSceneClear(f);
     case MSG.scene_classes:
       return decodeSceneClasses(f);
+    case MSG.text:
+      return decodeText(f);
+    case MSG.recordings:
+      return decodeRecordings(f);
+    case MSG.recording_open:
+      return decodeRecordingOpen(f);
+    case MSG.cursor:
+      return decodeCursor(f);
+    case MSG.time_state:
+      return decodeTimeState(f);
     default:
       return { type: 'unknown', id: t, meta: f.meta };
   }
@@ -576,7 +634,8 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
     case 'attach':
       return encodeFrame(id, { session: msg.session });
     case 'views':
-      return encodeFrame(id, { session: msg.session ?? null, views: msg.views });
+      return encodeFrame(id, msg.timelines === undefined ? { session: msg.session ?? null, views: msg.views }
+        : { session: msg.session ?? null, views: msg.views, timelines: msg.timelines });
     case 'subscribe':
       return encodeFrame(id, drop({ sub: msg.sub, view: msg.view, request_id: msg.request_id, max_rate: msg.max_rate, data_view: msg.data_view }));
     case 'unsubscribe':
@@ -587,24 +646,35 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
       return encodeFrame(id, drop({ request_id: msg.request_id, sub: msg.sub, view: msg.view, data_view: msg.data_view, error: msg.error }));
     case 'event':
       return encodeFrame(id, drop({ view: msg.view, type: msg.event, detail: msg.detail, sub: msg.sub, seq: msg.seq, data_view: msg.data_view }));
-    case 'series':
-      return encodeFrame(id, { sub: msg.sub, view: msg.view, start: msg.start, total: msg.total, stamp_ns: msg.stamp_ns },
-        [f32Section('values', msg.values, [msg.values.length])]);
+    case 'series': {
+      const sections: Section[] = [f32Section('values', msg.values, [msg.values.length])];
+      const n = msg.values.length;
+      if (msg.stamps) sections.push(stampSection('stamps', msg.stamps, [n, msg.stamps_t ?? (n ? msg.stamps.length / n : 0)]));
+      else if (msg.stamp) sections.push(stampSection('stamp', msg.stamp, [msg.stamp.length]));
+      if (msg.indices) sections.push(stampSection('indices', msg.indices, [msg.indices.length]));
+      return encodeFrame(id, drop({ sub: msg.sub, view: msg.view, start: msg.start, total: msg.total, stamp_ns: msg.stamp_ns, decimated: msg.decimated, cursor: msg.cursor }), sections);
+    }
     case 'snapshot': {
       const s = msg;
-      const sections: Section[] = [{
-        name: 'data', dtype: s.data instanceof Uint8Array ? DTYPE.u8 : DTYPE.f32, shape: s.shape, encoding: 0,
-        bytes: new Uint8Array(s.data.buffer, s.data.byteOffset, s.data.byteLength),
-      }];
+      const sections: Section[] = [];
+      if (!s.empty) {
+        sections.push({
+          name: 'data', dtype: s.data instanceof Uint8Array ? DTYPE.u8 : DTYPE.f32, shape: s.shape, encoding: 0,
+          bytes: new Uint8Array(s.data.buffer, s.data.byteOffset, s.data.byteLength),
+        });
+      }
       if (s.aux) sections.push(f32Section('aux', s.aux, [s.aux.length]));
+      if (s.colors) sections.push({ name: 'colors', dtype: DTYPE.u8, shape: [s.colors.length / 4, 4], encoding: 0, bytes: s.colors });
+      if (s.stamp) sections.push(stampSection('stamp', s.stamp, [s.stamp.length]));
       return encodeFrame(id, drop({
         sub: s.sub, view: s.view, seq: s.seq, stamp_ns: s.stamp_ns, kind: s.kind, data_view: s.data_view, colormap: s.colormap,
         flags: s.flags, vmin: s.vmin, vmax: s.vmax, stats: s.stats.map((x) => (Number.isFinite(x) ? x : null)), axes: s.axes,
-        tile: s.tile, points_dims: s.points_dims, label_count: s.label_count,
+        tile: s.tile, points_dims: s.points_dims, label_count: s.label_count, labels: s.labels,
+        horizontal: s.horizontal ? true : undefined, static: s.static ? true : undefined, cursor: s.cursor, empty: s.empty ? true : undefined,
       }), sections);
     }
     case 'controls':
-      return encodeFrame(id, { run: msg.run, params: msg.params, actions: msg.actions });
+      return encodeFrame(id, { run: msg.run, params: msg.params, actions: msg.actions }, msg.stamp ? [stampSection('stamp', msg.stamp, [msg.stamp.length])] : []);
     case 'control':
       return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count }));
     case 'control_reply':
@@ -624,6 +694,22 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
       return encodeSceneClear(msg, minor);
     case 'scene_classes':
       return encodeSceneClasses(msg, minor);
+    case 'text':
+      return encodeText(msg, minor);
+    case 'recordings':
+      return encodeFrame(id, { recordings: msg.recordings });
+    case 'recording_open':
+      return encodeFrame(id, { request_id: msg.request_id, recording: msg.recording });
+    case 'cursor':
+      return encodeFrame(id, drop({
+        request_id: msg.request_id, op: msg.op, timeline: msg.timeline, value: msg.value, count: msg.count, speed: msg.speed,
+        pace: msg.pace, loop: msg.loop,
+      }));
+    case 'time_state':
+      return encodeFrame(id, { ...drop({
+        request_id: msg.request_id, session: msg.session, generation: msg.generation, state: msg.state, timeline: msg.timeline,
+        ranges: msg.ranges, live: msg.live, speed: msg.speed, pace: msg.pace, loop: msg.loop,
+      }), cursor: msg.cursor ?? null });
   }
 }
 
@@ -636,6 +722,10 @@ import {
   MAX_CLASS_ID, MAX_CLASSES, MAX_ENCODED_BYTES, MAX_IMAGE_SIDE, MAX_LABELS, MAX_TIMELINES, MAX_TRANSFORMS, PART_ARROWS, PART_BOXES,
   PART_CAMERA, PART_IMAGE, PART_KEYS, PART_LINES, PART_MESH, PART_POINTS, PART_SECTIONS, SCENE_DATA_VIEW, SCENE_PARTS, SPACE_2D,
   SPACE_3D, UP_AXES_2D, UP_AXES_3D,
+  CURSOR_OPS, CURSOR_PLAY, CURSOR_SEEK, CURSOR_STEP, LEVEL_ERROR, MAX_BARS, MAX_CURSOR_STEP,
+  MAX_INCOMPLETE_UPDATES, MAX_PIECES, MAX_RECORDED, MAX_RECORDINGS, MAX_SPEED, MAX_UPDATE_BYTES, MIN_SPEED, PACE_EVEN, PACE_RECORDED,
+  STAMP_TEXT_MAX, TEXT_LINE_MAX, TEXT_MAX_LINES, TIME_FOLLOWING, TIME_PAUSED, TIME_PLAYING, TIMELINE_SEQUENCE, TIMELINE_TIME,
+  type CursorMsg, type RecordingEntry, type RecordingOpenMsg, type RecordingsMsg, type SplitKey, type TextMsg, type TimeStateMsg,
   type SceneArray, type SceneClass, type SceneClassesMsg, type SceneClearMsg, type SceneTransformsMsg, type SceneUpdateMsg,
   type SceneViewInfo, type ScenePart, type ViewCameraOrbit,
 } from './messages.js';
@@ -763,10 +853,6 @@ function labelCount(f: Frame, params: Record<string, unknown>, n: number): void 
 function classIds(f: Frame, n: number, arrays: Record<string, SceneArray>): void {
   const s = partSection(f, 'class_ids', DTYPE.i32, [n]);
   if (s) arrays.class_ids = sceneArray(s);
-}
-
-function unsupported(type: number, msg: string): never {
-  throw new MessageError('unsupported', msg, type);
 }
 
 type Params = Record<string, unknown>;
@@ -970,18 +1056,23 @@ export function decodeSceneUpdate(f: Frame): SceneUpdateMsg {
   const flags = sceneFlags(f);
   const axes = opt<PayloadAxisList | undefined>(f, 'axes', Array.isArray, 'a list', undefined);
   const items = opt<string | undefined>(f, 'items', isName, 'an item space name', undefined);
-  if (f.meta.split !== undefined && f.meta.split !== null) unsupported(t, 'split updates are not built yet');
+  const split = opt<SplitKey | undefined>(f, 'split', isObj, 'an object', undefined);
   const p = part as ScenePart;
-  const params = scenePartKeys(f, p);
+  let params: Params;
   let arrays: Arrays;
-  switch (p) {
-    case PART_POINTS: arrays = decodeScenePoints(f, params); break;
-    case PART_LINES: arrays = decodeSceneLines(f, params); break;
-    case PART_ARROWS: arrays = decodeSceneArrows(f); break;
-    case PART_BOXES: arrays = decodeSceneBoxes(f, params); break;
-    case PART_MESH: arrays = decodeSceneMesh(f); break;
-    case PART_IMAGE: arrays = decodeSceneImage(f, params); break;
-    default: arrays = decodeSceneCamera(f, params);
+  if (split !== undefined) {
+    ({ params, arrays } = decodePiece(f, p, split as unknown as Record<string, unknown>));
+  } else {
+    params = scenePartKeys(f, p);
+    switch (p) {
+      case PART_POINTS: arrays = decodeScenePoints(f, params); break;
+      case PART_LINES: arrays = decodeSceneLines(f, params); break;
+      case PART_ARROWS: arrays = decodeSceneArrows(f); break;
+      case PART_BOXES: arrays = decodeSceneBoxes(f, params); break;
+      case PART_MESH: arrays = decodeSceneMesh(f); break;
+      case PART_IMAGE: arrays = decodeSceneImage(f, params); break;
+      default: arrays = decodeSceneCamera(f, params);
+    }
   }
   const { stamp } = stampSections(f, flags.static);
   if (params.stats) params.stats = (params.stats as (number | null)[]).map((x) => (x === null ? NaN : x));
@@ -994,6 +1085,7 @@ export function decodeSceneUpdate(f: Frame): SceneUpdateMsg {
     items,
   };
   if (flags.cursor !== undefined) m.cursor = flags.cursor;
+  if (split !== undefined) m.split = split;
   if (stamp) m.stamp = i64(stamp);
   return m;
 }
@@ -1057,7 +1149,7 @@ export function decodeSceneClasses(f: Frame): SceneClassesMsg {
   return m;
 }
 
-export function encodeSceneUpdate(m: SceneUpdateMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+function sceneUpdateMeta(m: SceneUpdateMsg): Record<string, unknown> {
   const meta: Record<string, unknown> = { sub: m.sub, view: m.view, seq: m.seq, stamp_ns: m.stamp_ns, path: m.path, part: m.part };
   for (const [key, v] of Object.entries(m.params)) {
     if (v === undefined || v === null) continue;
@@ -1066,6 +1158,12 @@ export function encodeSceneUpdate(m: SceneUpdateMsg, minor: number = PROTOCOL_MI
   writeFlags(meta, m);
   if (m.axes !== undefined) meta.axes = m.axes;
   if (m.items !== undefined) meta.items = m.items;
+  if (m.split !== undefined) meta.split = m.split;
+  return meta;
+}
+
+export function encodeSceneUpdate(m: SceneUpdateMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+  const meta = sceneUpdateMeta(m);
   const sections: Section[] = [];
   for (const name of PART_SECTIONS[m.part] ?? []) {
     const a = m.arrays[name];
@@ -1097,6 +1195,378 @@ export function encodeSceneClasses(m: SceneClassesMsg, minor: number = PROTOCOL_
   const meta: Record<string, unknown> = { sub: m.sub, view: m.view, seq: m.seq, stamp_ns: m.stamp_ns, classes: m.classes };
   writeFlags(meta, m);
   return frameAt(MSG.scene_classes, meta, m.stamp ? [stampSection('stamp', m.stamp, [m.stamp.length])] : [], minor);
+}
+
+// --- 3.2 draft: timelines, text logs, recordings, the cursor (python: the block "timelines and stamps on the 3.0 and 3.1 messages") ---
+
+const TIMELINE_NAME = /^[A-Za-z0-9_.-]{1,63}$/;
+const STAMP_TEXT = /^-?[0-9]+$/;
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
+const isTimelineName = (v: unknown) => typeof v === 'string' && TIMELINE_NAME.test(v);
+
+/** Stamp text: decimal digits with an optional leading minus, at most 20 characters, a value of a signed 64-bit integer. */
+export function stampTextOk(v: unknown): boolean {
+  if (typeof v !== 'string' || v.length === 0 || v.length > STAMP_TEXT_MAX || !/^[\x00-\x7f]*$/.test(v) || !STAMP_TEXT.test(v)) return false;
+  const n = BigInt(v);
+  return n >= I64_MIN && n <= I64_MAX;
+}
+
+const isTimelineEntry = (t: unknown) => isObj(t) && isTimelineName((t as Record<string, unknown>).name)
+  && ((t as Record<string, unknown>).kind === TIMELINE_SEQUENCE || (t as Record<string, unknown>).kind === TIMELINE_TIME)
+  && ((t as Record<string, unknown>).epoch == null || isBool((t as Record<string, unknown>).epoch));
+
+/** The VIEWS key "timelines": 2 to 8 {name, kind, epoch?}, step and time first. */
+function isTimelines(v: unknown): boolean {
+  if (!(Array.isArray(v) && v.length >= 2 && v.length <= MAX_TIMELINES)) return false;
+  if (!v.every(isTimelineEntry)) return false;
+  const names = v.map((t) => (t as TimelineInfo).name);
+  return new Set(names).size === names.length && v[0].name === 'step' && v[0].kind === TIMELINE_SEQUENCE
+    && v[1].name === 'time' && v[1].kind === TIMELINE_TIME;
+}
+
+const isRecorded = (v: unknown) => Array.isArray(v) && v.length <= MAX_RECORDED && v.every(isObj);
+
+/** A session's key "recording": {id, seekable, complete}. */
+const isRecordingRef = (v: unknown) => isObj(v) && isSessionId((v as Record<string, unknown>).id)
+  && isBool((v as Record<string, unknown>).seekable) && isBool((v as Record<string, unknown>).complete);
+
+const isLoop = (v: unknown) => Array.isArray(v) && v.length === 2 && v.every(stampTextOk) && BigInt(v[0]) <= BigInt(v[1]);
+const isSpeed = (v: unknown) => isFinite_(v) && (v as number) >= MIN_SPEED && (v as number) <= MAX_SPEED;
+const isPace = (v: unknown) => v === PACE_RECORDED || v === PACE_EVEN;
+
+/** Lines of a text message, decoded as UTF-8. */
+export function textLines(m: TextMsg): string[] {
+  const dec = new TextDecoder();
+  const out: string[] = [];
+  for (let i = 0; i + 1 < m.offsets.length; i++) out.push(dec.decode(m.text.subarray(m.offsets[i], m.offsets[i + 1])));
+  return out;
+}
+
+/** A text message of `lines` at `levels` (one each), copied into its own buffers. */
+export function textFromLines(sub: number, view: string, start: number, total: number, stamp_ns: number, lines: string[], levels: ArrayLike<number>,
+  extra: Partial<Pick<TextMsg, 'dropped' | 'stamp' | 'stamps' | 'stamps_t' | 'cursor'>> = {}): TextMsg {
+  const data = lines.map((l) => utf8.encode(l));
+  const offsets = new Int32Array(data.length + 1);
+  data.forEach((d, i) => { offsets[i + 1] = offsets[i] + d.length; });
+  const text = new Uint8Array(offsets[data.length]);
+  data.forEach((d, i) => text.set(d, offsets[i]));
+  return { type: 'text', sub, view, start, total, stamp_ns, text, offsets, levels: Uint8Array.from(levels), ...extra };
+}
+
+export function decodeText(f: Frame): TextMsg {
+  const t = section(f, 'text');
+  if (!t || t.encoding !== 0 || t.dtype !== DTYPE.u8 || t.shape.length !== 1) bad(f.type, "a text message needs a (L,) u8 'text' section");
+  const o = section(f, 'offsets');
+  if (!o || o.encoding !== 0 || o.dtype !== DTYPE.i32 || o.shape.length !== 1 || o.shape[0] < 2)
+    bad(f.type, "a text message needs an (M + 1,) i32 'offsets' section, M >= 1");
+  const n = o.shape[0] - 1;
+  if (n > TEXT_MAX_LINES) bad(f.type, `${n} lines, more than ${TEXT_MAX_LINES} in one message`);
+  const lv = partSection(f, 'levels', DTYPE.u8, [n]);
+  if (!lv) bad(f.type, "a text message needs an (M,) u8 'levels' section");
+  const sub = req<number>(f, 'sub', isU32, 'a uint32');
+  const view = req<string>(f, 'view', isName, 'a view name');
+  const start = req<number>(f, 'start', isUint, 'an unsigned integer');
+  const total = req<number>(f, 'total', isUint, 'an unsigned integer');
+  const stamp_ns = req<number>(f, 'stamp_ns', isUint, 'an unsigned integer');
+  const dropped = opt<number | undefined>(f, 'dropped', isUint, 'an unsigned integer', undefined);
+  const cursor = opt<number | undefined>(f, 'cursor', isU32, 'a uint32', undefined);
+  if (start + n > total) bad(f.type, `text: ${n} lines from ${start} with total ${total}`);
+  const offs = i32(o);
+  if (offs[0] !== 0 || offs[n] !== t.shape[0]) bad(f.type, `'offsets' must start at 0 and end at the ${t.shape[0]} bytes of 'text'`);
+  let minStep = Infinity;
+  let maxStep = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const d = offs[i + 1] - offs[i];
+    if (d < minStep) minStep = d;
+    if (d > maxStep) maxStep = d;
+  }
+  if (minStep < 0) bad(f.type, "'offsets' must not decrease");
+  if (maxStep > TEXT_LINE_MAX) bad(f.type, `a line is at most ${TEXT_LINE_MAX} bytes`);
+  const levels = u8(lv);
+  for (const x of levels) if (x > LEVEL_ERROR) bad(f.type, 'a level is 0 (debug), 1 (info), 2 (warning) or 3 (error)');
+  for (let i = 0; i < n; i++) {
+    try {
+      utf8Strict.decode(t.bytes.subarray(offs[i], offs[i + 1]));
+    } catch {
+      bad(f.type, `line ${offs[i]}..${offs[i + 1]} of 'text' is not UTF-8`);
+    }
+  }
+  const { stamp, stamps } = stampSections(f, false, n);
+  const m: TextMsg = { type: 'text', sub, view, start, total, stamp_ns, text: u8(t), offsets: offs, levels };
+  if (dropped !== undefined) m.dropped = dropped;
+  if (cursor !== undefined) m.cursor = cursor;
+  if (stamp) m.stamp = i64(stamp);
+  if (stamps) {
+    m.stamps = i64(stamps);
+    m.stamps_t = stamps.shape[1];
+  }
+  return m;
+}
+
+export function encodeText(m: TextMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+  const n = m.levels.length;
+  const meta: Record<string, unknown> = { sub: m.sub, view: m.view, start: m.start, total: m.total, stamp_ns: m.stamp_ns };
+  if (m.dropped !== undefined) meta.dropped = m.dropped;
+  if (m.cursor !== undefined) meta.cursor = m.cursor;
+  const sections: Section[] = [
+    { name: 'text', dtype: DTYPE.u8, shape: [m.text.length], encoding: 0, bytes: m.text },
+    { name: 'offsets', dtype: DTYPE.i32, shape: [m.offsets.length], encoding: 0, bytes: bytesOf(m.offsets) },
+    { name: 'levels', dtype: DTYPE.u8, shape: [n], encoding: 0, bytes: m.levels },
+  ];
+  if (m.stamps) sections.push(stampSection('stamps', m.stamps, [n, m.stamps_t ?? (n ? m.stamps.length / n : 0)]));
+  else if (m.stamp) sections.push(stampSection('stamp', m.stamp, [m.stamp.length]));
+  return frameAt(MSG.text, meta, sections, minor);
+}
+
+function isRecordingEntry(e: unknown): boolean {
+  if (!isObj(e)) return false;
+  const o = e as Record<string, unknown>;
+  if (!(isSessionId(o.id) && isStr(o.title) && isStr(o.script) && isUint(o.bytes) && isUint(o.items) && isBool(o.complete))) return false;
+  for (const key of ['created_unix_ms', 'ended_unix_ms']) if (o[key] != null && !isUint(o[key])) return false;
+  const tl = o.timelines;
+  return Array.isArray(tl) && tl.length <= MAX_TIMELINES && tl.every((t) => isTimelineEntry(t) && stampTextOk((t as Record<string, unknown>).min)
+    && stampTextOk((t as Record<string, unknown>).max));
+}
+
+export function decodeRecordings(f: Frame): RecordingsMsg {
+  return {
+    type: 'recordings',
+    recordings: req<RecordingEntry[]>(f, 'recordings', (v) => Array.isArray(v) && v.length <= MAX_RECORDINGS && v.every(isRecordingEntry),
+      `a list of at most ${MAX_RECORDINGS} recordings`),
+  };
+}
+
+export function decodeRecordingOpen(f: Frame): RecordingOpenMsg {
+  return {
+    type: 'recording_open',
+    request_id: req(f, 'request_id', isU32, 'a uint32'),
+    recording: req(f, 'recording', isSessionId, 'a recording id'),
+  };
+}
+
+function cursorBad(msg: string): never {
+  throw new MessageError('bad_cursor', msg, MSG.cursor);
+}
+
+/** Only the fields of the op are kept; a request_id or op that is missing or wrong is bad_request, any other field bad_cursor. */
+export function decodeCursor(f: Frame): CursorMsg {
+  const m = f.meta;
+  const c: CursorMsg = {
+    type: 'cursor',
+    request_id: req(f, 'request_id', isU32, 'a uint32'),
+    op: req(f, 'op', (v) => CURSOR_OPS.includes(v as string), 'seek, play, pause, step or follow'),
+  };
+  const get = <T>(key: string, ok: (v: unknown) => boolean, what: string, need: boolean): T | undefined => {
+    const v = m[key];
+    if (v === undefined || v === null) {
+      if (need) cursorBad(`'${c.op}' needs '${key}'`);
+      return undefined;
+    }
+    if (!ok(v)) cursorBad(`'${key}' must be ${what}, got ${JSON.stringify(v)}`);
+    return v as T;
+  };
+  if (c.op === CURSOR_SEEK || c.op === CURSOR_PLAY || c.op === CURSOR_STEP) c.timeline = get<string>('timeline', isTimelineName, 'a timeline name', true);
+  if (c.op === CURSOR_SEEK) c.value = get<string>('value', stampTextOk, 'stamp text', true);
+  if (c.op === CURSOR_STEP)
+    c.count = get<number>('count', (v) => isInt(v) && v !== 0 && Math.abs(v) <= MAX_CURSOR_STEP, `an integer from -${MAX_CURSOR_STEP} to ${MAX_CURSOR_STEP}, not 0`, true);
+  if (c.op === CURSOR_PLAY) {
+    c.speed = get<number>('speed', isSpeed, `a number from ${MIN_SPEED} to ${MAX_SPEED}`, false);
+    c.pace = get<CursorMsg['pace']>('pace', isPace, 'recorded or even', false);
+    c.loop = get<[string, string]>('loop', isLoop, '[start, end] as stamp text', false);
+  }
+  return drop(c as unknown as Record<string, unknown>) as unknown as CursorMsg;
+}
+
+const isRanges = (v: unknown) => isObj(v) && Object.entries(v as Record<string, unknown>).every(([k, r]) => isTimelineName(k) && isLoop(r));
+
+export function decodeTimeState(f: Frame): TimeStateMsg {
+  const request_id = opt<number | undefined>(f, 'request_id', isU32, 'a uint32', undefined);
+  const session = req<string>(f, 'session', isSessionId, 'a session id');
+  const generation = req<number>(f, 'generation', isU32, 'a uint32');
+  const state = req<TimeStateMsg['state']>(f, 'state', (v) => v === TIME_FOLLOWING || v === TIME_PAUSED || v === TIME_PLAYING, 'following, paused or playing');
+  const timeline = req<string>(f, 'timeline', isTimelineName, 'a timeline name');
+  const cursor = opt<string | null>(f, 'cursor', stampTextOk, 'stamp text or null', null);
+  const speed = opt<number | undefined>(f, 'speed', isSpeed, `a number from ${MIN_SPEED} to ${MAX_SPEED}`, undefined);
+  const pace = opt<TimeStateMsg['pace']>(f, 'pace', isPace, 'recorded or even', undefined);
+  const loop = opt<[string, string] | undefined>(f, 'loop', isLoop, '[start, end] as stamp text', undefined);
+  const ranges = req<TimeStateMsg['ranges']>(f, 'ranges', isRanges, 'an object of [min, max] stamp text per timeline');
+  const live = req<boolean>(f, 'live', isBool, 'a boolean');
+  if ((state === TIME_FOLLOWING) !== (cursor === null)) bad(f.type, 'the cursor is null exactly while following');
+  const m: TimeStateMsg = { type: 'time_state', session, generation, state, timeline, cursor, ranges, live };
+  if (request_id !== undefined) m.request_id = request_id;
+  if (speed !== undefined) m.speed = speed;
+  if (pace !== undefined) m.pace = pace;
+  if (loop !== undefined) m.loop = loop;
+  return m;
+}
+
+// --- 3.2 draft: split updates ---
+
+type Raw = Record<string, unknown>;
+
+/** The checks of a piece of a split update, in this order: the keys of `split`, the part's keys in piece 0, the piece's array sections. */
+function decodePiece(f: Frame, part: ScenePart, split: Raw): { params: Params; arrays: Arrays } {
+  const need = <T>(key: string, ok: (v: unknown) => boolean, what: string): T => {
+    const v = split[key];
+    if (v === undefined || v === null || !ok(v)) bad(f.type, `'split.${key}' must be ${what}, got ${JSON.stringify(v)}`);
+    return v as T;
+  };
+  const rowsMap = (v: unknown) => isObj(v) && Object.values(v as Raw).every(isUint);
+  need('update', isUint, 'an unsigned integer');
+  const pieces = need<number>('pieces', (v) => isInt(v) && v >= 2 && v <= MAX_PIECES, `an integer from 2 to ${MAX_PIECES}`);
+  const piece = need<number>('piece', (v) => isInt(v) && v >= 0 && v < pieces, "a piece number below 'pieces'");
+  const first = need<Record<string, number>>('first', rowsMap, 'an object of row numbers');
+  let rows: Record<string, number> | undefined;
+  if (piece === 0) rows = need<Record<string, number>>('rows', rowsMap, 'an object of row counts');
+  else if (split.rows !== undefined && split.rows !== null) bad(f.type, "only piece 0 carries 'split.rows'");
+  const params = piece === 0 ? scenePartKeys(f, part) : {};
+  const arrays: Arrays = {};
+  for (const s of f.sections) {
+    if (s.name === 'stamp' || !PART_SECTIONS[part].includes(s.name)) continue; // the stamp, or a section of no array: ignored
+    if (s.encoding !== 0 || s.shape.length < 1) bad(f.type, `a piece of '${s.name}' is a raw array of at least one dimension`);
+    arrays[s.name] = pieceArray(s);
+  }
+  const fk = Object.keys(first).sort();
+  const ak = Object.keys(arrays).sort();
+  if (fk.length !== ak.length || fk.some((k, i) => k !== ak[i])) bad(f.type, `'split.first' names [${fk}], the piece holds [${ak}]`);
+  if (rows !== undefined) {
+    for (const name of Object.keys(rows)) if (!PART_SECTIONS[part].includes(name)) bad(f.type, `'split.rows' names '${name}', not an array of a ${part} part`);
+    for (const [name, a] of Object.entries(arrays))
+      if (!(name in rows) || first[name] + a.shape[0] > rows[name]) bad(f.type, `the rows of '${name}' in piece 0 pass 'split.rows'`);
+  }
+  return { params, arrays };
+}
+
+/** A piece's array: typed where this codec has a typed array, else its raw bytes. */
+function pieceArray(s: Section): SceneArray {
+  if (s.dtype === DTYPE.f32 || s.dtype === DTYPE.i32 || s.dtype === DTYPE.u8 || s.dtype === DTYPE.u16) return sceneArray(s);
+  return { dtype: s.dtype, shape: s.shape, data: s.bytes };
+}
+
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+
+interface Assembled { dtype: number; trailing: number[]; buf: Uint8Array; ranges: [number, number][] }
+
+/** One split update being put together. */
+class Assembly {
+  readonly key: string;
+  readonly rows: Record<string, number>;
+  readonly seen = new Set<number>();
+  readonly arrays = new Map<string, Assembled>();
+  nbytes = 0;
+
+  constructor(readonly p0: SceneUpdateMsg) {
+    this.key = Assembly.keyOf(p0);
+    this.rows = { ...p0.split!.rows! };
+  }
+
+  static keyOf(p: SceneUpdateMsg): string {
+    return JSON.stringify([p.path, p.part, p.seq, p.split!.pieces, p.stamp ? hex(bytesOf(p.stamp)) : null]);
+  }
+
+  add(p: SceneUpdateMsg): void {
+    const sp = p.split!;
+    if (Assembly.keyOf(p) !== this.key) bad(MSG.scene_update, "a piece's path, part, seq, pieces or stamp differ from its update's piece 0");
+    if (this.seen.has(sp.piece)) bad(MSG.scene_update, `piece ${sp.piece} of update ${sp.update} arrived twice`);
+    this.seen.add(sp.piece);
+    for (const [name, s] of Object.entries(p.arrays)) {
+      if (!(name in this.rows)) bad(MSG.scene_update, `piece ${sp.piece} holds '${name}', which 'split.rows' does not name`);
+      const item = DTYPE_SIZE[s.dtype];
+      if (item === undefined) bad(MSG.scene_update, `a piece of '${name}' has the unknown dtype ${s.dtype}`);
+      const trailing = s.shape.slice(1);
+      const rowbytes = trailing.reduce((x, y) => x * y, 1) * item;
+      let a = this.arrays.get(name);
+      if (a === undefined) {
+        const total = this.rows[name] * rowbytes;
+        if (this.nbytes + total > MAX_UPDATE_BYTES) bad(MSG.scene_update, `a split update of more than ${MAX_UPDATE_BYTES} bytes`);
+        this.nbytes += total;
+        a = { dtype: s.dtype, trailing, buf: new Uint8Array(total), ranges: [] };
+        this.arrays.set(name, a);
+      } else if (a.dtype !== s.dtype || a.trailing.length !== trailing.length || a.trailing.some((x, i) => x !== trailing[i])) {
+        bad(MSG.scene_update, `the pieces of '${name}' differ in dtype or shape`);
+      }
+      const first = sp.first[name];
+      const n = s.shape[0];
+      if (first + n > this.rows[name]) bad(MSG.scene_update, `rows ${first} to ${first + n} of '${name}' pass its ${this.rows[name]} rows`);
+      if (a.ranges.some(([f0, n0]) => first < f0 + n0 && f0 < first + n)) bad(MSG.scene_update, `two pieces hold the same rows of '${name}'`);
+      a.ranges.push([first, n]);
+      a.buf.set(bytesOf(s.data), first * rowbytes); // the buffers are the assembly's own: a decoded frame's arrays are views
+    }
+  }
+
+  done(): boolean {
+    if (this.seen.size < this.p0.split!.pieces) return false;
+    for (const [name, rows] of Object.entries(this.rows)) {
+      const a = this.arrays.get(name);
+      const got = a ? a.ranges.reduce((x, [, n]) => x + n, 0) : 0;
+      if (got !== rows) bad(MSG.scene_update, `the pieces ended before every row of '${name}' arrived`);
+    }
+    return true;
+  }
+
+  /** The whole update, checked by the normal scene_update decoder on a frame of the whole arrays plus the stamp. */
+  whole(): SceneUpdateMsg {
+    const p0 = this.p0;
+    const meta = sceneUpdateMeta(p0);
+    delete meta.split;
+    const sections: Section[] = [];
+    for (const name of PART_SECTIONS[p0.part]) {
+      const a = this.arrays.get(name);
+      if (a) sections.push({ name, dtype: a.dtype, shape: [this.rows[name], ...a.trailing], encoding: 0, bytes: a.buf });
+    }
+    if (p0.stamp) sections.push({ name: 'stamp', dtype: DTYPE.i64, shape: [p0.stamp.length], encoding: 0, bytes: bytesOf(p0.stamp).slice() });
+    return decodeSceneUpdate({ type: MSG.scene_update, flags: 0, major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR_3_2, meta, sections });
+  }
+}
+
+/**
+ * A receiver's split updates of one subscription. `add` takes each piece and returns the whole update, checked as an unsplit
+ * one, once every piece and every row has arrived, else null. A newer update of the same entity part discards an incomplete
+ * one, at most MAX_INCOMPLETE_UPDATES are held (the oldest goes first), and a piece of an update it does not hold is dropped
+ * and counted. A piece that contradicts its update throws MessageError (bad_request) and the update is discarded.
+ */
+export class SplitUpdates {
+  /** update -> assembly, oldest first. */
+  readonly open = new Map<number, Assembly>();
+  dropped = 0;
+  discarded = 0;
+
+  add(piece: SceneUpdateMsg): SceneUpdateMsg | null {
+    const sp = piece.split;
+    if (!sp) throw new MessageError('bad_request', 'not a piece of a split update', MSG.scene_update);
+    const uid = sp.update;
+    if (sp.piece === 0) {
+      for (const [k, a] of [...this.open]) {
+        if (k === uid || (a.p0.path === piece.path && a.p0.part === piece.part)) {
+          this.open.delete(k);
+          this.discarded++;
+        }
+      }
+      this.open.set(uid, new Assembly(piece));
+      while (this.open.size > MAX_INCOMPLETE_UPDATES) {
+        this.open.delete(this.open.keys().next().value as number);
+        this.discarded++;
+      }
+    }
+    const a = this.open.get(uid);
+    if (a === undefined) {
+      this.dropped++;
+      return null;
+    }
+    try {
+      a.add(piece);
+      if (!a.done()) return null;
+      this.open.delete(uid);
+      return a.whole();
+    } catch (e) {
+      if (e instanceof MessageError) {
+        this.open.delete(uid);
+        this.discarded++;
+      }
+      throw e;
+    }
+  }
 }
 
 const VIEW_CAMERA_KEYS = ['target', 'distance', 'azimuth', 'elevation'];

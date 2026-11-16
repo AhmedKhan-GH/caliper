@@ -75,6 +75,11 @@ class MsgType(enum.IntEnum):
     SCENE_TRANSFORMS = 0x0071      # 3.2 draft
     SCENE_CLEAR = 0x0072           # 3.2 draft
     SCENE_CLASSES = 0x0073         # 3.2 draft
+    TEXT = 0x0074                  # 3.2 draft, capability "text"
+    RECORDINGS = 0x0078            # 3.2 draft, capability "recordings"
+    RECORDING_OPEN = 0x0079
+    CURSOR = 0x007A
+    TIME_STATE = 0x007B
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -84,6 +89,8 @@ class Kind(enum.IntEnum):          # CaliperLiveKind
     SERIES = 4
     HISTOGRAM = 5
     SCENE = 6                      # 3.2 draft, capability "scenes" (see the 3.2 block)
+    TEXT = 7                       # 3.2 draft, capability "text"
+    BARS = 8                       # 3.2 draft, capability "bars"
 
 
 class DType(enum.IntEnum):         # CaliperDType
@@ -657,7 +664,9 @@ class Sessions(_Msg):
         def ok(v):
             return isinstance(v, list) and all(
                 _identity(s) and s.get("state") in (SESSION_LIVE, SESSION_ENDED)
-                and _uint(s.get("views")) for s in v)
+                and _uint(s.get("views"))
+                and (s.get("recording") is None or _recording_ref(s["recording"]))   # 3.2 draft
+                for s in v)
         return cls(_req(f.meta, "sessions", ok, "a list of sessions"))
 
 
@@ -689,7 +698,8 @@ def _view_entry(v) -> bool:
                     and (d.get("items") is None or _name(d["items"]))):
                 return False
     return ((v.get("default") is None or _obj(v.get("default")))
-            and (v.get("items") is None or _name(v["items"])))
+            and (v.get("items") is None or _name(v["items"]))
+            and (v.get("recorded") is None or _recorded(v["recorded"])))     # 3.2 draft
 
 
 @dataclass
@@ -698,15 +708,20 @@ class Views(_Msg):
     TYPE: ClassVar[MsgType] = MsgType.VIEWS
     views: list
     session: str | None = None                   # set on viewer connections
+    timelines: list | None = None                # 3.2 draft, capability "timelines"
 
     def to_meta(self):
-        return {"session": self.session, "views": list(self.views)}
+        meta = {"session": self.session, "views": list(self.views)}
+        if self.timelines is not None:
+            meta["timelines"] = list(self.timelines)
+        return meta
 
     @classmethod
     def from_frame(cls, f):
         return cls(_req(f.meta, "views", lambda v: isinstance(v, list)
                         and all(_view_entry(x) for x in v), "a list of views"),
-                   _opt(f.meta, "session", _session_id, "a session id"))
+                   _opt(f.meta, "session", _session_id, "a session id"),
+                   _opt(f.meta, "timelines", _timelines, "2 to 8 timelines, step and time first"))
 
 
 def _rate(v) -> bool:
@@ -824,6 +839,15 @@ class Snapshot(_Msg):
     tile: dict | None = None
     points_dims: int | None = None
     label_count: int | None = None
+    # 3.2 draft (see the 3.2 block): a bar chart's colours, labels and direction,
+    # a static snapshot, its stamp, and the cursor and emptiness of a recorded one.
+    colors: Any = None
+    labels: list | None = None
+    horizontal: bool = False
+    static: bool = False
+    stamp: Any = None
+    cursor: int | None = None
+    empty: bool = False
 
     def to_meta(self):
         return _drop_none({"sub": self.sub, "view": self.view, "seq": self.seq,
@@ -832,20 +856,31 @@ class Snapshot(_Msg):
                            "flags": self.flags, "vmin": float(self.vmin),
                            "vmax": float(self.vmax), "stats": [_json_float(x) for x in self.stats],
                            "axes": list(self.axes), "tile": self.tile,
-                           "points_dims": self.points_dims, "label_count": self.label_count})
+                           "points_dims": self.points_dims, "label_count": self.label_count,
+                           "labels": None if self.labels is None else list(self.labels),
+                           "horizontal": True if self.horizontal else None,
+                           "static": True if self.static else None, "cursor": self.cursor,
+                           "empty": True if self.empty else None})
 
     def to_sections(self):
-        s = [self.data if isinstance(self.data, Section) else Section.from_array("data", self.data)]
-        if self.aux is not None:
-            s.append(self.aux if isinstance(self.aux, Section) else Section.from_array("aux", self.aux))
+        s = []
+        if self.data is not None:
+            s.append(_section("data", self.data))
+        for name in ("aux", "colors", "stamp"):
+            if getattr(self, name) is not None:
+                s.append(_section(name, getattr(self, name)))
         return s
 
     @classmethod
     def from_frame(cls, f):
         m = f.meta
         kind = _req(m, "kind", _is_int, "a kind id")
+        empty = _opt(m, "empty", _bool, "a boolean", False)                  # 3.2 draft
         data = f.section("data")
-        if data is None:
+        if empty:
+            if f.sections:
+                _bad("an empty snapshot carries no section")
+        elif data is None:
             _bad("a snapshot needs a 'data' section")
         aux = f.section("aux")
         stats = _opt(m, "stats", lambda v: isinstance(v, list) and len(v) <= MAX_STATS
@@ -863,7 +898,10 @@ class Snapshot(_Msg):
                    _opt(m, "tile", _obj, "an object"),
                    _opt(m, "points_dims", lambda v: v in (2, 3), "2 or 3"),
                    _opt(m, "label_count", _uint, "an unsigned integer"))
-        _check_payload(snap)
+        snap.empty = empty
+        if not empty:
+            _check_payload(snap)
+        _snapshot_32(f, snap)                                                 # 3.2 draft
         return snap
 
 
@@ -878,13 +916,16 @@ def _json_float(x):
 def _check_payload(s: Snapshot) -> None:
     d = s.data
     want = {Kind.HEATMAP: (DType.F32, 2), Kind.IMAGE: (DType.U8, 3),
-            Kind.POINTS: (DType.F32, 2), Kind.HISTOGRAM: (DType.F32, 1)}.get(s.kind)
+            Kind.POINTS: (DType.F32, 2), Kind.HISTOGRAM: (DType.F32, 1),
+            Kind.BARS: (DType.F32, 1)}.get(s.kind)
     if want is None:
         return                                   # an unknown kind: the caller ignores it
     if d.dtype != want[0] or len(d.shape) != want[1]:
         _bad(f"kind {s.kind}: 'data' is dtype {d.dtype} shape {list(d.shape)}")
     if s.kind == Kind.IMAGE and d.shape[2] != 4:
         _bad("an image's 'data' is (H, W, 4)")
+    if s.kind == Kind.BARS and not 1 <= d.shape[0] <= MAX_BARS:               # 3.2 draft
+        _bad(f"a bar chart has 1 to {MAX_BARS} bars, got {d.shape[0]}")
     if s.kind == Kind.POINTS:
         if d.shape[1] not in (2, 3) or (s.points_dims not in (None, d.shape[1])):
             _bad("points 'data' is (N, points_dims) with points_dims 2 or 3")
@@ -904,15 +945,27 @@ class Series(_Msg):
     total: int
     stamp_ns: int
     values: Any
+    # 3.2 draft (see the 3.2 block): the values' stamps, and for a recorded
+    # series that was decimated the absolute index of each value and the bucket.
+    stamp: Any = None
+    stamps: Any = None
+    indices: Any = None
+    decimated: int | None = None
+    cursor: int | None = None
 
     def to_meta(self):
-        return {"sub": self.sub, "view": self.view, "start": self.start, "total": self.total,
-                "stamp_ns": self.stamp_ns}
+        return _drop_none({"sub": self.sub, "view": self.view, "start": self.start,
+                           "total": self.total, "stamp_ns": self.stamp_ns,
+                           "decimated": self.decimated, "cursor": self.cursor})
 
     def to_sections(self):
         v = self.values
-        return [v if isinstance(v, Section) else
-                Section.from_array("values", np.asarray(v, dtype=np.float32))]
+        out = [v if isinstance(v, Section) else
+               Section.from_array("values", np.asarray(v, dtype=np.float32))]
+        for name in ("stamps", "stamp", "indices"):
+            if getattr(self, name) is not None and not (name == "stamp" and self.stamps is not None):
+                out.append(_section(name, getattr(self, name)))
+        return out
 
     @classmethod
     def from_frame(cls, f):
@@ -924,8 +977,11 @@ class Series(_Msg):
                 _req(m, "start", _uint, "an unsigned integer"),
                 _req(m, "total", _uint, "an unsigned integer"),
                 _req(m, "stamp_ns", _uint, "an unsigned integer"), v)
-        if not 1 <= v.shape[0] <= SERIES_MAX_VALUES or s.start + v.shape[0] > s.total:
+        sparse = f.section("indices") is not None                           # 3.2 draft
+        if not 1 <= v.shape[0] <= SERIES_MAX_VALUES or (
+                not sparse and s.start + v.shape[0] > s.total):
             _bad(f"series: {v.shape[0]} values from {s.start} with total {s.total}")
+        _series_32(f, s)                                                      # 3.2 draft
         return s
 
 
@@ -1050,21 +1106,27 @@ class Controls(_Msg):
     run: dict
     params: list = field(default_factory=list)
     actions: list = field(default_factory=list)
+    stamp: Any = None                            # 3.2 draft: when the state or a value changed
 
     def to_meta(self):
         return {"run": dict(self.run), "params": list(self.params),
                 "actions": list(self.actions)}
 
+    def to_sections(self):
+        return [] if self.stamp is None else [_section("stamp", self.stamp)]
+
     @classmethod
     def from_frame(cls, f):
         m = f.meta
-        return cls(_req(m, "run", _run_obj, "a run state"),
+        c = cls(_req(m, "run", _run_obj, "a run state"),
                    _req(m, "params", lambda v: isinstance(v, list) and len(v) <= MAX_PARAMS
                         and all(_param_entry(p) for p in v) and _unique_names(v),
                         f"at most {MAX_PARAMS} parameters with unique names"),
                    _req(m, "actions", lambda v: isinstance(v, list) and len(v) <= MAX_ACTIONS
                         and all(_action_entry(a) for a in v) and _unique_names(v),
                         f"at most {MAX_ACTIONS} actions with unique names"))
+        c.stamp, _ = _stamp(f, False)                                         # 3.2 draft
+        return c
 
 
 def _set_value(v) -> bool:
@@ -1360,7 +1422,7 @@ def resolve_data_view(view: dict, request: dict | None, *,
     dv = _merge(request, view.get("default"))
     kind = view.get("kind")
     budget = dv["budget"]
-    if kind == Kind.SERIES:
+    if kind in (Kind.SERIES, Kind.TEXT):           # 3.2 draft: a text log's is a series'
         for key in ("index", "reduce", "tile"):
             if dv.get(key):
                 _dv_bad(f"a series takes no '{key}'")
@@ -1427,7 +1489,8 @@ def resolve_data_view(view: dict, request: dict | None, *,
             _dv_bad("only a heatmap can tile")
         if tile not in kept:
             _dv_bad(f"tile dim {tile!r} is not kept")
-    need = {Kind.HEATMAP: 3 if tile is not None else 2, Kind.IMAGE: 2, Kind.POINTS: 1}.get(kind)
+    need = {Kind.HEATMAP: 3 if tile is not None else 2, Kind.IMAGE: 2, Kind.POINTS: 1,
+            Kind.BARS: 1}.get(kind)
     if need is not None and len(kept) != need:
         _dv_bad(f"kind {kind} needs {need} kept dims, the data view keeps {kept}")
 
@@ -1468,7 +1531,7 @@ def payload_layout(view: dict, resolved: dict) -> dict:
     source index start + p * step. A pooled axis aggregates those positions,
     a sampled axis (points) takes the first."""
     kind = view.get("kind")
-    if kind in (Kind.SERIES, Kind.HISTOGRAM):
+    if kind in (Kind.SERIES, Kind.HISTOGRAM, Kind.TEXT):
         return {"extent": [], "axes": [], "tile": None}
     src = next(s for s in view["sources"] if s["name"] == resolved["source"])
     index, reduce, tile = resolved["index"], resolved["reduce"], resolved.get("tile")
@@ -1486,6 +1549,12 @@ def payload_layout(view: dict, resolved: dict) -> dict:
     if kind == Kind.POINTS:
         (a,) = axes.values()
         a["size"] = min(a["count"], budget["max_points"])
+        order = [a]
+    elif kind == Kind.BARS:                                                    # 3.2 draft
+        (a,) = axes.values()
+        if not 1 <= a["count"] <= MAX_BARS:
+            _dv_bad(f"a bar chart shows 1 to {MAX_BARS} bars, the data view selects {a['count']}")
+        a["size"] = a["count"]
         order = [a]
     else:
         ext = budget["max_extent"]
@@ -1958,7 +2027,10 @@ class SceneUpdate(_Msg):
     part's order (PART_SECTIONS); ``params`` holds the part's keys
     (PART_KEYS), ``stats`` entries may be None (a non-finite value). ``stamp``
     is the i64 (T,) stamp section; ``cursor`` the generation of the
-    TIME_STATE a recorded message answers."""
+    TIME_STATE a recorded message answers; ``split`` the key of a piece of a
+    split update, whose ``arrays`` then hold the piece's rows, checked against
+    the part only once :class:`SplitUpdates` has put the update together, and
+    whose ``params`` are the part's keys in piece 0 and empty in the others."""
     TYPE: ClassVar[MsgType] = MsgType.SCENE_UPDATE
     sub: int
     view: str
@@ -1974,6 +2046,7 @@ class SceneUpdate(_Msg):
     items: str | None = None
     stamp: Any = None
     cursor: int | None = None
+    split: dict | None = None
 
     def to_meta(self):
         meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
@@ -1998,6 +2071,8 @@ class SceneUpdate(_Msg):
             meta["axes"] = list(self.axes)
         if self.items is not None:
             meta["items"] = self.items
+        if self.split is not None:
+            meta["split"] = self.split
         return meta
 
     def to_sections(self):
@@ -2018,15 +2093,17 @@ class SceneUpdate(_Msg):
         static, state, cursor = _flags(m)
         axes = _opt(m, "axes", lambda v: isinstance(v, list), "a list")
         items = _opt(m, "items", _name, "an item space name")
-        if m.get("split") is not None:
-            _unsupported("split updates are not built yet")
-        params = _part_keys(m, part)
-        arrays = _DECODERS[part](f, params)
+        split = _opt(m, "split", _obj, "an object")
+        if split is not None:
+            params, arrays = _piece(f, m, part, split)
+        else:
+            params = _part_keys(m, part)
+            arrays = _DECODERS[part](f, params)
         stamp, _ = _stamp(f, static)
         if "stats" in params:
             params["stats"] = [math.nan if x is None else float(x) for x in params["stats"]]
         return cls(sub, view, seq, stamp_ns, path, part, arrays, params, static, state, axes,
-                   items, stamp, cursor)
+                   items, stamp, cursor, split)
 
 
 @dataclass
@@ -2247,3 +2324,600 @@ def resolve_scene_data_view(view: dict, request: dict | None) -> dict:
         _dv_bad("only the default data view of a scene is built yet: send {} or none; "
                 "entity filters and budgets come in a later increment")
     return json.loads(json.dumps(SCENE_DATA_VIEW))
+
+
+# ---------------------------------------------------------------------------
+# 3.2 draft: timelines and stamps on the 3.0 and 3.1 messages, text logs, bar
+# charts, split updates and the recording messages
+# ---------------------------------------------------------------------------
+CAP_TIMELINES = "timelines"
+CAP_TEXT = "text"
+CAP_BARS = "bars"
+CAP_RECORDINGS = "recordings"
+ERR_UNKNOWN_RECORDING = "unknown_recording"
+ERR_BAD_RECORDING = "bad_recording"
+ERR_NOT_SEEKABLE = "not_seekable"
+ERR_BAD_CURSOR = "bad_cursor"
+TIMELINE_SEQUENCE, TIMELINE_TIME = "sequence", "time"
+LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARNING, LEVEL_ERROR = 0, 1, 2, 3
+CURSOR_SEEK, CURSOR_PLAY, CURSOR_PAUSE, CURSOR_STEP, CURSOR_FOLLOW = (
+    "seek", "play", "pause", "step", "follow")
+CURSOR_OPS = (CURSOR_SEEK, CURSOR_PLAY, CURSOR_PAUSE, CURSOR_STEP, CURSOR_FOLLOW)
+PACE_RECORDED, PACE_EVEN = "recorded", "even"
+TIME_FOLLOWING, TIME_PAUSED, TIME_PLAYING = "following", "paused", "playing"
+STAMP_TEXT_MAX = 20
+MAX_PIECES = 16
+MAX_UPDATE_BYTES = 536_870_912
+MAX_INCOMPLETE_UPDATES = 2
+TEXT_LINE_MAX = 4096
+TEXT_MAX_LINES = 65536
+TEXT_RETAIN_MIN = 4096
+MAX_BARS = 4096
+MAX_RECORDINGS = 1024
+MAX_RECORDED = 64
+MAX_CURSOR_STEP = 1000
+CURSOR_RATE_HZ = 30
+TIME_STATE_RATE_HZ = 30
+MIN_SPEED = 0.0625
+MAX_SPEED = 64
+RECORDING_LINGER_MS = 600_000
+
+_TIMELINE_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,63}")
+_STAMP_TEXT = re.compile(r"-?[0-9]+")
+
+
+def _timeline_name(v) -> bool:
+    return isinstance(v, str) and _TIMELINE_NAME.fullmatch(v) is not None
+
+
+def stamp_text_ok(v) -> bool:
+    """Stamp text: decimal digits with an optional leading minus, at most 20
+    characters, a value of a signed 64-bit integer."""
+    return (isinstance(v, str) and 0 < len(v) <= STAMP_TEXT_MAX and v.isascii()
+            and _STAMP_TEXT.fullmatch(v) is not None and -(1 << 63) <= int(v) < (1 << 63))
+
+
+def _timelines(v) -> bool:
+    """The VIEWS key "timelines": 2 to 8 {name, kind, epoch?}, step and time first."""
+    if not (isinstance(v, list) and 2 <= len(v) <= MAX_TIMELINES):
+        return False
+    for t in v:
+        if not (_obj(t) and _timeline_name(t.get("name"))
+                and t.get("kind") in (TIMELINE_SEQUENCE, TIMELINE_TIME)
+                and (t.get("epoch") is None or _bool(t["epoch"]))):
+            return False
+    names = [t["name"] for t in v]
+    return (len(set(names)) == len(names) and (v[0]["name"], v[0]["kind"]) == ("step", "sequence")
+            and (v[1]["name"], v[1]["kind"]) == ("time", "time"))
+
+
+def _recorded(v) -> bool:
+    return isinstance(v, list) and len(v) <= MAX_RECORDED and all(_obj(x) for x in v)
+
+
+def _recording_ref(v) -> bool:
+    """A session's key "recording": {id, seekable, complete}."""
+    return (_obj(v) and _session_id(v.get("id")) and _bool(v.get("seekable"))
+            and _bool(v.get("complete")))
+
+
+def _snapshot_32(f: Frame, snap) -> None:
+    """The 3.2 additions to SNAPSHOT, checked after the 3.1 ones: a bar
+    chart's colours, labels and direction, then static, cursor and stamp."""
+    m = f.meta
+    if snap.kind == Kind.BARS and not snap.empty:
+        b = snap.data.shape[0]
+        snap.colors = _part_section(f, "colors", DType.U8, (b, 4))
+        snap.labels = _opt(m, "labels", lambda v: isinstance(v, list) and len(v) == b and all(
+            isinstance(x, str) and len(x.encode("utf-8")) <= NAME_MAX for x in v),
+            f"{b} labels of at most {NAME_MAX} bytes")
+        snap.horizontal = _opt(m, "horizontal", _bool, "a boolean", False)
+    snap.static = _opt(m, "static", _bool, "a boolean", False)
+    snap.cursor = _opt(m, "cursor", _u32, "a uint32")
+    snap.stamp, _ = _stamp(f, snap.static)
+
+
+def _series_32(f: Frame, s) -> None:
+    """The 3.2 additions to SERIES: indices and decimated (together), cursor,
+    then the stamps."""
+    m = f.meta
+    n = s.values.shape[0]
+    s.indices = _part_section(f, "indices", DType.I64, (n,))
+    s.decimated = _opt(m, "decimated", lambda v: _is_int(v) and v >= 1, "an integer >= 1")
+    if (s.indices is None) != (s.decimated is None):
+        _bad("'indices' and 'decimated' go together")
+    s.cursor = _opt(m, "cursor", _u32, "a uint32")
+    s.stamp, s.stamps = _stamp(f, False, n)
+
+
+@dataclass
+class Text(_Msg):
+    """3.2 draft: new lines of a text log, appended as a series' values are:
+    lines ``start .. start + M`` of ``total``; line i is bytes ``offsets[i]``
+    to ``offsets[i + 1]`` of ``text`` (UTF-8), at level ``levels[i]`` (0 debug,
+    1 info, 2 warning, 3 error). :meth:`from_lines` builds one."""
+    TYPE: ClassVar[MsgType] = MsgType.TEXT
+    sub: int
+    view: str
+    start: int
+    total: int
+    stamp_ns: int
+    text: Any
+    offsets: Any
+    levels: Any
+    dropped: int | None = None
+    stamp: Any = None
+    stamps: Any = None
+    cursor: int | None = None
+
+    @classmethod
+    def from_lines(cls, sub, view, start, total, stamp_ns, lines, levels, **kw) -> "Text":
+        data = [x.encode("utf-8") for x in lines]
+        offsets = np.zeros(len(data) + 1, np.int32)
+        offsets[1:] = np.cumsum([len(x) for x in data])
+        return cls(sub, view, start, total, stamp_ns, np.frombuffer(b"".join(data), np.uint8),
+                   offsets, np.asarray(levels, np.uint8), **kw)
+
+    def lines(self) -> list:
+        t = bytes(self.text.data if isinstance(self.text, Section) else np.asarray(self.text))
+        o = (self.offsets.array() if isinstance(self.offsets, Section)
+             else np.asarray(self.offsets)).tolist()
+        return [t[a:b].decode("utf-8") for a, b in zip(o, o[1:])]
+
+    def to_meta(self):
+        return _drop_none({"sub": self.sub, "view": self.view, "start": self.start,
+                           "total": self.total, "stamp_ns": self.stamp_ns,
+                           "dropped": self.dropped, "cursor": self.cursor})
+
+    def to_sections(self):
+        out = [_section("text", self.text), _section("offsets", self.offsets),
+               _section("levels", self.levels)]
+        if self.stamps is not None:
+            out.append(_section("stamps", self.stamps))
+        elif self.stamp is not None:
+            out.append(_section("stamp", self.stamp))
+        return out
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        t = f.section("text")
+        if t is None or t.encoding != Encoding.RAW or t.dtype != DType.U8 or len(t.shape) != 1:
+            _bad("a text message needs a (L,) u8 'text' section")
+        o = f.section("offsets")
+        if (o is None or o.encoding != Encoding.RAW or o.dtype != DType.I32 or len(o.shape) != 1
+                or o.shape[0] < 2):
+            _bad("a text message needs an (M + 1,) i32 'offsets' section, M >= 1")
+        n = o.shape[0] - 1
+        if n > TEXT_MAX_LINES:
+            _bad(f"{n} lines, more than {TEXT_MAX_LINES} in one message")
+        lv = _part_section(f, "levels", DType.U8, (n,))
+        if lv is None:
+            _bad("a text message needs an (M,) u8 'levels' section")
+        msg = cls(_req(m, "sub", _u32, "a uint32"), _req(m, "view", _name, "a view name"),
+                  _req(m, "start", _uint, "an unsigned integer"),
+                  _req(m, "total", _uint, "an unsigned integer"),
+                  _req(m, "stamp_ns", _uint, "an unsigned integer"), t, o, lv,
+                  _opt(m, "dropped", _uint, "an unsigned integer"))
+        msg.cursor = _opt(m, "cursor", _u32, "a uint32")
+        if msg.start + n > msg.total:
+            _bad(f"text: {n} lines from {msg.start} with total {msg.total}")
+        offs = o.array().astype(np.int64)
+        if offs[0] != 0 or offs[-1] != t.shape[0]:
+            _bad(f"'offsets' must start at 0 and end at the {t.shape[0]} bytes of 'text'")
+        steps = np.diff(offs)
+        if steps.size and int(steps.min()) < 0:
+            _bad("'offsets' must not decrease")
+        if steps.size and int(steps.max()) > TEXT_LINE_MAX:
+            _bad(f"a line is at most {TEXT_LINE_MAX} bytes")
+        if lv.array().size and int(lv.array().max()) > LEVEL_ERROR:
+            _bad("a level is 0 (debug), 1 (info), 2 (warning) or 3 (error)")
+        raw = bytes(t.data)
+        for a, b in zip(offs.tolist(), offs[1:].tolist()):
+            try:
+                raw[a:b].decode("utf-8")
+            except UnicodeDecodeError:
+                _bad(f"line {a}..{b} of 'text' is not UTF-8")
+        msg.stamp, msg.stamps = _stamp(f, False, n)
+        return msg
+
+
+def _recording_entry(e) -> bool:
+    if not (_obj(e) and _session_id(e.get("id")) and _str(e.get("title")) and _str(e.get("script"))
+            and _uint(e.get("bytes")) and _uint(e.get("items")) and _bool(e.get("complete"))):
+        return False
+    for key in ("created_unix_ms", "ended_unix_ms"):
+        if e.get(key) is not None and not _uint(e[key]):
+            return False
+    tl = e.get("timelines")
+    return isinstance(tl, list) and len(tl) <= MAX_TIMELINES and all(
+        _obj(t) and _timeline_name(t.get("name"))
+        and t.get("kind") in (TIMELINE_SEQUENCE, TIMELINE_TIME)
+        and (t.get("epoch") is None or _bool(t["epoch"]))
+        and stamp_text_ok(t.get("min")) and stamp_text_ok(t.get("max")) for t in tl)
+
+
+@dataclass
+class Recordings(_Msg):
+    """3.2 draft, server to viewer: the recordings the server can open."""
+    TYPE: ClassVar[MsgType] = MsgType.RECORDINGS
+    recordings: list
+
+    def to_meta(self):
+        return {"recordings": list(self.recordings)}
+
+    @classmethod
+    def from_frame(cls, f):
+        return cls(_req(f.meta, "recordings", lambda v: isinstance(v, list)
+                        and len(v) <= MAX_RECORDINGS and all(_recording_entry(e) for e in v),
+                        f"a list of at most {MAX_RECORDINGS} recordings"))
+
+
+@dataclass
+class RecordingOpen(_Msg):
+    """3.2 draft, viewer to server: open a recording as an ended session."""
+    TYPE: ClassVar[MsgType] = MsgType.RECORDING_OPEN
+    request_id: int
+    recording: str
+
+    def to_meta(self):
+        return {"request_id": self.request_id, "recording": self.recording}
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        return cls(_req(m, "request_id", _u32, "a uint32"),
+                   _req(m, "recording", _session_id, "a recording id"))
+
+
+def _cursor_bad(msg: str):
+    raise MessageError(ERR_BAD_CURSOR, msg)
+
+
+def _speed(v) -> bool:
+    return _finite(v) and MIN_SPEED <= v <= MAX_SPEED
+
+
+def _loop(v) -> bool:
+    return (isinstance(v, list) and len(v) == 2 and all(stamp_text_ok(x) for x in v)
+            and int(v[0]) <= int(v[1]))
+
+
+@dataclass
+class Cursor(_Msg):
+    """3.2 draft, viewer to server: move this viewer's cursor. Only the
+    fields of the op are kept: seek takes timeline and value, play timeline,
+    speed, pace and loop, step timeline and count. A request_id or op that is
+    missing or wrong is bad_request; any other field, bad_cursor."""
+    TYPE: ClassVar[MsgType] = MsgType.CURSOR
+    request_id: int
+    op: str
+    timeline: str | None = None
+    value: str | None = None
+    count: int | None = None
+    speed: float | None = None
+    pace: str | None = None
+    loop: list | None = None
+
+    def to_meta(self):
+        return _drop_none({"request_id": self.request_id, "op": self.op,
+                           "timeline": self.timeline, "value": self.value, "count": self.count,
+                           "speed": None if self.speed is None else float(self.speed),
+                           "pace": self.pace, "loop": self.loop})
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        c = cls(_req(m, "request_id", _u32, "a uint32"),
+                _req(m, "op", lambda v: v in CURSOR_OPS, "seek, play, pause, step or follow"))
+
+        def get(key, ok, what, need):
+            v = m.get(key)
+            if v is None:
+                if need:
+                    _cursor_bad(f"'{c.op}' needs {key!r}")
+                return None
+            if not ok(v):
+                _cursor_bad(f"{key!r} must be {what}, got {v!r}")
+            return v
+        if c.op in (CURSOR_SEEK, CURSOR_PLAY, CURSOR_STEP):
+            c.timeline = get("timeline", _timeline_name, "a timeline name", True)
+        if c.op == CURSOR_SEEK:
+            c.value = get("value", stamp_text_ok, "stamp text", True)
+        if c.op == CURSOR_STEP:
+            c.count = get("count", lambda v: _is_int(v) and v != 0 and abs(v) <= MAX_CURSOR_STEP,
+                          f"an integer from -{MAX_CURSOR_STEP} to {MAX_CURSOR_STEP}, not 0", True)
+        if c.op == CURSOR_PLAY:
+            c.speed = get("speed", _speed, f"a number from {MIN_SPEED} to {MAX_SPEED}", False)
+            c.pace = get("pace", lambda v: v in (PACE_RECORDED, PACE_EVEN), "recorded or even",
+                         False)
+            c.loop = get("loop", _loop, "[start, end] as stamp text", False)
+        return c
+
+
+def _ranges(v) -> bool:
+    return _obj(v) and all(_timeline_name(k) and _loop(r) for k, r in v.items())
+
+
+@dataclass
+class TimeState(_Msg):
+    """3.2 draft, server to viewer: the state of the viewer's cursor.
+    ``cursor`` is stamp text, None while following (written as null)."""
+    TYPE: ClassVar[MsgType] = MsgType.TIME_STATE
+    session: str
+    generation: int
+    state: str
+    timeline: str
+    cursor: str | None
+    ranges: dict
+    live: bool
+    request_id: int | None = None
+    speed: float | None = None
+    pace: str | None = None
+    loop: list | None = None
+
+    def to_meta(self):
+        meta = _drop_none({"request_id": self.request_id, "session": self.session,
+                           "generation": self.generation, "state": self.state,
+                           "timeline": self.timeline, "ranges": dict(self.ranges),
+                           "live": self.live,
+                           "speed": None if self.speed is None else float(self.speed),
+                           "pace": self.pace, "loop": self.loop})
+        meta["cursor"] = self.cursor
+        return meta
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        request_id = _opt(m, "request_id", _u32, "a uint32")
+        t = cls(_req(m, "session", _session_id, "a session id"),
+                _req(m, "generation", _u32, "a uint32"),
+                _req(m, "state", lambda v: v in (TIME_FOLLOWING, TIME_PAUSED, TIME_PLAYING),
+                     "following, paused or playing"),
+                _req(m, "timeline", _timeline_name, "a timeline name"),
+                _opt(m, "cursor", stamp_text_ok, "stamp text or null"),
+                {}, False, request_id,
+                _opt(m, "speed", _speed, f"a number from {MIN_SPEED} to {MAX_SPEED}"),
+                _opt(m, "pace", lambda v: v in (PACE_RECORDED, PACE_EVEN), "recorded or even"),
+                _opt(m, "loop", _loop, "[start, end] as stamp text"))
+        t.ranges = _req(m, "ranges", _ranges, "an object of [min, max] stamp text per timeline")
+        t.live = _req(m, "live", _bool, "a boolean")
+        if (t.state == TIME_FOLLOWING) != (t.cursor is None):
+            _bad("the cursor is null exactly while following")
+        return t
+
+
+for _cls in (Text, Recordings, RecordingOpen, Cursor, TimeState):
+    MESSAGES[_cls.TYPE] = _cls
+__all__ += ["Text", "Recordings", "RecordingOpen", "Cursor", "TimeState", "stamp_text_ok"]
+
+
+# ---------------------------------------------------------------------------
+# 3.2 draft: split updates
+# ---------------------------------------------------------------------------
+def _piece(f: Frame, m: dict, part: str, split: dict):
+    """The checks of a piece of a split update, in this order: the keys of
+    ``split`` (update, pieces, piece, first, then rows in piece 0 only), the
+    part's keys in piece 0, and that ``first`` names exactly the piece's array
+    sections, each a raw array of at least one dimension, whose rows in piece
+    0 stay within ``rows``. The arrays are checked against the part once the
+    whole update is put together (:class:`SplitUpdates`)."""
+    def need(key, ok, what):
+        v = split.get(key)
+        if v is None or not ok(v):
+            _bad(f"'split.{key}' must be {what}, got {v!r}")
+        return v
+    rows_map = lambda v: _obj(v) and all(_uint(x) for x in v.values())        # noqa: E731
+    need("update", _uint, "an unsigned integer")
+    pieces = need("pieces", lambda v: _is_int(v) and 2 <= v <= MAX_PIECES,
+                  f"an integer from 2 to {MAX_PIECES}")
+    piece = need("piece", lambda v: _is_int(v) and 0 <= v < pieces, "a piece number below 'pieces'")
+    first = need("first", rows_map, "an object of row numbers")
+    rows = None
+    if piece == 0:
+        rows = need("rows", rows_map, "an object of row counts")
+    elif split.get("rows") is not None:
+        _bad("only piece 0 carries 'split.rows'")
+    params = _part_keys(m, part) if piece == 0 else {}
+    arrays = {}
+    for s in f.sections:
+        if s.name == "stamp" or s.name not in PART_SECTIONS[part]:
+            continue                               # the stamp, or a section of no array: ignored
+        if s.encoding != Encoding.RAW or len(s.shape) < 1:
+            _bad(f"a piece of {s.name!r} is a raw array of at least one dimension")
+        arrays[s.name] = s
+    if set(first) != set(arrays):
+        _bad(f"'split.first' names {sorted(first)}, the piece holds {sorted(arrays)}")
+    if rows is not None:
+        for name in rows:
+            if name not in PART_SECTIONS[part]:
+                _bad(f"'split.rows' names {name!r}, not an array of a {part} part")
+        for name, s in arrays.items():
+            if name not in rows or first[name] + s.shape[0] > rows[name]:
+                _bad(f"the rows of {name!r} in piece 0 pass 'split.rows'")
+    return params, arrays
+
+
+class _Assembly:
+    """One split update being put together."""
+
+    def __init__(self, p0: SceneUpdate):
+        self.p0 = p0
+        self.key = (p0.path, p0.part, p0.seq, p0.split["pieces"],
+                    None if p0.stamp is None else bytes(p0.stamp.data))
+        self.rows = dict(p0.split["rows"])
+        self.seen: set = set()
+        self.arrays: dict = {}                    # name -> [dtype, trailing shape, buffer, ranges]
+        self.nbytes = 0
+
+    def add(self, p: SceneUpdate) -> None:
+        sp = p.split
+        key = (p.path, p.part, p.seq, sp["pieces"], None if p.stamp is None else bytes(p.stamp.data))
+        if key != self.key:
+            _bad("a piece's path, part, seq, pieces or stamp differ from its update's piece 0")
+        if sp["piece"] in self.seen:
+            _bad(f"piece {sp['piece']} of update {sp['update']} arrived twice")
+        self.seen.add(sp["piece"])
+        for name, s in p.arrays.items():
+            if name not in self.rows:
+                _bad(f"piece {sp['piece']} holds {name!r}, which 'split.rows' does not name")
+            item = DTYPE_SIZE.get(s.dtype)
+            if item is None:
+                _bad(f"a piece of {name!r} has the unknown dtype {s.dtype}")
+            trailing = tuple(s.shape[1:])
+            rowbytes = math.prod(trailing) * item
+            a = self.arrays.get(name)
+            if a is None:
+                total = self.rows[name] * rowbytes
+                if self.nbytes + total > MAX_UPDATE_BYTES:
+                    _bad(f"a split update of more than {MAX_UPDATE_BYTES} bytes")
+                self.nbytes += total
+                a = self.arrays[name] = [s.dtype, trailing, bytearray(total), []]
+            elif (a[0], a[1]) != (s.dtype, trailing):
+                _bad(f"the pieces of {name!r} differ in dtype or shape")
+            first, n = sp["first"][name], s.shape[0]
+            if first + n > self.rows[name]:
+                _bad(f"rows {first} to {first + n} of {name!r} pass its {self.rows[name]} rows")
+            if any(first < f0 + n0 and f0 < first + n for f0, n0 in a[3]):
+                _bad(f"two pieces hold the same rows of {name!r}")
+            a[3].append((first, n))
+            a[2][first * rowbytes:(first + n) * rowbytes] = s.data
+
+    def done(self) -> bool:
+        if len(self.seen) < self.key[3]:
+            return False
+        for name, rows in self.rows.items():
+            a = self.arrays.get(name)
+            got = sum(n for _, n in a[3]) if a is not None else 0
+            if got != rows:
+                _bad(f"the pieces ended before every row of {name!r} arrived")
+        return True
+
+    def whole(self) -> SceneUpdate:
+        p0 = self.p0
+        meta = p0.to_meta()
+        meta.pop("split")
+        sections = []
+        for name in PART_SECTIONS[p0.part]:
+            a = self.arrays.get(name)
+            if a is not None:
+                sections.append(Section(name, a[0], (self.rows[name],) + a[1],
+                                        memoryview(a[2]).cast("B") if a[2] else memoryview(b"")))
+        if p0.stamp is not None:
+            sections.append(Section("stamp", DType.I64, tuple(p0.stamp.shape),
+                                    memoryview(bytes(p0.stamp.data))))
+        return SceneUpdate.from_frame(Frame(MsgType.SCENE_UPDATE, meta, sections))
+
+
+class SplitUpdates:
+    """A receiver's split updates of one subscription. :meth:`add` takes each
+    piece and returns the whole update, checked as an unsplit one, once every
+    piece and every row has arrived, else None. A newer update of the same
+    entity part discards an incomplete one, at most MAX_INCOMPLETE_UPDATES are
+    held (the oldest goes first), and a piece of an update it does not hold,
+    whose piece 0 never arrived or was discarded, is dropped and counted. A
+    piece that contradicts its update raises :class:`MessageError`
+    (bad_request), and the update is discarded."""
+
+    def __init__(self):
+        self.open: dict = {}                      # update -> _Assembly, oldest first
+        self.dropped = 0
+        self.discarded = 0
+
+    def add(self, piece: SceneUpdate) -> SceneUpdate | None:
+        uid, num = piece.split["update"], piece.split["piece"]
+        if num == 0:
+            for k in [k for k, a in self.open.items()
+                      if k == uid or (a.p0.path, a.p0.part) == (piece.path, piece.part)]:
+                del self.open[k]
+                self.discarded += 1
+            self.open[uid] = _Assembly(piece)
+            while len(self.open) > MAX_INCOMPLETE_UPDATES:
+                del self.open[next(iter(self.open))]
+                self.discarded += 1
+        a = self.open.get(uid)
+        if a is None:
+            self.dropped += 1
+            return None
+        try:
+            a.add(piece)
+            if not a.done():
+                return None
+            del self.open[uid]
+            return a.whole()
+        except MessageError:
+            self.open.pop(uid, None)
+            self.discarded += 1
+            raise
+
+
+def split_update(u: SceneUpdate, update: int, max_frame: int = MAX_FRAME_BYTES) -> list:
+    """The pieces of scene update ``u`` (split counter ``update``), each frame
+    within ``max_frame`` bytes, or ``[u]`` when it fits one frame. Rows are cut
+    along the first axis of each array in the part's order; piece 0 carries
+    the part's keys and ``rows``, every piece the stamp. Raises ValueError
+    for an update over MAX_UPDATE_BYTES or one that needs more than MAX_PIECES
+    pieces."""
+    parts, size = frame_parts(u.TYPE, u.to_meta(), u.to_sections())
+    if size <= max_frame:
+        return [u]
+    arrays = []
+    for name in PART_SECTIONS[u.part]:
+        a = u.arrays.get(name)
+        if a is not None:
+            arrays.append((name, a.array() if isinstance(a, Section) else np.asarray(a)))
+    total = sum(a.nbytes for _, a in arrays)
+    if total > MAX_UPDATE_BYTES:
+        raise ValueError(f"a scene update of {total} bytes, more than {MAX_UPDATE_BYTES}")
+    # A bound on every piece's head: the header, the section table, padding,
+    # and metadata with the part's keys, the largest "split" key and the
+    # descriptors of the whole arrays.
+    rows = {name: int(a.shape[0]) for name, a in arrays}
+    probe = u.to_meta()
+    probe["split"] = {"update": update, "piece": MAX_PIECES - 1, "pieces": MAX_PIECES,
+                      "first": rows, "rows": rows}
+    sections = [Section.from_array(name, a[:0]) for name, a in arrays]
+    probe["sections"] = [dict(x.descriptor(), shape=[int(n) for n in a.shape])
+                         for x, (_, a) in zip(sections, arrays)]
+    nsec = len(arrays) + (u.stamp is not None)
+    stamp_bytes = 0 if u.stamp is None else 8 * MAX_TIMELINES + SECTION_ALIGN
+    head = HEADER_BYTES + 4 * nsec + len(canonical_json(probe)) + 64 + SECTION_ALIGN * nsec
+    room = max_frame - head - stamp_bytes
+    if room <= 0:
+        raise ValueError(f"a frame of {max_frame} bytes leaves no room for rows")
+    pieces, cur, used = [], {}, 0
+    for name, a in arrays:
+        rowbytes = max(1, a.nbytes // a.shape[0]) if a.shape[0] else 1
+        r = 0
+        while r < a.shape[0]:
+            take = min(a.shape[0] - r, max(0, (room - used) // rowbytes))
+            if take == 0:
+                if not cur:
+                    raise ValueError(f"one row of {name!r} needs more than {room} bytes")
+                pieces.append(cur)
+                cur, used = {}, 0
+                continue
+            cur[name] = (r, a[r:r + take])
+            used += take * rowbytes
+            r += take
+    if cur:
+        pieces.append(cur)
+    if not 2 <= len(pieces) <= MAX_PIECES:
+        raise ValueError(f"the update needs {len(pieces)} pieces; a split update has 2 to "
+                         f"{MAX_PIECES}")
+    out = []
+    for k, cut in enumerate(pieces):
+        sp = {"update": update, "piece": k, "pieces": len(pieces),
+              "first": {name: int(r) for name, (r, _) in cut.items()}}
+        if k == 0:
+            sp["rows"] = rows
+        out.append(SceneUpdate(u.sub, u.view, u.seq, u.stamp_ns, u.path, u.part,
+                               {name: a for name, (_, a) in cut.items()},
+                               dict(u.params) if k == 0 else {}, u.static, u.state, u.axes,
+                               u.items, u.stamp, u.cursor, sp))
+        if frame_parts(u.TYPE, out[-1].to_meta(), out[-1].to_sections())[1] > max_frame:
+            raise ValueError(f"piece {k} would pass {max_frame} bytes")
+    return out
+
+
+__all__ += ["SplitUpdates", "split_update"]

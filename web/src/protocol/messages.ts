@@ -34,12 +34,17 @@ export const MSG = {
   scene_transforms: 0x0071, // 3.2 draft
   scene_clear: 0x0072, // 3.2 draft
   scene_classes: 0x0073, // 3.2 draft
+  text: 0x0074, // 3.2 draft
+  recordings: 0x0078, // 3.2 draft
+  recording_open: 0x0079, // 3.2 draft
+  cursor: 0x007a, // 3.2 draft
+  time_state: 0x007b, // 3.2 draft
 } as const;
 export type MessageType = keyof typeof MSG;
 
 /** The live view kinds; scene (6) is the protocol 3.2 draft's (KIND_SCENE below). */
-export type Kind = 'heatmap' | 'image' | 'points' | 'series' | 'histogram' | 'scene';
-export const KIND_IDS: Record<Kind, number> = { heatmap: 1, image: 2, points: 3, series: 4, histogram: 5, scene: 6 };
+export type Kind = 'heatmap' | 'image' | 'points' | 'series' | 'histogram' | 'scene' | 'text' | 'bars';
+export const KIND_IDS: Record<Kind, number> = { heatmap: 1, image: 2, points: 3, series: 4, histogram: 5, scene: 6, text: 7, bars: 8 };
 export function kindName(id: number): Kind | null {
   for (const k in KIND_IDS) if (KIND_IDS[k as Kind] === id) return k as Kind;
   return null;
@@ -138,6 +143,8 @@ export interface SessionIdentity {
   views?: number;
   /** The producer's capabilities, in a session list. */
   capabilities?: string[];
+  /** 3.2 draft, a session opened from a recording. */
+  recording?: { id: string; seekable: boolean; complete: boolean } | null;
 }
 
 /** One axis of a snapshot's payload (payload_layout in _wire.py). */
@@ -176,7 +183,14 @@ export interface PingMsg { type: 'ping'; nonce: number }
 export interface PongMsg { type: 'pong'; nonce: number }
 export interface SessionsMsg { type: 'sessions'; sessions: SessionIdentity[] }
 export interface AttachMsg { type: 'attach'; session: string | null }
-export interface ViewsMsg { type: 'views'; views: ViewEntry[]; session?: string | null }
+export interface ViewsMsg {
+  type: 'views';
+  views: ViewEntry[];
+  session?: string | null;
+  /** 3.2 draft: 2 to 8 timelines, step and time first. */
+  timelines?: TimelineInfo[];
+}
+export interface TimelineInfo { name: string; kind: 'sequence' | 'time'; epoch?: boolean }
 export interface SubscribeMsg {
   type: 'subscribe';
   sub: number;
@@ -205,7 +219,7 @@ export interface SnapshotMsg {
   stamp_ns: number;
   kind: number;
   data_view: DataView;
-  /** heatmap (H, W) f32, image (H, W, 4) u8, points (N, D) f32, histogram (B,) f32. */
+  /** heatmap (H, W) f32, image (H, W, 4) u8, points (N, D) f32, histogram or bars (B,) f32; empty (length 0) when `empty`. */
   data: Float32Array | Uint8Array;
   shape: number[];
   /** points: (N,) f32 labels or values. */
@@ -220,6 +234,17 @@ export interface SnapshotMsg {
   tile?: { dim: string; rows: number; cols: number } | null;
   points_dims?: 2 | 3;
   label_count?: number;
+  /** 3.2 draft: a bar chart's (B, 4) u8 colours, B labels and direction. */
+  colors?: Uint8Array;
+  labels?: string[];
+  horizontal?: boolean;
+  /** A static snapshot carries no stamp. */
+  static?: boolean;
+  /** The i64 (T,) stamp section. */
+  stamp?: BigInt64Array;
+  cursor?: number;
+  /** A recorded view with nothing at the cursor: no section. */
+  empty?: boolean;
 }
 
 /** Series values start .. start + values.length; total appended so far. */
@@ -231,6 +256,14 @@ export interface SeriesMsg {
   total: number;
   stamp_ns: number;
   values: Float32Array;
+  /** 3.2 draft: one i64 (T,) stamp for the values, or `stamps` (M, T), `stamps_t` is T. */
+  stamp?: BigInt64Array;
+  stamps?: BigInt64Array;
+  stamps_t?: number;
+  /** A decimated recorded series: the absolute index of each value, and the bucket size. */
+  indices?: BigInt64Array;
+  decimated?: number;
+  cursor?: number;
 }
 
 /** What a viewer reports to Python: data to read, never a command. */
@@ -271,7 +304,7 @@ export interface ParamInfo {
 export interface ActionInfo { name: string; running: boolean; queued: boolean; help?: string }
 
 /** Producer to viewer: the run state, the parameters and the actions, whole. */
-export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[] }
+export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[]; /** 3.2 draft */ stamp?: BigInt64Array }
 /** Viewer to producer: pause, resume, step, set a parameter, run an action. */
 export interface ControlMsg {
   type: 'control';
@@ -313,7 +346,8 @@ export type Message =
   | HelloMsg | WelcomeMsg | ByeMsg | ErrorMsg | PingMsg | PongMsg | SessionsMsg | AttachMsg
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
   | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg
-  | SceneUpdateMsg | SceneTransformsMsg | SceneClearMsg | SceneClassesMsg;
+  | SceneUpdateMsg | SceneTransformsMsg | SceneClearMsg | SceneClassesMsg
+  | TextMsg | RecordingsMsg | RecordingOpenMsg | CursorMsg | TimeStateMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
@@ -416,7 +450,7 @@ export const SCENE_DATA_VIEW = {
   budget: { max_points: 100000, max_items: 100000, max_vertices: 1000000, max_extent: 1024 },
 };
 
-/** One section of a scene part; dtype 0 f32, 4 i32, 5 u8, 6 u16. */
+/** One section of a scene part; dtype 0 f32, 4 i32, 5 u8, 6 u16. A piece of a split update may hold any dtype: those with no typed array here (f16, bf16, i64) arrive as their raw bytes in a Uint8Array. */
 export interface SceneArray { dtype: number; shape: number[]; data: Float32Array | Int32Array | Uint8Array | Uint16Array }
 
 /** One part of one entity of a scene. */
@@ -464,8 +498,18 @@ export interface SceneUpdateMsg {
   cursor?: number;
   axes?: PayloadAxis[];
   items?: string;
+  /** The key of a piece of a split update; its `arrays` then hold the piece's rows, and `params` the part's keys in piece 0 only. */
+  split?: SplitKey;
   /** The i64 (T,) stamp section. */
   stamp?: BigInt64Array;
+}
+
+export interface SplitKey {
+  update: number;
+  pieces: number;
+  piece: number;
+  first: Record<string, number>;
+  rows?: Record<string, number>;
 }
 
 /** The entity transforms of up to 1024 entities: 4 x 4 matrices, column-major, row k of `matrices` for paths[k]. */
@@ -521,6 +565,65 @@ export interface SceneClassesMsg {
   cursor?: number;
 }
 
+/** 3.2 draft: new lines of a text log, appended as a series' values are. Line i is bytes offsets[i] to offsets[i + 1] of `text` (UTF-8), at level levels[i]. */
+export interface TextMsg {
+  type: 'text';
+  sub: number;
+  view: string;
+  start: number;
+  total: number;
+  stamp_ns: number;
+  text: Uint8Array;
+  offsets: Int32Array;
+  levels: Uint8Array;
+  dropped?: number;
+  stamp?: BigInt64Array;
+  stamps?: BigInt64Array;
+  stamps_t?: number;
+  cursor?: number;
+}
+
+export interface RecordingEntry {
+  id: string;
+  title: string;
+  script: string;
+  bytes: number;
+  items: number;
+  complete: boolean;
+  created_unix_ms?: number | null;
+  ended_unix_ms?: number | null;
+  timelines: { name: string; kind: 'sequence' | 'time'; epoch?: boolean; min: string; max: string }[];
+}
+export interface RecordingsMsg { type: 'recordings'; recordings: RecordingEntry[] }
+export interface RecordingOpenMsg { type: 'recording_open'; request_id: number; recording: string }
+/** Viewer to server: move this viewer's cursor; only the fields of the op are kept. */
+export interface CursorMsg {
+  type: 'cursor';
+  request_id: number;
+  op: 'seek' | 'play' | 'pause' | 'step' | 'follow';
+  timeline?: string;
+  value?: string;
+  count?: number;
+  speed?: number;
+  pace?: 'recorded' | 'even';
+  loop?: [string, string];
+}
+/** Server to viewer: the state of the viewer's cursor; `cursor` is stamp text, null while following. */
+export interface TimeStateMsg {
+  type: 'time_state';
+  request_id?: number;
+  session: string;
+  generation: number;
+  state: 'following' | 'paused' | 'playing';
+  timeline: string;
+  cursor: string | null;
+  ranges: Record<string, [string, string]>;
+  live: boolean;
+  speed?: number;
+  pace?: 'recorded' | 'even';
+  loop?: [string, string];
+}
+
 /** The orbit camera a scene view opens on; null-valued keys are dropped. */
 export interface ViewCameraOrbit { target?: number[]; distance?: number; azimuth?: number; elevation?: number }
 
@@ -532,3 +635,47 @@ export interface SceneViewInfo {
   /** The orbit keys or the entity path of a camera; undefined when absent, unreadable, or for a 2-D scene. */
   view_camera: ViewCameraOrbit | string | undefined;
 }
+
+// --- 3.2 draft: timelines, text, bars, recordings, split updates ---
+
+export const CAP_TIMELINES = 'timelines';
+export const CAP_TEXT = 'text';
+export const CAP_BARS = 'bars';
+export const CAP_RECORDINGS = 'recordings';
+export const ERR_UNKNOWN_RECORDING = 'unknown_recording';
+export const ERR_BAD_RECORDING = 'bad_recording';
+export const ERR_NOT_SEEKABLE = 'not_seekable';
+export const ERR_BAD_CURSOR = 'bad_cursor';
+export const TIMELINE_SEQUENCE = 'sequence';
+export const TIMELINE_TIME = 'time';
+export const LEVEL_DEBUG = 0;
+export const LEVEL_INFO = 1;
+export const LEVEL_WARNING = 2;
+export const LEVEL_ERROR = 3;
+export const CURSOR_SEEK = 'seek';
+export const CURSOR_PLAY = 'play';
+export const CURSOR_PAUSE = 'pause';
+export const CURSOR_STEP = 'step';
+export const CURSOR_FOLLOW = 'follow';
+export const CURSOR_OPS: readonly string[] = [CURSOR_SEEK, CURSOR_PLAY, CURSOR_PAUSE, CURSOR_STEP, CURSOR_FOLLOW];
+export const PACE_RECORDED = 'recorded';
+export const PACE_EVEN = 'even';
+export const TIME_FOLLOWING = 'following';
+export const TIME_PAUSED = 'paused';
+export const TIME_PLAYING = 'playing';
+export const STAMP_TEXT_MAX = 20;
+export const MAX_PIECES = 16;
+export const MAX_UPDATE_BYTES = 536870912;
+export const MAX_INCOMPLETE_UPDATES = 2;
+export const TEXT_LINE_MAX = 4096;
+export const TEXT_MAX_LINES = 65536;
+export const TEXT_RETAIN_MIN = 4096;
+export const MAX_BARS = 4096;
+export const MAX_RECORDINGS = 1024;
+export const MAX_RECORDED = 64;
+export const MAX_CURSOR_STEP = 1000;
+export const CURSOR_RATE_HZ = 30;
+export const TIME_STATE_RATE_HZ = 30;
+export const MIN_SPEED = 0.0625;
+export const MAX_SPEED = 64;
+export const RECORDING_LINGER_MS = 600000;

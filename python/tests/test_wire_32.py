@@ -34,9 +34,9 @@ EXPECT = json.loads((V32 / "invalid" / "expect.json").read_text())
 
 
 def test_the_frames_are_there():
-    assert len(VALID) >= 36
+    assert len(VALID) >= 60
     types = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
-    assert {0x70, 0x71, 0x72, 0x73} <= types
+    assert {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B} <= types
     msgs = [w.decode((FIXTURES / f"{n}.bin").read_bytes()) for n in VALID]
     parts = {m.part for m in msgs if isinstance(m, w.SceneUpdate)}
     assert parts == set(w.PARTS)
@@ -46,10 +46,11 @@ def test_the_frames_are_there():
     assert modes == {"segments", "strips", "edges"}
     stamped = {type(m).__name__ for m in msgs if getattr(m, "stamp", None) is not None
                or getattr(m, "stamps", None) is not None}
-    assert stamped == {"SceneUpdate", "SceneTransforms", "SceneClear", "SceneClasses"}
+    assert stamped == {"SceneUpdate", "SceneTransforms", "SceneClear", "SceneClasses", "Snapshot",
+                       "Series", "Controls", "Text"}
     assert any(s.dtype == w.DType.U16 for n in VALID
                for s in w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).sections)
-    assert len(EXPECT) >= 55
+    assert len(EXPECT) >= 90
     assert {"error"} <= set().union(*EXPECT.values()) and {"reason"} <= set().union(*EXPECT.values())
 
 
@@ -175,7 +176,8 @@ def test_golden_values_of_the_other_parts():
 def test_31_receivers_find_the_frames_well_formed():
     for n in VALID:
         f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
-        assert f.type in (0x01, 0x02, 0x20, 0x24, 0x70, 0x71, 0x72, 0x73)
+        assert f.type in (0x01, 0x02, 0x10, 0x20, 0x24, 0x30, 0x31, 0x50, 0x70, 0x71, 0x72, 0x73,
+                          0x74, 0x78, 0x79, 0x7A, 0x7B)
 
 
 @pytest.mark.parametrize("name", sorted(EXPECT))
@@ -446,4 +448,229 @@ def test_page_example_is_the_golden_frame():
     assert meta.encode() == data[mo:mo + struct.unpack_from("<I", data, 16)[0]]
     rows = dict(re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", page, re.M))
     assert rows == {"0070": "scene_update", "0071": "scene_transforms", "0072": "scene_clear",
-                    "0073": "scene_classes"}
+                    "0073": "scene_classes", "0074": "text", "0078": "recordings",
+                    "0079": "recording_open", "007a": "cursor", "007b": "time_state"}
+
+
+
+# ---------------------------------------------------------------------------
+# timelines, text logs, bar charts, split updates and recordings
+# ---------------------------------------------------------------------------
+def test_golden_values_of_timelines_text_bars_and_recordings():
+    v = _d("views_timelines")
+    assert [t["name"] for t in v.timelines] == ["step", "time", "episode"]
+    assert v.views[0]["recorded"] == [{"budget": {"max_backfill": 4096}}]
+    assert w.decode((FIXTURES / "views.bin").read_bytes()).timelines is None
+    se = _d("sessions_recording")
+    assert se.sessions[0]["recording"] == {"id": "train-20261115-120314", "seekable": True,
+                                           "complete": True}
+    sr = _d("series_stamps")
+    assert sr.stamps.array().tolist() == [[1200, 1763200000123456789],
+                                          [1201, 1763200000128456789],
+                                          [1202, 1763200000133456789]]
+    assert _d("series_stamp").stamp.array().tolist() == [1200, 1763200000123456789]
+    dec = _d("series_decimated")
+    assert dec.indices.array().tolist() == [0, 2048, 4095] and dec.decimated == 1024
+    assert dec.cursor == 2
+    sn = _d("snapshot_stamped")
+    assert sn.stamp is not None and not sn.static
+    assert _d("snapshot_static").static and _d("snapshot_static").stamp is None
+    em = _d("snapshot_empty")
+    assert em.empty and em.data is None and em.cursor == 3
+    b = _d("snapshot_bars")
+    assert b.kind == w.Kind.BARS and b.labels == ["cat", "dog", "fish"] and b.horizontal
+    assert b.colors.array().shape == (3, 4) and b.data.array().tolist() == [0.125, 0.75, -0.25]
+    assert _d("controls_stamped").stamp.array().tolist() == [1200, 1763200000123456789]
+    t = _d("text")
+    assert t.lines() == ["epoch 1 starts", "loss rose\nto 2.5", "pas de données é"]
+    assert t.levels.array().tolist() == [1, 2, 3] and t.stamps.array().shape == (3, 2)
+    ts = _d("text_stamp")
+    assert (ts.start, ts.total, ts.dropped, ts.cursor) == (10, 12, 10, 1)
+    assert ts.lines() == ["a", ""]
+    r = _d("recordings")
+    assert r.recordings[0]["id"] == "train-20261115-120314"
+    assert _d("recordings_none").recordings == []
+    assert _d("recording_open").recording == "train-20261115-120314"
+    c = _d("cursor_play")
+    assert (c.op, c.timeline, c.speed, c.pace, c.loop) == ("play", "step", 2.0, "even",
+                                                          ["1000", "5000"])
+    assert _d("cursor_step").count == -5
+    assert _d("cursor_follow").timeline is None
+    p = _d("time_state_paused")
+    assert (p.request_id, p.cursor, p.generation) == (2, "5000", 2)
+    f = _d("time_state_following")
+    assert f.cursor is None and f.live
+    assert b'"cursor":null' in (V32 / "time_state_following.bin").read_bytes()
+
+
+def test_31_encodings_are_unchanged():
+    """A 3.0 or 3.1 message without the 3.2 keys encodes to the bytes it always did."""
+    for p in sorted(FIXTURES.glob("*.bin")) + sorted((FIXTURES / "v3_1").glob("*.bin")):
+        if p.stem in ("ping_future", "unknown_type"):       # frames of a later minor
+            continue
+        buf = p.read_bytes()
+        m = w.decode(buf)
+        if isinstance(m, w.Unknown):
+            continue
+        assert w.encode(m, minor=w.decode_frame(buf).minor) == buf, p.name
+
+
+def test_stamp_text():
+    for ok in ("0", "-1", "1763200000123456789", "9223372036854775807",
+               "-9223372036854775808", "007"):
+        assert w.stamp_text_ok(ok), ok
+    for bad in ("", "-", "+1", "1.5", "1e3", " 1", "9223372036854775808",
+                "-9223372036854775809", "1" * 21, 12, None, "١٢"):
+        assert not w.stamp_text_ok(bad), bad
+
+
+def test_cursor_keeps_only_its_ops_fields():
+    meta = {"request_id": 1, "op": "pause", "timeline": "step", "value": "5", "count": 3,
+            "speed": 2, "pace": "even", "loop": None}
+    c = w.decode(w.encode_frame(w.MsgType.CURSOR, meta))
+    assert (c.timeline, c.value, c.count, c.speed) == (None, None, None, None)
+    assert w.encode(c) == w.encode_frame(w.MsgType.CURSOR, {"request_id": 1, "op": "pause"})
+    c = w.decode(w.encode_frame(w.MsgType.CURSOR, dict(meta, op="seek")))
+    assert (c.timeline, c.value, c.count) == ("step", "5", None)
+    for op, extra, code in (("step", {"count": 1001}, w.ERR_BAD_CURSOR),
+                            ("step", {"count": 1.5}, w.ERR_BAD_CURSOR),
+                            ("play", {"speed": 0.05}, w.ERR_BAD_CURSOR),
+                            ("play", {"pace": "fast"}, w.ERR_BAD_CURSOR),
+                            ("play", {"timeline": "bad name"}, w.ERR_BAD_CURSOR),
+                            ("rewind", {}, w.ERR_BAD_REQUEST)):
+        m = {"request_id": 1, "op": op, "timeline": "step", **extra}
+        _refused(w.encode_frame(w.MsgType.CURSOR, m), code)
+    ok = w.decode(w.encode_frame(w.MsgType.CURSOR, {"request_id": 1, "op": "play",
+                                                    "timeline": "t", "speed": 1 / 16}))
+    assert ok.speed == 0.0625 and ok.loop is None
+
+
+def test_text_rules():
+    t = w.Text.from_lines(1, "log", 0, 2, 5, ["x" * w.TEXT_LINE_MAX, "é" * 3], [0, 3])
+    back = w.decode(w.encode(t))
+    assert back.lines() == ["x" * 4096, "ééé"]
+    many = w.Text.from_lines(1, "log", 0, w.TEXT_MAX_LINES, 5, [""] * w.TEXT_MAX_LINES,
+                             [1] * w.TEXT_MAX_LINES)
+    assert len(w.decode(w.encode(many)).lines()) == w.TEXT_MAX_LINES
+    over = w.Text.from_lines(1, "log", 0, w.TEXT_MAX_LINES + 1, 5,
+                             [""] * (w.TEXT_MAX_LINES + 1), [1] * (w.TEXT_MAX_LINES + 1))
+    _refused(w.encode(over))
+    _refused(w.encode(w.Text.from_lines(1, "log", 0, 1, 5, ["a"], [1],
+                                        stamps=np.zeros((2, 2), np.int64))))
+
+
+def test_bars_and_text_data_views():
+    log = {"id": 1, "name": "log", "kind": int(w.Kind.TEXT), "sources": []}
+    assert w.resolve_data_view(log, None) == {"budget": {"max_backfill": w.SERIES_RETAIN_MIN}}
+    assert w.resolve_data_view(log, {"budget": {"max_backfill": 10}}) == {
+        "budget": {"max_backfill": 10}}
+    bars = {"id": 2, "name": "b", "kind": int(w.Kind.BARS), "sources": [
+        {"name": "s", "dtype": "f32", "dims": [{"name": "layer", "size": 4},
+                                               {"name": "class", "size": 5000}]}]}
+    with pytest.raises(w.MessageError):
+        w.resolve_data_view(bars, None)                      # two kept dims
+    r = w.resolve_data_view(bars, {"index": {"layer": 0, "class": [0, 4096]}})
+    assert w.payload_layout(bars, r)["extent"] == [4096]
+    with pytest.raises(w.MessageError) as e:
+        w.resolve_data_view(bars, {"index": {"layer": 0}})   # 5000 bars
+    assert e.value.code == w.ERR_BAD_DATA_VIEW
+
+
+def _pieces():
+    return [w.decode((V32 / f"scene_update_split_{k}.bin").read_bytes()) for k in range(5)]
+
+
+def test_split_update_assembles_to_the_whole():
+    from importlib import util
+    spec = util.spec_from_file_location("gen_v3_2", FIXTURES / "gen_v3_2.py")
+    gen = util.module_from_spec(spec)
+    sys.path.insert(0, str(FIXTURES))
+    spec.loader.exec_module(gen)
+    whole = gen.SPLIT
+    pieces = _pieces()
+    assert [p.split["piece"] for p in pieces] == [0, 1, 2, 3, 4]
+    assert pieces[0].params == {"radius": 0.25} and all(p.params == {} for p in pieces[1:])
+    assert all(p.stamp is not None for p in pieces)
+    su = w.SplitUpdates()
+    got = [su.add(p) for p in pieces]
+    assert got[:4] == [None] * 4 and not su.open
+    u = got[4]
+    assert isinstance(u, w.SceneUpdate) and u.split is None
+    assert u.arrays["positions"].array().tolist() == whole.arrays["positions"].tolist()
+    assert u.arrays["colors"].array().tolist() == whole.arrays["colors"].tolist()
+    assert (u.path, u.seq, u.params, u.stamp.array().tolist()) == (
+        "world/split", 37, {"radius": 0.25}, [1200, 1763200000123456789])
+    assert w.encode(u) == w.encode(whole)
+
+
+def test_split_update_rules():
+    pieces = _pieces()
+    # a piece without its piece 0 is dropped and counted
+    su = w.SplitUpdates()
+    assert su.add(pieces[1]) is None and su.dropped == 1 and not su.open
+    # a piece twice
+    su = w.SplitUpdates()
+    su.add(pieces[0])
+    su.add(pieces[1])
+    with pytest.raises(w.MessageError):
+        su.add(pieces[1])
+    assert not su.open
+    # a newer update of the same entity part discards the incomplete one
+    su = w.SplitUpdates()
+    su.add(pieces[0])
+    newer = w.SceneUpdate(**{**pieces[0].__dict__, "split": dict(pieces[0].split, update=5)})
+    su.add(newer)
+    assert list(su.open) == [5] and su.discarded == 1
+    assert su.add(pieces[1]) is None and su.dropped == 1
+    # at most two incomplete updates; the oldest goes
+    su = w.SplitUpdates()
+    for k, path in enumerate(["a", "b", "c"]):
+        su.add(w.SceneUpdate(**{**pieces[0].__dict__, "path": path,
+                                "split": dict(pieces[0].split, update=10 + k)}))
+    assert list(su.open) == [11, 12]
+    # a piece that differs from its piece 0, or whose rows overlap
+    for bad in (dict(pieces[1].__dict__, seq=38),
+                dict(pieces[1].__dict__, split=dict(pieces[1].split, first={"positions": 4}))):
+        su = w.SplitUpdates()
+        su.add(pieces[0])
+        with pytest.raises(w.MessageError):
+            su.add(w.SceneUpdate(**bad))
+    # the last piece arrives with rows missing
+    su = w.SplitUpdates()
+    su.add(w.SceneUpdate(**dict(pieces[0].__dict__, split=dict(pieces[0].split, pieces=2))))
+    with pytest.raises(w.MessageError):
+        su.add(w.SceneUpdate(**dict(pieces[4].__dict__, split=dict(pieces[4].split, piece=1,
+                                                                     pieces=2))))
+    # the whole update is checked as an unsplit one: colours of the wrong row count
+    su = w.SplitUpdates()
+    p0 = w.SceneUpdate(**dict(pieces[0].__dict__, split=dict(
+        pieces[0].split, pieces=2, rows={"positions": 20, "colors": 2})))
+    rest = w.SceneUpdate(2, "world", 37, pieces[0].stamp_ns, "world/split", "points",
+                         {"positions": np.zeros((14, 3), np.float32),
+                          "colors": np.zeros((2, 4), np.uint8)}, {}, stamp=pieces[0].stamp,
+                         split={"update": 4, "piece": 1, "pieces": 2,
+                                "first": {"positions": 6, "colors": 0}})
+    su.add(w.decode(w.encode(p0)))
+    with pytest.raises(w.MessageError):
+        su.add(w.decode(w.encode(rest)))
+
+
+def test_split_update_of_a_large_mesh():
+    """A mesh over one frame travels in pieces and comes back whole (small
+    frames stand in for 64 MiB, so that the test allocates a few MB)."""
+    n = 30_000
+    pos = np.random.default_rng(1).random((n, 3), dtype=np.float32)
+    tri = (np.arange(n * 3, dtype=np.int32) % n).reshape(n, 3)
+    u = w.SceneUpdate(1, "s", 3, 4, "m", "mesh", {"positions": pos, "indices": tri},
+                      {"color": [1, 2, 3, 255]})
+    pieces = w.split_update(u, 9, max_frame=64 * 1024)
+    assert 2 <= len(pieces) <= w.MAX_PIECES
+    assert all(len(w.encode(p)) <= 64 * 1024 for p in pieces)
+    su = w.SplitUpdates()
+    out = [su.add(w.decode(w.encode(p))) for p in pieces]
+    assert all(x is None for x in out[:-1])
+    assert out[-1].arrays["positions"].array().tolist() == pos.tolist()
+    assert out[-1].arrays["indices"].array().tolist() == tri.tolist()
+    with pytest.raises(ValueError):
+        w.split_update(u, 9, max_frame=16 * 1024)       # more than 16 pieces
+    assert w.split_update(u, 9) == [u]                  # fits one frame

@@ -1,0 +1,129 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 480,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 391,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 3,
+    "type": 48
+  },
+  "meta": {
+    "axes": [],
+    "colormap": 0,
+    "data_view": {
+      "budget": {},
+      "index": {},
+      "reduce": {},
+      "source": "scores"
+    },
+    "flags": 0,
+    "horizontal": true,
+    "kind": 8,
+    "labels": [
+      "cat",
+      "dog",
+      "fish"
+    ],
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "data",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "colors",
+        "shape": [
+          3,
+          4
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 8,
+    "stamp_ns": 81234567894423,
+    "stats": [
+      -0.25,
+      0.75
+    ],
+    "sub": 4,
+    "view": "scores",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 36,
+  "name": "v3_2/snapshot_bars",
+  "section_lengths": [
+    12,
+    12,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "data",
+      "offset": 432,
+      "shape": [
+        3
+      ],
+      "values": [
+        0.125,
+        0.75,
+        -0.25
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 12,
+      "name": "colors",
+      "offset": 448,
+      "shape": [
+        3,
+        4
+      ],
+      "values": [
+        255,
+        0,
+        0,
+        255,
+        0,
+        128,
+        0,
+        255,
+        0,
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 464,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "snapshot"
+}

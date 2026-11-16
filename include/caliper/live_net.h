@@ -377,13 +377,15 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
  *
  * Proposals that sprint 2 has not confirmed: the minor version 2, the
- * capability "scenes", the kind scene (6), the scene messages (0x0070 to
- * 0x0073), the dtype u16 (6) and the limits below. Each is one line here, so
+ * capabilities, the kinds scene (6), text (7) and bars (8), the messages
+ * 0x0070 to 0x0074 and 0x0078 to 0x007B, the dtype u16 (6), the error codes
+ * and the limits below. Each is one line here, so
  * a renumbering changes one line (the dtype also has one line in
  * caliper_net_dtype_size above). docs/references/wire-protocol-3-2.md states
- * what is built of them: every part of SCENE_UPDATE, SCENE_TRANSFORMS,
- * SCENE_CLEAR, SCENE_CLASSES, the stamp sections of the scene messages, the
- * VIEWS key "scene" and the default scene data view. Senders keep writing
+ * what is built of them: the codecs build the whole draft (every part of
+ * SCENE_UPDATE, split updates, SCENE_TRANSFORMS, SCENE_CLEAR, SCENE_CLASSES,
+ * stamps, TEXT, bar charts and the recording messages); producers, the hub
+ * and viewers build the scenes. Senders keep writing
  * CALIPER_NET_PROTOCOL_MINOR in their frames until 3.2 is confirmed; the 3.2
  * golden frames (tests/fixtures/wire_v3/v3_2) carry CALIPER_NET_MINOR_3_2. A
  * peer decides by the capability, never the minor. Every 3.1 message keeps
@@ -453,6 +455,55 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_SCENE_LIMIT_MAX_VERTICES   4194304u
 #define CALIPER_NET_SCENE_DEFAULT_MAX_EXTENT   1024u
 #define CALIPER_NET_SCENE_LIMIT_MAX_EXTENT     8192u
+
+/* --- timelines, text logs, bar charts, split updates and recordings -------- */
+#define CALIPER_NET_CAP_TIMELINES        "timelines"  /* VIEWS "timelines", stamps, "static"  */
+#define CALIPER_NET_CAP_TEXT             "text"       /* kind text and TEXT                 */
+#define CALIPER_NET_CAP_BARS             "bars"       /* kind bars, a SNAPSHOT of kind 8    */
+#define CALIPER_NET_CAP_RECORDINGS       "recordings" /* the recording messages and keys    */
+#define CALIPER_NET_KIND_TEXT            7            /* TEXT messages only                 */
+#define CALIPER_NET_KIND_BARS            8            /* data (B,) f32, colors (B, 4) u8    */
+#define CALIPER_NET_MSG_TEXT             0x0074u      /* P -> V/H, H -> V   new lines of a text log */
+#define CALIPER_NET_MSG_RECORDINGS       0x0078u      /* S -> V   the recordings a server can open */
+#define CALIPER_NET_MSG_RECORDING_OPEN   0x0079u      /* V -> S   open one; answered by VIEWS or ERROR */
+#define CALIPER_NET_MSG_CURSOR           0x007Au      /* V -> S   move the viewer's cursor      */
+#define CALIPER_NET_MSG_TIME_STATE       0x007Bu      /* S -> V   the state of the cursor       */
+#define CALIPER_NET_ERR_UNKNOWN_RECORDING "unknown_recording"
+#define CALIPER_NET_ERR_BAD_RECORDING    "bad_recording"
+#define CALIPER_NET_ERR_NOT_SEEKABLE     "not_seekable"
+#define CALIPER_NET_ERR_BAD_CURSOR       "bad_cursor"
+#define CALIPER_NET_TIMELINE_SEQUENCE    "sequence"
+#define CALIPER_NET_TIMELINE_TIME        "time"
+#define CALIPER_NET_LEVEL_DEBUG          0            /* TEXT "levels"                      */
+#define CALIPER_NET_LEVEL_INFO           1
+#define CALIPER_NET_LEVEL_WARNING        2
+#define CALIPER_NET_LEVEL_ERROR          3
+#define CALIPER_NET_CURSOR_SEEK          "seek"       /* CURSOR "op"                        */
+#define CALIPER_NET_CURSOR_PLAY          "play"
+#define CALIPER_NET_CURSOR_PAUSE         "pause"
+#define CALIPER_NET_CURSOR_STEP          "step"
+#define CALIPER_NET_CURSOR_FOLLOW        "follow"
+#define CALIPER_NET_PACE_RECORDED        "recorded"
+#define CALIPER_NET_PACE_EVEN            "even"
+#define CALIPER_NET_TIME_FOLLOWING       "following"  /* TIME_STATE "state"                 */
+#define CALIPER_NET_TIME_PAUSED          "paused"
+#define CALIPER_NET_TIME_PLAYING         "playing"
+#define CALIPER_NET_STAMP_TEXT_MAX       20u          /* characters of stamp text           */
+#define CALIPER_NET_MAX_PIECES           16u          /* pieces of a split update           */
+#define CALIPER_NET_MAX_UPDATE_BYTES     536870912u   /* bytes of a whole split update      */
+#define CALIPER_NET_MAX_INCOMPLETE_UPDATES 2u         /* split updates a receiver holds per subscription */
+#define CALIPER_NET_TEXT_LINE_MAX        4096u        /* bytes of a text line               */
+#define CALIPER_NET_TEXT_MAX_LINES       65536u       /* lines in one TEXT                  */
+#define CALIPER_NET_TEXT_RETAIN_MIN      4096u        /* lines a producer retains per text log */
+#define CALIPER_NET_MAX_BARS             4096u        /* bars of a snapshot                 */
+#define CALIPER_NET_MAX_RECORDINGS       1024u        /* recordings in RECORDINGS           */
+#define CALIPER_NET_MAX_RECORDED         64u          /* VIEWS "recorded": data views of a view */
+#define CALIPER_NET_MAX_CURSOR_STEP      1000u        /* CURSOR "count", either way         */
+#define CALIPER_NET_CURSOR_RATE_HZ       30u          /* CURSOR messages a viewer sends a second */
+#define CALIPER_NET_TIME_STATE_RATE_HZ   30u          /* TIME_STATE a server sends a second while playing */
+#define CALIPER_NET_MIN_SPEED            0.0625       /* playback speed, 1/16                */
+#define CALIPER_NET_MAX_SPEED            64u
+#define CALIPER_NET_RECORDING_LINGER_MS  600000u      /* an opened recording without viewers stays listed */
 
 #ifdef __cplusplus
 }  /* extern "C" */

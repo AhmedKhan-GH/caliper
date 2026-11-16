@@ -5,6 +5,18 @@
   "arrows_vectors_rows.bin": {
     "error": "bad_request"
   },
+  "bars_colors_rows.bin": {
+    "error": "bad_request"
+  },
+  "bars_labels_count.bin": {
+    "error": "bad_request"
+  },
+  "bars_rank_2.bin": {
+    "error": "bad_request"
+  },
+  "bars_too_many.bin": {
+    "error": "bad_request"
+  },
   "boxes_half_sizes_dims.bin": {
     "error": "bad_request"
   },
@@ -46,6 +58,33 @@
   },
   "colors_rgb.bin": {
     "error": "bad_request"
+  },
+  "controls_stamp_f32.bin": {
+    "error": "bad_request"
+  },
+  "cursor_loop_order.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_op.bin": {
+    "error": "bad_request"
+  },
+  "cursor_request_id.bin": {
+    "error": "bad_request"
+  },
+  "cursor_seek_range.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_seek_text.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_seek_timeline.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_speed.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_step_zero.bin": {
+    "error": "bad_cursor"
   },
   "edge_values_rows.bin": {
     "error": "bad_request"
@@ -129,11 +168,47 @@
   "positions_missing.bin": {
     "error": "bad_request"
   },
+  "recording_open_id.bin": {
+    "error": "bad_request"
+  },
+  "recordings_id.bin": {
+    "error": "bad_request"
+  },
   "segments_odd.bin": {
     "error": "bad_request"
   },
+  "series_decimated_zero.bin": {
+    "error": "bad_request"
+  },
+  "series_indices_alone.bin": {
+    "error": "bad_request"
+  },
+  "series_stamps_rows.bin": {
+    "error": "bad_request"
+  },
+  "snapshot_empty_with_data.bin": {
+    "error": "bad_request"
+  },
+  "snapshot_stamp_static.bin": {
+    "error": "bad_request"
+  },
+  "split_first_names.bin": {
+    "error": "bad_request"
+  },
+  "split_one_piece.bin": {
+    "error": "bad_request"
+  },
   "split_piece.bin": {
-    "error": "unsupported"
+    "error": "bad_request"
+  },
+  "split_rows_later.bin": {
+    "error": "bad_request"
+  },
+  "split_rows_missing.bin": {
+    "error": "bad_request"
+  },
+  "split_rows_pass.bin": {
+    "error": "bad_request"
   },
   "stamp_f32.bin": {
     "error": "bad_request"
@@ -151,6 +226,33 @@
     "error": "bad_request"
   },
   "strip_lengths_sum.bin": {
+    "error": "bad_request"
+  },
+  "text_level.bin": {
+    "error": "bad_request"
+  },
+  "text_levels_missing.bin": {
+    "error": "bad_request"
+  },
+  "text_line_long.bin": {
+    "error": "bad_request"
+  },
+  "text_offsets_decrease.bin": {
+    "error": "bad_request"
+  },
+  "text_offsets_end.bin": {
+    "error": "bad_request"
+  },
+  "text_total.bin": {
+    "error": "bad_request"
+  },
+  "text_utf8.bin": {
+    "error": "bad_request"
+  },
+  "time_state_cursor_following.bin": {
+    "error": "bad_request"
+  },
+  "time_state_ranges.bin": {
     "error": "bad_request"
   },
   "transforms_matrices_missing.bin": {
@@ -178,5 +280,14 @@
   "u16_length_mismatch.bin": {
     "close_code": 4000,
     "reason": "malformed"
+  },
+  "views_recorded_many.bin": {
+    "error": "bad_request"
+  },
+  "views_timelines_order.bin": {
+    "error": "bad_request"
+  },
+  "views_timelines_repeat.bin": {
+    "error": "bad_request"
   }
 }

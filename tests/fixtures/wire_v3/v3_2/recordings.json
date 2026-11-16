@@ -1,0 +1,47 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 381,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 357,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 120
+  },
+  "meta": {
+    "recordings": [
+      {
+        "bytes": 1048576,
+        "complete": false,
+        "created_unix_ms": 1763208194000,
+        "ended_unix_ms": null,
+        "id": "train-20261115-120314",
+        "items": 20000,
+        "script": "train.py",
+        "timelines": [
+          {
+            "kind": "sequence",
+            "max": "19999",
+            "min": "0",
+            "name": "step"
+          },
+          {
+            "epoch": true,
+            "kind": "time",
+            "max": "1763208794000000000",
+            "min": "1763208194000000000",
+            "name": "time"
+          }
+        ],
+        "title": "train.py"
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "v3_2/recordings",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "recordings"
+}

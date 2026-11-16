@@ -88,7 +88,7 @@ const char* kBase = "\"sub\":1,\"view\":\"v\",\"seq\":1,\"stamp_ns\":1,\"path\":
 
 TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes back to the same bytes") {
     const std::vector<std::string> names = v32_names();
-    REQUIRE(names.size() >= 39);
+    REQUIRE(names.size() >= 66);
     for (const std::string& name : names) {
         CAPTURE(name);
         const std::vector<uint8_t> bin = read_bytes(v32_dir() / (name + ".bin"));
@@ -337,9 +337,165 @@ TEST_CASE("net/wire 3.2: the other parts, stamps, entity transforms and class ta
     CHECK(std::string(scene_part_sections(scene_part_index("mesh"))[6]) == "texture");
 }
 
+TEST_CASE("net/wire 3.2: timelines, text logs, bar charts and the recording messages carry their golden values") {
+    std::vector<uint8_t> b;
+    Message m;
+    auto load = [&](const char* name) {
+        b = read_bytes(v32_dir() / (std::string(name) + ".bin"));
+        const DecodeResult r = decode_bytes(b, &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+    };
+    load("views_timelines");
+    REQUIRE(std::get<Views>(m).timelines.size() == 3);
+    CHECK(std::get<Views>(m).timelines.at(2).find("name")->as_string() == "episode");
+    load("series_stamps");
+    {
+        const Series& s = std::get<Series>(m);
+        REQUIRE(s.stamps.has_value());
+        CHECK(s.stamps->shape == std::vector<int64_t>{3, 2});
+        CHECK(at<int64_t>(*s.stamps, 5) == 1763200000133456789LL);
+    }
+    load("series_decimated");
+    CHECK(std::get<Series>(m).decimated == uint64_t(1024));
+    CHECK(at<int64_t>(*std::get<Series>(m).indices, 2) == 4095);
+    load("snapshot_empty");
+    CHECK(std::get<Snapshot>(m).empty);
+    CHECK(std::get<Snapshot>(m).cursor == uint32_t(3));
+    load("snapshot_bars");
+    {
+        const Snapshot& s = std::get<Snapshot>(m);
+        CHECK(s.kind == CALIPER_NET_KIND_BARS);
+        CHECK(s.horizontal);
+        CHECK(s.labels.size() == 3);
+        REQUIRE(s.colors.has_value());
+        CHECK(s.colors->shape == std::vector<int64_t>{3, 4});
+    }
+    load("snapshot_static");
+    CHECK(std::get<Snapshot>(m).is_static);
+    load("controls_stamped");
+    CHECK(std::get<Controls>(m).stamp.has_value());
+    load("text");
+    {
+        const Text& t = std::get<Text>(m);
+        CHECK(t.line(0) == "epoch 1 starts");
+        CHECK(t.line(1) == "loss rose\nto 2.5");
+        CHECK(t.line(2) == "pas de donn\xc3\xa9" "es \xc3\xa9");
+        CHECK(t.levels.data[2] == CALIPER_NET_LEVEL_ERROR);
+    }
+    load("cursor_play");
+    {
+        const Cursor& c = std::get<Cursor>(m);
+        CHECK(c.op == "play");
+        CHECK(*c.speed == 2.0);
+        CHECK(c.loop.at(1).as_string() == "5000");
+    }
+    load("time_state_following");
+    CHECK_FALSE(std::get<TimeState>(m).cursor.has_value());
+    load("recordings");
+    CHECK(std::get<Recordings>(m).recordings.size() == 1);
+    load("sessions_recording");
+    CHECK(std::get<Sessions>(m).list.size() == 1);
+}
+
+TEST_CASE("net/wire 3.2: stamp text, and a cursor keeps the fields of its op") {
+    for (const char* ok : {"0", "-1", "1763200000123456789", "9223372036854775807", "-9223372036854775808", "007"})
+        CHECK_MESSAGE(stamp_text_ok(ok), ok);
+    for (const char* no : {"", "-", "+1", "1.5", "1e3", " 1", "9223372036854775808", "-9223372036854775809",
+                           "111111111111111111111"})
+        CHECK_MESSAGE(!stamp_text_ok(no), no);
+    Json meta;
+    std::string err;
+    const char* text = "{\"request_id\":1,\"op\":\"pause\",\"timeline\":\"step\",\"value\":\"5\",\"count\":3}";
+    REQUIRE(Json::parse(text, std::strlen(text), &meta, &err));
+    std::vector<uint8_t> b;
+    REQUIRE(encode_frame(CALIPER_NET_MSG_CURSOR, meta, {}, &b));
+    Message m;
+    REQUIRE(decode_bytes(b, &m).ok());
+    const Cursor& c = std::get<Cursor>(m);
+    CHECK_FALSE(c.timeline.has_value());
+    CHECK_FALSE(c.count.has_value());
+    std::vector<uint8_t> again;
+    REQUIRE(encode(m, &again));
+    Frame f;
+    FrameError fe;
+    REQUIRE(decode_frame(again.data(), again.size(), &f, &fe));
+    CHECK(f.meta.dump() == "{\"op\":\"pause\",\"request_id\":1}");
+}
+
+TEST_CASE("net/wire 3.2: the pieces of a split update are put together and checked") {
+    std::vector<std::vector<uint8_t>> frames;
+    std::vector<SceneUpdate> pieces;
+    for (int k = 0; k < 5; ++k) {
+        frames.push_back(read_bytes(v32_dir() / ("scene_update_split_" + std::to_string(k) + ".bin")));
+    }
+    for (const auto& fr : frames) {
+        Message m;
+        REQUIRE(decode_bytes(fr, &m).ok());
+        pieces.push_back(std::get<SceneUpdate>(m));
+        CHECK_FALSE(pieces.back().split.is_null());
+    }
+    CHECK(pieces[0].params.find("radius") != nullptr);
+    CHECK(pieces[1].params.size() == 0);
+    SplitUpdates su;
+    WholeUpdate whole;
+    std::string err;
+    for (int k = 0; k < 4; ++k) CHECK(su.add(pieces[(size_t)k], &whole, &err) == SplitUpdates::Result::Pending);
+    REQUIRE_MESSAGE(su.add(pieces[4], &whole, &err) == SplitUpdates::Result::Whole, err);
+    CHECK(su.held() == 0);
+    const SceneUpdate& u = whole.update;
+    CHECK(u.split.is_null());
+    CHECK(u.path == "world/split");
+    REQUIRE(u.array("positions") != nullptr);
+    CHECK(u.array("positions")->shape == std::vector<int64_t>{20, 3});
+    for (int i = 0; i < 60; ++i) CHECK(at<float>(*u.array("positions"), (size_t)i) == (float)i / 8.0f);
+    REQUIRE(u.array("colors") != nullptr);
+    for (int i = 0; i < 80; ++i) CHECK(at<uint8_t>(*u.array("colors"), (size_t)i) == (uint8_t)(i * 3 % 256));
+    REQUIRE(u.stamp.has_value());
+    CHECK(at<int64_t>(*u.stamp, 0) == 1200);
+    CHECK(u.params.find("radius")->as_double() == 0.25);
+    // The whole update encodes as an unsplit one: a single frame.
+    std::vector<uint8_t> enc;
+    REQUIRE(encode(Message(u), &enc));
+    Message back;
+    REQUIRE(decode_bytes(enc, &back).ok());
+    CHECK(std::get<SceneUpdate>(back).array("colors")->shape == std::vector<int64_t>{20, 4});
+
+    // A piece without its piece 0 is dropped; a piece twice is refused.
+    SplitUpdates a;
+    CHECK(a.add(pieces[1], &whole, &err) == SplitUpdates::Result::Dropped);
+    CHECK(a.dropped() == 1);
+    CHECK(a.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
+    CHECK(a.add(pieces[1], &whole, &err) == SplitUpdates::Result::Pending);
+    CHECK(a.add(pieces[1], &whole, &err) == SplitUpdates::Result::Refused);
+    CHECK(a.held() == 0);
+    // A newer update of the same entity part discards the incomplete one; at most two are held.
+    SplitUpdates c;
+    CHECK(c.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
+    SceneUpdate newer = pieces[0];
+    newer.split.set("update", (uint64_t)5);
+    CHECK(c.add(newer, &whole, &err) == SplitUpdates::Result::Pending);
+    CHECK(c.held() == 1);
+    CHECK(c.discarded() == 1);
+    CHECK(c.add(pieces[1], &whole, &err) == SplitUpdates::Result::Dropped);
+    SplitUpdates d;
+    for (int k = 0; k < 3; ++k) {
+        SceneUpdate p = pieces[0];
+        p.path = std::string(1, char('a' + k));
+        p.split.set("update", (uint64_t)(10 + k));
+        CHECK(d.add(p, &whole, &err) == SplitUpdates::Result::Pending);
+    }
+    CHECK(d.held() == 2);
+    // A piece whose seq differs from piece 0 is refused.
+    SplitUpdates e;
+    CHECK(e.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
+    SceneUpdate odd = pieces[1];
+    odd.seq = 38;
+    CHECK(e.add(odd, &whole, &err) == SplitUpdates::Result::Refused);
+}
+
 TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json says") {
     const Json expect = read_json(v32_dir() / "invalid" / "expect.json");
-    REQUIRE(expect.size() >= 58);
+    REQUIRE(expect.size() >= 93);
     size_t frames = 0, messages = 0;
     for (const auto& kv : expect.members()) {
         CAPTURE(kv.first);
@@ -359,7 +515,7 @@ TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json sa
         }
     }
     CHECK(frames == 3);
-    CHECK(messages >= 55);
+    CHECK(messages >= 90);
 }
 
 TEST_CASE("net/wire 3.2: every truncation of a scene_update frame is refused") {
@@ -636,7 +792,7 @@ TEST_CASE("net/wire 3.2: truncations and bit flips of the 3.2 frames never crash
             CHECK((r.close_code == 4000 || r.close_code == 4001 || r.close_code == 1009));
         } else {
             ++bad_msg;
-            CHECK((r.error_code == "bad_request" || r.error_code == "unsupported"));
+            CHECK((r.error_code == "bad_request" || r.error_code == "unsupported" || r.error_code == "bad_cursor"));
         }
     }
     MESSAGE(iterations << " mutated frames: " << ok << " decoded, " << bad_frame << " refused as frames, " << bad_msg

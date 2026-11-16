@@ -10,7 +10,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  canonicalJson, decode, decodeFrame, encode, encodeFrame, entityPathOk, MessageError, resolveSceneDataView, sceneViewInfo, WireError,
+  canonicalJson, decode, decodeFrame, encode, encodeFrame, entityPathOk, MessageError, resolveSceneDataView, sceneViewInfo, SplitUpdates,
+  stampTextOk, textFromLines, textLines, WireError,
   type Section,
 } from '../src/protocol/codec.js';
 import {
@@ -19,7 +20,13 @@ import {
   LINES_EDGES, LINES_SEGMENTS, LINES_STRIPS, MAX_CLASS_ID, MAX_CLASSES, MAX_ENCODED_BYTES, MAX_IMAGE_SIDE, MAX_LABELS, MAX_TIMELINES,
   MAX_TRANSFORMS, MSG, PART_ARROWS, PART_BOXES, PART_CAMERA, PART_IMAGE, PART_KEYS, PART_LINES, PART_MESH, PART_POINTS,
   PART_SECTIONS, PART_TRANSFORM, PROTOCOL_MINOR_3_2, SCENE_DATA_VIEW, SCENE_PARTS, STAMP_ABSENT,
-  type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type ViewEntry,
+  CAP_BARS, CAP_RECORDINGS, CAP_TEXT, CAP_TIMELINES, CURSOR_RATE_HZ, ERR_BAD_CURSOR, ERR_BAD_RECORDING, ERR_NOT_SEEKABLE,
+  ERR_UNKNOWN_RECORDING, KIND_IDS, LEVEL_DEBUG, LEVEL_ERROR, LEVEL_INFO, LEVEL_WARNING, MAX_BARS, MAX_CURSOR_STEP, MAX_INCOMPLETE_UPDATES,
+  MAX_PIECES, MAX_RECORDED, MAX_RECORDINGS, MAX_SPEED, MAX_UPDATE_BYTES, MIN_SPEED, PACE_EVEN, PACE_RECORDED, RECORDING_LINGER_MS,
+  STAMP_TEXT_MAX, TEXT_LINE_MAX, TEXT_MAX_LINES, TEXT_RETAIN_MIN, TIME_FOLLOWING, TIME_PAUSED, TIME_PLAYING, TIME_STATE_RATE_HZ,
+  TIMELINE_SEQUENCE, TIMELINE_TIME,
+  type CursorMsg, type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type SnapshotMsg, type TextMsg, type TimeStateMsg,
+  type ViewEntry, type ViewsMsg,
 } from '../src/protocol/messages.js';
 import { expect, goldenFrames, REPO, test } from './util.js';
 
@@ -65,13 +72,15 @@ function catchError(fn: () => unknown): unknown {
 }
 
 test('the 3.2 golden frames are there', () => {
-  expect(names.length).toBeGreaterThanOrEqual(38);
+  expect(names.length).toBeGreaterThanOrEqual(66);
   expect(names).toContain('scene_update_mesh');
   expect(names).toContain('scene_transforms_stamps');
   expect(typeName(0x70)).toBe('scene_update');
   expect(typeName(0x71)).toBe('scene_transforms');
   expect(typeName(0x72)).toBe('scene_clear');
   expect(typeName(0x73)).toBe('scene_classes');
+  expect([0x74, 0x78, 0x79, 0x7a, 0x7b].map(typeName)).toEqual(['text', 'recordings', 'recording_open', 'cursor', 'time_state']);
+  for (const n of ['text', 'cursor_follow', 'series_decimated', 'snapshot_bars', 'time_state_following', 'scene_update_split_0']) expect(names).toContain(n);
 });
 
 for (const name of names) {
@@ -133,6 +142,30 @@ for (const name of names) {
         .toEqual([want.meta.sub, want.meta.view, want.meta.seq, want.meta.stamp_ns, want.meta.classes, want.meta.static ?? false, want.meta.state ?? false, want.meta.cursor]);
       checkStamp(f, msg.stamp, 'stamp');
     }
+    if (msg.type === 'snapshot' || msg.type === 'series' || msg.type === 'text' || msg.type === 'controls') {
+      checkStamp(f, msg.stamp, 'stamp');
+      if (msg.type !== 'snapshot' && msg.type !== 'controls') {
+        checkStamp(f, msg.stamps, 'stamps');
+        expect(msg.stamps_t).toBe(f.sections.find((x) => x.name === 'stamps')?.shape[1]);
+      }
+      if (msg.type !== 'controls') expect(msg.cursor).toBe(want.meta.cursor ?? undefined);
+      if (msg.type === 'series') checkStamp(f, msg.indices, 'indices');
+      if (msg.type === 'snapshot') {
+        expect(msg.static ?? false).toBe(want.meta.static ?? false);
+        expect(msg.empty ?? false).toBe(want.meta.empty ?? false);
+        expect(msg.labels).toEqual(want.meta.labels ?? undefined);
+      }
+    }
+    if (msg.type === 'text') {
+      expect([msg.sub, msg.view, msg.start, msg.total, msg.stamp_ns, msg.dropped]).toEqual([want.meta.sub, want.meta.view, want.meta.start, want.meta.total, want.meta.stamp_ns, want.meta.dropped ?? undefined]);
+      expect(msg.text.buffer).toBe(buf.buffer);
+      expect(msg.offsets.buffer).toBe(buf.buffer);
+    }
+    if (msg.type === 'cursor') expect(msg).toEqual({ type: 'cursor', ...want.meta, sections: undefined });
+    if (msg.type === 'time_state') expect(msg).toEqual({ type: 'time_state', ...want.meta, cursor: want.meta.cursor ?? null });
+    if (msg.type === 'recordings') expect(msg.recordings).toEqual(want.meta.recordings);
+    if (msg.type === 'recording_open') expect(msg.recording).toBe(want.meta.recording);
+    if (msg.type === 'scene_update' && want.meta.split) expect(msg.split).toEqual(want.meta.split);
     expect(typeName(f.type)).toBe(want.type_name);
     if (msg.type === 'unknown' || DECODE_ONLY.includes(name)) return;
 
@@ -168,7 +201,7 @@ test('some 3.2 frames re-encode byte for byte', () => {
 
 test('refuses every invalid 3.2 frame as expect.json says', () => {
   const expected: Record<string, { reason?: string; close_code?: number; error?: string }> = JSON.parse(fs.readFileSync(path.join(dir, 'invalid', 'expect.json'), 'utf8'));
-  expect(Object.keys(expected).length).toBeGreaterThanOrEqual(59);
+  expect(Object.keys(expected).length).toBeGreaterThanOrEqual(96);
   for (const [file, want] of Object.entries(expected)) {
     const buf = read('invalid', file);
     if (want.error === undefined) {
@@ -264,7 +297,7 @@ test('the 3.2 constants agree with include/caliper/live_net.h', () => {
   expect(block.length).toBeGreaterThan(100);
   const defs: Record<string, string | number> = {};
   // A define whose value is a parenthesised expression (STAMP_ABSENT) does not match and is checked below.
-  for (const m of block.matchAll(/^#define\s+(CALIPER_NET_\w+)\s+("[^"]*"|0x[0-9a-fA-F]+u?|\d+u?)/gm)) {
+  for (const m of block.matchAll(/^#define\s+(CALIPER_NET_\w+)\s+("[^"]*"|0x[0-9a-fA-F]+u?|\d+(?:\.\d+)?u?)/gm)) {
     const v = m[2];
     defs[m[1]] = v.startsWith('"') ? v.slice(1, -1) : Number(v.replace(/u$/, ''));
   }
@@ -313,6 +346,48 @@ test('the 3.2 constants agree with include/caliper/live_net.h', () => {
     CALIPER_NET_MAX_ENCODED_BYTES: MAX_ENCODED_BYTES,
     CALIPER_NET_MAX_TRANSFORMS: MAX_TRANSFORMS,
     CALIPER_NET_MAX_TIMELINES: MAX_TIMELINES,
+    CALIPER_NET_CAP_TIMELINES: CAP_TIMELINES,
+    CALIPER_NET_CAP_TEXT: CAP_TEXT,
+    CALIPER_NET_CAP_BARS: CAP_BARS,
+    CALIPER_NET_CAP_RECORDINGS: CAP_RECORDINGS,
+    CALIPER_NET_KIND_TEXT: KIND_IDS.text,
+    CALIPER_NET_KIND_BARS: KIND_IDS.bars,
+    CALIPER_NET_MSG_TEXT: MSG.text,
+    CALIPER_NET_MSG_RECORDINGS: MSG.recordings,
+    CALIPER_NET_MSG_RECORDING_OPEN: MSG.recording_open,
+    CALIPER_NET_MSG_CURSOR: MSG.cursor,
+    CALIPER_NET_MSG_TIME_STATE: MSG.time_state,
+    CALIPER_NET_ERR_UNKNOWN_RECORDING: ERR_UNKNOWN_RECORDING,
+    CALIPER_NET_ERR_BAD_RECORDING: ERR_BAD_RECORDING,
+    CALIPER_NET_ERR_NOT_SEEKABLE: ERR_NOT_SEEKABLE,
+    CALIPER_NET_ERR_BAD_CURSOR: ERR_BAD_CURSOR,
+    CALIPER_NET_TIMELINE_SEQUENCE: TIMELINE_SEQUENCE,
+    CALIPER_NET_TIMELINE_TIME: TIMELINE_TIME,
+    CALIPER_NET_LEVEL_DEBUG: LEVEL_DEBUG,
+    CALIPER_NET_LEVEL_INFO: LEVEL_INFO,
+    CALIPER_NET_LEVEL_WARNING: LEVEL_WARNING,
+    CALIPER_NET_LEVEL_ERROR: LEVEL_ERROR,
+    CALIPER_NET_PACE_RECORDED: PACE_RECORDED,
+    CALIPER_NET_PACE_EVEN: PACE_EVEN,
+    CALIPER_NET_TIME_FOLLOWING: TIME_FOLLOWING,
+    CALIPER_NET_TIME_PAUSED: TIME_PAUSED,
+    CALIPER_NET_TIME_PLAYING: TIME_PLAYING,
+    CALIPER_NET_STAMP_TEXT_MAX: STAMP_TEXT_MAX,
+    CALIPER_NET_MAX_PIECES: MAX_PIECES,
+    CALIPER_NET_MAX_UPDATE_BYTES: MAX_UPDATE_BYTES,
+    CALIPER_NET_MAX_INCOMPLETE_UPDATES: MAX_INCOMPLETE_UPDATES,
+    CALIPER_NET_TEXT_LINE_MAX: TEXT_LINE_MAX,
+    CALIPER_NET_TEXT_MAX_LINES: TEXT_MAX_LINES,
+    CALIPER_NET_TEXT_RETAIN_MIN: TEXT_RETAIN_MIN,
+    CALIPER_NET_MAX_BARS: MAX_BARS,
+    CALIPER_NET_MAX_RECORDINGS: MAX_RECORDINGS,
+    CALIPER_NET_MAX_RECORDED: MAX_RECORDED,
+    CALIPER_NET_MAX_CURSOR_STEP: MAX_CURSOR_STEP,
+    CALIPER_NET_CURSOR_RATE_HZ: CURSOR_RATE_HZ,
+    CALIPER_NET_TIME_STATE_RATE_HZ: TIME_STATE_RATE_HZ,
+    CALIPER_NET_MIN_SPEED: MIN_SPEED,
+    CALIPER_NET_MAX_SPEED: MAX_SPEED,
+    CALIPER_NET_RECORDING_LINGER_MS: RECORDING_LINGER_MS,
     CALIPER_NET_SCENE_DEFAULT_MAX_ITEMS: SCENE_DATA_VIEW.budget.max_items,
     CALIPER_NET_SCENE_DEFAULT_MAX_VERTICES: SCENE_DATA_VIEW.budget.max_vertices,
     CALIPER_NET_SCENE_DEFAULT_MAX_EXTENT: SCENE_DATA_VIEW.budget.max_extent,
@@ -476,7 +551,8 @@ test('message rules', () => {
   expect(upd2(update('image', { pixels: u8s([2, 3]) }, { form: 'color' })).arrays.pixels.shape).toEqual([2, 3]);
   expect(upd2(update('points', { positions: f32s([0, 3]) })).arrays.positions.shape).toEqual([0, 3]);
   // an unsupported split and an unknown part
-  refused(update('points', { positions: p3 }, { split: { axis: 0 } }), 'unsupported');
+  refused(update('points', { positions: p3 }, { split: { axis: 0 } }));
+  refused(update('points', { positions: p3 }, { split: 3 }));
   refused(update('points', { positions: p3 }, { part: 'nope' }));
   refused(update('points', { positions: p3 }, { part: 'points', path: 'a//b' }));
   refused(update('points', { positions: p3 }, { cursor: -1 }));
@@ -599,3 +675,272 @@ test('scene view info with a view camera', () => {
   expect(infos[0].view_camera).toEqual({ target: [0, 0, 0.5], azimuth: 30, elevation: 25 });
   expect(infos[1]).toEqual({ space: '2d', up: '-y', units: 'px', view_camera: undefined });
 });
+
+// --- timelines, text logs, bar charts, recordings and split updates ---
+
+test('golden values of timelines, text, bars and recordings', () => {
+  const v = frame32('views_timelines') as ViewsMsg;
+  expect(v.timelines!.map((t) => t.name)).toEqual(['step', 'time', 'episode']);
+  expect(v.views[0].recorded).toEqual([{ budget: { max_backfill: 4096 } }]);
+  expect((decode(new Uint8Array(fs.readFileSync(path.join(goldenFrames(), 'views.bin')))) as ViewsMsg).timelines).toBeUndefined();
+  const se = frame32('sessions_recording');
+  expect(se.type === 'sessions' && se.sessions[0].recording).toEqual({ id: 'train-20261115-120314', seekable: true, complete: true });
+  const sr = frame32('series_stamps');
+  expect(sr.type === 'series' && Array.from(sr.stamps!)).toEqual([1200n, 1763200000123456789n, 1201n, 1763200000128456789n, 1202n, 1763200000133456789n]);
+  expect(sr.type === 'series' && sr.stamps_t).toBe(2);
+  const s1 = frame32('series_stamp');
+  expect(s1.type === 'series' && Array.from(s1.stamp!)).toEqual([1200n, 1763200000123456789n]);
+  const dec = frame32('series_decimated');
+  expect(dec.type === 'series' && [Array.from(dec.indices!), dec.decimated, dec.cursor]).toEqual([[0n, 2048n, 4095n], 1024, 2]);
+  const sn = frame32('snapshot_stamped') as SnapshotMsg;
+  expect([sn.stamp instanceof BigInt64Array, sn.static]).toEqual([true, undefined]);
+  const st = frame32('snapshot_static') as SnapshotMsg;
+  expect([st.static, st.stamp]).toEqual([true, undefined]);
+  const em = frame32('snapshot_empty') as SnapshotMsg;
+  expect([em.empty, em.data.length, em.cursor]).toEqual([true, 0, 3]);
+  const b = frame32('snapshot_bars') as SnapshotMsg;
+  expect([b.kind, b.labels, b.horizontal, b.colors!.length]).toEqual([8, ['cat', 'dog', 'fish'], true, 12]);
+  expect(Array.from(b.data)).toEqual([0.125, 0.75, -0.25]);
+  const cs = frame32('controls_stamped');
+  expect(cs.type === 'controls' && Array.from(cs.stamp!)).toEqual([1200n, 1763200000123456789n]);
+  const t = frame32('text') as TextMsg;
+  expect(textLines(t)).toEqual(['epoch 1 starts', 'loss rose\nto 2.5', 'pas de données é']);
+  expect([Array.from(t.levels), t.stamps!.length, t.stamps_t]).toEqual([[1, 2, 3], 6, 2]);
+  const ts = frame32('text_stamp') as TextMsg;
+  expect([ts.start, ts.total, ts.dropped, ts.cursor]).toEqual([10, 12, 10, 1]);
+  expect(textLines(ts)).toEqual(['a', '']);
+  const r = frame32('recordings');
+  expect(r.type === 'recordings' && r.recordings[0].id).toBe('train-20261115-120314');
+  expect((frame32('recordings_none') as { recordings: unknown[] }).recordings).toEqual([]);
+  expect((frame32('recording_open') as { recording: string }).recording).toBe('train-20261115-120314');
+  const c = frame32('cursor_play') as CursorMsg;
+  expect([c.op, c.timeline, c.speed, c.pace, c.loop]).toEqual(['play', 'step', 2, 'even', ['1000', '5000']]);
+  expect((frame32('cursor_step') as CursorMsg).count).toBe(-5);
+  expect((frame32('cursor_follow') as CursorMsg).timeline).toBeUndefined();
+  const p = frame32('time_state_paused') as TimeStateMsg;
+  expect([p.request_id, p.cursor, p.generation]).toEqual([2, '5000', 2]);
+  const fo = frame32('time_state_following') as TimeStateMsg;
+  expect([fo.cursor, fo.live]).toEqual([null, true]);
+  expect(new TextDecoder().decode(encode(fo, PROTOCOL_MINOR_3_2))).toContain('"cursor":null');
+});
+
+test('3.0 and 3.1 encodings are unchanged', () => {
+  const root = goldenFrames();
+  const files = [
+    ...fs.readdirSync(root).filter((f) => f.endsWith('.bin')).map((f) => path.join(root, f)),
+    ...fs.readdirSync(path.join(root, 'v3_1')).filter((f) => f.endsWith('.bin')).map((f) => path.join(root, 'v3_1', f)),
+  ].filter((f) => !['ping_future.bin', 'unknown_type.bin'].includes(path.basename(f)));
+  expect(files.length).toBeGreaterThan(30);
+  let exact = 0;
+  for (const file of files) {
+    const buf = new Uint8Array(fs.readFileSync(file));
+    const f = decodeFrame(buf);
+    const msg = decode(buf);
+    if (msg.type === 'unknown') continue;
+    const again = encode(msg, f.minor);
+    const g = decodeFrame(again);
+    expect(g.meta, file).toEqual(f.meta);
+    expect(g.sections.map((x) => [x.name, Array.from(x.bytes)]), file).toEqual(f.sections.map((x) => [x.name, Array.from(x.bytes)]));
+    const text = new TextDecoder().decode(buf.subarray(24 + 4 * f.sections.length, 24 + 4 * f.sections.length + new DataView(buf.buffer, buf.byteOffset).getUint32(16, true)));
+    if (text === canonicalJson(f.meta)) {
+      expect(Array.from(again), file).toEqual(Array.from(buf));
+      exact++;
+    }
+  }
+  expect(exact).toBeGreaterThan(20);
+});
+
+test('stamp text', () => {
+  for (const ok of ['0', '-1', '1763200000123456789', '9223372036854775807', '-9223372036854775808', '007']) expect(stampTextOk(ok), ok).toBe(true);
+  for (const bad of ['', '-', '+1', '1.5', '1e3', ' 1', '9223372036854775808', '-9223372036854775809', '1'.repeat(21), 12, null, '١٢', '1\n'])
+    expect(stampTextOk(bad), String(bad)).toBe(false);
+});
+
+const cursorFrame = (meta: Record<string, unknown>) => encodeFrame(MSG.cursor, meta, [], PROTOCOL_MINOR_3_2);
+
+test('a cursor keeps only the fields of its op', () => {
+  const meta = { request_id: 1, op: 'pause', timeline: 'step', value: '5', count: 3, speed: 2, pace: 'even', loop: null };
+  let c = decode(cursorFrame(meta)) as CursorMsg;
+  expect([c.timeline, c.value, c.count, c.speed]).toEqual([undefined, undefined, undefined, undefined]);
+  expect(Array.from(encode(c, PROTOCOL_MINOR_3_2))).toEqual(Array.from(cursorFrame({ request_id: 1, op: 'pause' })));
+  c = decode(cursorFrame({ ...meta, op: 'seek' })) as CursorMsg;
+  expect([c.timeline, c.value, c.count]).toEqual(['step', '5', undefined]);
+  for (const [op, extra, code] of [['step', { count: 1001 }, 'bad_cursor'], ['step', { count: 1.5 }, 'bad_cursor'], ['step', { count: 0 }, 'bad_cursor'],
+    ['play', { speed: 0.05 }, 'bad_cursor'], ['play', { pace: 'fast' }, 'bad_cursor'], ['play', { timeline: 'bad name' }, 'bad_cursor'],
+    ['play', { loop: ['5', '4'] }, 'bad_cursor'], ['seek', { value: '1.5' }, 'bad_cursor'], ['seek', { value: null }, 'bad_cursor'],
+    ['rewind', {}, 'bad_request']] as [string, Record<string, unknown>, string][])
+    refused(cursorFrame({ request_id: 1, op, timeline: 'step', ...extra }), code);
+  refused(cursorFrame({ op: 'pause' }));
+  refused(cursorFrame({ request_id: 1, op: 'step', timeline: 'bad name' }), 'bad_cursor');
+  const ok = decode(cursorFrame({ request_id: 1, op: 'play', timeline: 't', speed: 1 / 16 })) as CursorMsg;
+  expect([ok.speed, ok.loop]).toEqual([0.0625, undefined]);
+});
+
+test('text rules', () => {
+  const enc = (m: TextMsg) => encode(m, PROTOCOL_MINOR_3_2);
+  const t = textFromLines(1, 'log', 0, 2, 5, ['x'.repeat(TEXT_LINE_MAX), 'é'.repeat(3)], [0, 3]);
+  expect(textLines(decode(enc(t)) as TextMsg)).toEqual(['x'.repeat(4096), 'ééé']);
+  const many = textFromLines(1, 'log', 0, TEXT_MAX_LINES, 5, Array(TEXT_MAX_LINES).fill(''), Array(TEXT_MAX_LINES).fill(1));
+  expect(textLines(decode(enc(many)) as TextMsg).length).toBe(TEXT_MAX_LINES);
+  refused(enc(textFromLines(1, 'log', 0, TEXT_MAX_LINES + 1, 5, Array(TEXT_MAX_LINES + 1).fill(''), Array(TEXT_MAX_LINES + 1).fill(1))));
+  refused(enc(textFromLines(1, 'log', 0, 1, 5, ['x'.repeat(TEXT_LINE_MAX + 1)], [1])));
+  refused(enc(textFromLines(1, 'log', 0, 1, 5, ['a'], [4])));
+  refused(enc(textFromLines(1, 'log', 1, 1, 5, ['a'], [1])));                 // 1 + 1 lines past a total of 1
+  const text = (extra: Section[], over: Record<string, unknown> = {}) => encodeFrame(MSG.text, { sub: 1, view: 'log', start: 0, total: 1, stamp_ns: 5, ...over },
+    [sec('text', DTYPE.u8, [1], Uint8Array.of(97)), sec('offsets', DTYPE.i32, [2], Int32Array.of(0, 1)), sec('levels', DTYPE.u8, [1], Uint8Array.of(1)), ...extra], PROTOCOL_MINOR_3_2);
+  expect(decode(text([])).type).toBe('text');
+  refused(text([sec('stamps', DTYPE.i64, [2, 2], new BigInt64Array(4))]));
+  expect((decode(text([sec('stamps', DTYPE.i64, [1, 2], new BigInt64Array(2))])) as TextMsg).stamps_t).toBe(2);
+  refused(text([sec('stamp', DTYPE.i64, [1], new BigInt64Array(1)), sec('stamps', DTYPE.i64, [1, 1], new BigInt64Array(1))]));
+  // offsets that do not start at 0, decrease, or miss the end; bytes that are not UTF-8
+  const bad = (text_: Uint8Array, offs: number[], lv = [1]) => encodeFrame(MSG.text, { sub: 1, view: 'log', start: 0, total: offs.length - 1, stamp_ns: 5 },
+    [sec('text', DTYPE.u8, [text_.length], text_), sec('offsets', DTYPE.i32, [offs.length], Int32Array.from(offs)), sec('levels', DTYPE.u8, [lv.length], Uint8Array.from(lv))], PROTOCOL_MINOR_3_2);
+  refused(bad(Uint8Array.of(97, 98), [1, 2]));
+  refused(bad(Uint8Array.of(97, 98), [0, 1]));
+  refused(bad(Uint8Array.of(97, 98), [0, 2, 1], [1, 1]));
+  refused(bad(Uint8Array.of(0xc3, 0x28), [0, 2]));
+  refused(bad(Uint8Array.of(0xc3, 0xa9), [0, 1, 2], [1, 1]));                  // a line cut inside a character
+  expect(decode(bad(Uint8Array.of(0xc3, 0xa9), [0, 2])).type).toBe('text');
+});
+
+const pieces = () => [0, 1, 2, 3, 4].map((k) => frame32(`scene_update_split_${k}`) as SceneUpdateMsg);
+const asArray = (a: { data: ArrayLike<number> }) => Array.from(a.data);
+
+test('a split update assembles to the whole', () => {
+  const ps = pieces();
+  expect(ps.map((p) => p.split!.piece)).toEqual([0, 1, 2, 3, 4]);
+  expect(ps[0].params).toEqual({ radius: 0.25 });
+  expect(ps.slice(1).every((p) => Object.keys(p.params).length === 0)).toBe(true);
+  expect(ps.every((p) => p.stamp instanceof BigInt64Array)).toBe(true);
+  const su = new SplitUpdates();
+  const got = ps.map((p) => su.add(p));
+  expect(got.slice(0, 4)).toEqual([null, null, null, null]);
+  expect(su.open.size).toBe(0);
+  const u = got[4]!;
+  expect(u.type).toBe('scene_update');
+  expect(u.split).toBeUndefined();
+  // the pieces' rows, concatenated in order of 'first'
+  const cat = (name: string) => ps.filter((p) => name in p.arrays).sort((a, b) => a.split!.first[name] - b.split!.first[name]).flatMap((p) => asArray(p.arrays[name]));
+  expect(u.arrays.positions.shape).toEqual([20, 3]);
+  expect(u.arrays.colors.shape).toEqual([20, 4]);
+  expect(asArray(u.arrays.positions)).toEqual(cat('positions'));
+  expect(asArray(u.arrays.colors)).toEqual(cat('colors'));
+  expect(u.arrays.positions.data.length).toBe(60);
+  expect([u.path, u.seq, u.params, Array.from(u.stamp!)]).toEqual(['world/split', 37, { radius: 0.25 }, Array.from(ps[0].stamp!)]);
+  expect(u.arrays.positions.data.buffer).not.toBe(ps[0].arrays.positions.data.buffer); // the assembly's own buffer
+  // the pieces are not changed by the assembly, and encode back to their frames
+  ps.forEach((p, k) => expect(Array.from(decodeFrame(encode(p, PROTOCOL_MINOR_3_2)).sections.map((x) => x.name))).toEqual(decodeFrame(read(`scene_update_split_${k}.bin`)).sections.map((x) => x.name)));
+  // it encodes as an unsplit update
+  expect(decodeFrame(encode(u, PROTOCOL_MINOR_3_2)).meta.split).toBeUndefined();
+});
+
+test('split update rules', () => {
+  const ps = pieces();
+  const withSplit = (p: SceneUpdateMsg, split: Partial<NonNullable<SceneUpdateMsg['split']>>, over: Partial<SceneUpdateMsg> = {}): SceneUpdateMsg =>
+    ({ ...p, ...over, split: { ...p.split!, ...split } });
+  const fails = (fn: () => unknown) => expect(catchError(fn)).toBeInstanceOf(MessageError);
+  // a piece without its piece 0 is dropped and counted
+  let su = new SplitUpdates();
+  expect(su.add(ps[1])).toBeNull();
+  expect([su.dropped, su.open.size]).toEqual([1, 0]);
+  // a piece twice
+  su = new SplitUpdates();
+  su.add(ps[0]);
+  su.add(ps[1]);
+  fails(() => su.add(ps[1]));
+  expect(su.open.size).toBe(0);
+  // a newer update of the same entity part discards the incomplete one
+  su = new SplitUpdates();
+  su.add(ps[0]);
+  su.add(withSplit(ps[0], { update: 5 }));
+  expect([Array.from(su.open.keys()), su.discarded]).toEqual([[5], 1]);
+  expect(su.add(ps[1])).toBeNull();
+  expect(su.dropped).toBe(1);
+  // at most two incomplete updates; the oldest goes
+  su = new SplitUpdates();
+  ['a', 'b', 'c'].forEach((path, k) => su.add(withSplit(ps[0], { update: 10 + k }, { path })));
+  expect(Array.from(su.open.keys())).toEqual([11, 12]);
+  // a piece that differs from its piece 0, or whose rows overlap
+  for (const bad of [{ ...ps[1], seq: 38 }, withSplit(ps[1], { first: { positions: 4 } })]) {
+    su = new SplitUpdates();
+    su.add(ps[0]);
+    fails(() => su.add(bad));
+  }
+  // the last piece arrives with rows missing
+  su = new SplitUpdates();
+  su.add(withSplit(ps[0], { pieces: 2 }));
+  fails(() => su.add(withSplit(ps[4], { piece: 1, pieces: 2 })));
+  // the whole update is checked as an unsplit one: colours of the wrong row count
+  su = new SplitUpdates();
+  const p0 = withSplit(ps[0], { pieces: 2, rows: { positions: 20, colors: 2 } });
+  const rest: SceneUpdateMsg = {
+    type: 'scene_update', sub: 2, view: 'world', seq: 37, stamp_ns: ps[0].stamp_ns, path: 'world/split', part: 'points',
+    arrays: {
+      positions: { dtype: DTYPE.f32, shape: [14, 3], data: new Float32Array(42) },
+      colors: { dtype: DTYPE.u8, shape: [2, 4], data: new Uint8Array(8) },
+    },
+    params: {}, stamp: ps[0].stamp, split: { update: 4, piece: 1, pieces: 2, first: { positions: 6, colors: 0 } },
+  };
+  su.add(decode(encode(p0, PROTOCOL_MINOR_3_2)) as SceneUpdateMsg);
+  fails(() => su.add(decode(encode(rest, PROTOCOL_MINOR_3_2)) as SceneUpdateMsg));
+  // key checks of a piece, refused when decoded
+  const frameOf = (split: unknown, extra: Record<string, unknown> = {}) => update('points', { positions: f32s([2, 3]) }, { split, ...extra });
+  const ok = { update: 1, pieces: 2, piece: 0, first: { positions: 0 }, rows: { positions: 4 } };
+  expect((decode(frameOf(ok)) as SceneUpdateMsg).split).toEqual(ok);
+  refused(frameOf({ ...ok, update: -1 }));
+  refused(frameOf({ ...ok, pieces: 1 }));
+  refused(frameOf({ ...ok, pieces: MAX_PIECES + 1 }));
+  refused(frameOf({ ...ok, piece: 2 }));
+  refused(frameOf({ ...ok, first: { colors: 0 } }));                          // first names an array the piece does not hold
+  refused(frameOf({ ...ok, rows: undefined }));                               // piece 0 needs rows
+  refused(frameOf({ ...ok, rows: { positions: 1 } }));                        // rows pass split.rows
+  refused(frameOf({ ...ok, rows: { positions: 4, nope: 1 } }));
+  refused(frameOf({ ...ok, piece: 1 }));                                      // only piece 0 carries rows
+  refused(frameOf({ ...ok, first: { positions: -1 } }));
+  // piece 0 checks the part's keys, the other pieces carry none
+  refused(frameOf(ok, { radius: 0 }));
+  expect(Object.keys((decode(frameOf({ update: 1, pieces: 2, piece: 1, first: { positions: 2 } }, { radius: 0 })) as SceneUpdateMsg).params)).toEqual([]);
+  // a piece holds any dtype; the assembly copies its bytes
+  const f16 = update('points', { positions: [DTYPE.f16, [2, 3], new Uint16Array(6)] }, { split: ok });
+  expect((decode(f16) as SceneUpdateMsg).arrays.positions.dtype).toBe(DTYPE.f16);
+});
+
+test('a split update of a large mesh', () => {
+  // small frames stand in for 64 MiB: the pieces are cut here, 8192 rows to a piece
+  const n = 30000;
+  const pos = new Float32Array(n * 3).map((_, i) => (i * 7919 % 10007) / 10007);
+  const tri = new Int32Array(n * 3).map((_, i) => i % n);
+  const cut = 8192;
+  const ps: SceneUpdateMsg[] = [];
+  const count = Math.ceil(n / cut);
+  for (let k = 0; k < count; k++) {
+    const a = k * cut;
+    const b = Math.min(n, a + cut);
+    ps.push({
+      type: 'scene_update', sub: 1, view: 's', seq: 3, stamp_ns: 4, path: 'm', part: 'mesh',
+      arrays: { positions: { dtype: DTYPE.f32, shape: [b - a, 3], data: pos.slice(a * 3, b * 3) }, indices: { dtype: DTYPE.i32, shape: [b - a, 3], data: tri.slice(a * 3, b * 3) } },
+      params: k === 0 ? { color: [1, 2, 3, 255] } : {},
+      split: { update: 9, piece: k, pieces: count, first: { positions: a, indices: a }, ...(k === 0 ? { rows: { positions: n, indices: n } } : {}) },
+    });
+  }
+  const su = new SplitUpdates();
+  const out = ps.map((p) => su.add(decode(encode(p, PROTOCOL_MINOR_3_2)) as SceneUpdateMsg));
+  expect(out.slice(0, -1).every((x) => x === null)).toBe(true);
+  const u = out[count - 1]!;
+  expect(u.arrays.positions.shape).toEqual([n, 3]);
+  expect(Array.from(u.arrays.positions.data as Float32Array)).toEqual(Array.from(pos));
+  expect(Array.from(u.arrays.indices.data as Int32Array)).toEqual(Array.from(tri));
+  expect(u.params).toEqual({ color: [1, 2, 3, 255] });
+  // pieces in any order, once piece 0 is first
+  const su2 = new SplitUpdates();
+  const order = [0, ...[...Array(count).keys()].slice(1).reverse()];
+  const res = order.map((k) => su2.add(decode(encode(ps[k], PROTOCOL_MINOR_3_2)) as SceneUpdateMsg));
+  expect(Array.from(res[count - 1]!.arrays.positions.data as Float32Array)).toEqual(Array.from(pos));
+  // a whole update over MAX_UPDATE_BYTES is refused before it allocates
+  const huge = { ...ps[0], split: { ...ps[0].split!, rows: { positions: MAX_UPDATE_BYTES / 12 + 1, indices: n } } };
+  fails2(() => new SplitUpdates().add(decode(encode(huge, PROTOCOL_MINOR_3_2)) as SceneUpdateMsg));
+});
+
+function fails2(fn: () => unknown): void {
+  expect(catchError(fn)).toBeInstanceOf(MessageError);
+}

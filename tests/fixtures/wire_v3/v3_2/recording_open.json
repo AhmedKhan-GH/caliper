@@ -1,0 +1,22 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 76,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 52,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 121
+  },
+  "meta": {
+    "recording": "train-20261115-120314",
+    "request_id": 1
+  },
+  "meta_offset": 24,
+  "name": "v3_2/recording_open",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "recording_open"
+}

@@ -99,6 +99,87 @@ def _matrix(tx, ty, tz) -> list:
     return m.T.reshape(-1).tolist()
 
 
+# Timelines, text logs, bar charts and recordings.
+TIMELINES = [{"name": "step", "kind": "sequence"}, {"name": "time", "kind": "time", "epoch": True},
+             {"name": "episode", "kind": "sequence"}]
+STEP_TIME = np.array([[1200, 1763200000123456789], [1201, 1763200000128456789],
+                      [1202, 1763200000133456789]], np.int64)
+RECORDING = {"id": "train-20261115-120314", "title": "train.py", "script": "train.py",
+             "bytes": 1048576, "items": 20000, "created_unix_ms": 1763208194000,
+             "ended_unix_ms": None, "complete": False,
+             "timelines": [{"name": "step", "kind": "sequence", "min": "0", "max": "19999"},
+                           {"name": "time", "kind": "time", "epoch": True,
+                            "min": "1763208194000000000", "max": "1763208794000000000"}]}
+LOG = {"id": 9, "name": "log", "kind": int(w.Kind.TEXT), "sources": []}
+SCORES = {"id": 10, "name": "scores", "kind": int(w.Kind.BARS),
+          "sources": [{"name": "scores", "dtype": "f32", "dims": [{"name": "class", "size": 3}]}]}
+LOSS_RECORDED = {"id": 3, "name": "loss", "kind": int(w.Kind.SERIES), "sources": [],
+                 "recorded": [{"budget": {"max_backfill": 4096}}]}
+
+
+SPLIT = w.SceneUpdate(2, "world", 37, STAMP + 3900, "world/split", w.PART_POINTS,
+                      {"positions": np.arange(60, dtype=np.float32).reshape(20, 3) / 8,
+                       "colors": (np.arange(80) * 3 % 256).astype(np.uint8).reshape(20, 4)},
+                      {"radius": 0.25}, stamp=STAMP_T)
+
+
+def _timeline_vectors() -> dict:
+    loss = {"sub": 3, "view": "loss", "stamp_ns": 81234567891123}
+    bars_dv = w.resolve_data_view(SCORES, None)
+    return {
+        "views_timelines": w.Views([LOSS_RECORDED, LOG, SCORES], SESSION["id"], TIMELINES),
+        "sessions_recording": w.Sessions([dict(SESSION, state="ended", views=3, recording={
+            "id": "train-20261115-120314", "seekable": True, "complete": True})]),
+        # The draft's example frame: series.bin of 3.0 with a stamp per value.
+        "series_stamps": w.Series(start=0, total=3, values=_f32([2.5, 1.25, 0.75]),
+                                  stamps=STEP_TIME, **loss),
+        "series_stamp": w.Series(start=3, total=5, values=_f32([0.5, 0.25]), stamp=STAMP_T,
+                                 **dict(loss, stamp_ns=81234567891999)),
+        "series_decimated": w.Series(start=0, total=4096, values=_f32([3, 2, 1]),
+                                     indices=np.array([0, 2048, 4095], np.int64), decimated=1024,
+                                     cursor=2, stamps=STEP_TIME, **loss),
+        "snapshot_stamped": w.Snapshot(1, "attn", 5, STAMP + 4000, int(w.Kind.HEATMAP),
+                                       {"source": "layer0"}, _f32([[0, 1], [2, 3]]),
+                                       stats=[0.0, 3.0], stamp=STAMP_T),
+        "snapshot_static": w.Snapshot(1, "attn", 6, STAMP + 4100, int(w.Kind.HEATMAP),
+                                      {"source": "layer0"}, _f32([[1]]), stats=[1.0, 1.0],
+                                      static=True),
+        "snapshot_empty": w.Snapshot(1, "attn", 7, STAMP + 4200, int(w.Kind.HEATMAP),
+                                     {"source": "layer0"}, None, empty=True, cursor=3),
+        "snapshot_bars": w.Snapshot(4, "scores", 8, STAMP + 4300, int(w.Kind.BARS), bars_dv,
+                                    _f32([0.125, 0.75, -0.25]),
+                                    colors=np.array([[255, 0, 0, 255], [0, 128, 0, 255],
+                                                     [0, 0, 255, 255]], np.uint8),
+                                    stats=[-0.25, 0.75], labels=["cat", "dog", "fish"],
+                                    horizontal=True, stamp=STAMP_T),
+        "controls_stamped": w.Controls({"state": "running", "step": 1200, "steps_left": None},
+                                       [], [], stamp=STAMP_T),
+        "text": w.Text.from_lines(5, "log", 0, 3, STAMP + 4400,
+                                  ["epoch 1 starts", "loss rose\nto 2.5", "pas de données é"],
+                                  [w.LEVEL_INFO, w.LEVEL_WARNING, w.LEVEL_ERROR], stamps=STEP_TIME),
+        "text_stamp": w.Text.from_lines(5, "log", 10, 12, STAMP + 4500, ["a", ""],
+                                        [w.LEVEL_DEBUG, w.LEVEL_INFO], dropped=10, stamp=STAMP_T,
+                                        cursor=1),
+        "recordings": w.Recordings([RECORDING]),
+        "recordings_none": w.Recordings([]),
+        "recording_open": w.RecordingOpen(1, "train-20261115-120314"),
+        "cursor_seek": w.Cursor(2, w.CURSOR_SEEK, timeline="step", value="5000"),
+        "cursor_play": w.Cursor(3, w.CURSOR_PLAY, timeline="step", speed=2.0, pace=w.PACE_EVEN,
+                                loop=["1000", "5000"]),
+        "cursor_step": w.Cursor(4, w.CURSOR_STEP, timeline="time", count=-5),
+        "cursor_pause": w.Cursor(5, w.CURSOR_PAUSE),
+        "cursor_follow": w.Cursor(6, w.CURSOR_FOLLOW),
+        "time_state_paused": w.TimeState("train-20261115-120314", 2, w.TIME_PAUSED, "step",
+                                         "5000", {"step": ["0", "19999"],
+                                                  "time": ["1763208194000000000",
+                                                           "1763208794000000000"]},
+                                         False, request_id=2),
+        "time_state_following": w.TimeState("clp-4242-a1b2c3", 1, w.TIME_FOLLOWING, "time", None,
+                                            {"time": ["-5", "1763208794000000000"]}, True,
+                                            speed=1.0, pace=w.PACE_RECORDED),
+    }
+
+
 def valid_vectors() -> dict[str, bytes]:
     u8, i32, u16 = np.uint8, np.int32, np.uint16
     msgs = {
@@ -242,7 +323,11 @@ def valid_vectors() -> dict[str, bytes]:
                                             parts=[w.PART_TRANSFORM, w.PART_BOXES],
                                             stamp=STAMP_T),
     }
+    msgs.update(_timeline_vectors())
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
+    # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
+    for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
+        out[f"v3_2/scene_update_split_{k}"] = w.encode(piece, minor=M)
     # Decode only: a section that no part has, which decoders ignore.
     out["v3_2/scene_update_points_future"] = w.encode_frame(
         w.MsgType.SCENE_UPDATE,
@@ -289,7 +374,6 @@ def _message(type_: int, **meta) -> bytes:
 def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
     P = w.CLOSE_PROTOCOL_ERROR
     bad = {"error": w.ERR_BAD_REQUEST}
-    unsupported = {"error": w.ERR_UNSUPPORTED}
     mesh = valid["v3_2/scene_update_mesh"]
     pos_meta = (b'{"part":"points","path":"p","sections":[{"dtype":0,"name":"positions",'
                 b'"shape":[3,3]}],"seq":1,"stamp_ns":1,"sub":2,"view":"s"}')
@@ -327,7 +411,7 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
         "part_unknown": (_frame("blob", "p", {"positions": CLOUD}), bad),
         "split_piece": (_frame("points", "p", {"positions": CLOUD},
                                split={"update": 1, "piece": 0, "pieces": 2, "first": [0],
-                                      "rows": [6]}), unsupported),
+                                      "rows": [6]}), bad),
         "path_dotdot": (_frame("points", "world/..", {"positions": CLOUD}), bad),
         "path_too_deep": (_frame("points", deep, {"positions": CLOUD}), bad),
         "clear_reset_path": (w.encode_frame(w.MsgType.SCENE_CLEAR,
@@ -423,4 +507,101 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
         "classes_id_range": (_message(K, classes=[{"id": 65536, "label": "x",
                                                    "color": [0, 0, 0, 255]}]), bad),
         "classes_color_missing": (_message(K, classes=[{"id": 1, "label": "x"}]), bad),
+        **_timeline_invalid(valid),
+    }
+
+
+def _meta_frame(type_, meta: dict, sections: dict | None = None) -> bytes:
+    return w.encode_frame(type_, meta, [w.Section.from_array(n, a)
+                                        for n, a in (sections or {}).items()], minor=M)
+
+
+def _timeline_invalid(valid: dict) -> dict:
+    bad = {"error": w.ERR_BAD_REQUEST}
+    cursor_bad = {"error": w.ERR_BAD_CURSOR}
+    S, R, X, C, TS, V, RO = (w.MsgType.SNAPSHOT, w.MsgType.SERIES, w.MsgType.TEXT,
+                             w.MsgType.CURSOR, w.MsgType.TIME_STATE, w.MsgType.VIEWS,
+                             w.MsgType.RECORDING_OPEN)
+    snap = {"sub": 1, "view": "v", "seq": 1, "stamp_ns": 1, "kind": 1, "data_view": {}}
+    bars = dict(snap, kind=8)
+    series = {"sub": 3, "view": "loss", "start": 0, "total": 3, "stamp_ns": 1}
+    text = {"sub": 5, "view": "log", "start": 0, "total": 2, "stamp_ns": 1}
+    v3 = _f32([1, 2, 3])
+
+    def lines(raw: bytes, offs, levels):
+        return {"text": np.frombuffer(raw, np.uint8), "offsets": np.array(offs, np.int32),
+                "levels": np.array(levels, np.uint8)}
+    split = {"part": "points", "path": "p", "seq": 1, "stamp_ns": 1, "sub": 2, "view": "s"}
+    pos = {"positions": CLOUD}
+    return {
+        "snapshot_stamp_static": (_meta_frame(S, dict(snap, static=True), {
+            "data": _f32([[1]]), "stamp": STAMP_T}), bad),
+        "snapshot_empty_with_data": (_meta_frame(S, dict(snap, empty=True),
+                                                 {"data": _f32([[1]])}), bad),
+        "bars_too_many": (_meta_frame(S, bars, {"data": np.zeros(4097, np.float32)}), bad),
+        "bars_labels_count": (_meta_frame(S, dict(bars, labels=["a", "b"]), {"data": v3}), bad),
+        "bars_colors_rows": (_meta_frame(S, bars, {"data": v3, "colors": RGB[:2]}), bad),
+        "bars_rank_2": (_meta_frame(S, bars, {"data": _f32([[1, 2]])}), bad),
+        "series_stamps_rows": (_meta_frame(R, series, {"values": v3,
+                                                       "stamps": STEP_TIME[:2]}), bad),
+        "series_indices_alone": (_meta_frame(R, series, {
+            "values": v3, "indices": np.array([0, 1, 2], np.int64)}), bad),
+        "series_decimated_zero": (_meta_frame(R, dict(series, decimated=0), {
+            "values": v3, "indices": np.array([0, 1, 2], np.int64)}), bad),
+        "controls_stamp_f32": (_meta_frame(w.MsgType.CONTROLS, {
+            "run": {"state": "none", "step": None, "steps_left": None}, "params": [],
+            "actions": []}, {"stamp": _f32([1, 2])}), bad),
+        "text_offsets_end": (_meta_frame(X, text, lines(b"ab", [0, 1, 1], [1, 1])), bad),
+        "text_offsets_decrease": (_meta_frame(X, text, lines(b"ab", [0, 2, 1, 2], [1, 1, 1])
+                                              ), bad),
+        "text_line_long": (_meta_frame(X, dict(text, total=1),
+                                       lines(b"x" * 4097, [0, 4097], [1])), bad),
+        "text_level": (_meta_frame(X, text, lines(b"ab", [0, 1, 2], [1, 4])), bad),
+        "text_utf8": (_meta_frame(X, text, lines(b"a\xc3", [0, 1, 2], [1, 1])), bad),
+        "text_total": (_meta_frame(X, dict(text, total=1), lines(b"ab", [0, 1, 2], [1, 1])), bad),
+        "text_levels_missing": (_meta_frame(X, text, {"text": np.frombuffer(b"ab", np.uint8),
+                                                      "offsets": np.array([0, 1, 2], np.int32)}),
+                                bad),
+        "views_timelines_order": (_meta_frame(V, {"session": None, "views": [], "timelines": [
+            TIMELINES[1], TIMELINES[0]]}), bad),
+        "views_timelines_repeat": (_meta_frame(V, {"session": None, "views": [], "timelines": [
+            TIMELINES[0], TIMELINES[1], TIMELINES[0]]}), bad),
+        "views_recorded_many": (_meta_frame(V, {"session": None, "views": [
+            dict(LOSS_RECORDED, recorded=[{}] * 65)]}), bad),
+        "recordings_id": (_meta_frame(w.MsgType.RECORDINGS, {"recordings": [
+            dict(RECORDING, id="runs/train")]}), bad),
+        "recording_open_id": (_meta_frame(RO, {"request_id": 1, "recording": ""}), bad),
+        "cursor_op": (_meta_frame(C, {"request_id": 1, "op": "rewind"}), bad),
+        "cursor_request_id": (_meta_frame(C, {"op": "pause"}), bad),
+        "cursor_seek_text": (_meta_frame(C, {"request_id": 1, "op": "seek", "timeline": "step",
+                                             "value": "12a"}), cursor_bad),
+        "cursor_seek_range": (_meta_frame(C, {"request_id": 1, "op": "seek", "timeline": "step",
+                                              "value": "9223372036854775808"}), cursor_bad),
+        "cursor_seek_timeline": (_meta_frame(C, {"request_id": 1, "op": "seek",
+                                                 "value": "5"}), cursor_bad),
+        "cursor_step_zero": (_meta_frame(C, {"request_id": 1, "op": "step", "timeline": "step",
+                                             "count": 0}), cursor_bad),
+        "cursor_speed": (_meta_frame(C, {"request_id": 1, "op": "play", "timeline": "step",
+                                         "speed": 128}), cursor_bad),
+        "cursor_loop_order": (_meta_frame(C, {"request_id": 1, "op": "play", "timeline": "step",
+                                              "loop": ["9", "1"]}), cursor_bad),
+        "time_state_cursor_following": (_meta_frame(TS, {
+            "session": "s", "generation": 1, "state": "following", "timeline": "step",
+            "cursor": "5", "ranges": {}, "live": True}), bad),
+        "time_state_ranges": (_meta_frame(TS, {
+            "session": "s", "generation": 1, "state": "paused", "timeline": "step",
+            "cursor": "5", "ranges": {"step": ["1"]}, "live": False}), bad),
+        "split_rows_missing": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 0}}), bad),
+        "split_first_names": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 2, "first": {}, "rows": {"positions": 6}}), bad),
+        "split_one_piece": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 1, "first": {"positions": 0},
+            "rows": {"positions": 3}}), bad),
+        "split_rows_later": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 1, "pieces": 2, "first": {"positions": 3},
+            "rows": {"positions": 6}}), bad),
+        "split_rows_pass": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 2},
+            "rows": {"positions": 4}}), bad),
     }

@@ -1,0 +1,159 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 440,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 314,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 3,
+    "type": 112
+  },
+  "meta": {
+    "part": "points",
+    "path": "world/split",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "colors",
+        "shape": [
+          12,
+          4
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 37,
+    "split": {
+      "first": {
+        "colors": 0,
+        "positions": 18
+      },
+      "piece": 3,
+      "pieces": 5,
+      "update": 4
+    },
+    "stamp_ns": 81234567894023,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 36,
+  "name": "v3_2/scene_update_split_3",
+  "section_lengths": [
+    24,
+    48,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 24,
+      "name": "positions",
+      "offset": 352,
+      "shape": [
+        2,
+        3
+      ],
+      "values": [
+        6.75,
+        6.875,
+        7.0,
+        7.125,
+        7.25,
+        7.375
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 48,
+      "name": "colors",
+      "offset": 376,
+      "shape": [
+        12,
+        4
+      ],
+      "values": [
+        0,
+        3,
+        6,
+        9,
+        12,
+        15,
+        18,
+        21,
+        24,
+        27,
+        30,
+        33,
+        36,
+        39,
+        42,
+        45,
+        48,
+        51,
+        54,
+        57,
+        60,
+        63,
+        66,
+        69,
+        72,
+        75,
+        78,
+        81,
+        84,
+        87,
+        90,
+        93,
+        96,
+        99,
+        102,
+        105,
+        108,
+        111,
+        114,
+        117,
+        120,
+        123,
+        126,
+        129,
+        132,
+        135,
+        138,
+        141
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 424,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

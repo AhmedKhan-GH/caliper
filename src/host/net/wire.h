@@ -44,6 +44,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
@@ -218,6 +219,7 @@ struct Views {
     Json views = Json::array();            // what encode() writes
     std::optional<std::string> session;    // written as null when absent
     std::vector<ViewInfo> list;            // decoded copy
+    Json timelines;                        // 3.2 draft: the timelines, null when absent
 };
 struct Subscribe {
     static constexpr uint16_t kType = CALIPER_NET_MSG_SUBSCRIBE;
@@ -264,6 +266,13 @@ struct Snapshot {
     Json tile;                             // null when absent
     std::optional<int64_t> points_dims;    // points: set from the payload on decode
     std::optional<uint64_t> label_count;
+    // 3.2 draft (the block below): a bar chart's colours (B, 4) u8, labels and direction, a static
+    // snapshot, its stamp i64 (T,), and the cursor and emptiness of a recorded one (no section).
+    std::optional<Section> colors;
+    Json labels;                           // null when absent
+    bool horizontal = false, is_static = false, empty = false;
+    std::optional<Section> stamp;
+    std::optional<uint32_t> cursor;
 };
 struct Series {
     static constexpr uint16_t kType = CALIPER_NET_MSG_SERIES;
@@ -273,6 +282,11 @@ struct Series {
     uint64_t total = 0;                    // values appended so far
     uint64_t stamp_ns = 0;
     Section values;                        // (M,) f32
+    // 3.2 draft: a stamp (T,) for all or stamps (M, T); a decimated recorded series' absolute
+    // indices (M,) i64 with its bucket size; the cursor generation.
+    std::optional<Section> stamp, stamps, indices;
+    std::optional<uint64_t> decimated;
+    std::optional<uint32_t> cursor;
 };
 struct Event {
     static constexpr uint16_t kType = CALIPER_NET_MSG_EVENT;
@@ -289,6 +303,7 @@ struct Controls {   // the run state, parameters and actions of a script
     Json run = Json::object();             // {"state", "step", "steps_left"}
     Json params = Json::array();           // parameter entries, validated
     Json actions = Json::array();          // action entries, validated
+    std::optional<Section> stamp;          // 3.2 draft: when the run state or a value changed
 };
 struct Control {    // pause, resume, step, set, run
     static constexpr uint16_t kType = CALIPER_NET_MSG_CONTROL;
@@ -346,6 +361,10 @@ struct SceneUpdate {                 // 3.2 draft: one part of one entity of a s
     std::optional<std::string> items;
     std::optional<Section> stamp;    // i64 (T,)
     std::optional<uint32_t> cursor;  // the TIME_STATE generation a recorded message answers
+    Json split;                      // a piece of a split update: {update, piece, pieces, first, rows}; null
+                                     // when whole. A piece's arrays are its rows, unchecked against the part
+                                     // until SplitUpdates puts the update together; its params are empty
+                                     // but in piece 0
     const Section* array(const std::string& name) const;
 };
 struct SceneTransforms {             // 3.2 draft: entity transforms, (K, 16) f32 column-major matrices
@@ -382,6 +401,95 @@ struct SceneClasses {                // 3.2 draft: the class table, replaced who
     std::optional<Section> stamp;
     std::optional<uint32_t> cursor;
 };
+// ---- 3.2 draft: text logs, recordings and split updates ----
+struct Text {                        // new lines of a text log (kind 7)
+    static constexpr uint16_t kType = CALIPER_NET_MSG_TEXT;
+    uint32_t sub = 0;
+    std::string view;
+    uint64_t start = 0, total = 0, stamp_ns = 0;
+    std::optional<uint64_t> dropped;
+    Section text;                    // (L,) u8, the lines' UTF-8
+    Section offsets;                 // (M + 1,) i32
+    Section levels;                  // (M,) u8: 0 debug, 1 info, 2 warning, 3 error
+    std::optional<Section> stamp, stamps;
+    std::optional<uint32_t> cursor;
+    std::string line(size_t i) const;   // line i's text
+};
+struct Recordings {                  // server to viewer: the recordings it can open
+    static constexpr uint16_t kType = CALIPER_NET_MSG_RECORDINGS;
+    Json recordings = Json::array();
+};
+struct RecordingOpen {
+    static constexpr uint16_t kType = CALIPER_NET_MSG_RECORDING_OPEN;
+    uint32_t request_id = 0;
+    std::string recording;
+};
+struct Cursor {                      // viewer to server; only the fields of `op` are kept
+    static constexpr uint16_t kType = CALIPER_NET_MSG_CURSOR;
+    uint32_t request_id = 0;
+    std::string op;                  // seek, play, pause, step, follow
+    std::optional<std::string> timeline, value, pace;   // value: stamp text
+    std::optional<int64_t> count;
+    std::optional<double> speed;
+    Json loop;                       // [start, end] as stamp text; null when absent
+};
+struct TimeState {                   // server to viewer
+    static constexpr uint16_t kType = CALIPER_NET_MSG_TIME_STATE;
+    std::optional<uint32_t> request_id;
+    std::string session;
+    uint32_t generation = 0;
+    std::string state;               // following, paused, playing
+    std::string timeline;
+    std::optional<std::string> cursor;   // stamp text; nullopt (null on the wire) while following
+    std::optional<double> speed;
+    std::optional<std::string> pace;
+    Json loop;                       // null when absent
+    Json ranges = Json::object();    // timeline name -> [min, max] stamp text
+    bool live = false;
+};
+// Stamp text: decimal digits with an optional leading minus, at most 20 characters, a signed 64-bit value.
+bool stamp_text_ok(const std::string& v);
+
+// A whole update put together from the pieces of a split update; its sections point into `keep`.
+struct WholeUpdate {
+    SceneUpdate update;
+    std::shared_ptr<const void> keep;
+};
+// A receiver's split updates of one subscription (_wire.py's SplitUpdates). add() copies each piece's
+// rows; once every piece and row has arrived it checks the whole update as an unsplit one. A newer
+// update of the same entity part discards an incomplete one, at most CALIPER_NET_MAX_INCOMPLETE_UPDATES
+// are held (the oldest goes first), and a piece of an update not held is dropped and counted.
+class SplitUpdates {
+public:
+    enum class Result { Pending, Whole, Dropped, Refused };
+    // Refused: the piece contradicts its update, or the whole update breaks the protocol; *err says why
+    // (answered with bad_request) and the update is discarded.
+    Result add(const SceneUpdate& piece, WholeUpdate* out, std::string* err);
+    size_t held() const { return open_.size(); }
+    uint64_t dropped() const { return dropped_; }
+    uint64_t discarded() const { return discarded_; }
+
+private:
+    struct Array {
+        int64_t dtype = 0;
+        std::vector<int64_t> trailing;
+        std::vector<uint8_t> bytes;
+        std::vector<std::pair<int64_t, int64_t>> ranges;   // (first row, rows)
+    };
+    struct Assembly {
+        uint64_t update = 0;
+        SceneUpdate p0;              // piece 0 without its arrays; its stamp in stamp_bytes
+        std::vector<uint8_t> stamp_bytes;
+        int64_t pieces = 0;
+        Json rows;
+        std::vector<int64_t> seen;
+        std::vector<std::pair<std::string, Array>> arrays;
+        uint64_t bytes = 0;
+    };
+    std::vector<Assembly> open_;     // oldest first
+    uint64_t dropped_ = 0, discarded_ = 0;
+};
+
 // The key "scene" of a VIEWS entry. view_camera: null when absent, unreadable or in a 2-D scene; else the
 // orbit object (target, distance, azimuth, elevation) or the entity path of a camera.
 struct SceneView { std::string space, up, units; Json view_camera; };
@@ -403,7 +511,7 @@ bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, s
 using Message = std::variant<Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach, Views, Subscribe,
                              Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Controls, Control,
                              ControlReply, Selection, SceneUpdate, SceneTransforms, SceneClear, SceneClasses,
-                             Unknown>;
+                             Text, Recordings, RecordingOpen, Cursor, TimeState, Unknown>;
 
 struct DecodeResult {
     enum class Status { Ok, BadFrame, BadMessage };

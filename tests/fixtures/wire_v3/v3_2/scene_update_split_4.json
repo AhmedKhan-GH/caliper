@@ -1,0 +1,114 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 336,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 254,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "part": "points",
+    "path": "world/split",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "colors",
+        "shape": [
+          8,
+          4
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 37,
+    "split": {
+      "first": {
+        "colors": 12
+      },
+      "piece": 4,
+      "pieces": 5,
+      "update": 4
+    },
+    "stamp_ns": 81234567894023,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_split_4",
+  "section_lengths": [
+    32,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 32,
+      "name": "colors",
+      "offset": 288,
+      "shape": [
+        8,
+        4
+      ],
+      "values": [
+        144,
+        147,
+        150,
+        153,
+        156,
+        159,
+        162,
+        165,
+        168,
+        171,
+        174,
+        177,
+        180,
+        183,
+        186,
+        189,
+        192,
+        195,
+        198,
+        201,
+        204,
+        207,
+        210,
+        213,
+        216,
+        219,
+        222,
+        225,
+        228,
+        231,
+        234,
+        237
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 320,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}
