@@ -55,6 +55,8 @@
 // 16. Override constants map to Metal function constants by id on Metal. Whether Naga's MSL
 //     output can declare them is for the generator's step to settle.
 // 17. The layer is used from one thread. Only completion is reported from other threads.
+// 18. The header and src/host/gfx/ build as C++17, the host's standard: View<T>, a pointer
+//     and a count, stands in for the C++20 span.
 #pragma once
 
 #include <caliper/tensor.h>
@@ -62,12 +64,26 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <string>
 #include <variant>
 #include <vector>
 
 namespace caliper_gfx {
+
+// ---- A read-only view of contiguous elements, a pointer and a count (decision 18) -----------
+
+template <class T> struct View {
+    const T* data = nullptr;
+    size_t size = 0;
+    View() = default;
+    View(const T* p, size_t n) : data(p), size(n) {}
+    View(const std::vector<T>& v) : data(v.data()), size(v.size()) {}
+    template <size_t N> View(const T (&a)[N]) : data(a), size(N) {}
+    const T* begin() const { return data; }
+    const T* end() const { return data + size; }
+    const T& operator[](size_t i) const { return data[i]; }
+    bool empty() const { return size == 0; }
+};
 
 // ---- Handles -------------------------------------------------------------------------------
 
@@ -298,8 +314,8 @@ public:
     void reset(const RenderTarget& target);       // empties the list and keeps its capacity
 
     const RenderTarget& target() const { return target_; }
-    std::span<const DrawRecord> records() const { return records_; }
-    std::span<const uint8_t> arena() const { return arena_; }
+    View<DrawRecord> records() const { return records_; }
+    View<uint8_t> arena() const { return arena_; }
     const std::string& error() const { return error_; }
 
 private:
@@ -365,14 +381,14 @@ using Pass = std::variant<WaitPass, DispatchPass, CopyPass, RenderPass>;
 class Frame {
 public:
     void wait(const ExternalSync& sync);             // honour a producer's event before the next pass
-    void dispatch(Pipeline p, std::span<const BindGroup> groups, std::span<const uint32_t> offsets,
-                  uint32_t x, uint32_t y, uint32_t z, std::span<const Texture> writes = {});
+    void dispatch(Pipeline p, View<BindGroup> groups, View<uint32_t> offsets,
+                  uint32_t x, uint32_t y, uint32_t z, View<Texture> writes = {});
     void copy_buffer_to_texture(Buffer src, uint64_t offset, uint32_t row_pitch, Texture dst);
     void render(DrawList&& list);
     uint32_t uniform(const void* data, uint32_t size);   // the frame's arena, for dispatches
 
-    std::span<const Pass> passes() const { return passes_; }
-    std::span<const uint8_t> arena() const { return arena_; }
+    View<Pass> passes() const { return passes_; }
+    View<uint8_t> arena() const { return arena_; }
     const std::string& error() const { return error_; }
 
 private:
@@ -406,6 +422,7 @@ struct BindGroupInfo;
 struct BufferInfo;
 struct TextureInfo;
 class Core;
+class CompletionSink;
 
 // ---- The backend interface -------------------------------------------------------------------
 
@@ -466,9 +483,11 @@ public:
 protected:
     explicit Backend(const Caps& caps);
 
-    // Called by a backend, from any thread, when the submit with this serial completed on the
-    // GPU. gpu_ms < 0 when unknown. Serials may complete out of order.
+    // Called by a backend when the submit with this serial completed on the GPU. gpu_ms < 0
+    // when unknown. Serials may complete out of order. Completion handlers on other threads
+    // hold the sink by shared pointer instead, so a late one never reaches a dead backend.
     void complete(Serial s, double gpu_ms = -1);
+    std::shared_ptr<CompletionSink> completion_sink() const;
     // Read access to what the core keeps per handle, for the hooks.
     const ProgramInfo&   program_info(Program p) const;
     const PipelineInfo&  pipeline_info(Pipeline p) const;
@@ -487,8 +506,11 @@ protected:
     virtual bool on_create_compute_pipeline(uint32_t slot, const ComputePipelineDesc& d, std::string* error) = 0;
     virtual bool on_create_bind_group(uint32_t slot, const BindGroupDesc& d, std::string* error) = 0;
     virtual void on_destroy(uint64_t handle) = 0;    // after its last use completed
-    virtual void on_write_buffer(uint32_t slot, uint64_t offset, const void* data, uint64_t size) = 0;
-    virtual void on_write_texture(uint32_t slot, const void* data, uint32_t row_pitch) = 0;
+    // in_use: a submit that uses the resource has not completed, so the write must be ordered
+    // on the queue; otherwise the backend may write the memory at once.
+    virtual void on_write_buffer(uint32_t slot, uint64_t offset, const void* data, uint64_t size,
+                                 bool in_use) = 0;
+    virtual void on_write_texture(uint32_t slot, const void* data, uint32_t row_pitch, bool in_use) = 0;
     virtual void* on_mapped(uint32_t slot) = 0;
     // Fills route, bytes_copied and reason; the core sets the handle, path and the stats.
     virtual bool on_import_buffer(uint32_t slot, const ExternalBuffer& ext, ImportResult* r) = 0;
