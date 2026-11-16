@@ -955,13 +955,14 @@ if(TARGET caliper_builder_session)
             endif()
             # One entry per case: the acceptance case, F4 listing a stream of
             # caliper.serve() from its stream file, the attachment kept across
-            # Home and the spec page until Detach, and a second stream and a
-            # stream that ends.
+            # Home and the spec page until Detach, a second stream and a
+            # stream that ends, and files dropped on the live page.
             foreach(_case IN ITEMS
                     "entropy|app live: attention entropy per layer*"
                     "f4_stream|app live: F4 lists a caliper.serve() stream*"
                     "home_keeps|app live: the stream stays attached*"
-                    "second_stream|app live: a second stream replaces the first*")
+                    "second_stream|app live: a second stream replaces the first*"
+                    "drop|app live: files dropped on the live page*")
                 string(REPLACE "|" ";" _parts "${_case}")
                 list(GET _parts 0 _name)
                 list(GET _parts 1 _filter)

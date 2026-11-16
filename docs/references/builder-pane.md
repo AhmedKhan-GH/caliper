@@ -21,8 +21,11 @@ There are three ways to the pane:
   its letters and digits in lower case, with one `-` for every other run of characters, such as `run-42` for "Run 42".
 - **Files dropped on the window.** Dropping files from the Finder or a file manager imports them into the workspace.
   On the spec page the pane opens in build mode with the new sources selected; on the landing screen the open spec's
-  page opens in build mode first, or a new Untitled dashboard when no spec is open. Other pages keep their windows and
-  say in Activity that a spec must be open.
+  page opens in build mode first, or a new Untitled dashboard when no spec is open. On the live page a new Untitled
+  dashboard opens in build mode, and Sources lists the files' sources beside the attached session's live sources,
+  which stay attached; when the open spec has unsaved changes, the files go into it instead, as on the landing screen,
+  so that nothing unsaved is replaced. An applet's page keeps its windows and says in Activity that a spec must be
+  open.
 - **An open spec.** ⌘B Build in the page bar (Ctrl+B Build elsewhere) turns build mode on and off for the spec the
   page shows. A spec applet found outside the workspace is drawn from its file and has no Build.
 

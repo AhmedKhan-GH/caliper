@@ -912,7 +912,10 @@ private:
     // Once per frame: a new spec that waits for the session, then the files
     // dropped. On the spec page they go to its builder (build mode on); on
     // the landing the open spec's page opens first, or a new spec when none
-    // is open; other pages keep their windows and say so in Activity.
+    // is open; on the live page a new spec, beside the attached session's
+    // live sources in the builder's Sources, unless the open spec has
+    // unsaved changes, which takes the files as on the landing; the applet
+    // page keeps its windows and says so in Activity.
     void note_drops() {
         if (new_requested_ && !new_pending_) {
             if (session_.session() && !session_.worker_busy()) {
@@ -933,9 +936,10 @@ private:
             if (spec_page_.drop_files(session_, paths, &why)) landing_.log("drop", what, "import");
             else landing_.log("drop refused", what, why);
             pending_drops_.erase(pending_drops_.begin());
+            drop_new_asked_ = false;
             return;
         }
-        if (page_ == AppPage::Landing) {
+        if (page_ == AppPage::Landing || page_ == AppPage::Live) {
             session_.ensure_open();
             if (!session_.open_error().empty()) {
                 landing_.log("drop refused", what, session_.open_error());
@@ -943,11 +947,22 @@ private:
                 return;
             }
             if (!session_.session() || session_.worker_busy() || new_requested_ || new_pending_) return;   // wait
-            if (caliper_host::SpecPage::has_open_spec(session_)) {
+            // One new spec per drop: when its spec.new failed (said in
+            // Activity), the drop goes instead of asking again every frame.
+            if (drop_new_asked_) {
+                landing_.log("drop refused", what, "no new spec was made");
+                pending_drops_.clear();
+                drop_new_asked_ = false;
+                return;
+            }
+            const bool into_open = page_ == AppPage::Landing ? caliper_host::SpecPage::has_open_spec(session_)
+                                                             : caliper_host::SpecPage::has_unsaved_spec(session_);
+            if (into_open) {
                 open_spec_page();
                 spec_page_.set_build_mode(true);
             } else {
                 new_spec("");
+                drop_new_asked_ = true;
             }
             return;
         }
@@ -1551,6 +1566,7 @@ private:
     std::vector<std::vector<std::string>> pending_drops_;   // files dropped on the window, in order
     bool new_requested_ = false;      // a new spec waits for the session
     bool new_pending_ = false;        // its spec.new is in the queue
+    bool drop_new_asked_ = false;     // the first pending drop asked for a new spec
     std::string pending_new_title_;
     std::string spec_entry_;          // the manifest id of the spec applet the page shows, or ""
     uint64_t applets_saved_ = 0;      // AppSession::applets_saved() when last listed

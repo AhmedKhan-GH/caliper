@@ -14,7 +14,8 @@
 // CALIPER_TEST_SPEC_UI beside one or two producers: F4 listing a stream from
 // its stream file, the attachment kept across Home and the spec page until
 // ⌘D Detach, a second stream replacing the first, a stream that ends while
-// the landing shows, and quitting while attached.
+// the landing shows, quitting while attached, and files dropped on the live
+// page.
 //
 // CALIPER_TEST_SHOTS=<folder> saves the two captures there as
 // live-entropy-a.png and live-entropy-b.png, and CALIPER_TEST_WINDOW=<W>x<H>
@@ -489,6 +490,67 @@ TEST_CASE("app live: a second stream replaces the first; a stream that ends whil
                   app.text.substr(ended_at == std::string::npos ? 0 : ended_at));
     ::kill(first.pid, SIGTERM);
     CHECK(first.wait(10000) == 0);
+}
+
+TEST_CASE("app live: files dropped on the live page start a new spec beside the live sources, or go into an open "
+          "spec with unsaved changes") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("drop");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    for (const char* name : {"runs_a", "runs_b", "runs_c"}) {
+        std::ofstream f(t.str(std::string(name) + ".csv"));
+        f << "step,loss\n";
+        for (int i = 0; i < 20; ++i) f << i << "," << 1.0 / (i + 1) << "\n";
+    }
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string drop_shot = shot_name(env, "live-drop");
+    // A drop on the live page; then, with the new spec unsaved, a second drop
+    // from the live page goes into it; saved, a third drop starts another.
+    const std::string script =
+        "page live;drop " + t.str("runs_a.csv") + ";page spec;pane source table:runs_a;pane source live:attn.entropy;" +
+        "wait 20;shot " + drop_shot + ";touch " + t.str("first") + ";key escape;wait 5;key escape;page landing;key f5;page live;drop " +
+        t.str("runs_b.csv") + ";page spec;pane source table:runs_b;touch " + t.str("second") + ";wait-file " +
+        t.str("saved") + ";key escape;wait 5;key escape;page landing;key f5;page live;drop " + t.str("runs_c.csv") +
+        ";page spec;pane source table:runs_c;touch " + t.str("third");
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      app_env(env, t, script, shots)));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(token.size() >= 22);
+
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("first")); }, 90000), app.text);
+    CHECK(app.text.find("drop refused") == std::string::npos);
+    const json first = ok(port, token, "spec.get");
+    const std::string first_id = first["id"].get<std::string>();
+    CHECK(first["dirty"] == true);
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("second")); }, 90000), app.text);
+    CHECK(ok(port, token, "spec.get")["id"] == first_id);   // the same, unsaved spec
+    ok(port, token, "applet.save");
+    std::ofstream(t.str("saved")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("third")); }, 90000), app.text);
+    CHECK(ok(port, token, "spec.get")["id"] != first_id);   // a new spec this time
+    REQUIRE(script_ended(app, 30000));
+    CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    CHECK(app.text.find("[live] detached") == std::string::npos);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
 }
 
 TEST_CASE("app live: attention entropy per layer, from a live stream, on the spec page while it trains") {

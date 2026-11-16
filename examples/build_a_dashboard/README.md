@@ -197,8 +197,9 @@ python examples/build_a_dashboard/make_data.py
 
 On the landing screen, drop `data/run_metrics.parquet` and `data/attention.safetensors` from the Finder onto the
 window. Caliper imports them into the workspace and opens a new Untitled dashboard in build mode: Sources on the left
-lists the table under Tables, with its rows and columns, and the tensor under Tensors, with its dtype and dimensions;
-Primitives is under it, the canvas in the middle and Properties on the right.
+lists the table under Tables, with its rows and columns, the tensor under Tensors, with its dtype and dimensions, and
+the stream's views under Live, since the app is still attached to it; Primitives is under it, the canvas in the middle
+and Properties on the right. Dropping the files on the live page instead does the same.
 
 Select the table in Sources and click **Series** in Primitives. A series panel appears on the canvas, with `step` as
 x and the other numeric columns as lines. Drag a source onto the canvas instead to place the panel where you drop it,

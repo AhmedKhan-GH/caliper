@@ -600,6 +600,13 @@ bool SpecPage::has_open_spec(AppSession& session) {
     return s && !session.worker_busy() && s->open_spec().has_value();
 }
 
+bool SpecPage::has_unsaved_spec(AppSession& session) {
+    cb::Session* s = session.session();
+    if (!s || session.worker_busy()) return false;
+    const std::optional<cb::OpenSpec> open = s->open_spec();
+    return open && open->dirty;
+}
+
 bool SpecPage::importing() const { return impl_->builder && impl_->builder->importing(); }
 
 bool SpecPage::request_answered(std::string* error) {
@@ -873,6 +880,7 @@ bool SpecPage::request_answered(std::string*) { return false; }
 bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
 bool SpecPage::take_new() { return false; }
 bool SpecPage::has_open_spec(AppSession&) { return false; }
+bool SpecPage::has_unsaved_spec(AppSession&) { return false; }
 bool SpecPage::importing() const { return false; }
 void SpecPage::enter(AppSession&) {}
 SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*, bool) { return {}; }

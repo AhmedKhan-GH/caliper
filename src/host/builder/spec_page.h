@@ -117,6 +117,9 @@ public:
     bool take_new();
     // The session holds an open spec (spec.new or applet.open ran).
     static bool has_open_spec(AppSession& session);
+    // ... and it has changes that are not saved (a new spec that was never
+    // saved has).
+    static bool has_unsaved_spec(AppSession& session);
     // An import from drop_files() still runs.
     bool importing() const;
 
