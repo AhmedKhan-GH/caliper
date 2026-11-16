@@ -600,6 +600,17 @@ TEST_CASE("live/net: stream links are checked and normalised") {
     CHECK_FALSE(caliper_live::parse_stream_url("ws://127.0.0.1:9/other?token=" + tok, &u, &err));
     CHECK_FALSE(caliper_live::parse_stream_url("wss://127.0.0.1:9/v3/stream?token=" + tok, &u, &err));
     CHECK_FALSE(caliper_live::parse_stream_url("ws://127.0.0.1:9/v3/stream?token=" + tok + "&session=a/b", &u, &err));
+    // No error repeats the token, whatever is wrong with the link.
+    for (const std::string bad : {"ftp://127.0.0.1:9/v3/stream?token=", "ws:///v3/stream?token=",
+                                  "ws://127.0.0.1:99999/v3/stream?token=", "http://127.0.0.1:0/?token=",
+                                  "ws://[::1]:9/v3/stream?token=", "ws://10.0.0.2:9/v3/stream?token=",
+                                  "ws://127.0.0.1:9/other?token=", "wss://127.0.0.1:9/v3/stream?token="}) {
+        CAPTURE(bad);
+        err.clear();
+        CHECK_FALSE(caliper_live::parse_stream_url(bad + tok, &u, &err));
+        CHECK_FALSE(err.empty());
+        CHECK(err.find(tok) == std::string::npos);
+    }
 }
 
 TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series and a histogram to "
@@ -800,6 +811,14 @@ TEST_CASE("live/net: refusals and bad links fail the attach with the reason") {
     CHECK(why.find("loopback") != std::string::npos);
     why = refused("ws://127.0.0.1:" + port + "/v3/stream?token=short");
     CHECK(why.find("token") != std::string::npos);
+    // What the app's attach pane and caliper-viewer print for a bad link
+    // (caliper_core_last_error) never repeats its token.
+    for (const std::string bad : {std::string("ws:///v3/stream?token="), std::string("ws://127.0.0.1:99999/v3/stream?token="),
+                                  "ftp://127.0.0.1:" + port + "/v3/stream?token=", std::string("ws://[::1]:9/v3/stream?token=")}) {
+        why = refused(bad + p.token);
+        CHECK_FALSE(why.empty());
+        CHECK(why.find(p.token) == std::string::npos);
+    }
     CHECK(caliper_core_live_attach_url(core, nullptr) == 0);
     CHECK(caliper_core_live_poll(core) == -1);   // nothing attached
 

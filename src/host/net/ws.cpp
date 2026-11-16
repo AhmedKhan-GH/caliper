@@ -328,10 +328,14 @@ std::string url_encode(const std::string& in) {
     return out;
 }
 
+// A URL as an error may show it: without its query and fragment, since a
+// stream link carries the session token in its query.
+static std::string shown_url(const std::string& url) { return url.substr(0, url.find_first_of("?#")); }
+
 bool parse_ws_url(const std::string& url, WsUrl* out, std::string* err) {
     const std::string scheme = "ws://";
     if (lower(url.substr(0, scheme.size())) != scheme) {
-        *err = "not a ws:// URL: " + url;
+        *err = "not a ws:// URL: " + shown_url(url);
         return false;
     }
     std::string rest = url.substr(scheme.size());
@@ -342,13 +346,13 @@ bool parse_ws_url(const std::string& url, WsUrl* out, std::string* err) {
     std::string target = slash == std::string::npos ? "/" : rest.substr(slash);
     if (target[0] == '?') target = "/" + target;
     if (authority.empty() || authority.find('@') != std::string::npos) {
-        *err = "no host in " + url;
+        *err = "no host in " + shown_url(url);
         return false;
     }
     WsUrl u;
     const size_t colon = authority.rfind(':');
     if (authority[0] == '[') {
-        *err = "IPv6 hosts are not supported: " + url;
+        *err = "IPv6 hosts are not supported: " + shown_url(url);
         return false;
     }
     if (colon == std::string::npos) {
@@ -359,13 +363,13 @@ bool parse_ws_url(const std::string& url, WsUrl* out, std::string* err) {
         const std::string p = authority.substr(colon + 1);
         if (p.empty() || p.size() > 5 || !std::all_of(p.begin(), p.end(), ::isdigit) ||
             std::stoul(p) == 0 || std::stoul(p) > 65535) {
-            *err = "bad port in " + url;
+            *err = "bad port in " + shown_url(url);
             return false;
         }
         u.port = (uint16_t)std::stoul(p);
     }
     if (u.host.empty()) {
-        *err = "no host in " + url;
+        *err = "no host in " + shown_url(url);
         return false;
     }
     u.host = lower(u.host);

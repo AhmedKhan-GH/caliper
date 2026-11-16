@@ -247,6 +247,20 @@ TEST_CASE("net/ws: URLs and query parameters") {
     CHECK_FALSE(parse_ws_url("ws://127.0.0.1:70000/", &u, &err));
     CHECK_FALSE(parse_ws_url("ws:///x", &u, &err));
     CHECK_FALSE(parse_ws_url("ws://[::1]:9/", &u, &err));
+    // An error shows a link without its query or fragment, where a stream
+    // link carries the session token.
+    const std::string secret = "secret-token-0123456789abcdef";
+    for (const std::string bad : {"http://127.0.0.1:9/v3/stream?token=", "ws:///v3/stream?token=",
+                                  "ws://127.0.0.1:0/v3/stream?token=", "ws://127.0.0.1:70000/v3/stream?token=",
+                                  "ws://[::1]:9/v3/stream?token=", "ws://u@127.0.0.1:9/v3/stream?token=",
+                                  "ws://127.0.0.1:x/v3/stream#token="}) {
+        CAPTURE(bad);
+        err.clear();
+        CHECK_FALSE(parse_ws_url(bad + secret, &u, &err));
+        CHECK_FALSE(err.empty());
+        CHECK(err.find(secret) == std::string::npos);
+        CHECK(err.find(bad.substr(0, bad.find_first_of("?#"))) != std::string::npos);
+    }
 
     HttpRequest r;
     r.query = "token=abc%2Bd&flag&name=a+b";

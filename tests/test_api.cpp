@@ -834,6 +834,16 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
         REQUIRE_MESSAGE(at != std::string::npos, v.text);
         CHECK(std::atoi(v.text.c_str() + at + std::strlen("received view=heat kind=heatmap updates=")) > 0);
         CHECK(prod.subscribes >= 1);
+        // A bad link fails the viewer, and nothing it prints repeats the token.
+        for (const std::string bad : {"ws:///v3/stream?token=", "ws://127.0.0.1:99999/v3/stream?token="}) {
+            Proc b;
+            REQUIRE(b.start(viewer, {"--headless", "--url", bad + token, "--exit-after", "3",
+                                     "--data-dir", t.str("viewer-data")}, {}));
+            const int bad_code = b.wait(30000);
+            CHECK_MESSAGE(bad_code == 2, b.text);
+            CHECK_MESSAGE(b.text.find(token) == std::string::npos, b.text);
+            CHECK_MESSAGE(b.text.find(bad.substr(0, bad.find('?'))) != std::string::npos, b.text);
+        }
     } else {
         MESSAGE("CALIPER_TEST_VIEWER_EXE is not set: the native viewer's attach through /v3/stream is not run");
     }
