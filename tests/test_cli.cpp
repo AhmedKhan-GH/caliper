@@ -261,6 +261,9 @@ TEST_CASE("cli: the -psn_ argument Finder passes is ignored") {
     CHECK(dev.applet_dirs == std::vector<std::string>{"/a"});
 }
 
+// Not on Windows, which refuses serve before it runs: a Hub opens a socket
+// even when it fails before listening (caliper_net_tests in tests/CMakeLists.txt).
+#ifndef _WIN32
 TEST_CASE("cli: serve refuses a token file it cannot use, before it listens") {
     TempDir t("serve-refuse");
     CommandLine cl = parse({"serve", "--port", "0"});
@@ -282,6 +285,7 @@ TEST_CASE("cli: serve refuses a token file it cannot use, before it listens") {
     CHECK(err3.str().find("not a folder") != std::string::npos);
     CHECK(out.str().empty());
 }
+#endif
 
 TEST_CASE("cli: info prints the versions and every service") {
     TempDir t("info");

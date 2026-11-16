@@ -40,12 +40,14 @@ if(NOT TARGET ZLIB::ZLIB)
 endif()
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB)
-# Wire protocol v3 networking (src/host/net): the WebSocket layer against its
-# own server on 127.0.0.1, and the codec against the golden frames in
-# tests/fixtures/wire_v3. Portable and headless, so it rides the fast suite.
-target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_wire.cpp)
-# The hub (src/host/net/hub.h) in-process with fake producers and viewers.
-target_sources(caliper_tests PRIVATE test_net_hub.cpp)
+# Wire protocol v3 networking (src/host/net): the codec against the golden
+# frames in tests/fixtures/wire_v3, everywhere; the WebSocket layer against its
+# own server on 127.0.0.1 and the hub (src/host/net/hub.h) in-process with fake
+# producers and viewers, not on Windows yet (caliper_net_tests below).
+target_sources(caliper_tests PRIVATE test_net_wire.cpp)
+if(NOT WIN32)
+    target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_hub.cpp)
+endif()
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
@@ -80,9 +82,21 @@ target_sources(caliper_tests PRIVATE test_cli.cpp ${CMAKE_SOURCE_DIR}/src/host/c
 # Caliper API v0 (src/host/api/api_server.h): the routes, the token, the Host
 # and Origin refusals and the limits, with the server in this process; the
 # ctest entry caliper_cli_api runs the same binary against `caliper shot --api`.
-target_sources(caliper_tests PRIVATE test_api.cpp)
-target_link_libraries(caliper_tests PRIVATE caliper_api)
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+# Not on Windows yet (caliper_net_tests below).
+if(NOT WIN32)
+    target_sources(caliper_tests PRIVATE test_api.cpp)
+    target_link_libraries(caliper_tests PRIVATE caliper_api)
+    target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+endif()
+# On Windows the socket cases of the WebSocket layer, the hub and Caliper API
+# are not built or run: every feature built on them is refused there
+# (windows_unavailable in src/host/host_cli.h), and their socket and timer
+# behaviour has not run on Winsock yet. This entry says so in the ctest log.
+if(WIN32)
+    add_test(NAME caliper_net_tests COMMAND "${CMAKE_COMMAND}" -E echo
+        "skipped on Windows: the socket tests of the WebSocket layer, the hub and Caliper API do not run there yet")
+    set_tests_properties(caliper_net_tests PROPERTIES SKIP_REGULAR_EXPRESSION "skipped on Windows")
+endif()
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)
