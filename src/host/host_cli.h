@@ -58,7 +58,8 @@
 // Exit codes: 0 success; 1 a check failed, nothing was found, or a file
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
 //
-// Header-only and free of any graphics dependency: main() dispatches here
+// Header-only but for serve's signal handler (host_cli.cpp) and `build`
+// (cli_build.cpp), and free of any graphics dependency: main() dispatches here
 // and the tests call the same functions with their own CliContext. `shot`
 // needs the renderer, so only its parsing is here and main() runs it
 // (run_shot in shot.h).
@@ -1037,9 +1038,9 @@ inline std::atomic<caliper_net::Hub*>& serving_hub() {
     static std::atomic<caliper_net::Hub*> hub{nullptr};
     return hub;
 }
-extern "C" inline void caliper_serve_on_signal(int) {
-    if (caliper_net::Hub* h = serving_hub().load()) h->stop();
-}
+// SIGINT and SIGTERM's handler while serve runs: stops serving_hub(). Defined
+// in host_cli.cpp, since a function with C linkage is not made inline.
+extern "C" void caliper_serve_on_signal(int);
 } // namespace cli_detail
 
 // Runs the hub until SIGINT or SIGTERM. Prints the viewer link and the

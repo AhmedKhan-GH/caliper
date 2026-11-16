@@ -580,9 +580,11 @@ add_executable(caliper
     src/host/shot.cpp
     # Caliper API v0 for the app and for `caliper shot` (--api).
     src/host/api/app_api.cpp
-    # caliper build <folder>: CMake against the installed SDK, then check.
-    # Compiled wherever host_cli.h dispatches (here and in caliper_tests).
+    # caliper build <folder>: CMake against the installed SDK, then check, and
+    # the out-of-line part of host_cli.h. Compiled wherever host_cli.h
+    # dispatches (here and in caliper_tests).
     src/host/cli_build.cpp
+    src/host/host_cli.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
