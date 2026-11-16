@@ -27,8 +27,8 @@
 
 #include "../scene/scene_row_fixture.h"
 #include "../scene/surface_row_fixture.h"
-#include "../shaders/colormap_cases.h"
 #include "scene_reference.h"
+#include "gfx/colormap_keys.h"
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "renderer/host_renderer.h"
@@ -54,7 +54,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <tuple>
 #include <vector>
 
 // The suite's Metal environment (gfx_main.cpp): its renderer, or nullptr without a device.
@@ -96,25 +95,10 @@ void capture(const char* name, const std::vector<uint8_t>& rgba, int w, int h, i
     MESSAGE("capture written: ", path);
 }
 
-// The colormap blocks of these rows, cached by colormap and range as a view caches them. The keys
-// come from the CPU reference map_f32_to_rgba8 through the shader tests' derivation
-// (tests/shaders/colormap_cases.h): this is the rows' own key derivation, which the shared one of
-// migration step 6 replaces.
+// The colormap blocks of these rows, from the shared derivation and cache of key blocks
+// (src/host/gfx/colormap_keys.h), by colormap and range as a view keeps them.
 BackendResources::ColormapSource row_colormaps() {
-    auto cache = std::make_shared<std::map<std::tuple<uint32_t, uint32_t, uint32_t>, sh::Cmap>>();
-    return [cache](uint32_t colormap, float vmin, float vmax, sh::Cmap* out) {
-        uint32_t lo, hi;
-        std::memcpy(&lo, &vmin, 4);
-        std::memcpy(&hi, &vmax, 4);
-        const auto key = std::make_tuple(colormap, lo, hi);
-        auto it = cache->find(key);
-        if (it == cache->end()) {
-            const uint32_t* lut = caliper_host::colormap_lut(int32_t(colormap));
-            const std::vector<uint32_t> table(lut, lut + 256);
-            it = cache->emplace(key, colormap_cases::block({"row", vmin, vmax}, table)).first;
-        }
-        *out = it->second;
-    };
+    return caliper_gfx::cmap::colormap_source(std::make_shared<caliper_gfx::cmap::KeyBlockCache>());
 }
 
 // The layer on Metal with the scene core's resources over it.
