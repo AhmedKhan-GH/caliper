@@ -824,6 +824,9 @@ if(CALIPER_WITH_BUILDER)
     target_link_libraries(caliper_api_session PUBLIC caliper_api caliper_builder_session)
     set_target_properties(caliper_api_session PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    # The spec runtime, which draws a spec's panels from the session's data,
+    # with its harness caliper-spec-shot and its tests.
+    add_subdirectory(src/host/spec_runtime)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed
