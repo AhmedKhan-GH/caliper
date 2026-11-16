@@ -1,0 +1,41 @@
+{
+  "comment": "The shader programs of the graphics layer. Each program is its sources concatenated in order, translated by tools/shaders/generate.py. outputs lists what is generated; hand_written names a platform's own version, by its header, which the generator leaves alone. pairs are the vertex and fragment entries the compile checks pair into pipelines.",
+  "programs": [
+    {
+      "name": "scene_points",
+      "sources": ["common/decls.wgsl", "common/colormap.wgsl", "common/helpers.wgsl", "scene/points.wgsl"],
+      "outputs": ["wgsl", "msl", "spirv"],
+      "hand_written": {},
+      "pairs": [["vs_points", "fs_points"], ["vs_points", "fs_points_pick"],
+                ["vs_depth_points", "fs_points"], ["vs_depth_points", "fs_points_pick"]]
+    },
+    {
+      "name": "scene_lines",
+      "sources": ["common/decls.wgsl", "common/colormap.wgsl", "common/helpers.wgsl", "common/fragments.wgsl", "scene/lines.wgsl"],
+      "outputs": ["wgsl", "msl", "spirv"],
+      "hand_written": {},
+      "pairs": [["vs_lines", "fs_color"], ["vs_lines", "fs_pick"]]
+    },
+    {
+      "name": "scene_mesh",
+      "sources": ["common/decls.wgsl", "common/colormap.wgsl", "common/helpers.wgsl", "common/fragments.wgsl", "scene/mesh.wgsl"],
+      "outputs": ["wgsl", "msl", "spirv"],
+      "hand_written": {},
+      "pairs": [["vs_mesh", "fs_color"], ["vs_mesh", "fs_mesh_flat"], ["vs_mesh", "fs_mesh_tex"], ["vs_mesh", "fs_pick"]]
+    },
+    {
+      "name": "index_clamp",
+      "sources": ["compute/index_clamp.wgsl"],
+      "outputs": ["wgsl", "msl", "spirv"],
+      "hand_written": {},
+      "pairs": []
+    },
+    {
+      "name": "edge_gather",
+      "sources": ["compute/edge_gather.wgsl"],
+      "outputs": ["wgsl", "msl", "spirv"],
+      "hand_written": {},
+      "pairs": []
+    }
+  ]
+}

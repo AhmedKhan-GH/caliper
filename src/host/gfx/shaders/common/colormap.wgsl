@@ -1,0 +1,36 @@
+// The colormap of the renderer core: the index is decided by integer comparisons against
+// keys the CPU derives from the reference map_f32_to_rgba8; the float guess only picks which
+// comparisons run, so no adapter's or compiler's float arithmetic can move an index.
+// Self-contained, so that a program needs only this file for the colormap.
+
+// keys: 258 entries; keys[0] = 0 (always passed), keys[256] = keys[257] = 0xffffffff (never passed).
+struct Cmap { vmin: f32, vmax: f32, flip: u32, pad: u32, keys: array<vec4<u32>, 65>, lut: array<vec4<u32>, 64> };
+@group(1) @binding(1) var<uniform> m: Cmap;
+
+fn key_at(k: u32) -> u32 { return m.keys[k >> 2u][k & 3u]; }
+fn level_ok(key: u32, k: u32) -> bool { return key >= key_at(k) && key < key_at(k + 1u); }
+
+fn colormap_index(bits: u32) -> u32 {
+    if ((bits & 0x7fffffffu) > 0x7f800000u) { return 0u; }                    // NaN, from the bits
+    let key = select(bits | 0x80000000u, ~bits, (bits >> 31u) != 0u) ^ m.flip;
+    let v = bitcast<f32>(bits);
+    let g = min(u32(clamp((v - m.vmin) / (m.vmax - m.vmin), 0.0, 1.0) * 255.0 + 0.5), 255u);
+    if (level_ok(key, g)) { return g; }                                       // the usual case
+    if (g > 0u && level_ok(key, g - 1u)) { return g - 1u; }
+    if (g < 255u && level_ok(key, g + 1u)) { return g + 1u; }
+    var lo = 0u; var hi = 256u;                                               // keys[lo] <= key < keys[hi]
+    loop { if (hi - lo <= 1u) { break; } let mid = (lo + hi) / 2u;
+           if (key >= key_at(mid)) { lo = mid; } else { hi = mid; } }
+    return lo;
+}
+
+// A packed colour, r | g << 8 | b << 16 | a << 24, as four channels in [0, 1].
+fn unpack_rgba(c: u32) -> vec4<f32> {
+  return vec4<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu),
+                   f32((c >> 16u) & 0xffu), f32((c >> 24u) & 0xffu)) / 255.0;
+}
+
+fn cmap_color(bits: u32) -> vec4<f32> {
+  let k = colormap_index(bits);
+  return unpack_rgba(m.lut[k >> 2u][k & 3u]);
+}
