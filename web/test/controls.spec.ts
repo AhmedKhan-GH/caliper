@@ -298,6 +298,9 @@ test.describe('linked selection', () => {
     await open(page, prod.url, 5);
     const other = await second(browser, prod.url, ['p', 'h']);
     try {
+      // Every view has drawn: a WebAssembly view is past its start-up frames,
+      // over which its windows are laid out, and publishes where it drew.
+      await drawn(page);
       await expect.poll(async () => (await state(page, 'p')).window?.x1 ?? null).not.toBeNull();
       const events = await page.evaluateHandle(() => {
         const r: unknown[] = [];
@@ -335,6 +338,7 @@ test.describe('linked selection', () => {
   test('a range of steps puts markers on the series', async ({ page }, info) => {
     prod = await startProducer(['--controls', '--fixed']);
     await open(page, prod.url, 5);
+    await drawn(page);
     await expect.poll(async () => (await state(page, 's')).window?.x1 ?? null).not.toBeNull();
     const from = await at(page, 's', 300.2, 500), to = await at(page, 's', 340.8, 500);
     await shiftDrag(page, { x: Math.ceil(from.x), y: from.y }, { x: Math.floor(to.x), y: to.y });
