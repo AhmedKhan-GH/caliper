@@ -128,19 +128,20 @@ Response get(uint16_t port, const std::string& target) {
 
 // POST /v0/commands/<name> on a socket of its own; read the answer with read_response().
 int send_command(uint16_t port, const std::string& name, const json& args, const std::string& origin = {},
-                 const std::string& group = {}) {
+                 const std::string& group = {}, const std::string& preview = {}) {
     const std::string body = args.dump();
     std::string extra = bearer() + "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
                         "\r\n";
     if (!origin.empty()) extra += "X-Caliper-Origin: " + origin + "\r\n";
     if (!group.empty()) extra += "X-Caliper-Group: " + group + "\r\n";
+    if (!preview.empty()) extra += "X-Caliper-Preview: " + preview + "\r\n";
     return send_request(port, "POST", "/v0/commands/" + name, extra, body);
 }
 
 // The envelope of one command, which must come with 200.
 json command(uint16_t port, const std::string& name, const json& args, const std::string& origin = {},
-             const std::string& group = {}) {
-    const Response r = read_response(send_command(port, name, args, origin, group));
+             const std::string& group = {}, const std::string& preview = {}) {
+    const Response r = read_response(send_command(port, name, args, origin, group, preview));
     INFO(name << ": " << r.status << " " << r.body.substr(0, 1000));
     REQUIRE(r.status == 200);
     const json env = r.value();
@@ -313,6 +314,25 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     CHECK(app.session->open_spec()->spec.applet.id == "dash");
     CHECK(command(port, "history.redo", json::object(), "mcp")["ok"] == true);
     CHECK(app.session->open_spec()->spec.panels.size() == 1);
+
+    // An edit that names a stacked preview in X-Caliper-Preview applies to the
+    // preview, not to the open spec; only the person commits it.
+    const json begun = command(port, "preview.begin", {{"id", "try"}}, "agent");
+    INFO(begun.dump());
+    REQUIRE(begun["ok"] == true);
+    const json patched = command(port, "panel.patch", {{"id", "note"}, {"patch", {{"title", "Draft"}}}}, "agent", {},
+                                 "try");
+    INFO(patched.dump());
+    REQUIRE(patched["ok"] == true);
+    CHECK_FALSE(app.session->open_spec()->spec.panels[0].title.has_value());
+    const json diff = command(port, "preview.diff", {{"id", "try"}}, "agent");
+    REQUIRE(diff["ok"] == true);
+    CHECK(diff["result"]["edits"] == 1);
+    CHECK(diff["result"]["diff"].get<std::string>().find("Draft") != std::string::npos);
+    CHECK(error_code(command(port, "preview.commit", {{"id", "try"}}, "agent")) == "preview.not_allowed");
+    CHECK(error_code(command(port, "panel.patch", {{"id", "note"}, {"patch", {{"title", "x"}}}}, "agent", {},
+                             "Not A Preview")) == "command.invalid_invocation");
+    CHECK(command(port, "preview.discard", {{"id", "try"}}, "agent")["ok"] == true);
 
     // What the command layer refuses comes with 200.
     CHECK(error_code(command(port, "no.such", json::object())) == "command.unknown");

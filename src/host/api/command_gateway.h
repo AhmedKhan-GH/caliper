@@ -33,6 +33,7 @@ struct CommandRequest {
     std::string args;          // the body: JSON text whose value is an object, at most 1 MiB
     std::string origin;        // "api", "mcp" or "agent"
     std::string group;         // from X-Caliper-Group; "" for none
+    std::string preview;       // from X-Caliper-Preview: a stacked preview's id; "" for none
     // How long a command that needs approval waits for the person's decision
     // (mcp and agent); 0 answers command.needs_approval at once (api).
     int approval_wait_ms = 0;

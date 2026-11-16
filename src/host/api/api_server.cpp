@@ -294,7 +294,7 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
     const std::string length = trim(r.header("content-length"));
     if (rt == Route::Command) {
         for (const char* h : {"authorization", "content-length", "content-type", "x-caliper-origin",
-                              "x-caliper-group"}) {
+                              "x-caliper-group", "x-caliper-preview"}) {
             if (header_count(r, h) > 1) {
                 v.status = 400;
                 v.message = std::string("the ") + h + " header is repeated";
@@ -541,6 +541,7 @@ struct Server::Impl {
                 layer.request.args = r.body;
                 layer.request.origin = v.origin;
                 layer.request.group = r.header("x-caliper-group");
+                layer.request.preview = r.header("x-caliper-preview");
                 layer.request.approval_wait_ms = v.origin == "api" ? 0 : opt.command_approval_wait_ms;
                 to_layer = true;
                 break;

@@ -8,7 +8,8 @@
 //   GET  /v0/commands         command_table_to_json(), made once, when the
 //                             gateway is made
 //   POST /v0/commands/{name}  an invocation with the server's id, the name,
-//                             the args, the origin and the group, submitted
+//                             the args, the origin, the group and the
+//                             preview, submitted
 //                             to session.queue(): with wait_for_approval and
 //                             approval_timeout for mcp and agent, and without
 //                             for api, which gets command.needs_approval at

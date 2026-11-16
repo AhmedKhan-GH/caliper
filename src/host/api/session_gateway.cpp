@@ -92,6 +92,7 @@ public:
             inv.args = std::move(args);
             inv.origin = *origin;
             inv.group = std::move(request.group);
+            inv.preview = std::move(request.preview);
             caliper_builder::SubmitOptions so;
             so.wait_for_approval = request.approval_wait_ms > 0;
             so.approval_timeout = std::chrono::milliseconds(request.approval_wait_ms > 0 ? request.approval_wait_ms : 0);

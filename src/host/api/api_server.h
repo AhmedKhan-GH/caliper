@@ -25,7 +25,8 @@
 // command layer's result envelope with 200, whether `ok` is true or false;
 // faults of the request itself keep their status. The origin of the
 // invocation is api, or mcp or agent from X-Caliper-Origin (400 for anything
-// else), and X-Caliper-Group gives its group. A command that needs approval
+// else), X-Caliper-Group gives its group, and X-Caliper-Preview the id of a
+// stacked preview that its edits apply to. A command that needs approval
 // is held for the origins mcp and agent while the person decides, up to
 // Options::command_approval_wait_ms, and answers command.needs_approval at
 // once for api, whose caller reads the outcome from GET /v0/approvals/{id}.
@@ -118,7 +119,7 @@ bool token_ok(const caliper_net::HttpRequest& r, const std::string& token, bool 
 
 // The checks of a plain request after the door's Host check, in this order:
 // Origin (403), route (404, then 405), token (401), then for a command: a
-// repeated header that the checks read (400), Transfer-Encoding (501), no
+// repeated header that the checks read or the command takes (400), Transfer-Encoding (501), no
 // Content-Length (411), one that is not a number (400) or over
 // kMaxCommandBody (413), a Content-Type other than application/json (415) and
 // an X-Caliper-Origin other than api, mcp or agent (400); for every other

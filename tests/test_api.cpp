@@ -632,6 +632,7 @@ struct FakeGateway final : caliper_api::CommandGateway {
         result.set("name", r.name);
         result.set("origin", r.origin);
         result.set("group", r.group);
+        result.set("preview", r.preview);
         result.set("args", r.args);
         env.set("id", r.id);
         env.set("ok", true);
@@ -745,6 +746,9 @@ TEST_CASE("api: a command request is checked for its headers and its body's leng
     CHECK(check(req("POST", path, {auth, json, json, len}), kToken, true).status == 400);
     CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-origin", "mcp"}, {"x-caliper-origin", "mcp"}}),
                 kToken, true).status == 400);
+    CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-preview", "a"}, {"x-caliper-preview", "b"}}), kToken,
+                true).status == 400);
+    CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-preview", "a"}}), kToken, true).status == 0);
     CHECK(check(req("POST", path, {auth, json, len, {"transfer-encoding", "chunked"}}), kToken, true).status == 501);
     CHECK(check(req("POST", path, {auth, json}), kToken, true).status == 411);
     CHECK(check(req("POST", path, {auth, json, {"content-length", "1e3"}}), kToken, true).status == 400);
@@ -812,7 +816,8 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     CHECK(http(port, "GET", "/v0/commands?token=" + kToken).status == 200);
 
     const std::string args = "{\"id\": \"heat\", \"patch\": {\"title\": \"Entropy\"}}";
-    Response r = post_command(port, "panel.patch", args, "X-Caliper-Origin: mcp\r\nX-Caliper-Group: turn-7\r\n");
+    Response r = post_command(port, "panel.patch", args,
+                              "X-Caliper-Origin: mcp\r\nX-Caliper-Group: turn-7\r\nX-Caliper-Preview: try-2\r\n");
     CHECK(r.status == 200);
     CHECK(r.headers["content-type"] == "application/json");
     Json env = parse_json(r.body);
@@ -821,6 +826,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     CHECK(env.find("result")->find("name")->as_string() == "panel.patch");
     CHECK(env.find("result")->find("origin")->as_string() == "mcp");
     CHECK(env.find("result")->find("group")->as_string() == "turn-7");
+    CHECK(env.find("result")->find("preview")->as_string() == "try-2");
     CHECK(env.find("result")->find("args")->as_string() == args);
     REQUIRE(gw->submitted() == 1);
     CHECK(gw->requests[0].approval_wait_ms == 4321);
@@ -832,6 +838,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     CHECK(gw->requests[1].origin == "api");
     CHECK(gw->requests[1].approval_wait_ms == 0);
     CHECK(gw->requests[1].group.empty());
+    CHECK(gw->requests[1].preview.empty());
     CHECK(gw->requests[2].origin == "agent");
     CHECK(gw->requests[2].approval_wait_ms == 4321);
     // A body that is JSON but not an object, or too deep, is the command layer's
@@ -857,6 +864,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     const std::string body = "{}";
     CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: ui\r\n").status == 400);
     CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: builder\r\n").status == 400);
+    CHECK(post_command(port, "spec.get", body, "X-Caliper-Preview: a\r\nX-Caliper-Preview: b\r\n").status == 400);
     CHECK(http(port, "POST", "/v0/commands/spec.get", bearer() + "Content-Type: text/plain\r\nContent-Length: 2\r\n",
                {}, body).status == 415);
     CHECK(http(port, "POST", "/v0/commands/spec.get", "Content-Type: application/json\r\nContent-Length: 2\r\n")
