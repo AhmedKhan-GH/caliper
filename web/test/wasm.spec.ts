@@ -8,7 +8,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { expect, REPO, shotPath, WEB, wireModule } from './util.js';
+import { colormapLut, lutIndex } from '../src/render/colormap.js';
+import { decodePng, expect, REPO, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
@@ -368,6 +369,111 @@ test.describe('selections in the WebAssembly views', () => {
       expect((await received(srv, 'hist', 'select')).detail).toEqual({ range: [-3, 1] });
       await page.waitForTimeout(300);
       await page.locator('caliper-view[view="hist"]').screenshot({ path: shotPath(info, 'wasm-histogram-selection') });
+    } finally {
+      srv.proc.kill();
+    }
+  });
+});
+
+test.describe('pan and zoom in the WebAssembly views', () => {
+  type Win = { x0: number; x1: number; y0: number; y1: number };
+  const win = async (page: Page, view: string) => (await state(page, view)).window as Win;
+
+  test('a heatmap zooms about the pointer, pans with a drag and fits again on a double click, and hover, selection and nearest sampling follow', async ({ page }, info) => {
+    test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+    const srv = await fixedPage(page);
+    try {
+      let h = await geometry(page, 'h');
+      const fit = await win(page, 'h');
+      expect([fit.y0, fit.y1]).toEqual([0, 4]);   // the 4 x 8 cells fit the height, centred
+      expect((fit.x0 + fit.x1) / 2).toBeCloseTo(4, 6);
+      const p = h.at(5.5, 2.5);
+      await page.mouse.move(p.x, p.y);
+      await page.mouse.wheel(0, -400);
+      await expect.poll(async () => (await win(page, 'h')).x1 - (await win(page, 'h')).x0).toBeLessThan((fit.x1 - fit.x0) * 0.8);
+      const z = await win(page, 'h');
+      expect(z.y1 - z.y0).toBeLessThan(4 * 0.8);
+      expect(z.x0).toBeLessThan(5.5);
+      expect(z.x1).toBeGreaterThan(5.5);
+      // Hover and pick at this zoom report the cell under the pointer.
+      h = await geometry(page, 'h');
+      const q = h.at(5.5, 2.5);
+      await page.mouse.move(q.x + 1, q.y);
+      await expect.poll(async () => (await state(page, 'h')).hover).toEqual({ r: 2, c: 5 });
+      expect((await received(srv, 'h', 'hover')).detail).toEqual({ row: 2, col: 5, value: 21 });
+      // Magnified, every pixel of a cell has the cell's colour (nearest sampling).
+      const box = (await page.locator('caliper-view[view="h"] .body .wasm canvas').boundingBox())!;
+      const png = decodePng(await page.screenshot({ clip: box }));
+      const lut = colormapLut('viridis');
+      const want = [lut[lutIndex(21, 0, 31) * 4], lut[lutIndex(21, 0, 31) * 4 + 1], lut[lutIndex(21, 0, 31) * 4 + 2], 255];
+      for (const [cx, cy] of [[5.08, 2.08], [5.5, 2.5], [5.92, 2.92]]) {
+        const a = h.at(cx, cy);
+        expect(png.at(a.x - box.x, a.y - box.y), `cell 2,5 at ${cx},${cy}`).toEqual(want);
+      }
+      // A shift-drag at this zoom selects the cells under it.
+      await shiftDrag(page, h.at(4.2, 1.2), h.at(5.8, 2.8));
+      await expect.poll(async () => (await selects(page)).at(-1)).toEqual({ view: 'h', type: 'select', detail: { rows: [1, 3], cols: [4, 6] } });
+      // A drag pans: the content follows the pointer to the right, so the window moves left.
+      await page.mouse.move(q.x, q.y);
+      await page.mouse.down();
+      await page.mouse.move(q.x + 80, q.y, { steps: 4 });
+      await page.mouse.up();
+      await expect.poll(async () => (await win(page, 'h')).x0).toBeLessThan(z.x0);
+      await page.locator('caliper-view[view="h"]').screenshot({ path: shotPath(info, 'wasm-heatmap-zoomed') });
+      await page.mouse.dblclick(q.x, q.y);
+      await expect.poll(() => win(page, 'h')).toEqual(fit);
+    } finally {
+      srv.proc.kill();
+    }
+  });
+
+  test('a series stops following on a pan or a zoom, holds the user\'s view, and follows again on a double click or the follow toggle', async ({ page }, info) => {
+    test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+    const srv = await fixedPage(page);
+    try {
+      await geometry(page, 's');
+      await geometry(page, 'hist');
+      const follow = page.locator('caliper-view[view="s"] .tool', { hasText: 'follow' });
+      await expect(follow).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('caliper-view[view="s"] .tool', { hasText: 'log' })).toHaveAttribute('aria-pressed', 'false');
+      expect((await state(page, 's')).follow).toBe(true);
+      const fit = await win(page, 's');
+      const s = await geometry(page, 's');
+      const c = s.at(500, 500);
+      await page.mouse.move(c.x, c.y);
+      await page.mouse.wheel(0, -400);
+      await expect.poll(async () => (await state(page, 's')).follow).toBe(false);
+      await expect(follow).toHaveAttribute('aria-pressed', 'false');
+      await expect.poll(async () => { const w = await win(page, 's'); return w.x1 - w.x0; }).toBeLessThan((fit.x1 - fit.x0) * 0.9);
+      const z = await win(page, 's');
+      await page.mouse.down();
+      await page.mouse.move(c.x + 80, c.y, { steps: 4 });
+      await page.mouse.up();
+      await expect.poll(async () => (await win(page, 's')).x0).toBeLessThan(z.x0);
+      const held = await win(page, 's');
+      await page.waitForTimeout(500);
+      expect(await win(page, 's')).toEqual(held);
+      await page.mouse.dblclick(c.x, c.y);
+      await expect.poll(async () => (await state(page, 's')).follow).toBe(true);
+      await expect(follow).toHaveAttribute('aria-pressed', 'true');
+      await expect.poll(() => win(page, 's')).toEqual(fit);
+      // The header toggle is the same control.
+      await follow.click();
+      await expect.poll(async () => (await state(page, 's')).follow).toBe(false);
+      await follow.click();
+      await expect.poll(async () => (await state(page, 's')).follow).toBe(true);
+      await page.locator('caliper-view[view="s"] .tool', { hasText: 'log' }).click();
+      await expect.poll(async () => (await state(page, 's')).logY).toBe(true);
+      await page.locator('caliper-view[view="s"]').screenshot({ path: shotPath(info, 'wasm-series-log') });
+
+      // A histogram keeps a zoom until a double click fits it again.
+      const hf = await win(page, 'hist');
+      const g = await geometry(page, 'hist');
+      await page.mouse.move(g.at(0, 10).x, g.at(0, 10).y);
+      await page.mouse.wheel(0, -400);
+      await expect.poll(async () => { const w = await win(page, 'hist'); return w.x1 - w.x0; }).toBeLessThan((hf.x1 - hf.x0) * 0.9);
+      await page.mouse.dblclick(g.at(0, 10).x, g.at(0, 10).y);
+      await expect.poll(() => win(page, 'hist')).toEqual(hf);
     } finally {
       srv.proc.kill();
     }
