@@ -61,7 +61,7 @@ caliper-mcp --version | --help
 | `--api-file <path>` | The API file to read. Without it, `api.json` in the app-data folder, which `CALIPER_DATA_DIR` moves. |
 | `--docs <dir>` | A folder of documentation pages, served as `caliper://docs/...` resources. Usually the `docs` folder of the repository or of an installed copy. |
 | `--sdk <dir>` | A folder that holds the Caliper SDK headers, served as `caliper://sdk/...` resources. Usually the installed SDK prefix. |
-| `--origin mcp` or `agent` | The value of the `X-Caliper-Origin` header of command calls; `mcp` by default. The app passes `agent` when its own side chat runs `caliper-mcp` (see [Changes to the contracts](#changes-to-the-contracts)). |
+| `--origin mcp` or `agent` | The value of the `X-Caliper-Origin` header of command calls; `mcp` by default. The app passes `agent` when its own side chat runs `caliper-mcp` (see [Changes to the contracts](#changes-to-the-contracts)). The origin of a call is the token's, not the header's: a server refuses a header that names another origin than its token's, so the header only states what the token already says. |
 | `--command-timeout <seconds>` | How long a command call may take, 1 to 3600 seconds; 130 by default, since a call may wait up to 120 seconds for the person's approval. |
 
 A folder given with `--docs` or `--sdk` must exist; otherwise `caliper-mcp` says so on standard error and exits
@@ -207,8 +207,12 @@ stops, it answers each open subscription with its closing result.
 
 ### From the command table to tools
 
-Each command of the table becomes one tool. The table is read generically at run time, so a command added to the
-table, or a schema changed in it, reaches the agent without a change to `caliper-mcp`.
+Each command of the table that an agent may run becomes one tool. The table is read generically at run time, so a
+command added to the table, or a schema changed in it, reaches the agent without a change to `caliper-mcp`. A command
+whose descriptor says `"agents": false`, today `history.undo` and `history.redo`, the person's own tools, is left out
+without a report, and a forced call of its tool name is refused as an unknown tool; the command layer refuses it to
+the `agent` and `mcp` origins anyway, with `command.not_allowed`. An app whose table carries no `agents` field is
+read as allowing every command to agents. An agent takes back a change with an edit that reverts it.
 
 | Tool field | Comes from |
 |---|---|
@@ -260,7 +264,8 @@ or token, and the answer is kept until then.
   agent is better served by a missing tool than by one whose calls fail in ways it cannot predict.
 - When the app is not running, the compiled-in table is used, so `tools/list` always answers.
 
-`tools/list` returns every tool in the table's order, which is deterministic, on one page. Its `ttlMs` is 0, since
+`tools/list` returns every tool in the table's order, which is deterministic, on one page; the command-table
+resource is the same table without the commands left out. Its `ttlMs` is 0, since
 the list depends on the running app.
 
 ## Calling a tool
@@ -336,7 +341,8 @@ An error envelope from the command layer passes through unchanged, with `approva
 ### Approval
 
 A destructive command sent with the origin `mcp` waits in the app while the person decides, for up to 120 seconds
-(contracts section 15). `caliper-mcp` therefore allows 130 seconds for a command call by default, both as the silence
+(contracts section 15), and so does an edit of the open spec while the person reviews the agent's changes, which is
+on by default for `mcp` and `agent`. `caliper-mcp` therefore allows 130 seconds for a command call by default, both as the silence
 it accepts while waiting for the first byte and as the whole exchange. Approved, the call returns the command's
 result; denied, the tool error `command.denied`; after the app's limit, `command.approval_timeout`. When the agent
 cancels the call, `caliper-mcp` closes the connection. There is no tool and no endpoint that approves, so an agent
@@ -433,8 +439,9 @@ the app's own.
   Nothing an agent sends is run as code; `caliper-mcp` starts no process and uses no shell.
 - **Hostile input** on standard input and from the app is bounded: line length, nesting, the number of calls in
   flight and of subscriptions, the size of every response, and every time limit.
-- **Approval** stays in the app. `caliper-mcp` cannot approve or deny, and the origin it sends only selects the
-  policy that applies, which asks for a destructive command from both `mcp` and `agent`.
+- **Approval** stays in the app. `caliper-mcp` cannot approve or deny, and the origin it sends must be its token's,
+  which selects the policy that applies: it asks for a destructive command and, with review on, for an edit of the
+  open spec from both `mcp` and `agent`, and it refuses `history.undo` and `history.redo` to both.
 
 ## Limits
 

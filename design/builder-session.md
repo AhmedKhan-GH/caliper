@@ -216,8 +216,8 @@ Nothing of the session runs before the first frame: `start()` only stores its op
 `caliper-builder-host` is a development tool, not part of the product. It stands in for the command endpoints of the app's Caliper API until the wiring, and the app's own API server replaces it then.
 
 ```sh
-caliper-builder-host --workspace <dir> --api-dir <dir> [--port <n>] [--approve allow|deny|ask]
-                     [--review none|<origin>,<origin>...]
+caliper-builder-host --workspace <dir> --api-dir <dir> [--port <n>] [--origin mcp|agent|api]
+                     [--approve allow|deny|ask] [--review none|<origin>,<origin>...]
 ```
 
 It opens the workspace as a `Session`, listens on 127.0.0.1 on a free port (or `--port`), and writes `<api-dir>/api.json` with the shape of the app's API file: `version` 1, `pid`, `port`, `token` and `url`, `http://127.0.0.1:<port>/v0`. The file has mode 0600 and is removed on exit. The app's file also has `stream_url`; the stand-in leaves it out, because it serves no stream, so a client that needs the stream must run against the app. The main thread drains the command queue, as the app's frame thread will. SIGTERM or SIGINT stops it: waiting calls are answered with `command.shutdown`, the API file goes, and it exits with 0. It never prints the session token.
@@ -227,7 +227,8 @@ It serves `GET /v0/commands` and `POST /v0/commands/{name}` exactly as contracts
 - the checks of API v0, in order: `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (403); an `Origin` must be `null`, an http or https origin on 127.0.0.1, `localhost` or `[::1]`, or `vscode-webview://` (403); the path and method (404, 405 with `Allow`); the token in `Authorization: Bearer`, or for a GET in the query parameter `token`, compared in constant time (401 with `WWW-Authenticate: Bearer`);
 - a strict, minimal HTTP/1.1: one request per connection; a head of at most 16 KiB (431) read within 5 seconds (408); CRLF line ends, no folded headers, no control characters and no repeated header that the checks read (400); no `Transfer-Encoding` (501); a POST with `Content-Length` (411) of at most 1 MiB (413) and the type `application/json` (415), read within 10 seconds (408), that is JSON (400); a GET with no body (413);
 - a body that is JSON but not an object, or nests deeper than 64 levels, is answered 200 with `command.invalid_args`, and a name that is not a command with `command.unknown`, so that a 404 means only that there is no command layer;
-- the origin is `api`, or `mcp` or `agent` from `X-Caliper-Origin`; any other value is refused with 400, so a request never claims `ui` or `builder`; `X-Caliper-Group` gives the group and `X-Caliper-Preview` the preview;
+- the origin is the token's, set when the host starts with `--origin` (`mcp`, `agent` or `api`; `mcp` by default), so a request cannot raise it by leaving a header out; an `X-Caliper-Origin` that names another origin is refused with 400; `X-Caliper-Group` gives the group and `X-Caliper-Preview` the preview;
+- `GET /v0/commands` leaves out `history.undo` and `history.redo`, the person's own tools, for an `agent` or `mcp` token, and the command layer refuses them to those origins with `command.not_allowed`;
 - a call from `mcp` or `agent` that needs approval is held for up to 120 seconds; one from `api` gets `command.needs_approval` with its approval id at once;
 - at most 32 connections are served at once, and one more gets 503 with `Retry-After: 1`; every response carries `Connection: close`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 
@@ -255,7 +256,7 @@ Both run headless in `test_acceptance.cpp`.
 - **`applet.save` asks an agent only before an overwrite.** Saving a new applet loses nothing.
 - **Saving under another id writes a copy.** Changing the open spec's applet id as part of a save that cannot be undone would leave the undo history describing another document.
 - **Resolved tabular data selects only the bound columns of a table but runs a `sql` source as written.** Wrapping a query in a subquery would not keep its order in DuckDB.
-- **The stand-in accepts `X-Caliper-Origin: agent`.** The widget agent sidecar calls Caliper API, and `agent` has the same approval rules as `mcp`.
+- **The stand-in's origin is its token's.** A test that needs another origin starts a host or a server for it; one session can sit behind several servers, one for each origin, as the approval tests do.
 - **A preview is the open spec with its edits applied, refreshed on every use.** A copy taken once would go stale when the side chat or the person changes the open spec; applying the edits again keeps a preview drawable and makes a commit apply exactly what the preview shows, or refuse with `history.conflict`.
 - **A preview needs an open spec.** For a dropped file with no open spec, the app runs `spec.new` from the `ui` origin before `preview.begin`.
 - **The stand-in reviews no origin unless asked.** The app's default is `agent` and `mcp`, which the stand-in takes with `--review agent,mcp`; its own default keeps the flows of the tests that came before the review.

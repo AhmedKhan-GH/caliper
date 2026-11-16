@@ -42,6 +42,7 @@ A descriptor describes one command. The registry holds one per command name, and
 | `mutates` | The command changes workspace state, so it is journaled and can be undone. |
 | `destructive` | The command deletes or overwrites saved data (a file of the workspace or a database table), or runs a Python loader. It needs approval when an agent sends it. |
 | `frame_thread` | The command must run on the app's frame thread, because it reads or changes what the frame thread draws. |
+| `agents` | An agent may run the command: the origins `agent` and `mcp`. It is false only for `history.undo` and `history.redo`, the person's own tools; the registry refuses them to agents with `command.not_allowed`, and the clients that build an agent's tools from the table leave them out. |
 
 `destructive` is about saved data. An edit of the open spec in memory is not destructive, even when it removes a panel, because undo reverses it exactly. Saving an applet, which can overwrite its files, is.
 
@@ -108,6 +109,7 @@ The registry checks an invocation in this order and answers the first fault: the
 | `command.invalid_invocation` | The invocation itself is malformed: a missing name, a bad id, group or merge key, an unknown origin or an unknown field. |
 | `command.unknown` | No command has that name. |
 | `command.invalid_args` | The arguments fail the schema, or are nested too deeply or hold too many values. `where` names the value. |
+| `command.not_allowed` | The origin may not run the command: a command that mutates from the `viewer` origin, or a command whose `agents` is false (`history.undo`, `history.redo`) from `agent` or `mcp`. It comes before any policy or history work and is not journaled. |
 | `command.not_bound` | The command is in the table but no handler is bound yet. |
 | `command.not_available` | The handler is bound but what it needs is not in this app yet, such as `panel.render` before the spec runtime, or the app's information outside the app. |
 | `command.wrong_thread` | A `frame_thread` command was invoked directly on a thread other than the frame thread. |
@@ -156,7 +158,7 @@ The flags of each command, and what undo does for the ones that mutate:
 | `history.undo`, `history.redo` | yes | | yes | Each reverses the other. |
 | `history.list` | | | yes | |
 
-The table holds 40 commands. `app.launch` changes the page the app shows, not the workspace, so it does not mutate in this sense and is not journaled; Caliper API v0 already offers it without approval. `history.undo` and `history.redo` mutate but are special: they are not journaled as `do` events and do not become steps of their own.
+The table holds 40 commands. `app.launch` changes the page the app shows, not the workspace, so it does not mutate in this sense and is not journaled; Caliper API v0 already offers it without approval. `history.undo` and `history.redo` mutate but are special: they are not journaled as `do` events and do not become steps of their own, and they are the person's tools, which the origins `agent` and `mcp` may not run.
 
 A "diagnostic" below is an object `{"code", "message", "where"}`, as the spec validator gives them. Every edit of the open spec validates the result and refuses an edit that leaves the spec with an error, with the validator's own code (for example `spec.unknown_primitive`), so the open spec is valid after every command and the preview can always draw it. Warnings, such as `spec.not_portable`, come back in the result.
 
@@ -267,7 +269,7 @@ A stacked preview is a scratch copy of the open spec on which edits stack withou
 | `applet.open` | `id` | `id`, `title`, `warnings` | `applet.not_found`, `applet.not_spec`, validator codes |
 | `applet.list` | none | `applets`: `id`, `title`, `path`, `updated_at` for each | |
 | `capture.frame` | none | `png_base64`, `width`, `height` | `capture.unavailable` |
-| `history.undo` | `steps` (1 to 100, default 1) | `steps` (one summary for each step undone), `can_undo`, `can_redo` | `history.nothing_to_undo`, `history.undo_failed`, `history.changed`, `command.needs_approval` |
+| `history.undo` | `steps` (1 to 100, default 1) | `steps` (one summary for each step undone), `can_undo`, `can_redo` | `history.nothing_to_undo`, `history.undo_failed`, `history.changed`, `command.needs_approval`, `command.not_allowed` |
 | `history.redo` | `steps` (1 to 100, default 1) | `steps`, `can_undo`, `can_redo` | `history.nothing_to_redo`, `history.redo_failed`, `history.changed`, `command.needs_approval` |
 | `history.list` | `limit` (1 to 200, default 50) | `undo`, `redo` (step summaries, newest first), `can_undo`, `can_redo` | |
 
@@ -325,7 +327,7 @@ When the `undo` of a record fails, the history first redoes the records of the s
 
 ### Undo, redo and approval
 
-An agent must not be able to do through the history what it could not do directly. Before it undoes or redoes a step, the history asks the approval policy about each destructive command in that step, with the origin of the `history.undo` or `history.redo` invocation: for an undo, the inverse invocations and the commands whose undo is a closure; for a redo, the commands themselves. A deny denies the whole command; an ask parks the history invocation for approval, with the ids of the steps it would touch. When it is approved, the history checks that those steps are still the ones on top, and answers `history.changed` if they are not.
+Undo and redo are the person's tools. The registry refuses `history.undo` and `history.redo` from the origins `agent` and `mcp` with `command.not_allowed` before it asks any policy or looks at the history, so an agent can neither take back the person's change nor restore one the person took back; an agent that wants to revert something sends an edit that reverts it, which is reviewed like any edit. `history.list` stays readable for every origin. For the other origins, a program over Caliper API must not be able to do through the history what it could not do directly. Before it undoes or redoes a step, the history asks the approval policy about each destructive command in that step, with the origin of the `history.undo` or `history.redo` invocation: for an undo, the inverse invocations and the commands whose undo is a closure; for a redo, the commands themselves. A deny denies the whole command; an ask parks the history invocation for approval, with the ids of the steps it would touch. When it is approved, the history checks that those steps are still the ones on top, and answers `history.changed` if they are not.
 
 ### Bounds
 
@@ -389,14 +391,15 @@ On `ask`, the registry parks the invocation under a new approval id and answers 
 The builder session installs a policy that adds two rules, decided per invocation because a descriptor's flags are fixed per command:
 
 - `loader.run` of a Python loader, and `loader.create` or `loader.update` of one with `run` set, ask every origin except `ui` and `builder`, each time, because running a Python loader runs the user's code. The handler passes the store's permission to run the script (`RunOptions::allow_python`) only for `ui` and `builder`, or for an invocation that the policy asked about and the person approved, so an app policy that allowed everything would still get `loader.python_needs_approval`. A redo never runs a script.
-- `applet.save` from `agent`, `mcp` or `api` asks only when it would overwrite a saved applet; writing a new one destroys nothing.
+- `applet.save` from `agent`, `mcp` or `api` asks only when it would overwrite a saved applet; writing a new one destroys nothing. The approval is bound to content: the pending approval carries the review of the overwrite, the diff of the saved file against the open spec it would be written with, and the session keeps the document and a digest of both texts.
+- **Replacing an open spec with unsaved changes.** `spec.new`, `spec.open` and `applet.open` from an origin under review ask when the open spec has unsaved changes, with the diff of that spec against the one that would replace it, bound to content as an overwrite is. Over a saved spec they run at once, since its file and the history keep it.
 - **Review of spec edits.** When review is on for an origin (a session setting, `ReviewSettings`, on by default for `agent` and `mcp` and off for `ui`, `builder` and `api`, which the app sets per origin), an edit of the open spec from that origin that would change it asks. The session computes the dry run itself and the pending approval carries its review, `{"diff", "warnings"}`: the unified diff of the canonical TOML before and after, and the validator's warnings. The call is then held or answered `command.needs_approval` exactly as a destructive command's is. A dry run, an edit that names a preview, an edit that would fail validation and one that would change nothing run at once, so an agent's own `dry_run` still works and has no effect.
 
 **When the open spec changed between the parking and the approval**, the approved edit is made again on the open spec as it is then. It runs only when the change it makes now is the change that was shown, compared as the lines it removes and adds without line numbers or context, so a change elsewhere in the spec does not stop it. When the change differs, the edit no longer applies, or another spec was opened, it answers `history.conflict`, is journaled as a failure and files no step.
 
 **A group of edits from one agent turn** is reviewed edit by edit. A held call answers before the agent sends its next edit, so each diff is against the spec that the earlier approvals left, and the pending approvals carry their group, so the pane can stack the cards of one turn. A review of several edits as one stacked diff is a [preview](#preview), which the widget agent uses and the person accepts with one Accept.
 
-`history.undo` and `history.redo` are not reviewed, since they take back or restore changes that were already reviewed or made by the person, and neither are `spec.new`, `spec.open` and `applet.open`, which replace the whole document, take no `dry_run` and keep the previous spec in the history.
+**An approval bound to content holds only while that content does.** Before an approved invocation runs, the registry asks the approval check (`set_approval_check()`). The session's check compares the open document and the digest of what the invocation would write or open now with what the card showed. When they differ, because the open spec, the saved file or the document changed while the card waited, the approval is void: a caller that waits for the outcome (a held call) keeps waiting on a new card, which the policy and the review make for the new content, and the `approve` future answers `command.needs_approval` with the new approval id; a caller that does not wait (an `api` client that polls) gets `history.conflict` for the approval it holds, journaled like a denial, and sends the call again. Nothing is written that the person did not see.
 
 There is no command and no endpoint that approves or denies, and only the `ui` and `builder` origins commit a preview. Only the app's own UI calls `approve` and `deny`, so an agent cannot approve its own request or accept its own preview, and approval ids need not be secret.
 
@@ -421,6 +424,10 @@ Transport faults keep their HTTP status: 401 and 403 from the checks, 411 withou
 
 How the server holds a request, as built. The server has one thread, the hub's, which also carries the stream, and it must never wait. A command request waits for the frame thread like every call of API v0: `Server::take()`, which the app calls once per frame, hands it to the gateway there, and the gateway submits it to the session's queue, which the frame thread drains. From then on the request is held as an entry of the server's table, with no thread of its own; `take()` and the hub's thread ask the gateway's `PendingCommand` whether the future is ready, never waiting, and answer it when it is. The 5-second bound of API v0 is therefore the wait before the frame thread takes the command; once taken, the request waits for its result, a call held for approval waits as described above, and a held request with no result within 600 seconds gets 504. At most 32 command requests are held or wait for the frame thread at once; one more gets 503 with `Retry-After: 1`, which also keeps them below the registry's 64 pending approvals. `GET /v0/approvals/{id}` is answered on the frame thread too, because the registry's lock may be held by a long command, and `GET /v0/commands` from the table the gateway made when it was created, so it never waits.
 
+### Which origin a call has
+
+The registry takes the origin from its caller and nothing else. Over HTTP the origin belongs to the token a request carries, not to the request: the stand-in's server takes it from its options (`caliper-builder-host --origin mcp|agent|api`, `mcp` by default), refuses a server for `ui`, `builder` or `viewer`, and refuses with 400 an `X-Caliper-Origin` header that names another origin, so a request cannot raise its origin by leaving the header out or by naming another. The app's API server fixes the origin by the token in the same way, with a token of its own for the side chat's agent and for the sidecar, so no agent holds a token whose origin is `api`. Review of spec edits therefore stays off by default for `api`, the person's own scripts, and on for `agent` and `mcp`.
+
 ## caliper-mcp and the Python sidecar
 
 The descriptor table is the one source of tool definitions. `caliper-mcp` links the C++ table, and the widget agent sidecar `caliper-agent` loads its JSON form, `src/builder/commands/command_table.json`, which is the output of `command_table_to_json()` printed with two-space indents, sorted keys and a final newline. A test fails when the file and the C++ table differ. After a change to the table, regenerate the file with the tool target of the commands module:
@@ -430,7 +437,7 @@ cmake --build <build> --target caliper_builder_command_table
 <build>/commands/caliper_builder_command_table --write src/builder/commands/command_table.json
 ```
 
-`caliper-agent` offers its model neither the `preview` commands nor `review.status`, which belong to the app and to the sidecar itself. Both clients name a tool after its command, with `_` for `.`: `panel_create` for `panel.create`, `spec_set_text` for `spec.set_text`. Since a group has no underscore, the first underscore of a tool name marks the dot, and the mapping is reversible. A tool's description is the command's summary; its input schema is the command's `args`. `caliper-mcp` may mark a tool read-only when `mutates` is false and destructive when `destructive` is true. For strict tools, the sidecar removes the keywords that the Claude API does not take in a strict schema (`minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `pattern`, `default`) from what it sends; nothing is lost, because the command layer checks every argument against the full schema.
+`caliper-mcp` leaves out every command whose `agents` is false, `history.undo` and `history.redo`, from its tools, and a forced call of either is refused as an unknown tool; the stand-in's `GET /v0/commands` leaves them out for an agent's or mcp's token, as the app's should. `caliper-agent` offers its model neither the `preview` commands nor `review.status`, which belong to the app and to the sidecar itself; it does not read `agents` yet, so its model may still call the two, which the command layer refuses. Both clients name a tool after its command, with `_` for `.`: `panel_create` for `panel.create`, `spec_set_text` for `spec.set_text`. Since a group has no underscore, the first underscore of a tool name marks the dot, and the mapping is reversible. A tool's description is the command's summary; its input schema is the command's `args`. `caliper-mcp` may mark a tool read-only when `mutates` is false and destructive when `destructive` is true. For strict tools, the sidecar removes the keywords that the Claude API does not take in a strict schema (`minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `pattern`, `default`) from what it sends; nothing is lost, because the command layer checks every argument against the full schema.
 
 ## Changes to the contracts
 
@@ -455,6 +462,9 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **Journaled invocations are those that passed validation.** A refused invocation ran nothing, and its arguments may be malformed or hostile.
 - **One lock for the registry.** It makes ordering and the history simple. The app runs the long commands on a worker and does not drain while one runs, so a frame never waits on the lock and the order of the queue holds.
 - **No approval through commands or endpoints.** Only the app's UI decides, so an agent cannot approve itself.
+- **Undo and redo are the person's.** An agent reverts with an edit, which is reviewed; letting an agent move the history would let it take back the person's work, or restore what the person took back, without an edit to show. A flag on the descriptor (`agents`), not a list of names, tells the registry and the clients.
+- **Approvals of overwrites and replacements are bound to the content shown,** and a held call gets a new card when that content changes, so the person never approves one file and gets another.
+- **The origin belongs to the token.** A header that a caller sets cannot be trusted to lower its own rights.
 - **Review in the command layer, not in each agent.** An agent that asks before an edit is polite; one that does not, such as an outside agent over MCP, is still reviewed, because the session computes the diff itself and the policy parks the edit.
 - **An approved edit runs only as it was shown.** Recomputing it and comparing the lines it removes and adds lets an unrelated change pass and refuses one that would make the approved change mean something else.
 - **Edits are reviewed one at a time; a stacked review is a preview.** A held call makes an agent's edits sequential, so each card shows a change against the spec the person has seen.
@@ -466,6 +476,16 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **A held request costs a table entry, not a thread.** The futures are polled without waiting from `take()` and the hub's tick, so a frame or at most 50 ms passes between a result and its answer.
 - **A command's body is read only after its head passed the Host, Origin and token checks with a length within 1 MiB.** Nothing is buffered for a request without the token; a refusal of the content type or the claimed origin comes after the body is read, so that the client receives it instead of a reset. The WebSocket layer reads a body only when its owner allows it for that head (`Options::body_limit` in `src/host/net/ws.h`), so every other request still carries none.
 - **`Transfer-Encoding` on the command endpoint is 501**, as in the stand-in, while the endpoints of API v0 keep 413 for any body.
+
+## Open items
+
+These were found in the review of sprint 3's first pull request and left for a later round:
+
+- **An expectation on `preview.commit`.** The commit applies whatever the preview holds when the person clicks Accept. An optional expectation (the number of edits and a digest of the preview's canonical text, which `preview.diff` would report) would let the app refuse with `history.conflict` a preview that changed after its card was drawn.
+- **Approvals from `api` never expire.** An `api` caller does not wait, so its approvals stay until the person decides, and many of them could fill the 64 pending slots so that agents get `command.too_many_pending`. A long expiry for approvals nobody waits for, and a share of the slots for each origin, would bound it.
+- **A command can join another's undo step.** A group joins the top step whatever its origin and whether it is still open, so an agent that sends a preview's id as its group after an Accept appends its command to the person's step. A group should join only the open top step of the same origin, and the step of a commit should close after its follow-ups.
+- **A timing test of the stand-in's server.** The connection-bound test of `test_command_server.cpp` still waits 300 ms for the first connection to take the slot. The approval test of that file now decides its held calls when they are parked, rather than inside a 400 ms window.
+- **The sidecar's tools.** `caliper-agent` should leave out every command whose `agents` is false, as `caliper-mcp` does.
 
 ## Open questions
 
