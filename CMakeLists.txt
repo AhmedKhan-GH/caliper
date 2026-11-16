@@ -899,6 +899,32 @@ if(TARGET caliper_builder_session)
                 ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_AGENT_OFFLINE=1"
                 SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
         endif()
+        # The acceptance case "plot attention entropy per layer while it
+        # trains" (tests/test_app_live.cpp): the hidden app attached to the
+        # stream of caliper_attention_producer, a test tool with a hub of its
+        # own that streams a model's sharpening attention, and a spec over the
+        # live sources built and opened through Caliper API. macOS only, as
+        # the app's network source is.
+        if(APPLE AND TARGET caliper_net)
+            add_executable(caliper_attention_producer tests/live_attention_producer.cpp)
+            target_link_libraries(caliper_attention_producer PRIVATE caliper_net)
+            target_include_directories(caliper_attention_producer PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+            set_target_properties(caliper_attention_producer PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+            add_executable(caliper_app_live_tests tests/test_app_live.cpp)
+            target_link_libraries(caliper_app_live_tests PRIVATE caliper_builder_test_main doctest::doctest
+                nlohmann_json::nlohmann_json)
+            target_include_directories(caliper_app_live_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests
+                ${CMAKE_SOURCE_DIR}/third_party/stb)
+            set_target_properties(caliper_app_live_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+            add_dependencies(caliper_app_live_tests caliper caliper_attention_producer)
+            if(TARGET hello_applet)
+                add_dependencies(caliper_app_live_tests hello_applet)
+            endif()
+            add_test(NAME caliper_app_live_entropy COMMAND caliper_app_live_tests)
+            set_tests_properties(caliper_app_live_entropy PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
         if(NOT WIN32)
             add_test(NAME caliper_app_session_hidden
                      COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")
