@@ -660,6 +660,53 @@ TEST_CASE("builder pane: a transform's axes with their ranges and names, and an 
     CHECK(odd[0].names.empty());
 }
 
+// A reduce over several axes keeps them all: a click on an axis in
+// Properties adds it to the list or takes it out, never leaving the list
+// empty, and every chosen axis is highlighted. A slice's axis is one.
+TEST_CASE("builder pane: a reduce's axes toggle in a list, never empty") {
+    Rig r = rig("pane-reduce-axes");
+    BuilderPane& p = *r.pane;
+    const auto axes_of = [&](size_t step) {
+        const spec::Source* src = p.open_spec()->spec.find_source("attn_weights");
+        REQUIRE(src);
+        REQUIRE(step < src->transforms.size());
+        return src->transforms[step].axis;
+    };
+    // The tensor is [2, 3, 8, 8]; a reduce starts on axis 0.
+    p.select("tensor:attn_weights");
+    REQUIRE(p.add_transform(spec::TransformOp::reduce));
+    CHECK(axes_of(0) == std::vector<int64_t>{0});
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{0});
+    // A click on axis 2 adds it; the reduce is over both.
+    REQUIRE(p.set_transform_axis(0, 2));
+    CHECK(axes_of(0) == std::vector<int64_t>{0, 2});
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{0, 2});
+    REQUIRE(p.transform_shapes().size() == 2);
+    CHECK(p.transform_shapes()[1].dims == std::vector<int64_t>{3, 8});
+    // A click on a chosen axis takes it out.
+    REQUIRE(p.set_transform_axis(0, 0));
+    CHECK(axes_of(0) == std::vector<int64_t>{2});
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{2});
+    // The last one stays: a reduce over no axis is not one.
+    const size_t sent = p.sent().size();
+    p.set_transform_axis(0, 2);
+    CHECK(axes_of(0) == std::vector<int64_t>{2});
+    CHECK(p.sent().size() == sent);
+    // A spec written with a list keeps all of its axes through a click.
+    REQUIRE(p.set_transform(0, nlohmann::json{{"op", "reduce"}, {"axis", {1, 3}}, {"fn", "mean"}}));
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{1, 3});
+    REQUIRE(p.set_transform_axis(0, 0));
+    CHECK(axes_of(0) == std::vector<int64_t>{0, 1, 3});
+    REQUIRE(p.set_transform_axis(0, 1));
+    REQUIRE(p.set_transform_axis(0, 3));
+    CHECK(axes_of(0) == std::vector<int64_t>{0});
+    // A slice's axis is replaced, as before: [3, 8, 8], axis 1 of three.
+    REQUIRE(p.add_transform(spec::TransformOp::slice));
+    REQUIRE(p.set_transform_axis(1, 1));
+    CHECK(axes_of(1) == std::vector<int64_t>{1});
+    CHECK(p.transform_axes_chosen(1) == std::vector<int64_t>{1});
+}
+
 // A new dashboard's empty canvas says how to start in build mode, and
 // nothing more once it has a panel or outside build mode.
 TEST_CASE("builder pane: an empty canvas says how to start") {

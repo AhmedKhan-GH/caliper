@@ -134,7 +134,9 @@ A slice's or a reduce's axis is a choice of every axis of the step's input, each
 `axis 1 · 0–3` for an axis of 4, and with its name where the source carries names: a live view's dims are named by the
 stream, as in `axis 0 layer · 0–3`, and a step that takes an axis away takes its name with it; a tensor from a
 safetensors file has none. While the shape is not known, as for a live view before its first snapshot, the axis is a
-number. A slice's index shows its axis's range at the right of the field. An index outside it is set to the nearer
+number. A slice takes one axis, and a click on another moves it there. A reduce takes a list of axes: a click on an
+axis adds it to the list or takes it out, every axis in the list is highlighted, and the last one stays, since a reduce
+over no axis is not one. A slice's index shows its axis's range at the right of the field. An index outside it is set to the nearer
 end, `3` for a `7` typed on an axis of 4, and the field says so in place of the range, `7 is outside 0–3`, until the
 next change of the transforms. A negative index counts from the end, as the spec format says.
 
