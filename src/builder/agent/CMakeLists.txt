@@ -1,4 +1,8 @@
 # The agent module (docs/plans/byok-agent.md):
+#   caliper_builder_agent  the key store of the agent pane's BYOK backend: an
+#                          interface, an in-memory store for tests and the macOS
+#                          Keychain store (compiled on macOS, never called by a
+#                          test); other systems get a stub
 #   caliper_agent/         the Python sidecar caliper-agent (its own pyproject.toml)
 #
 # The sidecar's pytest suite runs as the ctest builder_agent_py when
@@ -8,6 +12,21 @@
 #   uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest
 #   cmake ... -DCALIPER_BUILDER_TEST_PYTHON=src/builder/agent/.venv/bin/python
 # Without it the test reports that it was skipped.
+set(_agent_sources key_store.cpp)
+if(APPLE)
+    list(APPEND _agent_sources keychain_store_macos.cpp)
+endif()
+
+add_library(caliper_builder_agent STATIC ${_agent_sources})
+target_include_directories(caliper_builder_agent PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
+target_link_libraries(caliper_builder_agent PUBLIC caliper_builder_acp)
+target_compile_features(caliper_builder_agent PUBLIC cxx_std_17)
+if(APPLE)
+    target_link_libraries(caliper_builder_agent PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
+
+caliper_builder_add_tests(agent SOURCES tests/test_key_store.cpp LIBS caliper_builder_agent)
+
 if(BUILD_TESTS)
     set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
         "A Python interpreter with anthropic and pytest, to run the caliper-agent tests")

@@ -1,0 +1,149 @@
+// Tests of the key store: the in-memory store, the checks of the front, and
+// the placement of a key in a child's environment. The system store is never
+// called here (touching the login keychain could show a system prompt).
+#include <caliper_builder/agent/key_store.h>
+
+#include <doctest/doctest.h>
+
+#include <algorithm>
+#include <string>
+
+using namespace caliper_builder;
+using namespace caliper_builder::agent;
+
+namespace {
+
+const std::string kKey = "sk-ant-api03-TESTONLY-key-0123456789abcdefABCDEF_-";
+
+bool mentions(const Error& e, const std::string& secret) {
+    return e.message.find(secret) != std::string::npos || e.where.find(secret) != std::string::npos ||
+           e.code.find(secret) != std::string::npos;
+}
+
+const acp::EnvVar* find_var(const acp::SpawnOptions& s, const std::string& name) {
+    for (const auto& v : s.env)
+        if (v.name == name) return &v;
+    return nullptr;
+}
+
+}  // namespace
+
+TEST_CASE("the memory store sets, reports and removes a key") {
+    MemoryKeyStore store;
+    KeyPresence p = store.has(kAnthropicProvider);
+    CHECK(p.error.ok());
+    CHECK_FALSE(p.present);
+    CHECK(store.set(kAnthropicProvider, kKey).ok());
+    CHECK(store.has(kAnthropicProvider).present);
+    CHECK(store.set(kAnthropicProvider, kKey + "2").ok());  // replacing is allowed
+    CHECK(store.has(kAnthropicProvider).present);
+    CHECK(store.remove(kAnthropicProvider).ok());
+    CHECK_FALSE(store.has(kAnthropicProvider).present);
+    CHECK(store.remove(kAnthropicProvider).ok());  // removing an absent key succeeds
+}
+
+TEST_CASE("provider ids are checked") {
+    MemoryKeyStore store;
+    const std::string bad_ids[] = {"", "Anthropic", "../x", "openai", "a b", std::string(40, 'a'),
+                                   std::string("an\0x", 4)};
+    for (const auto& bad : bad_ids) {
+        CAPTURE(bad);
+        CHECK(store.set(bad, kKey).code == "keystore.bad_provider");
+        CHECK(store.has(bad).error.code == "keystore.bad_provider");
+        CHECK(store.remove(bad).code == "keystore.bad_provider");
+    }
+    CHECK(key_variable(kAnthropicProvider) == std::string("ANTHROPIC_API_KEY"));
+    CHECK(key_variable("openai") == nullptr);
+}
+
+TEST_CASE("malformed keys are refused without being quoted") {
+    MemoryKeyStore store;
+    const std::string bad_keys[] = {
+        "",
+        std::string(kMaxKeyBytes + 1, 'k'),
+        "sk-ant with-space-0123456789",
+        "sk-ant-line\nbreak-0123456789",
+        std::string("sk-ant-nul\0-0123456789", 22),
+        "sk-ant-\xc3\xa9-0123456789",
+        "sk-ant-tab\t0123456789",
+    };
+    for (const auto& bad : bad_keys) {
+        Error e = store.set(kAnthropicProvider, bad);
+        CHECK(e.code == "keystore.bad_key");
+        if (bad.size() > 8) {
+            CHECK_FALSE(mentions(e, bad));
+        }
+    }
+    CHECK_FALSE(store.has(kAnthropicProvider).present);
+    CHECK(store.set(kAnthropicProvider, std::string(kMaxKeyBytes, 'k')).ok());
+}
+
+TEST_CASE("a key is placed in a child's environment and nothing that could redirect it") {
+    MemoryKeyStore store;
+    acp::SpawnOptions spawn;
+    spawn.argv = {"caliper-agent"};
+    spawn.env = {{"KEEP", "1"},
+                 {"ANTHROPIC_API_KEY", "an-older-value-0123456789"},
+                 {"ANTHROPIC_BASE_URL", "http://elsewhere.example"},
+                 {"ANTHROPIC_AUTH_TOKEN", "token-0123456789"}};
+    spawn.env_remove = {"ANTHROPIC_LOG"};
+
+    SUBCASE("without a key nothing changes") {
+        const acp::SpawnOptions before = spawn;
+        Error e = place_key_in_environment(store, kAnthropicProvider, &spawn);
+        CHECK(e.code == "keystore.not_found");
+        CHECK(spawn.env.size() == before.env.size());
+        CHECK(spawn.env_remove == before.env_remove);
+    }
+    SUBCASE("with a key") {
+        REQUIRE(store.set(kAnthropicProvider, kKey).ok());
+        REQUIRE(place_key_in_environment(store, kAnthropicProvider, &spawn).ok());
+        int count = 0;
+        for (const auto& v : spawn.env) count += v.name == "ANTHROPIC_API_KEY";
+        CHECK(count == 1);
+        REQUIRE(find_var(spawn, "ANTHROPIC_API_KEY") != nullptr);
+        CHECK(find_var(spawn, "ANTHROPIC_API_KEY")->value == kKey);
+        CHECK(find_var(spawn, "KEEP") != nullptr);
+        CHECK(find_var(spawn, "ANTHROPIC_BASE_URL") == nullptr);
+        CHECK(find_var(spawn, "ANTHROPIC_AUTH_TOKEN") == nullptr);
+        for (const char* name : {"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS",
+                                 "ANTHROPIC_PROFILE", "ANTHROPIC_LOG", "CALIPER_AGENT_TEST_SCRIPT"}) {
+            CAPTURE(name);
+            CHECK(std::count(spawn.env_remove.begin(), spawn.env_remove.end(), std::string(name)) == 1);
+        }
+        CHECK(std::count(spawn.env_remove.begin(), spawn.env_remove.end(), std::string("ANTHROPIC_API_KEY")) == 0);
+        CHECK(spawn.argv == std::vector<std::string>{"caliper-agent"});  // never in argv
+        // Placing it again keeps one entry.
+        REQUIRE(place_key_in_environment(store, kAnthropicProvider, &spawn).ok());
+        count = 0;
+        for (const auto& v : spawn.env) count += v.name == "ANTHROPIC_API_KEY";
+        CHECK(count == 1);
+    }
+    SUBCASE("bad arguments") {
+        REQUIRE(store.set(kAnthropicProvider, kKey).ok());
+        Error e = place_key_in_environment(store, "openai", &spawn);
+        CHECK(e.code == "keystore.bad_provider");
+        CHECK_FALSE(mentions(e, kKey));
+        CHECK(place_key_in_environment(store, kAnthropicProvider, nullptr).code == "keystore.failed");
+    }
+}
+
+TEST_CASE("wipe clears a string") {
+    std::string s = kKey;
+    wipe(&s);
+    CHECK(s.empty());
+    std::string empty;
+    wipe(&empty);
+    wipe(nullptr);
+}
+
+TEST_CASE("the system store exists on every platform") {
+    // Construction only: no function of the system store is called, since the
+    // Keychain could show a prompt. Elsewhere it reports keystore.unsupported.
+    std::unique_ptr<KeyStore> store = make_system_key_store();
+    REQUIRE(store != nullptr);
+#if !defined(__APPLE__)
+    CHECK(store->has(kAnthropicProvider).error.code == "keystore.unsupported");
+    CHECK(store->set(kAnthropicProvider, kKey).code == "keystore.unsupported");
+#endif
+}
