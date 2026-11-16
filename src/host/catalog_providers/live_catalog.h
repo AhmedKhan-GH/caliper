@@ -98,6 +98,10 @@ public:
 
     // Copies made since construction (for tests and measurements).
     std::uint64_t copies() const;
+    // The names of a live view's dims, one per dim of its shape, from the
+    // stream's payload axes; empty for an id that is not a view, a view
+    // without a payload yet, or one whose axes do not match its shape.
+    std::vector<std::string> dim_names(const std::string& id) const;
 
     // What update() learned of one view: for tests, a stand-in producer
     // hands the same to apply() without a core.
@@ -113,6 +117,9 @@ public:
         // A tiled heatmap: the mosaic's cells, rows and columns of cells, and
         // the rows and columns of one cell; cells == 0 when not tiled.
         std::int64_t cells = 0, tile_rows = 0, tile_cols = 0, cell_h = 0, cell_w = 0;
+        // The names of the payload's dims, one per dim of `shape`, from the
+        // stream's payload axes (wire protocol v3); empty when it gives none.
+        std::vector<std::string> dims;
     };
     // The frame-thread step that update() ends with: `views` is the full list,
     // `attached` false means detached.
@@ -125,6 +132,7 @@ private:
         bool has_payload = false;
         caliper_builder::DType dtype = caliper_builder::DType::f32;
         std::vector<std::int64_t> shape;
+        std::vector<std::string> dims;   // ViewFrame::dims
         std::uint64_t bytes = 0;
         std::optional<double> rate_hz;
         std::optional<std::string> updated_at;

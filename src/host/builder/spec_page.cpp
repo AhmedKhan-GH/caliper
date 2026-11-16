@@ -157,6 +157,8 @@ struct SpecPage::Impl {
     std::unique_ptr<InlineWidget> widget;
     bool hidden = false;
     ChatPane* chat = nullptr;   // the side chat, when the app has one
+    // The names of a catalog source's dims, for the builder's Properties.
+    std::function<std::vector<std::string>(const std::string&)> dim_names;
     ApiFiles api_files;         // the sidecar's own API file
     std::string widget_api_file;
 
@@ -320,6 +322,9 @@ struct SpecPage::Impl {
             AppSession* a = &app;
             auto port = std::make_unique<SessionBuilderPort>(
                 *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
+            port->set_dim_names([this](const std::string& id) {
+                return dim_names ? dim_names(id) : std::vector<std::string>();
+            });
             builder = std::make_unique<BuilderPane>(std::move(port));
             builder->set_layout_rule(spec_page_layout_rule);
             // ⌘K in the builder: a dropped file's row and a property's row, a
@@ -744,6 +749,10 @@ void SpecPage::set_agent_settings(AgentSettings* settings) {
     if (settings) settings->set_on_change([&im] { im.retire_widget(); });
 }
 
+void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)> names) {
+    impl_->dim_names = std::move(names);
+}
+
 bool SpecPage::widget_action(const std::string& label) {
     if (!impl_->widget) return false;
     WidgetSurface& s = impl_->widget->surface();
@@ -891,6 +900,7 @@ void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
 void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
+void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)>) {}
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
 std::string SpecPage::selection_json() const { return {}; }

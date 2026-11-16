@@ -165,6 +165,9 @@ public:
     // its API token; the next ⌘K makes it again from the settings. The page
     // listens until shutdown(). Null: no settings.
     void set_agent_settings(AgentSettings* settings);
+    // Where Properties reads the names of a catalog source's dims, such as a
+    // live view's (AppProviders::dim_names()); none without it.
+    void set_dim_names(std::function<std::vector<std::string>(const std::string& catalog_id)> names);
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state
     // ("idle" before any ⌘K).

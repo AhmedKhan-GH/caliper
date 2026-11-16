@@ -16,6 +16,8 @@
 // CALIPER_WITH_BUILDER; without it both calls do nothing.
 // ============================================================================
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace caliper_live {
 class Attachment;
@@ -34,6 +36,10 @@ public:
 
     void frame(AppSession& session, const caliper_live::Attachment& live);
     void close(AppSession& session);
+    // The names of a live view's dims ("live:attn": layer, query, key), one
+    // per dim of its catalog shape, as the stream's payload axes give them;
+    // empty for any other source and for a view whose axes carry none.
+    std::vector<std::string> dim_names(const std::string& catalog_id) const;
 
     struct Impl;
 

@@ -52,6 +52,9 @@ struct PaneShape {
     std::optional<int64_t> rows;   // tabular, when the catalog knows it
     std::string dtype;             // tensor; empty when not known
     std::vector<int64_t> dims;     // tensor; -1 for a size that is not fixed
+    // tensor: one name per dim, "" for a dim without one; empty when the
+    // source carries no names (a safetensors tensor) or they are not known
+    std::vector<std::string> names;
     int64_t elements() const;      // the product of dims, or -1
 };
 
@@ -77,6 +80,29 @@ std::map<std::string, PaneShape> pane_source_shapes(const caliper_builder::spec:
 // the source's first i transforms. Empty when the spec has no such source.
 std::vector<PaneShape> pane_transform_shapes(const caliper_builder::spec::Spec& spec, const std::string& source_id,
                                              const caliper_builder::spec::SourceResolver& resolver);
+
+// ---- transform axes ---------------------------------------------------------------------
+
+// The names of a tensor's dims through a source's transforms, set on each
+// shape of pane_transform_shapes(): `names` are the source's own (a live
+// view's dims, one per dim of shapes[0]); a slice with an index and a reduce
+// without keepdims take their axis's name away, other steps keep them.
+// Shapes after a step whose shape is not known get none. Nothing is set when
+// `names` does not match the source's rank.
+void pane_name_dims(std::vector<PaneShape>& shapes, const std::vector<caliper_builder::spec::Transform>& transforms,
+                    const std::vector<std::string>& names);
+// The indices of an axis of `size`: "0–3" for 4, "0" for 1; "" for a
+// size that is not known or 0.
+std::string pane_index_range(int64_t size);
+// An axis as Properties shows it: "axis 1 · 0–3", with the axis's
+// name where the source carries one, "axis 0 layer · 0–3", and
+// "axis 2" alone when its size is not known.
+std::string pane_axis_text(int64_t axis, int64_t size, const std::string& name = {});
+// A slice's index on an axis of `size`, kept within -size to size - 1 (a
+// negative index counts from the end): a value outside is set to the nearer
+// end of 0 to size - 1, and *clamped says it was. Unchanged when the size is
+// not known.
+int64_t pane_clamp_index(int64_t index, int64_t size, bool* clamped);
 
 // ---- primitives, slots and options ------------------------------------------------------
 

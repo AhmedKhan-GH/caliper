@@ -83,8 +83,27 @@ TensorResult copy_payload(const LiveCatalog::ViewFrame& f) {
     return out;
 }
 
-// What the core's live views hold for one view, for apply().
+LiveCatalog::ViewFrame frame_shape_of(CaliperCore* core, const caliper_live_views::View& v);
+
+// What the core's live views hold for one view, for apply(): its payload and
+// shape, and the names of its dims where the stream's payload axes give one
+// axis per dim of that shape, with the same sizes.
 LiveCatalog::ViewFrame frame_of(CaliperCore* core, const caliper_live_views::View& v) {
+    LiveCatalog::ViewFrame f = frame_shape_of(core, v);
+    const auto& axes = v.map.axes;
+    if (f.has_payload && !axes.empty() && axes.size() == f.shape.size()) {
+        bool named = false, sized = true;
+        for (size_t i = 0; i < axes.size(); ++i) {
+            named = named || !axes[i].dim.empty();
+            sized = sized && axes[i].size == f.shape[i];
+        }
+        if (named && sized)
+            for (const auto& a : axes) f.dims.push_back(a.dim);
+    }
+    return f;
+}
+
+LiveCatalog::ViewFrame frame_shape_of(CaliperCore* core, const caliper_live_views::View& v) {
     LiveCatalog::ViewFrame f;
     f.name = v.name;
     f.kind = static_cast<std::uint32_t>(v.kind);
@@ -229,6 +248,7 @@ void LiveCatalog::apply(bool attached, const std::string& session, const std::ve
             v.has_payload = f.has_payload;
             v.dtype = f.dtype;
             v.shape = f.shape;
+            v.dims = f.dims.size() == f.shape.size() ? f.dims : std::vector<std::string>();
             v.bytes = f.has_payload ? shape_bytes(f.dtype, f.shape) : 0;
             v.readable = f.data != nullptr;
             if (f.updates != v.updates_seen) {
@@ -411,6 +431,15 @@ ServedData LiveCatalog::read(const std::string& id, const ServedRequest& request
 std::uint64_t LiveCatalog::copies() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return copies_;
+}
+
+std::vector<std::string> LiveCatalog::dim_names(const std::string& id) const {
+    const std::optional<std::string> name = view_name(id);
+    if (!name) return {};
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = views_.find(*name);
+    if (it == views_.end() || !it->second.has_payload) return {};
+    return it->second.dims;
 }
 
 }  // namespace caliper_host

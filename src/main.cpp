@@ -611,6 +611,7 @@ public:
         // Every page's status bar shows the API's address while it runs.
         set_host_status_note([this] { return api_.running() ? "api " + api_address() : std::string(); });
         spec_page_.set_chat(&chat_);
+        spec_page_.set_dim_names([this](const std::string& id) { return providers_.dim_names(id); });
         // ⌘K's sidecar gets an API file of its own, with an agent token.
         caliper_host::SpecPage::ApiFiles af;
         af.issue = [this]() -> std::string {

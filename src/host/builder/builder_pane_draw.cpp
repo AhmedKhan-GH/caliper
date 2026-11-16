@@ -1559,17 +1559,34 @@ void BuilderPane::draw_source_properties(Rows& rows) {
         }
         // Its fields.
         json tj = {{"op", spec::to_string(t.op)}};
-        auto field_int = [&](const char* key, const std::optional<int64_t>& value, bool required) {
+        // A number field; `right` is drawn at the row's right end, in the
+        // accent colour when `marked` (a slice's index range, or the note that
+        // an index was set to the end of its range).
+        auto field_int = [&](const char* key, const std::optional<int64_t>& value, bool required,
+                             const std::string& right = {}, bool marked = false) {
             const ImRect fr = rows.next(d.m.row);
             const ImRect v = rows.label(fr, std::string("  ") + key);
             const std::string id = "##" + base + "." + key + "." + src->id;
-            const Field f = text_field(d.bufs, L, id, v, value ? std::to_string(*value) : std::string(), required ? "" : "none", true,
+            ImRect fv = v;
+            if (!right.empty()) {
+                const std::string shown = fit(L.mono, L.mono_size, right, v.GetWidth() * 0.6f);
+                const float rw = extent(L.mono, L.mono_size, shown).x;
+                put(rows.dl, L.mono, L.mono_size, v2(v.Max.x - rw, v.Min.y + (v.GetHeight() - d.mono_h()) * 0.5f),
+                    marked ? L.accent : L.faint, shown);
+                fv = ImRect(v.Min, v2(std::max(v.Min.x + 8.0f, v.Max.x - rw - std::round(10.0f * s)), v.Max.y));
+            }
+            const Field f = text_field(d.bufs, L, id, fv, value ? std::to_string(*value) : std::string(), required ? "" : "none", true,
                                        false, ImGuiInputTextFlags_AutoSelectAll);
             d.item(base + ":" + key, v);
             if (f.activated) begin_gesture(base + "." + src->id);
             if (f.deactivated) end_gesture();
             if (!f.changed) return;
             int64_t x = 0;
+            // A slice's index stays within its axis's range (set_slice_index()).
+            if (t.op == spec::TransformOp::slice && std::string(key) == "index" && parse_int(f.value, &x)) {
+                set_slice_index(i, x);
+                return;
+            }
             json next = json::parse(spec::to_json(*src)["transform"][i].dump());
             if (f.value.empty() && !required) next.erase(key);
             else if (parse_int(f.value, &x)) next[key] = x;
@@ -1628,19 +1645,75 @@ void BuilderPane::draw_source_properties(Rows& rows) {
                 x += w + gap;
             }
         };
+        // A slice's or a reduce's axis: every axis of the step's input, with
+        // its index range and its name where the source carries one, one
+        // choice each; the number alone when the input's shape is not known.
+        auto field_axis = [&](const std::optional<int64_t>& now) {
+            const std::vector<std::string> axes = transform_axes(i);
+            if (axes.empty()) {
+                field_int("axis", now, true);
+                return;
+            }
+            const int64_t rank = (int64_t)axes.size();
+            const int64_t chosen = now ? (*now < 0 ? *now + rank : *now) : -1;
+            const float gap = std::round(2.0f * s), pad_w = std::round(10.0f * s);
+            const float avail = rows.x1 - rows.m.pad - (rows.x0 + rows.label_w);
+            int lines = 1;
+            {
+                float x = 0.0f;
+                for (const auto& o : axes) {
+                    const float w = extent(L.mono, L.mono_size, o).x + pad_w;
+                    if (x > 0.0f && x + w > avail) {
+                        ++lines;
+                        x = 0.0f;
+                    }
+                    x += w + gap;
+                }
+            }
+            const ImRect fr = rows.next(d.m.row * (float)lines);
+            const ImRect v = rows.label(ImRect(fr.Min, v2(fr.Max.x, fr.Min.y + d.m.row)), "  axis");
+            d.item(base + ":axis", ImRect(v.Min, v2(v.Max.x, fr.Max.y)));
+            float x = v.Min.x, y = v.Min.y;
+            for (int64_t k = 0; k < rank; ++k) {
+                const std::string& o = axes[(size_t)k];
+                const float w = std::min(extent(L.mono, L.mono_size, o).x + pad_w, avail);
+                if (x > v.Min.x && x + w > v.Min.x + avail) {
+                    x = v.Min.x;
+                    y += d.m.row;
+                }
+                const ImRect c(v2(x, y + std::round(3.0f * s)), v2(x + w, y + d.m.row - std::round(3.0f * s)));
+                ImGui::SetCursorScreenPos(c.Min);
+                ImGui::PushID((base + ":axis:" + std::to_string(k)).c_str());
+                const bool click = ImGui::InvisibleButton("##ax", c.GetSize());
+                const bool ch = ImGui::IsItemHovered();
+                ImGui::PopID();
+                d.item(base + ":axis:" + std::to_string(k), c);
+                const bool on = k == chosen;
+                if (on) rows.dl->AddRectFilled(c.Min, c.Max, L.plate);
+                else if (ch) rows.dl->AddRectFilled(c.Min, c.Max, L.plate_hover);
+                if (on) rows.dl->AddRectFilled(v2(c.Min.x, c.Max.y - 1.0f), c.Max, L.accent);
+                put(rows.dl, L.mono, L.mono_size, v2(c.Min.x + std::round(5.0f * s), c.Min.y + (c.GetHeight() - d.mono_h()) * 0.5f),
+                    on ? L.text : L.secondary, fit(L.mono, L.mono_size, o, c.GetWidth() - std::round(5.0f * s)));
+                if (click && !on) set_transform_axis(i, k);
+                x += w + gap;
+            }
+        };
         const std::optional<int64_t> axis = t.axis.empty() ? std::nullopt : std::optional<int64_t>(t.axis.front());
         switch (t.op) {
-            case spec::TransformOp::slice:
-                field_int("axis", axis, true);
-                if (t.index || !(t.start || t.stop || t.step)) field_int("index", t.index, false);
+            case spec::TransformOp::slice: {
+                field_axis(axis);
+                const bool noted = !transform_note().empty() && transform_note_step() == i;
+                if (t.index || !(t.start || t.stop || t.step))
+                    field_int("index", t.index, false, noted ? transform_note() : transform_index_range(i), noted);
                 if (!t.index) {
                     field_int("start", t.start, false);
                     field_int("stop", t.stop, false);
                     field_int("step", t.step, false);
                 }
                 break;
+            }
             case spec::TransformOp::reduce:
-                field_int("axis", axis, true);
+                field_axis(axis);
                 field_choice("fn", {"mean", "sum", "min", "max", "std", "var", "norm", "argmax", "argmin", "entropy"},
                              t.fn.value_or("mean"));
                 break;
