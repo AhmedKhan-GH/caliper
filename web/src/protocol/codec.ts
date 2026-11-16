@@ -5,8 +5,9 @@
 // of 8. This module is the only one that knows the bytes.
 
 import {
-  CLOSE, DTYPE, DTYPE_SIZE, LIMITS, MSG, PROTOCOL_MAJOR, PROTOCOL_MINOR,
-  type DataView as DataViewSpec, type ErrorMsg, type Message, type MessageType, type PayloadAxis,
+  CLOSE, CONTROL_OPS, DTYPE, DTYPE_SIZE, LIMITS, LIMITS_31, MSG, PROTOCOL_MAJOR, PROTOCOL_MINOR, RUN_STATES,
+  type ActionInfo, type ControlOp, type ControlReplyMsg, type DataView as DataViewSpec, type ErrorMsg, type Message,
+  type MessageType, type ParamInfo, type ParamValue, type PayloadAxis, type RunInfo, type SelectionDetails,
   type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry,
 } from './messages.js';
 
@@ -138,8 +139,16 @@ export function canonicalJson(v: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`).join(',')}}`;
 }
 
-/** Encodes one frame. Sections are raw arrays; meta.sections is written here. */
-export function encodeFrame(type: number, meta: Record<string, unknown>, sections: Section[] = []): Uint8Array {
+/**
+ * Encodes one frame at a minor version (this codec's, 1, by default; 0
+ * re-encodes a 3.0 frame byte for byte). Sections are raw arrays;
+ * meta.sections is written here.
+ */
+export function encodeFrame(type: number, meta: Record<string, unknown>, sections: Section[] = [], minor: number = PROTOCOL_MINOR): Uint8Array {
+  return frameAt(type, meta, sections, minor);
+}
+
+function frameAt(type: number, meta: Record<string, unknown>, sections: Section[], minor: number): Uint8Array {
   const m: Record<string, unknown> = { ...meta };
   delete m.sections;
   if (sections.length) {
@@ -158,7 +167,7 @@ export function encodeFrame(type: number, meta: Record<string, unknown>, section
   const dv = new DataView(out.buffer);
   dv.setUint32(0, MAGIC, true);
   dv.setUint16(4, PROTOCOL_MAJOR, true);
-  dv.setUint16(6, PROTOCOL_MINOR, true);
+  dv.setUint16(6, minor, true);
   dv.setUint16(8, type, true);
   dv.setUint16(10, 0, true);
   dv.setUint32(12, pos, true);
@@ -222,19 +231,74 @@ const isIdentity = (v: unknown) => {
   const o = v as Record<string, unknown>;
   return isSessionId(o.id) && isStr(o.script) && isUint(o.pid) && isUint(o.start_unix_ms);
 };
+const optName = (v: unknown) => v === undefined || v === null || isName(v);
 const isViewEntry = (v: unknown) => {
   if (!isObj(v)) return false;
   const o = v as Record<string, unknown>;
-  if (!isUint(o.id) || !isName(o.name) || !isInt(o.kind) || !Array.isArray(o.sources)) return false;
+  if (!isUint(o.id) || !isName(o.name) || !isInt(o.kind) || !Array.isArray(o.sources) || !optName(o.items)) return false;
   for (const s of o.sources as unknown[]) {
     if (!isObj(s)) return false;
     const so = s as Record<string, unknown>;
     if (!isName(so.name) || !Array.isArray(so.dims)) return false;
     for (const d of so.dims as unknown[]) {
-      if (!isObj(d) || !isName((d as Record<string, unknown>).name) || !isUint((d as Record<string, unknown>).size)) return false;
+      const dd = d as Record<string, unknown>;
+      if (!isObj(d) || !isName(dd.name) || !isUint(dd.size) || !optName(dd.items)) return false;
     }
   }
   return o.default === undefined || o.default === null || isObj(o.default);
+};
+
+// --- 3.1 checks (python/caliper/_wire.py has the same) -----------------------------
+
+const isBool = (v: unknown) => typeof v === 'boolean';
+const isFinite = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+const isText = (v: unknown) => typeof v === 'string' && utf8.encode(v).length <= LIMITS_31.textMax;
+const INT_EXACT = 2 ** 53;
+const fitsType = (p: ParamInfo, v: unknown) => {
+  if (p.type === 'number') return isFinite(v);
+  if (p.type === 'integer') return isInt(v) && Math.abs(v) <= INT_EXACT;
+  if (p.type === 'boolean') return isBool(v);
+  return typeof v === 'string' && !!p.choices?.includes(v);
+};
+const isParam = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const p = v as ParamInfo;
+  if (!isName(p.name) || !['number', 'integer', 'boolean', 'choice'].includes(p.type)) return false;
+  if (p.type === 'number' || p.type === 'integer') {
+    const bound = p.type === 'number' ? isFinite : (x: unknown) => isInt(x) && Math.abs(x) <= INT_EXACT;
+    for (const x of [p.min, p.max]) if (x !== undefined && x !== null && !bound(x)) return false;
+    if (p.min != null && p.max != null && p.min > p.max) return false;
+    if (p.log != null && !isBool(p.log)) return false;
+    if (p.log && !(p.min != null && p.min > 0 && p.max != null)) return false;
+  } else if (p.type === 'choice') {
+    const ch = p.choices;
+    if (!Array.isArray(ch) || ch.length < 1 || ch.length > LIMITS_31.maxChoices || !ch.every(isName) || new Set(ch).size !== ch.length) return false;
+  }
+  if (p.help != null && !isText(p.help)) return false;
+  return 'value' in p && fitsType(p, p.value) && (p.pending == null || fitsType(p, p.pending));
+};
+const isAction = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const a = v as ActionInfo;
+  return isName(a.name) && isBool(a.running) && isBool(a.queued) && (a.help == null || isText(a.help));
+};
+const isRun = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const r = v as RunInfo;
+  return RUN_STATES.includes(r.state) && (r.step == null || isUint(r.step)) && (r.steps_left == null || isUint(r.steps_left));
+};
+const uniqueNames = (v: { name: string }[]) => new Set(v.map((x) => x.name)).size === v.length;
+const isSetValue = (v: unknown) => isFinite(v) || isBool(v) || isName(v);
+const isAscending = (v: number[]) => v.every((x, i) => i === 0 || v[i - 1] < x);
+const isCell = (v: unknown) => v === null || isBool(v) || isFinite(v) || (typeof v === 'string' && utf8.encode(v).length <= LIMITS_31.detailTextMax);
+const isDetails = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const d = v as SelectionDetails;
+  return Array.isArray(d.fields) && d.fields.length <= LIMITS_31.maxDetailFields && d.fields.every(isName)
+    && new Set(d.fields).size === d.fields.length
+    && Array.isArray(d.items) && d.items.length <= LIMITS_31.maxDetailItems && d.items.every(isUint)
+    && Array.isArray(d.values) && d.values.length === d.items.length
+    && d.values.every((row) => Array.isArray(row) && row.length === d.fields.length && row.every(isCell));
 };
 
 function section(f: Frame, name: string): Section | undefined {
@@ -309,6 +373,7 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         software: opt(f, 'software', isObj, 'an object', undefined),
         session: opt<SessionIdentity | null>(f, 'session', isIdentity, 'a session identity', null),
         minor: f.minor,
+        control: opt<boolean | undefined>(f, 'control', isBool, 'a boolean', undefined),
       };
     case MSG.bye:
       return { type: 'bye', reason: req(f, 'reason', isStr, 'a string'), message: opt(f, 'message', isStr, 'a string', '') };
@@ -332,7 +397,8 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         type: 'sessions',
         sessions: req(f, 'sessions', (v) => Array.isArray(v) && v.every((s) => isIdentity(s)
           && ((s as SessionIdentity).state === 'live' || (s as SessionIdentity).state === 'ended')
-          && isUint((s as SessionIdentity).views)), 'a list of sessions'),
+          && isUint((s as SessionIdentity).views)
+          && ((s as SessionIdentity).capabilities == null || isStrs((s as SessionIdentity).capabilities))), 'a list of sessions'),
       };
     case MSG.attach:
       if (!('session' in f.meta)) bad(t, "missing 'session'");
@@ -411,6 +477,57 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         data_view: opt(f, 'data_view', isObj, 'an object', undefined),
       };
     }
+    case MSG.controls:
+      return {
+        type: 'controls',
+        run: req(f, 'run', isRun, 'a run state'),
+        params: req(f, 'params', (v) => Array.isArray(v) && v.length <= LIMITS_31.maxParams && v.every(isParam) && uniqueNames(v as ParamInfo[]),
+          `at most ${LIMITS_31.maxParams} parameters with unique names`),
+        actions: req(f, 'actions', (v) => Array.isArray(v) && v.length <= LIMITS_31.maxActions && v.every(isAction) && uniqueNames(v as ActionInfo[]),
+          `at most ${LIMITS_31.maxActions} actions with unique names`),
+      };
+    case MSG.control: {
+      const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'pause, resume, step, set or run');
+      const name = opt<string | undefined>(f, 'name', isName, 'a parameter or action name', undefined);
+      if ((op === 'set' || op === 'run') && name === undefined) bad(t, `'${op}' needs 'name'`);
+      return {
+        type: 'control',
+        request_id: req(f, 'request_id', isU32, 'a uint32'),
+        op,
+        name: op === 'set' || op === 'run' ? name : undefined,
+        value: op === 'set' ? req<ParamValue>(f, 'value', isSetValue, 'a number, a boolean or a choice') : undefined,
+        count: op === 'step' ? opt<number | undefined>(f, 'count', (v) => isU32(v) && (v as number) >= 1, 'a positive uint32', undefined) : undefined,
+      };
+    }
+    case MSG.control_reply: {
+      const status = req<ControlReplyMsg['status']>(f, 'status', (v) => v === 'ok' || v === 'queued' || v === 'error', 'ok, queued or error');
+      const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'a control op');
+      const error = opt<{ code: string; message?: string } | undefined>(f, 'error', (v) => isObj(v) && isStr((v as Record<string, unknown>).code)
+        && ((v as Record<string, unknown>).message == null || isText((v as Record<string, unknown>).message)), '{code, message}', undefined);
+      if ((error === undefined) === (status === 'error')) bad(t, "a control_reply carries 'error' exactly when its status is 'error'");
+      if (status === 'queued' && op !== 'run') bad(t, "only 'run' is queued");
+      return {
+        type: 'control_reply',
+        request_id: req(f, 'request_id', isU32, 'a uint32'),
+        op,
+        status,
+        name: opt(f, 'name', isName, 'a parameter or action name', undefined),
+        value: opt(f, 'value', isSetValue, 'a number, a boolean or a choice', undefined),
+        message: opt(f, 'message', isText, `a string of at most ${LIMITS_31.textMax} bytes`, undefined),
+        error,
+      };
+    }
+    case MSG.selection:
+      return {
+        type: 'selection',
+        space: req(f, 'space', isName, 'an item space name'),
+        items: req(f, 'items', (v) => Array.isArray(v) && v.length <= LIMITS.maxEventIndices && v.every(isUint) && isAscending(v as number[]),
+          `at most ${LIMITS.maxEventIndices} ascending unsigned integers`),
+        view: opt(f, 'view', isName, 'a view name', undefined),
+        truncated: opt(f, 'truncated', isBool, 'a boolean', false),
+        details: opt(f, 'details', isDetails, '{fields, items, values} within the limits', undefined),
+        details_error: opt(f, 'details_error', isText, `a string of at most ${LIMITS_31.textMax} bytes`, undefined),
+      };
     default:
       return { type: 'unknown', id: t, meta: f.meta };
   }
@@ -421,13 +538,19 @@ const drop = (o: Record<string, unknown>) => {
   return o;
 };
 
-/** Encodes one message into the bytes of one WebSocket message. */
-export function encode(msg: Message): Uint8Array {
+/**
+ * Encodes one message into the bytes of one WebSocket message, at a minor
+ * version (this codec's by default; a 3.0 message at minor 0 encodes to the
+ * bytes a 3.0 sender writes).
+ */
+export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array {
   const id = MSG[msg.type as MessageType];
+  const encodeFrame = (type: number, meta: Record<string, unknown>, sections: Section[] = []) => frameAt(type, meta, sections, minor);
   switch (msg.type) {
     case 'hello':
-    case 'welcome':
       return encodeFrame(id, drop({ role: msg.role, capabilities: msg.capabilities, software: msg.software, session: msg.session }));
+    case 'welcome':
+      return encodeFrame(id, drop({ role: msg.role, capabilities: msg.capabilities, software: msg.software, session: msg.session, control: msg.control }));
     case 'bye':
       return encodeFrame(id, { reason: msg.reason, message: msg.message });
     case 'error': {
@@ -472,5 +595,18 @@ export function encode(msg: Message): Uint8Array {
         tile: s.tile, points_dims: s.points_dims, label_count: s.label_count,
       }), sections);
     }
+    case 'controls':
+      return encodeFrame(id, { run: msg.run, params: msg.params, actions: msg.actions });
+    case 'control':
+      return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count }));
+    case 'control_reply':
+      return encodeFrame(id, drop({
+        request_id: msg.request_id, op: msg.op, status: msg.status, name: msg.name, value: msg.value, message: msg.message, error: msg.error,
+      }));
+    case 'selection':
+      return encodeFrame(id, drop({
+        space: msg.space, items: msg.items, view: msg.view, truncated: msg.truncated ? true : undefined, details: msg.details,
+        details_error: msg.details_error,
+      }));
   }
 }

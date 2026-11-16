@@ -4,7 +4,8 @@
 // on these objects only.
 
 export const PROTOCOL_MAJOR = 3;
-export const PROTOCOL_MINOR = 0;
+/** 3.1: controls and linked selection, each used only with a peer that announced its capability. */
+export const PROTOCOL_MINOR = 1;
 export const STREAM_PATH = '/v3/stream';
 export const TOKEN_PARAM = 'token';
 
@@ -25,6 +26,10 @@ export const MSG = {
   snapshot: 0x0030,
   series: 0x0031,
   event: 0x0040,
+  controls: 0x0050,
+  control: 0x0051,
+  control_reply: 0x0052,
+  selection: 0x0060,
 } as const;
 export type MessageType = keyof typeof MSG;
 
@@ -71,6 +76,22 @@ export const LIMITS = {
   seriesRetainMin: 4096,
 } as const;
 
+/** Capabilities in HELLO and WELCOME. */
+export const CAP = { events: 'events', controls: 'controls', selection: 'selection' } as const;
+
+/** 3.1 limits of controls and linked selection. */
+export const LIMITS_31 = {
+  maxParams: 64,
+  maxActions: 64,
+  maxChoices: 64,
+  textMax: 1024,
+  controlRateHz: 30,
+  maxItemSpaces: 16,
+  maxDetailItems: 32,
+  maxDetailFields: 16,
+  detailTextMax: 256,
+} as const;
+
 export type Reduction = 'mean' | 'sum' | 'max' | 'min' | 'norm';
 export const REDUCTIONS: readonly Reduction[] = ['mean', 'sum', 'max', 'min', 'norm'];
 
@@ -86,7 +107,8 @@ export interface DataView {
   budget?: { max_extent?: number; max_points?: number; pool?: 'mean' | 'max' | 'min'; max_backfill?: number };
 }
 
-export interface SourceDim { name: string; size: number }
+/** A source dimension; 3.1: items names the item space whose items it indexes. */
+export interface SourceDim { name: string; size: number; items?: string }
 export interface SourceInfo { name: string; dims: SourceDim[]; dtype?: string | number }
 
 /** One entry of a VIEWS message. */
@@ -96,6 +118,8 @@ export interface ViewEntry {
   kind: number;
   sources: SourceInfo[];
   default?: DataView | null;
+  /** 3.1, series only: the item space that the series' absolute index numbers. */
+  items?: string;
   [key: string]: unknown;
 }
 
@@ -107,6 +131,8 @@ export interface SessionIdentity {
   start_unix_ms: number;
   state?: 'live' | 'ended';
   views?: number;
+  /** The producer's capabilities, in a session list. */
+  capabilities?: string[];
 }
 
 /** One axis of a snapshot's payload (payload_layout in _wire.py). */
@@ -126,6 +152,8 @@ export interface WelcomeMsg {
   software?: { name?: string; version?: string };
   session?: SessionIdentity | null;
   minor: number;
+  /** 3.1, to a viewer that announced controls: whether the server accepts CONTROL from it. */
+  control?: boolean;
 }
 export interface ByeMsg { type: 'bye'; reason: string; message: string }
 export interface ErrorMsg {
@@ -214,13 +242,72 @@ export interface EventMsg extends Omit<ViewerEvent, 'type'> {
   data_view?: DataView;
 }
 
+// --- 3.1: controls -------------------------------------------------------------
+
+export type RunState = 'none' | 'running' | 'pausing' | 'paused' | 'stepping';
+export const RUN_STATES: readonly RunState[] = ['none', 'running', 'pausing', 'paused', 'stepping'];
+export type ParamType = 'number' | 'integer' | 'boolean' | 'choice';
+export type ParamValue = number | boolean | string;
+export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run';
+export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run'];
+
+export interface RunInfo { state: RunState; step?: number; steps_left?: number }
+export interface ParamInfo {
+  name: string;
+  type: ParamType;
+  value: ParamValue;
+  pending?: ParamValue;
+  min?: number;
+  max?: number;
+  log?: boolean;
+  choices?: string[];
+  help?: string;
+}
+export interface ActionInfo { name: string; running: boolean; queued: boolean; help?: string }
+
+/** Producer to viewer: the run state, the parameters and the actions, whole. */
+export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[] }
+/** Viewer to producer: pause, resume, step, set a parameter, run an action. */
+export interface ControlMsg {
+  type: 'control';
+  request_id: number;
+  op: ControlOp;
+  name?: string;
+  value?: ParamValue;
+  count?: number;
+}
+export interface ControlReplyMsg {
+  type: 'control_reply';
+  request_id: number;
+  op: ControlOp;
+  status: 'ok' | 'queued' | 'error';
+  name?: string;
+  value?: ParamValue;
+  message?: string;
+  error?: { code: string; message?: string };
+}
+
+// --- 3.1: linked selection -------------------------------------------------------
+
+export interface SelectionDetails { fields: string[]; items: number[]; values: (number | string | boolean | null)[][] }
+/** Producer to viewer: the current selection of an item space. */
+export interface SelectionMsg {
+  type: 'selection';
+  space: string;
+  items: number[];
+  truncated?: boolean;
+  view?: string;
+  details?: SelectionDetails;
+  details_error?: string;
+}
+
 /** A message type this version does not know; receivers ignore it. */
 export interface UnknownMsg { type: 'unknown'; id: number; meta: Record<string, unknown> }
 
 export type Message =
   | HelloMsg | WelcomeMsg | ByeMsg | ErrorMsg | PingMsg | PongMsg | SessionsMsg | AttachMsg
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
-  | SeriesMsg | EventMsg;
+  | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
