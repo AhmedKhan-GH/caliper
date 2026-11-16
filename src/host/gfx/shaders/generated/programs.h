@@ -37,6 +37,8 @@ static_assert(kMetalSizesBuffer < kMetalVertexBufferBase, "below the vertex buff
 // A vertex input an entry reads: its location and the format of its shader type. A vertex
 // layout may give a narrower format that converts to it, such as U8 for the break mask.
 struct VertexInputDesc { const char* entry; uint8_t location; VertexFormat format; };
+// A colour output a fragment entry writes: its location and the format of its target.
+struct FragmentOutputDesc { const char* entry; uint8_t location; Format format; };
 // A vertex and fragment entry that the compile checks pair into a pipeline.
 struct PairDesc { const char* vertex; const char* fragment; };
 
@@ -58,6 +60,10 @@ inline constexpr VertexInputDesc kScenePointsVertexInputs[] = {
     {"vs_points", 0, VertexFormat::F32x3},  // vec3<f32>
     {"vs_points", 1, VertexFormat::U32},  // u32
     {"vs_points", 2, VertexFormat::F32},  // f32
+};
+inline constexpr FragmentOutputDesc kScenePointsFragmentOutputs[] = {
+    {"fs_points", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_points_pick", 0, Format::RG32Uint},  // vec2<u32>
 };
 inline constexpr PairDesc kScenePointsPairs[] = {
     {"vs_points", "fs_points"},
@@ -84,6 +90,10 @@ inline constexpr VertexInputDesc kSceneLinesVertexInputs[] = {
     {"vs_lines", 2, VertexFormat::U32},  // u32
     {"vs_lines", 3, VertexFormat::U32},  // u32
     {"vs_lines", 4, VertexFormat::U32},  // u32
+};
+inline constexpr FragmentOutputDesc kSceneLinesFragmentOutputs[] = {
+    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
 };
 inline constexpr PairDesc kSceneLinesPairs[] = {
     {"vs_lines", "fs_color"},
@@ -116,6 +126,12 @@ inline constexpr VertexInputDesc kSceneMeshVertexInputs[] = {
     {"vs_mesh", 6, VertexFormat::F32x4},  // vec4<f32>
     {"vs_mesh", 7, VertexFormat::F32x4},  // vec4<f32>
     {"vs_mesh", 8, VertexFormat::U32},  // u32
+};
+inline constexpr FragmentOutputDesc kSceneMeshFragmentOutputs[] = {
+    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
+    {"fs_mesh_flat", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_mesh_tex", 0, Format::RGBA8Unorm},  // vec4<f32>
 };
 inline constexpr PairDesc kSceneMeshPairs[] = {
     {"vs_mesh", "fs_color"},
@@ -170,6 +186,10 @@ inline constexpr VertexInputDesc kSceneBoxesVertexInputs[] = {
     {"vs_box_solid", 2, VertexFormat::F32x4},  // vec4<f32>
     {"vs_box_solid", 3, VertexFormat::U32},  // u32
 };
+inline constexpr FragmentOutputDesc kSceneBoxesFragmentOutputs[] = {
+    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
+};
 inline constexpr PairDesc kSceneBoxesPairs[] = {
     {"vs_box_wire", "fs_color"},
     {"vs_box_wire", "fs_pick"},
@@ -196,6 +216,13 @@ inline constexpr BindingDesc kSceneImageBindings[] = {
     {2, 2, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 2},  // img_class
     {2, 3, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 3},  // img_value
 };
+inline constexpr FragmentOutputDesc kSceneImageFragmentOutputs[] = {
+    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
+    {"fs_image_rgba", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_image_class", 0, Format::RGBA8Unorm},  // vec4<f32>
+    {"fs_image_value", 0, Format::RGBA8Unorm},  // vec4<f32>
+};
 inline constexpr PairDesc kSceneImagePairs[] = {
     {"vs_image", "fs_image_rgba"},
     {"vs_image", "fs_image_value"},
@@ -218,17 +245,18 @@ struct ProgramDescription {
     const char* name; const EntryDesc* entries; uint8_t entry_count;
     const BindingDesc* bindings; uint8_t binding_count;
     const VertexInputDesc* vertex_inputs; uint8_t vertex_input_count;
+    const FragmentOutputDesc* fragment_outputs; uint8_t fragment_output_count;
     const PairDesc* pairs; uint8_t pair_count; bool test_only;
 };
 inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {
-    {"scene_points", kScenePointsEntries, 4, kScenePointsBindings, 5, kScenePointsVertexInputs, 3, kScenePointsPairs, 4, false},
-    {"scene_lines", kSceneLinesEntries, 3, kSceneLinesBindings, 4, kSceneLinesVertexInputs, 5, kSceneLinesPairs, 2, false},
-    {"scene_mesh", kSceneMeshEntries, 5, kSceneMeshBindings, 6, kSceneMeshVertexInputs, 9, kSceneMeshPairs, 4, false},
-    {"index_clamp", kIndexClampEntries, 1, kIndexClampBindings, 3, nullptr, 0, nullptr, 0, false},
-    {"edge_gather", kEdgeGatherEntries, 1, kEdgeGatherBindings, 6, nullptr, 0, nullptr, 0, false},
-    {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesPairs, 4, false},
-    {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImagePairs, 4, false},
-    {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, true},
+    {"scene_points", kScenePointsEntries, 4, kScenePointsBindings, 5, kScenePointsVertexInputs, 3, kScenePointsFragmentOutputs, 2, kScenePointsPairs, 4, false},
+    {"scene_lines", kSceneLinesEntries, 3, kSceneLinesBindings, 4, kSceneLinesVertexInputs, 5, kSceneLinesFragmentOutputs, 2, kSceneLinesPairs, 2, false},
+    {"scene_mesh", kSceneMeshEntries, 5, kSceneMeshBindings, 6, kSceneMeshVertexInputs, 9, kSceneMeshFragmentOutputs, 4, kSceneMeshPairs, 4, false},
+    {"index_clamp", kIndexClampEntries, 1, kIndexClampBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, false},
+    {"edge_gather", kEdgeGatherEntries, 1, kEdgeGatherBindings, 6, nullptr, 0, nullptr, 0, nullptr, 0, false},
+    {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesFragmentOutputs, 2, kSceneBoxesPairs, 4, false},
+    {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImageFragmentOutputs, 5, kSceneImagePairs, 4, false},
+    {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, true},
 };
 
 }  // namespace caliper_gfx::shaders

@@ -37,10 +37,20 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SHADERS = REPO / "src" / "host" / "gfx" / "shaders"
-GENERATED = SHADERS / "generated"
-MANIFEST = SHADERS / "manifest.json"
 DRIVER = REPO / "tools" / "shaders" / "naga-driver"
+SHADERS = GENERATED = MANIFEST = Path()
+
+
+def set_root(root: Path) -> None:
+    """Points the generator at a repository root (a copy, in the generator's own test)."""
+    global REPO, SHADERS, GENERATED, MANIFEST
+    REPO = root
+    SHADERS = root / "src" / "host" / "gfx" / "shaders"
+    GENERATED = SHADERS / "generated"
+    MANIFEST = SHADERS / "manifest.json"
+
+
+set_root(REPO)
 OUTPUTS = ("wgsl", "msl", "spirv")
 PIECE = 12000  # bytes per raw string literal piece, below MSVC's 16,380
 NAMESPACE = "caliper_gfx::shaders"
@@ -180,6 +190,7 @@ def member_decl(name: str, t: dict, structs: dict[str, str], order: list[str]) -
 
 VERTEX_FORMAT = {"f32": "F32", "vec2<f32>": "F32x2", "vec3<f32>": "F32x3", "vec4<f32>": "F32x4",
                  "u32": "U32", "i32": "S32", "vec2<u32>": "U32x2"}
+OUTPUT_FORMAT = {"vec4<f32>": "RGBA8Unorm", "vec2<u32>": "RG32Uint", "u32": "R32Uint", "f32": "R32Float"}
 STAGE = {"vertex": "kStageVertex", "fragment": "kStageFragment", "compute": "kStageCompute"}
 FORMAT = {"Rgba8Unorm": "RGBA8Unorm", "Bgra8Unorm": "BGRA8Unorm", "R8Unorm": "R8Unorm", "R16Uint": "R16Uint",
           "R32Uint": "R32Uint", "Rg32Uint": "RG32Uint", "R32Float": "R32Float"}
@@ -206,6 +217,8 @@ def programs_header(programs: list[dict], descs: dict[str, dict], version: str) 
     out.append("// A vertex input an entry reads: its location and the format of its shader type. A vertex")
     out.append("// layout may give a narrower format that converts to it, such as U8 for the break mask.")
     out.append("struct VertexInputDesc { const char* entry; uint8_t location; VertexFormat format; };")
+    out.append("// A colour output a fragment entry writes: its location and the format of its target.")
+    out.append("struct FragmentOutputDesc { const char* entry; uint8_t location; Format format; };")
     out.append("// A vertex and fragment entry that the compile checks pair into a pipeline.")
     out.append("struct PairDesc { const char* vertex; const char* fragment; };\n")
     for p in programs:
@@ -231,6 +244,12 @@ def programs_header(programs: list[dict], descs: dict[str, dict], version: str) 
             for name, i in inputs:
                 out.append(f"    {{\"{name}\", {i['location']}, VertexFormat::{VERTEX_FORMAT[i['type']]}}},  // {i['type']}")
             out.append("};")
+        outputs = [(e["name"], o) for e in d["entries"] for o in e["outputs"]]
+        if outputs:
+            out.append(f"inline constexpr FragmentOutputDesc k{c}FragmentOutputs[] = {{")
+            for name, o in outputs:
+                out.append(f"    {{\"{name}\", {o['location']}, Format::{OUTPUT_FORMAT[o['type']]}}},  // {o['type']}")
+            out.append("};")
         if p["pairs"]:
             out.append(f"inline constexpr PairDesc k{c}Pairs[] = {{")
             for v, f in p["pairs"]:
@@ -242,6 +261,7 @@ def programs_header(programs: list[dict], descs: dict[str, dict], version: str) 
     out.append("    const char* name; const EntryDesc* entries; uint8_t entry_count;")
     out.append("    const BindingDesc* bindings; uint8_t binding_count;")
     out.append("    const VertexInputDesc* vertex_inputs; uint8_t vertex_input_count;")
+    out.append("    const FragmentOutputDesc* fragment_outputs; uint8_t fragment_output_count;")
     out.append("    const PairDesc* pairs; uint8_t pair_count; bool test_only;")
     out.append("};")
     out.append("inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {")
@@ -249,9 +269,11 @@ def programs_header(programs: list[dict], descs: dict[str, dict], version: str) 
         d, c = descs[p["name"]], camel(p["name"])
         has_in = any(e["inputs"] for e in d["entries"])
         n_in = sum(len(e["inputs"]) for e in d["entries"])
+        n_out = sum(len(e["outputs"]) for e in d["entries"])
         out.append(f"    {{\"{p['name']}\", k{c}Entries, {len(d['entries'])}, "
                    + (f"k{c}Bindings, {len(d['bindings'])}, " if d["bindings"] else "nullptr, 0, ")
                    + (f"k{c}VertexInputs, {n_in}, " if has_in else "nullptr, 0, ")
+                   + (f"k{c}FragmentOutputs, {n_out}, " if n_out else "nullptr, 0, ")
                    + (f"k{c}Pairs, {len(p['pairs'])}, " if p["pairs"] else "nullptr, 0, ")
                    + ("true" if p.get("test_only") else "false") + "},")
     out.append("};\n")
@@ -315,9 +337,14 @@ def generate(driver: Path, out_dir: Path, work: Path) -> dict[str, bytes]:
         for k in OUTPUTS:
             if k not in p["outputs"] and k not in p["hand_written"]:
                 raise Error(f"{p['name']}: {k} is neither generated nor hand-written")
-        parts = []
+        parts, starts, line = [], [], 1
         for s in p["sources"]:
-            parts.append(f"// ---- {s}\n" + (SHADERS / s).read_text())
+            text = (SHADERS / s).read_text()
+            if not text.endswith("\n"):
+                raise Error(f"src/host/gfx/shaders/{s} does not end with a line break")
+            parts.append(f"// ---- {s}\n" + text)
+            starts.append((line + 1, s))   # the file's first line follows its marker line
+            line += 2 + text.count("\n")  # the marker, the file and the joining line break
         wgsl = "\n".join(parts)
         src = work / f"{p['name']}.wgsl"
         src.write_text(wgsl)
@@ -328,7 +355,13 @@ def generate(driver: Path, out_dir: Path, work: Path) -> dict[str, bytes]:
             cmd += ["--spv", str(work / f"{p['name']}.spv")]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            raise Error(f"{p['name']} does not compile:\n{r.stderr.replace(str(work) + os.sep, '')}")
+            def where(mt: re.Match) -> str:  # a line of the assembled program -> its source file's line
+                n = int(mt.group(1))
+                first, name = max((st for st in starts if st[0] <= n), default=(1, p["name"] + ".wgsl"))
+                return f"src/host/gfx/shaders/{name}:{n - first + 1}:"
+            msg = re.sub(re.escape(str(src)) + r":(\d+):", where, r.stderr)
+            msg = re.sub(re.escape(src.name) + r":(\d+):", where, msg)
+            raise Error(f"{p['name']} does not compile:\n{msg}")
         d = json.loads((work / f"{p['name']}.json").read_text())
         # Every uniform binding is dynamic: the frame, draw and colormap blocks and the compute
         # parameters all live in the uniform arena (gfx.h, decisions 6 and 7).
@@ -391,7 +424,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--check", action="store_true", help="fail when a generated file differs from what is committed")
     ap.add_argument("--driver", help="a built caliper-naga-driver (default: build it with cargo)")
+    ap.add_argument("--root", help="the repository root to work on (default: this checkout)")
     args = ap.parse_args()
+    if args.root:
+        set_root(Path(args.root).resolve())
     try:
         driver = Path(args.driver) if args.driver else build_driver()
         with tempfile.TemporaryDirectory(prefix="caliper-shaders-") as tmp:
