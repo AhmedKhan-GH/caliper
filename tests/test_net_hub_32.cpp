@@ -43,9 +43,10 @@ uint64_t mono_ns32() {
 struct Runner {
     std::unique_ptr<Hub> hub;
     std::thread thread;
-    Runner() {
+    explicit Runner(size_t max_retained_bytes = size_t(1) << 30) {
         HubOptions o;
         o.token = kToken32;
+        o.max_retained_bytes = max_retained_bytes;
         hub = std::make_unique<Hub>(std::move(o));
         std::string err;
         REQUIRE_MESSAGE(hub->listen(&err), err);
@@ -445,4 +446,63 @@ TEST_CASE("net/hub 3.2: a slow viewer's batches coalesce per entity part, the ne
     CHECK(p->scene_subscribes == 1);                   // both viewers share one producer subscription
     REQUIRE(w.until([&] { return h.hub->stats().scenes_in == 2 + 80; }));   // its state, then the batches
     CHECK(h.hub->stats().scenes_superseded == (80 - paced_n) + 2 * 38);
+}
+
+// The hub keeps a watched scene's state within its budget of retained bytes: past it, it forgets
+// the state (the viewers watching keep receiving every message), and a later viewer gets a fresh
+// state from the producer, for which the hub subscribes again.
+TEST_CASE("net/hub 3.2: a watched scene's state stays within the hub's budget; a late viewer gets a fresh state") {
+    const size_t budget = size_t(64) << 10;
+    Runner h(budget);
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto a = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*a, 5, "world");
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 2; }));
+    // 40 entities of 1,024 points (12 KiB) each: 480 KiB, past the budget of 64 KiB.
+    std::vector<float> cloud(3 * 1024, 0.5f);
+    for (int i = 0; i < 40; ++i) p->points("step/" + std::to_string(i), cloud);
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == 2 + 40; }));
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 2 + 40; }));   // the viewer missed nothing
+    CHECK(h.hub->stats().retained_scene_bytes <= budget);
+    // A late viewer: the hub subscribes again, and the producer's own state reaches it whole.
+    auto b = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*b, 9, "world");
+    REQUIRE(w.until([&] { return b->scene_log(9).size() == 2 + 40; }));
+    CHECK(p->scene_subscribes == 2);
+    const std::vector<std::string> got = b->scene_log(9, true);
+    REQUIRE(got.size() == 2 + 40);
+    CHECK(got[0] == "reset");
+    CHECK(got[1] == ":lines");
+    CHECK(got.back() == "step/9:points");   // the producer's state, in the byte order of the paths
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == 2 + 40 + 2 + 40; }));
+    CHECK(h.hub->stats().retained_scene_bytes <= budget);
+}
+
+// A producer that sends more batches than a scene holds (CALIPER_NET_MAX_BATCHES) makes the hub
+// forget the scene's state rather than keep every batch; a late viewer gets the producer's state.
+TEST_CASE("net/hub 3.2: past CALIPER_NET_MAX_BATCHES batches the hub forgets a scene's state") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto a = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*a, 5, "world");
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 2; }));
+    const int n = (int)CALIPER_NET_MAX_BATCHES + 8;
+    for (int i = 0; i < n; ++i) p->points("e/" + std::to_string(i), {(float)i, 0, 0});
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == 2 + (uint64_t)n; }, 20000));
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 2 + (size_t)n; }, 20000));
+    // The hub holds at most CALIPER_NET_MAX_BATCHES batches of the scene (each frame is under 512 bytes).
+    CHECK(h.hub->stats().retained_scene_bytes <= (uint64_t)CALIPER_NET_MAX_BATCHES * 512);
+    auto b = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*b, 9, "world");
+    REQUIRE(w.until([&] { return b->scene_log(9).size() == 2 + (size_t)n; }, 20000));
+    CHECK(p->scene_subscribes == 2);
+    CHECK(b->scene_log(9, true).front() == "reset");
 }

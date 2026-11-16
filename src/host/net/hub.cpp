@@ -167,10 +167,13 @@ struct Channel {
     uint64_t used_ms = 0;
     // 3.2 draft, a scene: the newest batch of each entity part, for a late
     // viewer; the newest seq; whether the producer has sent the state of this
-    // subscription (its reset) since the hub subscribed.
+    // subscription (its reset) since the hub subscribed; whether the hub forgot
+    // that state (over its budget, or past CALIPER_NET_MAX_BATCHES batches) and
+    // keeps nothing of the scene until the producer's next state.
     std::map<SceneKey, ScenePtr> scene_held;
     uint64_t scene_seq = 0;
     bool scene_seen = false;
+    bool scene_forgotten = false;
     bool idle() const { return members.empty() && waiters.empty() && !keeper; }
 };
 
@@ -768,6 +771,7 @@ struct Hub::Impl {
         if (s.next_sub == 0) s.next_sub = 1;
         s.by_up_sub[ch.up_sub] = ch.id;
         ch.scene_seen = false;       // 3.2 draft: the producer sends the scene's state again
+        ch.scene_forgotten = false;
         send_subscribe(s, ch);
         return true;
     }
@@ -889,6 +893,12 @@ struct Hub::Impl {
         ch.members.insert({p.conn, v.sub});
         ch.used_ms = monotonic_ms();
         if (ch.kind == CALIPER_NET_KIND_SCENE) {   // 3.2 draft
+            // The hub forgot the scene's state: it subscribes again for a fresh one, which
+            // reaches this viewer as the producer's own state.
+            if (ch.scene_forgotten && ch.up_sub && !ch.up_request && s.producer) {
+                ch.scene_forgotten = false;
+                send_subscribe(s, ch);
+            }
             join_scene(v, ch);
             p.dirty = true;
             return;
@@ -1837,7 +1847,10 @@ struct Hub::Impl {
             if (cl->parts) msg->parts = *cl->parts;
             state = cl->state;
             ch->scene_seq = std::max(ch->scene_seq, cl->seq);
-            if (cl->reset) ch->scene_seen = true;
+            if (cl->reset) {   // the producer's state begins: the hub keeps it again
+                ch->scene_seen = true;
+                ch->scene_forgotten = false;
+            }
         }
         ch->used_ms = monotonic_ms();
         const SceneKey key{msg->path, scene_part_order(msg->part)};
@@ -1850,11 +1863,16 @@ struct Hub::Impl {
                     ++h;
                 }
             }
-        } else {
-            ScenePtr& slot = ch->scene_held[key];
-            if (slot) scene_bytes -= slot->bytes();
-            slot = msg;
-            scene_bytes += msg->bytes();
+        } else if (!ch->scene_forgotten) {
+            auto h = ch->scene_held.find(key);
+            if (h == ch->scene_held.end() && ch->scene_held.size() >= CALIPER_NET_MAX_BATCHES) {
+                forget_scene(*ch);   // more batches than a scene holds: the producer's state serves a late viewer
+            } else {
+                ScenePtr& slot = ch->scene_held[key];
+                if (slot) scene_bytes -= slot->bytes();
+                slot = msg;
+                scene_bytes += msg->bytes();
+            }
         }
         for (const SubKey& k : ch->members) {
             VSub* v = vsub(k);
@@ -1873,6 +1891,16 @@ struct Hub::Impl {
             mark_dirty(k.conn);
         }
         if (retained() > opt.max_retained_bytes) enforce_budget();
+    }
+
+    // The hub forgets what it keeps of a scene. The viewers that watch it keep
+    // receiving its messages; a later viewer makes the hub subscribe again (join),
+    // and the producer's fresh state reaches it.
+    void forget_scene(Channel& ch) {
+        for (const auto& kv : ch.scene_held) scene_bytes -= kv.second->bytes();
+        ch.scene_held.clear();
+        ch.scene_seen = false;
+        ch.scene_forgotten = true;
     }
 
     // A viewer joins a scene channel. Once the producer's state has passed on
@@ -1924,7 +1952,9 @@ struct Hub::Impl {
     }
 
     // Over the byte budget: ended sessions go first (the oldest), then the
-    // last snapshots of channels nobody watches (the least recently used).
+    // last snapshots of channels nobody watches (the least recently used), then
+    // the states of watched scenes (the least recently used), which the hub
+    // forgets (3.2 draft).
     void enforce_budget() {
         while (retained() > opt.max_retained_bytes) {
             if (ended_count() > 0) {
@@ -1942,7 +1972,16 @@ struct Hub::Impl {
                         ls = &kv.second;
                     }
                 }
-            if (!lru) return;
+            if (!lru) {
+                Channel* scene = nullptr;
+                for (auto& kv : sessions)
+                    for (auto& ck : kv.second.channels)
+                        if (!ck.second.scene_held.empty() && (!scene || ck.second.used_ms < scene->used_ms))
+                            scene = &ck.second;
+                if (!scene) return;
+                forget_scene(*scene);
+                continue;
+            }
             set_latest(*lru, nullptr);
             for (const auto& kv : lru->scene_held) scene_bytes -= kv.second->bytes();   // 3.2 draft
             lru->scene_held.clear();

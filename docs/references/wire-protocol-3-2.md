@@ -117,7 +117,7 @@ The rules of [Flow control](wire-protocol.md#flow-control) hold, with these addi
 
 ## Through a hub
 
-The hub announces `scenes` to producers and viewers. It removes the views of kind 6 from the VIEWS it sends to a viewer without `scenes`, and refuses that viewer's SUBSCRIBE to one with `unknown_view`. It forwards SCENE_UPDATE and SCENE_CLEAR to the viewers of the producer subscription, rewriting `sub` and sharing the payload sections, with the flow control above per viewer. For a late viewer it keeps, per producer subscription, the newest batch of each entity part, a reset clearing what it kept, and sends them as the scene's state, opened by its own SCENE_CLEAR with `reset`. What it keeps counts toward its budget of retained bytes.
+The hub announces `scenes` to producers and viewers. It removes the views of kind 6 from the VIEWS it sends to a viewer without `scenes`, and refuses that viewer's SUBSCRIBE to one with `unknown_view`. It forwards SCENE_UPDATE and SCENE_CLEAR to the viewers of the producer subscription, rewriting `sub` and sharing the payload sections, with the flow control above per viewer. For a late viewer it keeps, per producer subscription, the newest batch of each entity part, a reset clearing what it kept, and sends them as the scene's state, opened by its own SCENE_CLEAR with `reset`. What it keeps counts toward its budget of retained bytes. Over that budget, or past `CALIPER_NET_MAX_BATCHES` batches of one scene, it forgets a scene's state, even one that viewers watch; they keep receiving the scene, and when a later viewer subscribes, the hub subscribes again at the producer, whose fresh state reaches that viewer.
 
 ## Limits
 
