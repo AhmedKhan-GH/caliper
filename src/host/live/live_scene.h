@@ -15,7 +15,11 @@
 // graphics layer and submits it to an offscreen colour target with depth, which the view's window
 // shows as an ImGui image; nothing is compiled or submitted while nothing changes. The camera is
 // the scene core's orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when
-// the scene first has bounds and again when the person asks. A colormapped batch takes its
+// the scene first has bounds and again when the person asks. In 3-D the person can switch the
+// orbit between Y up and Z up (design/scenes.md, "The up-axis switch"), which changes only the
+// camera, and the view measures the scale bar that the view layer draws over its picture
+// (scene/scale_bar.h). The mode the person chose and the scale bar option are the settings the
+// view layer keeps when the view closes and gives back when it opens again. A colormapped batch takes its
 // colormap block from the view's own cache of key blocks (src/host/gfx/colormap_keys.h), derived
 // from the CPU reference once per colormap and range.
 //
@@ -27,6 +31,7 @@
 #include "net/wire.h"
 #include "scene/camera.h"
 #include "scene/compile.h"
+#include "scene/scale_bar.h"
 #include "scene/scene.h"
 
 #include <cstdint>
@@ -73,7 +78,7 @@ public:
     bool init(std::string* why);
 
     // The scene's description, from its VIEWS entry. A new space empties the scene; a new up axis
-    // turns an orbit the person has not moved.
+    // turns an orbit the person has not moved, unless the person chose an up mode.
     void describe(const caliper_net::wire::SceneView& info);
 
     // One decoded message. False with *why when the scene store refused it; the view keeps what it
@@ -91,6 +96,33 @@ public:
     void pan(float dx, float dy, float view_height);
     void zoom(float wheel, float mx, float my, float view_w, float view_h);   // m: the pointer, -1 to 1
     void fit();
+
+    // The up-axis switch, in a 3-D scene: the orbit keeps its target, its distance and its eye, and
+    // takes its angles again about the new axis; the scene, its batches and the producer are not
+    // touched. Looking through a pinhole the mode is kept, and it applies when the view returns to
+    // its orbit. A mode the person chose wins over the scene's up until reset(). False in 2-D.
+    bool switch_up(caliper_scene::Axis up);
+    caliper_scene::Axis up_mode() const { return up_mode_; }
+    bool up_chosen() const { return up_chosen_; }
+    // The header's segments: Y up and Z up, then the scene's own axis or the mode when either is
+    // another one. Empty in 2-D, which has no switch.
+    std::vector<caliper_scene::Axis> up_choices() const;
+    // The view as it opens: the scene's up, the default angles and the fit. The scale bar option stays.
+    void reset();
+    // The scale bar of a picture of w x h logical pixels (scene/scale_bar.h); hidden while the
+    // option is off.
+    caliper_scene::ScaleBar scale_bar(double w, double h) const;
+    bool scale_bar_on() const { return scale_bar_on_; }
+    void set_scale_bar(bool on) { scale_bar_on_ = on; }
+    // What the view keeps of itself across a close and a reopen.
+    struct Settings {
+        bool up_chosen = false;
+        caliper_scene::Axis up = caliper_scene::Axis::PosY;
+        bool scale_bar = true;
+    };
+    Settings settings() const { return {up_chosen_, up_mode_, scale_bar_on_}; }
+    // After describe(): a remembered mode wins over the scene's up.
+    void restore(const Settings& s);
 
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
@@ -161,6 +193,10 @@ private:
     std::vector<std::string> notes_;
     uint64_t seq_ = 0;                 // the store's sequence numbers, one per applied batch
     bool fitted_ = false, moved_ = false, dirty_ = true;
+    caliper_scene::Axis up_mode_ = caliper_scene::Axis::PosY;   // the orbit's axis, or the one it returns to
+    bool up_chosen_ = false;           // the person switched: the scene's up no longer moves the view
+    bool through_ = false;             // the last frame looked through a pinhole
+    bool scale_bar_on_ = true;
 
     caliper_gfx::Texture color_, depth_;
     uint32_t width_ = 0, height_ = 0, clear_ = 0;

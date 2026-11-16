@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -34,6 +35,14 @@ namespace caliper_live_views {
 // wire protocol 3.2, fed with decoded scene messages instead of snapshots.
 constexpr int32_t kKindScene = 6;
 struct SceneHolder;
+
+// What a scene view keeps of itself across a close and a reopen, by its name (live_scene.h,
+// SceneView::Settings): the up mode the person chose and the scale bar option.
+struct SceneSettings {
+    bool up_chosen = false;
+    uint8_t up = 0;            // caliper_scene::Axis
+    bool scale_bar = true;
+};
 
 // ---- platform helpers (live_views_metal.mm; stubs elsewhere) --------------
 struct BufferInfo {
@@ -303,6 +312,8 @@ struct CaliperLiveViewsState {
     // data view picker, live_controls.h): called with the view and the
     // width it may take, at the cursor; returns the height it took (0: none).
     std::function<float(caliper_live_views::View&, float width)> under_header;
+    // The settings of the scene views that closed, by name, given back when one opens again.
+    std::map<std::string, caliper_live_views::SceneSettings> scene_settings;
 };
 
 namespace caliper_live_views {

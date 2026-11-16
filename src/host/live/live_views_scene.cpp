@@ -87,6 +87,7 @@ bool scene_open(CaliperCore* core, const std::string& name, const caliper_net::w
         caliper_core_live_view_remove(core, name.c_str());   // another kind: the scene replaces it
         v = nullptr;
     }
+    const bool opened = !v;
     if (!v) {
         for (const auto& tv : core->views)
             if (tv.name == name) {
@@ -115,8 +116,25 @@ bool scene_open(CaliperCore* core, const std::string& name, const caliper_net::w
         v = nv.get();
         views_state(core)->views.push_back(std::move(nv));
     }
-    if (SceneView* sv = scene_view(*v)) sv->describe(info);
+    if (SceneView* sv = scene_view(*v)) {
+        sv->describe(info);
+        CaliperLiveViewsState* S = views_state(core);
+        if (auto it = S->scene_settings.find(name); opened && it != S->scene_settings.end()) {
+            SceneView::Settings s;
+            s.up_chosen = it->second.up_chosen;
+            s.up = caliper_scene::Axis(it->second.up);
+            s.scale_bar = it->second.scale_bar;
+            sv->restore(s);
+        }
+    }
     return true;
+}
+
+void scene_remember(CaliperCore* core, const View& v) {
+    const SceneView* sv = scene_view(v);
+    if (!core || !sv || !core->live_views) return;
+    const SceneView::Settings s = sv->settings();
+    core->live_views->scene_settings[v.name] = SceneSettings{s.up_chosen, uint8_t(s.up), s.scale_bar};
 }
 
 bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneUpdate& u,

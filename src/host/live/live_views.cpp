@@ -150,6 +150,7 @@ void release_payload(CaliperCore* core, View& v, PointsPayload& p) {
 
 // Every GPU resource and handle of a view (telemetry and placement stay).
 void release_typed(CaliperCore* core, View& v) {
+    if (v.scene) scene_remember(core, v);   // its up mode and scale bar option, for when it opens again
     v.scene.reset();   // a scene view's buffers and targets go back to its layer, then the layer
     HostRenderer* r = core->renderer.get();
     for (void* h : v.pending)

@@ -622,6 +622,176 @@ kernel void cs_copy(device const uint* src [[buffer(0)]], device uint* dst [[buf
     gfx.release(copy);
 }
 
+namespace {
+
+// Where the pixels of exactly one colour lie: their count and their centre.
+struct Spot {
+    int count = 0;
+    double x = 0, y = 0;
+};
+Spot spot(const std::vector<uint8_t>& px, uint32_t w, uint32_t rgba) {
+    Spot s;
+    for (size_t i = 0; i + 3 < px.size(); i += 4) {
+        uint32_t p;
+        std::memcpy(&p, &px[i], 4);
+        if (p != rgba) continue;
+        ++s.count;
+        s.x += double((i / 4) % w);
+        s.y += double((i / 4) / w);
+    }
+    if (s.count) {
+        s.x /= s.count;
+        s.y /= s.count;
+    }
+    return s;
+}
+
+}  // namespace
+
+// The up-axis switch (design/scenes.md, "The up-axis switch"), drawn: a scene whose up is +y holds a
+// point at the origin, where the fit puts the orbit's target, and one unit along +z and -z from it.
+// Switched to Z up, the point at +z is drawn straight above the target and the one at -z straight
+// below; the eye, the target and the distance stay, the scene's batches, their sequence numbers and
+// the bytes copied stay, and the scale bar keeps its length and its label. Through a pinhole the
+// bar hides and a switch waits for the orbit; a reset returns to the scene's up. Captures go to
+// CALIPER_GFX_CAPTURE_DIR as scene-view-up-y.png and scene-view-up-z.png.
+TEST_CASE("gfx/Metal scene view: switching to Z up draws the point at +z above the target and changes nothing of the scene") {
+    namespace cs = caliper_scene;
+    ViewRig rig;
+    if (!rig.init(CALIPER_NET_SPACE_3D, "+y", "m")) CALIPER_SKIP_NO_GPU("no Metal device");
+    SceneView& v = *rig.view;
+    Wire w;
+    wire::SceneClear reset;
+    reset.sub = 1;
+    reset.view = "landscape";
+    reset.seq = 1;
+    reset.path = "";
+    reset.reset = true;
+    reset.state = true;
+    REQUIRE(feed(v, w.roundtrip(reset)));
+    const float at[3] = {0, 0, 0}, up[3] = {0, 0, 1}, down[3] = {0, 0, -1};
+    const uint32_t kRed = 0xff0000ffu, kGreen = 0xff00ff00u, kBlue = 0xffff0000u, kClear = 0xff202020u;
+    const struct { const char* path; const float* pos; uint32_t rgba; } pts[] = {
+        {"target", at, kRed}, {"above", up, kGreen}, {"below", down, kBlue}};
+    uint64_t seq = 2;
+    for (const auto& p : pts) {
+        wire::SceneUpdate u = update(p.path, CALIPER_NET_PART_POINTS, seq++, false);
+        u.params.set("color", rgba_json(p.rgba));
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {1, 3}, p.pos, 12));
+        std::string why;
+        REQUIRE_MESSAGE(feed(v, w.roundtrip(u), &why), why);
+    }
+    const uint32_t W = 320, H = 240;
+    std::string why;
+    REQUIRE_MESSAGE(v.render(W, H, 1.0f, kClear, &why), why);
+    CHECK(v.up_mode() == cs::Axis::PosY);
+    CHECK_FALSE(v.up_chosen());
+    CHECK(v.up_choices() == std::vector<cs::Axis>{cs::Axis::PosY, cs::Axis::PosZ});
+    const cs::Orbit o0 = std::get<cs::Orbit>(v.camera());
+    CHECK(o0.target[0] == doctest::Approx(0.0));
+    const std::vector<uint8_t> y_up = pixels(v);
+    capture_png("scene-view-up-y.png", y_up, W, H);
+    const caliper_live_views::SceneCounts c0 = v.counts();
+    const uint64_t revision = v.tree().revision();
+    const uint64_t above_seq = v.tree().batch(v.tree().find("above"), cs::Primitive::Points)->seq;
+    const cs::ScaleBar bar0 = v.scale_bar(W, H);
+    REQUIRE(bar0.visible);
+    MESSAGE("scale bar in Y up: ", bar0.label, ", ", bar0.pixels, " px");
+
+    REQUIRE(v.switch_up(cs::Axis::PosZ));
+    CHECK(v.up_chosen());
+    REQUIRE_MESSAGE(v.render(W, H, 1.0f, kClear, &why), why);
+    const std::vector<uint8_t> z_up = pixels(v);
+    capture_png("scene-view-up-z.png", z_up, W, H);
+    const cs::Orbit o1 = std::get<cs::Orbit>(v.camera());
+    CHECK(o1.up == cs::Axis::PosZ);
+    const cs::Vec3 e0 = cs::orbit_eye(o0), e1 = cs::orbit_eye(o1);
+    CHECK(std::fabs(e1.x - e0.x) + std::fabs(e1.y - e0.y) + std::fabs(e1.z - e0.z) <= 1e-6 * o0.distance);
+    CHECK(o1.distance == o0.distance);
+    CHECK(o1.target[0] == o0.target[0]);
+    CHECK(o1.target[1] == o0.target[1]);
+    CHECK(o1.target[2] == o0.target[2]);
+    // On screen: the target at the centre, +z straight above it and -z straight below.
+    const Spot t = spot(z_up, W, kRed), a = spot(z_up, W, kGreen), b = spot(z_up, W, kBlue);
+    REQUIRE(t.count > 0);
+    REQUIRE(a.count > 0);
+    REQUIRE(b.count > 0);
+    MESSAGE("Z up: target at ", t.x, ",", t.y, "; +z at ", a.x, ",", a.y, "; -z at ", b.x, ",", b.y);
+    CHECK(std::fabs(t.x - (W - 1) * 0.5) <= 1.0);
+    CHECK(std::fabs(t.y - (H - 1) * 0.5) <= 1.0);
+    CHECK(a.y < t.y - 10.0);
+    CHECK(b.y > t.y + 10.0);
+    CHECK(std::fabs(a.x - t.x) <= 1.0);
+    CHECK(std::fabs(b.x - t.x) <= 1.0);
+    // Nothing of the scene changed: no message, no upload, the same batches and sequence numbers.
+    const caliper_live_views::SceneCounts c1 = v.counts();
+    CHECK(c1.messages == c0.messages);
+    CHECK(c1.bytes_total == c0.bytes_total);
+    CHECK(c1.buffers_created == c0.buffers_created);
+    CHECK(c1.batches == c0.batches);
+    CHECK(v.tree().revision() == revision);
+    CHECK(v.tree().batch(v.tree().find("above"), cs::Primitive::Points)->seq == above_seq);
+    // The bar keeps its length and its label.
+    const cs::ScaleBar bar1 = v.scale_bar(W, H);
+    CHECK(bar1.label == bar0.label);
+    CHECK(bar1.pixels == doctest::Approx(bar0.pixels).epsilon(1e-12));
+
+    // And back to Y up: the first picture's points where they were.
+    REQUIRE(v.switch_up(cs::Axis::PosY));
+    REQUIRE_MESSAGE(v.render(W, H, 1.0f, kClear, &why), why);
+    const std::vector<uint8_t> again = pixels(v);
+    for (uint32_t c : {kRed, kGreen, kBlue}) {
+        const Spot p = spot(y_up, W, c), q = spot(again, W, c);
+        CHECK(p.count == q.count);
+        CHECK(std::fabs(p.x - q.x) <= 0.5);
+        CHECK(std::fabs(p.y - q.y) <= 0.5);
+    }
+
+    // Through a pinhole the bar hides; a switch made there applies when the orbit returns.
+    const cs::ViewCamera orbit_y = v.camera();
+    v.camera() = cs::ThroughPinhole{};
+    v.render(W, H, 1.0f, kClear, &why);   // the scene holds no camera to look through
+    CHECK_FALSE(v.scale_bar(W, H).visible);
+    REQUIRE(v.switch_up(cs::Axis::PosZ));
+    v.camera() = orbit_y;
+    REQUIRE_MESSAGE(v.render(W, H, 1.0f, kClear, &why), why);
+    CHECK(std::get<cs::Orbit>(v.camera()).up == cs::Axis::PosZ);
+    CHECK(v.scale_bar(W, H).visible);
+    // The option hides it; a reset returns to the scene's up and keeps the option.
+    v.set_scale_bar(false);
+    CHECK_FALSE(v.scale_bar(W, H).visible);
+    v.reset();
+    REQUIRE_MESSAGE(v.render(W, H, 1.0f, kClear, &why), why);
+    CHECK(v.up_mode() == cs::Axis::PosY);
+    CHECK_FALSE(v.up_chosen());
+    CHECK(std::get<cs::Orbit>(v.camera()).up == cs::Axis::PosY);
+    CHECK(std::get<cs::Orbit>(v.camera()).azimuth == doctest::Approx(cs::kDefaultAzimuth));
+    CHECK_FALSE(v.scale_bar_on());
+}
+
+TEST_CASE("gfx/Metal scene view: a 2-D scene has no up-axis switch and an exact scale bar") {
+    namespace cs = caliper_scene;
+    ViewRig rig;
+    if (!rig.init(CALIPER_NET_SPACE_2D, "-y", "px")) CALIPER_SKIP_NO_GPU("no Metal device");
+    SceneView& v = *rig.view;
+    CHECK(v.up_choices().empty());
+    CHECK_FALSE(v.switch_up(cs::Axis::PosZ));
+    CHECK_FALSE(v.up_chosen());
+    Wire w;
+    const float xy[4] = {0, 0, 640, 480};
+    wire::SceneUpdate u = update("pixels", CALIPER_NET_PART_POINTS, 2, false);
+    u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 2}, xy, 16));
+    std::string why;
+    REQUIRE_MESSAGE(feed(v, w.roundtrip(u), &why), why);
+    REQUIRE_MESSAGE(v.render(400, 300, 1.0f, 0xff202020u, &why), why);
+    const cs::ScaleBar b = v.scale_bar(400, 300);
+    REQUIRE(b.visible);
+    const double upp = 2.0 * std::get<cs::PanZoom>(v.camera()).half_height / 300.0;
+    CHECK(std::fabs(b.pixels - b.length / upp) <= 0.5);
+    CHECK(b.label.find(" px") != std::string::npos);
+    CHECK(b.label.find("at target") == std::string::npos);
+}
+
 TEST_CASE("gfx/Metal scene view: timing — the demo scene's cost per frame and of applying one mesh update") {
     const char* on = std::getenv("CALIPER_GFX_SCENE_VIEW_BENCH");
     if (!on || std::string(on) != "1") return;   // opt-in, like the other timing rows

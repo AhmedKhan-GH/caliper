@@ -59,6 +59,10 @@ void scene_begin_round(CaliperCore* core, const std::string& name);
 bool open_layer(CaliperCore* core, const char* what, std::unique_ptr<caliper_gfx::Backend>* owned,
                 caliper_gfx::Backend** gfx, const caliper_gfx::ProgramDesc** programs, std::string* notice);
 
+// Keeps the view's settings (its up mode and scale bar option) under its name, before it goes;
+// scene_open gives them back to a scene view of that name.
+void scene_remember(CaliperCore* core, const View& v);
+
 // The scene view of a live view, or null.
 SceneView* scene_view(CaliperCore* core, const char* name);
 SceneView* scene_view(View& v);

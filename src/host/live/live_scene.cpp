@@ -114,18 +114,13 @@ void SceneView::describe(const wire::SceneView& info) {
     Axis up = tree_.up();
     if (parse_axis(info.up, &up) && up != tree_.up()) {
         std::string err;
-        if (tree_.set_up(up, &err)) {
-            if (Orbit* o = std::get_if<Orbit>(&camera_)) {
-                if (!moved_) o->up = up;   // the scene's up is where an unmoved view starts
-            } else if (PanZoom* p = std::get_if<PanZoom>(&camera_)) {
-                p->y_down = up == Axis::NegY;
-            }
-        } else {
-            note("up '" + info.up + "': " + err);
-        }
+        if (!tree_.set_up(up, &err)) note("up '" + info.up + "': " + err);
     }
-    if (Orbit* o = std::get_if<Orbit>(&camera_); o && !moved_) o->up = tree_.up();
+    // The scene's up is where a view starts: an orbit the person has not moved takes it, unless the
+    // person chose a mode, which wins until a reset.
+    if (Orbit* o = std::get_if<Orbit>(&camera_); o && !moved_ && !up_chosen_) o->up = tree_.up();
     if (PanZoom* p = std::get_if<PanZoom>(&camera_)) p->y_down = tree_.up() == Axis::NegY;
+    if (!up_chosen_) up_mode_ = std::holds_alternative<Orbit>(camera_) ? std::get<Orbit>(camera_).up : tree_.up();
     tree_.set_units(info.units);
     changed();
 }
@@ -479,6 +474,57 @@ void SceneView::fit() {
     changed();
 }
 
+bool SceneView::switch_up(Axis up) {
+    if (tree_.space() != Space::k3D) return false;
+    up_mode_ = up;
+    up_chosen_ = true;
+    if (Orbit* o = std::get_if<Orbit>(&camera_); o && o->up != up) {
+        caliper_scene::switch_up(*o, up);
+        changed();
+    }
+    return true;
+}
+
+std::vector<Axis> SceneView::up_choices() const {
+    if (tree_.space() != Space::k3D) return {};
+    std::vector<Axis> c = {Axis::PosY, Axis::PosZ};
+    for (Axis a : {tree_.up(), up_mode_})
+        if (std::find(c.begin(), c.end(), a) == c.end()) c.push_back(a);
+    return c;
+}
+
+void SceneView::reset() {
+    if (tree_.space() == Space::k3D) {
+        Orbit o;
+        o.up = tree_.up();
+        camera_ = o;
+    } else {
+        PanZoom p;
+        p.y_down = tree_.up() == Axis::NegY;
+        camera_ = p;
+    }
+    up_mode_ = tree_.up();
+    up_chosen_ = moved_ = fitted_ = through_ = false;
+    changed();
+}
+
+void SceneView::restore(const Settings& s) {
+    scale_bar_on_ = s.scale_bar;
+    if (!s.up_chosen || tree_.space() != Space::k3D) return;
+    up_mode_ = s.up;
+    up_chosen_ = true;
+    if (Orbit* o = std::get_if<Orbit>(&camera_)) {
+        if (!moved_) o->up = s.up;   // a view that opens starts about its remembered axis
+        else if (o->up != s.up) caliper_scene::switch_up(*o, s.up);
+    }
+    changed();
+}
+
+ScaleBar SceneView::scale_bar(double w, double h) const {
+    if (!scale_bar_on_) return {};
+    return caliper_scene::scale_bar(camera_, tree_.scene_bounds().valid, tree_.units(), w, h);
+}
+
 // ---- drawing ---------------------------------------------------------------------------------------
 
 bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why) {
@@ -522,6 +568,16 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         changed();
     }
     if (tree_.revision() != drawn_revision_ || tree_.pose_revision() != drawn_pose_) changed();
+    // Back on the orbit after looking through a pinhole: the mode chosen meanwhile applies.
+    if (Orbit* o = std::get_if<Orbit>(&camera_)) {
+        if (through_ && o->up != up_mode_) {
+            caliper_scene::switch_up(*o, up_mode_);
+            changed();
+        }
+        through_ = false;
+    } else {
+        through_ = std::holds_alternative<ThroughPinhole>(camera_);
+    }
     if (!dirty_) return true;
 
     const auto t0 = std::chrono::steady_clock::now();
