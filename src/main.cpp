@@ -1079,10 +1079,32 @@ private:
                             a.status_text,
                         "app.launch_refused"};
             // The page opens with the applet.open that this sends, a frame
-            // or two later.
+            // or two later. One of the workspace that would replace unsaved
+            // changes from an origin under review waits for the person's
+            // approval, and the answer says so rather than "launched"; it
+            // reads the state now, so it claims no more than that.
+            const caliper_host::SpecPage::OpenReview review =
+                workspace_applet_id(a).empty() ? caliper_host::SpecPage::OpenReview::opens
+                                               : caliper_host::SpecPage::open_review(session_, origin);
             std::string why;
             if (!launch_spec_applet(i, &why, origin)) return {409, id + " failed to launch: " + why, "app.launch_failed"};
             const auto& b = loader_.at(loader_.find(id));
+            if (review == caliper_host::SpecPage::OpenReview::waits)
+                return {200,
+                        caliper_host::launch_pending_json(
+                            b.manifest.id, b.manifest.version, "PENDING_APPROVAL",
+                            "Accepted, not open yet: opening it would replace the open spec's unsaved changes, so it "
+                            "waits for the person's approval in the app. spec.get names the open spec once it has "
+                            "opened; if the person denies it, the open spec stays as it is."),
+                        ""};
+            if (review == caliper_host::SpecPage::OpenReview::unknown)
+                return {200,
+                        caliper_host::launch_pending_json(
+                            b.manifest.id, b.manifest.version, "PENDING",
+                            "Accepted, not open yet: the app is running a long command, so the open waits for it, and "
+                            "then for the person's approval if the open spec has unsaved changes by then. spec.get "
+                            "names the open spec once it has opened."),
+                        ""};
             return {200, caliper_host::launched_json(b.manifest.id, b.manifest.version, false), ""};
         }
         if (loader_.at(i).status != caliper_host::AppletStatus::Ready) {

@@ -558,6 +558,15 @@ bool SpecPage::take_open(const AppSession& session) {
     return true;
 }
 
+SpecPage::OpenReview SpecPage::open_review(AppSession& session, const std::string& origin) {
+    cb::Session* s = session.session();
+    if (!s) return OpenReview::opens;   // no session yet: no open spec to replace
+    if (!s->review().on(cb::command_origin_from_name(origin).value_or(cb::CommandOrigin::api))) return OpenReview::opens;
+    if (session.worker_busy()) return OpenReview::unknown;
+    const std::optional<cb::OpenSpec> open = s->open_spec();
+    return open && open->dirty ? OpenReview::waits : OpenReview::opens;
+}
+
 bool SpecPage::request_open(AppSession& session, const std::string& id, const std::string& origin) {
     cb::Session* s = session.session();
     if (!s) return false;
@@ -878,6 +887,7 @@ SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return false; }
 bool SpecPage::take_open(const AppSession&) { return false; }
 bool SpecPage::request_open(AppSession&, const std::string&, const std::string&) { return false; }
+SpecPage::OpenReview SpecPage::open_review(AppSession&, const std::string&) { return OpenReview::opens; }
 bool SpecPage::request_answered(std::string*) { return false; }
 bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
 bool SpecPage::take_new() { return false; }

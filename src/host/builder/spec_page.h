@@ -106,6 +106,14 @@ public:
     // approval card as its own command would. The page opens when it
     // succeeds. False when the session is not open.
     bool request_open(AppSession& session, const std::string& id, const std::string& origin = "ui");
+    // What an applet.open from `origin` would meet now, by the command
+    // layer's own condition for replacing an open spec (review on for that
+    // origin, and an open spec with unsaved changes): `opens` at once,
+    // `waits` for the person's approval, or `unknown` while the session's
+    // worker runs a command and the open spec cannot be read. It is the state
+    // at the time of the call; the open runs a frame or two later.
+    enum class OpenReview { opens, waits, unknown };
+    static OpenReview open_review(AppSession& session, const std::string& origin);
     // The answer of the last request_open(), once it has come: true, with
     // `error` empty when it succeeded and holding the reason otherwise.
     bool request_answered(std::string* error);

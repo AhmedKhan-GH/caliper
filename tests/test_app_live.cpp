@@ -841,6 +841,130 @@ TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved cha
     CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
 }
 
+namespace {
+
+// The approval id of the newest card line "[approval] <id> <name> (<origin>) waiting".
+std::string waiting_card(const Proc& app, const std::string& name, const std::string& origin) {
+    const std::string tail = " " + name + " (" + origin + ") waiting";
+    const size_t at = app.text.rfind(tail);
+    if (at == std::string::npos) return {};
+    const size_t start = app.text.rfind("[approval] ", at);
+    if (start == std::string::npos) return {};
+    return app.text.substr(start + 11, at - start - 11);
+}
+
+}  // namespace
+
+TEST_CASE("app launch: the answer to an outside agent's launch over unsaved work says it waits for the person's "
+          "approval, and the approval can be looked up") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("launch-reply");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string decisions = t.str("decisions");
+    std::ofstream(decisions).flush();
+    SaveApp a;
+    {
+        std::vector<std::string> e = app_env(env, t, "wait 1", t.str(""));
+        e.push_back("CALIPER_TEST_APPROVALS=" + decisions);
+        REQUIRE(a.app.start(env.exe,
+                            {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+                            e));
+        if (!has_metal(a.app)) {
+            ::kill(a.app.pid, SIGTERM);
+            a.app.wait(30000);
+            return;
+        }
+        REQUIRE_MESSAGE(a.app.read_until("[api] Spec applets in a browser", 60000), a.app.text);
+        a.port = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["port"].get<uint16_t>();
+        a.token = start_token(a.app);
+        REQUIRE(a.token.size() >= 22);
+    }
+    const std::string mcp = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["token"].get<std::string>();
+    ok(a.port, a.token, "spec.new", {{"id", "one"}, {"title", "One"}});
+    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "spec.new", {{"id", "two"}, {"title", "Two"}});
+    ok(a.port, a.token, "applet.save");
+    REQUIRE(lists(a, "local.one"));
+    REQUIRE(lists(a, "local.two"));
+    CHECK(ok(a.port, a.token, "applet.open", {{"id", "one"}})["title"] == "One");
+
+    // Not held (a saved spec): the answer is as before.
+    {
+        const Http r = launch_v0(a.port, mcp, "local.two");
+        REQUIRE(r.status == 200);
+        const json j = json::parse(r.body);
+        CHECK(j["status"] == "ACTIVE");
+        CHECK_FALSE(j.contains("note"));
+    }
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "two"; }));
+
+    // Held, through POST /v0/applets/{id}/launch: PENDING_APPROVAL with a note,
+    // and the card's approval is pending; approved, the spec is open.
+    retitle(a, "Two", "Two edited");
+    {
+        const Http r = launch_v0(a.port, mcp, "local.one");
+        REQUIRE(r.status == 200);
+        const json j = json::parse(r.body);
+        CHECK_MESSAGE(j["status"] == "PENDING_APPROVAL", r.body);
+        CHECK(j["already_open"] == false);
+        CHECK(j.value("note", std::string()).find("approval") != std::string::npos);
+        CHECK(j.value("note", std::string()).find("spec.get") != std::string::npos);
+    }
+    std::string id;
+    REQUIRE_MESSAGE(eventually(a.app, [&] { return !(id = waiting_card(a.app, "applet.open", "mcp")).empty(); }),
+                    a.app.text);
+    {
+        const Http r = http(a.port, "GET", "/v0/approvals/" + id, a.token);
+        REQUIRE(r.status == 200);
+        const json j = json::parse(r.body);
+        CHECK(j["state"] == "pending");
+        CHECK(j["name"] == "applet.open");
+        CHECK(j["origin"] == "mcp");
+    }
+    CHECK(a.spec()["id"] == "two");
+    std::ofstream(decisions, std::ios::app) << "approve applet.open mcp\n";
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "one"; }));
+    CHECK(eventually(a.app, [&] {
+        return json::parse(http(a.port, "GET", "/v0/approvals/" + id, a.token).body)["state"] == "decided";
+    }));
+
+    // Held, through app.launch: the same answer; denied, the spec is unchanged.
+    retitle(a, "One", "One edited");
+    {
+        const Http r = http(a.port, "POST", "/v0/commands/app.launch", mcp, json{{"id", "local.two"}}.dump());
+        REQUIRE(r.status == 200);
+        const json env_ = json::parse(r.body);
+        REQUIRE_MESSAGE(env_["ok"] == true, r.body);
+        CHECK(env_["result"]["status"] == "PENDING_APPROVAL");
+        CHECK(env_["result"].value("note", std::string()).find("approval") != std::string::npos);
+    }
+    std::string id2;
+    REQUIRE_MESSAGE(eventually(a.app, [&] {
+                        id2 = waiting_card(a.app, "applet.open", "mcp");
+                        return !id2.empty() && id2 != id;
+                    }),
+                    a.app.text);
+    std::ofstream(decisions, std::ios::app) << "deny applet.open mcp\n";
+    CHECK(eventually(a.app, [&] {
+        const json j = json::parse(http(a.port, "GET", "/v0/approvals/" + id2, a.token).body);
+        return j["state"] == "decided" && j["result"]["ok"] == false;
+    }));
+    CHECK(a.spec()["id"] == "one");
+    CHECK(a.spec()["dirty"] == true);
+
+    // The person's own token is not reviewed: as before.
+    {
+        const Http r = launch_v0(a.port, a.token, "local.two");
+        REQUIRE(r.status == 200);
+        CHECK(json::parse(r.body)["status"] == "ACTIVE");
+    }
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "two"; }));
+    ::kill(a.app.pid, SIGTERM);
+    CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
+}
+
 TEST_CASE("app launch: an in-app agent's launch of a dashboard over unsaved changes waits on an approval card") {
     const Env env = test_env();
     if (!env.ok) return;

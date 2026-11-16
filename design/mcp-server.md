@@ -309,6 +309,11 @@ A successful call becomes a `CallToolResult` with:
   checked to start with a PNG signature and header. For `capture_frame`, `caliper-mcp` encodes the PNG bytes of the
   endpoint itself and reads the size from the PNG header.
 
+`app_launch` relays the launch's answer as it is. When the app answers `status` `PENDING_APPROVAL` (the dashboard
+would replace the open spec's unsaved changes, so its `applet.open` waits on an approval card) or `PENDING`, the call
+succeeds, and the text block an agent reads holds that status and the `note`, which says the dashboard is not open
+yet and that `spec_get` names the open spec once it is; so an agent checks rather than believes that it opened.
+
 The structured content is checked against the tool's output schema before it is returned, since a client may check
 it too. A result that does not match, which means the app and the table disagree, becomes the tool error
 `mcp.invalid_result`, whose message still carries the result, so the agent loses nothing.
