@@ -163,7 +163,7 @@ Controls parse_controls(const wire::Controls& c) {
 // What the frame thread asks the network thread to send (the network thread
 // owns the socket and the subscriptions, and fills in what only it knows).
 struct Outgoing {
-    enum class Kind { Control, Event, ViewRequest } kind = Kind::Control;
+    enum class Kind { Control, Event, ViewRequest, Unsubscribe } kind = Kind::Control;
     wire::Control control;
     uint64_t key = 0;          // Event, ViewRequest: the view
     std::string type;          // Event
@@ -185,6 +185,7 @@ struct NetView {
     // Network thread only.
     uint32_t sub = 0;
     bool     subscribed = false;
+    bool     stopped = false;      // a scene view the frame thread refused for good: never subscribed again
     uint64_t last_producer_seq = 0;
     Json     shown_data_view;      // the data view of the newest snapshot (events name it)
     Json     shown_axes = Json::array(), shown_tile;   // and its payload axes (select events)
@@ -408,6 +409,20 @@ public:
         }
         for (auto& it : got) out->push_back(std::move(it));
         return true;
+    }
+
+    void stop_scene(uint64_t key) override {
+        NetView* v = find(key);
+        if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            v->scene.items.clear();
+            v->scene.stopped = true;
+        }
+        Outgoing o;
+        o.kind = Outgoing::Kind::Unsubscribe;
+        o.key = key;
+        enqueue(std::move(o));
     }
 
     // ---- NetSource ------------------------------------------------------------------------
@@ -919,6 +934,19 @@ private:
                     send(e);
                     break;
                 }
+                case Outgoing::Kind::Unsubscribe: {   // a scene view refused for good
+                    std::shared_ptr<NetView> v = view_by_key(o.key);
+                    if (!v) break;
+                    v->stopped = true;
+                    if (!v->subscribed) break;
+                    by_sub_.erase(v->sub);   // what is in flight for it is dropped
+                    if (ready) {
+                        wire::Unsubscribe u;
+                        u.sub = v->sub;
+                        send(u);
+                    }
+                    break;
+                }
                 case Outgoing::Kind::ViewRequest: {
                     std::shared_ptr<NetView> v = view_by_key(o.key);
                     if (!ready || !v || !v->subscribed) break;
@@ -1177,7 +1205,7 @@ private:
             cv_.notify_all();
         }
         for (const auto& view : next) {
-            if (view->subscribed) continue;
+            if (view->subscribed || view->stopped) continue;
             view->sub = next_sub_++;
             view->subscribed = true;
             view->last_producer_seq = 0;

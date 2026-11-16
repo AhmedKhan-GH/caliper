@@ -21,10 +21,12 @@ namespace caliper_live {
 
 inline constexpr size_t kSceneQueueMax = 8192;
 
-// A scene view's queue, and whether it waits for the scene's next state (a reset).
+// A scene view's queue, whether it waits for the scene's next state (a reset), and whether the
+// view will never be shown (Source::stop_scene), so that nothing is queued for it.
 struct SceneQueue {
     std::deque<SceneItem> items;
     bool resync = false;
+    bool stopped = false;
 };
 
 // Whether a clear of `c.path` reaches the entity at `path`.
@@ -61,6 +63,7 @@ inline bool scene_clear_covers(const caliper_net::wire::SceneClear& a, const cal
 // nothing until that state's reset.
 inline bool scene_queue_push(SceneQueue& sq, SceneItem item) {
     namespace wire = caliper_net::wire;
+    if (sq.stopped) return false;
     std::deque<SceneItem>& q = sq.items;
     if (const auto* c = std::get_if<wire::SceneClear>(&item.msg)) {
         if (c->reset) {

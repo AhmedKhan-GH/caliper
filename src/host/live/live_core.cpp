@@ -376,6 +376,7 @@ int poll_scene(CaliperCore* core, CaliperLiveState* L, View& v) {
             v.error = why;
             ++L->errors;
             core->log(2, "live: scene '" + v.name + "': " + why);
+            L->source->stop_scene(v.key);   // for good: its messages would only wait
             return 0;
         }
         v.shown = true;
