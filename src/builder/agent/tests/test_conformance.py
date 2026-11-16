@@ -6,7 +6,8 @@ the scripted model with each task's passing answer, which must pass every
 task, and with each failing answer, which must fail every task, so that the
 suite's checks are tested themselves; and against the fake OpenAI-compatible
 server, whose model gives the passing answers, after the probe. A hosted
-provider is refused without --real. ctest passes the runner's path in
+provider is refused without --real, and --real is refused without the
+person's opt-in and in any test run. ctest passes the runner's path in
 CALIPER_AGENT_CONFORMANCE; without it the tests are skipped.
 """
 
@@ -30,8 +31,10 @@ pytestmark = pytest.mark.skipif(not RUNNER or not Path(RUNNER).is_file(),
                                 reason="CALIPER_AGENT_CONFORMANCE does not name a built caliper-agent-conformance")
 
 
-def run_suite(tmp_path: Path, *args: str, env_extra: dict | None = None) -> tuple[int, dict | None, str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "CALIPER_MODEL", "OPENAI_"))}
+def run_suite(tmp_path: Path, *args: str, env_extra: dict | None = None,
+              env_remove: tuple = ()) -> tuple[int, dict | None, str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("ANTHROPIC_", "CALIPER_MODEL", "OPENAI_")) and k not in env_remove}
     env.update(env_extra or {})
     run = subprocess.run([RUNNER, "--python", sys.executable, "--out", str(tmp_path / "out"),
                           "--work", str(tmp_path / "work"), *args], capture_output=True, text=True, env=env, timeout=600)
@@ -125,3 +128,25 @@ def test_a_hosted_provider_needs_real(tmp_path):
         assert code == 2 and "--real" in err and doc is None, args
     code, _, _, err = run_suite(tmp_path, "--scripted", "maybe")
     assert code == 2
+
+
+def test_real_needs_the_opt_in_and_never_runs_in_a_test(tmp_path):
+    # Each run leaves at least one reason to refuse, and its server is a
+    # loopback port nothing listens on, so even a runner that failed to refuse
+    # would reach nothing.
+    args = ("--real", "--provider", "openai-compatible", "--base-url", "http://127.0.0.1:9/v1", "--model", "m")
+    markers = ("CALIPER_AGENT_OFFLINE", "PYTEST_CURRENT_TEST", "CTEST_INTERACTIVE_DEBUG_MODE")
+    opt_in = {"CALIPER_CONFORMANCE_REAL": "1"}
+    assert os.environ.get("CALIPER_AGENT_OFFLINE") == "1"   # conftest, and ctest
+    for env_extra, env_remove, expected in [
+        (opt_in, (), "CALIPER_AGENT_OFFLINE is set"),                             # the switch of every test run
+        (opt_in, ("CALIPER_AGENT_OFFLINE", "CTEST_INTERACTIVE_DEBUG_MODE"), "under ctest or pytest"),
+        ({**opt_in, "CTEST_INTERACTIVE_DEBUG_MODE": "1"}, ("CALIPER_AGENT_OFFLINE", "PYTEST_CURRENT_TEST"),
+         "under ctest or pytest"),
+        ({}, markers, "CALIPER_CONFORMANCE_REAL=1"),                               # no opt-in
+        ({"CALIPER_CONFORMANCE_REAL": "yes"}, markers, "CALIPER_CONFORMANCE_REAL=1"),
+    ]:
+        assert "CALIPER_CONFORMANCE_REAL" not in env_extra or set(env_remove) != set(markers) \
+            or env_extra["CALIPER_CONFORMANCE_REAL"] != "1"
+        code, doc, _, err = run_suite(tmp_path, *args, env_extra=env_extra, env_remove=env_remove)
+        assert code == 2 and expected in err and doc is None, (env_extra, env_remove, err)

@@ -633,7 +633,9 @@ page, Widget agent conformance (`docs/references/widget-agent-conformance.md`). 
   fails, and run the suite against the fake OpenAI-compatible server, whose model gives the passing answers after the
   probe. A server on loopback runs with the offline switch; a hosted provider, or a server on another machine, needs
   `--real`, the only path without the switch, with the key in the runner's environment, which it hands to the sidecar
-  through `place_key_in_environment()` and checks is absent from what it writes.
+  through `place_key_in_environment()` and checks is absent from what it writes. `--real` also needs
+  `CALIPER_CONFORMANCE_REAL=1`, set by the person, and is refused while `CALIPER_AGENT_OFFLINE` is set or under ctest
+  or pytest, so that no test run reaches a hosted provider.
 - **The verdict** generalises the counts above to any number of tasks: "passes" with at most one failed task,
   "partial" with at least 60 percent passed, "fails" otherwise, and "cannot drive Caliper" when the probe found no
   tool calling. A task passes when more than half of its runs pass (two of three by default).

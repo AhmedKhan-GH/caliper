@@ -24,6 +24,11 @@
 //                          and its key from this process's environment
 //                          (ANTHROPIC_API_KEY or CALIPER_MODEL_API_KEY),
 //                          handed to the sidecar by place_key_in_environment().
+//                          --real also needs CALIPER_CONFORMANCE_REAL=1, set
+//                          by the person who runs it, and is refused in a test
+//                          run: when this process has the offline switch
+//                          (every ctest entry does) or runs under ctest or
+//                          pytest (real_refusal()).
 // It first runs `caliper-agent probe` for the capabilities (not in the
 // scripted mode); a model without tool calling is recorded as unable to drive
 // Caliper, and the vision task is not applicable to a model without vision.
@@ -382,7 +387,32 @@ struct Provider {
     bool offline = true;   // the sidecar runs with CALIPER_AGENT_OFFLINE=1
 };
 
+// Why --real may not run here, or empty: it needs the person's opt-in, and it
+// never runs from a test, which has the offline switch (every ctest entry
+// inherits it, src/builder/cmake/CaliperOfflineTests.cmake) or ctest's or
+// pytest's own variable.
+std::string real_refusal() {
+    auto set = [](const char* name) {
+        const char* v = std::getenv(name);
+        return v != nullptr && *v != '\0';
+    };
+    const char* offline = std::getenv(agent::kOfflineVariable);
+    if (offline && *offline && std::string(offline) != "0")
+        return std::string("--real is refused while ") + agent::kOfflineVariable +
+               " is set: a test run never reaches a hosted provider";
+    if (set("CTEST_INTERACTIVE_DEBUG_MODE") || set("PYTEST_CURRENT_TEST"))
+        return "--real is refused under ctest or pytest: a test run never reaches a hosted provider";
+    const char* opt_in = std::getenv("CALIPER_CONFORMANCE_REAL");
+    if (!opt_in || std::string(opt_in) != "1")
+        return "--real also needs CALIPER_CONFORMANCE_REAL=1 in the environment, set by the person who runs it on "
+               "purpose";
+    return {};
+}
+
 bool choose_provider(const Options& o, Provider* p, std::string* problem) {
+    if (o.real) {
+        if (std::string why = real_refusal(); !why.empty()) return *problem = why, false;
+    }
     if (!o.scripted.empty()) {
         p->kind = "scripted";
         return true;

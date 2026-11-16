@@ -59,19 +59,22 @@ caliper-agent-conformance --python <python> --preset ollama --model <model> \
 ```
 
 A hosted provider costs money, and a server on another machine receives the fixture's data, so the suite refuses
-either without `--real`. The key comes from the environment, as for the agent: `ANTHROPIC_API_KEY` for Claude and
+either without `--real`, and `--real` without `CALIPER_CONFORMANCE_REAL=1` in the environment. A test run never
+reaches a hosted provider: `--real` is refused while `CALIPER_AGENT_OFFLINE` is set, which every test of the build has,
+and under ctest or pytest. The key comes from the environment, as for the agent: `ANTHROPIC_API_KEY` for Claude and
 `CALIPER_MODEL_API_KEY` for the others. Read it without echoing it:
 
 ```sh
 read -s CALIPER_MODEL_API_KEY && export CALIPER_MODEL_API_KEY
-caliper-agent-conformance --python <python> --preset openrouter --model <model> --real --out <folder>
+CALIPER_CONFORMANCE_REAL=1 caliper-agent-conformance --python <python> --preset openrouter --model <model> --real \
+    --out <folder>
 ```
 
 | Option | Meaning |
 |---|---|
 | `--preset <id>`, or `--provider claude\|openai-compatible` with `--base-url <url>` | The provider, as for the agent; the Claude preset runs Claude Haiku 5.5 unless `--model` names another |
 | `--model <id>` | The model, as the server names it |
-| `--real` | Run against a hosted provider or another machine; the only mode without the offline switch |
+| `--real` | Run against a hosted provider or another machine; the only mode without the offline switch. It also needs `CALIPER_CONFORMANCE_REAL=1` and never runs in a test |
 | `--runs <n>` | Runs of each task, 1 to 10; 3 by default |
 | `--tasks 1,2,...` | Only these tasks |
 | `--timeout <seconds>` | The longest a run may take; 300 by default |
