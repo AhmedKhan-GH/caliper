@@ -18,6 +18,8 @@
 //   leave                 the pointer leaves the window (no hover is left behind)
 //   wait <frames>         nothing for that many frames
 //   state <run state>     wait until the run state is <run state> (paused, running, ...)
+//   bar [<text>]          wait until the run state the bar wrote in the last frame starts
+//                         with <text> (any text without one), and log it: bar shows '<text>'
 // A step whose target has not been drawn waits for it, up to kPatience frames,
 // then the script stops with an error.
 //
@@ -83,6 +85,13 @@ public:
         if (s.verb == "state") {
             if (rc && rc->have() && rc->state().run_state == s.a) next("run state " + s.a);
             else if (frames_ > kPatience) fail("the run state never became " + s.a);
+            return;
+        }
+        if (s.verb == "bar") {
+            const std::string want = s.a + (s.b.empty() ? "" : " " + s.b);
+            const std::string& shown = bar_state_text();
+            if (!shown.empty() && shown.compare(0, want.size(), want) == 0) next("bar shows '" + shown + "'");
+            else if (frames_ > kPatience) fail("the bar never showed '" + want + "'; it shows '" + shown + "'");
             return;
         }
         if (s.verb == "click" || s.verb == "toggle" || s.verb == "set") {

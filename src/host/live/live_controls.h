@@ -178,6 +178,9 @@ struct ControlsLook {
 // What does not fit goes into a "+N more" popup.
 void draw_run_bar(RunControls& rc, const ControlsLook& look, float width);
 
+// The run state as the bar writes it.
+std::string run_state_text(const Controls& c);
+
 // The selection's details as a table, one row per item with the script's
 // fields, or why there are none.
 void draw_selection_details(const RunControls& rc, const ControlsLook& look);
@@ -231,5 +234,8 @@ struct WidgetRect {
     float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 };
 const std::map<std::string, WidgetRect>& bar_widgets();
+// The run state the bar wrote in the last frame ("no controls" before any
+// CONTROLS; empty before the bar was first drawn). A UI test reads it.
+const std::string& bar_state_text();
 
 }  // namespace caliper_live

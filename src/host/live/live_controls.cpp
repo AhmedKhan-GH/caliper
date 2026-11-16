@@ -23,6 +23,7 @@ constexpr uint64_t kNoticeShowNs = 10ull * 1000000000ull;   // and a refusal
 constexpr size_t kMaxLog = 256;
 
 std::map<std::string, WidgetRect> g_widgets;   // the bar's widgets, last frame
+std::string g_state_text;                      // the bar's run state, last frame
 
 void remember(const std::string& name) {
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
@@ -56,16 +57,6 @@ bool same_value(const Json& a, const Json& b) {
 std::string reply_error(const ControlReply& r) {
     std::string s = r.error_code.empty() ? "refused" : r.error_code;
     if (!r.error_message.empty()) s += ": " + r.error_message;
-    return s;
-}
-
-std::string state_text(const Controls& c) {
-    std::string s;
-    const std::string& st = c.run_state;
-    if (st == CALIPER_NET_RUN_NONE) s = "no checkpoint yet";
-    else if (st == CALIPER_NET_RUN_STEPPING) s = "stepping, " + std::to_string(c.steps_left) + " left";
-    else s = st;
-    if (c.has_step && st != CALIPER_NET_RUN_NONE) s += " at step " + std::to_string(c.step);
     return s;
 }
 
@@ -228,6 +219,16 @@ void draw_action(RunControls& rc, const ControlsLook& look, const ControlAction&
 }
 
 }  // namespace
+
+std::string run_state_text(const Controls& c) {
+    std::string s;
+    const std::string& st = c.run_state;
+    if (st == CALIPER_NET_RUN_NONE) s = "no checkpoint yet";
+    else if (st == CALIPER_NET_RUN_STEPPING) s = "stepping, " + std::to_string(c.steps_left) + " left";
+    else s = st;
+    if (c.has_step && st != CALIPER_NET_RUN_NONE) s += " at step " + std::to_string(c.step);
+    return s;
+}
 
 // ---- RunControls ------------------------------------------------------------------------------
 void RunControls::reset() {
@@ -503,6 +504,7 @@ std::vector<std::string> RunControls::take_log() {
 
 // ---- drawing ----------------------------------------------------------------------------
 const std::map<std::string, WidgetRect>& bar_widgets() { return g_widgets; }
+const std::string& bar_state_text() { return g_state_text; }
 
 void draw_run_bar(RunControls& rc, const ControlsLook& look, float width) {
     g_widgets.clear();
@@ -512,7 +514,8 @@ void draw_run_bar(RunControls& rc, const ControlsLook& look, float width) {
     const Controls& c = rc.state();
 
     // The run state, then the run buttons.
-    coloured(look.secondary, rc.have() ? state_text(c).c_str() : "no controls");
+    g_state_text = rc.have() ? run_state_text(c) : "no controls";
+    coloured(look.secondary, g_state_text.c_str());
     ImGui::SameLine(0.0f, st.ItemSpacing.x * 2.0f);
     const bool paused = c.run_state == CALIPER_NET_RUN_PAUSED;
     if (paused) {
