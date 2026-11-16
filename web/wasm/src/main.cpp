@@ -104,7 +104,8 @@ struct Page {
     std::vector<uint8_t> check_expect;
     std::string check_view;
     int check_kind = 0;
-    uint64_t check_next = 90;             // the frame of the next check
+    uint64_t check_next = 10;             // the frame of the next check
+    double last_publish = 0.0;            // when the counters were last published (ms)
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -618,13 +619,19 @@ void frame() {
     if (g.frames == 30) { g.t_mark = t1; g.frames_mark = g.frames; }
     if (g.frames > 30 && t1 > g.t_mark)
         g.fps = (double)(g.frames - g.frames_mark) * 1000.0 / (t1 - g.t_mark);
-    // From frame 90 on, one texture view is checked every 30 frames.
+    // From frame 10 on (past the start-up frames that create the pipelines),
+    // one view is checked every 5 frames, so that the checks do not wait on a
+    // frame rate: on a software adapter a frame can take most of a second.
     if (!g.check_pending && g.frames >= g.check_next) {
-        g.check_next = g.frames + 30;
+        g.check_next = g.frames + 5;
         start_check();
     }
     send_infos();
-    if (g.frames % 15 == 0 || g.publish_soon) publish();
+    // The counters every 15 frames, or every 250 ms when frames are slower.
+    if (g.frames % 15 == 0 || g.publish_soon || t1 - g.last_publish >= 250.0) {
+        publish();
+        g.last_publish = t1;
+    }
     g.publish_soon = false;
 }
 
