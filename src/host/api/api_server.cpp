@@ -321,6 +321,7 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
             v.message = "a command's arguments are at most 1 MiB";
             return v;
         }
+        v.body_ok = true;
         std::string type = lower(r.header("content-type"));
         type = trim(type.substr(0, type.find(';')));
         if (type != "application/json") {
@@ -470,12 +471,13 @@ struct Server::Impl {
     }
 
     // The hub's thread, before a request's body is read: the body of a command
-    // whose head passed every check, and none of any other request, so that
-    // nothing is buffered for a request that is refused.
+    // that came with the token and an acceptable length (Verdict::body_ok), and
+    // none of any other request, so that nothing is buffered for a request
+    // without the token or the right Host and Origin.
     size_t body_limit(const HttpRequest& r) {
         if (!caliper_net::wire::host_allowed(r.host, hub->port())) return 0;
         const Verdict v = check(r, opt.token, current_gateway() != nullptr);
-        return v.status == 0 && v.routed.route == Route::Command ? kMaxCommandBody : 0;
+        return v.routed.route == Route::Command && v.body_ok ? kMaxCommandBody : 0;
     }
 
     // The hub's thread: a request on any path but the stream's.

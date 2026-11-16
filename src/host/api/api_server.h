@@ -131,6 +131,11 @@ struct Verdict {
     std::string message;   // for the JSON error body
     Routed routed;
     std::string origin;    // Command: "api", "mcp" or "agent"
+    // Command: the request came with the token and a Content-Length within
+    // kMaxCommandBody, so its body is read even when a later check (415, the
+    // origin's 400) refuses it, and the refusal reaches the client before the
+    // connection closes.
+    bool body_ok = false;
 };
 Verdict check(const caliper_net::HttpRequest& r, const std::string& token, bool command_layer = false);
 
