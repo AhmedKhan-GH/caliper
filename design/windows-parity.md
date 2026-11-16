@@ -88,6 +88,12 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 - **`caliper-mcp`.** Its HTTP client to Caliper API on Winsock, still on 127.0.0.1 only.
 - **The key store.** Keep the widget agent's keys in the Windows Credential Manager, one entry per provider, as the Keychain holds one item per provider on macOS, kept on this machine and never roamed with the user's profile. A local model server needs no entry.
 - **Local model servers.** Ollama runs as a native Windows application with NVIDIA and AMD Radeon GPU support and serves its API on `http://localhost:11434`, as on macOS ([Ollama on Windows](https://docs.ollama.com/windows), read on 15 November 2026), so the Ollama preset needs no change. The agent registry lists opencode binaries for Windows on x64 and ARM64, and opencode's install page says that Windows package managers are not supported. A local model takes video memory that a CUDA training run may need, so the GPU contention note applies.
+- **Turn the builder on and port what the include check lists.** The builder (`CALIPER_WITH_BUILDER`) is off on Windows, so `scripts/check_windows_includes.py` leaves out what is built only with it (its `OFF_ON_WINDOWS` list). When the builder comes to Windows, that list is emptied and these thirteen translation units, which reach POSIX-only or macOS-only headers and calls today, are ported or kept off by design:
+    - `src/builder/acp/acp_client.cpp`: `poll` on the agent's pipes, with the subprocess handling above.
+    - `src/builder/agent/keychain_store_macos.cpp`: macOS-only by design; the Credential Manager store takes its place.
+    - `src/builder/agent/conformance/conformance_main.cpp`: `gmtime_r`.
+    - `src/host/builder/chat_shot_main.cpp`: `<unistd.h>` in the capture tool.
+    - The tests and their helpers that start processes, signal them, set the environment or open sockets: `src/builder/acp/tests/test_subprocess.cpp`, `src/builder/loaders/tests/test_python_loader.cpp`, `src/builder/mcp/tests/fake_http.cpp`, `test_http.cpp` and `test_process.cpp`, `tests/live_attention_producer.cpp`, `tests/test_api_commands.cpp`, `tests/test_app_live.cpp` and `tests/test_app_route.cpp`.
 - **The shortcut.** The widget agent opens with Ctrl+K in place of ⌘K.
 - **Done when** the side chat runs an agent with `caliper-mcp` on Windows, the widget agent's key is stored in and removed from the Credential Manager, and an edit by Ctrl+K on a panel is previewed and accepted, once with Claude and once with a local model through the Ollama preset.
 

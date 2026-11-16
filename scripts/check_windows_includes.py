@@ -68,6 +68,31 @@ MACOS_ONLY = {
     "tests/test_live_net.cpp",
     "tests/test_live_views.cpp",
 }
+# Translation units the Windows lane does not compile because the builder is off
+# there: CALIPER_WITH_BUILDER defaults to OFF on Windows (CMakeLists.txt), and
+# these folders and files are built only with it. Their POSIX code (process
+# spawning, sockets, the macOS Keychain) is ported when the builder comes to
+# Windows; design/windows-parity.md lists what that takes. A path that ends in
+# "/" excludes a folder.
+OFF_ON_WINDOWS = (
+    "src/builder/",
+    "src/host/builder/",
+    "src/host/spec_runtime/",
+    "src/host/catalog_providers/",
+    "src/host/api/session_gateway.cpp",
+    "tests/live_attention_producer.cpp",
+    "tests/test_api_commands.cpp",
+    "tests/test_app_live.cpp",
+    "tests/test_app_route.cpp",
+    "tests/test_app_session.cpp",
+    "tests/test_spec_applet_session.cpp",
+)
+
+
+def off_on_windows(rel: str) -> bool:
+    return any(rel == p or (p.endswith("/") and rel.startswith(p)) for p in OFF_ON_WINDOWS)
+
+
 # Windows-only translation units, each with the macOS translation unit whose
 # include paths and definitions it shares (its target's).
 WINDOWS_ONLY = {
@@ -279,7 +304,7 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
         by_rel[os.path.relpath(f, ROOT)] = e
     units = []
     for rel, e in sorted(by_rel.items()):
-        if not first_party(os.path.join(ROOT, rel)) or rel in MACOS_ONLY:
+        if not first_party(os.path.join(ROOT, rel)) or rel in MACOS_ONLY or off_on_windows(rel):
             continue
         if not rel.endswith((".cpp", ".cc", ".c")):
             continue   # Objective-C++ is macOS-only
