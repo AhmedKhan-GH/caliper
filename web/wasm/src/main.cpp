@@ -34,6 +34,7 @@
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
+#include "gfx/colormap_keys.h"   // derive_keys, for the test of the keys this build derives
 #include "live/live_scene.h"         // a scene view's facts
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"   // the points check reads the view's camera and payload
@@ -835,6 +836,20 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_gfx_selftest() {
     }
     g.selftest.clear();
     publish();
+    return 1;
+}
+
+// The colormap keys that this build derives at run time for the range (vmin, vmax), from its own
+// CPU reference (src/host/gfx/colormap_keys.h), as the scene views derive them: the browser test
+// compares them with the case file that the native tool writes. Module.caliperColormapKeys =
+// Uint32Array [flip, key[0], ..., key[256]]. Returns 1.
+EMSCRIPTEN_KEEPALIVE int caliper_views_colormap_keys(float vmin, float vmax) {
+    const caliper_gfx::cmap::Keys k = caliper_gfx::cmap::derive_keys(vmin, vmax);
+    uint32_t out[1 + caliper_gfx::cmap::kKeyCount];
+    out[0] = k.flip;
+    std::memcpy(out + 1, k.key, sizeof k.key);
+    EM_ASM({ Module["caliperColormapKeys"] = new Uint32Array(HEAPU8.slice($0, $0 + 4 * $1).buffer); }, out,
+           (int)(1 + caliper_gfx::cmap::kKeyCount));
     return 1;
 }
 

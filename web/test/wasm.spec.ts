@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { colormapLut, lutIndex } from '../src/render/colormap.js';
+import { readColormapCases } from './colormap_cases.js';
 import { decodePng, drawn, expect, REPO, roundTrip, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
@@ -290,6 +291,66 @@ test('the graphics layer draws an indexed quad and instanced draws, dispatches a
                               + `submit-error=reported level=${compat ? 'compatibility' : 'core'}`);
       expect(Object.keys(got.images).sort()).toEqual(['layer-compute', 'layer-copy', 'layer-draws', 'layer-ids']);
     }
+  } finally {
+    site.close();
+  }
+});
+
+// The colormap's keys as the module derives them at run time, from the WebAssembly build of the CPU
+// reference, against the case file that the native tool writes (CALIPER_COLORMAP_CASES), from
+// which the browser rows take their keys and expected colours: the module's scene views use the
+// former, so both builds of the reference must agree on every key of every boundary range.
+test('the WebAssembly views derive the same colormap keys as the native case file', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  const CASES = process.env.CALIPER_COLORMAP_CASES;
+  test.skip(!CASES, 'needs CALIPER_COLORMAP_CASES, the file that caliper_colormap_cases writes');
+  const cases = readColormapCases(CASES!);
+  const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
+  try {
+    await page.goto(`${site.origin}/test/blank.html`);
+    // Each range as the bits of its two ends, so that every float reaches the module exactly.
+    const ends = cases.map((c) => [c.block.readUInt32LE(0), c.block.readUInt32LE(4)]);
+    const derived: number[][] = await page.evaluate(async ({ base, ends }) => {
+      type M = { caliperColormapKeys?: Uint32Array; _caliper_views_colormap_keys(vmin: number, vmax: number): number;
+                 _caliper_views_destroy(): void };
+      const { preloadCaliperViews } = await import(base + 'caliper-views-loader.js');
+      const { factory, wasm } = await preloadCaliperViews(base);
+      const canvas = document.createElement('canvas');
+      document.body.append(canvas);
+      const m: M = await factory({
+        canvas, caliperConfig: { src: '' },
+        instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+          WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
+          return {};
+        },
+        print: () => {}, printErr: () => {},
+      });
+      const f = new Float32Array(2), u = new Uint32Array(f.buffer);
+      const out = ends.map(([a, b]) => {
+        u[0] = a;
+        u[1] = b;
+        m._caliper_views_colormap_keys(f[0], f[1]);
+        return Array.from(m.caliperColormapKeys!);
+      });
+      m._caliper_views_destroy();
+      canvas.remove();
+      return out;
+    }, { base: `${site.origin}/`, ends });
+    const bad: string[] = [];
+    let compared = 0;
+    for (const [i, c] of cases.entries()) {
+      const want = [c.block.readUInt32LE(8)];                                   // the flip
+      for (let k = 0; k < 256; k++) want.push(c.block.readUInt32LE(16 + 16 * k));
+      want.push(c.block.readUInt32LE(16 + 16 * 255 + 4));                      // key[256], the end
+      const got = derived[i];
+      for (let k = 0; k < want.length; k++) {
+        compared++;
+        if (got[k] !== want[k] && bad.length < 8)
+          bad.push(`${c.name}: ${k === 0 ? 'flip' : `key ${k - 1}`} is 0x${got[k]?.toString(16)} here, 0x${want[k].toString(16)} in the case file`);
+      }
+    }
+    console.log(`${info.project.name} colormap keys: ${compared} values over ${cases.length} ranges compared with the native case file, ${bad.length} differ`);
+    expect(bad).toEqual([]);
   } finally {
     site.close();
   }
