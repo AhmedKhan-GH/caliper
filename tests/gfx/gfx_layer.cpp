@@ -79,6 +79,10 @@ fragment FOut fs_quad(VOut in [[stage_in]]) {
     f.id = in.pick;
     return f;
 }
+
+fragment float4 fs_sample(VOut in [[stage_in]], texture2d<float> img [[texture(0)]]) {
+    return img.read(uint2(0, 0));
+}
 )metal";
 
 struct Quad { float rect[4]; float z; uint32_t rgba, pick_id, item; };
@@ -99,6 +103,27 @@ ProgramDesc test_program() {
     d.entry_count = 2;
     d.bindings = kBindings;
     d.binding_count = 1;
+    d.msl = kMsl;
+    return d;
+}
+
+// The same quad with a fragment entry that reads texel (0, 0) of the image in group 2.
+const EntryDesc kSampleEntries[] = {
+    {"vs_quad", kStageVertex, {1, 1, 1}},
+    {"fs_sample", kStageFragment, {1, 1, 1}},
+};
+const BindingDesc kSampleBindings[] = {
+    {1, 0, BindingType::Uniform, kStageVertex, true, 32, Format::RGBA8Unorm, 0},
+    {2, 0, BindingType::Texture, kStageFragment, false, 0, Format::RGBA8Unorm, 0},
+};
+
+ProgramDesc sample_program() {
+    ProgramDesc d;
+    d.label = "gfx-layer-sample";
+    d.entries = kSampleEntries;
+    d.entry_count = 2;
+    d.bindings = kSampleBindings;
+    d.binding_count = 2;
     d.msl = kMsl;
     return d;
 }
@@ -666,6 +691,81 @@ TEST_CASE("gfx/Metal layer: a frame the core refuses leaves the target untouched
     CHECK(gfx->submit(std::move(f)) == 0);
     CHECK(gfx->last_error().find("reads past the end") != std::string::npos);
     CHECK(read_back(*gfx, color, W, H) == before);      // the new clear never ran
+}
+
+TEST_CASE("gfx/Metal layer: a draw that samples its own pass's target refuses the frame and leaves it untouched") {
+    // Sampling a texture while the same pass renders into it is undefined on Metal and refused by
+    // WebGPU, so the core refuses the frame. Sampled in a pass that renders elsewhere, it is fine.
+    std::unique_ptr<Backend> gfx = metal_layer();
+    if (!gfx) CALIPER_SKIP_NO_GPU("no Metal device");
+    const int W = 8, H = 8;
+    Texture color = gfx->create_texture({W, H, Format::RGBA8Unorm, kRenderTarget | kSampled | kCopySrcTex, "color"});
+    Texture other = gfx->create_texture({W, H, Format::RGBA8Unorm, kRenderTarget | kCopySrcTex, "other"});
+    Program program = gfx->create_program(sample_program());
+    REQUIRE_MESSAGE(bool(program), gfx->last_error());
+    RenderPipelineDesc pd;
+    pd.program = program;
+    pd.vertex_entry = "vs_quad";
+    pd.fragment_entry = "fs_sample";
+    pd.vertex_layout_count = 1;
+    pd.vertex_layouts[0].stride = 8;
+    pd.vertex_layouts[0].attribute_count = 1;
+    pd.vertex_layouts[0].attributes[0] = {0, VertexFormat::F32x2, 0};
+    Pipeline pipe = gfx->create_render_pipeline(pd);
+    REQUIRE_MESSAGE(bool(pipe), gfx->last_error());
+    BindGroupDesc b1;
+    b1.program = program;
+    b1.group = 1;
+    b1.entry_count = 1;
+    b1.entries[0].binding = 0;
+    b1.entries[0].buffer = kArena;
+    BindGroup g1 = gfx->create_bind_group(b1);
+    BindGroupDesc b2;
+    b2.program = program;
+    b2.group = 2;
+    b2.entry_count = 1;
+    b2.entries[0].binding = 0;
+    b2.entries[0].texture = color;
+    BindGroup g2 = gfx->create_bind_group(b2);
+    REQUIRE_MESSAGE((g1 && g2), gfx->last_error());
+    Buffer corners = gfx->create_buffer({sizeof kCorners, kVertex | kCopyDst});
+    REQUIRE(gfx->write_buffer(corners, 0, kCorners, sizeof kCorners));
+    auto sample_into = [&](Texture target, uint32_t clear) {
+        RenderTarget tg;
+        tg.color = target;
+        tg.clear_rgba = clear;
+        DrawList list(tg);
+        Quad q{};
+        pixel_rect(0, 0, W, H, W, H, q.rect);
+        DrawRecord r;
+        r.pipeline = pipe;
+        r.groups[1] = g1;
+        r.groups[2] = g2;
+        r.dynamic_offsets[0] = list.uniform(&q, sizeof q);
+        r.vertex[0] = {corners, 0};
+        r.count = 6;
+        list.draw(r);
+        Frame f;
+        f.render(std::move(list));
+        return gfx->submit(std::move(f));
+    };
+    {   // colour holds blue
+        RenderTarget tg;
+        tg.color = color;
+        tg.clear_rgba = 0xffff0000u;
+        Frame f;
+        f.render(DrawList(tg));
+        REQUIRE(gfx->submit(std::move(f)) != 0);
+    }
+    const std::vector<uint8_t> before = read_back(*gfx, color, W, H);
+    // Sampled while rendering into another target: every pixel takes colour's texel (0, 0).
+    REQUIRE_MESSAGE(sample_into(other, 0xff00ff00u) != 0, gfx->last_error());
+    const std::vector<uint8_t> copied = read_back(*gfx, other, W, H);
+    CHECK(copied == before);
+    // Sampled while rendering into colour itself: refused, and colour keeps its blue.
+    CHECK(sample_into(color, 0xff0000ffu) == 0);
+    CHECK_MESSAGE(gfx->last_error().find("binds the pass's own colour target") != std::string::npos, gfx->last_error());
+    CHECK(read_back(*gfx, color, W, H) == before);
 }
 
 TEST_CASE("gfx/Metal layer: a write after a queued write lands last, while the queued one waits behind other work") {

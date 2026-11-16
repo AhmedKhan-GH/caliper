@@ -431,6 +431,86 @@ TEST_CASE("gfx layer: a bad draw refuses the whole frame and leaves the target u
     CHECK(s.gfx.submit(std::move(f)) == 2);
 }
 
+TEST_CASE("gfx layer: a draw that binds a target of its own pass as a texture refuses the frame") {
+    // WebGPU refuses such a pass when it is encoded and Metal leaves it undefined, so the core
+    // refuses the frame before either sees it. Bound in another pass, the same texture is fine.
+    RecordingBackend gfx;
+    Texture color = gfx.create_texture({16, 16, Format::RGBA8Unorm, kRenderTarget | kSampled | kCopySrcTex, "color"});
+    Texture ids = gfx.create_texture({16, 16, Format::RG32Uint, kRenderTarget | kSampled, "id"});
+    Texture other = gfx.create_texture({16, 16, Format::RGBA8Unorm, kRenderTarget | kSampled, "other"});
+    Texture other_ids = gfx.create_texture({16, 16, Format::RG32Uint, kRenderTarget | kSampled, "other id"});
+    static const BindingDesc kSampling[] = {
+        {0, 0, BindingType::Uniform, kStageVertex | kStageFragment, true, 48, Format::RGBA8Unorm, 0},
+        {2, 0, BindingType::Texture, kStageFragment, false, 0, Format::RGBA8Unorm, 0},
+        {2, 1, BindingType::UintTexture, kStageFragment, false, 0, Format::RGBA8Unorm, 1},
+    };
+    Program program = gfx.create_program(quad_program(kSampling, 3));
+    REQUIRE_MESSAGE(bool(program), gfx.last_error());
+    RenderPipelineDesc pd = quad_pipeline(program);
+    pd.depth = pd.depth_test = pd.depth_write = false;
+    Pipeline pipe = gfx.create_render_pipeline(pd);
+    REQUIRE_MESSAGE(bool(pipe), gfx.last_error());
+    BindGroupDesc b0;
+    b0.program = program;
+    b0.group = 0;
+    b0.entry_count = 1;
+    b0.entries[0].binding = 0;
+    b0.entries[0].buffer = kArena;
+    const BindGroup g0 = gfx.create_bind_group(b0);
+    auto images = [&](Texture image, Texture uint_image) {
+        BindGroupDesc b2;
+        b2.program = program;
+        b2.group = 2;
+        b2.entry_count = 2;
+        b2.entries[0].binding = 0;
+        b2.entries[0].texture = image;
+        b2.entries[1].binding = 1;
+        b2.entries[1].texture = uint_image;
+        const BindGroup g = gfx.create_bind_group(b2);
+        REQUIRE_MESSAGE(bool(g), gfx.last_error());
+        return g;
+    };
+    const float c[12] = {0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1};
+    Buffer corners = gfx.create_buffer({sizeof c, kVertex | kCopyDst, false, "corners"});
+    gfx.write_buffer(corners, 0, c, sizeof c);
+    Buffer instances = gfx.create_buffer({12, kVertex | kCopyDst, false, "instances"});
+    auto pass = [&](Frame& f, Texture target, Texture target_ids, BindGroup g2) {
+        RenderTarget t;
+        t.color = target;
+        t.id = target_ids;
+        DrawList list(t);
+        uint8_t block[48] = {};
+        DrawRecord r;
+        r.pipeline = pipe;
+        r.groups[0] = g0;
+        r.groups[2] = g2;
+        r.dynamic_offsets[0] = list.uniform(block, sizeof block);
+        r.vertex[0] = {corners, 0};
+        r.vertex[1] = {instances, 0};
+        r.count = 6;
+        list.draw(r);
+        f.render(std::move(list));
+    };
+    const BindGroup reads_other = images(other, other_ids);
+    const BindGroup reads_color = images(color, ids);
+    const BindGroup reads_ids = images(other, ids);
+    {   // Sampling other textures, and the target of an earlier pass.
+        Frame f;
+        pass(f, color, ids, reads_other);
+        pass(f, other, other_ids, reads_color);
+        CHECK_MESSAGE(gfx.submit(std::move(f)) != 0, gfx.last_error());
+    }
+    const size_t recorded = gfx.submitted().size();
+    for (const auto& [g2, why] : {std::pair<BindGroup, const char*>{reads_color, "binds the pass's own colour target"},
+                                  std::pair<BindGroup, const char*>{reads_ids, "binds the pass's own ID target"}}) {
+        Frame f;
+        pass(f, color, ids, g2);
+        CHECK(gfx.submit(std::move(f)) == 0);
+        CHECK_MESSAGE(has(gfx.last_error(), why), gfx.last_error());
+        CHECK(gfx.submitted().size() == recorded);   // nothing reached the backend
+    }
+}
+
 TEST_CASE("gfx layer: indexed draws check their index range, not the vertex range") {
     Scene s;
     Buffer idx = s.gfx.create_buffer({6 * 4, kIndex | kCopyDst});

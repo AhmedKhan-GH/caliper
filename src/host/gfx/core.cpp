@@ -281,9 +281,10 @@ public:
     Serial through() const { return sink->completed_through(); }
 
     bool validate_frame(const Frame& f, Serial s, Stats* st);
+    // targets: a render pass's colour, ID and depth textures, which its groups may not bind.
     bool validate_groups(const char* what, size_t index, const ProgramInfo& P, const BindGroup* gs,
                          const uint32_t* offsets, uint64_t arena_size, Serial s,
-                         uint64_t verified[kMaxBindGroups]);
+                         uint64_t verified[kMaxBindGroups], const Texture* targets = nullptr);
     bool fail(std::string msg) { error = std::move(msg); return false; }
 };
 
@@ -291,7 +292,7 @@ public:
 
 bool Core::validate_groups(const char* what, size_t index, const ProgramInfo& P, const BindGroup* gs,
                            const uint32_t* offsets, uint64_t arena_size, Serial s,
-                           uint64_t verified[kMaxBindGroups]) {
+                           uint64_t verified[kMaxBindGroups], const Texture* targets) {
     uint32_t k = 0;
     for (uint32_t g = 0; g < kMaxBindGroups; ++g) {
         if ((P.group_mask & (1u << g)) == 0) continue;
@@ -325,6 +326,17 @@ bool Core::validate_groups(const char* what, size_t index, const ProgramInfo& P,
                 }
                 gslot->checked = epoch;
             }
+            // A pass may not read a texture it renders into: WebGPU refuses the pass when it is
+            // encoded, and on Metal the result is undefined.
+            if (targets != nullptr)
+                for (const BindEntry& e : bg.entries) {
+                    if (!e.texture) continue;
+                    static const char* const kTarget[3] = {"colour", "ID", "depth"};
+                    for (int t = 0; t < 3; ++t)
+                        if (targets[t] && e.texture == targets[t])
+                            return fail(fmt("%s %zu: bind group %u binds the pass's own %s target as a texture", what,
+                                            index, g, kTarget[t]));
+                }
             gslot->last_use = s;
             verified[g] = gs[g].id;
         }
@@ -419,6 +431,7 @@ bool Core::validate_frame(const Frame& f, Serial s, Stats* st) {
                 t->last_use = s;
             }
             const uint64_t arena_size = list.arena().size;
+            const Texture targets[3] = {tg.color, tg.id, tg.depth};
             uint64_t last_pipeline = 0;
             const PipelineInfo* pi = nullptr;
             uint64_t verified[kMaxBindGroups] = {};
@@ -436,7 +449,8 @@ bool Core::validate_frame(const Frame& f, Serial s, Stats* st) {
                     last_pipeline = rec.pipeline.id;
                     std::fill(std::begin(verified), std::end(verified), 0);
                 }
-                if (!validate_groups("draw", index, *pi->layout, rec.groups, rec.dynamic_offsets, arena_size, s, verified))
+                if (!validate_groups("draw", index, *pi->layout, rec.groups, rec.dynamic_offsets, arena_size, s, verified,
+                                     targets))
                     return false;
                 const bool indexed = bool(rec.index_buffer);
                 for (uint32_t i = 0; i < pi->desc.vertex_layout_count; ++i) {
