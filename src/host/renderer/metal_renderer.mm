@@ -1,7 +1,8 @@
-// Metal backend for the HostRenderer seam (docs/explanations/rendering.md). Sibling to
-// gl_renderer.cpp; make_metal_renderer() (declared in host_renderer.h)
-// constructs it and main.cpp selects via CALIPER_RENDERER=metal, falling back
-// to the GL backend if init() fails. Apple-only translation unit.
+// Metal backend for the HostRenderer seam (docs/explanations/rendering.md).
+// make_metal_renderer() (declared in host_renderer.h) constructs it and
+// core_select_renderer() chooses it on macOS. There is no fallback: if its
+// start fails, the app, caliper shot and the embedding core refuse with
+// start_error(). Apple-only translation unit.
 //
 // Frame ordering matches the C1 contract: the CLEAR happens in new_frame()
 // (the Metal render pass is opened there with loadAction=Clear), the applet
@@ -513,7 +514,7 @@ public:
 
     // Metal owns no GL context: the window must be created with NO_API so GLFW
     // does not attach an OpenGL context we would fight over. Runs before
-    // glfwCreateWindow (sibling to the GL backend's profile hints).
+    // glfwCreateWindow.
     void window_hints() override {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     }
@@ -529,24 +530,29 @@ public:
     bool canvas_supported() const override { return true; }
 
     bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
-        if (w <= 0 || h <= 0) return false;
+        if (forced_start_failure()) return false;
+        if (w <= 0 || h <= 0) return start_failed("the canvas size is not positive");
         device_ = MTLCreateSystemDefaultDevice();
-        if (device_ == nil) return false;
+        if (device_ == nil) return start_failed("no Metal device");
         queue_ = [device_ newCommandQueue];
-        if (queue_ == nil) { device_ = nil; return false; }
+        if (queue_ == nil) { device_ = nil; return start_failed("no Metal command queue"); }
 
         canvas_mode_ = mode;
         canvas_w_ = w;
         canvas_h_ = h;
 
         if (mode == CANVAS_OFFSCREEN) {
-            if (!make_canvas_target(w, h)) { queue_ = nil; device_ = nil; return false; }
+            if (!make_canvas_target(w, h)) {
+                queue_ = nil; device_ = nil;
+                return start_failed("no " + std::to_string(w) + "x" + std::to_string(h) +
+                                    " offscreen target");
+            }
         } else {
             // Window mode: attach a CAMetalLayer to the host's native NSView —
             // the embed analog of init()'s glfwGetCocoaWindow path, but from a
             // view the EMBEDDER owns (no GLFW). BGRA8 to match a display layer.
             NSView* view = (__bridge NSView*)native_view;
-            if (view == nil) { queue_ = nil; device_ = nil; return false; }
+            if (view == nil) { queue_ = nil; device_ = nil; return start_failed("no view to draw into"); }
             canvas_layer_ = [CAMetalLayer layer];
             canvas_layer_.device = device_;
             canvas_layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -574,7 +580,7 @@ public:
         // wire ONLY the Metal render backend. No ImGui_ImplGlfw here.
         if (!ImGui_ImplMetal_Init(device_)) {
             canvas_layer_ = nil; canvas_tex_ = nil; queue_ = nil; device_ = nil;
-            return false;
+            return start_failed("ImGui's Metal backend did not start");
         }
 
         textures_ = [NSMutableDictionary dictionary];
@@ -709,14 +715,15 @@ public:
     }
 
     bool init(GLFWwindow* window) override {
+        if (forced_start_failure()) return false;
         window_ = window;
         device_ = MTLCreateSystemDefaultDevice();
-        if (device_ == nil) return false;
+        if (device_ == nil) return start_failed("no Metal device");
         queue_ = [device_ newCommandQueue];
-        if (queue_ == nil) return false;
+        if (queue_ == nil) return start_failed("no Metal command queue");
 
         NSWindow* nswin = glfwGetCocoaWindow(window);
-        if (nswin == nil) return false;
+        if (nswin == nil) return start_failed("the window has no Cocoa window");
         layer_ = [CAMetalLayer layer];
         layer_.device = device_;
         layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -726,10 +733,11 @@ public:
 
         // ImGui core/ImPlot contexts are host-owned and already created; only
         // the GLFW + Metal *backends* belong to this renderer.
-        if (!ImGui_ImplGlfw_InitForOther(window, true)) return false;
+        if (!ImGui_ImplGlfw_InitForOther(window, true))
+            return start_failed("ImGui's GLFW backend did not start");
         if (!ImGui_ImplMetal_Init(device_)) {
-            ImGui_ImplGlfw_Shutdown();   // undo the GLFW backend for a clean fallback
-            return false;
+            ImGui_ImplGlfw_Shutdown();   // undo the GLFW backend before the refusal
+            return start_failed("ImGui's Metal backend did not start");
         }
 
         textures_ = [NSMutableDictionary dictionary];

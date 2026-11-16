@@ -158,12 +158,12 @@ int run_shot(const CommandLine& cl) {
     // under the temporary root from here on.
     if (own_root) caliper::set_app_data_dir_override(s.temp_root.string());
 
-    // The renderer's offscreen canvas: Metal on macOS, Vulkan on Windows. The
-    // GL fallback has none.
-    s.renderer = core_select_renderer();
-    if (!s.renderer->canvas_supported())
-        return fail(std::string("shot cannot draw offscreen: the ") + s.renderer->name() +
-                    " renderer has no offscreen canvas (shot needs Metal or Vulkan)");
+    // The renderer's offscreen canvas: Metal on macOS, Vulkan on Windows. There
+    // is no fallback renderer, so a renderer that is not there or cannot start
+    // is refused with its reason.
+    std::string refusal;
+    s.renderer = core_select_renderer(&refusal);
+    if (!s.renderer) return fail("shot cannot draw offscreen: " + refusal);
 
     // The UI contexts and the house style, as the app makes them, but with no
     // imgui.ini: nothing is read, so the layout is a first run's, and nothing
@@ -180,9 +180,8 @@ int run_shot(const CommandLine& cl) {
     sternbild::apply_style();
 
     if (!s.renderer->canvas_init(nullptr, HostRenderer::CANVAS_OFFSCREEN, W, H))
-        return fail(std::string("shot cannot draw offscreen: the ") + s.renderer->name() +
-                    " renderer could not make a " + std::to_string(W) + "x" +
-                    std::to_string(H) + " canvas (no GPU?)");
+        return fail("shot cannot draw offscreen: " +
+                    renderer_start_refusal(s.renderer->name(), s.renderer->start_error()));
     s.canvas = true;
 
     // Services, the dock-hint sink and the bridge, in the app's order.

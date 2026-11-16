@@ -1,6 +1,8 @@
 #pragma once
 #include <caliper/tensor.h>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -84,7 +86,13 @@ public:
     virtual void new_frame() = 0;                   // frame CLEAR + backend NewFrame
     virtual void render(int fb_w, int fb_h) = 0;    // RenderDrawData + present
     virtual void shutdown() = 0;
-    virtual const char* name() const = 0;           // "gl" / "metal"
+    virtual const char* name() const = 0;           // "metal" / "vulkan" / "webgpu"
+
+    // Why the last init() or canvas_init() returned false, in a few words; empty
+    // while neither has failed. There is no fallback renderer, so the app,
+    // caliper shot and the embedding core refuse with this reason
+    // (renderer_start_refusal in core_lifecycle.h).
+    const std::string& start_error() const { return start_error_; }
 
     // Texture ops the bridge builds on. data is tightly-packed RGBA8.
     virtual uint64_t tex_create_rgba8(int w, int h) = 0;            // 0 on fail
@@ -345,8 +353,26 @@ public:
     };
     virtual bool frame_stats(FrameStats* /*out*/, bool /*reset_window*/) { return false; }
 
+protected:
+    // A backend's init() and canvas_init() fail through this, which records the
+    // reason for start_error(): `return start_failed("no Metal device");`.
+    bool start_failed(std::string why) {
+        start_error_ = std::move(why);
+        return false;
+    }
+    // The test variable CALIPER_TEST_RENDERER_FAIL=1 makes init() and
+    // canvas_init() fail before they touch a device, so that the refusals can
+    // be tested on a machine whose GPU works (docs/references/environment.md).
+    // Each begins with `if (forced_start_failure()) return false;`.
+    bool forced_start_failure() {
+        const char* v = std::getenv("CALIPER_TEST_RENDERER_FAIL");
+        if (!v || std::strcmp(v, "1") != 0) return false;
+        return !start_failed("CALIPER_TEST_RENDERER_FAIL=1 made its start fail");
+    }
+
 private:
     CopyCount copy_count_;
+    std::string start_error_;
 };
 
 // GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend
@@ -357,13 +383,14 @@ private:
 std::unique_ptr<HostRenderer> make_renderer(const char* name); // "gl"|"metal"|nullptr->default
 
 // Metal factory (metal_renderer.mm, C2; Apple-only translation unit). Returns
-// the Metal backend, still un-init'd — caller runs window_hints()/init() and
-// falls back to make_renderer("gl") if init() fails. Not defined on non-Apple.
+// the Metal backend, still un-init'd — the caller runs window_hints()/init(),
+// or canvas_init(), and refuses with start_error() if that fails. Not defined
+// on non-Apple.
 std::unique_ptr<HostRenderer> make_metal_renderer();
 
 // Vulkan factory (vulkan_renderer.cpp, Phase 4; Windows-only translation unit
-// today). Same contract as the Metal factory: un-init'd, caller falls back to
-// GL if init() fails. Device-resident CUDA tensors via VK_KHR_external_memory
+// today). Same contract as the Metal factory: un-init'd, and the caller refuses
+// if its start fails. Device-resident CUDA tensors via VK_KHR_external_memory
 // + the runtime-loaded CUDA driver API (docs/explanations/zero-copy.md). Not defined elsewhere.
 std::unique_ptr<HostRenderer> make_vulkan_renderer();
 }

@@ -1,7 +1,8 @@
 // Vulkan backend for the HostRenderer seam (docs/explanations/rendering.md).
-// Sibling to metal_renderer.mm / gl_renderer.cpp; make_vulkan_renderer()
-// constructs it and main.cpp selects it as the Windows default, falling back
-// to the GL backend if init() fails (no Vulkan driver, remote desktop, ...).
+// Sibling to metal_renderer.mm; make_vulkan_renderer() constructs it and
+// core_select_renderer() chooses it on Windows. There is no fallback: if its
+// start fails (no Vulkan driver, remote desktop, ...), the app, caliper shot
+// and the embedding core refuse with start_error().
 //
 // Zero-copy story (docs/explanations/zero-copy.md, Windows/NVIDIA): discrete GPUs have no
 // unified memory, so "zero-copy" means the tensor bytes never leave VRAM.
@@ -262,18 +263,19 @@ public:
     }
 
     bool init(GLFWwindow* window) override {
+        if (forced_start_failure()) return false;
         window_ = window;
-        if (volkInitialize() != VK_SUCCESS) return false;
-        if (!glfwVulkanSupported()) return false;
-        if (!create_instance()) return false;
-        if (!pick_device_and_queue()) return false;
-        if (!create_descriptor_pool()) return false;
+        if (volkInitialize() != VK_SUCCESS) return start_failed("no Vulkan loader");
+        if (!glfwVulkanSupported()) return start_failed("GLFW finds no Vulkan support");
+        if (!create_instance()) return start_failed("no Vulkan instance");
+        if (!pick_device_and_queue()) return start_failed("no Vulkan device with a graphics queue");
+        if (!create_descriptor_pool()) return start_failed("no Vulkan descriptor pool");
 
         if (glfwCreateWindowSurface(instance_, window, nullptr, &surface_) != VK_SUCCESS)
-            return false;
+            return start_failed("no Vulkan surface for the window");
         VkBool32 wsi = VK_FALSE;
         vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queue_family_, surface_, &wsi);
-        if (wsi != VK_TRUE) return false;
+        if (wsi != VK_TRUE) return start_failed("the Vulkan queue cannot present to the window");
 
         // Swapchain / render pass / framebuffers via the imgui helpers.
         wd_.Surface = surface_;
@@ -288,13 +290,14 @@ public:
         ImGui_ImplVulkanH_CreateOrResizeWindow(instance_, physical_, device_, &wd_,
                                                queue_family_, nullptr, w, h,
                                                kMinImageCount, 0);
-        // C1 contract: same background as the GL backend's clear.
+        // C1 contract: the background every backend clears to.
         wd_.ClearValue.color.float32[0] = 0.05f;
         wd_.ClearValue.color.float32[1] = 0.05f;
         wd_.ClearValue.color.float32[2] = 0.08f;
         wd_.ClearValue.color.float32[3] = 1.0f;
 
-        if (!ImGui_ImplGlfw_InitForVulkan(window, true)) return false;
+        if (!ImGui_ImplGlfw_InitForVulkan(window, true))
+            return start_failed("ImGui's GLFW backend did not start");
         ImGui_ImplVulkan_InitInfo ii = {};
         ii.ApiVersion = VK_API_VERSION_1_1;
         ii.Instance = instance_;
@@ -310,10 +313,10 @@ public:
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         if (!ImGui_ImplVulkan_Init(&ii)) {
             ImGui_ImplGlfw_Shutdown();
-            return false;
+            return start_failed("ImGui's Vulkan backend did not start");
         }
 
-        if (!create_oneshot_pool()) return false;
+        if (!create_oneshot_pool()) return start_failed("no Vulkan command pool");
 
         // Resolve the CUDA interop pairing NOW, at session start (spec §3.1),
         // not lazily: the bridge reads interop_device() when it is constructed
@@ -410,35 +413,37 @@ public:
     bool canvas_supported() const override { return true; }
 
     bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
-        if (w <= 0 || h <= 0) return false;
+        if (forced_start_failure()) return false;
+        if (w <= 0 || h <= 0) return start_failed("the canvas size is not positive");
         // One attach per instance, mutually exclusive with the exe init() path.
-        if (canvas_active_ || device_ != VK_NULL_HANDLE) return false;
+        if (canvas_active_ || device_ != VK_NULL_HANDLE)
+            return start_failed("this renderer has already started");
 
         canvas_mode_ = mode;
         canvas_w_ = w;
         canvas_h_ = h;
         canvas_active_ = true;
-        auto fail = [&]() -> bool { canvas_teardown(); return false; };
+        auto fail = [&](const char* why) -> bool { canvas_teardown(); return start_failed(why); };
 
         // GLFW-free bring-up: explicit instance (no glfwGetRequiredInstance-
         // Extensions — the embed path never calls glfwInit), then the same
         // device/pool helpers the exe path uses (they touch no GLFW/surface).
-        if (volkInitialize() != VK_SUCCESS) return fail();
-        if (!create_canvas_instance(mode)) return fail();
-        if (!pick_device_and_queue()) return fail();
-        if (!create_descriptor_pool()) return fail();
-        if (!create_oneshot_pool()) return fail();
+        if (volkInitialize() != VK_SUCCESS) return fail("no Vulkan loader");
+        if (!create_canvas_instance(mode)) return fail("no Vulkan instance");
+        if (!pick_device_and_queue()) return fail("no Vulkan device with a graphics queue");
+        if (!create_descriptor_pool()) return fail("no Vulkan descriptor pool");
+        if (!create_oneshot_pool()) return fail("no Vulkan command pool");
 
         if (mode == CANVAS_WINDOW) {
-            if (native_view == nullptr) return fail();
+            if (native_view == nullptr) return fail("no window to draw into");
             VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
             sci.hinstance = (HINSTANCE)GetModuleHandleW(nullptr);
             sci.hwnd = (HWND)native_view;
             if (vkCreateWin32SurfaceKHR(instance_, &sci, nullptr, &surface_) != VK_SUCCESS)
-                return fail();
+                return fail("no Vulkan surface for the window");
             VkBool32 wsi = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queue_family_, surface_, &wsi);
-            if (wsi != VK_TRUE) return fail();
+            if (wsi != VK_TRUE) return fail("the Vulkan queue cannot present to the window");
 
             // Same swapchain/render-pass block as init() (verbatim; wd_ only).
             wd_.Surface = surface_;
@@ -459,8 +464,8 @@ public:
             // OFFSCREEN: a dedicated color-only pass + RGBA8 target we composite
             // into and copy back (adjudication F1; no depth — ImGui needs none
             // and the exe swapchain pass has none either).
-            if (!ensure_canvas_pass()) return fail();
-            if (!make_canvas_target(w, h)) return fail();
+            if (!ensure_canvas_pass()) return fail("no Vulkan render pass for the canvas");
+            if (!make_canvas_target(w, h)) return fail("no offscreen target of that size");
         }
 
         // Wire ONLY the ImGui render backend against the pass it will record
@@ -479,7 +484,7 @@ public:
             (mode == CANVAS_WINDOW) ? wd_.RenderPass : canvas_pass_;
         ii.PipelineInfoMain.Subpass = 0;
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-        if (!ImGui_ImplVulkan_Init(&ii)) return fail();
+        if (!ImGui_ImplVulkan_Init(&ii)) return fail("ImGui's Vulkan backend did not start");
         canvas_imgui_ = true;
 
         // Same session-start CUDA interop pairing the exe init() does (spec §3.1):

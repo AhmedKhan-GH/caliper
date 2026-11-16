@@ -10,6 +10,8 @@
 #   DATA_DIR  the CALIPER_DATA_DIR of the run: removed before it, and it must
 #           not exist after it unless ALLOW names what it may hold (optional)
 #   ALLOW   the names allowed at the top of DATA_DIR, separated by "|"
+#   EMPTY_DATA_DIR  1 when the run may leave DATA_DIR as an empty folder
+#           (optional)
 #   STAGE   <from>|<to>: a folder copied to <to> before the run, after CLEAN
 #           (optional)
 if(CLEAN)
@@ -42,7 +44,7 @@ if(DEFINED ERROR AND NOT err MATCHES "${ERROR}")
     message(FATAL_ERROR "stderr does not match: ${ERROR}")
 endif()
 if(DATA_DIR AND EXISTS "${DATA_DIR}")
-    if(NOT ALLOW)
+    if(NOT ALLOW AND NOT EMPTY_DATA_DIR)
         message(FATAL_ERROR "the run created ${DATA_DIR}")
     endif()
     string(REPLACE "|" ";" allow "${ALLOW}")

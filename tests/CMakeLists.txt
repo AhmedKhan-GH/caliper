@@ -189,12 +189,15 @@ set_target_properties(caliper_colormap_cases PROPERTIES CXX_STANDARD 17 CXX_STAN
 if(TARGET caliper)
     set(_cli_work "${CMAKE_CURRENT_BINARY_DIR}/cli-work")
     function(caliper_cli_test name)
-        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_APPLETS"
-            "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE;ALLOW" "")
+        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_APPLETS;EMPTY_DATA_DIR"
+            "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE;ALLOW;ENV" "")
         set(data "${_cli_work}/app-data-${name}")
         set(env "--unset=CALIPER_APPLET_PATH|CALIPER_DATA_DIR=${data}")
         if(NOT t_DEFAULT_USER_APPLETS)
             string(APPEND env "|CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
+        endif()
+        if(DEFINED t_ENV)   # more of the run's environment, "|"-separated
+            string(APPEND env "|${t_ENV}")
         endif()
         set(defs -DEXE=$<TARGET_FILE:caliper> "-DARGS=${t_ARGS}" -DEXIT=${t_EXIT}
                  "-DENV=${env}" "-DDATA_DIR=${data}")
@@ -203,6 +206,9 @@ if(TARGET caliper)
                 list(APPEND defs "-D${opt}=${t_${opt}}")
             endif()
         endforeach()
+        if(t_EMPTY_DATA_DIR)
+            list(APPEND defs "-DEMPTY_DATA_DIR=1")
+        endif()
         add_test(NAME caliper_cli_${name}
                  COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_run.cmake)
         set_tests_properties(caliper_cli_${name} PROPERTIES LABELS cli)
@@ -288,6 +294,33 @@ if(TARGET caliper)
     caliper_cli_test(shot_unknown_applet
         ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.example.nowhere|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 ERROR "no applet with the id dev\\.example\\.nowhere")
+
+    # No fallback renderer (renderer core, step 5). Where the platform's
+    # renderer cannot start, the app and shot refuse with one message that
+    # names it and why, and exit with 1. The test variable
+    # CALIPER_TEST_RENDERER_FAIL=1 makes the renderer's start fail, so these run
+    # on any machine, with or without a GPU. CALIPER_RENDERER=gl, which asks for
+    # the removed OpenGL renderer, is refused before any renderer is made.
+    # CALIPER_EXIT_AFTER ends an app that starts after all, which then fails on
+    # its exit code instead of running until the timeout. A refused run leaves
+    # at most the empty data folder, which the app and shot resolve their paths
+    # under before the renderer starts.
+    set(_no_renderer "the (Metal|Vulkan) renderer could not start \\(CALIPER_TEST_RENDERER_FAIL=1 made its start fail\\), and there is no fallback renderer until the WebGPU fallback through Dawn lands")
+    # (The pattern's "removed." stands for "removed;": a ";" would split the argument.)
+    set(_gl_removed "CALIPER_RENDERER=gl asks for the OpenGL renderer, which was removed. unset it, and Caliper draws with Metal on macOS and Vulkan on Windows")
+    caliper_cli_test(app_no_renderer ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
+        ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1|CALIPER_EXIT_AFTER=2"
+        ERROR "caliper: ${_no_renderer}")
+    caliper_cli_test(app_renderer_gl ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
+        ENV "CALIPER_RENDERER=gl|CALIPER_EXIT_AFTER=2" ERROR "caliper: ${_gl_removed}")
+    caliper_cli_test(shot_no_renderer
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        EXIT 1 EMPTY_DATA_DIR ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1"
+        ERROR "caliper: shot cannot draw offscreen: ${_no_renderer}")
+    caliper_cli_test(shot_renderer_gl
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        EXIT 1 EMPTY_DATA_DIR ENV "CALIPER_RENDERER=gl"
+        ERROR "caliper: shot cannot draw offscreen: ${_gl_removed}")
 
     # Then real shots of the hello fixture: the image has the requested size
     # and is not one flat colour (caliper_png_check), and the run leaves

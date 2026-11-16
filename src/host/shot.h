@@ -37,8 +37,9 @@
 //
 // Exit codes: 0 when the PNG is written; 1 when the applet is not found,
 // cannot be launched, fails to launch or is quarantined, when the renderer
-// cannot draw offscreen (no Metal or Vulkan device), or when the image cannot
-// be written. A wrong command line is caught by parse_command_line (exit 2).
+// cannot draw offscreen (CALIPER_RENDERER=gl, or Metal or Vulkan could not
+// start, and there is no fallback renderer), or when the image cannot be
+// written. A wrong command line is caught by parse_command_line (exit 2).
 // ============================================================================
 #include "host_cli.h"
 

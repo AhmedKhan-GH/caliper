@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <string>
 
 #include "renderer/host_renderer.h"
 
@@ -17,11 +18,22 @@
 // documented reordering crashes (MTLTexture UAF / ImGui-backend teardown).
 namespace caliper_host {
 
-// Selects the HostRenderer backend from CALIPER_RENDERER + the platform default
-// (Metal on Apple, Vulkan on Win32, GL elsewhere); GL is the guaranteed
-// fallback. The host still creates the window and calls renderer->init()
-// itself, and still recreates with make_renderer("gl") if that init fails.
-std::unique_ptr<HostRenderer> core_select_renderer();
+// The platform's HostRenderer, not yet started: Metal on Apple, Vulkan on
+// Win32. There is no fallback renderer until the WebGPU fallback through Dawn
+// lands, so this returns nullptr with *why set to the refusal where there is
+// none: CALIPER_RENDERER=gl, which asks for the removed OpenGL renderer, or a
+// platform with neither Metal nor Vulkan. Any other value of CALIPER_RENDERER
+// leaves the platform's renderer. The caller starts it (init() after creating
+// the window, or canvas_init()) and refuses with renderer_start_refusal() if
+// that fails.
+std::unique_ptr<HostRenderer> core_select_renderer(std::string* why);
+
+// The refusal when the renderer `name` could not start for the reason `why`
+// (HostRenderer::start_error()): it names the renderer and the reason, and
+// says that there is no fallback yet. The app prints it after "caliper: ",
+// caliper shot after "caliper: shot cannot draw offscreen: ", and the
+// embedding core sets it as the last error after "attach_canvas: ".
+std::string renderer_start_refusal(const char* name, const std::string& why);
 
 // Creates the applet-canvas ImGui/ImPlot/ImPlot3D contexts and sets the base
 // config flags (keyboard nav + docking). MUST run before renderer->init().
