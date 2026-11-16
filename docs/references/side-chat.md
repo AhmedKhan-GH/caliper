@@ -7,7 +7,9 @@ explains when to use the side chat and when the widget agent.
 
 !!! note "Status"
     The side chat is on the app's spec page and live page (`src/host/builder/chat_pane.h`, over the component in
-    `src/host/builder/side_chat.h`), and is tested in the hidden app with stub agents. It is not on the landing page.
+    `src/host/builder/side_chat.h`), and is tested in the hidden app with stub agents, and with `caliper-agent` on a local
+    model served by Ollama in the dry run `examples/build_a_dashboard/dry_run/step4_side_chat.py`. It is not on the
+    landing page.
     In the spec page's build mode it is the lower part of the builder pane's right column, under Properties
     ([Builder pane](builder-pane.md)).
 
@@ -49,6 +51,10 @@ is:
 /usr/bin/env PYTHONPATH=/path/to/caliper/src/builder/agent /path/to/python -P -m caliper_agent --preset ollama --base-url http://127.0.0.1:11434/v1 --model <model>
 ```
 
+The script `examples/build_a_dashboard/chat-agent.sh` wraps this line: give its absolute path as the custom command,
+and it finds the source from its own place, takes the interpreter from `CALIPER_AGENT_PYTHON` (the repository's
+`.venv` by default) and the model from `CALIPER_CHAT_MODEL`. An app started from the Finder gives its agents only the
+system's `PATH`, so set such a variable in the line itself, as `/usr/bin/env CALIPER_AGENT_PYTHON=... /path/to/chat-agent.sh`.
 It reaches Caliper with the session's own API file, so its edits wait on the approval cards like any other agent's.
 
 The agent uses its own login. When it answers that it needs one, the pane shows LOGIN with the login methods the agent
