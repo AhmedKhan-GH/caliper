@@ -26,8 +26,10 @@
 //                        real model's turn), else kPatience frames; a state
 //                        that does not change by itself (failed, declined,
 //                        handoff, conflict, unavailable) stops the script at
-//                        once when it is not the one waited for. The log line
-//                        adds what the surface shows (SpecPage::widget_facts())
+//                        once when it is not the one waited for, and the stop
+//                        says "a state that does not change by itself", which
+//                        a wait that ran out does not. The log line adds what
+//                        the surface shows (SpecPage::widget_facts())
 //   shot <name>          read the next frame back into <name>.png
 //   chat open|close      the side chat's toggle (chat_pane.h)
 //   chat focus           puts the keyboard into the chat's input
@@ -528,7 +530,9 @@ public:
                 // A state that does not change by itself ends the wait.
                 if (now == "failed" || now == "declined" || now == "handoff" || now == "conflict" ||
                     now == "unavailable")
-                    return void(error_ = "until " + s.arg + ": " + why);
+                    return void(error_ = "until " + s.arg + ": the surface is " + now + ", not " + want +
+                                         ", a state that does not change by itself" +
+                                         (facts.empty() ? "" : " (" + facts + ")"));
                 return patience_for(seconds, why);
             }
             next("the surface is " + want + (facts.empty() ? "" : " (" + facts + ")"));
