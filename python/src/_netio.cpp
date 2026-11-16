@@ -30,7 +30,9 @@
 // announced as JSON. A CONTROL from a peer that did not announce "controls" is
 // refused here with ERROR bad_request. Python sends CONTROLS, CONTROL_REPLY
 // and SELECTION with send(); a late viewer's state goes with
-// send_after_views() so that it follows the VIEWS of its attachment. A peer
+// send_after_views() so that it follows the VIEWS of its attachment, and
+// data_pending() tells Python when the run state of a pause may follow the
+// data sent before it. A peer
 // that announced "selection" gets the VIEWS with item spaces (set_views()'s
 // second list).
 //
@@ -390,6 +392,22 @@ public:
         (l.views_pending ? l.after_views : l.control).push_back(std::move(b));
         wake_all();
         return true;
+    }
+
+    // 3.1: whether a connection still has a snapshot or series values to send
+    // (Python sends the run state of a pause only once none has).
+    bool data_pending() {
+        std::lock_guard<std::mutex> g(mu_);
+        for (const auto& [id, l] : links_) {
+            if (l.closing) continue;
+            for (const auto& [n, sub] : l.subs) {
+                if (sub.snap) return true;
+                if (!sub.series) continue;
+                auto h = histories_.find(sub.view);
+                if (h != histories_.end() && sub.next < h->second.total) return true;
+            }
+        }
+        return false;
     }
 
     // 3.1: announce "controls" and "selection" from now on; ``allow``: whether
@@ -1391,6 +1409,7 @@ NB_MODULE(_netio, m) {
                  return self.send_after_views(c, std::move(f));
              })
         .def("enable_controls", &NetIO::enable_controls, nb::arg("allow"), R())
+        .def("data_pending", &NetIO::data_pending, R())
         .def("sub_open", &NetIO::sub_open, nb::arg("conn"), nb::arg("sub"), nb::arg("view"), nb::arg("kind"),
              nb::arg("group"), nb::arg("data_view"), nb::arg("max_rate"), nb::arg("backfill"), R())
         .def("sub_close", &NetIO::sub_close, R())
