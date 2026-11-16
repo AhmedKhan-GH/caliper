@@ -286,10 +286,11 @@ class DataViewEngine:
     def _fast(self, call: Call, p) -> Reduced | None:
         """A view without dims whose plan would only copy the call's tensor (a
         float32 2-D heatmap, float32 (N, 2|3) points): the data view is applied
-        to that tensor itself, with no scratch copy. Stats: a pooled or tiled
-        heatmap reports the range of its data before pooling (protocol v2's
-        rule, as dv.finish), one aminmax; otherwise they are the payload's,
-        which the transport computes on the host."""
+        to that tensor itself, with no scratch copy. The stats are those of
+        _apply_plain: a heatmap reports the range of the whole tensor (one
+        aminmax when the data view pools, zooms or tiles it; the transport
+        computes the same range on the host when the payload is the whole
+        tensor), points those of the points sent (on the host)."""
         import torch
         plan = call.plan
         common = dict(colormap=plan.colormap, flags=snap_flags(plan.flags), vmin=plan.vmin,
@@ -298,17 +299,17 @@ class DataViewEngine:
             src = _plain_source(call)
             if src is None:
                 return None
-            y, pre = dv._apply(src, p, pre=True)
+            y = dv._apply(src, p)
             stats = None
-            if (p.tile is not None or (p.pool and p.pool[1])) and \
-                    plan.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX):
+            whole = y.shape == src.shape and y.stride() == src.stride() and y.data_ptr() == src.data_ptr()
+            if not whole and plan.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX):
                 key = (call.name, "range")
                 r = self._stats.get(key)
                 if r is None or r[0].device != src.device:
                     stats = torch.zeros(2, dtype=torch.float32, device=src.device)
                     r = self._stats[key] = (stats, (stats[0], stats[1]))
                 stats = r[0]
-                torch.aminmax(pre, out=r[1])
+                torch.aminmax(src, out=r[1])
             if not y.is_contiguous():            # a strided zoom: MPS copies to the host need it
                 y = y.contiguous()
             return Reduced(y, stats=stats, stats_count=2, **common)
