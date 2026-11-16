@@ -331,6 +331,12 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
     if (it == commands_.end())
         return CommandResult::failure(inv.id, Error("command.unknown", "No command is named " + inv.name + ".", "name"));
     const Entry& entry = it->second;
+    // The arguments first: a caller learns that its call is malformed even
+    // from an app that has no handler for the command yet.
+    if (Error err = validate_command_value(entry.descriptor.args, inv.args, "args")) {
+        err.code = "command.invalid_args";
+        return CommandResult::failure(inv.id, err);
+    }
     if (!entry.handler)
         return CommandResult::failure(
             inv.id, Error("command.not_bound", inv.name + " is in the command table, but this app has no handler for it yet.",
@@ -338,10 +344,6 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
     if (wrong_thread(entry.descriptor))
         return CommandResult::failure(
             inv.id, Error("command.wrong_thread", inv.name + " runs only on the app's frame thread.", "name"));
-    if (Error err = validate_command_value(entry.descriptor.args, inv.args, "args")) {
-        err.code = "command.invalid_args";
-        return CommandResult::failure(inv.id, err);
-    }
 
     ApprovalDecision decision;
     std::vector<std::uint64_t> steps;

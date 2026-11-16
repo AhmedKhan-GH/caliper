@@ -1,0 +1,4154 @@
+{
+  "commands": [
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "app.info",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "abi_epoch": {
+            "description": "The ABI epoch that compiled applets must be built for.",
+            "type": "integer"
+          },
+          "host": {
+            "description": "The app's version.",
+            "type": "string"
+          },
+          "libtorch": {
+            "description": "The libtorch version, or null when the app has none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sdk": {
+            "description": "The Caliper SDK version, or null when it is not known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "services": {
+            "description": "The service ids the app offers to applets, such as caliper.data.v1.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ui_stack": {
+            "description": "A fingerprint of the interface libraries, or null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "abi_epoch",
+          "host",
+          "libtorch",
+          "sdk",
+          "services",
+          "ui_stack"
+        ],
+        "type": "object"
+      },
+      "summary": "Describes the running Caliper app: its version, the ABI epoch its applets must be built for, the services it offers, and the versions of the SDK, libtorch and its interface libraries. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "app.applets",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applets": {
+            "description": "The applets, in the app's search order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "folder": {
+                  "description": "The folder the applet was found in.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "The applet's manifest id.",
+                  "type": "string"
+                },
+                "reason": {
+                  "description": "Why the applet cannot run; empty for a READY applet.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "READY, ACTIVE, REFUSED or SHADOWED, as caliper list prints it.",
+                  "type": "string"
+                },
+                "version": {
+                  "description": "The applet's version.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "folder",
+                "id",
+                "reason",
+                "status",
+                "version"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "applets"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. The id is what app.launch takes. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The applet's manifest id, such as com.example.my-viewer, from app.applets.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]{1,128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "com.example.my-viewer"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "app.launch",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "already_open": {
+            "description": "Whether the applet's page was already open.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The applet's manifest id.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The applet's status after the launch, ACTIVE when it opened.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The applet's version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "already_open",
+          "id",
+          "status",
+          "version"
+        ],
+        "type": "object"
+      },
+      "summary": "Opens the page of one applet, as a click on its row on the app's landing screen does. The page shown before is closed first, and an attached live session is detached. The id is an applet's manifest id from app.applets."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "Only sources of this kind.",
+            "enum": [
+              "table",
+              "tensor",
+              "live",
+              "feed",
+              "metric"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "description": "The most entries to return, from 1 to 1000; 100 when absent.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prefix": {
+            "description": "Only sources whose name starts with this text, case-sensitive.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "kind": "tensor",
+          "limit": 50
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "catalog.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "description": "The matching sources, sorted by id.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "bytes": {
+                  "description": "The size of the data in bytes, or null when it is not known.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "columns": {
+                  "description": "For a table, feed or metric, its columns with their DuckDB types; null for a tensor or live view.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "description": "The column's name.",
+                        "type": "string"
+                      },
+                      "type": {
+                        "description": "The column's DuckDB type, such as BIGINT, DOUBLE or VARCHAR.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "type"
+                    ],
+                    "type": "object"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "dtype": {
+                  "description": "For a tensor or live view, its element type; null for a tabular source, and for a live view before its first snapshot.",
+                  "enum": [
+                    "u8",
+                    "i8",
+                    "u16",
+                    "i16",
+                    "u32",
+                    "i32",
+                    "u64",
+                    "i64",
+                    "f16",
+                    "f32",
+                    "f64",
+                    "bool",
+                    null
+                  ],
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "The source id, <kind>:<name>; a spec source names it in its catalog field.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics.",
+                  "enum": [
+                    "table",
+                    "tensor",
+                    "live",
+                    "feed",
+                    "metric"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "description": "The name part of the id. For a table it is the table's name in SQL.",
+                  "type": "string"
+                },
+                "origin": {
+                  "additionalProperties": false,
+                  "description": "Where the source comes from: a loader and its file, a database table, a live view, a feed channel, or a metrics run and tag.",
+                  "properties": {
+                    "channel": {
+                      "description": "The feed channel's id, such as sys.cpu.util.",
+                      "type": "string"
+                    },
+                    "database": {
+                      "description": "The database that holds the table, workspace for the workspace's own.",
+                      "type": "string"
+                    },
+                    "experiment": {
+                      "description": "The metrics experiment.",
+                      "type": "string"
+                    },
+                    "file": {
+                      "description": "The file or glob the loader read, relative to the workspace.",
+                      "type": "string"
+                    },
+                    "loader": {
+                      "description": "The id of the loader that made the source.",
+                      "type": "string"
+                    },
+                    "output": {
+                      "description": "The name of the loader output that made the source.",
+                      "type": "string"
+                    },
+                    "run": {
+                      "description": "The metrics run's id.",
+                      "type": "integer"
+                    },
+                    "run_name": {
+                      "description": "The metrics run's name.",
+                      "type": "string"
+                    },
+                    "schema": {
+                      "description": "The table's DuckDB schema.",
+                      "type": "string"
+                    },
+                    "service": {
+                      "description": "The app service that holds the data: feed for live telemetry, metrics for logged metrics.",
+                      "type": "string"
+                    },
+                    "session": {
+                      "description": "The live session that publishes the view.",
+                      "type": "string"
+                    },
+                    "table": {
+                      "description": "The table's or view's name in DuckDB.",
+                      "type": "string"
+                    },
+                    "tag": {
+                      "description": "The metrics tag, such as train/loss.",
+                      "type": "string"
+                    },
+                    "tensor": {
+                      "description": "The tensor's name inside the file.",
+                      "type": "string"
+                    },
+                    "units": {
+                      "description": "The feed channel's units, such as % or W.",
+                      "type": "string"
+                    },
+                    "view": {
+                      "description": "The live view's name, as the training script published it with Caliper LIB.",
+                      "type": "string"
+                    },
+                    "view_type": {
+                      "description": "The live view's type: heatmap, points, histogram or series.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "rate_hz": {
+                  "description": "How often new values arrive, in hertz: snapshots per second for a live view, the nominal rate of a feed channel, or the sampling rate along axis 0 of an audio tensor; null when the source has no rate.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "rows": {
+                  "description": "For a table, feed or metric, its number of rows, or null when it is not known; null for a tensor or live view.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "shape": {
+                  "description": "For a tensor or live view, the size of each axis, at most 8 axes; null otherwise.",
+                  "items": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 8,
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "description": "A name for a person.",
+                  "type": "string"
+                },
+                "updated_at": {
+                  "description": "When the source's data last changed, in UTC ISO 8601, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "warnings": {
+                  "description": "Notes about the source, such as that it was loaded weights-only from a pickle file.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "wire": {
+                  "description": "Whether the source can be streamed to the browser viewer, so that a spec that binds it also runs on the web.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "title",
+                "origin",
+                "columns",
+                "rows",
+                "dtype",
+                "shape",
+                "rate_hz",
+                "bytes",
+                "wire",
+                "warnings",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "Whether more sources matched than limit.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "description": "Notes about the catalog itself, such as an origin that failed to answer or an id offered twice.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries",
+          "truncated",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the sources in the catalog: every table, tensor, live view, feed channel and metric that a spec can bind, with its schema, shape and rate. A source id is <kind>:<name>, such as table:run42_metrics or live:attn.weights; a spec source names it in its catalog field. Filter by kind or by the start of the name. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The source id, <kind>:<name>, from catalog.list.",
+            "maxLength": 263,
+            "minLength": 3,
+            "pattern": "^(table|tensor|live|feed|metric):.+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "live:attn.weights"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "catalog.describe",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "entry": {
+            "additionalProperties": false,
+            "description": "The source.",
+            "properties": {
+              "bytes": {
+                "description": "The size of the data in bytes, or null when it is not known.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "columns": {
+                "description": "For a table, feed or metric, its columns with their DuckDB types; null for a tensor or live view.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The column's name.",
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "The column's DuckDB type, such as BIGINT, DOUBLE or VARCHAR.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "type"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "dtype": {
+                "description": "For a tensor or live view, its element type; null for a tabular source, and for a live view before its first snapshot.",
+                "enum": [
+                  "u8",
+                  "i8",
+                  "u16",
+                  "i16",
+                  "u32",
+                  "i32",
+                  "u64",
+                  "i64",
+                  "f16",
+                  "f32",
+                  "f64",
+                  "bool",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "The source id, <kind>:<name>; a spec source names it in its catalog field.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics.",
+                "enum": [
+                  "table",
+                  "tensor",
+                  "live",
+                  "feed",
+                  "metric"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "description": "The name part of the id. For a table it is the table's name in SQL.",
+                "type": "string"
+              },
+              "origin": {
+                "additionalProperties": false,
+                "description": "Where the source comes from: a loader and its file, a database table, a live view, a feed channel, or a metrics run and tag.",
+                "properties": {
+                  "channel": {
+                    "description": "The feed channel's id, such as sys.cpu.util.",
+                    "type": "string"
+                  },
+                  "database": {
+                    "description": "The database that holds the table, workspace for the workspace's own.",
+                    "type": "string"
+                  },
+                  "experiment": {
+                    "description": "The metrics experiment.",
+                    "type": "string"
+                  },
+                  "file": {
+                    "description": "The file or glob the loader read, relative to the workspace.",
+                    "type": "string"
+                  },
+                  "loader": {
+                    "description": "The id of the loader that made the source.",
+                    "type": "string"
+                  },
+                  "output": {
+                    "description": "The name of the loader output that made the source.",
+                    "type": "string"
+                  },
+                  "run": {
+                    "description": "The metrics run's id.",
+                    "type": "integer"
+                  },
+                  "run_name": {
+                    "description": "The metrics run's name.",
+                    "type": "string"
+                  },
+                  "schema": {
+                    "description": "The table's DuckDB schema.",
+                    "type": "string"
+                  },
+                  "service": {
+                    "description": "The app service that holds the data: feed for live telemetry, metrics for logged metrics.",
+                    "type": "string"
+                  },
+                  "session": {
+                    "description": "The live session that publishes the view.",
+                    "type": "string"
+                  },
+                  "table": {
+                    "description": "The table's or view's name in DuckDB.",
+                    "type": "string"
+                  },
+                  "tag": {
+                    "description": "The metrics tag, such as train/loss.",
+                    "type": "string"
+                  },
+                  "tensor": {
+                    "description": "The tensor's name inside the file.",
+                    "type": "string"
+                  },
+                  "units": {
+                    "description": "The feed channel's units, such as % or W.",
+                    "type": "string"
+                  },
+                  "view": {
+                    "description": "The live view's name, as the training script published it with Caliper LIB.",
+                    "type": "string"
+                  },
+                  "view_type": {
+                    "description": "The live view's type: heatmap, points, histogram or series.",
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "rate_hz": {
+                "description": "How often new values arrive, in hertz: snapshots per second for a live view, the nominal rate of a feed channel, or the sampling rate along axis 0 of an audio tensor; null when the source has no rate.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "rows": {
+                "description": "For a table, feed or metric, its number of rows, or null when it is not known; null for a tensor or live view.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "shape": {
+                "description": "For a tensor or live view, the size of each axis, at most 8 axes; null otherwise.",
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 8,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "A name for a person.",
+                "type": "string"
+              },
+              "updated_at": {
+                "description": "When the source's data last changed, in UTC ISO 8601, or null.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "warnings": {
+                "description": "Notes about the source, such as that it was loaded weights-only from a pickle file.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "wire": {
+                "description": "Whether the source can be streamed to the browser viewer, so that a spec that binds it also runs on the web.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "name",
+              "title",
+              "origin",
+              "columns",
+              "rows",
+              "dtype",
+              "shape",
+              "rate_hz",
+              "bytes",
+              "wire",
+              "warnings",
+              "updated_at"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "type": "object"
+      },
+      "summary": "Gives one catalog source in full: its kind, where it comes from, its columns and row count for a table, feed or metric, its dtype and shape for a tensor or live view, its rate, its size, whether it can run in the browser viewer, and any warnings. The id comes from catalog.list."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "For a tensor-shaped source, the box's size on each axis, one per axis, each at most 64 and at most 4096 values in all; as many as fit when absent.",
+            "items": {
+              "maximum": 64,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "id": {
+            "description": "The source id, <kind>:<name>, from catalog.list.",
+            "maxLength": 263,
+            "minLength": 3,
+            "pattern": "^(table|tensor|live|feed|metric):.+$",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "description": "For a tabular source, the most rows to give, from 1 to 1000; 20 when absent.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "start": {
+            "description": "For a tensor-shaped source, the box's first index on each axis, one per axis; zeros when absent.",
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "count": [
+            1,
+            1,
+            8,
+            8
+          ],
+          "id": "tensor:attn_weights",
+          "start": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "catalog.sample",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "description": "For a tabular source, its columns, in the order of each row's cells; null otherwise.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "description": "The column's name.",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "The column's DuckDB type, such as BIGINT, DOUBLE or VARCHAR.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "cut_cells": {
+            "description": "How many string cells were cut to 1024 bytes.",
+            "type": "integer"
+          },
+          "dtype": {
+            "description": "For a tensor-shaped source, its element type; null otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The source id.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The source's kind.",
+            "enum": [
+              "table",
+              "tensor",
+              "live",
+              "feed",
+              "metric"
+            ],
+            "type": "string"
+          },
+          "rows": {
+            "description": "For a tabular source, the rows given, each a list of cells in column order: a table's first rows, a feed's newest, a metric's last by step. NaN and infinities are the strings nan, inf and -inf; dates are ISO 8601 strings; nested values are their JSON text. Null otherwise.",
+            "items": {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shape": {
+            "description": "For a tensor-shaped source, its shape; null otherwise.",
+            "items": {
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "slice": {
+            "additionalProperties": false,
+            "description": "For a tensor-shaped source, a box of its values; null otherwise.",
+            "properties": {
+              "shape": {
+                "description": "The box's size on each axis.",
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "start": {
+                "description": "The box's first index on each axis.",
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "values": {
+                "description": "The box's values in row-major order; NaN and infinities are the strings nan, inf and -inf.",
+                "items": {
+                  "type": [
+                    "number",
+                    "boolean",
+                    "string"
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "start",
+              "shape",
+              "values"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "stats": {
+            "additionalProperties": false,
+            "description": "For a tensor-shaped source, statistics over its elements; null otherwise.",
+            "properties": {
+              "count": {
+                "description": "The tensor's number of elements.",
+                "type": "integer"
+              },
+              "exact": {
+                "description": "Whether every element was read.",
+                "type": "boolean"
+              },
+              "max": {
+                "description": "The largest finite value, or null.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "mean": {
+                "description": "The mean of the finite values, or null.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "min": {
+                "description": "The smallest finite value, or null when there is none.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "nonfinite": {
+                "description": "How many of the elements read are NaN or infinite.",
+                "type": "integer"
+              },
+              "sampled": {
+                "description": "How many elements were read: all of them up to 2^26, else an even stride.",
+                "type": "integer"
+              },
+              "std": {
+                "description": "The population standard deviation of the finite values, or null.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "count",
+              "sampled",
+              "exact",
+              "nonfinite",
+              "min",
+              "max",
+              "mean",
+              "std"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "total_rows": {
+            "description": "The source's row count when it is known, else null.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "truncated": {
+            "description": "Whether the source has more rows than were given.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "columns",
+          "rows",
+          "total_rows",
+          "truncated",
+          "cut_cells",
+          "dtype",
+          "shape",
+          "stats",
+          "slice"
+        ],
+        "type": "object"
+      },
+      "summary": "Shows a little of a source's data, to learn what it holds before binding it. A table, feed or metric gives up to limit rows (20 by default). A tensor or live view gives its statistics (min, max, mean, standard deviation and the count of non-finite values) and a box of its values, at most 64 per axis and 4096 in all, placed with start and count. The id comes from catalog.list. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 1000,
+            "description": "The most rows to return, from 1 to 100000; 1000 when absent.",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sql": {
+            "description": "One SELECT statement, such as SELECT step, loss FROM run42_metrics ORDER BY step.",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeout_ms": {
+            "default": 5000,
+            "description": "The time limit in milliseconds, from 100 to 30000; 5000 when absent.",
+            "maximum": 30000,
+            "minimum": 100,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "limit": 100,
+          "sql": "SELECT step, loss FROM run42_metrics ORDER BY step"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "data.query",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "description": "The result's columns, in order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "description": "The column's name.",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "The column's DuckDB type, such as BIGINT, DOUBLE or VARCHAR.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "elapsed_ms": {
+            "description": "How long the query took, in milliseconds.",
+            "type": "number"
+          },
+          "rows": {
+            "description": "The rows, each a list of cells in column order. NaN and infinities are the strings nan, inf and -inf; dates are ISO 8601 strings; nested values are their JSON text.",
+            "items": {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "Whether the query had more rows than limit, or more than 8 MiB of them.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "columns",
+          "rows",
+          "truncated",
+          "elapsed_ms"
+        ],
+        "type": "object"
+      },
+      "summary": "Runs one read-only SQL SELECT, in DuckDB's dialect, over the workspace's tables, which are the table: sources of the catalog named without the table: prefix. It returns at most limit rows (1000 by default) and stops after timeout_ms (5000 by default). Use it to explore data or to try the SQL of a spec source. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "paths": {
+            "description": "The files to import, relative to the workspace, such as data/run42/metrics.parquet.",
+            "items": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "run": {
+            "default": true,
+            "description": "Whether to run the new loaders at once; true when absent. A Python loader is never run by an import.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "paths": [
+            "data/run42/metrics.parquet",
+            "checkpoints/model.safetensors"
+          ]
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "data.import",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "loaders": {
+            "description": "One entry for each loader created.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "description": "The new loader's id, for the loader commands.",
+                  "type": "string"
+                },
+                "outputs": {
+                  "description": "The catalog ids of the sources it made, such as table:metrics.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "path": {
+                  "description": "The file it reads.",
+                  "type": "string"
+                },
+                "ran": {
+                  "description": "Whether it ran.",
+                  "type": "boolean"
+                },
+                "reader": {
+                  "description": "The reader chosen, such as parquet or safetensors.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "path",
+                "reader",
+                "outputs",
+                "ran"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "refused": {
+            "description": "One entry for each path that was refused.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "Why, such as loader.pickle_refused or loader.path_refused.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence, naming the safe route when there is one.",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "The path refused.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "code",
+                "message"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "loaders",
+          "refused"
+        ],
+        "type": "object"
+      },
+      "summary": "Creates a loader for each file path given, choosing the reader from the file's extension (csv, tsv, parquet, json, jsonl, arrow, npy, npz, safetensors, hdf5, png, jpg, wav), and runs the new loaders unless run is false, so that the files' contents appear in the catalog as table: and tensor: sources. Paths are relative to the workspace; a path outside it is accepted only from the person's own drop or file dialog. Pickle files are refused. Undo deletes the loaders it created and their outputs."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "loader.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "loaders": {
+            "description": "The loaders, sorted by id.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "description": "The loader's id.",
+                  "type": "string"
+                },
+                "outputs": {
+                  "description": "The catalog ids of the sources it made.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "path": {
+                  "description": "The file or glob it reads, relative to the workspace.",
+                  "type": "string"
+                },
+                "reader": {
+                  "description": "The reader it uses, such as csv or npz.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "How its last run went.",
+                  "enum": [
+                    "never_run",
+                    "ok",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                "title": {
+                  "description": "The loader's title.",
+                  "type": "string"
+                },
+                "updated_at": {
+                  "description": "When its recipe last changed, in UTC ISO 8601.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "reader",
+                "path",
+                "status",
+                "outputs",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "loaders"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the workspace's saved loaders. A loader is a saved recipe that turns files into catalog sources: a file or glob, a reader, and optional SQL or tensor transforms. Each has an id, which the other loader commands take. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The loader's id, from loader.list.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "run42-metrics"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "loader.describe",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The loader's id.",
+            "type": "string"
+          },
+          "last_run": {
+            "additionalProperties": false,
+            "description": "Its last run, or null when it never ran.",
+            "properties": {
+              "at": {
+                "description": "When the run ended, in UTC ISO 8601.",
+                "type": "string"
+              },
+              "elapsed_ms": {
+                "description": "How long it took, in milliseconds.",
+                "type": "number"
+              },
+              "error": {
+                "description": "The error code of a failed run, or null.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ok": {
+                "description": "Whether it succeeded.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "at",
+              "ok",
+              "error",
+              "elapsed_ms"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "outputs": {
+            "description": "The catalog ids of the sources it made.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "The file or glob it reads.",
+            "type": "string"
+          },
+          "reader": {
+            "description": "The reader it uses.",
+            "type": "string"
+          },
+          "status": {
+            "description": "How its last run went.",
+            "enum": [
+              "never_run",
+              "ok",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "description": "The recipe, as the TOML text saved in loaders/<id>.loader.toml.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The loader's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "text",
+          "reader",
+          "path",
+          "status",
+          "last_run",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "summary": "Gives one loader in full: its TOML recipe, its reader and input path, how its last run went and the catalog sources it made. The id comes from loader.list."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "default": false,
+            "description": "Whether to run the loader at once; false when absent.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "The recipe as TOML text.",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "run": true,
+          "text": "caliper_loader = 0\n[loader]\nid = \"run42-metrics\"\ntitle = \"Run 42 metrics\"\n[input]\npath = \"data/run42/*.parquet\"\n[[output]]\nname = \"run42_metrics\"\n"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "loader.create",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The new loader's id, from its recipe.",
+            "type": "string"
+          },
+          "outputs": {
+            "description": "The catalog ids of the sources it made; empty when it did not run.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "summary": "Saves a new loader from its TOML recipe, as loaders/<id>.loader.toml in the workspace, and runs it when run is true. The recipe holds caliper_loader = 0; a [loader] table with id and title; an [input] table with path (a file or glob relative to the workspace) and an optional reader; optional [reader] options; and one or more [[output]] tables, each with a name and an optional SQL SELECT over the relation input, or a tensor to select. It fails when a loader with that id exists. Undo deletes it."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The loader's id, from loader.list.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "run": {
+            "default": false,
+            "description": "Whether to run the loader at once; false when absent.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "The new recipe as TOML text.",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "destructive": true,
+      "examples": [
+        {
+          "id": "run42-metrics",
+          "text": "caliper_loader = 0\n[loader]\nid = \"run42-metrics\"\ntitle = \"Run 42\"\n[input]\npath = \"data/run42/*.parquet\"\n[[output]]\nname = \"run42_metrics\"\nsql = \"SELECT step, loss FROM input WHERE step > 0\"\n"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "loader.update",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The loader's id.",
+            "type": "string"
+          },
+          "outputs": {
+            "description": "The catalog ids of the sources it made; empty when it did not run.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "summary": "Replaces the recipe of an existing loader with new TOML text, whose [loader] id must stay the same, and runs it when run is true. It overwrites the saved recipe, so an agent's call needs the person's approval. Undo restores the previous recipe; the tables the new recipe made stay until the loader runs again. The id comes from loader.list."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The loader's id, from loader.list.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": true,
+      "examples": [
+        {
+          "id": "run42-metrics"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "loader.run",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "elapsed_ms": {
+            "description": "How long the run took, in milliseconds.",
+            "type": "number"
+          },
+          "id": {
+            "description": "The loader's id.",
+            "type": "string"
+          },
+          "outputs": {
+            "description": "The sources the run made.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "description": "The source's catalog id.",
+                  "type": "string"
+                },
+                "rows": {
+                  "description": "For a table, its row count; null for a tensor.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "shape": {
+                  "description": "For a tensor, its shape; null for a table.",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "rows",
+                "shape"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "outputs",
+          "elapsed_ms"
+        ],
+        "type": "object"
+      },
+      "summary": "Runs a loader: reads its input files and rebuilds its outputs, which replaces the tables and tensors its previous run made. A Python loader runs as a separate process. This cannot be undone, and an agent's call needs the person's approval. The id comes from loader.list."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The loader's id, from loader.list.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "keep_outputs": {
+            "default": false,
+            "description": "Whether to keep the sources it made; false when absent.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": true,
+      "examples": [
+        {
+          "id": "run42-metrics"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "loader.delete",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The deleted loader's id.",
+            "type": "string"
+          },
+          "removed": {
+            "description": "The catalog ids of the sources removed with it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "summary": "Deletes a saved loader and, unless keep_outputs is true, the catalog sources it made. An agent's call needs the person's approval. Undo restores the recipe; its outputs come back when it runs again. The id comes from loader.list."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "description": "What the applet shows, in a sentence or two.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "id": {
+            "description": "The applet's id, such as attention-entropy.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "title": {
+            "description": "The applet's title for a person.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "description": "Entropy of each attention head while the model trains.",
+          "id": "attention-entropy",
+          "title": "Attention entropy"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "spec.new",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The applet's id.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The new spec's TOML text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "summary": "Starts a new, empty spec and makes it the open spec: the one the builder shows and that the source, panel and layout commands edit. A spec is the text that describes an applet built from data: its sources, its panels and their layout. The id names the applet, in lower case with digits, - and _. Undo returns to the spec that was open before."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "The spec file, relative to the workspace.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "\\.spec\\.toml$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "path": "applets/attention-entropy/attention-entropy.spec.toml"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "spec.open",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The applet id of the spec opened.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The file opened, relative to the workspace.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as a source with no wire form.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Opens a spec file of the workspace as the open spec. The path is relative to the workspace and ends in .spec.toml, such as applets/attention-entropy/attention-entropy.spec.toml. To open a saved applet by its id, use applet.open. Undo returns to the spec that was open before, with its unsaved changes."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "spec.get",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "dirty": {
+            "description": "Whether it has changes that are not saved.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The spec's applet id.",
+            "type": "string"
+          },
+          "json": {
+            "additionalProperties": true,
+            "description": "The spec's canonical JSON form: the TOML tables as JSON objects, as the spec format's JSON Schema describes them.",
+            "type": "object"
+          },
+          "path": {
+            "description": "Its file, relative to the workspace, or null when it was never saved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The spec as TOML text, in canonical form.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "dirty",
+          "text",
+          "json"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "description": "The whole spec as TOML text, with caliper_spec = 0, an [applet] table, [[source]] and [[panel]] tables and a [layout] table.",
+            "maxLength": 262144,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "text": "caliper_spec = 0\n[applet]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "spec.set_text",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The spec's applet id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Replaces the whole open spec with new TOML text after checking it; text with an error is refused, and the open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "description": "A spec as TOML text; the open spec when absent.",
+            "maxLength": 262144,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "spec.validate",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "errors": {
+            "description": "The errors, in the order of the text.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "valid": {
+            "description": "Whether the spec has no errors.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "description": "The warnings, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Checks a spec and lists its errors and warnings, each with a code, a message and where it is. It checks the given text, or the open spec when no text is given. An invalid spec is reported in the result, not as an error. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog": {
+            "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
+            "maxLength": 263,
+            "minLength": 3,
+            "pattern": "^(table|tensor|live|feed|metric):.+$",
+            "type": "string"
+          },
+          "from": {
+            "description": "The id of another source of this spec that this one derives from, usually through transforms.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "id": {
+            "description": "The source's id in this spec, which panels bind.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "sql": {
+            "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query.",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "transform": {
+            "description": "Tensor transforms applied in order; only for tensor-shaped data.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "axis": {
+                  "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor.",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": [
+                    "integer",
+                    "array"
+                  ]
+                },
+                "fn": {
+                  "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats.",
+                  "enum": [
+                    "mean",
+                    "sum",
+                    "min",
+                    "max",
+                    "std",
+                    "var",
+                    "norm",
+                    "argmax",
+                    "argmin",
+                    "entropy"
+                  ],
+                  "type": "string"
+                },
+                "index": {
+                  "description": "slice: the one index to keep; it drops the axis.",
+                  "type": "integer"
+                },
+                "keepdims": {
+                  "description": "reduce: keep the reduced axes with size 1; false by default.",
+                  "type": "boolean"
+                },
+                "mode": {
+                  "description": "normalise: the rescaling.",
+                  "enum": [
+                    "minmax",
+                    "zscore",
+                    "softmax",
+                    "l2"
+                  ],
+                  "type": "string"
+                },
+                "op": {
+                  "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values.",
+                  "enum": [
+                    "slice",
+                    "reduce",
+                    "normalise"
+                  ],
+                  "type": "string"
+                },
+                "start": {
+                  "description": "slice: the first index, Python style, negative allowed.",
+                  "type": "integer"
+                },
+                "step": {
+                  "description": "slice: the step, at least 1.",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "stop": {
+                  "description": "slice: the index to stop before, Python style.",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "op"
+              ],
+              "type": "object"
+            },
+            "maxItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "from": "attn",
+          "id": "entropy",
+          "transform": [
+            {
+              "axis": 3,
+              "fn": "entropy",
+              "op": "reduce"
+            },
+            {
+              "axis": 2,
+              "fn": "mean",
+              "op": "reduce"
+            }
+          ]
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "source.add",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The source's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds a source to the open spec. A spec source gives data a name that panels bind. It has exactly one of catalog (a catalog source id from catalog.list, such as live:attn.weights), sql (one read-only SELECT over the workspace's tables) or from (the id of another source of this spec), and an optional list of tensor transforms (slice, reduce, normalise) for tensor-shaped data. Undo removes it."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The source's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "patch": {
+            "additionalProperties": false,
+            "description": "The keys to change: catalog, sql, from or transform; null removes one.",
+            "properties": {
+              "catalog": {
+                "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
+                "maxLength": 263,
+                "minLength": 3,
+                "pattern": "^(table|tensor|live|feed|metric):.+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "from": {
+                "description": "The id of another source of this spec that this one derives from, usually through transforms.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sql": {
+                "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query.",
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "transform": {
+                "description": "Tensor transforms applied in order; only for tensor-shaped data.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "axis": {
+                      "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor.",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": [
+                        "integer",
+                        "array"
+                      ]
+                    },
+                    "fn": {
+                      "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats.",
+                      "enum": [
+                        "mean",
+                        "sum",
+                        "min",
+                        "max",
+                        "std",
+                        "var",
+                        "norm",
+                        "argmax",
+                        "argmin",
+                        "entropy"
+                      ],
+                      "type": "string"
+                    },
+                    "index": {
+                      "description": "slice: the one index to keep; it drops the axis.",
+                      "type": "integer"
+                    },
+                    "keepdims": {
+                      "description": "reduce: keep the reduced axes with size 1; false by default.",
+                      "type": "boolean"
+                    },
+                    "mode": {
+                      "description": "normalise: the rescaling.",
+                      "enum": [
+                        "minmax",
+                        "zscore",
+                        "softmax",
+                        "l2"
+                      ],
+                      "type": "string"
+                    },
+                    "op": {
+                      "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values.",
+                      "enum": [
+                        "slice",
+                        "reduce",
+                        "normalise"
+                      ],
+                      "type": "string"
+                    },
+                    "start": {
+                      "description": "slice: the first index, Python style, negative allowed.",
+                      "type": "integer"
+                    },
+                    "step": {
+                      "description": "slice: the step, at least 1.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "stop": {
+                      "description": "slice: the index to stop before, Python style.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "op"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "patch"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "entropy",
+          "patch": {
+            "transform": [
+              {
+                "axis": 3,
+                "fn": "entropy",
+                "op": "reduce"
+              }
+            ]
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "source.patch",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "additionalProperties": false,
+            "description": "The source as it is now.",
+            "properties": {
+              "catalog": {
+                "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
+                "maxLength": 263,
+                "minLength": 3,
+                "pattern": "^(table|tensor|live|feed|metric):.+$",
+                "type": "string"
+              },
+              "from": {
+                "description": "The id of another source of this spec that this one derives from, usually through transforms.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "id": {
+                "description": "The source's id in this spec, which panels bind.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "sql": {
+                "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query.",
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": "string"
+              },
+              "transform": {
+                "description": "Tensor transforms applied in order; only for tensor-shaped data.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "axis": {
+                      "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor.",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": [
+                        "integer",
+                        "array"
+                      ]
+                    },
+                    "fn": {
+                      "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats.",
+                      "enum": [
+                        "mean",
+                        "sum",
+                        "min",
+                        "max",
+                        "std",
+                        "var",
+                        "norm",
+                        "argmax",
+                        "argmin",
+                        "entropy"
+                      ],
+                      "type": "string"
+                    },
+                    "index": {
+                      "description": "slice: the one index to keep; it drops the axis.",
+                      "type": "integer"
+                    },
+                    "keepdims": {
+                      "description": "reduce: keep the reduced axes with size 1; false by default.",
+                      "type": "boolean"
+                    },
+                    "mode": {
+                      "description": "normalise: the rescaling.",
+                      "enum": [
+                        "minmax",
+                        "zscore",
+                        "softmax",
+                        "l2"
+                      ],
+                      "type": "string"
+                    },
+                    "op": {
+                      "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values.",
+                      "enum": [
+                        "slice",
+                        "reduce",
+                        "normalise"
+                      ],
+                      "type": "string"
+                    },
+                    "start": {
+                      "description": "slice: the first index, Python style, negative allowed.",
+                      "type": "integer"
+                    },
+                    "step": {
+                      "description": "slice: the step, at least 1.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "stop": {
+                      "description": "slice: the index to stop before, Python style.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "op"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "warnings": {
+            "description": "What the validator warns about.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Changes a source of the open spec with a JSON merge patch (RFC 7386): the keys given replace the source's own, and a key set to null is removed. The id cannot change. The id comes from spec.get. Undo restores the source."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The source's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "loss"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "source.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The removed source's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes a source from the open spec. A source that a panel binds, or that another source derives from, cannot be removed until they change. The id comes from spec.get. Undo restores it."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "bind": {
+            "additionalProperties": false,
+            "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source.",
+            "properties": {
+              "color": {
+                "description": "points: a value per point that sets its colour.",
+                "type": "string"
+              },
+              "positions": {
+                "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                "type": "string"
+              },
+              "rows": {
+                "description": "table: a tabular source whose rows are shown.",
+                "type": "string"
+              },
+              "size": {
+                "description": "points: a value per point that sets its size.",
+                "type": "string"
+              },
+              "value": {
+                "description": "text: a binding shown as a number or a string.",
+                "type": "string"
+              },
+              "values": {
+                "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                "type": "string"
+              },
+              "x": {
+                "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                "type": "string"
+              },
+              "y": {
+                "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "array"
+                ]
+              },
+              "z": {
+                "description": "points: the z coordinates, for a 3-D cloud.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "id": {
+            "description": "The new panel's id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": false,
+            "description": "The primitive's options.",
+            "properties": {
+              "bins": {
+                "description": "histogram: the number of bins.",
+                "maximum": 1024,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "colormap": {
+                "description": "heatmap and image: the colour map, such as viridis.",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "columns": {
+                "description": "table: the columns to show, in order.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "text": {
+                "description": "text: static text to show.",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "x_label": {
+                "description": "The label of the x axis.",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "y_label": {
+                "description": "The label of the y axis.",
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "place": {
+            "additionalProperties": false,
+            "description": "Where to put the panel, next to another panel of the layout.",
+            "properties": {
+              "ratio": {
+                "default": 0.5,
+                "description": "The share of the space the new panel gets; 0.5 when absent.",
+                "maximum": 0.95,
+                "minimum": 0.05,
+                "type": "number"
+              },
+              "target": {
+                "description": "The id of a panel already in the layout.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "where": {
+                "description": "beside puts it to the right of the target; tabbed shows both in tabs.",
+                "enum": [
+                  "beside",
+                  "above",
+                  "below",
+                  "tabbed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "target",
+              "where"
+            ],
+            "type": "object"
+          },
+          "primitive": {
+            "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none.",
+            "enum": [
+              "series",
+              "heatmap",
+              "points",
+              "histogram",
+              "table",
+              "image",
+              "text"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "The panel's title.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "primitive",
+          "bind"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "bind": {
+            "values": "entropy"
+          },
+          "id": "heat",
+          "options": {
+            "colormap": "viridis",
+            "x_label": "Head",
+            "y_label": "Layer"
+          },
+          "primitive": "heatmap",
+          "title": "Entropy per layer and head"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "panel.create",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The new panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds a panel to the open spec. A panel draws one primitive from the sources it binds: series (lines), heatmap (a colour-mapped grid), points (a 2-D or 3-D cloud), histogram, table, image or text. bind maps each slot of the primitive to a spec source id, or to <source>.<column> for one column of a tabular source. place puts it beside, above, below or in tabs with another panel; without place, the panel goes to the right of the whole layout. Undo removes it."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "patch": {
+            "additionalProperties": false,
+            "description": "The keys to change; null removes one.",
+            "properties": {
+              "bind": {
+                "additionalProperties": false,
+                "description": "Slots to bind, or null to unbind one.",
+                "properties": {
+                  "color": {
+                    "description": "points: a value per point that sets its colour.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "positions": {
+                    "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "rows": {
+                    "description": "table: a tabular source whose rows are shown.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "size": {
+                    "description": "points: a value per point that sets its size.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "text: a binding shown as a number or a string.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "values": {
+                    "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "x": {
+                    "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "y": {
+                    "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "z": {
+                    "description": "points: the z coordinates, for a 3-D cloud.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "options": {
+                "additionalProperties": false,
+                "description": "Options to set, or null to clear one.",
+                "properties": {
+                  "bins": {
+                    "description": "histogram: the number of bins.",
+                    "maximum": 1024,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "colormap": {
+                    "description": "heatmap and image: the colour map, such as viridis.",
+                    "maxLength": 64,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "columns": {
+                    "description": "table: the columns to show, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "text: static text to show.",
+                    "maxLength": 4096,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "x_label": {
+                    "description": "The label of the x axis.",
+                    "maxLength": 256,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "y_label": {
+                    "description": "The label of the y axis.",
+                    "maxLength": 256,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "primitive": {
+                "description": "What the panel draws.",
+                "enum": [
+                  "series",
+                  "heatmap",
+                  "points",
+                  "histogram",
+                  "table",
+                  "image",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "description": "The panel's title.",
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "patch"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "heat",
+          "patch": {
+            "options": {
+              "colormap": "magma",
+              "y_label": null
+            },
+            "title": "Entropy"
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "panel.patch",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "panel": {
+            "additionalProperties": false,
+            "description": "The panel as it is now.",
+            "properties": {
+              "bind": {
+                "additionalProperties": false,
+                "description": "The panel's bindings, by slot.",
+                "properties": {
+                  "color": {
+                    "description": "points: a value per point that sets its colour.",
+                    "type": "string"
+                  },
+                  "positions": {
+                    "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                    "type": "string"
+                  },
+                  "rows": {
+                    "description": "table: a tabular source whose rows are shown.",
+                    "type": "string"
+                  },
+                  "size": {
+                    "description": "points: a value per point that sets its size.",
+                    "type": "string"
+                  },
+                  "value": {
+                    "description": "text: a binding shown as a number or a string.",
+                    "type": "string"
+                  },
+                  "values": {
+                    "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                    "type": "string"
+                  },
+                  "x": {
+                    "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                    "type": "string"
+                  },
+                  "y": {
+                    "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "array"
+                    ]
+                  },
+                  "z": {
+                    "description": "points: the z coordinates, for a 3-D cloud.",
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "id": {
+                "description": "The panel's id.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "options": {
+                "additionalProperties": false,
+                "description": "The panel's options.",
+                "properties": {
+                  "bins": {
+                    "description": "histogram: the number of bins.",
+                    "maximum": 1024,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "colormap": {
+                    "description": "heatmap and image: the colour map, such as viridis.",
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  "columns": {
+                    "description": "table: the columns to show, in order.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array"
+                  },
+                  "text": {
+                    "description": "text: static text to show.",
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "x_label": {
+                    "description": "The label of the x axis.",
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "y_label": {
+                    "description": "The label of the y axis.",
+                    "maxLength": 256,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "primitive": {
+                "description": "What the panel draws.",
+                "enum": [
+                  "series",
+                  "heatmap",
+                  "points",
+                  "histogram",
+                  "table",
+                  "image",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "description": "The panel's title, or null.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "primitive",
+              "title",
+              "bind",
+              "options"
+            ],
+            "type": "object"
+          },
+          "warnings": {
+            "description": "What the validator warns about.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Changes a panel of the open spec with a JSON merge patch (RFC 7386) of its title, primitive, bindings and options: the keys given replace the panel's own, a key set to null is removed, and bind and options merge key by key. The id cannot change. The id comes from spec.get. Undo restores the panel."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "heat"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "panel.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The removed panel's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "default": 500,
+            "description": "The image's height in pixels; 500 when absent.",
+            "maximum": 4096,
+            "minimum": 64,
+            "type": "integer"
+          },
+          "id": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "width": {
+            "default": 800,
+            "description": "The image's width in pixels; 800 when absent.",
+            "maximum": 4096,
+            "minimum": 64,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "height": 400,
+          "id": "heat",
+          "width": 640
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "panel.render",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "description": "The image's height in pixels.",
+            "type": "integer"
+          },
+          "png_base64": {
+            "description": "The PNG image, base64-encoded.",
+            "type": "string"
+          },
+          "width": {
+            "description": "The image's width in pixels.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "png_base64",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "summary": "Draws one panel of the open spec off screen and returns it as a PNG image, so that you can check what it looks like. width and height are in pixels, 800 by 500 by default. The id comes from spec.get. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "panel": {
+            "description": "The id of the panel to place.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "ratio": {
+            "default": 0.5,
+            "description": "The share of the space the placed panel gets; 0.5 when absent.",
+            "maximum": 0.95,
+            "minimum": 0.05,
+            "type": "number"
+          },
+          "target": {
+            "description": "The id of the panel to place it next to.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "where": {
+            "description": "Where to place it, relative to the target.",
+            "enum": [
+              "beside",
+              "above",
+              "below",
+              "tabbed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "target",
+          "where"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "panel": "loss",
+          "ratio": 0.4,
+          "target": "heat",
+          "where": "below"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "layout.place",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "layout": {
+            "additionalProperties": false,
+            "description": "The whole layout as it is now.",
+            "properties": {
+              "nodes": {
+                "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "children": {
+                      "description": "Panel ids and node ids, in order; each node is used once.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "id": {
+                      "description": "The node's id; it must not be a panel's id.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "ratio": {
+                      "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs.",
+                      "maximum": 0.95,
+                      "minimum": 0.05,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "split": {
+                      "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs.",
+                      "enum": [
+                        "horizontal",
+                        "vertical",
+                        "tabs"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "split",
+                    "children"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "root": {
+                "description": "The id of the top node, or of the one panel when the layout is a single panel.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "nodes"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "layout"
+        ],
+        "type": "object"
+      },
+      "summary": "Places a panel of the open spec next to another one, the target: beside puts it to the right, above and below above or below, tabbed in tabs with the target. ratio is the share of the space the placed panel gets, from 0.05 to 0.95, half by default. A panel already in the layout is moved. Undo restores the previous layout."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "layout": {
+            "additionalProperties": false,
+            "description": "The new layout.",
+            "properties": {
+              "nodes": {
+                "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "children": {
+                      "description": "Panel ids and node ids, in order; each node is used once.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "id": {
+                      "description": "The node's id; it must not be a panel's id.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "ratio": {
+                      "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs.",
+                      "maximum": 0.95,
+                      "minimum": 0.05,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "split": {
+                      "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs.",
+                      "enum": [
+                        "horizontal",
+                        "vertical",
+                        "tabs"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "split",
+                    "children"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "root": {
+                "description": "The id of the top node, or of the one panel when the layout is a single panel.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "nodes"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "layout"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "layout": {
+            "nodes": [
+              {
+                "children": [
+                  "heat",
+                  "right"
+                ],
+                "id": "main",
+                "ratio": 0.6,
+                "split": "horizontal"
+              },
+              {
+                "children": [
+                  "mean",
+                  "loss"
+                ],
+                "id": "right",
+                "ratio": null,
+                "split": "vertical"
+              }
+            ],
+            "root": "main"
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "layout.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "layout": {
+            "additionalProperties": false,
+            "description": "The layout as it is now.",
+            "properties": {
+              "nodes": {
+                "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "children": {
+                      "description": "Panel ids and node ids, in order; each node is used once.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "id": {
+                      "description": "The node's id; it must not be a panel's id.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "ratio": {
+                      "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs.",
+                      "maximum": 0.95,
+                      "minimum": 0.05,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "split": {
+                      "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs.",
+                      "enum": [
+                        "horizontal",
+                        "vertical",
+                        "tabs"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "split",
+                    "children"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "root": {
+                "description": "The id of the top node, or of the one panel when the layout is a single panel.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "nodes"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "layout"
+        ],
+        "type": "object"
+      },
+      "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child, or shows them in tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec must appear once. Undo restores the previous layout."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The applet's id; the spec's own applet id when absent.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "description": "Whether to replace a saved applet of the same id; false when absent.",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": true,
+      "examples": [
+        {
+          "id": "attention-entropy"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "applet.save",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The saved applet's id.",
+            "type": "string"
+          },
+          "manifest": {
+            "description": "The manifest's path, relative to the workspace.",
+            "type": "string"
+          },
+          "spec": {
+            "description": "The spec's path, relative to the workspace.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "manifest",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "summary": "Saves the open spec as a spec applet of the workspace: the folder applets/<id>/ with a manifest <id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's applet id unless one is given. Saving over an existing applet needs overwrite set to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The applet's id, from applet.list.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "attention-entropy"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "applet.open",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The applet's id.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The applet's title.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Opens a saved spec applet of the workspace by its id, from applet.list, as the open spec, so that it can be edited. Undo returns to the spec that was open before."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "applet.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applets": {
+            "description": "The saved spec applets, sorted by id.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "description": "The applet's id.",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "Its folder, relative to the workspace.",
+                  "type": "string"
+                },
+                "title": {
+                  "description": "The applet's title.",
+                  "type": "string"
+                },
+                "updated_at": {
+                  "description": "When it was last saved, in UTC ISO 8601.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "path",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "applets"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the spec applets saved in the workspace, with each one's id, title, folder and the time it was last saved. The id is what applet.open takes. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "capture.frame",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "description": "The image's height in pixels.",
+            "type": "integer"
+          },
+          "png_base64": {
+            "description": "The PNG image, base64-encoded.",
+            "type": "string"
+          },
+          "width": {
+            "description": "The image's width in pixels.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "png_base64",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the frame the app draws, the whole window, as a PNG image, so that you can see the app as the person does. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "steps": {
+            "default": 1,
+            "description": "How many steps to move, from 1 to 100; 1 when absent.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "steps": 1
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "history.undo",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "can_redo": {
+            "description": "Whether a step is left to redo.",
+            "type": "boolean"
+          },
+          "can_undo": {
+            "description": "Whether a step is left to undo.",
+            "type": "boolean"
+          },
+          "steps": {
+            "description": "One summary for each step undone, in the order undone.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "description": "The UTC time of the step's newest command, in ISO 8601.",
+                  "type": "string"
+                },
+                "count": {
+                  "description": "How many commands the step holds, merged ones included.",
+                  "type": "integer"
+                },
+                "group": {
+                  "description": "The group the step's commands were sent with, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "The step's number; each new step gets a higher one.",
+                  "type": "integer"
+                },
+                "label": {
+                  "description": "The name of the step's first command, such as panel.patch.",
+                  "type": "string"
+                },
+                "origin": {
+                  "description": "Who sent the step's first command: the app's UI, the builder, the agent pane, an outside agent over MCP, or a program over Caliper API.",
+                  "enum": [
+                    "ui",
+                    "builder",
+                    "agent",
+                    "mcp",
+                    "api"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "count",
+                "group",
+                "origin",
+                "at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps",
+          "can_undo",
+          "can_redo"
+        ],
+        "type": "object"
+      },
+      "summary": "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, several commands sent with the same group, or a run of commands merged by a merge key, such as a slider drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an applet or running a loader. Undoing a step that overwrote or deleted saved data may need the person's approval when an agent asks. history.list shows the steps first."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "steps": {
+            "default": 1,
+            "description": "How many steps to move, from 1 to 100; 1 when absent.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "steps": 1
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "history.redo",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "can_redo": {
+            "description": "Whether a step is left to redo.",
+            "type": "boolean"
+          },
+          "can_undo": {
+            "description": "Whether a step is left to undo.",
+            "type": "boolean"
+          },
+          "steps": {
+            "description": "One summary for each step redone, in the order redone.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "description": "The UTC time of the step's newest command, in ISO 8601.",
+                  "type": "string"
+                },
+                "count": {
+                  "description": "How many commands the step holds, merged ones included.",
+                  "type": "integer"
+                },
+                "group": {
+                  "description": "The group the step's commands were sent with, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "The step's number; each new step gets a higher one.",
+                  "type": "integer"
+                },
+                "label": {
+                  "description": "The name of the step's first command, such as panel.patch.",
+                  "type": "string"
+                },
+                "origin": {
+                  "description": "Who sent the step's first command: the app's UI, the builder, the agent pane, an outside agent over MCP, or a program over Caliper API.",
+                  "enum": [
+                    "ui",
+                    "builder",
+                    "agent",
+                    "mcp",
+                    "api"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "count",
+                "group",
+                "origin",
+                "at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps",
+          "can_undo",
+          "can_redo"
+        ],
+        "type": "object"
+      },
+      "summary": "Redoes the step that was undone most recently, or the given number of steps. Any new change to the workspace clears what can be redone. Redoing a step that overwrites or deletes saved data may need the person's approval when an agent asks."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "The most steps to list on each stack, from 1 to 200; 50 when absent.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "limit": 20
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "history.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "can_redo": {
+            "description": "Whether a step is left to redo.",
+            "type": "boolean"
+          },
+          "can_undo": {
+            "description": "Whether a step is left to undo.",
+            "type": "boolean"
+          },
+          "redo": {
+            "description": "The steps that history.redo would redo, the next one first.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "description": "The UTC time of the step's newest command, in ISO 8601.",
+                  "type": "string"
+                },
+                "count": {
+                  "description": "How many commands the step holds, merged ones included.",
+                  "type": "integer"
+                },
+                "group": {
+                  "description": "The group the step's commands were sent with, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "The step's number; each new step gets a higher one.",
+                  "type": "integer"
+                },
+                "label": {
+                  "description": "The name of the step's first command, such as panel.patch.",
+                  "type": "string"
+                },
+                "origin": {
+                  "description": "Who sent the step's first command: the app's UI, the builder, the agent pane, an outside agent over MCP, or a program over Caliper API.",
+                  "enum": [
+                    "ui",
+                    "builder",
+                    "agent",
+                    "mcp",
+                    "api"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "count",
+                "group",
+                "origin",
+                "at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "undo": {
+            "description": "The steps that history.undo would undo, newest first.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "description": "The UTC time of the step's newest command, in ISO 8601.",
+                  "type": "string"
+                },
+                "count": {
+                  "description": "How many commands the step holds, merged ones included.",
+                  "type": "integer"
+                },
+                "group": {
+                  "description": "The group the step's commands were sent with, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "The step's number; each new step gets a higher one.",
+                  "type": "integer"
+                },
+                "label": {
+                  "description": "The name of the step's first command, such as panel.patch.",
+                  "type": "string"
+                },
+                "origin": {
+                  "description": "Who sent the step's first command: the app's UI, the builder, the agent pane, an outside agent over MCP, or a program over Caliper API.",
+                  "enum": [
+                    "ui",
+                    "builder",
+                    "agent",
+                    "mcp",
+                    "api"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "count",
+                "group",
+                "origin",
+                "at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "undo",
+          "redo",
+          "can_undo",
+          "can_redo"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the steps that can be undone and redone, newest first, with the command that began each step, how many commands it holds, its group, who sent it and when. It changes nothing."
+    }
+  ],
+  "version": 0
+}

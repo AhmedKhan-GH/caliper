@@ -1,10 +1,11 @@
 #pragma once
 // CommandRegistry: the command layer's core (docs/plans/command-layer.md). It
 // maps command names to descriptors and handlers, and runs an invocation:
-//   1. checks the invocation, finds the command and its handler, checks the
-//      thread for a frame_thread command, and validates the arguments against
-//      the schema (command.invalid_invocation, command.unknown,
-//      command.not_bound, command.wrong_thread, command.invalid_args);
+//   1. checks the invocation, finds the command, validates the arguments
+//      against its schema, then checks that a handler is bound and, for a
+//      frame_thread command, the thread (command.invalid_invocation,
+//      command.unknown, command.invalid_args, command.not_bound,
+//      command.wrong_thread);
 //   2. asks the approval policy, and on ask parks the invocation and answers
 //      command.needs_approval with an approval id;
 //   3. runs the handler; an exception that escapes it becomes
