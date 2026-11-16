@@ -1575,3 +1575,54 @@ def test_the_token_is_not_in_a_repr_or_an_error(server):
         log.removeHandler(h)
         log.setLevel(old)
     assert len(seen) == 2 and not any(tok in s for s in seen), seen
+
+
+# ---------------------------------------------------------------------------
+# the native sender's lifetime
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not NATIVE, reason="caliper._netio is not built")
+def test_native_close_from_two_threads_joins_once():
+    """close() from two threads at once (the script's close() and caliper.close()
+    at exit, say) joins the native threads once and returns in both."""
+    from caliper import _netio
+    for _ in range(20):
+        nio = _netio.Server(0, "t" * 32, json.dumps({"id": "clp-1-aaaaaa", "script": "x", "pid": 1,
+                                                       "start_unix_ms": 1}), "{}", [], 4, 4096,
+                            10_000, 10_000, 30_000)
+        barrier = threading.Barrier(3)
+        done = []
+
+        def close():
+            barrier.wait()
+            nio.close()
+            done.append(1)
+        ts = [threading.Thread(target=close) for _ in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(10)
+        assert len(done) == 3 and not any(t.is_alive() for t in ts)
+        del nio                                       # the destructor's close() after both
+
+
+@pytest.mark.skipif(not NATIVE, reason="caliper._netio is not built")
+def test_native_listen_after_close_fails_at_once():
+    """listen() on a closed native server raises instead of waiting for a loop
+    that has exited."""
+    from caliper import _netio
+    nio = _netio.Server(-1, "t" * 32, json.dumps({"id": "clp-1-aaaaaa", "script": "x", "pid": 1,
+                                                   "start_unix_ms": 1}), "{}", [], 4, 4096,
+                        10_000, 10_000, 30_000)
+    nio.close()
+    out = []
+
+    def listen():
+        try:
+            nio.listen(0)
+            out.append("listened")
+        except RuntimeError as e:
+            out.append(str(e))
+    t = threading.Thread(target=listen, daemon=True)
+    t.start()
+    t.join(10)
+    assert out == ["listen: the server is closed"]

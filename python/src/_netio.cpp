@@ -273,6 +273,8 @@ public:
         std::future<std::string> f = done.get_future();
         {
             std::lock_guard<std::mutex> g(mu_);
+            // Once the native loop has exited nothing would answer the promise.
+            if (loop_done_) throw std::runtime_error("listen: the server is closed");
             listen_port_ = port;
             listen_done_ = &done;
         }
@@ -298,11 +300,13 @@ public:
             up_attempts_ = 0;
             up_replaced_ = false;
         }
+        std::lock_guard<std::mutex> j(up_join_mu_);
         up_stop_ = false;
         up_thread_ = std::thread([this] { up_loop(); });
     }
 
     void disconnect_upstream() {
+        std::lock_guard<std::mutex> j(up_join_mu_);    // two threads never join it at once
         if (!up_thread_.joinable()) return;
         up_stop_ = true;
         {
@@ -335,10 +339,10 @@ public:
     // ---- Python-thread calls (the GIL is released around them) ----------------------
     void close() {
         disconnect_upstream();
-        if (stop_.exchange(true)) {
-            if (thread_.joinable()) thread_.join();
-            return;
-        }
+        // close() may come from two threads at once (the script's close() and
+        // caliper.close() at exit, say): one of them joins, the other waits.
+        std::lock_guard<std::mutex> j(join_mu_);
+        stop_ = true;
         server_->wake();
         if (thread_.joinable()) thread_.join();
         std::lock_guard<std::mutex> g(cmu_);
@@ -725,6 +729,7 @@ private:
         }
         server_->shutdown(CALIPER_NET_CLOSE_GOING_AWAY, 2000);
         std::lock_guard<std::mutex> g(mu_);
+        loop_done_ = true;                    // a later listen() fails at once
         if (listen_done_) {
             listen_done_->set_value("closed");
             listen_done_ = nullptr;
@@ -1377,6 +1382,8 @@ private:
     ConnId next_up_id_ = ConnId(1) << 62;     // never a server connection id
     int listen_port_ = 0;
     std::promise<std::string>* listen_done_ = nullptr;
+    bool loop_done_ = false;                  // the native loop has exited (under mu_)
+    std::mutex join_mu_, up_join_mu_;         // one thread at a time joins thread_, up_thread_
 
     std::unique_ptr<caliper_net::Server> server_;
     std::thread thread_;
