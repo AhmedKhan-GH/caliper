@@ -276,6 +276,7 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [slang](https://github.com/MikePopoloski/slang) | MIT | Michael Popoloski | Use, modify, and distribute freely provided the license notice is included. |
 | [stb](https://github.com/nothings/stb) | MIT / public domain | Sean Barrett and contributors | Use, modify, and distribute freely. |
 | [toml++](https://github.com/marzer/tomlplusplus) | MIT | Mark Gillard | Use, modify, and distribute freely provided the license notice is included. |
+| [JSON for Modern C++](https://github.com/nlohmann/json) | MIT | 2013-2026 Niels Lohmann | Use, modify, and distribute freely provided the license notice is included. |
 | [doctest](https://github.com/doctest/doctest) | MIT | Viktor Kirilov | Use, modify, and distribute freely provided the license notice is included. |
 | [nanobind](https://github.com/wjakob/nanobind) | BSD 3-Clause | Wenzel Jakob | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [zlib](https://github.com/madler/zlib) | Zlib | Jean-loup Gailly and Mark Adler | Use, modify, and distribute freely with no attribution required in binaries. |
