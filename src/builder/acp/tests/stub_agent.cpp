@@ -135,7 +135,7 @@ void run_turn(json id, std::string text) {
         update({{"sessionUpdate", "plan"},
                 {"entries", json::array({{{"content", "Say hello"}, {"priority", "high"}, {"status", "in_progress"}},
                                          {{"content", "Stop"}, {"priority", "low"}, {"status", "pending"}}})}});
-        chunk("Hello");
+        chunk("Hi");
         chunk(", ");
         chunk("world.");
         update({{"sessionUpdate", "available_commands_update"},

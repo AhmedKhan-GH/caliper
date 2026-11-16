@@ -188,7 +188,7 @@ TEST_CASE("a turn streams every kind of update") {
     CHECK(c.turn_active());
     CHECK(c.prompt("again").code == "acp.turn_active");
     auto events = run_turn(c);
-    CHECK(message_text(events) == "Hello, world.");
+    CHECK(message_text(events) == "Hi, world.");
     const AcpEvent* thought = find(events, AcpEventKind::agent_thought_chunk);
     REQUIRE(thought);
     CHECK(thought->text == "Thinking about hello.");
