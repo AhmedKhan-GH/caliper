@@ -29,7 +29,8 @@ jobs:
       # The docs (MkDocs Material) are served under /docs/ on the same Pages
       # site; --strict keeps the snippet-embedded headers honest.
       # awesome-nav builds the navigation from the docs/ folders and their .nav.yml files.
-      - run: pip install mkdocs-material mkdocs-awesome-nav
+      # Pinned as in the Docs workflow, which checks the same builds on pull requests.
+      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1
       - run: mkdocs build --strict
       # The design pages are checked, not published: they build into
       # build/design-site, which the Pages artifact below leaves out.

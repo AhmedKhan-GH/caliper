@@ -15,11 +15,11 @@ The GPU suites skip when the machine has no usable device, and ctest reports the
 
 Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/guides/ci.md) describes what runs, what is cached, and how to handle a failed run.
 
-To check the documentation, build it the way the Pages workflow does, from the repository root. The second command checks the design pages, which are built apart from the docs site and are not published.
+To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The second command checks the design pages, which are built apart from the docs site and are not published.
 
 ```sh
-uvx --with mkdocs-material --with mkdocs-awesome-nav mkdocs build --strict
-uvx --with mkdocs-material --with mkdocs-awesome-nav mkdocs build --strict -f design/mkdocs.yml
+uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 mkdocs@1.6.1 build --strict
+uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 mkdocs@1.6.1 build --strict -f design/mkdocs.yml
 ```
 
 ## Submodules

@@ -1,0 +1,33 @@
+# .github/workflows/docs.yml
+name: Docs
+on:
+  pull_request:
+    # The docs site, the design pages, their theme and MkDocs configs
+    # (design/mkdocs.yml is under design/), and the sources the docs embed
+    # as snippets.
+    paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
+            'sdk/include/**', 'include/caliper/**', 'examples/**',
+            '.github/workflows/docs.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Builds the docs site and the design pages with --strict, so a broken link,
+  # anchor or snippet fails the pull request. Nothing is published here; the
+  # Deploy Pages workflow publishes the docs site from main.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      # Pinned to the versions the docs are built with. The design build also
+      # depends on MkDocs accepting design/mkdocs.yml inside its own docs folder
+      # when the file is named by a relative path, as here.
+      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1
+      - run: mkdocs build --strict
+      - run: mkdocs build --strict -f design/mkdocs.yml
