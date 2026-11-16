@@ -230,7 +230,7 @@ the producer's Python code to read, through `server.on_event()` or
 sends runs as code.
 
 This position holds until a dedicated security review, which comes before any
-session leaves the machine ([Security](../design/streaming-and-embedding.md#security)).
+session leaves the machine.
 Until then the server cannot listen on another interface, and the stream is not
 encrypted, which is acceptable only because it never leaves the loopback
 interface.

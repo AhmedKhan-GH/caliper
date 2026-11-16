@@ -34,7 +34,7 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 
 **Only `caliper.ui.v1` may know the toolkit or the renderer.** Every other service describes data, such as tensors, tables, geometry and files, and never an ImGui, Metal, Vulkan or OpenGL type. That keeps the services usable by a host that draws with a different toolkit, and it is why a renderer change needs no applet rebuild. The one service that hands applets the ImGui, ImPlot and ImPlot3D contexts is [`caliper.ui.v1`](../references/service-ui-v1.md).
 
-The applets still live in this repository, but the core build compiles none of them, and the `caliper` target depends on none. Each applet builds against the installed SDK package with `find_package(caliper-sdk)` and `caliper_add_applet()`, as an applet outside the repository would ([SDK package](../references/sdk-package.md)). `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders inside the core build, and `examples/hello` and `examples/sine_scope` build with the tests, because the tests load them. Moving the applets to their own repositories is planned in [Applets outside the core](../design/applets-outside-the-core.md).
+The applets still live in this repository, but the core build compiles none of them, and the `caliper` target depends on none. Each applet builds against the installed SDK package with `find_package(caliper-sdk)` and `caliper_add_applet()`, as an applet outside the repository would ([SDK package](../references/sdk-package.md)). `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders inside the core build, and `examples/hello` and `examples/sine_scope` build with the tests, because the tests load them. Moving the applets to their own repositories is planned.
 
 ## Platform rules
 

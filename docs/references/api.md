@@ -3,7 +3,7 @@
 Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), and returns a capture of the frame the app draws. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
-    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. Driving the app's state from outside, beyond launching an applet, comes with the command layer of [Phase 3](../design/roadmap.md#phase-3-agent-built-panels).
+    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. Driving the app's state from outside, beyond launching an applet, is planned with a command layer that has undo.
 
 | Method and path | What it does |
 |---|---|

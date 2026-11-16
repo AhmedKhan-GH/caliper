@@ -16,7 +16,7 @@ The terms below are used across these pages with one meaning each.
 
 **Caliper LIB.** The `caliper` Python package, which gives a training script live views of its tensors. See [Caliper LIB](python-api.md).
 
-**Caliper API.** The HTTP interface to the running app, so that a program in any language can list and launch applets, stream data to the app and fetch what it shows. Version 0 is built; see [Caliper API](api.md), and the [roadmap](../design/roadmap.md#api) for what comes next.
+**Caliper API.** The HTTP interface to the running app, so that a program in any language can list and launch applets, stream data to the app and fetch what it shows. Version 0 is built; see [Caliper API](api.md). A full API that drives the app's state from outside is planned.
 
 **Service.** A named, immutable C function table that the host vends through `get_service("caliper.x.vN")`. The [Service catalog](services.md) lists them all.
 
