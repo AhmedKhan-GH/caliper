@@ -140,9 +140,7 @@ test.describe('run controls and the controls panel', () => {
       document.querySelector('caliper-controls')!.addEventListener('caliper-reply', (e) => r.push((e as CustomEvent).detail));
       return r;
     });
-    // Queued and running last one training step and 0.2 s, which can be over
-    // before the click returns on a busy machine: the page records each state
-    // of the button and its note as it changes.
+    // The page records each state of the button and its note as it changes.
     const seen = await page.evaluateHandle(() => {
       const root = document.querySelector('caliper-controls')!.shadowRoot!;
       const now = () => {
@@ -158,10 +156,16 @@ test.describe('run controls and the controls panel', () => {
     await btn.click();
     await roundTrip(panel(page).locator('.action .note')).toHaveText(/^saved step \d+$/);
     await roundTrip(btn).toHaveAttribute('aria-busy', 'false');
-    const states = await seen.evaluate((r) => r.map((s) => s.replace(/\d+$/, 'N')));
-    expect(states).toEqual(['false ', 'true queued', 'true running', 'false saved step N']);
     const got = await replies.evaluate((r) => r.map((x) => (x as { status: string }).status));
     expect(got).toEqual(['queued', 'ok']);
+    // The drawn states come in this order. A transient one may be missed on a
+    // busy machine (the run can start at the checkpoint right after it was
+    // queued, before CONTROLS says queued), but one out of order is a failure.
+    const order = ['false ', 'true queued', 'true running', 'false saved step N'];
+    const drew = await seen.evaluate((r) => r.map((s) => s.replace(/\d+$/, 'N')));
+    const at = drew.map((d) => order.indexOf(d));
+    expect(at.every((k, i) => k >= 0 && (i === 0 || k > at[i - 1])), drew.join(', ')).toBe(true);
+    expect(drew.at(-1)).toBe('false saved step N');
   });
 
   test('a viewer the producer refuses shows the controls but cannot use them', async ({ page }, info) => {
