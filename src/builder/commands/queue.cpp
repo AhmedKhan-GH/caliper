@@ -157,6 +157,19 @@ void CommandQueue::shutdown() {
     registry_.cancel_pending();
 }
 
+std::optional<QueuedItem> CommandQueue::peek() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (shut_ || items_.empty()) return std::nullopt;
+    const Item& front = items_.front();
+    QueuedItem out;
+    out.kind = front.kind == Kind::invoke ? QueuedItem::Kind::invoke
+               : front.kind == Kind::approve ? QueuedItem::Kind::approve
+                                             : QueuedItem::Kind::deny;
+    if (front.kind == Kind::invoke) out.invocation = front.invocation;
+    out.approval = front.approval;
+    return out;
+}
+
 bool CommandQueue::is_shut_down() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return shut_;

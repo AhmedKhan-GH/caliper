@@ -390,6 +390,13 @@ CommandJournal::Append CommandJournal::append(JournalEvent event) {
     size_ += line.size();
     last_seq_ = event.seq;
     out.seq = event.seq;
+    if (options_.on_append) {
+        try {
+            options_.on_append(event);
+        } catch (...) {
+            // An observer that throws loses its event; the line is written.
+        }
+    }
     return out;
 }
 

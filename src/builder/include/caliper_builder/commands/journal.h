@@ -38,11 +38,18 @@
 
 namespace caliper_builder {
 
+struct JournalEvent;
+
 struct JournalOptions {
     std::uint64_t max_bytes = std::uint64_t(16) << 20;  // rotate before the file passes this
     int keep = 4;                                       // rotated files kept
     std::size_t redact_over = std::size_t(64) << 10;    // 64 KiB
     bool include_read_only = false;                     // the registry also writes read-only commands
+    // Called with each event once its line is written, on the appending
+    // thread and under the journal's lock: it must be quick and must not call
+    // the journal. An exception it throws is dropped. The app shows each
+    // command in its Activity pane this way.
+    std::function<void(const JournalEvent&)> on_append;
 };
 
 struct JournalEvent {

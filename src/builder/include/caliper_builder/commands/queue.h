@@ -20,6 +20,13 @@
 // included, with command.shutdown, and drops the registry's pending
 // approvals; later submits complete at once with that error. The destructor
 // shuts down. No future is ever left without a value. No function throws.
+//
+// peek() tells what drain() runs next without running it, so that an app can
+// choose where to run it: the app runs a long command, such as loader.run, on
+// a worker with drain(1) while its frame thread leaves the queue alone, and
+// waits for a frame to be read back before it drains capture.frame
+// (src/host/builder/app_session.h). Only the draining side may rely on the
+// answer, since nothing but drain() and shutdown() removes an item.
 #include <caliper_builder/commands/command.h>
 #include <caliper_builder/commands/registry.h>
 
@@ -36,6 +43,15 @@
 #include <string>
 
 namespace caliper_builder {
+
+// The item that drain() runs next: an invocation, or the person's decision on
+// a pending approval, with its approval id.
+struct QueuedItem {
+    enum class Kind { invoke, approve, deny };
+    Kind kind = Kind::invoke;
+    CommandInvocation invocation;  // for invoke
+    std::string approval;          // for approve and deny
+};
 
 struct SubmitOptions {
     bool wait_for_approval = true;
@@ -63,6 +79,9 @@ public:
 
     // Runs up to `max` waiting items on the calling thread; returns how many ran.
     std::size_t drain(std::size_t max = std::numeric_limits<std::size_t>::max());
+
+    // The item drain() runs next, or nothing when none waits or the queue is shut down.
+    std::optional<QueuedItem> peek() const;
 
     void shutdown();
     bool is_shut_down() const;

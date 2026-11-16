@@ -233,6 +233,52 @@ TEST_CASE("shutdown completes every future, and later submits complete at once")
     queue.shutdown();  // twice is fine
 }
 
+TEST_CASE("peek tells what drain runs next without running it") {
+    CommandRegistry registry;
+    int runs = 0;
+    REQUIRE(registry.add(descriptor("toy.noop"), [&](const CommandContext&) {
+                         ++runs;
+                         return CommandOutput::ok({});
+                     }).ok());
+    REQUIRE(registry.add(descriptor("toy.delete", true), [](const CommandContext&) { return CommandOutput::ok({}); }).ok());
+    CommandQueue queue(registry);
+    CHECK_FALSE(queue.peek().has_value());
+
+    auto a = queue.submit(inv("toy.noop", 7, CommandOrigin::mcp));
+    auto b = queue.submit(inv("toy.delete", 1, CommandOrigin::mcp));
+    auto next = queue.peek();
+    REQUIRE(next.has_value());
+    CHECK(next->kind == cb::QueuedItem::Kind::invoke);
+    CHECK(next->invocation.name == "toy.noop");
+    CHECK(next->invocation.args == json{{"n", 7}});
+    CHECK(next->invocation.origin == CommandOrigin::mcp);
+    CHECK(queue.peek()->invocation.name == "toy.noop");  // peeking twice changes nothing
+    CHECK(runs == 0);
+    CHECK(queue.waiting() == 2);
+
+    CHECK(queue.drain(1) == 1);
+    CHECK(a.get().ok);
+    CHECK(queue.peek()->invocation.name == "toy.delete");
+    CHECK(queue.drain(1) == 1);  // parked for approval
+    REQUIRE(registry.pending_approvals().size() == 1);
+    const std::string id = registry.pending_approvals()[0].approval;
+    CHECK_FALSE(queue.peek().has_value());
+
+    auto decided = queue.approve(id);
+    next = queue.peek();
+    REQUIRE(next.has_value());
+    CHECK(next->kind == cb::QueuedItem::Kind::approve);
+    CHECK(next->approval == id);
+    CHECK(next->invocation.name.empty());
+    CHECK(queue.drain(1) == 1);
+    CHECK(decided.get().ok);
+    CHECK(b.get().ok);
+
+    queue.submit(inv("toy.noop"));
+    queue.shutdown();
+    CHECK_FALSE(queue.peek().has_value());
+}
+
 TEST_CASE("the destructor shuts the queue down") {
     CommandRegistry registry;
     REQUIRE(registry.add(descriptor("toy.noop"), [](const CommandContext&) { return CommandOutput::ok({}); }).ok());

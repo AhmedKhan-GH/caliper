@@ -10,7 +10,9 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 using caliper_builder::CommandJournal;
 using caliper_builder::CommandOrigin;
@@ -105,6 +107,41 @@ TEST_CASE("events get increasing seqs that continue after reopening") {
     // The timestamp is UTC with milliseconds.
     CHECK(read.events[0].ts.size() == 24);
     CHECK(read.events[0].ts.back() == 'Z');
+}
+
+TEST_CASE("an observer sees each event once its line is written") {
+    const std::string path = fresh_dir("observer") + "/commands.jsonl";
+    std::vector<JournalEvent> seen;
+    JournalOptions options;
+    options.on_append = [&](const JournalEvent& e) { seen.push_back(e); };
+    auto opened = CommandJournal::open(path, options);
+    REQUIRE(opened.error.ok());
+    auto failed = do_event("loader.run", {{"id", "temps"}});
+    failed.ok = false;
+    failed.error = "loader.not_found";
+    CHECK(opened.journal->append(do_event("panel.create", {{"token", "abc"}})).seq == 1);
+    CHECK(opened.journal->append(failed).seq == 2);
+    REQUIRE(seen.size() == 2);
+    CHECK(seen[0].seq == 1);
+    CHECK(seen[0].name == "panel.create");
+    CHECK(seen[0].origin == CommandOrigin::agent);
+    CHECK(seen[0].args["token"] == json{{"$redacted", "secret"}});  // what was written
+    CHECK(seen[1].name == "loader.run");
+    CHECK_FALSE(seen[1].ok);
+    CHECK(seen[1].error == "loader.not_found");
+    // An observer that throws loses its event, and the line is still written.
+    std::vector<JournalEvent> before = seen;
+    opened.journal->close();
+    JournalOptions throwing;
+    throwing.on_append = [](const JournalEvent&) { throw std::runtime_error("observer"); };
+    auto again = CommandJournal::open(path, throwing);
+    REQUIRE(again.error.ok());
+    CHECK(again.journal->append(do_event("panel.remove")).seq == 3);
+    // A closed journal writes nothing and tells nobody.
+    again.journal->close();
+    CHECK(again.journal->append(do_event("panel.remove")).error.code == "journal.closed");
+    CHECK(seen.size() == before.size());
+    CHECK(cb::read_journal(path).events.size() == 3);
 }
 
 TEST_CASE("timestamps are UTC ISO 8601 with milliseconds") {
