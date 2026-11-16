@@ -6,15 +6,16 @@ seeds and deterministic algorithms, and a test viewer on a real loopback
 connection to the notebook's ``caliper.serve()`` decodes every scene batch:
 
 * the path's plane, 300 steps with ``every`` at 100, so that refits come at
-  steps 50, 100 and 200: the scene's entities and the frame at its root,
-  nothing drawn before step 50, the mesh's shape, the centre vertex at half
-  the log10 of the loss computed separately, the path's last point at the
-  current point, orthonormal directions, the first nine points of the path
-  after the refit at step 200 against the snapshots' projections in float64,
-  and ``plane share``;
+  steps 40, 100 and 200 (a point every 10th step, a snapshot every 20): the
+  scene's entities and the frame at its root, nothing drawn before step 40,
+  the mesh's shape, the centre vertex at half the log10 of the loss computed
+  separately, the path's last point at the current point whenever the path
+  is sent (each 10th step and each refit), orthonormal directions, the first
+  eleven points of the path after the refit at step 200 against the
+  snapshots' projections in float64, and ``plane share``;
 * random directions, 100 steps with ``every`` at 50: the filter-normalised
   rows, zero biases and normalisation entries, the centre vertex, a path of
-  one point per step that is never redrawn;
+  one point every 10th step that is never redrawn;
 * the controls: ``span``, ``directions`` and ``every`` set while paused take
   effect at the next surface, and ``surface now`` computes one while paused;
 * two fixtures of ``Landscape`` alone: snapshots along a known curve whose
@@ -125,6 +126,7 @@ class Recorder:
         self.ns = ns
         self.surfaces: list[dict] = []
         self.losses: dict[int, float] = {}               # snapshot steps -> plain loss
+        self.thetas: dict = {}                           # point steps -> the weights
         self.drawn: list[int] = []
         land = ns["land"]
         point, surface, path = land.point, ns["show_surface"], ns["show_path"]
@@ -133,6 +135,8 @@ class Recorder:
             p = point(model, step)
             if step % land.snapshot_every == 0:
                 self.losses[step] = plain_loss(ns)
+            if p is not None:
+                self.thetas[step] = land.flat(model).clone()
             return p
 
         def recording_surface():
@@ -298,14 +302,16 @@ def test_path_plane(notebook):
         assert [(m.path, m.part, m.static) for m in state] == [("", "lines", True)]
         assert arr(state[0], "positions").shape == (2 * (12 + 18), 3)       # box edges, floor grid
         ns["train"](300)
-        v.wait(lambda: any(len(arr(m, "positions")) == 108 for m in v.updates("path", "lines")),
+        v.wait(lambda: any(len(arr(m, "positions")) == 20 for m in v.updates("path", "lines")),
                what="the last path")
         v.wait(lambda: len(v.series()) == 3, what="three plane shares")
 
-    # refits at 50, 100 and 200; nothing drawn before step 50
-    assert [s["step"] for s in rec.surfaces] == [50, 100, 200]
-    assert land.refits == [(50, "path"), (100, "path"), (200, "path")] and land.method == "vmap"
-    assert min(rec.drawn) >= 50
+    # refits at 40, 100 and 200; nothing drawn before step 40, then only at
+    # points (every 10th step) and refits, and once more after the last step
+    assert [s["step"] for s in rec.surfaces] == [40, 100, 200]
+    assert land.refits == [(40, "path"), (100, "path"), (200, "path")] and land.method == "vmap"
+    assert min(rec.drawn) >= 40 and rec.drawn[-1] == 299
+    assert all(step % 10 == 0 for step in rec.drawn[:-1])
     received = {(m.path, m.part) for m in v.all() if isinstance(m, w.SceneUpdate) and m.sub == 1}
     assert received == {("", "lines"), ("surface", "mesh"), ("path", "lines"),
                         ("current", "points")}
@@ -326,18 +332,19 @@ def test_path_plane(notebook):
         d = s["directions"].double()
         np.testing.assert_allclose((d @ d.T).numpy(), np.eye(2), rtol=0, atol=1e-5)
 
-    # after the refit at step 200: one point per kept snapshot, then one per step
+    # after the refit at step 200: one point per kept snapshot, then one every
+    # 10th step (210 to 290)
     last = rec.surfaces[-1]
-    assert last["snapshots"] == 9 and land.snapshot_steps[:9] == list(range(0, 201, 25))
+    assert last["snapshots"] == 11 and land.snapshot_steps[:11] == list(range(0, 201, 20))
     final = arr(v.updates("path", "lines")[-1], "positions")
-    assert len(final) == 9 + (299 - 200)
-    snaps = land.snapshots[:9].double()
+    assert len(final) == 11 + 9
+    snaps = land.snapshots[:11].double()
     theta_r, plane = last["centre"].double(), last["directions"].double()
     coords = (snaps - theta_r) @ plane.T                                   # float64, on the CPU
     half = max(1.5 * 1.0 * coords.abs().max().item(), 1e-3 * theta_r.norm().item())
-    np.testing.assert_allclose(final[:9, :2], (coords / half).numpy(), rtol=0, atol=1e-4)
-    heights = [0.5 * math.log10(rec.losses[s]) for s in range(0, 201, 25)]
-    np.testing.assert_allclose(final[:9, 2], heights, rtol=0, atol=1e-4)
+    np.testing.assert_allclose(final[:11, :2], (coords / half).numpy(), rtol=0, atol=1e-4)
+    heights = [0.5 * math.log10(rec.losses[s]) for s in range(0, 201, 20)]
+    np.testing.assert_allclose(final[:11, 2], heights, rtol=0, atol=1e-4)
     assert abs(last["half_width"] - half) <= 1e-5 * half
 
     # the plane holds nearly as much of the path as the exact top two components
@@ -364,7 +371,7 @@ def test_random_directions(notebook):
     rec = Recorder(ns)
     with Viewer(ns["server"]) as v:
         ns["train"](100)
-        v.wait(lambda: any(len(arr(m, "positions")) == 100 for m in v.updates("path", "lines")),
+        v.wait(lambda: any(len(arr(m, "positions")) == 10 for m in v.updates("path", "lines")),
                what="the last path")
 
     assert [(s["step"], s["mode"]) for s in rec.surfaces] == [(0, "random"), (50, "random")]
@@ -392,16 +399,17 @@ def test_random_directions(notebook):
                                    atol=1e-6)
 
     check_path_ends_at_current(v)
-    # one point per step, never redrawn
+    # one point every 10th step (0 to 90), never redrawn
     for a, b in zip(paths, paths[1:]):
         pa, pb = arr(a, "positions"), arr(b, "positions")
         assert len(pb) >= len(pa)
         np.testing.assert_array_equal(pb[:len(pa)], pa)
     final = arr(paths[-1], "positions")
-    assert len(final) == 100
-    # the path barely moves in random directions: its coordinates against the
-    # anchor by least squares, in float64
-    theta = land.flat(model).double() - land.anchor.double()
+    assert len(final) == 10
+    # the path barely moves in random directions: its last point, at step 90,
+    # against the coordinates of that step's weights on the anchor by least
+    # squares, in float64
+    theta = rec.thetas[90].double() - land.anchor.double()
     d = land.random_directions.double()
     coef = torch.linalg.solve(d @ d.T, d @ theta)
     np.testing.assert_allclose(final[-1, :2], coef.numpy() / 1.0, rtol=0, atol=1e-4)
@@ -414,7 +422,7 @@ def test_random_directions(notebook):
 def test_controls(notebook):
     ns = notebook(160)
     land, model = ns["land"], ns["model"]
-    ns["every"].set(1000)                                # one surface, at step 50
+    ns["every"].set(1000)                                # one surface, at step 40
     rec = Recorder(ns)
     errors = []
 
@@ -501,7 +509,7 @@ def test_matched_directions_keep_order_and_sign():
     125 and 250 while the components stay e1 and e2 (the patterns are
     orthogonal, so the Gram matrix is diagonal in them)."""
     model, x, y = toy()
-    land = Landscape(model, x, y, grid=5)
+    land = Landscape(model, x, y, grid=5, point_every=1, snapshot_every=25)
     base = land.flat(model).clone()
     g = torch.Generator().manual_seed(2)
     e = torch.linalg.qr(torch.randn(land.size, 2, generator=g, dtype=torch.float64))[0].T.float()
@@ -527,7 +535,7 @@ def test_matched_directions_keep_order_and_sign():
 
 def test_thinning_rule():
     model, x, y = toy()
-    land = Landscape(model, x, y, grid=5, keep=8, snapshot_every=25)
+    land = Landscape(model, x, y, grid=5, keep=8, point_every=1, snapshot_every=25)
     theta0 = land.flat(model).clone()
     kept = {}
     for step in range(601):
@@ -543,15 +551,17 @@ def test_thinning_rule():
         np.testing.assert_allclose(land.snapshots[k].numpy(), (theta0 + 0.01 * step).numpy(),
                                    rtol=0, atol=1e-6)
 
-    land = Landscape(model, x, y, grid=5)                       # keep 256, every 25
+    land = Landscape(model, x, y, grid=5)              # the defaults: keep 256, every 20 steps
     for step in range(8000):
         land.point(model, step)
-        if step == 6399:
+        if step == 5119:
             assert len(land.snapshot_steps) == 256
-        if step == 6400:
-            assert len(land.snapshot_steps) == 129 and land.snapshot_steps[-2:] == [6350, 6400]
-    assert len(land.snapshot_steps) == 160
-    assert land.snapshot_steps == list(range(0, 6400, 50)) + list(range(6400, 8000, 50))
+        if step == 5120:
+            assert len(land.snapshot_steps) == 129 and land.snapshot_steps[-2:] == [5080, 5120]
+    assert len(land.snapshot_steps) == 200
+    assert land.snapshot_steps == list(range(0, 5120, 40)) + list(range(5120, 8000, 40))
+    with pytest.raises(ValueError):
+        Landscape(model, x, y, grid=5, point_every=10, snapshot_every=25)
 
 
 # ---------------------------------------------------------------------------
