@@ -850,13 +850,16 @@ if(TARGET caliper_builder_session)
             ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
         target_compile_definitions(caliper_app_session_tests PRIVATE CALIPER_WITH_BUILDER=1)
         set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+        if(TARGET hello_applet)
+            add_dependencies(caliper_app_session_tests hello_applet)   # app.launch in the process test
+        endif()
         add_test(NAME caliper_app_session COMMAND caliper_app_session_tests "--test-case-exclude=*hidden app*")
         set_tests_properties(caliper_app_session PROPERTIES LABELS "builder" TIMEOUT 120)
         if(NOT WIN32)
             add_test(NAME caliper_app_session_hidden
                      COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")
             set_tests_properties(caliper_app_session_hidden PROPERTIES LABELS "cli;builder" TIMEOUT 240
-                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets"
                 SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
         endif()
     endif()

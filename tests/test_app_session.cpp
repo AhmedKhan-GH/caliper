@@ -583,8 +583,10 @@ TEST_CASE("app session: the command script runs through the queue and writes eac
 #ifndef _WIN32
 TEST_CASE("app session: the hidden app runs a command script on its workspace and closes it on SIGTERM") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
-    if (!exe || !*exe) {
-        MESSAGE("CALIPER_TEST_CALIPER_EXE is not set: run the ctest entry caliper_app_session_hidden");
+    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
+    if (!exe || !*exe || !applets || !*applets) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_APPLETS is not set: run the ctest entry "
+                "caliper_app_session_hidden");
         return;
     }
     TempDir t("app");
@@ -609,6 +611,7 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
         {{"name", "applet.save"}, {"args", json::object()}},
         {{"name", "app.info"}},
         {{"name", "app.applets"}},
+        {{"name", "app.launch"}, {"args", {{"id", "dev.caliper.hello"}}}},
         {{"name", "capture.frame"}},
         {{"name", "panel.render"}, {"args", {{"id", "curve"}}}},
     };
@@ -618,7 +621,7 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     fs::create_directories(t.str("user-applets"));
 
     Proc p;
-    REQUIRE(p.start(exe, {"--hidden", "--workspace", ws},
+    REQUIRE(p.start(exe, {"--hidden", "--applets", applets, "--workspace", ws},
                     {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
                      "CALIPER_WINDOW_SIZE=640x400", "CALIPER_COMMAND_SCRIPT=" + t.str("script.jsonl"),
                      "CALIPER_COMMAND_RESULTS=" + t.str("results.jsonl")}));
@@ -629,7 +632,7 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     std::istringstream in(read_text(t.str("results.jsonl")));
     for (std::string line; std::getline(in, line);) results.push_back(json::parse(line));
     REQUIRE(results.size() == script.size() + 1);
-    for (size_t i = 0; i + 3 < script.size(); ++i) {
+    for (size_t i = 0; i + 4 < script.size(); ++i) {
         CAPTURE(results[i].dump());
         CHECK(results[i]["ok"] == true);
     }
@@ -637,19 +640,23 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     CHECK(results[6]["result"]["manifest"] == "applets/temps-board/temps-board.caliper.toml");
     CHECK(results[7]["result"]["services"].size() > 0);
     CHECK(results[8]["ok"] == true);
+    // app.launch opens the fixture's page, as POST /v0/applets/{id}/launch does.
+    REQUIRE_MESSAGE(results[9]["ok"] == true, results[9].dump());
+    CHECK(results[9]["result"]["id"] == "dev.caliper.hello");
+    CHECK(results[9]["result"]["status"] == "ACTIVE");
     if (metal) {
-        REQUIRE_MESSAGE(results[9]["ok"] == true, results[9].dump());
-        const std::string png = unb64(results[9]["result"]["png_base64"].get<std::string>());
+        REQUIRE_MESSAGE(results[10]["ok"] == true, results[10].dump());
+        const std::string png = unb64(results[10]["result"]["png_base64"].get<std::string>());
         int w = 0, h = 0, n = 0;
         unsigned char* px = stbi_load_from_memory((const unsigned char*)png.data(), (int)png.size(), &w, &h, &n, 4);
         REQUIRE(px != nullptr);
         stbi_image_free(px);
         CHECK(((w == 640 && h == 400) || (w == 1280 && h == 800)));
-        CHECK(results[9]["result"]["width"] == w);
+        CHECK(results[10]["result"]["width"] == w);
     } else {
-        CHECK(results[9]["error"]["code"] == "capture.unavailable");
+        CHECK(results[10]["error"]["code"] == "capture.unavailable");
     }
-    CHECK(results[10]["error"]["code"] == "command.not_available");
+    CHECK(results[11]["error"]["code"] == "command.not_available");
     CHECK(results.back() == json{{"done", true}, {"commands", (int)script.size()}, {"failed", metal ? 1 : 2}});
 
     // SIGTERM closes the hidden window as a click would; the session closes

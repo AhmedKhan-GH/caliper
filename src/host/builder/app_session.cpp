@@ -559,6 +559,7 @@ caliper_builder::Session* AppSession::wait_open(std::chrono::milliseconds limit)
     Impl& im = *impl_;
     im.ensure_open();
     std::unique_lock<std::mutex> lock(im.m);
+    if (!im.started) return nullptr;
     if (std::this_thread::get_id() != im.frame_thread)
         im.cv.wait_for(lock, limit, [&] {
             return im.state == Impl::State::ready || im.state == Impl::State::failed ||

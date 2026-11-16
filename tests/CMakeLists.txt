@@ -289,6 +289,8 @@ if(TARGET caliper)
         ERROR "--api applies only to starting the app, dev and shot")
     caliper_cli_test(hidden_elsewhere ARGS "shot|--hidden|--launch|x|--out|${_cli_work}/x.png" EXIT 2
         ERROR "--hidden applies only to starting the app and dev")
+    caliper_cli_test(workspace_elsewhere ARGS "list|--workspace|${_cli_work}/ws" EXIT 2
+        ERROR "--workspace applies only to starting the app, dev and shot")
     # On Windows the pieces that have not run there as a process yet are
     # refused before anything starts, with exit code 1 and one message
     # (host_cli.h, windows_unavailable); no window opens and nothing is written.
