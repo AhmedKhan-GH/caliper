@@ -297,7 +297,6 @@ TEST_CASE("widget app: a property's edit, through the sidecar, previewed in its 
     CHECK(c.edits == std::vector<std::string>{"panel.patch"});
 }
 
-#endif
 
 namespace {
 
