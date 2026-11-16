@@ -42,6 +42,13 @@
 // sessions go after ended_ttl_ms, beyond max_ended_sessions (the oldest
 // first), or when retained data passes max_retained_bytes.
 //
+// PROTOCOL 3.2 DRAFT, SCENES. The hub announces `scenes`, leaves the scene views
+// out of the VIEWS of a viewer that did not announce it, forwards SCENE_UPDATE
+// and SCENE_CLEAR to the viewers of the producer subscription (in-order clears
+// and states, the newest batch per entity part, each part at max_rate), and
+// keeps the newest batch of each entity part, a clear applied, which a late
+// viewer receives as the scene's state after a reset of the hub's own.
+//
 // PROTOCOL 3.1. The hub announces `controls` and `selection`. It keeps the
 // latest CONTROLS of each session and the latest SELECTION of each item space
 // (at most CALIPER_NET_MAX_ITEM_SPACES), also after the session ends, passes
@@ -150,6 +157,10 @@ struct HubStats {
     uint64_t controls_out = 0, selections_out = 0, selections_dropped = 0;
     uint64_t controls_held = 0;             // CONTROLS that waited for the data before them
     uint64_t controls_hold_expired = 0;     // of which went after 2 s with that data still unsent
+    // 3.2 draft: scene messages in, out and replaced by a newer batch of the
+    // same entity part while waiting, and the bytes of the batches kept
+    uint64_t scenes_in = 0, scenes_out = 0, scenes_superseded = 0;
+    uint64_t retained_scene_bytes = 0;
     size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer
     uint64_t refused_host = 0, refused_origin = 0, refused_token = 0, refused_full = 0;
     uint64_t http_files = 0, http_not_found = 0;

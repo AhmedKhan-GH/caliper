@@ -87,6 +87,41 @@ struct Snap {
 };
 using SnapPtr = std::shared_ptr<const Snap>;
 
+// ---- 3.2 draft: scenes (capability "scenes"; docs/references/wire-protocol-3-2.md) ----
+// One scene message of a producer, SCENE_UPDATE or SCENE_CLEAR, shared by every
+// viewer connection that sends it. The reset that opens a late viewer's state
+// is the hub's own and has no frame.
+struct SceneMsg {
+    uint16_t type = 0;
+    SharedBytes frame;               // null for a message the hub makes
+    Json meta;                       // the metadata, "sections" included when there are sections
+    std::vector<uint32_t> lens;      // section lengths
+    size_t tail = 0;                 // offset of the first section in `frame`
+    uint16_t flags = 0;
+    std::string path, part;          // part: "" for a clear
+    bool is_static = false, recursive = false, reset = false;
+    std::vector<std::string> parts;  // a clear's parts; empty: all
+    size_t bytes() const { return frame ? frame->size() : 0; }
+    size_t tail_len() const { return frame ? frame->size() - tail : 0; }
+};
+using ScenePtr = std::shared_ptr<const SceneMsg>;
+// (path, part): the byte order of the paths, then points, lines, mesh.
+using SceneKey = std::pair<std::string, int>;
+int scene_part_order(const std::string& part) {
+    return part == CALIPER_NET_PART_POINTS ? 0 : part == CALIPER_NET_PART_LINES ? 1 : part == CALIPER_NET_PART_MESH ? 2 : 3;
+}
+// Whether clear `c` removes the batch of `part` at `path`: a reset removes
+// everything; otherwise static items stay unless the clear is static too.
+bool scene_clears(const SceneMsg& c, const SceneMsg& b) {
+    if (c.reset) return true;
+    if (b.is_static && !c.is_static) return false;
+    const std::string& p = b.path;
+    const bool in = p == c.path || (c.recursive && (c.path.empty() || (p.size() > c.path.size() &&
+                                                                       p.compare(0, c.path.size(), c.path) == 0 &&
+                                                                       p[c.path.size()] == '/')));
+    return in && (c.parts.empty() || std::find(c.parts.begin(), c.parts.end(), b.part) != c.parts.end());
+}
+
 struct History {
     uint64_t view_id = 0;
     std::deque<float> v;             // values [first, first + v.size())
@@ -130,6 +165,12 @@ struct Channel {
     std::vector<Waiter> waiters;
     SnapPtr latest;
     uint64_t used_ms = 0;
+    // 3.2 draft, a scene: the newest batch of each entity part, for a late
+    // viewer; the newest seq; whether the producer has sent the state of this
+    // subscription (its reset) since the hub subscribed.
+    std::map<SceneKey, ScenePtr> scene_held;
+    uint64_t scene_seq = 0;
+    bool scene_seen = false;
     bool idle() const { return members.empty() && waiters.empty() && !keeper; }
 };
 
@@ -198,6 +239,13 @@ struct VSub {
     uint64_t pending_n = 0;          // counts the snapshots made pending (a held CONTROLS waits for one)
     uint64_t next = 0;               // series: next absolute index to send
     uint64_t backfill = std::numeric_limits<uint64_t>::max();
+    // 3.2 draft, a scene: messages sent first and in order (clears and states),
+    // each with whether it goes as state; then the newest batch of each entity
+    // part, each part at most at `rate`.
+    bool scene = false;
+    std::deque<std::pair<ScenePtr, bool>> scene_first;
+    std::map<SceneKey, ScenePtr> scene_pending;
+    std::map<SceneKey, uint64_t> scene_last_us;
 };
 
 struct Peer {
@@ -220,6 +268,7 @@ struct Peer {
     // 3.1: what the viewer announced, its coalesced CONTROLS and SELECTIONs
     // (latest wins while its send queue is full), and its waiting CONTROLs.
     bool cap_controls = false, cap_selection = false;
+    bool cap_scenes = false;         // 3.2 draft: the viewer announced "scenes"
     SharedBytes pending_controls;
     std::map<std::string, SharedBytes> pending_selections;
     size_t controls_waiting = 0;
@@ -314,7 +363,8 @@ struct Hub::Impl {
     uint64_t next_order = 1;
     uint64_t snap_bytes = 0, series_bytes = 0;
     uint64_t meta_bytes = 0;         // 3.1: the CONTROLS and SELECTIONs kept per session
-    uint64_t retained() const { return snap_bytes + series_bytes + meta_bytes; }
+    uint64_t scene_bytes = 0;        // 3.2 draft: the scene batches kept for late viewers
+    uint64_t retained() const { return snap_bytes + series_bytes + meta_bytes + scene_bytes; }
     HubStats c;                      // the counters
     mutable std::mutex stats_mu;
     HubStats published;
@@ -452,11 +502,21 @@ struct Hub::Impl {
 
     // VIEWS for one viewer: the item spaces of 3.1 only to a viewer that
     // announced `selection`.
-    wire::Views views_msg(const Session* s, bool with_items) {
+    // 3.2 draft: the scenes only to a viewer that announced `scenes`.
+    wire::Views views_msg(const Session* s, bool with_items, bool with_scenes = true) {
         wire::Views v;
         if (s) {
             v.session = s->id;
             v.views = with_items ? s->views : s->views_plain;
+            if (!with_scenes) {
+                Json out = Json::array();
+                for (const Json& e : v.views.items()) {
+                    const Json* k = e.find("kind");
+                    int64_t kind = 0;
+                    if (!(k && k->get_i64(&kind) && kind == CALIPER_NET_KIND_SCENE)) out.push(e);
+                }
+                v.views = out;
+            }
         } else {
             v.views = Json::array();
         }
@@ -601,7 +661,7 @@ struct Hub::Impl {
     void attach(Peer& p, const std::string& sid) {
         if (p.attached == sid) {   // already there: confirm
             Session* s = sid.empty() ? nullptr : &sessions.at(sid);
-            send(p.conn, views_msg(s, p.cap_selection));
+            send(p.conn, views_msg(s, p.cap_selection, p.cap_scenes));
             if (s) send_state(p, *s);
             return;
         }
@@ -612,7 +672,7 @@ struct Hub::Impl {
             s = &sessions.at(sid);
             s->viewers.insert(p.conn);
         }
-        send(p.conn, views_msg(s, p.cap_selection));
+        send(p.conn, views_msg(s, p.cap_selection, p.cap_scenes));
         if (s) send_state(p, *s);
     }
 
@@ -707,6 +767,7 @@ struct Hub::Impl {
         ch.up_sub = s.next_sub++;
         if (s.next_sub == 0) s.next_sub = 1;
         s.by_up_sub[ch.up_sub] = ch.id;
+        ch.scene_seen = false;       // 3.2 draft: the producer sends the scene's state again
         send_subscribe(s, ch);
         return true;
     }
@@ -742,7 +803,7 @@ struct Hub::Impl {
         if (ch->idle()) {
             unsubscribe_upstream(s, *ch);
             ch->used_ms = monotonic_ms();
-            const bool keep = ch->resolved_ok && (ch->latest || s.series.count(ch->view));
+            const bool keep = ch->resolved_ok && (ch->latest || s.series.count(ch->view) || !ch->scene_held.empty());
             if (!keep) {
                 destroy_channel(s, id);
                 return;
@@ -787,6 +848,7 @@ struct Hub::Impl {
         }
         if (ch.up_request) s.by_up_request.erase(ch.up_request);
         if (ch.latest) snap_bytes -= ch.latest->bytes();
+        for (const auto& kv : ch.scene_held) scene_bytes -= kv.second->bytes();
         for (const SubKey& k : ch.members) {
             auto pt = peers.find(k.conn);
             if (pt == peers.end()) continue;
@@ -826,6 +888,11 @@ struct Hub::Impl {
         v.pending.reset();
         ch.members.insert({p.conn, v.sub});
         ch.used_ms = monotonic_ms();
+        if (ch.kind == CALIPER_NET_KIND_SCENE) {   // 3.2 draft
+            join_scene(v, ch);
+            p.dirty = true;
+            return;
+        }
         if (v.series) {
             v.backfill = backfill_of(ch.resolved);
             v.next = 0;
@@ -840,6 +907,8 @@ struct Hub::Impl {
 
     void leave(Session& s, Peer& p, VSub& v) {
         v.pending.reset();
+        v.scene_first.clear();
+        v.scene_pending.clear();
         Channel* ch = channel(s, v.channel);
         v.channel = 0;
         if (!ch) return;
@@ -899,7 +968,7 @@ struct Hub::Impl {
         for (auto& kv : s.channels) {
             Channel& ch = kv.second;
             if (ch.id == exclude || ch.view != view || ch.view_id != vi->second.id || !ch.resolved_ok) continue;
-            const bool has = ch.latest || s.series.count(view);
+            const bool has = ch.latest || s.series.count(view) || !ch.scene_held.empty();
             if (!has) continue;
             if (ch.aliases.count(key) || ch.resolved_key == key) return &ch;
             if (!best || ch.used_ms > best->used_ms) best = &ch;
@@ -978,6 +1047,12 @@ struct Hub::Impl {
         if (!known && p.subs.size() + p.pending_sub.size() >= CALIPER_NET_MAX_SUBSCRIPTIONS) {
             reply_error(p.conn, m.request_id, m.sub, m.view, CALIPER_NET_ERR_LIMIT,
                         "at most " + std::to_string(CALIPER_NET_MAX_SUBSCRIPTIONS) + " subscriptions per connection");
+            return;
+        }
+        if (auto vi = s->view_index.find(m.view);   // 3.2 draft: no scene for a viewer without `scenes`
+            vi != s->view_index.end() && vi->second.kind == CALIPER_NET_KIND_SCENE && !p.cap_scenes) {
+            reply_error(p.conn, m.request_id, m.sub, m.view, CALIPER_NET_ERR_UNKNOWN_VIEW,
+                        "no view '" + m.view + "' in session " + s->id);
             return;
         }
         end_vsub(p, m.sub);
@@ -1325,7 +1400,7 @@ struct Hub::Impl {
     wire::Welcome hub_welcome(bool client_has_controls) {
         wire::Welcome w;
         w.role = CALIPER_NET_ROLE_HUB;
-        w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+        w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION};
         Json sw = Json::object();
         sw.set("name", "caliper-hub");
         sw.set("version", opt.software_version);
@@ -1559,16 +1634,19 @@ struct Hub::Impl {
         }
         // The viewers attached to the session hear the new list, with the item
         // spaces only when they announced `selection`.
-        for (bool with_items : {true, false}) {
-            std::vector<uint8_t> b;
-            if (!wire::encode(views_msg(&s, with_items), &b)) continue;
-            auto shared = std::make_shared<const Bytes>(std::move(b));
-            for (ConnId v : s.viewers) {
-                auto pt = peers.find(v);
-                if (pt == peers.end() || pt->second.cap_selection != with_items) continue;
-                if (!server.send(v, shared)) overflow(v);
+        for (bool with_items : {true, false})
+            for (bool with_scenes : {true, false}) {
+                std::vector<uint8_t> b;
+                if (!wire::encode(views_msg(&s, with_items, with_scenes), &b)) continue;
+                auto shared = std::make_shared<const Bytes>(std::move(b));
+                for (ConnId v : s.viewers) {
+                    auto pt = peers.find(v);
+                    if (pt == peers.end() || pt->second.cap_selection != with_items ||
+                        pt->second.cap_scenes != with_scenes)
+                        continue;
+                    if (!server.send(v, shared)) overflow(v);
+                }
             }
-        }
         if (s.views.size() != before) broadcast_sessions();
     }
 
@@ -1617,6 +1695,7 @@ struct Hub::Impl {
                 }
             ch->members.clear();
             if (!other->latest && ch->latest) set_latest(*other, ch->latest);
+            if (other->scene_held.empty()) other->scene_held.swap(ch->scene_held);   // 3.2 draft
             const uint64_t oid = other->id;
             destroy_channel(s, id);
             Channel* o = channel(s, oid);
@@ -1633,6 +1712,7 @@ struct Hub::Impl {
             // An idle channel with the same data view gives this one its aliases.
             ch->aliases.insert(other->aliases.begin(), other->aliases.end());
             if (!ch->latest && other->latest) set_latest(*ch, other->latest);
+            if (ch->scene_held.empty()) ch->scene_held.swap(other->scene_held);      // 3.2 draft
             for (const SubKey& k : other->members)
                 if (VSub* v = vsub(k)) {
                     v->channel = ch->id;
@@ -1720,6 +1800,129 @@ struct Hub::Impl {
         if (retained() > opt.max_retained_bytes) enforce_budget();
     }
 
+    // ---- 3.2 draft: scenes ---------------------------------------------------------------
+    // A scene message of a producer: the hub keeps the newest batch of each
+    // entity part of the channel for a late viewer, applies a clear to what it
+    // keeps, and offers the message to the channel's viewers. Clears and the
+    // producer's state go to a viewer in order and are never dropped (a clear
+    // first drops the viewer's pending batches it clears); any other batch
+    // replaces the viewer's pending one of the same entity part.
+    void producer_scene(Session& s, wire::DecodeResult& r, const wire::Message& m, SharedBytes buf) {
+        const auto* up = std::get_if<wire::SceneUpdate>(&m);
+        const auto* cl = std::get_if<wire::SceneClear>(&m);
+        auto it = s.by_up_sub.find(up ? up->sub : cl->sub);
+        if (it == s.by_up_sub.end()) return;
+        Channel* ch = channel(s, it->second);
+        if (!ch || ch->kind != CALIPER_NET_KIND_SCENE) return;
+        ++c.scenes_in;
+        auto msg = std::make_shared<SceneMsg>();
+        msg->type = r.type;
+        msg->meta = std::move(r.frame.meta);
+        msg->flags = r.frame.flags;
+        for (const auto& sec : r.frame.sections) msg->lens.push_back((uint32_t)sec.size);
+        msg->tail = r.frame.sections.empty() ? buf->size() : r.frame.sections.front().offset;
+        msg->frame = std::move(buf);
+        bool state = false;
+        if (up) {
+            msg->path = up->path;
+            msg->part = up->part;
+            msg->is_static = up->is_static;
+            state = up->state;
+            ch->scene_seq = std::max(ch->scene_seq, up->seq);
+        } else {
+            msg->path = cl->path;
+            msg->is_static = cl->is_static;
+            msg->recursive = cl->recursive;
+            msg->reset = cl->reset;
+            if (cl->parts) msg->parts = *cl->parts;
+            state = cl->state;
+            ch->scene_seq = std::max(ch->scene_seq, cl->seq);
+            if (cl->reset) ch->scene_seen = true;
+        }
+        ch->used_ms = monotonic_ms();
+        const SceneKey key{msg->path, scene_part_order(msg->part)};
+        if (cl) {
+            for (auto h = ch->scene_held.begin(); h != ch->scene_held.end();) {
+                if (scene_clears(*msg, *h->second)) {
+                    scene_bytes -= h->second->bytes();
+                    h = ch->scene_held.erase(h);
+                } else {
+                    ++h;
+                }
+            }
+        } else {
+            ScenePtr& slot = ch->scene_held[key];
+            if (slot) scene_bytes -= slot->bytes();
+            slot = msg;
+            scene_bytes += msg->bytes();
+        }
+        for (const SubKey& k : ch->members) {
+            VSub* v = vsub(k);
+            if (!v || !v->scene) continue;
+            if (cl) {
+                for (auto q = v->scene_pending.begin(); q != v->scene_pending.end();)
+                    q = scene_clears(*msg, *q->second) ? v->scene_pending.erase(q) : std::next(q);
+                v->scene_first.emplace_back(msg, false);
+            } else if (state) {
+                v->scene_first.emplace_back(msg, false);
+            } else {
+                ScenePtr& slot = v->scene_pending[key];
+                if (slot) ++c.scenes_superseded;
+                slot = msg;
+            }
+            mark_dirty(k.conn);
+        }
+        if (retained() > opt.max_retained_bytes) enforce_budget();
+    }
+
+    // A viewer joins a scene channel. Once the producer's state has passed on
+    // it, the hub sends its own: a reset, then every batch it keeps, as state.
+    void join_scene(VSub& v, const Channel& ch) {
+        v.scene = true;
+        v.scene_first.clear();
+        v.scene_pending.clear();
+        v.scene_last_us.clear();
+        if (!ch.scene_seen) return;   // the producer's own state is on its way
+        auto reset = std::make_shared<SceneMsg>();
+        reset->type = CALIPER_NET_MSG_SCENE_CLEAR;
+        reset->reset = true;
+        Json meta = Json::object();
+        meta.set("view", ch.view);
+        meta.set("seq", ch.scene_seq);
+        meta.set("stamp_ns", (uint64_t)now_us() * 1000u);
+        meta.set("path", "");
+        meta.set("reset", true);
+        reset->meta = std::move(meta);
+        v.scene_first.emplace_back(reset, true);
+        for (const auto& kv : ch.scene_held) v.scene_first.emplace_back(kv.second, true);
+    }
+
+    bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+        Json meta = msg->meta;
+        meta.set("sub", v.sub);
+        if (state) meta.set("state", true);
+        if (!msg->lens.empty()) {
+            std::vector<uint8_t> head;
+            if (!wire::encode_head(msg->type, meta, msg->lens, msg->tail_len(), &head, nullptr,
+                                   CALIPER_NET_PROTOCOL_MINOR, msg->flags))
+                return false;
+            if (!server.send(p.conn, std::move(head), msg->frame, msg->tail, msg->tail_len())) {
+                overflow(p.conn);
+                return false;
+            }
+        } else {
+            meta.erase("sections");
+            std::vector<uint8_t> b;
+            if (!wire::encode_frame(msg->type, meta, {}, &b)) return false;
+            if (!server.send(p.conn, std::make_shared<const Bytes>(std::move(b)))) {
+                overflow(p.conn);
+                return false;
+            }
+        }
+        ++c.scenes_out;
+        return true;
+    }
+
     // Over the byte budget: ended sessions go first (the oldest), then the
     // last snapshots of channels nobody watches (the least recently used).
     void enforce_budget() {
@@ -1733,7 +1936,7 @@ struct Hub::Impl {
             for (auto& kv : sessions)
                 for (auto& ck : kv.second.channels) {
                     Channel& ch = ck.second;
-                    if (!ch.latest || !ch.members.empty() || !ch.waiters.empty()) continue;
+                    if ((!ch.latest && ch.scene_held.empty()) || !ch.members.empty() || !ch.waiters.empty()) continue;
                     if (!lru || ch.used_ms < lru->used_ms) {
                         lru = &ch;
                         ls = &kv.second;
@@ -1741,6 +1944,8 @@ struct Hub::Impl {
                 }
             if (!lru) return;
             set_latest(*lru, nullptr);
+            for (const auto& kv : lru->scene_held) scene_bytes -= kv.second->bytes();   // 3.2 draft
+            lru->scene_held.clear();
             if (!lru->up_sub && lru->idle()) destroy_channel(*ls, lru->id);
         }
     }
@@ -1757,6 +1962,8 @@ struct Hub::Impl {
             producer_series(s, *x);
         } else if (auto* v = std::get_if<wire::Views>(&m)) {
             producer_views(s, *v);
+        } else if (std::holds_alternative<wire::SceneUpdate>(m) || std::holds_alternative<wire::SceneClear>(m)) {
+            producer_scene(s, r, m, std::move(buf));                 // 3.2 draft
         } else if (auto* q = std::get_if<wire::ViewReply>(&m)) {
             producer_reply(s, *q);
         } else if (std::holds_alternative<wire::Controls>(m)) {
@@ -1796,6 +2003,7 @@ struct Hub::Impl {
         p.role = Peer::Role::Viewer;
         p.cap_controls = has_cap(h.capabilities, CALIPER_NET_CAP_CONTROLS);
         p.cap_selection = has_cap(h.capabilities, CALIPER_NET_CAP_SELECTION);
+        p.cap_scenes = has_cap(h.capabilities, CALIPER_NET_CAP_SCENES);
         send(p.conn, hub_welcome(p.cap_controls));
         send(p.conn, sessions_msg());
         reconsider_defaults();
@@ -1916,8 +2124,34 @@ struct Hub::Impl {
         VSub* best = nullptr;
         bool best_series = false;
         uint64_t due_min = 0;
+        VSub* scene_v = nullptr;           // 3.2 draft: the scene message to send next, if any
+        bool scene_head = false;           // from the in-order queue (else a pending batch)
+        SceneKey scene_key;
         for (auto& kv : p.subs) {
             VSub& v = kv.second;
+            if (v.scene) {
+                if (!v.scene_first.empty()) {
+                    if (!scene_v || !scene_head || v.last_us < scene_v->last_us) {
+                        scene_v = &v;
+                        scene_head = true;
+                    }
+                } else if (!scene_head) {
+                    const uint64_t iv = (uint64_t)(1e6 / v.rate);
+                    for (const auto& q : v.scene_pending) {
+                        auto lt = v.scene_last_us.find(q.first);
+                        const uint64_t due = lt == v.scene_last_us.end() ? 0 : lt->second + iv;
+                        if (due <= now) {
+                            if (!scene_v || v.last_us < scene_v->last_us) {
+                                scene_v = &v;
+                                scene_key = q.first;
+                            }
+                            break;
+                        }
+                        if (!due_min || due < due_min) due_min = due;
+                    }
+                }
+                continue;
+            }
             bool has = false;
             if (v.series) {
                 auto h = s->series.find(v.view);
@@ -1941,6 +2175,25 @@ struct Hub::Impl {
             }
         }
         p.due_us = due_min;
+        if (scene_v && !(best && best->series)) {   // 3.2 draft: scenes after series, before snapshots
+            bool ok;
+            if (scene_head) {
+                auto item = scene_v->scene_first.front();
+                scene_v->scene_first.pop_front();
+                ok = send_scene(p, *scene_v, item.first, item.second);
+            } else {
+                auto q = scene_v->scene_pending.find(scene_key);
+                ScenePtr msg = q->second;
+                scene_v->scene_pending.erase(q);
+                scene_v->scene_last_us[scene_key] = now;
+                ok = send_scene(p, *scene_v, msg, false);
+            }
+            if (!ok) return;
+            scene_v->last_us = now;
+            scene_v->sent_any = true;
+            p.in_flight = true;
+            return;
+        }
         if (!best) return;
         bool ok;
         if (best->series) ok = send_series(p, *s, *best);
@@ -2072,6 +2325,7 @@ struct Hub::Impl {
         st.retained_snapshot_bytes = snap_bytes;
         st.retained_series_bytes = series_bytes;
         st.retained_control_bytes = meta_bytes;
+        st.retained_scene_bytes = scene_bytes;
         for (auto& kv : sessions) st.controls_waiting += kv.second.routes.size();
         const DoorStats& d = door->stats();
         st.refused_host = d.refused_host;

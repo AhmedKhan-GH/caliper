@@ -48,6 +48,7 @@ target_sources(caliper_tests PRIVATE test_net_wire.cpp)
 target_sources(caliper_tests PRIVATE test_net_wire_32.cpp)
 if(NOT WIN32)
     target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_hub.cpp)
+    target_sources(caliper_tests PRIVATE test_net_hub_32.cpp)   # the scenes of the 3.2 draft
 endif()
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
