@@ -237,6 +237,8 @@ def test_live_training_notebook(tmp_path, mode):
         nb.page.mouse.move(hx + 60, hy + 30, steps=5)
         nb.page.mouse.up()
         nb.wait(f"() => ({STATE})('attention').window.x0 < {zoomed['x0']}", timeout=10)
+        # The window has started to move; read it once the whole drag has landed.
+        drawn(nb.page, "attention")
         d = nb.page.evaluate(STATE, "attention")
         w = d["window"]
         col = int((w["x0"] + w["x1"]) / 2)
