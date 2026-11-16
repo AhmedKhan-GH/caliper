@@ -29,6 +29,7 @@ nav:
       - embedding.md
       - python-api.md
       - wire-protocol.md
+      - browser-elements.md
       - api.md
   - Applets and environment:
       - applets.md
