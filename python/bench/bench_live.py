@@ -24,7 +24,9 @@ runs in a fresh process: 1 s warm-up (plus however long the viewer takes to
 attach), then a 10 s measured window ending with a device sync. Latency comes
 from the viewer's --latency-log (step-to-screen per update, viewer
 CLOCK_UPTIME_RAW at encode minus the show() stamp), restricted to the measured
-window. Session files go to a private $CALIPER_DATA_DIR (a temp dir).
+window. Session files go to a private $CALIPER_DATA_DIR (a temp dir), and so do the
+viewer's log and latency samples of each row unless CALIPER_BENCH_KEEP_RAW is set,
+which writes them to results/S-raw-<tag>-*.txt as before.
 
 The public path (caliper/__init__.py routing, caliper/_ring.py SnapshotRing,
 caliper/live.py SessionTransport) is what every row measures.
@@ -239,8 +241,12 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
     if mode == "spike2":   # the spike's train_show.py views: fc1.weight + conv1 activation mosaic
         model.conv1.register_forward_hook(lambda m, i, o: acts.__setitem__("conv1", o.detach()))
     RESULTS.mkdir(exist_ok=True)
-    vlog = RESULTS / f"S-raw-{tag}-viewer.txt"
-    llog = RESULTS / f"S-raw-{tag}-latency.txt"
+    # The viewer's log and latency samples are read back below. They go to the
+    # private data folder unless CALIPER_BENCH_KEEP_RAW is set: a row's tag can
+    # repeat a committed file's name in results/.
+    raw = RESULTS if os.environ.get("CALIPER_BENCH_KEEP_RAW") else Path(os.environ["CALIPER_DATA_DIR"])
+    vlog = raw / f"S-raw-{tag}-viewer.txt"
+    llog = raw / f"S-raw-{tag}-latency.txt"
     tr = None
     if use_viewer:
         for p in (vlog, llog):

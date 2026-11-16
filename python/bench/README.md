@@ -38,7 +38,10 @@ done
 The heatmap rows show a `size` x `size` weight; the points rows (`--kind points`) show an (N, 3) cloud with
 `caliper.points`, N = `--size`. Both write `results/S-table-<device><size>.txt` (points:
 `S-table-points-<device><N>.txt`), or the name given with `--out`, with one Markdown row per mode and repeat, the
-1-minute load average at its start and end, and every row's raw JSON below the table.
+1-minute load average at its start and end, and every row's raw JSON below the table. The viewer's log and latency
+samples of each row stay in the run's private data folder; `CALIPER_BENCH_KEEP_RAW=1` writes them to
+`results/S-raw-<tag>-viewer.txt` and `-latency.txt` instead, where a row's tag can repeat the name of a file already
+there.
 
 Every row that has a viewer reports steps per second against the baseline and against the commit-matched
 control, the cost of `caliper.show` or `caliper.points` (median microseconds), the step-to-screen latency (median
