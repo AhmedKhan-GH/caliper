@@ -139,6 +139,19 @@ target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene
 set_target_properties(caliper_scene_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_scene_tests COMMAND caliper_scene_tests)
 
+# The colormap by keys against map_f32_to_rgba8 for all 2^32 inputs on each boundary range,
+# label slow: it exits 77 (skipped) unless CALIPER_SLOW_TESTS=1, so the default run passes over
+# it. Run it as a heavy job: CALIPER_SLOW_TESTS=1 ctest -L slow (6 threads at most).
+find_package(Threads REQUIRED)
+add_executable(caliper_colormap_exhaustive
+    test_colormap_exhaustive.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+target_include_directories(caliper_colormap_exhaustive PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_colormap_exhaustive PRIVATE caliper::sdk Threads::Threads)
+set_target_properties(caliper_colormap_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+add_test(NAME caliper_colormap_exhaustive COMMAND caliper_colormap_exhaustive)
+set_tests_properties(caliper_colormap_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 1800)
+
 # ---------------------------------------------------------------------------
 # The caliper executable's subcommands, run as a user runs them. Each runs and
 # exits without a window (host_cli.h); `caliper dev` and plain `caliper` start
