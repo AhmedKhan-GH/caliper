@@ -104,14 +104,35 @@ const DefaultDir& resolved_default() {
 // CALIPER_DATA_DIR when it is set and not empty, else the OS default, which a
 // test or hidden run refuses (THE GUARD, app_paths.h): it says why on standard
 // error and ends the process with exit code 1, before anything is created.
+// Whether `path` is `root` or lies under it, by their lexically normal
+// absolute forms and, where they exist, with links resolved.
+bool is_or_under(const fs::path& path, const fs::path& root) {
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(fs::absolute(path, ec), ec);
+    if (ec) p = fs::absolute(path, ec).lexically_normal();
+    ec.clear();
+    fs::path r = fs::weakly_canonical(fs::absolute(root, ec), ec);
+    if (ec) r = fs::absolute(root, ec).lexically_normal();
+    auto pi = p.begin();
+    for (auto ri = r.begin(); ri != r.end(); ++ri, ++pi) {
+        if (ri->empty()) continue;   // a trailing separator
+        if (pi == p.end() || *pi != *ri) return false;
+    }
+    return !r.empty();
+}
+
 const std::string& default_app_data_dir() {
     const DefaultDir& dir = resolved_default();
-    if (!dir.given) {
+    // In a test or hidden run the folder must be one of the run's own: not
+    // the OS default because none was given, and not a folder given inside it.
+    if (!dir.given || is_or_under(dir.path, os_app_data_dir())) {
         const std::string why = app_data_guard_reason();
         if (!why.empty()) {
             std::fprintf(stderr,
-                         "caliper: %s has no data folder of its own and would use your "
-                         "app-data folder %s; set CALIPER_DATA_DIR to a folder of its own\n",
+                         dir.given ? "caliper: %s was given a data folder inside your app-data folder, %s; set "
+                                     "CALIPER_DATA_DIR to a folder of its own\n"
+                                   : "caliper: %s has no data folder of its own and would use your "
+                                     "app-data folder %s; set CALIPER_DATA_DIR to a folder of its own\n",
                          why.c_str(), dir.path.c_str());
             std::fflush(stdout);
             std::fflush(stderr);
