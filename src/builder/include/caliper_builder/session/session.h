@@ -249,6 +249,11 @@ public:
     // A preview's spec, for the app to draw; reading it counts as using it.
     PreviewState preview(std::string_view id) const;
 
+    // The data sources of the kinds the app serves (live, feed and metric),
+    // which resolve() and panel.render read; the app registers one per kind
+    // with data_sources().set() (resolve.h).
+    DataSources& data_sources();
+
     // Shuts the queue down (every waiting future completes with
     // command.shutdown) and closes the journal. The destructor does it too.
     void close();

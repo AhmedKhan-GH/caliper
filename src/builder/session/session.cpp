@@ -142,6 +142,7 @@ struct Session::Impl {
     std::unique_ptr<LoaderStore> store;
     std::shared_ptr<LoaderCatalogProvider> provider;
     std::unique_ptr<Catalog> catalog;
+    DataSources sources;  // of the kinds the app serves
     std::unique_ptr<CommandJournal> journal;
     mutable std::mutex host_mutex;
     std::shared_ptr<SessionHost> host;
@@ -1316,7 +1317,7 @@ struct Session::Impl {
                         std::string("The ") + (ctx.invocation.preview.empty() ? "open spec" : "preview") +
                             " has no panel " + id + ".",
                         "args.id");
-        PanelData data = resolve_panel(s, id, *store, options.resolve);
+        PanelData data = resolve_panel(s, id, *store, options.resolve, &sources);
         if (data.error) return CommandOutput::fail(data.error);
         return h->render_panel(s, data, static_cast<int>(int_arg(ctx.invocation.args, "width", 800)),
                                static_cast<int>(int_arg(ctx.invocation.args, "height", 500)));
@@ -1571,7 +1572,7 @@ PanelData Session::resolve(std::string_view panel_id, std::string_view preview) 
             s = p->shadow;
         }
     }
-    return resolve_panel(s, panel_id, *impl_->store, impl_->options.resolve);
+    return resolve_panel(s, panel_id, *impl_->store, impl_->options.resolve, &impl_->sources);
 }
 
 PreviewState Session::preview(std::string_view id) const {
@@ -1595,6 +1596,8 @@ PreviewState Session::preview(std::string_view id) const {
     out.source = p->source;
     return out;
 }
+
+DataSources& Session::data_sources() { return impl_->sources; }
 
 void Session::close() {
     {

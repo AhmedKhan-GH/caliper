@@ -62,6 +62,7 @@ caliper_builder_add_tests(session
         tests/test_context_bundle.cpp
         tests/test_review.cpp
         tests/test_resolve.cpp
+        tests/test_served_sources.cpp
         tests/test_command_server.cpp
         tests/test_acceptance.cpp
     LIBS caliper_builder_session caliper_builder_session_host caliper_builder_acp caliper_builder_duckdb)

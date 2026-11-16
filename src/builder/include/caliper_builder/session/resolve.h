@@ -21,14 +21,27 @@
 // - A column binding gives one column; a whole tabular binding gives a table
 //   (for table.rows, the columns of options.columns, in that order); a tensor
 //   binding gives the tensor.
-// Sources the app serves (`live:`, `feed:`, `metric:`) answer
-// resolve.unavailable until the wiring adds their data.
+// - A root that the app serves (a `live:`, `feed:` or `metric:` catalog
+//   source) is read through the CatalogDataSource registered for its kind in
+//   DataSources (below): a live view gives its newest snapshot as a tensor,
+//   on which the transforms run as on any tensor; a feed channel and a metric
+//   give columns. Without a registered source such a root answers
+//   resolve.unavailable.
+//
+// Refresh. Every served source has a generation that grows whenever its data
+// changes. PanelData::generation and panel_generation() mix the generations
+// of a panel's served roots, so a caller that drew a panel learns whether its
+// data changed by comparing two numbers, without reading any data. The result
+// of a chain of transforms over a served tensor is cached in DataSources by
+// the chain and the generation it was computed from, so the transforms run at
+// most once per new snapshot and chain, however many panels or frames ask.
 //
 // Errors: panel.not_found, resolve.unknown_source, resolve.cycle,
 // resolve.unknown_column, resolve.not_tabular, resolve.not_a_tensor,
 // resolve.unavailable, resolve.too_large, resolve.query_failed,
 // resolve.timeout and the transform.* and loader.* codes of the libraries
 // below. Nothing here throws.
+#include <caliper_builder/catalog/catalog_entry.h>
 #include <caliper_builder/error.h>
 #include <caliper_builder/loaders/query.h>
 #include <caliper_builder/loaders/store.h>
@@ -39,6 +52,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <list>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,6 +82,7 @@ struct SlotData {
     std::vector<ColumnInfo> columns;    // Kind::column: the one column; Kind::table: every column given
     nlohmann::json values = nlohmann::json::array();  // Kind::column: the cells; Kind::table: rows of cells
     bool truncated = false;             // the rows were cut at a limit
+    std::uint64_t generation = 0;       // of the served source it was read from; 0 for a loader output
 };
 
 const char* slot_kind_name(SlotData::Kind kind);
@@ -74,10 +92,115 @@ struct PanelData {
     std::string panel;
     spec::Primitive primitive = spec::Primitive::series;
     std::vector<SlotData> slots;  // in slot name order, list slots in their order
+    // The generations of the served roots the panel binds, mixed in binding
+    // order; 0 when it binds none. Equal to panel_generation() for as long as
+    // none of those sources changes.
+    std::uint64_t generation = 0;
 };
 
+// ---- Sources that the app serves ------------------------------------------
+
+// The bounds a CatalogDataSource keeps to when it gives data.
+struct ServedRequest {
+    std::uint64_t max_rows = 100000;                       // rows of a tabular source
+    std::uint64_t max_cells = std::uint64_t(1) << 22;      // rows times columns
+    std::uint64_t max_bytes = std::uint64_t(256) << 20;    // bytes of a tensor
+};
+
+// The current data of one served source.
+struct ServedData {
+    Error error;                     // resolve.unavailable when the source is gone or has no data yet
+    std::uint64_t generation = 0;    // of the data given
+    bool tabular = false;
+    TensorData tensor;                                // a tensor-shaped source: owned, never changed after
+    std::vector<ColumnInfo> columns;                  // a tabular source, with DuckDB type names
+    nlohmann::json rows = nlohmann::json::array();    // rows of cells in column order; nan, inf and -inf as strings
+    bool truncated = false;                           // the source had more rows than the request allowed
+};
+
+// The data of the sources of one kind that the app serves (live views, feed
+// channels or metrics), by catalog id. The app implements one per kind and
+// registers it with DataSources::set(). Both functions may be called from any
+// thread, at the same time, and must not throw.
+class CatalogDataSource {
+public:
+    virtual ~CatalogDataSource() = default;
+    // The generation of the source's current data: it grows whenever the data
+    // changes, and is 0 for an unknown source or one with no data yet. It must
+    // be cheap and never wait long, because the spec runtime may ask it once
+    // per panel and frame.
+    virtual std::uint64_t generation(const std::string& id) = 0;
+    // The current data, within the request's bounds, with its generation. A
+    // tensor is a copy that the source never changes afterwards.
+    virtual ServedData read(const std::string& id, const ServedRequest& request) = 0;
+};
+
+// The registered data sources, one per served kind, and the cache of
+// transformed tensors. The session owns one; the app registers its sources
+// with set(). Thread-safe. No function here throws.
+class DataSources {
+public:
+    struct Options {
+        std::size_t max_cache_entries = 64;                       // transformed tensors kept
+        std::uint64_t max_cache_bytes = std::uint64_t(256) << 20;  // their bytes in all
+    };
+    DataSources();
+    explicit DataSources(Options options);
+    DataSources(const DataSources&) = delete;
+    DataSources& operator=(const DataSources&) = delete;
+
+    // Registers the source of `kind` (live, feed or metric), or removes it for
+    // null; false for table and tensor. The cache is emptied, since the new
+    // source's generations are not the old one's.
+    bool set(CatalogKind kind, std::shared_ptr<CatalogDataSource> source);
+    std::shared_ptr<CatalogDataSource> get(CatalogKind kind) const;
+    // The generation of a served catalog id from its source; 0 when no source
+    // is registered for its kind or the id is not served.
+    std::uint64_t generation(std::string_view catalog_id) const;
+
+    struct CacheStats {
+        std::uint64_t computed = 0;  // chains whose transforms ran
+        std::uint64_t reused = 0;    // chains answered from the cache
+        std::size_t entries = 0;
+        std::uint64_t bytes = 0;
+    };
+    CacheStats cache_stats() const;
+
+    // The cache that resolve_panel() uses: the result of a chain of transforms
+    // (named by `key`) computed from one generation of its served root. A
+    // tensor larger than max_cache_bytes is not kept; the least recently used
+    // entries go first.
+    bool find_cached(const std::string& key, std::uint64_t generation, TensorData* out);
+    void store_cached(const std::string& key, std::uint64_t generation, const TensorData& tensor);
+
+private:
+    struct Cached {
+        std::uint64_t generation = 0;
+        TensorData tensor;
+        std::list<std::string>::iterator use;
+    };
+    Options options_;
+    mutable std::mutex mutex_;
+    std::shared_ptr<CatalogDataSource> live_, feed_, metric_;
+    std::map<std::string, Cached> cache_;
+    std::list<std::string> uses_;  // keys, most recently used first
+    std::uint64_t cache_bytes_ = 0;
+    std::uint64_t computed_ = 0;
+    std::uint64_t reused_ = 0;
+};
+
+// `sources` may be null, and then every served root answers
+// resolve.unavailable.
 PanelData resolve_panel(const spec::Spec& spec, std::string_view panel_id, LoaderStore& store,
-                        const ResolveLimits& limits = {});
+                        const ResolveLimits& limits = {}, DataSources* sources = nullptr);
+
+// The generation that resolve_panel() would give panel `panel_id` now, from
+// the sources' generation() alone: a few map lookups and one cheap call per
+// served root, with no data read. 0 when the panel binds no served source or
+// does not exist. The spec runtime calls it once per frame for a panel it
+// shows, and resolves the panel again only when it differs from the
+// generation of the data it drew.
+std::uint64_t panel_generation(const spec::Spec& spec, std::string_view panel_id, const DataSources& sources);
 
 // A summary of resolved data for a test or a log: each slot's kind, shape or
 // row count, and up to `max_values` of its values.
