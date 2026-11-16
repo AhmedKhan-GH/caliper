@@ -270,10 +270,14 @@ class NetRing:
         if t is not None and now - t.t0 > self.tick_interval:
             self._close_tick()              # its step's calls are over
             t = None
-        if t is None and now < self.tick_next:
-            self.counters["skipped"] += 1
-            self.next_due = self.tick_next
-            return False
+        if t is None:
+            if now < self.tick_next:
+                self.counters["skipped"] += 1
+                self.next_due = self.tick_next
+                return False
+            if not any(self._group_due(g, v, now, False) for g in list(v.groups.values())):
+                self.counters["rate_limited"] += 1
+                return False                # a slower view: not due for this tick
         return True                         # take_call opens or joins the tick
 
     def _idle_due(self, now: float) -> None:
@@ -294,11 +298,16 @@ class NetRing:
         """A subscription opened or closed (network thread): recheck at once."""
         self.next_due = 0.0
 
-    def _group_due(self, g: Group, v: ViewState, now: float) -> bool:
+    def _group_due(self, g: Group, v: ViewState, now: float, joining: bool) -> bool:
         """The group may take a snapshot: its subscription's rate and the
-        call's own rate allow it (half a tick of slack: ticks set the pace)."""
+        call's own rate allow it. A group joining an open tick, or one at the
+        session's rate, has half a tick of slack, so that it keeps to the
+        ticks; a slower group that would open a tick itself waits its whole
+        interval, so that it never exceeds its rate."""
         iv = max(g.interval, v.iv)
-        return now - g.last >= iv - self.tick_interval / 2
+        tick = self.tick_interval
+        slack = tick / 2 if joining or iv <= tick * 1.01 else 0.001
+        return now - g.last >= iv - slack
 
     def _complete(self, t: Tick, now: float) -> bool:
         """Every due group of a view called lately, and every watched series
@@ -307,7 +316,7 @@ class NetRing:
             if v.kind == KIND_SERIES or not v.groups or now - v.seen > OFFER_REFRESH_S:
                 continue                    # a view not called for a second does not hold ticks
             for g in list(v.groups.values()):
-                if g not in t.served and self._group_due(g, v, now):
+                if g not in t.served and self._group_due(g, v, now, True):
                     return False
         for st in list(self.series.values()):
             if st.watched and st.refs and st not in t.served and now - st.seen <= OFFER_REFRESH_S:
@@ -374,7 +383,7 @@ class NetRing:
             if t is not None and g in t.served:
                 self._close_tick()          # served in this tick: the next step began
                 return bool(taken)
-            if not self._group_due(g, v, now):
+            if not self._group_due(g, v, now, t is not None):
                 self.counters["rate_limited"] += 1
                 continue
             stage_free = any(not s.busy for s in g.stages) or len(g.stages) < STAGE_SETS
