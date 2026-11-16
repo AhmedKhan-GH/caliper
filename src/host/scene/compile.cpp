@@ -668,7 +668,7 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
             specs.push_back(s);
         }
         // Entity axes, for the entities with a transform or a camera.
-        if (opts.show_axes && three_d && !pixel && (tree.transform(e) || pin)) {
+        if (opts.show_axes && three_d && !pixel && e != cm.through && (tree.transform(e) || pin)) {
             Spec s = base(Primitive::Lines, DrawPart::Axes);
             s.program = ProgramId::scene_lines;
             s.vs = "vs_lines";

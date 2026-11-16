@@ -753,6 +753,13 @@ message(STATUS "  Parallel Jobs: ${N}")
 message(STATUS "========================================")
 message(STATUS "")
 
+# The scene core over a backend of the graphics layer (src/host/scene/backend_resources.h), once
+# the layer's core is a target of the build.
+if(TARGET caliper_gfx)
+    target_sources(caliper_scene PRIVATE src/host/scene/backend_resources.cpp)
+    target_link_libraries(caliper_scene PUBLIC caliper_gfx)
+endif()
+
 if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

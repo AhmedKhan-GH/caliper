@@ -131,6 +131,8 @@ add_executable(caliper_scene_tests
 )
 target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
 if(TARGET caliper_gfx)
+    # The fixture draw lists through the layer's validation on its recording backend.
+    target_sources(caliper_scene_tests PRIVATE scene/test_scene_layer.cpp)
     target_link_libraries(caliper_scene_tests PRIVATE caliper_gfx)
 else()
     target_sources(caliper_scene_tests PRIVATE scene/draw_list_standin.cpp)
