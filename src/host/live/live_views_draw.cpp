@@ -81,7 +81,6 @@ const uint32_t kPalette[16] = {
 
 namespace {
 
-constexpr uint32_t kClear = LV_RGB(16, 16, 20);    // render-target background
 constexpr uint32_t kFlat = LV_RGB(220, 220, 230);  // points without aux
 constexpr int      kHysteresisPx = 8;
 constexpr int      kMaxTarget = 8192;
@@ -873,8 +872,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     }
 
     // ---- GPU: redraw the render target when something changed
-    // Bare views (a page draws the chrome) clear to the window's ground.
-    const uint32_t clear = core->views_bare ? ImGui::GetColorU32(ImGuiCol_WindowBg) : kClear;
+    // The plot clears to the window's ground, as the browser's points view
+    // draws on its plate, so the dimmed rest of a selection stays visible.
+    const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
     if (v.dirty) {
         bool ok;
         if (v.have_cur) {
@@ -1523,12 +1523,16 @@ std::vector<int64_t> index_ticks(double lo, double hi, int n) {
 // through the payload axes (a mosaic's per cell), the dims' names, and for a
 // heatmap the colorbar at the right. Cells [x0, x1) x [y0, y1) are in view.
 void draw_cell_axes(const View& v, const TensorView& tv, ImDrawList* dl, float ax, float ay, float aw, float ah,
-                    double x0, double x1, double y0, double y1) {
-    const ImU32 rule = IM_COL32(0x5a, 0x57, 0x51, 255), faint = IM_COL32(0xa4, 0x9d, 0x8f, 255);
-    ImFont* mono = nullptr;   // the host's mono face when it loaded one (by its file name), else the current
-    for (ImFont* f : ImGui::GetIO().Fonts->Fonts)
-        if (std::strstr(f->GetDebugName(), "Code") || std::strstr(f->GetDebugName(), "Mono")) { mono = f; break; }
-    const float fs = 10.5f;
+                    double x0, double x1, double y0, double y1, float fs, ImFont* font, ImU32 faint_ink,
+                    ImU32 rule_ink) {
+    // The given ink, else the browser element's.
+    const ImU32 rule = rule_ink ? rule_ink : IM_COL32(0x5a, 0x57, 0x51, 255);
+    const ImU32 faint = faint_ink ? faint_ink : IM_COL32(0xa4, 0x9d, 0x8f, 255);
+    ImFont* mono = font;   // else the host's mono face when it loaded one (by its file name), else the current
+    if (!mono)
+        for (ImFont* f : ImGui::GetIO().Fonts->Fonts)
+            if (std::strstr(f->GetDebugName(), "Code") || std::strstr(f->GetDebugName(), "Mono")) { mono = f; break; }
+    const float k = fs / 10.5f;
     dl->AddRect(ImVec2(std::round(ax) - 0.5f, std::round(ay) - 0.5f),
                 ImVec2(std::round(ax + aw) + 0.5f, std::round(ay + ah) + 0.5f), rule);
     const CellAxes cax = cell_axes(v);
@@ -1541,24 +1545,24 @@ void draw_cell_axes(const View& v, const TensorView& tv, ImDrawList* dl, float a
         dl->AddText(mono, fs, ImVec2(p.x - ts.x * align_x, p.y - ts.y * align_y), faint, s.c_str());
     };
     const float sx = aw / (float)(x1 - x0), sy = ah / (float)(y1 - y0);
-    for (int64_t c : index_ticks(std::max(x0 - 0.5, 0.0), std::min(x1 - 0.5, (double)tv.w - 1), std::max(2, (int)(aw / 70)))) {
+    for (int64_t c : index_ticks(std::max(x0 - 0.5, 0.0), std::min(x1 - 0.5, (double)tv.w - 1), std::max(2, (int)(aw / (70 * k))))) {
         const float x = std::round(ax + (float)(c + 0.5 - x0) * sx) + 0.5f;
         if (x < ax - 0.5f || x > ax + aw + 0.5f) continue;
         dl->AddLine(ImVec2(x, ay + ah + 0.5f), ImVec2(x, ay + ah + 4.5f), rule);
-        text(ImVec2(x, ay + ah + 6.0f), label(cax.col, c), 0.5f, 0.0f);
+        text(ImVec2(x, ay + ah + 6.0f * k), label(cax.col, c), 0.5f, 0.0f);
     }
-    for (int64_t r : index_ticks(std::max(y0 - 0.5, 0.0), std::min(y1 - 0.5, (double)tv.h - 1), std::max(2, (int)(ah / 36)))) {
+    for (int64_t r : index_ticks(std::max(y0 - 0.5, 0.0), std::min(y1 - 0.5, (double)tv.h - 1), std::max(2, (int)(ah / (36 * k))))) {
         const float y = std::round(ay + (float)(r + 0.5 - y0) * sy) + 0.5f;
         if (y < ay - 0.5f || y > ay + ah + 0.5f) continue;
         dl->AddLine(ImVec2(ax - 0.5f, y), ImVec2(ax - 4.5f, y), rule);
-        text(ImVec2(ax - 6.0f, y), label(cax.row, r), 1.0f, 0.5f);
+        text(ImVec2(ax - 6.0f * k, y), label(cax.row, r), 1.0f, 0.5f);
     }
-    if (cax.col && !cax.col->dim.empty()) text(ImVec2(ax + aw, ay + ah + 19.0f), cax.col->dim, 1.0f, 0.0f);
-    if (cax.row && !cax.row->dim.empty()) text(ImVec2(ax - 6.0f, ay - 4.0f), cax.row->dim, 1.0f, 1.0f);
+    if (cax.col && !cax.col->dim.empty()) text(ImVec2(ax + aw, ay + ah + 19.0f * k), cax.col->dim, 1.0f, 0.0f);
+    if (cax.row && !cax.row->dim.empty()) text(ImVec2(ax - 6.0f * k, ay - 4.0f * k), cax.row->dim, 1.0f, 1.0f);
     if (v.kind == CALIPER_LIVE_KIND_HEATMAP) {
         // The colorbar: the colormap from its top (index 255) to its bottom.
         const uint32_t* lut = caliper_host::colormap_lut(tv.colormap);
-        const float bx = ax + aw + 8.0f, bw = 8.0f;
+        const float bx = ax + aw + 8.0f * k, bw = 8.0f * k;
         const int n = std::max(2, (int)std::floor(ah));
         for (int i = 0; lut && i < n; ++i) {
             const int idx = (int)std::lround(255.0 * (1.0 - (double)i / (n - 1)));
@@ -1602,24 +1606,28 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
         // app as in the browser, and draws the image itself: the wheel zooms
         // about the pointer, a drag pans, a double click fits it again. The
         // plot area takes the gestures, so a drag there never moves the
-        // window; the title bar still does. In a native window the info line
-        // stays above the area and the telemetry bar with Pause below it. A
-        // bare view on a page (the browser) also takes the element's layout:
-        // axes of row and column indices around the plot area, a colorbar
-        // beside a heatmap, a heatmap stretched to the area and an image at
-        // equal aspect; elsewhere the fit keeps cells square.
+        // window; the title bar still does. Every view takes the browser
+        // element's layout, in the app as on a page: axes of row and column
+        // indices around the plot area, titled with the dims' names, a
+        // colorbar beside a heatmap, a heatmap stretched to the area and an
+        // image at equal aspect. Only a bare view without an event sink (an
+        // embedder that draws its own chrome) keeps the plain fit with square
+        // cells and no axes.
         const ImVec2 cs = ImGui::GetCursorStartPos();
-        // The gestures run in the app as in the browser; the element's layout
-        // (axes, colorbar, stretched heatmap) is the page's, where events go
-        // to a producer.
         const bool ev = true;
-        const bool page = S->events && core->views_bare;
+        const bool page = core->views_bare ? (bool)S->events : true;
         const bool image = v.kind == CALIPER_LIVE_KIND_IMAGE;
+        // The axes' type: the browser's 10.5 px on a page, the host's small
+        // mono in a window; the margins grow with it.
+        const float afs = core->views_bare ? 10.5f
+                          : S->look.mono_size > 0.0f ? S->look.mono_size - 1.0f
+                                                     : std::max(10.5f, ImGui::GetFontSize() * 0.85f);
+        const float k = afs / 10.5f;
         // Margins of the element's heatmap view: tick labels left and below, a
         // colorbar right of a heatmap (web/src/views/heatmap.ts).
-        const float ml = page ? 46.0f : 0.0f, mt = page ? 16.0f : 0.0f;
-        const float mr = page ? (image ? 10.0f : 26.0f) : 0.0f;
-        const float mb = page ? 32.0f : debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f;
+        const float ml = page ? 46.0f * k : 0.0f, mt = page ? 16.0f * k : 0.0f;
+        const float mr = page ? (image ? 10.0f : 26.0f) * k : 0.0f;
+        const float mb = (page ? 32.0f * k : 0.0f) + (debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f);
         const float ax = wp.x + cs.x + ml;
         // Under the header row of a docked window, and the v1.2 window's
         // diagnostics line in debug.
@@ -1801,7 +1809,11 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
                 }
             }
             dl->PopClipRect();
-            if (page) draw_cell_axes(v, *tv, dl, ax, ay, aw, ah, wx0, wx0 + aw / kx, wy0, wy0 + ah / ky);
+            if (page) {
+                const bool house = !core->views_bare;
+                draw_cell_axes(v, *tv, dl, ax, ay, aw, ah, wx0, wx0 + aw / kx, wy0, wy0 + ah / ky, afs,
+                               house ? S->look.mono : nullptr, house ? S->look.faint : 0, house ? S->look.rule : 0);
+            }
         }
         v.geo_valid = true;
         v.geo_area[0] = ax; v.geo_area[1] = ay; v.geo_area[2] = aw; v.geo_area[3] = ah;
@@ -1831,8 +1843,11 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
 
 }  // namespace
 
+// The browser's points view's sizes (web/src/views/points.ts, radius()):
+// the side of a point in logical px, from 7 for a few hundred points down to
+// 3 past 50,000.
 float point_size_px(uint64_t n, float scale) {
-    const float base = n <= 2000 ? 5.0f : n <= 50000 ? 3.0f : 2.0f;
+    const float base = n > 50000 ? 3.0f : n > 5000 ? 4.0f : n > 500 ? 5.5f : 7.0f;
     return base * scale;
 }
 

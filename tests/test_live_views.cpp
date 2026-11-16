@@ -33,6 +33,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -154,6 +155,25 @@ bool has(const std::string& s, const char* sub) { return s.find(sub) != std::str
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// The ground a points view clears its plot to (the window's background
+// colour): the most common pixel of its render target.
+static uint32_t ground_of(const std::vector<uint8_t>& px) {
+    std::map<uint32_t, int> counts;
+    for (size_t i = 0; i + 4 <= px.size(); i += 4) {
+        uint32_t p;
+        std::memcpy(&p, &px[i], 4);
+        ++counts[p];
+    }
+    uint32_t best = 0;
+    int n = -1;
+    for (const auto& kv : counts)
+        if (kv.second > n) {
+            n = kv.second;
+            best = kv.first;
+        }
+    return best;
+}
+
 TEST_CASE("live_views/heatmap: CPU payload at an offset is byte-exact; telemetry; v1.2 "
           "view_info/readback/count keep working") {
     const int W = 64, H = 48;
@@ -374,7 +394,7 @@ TEST_CASE("live_views/points: categorical labels draw exact palette colours; the
     CHECK(vi.creates >= 1);
     std::vector<uint8_t> px = readback(c.core, "emb", vi.width, vi.height);
     REQUIRE(px.size() == (size_t)vi.width * vi.height * 4);
-    const uint32_t bg = 0xff000000u | (20u << 16) | (16u << 8) | 16u;
+    const uint32_t bg = ground_of(px);
     int fg = 0;
     std::set<uint32_t> seen;
     for (size_t i = 0; i < px.size(); i += 4) {
@@ -450,7 +470,7 @@ TEST_CASE("live_views/points: 3-D continuous colormap and CPU-staged payloads dr
     const uint32_t* lut = caliper_host::colormap_lut(1);
     std::set<uint32_t> lut_colours(lut, lut + 256);
     int fg = 0, in_lut = 0;
-    const uint32_t bg = 0xff000000u | (20u << 16) | (16u << 8) | 16u;
+    const uint32_t bg = ground_of(px);
     for (size_t i = 0; i < px.size(); i += 4) {
         uint32_t p;
         std::memcpy(&p, &px[i], 4);
