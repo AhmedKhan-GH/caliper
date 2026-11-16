@@ -18,6 +18,7 @@ endif()
 set(_widget_dir ${CMAKE_SOURCE_DIR}/src/host/builder)
 add_library(caliper_widget_surface STATIC
     ${_widget_dir}/widget_agent.cpp
+    ${_widget_dir}/widget_agent_acp.cpp
     ${_widget_dir}/widget_surface.cpp)
 target_include_directories(caliper_widget_surface PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_widget_surface PUBLIC caliper_spec_runtime caliper_builder_session caliper_builder_acp
@@ -37,22 +38,33 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         ${_widget_dir}/tests/test_main.cpp
         ${_widget_dir}/tests/test_widget_surface.cpp
         ${_widget_dir}/tests/test_widget_layout.cpp
-        ${_widget_dir}/tests/test_widget_shot.cpp)
+        ${_widget_dir}/tests/test_widget_shot.cpp
+        ${_widget_dir}/tests/test_widget_agent_acp.cpp)
     target_link_libraries(caliper_widget_surface_tests PRIVATE caliper_widget_surface doctest::doctest
-        caliper_builder_duckdb)
+        caliper_builder_duckdb caliper_builder_session_host)
     target_include_directories(caliper_widget_surface_tests PRIVATE ${THIRD_PARTY_DIR}/stb
         ${CMAKE_SOURCE_DIR}/src/host/spec_runtime/tests)
     target_compile_definitions(caliper_widget_surface_tests PRIVATE
         CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
         CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/widget-test-tmp"
-        CALIPER_WIDGET_SHOT_EXE="$<TARGET_FILE:caliper-widget-shot>")
+        CALIPER_WIDGET_SHOT_EXE="$<TARGET_FILE:caliper-widget-shot>"
+        CALIPER_BUILDER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/src/builder"
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}"
+        CALIPER_ACP_STUB_AGENT="$<TARGET_FILE:caliper_acp_stub_agent>")
     set_target_properties(caliper_widget_surface_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-    add_dependencies(caliper_widget_surface_tests caliper-widget-shot)
+    add_dependencies(caliper_widget_surface_tests caliper-widget-shot caliper_acp_stub_agent)
     # Headless: the state machine over a real session, the preview's life,
     # the compact diff and the layout.
-    add_test(NAME caliper_widget_surface COMMAND caliper_widget_surface_tests --test-suite-exclude=gpu)
+    add_test(NAME caliper_widget_surface COMMAND caliper_widget_surface_tests --test-suite-exclude=gpu,agent)
     # Offscreen: caliper-widget-shot as a process, checked by image properties.
     add_test(NAME caliper_widget_surface_gpu COMMAND caliper_widget_surface_tests --test-suite=gpu)
-    set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu PROPERTIES LABELS "builder;widget")
+    # The agent over ACP: the real caliper-agent sidecar with its scripted
+    # model and a fake key, driven by the surface; skipped without
+    # CALIPER_BUILDER_TEST_PYTHON.
+    add_test(NAME caliper_widget_surface_agent COMMAND caliper_widget_surface_tests --test-suite=agent)
+    set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu caliper_widget_surface_agent
+        PROPERTIES LABELS "builder;widget")
     set_tests_properties(caliper_widget_surface_gpu PROPERTIES TIMEOUT 300)
+    set_tests_properties(caliper_widget_surface_agent PROPERTIES TIMEOUT 300
+        SKIP_REGULAR_EXPRESSION "caliper_widget_surface_agent skipped")
 endif()
