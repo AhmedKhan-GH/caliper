@@ -31,3 +31,28 @@ add_executable(caliper-widget-shot ${_widget_dir}/widget_shot_main.cpp)
 target_link_libraries(caliper-widget-shot PRIVATE caliper_widget_surface)
 set_target_properties(caliper-widget-shot PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 caliper_spec_runtime_fonts(caliper-widget-shot)
+
+if(BUILD_TESTS AND TARGET doctest::doctest)
+    add_executable(caliper_widget_surface_tests
+        ${_widget_dir}/tests/test_main.cpp
+        ${_widget_dir}/tests/test_widget_surface.cpp
+        ${_widget_dir}/tests/test_widget_layout.cpp
+        ${_widget_dir}/tests/test_widget_shot.cpp)
+    target_link_libraries(caliper_widget_surface_tests PRIVATE caliper_widget_surface doctest::doctest
+        caliper_builder_duckdb)
+    target_include_directories(caliper_widget_surface_tests PRIVATE ${THIRD_PARTY_DIR}/stb
+        ${CMAKE_SOURCE_DIR}/src/host/spec_runtime/tests)
+    target_compile_definitions(caliper_widget_surface_tests PRIVATE
+        CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
+        CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/widget-test-tmp"
+        CALIPER_WIDGET_SHOT_EXE="$<TARGET_FILE:caliper-widget-shot>")
+    set_target_properties(caliper_widget_surface_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    add_dependencies(caliper_widget_surface_tests caliper-widget-shot)
+    # Headless: the state machine over a real session, the preview's life,
+    # the compact diff and the layout.
+    add_test(NAME caliper_widget_surface COMMAND caliper_widget_surface_tests --test-suite-exclude=gpu)
+    # Offscreen: caliper-widget-shot as a process, checked by image properties.
+    add_test(NAME caliper_widget_surface_gpu COMMAND caliper_widget_surface_tests --test-suite=gpu)
+    set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu PROPERTIES LABELS "builder;widget")
+    set_tests_properties(caliper_widget_surface_gpu PROPERTIES TIMEOUT 300)
+endif()
