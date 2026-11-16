@@ -59,4 +59,22 @@ if(BUILD_TESTS)
     add_dependencies(caliper_builder_mcp_tests caliper-mcp)
     target_compile_definitions(caliper_builder_mcp_tests PRIVATE
         CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
+
+    # The end-to-end test against the real app, after contracts sections 14
+    # and 17. It runs when CALIPER_BUILDER_TEST_APP names a caliper executable,
+    # and reports itself skipped otherwise.
+    if(NOT WIN32)
+        set(CALIPER_BUILDER_TEST_APP "" CACHE FILEPATH
+            "A caliper executable for the end-to-end test of caliper-mcp; empty skips it")
+        caliper_builder_add_tests(mcp_app SOURCES tests/test_app_e2e.cpp LIBS caliper_builder_mcp caliper_builder_acp)
+        add_dependencies(caliper_builder_mcp_app_tests caliper-mcp)
+        target_include_directories(caliper_builder_mcp_app_tests SYSTEM PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/stb")
+        target_compile_definitions(caliper_builder_mcp_app_tests PRIVATE
+            CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>"
+            CALIPER_BUILDER_TEST_APP="${CALIPER_BUILDER_TEST_APP}")
+        set_tests_properties(builder_mcp_app PROPERTIES
+            SKIP_REGULAR_EXPRESSION "caliper-mcp end-to-end test skipped"
+            TIMEOUT 300)
+    endif()
 endif()
