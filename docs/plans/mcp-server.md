@@ -43,7 +43,9 @@ Caliper API in the running app ──► command queue ──► command layer
 
 The agent starts one `caliper-mcp` per session. Standard output carries MCP messages only, one JSON object per line;
 diagnostics go to standard error, each line starting with `caliper-mcp:`. When standard input ends, `caliper-mcp`
-cancels the calls still running, ends its subscriptions and exits with 0. It keeps no state that matters between
+lets the calls still running finish for up to 2 seconds, since a client may close its input and still read the
+answers, then cancels the rest (they answer with the tool error `mcp.cancelled`), ends its subscriptions and exits
+with 0. It keeps no state that matters between
 requests: the command table it fetched from the app is a cache, and the API file is read again at every call.
 
 ### Command line
