@@ -914,9 +914,20 @@ void SideChat::mirror_approvals() {
     if (!open && state_ != ChatState::running && state_ != ChatState::cancelling) return;
     const std::vector<caliper_builder::PendingApproval> pending = hooks_.pending_approvals();
     std::set<std::string> ids;
+    for (const auto& p : pending)
+        if (p.invocation.origin == caliper_builder::CommandOrigin::agent) ids.insert(p.approval);
+    // A row whose approval was reissued for changed content follows the new
+    // one, still waiting, so one change keeps one row.
+    if (hooks_.reissued_as)
+        for (ChatItem& it : items_)
+            if (it.kind == ChatItem::Kind::approval && it.answer.empty() && !ids.count(it.approval))
+                for (int hops = 0; hops < 8 && !ids.count(it.approval); ++hops) {
+                    const std::string next = hooks_.reissued_as(it.approval);
+                    if (next.empty() || next == it.approval) break;
+                    it.approval = next;
+                }
     for (const auto& p : pending) {
         if (p.invocation.origin != caliper_builder::CommandOrigin::agent) continue;
-        ids.insert(p.approval);
         bool known = false;
         for (const ChatItem& it : items_)
             if (it.kind == ChatItem::Kind::approval && it.approval == p.approval) known = true;

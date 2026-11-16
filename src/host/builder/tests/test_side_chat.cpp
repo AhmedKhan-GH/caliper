@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <thread>
 
 using namespace caliper_host;
@@ -350,6 +351,46 @@ TEST_CASE("side chat: a pending command approval of the agent's turn is mirrored
     pending.clear();   // the person decided on the approval card
     chat.update();
     CHECK(find(chat, K::approval)->answer == "decided");
+    REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
+}
+
+TEST_CASE("side chat: an approval reissued for changed content keeps its row waiting on the new approval") {
+    Fixture f("chat-reissued");
+    std::vector<caliper_builder::PendingApproval> pending;
+    std::map<std::string, std::string> reissued;   // old approval -> new, as the queue records it
+    SideChat::Hooks hooks;
+    hooks.pending_approvals = [&pending] { return pending; };
+    hooks.reissued_as = [&reissued](const std::string& id) {
+        const auto it = reissued.find(id);
+        return it == reissued.end() ? std::string() : it->second;
+    };
+    hooks.approval_outcome = [](const std::string& id) { return id == "ap-3" ? std::string("approved") : std::string(); };
+    SideChat chat(f.options(), hooks);
+    say(chat, "slow");
+    REQUIRE(pump_until(chat, [&] { return chat.state() == ChatState::running; }));
+    caliper_builder::PendingApproval a;
+    a.approval = "ap-2";
+    a.invocation.name = "applet.save";
+    a.invocation.origin = caliper_builder::CommandOrigin::agent;
+    pending = {a};
+    chat.update();
+    REQUIRE(find(chat, K::approval));
+    CHECK(find(chat, K::approval)->approval == "ap-2");
+    // The content changed while the card waited, and the person approved:
+    // the approval is void and reissued as ap-3, which waits.
+    a.approval = "ap-3";
+    pending = {a};
+    reissued["ap-2"] = "ap-3";
+    chat.update();
+    int rows = 0;
+    for (const ChatItem& it : chat.items()) rows += it.kind == K::approval;
+    CHECK(rows == 1);
+    CHECK(find(chat, K::approval)->approval == "ap-3");
+    CHECK(find(chat, K::approval)->answer.empty());
+    // The person approves the new card.
+    pending.clear();
+    chat.update();
+    CHECK(find(chat, K::approval)->answer == "approved");
     REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
 }
 

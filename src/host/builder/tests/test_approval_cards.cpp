@@ -270,6 +270,38 @@ TEST_CASE("approval cards: a destructive command's card says what is lost, and a
     CHECK(r.activity.size() == 4);
 }
 
+TEST_CASE("approval cards: an approval made void by a change of what the card showed is reissued, not failed") {
+    Rig r("reissued");
+    ok(*r.s, "applet.save");
+    // An outside agent overwrites the saved applet: held, with the content.
+    auto f = r.submit("applet.save", {{"overwrite", true}});
+    r.frame();
+    const std::string first = r.only().id;
+    // The open spec changes while the card waits; the person approves the card.
+    ok(*r.s, "panel.patch", {{"id", "curves"}, {"patch", {{"title", "Changed"}}}});
+    CHECK(r.cards->approve(first));
+    r.frame();
+    // The old card is gone without an outcome; a new card waits for the new
+    // content, and the call still waits.
+    REQUIRE(r.cards->cards().size() == 1);
+    const ApprovalCard& second = r.only();
+    CHECK(second.id != first);
+    CHECK(second.state == ApprovalState::waiting);
+    CHECK(second.name == "applet.save");
+    CHECK(r.cards->waiting() == 1);
+    CHECK_FALSE(ready(f));
+    CHECK(r.err.str().find("[approval] " + first + " applet.save (mcp) reissued as " + second.id) != std::string::npos);
+    CHECK(r.err.str().find("failed") == std::string::npos);
+    CHECK(r.err.str().find("history.conflict") == std::string::npos);
+    // Approving the new card completes the call.
+    const std::string second_id = second.id;
+    CHECK(r.cards->approve(second_id));
+    r.frame();
+    REQUIRE(ready(f));
+    CHECK(f.get().ok);
+    CHECK(r.cards->waiting() == 0);
+}
+
 TEST_CASE("approval cards: a new panel's card lists its keys, and the origins read as nouns") {
     Rig r("create");
     auto f = r.submit("panel.create", {{"id", "rows"}, {"primitive", "table"}, {"title", "Rows"},

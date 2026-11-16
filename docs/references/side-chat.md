@@ -93,7 +93,9 @@ file it is the unified diff. An agent's "always allow" option is offered only wh
 **Command approvals.** A command of the agent that needs your approval, such as an edit of the open spec while review
 is on, is decided on the approval cards at the bottom of the window. While it waits, the conversation shows one row
 for it, APPROVAL with the command and "waiting"; a click on the row outlines its card in bronze for a moment. Once it
-is decided, the row folds into its call's group.
+is decided, the row folds into its call's group. When what a card showed changes while it waits, such as the open spec
+that an overwrite would write, your approval no longer holds: the card is replaced by a new one for the new content,
+and the row keeps waiting, on the new card.
 
 **Groups.** Consecutive calls of the same command fold into one row with the count, the approvals' outcome and the
 status, such as "source.add ×9 · approved · done"; a click opens it to show each call and its approval. A group with a

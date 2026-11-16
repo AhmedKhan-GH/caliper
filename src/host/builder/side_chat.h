@@ -321,6 +321,10 @@ public:
         // The outcome of an approval that is no longer pending: approved,
         // denied, timed out or failed; "" when it is not known.
         std::function<std::string(const std::string& approval)> approval_outcome;
+        // The new approval an approval was reissued as, when what its card
+        // showed changed while it waited and the command waits again on a
+        // new card; "" otherwise. The row then follows the new approval.
+        std::function<std::string(const std::string& approval)> reissued_as;
         // The settings changed (an agent chosen, a custom command): the app saves them.
         std::function<void(const ChatSettings&)> settings_changed;
         // Just before an agent starts, on the frame thread: the app may fill

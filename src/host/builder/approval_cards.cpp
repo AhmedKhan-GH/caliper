@@ -349,6 +349,17 @@ void ApprovalCards::settle(cb::Session& s, ApprovalCard& c, double now) {
     }
     if (!r) r = s.queue().approval_outcome(c.id);
     std::string detail;
+    if (r && r->error.code == "command.needs_approval" && !r->approval.empty() && r->approval != c.id) {
+        // What the card showed changed while it waited, so the approval is
+        // void and the command waits again on a new card, for the new
+        // content, which the pending approvals already list: this card goes
+        // at once, as no outcome.
+        c.state = ApprovalState::withdrawn;
+        c.time_left.reset();
+        c.decided_at = now - kKeepDecided;
+        line(c, "reissued as " + r->approval);
+        return;
+    }
     if (!r) {
         c.state = ApprovalState::withdrawn;
         detail = "withdrawn";

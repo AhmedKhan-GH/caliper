@@ -131,7 +131,14 @@ struct ChatPane::Impl {
             if (r->ok) return "approved";
             if (r->error.code == "command.denied") return "denied";
             if (r->error.code == "command.approval_timeout") return "timed out";
+            if (r->error.code == "command.needs_approval") return "reissued";
             return "failed";
+        };
+        h.reissued_as = [this](const std::string& id) -> std::string {
+            if (!session) return {};
+            const std::optional<caliper_builder::CommandResult> r = session->queue().approval_outcome(id);
+            if (r && r->error.code == "command.needs_approval" && r->approval != id) return r->approval;
+            return {};
         };
         h.settings_changed = [this](const ChatSettings& s) {
             settings.chat = s;
