@@ -24,8 +24,9 @@ enum class ProgramId : uint32_t {
     scene_boxes = 5,
     scene_image = 6,
     colormap_probe = 7,  // test only
+    colormap_texture = 8,
 };
-inline constexpr uint32_t kProgramCount = 8;
+inline constexpr uint32_t kProgramCount = 9;
 
 // Naga's MSL gives every entry that uses a Storage or StorageReadWrite binding one more
 // argument: a buffer at this Metal index holding one u32 per such binding of the program,
@@ -240,6 +241,17 @@ inline constexpr BindingDesc kColormapProbeBindings[] = {
     {3, 1, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 2},  // probe_out
 };
 
+// ---- colormap_texture
+inline constexpr EntryDesc kColormapTextureEntries[] = {
+    {"cs_colormap_texture", kStageCompute, {8, 8, 1}},
+};
+inline constexpr BindingDesc kColormapTextureBindings[] = {
+    {0, 0, BindingType::Uniform, uint8_t(kStageCompute), true, 16, Format::RGBA8Unorm, 0},  // tp
+    {0, 1, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // tex_values
+    {0, 2, BindingType::StorageTexture, uint8_t(kStageCompute), false, 0, Format::RGBA8Unorm, 0},  // tex_out
+    {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 2080, Format::RGBA8Unorm, 2},  // m
+};
+
 // The descriptions by program id, with no sources, for code that needs no backend.
 struct ProgramDescription {
     const char* name; const EntryDesc* entries; uint8_t entry_count;
@@ -257,6 +269,7 @@ inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {
     {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesFragmentOutputs, 2, kSceneBoxesPairs, 4, false},
     {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImageFragmentOutputs, 5, kSceneImagePairs, 4, false},
     {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, true},
+    {"colormap_texture", kColormapTextureEntries, 1, kColormapTextureBindings, 4, nullptr, 0, nullptr, 0, nullptr, 0, false},
 };
 
 }  // namespace caliper_gfx::shaders

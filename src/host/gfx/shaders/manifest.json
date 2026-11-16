@@ -58,6 +58,13 @@
       "outputs": ["wgsl", "msl", "spirv"],
       "hand_written": {},
       "pairs": []
+    },
+    {
+      "name": "colormap_texture",
+      "sources": ["common/colormap.wgsl", "compute/colormap_texture.wgsl"],
+      "outputs": ["wgsl", "msl", "spirv"],
+      "hand_written": {},
+      "pairs": []
     }
   ]
 }
