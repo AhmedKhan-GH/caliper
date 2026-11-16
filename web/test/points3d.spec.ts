@@ -140,8 +140,10 @@ test('the rotate toggle turns the 3-D view until a drag stops it, and a 2-D view
       await page.mouse.up();
       await expect(button).toHaveAttribute('aria-pressed', 'false');
       await expect.poll(async () => (await state(page, r)).rotate, { timeout: 5000 }).toBe(false);
+      // The module publishes its state a few times a second: let the drag's own turn arrive first.
+      await page.waitForTimeout(500);
       const az1 = ((await state(page, r)).camera as { az: number }).az;
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(600);
       expect(((await state(page, r)).camera as { az: number }).az, r).toBeCloseTo(az1, 6);
     }
   } finally {
