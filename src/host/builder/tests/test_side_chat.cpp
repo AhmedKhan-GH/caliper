@@ -817,9 +817,11 @@ TEST_CASE("side chat: caliper-agent's turn that does not fit its context ends wi
     REQUIRE(text);
     CHECK(text->text.find("no longer fits the model's context of 4,096 tokens") != std::string::npos);
     CHECK(text->text.find("--context-length") != std::string::npos);
+    // A turn cut short reads as a limit, not as done: the sidecar ends it with
+    // the stop reason max_tokens.
     const ChatItem* stop = find(chat, K::stop, 1);
     REQUIRE(stop);
-    CHECK(stop->text == "DONE");
+    CHECK(stop->text == "LIMIT");
 }
 
 // The chat renders an agent's Markdown (chat_markdown.h) as display only: the
