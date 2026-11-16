@@ -379,7 +379,11 @@ sent on one connection to 65,536 messages and 16 MiB, and keeps one PONG
 waiting, to the latest PING. Only a viewer that keeps sending requests while it
 reads nothing reaches the limit; the server then closes its connection with code
 1008, as the hub does with a send queue that overflows. The training loop is not
-affected. These are limits of Caliper LIB's server, not rules of the protocol.
+affected. Scene messages travel in the same queue, in order with the replies, but
+they are counted apart: the server hands a connection at most two of them at a
+time, each at most a frame of 64 MiB, so they are bounded by 128 MiB and never
+close a connection that the protocol allows. These are limits of Caliper LIB's
+server, not rules of the protocol.
 
 | Member | Meaning |
 |---|---|

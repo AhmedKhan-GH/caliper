@@ -110,6 +110,13 @@ constexpr size_t kMaxControlPerConn = 256;   // messages for Python waiting per 
 // 1008, as the hub closes a connection whose send queue overflows.
 constexpr size_t kMaxControlFrames = 65536;
 constexpr size_t kMaxControlBytes = 16u << 20;
+// 3.2 draft: scene frames travel in the same queue, in order with the control
+// frames, but they are the producer's data and not answers a peer provoked: Python
+// hands a connection at most NATIVE_BACKLOG (2) of them waiting, each at most a
+// frame of CALIPER_NET_MAX_FRAME_BYTES. They are counted apart, against this bound,
+// so that a scene frame the protocol allows never closes the connection.
+constexpr size_t kSceneBacklog = 2;
+constexpr size_t kMaxSceneBytes = kSceneBacklog * size_t(CALIPER_NET_MAX_FRAME_BYTES);
 constexpr uint16_t kCloseOverflow = 1008;
 constexpr int kMaxPollMs = 50;
 
@@ -208,7 +215,8 @@ struct Link {
     bool cap_scenes = false;                  // 3.2 draft: the peer announced "scenes"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
-    size_t control_bytes = 0;                 // the bytes in control and after_views
+    size_t control_bytes = 0;                 // the bytes in control and after_views, scene frames aside
+    size_t scene_bytes = 0;                   // 3.2 draft: the bytes of the scene frames among them
     bool overflow = false;                    // past kMaxControlFrames/Bytes: closed with 1008
     bool pong_pending = false;                // one PONG at most, to the latest PING
     uint32_t pong_nonce = 0;
@@ -835,22 +843,32 @@ private:
         if (SharedBytes b = encode(m)) push_control(l, std::move(b));
     }
 
-    // Queue a control frame (under mu_). Past kMaxControlFrames or
-    // kMaxControlBytes the queue is dropped and the connection marked, and the
-    // thread that owns its socket closes it with 1008 at its next pump.
+    // A SCENE_UPDATE or SCENE_CLEAR frame (the type at offset 8 of the header).
+    static bool scene_frame(const caliper_net::Bytes& b) {
+        if (b.size() < 10) return false;
+        const uint16_t type = uint16_t(b[8] | (b[9] << 8));
+        return type == CALIPER_NET_MSG_SCENE_UPDATE || type == CALIPER_NET_MSG_SCENE_CLEAR;
+    }
+
+    // Queue a control frame (under mu_). Past kMaxControlFrames, kMaxControlBytes
+    // or, for scene frames, kMaxSceneBytes the queue is dropped and the connection
+    // marked, and the thread that owns its socket closes it with 1008 at its next pump.
     bool push_control(Link& l, SharedBytes b, bool after_views = false) {
         if (l.overflow || l.closing) return false;
+        const bool scene = scene_frame(*b);
+        size_t& bytes = scene ? l.scene_bytes : l.control_bytes;
         if (l.control.size() + l.after_views.size() >= kMaxControlFrames ||
-            l.control_bytes + b->size() > kMaxControlBytes) {
+            bytes + b->size() > (scene ? kMaxSceneBytes : kMaxControlBytes)) {
             l.overflow = true;
             ++overflow_closed_;
             l.control.clear();
             l.after_views.clear();
             l.control_bytes = 0;
+            l.scene_bytes = 0;
             wake_all();
             return false;
         }
-        l.control_bytes += b->size();
+        bytes += b->size();
         (after_views ? l.after_views : l.control).push_back(std::move(b));
         return true;
     }
@@ -1204,7 +1222,8 @@ private:
             } else if (!l.control.empty()) {
                 f = l.control.front();
                 l.control.pop_front();
-                l.control_bytes -= std::min(l.control_bytes, f->size());
+                size_t& bytes = scene_frame(*f) ? l.scene_bytes : l.control_bytes;
+                bytes -= std::min(bytes, f->size());
             } else {
                 f = next_data(l, now, final);
             }
@@ -1457,6 +1476,7 @@ NB_MODULE(_netio, m) {
     m.attr("MAX_CONTROL_PER_CONNECTION") = kMaxControlPerConn;
     m.attr("MAX_CONTROL_FRAMES") = kMaxControlFrames;
     m.attr("MAX_CONTROL_BYTES") = kMaxControlBytes;
+    m.attr("MAX_SCENE_BYTES") = kMaxSceneBytes;
     using R = nb::call_guard<nb::gil_scoped_release>;
     nb::class_<NetIO>(m, "Server")
         .def(nb::init<int, std::string, std::string, std::string,
