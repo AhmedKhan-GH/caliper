@@ -2100,6 +2100,8 @@ struct AppRun {
     std::string text;                 // the app's output
     std::vector<wire::Control> controls;
     std::vector<wire::Event> events;
+    int64_t bar_running_at = -1;      // the fake script's step when the page's bar first showed "running..."
+    int64_t paused_at = -1;           // the step at which a pause or step stopped it
 };
 
 AppRun run_hidden_app(const char* exe, bool allow_control, const std::string& ui) {
@@ -2110,6 +2112,11 @@ AppRun run_hidden_app(const char* exe, bool allow_control, const std::string& ui
     World w;
     auto p = producer(w, h, "clp-app", 4242, 1763200000000ull,
                       {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION}, true);
+    // As caliper.step(step) does: the first checkpoint says running at step 0,
+    // and no CONTROLS follows while the loop runs on (the step in CONTROLS is
+    // that of the last change of state).
+    int64_t step = 0, state_step = 0;
+    p->send_controls(CALIPER_NET_RUN_RUNNING, 0.001, state_step);
     const fs::path dir = fs::temp_directory_path() / (std::string("caliper-app-live-") + (allow_control ? "a" : "b"));
     fs::remove_all(dir);
     fs::create_directories(dir / "data");
@@ -2141,18 +2148,26 @@ AppRun run_hidden_app(const char* exe, bool allow_control, const std::string& ui
             p->snapshot(fill += 0.01f);
             p->append({fill});
             last_snap = std::chrono::steady_clock::now();
+            if (state == CALIPER_NET_RUN_RUNNING) ++step;
         }
+        if (out.bar_running_at < 0 && app.text.find("[ui] bar shows 'running") != std::string::npos)
+            out.bar_running_at = step;
         // As a script at its checkpoint: apply what was accepted, say so in CONTROLS.
         for (; controls_seen < p->controls_in.size(); ++controls_seen) {
             const wire::Control& c = p->controls_in[controls_seen];
-            if (c.op == CALIPER_NET_OP_PAUSE || c.op == CALIPER_NET_OP_STEP) state = CALIPER_NET_RUN_PAUSED;
-            else if (c.op == CALIPER_NET_OP_RESUME) state = CALIPER_NET_RUN_RUNNING;
-            else if (c.op == CALIPER_NET_OP_SET) lr = std::min(0.1, c.value.as_double());
-            else if (c.op == CALIPER_NET_OP_RUN) {
+            if (c.op == CALIPER_NET_OP_PAUSE || c.op == CALIPER_NET_OP_STEP) {
+                state = CALIPER_NET_RUN_PAUSED;
+                state_step = out.paused_at = step;
+            } else if (c.op == CALIPER_NET_OP_RESUME) {
+                state = CALIPER_NET_RUN_RUNNING;
+                state_step = step;
+            } else if (c.op == CALIPER_NET_OP_SET) {
+                lr = std::min(0.1, c.value.as_double());
+            } else if (c.op == CALIPER_NET_OP_RUN) {
                 p->queued_runs.clear();
                 p->finish_run(c.request_id, "saved at step 7");
             }
-            p->send_controls(state.c_str(), lr);
+            p->send_controls(state.c_str(), lr, state_step);
         }
         // A selection made in a view: every viewer gets it, with details.
         for (; events_seen < p->events.size(); ++events_seen) {
@@ -2203,9 +2218,11 @@ TEST_CASE("app: the hidden app's run bar controls a script through a hub with --
         MESSAGE("CALIPER_TEST_CALIPER_EXE is not set: run the ctest entry caliper_app_live_controls");
         return;
     }
+    // The bar while the fake script runs on past the step 0 of its only
+    // CONTROLS, and once it is paused.
     AppRun a = run_hidden_app(exe, true,
-                              "state running; click pause; state paused; set lr 0.02; wait 10; "
-                              "click action:save; wait 30; select heat; wait 30");
+                              "state running; wait 30; bar running; click pause; state paused; bar paused; "
+                              "set lr 0.02; wait 10; click action:save; wait 30; select heat; wait 30");
     if (!a.ran) {
         const char* require = std::getenv("CALIPER_REQUIRE_GPU");
         REQUIRE_MESSAGE(!(require && std::string(require) == "1"), a.text);
@@ -2221,6 +2238,12 @@ TEST_CASE("app: the hidden app's run bar controls a script through a hub with --
     CHECK(a.controls[1].value.as_double() == doctest::Approx(0.02));
     CHECK(a.controls[2].op == "run");
     CHECK(*a.controls[2].name == "save");
+    // The bar says running, without the step of the state's change, while the
+    // script is past it, and names the step at which the run is paused.
+    CHECK(has(a.text, "[ui] bar shows 'running'\n"));
+    CHECK(a.bar_running_at > 0);
+    REQUIRE(a.paused_at > 0);
+    CHECK(has(a.text, "[ui] bar shows 'paused at step " + std::to_string(a.paused_at) + "'\n"));
     // The page shows what the script echoed.
     CHECK(has(a.text, "[live] controls on"));
     CHECK(has(a.text, "[live] run paused"));

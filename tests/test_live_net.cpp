@@ -1348,8 +1348,10 @@ TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the 
     REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
     REQUIRE(a.controls() != nullptr);
     // The heatmap's rows index "samples"; it needs pixels to be selected in.
-    caliper_live::UiDriver driver("state running; click pause; state paused; set lr 0.02; wait 5; "
-                                  "click action:save; wait 5; select heat; wait 5");
+    // The fake script's CONTROLS carry step 7, the step of its last change: the
+    // bar names it only once the run is paused there.
+    caliper_live::UiDriver driver("state running; bar running; click pause; state paused; bar paused; "
+                                  "set lr 0.02; wait 5; click action:save; wait 5; select heat; wait 5");
     bool sent_heat = false;
     std::vector<std::string> steps;
     for (int i = 0; i < 3000 && !driver.done(); ++i) {
@@ -1368,6 +1370,8 @@ TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the 
     for (const auto& s : steps) INFO(s);
     REQUIRE(driver.done());
     REQUIRE(driver.error().empty());
+    CHECK(std::find(steps.begin(), steps.end(), "bar shows 'running'") != steps.end());
+    CHECK(std::find(steps.begin(), steps.end(), "bar shows 'paused at step 7'") != steps.end());
     caliper_live::RunControls* rc = a.controls();
     // Let the last echoes arrive.
     const auto echoes_by = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -1572,6 +1576,50 @@ TEST_CASE("live/controls: why a control is off, and what a checkpoint unlocks") 
     CHECK(std::find(log.begin(), log.end(), "controls off: the session has ended") != log.end());
     CHECK(std::find(log.begin(), log.end(), "controls on") != log.end());
     CHECK(std::find(log.begin(), log.end(), "run running") != log.end());
+}
+
+// The run object's `step` is the script's step where the state last changed
+// (wire protocol 3.1, controls), not its current step: a loop that calls
+// caliper.step(step) up to 1,999 sends {"state": "running", "step": 0} once
+// and no CONTROLS after it. The bar and the log name a step only for a run
+// that is paused, which stands at that step.
+TEST_CASE("live/controls: the run state names a step only where the paused run stands") {
+    caliper_live::Controls c;
+    c.run_state = CALIPER_NET_RUN_RUNNING;
+    c.has_step = true;
+    c.step = 0;
+    CHECK(caliper_live::run_state_text(c) == "running");
+    c.step = 1500;   // resumed at step 1,500
+    CHECK(caliper_live::run_state_text(c) == "running");
+    c.run_state = CALIPER_NET_RUN_PAUSING;   // still the step of the last change
+    CHECK(caliper_live::run_state_text(c) == "pausing");
+    c.run_state = CALIPER_NET_RUN_PAUSED;
+    c.step = 1999;
+    CHECK(caliper_live::run_state_text(c) == "paused at step 1999");
+    c.has_step = false;
+    CHECK(caliper_live::run_state_text(c) == "paused");
+    c.run_state = CALIPER_NET_RUN_STEPPING;
+    c.has_step = true;
+    c.steps_left = 3;
+    CHECK(caliper_live::run_state_text(c) == "stepping, 3 left");
+    c.run_state = CALIPER_NET_RUN_NONE;
+    CHECK(caliper_live::run_state_text(c) == "no checkpoint yet");
+
+    // The page through 2,000 frames of a run whose only CONTROLS says running at step 0.
+    ScriptedSource src;
+    caliper_live::RunControls rc;
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    src.ctl.has_step = true;
+    src.ctl.step = 0;
+    for (uint64_t frame = 1; frame <= 2000; ++frame) rc.update(&src, frame * kMs);
+    CHECK(caliper_live::run_state_text(rc.state()) == "running");
+    src.controls_now(CALIPER_NET_RUN_PAUSED, 0.001);
+    src.ctl.step = 1999;
+    rc.update(&src, 2001 * kMs);
+    CHECK(caliper_live::run_state_text(rc.state()) == "paused at step 1999");
+    const auto log = rc.take_log();
+    CHECK(std::find(log.begin(), log.end(), "run running") != log.end());
+    CHECK(std::find(log.begin(), log.end(), "run paused at step 1999") != log.end());
 }
 
 TEST_CASE("live/controls: set goes out at most 30 times a second, and the value where a drag stops goes last") {
