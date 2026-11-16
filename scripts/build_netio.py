@@ -12,6 +12,8 @@ in a virtual environment). Run it with the Python of the training script:
     .venv/bin/python scripts/build_netio.py --asan     # AddressSanitizer, plus the caliper_net tests
 
 Reinstalling the wheel replaces the installed package; run it again after.
+On macOS the module is built for macOS 14 (Sonoma) or later, as
+python/netio/CMakeLists.txt sets (cmake/CaliperMacOSTarget.cmake).
 The wheel's own build of the module (python/CMakeLists.txt) is not tested yet.
 """
 from __future__ import annotations

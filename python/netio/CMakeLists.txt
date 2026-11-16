@@ -10,6 +10,8 @@
 # -DNETIO_ASAN=ON builds it and the caliper_net tests (netio_net_tests) with
 # AddressSanitizer.
 cmake_minimum_required(VERSION 3.20)
+# For macOS 14.0 (Sonoma) or later, as the core build (before project()).
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/CaliperMacOSTarget.cmake)
 project(caliper_netio LANGUAGES CXX)
 
 set(REPO ${CMAKE_CURRENT_SOURCE_DIR}/../..)

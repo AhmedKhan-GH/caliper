@@ -24,6 +24,9 @@
 #                          -DCALIPER_TORCH_DIR=<libtorch root> to use another
 #                          copy of the same version. Only applets that call
 #                          caliper_add_applet(... TORCH) need it.
+#   CALIPER_MACOS_MIN      The host's minimum macOS, 14.0 by default. On macOS
+#                          it becomes CMAKE_OSX_DEPLOYMENT_TARGET unless the
+#                          project or the environment chose one.
 include("${CMAKE_CURRENT_LIST_DIR}/caliper-sdk-info.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/CaliperSDKTargets.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/caliper-ui-stack.cmake")
