@@ -1,7 +1,7 @@
 // live_views_state.h: the per-core state of the typed live views
 // (caliper/live_views.h), shared by live_views.cpp (C ABI, apply, lifetime),
 // live_views_draw.cpp (ImGui/ImPlot windows, camera, hover) and
-// live_views_metal.mm (the few MTLBuffer queries a .cpp cannot make).
+// live_views_metal.mm (the MTLBuffer query a .cpp cannot make).
 // Host-internal: nothing here crosses the C seam.
 //
 // A POINTS view draws through the scene core and the graphics layer
@@ -42,9 +42,6 @@ struct BufferInfo {
     void*    contents = nullptr;  // [buffer contents]; NULL for private storage
 };
 BufferInfo metal_buffer_info(void* mtl_buffer);
-// +1 shared-storage MTLBuffer holding a copy of `bytes` (CPU-staged payloads).
-void* metal_new_shared_buffer(void* mtl_device, const void* bytes, uint64_t len);
-void  metal_release(void* obj);   // balances metal_new_shared_buffer; NULL-safe
 
 uint64_t now_ns();   // CLOCK_UPTIME_RAW ns on Apple (== Python time.monotonic_ns)
 

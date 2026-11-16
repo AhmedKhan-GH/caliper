@@ -13,17 +13,10 @@
 //                      update writes the bytes that changed and submits a Frame
 //                      of one dispatch whose parameters are a uniform in the
 //                      frame's arena.
-//   Host allocations   import_buffer of host memory: a copy, which the layer
-//                      reports as the route copied-from-host.
-//   Render targets     an RGBA8 texture and a Depth32Float texture, cleared by
-//                      an empty draw list.
-//   Points             one DrawList per call: per draw a 2,160-byte uniform
-//                      block (matrix, colour rule, table and thresholds, depth
-//                      cues) in the list's arena, the positions and values
-//                      bound as instance-step vertex buffers at the draw's
-//                      byte offsets.
 //   Readback           read_texture, handed over once the layer has it
 //                      (release_retired).
+// The points and scene views draw through the scene core on the same backend
+// (src/host/live/live_points.h, live_scene.h).
 #include "webgpu_renderer.h"
 #include "webgpu_programs.h"
 
@@ -33,8 +26,6 @@
 #include <emscripten/emscripten.h>
 
 #include "tensor_bridge.h"   // colormap_thresholds, from the colormap's reference
-
-#include <caliper/services/geometry_v1_1.h>   // CALIPER_GEOM_*
 
 #include <cmath>
 #include <cstdio>
@@ -47,7 +38,7 @@ namespace prog = webgpu_programs;
 
 namespace {
 
-// The colormap's thresholds (webgpu_programs.h, kColormap and kPoints). The
+// The colormap's thresholds (webgpu_programs.h, kColormap). The
 // shaders give exactly the bytes of the CPU reference map_f32_to_rgba8
 // (tensor_bridge.cpp) on every adapter: WGSL allows a division 2.5 ULP of
 // error and lets an implementation assume no NaN or infinity, so recomputing
@@ -61,24 +52,9 @@ namespace {
 // shader finds with a binary search of exact float comparisons. mode 0 is a
 // range whose width vmax - vmin is zero, infinite or NaN, where the reference
 // maps every value to index 0 (t is 0 or NaN), 1 an increasing and 2 a
-// decreasing one; NaN takes index 0, tested on the bits. The points shader
-// colours by value the same way.
+// decreasing one; NaN takes index 0, tested on the bits.
 
 WGPUStringView sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
-
-void mul4(const float* a, const float* b, float* out) {   // out = a * b, column-major
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) {
-            float acc = 0.0f;
-            for (int k = 0; k < 4; ++k) acc += a[k * 4 + r] * b[c * 4 + k];
-            out[c * 4 + r] = acc;
-        }
-}
-
-bool geom_fail(const char* why) {
-    std::fprintf(stderr, "[webgpu] geometry refused: %s\n", why);
-    return false;
-}
 
 void report(gfx::Backend& b, const char* what) {
     std::fprintf(stderr, "[webgpu] %s: %s\n", what, b.last_error().c_str());
@@ -236,23 +212,17 @@ void WebGpuRenderer::on_work_done(double submitted_ms) {
 void WebGpuRenderer::shutdown() {
     if (gfx_) {
         for (auto& kv : tex_) free_tex(kv.second);
-        for (auto& kv : allocs_) drop(*gfx_, kv.second.buffer);
         for (auto& r : readbacks_) {
             drop(*gfx_, r.rb);
             r.done({});
         }
-        for (auto& p : points_pipes_) drop(*gfx_, p);
-        drop(*gfx_, points_group_);
         drop(*gfx_, cmap_frame_group_);
         drop(*gfx_, cmap_pipe_);
-        drop(*gfx_, zero16_);
-        drop(*gfx_, points_prog_);
         drop(*gfx_, cmap_prog_);
         gfx_->release_retired();
         gfx_.reset();
     }
     tex_.clear();
-    allocs_.clear();
     readbacks_.clear();
     if (imgui_ready_) ImGui_ImplWGPU_Shutdown();
     imgui_ready_ = false;
@@ -263,9 +233,8 @@ void WebGpuRenderer::shutdown() {
     }
 }
 
-// The graphics layer's backend on this renderer's device and queue, and what the live views'
-// draws need of it: the two programs, the colormap's pipeline, the bind groups of their uniform
-// arena and the 16-byte constant that a flat-coloured point draw binds as its value stream.
+// The graphics layer's backend on this renderer's device and queue, and what the textures' colormap
+// needs of it: its program, its pipeline and the bind group of its uniform arena.
 bool WebGpuRenderer::init_layer() {
     std::string adapter;
     WGPUAdapterInfo info = WGPU_ADAPTER_INFO_INIT;
@@ -282,14 +251,13 @@ bool WebGpuRenderer::init_layer() {
         return false;
     }
     cmap_prog_ = gfx_->create_program(prog::kColormap);
-    points_prog_ = gfx_->create_program(prog::kPoints);
     gfx::ComputePipelineDesc cd;
     cd.program = cmap_prog_;
     cd.entry = "cmap_f32";
     cd.label = "caliper.cmap_f32";
     cmap_pipe_ = gfx_->create_compute_pipeline(cd);
-    // The dynamic uniform of each program is the arena of the pass it is used in: one bind group
-    // serves every dispatch and every draw.
+    // The dynamic uniform is the arena of the pass it is used in: one bind group serves every
+    // dispatch.
     gfx::BindGroupDesc g;
     g.group = 0;
     g.entry_count = 1;
@@ -297,14 +265,7 @@ bool WebGpuRenderer::init_layer() {
     g.entries[0].buffer = gfx::kArena;
     g.program = cmap_prog_;
     cmap_frame_group_ = gfx_->create_bind_group(g);
-    g.program = points_prog_;
-    points_group_ = gfx_->create_bind_group(g);
-    gfx::BufferDesc zd;
-    zd.size = 16;
-    zd.usage = gfx::kVertex | gfx::kCopyDst;
-    zd.label = "caliper.points.zero";
-    zero16_ = gfx_->create_buffer(zd);
-    if (!cmap_prog_ || !points_prog_ || !cmap_pipe_ || !cmap_frame_group_ || !points_group_ || !zero16_) {
+    if (!cmap_prog_ || !cmap_pipe_ || !cmap_frame_group_) {
         report(*gfx_, "graphics layer set-up");
         return false;
     }
@@ -377,7 +338,6 @@ void WebGpuRenderer::free_tex(Tex& t) {
     drop(*gfx_, t.src);
     drop(*gfx_, t.lut);
     drop(*gfx_, t.th);
-    drop(*gfx_, t.depth);
     drop(*gfx_, t.color);
 }
 
@@ -456,204 +416,6 @@ bool WebGpuRenderer::tex_update_mapped_from_host(uint64_t id, const float* data,
     }
     ++dispatches_;
     last_path_ = "webgpu-compute";
-    return true;
-}
-
-// ---- the geometry path: points as instanced quads ------------------------------------------------
-
-uint64_t WebGpuRenderer::import_host_allocation(const void* data, uint64_t bytes) {
-    if (!gfx_ || !data || bytes == 0 || bytes > (1ull << 31)) return 0;
-    gfx::ExternalBuffer ext;
-    ext.kind = gfx::ExternalKind::HostMemory;
-    ext.usage = gfx::kVertex;
-    ext.label = "caliper.points.alloc";
-    std::vector<uint8_t> padded;
-    if (bytes % 4 == 0) {
-        ext.handle = const_cast<void*>(data);
-        ext.size = bytes;
-    } else {   // the layer takes multiples of 4
-        padded.assign((bytes + 3) & ~uint64_t(3), 0);
-        std::memcpy(padded.data(), data, (size_t)bytes);
-        ext.handle = padded.data();
-        ext.size = padded.size();
-    }
-    const gfx::ImportResult r = gfx_->import_buffer(ext);
-    if (!r.buffer) {
-        std::fprintf(stderr, "[webgpu] import refused: %s\n", r.reason.c_str());
-        return 0;
-    }
-    const uint64_t id = next_id_++;
-    allocs_.emplace(id, Alloc{r.buffer, bytes});
-    return id;
-}
-
-void WebGpuRenderer::release_external_allocation(uint64_t id) {
-    if (!gfx_) return;
-    auto it = allocs_.find(id);
-    if (it == allocs_.end()) return;
-    drop(*gfx_, it->second.buffer);   // the layer keeps it for reuse once its draws completed
-    allocs_.erase(it);
-}
-
-uint64_t WebGpuRenderer::geom_create_view_ex(int w, int h, uint32_t flags) {
-    if (!gfx_ || (flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u || w <= 0 || h <= 0) return 0;
-    gfx::TextureDesc d;
-    d.width = (uint32_t)w;
-    d.height = (uint32_t)h;
-    d.format = gfx::Format::RGBA8Unorm;
-    d.usage = gfx::kSampled | gfx::kRenderTarget | gfx::kCopySrcTex;
-    d.label = "caliper.geom.view";
-    Tex t;
-    t.color = gfx_->create_texture(d);
-    if (!t.color) return 0;
-    if (flags & CALIPER_GEOM_VIEW_DEPTH) {
-        d.format = gfx::Format::Depth32Float;
-        d.usage = gfx::kRenderTarget;
-        d.label = "caliper.geom.depth";
-        t.depth = gfx_->create_texture(d);
-        if (!t.depth) {
-            drop(*gfx_, t.color);
-            return 0;
-        }
-    }
-    t.w = w;
-    t.h = h;
-    const uint64_t id = next_id_++;
-    tex_.emplace(id, t);
-    // Black until the first draw, as the native targets start.
-    const float I[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    geom_draw_primitives(id, I, I, nullptr, 0, 0xff000000u);
-    return id;
-}
-
-// [(depth target ? 1 + flags : 0) * 2 + colormap]: a target without depth, or with a depth buffer
-// tested and written as the draw's depth flags say (less-equal when testing, as Metal); the value
-// stream at stride 4 for a colormapped draw and at stride 0 for a flat one.
-gfx::Pipeline WebGpuRenderer::points_pipeline(bool depth_target, uint32_t depth_flags, bool cmap) {
-    const uint32_t f = depth_flags & (CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE);
-    const int slot = (depth_target ? 1 + (int)f : 0) * 2 + (cmap ? 1 : 0);
-    if (points_pipes_[slot]) return points_pipes_[slot];
-    gfx::RenderPipelineDesc d;
-    d.program = points_prog_;
-    d.vertex_entry = "vs";
-    d.fragment_entry = "fs";
-    d.vertex_layout_count = 2;
-    d.vertex_layouts[0].stride = 12;
-    d.vertex_layouts[0].step = gfx::Step::Instance;
-    d.vertex_layouts[0].attribute_count = 1;
-    d.vertex_layouts[0].attributes[0] = {0, gfx::VertexFormat::F32x3, 0};
-    d.vertex_layouts[1].stride = cmap ? 4 : 0;
-    d.vertex_layouts[1].step = gfx::Step::Instance;
-    d.vertex_layouts[1].attribute_count = 1;
-    d.vertex_layouts[1].attributes[0] = {1, gfx::VertexFormat::U32, 0};
-    d.topology = gfx::Topology::TriangleList;
-    d.color_format = gfx::Format::RGBA8Unorm;
-    d.blend = gfx::Blend::Opaque;
-    d.depth = depth_target;
-    d.depth_test = depth_target && (f & CALIPER_GEOM_DEPTH_TEST);
-    d.depth_write = depth_target && (f & CALIPER_GEOM_DEPTH_WRITE);
-    d.label = "caliper.points";
-    points_pipes_[slot] = gfx_->create_render_pipeline(d);
-    if (!points_pipes_[slot]) report(*gfx_, "points pipeline");
-    return points_pipes_[slot];
-}
-
-const WebGpuRenderer::PointThresholds& WebGpuRenderer::point_thresholds(float vmin, float vmax) {
-    // The thresholds change with the range only, and computing them takes some 8,000 reference
-    // evaluations, so the last few ranges keep theirs; the range is compared by its bits.
-    uint32_t key[2];
-    std::memcpy(&key[0], &vmin, 4);
-    std::memcpy(&key[1], &vmax, 4);
-    for (auto& e : point_th_)
-        if (e.valid && e.key[0] == key[0] && e.key[1] == key[1]) return e;
-    PointThresholds& e = point_th_[point_th_next_];
-    point_th_next_ = (point_th_next_ + 1) % (uint32_t)(sizeof point_th_ / sizeof point_th_[0]);
-    e.mode = colormap_thresholds(vmin, vmax, e.T);
-    e.key[0] = key[0];
-    e.key[1] = key[1];
-    e.valid = true;
-    return e;
-}
-
-bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16, const float* proj16,
-                                          const HostGeomDraw* draws, uint32_t count,
-                                          uint32_t clear_rgba) {
-    if (!gfx_) return geom_fail("the renderer is not initialised");
-    auto it = tex_.find(view_tex);
-    if (it == tex_.end()) return geom_fail("unknown render target");
-    Tex& t = it->second;
-    if (!view16 || !proj16) return geom_fail("null camera matrices");
-    if (count > 0 && !draws) return geom_fail("null draw array");
-
-    gfx::RenderTarget target;
-    target.color = t.color;
-    target.depth = t.depth;
-    target.clear_rgba = clear_rgba;
-    target.clear = true;
-    gfx::DrawList list(target);
-    list.reserve(count, (size_t)count * 2304);   // each 2,160-byte block padded to 256
-    float mvp[16];
-    mul4(proj16, view16, mvp);
-    // Every draw is checked and recorded before anything is submitted, so a refusal leaves the
-    // target's pixels as they were; the layer refuses a bad list as a whole too.
-    for (uint32_t i = 0; i < count; ++i) {
-        const HostGeomDraw& d = draws[i];
-        if (d.topology != CALIPER_GEOM_TOPO_POINTS) return geom_fail("only points are drawn in the browser");
-        if (d.index_alloc || d.normal_alloc || d.uv_alloc || d.texture || d.instance_alloc)
-            return geom_fail("indices, normals, UVs, textures and instances are not drawn in the browser");
-        auto pa = allocs_.find(d.pos_alloc);
-        if (pa == allocs_.end()) return geom_fail("unknown position allocation");
-        if (d.vertex_count == 0 || d.vertex_count > UINT32_MAX || d.pos_offset % 4 ||
-            d.pos_offset + d.vertex_count * 12 > pa->second.bytes)
-            return geom_fail("positions out of the allocation's bounds");
-        const bool cmap = d.color_mode == CALIPER_GEOM_COLOR_COLORMAP;
-        gfx::VertexBinding attr{zero16_, 0};
-        if (cmap) {
-            auto aa = allocs_.find(d.attr_alloc);
-            if (aa == allocs_.end() || !d.lut256) return geom_fail("colormap draw without attr or LUT");
-            if (d.attr_offset % 4 || d.attr_offset + d.vertex_count * 4 > aa->second.bytes)
-                return geom_fail("attr out of the allocation's bounds");
-            attr = {aa->second.buffer, d.attr_offset};
-        } else if (d.color_mode != CALIPER_GEOM_COLOR_FLAT) {
-            return geom_fail("color mode other than flat or colormap");
-        }
-        prog::PointParams pp{};
-        std::memcpy(pp.mvp, mvp, sizeof mvp);
-        pp.color_mode = cmap ? 1u : 0u;
-        pp.flat_rgba = d.flat_rgba;
-        pp.vmin = d.vmin;
-        pp.vmax = d.vmax;
-        pp.size_px = d.size_px > 0.0f ? d.size_px : 1.0f;
-        pp.viewport[0] = (float)t.w;
-        pp.viewport[1] = (float)t.h;
-        pp.att_ref = d.att_ref;
-        pp.fade_w[0] = d.fade_w0;
-        pp.fade_w[1] = d.fade_w1;
-        if (cmap) {
-            std::memcpy(pp.lut, d.lut256, sizeof pp.lut);
-            // Every value-coloured draw takes map_f32_to_rgba8's exact index (d.exact_colormap
-            // is the Metal renderer's switch; this one always does).
-            const PointThresholds& th = point_thresholds(d.vmin, d.vmax);
-            pp.cmap_mode = th.mode;
-            if (th.mode) std::memcpy(pp.th, th.T, sizeof pp.th);
-        }
-        gfx::DrawRecord r;
-        r.pipeline = points_pipeline(t.depth.id != 0, d.depth_flags, cmap);
-        if (!r.pipeline) return geom_fail("pipeline creation failed");
-        r.groups[0] = points_group_;
-        r.dynamic_offsets[0] = list.uniform(&pp, sizeof pp);
-        r.vertex[0] = {pa->second.buffer, d.pos_offset};
-        r.vertex[1] = attr;
-        r.count = 6;
-        r.instance_count = (uint32_t)d.vertex_count;
-        list.draw(r);
-    }
-    gfx::Frame f;
-    f.render(std::move(list));
-    if (!gfx_->submit(std::move(f))) {
-        std::fprintf(stderr, "[webgpu] geometry refused: %s\n", gfx_->last_error().c_str());
-        return false;
-    }
     return true;
 }
 

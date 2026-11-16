@@ -50,8 +50,6 @@ using caliper_host::HostRenderer;
 #ifndef __APPLE__
 namespace caliper_live_views {
 BufferInfo metal_buffer_info(void*) { return {}; }
-void* metal_new_shared_buffer(void*, const void*, uint64_t) { return nullptr; }
-void metal_release(void*) {}
 uint64_t now_ns() {
     return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch()).count();

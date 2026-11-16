@@ -1,6 +1,8 @@
-// live_views_metal.mm: the MTLBuffer queries the typed live views need and a
-// plain C++ TU cannot make (compiled with ARC, Apple only; live_views.cpp has
-// the non-Apple stubs). No GPU work here: length/contents are CPU properties.
+// live_views_metal.mm: the MTLBuffer query that the heatmap's hover and the
+// series and histogram views still make and a plain C++ TU cannot (compiled
+// with ARC, Apple only; live_views.cpp has the non-Apple stubs). No GPU work
+// here: length and contents are CPU properties. The points view reads its
+// buffers through the graphics layer's import and mapping (live_points.h).
 #import <Metal/Metal.h>
 
 #include <time.h>
@@ -18,22 +20,6 @@ BufferInfo metal_buffer_info(void* mtl_buffer) {
     // Private storage has no CPU mapping; contents is NULL there by contract.
     bi.contents = b.storageMode == MTLStorageModePrivate ? nullptr : b.contents;
     return bi;
-}
-
-void* metal_new_shared_buffer(void* mtl_device, const void* bytes, uint64_t len) {
-    if (mtl_device == nullptr || bytes == nullptr || len == 0) return nullptr;
-    id<MTLDevice> dev = (__bridge id<MTLDevice>)mtl_device;
-    id<MTLBuffer> b = [dev newBufferWithBytes:bytes
-                                       length:(NSUInteger)len
-                                      options:MTLResourceStorageModeShared];
-    return b != nil ? (__bridge_retained void*)b : nullptr;
-}
-
-void metal_release(void* obj) {
-    if (obj != nullptr) {
-        id o = (__bridge_transfer id)obj;
-        (void)o;
-    }
 }
 
 uint64_t now_ns() { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }

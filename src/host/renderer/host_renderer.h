@@ -189,13 +189,6 @@ public:
                                                 uint64_t /*size_bytes*/,
                                                 uint32_t /*handle_type*/) { return 0; }
     virtual void release_external_allocation(uint64_t /*id*/) {}
-    // The browser's views (web/wasm), additive: copy `bytes` of HOST memory
-    // into a renderer allocation that the geometry draws read like an
-    // imported one (same id table, released by release_external_allocation).
-    // A browser has no device memory to import, so a points payload, which
-    // arrives as bytes, takes this path. Default 0: unsupported; the live
-    // views then stage a CPU payload into a shared MTLBuffer as before.
-    virtual uint64_t import_host_allocation(const void* /*data*/, uint64_t /*bytes*/) { return 0; }
     virtual bool tex_update_from_imported(uint64_t /*tex*/, uint64_t /*alloc*/,
                                           uint64_t /*offset_bytes*/,
                                           const CaliperTensor& /*desc*/,
