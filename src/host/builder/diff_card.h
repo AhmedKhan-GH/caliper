@@ -19,6 +19,8 @@
 // ============================================================================
 #include <caliper_builder/spec/spec.h>
 
+#include <nlohmann/json.hpp>
+
 #include <imgui.h>
 #include <imgui_internal.h>   // ImRect
 
@@ -49,6 +51,11 @@ struct WidgetDiffLine {
 std::vector<WidgetDiffLine> widget_compact_diff(const caliper_builder::spec::Spec& before,
                                                 const caliper_builder::spec::Spec& after, const std::string& panel,
                                                 size_t max_value = 40);
+
+// The keys of one new item, such as the panel of panel.create, as added
+// lines: every key of its canonical JSON but its id, objects flattened to
+// dotted keys (primitive, title, bind.rows, options.x_label).
+std::vector<WidgetDiffLine> widget_item_lines(const nlohmann::json& item, size_t max_value = 40);
 
 // Text in a card's faces: its extent, the text cut with an ellipsis to fit
 // `width` (empty when not even the ellipsis fits), and the text drawn on whole

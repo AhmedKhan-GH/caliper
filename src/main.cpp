@@ -27,6 +27,7 @@
 #include "host/api/window_captures.h"
 #include "host/builder/app_hooks.h"
 #include "host/builder/app_providers.h"
+#include "host/builder/approval_cards.h"
 #include "host/builder/spec_page.h"
 #include "host/builder/spec_ui_driver.h"
 #include "app_paths.h"
@@ -320,6 +321,7 @@ public:
             // frame drawn next (window_captures.h).
             if (api_.running()) serve_api();
             session_.frame();
+            approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
             note_spec_applets();
             captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
                 capture_error(t, status, why);
@@ -519,6 +521,17 @@ public:
         // panel.render draws on an offscreen canvas that shares this
         // window's font atlas, made on the first call between two frames.
         session_.set_panel_renderer(caliper_host::SpecPage::make_panel_renderer());
+        // The approval cards: a strip above the jobs tray on every page, and
+        // a mark on the spec page's panel that a waiting edit changes. A
+        // test decides through CALIPER_TEST_APPROVALS, read only when hidden.
+        caliper_host::ApprovalTray::Hooks ah;
+        ah.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
+        if (const char* d = std::getenv("CALIPER_TEST_APPROVALS"); d && hidden_) ah.decisions = d;
+        approvals_.start(std::move(ah));
+        jobs_tray_.set_next_strip([this] { approvals_.draw_strip(); });
+        spec_page_.set_panel_overlay([this](const std::string& id, float x, float y, float w, float h, float strip) {
+            approvals_.mark_panel(id, x, y, w, h, strip);
+        });
     }
 
     void cleanup() {
@@ -529,6 +542,7 @@ public:
         api_.set_command_gateway(nullptr);
         session_.set_panel_renderer(nullptr);
         providers_.close(session_);   // before the session and the host's stores
+        approvals_.close();
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
@@ -1215,6 +1229,7 @@ private:
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
     caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
+    caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open

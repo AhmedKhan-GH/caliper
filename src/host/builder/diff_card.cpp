@@ -157,6 +157,22 @@ std::vector<WidgetDiffLine> widget_compact_diff(const spec::Spec& before, const 
 }
 
 
+std::vector<WidgetDiffLine> widget_item_lines(const json& item, size_t max_value) {
+    std::map<std::string, json> keys;
+    flatten(item, "", &keys);
+    std::vector<WidgetDiffLine> out;
+    for (const auto& kv : keys) {
+        if (kv.first == "id" || kv.first.empty() || kv.second.is_null()) continue;
+        if (kv.second.is_object() && kv.second.empty()) continue;
+        WidgetDiffLine line;
+        line.kind = WidgetDiffLine::Kind::added;
+        line.key = kv.first;
+        line.after = compact_value(kv.second, max_value);
+        out.push_back(std::move(line));
+    }
+    return out;
+}
+
 // ---- text -------------------------------------------------------------------------------
 
 ImVec2 card_text_extent(ImFont* f, float size, const std::string& s) {

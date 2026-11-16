@@ -140,6 +140,7 @@ struct SpecPage::Impl {
     std::string request_error;
 
     Seams seams;
+    PanelOverlay panel_overlay;
     std::string focused;   // the focused panel's id, "" for none
 
     // The widget agent's inline surface (widget_surface.h), made at the
@@ -363,11 +364,14 @@ struct SpecPage::Impl {
 
     // The runtime's overlay, inside each panel's own window after its
     // content: the bronze frame of the focused panel, which the panel's
-    // content would otherwise cover, then the inline surface.
+    // content would otherwise cover, the app's panel overlay (the approval
+    // cards' mark), then the inline surface.
     void install_overlay() {
         runtime->set_overlay([this](const SpecPanelFrame& f) {
             if (f.id == focused)
                 ImGui::GetWindowDrawList()->AddRect(f.rect.Min, f.rect.Max, sternbild::col::bronze, 0.0f, 0, 1.0f);
+            if (panel_overlay)
+                panel_overlay(f.id, f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(), f.rect.GetHeight(), f.header.GetHeight());
             if (widget) widget->overlay(f);
         });
     }
@@ -525,6 +529,8 @@ std::string SpecPage::widget_state() const {
     return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
 }
 
+void SpecPage::set_panel_overlay(PanelOverlay overlay) { impl_->panel_overlay = std::move(overlay); }
+
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 
 void SpecPage::focus_panel(const std::string& panel_id) { impl_->focused = panel_id; }
@@ -605,6 +611,7 @@ void SpecPage::set_seams(Seams) {}
 void SpecPage::set_hidden(bool) {}
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
+void SpecPage::set_panel_overlay(PanelOverlay) {}
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string&) {}
 void SpecPage::leave() {}

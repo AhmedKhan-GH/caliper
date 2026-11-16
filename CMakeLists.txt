@@ -632,6 +632,9 @@ add_executable(caliper
     src/host/builder/app_session.cpp
     src/host/builder/spec_page.cpp
     src/host/builder/app_providers.cpp
+    # The approval cards of agents' requests that wait for the person
+    # (src/host/builder/approval_cards.h); a stub without the builder.
+    src/host/builder/approval_cards.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -951,6 +954,8 @@ if(TARGET caliper_builder_session)
     endif()
     # The host's catalog providers for live views, feed channels and metrics.
     add_subdirectory(src/host/catalog_providers)
+    # The approval cards' link to the diff card and their tests.
+    include(src/host/builder/approval_cards.cmake)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed

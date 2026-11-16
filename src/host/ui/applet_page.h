@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace caliper_host {
@@ -102,13 +103,20 @@ public:
     // above the status bar and the dock space ends above the strip.
     void draw();
 
+    // A strip that draw() draws right after the tray's own, whether the tray
+    // is open or not, so that it lands above the tray on every page that
+    // draws the tray: the approval cards' strip (builder/approval_cards.h).
+    void set_next_strip(std::function<void()> draw) { next_strip_ = std::move(draw); }
+
 private:
+    void draw_tray();
     void draw_list();   // every entry, one per row, in the "+N more" popup
     void clear_finished();
 
     std::vector<Failure> failed_;   // oldest first
     std::vector<JobSystem::JobView> views_;
     JobsTrayPresence presence_;
+    std::function<void()> next_strip_;
 };
 
 } // namespace caliper_host
