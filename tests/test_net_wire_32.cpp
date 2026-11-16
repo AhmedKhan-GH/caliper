@@ -399,6 +399,20 @@ TEST_CASE("net/wire 3.2: scene view info and the scene data view") {
             }
         CHECK(seen);
     }
+    // A null key means the same as an absent one: the golden VIEWS whose scene keys are all null.
+    {
+        const std::vector<uint8_t> bin = read_bytes(v32_dir() / "views_scene_nulls.bin");
+        Message m;
+        REQUIRE(decode_bytes(bin, &m).ok());
+        const Views& vs = std::get<Views>(m);
+        REQUIRE(vs.views.size() == 1);
+        v = SceneView{};
+        err.clear();
+        CHECK_MESSAGE(scene_view_info(vs.views.at(0), &v, &err), err);
+        CHECK(v.space == "3d");
+        CHECK(v.up == "+y");
+        CHECK(v.units == "m");
+    }
 
     const Json dv = scene_data_view();
     CHECK(dv.dump() ==

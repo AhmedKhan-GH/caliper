@@ -691,8 +691,8 @@ bool scene_view_info(const Json& entry, SceneView* out, std::string* err) {
     if (!sc || sc->is_null()) sc = &empty;
     if (!sc->is_object()) return fail("'scene' must be an object, got " + show(*sc));
     SceneView v;
-    const Json* space = sc->find("space");
-    if (!space) v.space = CALIPER_NET_SPACE_3D;
+    const Json* space = sc->find("space");   // a null key means the same as an absent one
+    if (!space || space->is_null()) v.space = CALIPER_NET_SPACE_3D;
     else if (space->is_string() &&
              (space->as_string() == CALIPER_NET_SPACE_3D || space->as_string() == CALIPER_NET_SPACE_2D))
         v.space = space->as_string();
@@ -711,7 +711,7 @@ bool scene_view_info(const Json& entry, SceneView* out, std::string* err) {
         v.up = up->as_string();
     }
     const Json* units = sc->find("units");
-    if (!units) v.units = "m";
+    if (!units || units->is_null()) v.units = "m";
     else if (units->is_string() && units->as_string().size() <= CALIPER_NET_UNITS_MAX) v.units = units->as_string();
     else return fail("scene units must be a string of at most 15 bytes, got " + show(*units));
     if (out) *out = std::move(v);

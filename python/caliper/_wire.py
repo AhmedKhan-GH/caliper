@@ -1876,7 +1876,9 @@ def scene_view_info(entry: dict) -> dict:
         sc = {}
     if not _obj(sc):
         _bad(f"'scene' must be an object, got {sc!r}")
-    space = sc.get("space", SPACE_3D)
+    space = sc.get("space")                     # a null key means the same as an absent one
+    if space is None:
+        space = SPACE_3D
     if space not in (SPACE_3D, SPACE_2D):
         _bad(f"scene space {space!r}; expected '3d' or '2d'")
     up = sc.get("up")
@@ -1885,7 +1887,9 @@ def scene_view_info(entry: dict) -> dict:
         up = "+y" if space == SPACE_3D else "-y"
     if up not in axes:
         _bad(f"scene up {up!r}; a {space} scene takes one of {list(axes)}")
-    units = sc.get("units", "m")
+    units = sc.get("units")
+    if units is None:
+        units = "m"
     if not isinstance(units, str) or len(units.encode("utf-8")) > UNITS_MAX:
         _bad(f"scene units must be a string of at most {UNITS_MAX} bytes, got {units!r}")
     return {"space": space, "up": up, "units": units}
