@@ -15,6 +15,7 @@
 # exist in the stand-in's app-data folder. The steps:
 #   1. caliper --hidden without a data folder is refused (exit 1, the guard's
 #      line) before it creates anything.
+#      A data folder named inside the app-data folder is refused the same way.
 #   2. caliper --hidden with CALIPER_DATA_DIR runs and opens its stores there.
 #   3. caliper_embed_tests run directly, as from a shell or an IDE, without a
 #      data folder is refused: the run that once wrote its metrics into the
@@ -77,6 +78,15 @@ endfunction()
 #    run that the guard should never let start.
 step(hidden_refused EXIT 1 ENV CALIPER_EXIT_AFTER=5 ARGS "${EXE}" --hidden --applets "${APPLETS}")
 expect_refusal(hidden_refused "the hidden app \\(--hidden\\)")
+
+# 1b. caliper --hidden with a data folder named inside the app-data folder is
+# refused too, before it creates anything.
+step(hidden_inside_refused EXIT 1
+     ENV "CALIPER_DATA_DIR=${WORK_DIR}/home/Library/Application Support/Caliper/inside" CALIPER_EXIT_AFTER=5
+     ARGS "${EXE}" --hidden --applets "${APPLETS}")
+if(NOT step_out MATCHES "was given a data folder inside your app-data folder")
+    message(FATAL_ERROR "step hidden_inside_refused did not print the guard's refusal")
+endif()
 
 # 2. The hidden app with one: it runs for a second and closes normally.
 step(hidden_data_dir ENV "CALIPER_DATA_DIR=${WORK_DIR}/data" CALIPER_EXIT_AFTER=1
