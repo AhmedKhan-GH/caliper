@@ -4,11 +4,11 @@ from the landing screen, and open it in a browser.
     python examples/build_a_dashboard/dry_run/step6_save_reopen_browser.py [--out DIR] [--work DIR]
         [--size 1440x900[,2560x1440]] [--caliper APP] [--workspace DIR --app-data DIR]
 
-The app runs with Caliper API (--api on a free port). Without --workspace the
+Without --workspace the
 dashboard is built by hand as in step 2, in a new workspace, then ⌘S saves it
 as the applet training-run, ⌘B leaves build mode, esc gives up the focus and
-esc again goes Home, where the landing lists the dashboard. ⌘K, its title and
-Enter open it again. The saved and the reopened dashboards are compared pixel
+esc again goes Home, where the landing selects the dashboard under Projects,
+and Enter opens it again. The saved and the reopened dashboards are compared pixel
 by pixel, and the saved spec with expected.spec.toml beside this script.
 
 With --workspace and --app-data, as in run_all.py --story, the dashboard is the
@@ -16,22 +16,23 @@ one that the earlier steps built and changed in that workspace: it is opened
 from the landing screen, saved with ⌘S in build mode, and reopened, and the
 saved spec must equal the spec the workspace held when the step began.
 
-Meanwhile the browser part: the app prints the link of its browser viewer on
-standard error, "Spec applets in a browser at http://127.0.0.1:<port>/v0/spec
-?token=<viewer token>&applet=<id>"; with applet=training-run, headless
-Chromium (Playwright, from the web package) opens it once the applet is saved,
-and the page is captured at the window's size and laid beside the reopened
-app's capture, whole and panel by panel. The app's input script ends with the
-reopened capture and the app stays open for the browser, which may take as
-long as it needs; the script then closes the app.
+Meanwhile the browser part: once the dashboard is saved, the input script
+clicks ⌘O Open in browser in the page bar. The hidden app opens no browser; its
+test hook CALIPER_TEST_OPEN_URL writes the link instead, http://127.0.0.1:<port>
+/v0/spec?token=<viewer token>&applet=training-run, which headless Chromium
+(Playwright, from the web package) opens, and the page is captured at the
+window's size and laid beside the reopened app's capture, whole and panel by
+panel. After esc Home the landing must select the dashboard and list it under
+Projects. The app's input script ends with the reopened capture and the app
+stays open for the browser, which may take as long as it needs; the script then
+closes the app.
 
 The captures are step6-<n>-<what>-<W>x<H>.png in --out. Needs node, and
 Playwright from `cd web && npm ci` (or NODE_PATH naming a node_modules that has
 @playwright/test). The options are those of hidden_app.py.
 
-What a person does differently: they read the link from the terminal that
-started the app, since the app shows it nowhere in its window, and open it in
-their own browser.
+What a person does differently: ⌘O opens the dashboard in their own default
+browser.
 """
 
 import argparse
@@ -114,36 +115,50 @@ def run(children, args, size, work, out):
     root = fresh_folder(work, size)
     workspace = Path(args.workspace).resolve() if story else root / "workspace"
     found = saved_spec(workspace).read_text() if story else None
+    link_file = root / "browser-link.txt"
     if story:
-        # The story's dashboard, opened from the landing screen and saved in build mode.
+        # The story's dashboard, opened from the landing screen and saved in build mode. Nothing is focused
+        # then, so no esc follows: with nothing to give up, esc goes Home.
         steps = ["wait 60", "page landing", "key cmd+k", f"type {TITLE}", "key enter", "page spec", "wait 40",
-                 "key cmd+b", "wait 20", "key cmd+s", "wait 20", "key cmd+b", "key escape", *settle_and_shot("saved")]
+                 "key cmd+b", "wait 20", "key cmd+s", "wait 20", "key cmd+b", "wait 10"]
     else:
-        steps = build_steps() + ["key cmd+s", "wait 20", "key cmd+b", "key escape", *settle_and_shot("saved")]
-    steps += ["key escape", "page landing", "wait 30", *settle_and_shot("landing"),
-              "key cmd+k", f"type {TITLE}", "key enter", "page spec", "wait 40", *settle_and_shot("reopened")]
-    link = {}
+        # After the build the table is focused; esc gives up the focus.
+        steps = build_steps() + ["key cmd+s", "wait 20", "key cmd+b", "key escape"]
+    steps += [
+        # ⌘O Open in browser: the hidden app writes the link to the test hook's file.
+        "click page:browser", f"wait-file {link_file}", "wait 10", *settle_and_shot("saved"),
+        # Home, where the landing selects the dashboard under Projects, and Enter opens it again.
+        "key escape", "page landing", "wait 30", f"landing selected local.{APPLET}",
+        f"landing projects local.{APPLET}", *settle_and_shot("landing"),
+        "key enter", "page spec", "wait 40", *settle_and_shot("reopened")]
 
-    def on_line(line):
-        m = re.search(r"Spec applets in a browser at (http://127\.0\.0\.1:\d+/v0/spec\?token=[A-Za-z0-9_-]+)", line)
-        if m:
-            link["url"] = m.group(1)
+    def read_link():
+        try:
+            lines = link_file.read_text().splitlines()
+        except OSError:
+            return None
+        pattern = r"http://127\.0\.0\.1:\d+/v0/spec\?token=[A-Za-z0-9_-]+&applet=[a-z0-9-]+"
+        return lines[0] if lines and re.fullmatch(pattern, lines[0]) else None
 
-    app = HiddenApp(children, args.caliper, root, size, steps, workspace=workspace, api=True,
-                    app_data=Path(args.app_data).resolve() if args.app_data else None)
-    app.listeners.append(on_line)
+    app = HiddenApp(children, args.caliper, root, size, steps, workspace=workspace,
+                    app_data=Path(args.app_data).resolve() if args.app_data else None,
+                    extra_env={"CALIPER_TEST_OPEN_URL": str(link_file)})
     ok = True
     browser_png = out / f"step6-4-browser-{size}.png"
     state = root / "browser-state.json"
-    # The browser opens the applet once it is saved, while the app goes Home and reopens it.
+    # The browser opens the link once the app has given it, while the app goes Home and reopens the dashboard.
     deadline = time.time() + 300
-    saved_ok = until(app, "saved", deadline)
-    if "url" not in link or not saved_ok:
-        print(f"  no link or no saved capture: link {'found' if 'url' in link else 'missing'}")
+    url = None
+    while app.proc.poll() is None and time.time() < deadline and not url and not any(
+            l.startswith("[ui] stopped") for l in app.ui_lines()):
+        url = read_link()
+        time.sleep(0.2)
+    if not url:
+        print("  no link from Open in browser")
         ok = False
     else:
-        print(f"  link: {link['url'].split('?')[0]}?token=<viewer token>&applet={APPLET}")
-        ok = node(children, "capture", f"{link['url']}&applet={APPLET}", size, browser_png, state)
+        print(f"  link: {url.split('?')[0]}?token=<viewer token>&applet={url.rsplit('=', 1)[1]}")
+        ok = url.endswith(f"&applet={APPLET}") and node(children, "capture", url, size, browser_png, state)
     until(app, "reopened", deadline)
     # The input script ends with the reopened capture; the app stays open until it is closed here.
     end = time.time() + 30

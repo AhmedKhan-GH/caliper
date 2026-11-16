@@ -4,7 +4,7 @@
         [--out <folder>] [--work <folder>] [--size 1440x900] [--workspace <folder> --app-data <folder>]
         [--runs N] [--request series|heatmap|both|selection|property|all]
 
-It needs Ollama running on 127.0.0.1:11434 with the model qwen3.8:27b (or the one given with --model), the
+It needs Ollama running on 127.0.0.1:11434 (or --ollama) with the model qwen3.8:27b (or the one given with --model), the
 caliper executable built with the builder, a Python interpreter that has caliper-agent's dependencies
 (--agent-python, or CALIPER_AGENT_PYTHON), and the two data files of make_data.py in data/ beside this folder
 (or in --data). It stops with exit code 2 and says what is missing when any of them is not there.
@@ -47,11 +47,12 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from hidden_app import (APPLET, EXPECTED_SPEC, FAILED, INTERRUPTED, MISSING, OK, TITLE, Children, Stop, add_options,
-                        app_env, caliper_problem, fresh_folder, png_size, saved_spec, work_folder)
+from hidden_app import (APPLET, EXPECTED_SPEC, FAILED, INTERRUPTED, MISSING, OK, Children, Stop, add_options, app_env,
+                        caliper_problem, fixture_commands, fresh_folder, saved_spec, work_folder)
 
 HERE = Path(__file__).resolve().parent
 EXAMPLE = HERE.parent
@@ -73,18 +74,20 @@ def _get(url: str, body: dict | None = None) -> dict:
         return json.loads(response.read())
 
 
-def check_ollama(model: str) -> str:
+def check_ollama(base: str, model: str) -> str:
     """Lists the server's models and reads the model's metadata; it never calls the model."""
+    if (urllib.parse.urlsplit(base).hostname or "") not in ("127.0.0.1", "localhost", "::1"):
+        raise Missing(f"--ollama {base} is not a server on this machine.")
     try:
-        version = _get(OLLAMA + "/api/version").get("version", "?")
-        tags = _get(OLLAMA + "/api/tags")
+        version = _get(base + "/api/version").get("version", "?")
+        tags = _get(base + "/api/tags")
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        raise Missing(f"Ollama does not answer on {OLLAMA} ({exc}). Start it with `ollama serve`.") from None
+        raise Missing(f"Ollama does not answer on {base} ({exc}). Start it with `ollama serve`.") from None
     names = {m.get("name") for m in tags.get("models", [])} | {m.get("model") for m in tags.get("models", [])}
     if model not in names:
         raise Missing(f"Ollama has no model {model}. Download it with `ollama pull {model}`.")
     try:
-        caps = _get(OLLAMA + "/api/show", {"model": model}).get("capabilities", [])
+        caps = _get(base + "/api/show", {"model": model}).get("capabilities", [])
     except (urllib.error.URLError, OSError, ValueError):
         caps = []
     if caps and "tools" not in caps:
@@ -168,31 +171,6 @@ def environment(app_data: Path, user_applets: Path, python: Path, size: str, ext
     user_applets.mkdir(parents=True, exist_ok=True)
     return app_env(app_data, user_applets, size, exit_after=exit_after,
                    extra=dict(extra, CALIPER_AGENT_PYTHON=str(python)))
-
-
-# The dashboard of expected.spec.toml, the one step 2 builds by hand, as commands.
-def fixture_commands(parquet: Path, tensors: Path) -> list[dict]:
-    return [
-        {"name": "data.import", "args": {"paths": [str(parquet), str(tensors)], "run": True}},
-        {"name": "spec.new", "args": {"id": APPLET, "title": TITLE}},
-        {"name": "source.add", "args": {"id": "run_metrics", "catalog": "table:run_metrics"}},
-        # attn is layers x heads x query x key; layer 1, head 2 is an induction head.
-        {"name": "source.add", "args": {"id": "attention_attn", "catalog": "tensor:attention_attn",
-                                        "transform": [{"op": "slice", "axis": 0, "index": 1},
-                                                      {"op": "slice", "axis": 0, "index": 2}]}},
-        {"name": "panel.create", "args": {"id": "series", "primitive": "series", "title": "Loss and accuracy",
-                                          "bind": {"x": "run_metrics.step",
-                                                   "y": ["run_metrics.loss", "run_metrics.accuracy"]},
-                                          "options": {"x_label": "Step"}}},
-        {"name": "panel.create", "args": {"id": "heatmap", "primitive": "heatmap",
-                                          "title": "Attention of layer 1, head 2", "bind": {"values": "attention_attn"},
-                                          "options": {"x_label": "Key", "y_label": "Query"}}},
-        {"name": "panel.create", "args": {"id": "table", "primitive": "table", "bind": {"rows": "run_metrics"}}},
-        {"name": "layout.set", "args": {"layout": {"root": "n1", "nodes": [
-            {"id": "n1", "split": "vertical", "ratio": 0.62, "children": ["n2", "table"]},
-            {"id": "n2", "split": "horizontal", "children": ["series", "heatmap"]}]}}},
-        {"name": "applet.save", "args": {"overwrite": True}},
-    ]
 
 
 def build_workspace(children: Children, args, python: Path, parquet: Path, tensors: Path, work: Path) -> Path:
@@ -319,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Step 3 of the walk-through: ⌘K with the widget agent on a local "
                                                  "model, in the hidden app.")
     add_options(parser, agent=True, model=True)
+    parser.add_argument("--ollama", default=OLLAMA, help=f"Ollama on this machine (default {OLLAMA})")
     parser.add_argument("--data", help="the folder of make_data.py's two files (default: data/ of the example)")
     parser.add_argument("--request", default="both", choices=["series", "heatmap", "both", "selection",
                                                               "property", "all"])
@@ -327,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        server = check_ollama(args.model)
+        server = check_ollama(args.ollama.rstrip("/"), args.model)
         python, parquet, tensors = check_files(args)
     except Missing as exc:
         print(f"step3_cmdk: {exc}", file=sys.stderr)
@@ -352,6 +331,9 @@ def main(argv: list[str] | None = None) -> int:
         except Stop as why:
             print(f"step3_cmdk: interrupted by {why}", flush=True)
             return INTERRUPTED
+        except RuntimeError as why:
+            print(f"step3_cmdk: FAILED, {why}", flush=True)
+            return FAILED
     print(f"step3_cmdk: {sum(o['ok'] for o in outcomes)} of {len(outcomes)} runs ok; captures in {args.out}")
     return OK if outcomes and all(o["ok"] for o in outcomes) else FAILED
 

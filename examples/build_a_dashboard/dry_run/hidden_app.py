@@ -17,7 +17,8 @@ failed, 2 when something the step needs is missing, 130 when interrupted.
 
 The environment of a hidden app (app_env): CALIPER_AGENT_OFFLINE=1, a PATH of
 the system's folders only, so that the side chat finds no installed agent, no
-API key or test hook from the caller's environment, and CALIPER_EXIT_AFTER, so
+API key, test hook or Caliper API setting from the caller's environment (the
+app starts Caliper API only when asked), and CALIPER_EXIT_AFTER, so
 that the app closes itself should its script be killed outright.
 
 The processes a step starts (Children): each is recorded as it starts and
@@ -66,7 +67,7 @@ APPLET = "training-run"
 # Left out of every environment a step gives: keys, and hooks that would change
 # what the hidden app does.
 DROPPED = ("ANTHROPIC_", "OPENAI_", "GEMINI_", "OPENROUTER_", "CALIPER_MODEL_API_KEY", "CALIPER_TEST_",
-           "CALIPER_COMMAND_", "CALIPER_AUTOLAUNCH", "CALIPER_DEMO_")
+           "CALIPER_COMMAND_", "CALIPER_AUTOLAUNCH", "CALIPER_DEMO_", "CALIPER_API")
 
 
 # ---- options ------------------------------------------------------------------------------------
@@ -282,7 +283,7 @@ class HiddenApp:
     and error are one log, root/app.log, read line by line."""
 
     def __init__(self, children, caliper, root, size, steps, workspace=None, app_data=None, api=False,
-                 exit_after=300, args=()):
+                 exit_after=300, args=(), extra_env=None):
         self.root = Path(root)
         self.size = size
         self.workspace = Path(workspace) if workspace else self.root / "workspace"
@@ -291,7 +292,7 @@ class HiddenApp:
             d.mkdir(parents=True, exist_ok=True)
         self.log_lines = []
         self.listeners = []
-        env = app_env(self.app_data, self.root / "applets", size, steps, self.root / "raw", exit_after)
+        env = app_env(self.app_data, self.root / "applets", size, steps, self.root / "raw", exit_after, extra_env)
         argv = [str(caliper), "--hidden", "--workspace", str(self.workspace), *args]
         if api:
             argv += ["--api", "--api-port", "0"]
@@ -393,6 +394,33 @@ def build_steps(shot=None):
         "click source:spec:run_metrics 0.6 0.5",
         "drag primitive:table to canvas 0.5 -4", "pane focus table",
         "drag divider: 0.5 0.0 to canvas 0.5 0.62", *shot("table"),
+    ]
+
+
+def fixture_commands(metrics=METRICS, attention=ATTENTION):
+    """The dashboard of expected.spec.toml, the one step 2 builds by hand, as a command script: the data files
+    imported, the spec made and saved as the applet training-run. Steps that start from their own fixture
+    build this one, so that alone and in the story they work on the same dashboard."""
+    return [
+        {"name": "data.import", "args": {"paths": [str(metrics), str(attention)], "run": True}},
+        {"name": "spec.new", "args": {"id": APPLET, "title": TITLE}},
+        {"name": "source.add", "args": {"id": "run_metrics", "catalog": "table:run_metrics"}},
+        # attn is layers x heads x query x key; layer 1, head 2 is an induction head.
+        {"name": "source.add", "args": {"id": "attention_attn", "catalog": "tensor:attention_attn",
+                                        "transform": [{"op": "slice", "axis": 0, "index": 1},
+                                                      {"op": "slice", "axis": 0, "index": 2}]}},
+        {"name": "panel.create", "args": {"id": "series", "primitive": "series", "title": "Loss and accuracy",
+                                          "bind": {"x": "run_metrics.step",
+                                                   "y": ["run_metrics.loss", "run_metrics.accuracy"]},
+                                          "options": {"x_label": "Step"}}},
+        {"name": "panel.create", "args": {"id": "heatmap", "primitive": "heatmap",
+                                          "title": "Attention of layer 1, head 2", "bind": {"values": "attention_attn"},
+                                          "options": {"x_label": "Key", "y_label": "Query"}}},
+        {"name": "panel.create", "args": {"id": "table", "primitive": "table", "bind": {"rows": "run_metrics"}}},
+        {"name": "layout.set", "args": {"layout": {"root": "n1", "nodes": [
+            {"id": "n1", "split": "vertical", "ratio": 0.62, "children": ["n2", "table"]},
+            {"id": "n2", "split": "horizontal", "children": ["series", "heatmap"]}]}}},
+        {"name": "applet.save", "args": {"overwrite": True}},
     ]
 
 
