@@ -130,7 +130,7 @@ back, and the model learns to do that; the data is made by the script, so nothin
 The script first prints its stream link, a line such as
 
 ```text
-http://127.0.0.1:53634/?token=muBx4B8W7oIxM64YErBC62JwGl0KCsN_
+http://127.0.0.1:53634/?token=<token>
 ```
 
 and then a line every 10 seconds with the step, the loss and the entropy of each layer's attention, in nats. A note
@@ -142,11 +142,11 @@ field under the list, **or a stream link: http://127.0.0.1:&lt;port&gt;/?token=.
 or click **Attach link**. You can also open the app on the stream directly, with the link on the command line:
 
 ```sh
-cmake-build-release/caliper --api --url "http://127.0.0.1:53634/?token=muBx4B8W7oIxM64YErBC62JwGl0KCsN_"
+cmake-build-release/caliper --api --url "http://127.0.0.1:53634/?token=<token>"
 ```
 
 The live page opens. Its bar reads **esc Home**, `train.py` and a diamond with **live**, with **⌘L Chat** at the
-right. Under it, the run bar says **running at step 1** with **Pause** and **Step**, which hold the training loop at
+right. Under it, the run bar says **running** with **Pause** and **Step**, which hold the training loop at
 its next step and run one step at a time. Seven views fill the page:
 
 | View | What it shows |

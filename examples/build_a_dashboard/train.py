@@ -8,10 +8,10 @@ synthetic data, so nothing is downloaded.
 
 The task: each sequence is 24 random tokens followed by the same 24 tokens
 again, and the model predicts every next token. The first half cannot be
-predicted, but the second half can, by looking back to where the current token
-appeared before and copying the token after it. A small transformer learns
-this, and while it does, the attention of some heads sharpens onto one key, so
-their entropy falls. That is what the app shows.
+predicted, but the second half can: the next token is the one that stands 23
+positions back. A small transformer learns to look there, and while it does,
+the attention of some heads sharpens onto one key, so their entropy falls. That
+is what the app shows.
 
 The script streams to the app with caliper.serve(): a stream server on
 127.0.0.1 that prints its link. In Caliper, press F4 on the landing screen,
@@ -99,8 +99,9 @@ class Transformer(nn.Module):
 
 def entropy(attn: torch.Tensor) -> torch.Tensor:
     """The entropy of each attention row, in nats, averaged over the batch and the
-    queries: (layer, head). A head that spreads evenly over the 40 keys before it
-    has an entropy near log(40) = 3.7; one that looks at a single key has 0."""
+    queries: (layer, head). A query sees itself and the keys before it, so a head
+    that spreads evenly over them averages about 2.9 over the 47 queries; one that
+    looks at a single key has 0."""
     rows = -(attn * attn.clamp_min(1e-12).log()).sum(-1)               # (batch, layer, head, query)
     return rows.mean(dim=(0, 3))
 
