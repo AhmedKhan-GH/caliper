@@ -687,8 +687,11 @@ def test_capture(notebook, tmp_path):
         renderer = next(x for x in lines if x.startswith("[renderer] "))
         if "metal" not in renderer:
             pytest.skip(f"the app has no Metal renderer here ({renderer})")
-        wait(lambda: any(c.get("subscriptions", 0) > 0
-                         for c in ns["server"].stats()["connections"]), "the app's subscription")
+        # The app has subscribed once its scene view has drawn the scene's
+        # state (the UI driver reports where only after an update). The
+        # connections' stats are no sign of it: the native sender keeps a
+        # scene's subscriptions in Python (caliper._net_scene), not there.
+        wait(lambda: len(wheres()) > 0, "the app's subscription")
         wait(lambda: (data / "data" / "api.json").exists(), "Caliper API")
         ns["train"](300)
         ns["show_surface"]()                                  # a surface forced at step 299
