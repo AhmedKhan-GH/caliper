@@ -521,6 +521,41 @@ TEST_CASE("agent settings: the GPU note's condition") {
     CHECK(s.gpu_note().empty());
 }
 
+TEST_CASE("agent settings: the cache note's condition") {
+    AgentSettingsData d;
+    d.preset = "ollama";
+    AgentCapabilities caps;
+    caps.context = 262144;
+    CHECK(agent_cache_note(agent_choice(d), caps).empty());   // the cache a token takes is unknown
+    caps.kv_bytes_per_token = 69632;
+    CHECK(agent_cache_note(agent_choice(d), caps) == "Context cache about 18 GB");
+    caps.context = 16384;   // about 1.1 GB
+    CHECK(agent_cache_note(agent_choice(d), caps).empty());
+    caps.context = 57444;   // just under 4 GB
+    CHECK(agent_cache_note(agent_choice(d), caps).empty());
+    caps.context = 57445;
+    CHECK(agent_cache_note(agent_choice(d), caps) == "Context cache about 4 GB");
+    caps.context = 262144;
+    d.providers["ollama"].base_url = "http://192.0.2.10:11434/v1";   // another machine's memory
+    CHECK(agent_cache_note(agent_choice(d), caps).empty());
+    d.preset = "custom";   // an Ollama server reached as Custom
+    d.providers["custom"].base_url = "http://127.0.0.1:11434/v1";
+    CHECK(agent_cache_note(agent_choice(d), caps) == "Context cache about 18 GB");
+    d.preset = "anthropic";
+    CHECK(agent_cache_note(agent_choice(d), caps).empty());
+    // From the probe's answer, and from the cache.
+    const AgentProbeAnswer a = parse_probe_answer(R"({"version": 1, "capabilities": {"context_length":
+        {"value": 262144, "source": "server"}}, "quirks": {"kv_bytes_per_token": 69632}})");
+    CHECK(a.caps.kv_bytes_per_token == std::optional<long long>(69632));
+    const std::string dir = tmp_dir("cache-note");
+    write_cache(dir, "http://127.0.0.1:1/v1", "m",
+                {{"context_length", {{"value", 16384}, {"source", "preset"}}}, {"quirks", {{"kv_bytes_per_token", 69632}}}},
+                json::object());
+    const AgentCapabilities c = read_cached_capabilities(dir, "http://127.0.0.1:1/v1", "m", 2.0e9);
+    CHECK(c.kv_bytes_per_token == std::optional<long long>(69632));
+    CHECK(c.context_source == "preset");
+}
+
 TEST_CASE("agent settings: the probe's answer and the cache") {
     const AgentProbeAnswer a = parse_probe_answer(R"({"version": 1, "models": ["a", "b"],
         "capabilities": {"tools": {"value": true, "source": "probe"}, "vision": {"value": false, "source": "override"},
@@ -627,8 +662,8 @@ TEST_CASE("agent settings: List and Probe through caliper-agent on a fake local 
     }
     const std::string agent_dir = std::string(CALIPER_BUILDER_SOURCE_DIR) + "/agent";
     std::string why;
-    auto server = test::FakeModelServer::start(python, agent_dir, {"--models", "local-a,local-b", "--context", "32768"},
-                                               &why);
+    auto server = test::FakeModelServer::start(
+        python, agent_dir, {"--models", "local-a,local-b", "--context", "32768", "--ollama-show"}, &why);
     REQUIRE_MESSAGE(server, why);
     const std::string dir = tmp_dir("probe");
     agent::MemoryKeyStore keys;
@@ -651,8 +686,21 @@ TEST_CASE("agent settings: List and Probe through caliper-agent on a fake local 
     CHECK(c.tools == std::optional<bool>(true));
     CHECK(c.tools_source == "probe");
     CHECK(c.vision == std::optional<bool>(true));
-    CHECK(c.context == std::optional<long long>(32768));
+    // The Ollama preset loads the model with its own context length, not the
+    // 32,768 the server lists, and the probe read the cache a token takes.
+    CHECK(c.context == std::optional<long long>(16384));
+    CHECK(c.context_source == "preset");
+    CHECK(c.kv_bytes_per_token == std::optional<long long>(17 * 4 * 512 * 2));
     CHECK(s.state().empty());
+    CHECK(s.cache_note().empty());   // 16,384 tokens: about 1.1 GB
+    // The person raises the context length: the note says what it costs.
+    s.set_override("context_length", "262144");
+    settle(s);
+    CHECK(s.capabilities().context == std::optional<long long>(262144));
+    CHECK(s.cache_note() == "Context cache about 18 GB");
+    s.set_override("context_length", "auto");
+    settle(s);
+    CHECK(s.cache_note().empty());
     // The person's override, kept in the probe's cache, which the app's agent reads too.
     s.set_override("tools", "no");
     settle(s);
@@ -898,6 +946,40 @@ TEST_CASE("agent settings: caliper-agent-settings-shot draws the Claude preset a
         CHECK(h == 600);
         stbi_image_free(px);
     }
+}
+
+TEST_CASE("agent settings: caliper-agent-settings-shot draws the cache note of a raised context length") {
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    if (python.empty()) {
+        MESSAGE("caliper_agent_settings_gpu: the cache note's shot is not run: no CALIPER_BUILDER_TEST_PYTHON");
+        return;
+    }
+    const std::string dir = tmp_dir("shot-cache");
+    const std::string file = (fs::path(dir) / "large-cache.png").string();
+    acp::SpawnOptions o;
+    o.argv = {CALIPER_AGENT_SETTINGS_SHOT_EXE, "--scenario", "large-cache", "--out", file, "--data-dir",
+              (fs::path(dir) / "data").string(), "--size", "1440x900", "--python", python, "--agent-dir",
+              std::string(CALIPER_BUILDER_SOURCE_DIR) + "/agent"};
+    o.env = {{"CALIPER_AGENT_OFFLINE", "1"}};
+    acp::RunLimits limits;
+    limits.timeout_ms = 240000;
+    const acp::RunResult run = acp::run_process(o, limits);
+    if (run.out.empty() && run.err.find("cannot draw offscreen") != std::string::npos) {
+        MESSAGE("caliper_agent_settings_gpu skipped: no offscreen canvas");
+        return;
+    }
+    REQUIRE_MESSAGE(run.status.success(), run.err);
+    const json j = json::parse(run.out);
+    CHECK(j["cache_note"] == "Context cache about 18 GB");
+    bool shown = false;
+    for (const auto& t : j["shown"]) shown = shown || t == "Context cache about 18 GB";
+    CHECK(shown);
+    int w = 0, h = 0, n = 0;
+    unsigned char* px = stbi_load(file.c_str(), &w, &h, &n, 4);
+    REQUIRE(px != nullptr);
+    CHECK(w == 1440);
+    CHECK(h == 900);
+    stbi_image_free(px);
 }
 
 TEST_SUITE_END();

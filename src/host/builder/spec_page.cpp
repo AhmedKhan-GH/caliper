@@ -234,6 +234,13 @@ struct SpecPage::Impl {
                 widget_api_file.clear();
             }
             widget_revision = settings ? settings->revision() : -1;
+            if (settings) {
+                // The bundle takes at most a quarter of the model's context
+                // length, and no render for a model that reads no images.
+                const AgentCapabilities caps = settings->capabilities();
+                if (caps.context && *caps.context > 0) o.bundle.context_tokens = (std::uint64_t)*caps.context;
+                if (caps.vision && !*caps.vision) o.bundle.vision = false;
+            }
             o.hooks.open_settings = [this] {
                 if (settings) settings->set_open(true);
             };

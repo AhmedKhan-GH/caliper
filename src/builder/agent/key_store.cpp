@@ -118,6 +118,8 @@ const std::vector<ProviderPreset>& provider_presets() {
                     preset.models.emplace_back(m["id"].get<std::string>(), m.value("name", m["id"].get<std::string>()));
             for (const auto& e : p.value("efforts", nlohmann::json::array()))
                 if (e.is_string()) preset.efforts.push_back(e.get<std::string>());
+            if (p.contains("context_length") && p["context_length"].is_number_integer())
+                preset.context_length = p["context_length"].get<long long>();
             if (!preset.id.empty()) out.push_back(std::move(preset));
         }
         return out;

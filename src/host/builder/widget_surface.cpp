@@ -726,7 +726,9 @@ std::vector<WidgetAction> WidgetSurface::row_actions() const {
 InlineWidget::InlineWidget(Options o)
     : session_(std::make_unique<SessionWidgetSession>(*o.session, std::move(o.busy))),
       agent_(std::move(o.agent)),
-      surface_(std::make_unique<WidgetSurface>(*session_, *agent_, std::move(o.hooks))) {}
+      surface_(std::make_unique<WidgetSurface>(*session_, *agent_, std::move(o.hooks))) {
+    session_->bundle_options = o.bundle;
+}
 
 InlineWidget::~InlineWidget() {
     surface_.reset();   // discards an open preview and closes the session first

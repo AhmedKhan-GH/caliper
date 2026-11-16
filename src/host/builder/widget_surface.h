@@ -356,6 +356,9 @@ public:
         std::function<bool()> busy;              // AppSession::worker_busy()
         std::unique_ptr<WidgetAgent> agent;
         WidgetSurface::Hooks hooks;
+        // The context bundle's sizing: the model's context length and whether
+        // it reads images, from the widget agent's settings.
+        caliper_builder::ContextBundleOptions bundle;
     };
     explicit InlineWidget(Options options);
     ~InlineWidget();

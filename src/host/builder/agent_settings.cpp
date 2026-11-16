@@ -271,6 +271,17 @@ std::string agent_gpu_note(bool live_attached, const AgentChoice& c) {
     return live_attached && c.preset && c.loopback ? "Shared GPU" : std::string();
 }
 
+std::string agent_cache_note(const AgentChoice& c, const AgentCapabilities& caps) {
+    if (!c.preset || !c.loopback || !caps.context || !caps.kv_bytes_per_token) return {};
+    if (*caps.context <= 0 || *caps.kv_bytes_per_token <= 0) return {};
+    const double bytes = (double)*caps.context * (double)*caps.kv_bytes_per_token;
+    if (bytes < (double)kLargeCacheBytes) return {};
+    const double gb = bytes / 1e9;
+    char text[64];
+    std::snprintf(text, sizeof text, "Context cache about %.0f GB", std::round(gb));
+    return text;
+}
+
 AgentCapabilities read_cached_capabilities(const std::string& cache_dir, const std::string& base_url,
                                            const std::string& model, double now) {
     AgentCapabilities caps;
@@ -295,6 +306,9 @@ AgentCapabilities read_cached_capabilities(const std::string& cache_dir, const s
                 *source = result[name].value("source", "probe");
             }
         };
+        if (fresh && result.contains("quirks") && result["quirks"].is_object() &&
+            result["quirks"].contains("kv_bytes_per_token") && result["quirks"]["kv_bytes_per_token"].is_number_integer())
+            caps.kv_bytes_per_token = result["quirks"]["kv_bytes_per_token"].get<long long>();
         pick_bool("tools", &caps.tools, &caps.tools_source);
         pick_bool("vision", &caps.vision, &caps.vision_source);
         if (over.is_object() && over.contains("context_length") && over["context_length"].is_number_integer()) {
@@ -380,6 +394,9 @@ AgentProbeAnswer parse_probe_answer(const std::string& text) {
     if (ctx.contains("value") && ctx["value"].is_number_integer()) a.caps.context = ctx["value"].get<long long>();
     a.caps.context_source = ctx.value("source", std::string("unknown"));
     if (j.contains("overrides") && j["overrides"].is_object()) a.caps.overrides = j["overrides"];
+    const json quirks = j.value("quirks", json::object());
+    if (quirks.is_object() && quirks.contains("kv_bytes_per_token") && quirks["kv_bytes_per_token"].is_number_integer())
+        a.caps.kv_bytes_per_token = quirks["kv_bytes_per_token"].get<long long>();
     for (const json& e : j.value("errors", json::array())) {
         if (!e.is_object()) continue;
         const std::string name = probe_problem_name(e.value("code", ""));
@@ -551,6 +568,10 @@ AgentSettingsLayout layout_in_window(const AgentSettingsLayoutInput& in, const A
     if (in.problems > 0) cy += m.line + m.gap;
     if (in.state) {
         L.state = {cx, cy, std::min(cw, bw("No tool calling")), m.line};
+        cy += m.line + m.gap;
+    }
+    if (!in.cache_note.empty()) {
+        L.cache_note = {cx, cy, std::min(cw, bw(in.cache_note)), m.line};
         cy += m.line + m.gap;
     }
     L.caps.h = cy - L.caps.y;
@@ -761,6 +782,8 @@ void AgentSettings::set_effort(std::string effort) {
     changed();
 }
 
+std::string AgentSettings::cache_note() const { return agent_cache_note(choice(), capabilities()); }
+
 std::string AgentSettings::gpu_note() const {
     return agent_gpu_note(options_.live_attached && options_.live_attached(), choice());
 }
@@ -957,6 +980,10 @@ AgentCapabilities AgentSettings::capabilities() const {
             if (!caps_cached_.tools) caps_cached_.tools = true, caps_cached_.tools_source = "known";
             if (!caps_cached_.vision) caps_cached_.vision = true, caps_cached_.vision_source = "known";
         }
+        // A preset that loads the model with a context length of its own
+        // (Ollama) has that one until the person sets another, as the sidecar.
+        if (c.preset && c.preset->context_length > 0 && caps_cached_.context_source != "override")
+            caps_cached_.context = c.preset->context_length, caps_cached_.context_source = "preset";
         caps_revision_seen_ = revision_;
     }
     return caps_cached_;
@@ -995,6 +1022,7 @@ std::string source_text(const std::string& s) {
     if (s == "known") return "known";
     if (s == "override") return "override";
     if (s == "default") return "assumed";
+    if (s == "preset") return "preset";
     return "unknown";
 }
 
@@ -1054,6 +1082,8 @@ std::vector<std::string> AgentSettings::visible_text() const {
     if (!answer_.failure.empty()) out.push_back(answer_.failure);
     const std::string st = state();
     if (!st.empty()) out.push_back(st);
+    const std::string cache = cache_note();
+    if (!cache.empty()) out.push_back(cache);
     return out;
 }
 
@@ -1073,6 +1103,7 @@ AgentSettingsLayoutInput AgentSettings::layout_input(const WidgetRect& area) con
     in.note = !gpu_note().empty();
     in.problems = (int)answer_.problems.size() + (answer_.failure.empty() ? 0 : 1);
     in.state = !state().empty();
+    in.cache_note = cache_note();
     return in;
 }
 
@@ -1336,6 +1367,8 @@ void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) 
     }
     const std::string st = state();
     if (!lay.state.empty() && !st.empty()) tag(L, dl, lay.state, st, L.accent);
+    const std::string cache = cache_note();
+    if (!lay.cache_note.empty() && !cache.empty()) tag(L, dl, lay.cache_note, cache, L.accent);
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
         !ImGui::GetIO().WantTextInput)
