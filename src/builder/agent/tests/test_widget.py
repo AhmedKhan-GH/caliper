@@ -245,6 +245,15 @@ def _tool_names(record_entry: dict) -> list[str]:
     return [t["name"] for t in record_entry["tools"]]
 
 
+def test_model_and_effort_on_the_command_line_also_set_a_widget_session(run_agent):
+    agent, _ = run_agent([], extra_args=["--model", "claude-sonnet-5-5", "--effort", "medium"])
+    agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    response, _ = agent.request("session/new", {"cwd": "/tmp/ws", "mcpServers": [], "_meta": widget_meta()})
+    options = {o["id"]: o for o in response["result"]["configOptions"]}
+    assert options["model"]["currentValue"] == "claude-sonnet-5-5"
+    assert options["effort"]["currentValue"] == "medium"
+
+
 def test_session_new_with_a_widget_field_answers_its_scope_and_uses_the_widget_defaults(run_agent):
     agent, _ = run_agent([])
     response, _ = agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})

@@ -69,6 +69,25 @@ if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET 
         SKIP_REGULAR_EXPRESSION "builder_agent_widget skipped" ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
 endif()
 
+# The provider conformance suite (conformance/conformance_main.cpp): the widget
+# agent's tasks on a fixture workspace, through the real session, context bundle
+# and ACP client. A tool for tests and for on-demand runs, so it is built with
+# the tests; POSIX only, like the stand-in's server. tests/test_conformance.py
+# runs it against the scripted model and the fake OpenAI-compatible server.
+if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET caliper_builder_duckdb)
+    set(_tasks "${CMAKE_CURRENT_SOURCE_DIR}/conformance/tasks.json")
+    file(READ "${_tasks}" CALIPER_CONFORMANCE_TASKS_JSON)
+    configure_file(conformance/tasks_json.h.in
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/caliper_builder/conformance_tasks_json.h" @ONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_tasks}")
+    add_executable(caliper-agent-conformance conformance/conformance_main.cpp)
+    target_include_directories(caliper-agent-conformance PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(caliper-agent-conformance PRIVATE caliper_builder_session_host caliper_builder_session
+        caliper_builder_acp caliper_builder_agent caliper_builder_duckdb)
+    target_compile_definitions(caliper-agent-conformance PRIVATE
+        CALIPER_BUILDER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 if(BUILD_TESTS)
     set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
         "A Python interpreter with caliper-agent's test extras, to run the caliper-agent tests")
@@ -79,11 +98,15 @@ if(BUILD_TESTS)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
         set(_agent_py_env "PYTHONDONTWRITEBYTECODE=1" "CALIPER_AGENT_OFFLINE=1")
+        if(TARGET caliper-agent-conformance)
+            # tests/test_conformance.py runs the suite in its default modes.
+            list(APPEND _agent_py_env "CALIPER_AGENT_CONFORMANCE=$<TARGET_FILE:caliper-agent-conformance>")
+        endif()
         if(NOT WIN32)
             # The end-to-end test drives the sidecar through the real C++ client.
             list(APPEND _agent_py_env "CALIPER_ACP_HARNESS=$<TARGET_FILE:caliper-acp-harness>")
         endif()
-        set_tests_properties(builder_agent_py PROPERTIES ENVIRONMENT "${_agent_py_env}" TIMEOUT 600)
+        set_tests_properties(builder_agent_py PROPERTIES ENVIRONMENT "${_agent_py_env}" TIMEOUT 900)
     else()
         add_test(NAME builder_agent_py
             COMMAND ${CMAKE_COMMAND} -E echo

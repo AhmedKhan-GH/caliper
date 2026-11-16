@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
                       key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal,
-                      provider_meta=choice.as_meta())
+                      provider_meta=choice.as_meta(), widget_model=args.model, widget_effort=args.effort)
         try:
             await conn.serve(agent.on_request, agent.on_notification)
         finally:

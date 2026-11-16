@@ -90,7 +90,8 @@ class Agent:
                  graph: GraphAgent, api: CaliperApi, *, default_model: str, default_effort: str,
                  usage_log: str | None = None, key_required: bool = True, commands: list[Command] | None = None,
                  scope_rule: ScopeRule | None = None, refusal: Exception | None = None,
-                 provider_meta: dict | None = None) -> None:
+                 provider_meta: dict | None = None, widget_model: str | None = None,
+                 widget_effort: str | None = None) -> None:
         self._usage_log = usage_log
         # Why no provider may run (offline.py): every session/new and
         # session/prompt is then answered with this error.
@@ -98,6 +99,11 @@ class Agent:
         # Where model requests go, with the warnings the pane shows
         # (presets.py), for initialize's `_meta.caliper.provider`.
         self._provider_meta = provider_meta
+        # A widget session's model and effort on the Claude API when the
+        # command line names them (the conformance suite does); else the
+        # fast defaults below.
+        self._widget_model = widget_model
+        self._widget_effort = widget_effort
         self._conn = conn
         self._provider = provider
         self._key_status = key_status
@@ -214,7 +220,8 @@ class Agent:
         sid = ("widget-" if widget is not None else "byok-") + uuid.uuid4().hex[:16]
         model, effort = self._default_model, self._default_effort
         if widget is not None and self._claude:
-            model, effort = WIDGET_CLAUDE_MODEL, WIDGET_CLAUDE_EFFORT
+            model = self._widget_model or WIDGET_CLAUDE_MODEL
+            effort = self._widget_effort or WIDGET_CLAUDE_EFFORT
         caliper_meta: dict = {}
         if self._provider is not None:
             caps = self._provider.capabilities(model)
