@@ -509,7 +509,7 @@ struct Hub::Impl {
     // VIEWS for one viewer: the item spaces of 3.1 only to a viewer that
     // announced `selection`.
     // 3.2 draft: the scenes only to a viewer that announced `scenes`.
-    wire::Views views_msg(const Session* s, bool with_items, bool with_scenes = true) {
+    wire::Views views_msg(const Session* s, bool with_items, bool with_scenes) {
         wire::Views v;
         if (s) {
             v.session = s->id;
@@ -1546,7 +1546,7 @@ struct Hub::Impl {
         for (ConnId v : viewers) {
             auto pt = peers.find(v);
             if (pt == peers.end() || pt->second.closing) continue;
-            send(v, views_msg(nullptr, false));
+            send(v, views_msg(nullptr, pt->second.cap_selection, pt->second.cap_scenes));
         }
         reconsider_defaults();
     }
