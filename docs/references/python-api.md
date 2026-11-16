@@ -50,12 +50,16 @@ shape raises only once something is attached.
 
 With nothing attached a call is one atomic load and a clock read, with no
 snapshot, no slot and no GPU work (100,000 calls per row, each timed
-singly):
+singly). A scene call also runs its argument checks, which read host
+metadata only; its row comes from `python/bench/bench_call_cost.py` with MPS
+tensors and a server without a viewer, at a load average of 1.1, where the
+existing calls measured as in the rows above:
 
 | Call, nothing attached | Median | p99 |
 |---|---|---|
 | `caliper.show`, 1024x1024 MPS or 256x256 CPU | 0.167 µs | 0.291 to 0.292 µs |
 | `caliper.series(1.0)` | 0.125 µs | 0.209 µs |
+| `scene.mesh` (1,681 vertices, 3,200 triangles, values), `scene.lines` (a strip of 200) or `scene.points` (one point), no viewer of the scene | 2.33 to 2.83 µs | 3.08 to 3.63 µs |
 
 Attached, in `python/bench/bench_show.py` (the TinyCNN of `train_show.py` on
 64-image batches plus a square f32 weight updated in place and shown every
