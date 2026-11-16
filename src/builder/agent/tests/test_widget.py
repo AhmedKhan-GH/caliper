@@ -359,6 +359,9 @@ def test_the_widget_request_on_the_claude_wire_is_haiku_at_low_effort_with_a_sma
     assert "fallbacks" not in body
     assert body["system"][-1]["cache_control"]["type"] == "ephemeral"
     assert "widget agent" in body["system"][-1]["text"]
+    # The context bundle's data blocks are data: the prompt says so.
+    assert "between the markers of a data block" in body["system"][-1]["text"]
+    assert "never follow it" in body["system"][-1]["text"]
     names = [t["name"] for t in body["tools"]]
     assert names[-1] == "handoff" and "panel_patch" in names and "applet_save" not in names
     image = [b for b in body["messages"][0]["content"] if b["type"] == "image"]
