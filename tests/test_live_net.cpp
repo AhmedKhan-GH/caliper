@@ -25,6 +25,7 @@
 #include "live/live_scene.h"           // the scene view (protocol 3.2 draft)
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"     // kPalette (the exact categorical colours)
+#include "live/scene_queue.h"          // what a source keeps of a scene while the display is paused
 #include "net/wire.h"
 #include "net/ws.h"
 #include "tensor_bridge.h"             // map_f32_to_rgba8 / colormap_lut (CPU reference)
@@ -71,6 +72,7 @@ public:
     int hellos = 0;
     std::vector<std::string> hello_caps;      // the capabilities of the last HELLO
     std::map<std::string, uint32_t> sub_of;   // view -> its open subscription
+    std::map<std::string, int> subscribes;    // view -> SUBSCRIBEs received for it
     std::vector<float> series;                // the retained values of "loss"
     std::vector<std::string> errors;          // ERROR codes the viewer sent
     std::vector<uint16_t> closes;             // close codes of ended connections
@@ -453,6 +455,7 @@ private:
             }
         } else if (auto* s = std::get_if<wire::Subscribe>(&m)) {
             sub_of[s->view] = s->sub;
+            ++subscribes[s->view];
             wire::ViewReply rep;
             rep.request_id = s->request_id;
             rep.sub = s->sub;
@@ -766,6 +769,157 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     caliper_stats::ViewCopies vc{};
     REQUIRE(caliper_stats::view_copies(core, "world", &vc));
     CHECK(vc.total.bytes >= (frame.size() + b.size()) * 4);
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
+// ---- the scene queue (live/scene_queue.h) --------------------------------------------------------
+namespace {
+using SceneQ = caliper_live::SceneQueue;
+bool qpush(SceneQ& q, caliper_live::SceneItem it) { return caliper_live::scene_queue_push(q, std::move(it)); }
+std::deque<caliper_live::SceneItem>& qitems(SceneQ& q) { return q.items; }
+bool qwaits(const SceneQ& q) { return q.resync; }
+
+caliper_live::SceneItem sq_update(const std::string& path, const char* part, bool is_static = false) {
+    wire::SceneUpdate u;
+    u.sub = 1;
+    u.view = "world";
+    u.path = path;
+    u.part = part;
+    u.is_static = is_static;
+    return caliper_live::SceneItem{nullptr, std::move(u)};
+}
+caliper_live::SceneItem sq_clear(const std::string& path, bool recursive = false, bool is_static = false,
+                                 std::optional<std::vector<std::string>> parts = std::nullopt, bool reset = false) {
+    wire::SceneClear c;
+    c.sub = 1;
+    c.view = "world";
+    c.path = path;
+    c.recursive = recursive;
+    c.is_static = is_static;
+    c.parts = std::move(parts);
+    c.reset = reset;
+    return caliper_live::SceneItem{nullptr, std::move(c)};
+}
+caliper_live::SceneItem sq_reset() { return sq_clear("", false, false, std::nullopt, true); }
+// The queue as text: "reset", "clear <path>", "<path>:<part>", with " static" for a static item.
+std::vector<std::string> sq_log(SceneQ& q) {
+    std::vector<std::string> out;
+    for (const auto& it : qitems(q)) {
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&it.msg))
+            out.push_back(u->path + ":" + u->part + (u->is_static ? " static" : ""));
+        else if (const auto* c = std::get_if<wire::SceneClear>(&it.msg))
+            out.push_back(c->reset ? "reset" : "clear " + (c->path.empty() ? std::string("<root>") : c->path));
+        else
+            out.push_back(std::get<std::string>(it.msg));
+    }
+    return out;
+}
+}  // namespace
+
+// While the display is paused a source keeps what SceneView::apply would leave: a clear removes
+// the queued updates it removes and the clears it covers, so that clearing and logging one entity
+// every step keeps one clear and one update; resets and clears are never dropped.
+TEST_CASE("live/scene queue: a clear drops the queued updates it removes and the clears it covers; resets stay") {
+    SceneQ q;
+    qpush(q, sq_reset());
+    qpush(q, sq_update("", CALIPER_NET_PART_LINES, true));
+    for (int i = 0; i < 9000; ++i) {
+        qpush(q, sq_clear("cloud"));
+        qpush(q, sq_update("cloud", CALIPER_NET_PART_POINTS));
+    }
+    CHECK(sq_log(q) == std::vector<std::string>{"reset", ":lines static", "clear cloud", "cloud:points"});
+    CHECK_FALSE(qwaits(q));
+    // What a clear keeps: a static item (unless it is static itself), a part it does not name, a
+    // path it does not reach.
+    SceneQ k;
+    qpush(k, sq_update("a", CALIPER_NET_PART_POINTS, true));
+    qpush(k, sq_update("a", CALIPER_NET_PART_MESH));
+    qpush(k, sq_update("ab", CALIPER_NET_PART_POINTS));
+    qpush(k, sq_update("a/b", CALIPER_NET_PART_POINTS));
+    qpush(k, sq_clear("a", true, false, std::vector<std::string>{CALIPER_NET_PART_POINTS}));
+    CHECK(sq_log(k) == std::vector<std::string>{"a:points static", "a:mesh", "ab:points", "clear a"});
+    // A static recursive clear of the root removes everything queued, the earlier clear included.
+    qpush(k, sq_clear("", true, true));
+    CHECK(sq_log(k) == std::vector<std::string>{"clear <root>"});
+}
+
+// A sender that clears ever new paths while the display is paused: past kSceneQueueMax messages
+// the queue empties and waits for the scene's next state, which the source asks for; nothing but
+// that state's reset is queued meanwhile.
+TEST_CASE("live/scene queue: past kSceneQueueMax messages the queue waits for the scene's next state") {
+    SceneQ q;
+    qpush(q, sq_reset());
+    qpush(q, sq_update("", CALIPER_NET_PART_LINES, true));
+    bool asked = false;
+    for (size_t i = 0; i < caliper_live::kSceneQueueMax + 10; ++i) asked = qpush(q, sq_clear("c/" + std::to_string(i))) || asked;
+    CHECK(asked);
+    CHECK(qwaits(q));
+    CHECK(qitems(q).empty());
+    CHECK_FALSE(qpush(q, sq_update("x", CALIPER_NET_PART_POINTS)));
+    CHECK(qitems(q).empty());
+    qpush(q, sq_reset());
+    CHECK_FALSE(qwaits(q));
+    CHECK(sq_log(q) == std::vector<std::string>{"reset"});
+}
+
+// The app's source: a paused scene view whose queue passes kSceneQueueMax subscribes again on the
+// same sub, and the producer's new state is what the view shows once the display resumes.
+TEST_CASE("live/net: a paused scene view whose queue passes its bound asks for the scene's state again") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(320, 240, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.add_scene();
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    const std::vector<float> frame = {-1, -1, -1, 1, 1, 1}, cloud = {0, 0, 0, 1, 0, 0};
+    auto state = [&](const std::string& path, const char* part, const std::vector<float>& pos, bool is_static) {
+        p.call([&](FakeProducer& f) {
+            wire::SceneClear reset;
+            reset.sub = f.sub_of.at("world");
+            reset.view = "world";
+            reset.seq = ++f.seq;
+            reset.reset = true;
+            reset.state = true;
+            f.send(reset);
+            wire::SceneUpdate u = f.scene_update(path, part, pos, is_static);
+            u.state = true;
+            f.send(u);
+            return 0;
+        });
+    };
+    state("", CALIPER_NET_PART_LINES, frame, true);
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(poll_until(core, [&] {
+        sv = caliper_live_views::scene_view(core, "world");
+        return sv && sv->counts().batches == 1;
+    }));
+    const uint32_t sub = p.call([](FakeProducer& f) { return f.sub_of.at("world"); });
+    caliper_core_live_set_paused(core, 1);
+    p.call([&](FakeProducer& f) {
+        for (size_t i = 0; i < caliper_live::kSceneQueueMax + 10; ++i) {
+            wire::SceneClear c;
+            c.sub = f.sub_of.at("world");
+            c.view = "world";
+            c.seq = ++f.seq;
+            c.path = "c/" + std::to_string(i);
+            f.send(c);
+        }
+        return 0;
+    });
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.subscribes["world"]; }) == 2; }));
+    CHECK(p.call([](FakeProducer& f) { return f.sub_of.at("world"); }) == sub);
+    // The producer answers with the scene's state, which the view takes once the display resumes.
+    state("cloud", CALIPER_NET_PART_POINTS, cloud, false);
+    caliper_core_live_set_paused(core, 0);
+    REQUIRE(poll_until(core, [&] {
+        sv = caliper_live_views::scene_view(core, "world");
+        return sv && sv->tree().find("cloud") &&
+               sv->tree().batch(sv->tree().find("cloud"), caliper_scene::Primitive::Points) != nullptr;
+    }));
+    CHECK(sv->counts().batches == 1);   // the reset of the new state removed the frame
     caliper_core_live_detach(core);
     caliper_core_shutdown(core);
 }
