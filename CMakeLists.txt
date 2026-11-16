@@ -956,13 +956,18 @@ if(TARGET caliper_builder_session)
             # One entry per case: the acceptance case, F4 listing a stream of
             # caliper.serve() from its stream file, the attachment kept across
             # Home and the spec page until Detach, a second stream and a
-            # stream that ends, and files dropped on the live page.
+            # stream that ends, files dropped on the live page, and "Save
+            # changes to <name>?" before F3, an open from the landing and a
+            # close over unsaved changes.
             foreach(_case IN ITEMS
                     "entropy|app live: attention entropy per layer*"
                     "f4_stream|app live: F4 lists a caliper.serve() stream*"
                     "home_keeps|app live: the stream stays attached*"
                     "second_stream|app live: a second stream replaces the first*"
-                    "drop|app live: files dropped on the live page*")
+                    "drop|app live: files dropped on the live page*"
+                    "save_new|app save: F3 New dashboard over unsaved changes*"
+                    "save_open|app save: opening another dashboard*"
+                    "save_close|app save: closing the window*")
                 string(REPLACE "|" ";" _parts "${_case}")
                 list(GET _parts 0 _name)
                 list(GET _parts 1 _filter)

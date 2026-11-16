@@ -29,6 +29,7 @@
 #include "host/builder/app_providers.h"
 #include "host/builder/approval_cards.h"
 #include "host/builder/chat_pane.h"
+#include "host/builder/save_prompt.h"
 #include "host/builder/spec_page.h"
 #if CALIPER_WITH_BUILDER
 #include "host/builder/agent_settings.h"
@@ -328,6 +329,7 @@ public:
             // frame drawn next (window_captures.h).
             if (api_.running()) serve_api();
             session_.frame();
+            save_prompt_.frame(session_);   // "Save changes to <name>?" and what waits on it
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
             chat_.frame(session_);   // the side chat polls its agent
             note_spec_applets();
@@ -363,7 +365,7 @@ public:
                 LandingScreen::Context ctx;
                 ctx.loader = &loader_;
                 ctx.renderer_name = renderer_->name();
-                ctx.launch = [this](int i) { launch_applet(i); };
+                ctx.launch = [this](int i) { launch_from_landing(i); };
                 ctx.restart = [this](int i) { restart_applet(i); };
                 ctx.sessions = &sessions_;
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
@@ -383,8 +385,12 @@ public:
                     return caliper_host::SpecPage::facts(e.spec_path, f);
                 };
                 ctx.shown_path = [this](const std::string& p) { return workspace_relative(p); };
+                // F3 New dashboard asks "Save changes to <name>?" first when
+                // the open spec has unsaved changes.
                 if (caliper_host::SpecPage::built())
-                    ctx.new_spec = [this](const std::string& title) { new_spec(title); };
+                    ctx.new_spec = [this](const std::string& title) {
+                        save_prompt_.ask("new dashboard", [this, title] { new_spec(title); });
+                    };
 #if CALIPER_WITH_BUILDER
                 ctx.agent_settings = [this] { agent_settings_.set_open(true); };
 #endif
@@ -453,6 +459,9 @@ public:
                 // drawing valid textures through this frame's render.
                 if (go_back) pending_home_ = active_applet_;
             }
+
+            // "Save changes to <name>?" over whatever page is shown, while open.
+            save_prompt_.draw();
 
 #if CALIPER_WITH_BUILDER
             // The widget agent's settings, over whatever page is shown, in the
@@ -558,6 +567,7 @@ public:
             h.capture_unavailable = caliper_host::WindowCaptures::unsupported(renderer_->name());
         h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
         h.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
+        save_prompt_.set_log([this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); });
         std::string refused;   // a command script, which only a hidden app runs
         session_.start(caliper_host::app_session_options(cl, hidden_, &refused), std::move(h));
         if (!refused.empty()) {
@@ -794,6 +804,53 @@ private:
         e.status_text.clear();
         spec_entry_ = e.manifest.id;
         landing_.select(idx);
+    }
+
+    // A launch from the landing screen (a row, Enter, ⏎ Launch, the command
+    // line): a dashboard of the workspace replaces the open spec, so it asks
+    // "Save changes to <name>?" first when the open spec has unsaved changes,
+    // and the open spec's own dashboard shows its page, unsaved changes and
+    // all, instead of reading its file again. Other applets launch at once.
+    // app.launch and the API's launch never come here: an agent's request is
+    // not the person's.
+    void launch_from_landing(int idx) {
+        if (idx < 0 || idx >= loader_.count()) return;
+        const caliper_host::AppletEntry& a = loader_.at(idx);
+        const std::string ws_id = a.manifest.kind == caliper_host::AppletKind::Spec ? workspace_applet_id(a) : "";
+        if (ws_id.empty()) {
+            launch_applet(idx);
+            return;
+        }
+        std::string open_id;
+        if (caliper_host::SavePrompt::unsaved(session_, &open_id) && open_id == ws_id) {
+            open_spec_page();
+            return;
+        }
+        save_prompt_.ask("open " + a.manifest.name, [this, id = a.manifest.id] {
+            const int i = loader_.find(id);
+            if (i >= 0) launch_applet(i);
+        });
+    }
+
+    // The window's close request (its close button, ⌘Q, the input driver's
+    // `close`), which GLFW makes after it has set the close flag: with unsaved
+    // changes in the open spec it asks first, and the window closes after
+    // Save or Don't Save. A hidden app's SIGTERM, CALIPER_EXIT_AFTER and the
+    // driver's `quit` set the flag without a request and never ask; nor does
+    // a close while the session's worker runs a command, so quitting never
+    // waits on it.
+    void on_close_request() {
+        if (quit_confirmed_) return;
+        if (save_prompt_.waiting()) {   // the question already open stays
+            glfwSetWindowShouldClose(window_, GLFW_FALSE);
+            return;
+        }
+        if (!caliper_host::SavePrompt::unsaved(session_)) return;
+        glfwSetWindowShouldClose(window_, GLFW_FALSE);
+        save_prompt_.ask("quit", [this] {
+            quit_confirmed_ = true;
+            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+        });
     }
 
     // The workspace id of a spec applet found in the workspace's applets/
@@ -1205,6 +1262,11 @@ private:
     void feed_spec_ui() {
         spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
+        spec_ui_->set_save_prompt(&save_prompt_);
+        spec_ui_->set_close([this] {   // as GLFW does: the flag, then the request
+            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            on_close_request();
+        });
 #if CALIPER_WITH_BUILDER
         spec_ui_->set_agent_settings(&agent_settings_);
 #endif
@@ -1516,6 +1578,11 @@ private:
                 if (paths[i] && *paths[i]) list.emplace_back(paths[i]);
             app->on_drop(std::move(list));
         });
+        // The close button and ⌘Q: "Save changes to <name>?" first when the
+        // open spec has unsaved changes (on_close_request).
+        glfwSetWindowCloseCallback(window_, [](GLFWwindow* w) {
+            if (auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w))) app->on_close_request();
+        });
         return renderer_->init(window_);
     }
 
@@ -1545,6 +1612,8 @@ private:
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
     caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
     caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person
+    caliper_host::SavePrompt save_prompt_;  // "Save changes to <name>?" before the person's replacement or quit
+    bool quit_confirmed_ = false;           // the person answered the close's question
     caliper_host::ChatPane chat_;           // the side chat, on the spec and live pages
 #if CALIPER_WITH_BUILDER
     caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page

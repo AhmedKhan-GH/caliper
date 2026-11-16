@@ -73,6 +73,14 @@
 //                        names begin with <prefix> (the API's agent files)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
+//   save until           wait until "Save changes to <name>?" is open
+//                        (save_prompt.h)
+//   save save|dont-save|cancel
+//                        wait until it is open, then answer it as a click on
+//                        that button does
+//   close                a request to close the window, as its close button
+//                        and ⌘Q make, which asks first when the open spec
+//                        has unsaved changes
 //   quit                 close the app
 // A step whose target is not there yet waits for it, up to kPatience frames,
 // then the script stops with an error.
@@ -81,6 +89,7 @@
 // ============================================================================
 #include "builder/app_session.h"
 #include "builder/chat_pane.h"
+#include "builder/save_prompt.h"
 #include "builder/spec_page.h"
 #include "export_service.h"
 
@@ -157,6 +166,10 @@ public:
     // a dropped file reaches; the app sets both before each feed().
     void set_page(std::string page) { page_ = std::move(page); }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+    // "Save changes to <name>?" for the `save` steps, and the window's close
+    // request for `close`; the app sets both.
+    void set_save_prompt(SavePrompt* prompt) { save_prompt_ = prompt; }
+    void set_close(std::function<void()> close) { close_ = std::move(close); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
     void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
@@ -450,6 +463,20 @@ public:
             if (s.verb == "append") out << line << "\n";
             if (!out) return void(error_ = s.verb + ": cannot write " + file);
             next(s.verb + " " + std::filesystem::path(file).filename().string());
+        } else if (s.verb == "save") {
+            if (!save_prompt_) return void(error_ = "save: the app gave no save prompt");
+            if (!save_prompt_->is_open()) return patience("no Save changes question is open");
+            if (s.arg == "until") {
+                next("Save changes to " + save_prompt_->name() + "? is open");
+            } else if (save_prompt_->answer(s.arg)) {
+                next("answered " + s.arg);
+            } else {
+                error_ = "save takes until, save, dont-save or cancel";
+            }
+        } else if (s.verb == "close") {
+            if (!close_) return void(error_ = "close: the app gave no close request");
+            close_();
+            next("asked to close the window");
         } else if (s.verb == "quit") {
             quit_ = true;
             next("quit");
@@ -562,6 +589,8 @@ private:
 #endif
     std::string page_;
     std::function<void(std::vector<std::string>)> drop_;
+    SavePrompt* save_prompt_ = nullptr;
+    std::function<void()> close_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
     static constexpr int kSettle = 3;   // frames after a step of input

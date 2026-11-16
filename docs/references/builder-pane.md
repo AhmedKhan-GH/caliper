@@ -32,6 +32,16 @@ There are three ways to the pane:
 A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears in the landing
 screen's list at once.
 
+The open spec stays open when you go Home, with its unsaved changes. Before one of your own actions replaces it or
+closes the app while it has unsaved changes, the app asks "Save changes to <name>?", where the name is the spec's
+title: F3 New dashboard (or `new <title>` and Enter on the command line), opening another dashboard from the landing
+screen, and closing the window or quitting with ⌘Q. ⏎ Save (Enter) saves it as ⌘S does and then goes on, Don't Save
+goes on without saving, and esc Cancel (Esc) leaves everything as it was. Opening the open spec's own dashboard from
+the landing screen shows it with its unsaved changes and does not ask. A drop never replaces a spec with unsaved
+changes (the files go into it), so it does not ask either. An agent that replaces the open spec is reviewed on an
+approval card instead, and Caliper API's and `app.launch`'s launches do not ask. After a replacement, ⌘Z still
+brings the previous spec back with its unsaved changes.
+
 ## Where things are
 
 Build mode keeps the page bar, the status bar, the jobs tray and the approval cards where they are, and divides the

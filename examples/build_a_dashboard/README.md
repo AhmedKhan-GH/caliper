@@ -253,7 +253,10 @@ Choose **Deny** instead, and the dashboard stays as it was and the agent is told
 Not yet verified by a dry run.
 
 Press ⌘S **Save**. The dashboard is saved as a spec applet of the workspace and appears in the landing screen's list.
-Press **esc Home**, select the dashboard in the list, and press Enter: it opens again with the same panels. To open
+Press **esc Home**, select the dashboard in the list, and press Enter: it opens again with the same panels. Had you
+gone Home without saving, the dashboard would still be open with its changes, and Enter on it would show them; F3
+New dashboard, or opening another dashboard, would first ask **Save changes to &lt;name&gt;?** with **⏎ Save**,
+**Don't Save** and **esc Cancel**, as quitting the app would. To open
 it in a browser, take the second `[api]` line that the app printed when it started, replace `<id>` with the
 dashboard's id, such as `attention-entropy`, and open the address in your browser. The page draws the saved dashboard
 with the layout and look of the app's spec page, and asks the app for each panel's data once a second.

@@ -15,7 +15,9 @@
 // its stream file, the attachment kept across Home and the spec page until
 // ⌘D Detach, a second stream replacing the first, a stream that ends while
 // the landing shows, quitting while attached, and files dropped on the live
-// page.
+// page. The "app save" cases drive "Save changes to <name>?" the same way:
+// F3 New dashboard, opening another dashboard from the landing, and closing
+// the window, each over unsaved changes.
 //
 // CALIPER_TEST_SHOTS=<folder> saves the two captures there as
 // live-entropy-a.png and live-entropy-b.png, and CALIPER_TEST_WINDOW=<W>x<H>
@@ -40,6 +42,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -551,6 +554,190 @@ TEST_CASE("app live: files dropped on the live page start a new spec beside the 
     CHECK_MESSAGE(app.wait(30000) == 0, app.text);
     ::kill(producer.pid, SIGTERM);
     CHECK(producer.wait(10000) == 0);
+}
+
+// ---- "Save changes to <name>?" (src/host/builder/save_prompt.h) ----
+
+namespace {
+
+// The hidden app on an empty workspace with Caliper API, and its API port and
+// the person's token; false when it runs without Metal (skipped).
+struct SaveApp {
+    Proc app;
+    uint16_t port = 0;
+    std::string token;
+    bool start(const Env& env, const TempDir& t, const std::string& script, const std::string& shots) {
+        REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+                          app_env(env, t, script, shots)));
+        if (!has_metal(app)) {
+            ::kill(app.pid, SIGTERM);
+            app.wait(30000);
+            return false;
+        }
+        REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+        const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+        REQUIRE(api.is_object());
+        port = api["port"].get<uint16_t>();
+        token = start_token(app);
+        REQUIRE(token.size() >= 22);
+        return true;
+    }
+    json spec() { return ok(port, token, "spec.get"); }
+    void reach(const TempDir& t, const std::string& file) {
+        REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str(file)); }, 90000), app.text);
+    }
+    size_t count(const std::string& needle) const {
+        size_t n = 0;
+        for (size_t at = app.text.find(needle); at != std::string::npos; at = app.text.find(needle, at + 1)) ++n;
+        return n;
+    }
+};
+
+void go_on(const TempDir& t, const std::string& file) { std::ofstream(t.str(file)).put('\n'); }
+
+// The open spec's text with its title changed, as an edit that leaves it unsaved.
+void retitle(SaveApp& a, const std::string& from, const std::string& to) {
+    std::string text = a.spec()["text"].get<std::string>();
+    const std::string old_line = "title = \"" + from + "\"";
+    const size_t at = text.find(old_line);
+    REQUIRE_MESSAGE(at != std::string::npos, text);
+    text.replace(at, old_line.size(), "title = \"" + to + "\"");
+    ok(a.port, a.token, "spec.set_text", {{"text", text}});
+}
+
+}  // namespace
+
+TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes first; Cancel keeps the spec, Don't "
+          "Save and Save go on") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("save-new");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    const std::string shot = shot_name(env, "save-changes");
+    const std::string home = "key escape;wait 5;key escape;page landing;";
+    auto new_spec = [](const std::string& title) {
+        return "key cmd+k;wait 5;type new " + title + ";wait 5;key enter;";
+    };
+    const std::string script = "page landing;wait 60;" + new_spec("Alpha") + "page spec;touch " + t.str("a1") + ";" + home +
+                               new_spec("Beta") + "wait 30;touch " + t.str("a2") + ";save until;shot " + shot +
+                               ";save cancel;wait 10;touch " + t.str("a3") + ";" + new_spec("Beta") +
+                               "save dont-save;page spec;touch " + t.str("a4") + ";" + home + new_spec("Gamma") +
+                               "save save;page spec;touch " + t.str("a5");
+    SaveApp a;
+    if (!a.start(env, t, script, shots)) return;
+
+    a.reach(t, "a1");
+    CHECK(a.spec()["id"] == "alpha");
+    CHECK(a.spec()["dirty"] == true);
+    // F3 again: the question holds the new spec back.
+    a.reach(t, "a2");
+    CHECK(a.spec()["id"] == "alpha");
+    CHECK(a.app.text.find("[save] Save changes to Alpha? waiting") != std::string::npos);
+    // Cancel: nothing changed.
+    a.reach(t, "a3");
+    CHECK(a.spec()["id"] == "alpha");
+    CHECK(a.spec()["dirty"] == true);
+    // Don't Save: the new spec, and Alpha was never written.
+    a.reach(t, "a4");
+    CHECK(a.spec()["id"] == "beta");
+    CHECK_FALSE(fs::exists(t.str("ws/applets/alpha")));
+    // Save: Beta is saved, then the new spec.
+    a.reach(t, "a5");
+    CHECK(a.spec()["id"] == "gamma");
+    CHECK(fs::exists(t.str("ws/applets/beta/beta.spec.toml")));
+    CHECK(fs::exists(fs::path(shots) / (shot + ".png")));
+    REQUIRE(script_ended(a.app, 30000));
+    CHECK_MESSAGE(a.app.text.find("[ui] done") != std::string::npos, a.app.text);
+    // A hidden app's SIGTERM never asks, with Gamma unsaved.
+    const size_t asked = a.count("[save] Save changes to");
+    ::kill(a.app.pid, SIGTERM);
+    CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
+    CHECK(a.count("[save] Save changes to") == asked);
+}
+
+TEST_CASE("app save: opening another dashboard from the landing over unsaved changes asks first; the open spec's "
+          "own dashboard shows its changes; an agent's launch never asks") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("save-open");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    const std::string home = "key escape;wait 5;key escape;page landing;";
+    const std::string open_two = "key cmd+k;wait 5;type Two;wait 5;key enter;";
+    const std::string script = "wait-file " + t.str("b0") + ";page spec;" + home + open_two + "wait 30;touch " +
+                               t.str("b1") + ";save save;page spec;wait 10;touch " + t.str("b2") + ";wait-file " +
+                               t.str("b2go") + ";" + home + open_two + "page spec;wait 30;touch " + t.str("b3");
+    SaveApp a;
+    if (!a.start(env, t, script, shots)) return;
+    ok(a.port, a.token, "spec.new", {{"id", "one"}, {"title", "One"}});
+    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "spec.new", {{"id", "two"}, {"title", "Two"}});
+    ok(a.port, a.token, "applet.save");
+    CHECK(ok(a.port, a.token, "applet.open", {{"id", "one"}})["title"] == "One");
+    retitle(a, "One", "One edited");
+    CHECK(a.spec()["dirty"] == true);
+    go_on(t, "b0");
+
+    // Two from the landing: the question first, and One stays open meanwhile.
+    a.reach(t, "b1");
+    CHECK(a.spec()["id"] == "one");
+    CHECK(a.app.text.find("[save] Save changes to One edited? waiting") != std::string::npos);
+    // Save: One is written with its change, then Two opens.
+    a.reach(t, "b2");
+    CHECK(a.spec()["id"] == "two");
+    {
+        std::ifstream f(t.str("ws/applets/one/one.spec.toml"));
+        const std::string saved((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        CHECK(saved.find("One edited") != std::string::npos);
+    }
+    // Two edited, then Two again from the landing: its own page, changes and
+    // all, and no question.
+    retitle(a, "Two", "Two edited");
+    const size_t asked = a.count("[save] Save changes to");
+    go_on(t, "b2go");
+    a.reach(t, "b3");
+    CHECK(a.spec()["id"] == "two");
+    CHECK(a.spec()["dirty"] == true);
+    CHECK(a.spec()["text"].get<std::string>().find("Two edited") != std::string::npos);
+    CHECK(a.count("[save] Save changes to") == asked);
+    // An agent's launch (Caliper API here) is not the person's: no question.
+    CHECK(ok(a.port, a.token, "app.launch", {{"id", "local.one"}})["id"] == "local.one");   // the manifest's id
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "one"; }));
+    CHECK(a.count("[save] Save changes to") == asked);
+    REQUIRE(script_ended(a.app, 30000));
+    CHECK_MESSAGE(a.app.text.find("[ui] done") != std::string::npos, a.app.text);
+    ::kill(a.app.pid, SIGTERM);
+    CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
+}
+
+TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel keeps the app running, Don't Save "
+          "quits") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("save-close");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    const std::string script = "wait-file " + t.str("c0") + ";close;wait 30;touch " + t.str("c1") +
+                               ";save cancel;wait 30;touch " + t.str("c2") + ";wait-file " + t.str("c2go") +
+                               ";close;save dont-save";
+    SaveApp a;
+    if (!a.start(env, t, script, shots)) return;
+    ok(a.port, a.token, "spec.new", {{"id", "draft"}, {"title", "Draft"}});
+    go_on(t, "c0");
+    a.reach(t, "c1");
+    CHECK(::kill(a.app.pid, 0) == 0);   // still running: the question holds the close back
+    CHECK(a.app.text.find("[save] Save changes to Draft? waiting") != std::string::npos);
+    a.reach(t, "c2");
+    CHECK(::kill(a.app.pid, 0) == 0);   // Cancel: it runs on
+    CHECK(a.spec()["id"] == "draft");
+    go_on(t, "c2go");
+    CHECK_MESSAGE(a.app.wait(60000) == 0, a.app.text);   // Don't Save: it quits
+    CHECK(a.app.text.find("[save] Don't Save") != std::string::npos);
+    CHECK_FALSE(fs::exists(t.str("ws/applets/draft")));
 }
 
 TEST_CASE("app live: attention entropy per layer, from a live stream, on the spec page while it trains") {
