@@ -848,9 +848,29 @@ private:
             const int listed = loader_.rescan_workspace();
             if (listed >= 0) {
                 if (!selected.empty()) landing_.select(loader_.find(selected));
-                if (page_ == AppPage::Spec && !shown.empty()) mark_spec_entry(loader_.find(shown));
+                // The spec the page shows is ACTIVE and the landing's
+                // selection, so that Home returns to its row: also once it
+                // is saved for the first time, which lists it only now.
+                if (page_ == AppPage::Spec) {
+                    const int now = workspace_spec_entry(spec_page_.applet_id());
+                    if (now >= 0) mark_spec_entry(now);
+                    else if (!shown.empty()) mark_spec_entry(loader_.find(shown));
+                }
             }
         }
+    }
+
+    // The entry of the workspace's spec applet `id` (its folder's name), or -1.
+    int workspace_spec_entry(const std::string& id) const {
+        if (id.empty()) return -1;
+        for (int i = 0; i < loader_.count(); i++) {
+            const caliper_host::AppletEntry& e = loader_.at(i);
+            if (e.manifest.kind == caliper_host::AppletKind::Spec &&
+                (e.status == caliper_host::AppletStatus::Ready || e.status == caliper_host::AppletStatus::Active) &&
+                workspace_applet_id(e) == id)
+                return i;
+        }
+        return -1;
     }
 
     // F3 New dashboard on the landing, or a drop with no open spec: spec.new
@@ -1129,6 +1149,14 @@ private:
         spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
         spec_ui_->set_command_line(landing_.command_text());
+        {
+            const int sel = landing_.selected_index();
+            std::vector<std::string> projects;
+            for (const int i : landing_.project_rows())
+                if (i >= 0 && i < loader_.count()) projects.push_back(loader_.at(i).manifest.id);
+            spec_ui_->set_landing(sel >= 0 && sel < loader_.count() ? loader_.at(sel).manifest.id : std::string(),
+                                  std::move(projects));
+        }
 #if CALIPER_WITH_BUILDER
         spec_ui_->set_agent_settings(&agent_settings_);
 #endif

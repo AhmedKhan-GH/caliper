@@ -221,4 +221,54 @@ TEST_CASE("builder app: New dashboard leaves the landing's command line empty" *
     CHECK(titles == std::vector<std::string>{"Run 42", "Run 43"});
 }
 
+// Home from a dashboard just made and saved: the landing selects that
+// dashboard, not the first instrument, and Projects lists it, the
+// workspace's own dashboard, while Instruments keeps the installed applets.
+TEST_CASE("builder app: Home from a new dashboard selects it and lists it under Projects" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    const std::string root = fresh_dir("builder-app-home");
+    const std::string data = root + "/files", shots = root + "/shots";
+    for (const auto& d : {shots, root + "/data", root + "/apps"}) std::filesystem::create_directories(d);
+    write_parquet(data + "/run42_metrics.parquet",
+                  "SELECT range AS step, 0.1 + 2.0 * exp(-range / 50.0) AS loss FROM range(100)");
+    const std::string script =
+        "wait 60; page landing; landing projects none; "
+        "key cmd+k; type Training run; key f3; page spec; "
+        "drop " + data + "/run42_metrics.parquet; pane source table:run42_metrics; "
+        "click source:table:run42_metrics 0.6 0.5; click primitive:series; pane focus series; "
+        "key cmd+s; wait 20; key escape; wait 5; key escape; page landing; wait 20; "
+        "landing selected local.training-run; landing projects local.training-run; "
+        "leave; wait 5; shot home; quit";
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+    o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1440x900"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", script},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", shots},
+             {"CALIPER_EXIT_AFTER", "150"}};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 200000;
+    lim.max_output_bytes = 16u << 20;
+    const auto run = caliper_builder::acp::run_process(o, lim);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] the landing's selection is local.training-run") != std::string::npos);
+    CHECK(run.err.find("[ui] Projects lists local.training-run") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/home.png"));
+}
+
 #endif

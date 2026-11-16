@@ -198,6 +198,12 @@ ImU32 status_colour(AppletStatus s) {
 
 bool launchable(const AppletEntry& e) { return e.status == AppletStatus::Ready; }
 
+// One of the person's dashboards: a spec applet of the open workspace, listed
+// under Projects; every other applet is an installed instrument.
+bool dashboard(const AppletLoader& loader, int i) {
+    return loader.at(i).manifest.kind == caliper_host::AppletKind::Spec && loader.in_workspace(i);
+}
+
 bool any_popup_open() {
     return ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
                                            ImGuiPopupFlags_AnyPopupLevel);
@@ -753,6 +759,15 @@ void LandingScreen::rebuild_rows(const AppletLoader& loader) {
         if (int c = natural_compare(a.manifest.tag, b.manifest.tag)) return c < 0;
         return natural_compare(a.manifest.name, b.manifest.name) < 0;
     });
+
+    // The person's dashboards first, as Projects lists them above the
+    // instruments, so that ↑↓ and the command line's top match walk one list
+    // through both panes.
+    const auto first_instrument = std::stable_partition(
+        rows_.begin(), rows_.end(), [&](int i) { return dashboard(loader, i); });
+    project_rows_.assign(rows_.begin(), first_instrument);
+    dashboards_ = 0;
+    for (int i = 0; i < loader.count(); ++i) dashboards_ += dashboard(loader, i);
 }
 
 // ============================================================================
@@ -794,8 +809,9 @@ void LandingScreen::draw_dock_space() {
     // First-run layout, attempted once per process, with the same guard as
     // the applet page in main.cpp:
     //  - fresh dockspace (no imgui.ini history): build the four-pane tiling,
-    //    left 0.62 (Projects 0.22 over Instruments: Projects is empty until
-    //    the project model lands), right 0.38 (Inspector over Activity).
+    //    left 0.62 (Projects 0.32 over Instruments: Projects holds the
+    //    workspace's dashboards over the ways in), right 0.38 (Inspector over
+    //    Activity).
     //  - restored dockspace: dock ONLY panes that have no saved settings yet
     //    (a pane added after the ini was written); the user's splits win.
     if (!layout_built_) {
@@ -812,7 +828,7 @@ void LandingScreen::draw_dock_space() {
             ImGuiID left = 0, right = 0;
             ImGui::DockBuilderSplitNode(dock_id, ImGuiDir_Left, 0.62f, &left, &right);
             ImGuiID projects = 0, instruments = 0;
-            ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.22f, &projects,
+            ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.32f, &projects,
                                         &instruments);
             ImGuiID inspector = 0, activity = 0;
             ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.55f, &inspector,
@@ -847,15 +863,19 @@ void LandingScreen::draw_dock_space() {
 // Panes
 // ============================================================================
 
-// Projects: with no projects, the empty table becomes the numbered menu of
-// ways in (Bloomberg numbered menus, VS Code Welcome; landing/final): number,
-// the way in as a key button holding its function key, and the command-line
-// words, so the eventual paths are learnable now (progressive disclosure,
-// Hick: two choices). F4 Attach to process works: it turns the pane into the
-// list of live sessions (draw_sessions). F2 Open folder waits for the project
-// model, so its button is disabled, faint, and says why on hover (honesty:
-// never a silent dead control); the command-line words stay faint, since the
-// command line does not take them yet.
+// Projects: the person's own work over the ways to start more. The open
+// workspace's dashboards (its spec applets, which F3 New dashboard makes and
+// ⌘S saves) are a dense table like Instruments, one selection with it: ↑↓
+// walk both as one list, Enter or a double click opens. Under them, or alone
+// while there are none, the numbered menu of ways in (Bloomberg numbered
+// menus, VS Code Welcome; landing/final): number, the way in as a key button
+// holding its function key, and the command-line words, so the eventual
+// paths are learnable now (progressive disclosure, Hick: two choices). F4
+// Attach to process works: it turns the pane into the list of live sessions
+// (draw_sessions). F2 Open folder waits for the project model, so its button
+// is disabled, faint, and says why on hover (honesty: never a silent dead
+// control); the command-line words stay faint, since the command line does
+// not take them yet.
 void LandingScreen::draw_projects(const Context& ctx) {
     if (attach_mode_ && ctx.sessions) {
         draw_sessions(ctx);
@@ -870,11 +890,30 @@ void LandingScreen::draw_projects(const Context& ctx) {
         ctx.sessions->refresh();
         for (const auto& e : ctx.sessions->sessions()) live += caliper_live::can_attach(e);
     }
-    char subtitle[64];
-    std::snprintf(subtitle, sizeof subtitle,
-                  live == 1 ? "none yet \xc2\xb7 %d live session"
-                            : "none yet \xc2\xb7 %d live sessions", live);
-    pane_header(kProjects, live > 0 ? subtitle : "none yet", kKeyPane[0]);
+    {
+        std::string subtitle = dashboards_ == 0   ? std::string("none yet")
+                               : dashboards_ == 1 ? std::string("1 dashboard")
+                                                  : std::to_string(dashboards_) + " dashboards";
+        if (live > 0)
+            subtitle += " \xc2\xb7 " + std::to_string(live) + (live == 1 ? " live session" : " live sessions");
+        pane_header(kProjects, subtitle.c_str(), kKeyPane[0]);
+    }
+
+    // Keyboard: while Projects has focus, the arrows and Enter move and open
+    // as in Instruments, over the one list of both (the step is applied
+    // there, by draw_instruments()).
+    if (dashboards_ > 0 && ctx.loader && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !command_active_ && !any_popup_open()) {
+        const ImGuiID owner = ImGui::GetID("##project_keys");
+        ImGui::SetKeyOwner(ImGuiKey_UpArrow, owner);
+        ImGui::SetKeyOwner(ImGuiKey_DownArrow, owner);
+        ImGui::SetKeyOwner(ImGuiKey_Enter, owner);
+        ImGui::SetKeyOwner(ImGuiKey_KeypadEnter, owner);
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) select_step_ += 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) select_step_ -= 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
+            enter_requested_ = true;
+    }
 
     struct WayIn {
         const char* n;
@@ -896,9 +935,19 @@ void LandingScreen::draw_projects(const Context& ctx) {
     // that line; the number before it is dropped by the same inset by hand.
     const float way_row = metric::key_button + 2.0f * ImGui::GetStyle().CellPadding.y;
     const float text_dy = std::floor((metric::key_button - font_size::ui) * 0.5f);
-    const float height = std::max(
-        1.0f, std::min(metric::row + way_row * 3.0f + 2.0f,
-                       ImGui::GetContentRegionAvail().y));
+    const float ways_h = metric::row + way_row * 3.0f + 2.0f;
+
+    // The dashboards, over the ways in, in what the ways leave (at least a
+    // row; the table scrolls inside).
+    if (dashboards_ > 0 && ctx.loader) {
+        const float gap = std::round(metric::row * 0.5f);
+        const float need = metric::row * (1.0f + (float)std::max<size_t>(1, project_rows_.size())) + 2.0f;
+        const float room = ImGui::GetContentRegionAvail().y - ways_h - gap;
+        const float h = std::max(kEmptyTableSize.y, std::min(need, room));
+        draw_dashboards(ctx, h);
+        ImGui::Dummy(ImVec2(1.0f, gap));
+    }
+    const float height = std::max(1.0f, std::min(ways_h, ImGui::GetContentRegionAvail().y));
     if (sternbild::begin_table("##projects", 3, ImVec2(0.0f, height),
                                ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -930,6 +979,50 @@ void LandingScreen::draw_projects(const Context& ctx) {
         }
         sternbild::end_table();
     }
+}
+
+// The workspace's dashboards under Projects: name, id and status, as the
+// Instruments rows show them, with the same selection, hover and bronze.
+void LandingScreen::draw_dashboards(const Context& ctx, float height) {
+    const AppletLoader& loader = *ctx.loader;
+    ImFont* ui = sternbild::fonts().ui;
+    ImFont* mono = sternbild::fonts().mono;
+    if (!sternbild::begin_table("##dashboards", 3, ImVec2(0.0f, height),
+                                ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings))
+        return;
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Dashboard", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoHide, 150.0f);
+    ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed);
+    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    sternbild::table_header_row();
+    for (const int idx : project_rows_) {
+        const AppletEntry& e = loader.at(idx);
+        const bool selected = idx == selected_;
+        ImGui::PushID(idx);
+        ImGui::TableNextRow(ImGuiTableRowFlags_None, metric::row);
+        ImGui::TableNextColumn();
+        const float cell_x = ImGui::GetCursorPosX();
+        bool double_clicked = false;
+        if (sternbild::table_row_selectable("##dash", selected, &double_clicked)) selected_ = idx;
+        if (double_clicked && launchable(e)) pending_launch_ = idx;
+        if (selected && scroll_to_selected_) {
+            const ImVec2 clip_min = ImGui::GetWindowDrawList()->GetClipRectMin();
+            const ImVec2 clip_max = ImGui::GetWindowDrawList()->GetClipRectMax();
+            if (ImGui::GetItemRectMin().y < clip_min.y || ImGui::GetItemRectMax().y > clip_max.y)
+                ImGui::SetScrollHereY(0.5f);
+            scroll_to_selected_ = false;
+        }
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(cell_x);
+        cell_text(e.manifest.name.c_str(), ui, font_size::ui, sternbild::row_text(selected, col::parchment));
+        ImGui::TableNextColumn();
+        cell_text(e.manifest.id.c_str(), mono, font_size::mono, sternbild::row_text(selected, col::secondary));
+        ImGui::TableNextColumn();
+        cell_text(status_word(e.status), ui, font_size::ui, sternbild::row_text(selected, status_colour(e.status)));
+        ImGui::PopID();
+    }
+    if (project_rows_.empty()) empty_row(("No dashboards match \"" + command_ + "\".").c_str());
+    sternbild::end_table();
 }
 
 // Projects in attach mode (F4): the live sessions of training scripts on this
@@ -1140,23 +1233,21 @@ void LandingScreen::draw_sessions(const Context& ctx) {
 // and Enter or a double click to launch.
 void LandingScreen::draw_instruments(const Context& ctx) {
     const AppletLoader* loader = ctx.loader;
+    // The installed applets: every entry but the workspace's dashboards,
+    // which Projects lists.
+    const int installed = (loader ? loader->count() : 0) - dashboards_;
     {
-        const int n = loader ? loader->count() : 0;
         int unavailable = 0;
-        for (int i = 0; i < n; ++i) unavailable += !launchable(loader->at(i)) &&
-                                    loader->at(i).status != AppletStatus::Active;
+        for (int i = 0; loader && i < loader->count(); ++i)
+            unavailable += !dashboard(*loader, i) && !launchable(loader->at(i)) &&
+                           loader->at(i).status != AppletStatus::Active;
         char subtitle[64];
         if (unavailable > 0)
             std::snprintf(subtitle, sizeof subtitle,
-                          "%d installed \xc2\xb7 %d unavailable", n, unavailable);
+                          "%d installed \xc2\xb7 %d unavailable", installed, unavailable);
         else
-            std::snprintf(subtitle, sizeof subtitle, "%d installed", n);
+            std::snprintf(subtitle, sizeof subtitle, "%d installed", installed);
         pane_header(kInstruments, subtitle, kKeyPane[1]);
-    }
-    if (!loader || loader->count() == 0) {
-        faint_line("No instruments found. Drop a dylib + <name>.caliper.toml "
-                   "into the applets folder.");
-        return;
     }
     ImFont* ui = sternbild::fonts().ui;
     ImFont* mono = sternbild::fonts().mono;
@@ -1193,10 +1284,17 @@ void LandingScreen::draw_instruments(const Context& ctx) {
         selected_ = rows_[(size_t)pos];
         scroll_to_selected_ = true;
     }
+    if (!loader || installed <= 0) {
+        faint_line("No instruments found. Drop a dylib + <name>.caliper.toml "
+                   "into the applets folder.");
+        return;
+    }
+    // The instruments are the rows after the dashboards (rebuild_rows()).
+    const std::vector<int> shown(rows_.begin() + (std::ptrdiff_t)project_rows_.size(), rows_.end());
 
     // An empty result keeps the header (the columns stay legible) and says
     // so in the body, instead of a blank pane.
-    const ImVec2 size = rows_.empty() ? kEmptyTableSize : ImVec2(0.0f, 0.0f);
+    const ImVec2 size = shown.empty() ? kEmptyTableSize : ImVec2(0.0f, 0.0f);
     // Columns sit tight on their content, terminal style; the last column
     // takes the slack so the eye never crosses a gap to reach the next value.
     // ID auto-fits; VERSION leaves room for the sort chevron. No saved
@@ -1241,7 +1339,7 @@ void LandingScreen::draw_instruments(const Context& ctx) {
         }
         sternbild::table_header_row();
 
-        for (const int idx : rows_) {
+        for (const int idx : shown) {
             const AppletEntry& e = loader->at(idx);
             const bool selected = idx == selected_;
             ImGui::PushID(idx);
@@ -1286,11 +1384,13 @@ void LandingScreen::draw_instruments(const Context& ctx) {
                       sternbild::row_text(selected, status_colour(e.status)));
             ImGui::PopID();
         }
-        if (rows_.empty())
+        if (shown.empty())
             empty_row(("No instruments match \"" + command_ + "\".").c_str());
         sternbild::end_table();
     }
-    scroll_to_selected_ = false;
+    // A dashboard's row scrolls into view in Projects on the next frame.
+    if (std::find(project_rows_.begin(), project_rows_.end(), selected_) == project_rows_.end())
+        scroll_to_selected_ = false;
 }
 
 // Inspector: details on demand (Shneiderman) for the selected row, as a
@@ -1592,7 +1692,8 @@ void LandingScreen::draw_status_bar(const Context& ctx) {
         int n = 0;
         for (int i = 0; i < ctx.loader->count(); ++i) {
             const AppletStatus s = ctx.loader->at(i).status;
-            if (s == AppletStatus::Shadowed) continue;
+            // The workspace's dashboards are the person's, under Projects.
+            if (s == AppletStatus::Shadowed || dashboard(*ctx.loader, i)) continue;
             n++;
             unavailable += (s != AppletStatus::Ready && s != AppletStatus::Active);
         }

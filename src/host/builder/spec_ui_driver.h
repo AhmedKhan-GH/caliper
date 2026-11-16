@@ -66,6 +66,12 @@
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
+//   landing selected <applet id>
+//                        wait until the landing's selected row is the applet
+//                        with that manifest id
+//   landing projects <applet id>,...|none
+//                        wait until Projects lists exactly those dashboards
+//                        (manifest ids, in their order), or none
 //   widget <label>       presses the inline surface's action of that label
 //                        ("Setup", "Ask in chat", ...) once the surface offers it,
 //                        through the surface's own act(), as its button does
@@ -167,6 +173,12 @@ public:
     void set_page(std::string page) { page_ = std::move(page); }
     // The landing's command line, for the `command-line` step; the app sets it.
     void set_command_line(std::string text) { command_line_ = std::move(text); }
+    // The landing's selected row (its manifest id, "" for none) and the
+    // dashboards Projects lists, for the `landing` steps; the app sets them.
+    void set_landing(std::string selected, std::vector<std::string> projects) {
+        landing_selected_ = std::move(selected);
+        landing_projects_ = std::move(projects);
+    }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
@@ -365,6 +377,24 @@ public:
             if (command_line_ != want)
                 return patience("the command line holds " + (command_line_.empty() ? std::string("nothing") : "\"" + command_line_ + "\""));
             next("the command line holds " + (want.empty() ? std::string("nothing") : "\"" + want + "\""));
+            return;
+        }
+        if (s.verb == "landing") {
+            std::stringstream words(s.arg);
+            std::string what, want;
+            words >> what >> want;
+            auto shown = [](const std::string& t) { return t.empty() ? std::string("none") : t; };
+            if (what == "selected") {
+                if (landing_selected_ != want) return patience("the landing's selection is " + shown(landing_selected_));
+                next("the landing's selection is " + want);
+            } else if (what == "projects") {
+                std::string listed;
+                for (const auto& id : landing_projects_) listed += (listed.empty() ? "" : ",") + id;
+                if (shown(listed) != want) return patience("Projects lists " + shown(listed));
+                next("Projects lists " + want);
+            } else {
+                error_ = "landing takes selected <applet id> or projects <applet id>,...|none";
+            }
             return;
         }
         if (s.verb == "pane") {
@@ -584,7 +614,8 @@ private:
 #if CALIPER_WITH_BUILDER
     AgentSettings* settings_ = nullptr;
 #endif
-    std::string page_, command_line_;
+    std::string page_, command_line_, landing_selected_;
+    std::vector<std::string> landing_projects_;
     std::function<void(std::vector<std::string>)> drop_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
