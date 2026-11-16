@@ -129,6 +129,16 @@ struct ChatPane::Impl {
         if (hooks.log) hooks.log(event, object, detail);
     }
 
+    // Whether the newest undo step holds the command journaled under `seq`;
+    // never while a long command holds the registry.
+    bool top_step_holds(std::uint64_t seq) const {
+        if (!session || busy) return false;
+        const auto state = session->registry().history_state(1);
+        if (state.undo.empty()) return false;
+        const auto& seqs = state.undo.front().seqs;
+        return std::find(seqs.begin(), seqs.end(), seq) != seqs.end();
+    }
+
     void save() {
         std::string why;
         if (!write_chat_settings(options.settings_path, settings, &why) && hooks.log)
@@ -180,19 +190,16 @@ struct ChatPane::Impl {
             const caliper_builder::Error e = session->set_agent_mode(caliper_builder::AgentPrincipal::chat, *mode);
             log(e ? "mode not set" : "side chat mode", caliper_builder::agent_mode_label(*mode), e ? e.code : "");
         };
-        h.can_undo = [this](std::uint64_t seq) {
-            if (!session || busy) return false;
-            const auto state = session->registry().history_state(1);
-            if (state.undo.empty()) return false;
-            const auto& seqs = state.undo.front().seqs;
-            return std::find(seqs.begin(), seqs.end(), seq) != seqs.end();
-        };
-        h.undo = [this](std::uint64_t) {
-            if (!session) return;
+        h.can_undo = [this](std::uint64_t seq) { return top_step_holds(seq); };
+        // Run at once on the frame thread, right after the check, so that no
+        // command queued meanwhile becomes the step it takes back.
+        h.undo = [this](std::uint64_t seq) {
+            if (!top_step_holds(seq)) return;
             caliper_builder::CommandInvocation inv;
             inv.name = "history.undo";
             inv.origin = caliper_builder::CommandOrigin::ui;   // the person's own Undo
-            session->queue().submit(std::move(inv));
+            const caliper_builder::CommandResult r = session->invoke(std::move(inv));
+            if (!r.ok) log("undo failed", "history.undo", r.error.code);
         };
         h.before_start = [this](ChatEnvironment* env) -> caliper_builder::Error {
             if (!hooks.start_api) return {"chat.no_api", "Caliper API is not running."};

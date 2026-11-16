@@ -382,7 +382,8 @@ public:
         // its own menu item only; "" ends Allow all, back to the saved mode.
         std::function<void(const std::string& mode)> set_permission_mode;
         // Whether the command journaled under `seq` is the newest step of the
-        // history, and undoing it as the person (history.undo from ui).
+        // history, and undoing it as the person (history.undo from ui), only
+        // while it still is.
         std::function<bool(std::uint64_t seq)> can_undo;
         std::function<void(std::uint64_t seq)> undo;
     };
