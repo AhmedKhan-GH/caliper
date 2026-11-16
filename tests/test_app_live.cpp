@@ -496,6 +496,100 @@ TEST_CASE("app live: a second stream replaces the first; a stream that ends whil
     CHECK(first.wait(10000) == 0);
 }
 
+TEST_CASE("app live: a second attach that fails leaves the attached stream attached") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("restore");
+    fs::create_directories(t.str("data/streams"));
+    fs::permissions(t.str("data/streams"), fs::perms::owner_all, fs::perm_options::replace);
+    fs::create_directories(t.str("user-applets"));
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string script = "page live;key escape;page landing;wait-file " + t.str("r0") +
+                               ";key f4;wait 10;key enter;wait 30;touch " + t.str("r1");
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      app_env(env, t, script, t.str(""))));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const uint16_t port = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }));
+    // A stale row: a stream file of a running process (this test) whose port
+    // nobody listens on any more.
+    uint16_t dead_port = 0;
+    {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+        socklen_t len = sizeof addr;
+        ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+        dead_port = ntohs(addr.sin_port);
+        ::close(fd);
+    }
+    char host[256] = {0};
+    ::gethostname(host, sizeof host - 1);
+    const long now_ms = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    const std::string stale = t.str("data/streams/" + std::to_string(::getpid()) + ".json");
+    {
+        std::ofstream f(stale);
+        f << json{{"version", 1}, {"pid", ::getpid()}, {"host", host}, {"session", "stale-1"}, {"script", "stale.py"},
+                  {"start_unix_ms", now_ms}, {"port", dead_port},
+                  {"stream_url", "ws://127.0.0.1:" + std::to_string(dead_port) + "/v3/stream?token=abcdefghijklmnopqrstuvwxyz0123"},
+                  {"control", false}, {"views", json::array()}}
+                 .dump();
+    }
+    fs::permissions(stale, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+    std::ofstream(t.str("r0")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("r1")); }, 60000), app.text);
+    CHECK(app_says(app, "attach failed", 10000));
+    // The first stream is still attached, and its sources still arrive.
+    CHECK(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }));
+    fs::remove(stale);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+}
+
+TEST_CASE("app live: CALIPER_HOME_AFTER goes Home once, and the live page opened again with F5 stays") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("home-after");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    // The hook goes Home a second after the live page opened; F5 comes back,
+    // and the page stays for the 120 frames after.
+    std::vector<std::string> e = app_env(env, t, "page live;page landing;key f5;page live;wait 120;page live;touch " +
+                                                     t.str("stayed"), t.str(""));
+    e.push_back("CALIPER_HOME_AFTER=1");
+    Proc app;
+    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--url", link, "--workspace", t.str("ws")}, e));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("stayed")); }, 90000), app.text);
+    CHECK(app.text.find("[ui] stopped") == std::string::npos);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+}
+
 TEST_CASE("app live: files dropped on the live page start a new spec beside the live sources, or go into an open "
           "spec with unsaved changes") {
     const Env env = test_env();
