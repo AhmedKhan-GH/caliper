@@ -15,7 +15,9 @@
 // graphics layer and submits it to an offscreen colour target with depth, which the view's window
 // shows as an ImGui image; nothing is compiled or submitted while nothing changes. The camera is
 // the scene core's orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when
-// the scene first has bounds and again when the person asks.
+// the scene first has bounds and again when the person asks. A colormapped batch takes its
+// colormap block from the view's own cache of key blocks (src/host/gfx/colormap_keys.h), derived
+// from the CPU reference once per colormap and range.
 //
 // Every method runs on the frame thread. The view never waits for the GPU except in
 // read_pixels(), which tests call.
@@ -34,10 +36,9 @@
 #include <vector>
 
 namespace caliper_scene { class BackendResources; }
+namespace caliper_gfx { namespace cmap { class KeyBlockCache; } }
 
 namespace caliper_live_views {
-
-class SceneColormapKeys;
 
 // What the last drawn frame of a scene view cost.
 struct SceneCost {
@@ -150,7 +151,7 @@ private:
 
     caliper_gfx::Backend& gfx_;
     const caliper_gfx::ProgramDesc* programs_;
-    std::unique_ptr<SceneColormapKeys> keys_;
+    std::shared_ptr<caliper_gfx::cmap::KeyBlockCache> colormaps_;   // the view's key blocks
     std::unique_ptr<caliper_scene::BackendResources> res_;
     caliper_scene::SceneTree tree_;
     caliper_scene::SceneCompiler compiler_;

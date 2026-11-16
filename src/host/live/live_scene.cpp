@@ -1,7 +1,7 @@
 // live_scene.cpp: the scene view of the shared view layer (live_scene.h).
 #include "live/live_scene.h"
 
-#include "live/scene_colormap_keys.h"
+#include "gfx/colormap_keys.h"
 #include "scene/backend_resources.h"
 
 #include <algorithm>
@@ -74,7 +74,7 @@ std::string count_text(uint64_t n) {
 }  // namespace
 
 SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDesc* programs)
-    : gfx_(backend), programs_(programs), keys_(std::make_unique<SceneColormapKeys>()) {}
+    : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()) {}
 
 SceneView::~SceneView() {
     for (auto& kv : slots_) release(kv.second);
@@ -85,11 +85,7 @@ SceneView::~SceneView() {
 }
 
 bool SceneView::init(std::string* why) {
-    SceneColormapKeys* keys = keys_.get();
-    res_ = std::make_unique<BackendResources>(gfx_, programs_,
-                                              [keys](uint32_t cmap, float vmin, float vmax, caliper_gfx::shaders::Cmap* out) {
-                                                  keys->block(cmap, vmin, vmax, out);
-                                              });
+    res_ = std::make_unique<BackendResources>(gfx_, programs_, caliper_gfx::cmap::colormap_source(colormaps_));
     return res_->init(why);
 }
 
