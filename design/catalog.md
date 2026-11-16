@@ -12,11 +12,17 @@ Built on this branch, in the library `caliper_builder_catalog` (`src/builder/cat
 - `InMemoryCatalogProvider`, a provider for tests that holds entries, table rows and tensor bytes;
 - `sample_tensor()`, which computes the statistics and the slice of a tensor from its dtype, shape and little-endian bytes, for any provider to use.
 
-Planned:
+Built in the session library: the provider for loader outputs, `LoaderCatalogProvider`, and the handlers of `catalog.list`, `catalog.describe` and `catalog.sample`, each of which calls the matching function of `Catalog` ([Builder session](builder-session.md)).
 
-- The provider for loader outputs (tables and tensors) belongs to the loaders library.
-- The providers for live views, feed channels and metrics come when the libraries are wired into the app, because they read the app's live session and services.
-- The handlers of `catalog.list`, `catalog.describe` and `catalog.sample` are bound by a later stream; each calls the matching function of `Catalog`.
+Built in the host, in the library `caliper_catalog_providers` (`src/host/catalog_providers/`, only with `CALIPER_WITH_BUILDER`), each provider also the data source of its kind for the session's resolve:
+
+- `LiveCatalog`, the views of the attached live session or stream, read from the live core's typed views once per frame after the live poll;
+- `FeedCatalog`, the channels of the `FeedStore` behind `caliper.feed.v1`;
+- `MetricsCatalog`, the runs and scalar tags of the `MetricsStore` behind `caliper.metrics.v1`;
+- `register_catalog_providers()`, the one call that adds the three providers to a session's catalog and registers their data sources;
+- tests against a real metrics store in a temporary folder, a real feed store, the live catalog's frame-thread step fed by a stand-in for the live core, an offscreen embed core fed through `caliper_core_live_apply`, and a session that resolves a live source with the entropy transforms.
+
+Planned: the app calls `register_catalog_providers()` when it opens its session and the live catalog's `update()` once per frame; the session builder connects both in `src/main.cpp`.
 
 ## The entry
 
@@ -70,7 +76,7 @@ A source id is `<kind>:<name>`, split at the first colon. The kind must be one o
 |---|---|---|---|---|---|
 | `table` | Tabular | Required; `rows` may be `null` | `null` | `null`: a table changes when a loader runs, not at a rate | The stored size of a table-mode output, else `null` |
 | `tensor` | Tensor | `null` | Required | The sampling rate along axis 0 for a signal such as audio (the `wav` reader sets it), else `null` | Element count times the dtype's size |
-| `live` | Tensor | `null` | Both `null` until the first snapshot, then both set | Snapshots per second measured over the last 5 s; `null` until two snapshots have arrived | The size of the newest snapshot |
+| `live` | Tensor | `null` | Both `null` until the first snapshot, then both set | New snapshots per second that reached the app over the last 5 s; `null` until two have arrived in that window | The size of the newest snapshot |
 | `feed` | Tabular | Required: `seq BIGINT`, `t_ns BIGINT`, `value FLOAT`; `rows` is the number of samples buffered | `null` | The channel's nominal rate from `caliper.feed.v1` | `null` |
 | `metric` | Tabular | Required: `step BIGINT`, `value DOUBLE`; `rows` is the number of points | `null` | `null`: points arrive per training step | `null` |
 
@@ -82,11 +88,22 @@ Each origin fills the fields as follows. The keys of `origin` are a closed set, 
 |---|---|---|---|---|---|
 | A loader's output | `table`, `tensor` | The output's `name`; with `tensor = "*"`, the prefix and the tensor's name in the file | `loader`, `file` (relative to the workspace, or the dropped file), `output`, and `tensor` for a tensor | The output's name | The end of the run that made it |
 | A table of the database that no loader made | `table` | The table's name; `<schema>.<table>` outside the schema `main` | `database` (`workspace`), `schema`, `table` | The table's name | `null` |
-| A live view of the attached live session | `live` | The view's name as Caliper LIB published it | `session`, `view`, `view_type` (`heatmap`, `points`, `histogram` or `series`) | The view's name | The newest snapshot |
-| A channel of `caliper.feed.v1` | `feed` | The channel's id, such as `sys.cpu.util` | `service` (`feed`), `channel`, `units` | The channel's display name | The newest sample |
-| A run and tag of `caliper.metrics.v1` | `metric` | `<run id>/<tag>`, such as `7/train/loss` | `service` (`metrics`), `experiment`, `run`, `run_name`, `tag` | `<run name> <tag>` | The newest point |
+| A live view of the attached live session | `live` | The view's name as Caliper LIB published it | `session`, `view`, `view_type` (`heatmap`, `image`, `points`, `histogram` or `series`) | The view's name | When the newest snapshot reached the app |
+| A channel of `caliper.feed.v1` | `feed` | The channel's id, such as `sys.cpu.util` | `service` (`feed`), `channel`, `units` | The channel's display name, or its id when the name is empty | The newest sample: its stamp on the host's steady clock, turned into wall-clock time |
+| A run and tag of `caliper.metrics.v1` | `metric` | `<run id>/<tag>`, such as `7/train/loss` | `service` (`metrics`), `experiment`, `run`, `run_name`, `tag` | `<run name> <tag>`, or the tag for a run without a name | `null`: the store records no time |
 
-Only one live session is attached at a time, so a live view's name needs no session prefix. A metric's name uses the run's id rather than its name, because two runs may share a name; the title carries the name.
+Only one live session is attached at a time, so a live view's name needs no session prefix. A metric's name uses the run's id rather than its name, because two runs may share a name; the title carries the name. An origin value that is empty is left out, and a channel, run or tag whose id would break the name rules (a control character, more than 256 bytes, a space at either end) is not listed, since no spec could bind it.
+
+A live view's tensor is the payload of its newest snapshot:
+
+| View | dtype and shape |
+|---|---|
+| Heatmap | `f32` `[H, W]` |
+| Tiled heatmap | `f32` `[cells, rows, cols]`: the mosaic is cut back into its cells (wire protocol v3, "Payload axes"), so axis 0 is the tile dim, such as a layer, and the NaN fill is dropped |
+| Image | `u8` `[H, W, 4]` |
+| Points | `f32` `[N, 3]`, the positions; the aux values are not given |
+| Series | `f32` `[M]`, the values the view holds, oldest first |
+| Histogram | `f32` `[B]`, the bin counts |
 
 ## The commands
 
@@ -157,7 +174,17 @@ Each provider has a name (`[a-z][a-z0-9_-]{0,31}`, unique in its catalog) and a 
 
 ### Refreshing
 
-`Catalog` keeps no cache. Every `list`, `describe` and `sample` asks the providers, so the catalog is always as fresh as they are. Each provider keeps its own state current: the loader provider updates its entries when a loader runs, the live provider when a session attaches or detaches and when a view first publishes, and the feed and metric providers read their services when they are asked. `Catalog::revision()` is the sum of the providers' revisions plus the number of times a provider was added or removed. Since every term only grows, a pane that shows the catalog can poll it once a frame and list again only when it changes.
+`Catalog` keeps no cache. Every `list`, `describe` and `sample` asks the providers, so the catalog is always as fresh as they are. Each provider keeps its own state current: the loader provider updates its entries when a loader runs; the live provider when the app calls its `update()` on the frame thread after the live poll, which sees views appear and go, new snapshots, an attach and a detach; the feed provider reads the feed store when it is asked; and the metric provider keeps a summary of the metrics store's series that its own thread refreshes when the store's change counter moves, at most every 250 ms.
+
+### What each call costs
+
+| Provider | `list`, `describe`, `revision` | `sample` | Where it may run |
+|---|---|---|---|
+| Live | The views under a short mutex | `sample_tensor()` over the newest copy of the snapshot | Any thread, the frame thread included |
+| Feed | The channel registry and each channel's ring under its own mutex, which a push holds for one 24-byte store | A copy of at most 1000 samples | Any thread |
+| Metric | The summary under a short mutex, never the store | One prepared query of at most 1001 points, under the store's mutex | `list` and `describe` anywhere; `sample` waits for whatever holds the store's mutex, a few milliseconds at most |
+
+The live provider copies a view's payload on the frame thread, in place, while the live core still holds the snapshot's slot, so the producer never waits: when a newer snapshot was applied and a reader asked for the view in the last 2 s, when the last copy is older than 1 s, or when there is none yet. A payload past 64 MiB is not copied and its sample answers `catalog.no_data` with the reason. `Catalog::revision()` is the sum of the providers' revisions plus the number of times a provider was added or removed. Since every term only grows, a pane that shows the catalog can poll it once a frame and list again only when it changes.
 
 ## Reserved names
 
@@ -173,3 +200,6 @@ The kind `recording` is reserved for recorded sessions, which a later sprint sto
 - **Duplicates go to the highest priority, then to the provider added first.** The rule is deterministic, and the wiring sets the priorities (loader outputs above plain database tables, for example).
 - **A failing provider does not fail the catalog.** One broken origin must not hide every other source from an agent.
 - **No cache in `Catalog`.** The providers know when their data changes; a second cache would only go stale.
+- **A live view is copied on the frame thread, and only while someone reads it.** The snapshot's slot is claimed only between two polls, and a view that nobody reads is copied at most once a second, so an unread 64 MiB heatmap does not cost a copy per frame.
+- **A tiled heatmap is given as its cells.** "Entropy per layer" needs the layer as an axis; the mosaic's layout is a drawing concern.
+- **The metric provider keeps a summary on its own thread.** A `GROUP BY` over every point is too slow for the frame thread, and the store's change counter tells the thread when to run it.

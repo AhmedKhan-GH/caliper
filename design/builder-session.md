@@ -10,8 +10,11 @@ Built on this branch, in `src/builder/session/` with headers in `src/builder/inc
 - the library `caliper_builder_session_host`: a strict HTTP/1.1 server for the two command endpoints of Caliper API, with the API file and token helpers;
 - the tool `caliper-builder-host`, the development stand-in for the app's command endpoints;
 - the command table brought in line with the spec format, with a test that keeps it so;
+- the seam for the sources the app serves: `CatalogDataSource`, which gives the current tensor or table of a catalog id with its generation, `DataSources`, where the app registers one per kind with `Session::data_sources()`, the generation of a panel with its cheap probe `panel_generation()`, and the cache of transformed tensors;
 - the tests in `src/builder/session/tests/`, including the two acceptance tests of this phase;
 - the session in the app, in `src/host/builder/` ([below](#the-session-in-the-app)): the app, `caliper dev` and `caliper shot` own one session for the workspace of `--workspace`, `CALIPER_WORKSPACE` or `workspace/` under the app-data folder, drain its queue on the frame thread within a time budget, run the long commands on the host's job system, implement `SessionHost`, show each journaled command in the Activity pane, and close the session before the host's stores; with the command script, a testing and demo aid, and the tests `caliper_app_session` and `caliper_app_session_hidden`.
+
+Built in the host, in `src/host/catalog_providers/`: the catalog providers and data sources for live views, feed channels and metrics, and `register_catalog_providers()`, which gives them to a session ([Catalog](catalog.md)).
 
 Planned:
 
@@ -125,7 +128,18 @@ The loader commands call the store and record what each change needs for its und
 3. A tabular root, a `table:` catalog source or a `sql` source, is read once per call through the store's bounded read-only query. A table selects only the columns the panel binds, or all of them when a binding names the whole source; a `sql` source runs as written, so its `ORDER BY` holds. The rows are cut at 100,000 and at 2^22 cells, and `truncated` says so.
 4. A column binding gives one column as a list of cells. A whole tabular binding gives a table; for `table.rows`, its columns are those of `options.columns`, in that order. A tensor binding gives the tensor.
 
-Sources that the app serves, `live:`, `feed:` and `metric:`, answer `resolve.unavailable` until the wiring gives the session their data. The bounds are `ResolveLimits`, which an app may change.
+5. A root that the app serves, a `live:`, `feed:` or `metric:` catalog source, is read through the `CatalogDataSource` registered for its kind. A live view gives its newest snapshot as a tensor, a copy that the source never changes, on which the transforms of step 2 run as on a mapped tensor, with the same bound; a feed channel and a metric give columns, cut at the same rows and cells as a table. Without a registered source such a root answers `resolve.unavailable`, and a source that went away (a detached session, a deleted run) answers it with the reason.
+
+The bounds are `ResolveLimits`, which an app may change.
+
+### Refresh
+
+A served source changes many times a second, so a panel needs to learn cheaply whether its data changed.
+
+- **The generation.** Every served source has a generation that grows whenever its data changes: a live view's grows with each copy of a new snapshot, a feed channel's is its newest sequence number, and a metric's moves when its series gains points. `PanelData::generation` mixes the generations of the served roots that a panel binds, in binding order, and is 0 for a panel that binds none.
+- **The probe.** `panel_generation(spec, panel, data_sources())` computes the same number from the sources' `generation()` alone: a walk of the panel's chains and one call per served root, each a map lookup under a short mutex, about a microsecond in all, with no data read. The spec runtime calls it once per frame for each panel it shows and resolves a panel again only when the number differs from the generation of the data it drew.
+- **The cache.** The result of a chain of transforms over a served tensor is kept in `DataSources` by the chain (the root's id and every transform down the chain) and the generation it was computed from, at most 64 results and 256 MiB, the least recently used going first. A resolve whose root has not changed reads the generation and takes the cached tensor, so the transforms run at most once per new snapshot and chain, however many panels show it and however many frames ask. Tables are not cached: a panel that binds a feed or a metric is resolved again only when the probe changes.
+- **The cost per frame.** With nothing new, a live panel costs the probe. A resolve with nothing new costs a copy of the open spec and the cached tensor; a resolve after a new snapshot costs the transforms once. The benchmark `caliper_catalog_providers_bench` (`src/host/catalog_providers/bench/`, built on demand) measures these costs for the acceptance case.
 
 ## The catalog provider
 
@@ -212,7 +226,7 @@ It serves `GET /v0/commands` and `POST /v0/commands/{name}` exactly as contracts
 
 ### How the wiring replaces it
 
-The app now opens a `Session` for its workspace, names its frame thread to the registry, drains the queue between frames and implements `SessionHost` on its own window ([above](#the-session-in-the-app)); the live, feed and metric catalog providers come next. Its API server, which already holds the loopback, `Host`, `Origin` and token checks of API v0, gains the two command routes; each submits to the session's queue as `CommandServer::handle()` does here, with the same origins, approval waits and envelope, and the approvals come from the app's own approval UI rather than from standard input. `caliper-builder-host` and `caliper_builder_session_host` are then removed, and the tests of `caliper-mcp` and `caliper-agent` move to `caliper --hidden --api`.
+The app now opens a `Session` for its workspace, names its frame thread to the registry, drains the queue between frames and implements `SessionHost` on its own window ([above](#the-session-in-the-app)); the live, feed and metric catalog providers are built in `src/host/catalog_providers/` and are given to the session with `caliper_host::register_catalog_providers()`, with the live catalog's `update()` called once per frame after the live poll. Its API server, which already holds the loopback, `Host`, `Origin` and token checks of API v0, gains the two command routes; each submits to the session's queue as `CommandServer::handle()` does here, with the same origins, approval waits and envelope, and the approvals come from the app's own approval UI rather than from standard input. `caliper-builder-host` and `caliper_builder_session_host` are then removed, and the tests of `caliper-mcp` and `caliper-agent` move to `caliper --hidden --api`.
 
 ## The acceptance tests
 
@@ -242,6 +256,9 @@ Both run headless in `test_acceptance.cpp`.
 - **`capture.frame` holds the queue until the next frame is read back.** A command answers on the thread that runs it, and the read-back of a presented frame completes a frame or two later; holding the queue keeps the order of the commands and never waits on the frame thread.
 - **The Activity pane takes the journal's events.** An observer on the journal (`JournalOptions::on_append`) sees exactly the commands that changed the workspace or were denied, and none of the dry runs and reads, from whatever thread ran them.
 - **The test path of the app's session is a command script.** Until the API's command endpoints are connected, `CALIPER_COMMAND_SCRIPT` drives the real queue from a thread of its own, as a client does, and its results file is what a process test reads; it also serves demos and screenshots.
+- **The served sources reach the session through an interface it owns.** `CatalogDataSource` names no host type, so the session library still builds and tests without the host, and the host implements it beside its providers.
+- **A panel's generation is a mix, not a sum.** A source that goes away drops its generation to 0, so a sum could come back to an earlier value; a mix of the generations changes whenever one of them does.
+- **The cache is keyed by generation, not by time.** A transform's result is valid exactly as long as its snapshot is, so no time limit can make it stale or recompute it early.
 
 ## Changes to the contracts and to the earlier pages
 
@@ -253,7 +270,7 @@ Both run headless in `test_acceptance.cpp`.
 ## Limits
 
 - A preview's edits are kept in memory only; a restart drops every preview, as it drops the undo history.
-- The session reads the data of loader outputs only; live views, feed channels and metrics wait for the wiring.
+- The session reads live views, feed channels and metrics only through the data sources the app registers; in the app that happens once the session builder connects `register_catalog_providers()`.
 - `loader.delete` with `keep_outputs` is not available, because the store deletes a loader's outputs with it. The loaders library would need `LoaderStore::remove(id, keep_outputs)`.
 - Undo does not reach files outside the session: a saved applet stays saved, and a loader run's tables stay as the run made them.
 - Replay rebuilds the open spec, not the loaders; `spec.open` and `applet.open` read their files as they are when the journal is replayed.
