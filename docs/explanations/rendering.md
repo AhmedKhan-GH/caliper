@@ -36,7 +36,7 @@ the CPU reference conversion (`map_f32_to_rgba8` and `expand_u8_to_rgba8`). The 
 for Metal, for Vulkan (the CPU-staged rows, which run on any Vulkan driver) and for Vulkan with CUDA (the device
 rows, which run when the paired CUDA device is the only one in the machine).
 
-The plan for the renderers is in the [roadmap](../plans/roadmap.md#renderers).
+The plan for the renderers is in the [roadmap](../design/roadmap.md#renderers).
 
 ## The WebGPU backend
 
@@ -61,7 +61,7 @@ It refuses the rest of the interface: device tensors and imported GPU memory (a 
 than points, and the embed canvas. Its two shaders are written by hand in WGSL, because WebGPU has no push constants,
 draws points one pixel wide and limits the storage buffers of a vertex stage, which changes the native shaders' design
 and not only their syntax. `web/wasm/README.md` gives the module's build, its size and its checks. The same renderer
-is planned as the native fallback through Dawn ([roadmap](../plans/roadmap.md#renderers)).
+is planned as the native fallback through Dawn ([roadmap](../design/roadmap.md#renderers)).
 
 The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
 with ImGui, so they look the same on every backend.

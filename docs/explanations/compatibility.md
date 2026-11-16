@@ -142,7 +142,7 @@ A promoted feature arrives as a new service id or as a new revision of an existi
 
 Sugar that is compiled into the applet, such as the `caliper::viz` components, needs nothing from the host at run time. It arrives in a minor version of the SDK, changes no table, and reaches an applet when the applet is rebuilt.
 
-[Platform candidates](../plans/platform-candidates.md) lists the features that are candidates for promotion and the order in which they move.
+[Platform candidates](../design/platform-candidates.md) lists the features that are candidates for promotion and the order in which they move.
 
 ## Negotiation at load
 

@@ -57,7 +57,7 @@ The viewers in the browser live in the `web/` package: the `<caliper-view>`
 element, the notebook widget built on it, and the viewer page. The element
 decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
 view layer compiled to WebAssembly (`web/wasm`, the
-[web viewer](../plans/streaming-and-embedding.md#the-web-viewer)) draws the
+[web viewer](../design/streaming-and-embedding.md#the-web-viewer)) draws the
 kinds its loader lists, which are now all five: heatmaps, images, points,
 series and histograms. A kind the loader does not list is drawn by small views
 written for the browser in TypeScript. Without an adapter the TypeScript views
@@ -230,7 +230,7 @@ the producer's Python code to read, through `server.on_event()` or
 sends runs as code.
 
 This position holds until a dedicated security review, which comes before any
-session leaves the machine ([Security](../plans/streaming-and-embedding.md#security)).
+session leaves the machine ([Security](../design/streaming-and-embedding.md#security)).
 Until then the server cannot listen on another interface, and the stream is not
 encrypted, which is acceptable only because it never leaves the loopback
 interface.
@@ -245,8 +245,8 @@ interface.
 - **No applets in the browser yet.** The browser draws views and runs no
   applet. Applets reach the browser only after the split into computation and
   interface that Phase 2 settles
-  ([Applets in the browser](../plans/streaming-and-embedding.md#applets-in-the-browser)).
-  [Limits in the browser](../plans/streaming-and-embedding.md#limits-in-the-browser)
+  ([Applets in the browser](../design/streaming-and-embedding.md#applets-in-the-browser)).
+  [Limits in the browser](../design/streaming-and-embedding.md#limits-in-the-browser)
   lists the limits of the web viewer itself.
 - **Widget traits wait for an idle kernel.** A widget's `selection` and
   `data_view` traits travel over the notebook's message channel, which the

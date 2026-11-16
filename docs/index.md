@@ -30,4 +30,4 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 - [Guides](guides/index.md) are task recipes for debugging, attaching to scripts and continuous integration.
 - [References](references/index.md) list the ABI, the manifest, the service tables, the adapters, embedding, the C++ sugar and the folders and environment variables.
 - [Explanations](explanations/index.md) cover rendering, compatibility, trust and the architecture.
-- [Plans](plans/index.md) holds the roadmap and the designs that are not built yet.
+- [Design](design/index.md) holds the roadmap and the designs that are not built yet.
