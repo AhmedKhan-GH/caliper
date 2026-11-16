@@ -25,6 +25,7 @@
 #ifdef CALIPER_HAVE_METAL
 #import <Metal/Metal.h>
 
+#include "../scene/primitive_rows.h"
 #include "../scene/surface_row_fixture.h"
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
@@ -244,13 +245,13 @@ fs::path golden_dir() { return fs::path(CALIPER_TEST_SOURCE_ROOT) / "tests" / "f
 
 TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scene views and their state follows") {
     // One view per scene the frames name: "landscape" as VIEWS describes it, "world" with the
-    // defaults, "flat" in 2-D (its positions are (N, 2)).
+    // defaults, "flat" and "overlay" in 2-D (their positions are (N, 2)).
     std::map<std::string, std::unique_ptr<ViewRig>> views;
     auto view_of = [&](const std::string& name) -> SceneView* {
         auto it = views.find(name);
         if (it == views.end()) {
             auto rig = std::make_unique<ViewRig>();
-            const bool ok = name == "flat" ? rig->init(CALIPER_NET_SPACE_2D, "-y", "px")
+            const bool ok = (name == "flat" || name == "overlay") ? rig->init(CALIPER_NET_SPACE_2D, "-y", "px")
                             : name == "landscape" ? rig->init(CALIPER_NET_SPACE_3D, "+z", "")
                                                   : rig->init(CALIPER_NET_SPACE_3D, "+y", "m");
             if (!ok) return nullptr;
@@ -276,10 +277,16 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
     }
     CHECK(view_of("landscape")->tree().up() == caliper_scene::Axis::PosZ);
 
-    const char* updates[] = {"scene_update_points",      "scene_update_points_stamped", "scene_update_points_color",
-                             "scene_update_points_values", "scene_update_lines_segments", "scene_update_lines_strip",
-                             "scene_update_lines_strips", "scene_update_mesh",          "scene_update_mesh_normals",
-                             "scene_update_mesh_colors"};
+    // Every frame but the encoded image, cameras before the images under them.
+    const char* updates[] = {"scene_update_points",          "scene_update_points_stamped", "scene_update_points_color",
+                             "scene_update_points_values",   "scene_update_lines_segments", "scene_update_lines_strip",
+                             "scene_update_lines_strips",    "scene_update_mesh",           "scene_update_mesh_normals",
+                             "scene_update_mesh_colors",     "scene_update_camera",         "scene_update_camera_rub",
+                             "scene_update_arrows",          "scene_update_boxes",          "scene_update_boxes_2d",
+                             "scene_update_image_color",     "scene_update_image_depth",    "scene_update_image_depth_f32",
+                             "scene_update_image_segmentation", "scene_update_image_segmentation_u16",
+                             "scene_update_lines_edges",     "scene_update_mesh_textured",  "scene_update_points_labels",
+                             "scene_update_points_future"};
     std::vector<std::vector<uint8_t>> keep;
     auto load = [&](const char* name) {
         std::ifstream f(golden_dir() / (std::string(name) + ".bin"), std::ios::binary);
@@ -294,6 +301,18 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
         const auto& u = std::get<wire::SceneUpdate>(m);
         std::string why;
         CHECK_MESSAGE(view_of(u.view)->apply(u, &why), name, ": ", why);
+    }
+    for (const char* name : {"scene_transforms_static", "scene_transforms", "scene_transforms_stamps"}) {
+        const wire::Message m = load(name);
+        const auto& t = std::get<wire::SceneTransforms>(m);
+        std::string why;
+        CHECK_MESSAGE(view_of(t.view)->apply(t, &why), name, ": ", why);
+    }
+    for (const char* name : {"scene_classes", "scene_classes_stamped"}) {
+        const wire::Message m = load(name);
+        const auto& c = std::get<wire::SceneClasses>(m);
+        std::string why;
+        CHECK_MESSAGE(view_of(c.view)->apply(c, &why), name, ": ", why);
     }
     using caliper_scene::Primitive;
     SceneView& land = *view_of("landscape");
@@ -316,8 +335,9 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
     CHECK(batch(land, "path", Primitive::Lines)->line_mode == caliper_scene::LineMode::Strips);
     REQUIRE(batch(land, "surface", Primitive::Mesh));
     CHECK(batch(land, "surface", Primitive::Mesh)->array(caliper_scene::Role::Indices)->count == 2);
-    // The world: a cloud and two tracks whose per-strip colours are expanded to their vertices.
-    CHECK(world.counts().entities == 2);
+    // The world: a cloud and two tracks whose per-strip colours are expanded to their vertices, and
+    // eight more entities with a batch (below).
+    CHECK(world.counts().entities == 10);
     const caliper_scene::Batch* tracks = batch(world, "world/tracks", Primitive::Lines);
     REQUIRE(tracks);
     CHECK(tracks->array(caliper_scene::Role::Colors)->count == 5);
@@ -325,6 +345,33 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
     // The flat scene: a 2-D triangle, static.
     CHECK(flat.tree().space() == caliper_scene::Space::k2D);
     REQUIRE(batch(flat, "shapes/tri", Primitive::Mesh));
+    // The other parts of the world: two cameras, the images under the first, arrows, a static box,
+    // index-pair edges, a textured mesh, labelled points; the transforms and the class table.
+    const caliper_scene::SceneTree& wt = world.tree();
+    CHECK(wt.camera(wt.find("rig/left")));
+    REQUIRE(wt.camera(wt.find("sim/eye")));
+    CHECK(wt.camera(wt.find("sim/eye"))->convention == caliper_scene::Convention::Rub);
+    CHECK(batch(world, "rig/left/rgb", Primitive::Image)->image_form == caliper_scene::ImageForm::Color);
+    CHECK(batch(world, "rig/left/depth", Primitive::Image)->image_form == caliper_scene::ImageForm::Depth);
+    CHECK(batch(world, "rig/left/depth", Primitive::Image)->cloud);   // the model's default under a camera
+    CHECK(batch(world, "rig/left/classes", Primitive::Image)->opacity == 0.5f);
+    REQUIRE(batch(world, "field", Primitive::Arrows));
+    CHECK(wt.batch_static(wt.find("arm/link0"), Primitive::Boxes));
+    REQUIRE(batch(world, "graph/edges", Primitive::Lines));
+    CHECK(batch(world, "graph/edges", Primitive::Lines)->line_mode == caliper_scene::LineMode::Edges);
+    CHECK(batch(world, "graph/edges", Primitive::Lines)->per_edge);
+    CHECK(bool(batch(world, "floor", Primitive::Mesh)->texture));
+    CHECK(batch(world, "graph/nodes", Primitive::Points)->labels.size() == 3);
+    CHECK(wt.transform(wt.find("rig/left")));
+    CHECK(wt.transform(wt.find("arm/link0/link1")));
+    CHECK(wt.transform(wt.find("b")));
+    // The stamped table, empty, wins over the static one: latest-at.
+    CHECK(wt.classes().empty());
+    SceneView& overlay = *view_of("overlay");
+    CHECK(batch(overlay, "rig/left/cars", Primitive::Boxes)->fill);
+    CHECK(batch(overlay, "elevation", Primitive::Image)->image_form == caliper_scene::ImageForm::Depth);
+    CHECK(batch(overlay, "labels", Primitive::Image)->opacity == 0.75f);
+    CHECK(overlay.counts().textures_live == 2);
 
     // Every scene compiles and draws.
     for (auto& kv : views) {
@@ -335,6 +382,21 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
         CHECK_MESSAGE(notes.empty(), kv.first, ": ", first);
     }
 
+    // The encoded image is the one form a scene view does not draw yet: it refuses and says so.
+    {
+        const wire::Message m = load("scene_update_image_encoded");
+        std::string why;
+        CHECK_FALSE(world.apply(std::get<wire::SceneUpdate>(m), &why));
+        CHECK_MESSAGE(why.find("encoded images are not drawn yet") != std::string::npos, why);
+    }
+    // A clear of the transform and the boxes under arm removes the stamped transforms and keeps the
+    // static box.
+    {
+        const wire::Message m = load("scene_clear_stamped");
+        REQUIRE(world.apply(std::get<wire::SceneClear>(m), nullptr));
+        CHECK_FALSE(wt.transform(wt.find("arm/link0/link1")));
+        CHECK(batch(world, "arm/link0", Primitive::Boxes) != nullptr);
+    }
     // A recursive clear of points and meshes under world/cloud removes the cloud.
     {
         const wire::Message m = load("scene_clear");
@@ -408,6 +470,71 @@ TEST_CASE("gfx/Metal scene view: the demo's messages draw the surface row's scen
     const std::string info = v.info();
     CHECK_MESSAGE(info.find("4 entities  3,252 items  copied") == 0, info);
     CHECK_MESSAGE(info.find("gpu ") != std::string::npos, info);
+}
+
+// The rows of every primitive (tests/scene/primitive_fixtures.h): each fixture's messages applied to
+// a scene view on Metal, drawn at 256 x 256, read back and compared with the CPU reference of
+// tests/scene/draw_reference.h under web geometry's parity rules. The demo's scene runs through the
+// same reference first, as a check of the reference against the surface row's own.
+TEST_CASE("gfx/Metal scene view: every primitive drawn from protocol 3.2 messages matches the CPU reference") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    probe.view.reset();
+    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
+    const scene_fixtures::SurfaceRowFixture fx;
+    const DemoMessages dm(fx);
+    {
+        primitive_fixtures::Fixture demo;
+        demo.name = "demo";
+        demo.info = {CALIPER_NET_SPACE_3D, "+z", ""};
+        demo.messages = {dm.reset(), dm.box(), dm.surface(), dm.path(), dm.marker()};
+        fixtures.insert(fixtures.begin(), demo);
+    }
+    for (const primitive_fixtures::Fixture& f : fixtures) {
+        CAPTURE(f.name);
+        ViewRig rig;
+        REQUIRE(rig.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
+        SceneView& v = *rig.view;
+        primitive_rows::Row row;
+        row.fixture = f;
+        REQUIRE_MESSAGE(row.draw(v), row.error);
+        CHECK_MESSAGE(v.notes().empty(), f.name, ": ", (v.notes().empty() ? std::string() : v.notes().back()));
+        const std::vector<uint8_t> got = pixels(v);
+        capture_png(("scene-" + f.name + ".png").c_str(), got, int(v.width()), int(v.height()));
+        const primitive_rows::Row::Result r = row.compare(v, got);
+        MESSAGE(r.sentence, "; ", r.draws, " draws, ", r.triangles, " triangles, ", r.c.interior, " interior and ",
+                r.c.edge, " edge pixels, ", r.c.exact, " exact");
+        CHECK_MESSAGE(r.problems.empty(), (r.problems.empty() ? std::string() : r.problems.front()));
+        CHECK_MESSAGE(r.clipped == 0, r.clipped, " triangles would need clipping");
+        CHECK_MESSAGE(r.c.failed == 0, r.c.failed, " pixels outside the parity rules; ", r.c.first);
+        // Every draw shows in the picture.
+        for (uint32_t d = 0; d < r.draws; ++d) CHECK_MESSAGE(r.covered.at(d) > 0, "draw ", d, " of ", f.name, " covers no pixel");
+
+        if (f.name == "boxes") {
+            // The chain's poses compose down the tree, M_arm * M_link0 * M_link1, in double.
+            using caliper_scene::Mat4;
+            auto m = [](const std::vector<float>& c) {
+                Mat4 r;
+                for (int k = 0; k < 16; ++k) r.at(k % 4, k / 4) = c[size_t(k)];
+                return r;
+            };
+            std::vector<float> tilt = {1, 0, 0, 0, 0, std::cos(0.6f), std::sin(0.6f), 0, 0, -std::sin(0.6f), std::cos(0.6f), 0, 0, 0, 0, 1};
+            std::vector<float> next = tilt;
+            next[14] = 0.4f;
+            const Mat4 want = m(primitive_fixtures::translate(0.9f, -0.6f, 0)) * m(tilt) * m(next);
+            const Mat4& got_w = v.tree().world(v.tree().find("arm/link0/link1"));
+            for (int k = 0; k < 16; ++k) CHECK(std::fabs(got_w.at(k % 4, k / 4) - want.at(k % 4, k / 4)) < 1e-12);
+            // The crates' labels, anchored at their centres, nearest first.
+            CHECK(v.labels().size() == 3);
+            // Class colours: 1 and 2 from the table, 7 from the palette.
+            CHECK(v.tree().class_label(1) == "car");
+        }
+        if (f.name == "through") CHECK(v.camera_text().find("through rig/left") != std::string::npos);
+        if (f.name == "images") {
+            CHECK(v.counts().textures_live == 4);
+            CHECK(v.counts().items == 4 + 2 + 2);
+        }
+    }
 }
 
 TEST_CASE("gfx/Metal scene view: a late attach receives a reset and the state; clears keep static items") {

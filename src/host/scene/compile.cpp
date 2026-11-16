@@ -820,6 +820,9 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
         ++result.draws;
         if (map) {
             s.entry.mvp = mvp;
+            s.entry.translucent = s.translucent;
+            s.entry.depth_test = d.depth_test;
+            s.entry.depth_write = d.depth_test && !s.translucent;   // in the colour pass
             map->entries.push_back(s.entry);
         }
     }
