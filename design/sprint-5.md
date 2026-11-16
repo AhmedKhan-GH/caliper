@@ -36,7 +36,7 @@ Comparing runs is the headline of the sprint: it answers the question ML enginee
 
 ### 2. Fields for the physical sciences
 
-- **Slice planes.** A slice plane cuts a 3-D field, such as a flow, a weather volume, a CT scan or a density grid, along an axis. It is placed inside the scene and dragged along its axis. The slice is a data view computed on the device where the field lives, and it is drawn on a textured quad, so only the slice travels and no new renderer is needed.
+- **Slice planes.** A slice plane cuts a 3-D field, such as a flow, a weather volume or a density grid, along an axis. It is placed inside the scene and dragged along its axis. The slice is a data view computed on the device where the field lives, and it is drawn on a textured quad, so only the slice travels and no new renderer is needed.
 - **Isosurfaces.** An isosurface is the surface where a field equals a chosen value: a front, a boundary or an orbital. A marching-cubes kernel runs on the device and sends the result as a mesh, which the scene's mesh primitive draws. It comes after the slices, on the same field data.
 - **Done when** a 3-D field from a script shows three draggable slice planes and one isosurface at a value set from the controls panel, natively and in the browser.
 
