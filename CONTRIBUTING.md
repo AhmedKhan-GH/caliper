@@ -15,6 +15,8 @@ The GPU suites skip when the machine has no usable device, and ctest reports the
 
 Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/guides/ci.md) describes what runs, what is cached, and how to handle a failed run.
 
+The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Write a shader](docs/guides/write-a-shader.md) describes the generator and its checks.
+
 To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The second command checks the design pages, which are built apart from the docs site and are not published.
 
 ```sh

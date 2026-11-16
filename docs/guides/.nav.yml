@@ -6,6 +6,7 @@ nav:
   - run-a-hub.md
   - control-a-running-script.md
   - verify-on-windows.md
+  - write-a-shader.md
   - ci.md
   - glob: "*"
     ignore_no_matches: true
