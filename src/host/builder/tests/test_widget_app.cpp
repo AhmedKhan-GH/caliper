@@ -297,6 +297,37 @@ TEST_CASE("widget app: a property's edit, through the sidecar, previewed in its 
     CHECK(c.edits == std::vector<std::string>{"panel.patch"});
 }
 
+TEST_CASE("widget app: a source's property edit, through the sidecar, from Properties with the source selected" *
+          doctest::test_suite("app")) {
+    const json transforms = json::array({{{"op", "slice"}, {"axis", 0}, {"index", 0}},
+                                         {{"op", "reduce"}, {"axis", 0}, {"fn", "max"}},
+                                         {{"op", "normalise"}, {"mode", "minmax"}}});
+    const json steps = json::array(
+        {tool_step(json::array({tool_use("toolu_1", "source_patch", {{"id", "attn"}, {"patch", {{"transform", transforms}}}})})),
+         text_step("The attention takes the maximum over the heads.")});
+    const AppRun r = run_target("source-property", steps,
+                                "wait 60; key cmd+b; wait 20; click source:spec:attn; wait 10; "
+                                "click cmdk:prop:transform; until prompt; wait 3; "
+                                "type Take the maximum over the heads; wait 5; key enter; until preview; wait 10; "
+                                "shot preview; key enter; until applied; wait 5; quit");
+    if (!r.ran) return;
+    INFO("stderr tail: " << r.err.substr(r.err.size() > 6000 ? r.err.size() - 6000 : 0));
+    CHECK(r.code == 0);
+    CHECK(r.err.find("[ui] done") != std::string::npos);
+    CHECK(r.err.find("surface preview") != std::string::npos);
+    // The source and its property reached the model, with a source's property tools.
+    REQUIRE(std::filesystem::is_regular_file(r.record));
+    const std::string requests = read_text(r.record);
+    CHECK(requests.find("source attn") != std::string::npos);
+    CHECK(requests.find("tensor:attn_weights") != std::string::npos);
+    CHECK(requests.find("\"source_patch\"") != std::string::npos);
+    CHECK(requests.find("\"panel_patch\"") == std::string::npos);
+    CHECK(requests.find("\"panel_create\"") == std::string::npos);
+    const Committed c = committed(r.ws);
+    CHECK(c.commit);
+    CHECK(c.edits == std::vector<std::string>{"source.patch"});
+}
+
 
 namespace {
 

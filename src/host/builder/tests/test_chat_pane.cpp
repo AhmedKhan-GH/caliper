@@ -144,8 +144,11 @@ TEST_CASE("chat pane: the settings file holds the agent and the custom command, 
     CHECK(s.chat.custom_name == "Custom agent");
     CHECK_FALSE(s.open);
 
+    CHECK(s.chat.local_model_agents.empty());
+
     s = stub_settings("--flag");
     s.chat.allow_always = true;
+    s.chat.local_model_agents = {"opencode", "custom"};
     s.open = true;
     REQUIRE(write_chat_settings(path, s));
     ChatPaneSettings r;
@@ -154,7 +157,15 @@ TEST_CASE("chat pane: the settings file holds the agent and the custom command, 
     CHECK(r.chat.custom_name == "Stub agent");
     CHECK(r.chat.custom_command == s.chat.custom_command);
     CHECK(r.chat.allow_always);
+    CHECK(r.chat.local_model_agents == std::vector<std::string>{"opencode", "custom"});
     CHECK(r.open);
+    // Only agent ids are kept from the list.
+    std::ofstream(path) << R"({"agent": "custom", "local_model_agents": ["opencode", 3, null, "", "custom", "opencode"]})";
+    REQUIRE(read_chat_settings(path, &r));
+    CHECK(r.chat.local_model_agents == std::vector<std::string>{"opencode", "custom"});
+    std::ofstream(path) << R"({"agent": "custom", "local_model_agents": "opencode"})";
+    REQUIRE(read_chat_settings(path, &r));
+    CHECK(r.chat.local_model_agents.empty());
 
     // Keys it does not know are not read, and are gone once it writes: no
     // setting chooses the API's address, and none holds a key.
@@ -233,6 +244,38 @@ TEST_CASE("chat pane: the toggle and ⌘L, and the column that leaves the canvas
     CHECK(left.Max.x == doctest::Approx(Ui::kW));
     REQUIRE(read_chat_settings(path, &saved));
     CHECK_FALSE(saved.open);
+}
+
+TEST_CASE("chat pane: the Local model setting is saved, and the GPU note follows the app's live run") {
+    const fs::path dir = fresh("chat-pane-local");
+    fs::create_directories(dir / "empty");
+    const std::string path = (dir / "side-chat.json").string();
+    ChatPaneSettings s = stub_settings();
+    s.open = true;
+    REQUIRE(write_chat_settings(path, s));
+    App a(dir / "ws");
+    ChatPane pane;
+    ChatPane::Options o;
+    o.settings_path = path;
+    o.path = (dir / "empty").string();
+    bool live = false;
+    ChatPane::Hooks h;
+    h.live_attached = [&live] { return live; };
+    pane.start(o, h);
+    CHECK_FALSE(pane.set_local_model(true));   // no chat yet
+    REQUIRE(a.run(pane, [&] { return pane.state() == "idle"; }));
+    CHECK(pane.note().empty());
+    REQUIRE(pane.set_local_model(true));
+    ChatPaneSettings saved;
+    REQUIRE(read_chat_settings(path, &saved));
+    CHECK(saved.chat.local_model_agents == std::vector<std::string>{"custom"});
+    CHECK(pane.note().empty());   // no live run
+    live = true;
+    CHECK(pane.note() == "Shared GPU");
+    REQUIRE(pane.set_local_model(false));
+    CHECK(pane.note().empty());
+    REQUIRE(read_chat_settings(path, &saved));
+    CHECK(saved.chat.local_model_agents.empty());
 }
 
 TEST_CASE("chat pane: Ask in chat opens the pane with the handoff draft, which waits for the chat") {

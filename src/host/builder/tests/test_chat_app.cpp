@@ -353,4 +353,89 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
     CHECK(run.err.find("[chat] Caliper API stopped") == std::string::npos);
 }
 
+TEST_CASE("chat app: the Shared GPU note while a live run is attached and the agent is marked as local" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
+    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
+    if (!exe || !*exe || !producer_exe || !*producer_exe || !applets || !*applets) {
+        std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE and "
+                    "CALIPER_TEST_APPLETS\n");
+        return;
+    }
+    const fs::path root = fresh("chat-gpu-note");
+    const fs::path ws = root / "ws", data = root / "data", shots = root / "shots";
+    for (const fs::path& d : {ws, data, shots, root / "apps"}) fs::create_directories(d);
+    // The stub as the person's agent, not marked yet; it never starts, since
+    // no message is sent.
+    {
+        json s = {{"agent", "custom"},
+                  {"custom_name", "Stub agent"},
+                  {"custom_command", "'" + std::string(CALIPER_CHAT_STUB_AGENT) + "'"},
+                  {"open", false}};
+        std::ofstream(data / "side-chat.json") << s.dump();
+    }
+    // The training script's stand-in.
+    acp::SpawnOptions po;
+    po.argv = {producer_exe, "--layers", "2", "--heads", "4", "--tokens", "16", "--hz", "8"};
+    caliper_builder::Error e;
+    std::unique_ptr<acp::Process> producer = acp::Process::spawn(po, &e);
+    REQUIRE_MESSAGE(producer, e.message);
+    std::string out, link;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (link.empty() && std::chrono::steady_clock::now() < until) {
+        char b[4096];
+        std::size_t got = 0;
+        if (producer->read_stdout(b, sizeof b, &got, 100) == acp::IoStatus::ok) out.append(b, got);
+        if (producer->read_stderr(b, sizeof b, &got, 10) == acp::IoStatus::ok) out.append(b, got);
+        const size_t at = out.find("[producer] hub ");
+        if (at != std::string::npos && out.find('\n', at) != std::string::npos) {
+            const size_t s = at + std::string("[producer] hub ").size();
+            link = out.substr(s, out.find('\n', at) - s);
+        }
+    }
+    REQUIRE_MESSAGE(!link.empty(), out);
+
+    // Attached, the note waits for the mark; marked, it shows; detached (esc
+    // Home on the live page), it goes.
+    const std::string ui =
+        "page live; chat open; chat until idle; chat note none; chat local on; chat note Shared GPU; wait 5; shot gpu; "
+        "key escape; page landing; chat note none; quit";
+    acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--applets", applets, "--url", link, "--workspace", ws.string()};
+    o.env = {{"CALIPER_DATA_DIR", data.string()},
+             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_WINDOW_SIZE", "960x600"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", ui},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", shots.string()},
+             {"CALIPER_EXIT_AFTER", "100"}};
+    o.env_remove = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"};
+    acp::RunLimits lim;
+    lim.timeout_ms = 150000;
+    const auto run = acp::run_process(o, lim);
+    producer->terminate(2000);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 6000 ? run.err.size() - 6000 : 0));
+    REQUIRE(run.error.ok());
+    if (!metal(run.err)) {
+        std::printf("caliper_side_chat_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK(run.err.find("[ui] stopped") == std::string::npos);
+    const size_t marked = run.err.find("[ui] chat local on");
+    const size_t shown = run.err.find("[ui] the chat's note is Shared GPU");
+    REQUIRE(marked != std::string::npos);
+    REQUIRE(shown != std::string::npos);
+    CHECK(marked < shown);
+    CHECK(run.err.find("[ui] the chat's note is none", shown) != std::string::npos);
+    const Png p = load((shots / "gpu.png").string());
+    CHECK(((p.w == 960 && p.h == 600) || (p.w == 1920 && p.h == 1200)));
+    // The mark is kept in the chat's settings, for the chosen agent.
+    const json saved = json::parse(read_file(data / "side-chat.json"), nullptr, false);
+    REQUIRE(saved.is_object());
+    CHECK(saved.value("local_model_agents", json::array()) == json::array({"custom"}));
+}
+
 #endif

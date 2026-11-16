@@ -141,9 +141,14 @@ the builder pane's Sources palette, and the prompt opens under that row for the 
 catalog ids; with no spec open, the preview's `spec.new` from the `ui` origin is undone again by a discard while
 its step is still the top of the undo stack, and Accept leaves it as a step of its own before the change. **A
 property**: ⌘K beside the focused panel's title and each of its options in Properties opens the prompt under that
-row for that one property (`options.colormap`), and the edit is previewed in the panel. Each session's scope is the
-scope rule's for its kind of target. Not built yet: the ⌘K of a source's properties, and the packaging of
-`caliper-agent` with a Python runtime.
+row for that one property (`options.colormap`), and the edit is previewed in the panel. With a spec source selected in
+the builder pane, ⌘K beside what it reads (`catalog`, `from` or `sql`) and beside its transforms (`transform`, the
+list as one property) opens the prompt under that row for that property of the source; the context bundle carries the
+source, its chain and its catalog entry, the property's value and its part of `source.patch`'s schema, and the scope
+is the rule's `source_property`. **Decision:** the transforms are one property, since an edit of the chain usually
+touches more than one step and `source.patch` replaces the list whole. The edit shows as its compact diff under the
+row; the panels that read the source are not redrawn from the preview (an open item below). Each session's scope is
+the scope rule's for its kind of target. Not built yet: the packaging of `caliper-agent` with a Python runtime.
 
 ## The context bundle
 
@@ -734,7 +739,12 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   is attached (`caliper_live::Attachment::attached()`, true while the app holds a training script's stream, until it
   detaches) and the chosen base URL is a loopback address, for Ollama, LM Studio or Custom alike. A test in the hidden app
   attaches to the stream of the producer of the live acceptance test with the Ollama preset chosen and sees the note,
-  then detaches and sees it gone. The side chat's setting and note are not built.
+  then detaches and sees it gone.
+- **Built: the side chat's note.** Local model in the side chat's agent picker marks the chosen agent as running on a
+  local model, kept per agent in `side-chat.json` ([ACP integration](acp-integration.md#the-side-chat-as-built)). While
+  the live session is attached and the chosen agent is marked, the chat's header shows the same noun, "Shared GPU"
+  (`chat_gpu_note()`), framed in bronze after the agent's name. A test in the hidden app attaches to the producer's
+  stream, marks the stub agent and sees the note, then detaches and sees it gone.
 - **The advice**, in Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`):
   during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;
@@ -857,12 +867,12 @@ and L six to ten; each figure is rough.
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | Done: widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget, the handoff and `session/close` | None left |
 | 13 | Done: the context bundle, built from the session with its bounds and cuts, as ACP content blocks with the tool scope and `session/new`'s `_meta` (`build_context_bundle()`); calling it from the inline surface comes with item 14 | None left |
-| 14 | Built: the inline surface on a panel, a selection, a dropped file and a property, the preview drawn in place (a panel or the whole spec), Accept, Reject and Refine, Ask in chat, and the agent over `AcpClient`. Left: the packaging of `caliper-agent` with a Python runtime, and ⌘K on a source's properties | S, 2 days |
+| 14 | Built: the inline surface on a panel, a selection, a dropped file and a property of a panel or a source, the preview drawn in place (a panel or the whole spec), Accept, Reject and Refine, Ask in chat, and the agent over `AcpClient`. Left: the packaging of `caliper-agent` with a Python runtime | S, 1 day |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. The app passes the chosen preset, base URL, model and effort from the widget agent's settings when it starts the sidecar, and places the key only in the sidecar's environment; widget sessions (12) and the probe (16) build on it | None left |
 | 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
 | 17 | Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` with its checks and warnings, the scrubbing of every documented key shape, and the settings in the app (`agent_settings.h`) with the agent made from them | None left |
 | 18 | Done: the provider conformance suite (`caliper-agent-conformance`), its scripted and fake-server modes and its reference page | None left |
-| 19 | Done: the GPU contention note of the widget agent ("Shared GPU" in the settings and the ⌘K prompt row). Left: the side chat's setting and note | S, half a day |
+| 19 | Done: the GPU contention note ("Shared GPU" in the widget agent's settings and its ⌘K prompt row, and in the side chat's header with its Local model setting) | None left |
 
 The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](windows-parity.md) page.
 
@@ -875,6 +885,10 @@ These were found in the review of sprint 3's second pull request and left for a 
   and ⌘K opens a prompt there. While the settings are open, neither key should reach the page or the prompt.
 - **A property's prompt anchor lacks its panel.** A prompt opened on a property is anchored to `prop:` and the
   property's path, so after the focus moves to another panel it can draw under that panel's row of the same path. The
-  anchor should name the panel too.
+  anchor should name the panel too. A source's property has the same anchor, so it can draw under another source's
+  `transform` row.
+- **A source's preview is not drawn in its panels.** The whole spec's preview redraws a panel only when the panel's
+  own fragment changed, so an edit of a source shows as its diff under the row and the panels that read the source keep
+  their data until Accept.
 - **A selection outlives its spec.** `SpecRuntime::set_spec()` never clears the selection, so it stays when the spec
   changes or its panel goes. To check with it: the `selecting` flag of a panel entry that a preview replaces.

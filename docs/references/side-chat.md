@@ -22,7 +22,8 @@ live page shows beside the same conversation.
 
 The chat's settings are kept in `side-chat.json` in the app-data folder ([Folders and environment
 variables](environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
-allow" options are offered, and whether the chat is open. They never hold a key.
+allow" options are offered, the agents you marked as running on a local model (`local_model_agents`, a list of agent
+ids), and whether the chat is open. They never hold a key.
 
 ## The agents
 
@@ -67,8 +68,8 @@ folder, and sends:
 ## The pane
 
 The pane is the lower part of the right column, under Selection and Properties. Its header shows CHAT, the agent's
-name, its version and its mode, the state as a tag, a FAULTS chip when the agent sent messages Caliper dropped, and
-Restart when the agent must start again.
+name, Shared GPU when it applies (see [Local models](#local-models)), its version and its mode, the state as a tag, a
+FAULTS chip when the agent sent messages Caliper dropped, and Restart when the agent must start again.
 
 | Tag | State | Action |
 |---|---|---|
@@ -103,7 +104,20 @@ failed call or an approval that was denied, timed out or failed says so in bronz
 call without an approval is a plain row.
 
 **The input** is one line that grows to six with Shift+Enter or Command+Enter; Enter sends. The agent picker beside it
-lists the agents by name, with NOT FOUND for those not on `PATH`, and Custom command.
+lists the agents by name, with NOT FOUND for those not on `PATH`, Custom command, and Local model.
+
+## Local models
+
+Your agent may run its model on your own machine, such as opencode with a model served by Ollama. Caliper cannot tell
+where an agent's model runs, so you say so: choose Local model in the agent picker, which marks the chosen agent, or
+clears the mark when it is set. The mark belongs to that agent, kept by its id, so choosing another agent leaves it
+behind and choosing the agent again brings it back.
+
+While a training run streams into Caliper (the app is attached to a live session) and the chosen agent is marked, the
+chat's header shows **Shared GPU** after the agent's name, framed in bronze, as the widget agent's settings and its ⌘K
+prompt do for a model server on this machine. The model and the run then share the same GPU and memory; Set up the
+widget agent ([Share the GPU with a training run](../guides/set-up-the-widget-agent.md#share-the-gpu-with-a-training-run))
+gives the advice. As the header narrows, the note gives way after the agent's version and before its name.
 
 ## Ask in chat
 

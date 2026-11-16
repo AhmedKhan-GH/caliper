@@ -253,13 +253,15 @@ public:
 
     // ---- ⌘K: the widget agent's inline surface, which the page owns. The
     // pane offers ⌘K on the rows of the files just dropped (the prompt for
-    // that file's loader and its catalog ids) and beside the focused panel's
-    // title and options (the prompt for that one property), and draws the
-    // surface under the row it is open on ("source:<key>", "prop:<path>").
+    // that file's loader and its catalog ids), beside the focused panel's
+    // title and options, and beside the focused spec source's catalog, from
+    // or SQL and its transforms (the prompt for that one property), and draws
+    // the surface under the row it is open on ("source:<key>", "prop:<path>").
     struct WidgetHooks {
         std::function<void(const std::string& loader, const std::vector<std::string>& catalog,
                            const std::string& anchor)> open_file;
-        std::function<void(const std::string& panel, const std::string& path)> open_property;
+        // A property of a panel (`panel` set) or of a spec source (`source` set).
+        std::function<void(const std::string& panel, const std::string& source, const std::string& path)> open_property;
         std::function<float(const std::string& anchor, float width)> height;   // 0: not open there
         std::function<void(const std::string& anchor, const SpecRect& rect)> draw;
     };
@@ -420,7 +422,8 @@ private:
     // The ⌘K control in `r`; true when clicked.
     bool widget_key(const std::string& id, const ImRect& r, bool shown);
     // A property row's ⌘K, and the prompt under the row when it is open there.
-    void property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path);
+    void property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path,
+                      const std::string& source = {});
     bool run_plan(PanePlan plan, const std::string& merge = {});
     PanePlan simulate(std::vector<caliper_builder::CommandInvocation> commands) const;
     caliper_builder::CommandResult send(caliper_builder::CommandInvocation inv, const std::string& group,

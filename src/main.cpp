@@ -604,6 +604,8 @@ public:
             std::cerr << "[chat] Caliper API stopped on " << address << ": the side chat's agent ended" << std::endl;
         };
         chh.show_approval = [this](const std::string& id) { approvals_.point_to(id); };
+        // The header's GPU note: a live run is attached.
+        chh.live_attached = [this] { return live_.attached(); };
         chh.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
         chat_.start(std::move(co), std::move(chh));
         // Every page's status bar shows the API's address while it runs.

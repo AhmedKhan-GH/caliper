@@ -74,7 +74,8 @@
 // Labels are nouns, as the UI principles ask: Send, Cancel, Restart, Custom
 // command, Clear; states are tags: RUNNING, STALLED, EXITED, LOGIN, FAILED,
 // NO AGENT, PERMISSION, APPROVAL, PLAN, THOUGHT, and the stop words DONE,
-// STOPPED, DECLINED, LIMIT. The pane writes no sentences of its own; the
+// STOPPED, DECLINED, LIMIT; the header's GPU note is the noun phrase "Shared
+// GPU", framed in bronze. The pane writes no sentences of its own; the
 // agent's text, its option names and its login methods are the agent's
 // content.
 //
@@ -151,8 +152,17 @@ struct ChatSettings {
     std::string custom_name = "Custom agent";  // the custom agent's name in the picker
     std::string custom_command;                // one line; empty: no custom agent
     bool allow_always = false;                 // offer an agent's allow_always options
-    bool local_model = false;                  // the agent runs on a local model
+    // The agents the person marked as running on a local model, by id: the
+    // GPU note's condition (chat_gpu_note()), since Caliper cannot tell where
+    // an agent's model runs.
+    std::vector<std::string> local_model_agents;
 };
+
+// The GPU contention note of the side chat's header (design/widget-agent.md,
+// GPU contention): "Shared GPU" while a live run is attached and the person
+// marked the chat's agent as running on a local model, else "". The same
+// noun as the widget agent's note (agent_gpu_note()).
+std::string chat_gpu_note(bool live_attached, bool local_model);
 
 // The MCP server's name in session/new, and so the prefix agents give its tools.
 inline constexpr const char* kChatMcpServerName = "caliper";
@@ -335,6 +345,9 @@ public:
         // could not start, or the person chose another agent. Not called when
         // a restart replaces it, nor when the chat is destroyed.
         std::function<void()> agent_ended;
+        // A live run is attached (the app's live session): the GPU note's
+        // condition with the agent's local-model mark. None: no live run.
+        std::function<bool()> live_attached;
     };
 
     SideChat(Options options, Hooks hooks = {});
@@ -348,6 +361,9 @@ public:
     bool choose_agent(const std::string& id);
     // Sets the custom agent's name and command line and picks it.
     caliper_builder::Error set_custom_agent(const std::string& name, const std::string& line);
+    // Marks the chosen agent as running on a local model, or clears the mark
+    // (the picker's Local model row); the settings change. False with no agent.
+    bool set_local_model(bool on);
     void set_text(std::string text);
     // Enter: sends the text and the draft's blocks. The agent starts first
     // when it is not running, and the message waits for its session.
@@ -386,6 +402,10 @@ public:
     const nlohmann::json& last_prompt() const { return last_prompt_; }
     // The agent's name for the picker and the header: agentInfo's title, else the agent's.
     std::string agent_title() const;
+    // The chosen agent is marked as running on a local model.
+    bool local_model() const;
+    // The header's GPU note (chat_gpu_note()), "" for none.
+    std::string gpu_note() const;
     // The tag of the state ("RUNNING", ...) or "".
     std::string tag() const;
     // The header's actions, and the input row's (Send, or Cancel while a turn runs).
@@ -521,6 +541,7 @@ struct ChatPaneInput {
     std::string version;              // its version, or ""
     std::string mode;                 // the agent's mode, or ""
     std::string tag;                  // the state's tag, or ""
+    std::string note;                 // the GPU note, or ""
     std::vector<ChatAction> header_actions;
     int faults = 0;                   // the diagnostics' count; 0 shows none
     std::string picker;               // the picker's label: the agent's name
@@ -535,6 +556,7 @@ struct ChatPaneLayout {
     WidgetRect agent;                 // empty when collapsed
     WidgetRect version;               // empty when collapsed or none
     WidgetRect mode;                  // empty when collapsed or none
+    WidgetRect note;                  // the GPU note after the agent's name; empty when collapsed or none
     WidgetRect tag;                   // empty when none
     WidgetRect faults;                // empty when none
     std::vector<WidgetRect> header_buttons;   // in header_actions order
@@ -552,7 +574,7 @@ struct ChatPaneLayout {
 };
 
 // Lays the pane out. What collapses first as it narrows: the agent's mode and
-// then its version in the header, then the agent's name in the header, then the picker's name
+// then its version in the header, then the GPU note, then the agent's name in the header, then the picker's name
 // (the ▾ mark stays), then the buttons' keys; in the header the faults chip,
 // then the state's tag, give way to the buttons when they need the room; the
 // draft's chips past what fits fold into "+N". The conversation takes every

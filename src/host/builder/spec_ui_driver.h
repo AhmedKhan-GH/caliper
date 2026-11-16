@@ -33,6 +33,11 @@
 //                        ("approval panel.create waiting"), a stop word
 //                        ("stop - DONE")
 //   chat draft           wait until the chat's input holds a handoff's draft
+//   chat note <text>|none
+//                        wait until the chat's header shows that GPU note
+//   chat local on|off    marks the chosen agent as running on a local model,
+//                        or clears it, as the picker's Local model row does
+//   chat picker          opens the agent picker
 //   click <item> [fx fy] a click on a builder pane's named rectangle
 //                        (BuilderPane::item_rect: "source:table:metrics",
 //                        "primitive:series", "prop:title", "bar:save", ...),
@@ -93,6 +98,7 @@
 #include <caliper_builder/session/session.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 
@@ -433,6 +439,20 @@ public:
             } else if (what == "draft") {
                 if (chat->draft_chips() == 0) return patience("the chat has no draft");
                 next("chat draft of " + std::to_string(chat->draft_chips()) + " blocks");
+            } else if (what == "local" && (a == "on" || a == "off")) {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                if (!chat->set_local_model(a == "on")) return void(error_ = "chat local: the chat has no agent");
+                next("chat local " + a);
+            } else if (what == "picker") {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                chat->open_picker();
+                next("chat picker");
+            } else if (what == "note") {
+                std::string want = s.arg.substr(std::min(s.arg.size(), std::string("note ").size()));
+                if (want == "none") want.clear();
+                const std::string shown = chat->note().empty() ? std::string("none") : chat->note();
+                if (chat->note() != want) return patience("the chat's note is " + shown);
+                next("the chat's note is " + shown);
             } else if (what == "item") {
                 const std::string cmd = b == "-" ? std::string() : b;
                 if (!chat->has_item(a, cmd, c)) return patience("no chat item " + s.arg);

@@ -1061,8 +1061,10 @@ void BuilderPane::widget_under(const std::string& anchor, float x, float w) {
 }
 
 // A property row's ⌘K: at the right end of its label, shown while the row is
-// under the pointer or its prompt is open; then the prompt under the row.
-void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path) {
+// under the pointer or its prompt is open; then the prompt under the row. The
+// property is the panel's, or with `source` given the spec source's.
+void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path,
+                               const std::string& source) {
     if (!widget_.open_property) return;
     const std::string anchor = "prop:" + path;
     const SpecLook& L = draw_->look;
@@ -1077,7 +1079,7 @@ void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& p
     ImGui::PushID(anchor.c_str());
     // A plate under the key, so that the label's end does not show through.
     if (shown) rows.dl->AddRectFilled(v2(kr.Min.x - 2.0f, r.Min.y), v2(kr.Max.x + 2.0f, r.Min.y + rh), L.ground);
-    if (widget_key("##cmdk.prop", kr, shown)) widget_.open_property(panel, path);
+    if (widget_key("##cmdk.prop", kr, shown)) widget_.open_property(panel, source, path);
     ImGui::PopID();
     ImGui::SetCursorScreenPos(back);
     widget_under(anchor, r.Min.x, r.GetWidth());
@@ -1497,6 +1499,8 @@ void BuilderPane::draw_source_properties(Rows& rows) {
         const ImRect v = rows.label(r, src && src->from ? "From" : "Catalog");
         put(rows.dl, L.mono, L.mono_size, v2(v.Min.x, v.Min.y + (v.GetHeight() - d.mono_h()) * 0.5f), L.text,
              fit(L.mono, L.mono_size, reads, v.GetWidth()));
+        // ⌘K beside what a spec source reads: its catalog, from or SQL.
+        if (src) property_key(rows, r, "", src->catalog ? "catalog" : src->from ? "from" : "sql", src->id);
     }
     const std::vector<PaneShape> shapes = transform_shapes();
     {
@@ -1517,6 +1521,7 @@ void BuilderPane::draw_source_properties(Rows& rows) {
         return;
     }
     rows.section("Transforms");
+    const float transforms_top = ImGui::GetCursorScreenPos().y;
     const size_t n = src ? src->transforms.size() : 0;
     for (size_t i = 0; i < n; ++i) {
         const spec::Transform& t = src->transforms[i];
@@ -1661,6 +1666,10 @@ void BuilderPane::draw_source_properties(Rows& rows) {
             x += w + std::round(6.0f * s);
         }
     }
+    // ⌘K beside a spec source's transforms, as one property, and the prompt
+    // under them.
+    if (src) property_key(rows, ImRect(v2(rows.x0, transforms_top), v2(rows.x1, ImGui::GetCursorScreenPos().y)), "",
+                          "transform", src->id);
     if (src) {
         ImGui::Dummy(v2(1.0f, std::round(10.0f * s)));
         const ImRect r = rows.next(d.m.row + std::round(6.0f * s));

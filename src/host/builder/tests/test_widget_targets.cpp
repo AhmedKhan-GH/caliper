@@ -353,6 +353,49 @@ TEST_CASE("widget targets: a property's edit is previewed in its panel") {
     CHECK(r.undo_steps() == r.steps_before + 1);
 }
 
+TEST_CASE("widget targets: a source's property edit is shown as its diff under its row") {
+    // The attention's transforms: the maximum over the heads in place of their mean.
+    const json transforms = json::array({{{"op", "slice"}, {"axis", 0}, {"index", 0}},
+                                         {{"op", "reduce"}, {"axis", 0}, {"fn", "max"}},
+                                         {{"op", "normalise"}, {"mode", "minmax"}}});
+    WidgetScriptTurn t;
+    t.steps = {edit(100, "source.patch", {{"id", "attn"}, {"patch", {{"transform", transforms}}}}),
+               message(200, "The attention takes the maximum over the heads.")};
+    t.end_at = milliseconds(300);
+    Rig r("source-property", {t});
+    const WidgetTarget target = WidgetTarget::for_property("", "attn", "transform");
+    CHECK(target.anchor == "prop:transform");
+    CHECK(target.frame_panel().empty());   // drawn under its row in Properties
+    CHECK(target.preview_scope() == json{{"source", "attn"}});
+    CHECK(target.to_json()["source"] == "attn");
+    r.ask(target, "Take the maximum over the heads");
+    REQUIRE_MESSAGE(r.surface->state() == WidgetState::preview, r.surface->error().code << " " << r.surface->error().message);
+    // The scope rule's scope for a source's property, and the bundle carries
+    // that source, its path and its value.
+    REQUIRE(r.agent->scopes().size() == 1);
+    CHECK(r.agent->scopes()[0] == r.rule_scope("source_property"));
+    const std::string bundle = r.agent->contexts()[0].dump();
+    CHECK(bundle.find("source attn") != std::string::npos);
+    CHECK(bundle.find("transform") != std::string::npos);
+    CHECK(bundle.find("tensor:attn_weights") != std::string::npos);
+    CHECK(bundle.find("source.patch") != std::string::npos);
+    // No panel is drawn from the preview; the diff names the source's change.
+    CHECK(r.sink.panels.empty());
+    CHECK(r.sink.specs.empty());
+    REQUIRE_FALSE(r.surface->diff().empty());
+    CHECK(r.surface->diff()[0].key.rfind("source attn", 0) == 0);
+    CHECK(r.s->open_spec()->text == r.before);
+    r.surface->accept();
+    CHECK(r.surface->state() == WidgetState::applied);
+    CHECK(r.undo_steps() == r.steps_before + 1);
+    const auto open = r.s->open_spec();   // kept: the source points into it
+    REQUIRE(open);
+    const auto* src = open->spec.find_source("attn");
+    REQUIRE(src != nullptr);
+    REQUIRE(src->transforms.size() == 3);
+    CHECK(src->transforms[1].fn == std::optional<std::string>("max"));
+}
+
 TEST_CASE("widget targets: a line whose y is shorter than its x gives NaN in the selection's rows") {
     PreparedPanel p;
     p.id = "curves";
