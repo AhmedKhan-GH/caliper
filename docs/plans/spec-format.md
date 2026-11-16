@@ -267,6 +267,13 @@ A spec with no `layout` places its panels in declaration order: one panel fills 
 
 A table named `x` may appear in the document's root, in `applet`, in each source, transform and panel, in `options` and in each layout table. Validation ignores its content, the canonical writers keep it, and the spec runtime never reads it. It is the place for a tool's own data, such as an editor's state. Its content follows the rules of [Values](#values) and counts toward the limits of the whole document. An empty `x` is dropped.
 
+### Reserved names
+
+Two names are reserved for work that is planned and not built, so that nothing else takes them:
+
+- The primitive name `scene` is reserved for 3-D scenes. Version 0 refuses it as `spec.unknown_primitive`, like any other name outside the seven, and a later version of the format adds it with its slots.
+- The catalog kind `recording` is reserved for recorded sessions, which the local database will store beside the loaders' tables. Version 0 refuses a `catalog` id of that kind as `spec.bad_value`, like any kind outside the five, and the kind is added when the catalog lists recordings.
+
 ## Values
 
 A spec holds only values that the canonical JSON form can carry unchanged to a browser:
