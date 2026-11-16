@@ -98,7 +98,10 @@ function render({ model, el }) {
   }
 
   const timer = setInterval(() => {
-    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ received }));
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ received }));
+      host.dataset.reported = String(received);   // the count the server has been sent
+    }
   }, 1000);
 
   model.on("change:src", () => socket && socket.close());

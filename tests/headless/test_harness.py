@@ -30,6 +30,7 @@ HERE = Path(__file__).parent
 SELFTEST = HERE / "mock_widget" / "selftest.ipynb"
 CANVAS = ".mock-view canvas"  # inside the widget's open shadow root
 RECEIVED = "() => Number(__caliperHarness.deepQueryAll('.mock-view')[0].dataset.received || 0)"
+REPORTED = "() => Number(__caliperHarness.deepQueryAll('.mock-view')[0].dataset.reported || 0)"
 
 CANVAS_2D_PAGE = """<!doctype html>
 <body style="margin:0;background:#181715">
@@ -200,6 +201,9 @@ def test_widget_stays_live_while_a_later_cell_runs(shots):
         webgpu = session.probe_webgpu()
         csp = session.headers.get("content-security-policy", "")
 
+        # The widget reports its count to the server once a second; the loop
+        # stops once it has sent one, and the server closes before its report.
+        session.wait(f"() => ({REPORTED})() > 0", timeout=30)
         (session.server.root / "stop-loop").write_text("")
         session.wait(idle=True, timeout=60)
         report = json.loads((session.server.root / "mock_stream_report.json").read_text())
