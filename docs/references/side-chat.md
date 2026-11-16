@@ -7,8 +7,9 @@ explains when to use the side chat and when the widget agent.
 
 !!! note "Status"
     The side chat is on the app's spec page and live page (`src/host/builder/chat_pane.h`, over the component in
-    `src/host/builder/side_chat.h`), and is tested in the hidden app with stub agents. It is not on the landing page,
-    and it does not take the builder pane's right column yet.
+    `src/host/builder/side_chat.h`), and is tested in the hidden app with stub agents. It is not on the landing page.
+    In the spec page's build mode it is the lower part of the builder pane's right column, under Properties
+    ([Builder pane](builder-pane.md)).
 
 ## Opening it
 
