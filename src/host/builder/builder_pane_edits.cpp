@@ -362,6 +362,26 @@ json pane_bind_json(const std::map<std::string, SlotValue>& bind) {
     return out;
 }
 
+std::string pane_fit_hint(Primitive p, const std::string& source_id, const PaneShape& shape) {
+    const char* takes = "";
+    size_t max_rank = 0;   // the most dimensions it draws, for a hint to slice
+    switch (p) {
+        case Primitive::series: takes = "a table's columns or a tensor of one or two dimensions"; max_rank = 2; break;
+        case Primitive::heatmap: takes = "a tensor of two dimensions"; max_rank = 2; break;
+        case Primitive::image: takes = "a tensor [H, W], [H, W, 3] or [H, W, 4]"; max_rank = 3; break;
+        case Primitive::points: takes = "a tensor [n, 2] or [n, 3], or two numeric columns"; max_rank = 2; break;
+        case Primitive::histogram: takes = "a numeric column or a tensor"; break;
+        case Primitive::table: takes = "a table"; break;
+        case Primitive::text: return {};
+    }
+    const std::string what = std::string("a") + (p == Primitive::image ? "n " : " ") + spec::to_string(p);
+    if (!shape.known) return source_id + "'s data is not known yet, and " + what + " takes " + takes + ".";
+    if (shape.tabular) return source_id + " is a table, and " + what + " takes " + takes + ".";
+    std::string out = source_id + " is " + pane_shape_text(shape) + ", and " + what + " takes " + takes;
+    if (max_rank > 0 && shape.dims.size() > max_rank) out += ": slice or reduce it in Properties";
+    return out + ".";
+}
+
 // ---- ids --------------------------------------------------------------------------------
 
 bool pane_valid_id(const std::string& id) {
@@ -453,6 +473,38 @@ spec::Spec pane_rename_source(const spec::Spec& s, const std::string& from, cons
                 if (head == from) b = to + (dot == std::string::npos ? std::string() : b.substr(dot));
             }
     return out;
+}
+
+// ---- the spec text ----------------------------------------------------------------------
+
+namespace {
+
+std::vector<std::string> text_lines(const std::string& t) {
+    std::vector<std::string> out;
+    size_t at = 0;
+    while (at < t.size()) {
+        size_t end = t.find('\n', at);
+        if (end == std::string::npos) end = t.size();
+        out.push_back(t.substr(at, end - at));
+        at = end + 1;
+    }
+    return out;
+}
+
+}  // namespace
+
+int pane_text_follow_line(const std::string& before, const std::string& after) {
+    if (before == after) return -1;
+    const std::vector<std::string> a = text_lines(before), b = text_lines(after);
+    size_t head = 0;
+    while (head < a.size() && head < b.size() && a[head] == b[head]) ++head;
+    size_t tail = 0;
+    while (tail < a.size() - head && tail < b.size() - head && a[a.size() - 1 - tail] == b[b.size() - 1 - tail]) ++tail;
+    if (b.empty()) return -1;
+    // The changed lines of `after` are [head, b.size() - tail); with none,
+    // lines were only taken out, before line `head`.
+    if (b.size() - tail > head) return (int)(b.size() - tail - 1);
+    return (int)std::min(head, b.size() - 1);
 }
 
 // ---- the layout tree --------------------------------------------------------------------

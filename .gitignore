@@ -21,6 +21,8 @@ imgui.ini
 
 # Data directories (comment out if you want to track data)
 data/
+# The walk-through's small data files are committed (make_data.py writes them).
+!examples/build_a_dashboard/data/
 
 # Third-party libraries
 # Ignore generated/built files in third_party, but track custom CMakeLists.txt

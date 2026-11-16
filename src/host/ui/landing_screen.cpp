@@ -456,6 +456,10 @@ void LandingScreen::draw(const Context& ctx) {
     if (pending_new_) {
         pending_new_ = false;
         command_.clear();
+        // While the line has the keyboard its own text wins over the buffer,
+        // so it reloads the cleared one; otherwise the title stayed in the
+        // line and filtered the instruments when the person came back Home.
+        if (ImGuiInputTextState* line = ImGui::GetInputTextState(command_id_)) line->ReloadUserBufAndMoveToEnd();
         std::string title = pending_new_title_;
         while (!title.empty() && title.front() == ' ') title.erase(title.begin());
         while (!title.empty() && title.back() == ' ') title.pop_back();
@@ -567,6 +571,7 @@ void LandingScreen::draw_command_bar() {
     // The field is a ruled fill-in line (SPEC §6.4): no box, no fill, only a
     // 1 px rule under the text that turns parchment while editing.
     const ImGuiID command_id = ImGui::GetID("##command");
+    command_id_ = command_id;
     const bool was_active = ImGui::GetActiveID() == command_id;
     const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
     if (focus_command_) {

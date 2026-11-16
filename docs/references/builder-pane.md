@@ -17,8 +17,9 @@ There are three ways to the pane:
 
 - **A new dashboard.** On the landing screen, F3 New dashboard, the Projects way in, makes a new spec and opens it in
   build mode. Type `new <title>` in the command line and press Enter to give it a title; F3 takes the command line's
-  text as the title too, and a dashboard without one is called Untitled. The spec's applet id is made from the title:
-  its letters and digits in lower case, with one `-` for every other run of characters, such as `run-42` for "Run 42".
+  text as the title too, and a dashboard without one is called Untitled. The command line is empty again afterwards.
+  The spec's applet id is made from the title: its letters and digits in lower case, with one `-` for every other run
+  of characters, such as `run-42` for "Run 42".
 - **Files dropped on the window.** Dropping files from the Finder or a file manager imports them into the workspace.
   On the spec page the pane opens in build mode with the new sources selected; on the landing screen the open spec's
   page opens in build mode first, or a new Untitled dashboard when no spec is open. Other pages keep their windows and
@@ -72,8 +73,11 @@ Files that an import refused are listed under Refused, with the file's name and 
 
 Series, Heatmap, Points, Histogram, Table, Image and Text. A click adds a panel of that primitive bound to the selected
 source: a series takes a table's first column as x and its other numeric columns as lines. A primitive that the
-selection does not fit is faint, with the reason in its tooltip, and a click on it changes nothing. A panel always has
-its required slots, so a primitive needs a selection that fits, except Text, which starts with the text "Text".
+selection does not fit is faint, with the reason in its tooltip, and a click on it changes nothing. The reason says what
+the source is and what the primitive takes; for a tensor with more dimensions than the primitive draws, such as a
+four-dimensional attention tensor for a heatmap, it says to slice or reduce it under Transforms in Properties. A panel
+always has its required slots, so a primitive needs a selection that fits, except Text, which starts with the text
+"Text".
 Dragging a primitive onto the canvas places the new panel where it is dropped.
 
 ## The canvas
@@ -121,7 +125,8 @@ Text and numbers apply as you type; ids apply on Enter or when the field is left
 into an editor, and Esc Done back. An edit applies as soon as the text is a valid spec, and the panels follow. While
 it is not, each error's line is marked with its code, the message is in the line's tooltip, the panels keep the last
 valid spec, and other changes wait until the text is fixed or left. A change made on the canvas or in Properties
-shows in the text at once.
+shows in the text at once, and the strip scrolls to the last line that changed when that line is out of view, so a
+new panel's block at the end of the text, or a title changed in the middle of it, comes into view.
 
 ## Keys
 
