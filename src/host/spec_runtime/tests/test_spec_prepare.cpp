@@ -183,6 +183,60 @@ TEST_CASE("prepare: points from positions and from columns, with colour and size
     CHECK(q.title == "v by step");
 }
 
+TEST_CASE("prepare: integer class labels take the categorical palette, other colours the colormap") {
+    const spec::Spec s = one_panel(kTensor, "primitive = \"points\"\nbind = { positions = \"w\", color = \"w\" }\n"
+                                            "options = { colormap = \"rdbu\" }");
+    const std::vector<float> pos = {0, 0, 1, 1, 2, 2, 3, 3};
+    {
+        // Labels of an integer dtype, few and whole: classes, in the live
+        // views' palette, and the colormap does not apply.
+        const std::vector<int64_t> labels = {0, 3, 3, 7};
+        const PreparedPanel p = prep(s, data({f32("positions", "w", {4, 2}, pos),
+                                              tensor<int64_t>("color", "w", DType::i64, {4}, labels)},
+                                             spec::Primitive::points));
+        REQUIRE(p.state.ready());
+        CHECK(p.points.classes == std::vector<int>{0, 3, 7});
+        CHECK(p.points.rgba == std::vector<uint32_t>{spec_class_color(0), spec_class_color(3), spec_class_color(3),
+                                                     spec_class_color(7)});
+        CHECK(spec_class_color(16) == spec_class_color(0));
+        CHECK(p.info == "4 points  2-D  3 classes");
+    }
+    {
+        // The same values as floats are values, through the colormap.
+        const PreparedPanel p = prep(s, data({f32("positions", "w", {4, 2}, pos), f32("color", "w", {4}, {0, 3, 3, 7})},
+                                             spec::Primitive::points));
+        CHECK(p.points.classes.empty());
+        CHECK(p.points.rgba.front() == spec_colormap_lut(kCmapRdbu)[0]);
+    }
+    {
+        // Seventeen distinct integers, or a negative one, are values too.
+        std::vector<float> many;
+        std::vector<int64_t> ids;
+        for (int i = 0; i < 17; ++i) {
+            many.insert(many.end(), {(float)i, (float)i});
+            ids.push_back(i);
+        }
+        const PreparedPanel p = prep(s, data({f32("positions", "w", {17, 2}, many),
+                                              tensor<int64_t>("color", "w", DType::i64, {17}, ids)},
+                                             spec::Primitive::points));
+        CHECK(p.points.classes.empty());
+        const std::vector<int64_t> neg = {-1, 0, 1, 2};
+        const PreparedPanel q = prep(s, data({f32("positions", "w", {4, 2}, pos),
+                                              tensor<int64_t>("color", "w", DType::i64, {4}, neg)},
+                                             spec::Primitive::points));
+        CHECK(q.points.classes.empty());
+    }
+    {
+        // A column of an integer type holds labels as well.
+        const spec::Spec c = one_panel(kMetrics, "primitive = \"points\"\nbind = { x = \"m.x\", y = \"m.y\", color = \"m.k\" }");
+        SlotData k = column("color", "m.k", {1, 2, 1});
+        k.columns = {{"k", "BIGINT"}};
+        const PreparedPanel p = prep(c, data({column("x", "m.x", {0.0, 1.0, 2.0}), column("y", "m.y", {0.0, 1.0, 2.0}), k},
+                                             spec::Primitive::points));
+        CHECK(p.points.classes == std::vector<int>{1, 2});
+    }
+}
+
 TEST_CASE("prepare: a cloud past max_points is sampled at a stride") {
     const spec::Spec s = one_panel(kTensor, "primitive = \"points\"\nbind = { positions = \"w\" }");
     std::vector<float> pos(250000 * 2, 0.5f);

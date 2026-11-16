@@ -12,6 +12,7 @@
 #include <imgui_internal.h>
 #include <implot.h>
 #include <implot3d.h>
+#include <implot3d_internal.h>   // the plot's rotation, to fit its box
 
 #include <algorithm>
 #include <cfloat>
@@ -442,19 +443,73 @@ void draw_grid(SpecPanelView& v, const ImRect& c, const SpecLook& L, SpecTexture
 }
 
 // The colour key of a points panel: the colormap's scale, named by the
-// colour binding, at the right of the content.
+// colour binding, in a column at the right of the content; for class labels
+// a legend over the plot's top right corner instead, as a series' legend
+// sits, so the cloud keeps the panel's width.
 float points_key_width(const PreparedPoints& P, const SpecLook& L) {
-    if (P.rgba.empty()) return 0.0f;
+    if (P.rgba.empty() || !P.classes.empty()) return 0.0f;
     const float afs = L.mono_size - 1.0f;
     return std::round(std::max(60.0f, text_size(L.mono, afs, "-0.000e-0").x + 26.0f) * L.text_scale);
 }
 
+// The legend of the classes: the colour binding's name over a swatch and the
+// label of each class (the live points view's classes), in a box at the top
+// right of `r`.
+void draw_class_legend(const PreparedPoints& P, const ImRect& r, const SpecLook& L) {
+    if (P.classes.empty()) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float afs = L.mono_size - 1.0f, s = L.text_scale;
+    const float sw = std::round(7.0f * s), gap = std::round(5.0f * s), pad = std::round(6.0f * s);
+    const float line = std::round(L.mono_size + 5.0f * s);
+    float w = text_size(L.mono, afs, P.color_name).x;
+    for (int c : P.classes) w = std::max(w, sw + gap + text_size(L.mono, L.mono_size, std::to_string(c)).x);
+    const size_t rows = std::min<size_t>(P.classes.size(), (size_t)std::max(0.0f, (r.GetHeight() - 2.0f * pad) / line - 1.0f));
+    const ImVec2 b1(r.Max.x - std::round(8.0f * s), r.Min.y + std::round(8.0f * s));
+    const ImVec2 b0(b1.x - std::round(w + 2.0f * pad), b1.y);
+    const ImVec2 b2(b1.x, b1.y + std::round(2.0f * pad + line * (float)(rows + 1)));
+    dl->AddRectFilled(b0, b2, with_alpha(L.ground, 230));
+    dl->AddRect(b0, b2, L.rule);
+    float y = b0.y + pad;
+    text_at(dl, L.mono, afs, ImVec2(b0.x + pad, y), L.faint, P.color_name);
+    y += line;
+    for (size_t i = 0; i < rows; ++i) {
+        const std::string t = std::to_string(P.classes[i]);
+        const ImVec2 ts = text_size(L.mono, L.mono_size, t);
+        const float cy = std::round(y + ts.y * 0.5f);
+        dl->AddRectFilled(ImVec2(b0.x + pad, cy - sw * 0.5f), ImVec2(b0.x + pad + sw, cy + sw * 0.5f),
+                          (ImU32)spec_class_color(P.classes[i]));
+        text_at(dl, L.mono, L.mono_size, ImVec2(b0.x + pad + sw + gap, y), L.secondary, t);
+        y += line;
+    }
+}
+
 void draw_points_key(const PreparedPoints& P, const ImRect& r, const SpecLook& L) {
-    if (P.rgba.empty()) return;
+    if (P.rgba.empty() || !P.classes.empty()) return;
     push_plot_style(L);
     ImGui::SetCursorScreenPos(r.Min);
     ImPlot::ColormapScale(P.color_name.c_str(), P.cmin, P.cmax, r.GetSize(), "%.3g", 0, implot_colormap(P.colormap));
     pop_plot_style();
+}
+
+// The view scale that makes the 3-D box, as the current rotation shows it,
+// fill `fill` of the plot's width and height: the box's corners projected
+// as ImPlot3D projects them (view scale times the rotated corner), against
+// ImPlot3D's view scale of min(w, h) / 1.8 at a factor of 1.
+float points3d_view_factor(const ImVec2& size, float fill) {
+    ImPlot3DPlot* plot = ImPlot3D::GetCurrentPlot();
+    if (!plot || size.x <= 0.0f || size.y <= 0.0f) return 1.0f;
+    const ImPlot3DPoint scale = plot->GetBoxScale();
+    double mx = 0.0, my = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        const ImPlot3DPoint corner((i & 1 ? 0.5 : -0.5) * scale.x, (i & 2 ? 0.5 : -0.5) * scale.y,
+                                   (i & 4 ? 0.5 : -0.5) * scale.z);
+        const ImPlot3DPoint q = plot->Rotation * corner;
+        mx = std::max(mx, std::fabs(q.x));
+        my = std::max(my, std::fabs(q.y));
+    }
+    if (mx <= 0.0 || my <= 0.0) return 1.0f;
+    const double want = std::min(fill * size.x / (2.0 * mx), fill * size.y / (2.0 * my));
+    return (float)std::clamp(want / (std::min(size.x, size.y) / 1.8), 0.5, 4.0);
 }
 
 void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
@@ -490,6 +545,7 @@ void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     }
     pop_plot_style();
     if (key > 0.0f) draw_points_key(P, ImRect(ImVec2(plot.Max.x + 4.0f, c.Min.y), c.Max), L);
+    draw_class_legend(P, c, L);
 }
 
 void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
@@ -498,11 +554,15 @@ void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const float key = points_key_width(P, L);
     const ImRect plot(c.Min, ImVec2(c.Max.x - key, c.Max.y));
     push_plot3d_style(L);
-    ImPlot3D::PushStyleVar(ImPlot3DStyleVar_ViewScaleFactor, 1.3f);
+    ImGui::PushFont(L.mono, L.mono_size);   // the box's ticks are drawn at a slant; a step larger
+    ImPlot3D::PushStyleVar(ImPlot3DStyleVar_ViewScaleFactor, 1.0f);
     if (ImPlot3D::BeginPlot("##spec.points3d", plot.GetSize(),
                             ImPlot3DFlags_NoTitle | ImPlot3DFlags_NoLegend | ImPlot3DFlags_NoMouseText |
                                 ImPlot3DFlags_NoMenus)) {
         ImPlot3D::SetupAxes(label_or_null(p.x_label), label_or_null(p.y_label), label_or_null(p.z_label));
+        // The box fills the panel, leaving room for its ticks and labels, as
+        // it is turned: the cloud fills its view on opening and on resize.
+        ImPlot3D::GetStyle().ViewScaleFactor = points3d_view_factor(plot.GetSize(), 0.84f);
         if (v.fit_frames > 0) {
             double x0, x1, y0, y1, z0, z1;
             const std::vector<double> xs(P.x.begin(), P.x.end()), ys(P.y.begin(), P.y.end()), zs(P.z.begin(), P.z.end());
@@ -534,8 +594,10 @@ void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
         ImPlot3D::EndPlot();
     }
     ImPlot3D::PopStyleVar();
+    ImGui::PopFont();
     pop_plot3d_style();
     if (key > 0.0f) draw_points_key(P, ImRect(ImVec2(plot.Max.x + 4.0f, c.Min.y), c.Max), L);
+    draw_class_legend(P, c, L);
 }
 
 void draw_table(SpecPanelView& v, const ImRect& c, const SpecLook& L) {

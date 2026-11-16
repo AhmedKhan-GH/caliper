@@ -101,7 +101,17 @@ struct PreparedPoints {
     // size from 0.5 at `smin` to 2 at `smax`.
     std::vector<uint32_t> rgba;
     std::vector<float> scale;
+    // Class labels: a colour binding of an integer type whose values are
+    // whole numbers from 0 to 255 with at most 16 distinct ones is drawn as
+    // classes, label L in the live views' categorical colour L mod 16, as
+    // the live points view draws classes, with a legend of the labels in
+    // `classes` in place of the colormap's scale.
+    std::vector<int> classes;
 };
+
+// The colour of class label `label` (r | g<<8 | b<<16 | a<<24): the live
+// views' categorical palette.
+uint32_t spec_class_color(int label);
 
 struct PreparedHistogram {
     std::vector<double> counts;

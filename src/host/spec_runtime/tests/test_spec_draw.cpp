@@ -156,6 +156,56 @@ TEST_CASE("draw: points in 2-D and 3-D, flat and coloured") {
         CHECK(d.img.count(near(lut[128], 3)).n > 20);
         CHECK(d.img.count(near(flat, 2)).n == 0);
     }
+    {
+        // Class labels: each class in its categorical colour, the legend's
+        // swatches at the right, and no colormap.
+        std::vector<int64_t> labels;
+        for (int i = 0; i < 400; ++i) labels.push_back(i % 4);
+        const spec::Spec s = one_panel(kTensor, "primitive = \"points\"\nbind = { positions = \"w\", color = \"w\" }\n"
+                                                "options = { colormap = \"magma\" }");
+        const Drawn d = draw_one(s, data({f32("positions", "w", {400, 3}, pos3),
+                                          tensor<int64_t>("color", "w", DType::i64, {400}, labels)},
+                                         spec::Primitive::points));
+        const Box b = content(d);
+        for (int k = 0; k < 4; ++k) {
+            CAPTURE(k);
+            CHECK(d.img.count(near(spec_class_color(k), 2), b.x0, b.y0, b.x1, b.y1).n > 40);
+            // The legend's swatch, at the top right.
+            CHECK(d.img.count(near(spec_class_color(k), 2), b.x1 - 80, b.y0, b.x1, b.y0 + 120).n >= 25);
+        }
+        CHECK(d.img.count(near(spec_class_color(4), 2), b.x0, b.y0, b.x1, b.y1).n == 0);
+        CHECK(d.img.count(near(spec_colormap_lut(kCmapMagma)[200], 3)).n == 0);
+    }
+}
+
+TEST_CASE("draw: a 3-D cloud fills its panel") {
+    if (!canvas()) return;
+    // A cube of points from corner to corner: its spread on screen is the box's.
+    std::vector<float> pos;
+    for (int i = 0; i < 1000; ++i)
+        pos.insert(pos.end(), {(float)(i % 10), (float)((i / 10) % 10), (float)(i / 100)});
+    const spec::Spec s = one_panel(kTensor, "primitive = \"points\"\nbind = { positions = \"w\" }");
+    for (const auto& size : {std::pair<int, int>{640, 400}, std::pair<int, int>{360, 640}}) {
+        const Drawn d = draw_one(s, data({f32("positions", "w", {1000, 3}, pos)}, spec::Primitive::points), size.first,
+                                 size.second);
+        const Box b = content(d);
+        int x0 = 1 << 30, x1 = -1, y0 = 1 << 30, y1 = -1;
+        for (int y = b.y0; y < b.y1; ++y)
+            for (int x = b.x0; x < b.x1; ++x)
+                if (near(d.look.flat_point, 2)(d.img.rgb(x, y))) {
+                    x0 = std::min(x0, x);
+                    x1 = std::max(x1, x);
+                    y0 = std::min(y0, y);
+                    y1 = std::max(y1, y);
+                }
+        CAPTURE(size.first);
+        REQUIRE(x1 > x0);
+        // The cloud takes most of the panel along its tighter side.
+        const double fill = std::max((double)(x1 - x0) / (b.x1 - b.x0), (double)(y1 - y0) / (b.y1 - b.y0));
+        CHECK(fill > 0.6);
+        CHECK(x0 >= b.x0);
+        CHECK(x1 < b.x1);
+    }
 }
 
 TEST_CASE("draw: a histogram's bars in the plot ink") {

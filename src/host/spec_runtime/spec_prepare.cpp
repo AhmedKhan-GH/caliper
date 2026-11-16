@@ -8,11 +8,17 @@
 #include <caliper/services/tensor_bridge_v1.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+
+// The live views' categorical palette (live_views_draw.cpp).
+namespace caliper_live_views {
+extern const uint32_t kPalette[16];
+}  // namespace caliper_live_views
 
 namespace caliper_host {
 
@@ -144,6 +150,40 @@ std::string cell_text(const json& c, size_t max_chars) {
     for (char& ch : s)
         if ((unsigned char)ch < 0x20) ch = ' ';
     return s;
+}
+
+// A DuckDB type of whole numbers.
+bool integer_type(const std::string& t) {
+    static const char* const kInteger[] = {"TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT",
+                                           "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "BOOLEAN", "INT"};
+    for (const char* n : kInteger)
+        if (t == n || (t.rfind(n, 0) == 0 && t.size() > std::strlen(n) && std::isdigit((unsigned char)t[std::strlen(n)])))
+            return true;
+    return false;
+}
+
+// Whether a colour binding holds class labels (spec_prepare.h): an integer
+// type, and whole values from 0 to 255 with at most 16 distinct ones.
+bool class_labels(const SlotData& s, const std::vector<double>& v, std::vector<int>* classes) {
+    bool integer = false;
+    if (s.kind == SlotData::Kind::tensor) integer = s.tensor.valid() && !caliper_builder::dtype_is_float(s.tensor.dtype());
+    else if (s.kind == SlotData::Kind::column) integer = !s.columns.empty() && integer_type(s.columns[0].type);
+    if (!integer) return false;
+    bool seen[256] = {};
+    int distinct = 0;
+    for (double x : v) {
+        if (!std::isfinite(x)) continue;
+        if (x < 0.0 || x > 255.0 || x != std::floor(x)) return false;
+        if (!seen[(int)x]) {
+            seen[(int)x] = true;
+            if (++distinct > 16) return false;
+        }
+    }
+    if (distinct == 0) return false;
+    classes->clear();
+    for (int i = 0; i < 256; ++i)
+        if (seen[i]) classes->push_back(i);
+    return true;
 }
 
 bool numeric_type(const std::string& t) {
@@ -439,9 +479,11 @@ void prepare_points(PreparedPanel& p, const spec::Panel& panel, const PanelData&
     }
     P.three_d = !zs.empty() || (pos && pos->tensor.shape()[1] == 3);
     std::vector<double> cs, ss;
+    bool classes = false;
     if (const SlotData* sc = slot(d, "color")) {
         if (!vector_of(*sc, &cs)) { p.state = mismatch(sc->binding); return; }
         P.color_name = slot_name(*sc);
+        classes = class_labels(*sc, cs, &P.classes);
     }
     if (const SlotData* sz = slot(d, "size")) {
         if (!vector_of(*sz, &ss)) { p.state = mismatch(sz->binding); return; }
@@ -485,7 +527,10 @@ void prepare_points(PreparedPanel& p, const spec::Panel& panel, const PanelData&
         P.smax = (float)hi;
     }
     P.colormap = spec_colormap(panel.options.colormap.value_or("viridis"), kCmapViridis);
-    if (!P.color.empty()) {
+    if (classes) {
+        P.rgba.reserve(P.color.size());
+        for (float c : P.color) P.rgba.push_back(std::isfinite(c) ? spec_class_color((int)c) : spec_class_color(0));
+    } else if (!P.color.empty()) {
         const uint32_t* lut = spec_colormap_lut(P.colormap);
         const float span = P.cmax - P.cmin;
         P.rgba.reserve(P.color.size());
@@ -503,7 +548,11 @@ void prepare_points(PreparedPanel& p, const spec::Panel& panel, const PanelData&
         }
     }
     char b[96];
-    std::snprintf(b, sizeof b, "%s points  %d-D", with_commas(n).c_str(), P.three_d ? 3 : 2);
+    if (classes)
+        std::snprintf(b, sizeof b, "%s points  %d-D  %zu classes", with_commas(n).c_str(), P.three_d ? 3 : 2,
+                      P.classes.size());
+    else
+        std::snprintf(b, sizeof b, "%s points  %d-D", with_commas(n).c_str(), P.three_d ? 3 : 2);
     p.info = b;
 }
 
@@ -686,6 +735,8 @@ std::string spec_fmt4(double v) {
     std::snprintf(b, sizeof b, "%.10g", std::strtod(b, nullptr));
     return b;
 }
+
+uint32_t spec_class_color(int label) { return caliper_live_views::kPalette[(label < 0 ? 0 : label) % 16]; }
 
 int spec_colormap(const std::string& name, int fallback) {
     if (name == "viridis") return kCmapViridis;
