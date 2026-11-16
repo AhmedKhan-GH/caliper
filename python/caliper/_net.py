@@ -252,6 +252,7 @@ class Link:
     may be sendable. Network thread only."""
     caps: frozenset = frozenset()            # 3.1: "controls", "selection" if the peer announced them
     may_control = False                      # 3.1: a CONTROL from it is accepted
+    scenes = None                            # 3.2 draft: its scene subscriptions (caliper._net_scene)
 
     def __init__(self, producer: "_Producer", peer: str = ""):
         self.p = producer
@@ -365,6 +366,9 @@ class Link:
         except _wire.MessageError as e:
             self._reply_error(msg, e.code, e.message)
             return
+        if v.kind == _wire.Kind.SCENE and _wire.CAP_SCENES not in self.caps:   # 3.2 draft
+            self._reply_error(msg, _wire.ERR_UNKNOWN_VIEW, f"no view {msg.view!r}")
+            return
         rate = min(float(msg.max_rate or _wire.DEFAULT_RATE_HZ), float(_wire.LIMIT_RATE_HZ))
         s = Sub(msg.sub, v.name, v.id, v.kind, resolved, 1.0 / rate, rate)
         self.subs[msg.sub] = s
@@ -449,6 +453,13 @@ class Link:
             self.stats["series_values"] += stop - start
             return _wire.encode_parts(_wire.Series(s.sub, s.view, start, h.total, h.stamp_ns,
                                                    vals)), None
+        if self.scenes is not None:          # 3.2 draft: scene messages after series
+            frame, due = self.scenes.next_frame(now)
+            if frame is not None:
+                self.stats["scenes_sent"] += 1
+                return frame, None
+            if due is not None:
+                wait = due if wait is None else min(wait, due)
         best = None
         for s in self.subs.values():
             if s.snap is None:
@@ -512,13 +523,15 @@ class _Producer:
 
     def capabilities(self) -> list:
         from ._net_controls import capabilities
-        return capabilities(self.controls is not None)
+        return sorted(capabilities(self.controls is not None) + [_wire.CAP_SCENES])
 
     def views_msg(self, link: Link | None = None) -> _wire.Views:
         with self.ring.lock:
             entries = [v.entry() for v in self.ring.views.values()][:_wire.MAX_VIEWS]
         if link is not None and self.controls is not None and _wire.CAP_SELECTION in link.caps:
             entries = self.controls.annotate(entries)
+        if link is None or _wire.CAP_SCENES not in link.caps:          # 3.2 draft
+            entries = [e for e in entries if e["kind"] != _wire.Kind.SCENE]
         return _wire.Views(entries, self.identity["id"])
 
     def attached_changed(self, delta: int) -> None:
@@ -535,6 +548,8 @@ class _Producer:
         try:
             if v.kind == KIND_SERIES:
                 return v, _wire.resolve_data_view(entry, request, retain=SERIES_RETAIN)
+            if v.kind == _wire.Kind.SCENE:                          # 3.2 draft
+                return v, _wire.resolve_scene_data_view(entry, request)
             return v, self.ring.engine.resolve(entry, request)
         except _wire.MessageError:
             raise
@@ -542,6 +557,10 @@ class _Producer:
             raise _wire.MessageError(_wire.ERR_INTERNAL, f"{type(e).__name__}: {e}") from None
 
     def join(self, link: Link, s: Sub) -> None:
+        if s.kind == _wire.Kind.SCENE:                              # 3.2 draft
+            from ._net_scene import route_of
+            route_of(self.ring).join(link, s)
+            return
         if s.kind == KIND_SERIES:
             st = self.ring.series.get(s.view)
             if st is None:
@@ -568,6 +587,10 @@ class _Producer:
 
     def leave(self, link: Link, s: Sub) -> None:
         s.snap = None
+        if s.kind == _wire.Kind.SCENE:                              # 3.2 draft
+            from ._net_scene import route_of
+            route_of(self.ring).leave(link, s)
+            return
         if s.series is not None:
             st = s.series
             s.series = None
@@ -629,6 +652,9 @@ class _Producer:
         for p in ready:
             self.transport.publish(p.view, Slot(0, p.stage.data, p.stage.stats, p.stage.aux,
                                                 p.event), _NetMeta(p))
+        scenes = ring.__dict__.get("scenes")                        # 3.2 draft
+        if scenes is not None and scenes.pump():
+            busy = True
         for st in list(ring.series.values()):
             q = st.q
             got = False
@@ -914,6 +940,8 @@ class _Listener:
                 link.caps = peer_caps(hello.capabilities)
                 if _wire.CAP_CONTROLS in link.caps:
                     control = link.may_control = ctl.allow
+            if _wire.CAP_SCENES in hello.capabilities:            # 3.2 draft
+                link.caps = link.caps | {_wire.CAP_SCENES}
             await ws.send(_wire.encode(_wire.Welcome(
                 _wire.ROLE_PRODUCER, s.producer.capabilities(), s.software, s.identity,
                 control=control)))
@@ -1137,7 +1165,8 @@ class NetServer:
                 continue
             self._pump_idle = True
             self._pump_wake.clear()
-            if self.ring.pending:                   # raced with a wake
+            sc = self.ring.__dict__.get("scenes")
+            if self.ring.pending or (sc is not None and sc.pending):   # raced with a wake
                 continue
             await self._pump_wake.wait(0.25)
             self._pump_idle = False
@@ -1338,6 +1367,7 @@ def _add_route(s) -> None:
     caliper._extra_routes.append(route)
     caliper._set_routes()
     caliper._series_tap = s.ring.tap
+    caliper._scene.attach_ring(s.ring)          # 3.2 draft: list the scenes made before
     _producer = s
 
 

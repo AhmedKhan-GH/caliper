@@ -727,6 +727,7 @@ def remove(name: str) -> bool:
     core had it."""
     found = False
     _dataview.REGISTRY.remove(name)
+    _scene.forget(name)
     _CTL.forget_view(name)
     with LOCK:
         for r in _routes:
@@ -863,7 +864,7 @@ __all__ += ["widget"]
 def widget(name: str, kind: str | None = None, *, height: int = 320):
     """A live view of the stream inline in a notebook cell (an anywidget fed by
     the stream socket, not by Jupyter's message channel). ``kind`` is "series",
-    "heatmap", "image", "points" or "histogram"; None takes it from the stream.
+    "heatmap", "image", "points", "histogram" or "scene"; None takes it from the stream.
     Starts :func:`serve` when no server runs. The widget's ``selection`` and
     ``data_view`` traits carry what the viewer picks back to Python."""
     from ._widget import widget as _widget
@@ -989,3 +990,31 @@ def controls(*, height: int = 160):
     server runs."""
     from ._widget import controls as _controls_widget
     return _controls_widget(height=height)
+
+
+# ---------------------------------------------------------------------------
+# scenes (the scenes subset of wire protocol 3.2, draft; caliper._scene)
+# ---------------------------------------------------------------------------
+__all__ += ["scene", "Scene"]
+from . import _scene                                           # noqa: E402
+from ._scene import Scene                                      # noqa: E402
+
+
+def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", rate=None,
+          data_view=None, view_camera=None) -> Scene:
+    """The scene ``name``, made on the first call: a tree of entities, named
+    by entity paths such as "world/cloud", each holding a batch of points,
+    lines and a mesh, in one 3-D (``space="3d"``) or 2-D space. ``up`` is the
+    axis a 3-D view keeps upright when it opens ("+x" to "-z", default "+y"),
+    or in 2-D the direction of y on screen ("-y" default, "+y"); ``units`` a
+    note of at most 15 bytes shown with the view (default "m"); ``rate`` the
+    default rate limit of each batch (default 60 per second, 0 every call).
+    A second call returns the same scene and updates ``up``, ``units`` and
+    ``rate``; a different ``space`` raises ValueError. Log to it with
+    ``scene.points``, ``scene.lines`` and ``scene.mesh``. Scenes travel over
+    :func:`serve` (the notebook widget with ``kind="scene"``, the browser page
+    and a hub); with only the shared-memory session or the in-process window
+    open, a scene call warns once and does nothing there. ``data_view`` and
+    ``view_camera`` are not built yet and raise NotImplementedError."""
+    return _scene.scene(name, space=space, up=up, units=units, rate=rate, data_view=data_view,
+                        view_camera=view_camera)

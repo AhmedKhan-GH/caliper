@@ -35,7 +35,7 @@ except ImportError as e:
 
 from . import _assets
 
-KINDS = ("series", "heatmap", "image", "points", "histogram")
+KINDS = ("series", "heatmap", "image", "points", "histogram", "scene")   # scene: 3.2 draft
 
 
 # ---------------------------------------------------------------------------

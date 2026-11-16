@@ -113,6 +113,9 @@ class _NativeProducer(_Producer):
     def busy(self) -> bool:
         if self.ring.pending or (self.controls is not None and self.controls.holding()):
             return True
+        sc = self.ring.__dict__.get("scenes")                       # 3.2 draft
+        if sc is not None and (sc.pending or sc.native_wait is not None):
+            return True
         for st in list(self.ring.series.values()):
             if st.q:
                 return True
@@ -143,6 +146,11 @@ class _NativeProducer(_Producer):
             busy = len(ring.pending) > 0
         for p in ready:
             self.deliver(p)
+        sc = ring.__dict__.get("scenes")                            # 3.2 draft: scene messages
+        if sc is not None:
+            if sc.pump():
+                busy = True
+            sc.native_wait = sc.pump_native(list(self.links), time.monotonic())
         for st in list(ring.series.values()):
             q = st.q
             floats, stamp = [], 0
@@ -300,8 +308,8 @@ class NativeServer(NetServer):
             link = _NativeLink(p, conn)
             if frame:                                 # what the peer announced (3.1)
                 info = json.loads(frame)
-                link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION)
-                                      if info.get(c))
+                link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION,
+                                                  _wire.CAP_SCENES) if info.get(c))
                 link.may_control = bool(info.get("control"))
             p.by_conn[conn] = link
             p.links.add(link)
