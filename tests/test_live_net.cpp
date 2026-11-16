@@ -734,15 +734,22 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
         f.send(fr);
         f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, a, false));
         f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, b, false));
+        // A part of the draft this viewer does not draw yet, and an entity transform it does not apply yet.
         wire::SceneUpdate arrows = f.scene_update("arrows", CALIPER_NET_PART_POINTS, a, false);
-        std::vector<uint8_t> bytes;
-        REQUIRE(wire::encode(arrows, &bytes));
-        // The same frame with the part "arrows": the codec refuses to write it, so it is patched.
-        const std::string from = "\"part\":\"points\"", to = "\"part\":\"arrows\"";
-        auto at = std::search(bytes.begin(), bytes.end(), from.begin(), from.end());
-        REQUIRE(at != bytes.end());
-        std::copy(to.begin(), to.end(), at);
-        f.send_raw(bytes);
+        arrows.part = CALIPER_NET_PART_ARROWS;
+        arrows.arrays.at(0).name = "origins";
+        wire::Section vec = arrows.arrays.at(0);
+        vec.name = "vectors";
+        arrows.arrays.push_back(vec);
+        f.send(arrows);
+        static const float eye[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        wire::SceneTransforms tr;
+        tr.sub = f.sub_of.at("world");
+        tr.view = "world";
+        tr.seq = ++f.seq;
+        tr.paths = {"cloud"};
+        tr.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {1, 16}, eye, sizeof eye);
+        f.send(tr);
         return 0;
     });
     caliper_live_views::SceneView* sv = nullptr;
@@ -755,7 +762,14 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     REQUIRE(cloud != nullptr);
     CHECK(cloud->count() == 3);   // the newer update
     CHECK(sv->tree().batch_static(sv->tree().root(), caliper_scene::Primitive::Lines));
-    CHECK_MESSAGE(sv->notes().back().find("arrows") != std::string::npos, sv->notes().back());
+    REQUIRE(poll_until(core, [&] { return sv->notes().size() >= 2; }));
+    const auto noted = [&](const char* what) {
+        for (const std::string& n : sv->notes())
+            if (n.find(what) != std::string::npos) return true;
+        return false;
+    };
+    CHECK_MESSAGE(noted("'arrows' is not drawn yet"), sv->notes().front());
+    CHECK_MESSAGE(noted("entity transforms are not applied yet"), sv->notes().back());
     REQUIRE(poll_until(core, [&] {
         const auto errs = p.call([](FakeProducer& f) { return f.errors; });
         return std::find(errs.begin(), errs.end(), CALIPER_NET_ERR_UNSUPPORTED) != errs.end();
