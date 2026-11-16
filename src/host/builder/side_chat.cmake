@@ -85,3 +85,42 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
     # agents here are the stubs, and the switch keeps caliper-agent offline.
     set_tests_properties(caliper_side_chat caliper_side_chat_gpu PROPERTIES ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
 endif()
+
+# The side chat in the app (chat_pane.cpp, which the caliper target compiles
+# itself), headless over a real AppSession and a headless ImGui context, and
+# in the hidden app with the stub agents (POSIX):
+#   ctest caliper_chat_pane       the settings, the toggle and ⌘L, the column,
+#                                 Ask in chat, the approval row, the API line
+#   ctest caliper_side_chat_app   the spec page's turn with the cards and Ask in
+#                                 chat, and the acceptance case on a live stream
+if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32 AND TARGET caliper)
+    add_executable(caliper_chat_pane_tests
+        ${_chat_dir}/tests/test_main.cpp
+        ${_chat_dir}/tests/test_chat_pane.cpp
+        ${_chat_dir}/tests/test_chat_app.cpp
+        ${_chat_dir}/chat_pane.cpp
+        ${_chat_dir}/app_session.cpp)
+    target_link_libraries(caliper_chat_pane_tests PRIVATE caliper_side_chat caliper_api_session caliper_host_lib
+        doctest::doctest caliper_builder_duckdb)
+    target_include_directories(caliper_chat_pane_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host ${THIRD_PARTY_DIR}/stb)
+    target_compile_definitions(caliper_chat_pane_tests PRIVATE CALIPER_WITH_BUILDER=1
+        CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/chat-pane-test-tmp"
+        CALIPER_ACP_STUB_AGENT="$<TARGET_FILE:caliper_acp_stub_agent>"
+        CALIPER_CHAT_STUB_AGENT="$<TARGET_FILE:caliper_chat_stub_agent>")
+    set_target_properties(caliper_chat_pane_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    caliper_spec_runtime_fonts(caliper_chat_pane_tests)
+    add_dependencies(caliper_chat_pane_tests caliper caliper-mcp caliper_acp_stub_agent caliper_chat_stub_agent)
+    add_test(NAME caliper_chat_pane COMMAND caliper_chat_pane_tests --test-suite-exclude=app)
+    set(_chat_app_env "CALIPER_AGENT_OFFLINE=1;CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+    if(APPLE AND TARGET caliper_net)
+        # caliper_attention_producer is defined later, under the same condition.
+        add_dependencies(caliper_chat_pane_tests caliper_attention_producer)
+        list(APPEND _chat_app_env "CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>"
+            "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+    endif()
+    add_test(NAME caliper_side_chat_app COMMAND caliper_chat_pane_tests --test-suite=app)
+    set_tests_properties(caliper_chat_pane PROPERTIES LABELS "builder;chat" TIMEOUT 240
+        ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
+    set_tests_properties(caliper_side_chat_app PROPERTIES LABELS "builder;chat;cli" TIMEOUT 500
+        ENVIRONMENT "${_chat_app_env}" SKIP_REGULAR_EXPRESSION "caliper_side_chat_app skipped")
+endif()

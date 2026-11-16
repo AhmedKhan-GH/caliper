@@ -252,3 +252,35 @@ TEST_CASE("side chat layout: the builder's left column keeps its share free besi
     CHECK(c.left.w == 1050 - m.min_width - m.min_canvas);
     CHECK(c.canvas.w == m.min_canvas);
 }
+
+TEST_CASE("side chat layout: the page with the chat open and closed, under the strips, at two sizes") {
+    const ChatLayoutMetrics m = ChatLayoutMetrics::for_text_scale(1.0f);
+    const float page_bar = 28, status_bar = 22, approval_strip = 120;
+    for (const auto& size : {std::pair<float, float>{2560, 1440}, std::pair<float, float>{1440, 900}}) {
+        INFO(size.first << "x" << size.second);
+        const WidgetRect window{0, 0, size.first, size.second};
+        for (const bool left : {false, true}) {
+            INFO("left " << left);
+            const ChatColumnLayout open = layout_chat_page(window, page_bar, status_bar + approval_strip, true, left, m);
+            const ChatColumnLayout closed = layout_chat_page(window, page_bar, status_bar + approval_strip, false, left, m);
+            // The strips keep their places: the page starts under the page bar and ends above the strip.
+            for (const ChatColumnLayout* c : {&open, &closed}) {
+                CHECK(c->canvas.y == page_bar);
+                CHECK(c->canvas.bottom() == size.second - status_bar - approval_strip);
+            }
+            // Open: the chat at the right, the canvas beside it, nothing overlaps.
+            CHECK(open.chat.right() == size.first);
+            CHECK(open.chat.w == std::max(m.min_width, std::round(size.first * 0.28f)));
+            CHECK(open.canvas.right() == open.chat.x);
+            CHECK(open.chat.y == page_bar);
+            CHECK(open.chat.bottom() == size.second - status_bar - approval_strip);
+            check_no_overlap({open.left, open.canvas, open.chat});
+            // Closed: no column, and the canvas takes its width back.
+            CHECK(closed.chat.empty());
+            CHECK(closed.column.empty());
+            CHECK(closed.canvas.right() == size.first);
+            CHECK(closed.canvas.w == open.canvas.w + open.chat.w);
+            CHECK(closed.left.w == open.left.w);
+        }
+    }
+}

@@ -23,6 +23,8 @@
 //                  Caliper reviews them
 //   Compare ...    one chunk, a line on stderr, then exits with code 1
 //   report         answers with the prompt's blocks as JSON
+//   hold           one chunk, then waits for the gate file <gate-dir>/go (or a
+//                  cancel), then ends the turn
 //   anything else  echoes the text
 //
 // Options: --gate-dir <dir> makes the learning-rate scenario wait, after its
@@ -461,6 +463,10 @@ void run_turn(json id, json prompt) {
         pause(50);
         std::fflush(stdout);
         std::_Exit(1);
+    } else if (text == "hold") {
+        chunk("Holding.");
+        wait_gate("go");
+        end_turn(id, g_cancelled ? "cancelled" : "end_turn");
     } else if (text == "report") {
         chunk(prompt.dump());
         end_turn(id);
