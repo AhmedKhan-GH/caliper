@@ -25,8 +25,12 @@
 //                             Additive (one, one) as the native geometry pipelines; Depth32Float with
 //                             less-equal when testing and always when only writing; override
 //                             constants keyed by their numeric id. Created synchronously: the core
-//                             caches pipelines by descriptor, so each is made once.
-//   on_create_compute_pipeline wgpuDeviceCreateComputePipeline on the program's layout.
+//                             caches pipelines by descriptor, so each is made once. Refused on a
+//                             compatibility-mode device when it blends and writes the ID target,
+//                             which that level cannot do (one blend state for all targets).
+//   on_create_compute_pipeline wgpuDeviceCreateComputePipeline on the program's layout; refused when
+//                             the entry's workgroup is above the device's compute limits (128
+//                             invocations on a compatibility-mode device), which Limits lacks.
 //   on_create_bind_group      wgpuDeviceCreateBindGroup with the program's layout of that group. A
 //                             kArena entry binds the arena buffer at offset 0 for the binding's size;
 //                             the group is rebuilt (same handle) if the arena buffer has to grow.
@@ -231,7 +235,12 @@ std::unique_ptr<WebGpuBackend> WebGpuBackend::create(WGPUDevice device, WGPUQueu
     caps.backend = "webgpu";
     adapter_text() = adapter ? adapter : "";
     caps.adapter = adapter_text().c_str();
-    return std::unique_ptr<WebGpuBackend>(new WebGpuBackend(device, queue, caps, compat));
+    auto b = std::unique_ptr<WebGpuBackend>(new WebGpuBackend(device, queue, caps, compat));
+    b->max_invocations_ = L.maxComputeInvocationsPerWorkgroup;
+    b->max_group_[0] = L.maxComputeWorkgroupSizeX;
+    b->max_group_[1] = L.maxComputeWorkgroupSizeY;
+    b->max_group_[2] = L.maxComputeWorkgroupSizeZ;
+    return b;
 }
 
 WebGpuBackend::WebGpuBackend(WGPUDevice device, WGPUQueue queue, const Caps& caps, bool compat)
@@ -464,6 +473,7 @@ bool WebGpuBackend::on_create_program(uint32_t slot, const ProgramDesc& d, std::
         return false;
     }
     p.bindings.assign(d.bindings, d.bindings + d.binding_count);
+    p.entries.assign(d.entries, d.entries + d.entry_count);
     std::sort(p.bindings.begin(), p.bindings.end(), [](const BindingDesc& a, const BindingDesc& b) {
         return a.group != b.group ? a.group < b.group : a.binding < b.binding;
     });
@@ -558,6 +568,12 @@ bool WebGpuBackend::on_create_render_pipeline(uint32_t slot, const RenderPipelin
         *error = "a render pipeline needs a vertex and a fragment entry";
         return false;
     }
+    // A compatibility-mode device has one blend state for all colour targets, and an RG32Uint
+    // target cannot blend, so a pipeline that writes the ID target cannot blend there.
+    if (compat_ && d.id_target && d.blend != Blend::Opaque) {
+        *error = "a compatibility-mode device cannot blend a pipeline that writes the ID target";
+        return false;
+    }
     WGPUVertexAttribute attrs[kMaxVertexBuffers][kMaxAttributesPerBuffer];
     WGPUVertexBufferLayout vbl[kMaxVertexBuffers];
     for (uint32_t i = 0; i < d.vertex_layout_count; ++i) {
@@ -641,6 +657,17 @@ bool WebGpuBackend::on_create_compute_pipeline(uint32_t slot, const ComputePipel
         *error = "the program is gone or the entry is missing";
         return false;
     }
+    for (const EntryDesc& e : pr->entries)
+        if (e.name && std::strcmp(e.name, d.entry) == 0) {
+            const uint32_t x = e.workgroup_size[0], y = e.workgroup_size[1], z = e.workgroup_size[2];
+            if (x > max_group_[0] || y > max_group_[1] || z > max_group_[2] || x * y * z > max_invocations_) {
+                char b[160];
+                std::snprintf(b, sizeof b, "the workgroup %u x %u x %u is above the device's limits (%u invocations)",
+                              x, y, z, max_invocations_);
+                *error = b;
+                return false;
+            }
+        }
     WGPUComputePipelineDescriptor cd = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
     cd.label = sv(d.label);
     cd.layout = pr->layout;
@@ -663,10 +690,10 @@ bool WebGpuBackend::build_group(Group& g, std::string* error) {
         const BindEntry& be = g.desc.entries[i];
         e[i] = WGPU_BIND_GROUP_ENTRY_INIT;
         e[i].binding = be.binding;
-        uint64_t declared = 0;
+        uint64_t declared = 0;   // a uniform's block; a storage binding of size 0 takes the rest
         if (pr)
             for (const BindingDesc& b : pr->bindings)
-                if (b.group == g.index && b.binding == be.binding) declared = b.size;
+                if (b.group == g.index && b.binding == be.binding && b.type == BindingType::Uniform) declared = b.size;
         if (be.buffer == kArena) {
             if (!ensure_arena(kUniformAlign)) return false;
             e[i].buffer = arena_;

@@ -92,6 +92,7 @@ private:
         WGPUPipelineLayout layout = nullptr;
         std::vector<BindingDesc> bindings;   // sorted by (group, binding)
         uint8_t group_mask = 0;              // the groups the program declares
+        std::vector<EntryDesc> entries;      // names point into the caller's ProgramDesc table
     };
     struct Pipe {
         WGPURenderPipeline render = nullptr;
@@ -130,6 +131,8 @@ private:
     WGPUDevice device_ = nullptr;
     WGPUQueue queue_ = nullptr;
     bool compat_ = false;
+    // The device's compute limits, which Limits does not carry: a workgroup above them is refused.
+    uint32_t max_invocations_ = 256, max_group_[3] = {256, 256, 64};
 
     std::vector<Buf> buffers_;
     std::vector<Tex> textures_;
