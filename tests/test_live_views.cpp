@@ -696,6 +696,83 @@ TEST_CASE("live_views/points: screenshots of a 3-D cluster scene from three angl
     }
 }
 
+// The colormap edge cases of web/test/mock_server.py's edge_values(): NaN, the
+// infinities, zeros, the range's ends and +-1e30, then each side of every
+// index boundary of [lo, hi] (float32 arithmetic throughout).
+static std::vector<float> edge_values(float lo, float hi) {
+    std::vector<float> out = {NAN, INFINITY, -INFINITY, 0.0f, -0.0f, lo, hi, 1e30f, -1e30f};
+    std::vector<float> b(256);
+    for (int k = 0; k < 256; ++k) b[k] = lo + ((float)k - 0.5f) / 255.0f * (hi - lo);
+    for (float x : b) out.push_back(x);
+    for (float x : b) out.push_back(std::nextafter(x, INFINITY));
+    for (float x : b) out.push_back(std::nextafter(x, -INFINITY));
+    for (float x : b) out.push_back(std::nextafter(std::nextafter(x, INFINITY), INFINITY));
+    return out;
+}
+
+TEST_CASE("live_views/points: value-coloured points have map_f32_to_rgba8's colour for every edge case, over "
+          "increasing, decreasing and very wide ranges") {
+    Core c(900, 700);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    const uint32_t* lut = caliper_host::colormap_lut(1);
+    const float ranges[][2] = {{-3.0f, 5.0f}, {1.0f, -1.0f}, {-3e38f, 3e38f}, {0.0f, 3e38f}};
+    for (const auto& r : ranges) {
+        CAPTURE(r[0]);
+        CAPTURE(r[1]);
+        // 1,024 2-D points on a 32 x 32 grid, coloured by the edge values.
+        const std::vector<float> vals = edge_values(r[0], r[1]);
+        const int N = 1024;
+        std::vector<float> pos(N * 3), val(N);
+        for (int i = 0; i < N; ++i) {
+            pos[3 * i] = (float)(i % 32);
+            pos[3 * i + 1] = (float)(i / 32);
+            pos[3 * i + 2] = 0.0f;
+            val[i] = vals[i % vals.size()];
+        }
+        CaliperTensor tp = tensor(pos.data(), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_CPU);
+        CaliperTensor tv = tensor(val.data(), CALIPER_DT_F32, {N}, CALIPER_DEV_CPU);
+        const float stats[8] = {0, 0, 0, 31, 0, 31, 0, 0};
+        CaliperLiveSnapshot s = snap("edge_points", CALIPER_LIVE_KIND_POINTS, &tp);
+        s.aux = &tv;
+        s.colormap = 1;
+        s.vmin = r[0];
+        s.vmax = r[1];
+        s.points_dims = 2;
+        s.stats = stats;
+        s.stats_count = 8;
+        REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &s) == 1, c.err());
+        c.frames(3);
+        caliper_live_views::View* pv = caliper_live_views::find(c.core, "edge_points");
+        REQUIRE(pv != nullptr);
+        CaliperLiveViewInfo vi = info(c.core, "edge_points");
+        std::vector<uint8_t> px = readback(c.core, "edge_points", vi.width, vi.height);
+        REQUIRE(px.size() == (size_t)vi.width * vi.height * 4);
+        float V[16], P[16];
+        caliper_live_views::camera_matrices(*pv, (float)vi.width / (float)vi.height, V, P);
+        int wrong = 0, compared = 0;
+        std::string first;
+        for (int i = 0; i < N; ++i) {
+            // The point's centre on the render target (2-D: the view matrix is the identity).
+            const float x = pos[3 * i], y = pos[3 * i + 1];
+            const float cx = P[0] * x + P[12], cy = P[5] * y + P[13];
+            const int sx = (int)((cx * 0.5f + 0.5f) * vi.width), sy = (int)((0.5f - cy * 0.5f) * vi.height);
+            if (sx < 0 || sy < 0 || sx >= vi.width || sy >= vi.height) continue;
+            uint8_t want[4];
+            caliper_host::map_f32_to_rgba8(&val[i], 1, 1, lut, r[0], r[1], want);
+            const uint8_t* got = &px[((size_t)sy * vi.width + sx) * 4];
+            ++compared;
+            if (std::memcmp(got, want, 4) != 0) {
+                if (!wrong) first = std::to_string(i) + " (" + std::to_string(val[i]) + ")";
+                ++wrong;
+            }
+        }
+        MESSAGE("[" << r[0] << ", " << r[1] << "]: " << compared << " points compared, " << wrong
+                    << " differ" << (wrong ? ", the first " + first : std::string()));
+        CHECK(compared == N);
+        CHECK(wrong == 0);
+    }
+}
+
 TEST_CASE("live_views/series: ring wrap copies the window oldest first") {
     Core c(320, 240);
     if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());

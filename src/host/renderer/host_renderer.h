@@ -59,6 +59,12 @@ struct HostGeomDraw {
     float att_ref = 0.0f;
     float fade_w0 = 0.0f;
     float fade_w1 = 0.0f;
+    // Host-internal, set by the live points view: colour a COLORMAP points
+    // draw by exactly the index map_f32_to_rgba8 gives each value (through
+    // colormap_thresholds, tensor_bridge.h), as the browser views do, instead
+    // of the geometry service's own rule. The WebGPU backend always does; the
+    // Metal backend does when this is set; Vulkan and GL keep the service's.
+    bool exact_colormap = false;
 };
 
 // The constants of the depth cues above, written out in each backend's shader

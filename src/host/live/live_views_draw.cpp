@@ -1201,6 +1201,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             d[0].size_px = point_size_px(v.cur.n, core->scale);
             if (v.cur.aux) {
                 d[0].color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+                d[0].exact_colormap = true;   // each value's colour exactly as map_f32_to_rgba8
                 d[0].attr_alloc = v.cur.aux->rid;
                 d[0].attr_offset = v.cur.aux_off;
                 d[0].lut256 = v.lut;
