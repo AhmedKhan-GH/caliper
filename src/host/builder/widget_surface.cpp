@@ -90,6 +90,7 @@ const char* widget_action_label(WidgetAction action) {
         case WidgetAction::model: return "Model";
         case WidgetAction::setup: return "Setup";
         case WidgetAction::close: return "Close";
+        case WidgetAction::text: return "Text";
     }
     return "";
 }
@@ -613,6 +614,7 @@ void WidgetSurface::act(WidgetAction action) {
         case WidgetAction::model:
         case WidgetAction::setup: open_model(); break;
         case WidgetAction::close: close(); break;
+        case WidgetAction::text: toggle_diff(); break;
     }
 }
 
@@ -657,6 +659,8 @@ std::vector<WidgetAction> WidgetSurface::card_actions() const {
     switch (state_) {
         case WidgetState::preview:
             if (edits_ > 0) return {A::accept, A::reject, A::refine, A::diff};
+            // An answer: Text shows the whole of one longer than its card.
+            if (reply_overflow_) return {A::refine, A::text, A::close};
             return {A::refine, A::close};
         case WidgetState::declined: return {A::rephrase, A::retry, A::model};
         case WidgetState::handoff: return {A::ask_in_chat, A::rephrase, A::close};
@@ -982,16 +986,42 @@ std::string WidgetSurface::reply_body() const {
     return reply_;
 }
 
-int WidgetSurface::reply_lines(float card_width) const {
+int WidgetSurface::reply_lines(float card_width, bool row) const {
     // An answer without a change is the card's content: its reply wraps over
-    // up to six lines. Otherwise the reply is one elided line.
+    // up to six lines in a panel and four under a row, elided past them, with
+    // Text for the whole of it. Otherwise the reply is one elided line.
+    reply_overflow_ = false;
     if (!look_ || state_ != WidgetState::preview || edits_ > 0 || reply_.empty()) return 1;
     const SpecLook& L = *look_;
     const float w = std::max(40.0f, card_width);
     ImFont* f = L.ui ? L.ui : ImGui::GetFont();
     const float h = f->CalcTextSizeA(L.small_size, FLT_MAX, w, reply_.c_str(), reply_.c_str() + reply_.size()).y;
     const float lh = f->CalcTextSizeA(L.small_size, FLT_MAX, 0.0f, "Ag").y;
-    return std::max(1, std::min(6, (int)std::ceil(h / std::max(1.0f, lh) - 0.01f)));
+    const int need = std::max(1, (int)std::ceil(h / std::max(1.0f, lh) - 0.01f));
+    const int most = row ? 4 : 6;
+    reply_overflow_ = need > most;
+    return std::min(need, most);
+}
+
+// The reply cut to `lines` lines of `width`, ending with an ellipsis.
+std::string WidgetSurface::elided_reply(float width, int lines) const {
+    const SpecLook& L = *look_;
+    ImFont* f = L.ui ? L.ui : ImGui::GetFont();
+    const float lh = f->CalcTextSizeA(L.small_size, FLT_MAX, 0.0f, "Ag").y;
+    auto fits = [&](const std::string& t) {
+        return f->CalcTextSizeA(L.small_size, FLT_MAX, width, t.c_str(), t.c_str() + t.size()).y <= lh * (float)lines + 0.5f;
+    };
+    if (fits(reply_)) return reply_;
+    static const std::string kDots = "\xE2\x80\xA6";
+    size_t lo = 0, hi = reply_.size();
+    while (lo < hi) {   // the longest prefix that fits with the ellipsis
+        size_t mid = (lo + hi + 1) / 2;
+        while (mid > 0 && ((unsigned char)reply_[mid] & 0xC0) == 0x80) --mid;
+        if (mid <= lo) break;
+        if (fits(trimmed(reply_.substr(0, mid)) + kDots)) lo = mid;
+        else hi = mid - 1;
+    }
+    return trimmed(reply_.substr(0, lo)) + kDots;
 }
 
 WidgetLayout WidgetSurface::layout_in(const WidgetRect& panel, float strip, bool row) const {
@@ -999,7 +1029,8 @@ WidgetLayout WidgetSurface::layout_in(const WidgetRect& panel, float strip, bool
     WidgetLayoutMetrics m = WidgetLayoutMetrics::for_text_scale(L.text_scale);
     if (row) m.min_content = 0.0f;   // under a row nothing else shares the space
     const float card_w = panel.w - 4.0f * m.pad;
-    return layout_widget_surface(widget_layout_input(*this, panel, strip, reply_lines(card_w)), m, look_measure(L));
+    const int lines = reply_lines(card_w, row);
+    return layout_widget_surface(widget_layout_input(*this, panel, strip, lines), m, look_measure(L));
 }
 
 float WidgetSurface::reserve(const SpecPanelFrame& f) const {
@@ -1052,7 +1083,7 @@ void WidgetSurface::draw_block(const WidgetRect& panel, float strip, const ImRec
     const SpecLook& L = *look_;
     const float s = L.text_scale;
     const WidgetLayoutMetrics metrics = WidgetLayoutMetrics::for_text_scale(s);
-    WidgetLayoutInput in = widget_layout_input(*this, panel, strip, reply_lines(panel.w - 4.0f * metrics.pad));
+    WidgetLayoutInput in = widget_layout_input(*this, panel, strip, reply_lines(panel.w - 4.0f * metrics.pad, at_row));
     const WidgetLayout lay = layout_in(panel, strip, at_row);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGui::PushClipRect(band.Min, band.Max, true);
@@ -1084,7 +1115,7 @@ void WidgetSurface::draw_block(const WidgetRect& panel, float strip, const ImRec
             fill = L.plate_hover;
             key_ink = L.accent;
         }
-        if (a == WidgetAction::diff && show_full_diff_) outline = L.accent;
+        if ((a == WidgetAction::diff || a == WidgetAction::text) && show_full_diff_) outline = L.accent;
         if (primary) sternbild::cut_plate(dl, b.Min, b.Max, outline, fill, std::round(4.0f * s));
         else {
             if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
@@ -1210,8 +1241,9 @@ void WidgetSurface::draw_block(const WidgetRect& panel, float strip, const ImRec
                 const float lh = r.GetHeight() / (float)in.reply_lines;
                 ImGui::PushClipRect(r.Min, r.Max, true);
                 ImFont* f = L.ui ? L.ui : ImGui::GetFont();
+                const std::string shown = reply_overflow_ ? elided_reply(r.GetWidth(), in.reply_lines) : body;
                 dl->AddText(f, L.small_size, v2(r.Min.x, std::round(r.Min.y + (lh - small_h) * 0.5f)), L.secondary,
-                            body.c_str(), body.c_str() + body.size(), r.GetWidth());
+                            shown.c_str(), shown.c_str() + shown.size(), r.GetWidth());
                 ImGui::PopClipRect();
             } else {
                 draw_text(dl, L.ui, L.small_size, v2(r.Min.x, r.Min.y + (r.GetHeight() - small_h) * 0.5f), L.secondary,

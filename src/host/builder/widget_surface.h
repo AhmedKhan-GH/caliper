@@ -145,7 +145,7 @@ enum class WidgetState { idle, prompt, running, preview, applied, declined, hand
 const char* widget_state_name(WidgetState state);
 
 // The actions a state offers, in their order on the surface.
-enum class WidgetAction { accept, reject, refine, diff, ask_in_chat, cancel, retry, rephrase, model, setup, close };
+enum class WidgetAction { accept, reject, refine, diff, ask_in_chat, cancel, retry, rephrase, model, setup, close, text };
 const char* widget_action_label(WidgetAction action);   // the noun on the surface
 const char* widget_action_key(WidgetAction action);     // its key ("⏎", "esc") or ""
 
@@ -279,7 +279,8 @@ private:
     void show_preview();
     void clear_shown();
     std::string reply_body() const;
-    int reply_lines(float card_width) const;
+    int reply_lines(float card_width, bool row) const;
+    std::string elided_reply(float width, int lines) const;
     WidgetLayout layout_in(const WidgetRect& panel, float strip, bool row) const;
     void draw_block(const WidgetRect& panel, float strip, const ImRect& band, bool row);
     void drop_preview();
@@ -324,6 +325,7 @@ private:
     std::string shown_panel_;       // the panel the sink shows a preview in
     bool shown_spec_ = false;       // the sink shows the whole spec's preview
     bool created_spec_ = false;     // the preview needed a spec.new, which a discard undoes
+    mutable bool reply_overflow_ = false;   // an answer longer than its card's lines: Text shows it all
     struct Sink;
     std::unique_ptr<WidgetPreviewSink> runtime_sink_;
 };
