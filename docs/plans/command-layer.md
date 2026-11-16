@@ -217,7 +217,7 @@ These commands edit the open spec, the one spec the builder shows. There is at m
 - `panel.create` without `place` puts the new panel to the right of the whole layout, with half the width.
 - `layout.place` moves a panel that is already in the layout. `beside` puts it to the right of the target. `ratio` is the share of the space that the placed panel gets, from 0.05 to 0.95, 0.5 by default; the handler turns it into the spec's `ratio`, which is the share of the first child.
 - The bindings and options that `panel.create` and `panel.patch` accept are every slot and option of the [spec format](spec-format.md), with its enumerations and bounds where the schema subset can state them; a test keeps the table in line with the format's fixtures. Extension tables (`x`) are open objects, which closed tool schemas cannot describe, so only `spec.set_text` sets them; the patches keep an item's `x`. `panel.create` needs no `bind`, since a text panel may have only `options.text`.
-- Every command of this table that edits the open spec returns the change as a unified diff of the spec's canonical TOML (`diff`) and whether it was applied (`applied`), and takes `dry_run`, which checks the change and returns its diff and warnings without applying it, so that the change can be shown for approval first. A dry run records no undo step and, like any mutating command without one, clears the redo stack.
+- Every command of this table that edits the open spec returns the change as a unified diff of the spec's canonical TOML (`diff`) and whether it was applied (`applied`), and takes `dry_run`, which checks the change and returns its diff and warnings without applying it, so that the change can be shown for approval first. A dry run has no effect at all: its handler reports `no_effect`, so the registry keeps the redo stack, files no step and writes no journal line, as for a read (see [Steps and records](#steps-and-records)). An edit that leaves the spec as it was reports the same.
 
 The layout in `layout.set` and in the results is a flat list of nodes, because tool schemas cannot be recursive: `{"root": "<id>", "nodes": [{"id": "n1", "split": "horizontal", "ratio": 0.6, "children": ["heat", "n2"]}, ...]}`. `split` is `horizontal`, `vertical` or `tabs`; `ratio` is the share of the first child, or null for tabs. A child is a node id or a panel id; node ids must not be panel ids, and a node is used once. `root` names a node, or the one panel when the layout is a single panel. The handler turns this into the spec's nested `[layout]` table and back.
 
@@ -245,6 +245,8 @@ The history is one undo stack and one redo stack per workspace, held by the regi
 - **an inverse invocation**, a command name and arguments that reverse the command; redo runs the original invocation's handler again;
 - **none**, for a command that cannot be undone.
 
+A handler may instead report that its command changed nothing, with `no_effect` on its output, whether it succeeded or failed: a dry run, or an edit that left everything as it was. The registry then treats the invocation as a read: it files no step and ignores any undo record, keeps the redo stack and an open merge, and writes no journal line unless the journal records read-only commands. A preview by an agent therefore never costs the person their redo.
+
 Undoing a step runs its records' `undo` in reverse order; redoing it runs their `redo` in order. An inverse invocation runs through the registry's handler table, with its arguments validated, but it is not journaled as a `do` event, not recorded as a step and not sent to the approval policy on its own (see [Undo, redo and approval](#undo-redo-and-approval)). The inverse kept is always the one from the first time the command ran: an inverse must restore the state from before, given the state after, and a handler that makes ids must make them from the state, so that a redo makes the same ids again.
 
 ### Groups
@@ -265,7 +267,7 @@ A merged record keeps the `undo` of its first command and takes the `redo` of it
 
 ### Redo
 
-Undo moves a step from the undo stack to the redo stack, and redo moves it back. Any mutating command that succeeds clears the redo stack, including one that cannot be undone, because the redo steps were recorded against a state that no longer holds. A command that fails, a read-only command and a refused invocation leave both stacks as they were.
+Undo moves a step from the undo stack to the redo stack, and redo moves it back. Any mutating command that succeeds clears the redo stack, including one that cannot be undone and excepting one whose handler reports no effect, because the redo steps were recorded against a state that no longer holds. A command that fails, a read-only command and a refused invocation leave both stacks as they were.
 
 ### Commands that cannot be undone
 
@@ -311,7 +313,7 @@ The journal is append-only JSON Lines at `journal/commands.jsonl` in the workspa
 - A failed event carries `"ok": false` and `"error": "<code>"`.
 - An `undo` or `redo` event is written for each step that `history.undo` or `history.redo` undid or redid. Its `name` is that command, its `args` are `{}`, its `group` is the step's group, and `seqs` lists the `seq` of every `do` event of the step. A failed undo or redo is written with `ok: false` and the error code.
 
-The journal records every invocation of a mutating command that passed argument validation: the ones that succeeded, the ones whose handler failed, and the ones that were denied, by the policy or by the person. An invocation refused earlier (unknown command, invalid arguments, not bound, wrong thread) ran nothing and is not written, since its arguments may be malformed. An invocation waiting for approval is written once, when it is decided or withdrawn. Read-only commands are written only when the journal is opened with `include_read_only`, as `do` events. Results are never written.
+The journal records every invocation of a mutating command that passed argument validation: the ones that succeeded, the ones whose handler failed, and the ones that were denied, by the policy or by the person. An invocation whose handler reports no effect is a read and is not recorded. An invocation refused earlier (unknown command, invalid arguments, not bound, wrong thread) ran nothing and is not written, since its arguments may be malformed. An invocation waiting for approval is written once, when it is decided or withdrawn. Read-only commands are written only when the journal is opened with `include_read_only`, as `do` events. Results are never written.
 
 Each line is written and flushed before the command's result is returned, so a crash loses no line that a client saw acknowledged, apart from what the operating system had not yet written to disk; the journal does not call `fsync`. A journal that cannot be written does not fail the command: the registry keeps the error and reports it to the app through `journal_error()`.
 

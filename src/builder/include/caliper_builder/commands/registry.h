@@ -12,7 +12,11 @@
 //      command.handler_failed, and a handler that invokes a command gets
 //      command.reentrant;
 //   4. for a mutating command, writes the journal's do event (also for a
-//      failure or a denial) and files the undo record in the history.
+//      failure or a denial) and files the undo record in the history. A
+//      handler that reports `no_effect` (a dry run, or an edit that changed
+//      nothing) is treated as a read: no undo step is filed, the redo stack
+//      and merging are kept, and no journal line is written unless the
+//      journal also records read-only commands.
 // history.undo, history.redo and history.list are built in: every registry
 // has them, bound to the history it owns. Undoing or redoing a step asks the
 // approval policy about each destructive command in it, with the history
@@ -54,14 +58,19 @@ struct CommandContext {
 
 // What a handler returns: a result object or an error, and for a mutating
 // command that succeeded, its undo record (UndoRecord::none() when it cannot
-// be undone).
+// be undone). `no_effect` says that the command changed nothing, as a dry run
+// does whether it succeeds or fails, so the registry treats it as a read and
+// ignores any undo record.
 struct CommandOutput {
     nlohmann::json result = nlohmann::json::object();
     Error error;
     UndoRecord undo;
+    bool no_effect = false;
 
     static CommandOutput ok(nlohmann::json result, UndoRecord undo = UndoRecord::none());
     static CommandOutput fail(Error error);
+    // A success that changed nothing.
+    static CommandOutput unchanged(nlohmann::json result);
 };
 
 using CommandHandler = std::function<CommandOutput(const CommandContext&)>;

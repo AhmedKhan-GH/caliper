@@ -100,6 +100,13 @@ CommandOutput CommandOutput::ok(json result, UndoRecord undo) {
     return out;
 }
 
+CommandOutput CommandOutput::unchanged(json result) {
+    CommandOutput out;
+    out.result = std::move(result);
+    out.no_effect = true;
+    return out;
+}
+
 CommandOutput CommandOutput::fail(Error error) {
     CommandOutput out;
     out.error = std::move(error);
@@ -454,13 +461,15 @@ CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& en
         result = run_history_list(inv);
     } else {
         CommandOutput out = call(entry, inv, false);
-        const bool journal_this = entry.descriptor.mutates || (journal_ && journal_->options().include_read_only);
+        // An outcome that changed nothing is a read, even of a mutating command.
+        const bool changed = entry.descriptor.mutates && !out.no_effect;
+        const bool journal_this = changed || (journal_ && journal_->options().include_read_only);
         if (out.error) {
             if (journal_this) journal_do(inv, false, out.error.code);
             return CommandResult::failure(inv.id, out.error);
         }
         const std::uint64_t seq = journal_this ? journal_do(inv, true, {}) : 0;
-        if (entry.descriptor.mutates) {
+        if (changed) {
             if (out.undo.kind == UndoRecord::Kind::none) {
                 history_.pass_by();
             } else {

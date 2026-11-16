@@ -361,6 +361,64 @@ TEST_CASE("a command that cannot be undone is passed by and clears the redo stac
     CHECK(saves == 1);
 }
 
+TEST_CASE("an outcome with no effect is a read: the redo stack, the history and the journal stay as they were") {
+    const fs::path dir = fs::path(CALIPER_BUILDER_TEST_TMP) / "registry-no-effect";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    const std::string path = (dir / "commands.jsonl").string();
+    auto opened = CommandJournal::open(path);
+    REQUIRE(opened.error.ok());
+    CommandRegistry r;
+    r.set_journal(opened.journal.get());
+    Store s;
+    add_toy(r, s);
+    int undo_runs = 0;
+    // toy.preview: a dry run of toy.set. Its undo record, if any, is ignored.
+    REQUIRE(r.add(descriptor("toy.preview", true), [&](const CommandContext& c) {
+                 if (c.invocation.args.value("key", "") == "bad") {
+                     CommandOutput failed = CommandOutput::fail(cb::Error("toy.refused", "No."));
+                     failed.no_effect = true;
+                     return failed;
+                 }
+                 CommandOutput out = CommandOutput::unchanged({{"preview", true}});
+                 out.undo = UndoRecord::closures([&] { ++undo_runs; return cb::Error(); }, [] { return cb::Error(); });
+                 return out;
+             }).ok());
+
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "a"}, {"value", 1}})).ok);
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "a"}, {"value", 2}})).ok);
+    REQUIRE(r.invoke(inv("history.undo")).ok);
+    CHECK(r.invoke(inv("toy.preview", {{"key", "a"}})).ok);
+    CHECK(r.invoke(inv("toy.preview", {{"key", "bad"}})).error.code == "toy.refused");
+    CHECK(state(r).can_redo);
+    CHECK(state(r).undo.size() == 1);
+    REQUIRE(r.invoke(inv("history.redo")).ok);
+    CHECK(s.values["a"] == 2);
+    CHECK(undo_runs == 0);
+    // The previews wrote nothing: two do events, one undo and one redo.
+    const auto read = cb::read_journal(path);
+    REQUIRE(read.events.size() == 4);
+    for (const auto& e : read.events) CHECK(e.name != "toy.preview");
+
+    // Merging stays open across a preview: a drag interrupted by one is still one step.
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "b"}, {"value", 1}}, CommandOrigin::ui, {}, "drag")).ok);
+    REQUIRE(r.invoke(inv("toy.preview", {{"key", "b"}})).ok);
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "b"}, {"value", 2}}, CommandOrigin::ui, {}, "drag")).ok);
+    CHECK(state(r).undo.front().count == 2);
+
+    // A journal that records reads records the preview as a read.
+    const fs::path reads = dir / "reads" / "commands.jsonl";
+    cb::JournalOptions options;
+    options.include_read_only = true;
+    auto with_reads = CommandJournal::open(reads.string(), options);
+    REQUIRE(with_reads.error.ok());
+    r.set_journal(with_reads.journal.get());
+    REQUIRE(r.invoke(inv("toy.preview", {{"key", "a"}})).ok);
+    const auto read2 = cb::read_journal(reads.string());
+    REQUIRE(read2.events.size() == 1);
+    CHECK(read2.events[0].name == "toy.preview");
+}
+
 TEST_CASE("the default policy asks for a destructive command from an agent, and the person decides") {
     RegistryOptions options;
     options.max_pending = 2;
