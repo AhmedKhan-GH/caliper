@@ -21,7 +21,7 @@ grid and the camera never move.
     land = Landscape(model, eval_x[:128], eval_y[:128])
     for step in range(steps):
         ...                                   # one training step
-        land.point(model, step)
+        land.point(model, step)               # a point every 10th step
         if land.due(step, every, directions):
             positions, values, share = land.refit(model, span, directions)
 """
@@ -80,20 +80,26 @@ class Landscape:
     current weights are the centre vertex). ``seed`` seeds the generator of
     the random directions, which are drawn once and filter-normalised against
     the weights as they are when the Landscape is made, before the first
-    training step: the weights at step 0. A snapshot of the weights is kept
-    every ``snapshot_every`` steps and at every refit, at most ``keep`` of
-    them: when the buffer is full, every second snapshot is dropped and the
-    interval doubles. ``loss`` is the loss of a batch, ``loss(logits, y)``.
+    training step: the weights at step 0. The path gets a point every
+    ``point_every`` steps, from one forward pass of the batch. A snapshot of
+    the weights is kept every ``snapshot_every`` steps, a multiple of
+    ``point_every`` so that it has the loss of its step, and at every refit, at
+    most ``keep`` of them: when the buffer is full, every second snapshot is
+    dropped and the interval doubles. ``loss`` is the loss of a batch,
+    ``loss(logits, y)``.
     """
 
-    def __init__(self, model, x, y, *, grid=41, seed=0, snapshot_every=25, keep=256,
-                 loss=F.cross_entropy):
+    def __init__(self, model, x, y, *, grid=41, seed=0, point_every=10, snapshot_every=20,
+                 keep=256, loss=F.cross_entropy):
         if grid < 3 or grid % 2 == 0:
             raise ValueError(f"grid must be an odd number of at least 3, got {grid}")
         if keep < 4 or keep % 2:
             raise ValueError(f"keep must be an even number of at least 4, got {keep}")
-        if snapshot_every < 1:
-            raise ValueError(f"snapshot_every must be at least 1, got {snapshot_every}")
+        if point_every < 1:
+            raise ValueError(f"point_every must be at least 1, got {point_every}")
+        if snapshot_every < 1 or snapshot_every % point_every:
+            raise ValueError(f"snapshot_every must be a multiple of point_every ({point_every}), "
+                             f"got {snapshot_every}")
         named = [(n, p) for n, p in model.named_parameters() if p.ndim >= 2]
         if not named:
             raise ValueError("the model has no parameter with two or more dimensions to perturb")
@@ -108,6 +114,7 @@ class Landscape:
         self.grid = grid
         self.loss = loss
         self.keep = keep
+        self.point_every = point_every
         self.snapshot_every = snapshot_every
         self._interval = snapshot_every
 
@@ -287,12 +294,17 @@ class Landscape:
 
     # -- the calls of the training loop ----------------------------------------
     def point(self, model, step):
-        """The path's point (3,) at the model's current weights, after the
-        training step ``step``: its coordinates on the plane in box units and its
-        height, half the clipped log10 loss of the landscape batch. Keeps a
-        snapshot every ``snapshot_every`` steps (the interval doubles at each
-        thinning) and, once a plane exists, appends the point to the path."""
+        """Call after every training step ``step``. At every ``point_every``-th
+        step it returns the path's point (3,) at the model's current weights:
+        its coordinates on the plane in box units and its height, half the
+        clipped log10 loss of the landscape batch; keeps a snapshot every
+        ``snapshot_every`` steps (the interval doubles at each thinning); and,
+        once a plane exists, appends the point to the path. At the other steps
+        it only notes the step and returns None, so that the path and the
+        current point stay at the latest point."""
         self.step = step
+        if step % self.point_every:
+            return None
         with torch.no_grad():
             theta = self.flat(model)
             h = 0.5 * _log_loss(self.batch_loss(model))
@@ -319,7 +331,7 @@ class Landscape:
 
     def due(self, step, every, directions) -> bool:
         """Whether the loop refits at ``step``: first at step 0 in random
-        directions, or in the path's plane once three snapshots exist (step 50
+        directions, or in the path's plane once three snapshots exist (step 40
         at the defaults), then at every multiple of ``every``."""
         if directions not in (PATH, RANDOM):
             raise ValueError(f"directions must be {PATH!r} or {RANDOM!r}, got {directions!r}")
