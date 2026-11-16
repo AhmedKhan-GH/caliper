@@ -9,7 +9,7 @@ synthetic data, so nothing is downloaded.
 The task: each sequence is 24 random tokens followed by the same 24 tokens
 again, and the model predicts every next token. The first half cannot be
 predicted, but the second half can, by looking back to where the current token
-appeared before and copying the token after it. A two-layer transformer learns
+appeared before and copying the token after it. A small transformer learns
 this, and while it does, the attention of some heads sharpens onto one key, so
 their entropy falls. That is what the app shows.
 
