@@ -42,7 +42,6 @@ test('the 3.2 golden frames are there', () => {
   expect(typeName(0x72)).toBe('scene_clear');
 });
 
-let byteEqual = 0;
 for (const name of names) {
   test(`decodes and encodes v3_2/${name}`, () => {
     const buf = read(`${name}.bin`);
@@ -100,7 +99,6 @@ for (const name of names) {
     const text = new TextDecoder().decode(buf.subarray(24 + 4 * f.sections.length, 24 + 4 * f.sections.length + want.header.meta_len));
     if (text === canonicalJson(f.meta)) {
       expect(Array.from(again)).toEqual(Array.from(buf));
-      byteEqual++;
     } else {
       // Only a float written with a trailing .0 by Python can differ.
       expect(text.replace(/(\d)\.0(?![0-9])/g, '$1')).toBe(canonicalJson(f.meta));
@@ -109,6 +107,16 @@ for (const name of names) {
 }
 
 test('some 3.2 frames re-encode byte for byte', () => {
+  // Counted here: the tests above run in several workers, which share no state.
+  let byteEqual = 0;
+  for (const name of names) {
+    if (DECODE_ONLY.includes(name)) continue;
+    const buf = read(`${name}.bin`);
+    const f = decodeFrame(buf);
+    const msg = decode(buf);
+    if (msg.type === 'unknown') continue;
+    if (Array.from(encode(msg, f.minor)).join() === Array.from(buf).join()) byteEqual++;
+  }
   expect(byteEqual).toBeGreaterThanOrEqual(3);
 });
 

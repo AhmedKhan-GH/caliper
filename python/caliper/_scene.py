@@ -40,10 +40,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import _wire
+from ._convert import check_range, cmap_index
 
 __all__ = ["scene", "Scene", "SceneState", "Batch", "SCENES", "forget"]
 
 KIND_SCENE = int(_wire.Kind.SCENE)
+_CMAPS = {"viridis": 0, "magma": 1, "rdbu": 2}
 DEFAULT_RATE_HZ = 60.0
 META_MARGIN = 4096                       # bytes of metadata a batch frame may need, at most
 PART_ORDER = {_wire.PART_POINTS: 0, _wire.PART_LINES: 1, _wire.PART_MESH: 2}
@@ -191,6 +193,14 @@ def attach_ring(ring) -> None:
 # routes
 # ---------------------------------------------------------------------------
 _route_cache: tuple = ((), (), False)     # (routes tuple, scene routes, other routes open)
+_CALIPER = None
+
+
+def _caliper():
+    global _CALIPER
+    import caliper
+    _CALIPER = caliper
+    return caliper
 
 
 def _scene_routes(routes) -> tuple:
@@ -345,12 +355,14 @@ def _check_colors(colors, values, rows_ok, what_rows):
 
 
 def _check_range_args(cmap, vmin, vmax):
-    from ._convert import check_range, cmap_index
-    cm = cmap_index(cmap)
-    for v in (vmin, vmax):
-        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
-            raise TypeError(f"vmin/vmax must be numbers or None, got {v!r}")
-    check_range(vmin, vmax)
+    cm = _CMAPS.get(cmap) if cmap.__class__ is str else None
+    if cm is None:
+        cm = cmap_index(cmap)
+    if vmin is not None or vmax is not None:
+        for v in (vmin, vmax):
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
+                raise TypeError(f"vmin/vmax must be numbers or None, got {v!r}")
+        check_range(vmin, vmax)
     return cm
 
 
@@ -454,15 +466,23 @@ class Scene:
             s_count = None
             rows_ok, rows = (lambda r: r == v), "V"
         else:
-            sl = _array(strip_lengths, "strip_lengths", "int")
-            if sl.ndim != 1:
-                raise ValueError(f"strip_lengths must be (S,), got {tuple(sl.shape)}")
-            s_count = sl.shape[0]
+            if isinstance(strip_lengths, (list, tuple)) and all(
+                    x.__class__ is int for x in strip_lengths):
+                sl = strip_lengths                   # host ints: checked here, a tensor later
+                s_count = len(sl)
+                total, low = sum(sl), min(sl, default=1)
+            else:
+                sl = _array(strip_lengths, "strip_lengths", "int")
+                if sl.ndim != 1:
+                    raise ValueError(f"strip_lengths must be (S,), got {tuple(sl.shape)}")
+                s_count = sl.shape[0]
+                total = low = None
+                if sl.device.type == "cpu" and s_count:    # host data: the sum is checked here
+                    total, low = int(sl.sum()), int(sl.min())
             if s_count > _wire.MAX_BATCH_ITEMS:
                 raise ValueError(f"{s_count} strips, more than {_wire.MAX_BATCH_ITEMS} in a batch")
-            if sl.device.type == "cpu":          # host data: the sum is checked here
-                total = int(sl.sum()) if s_count else 0
-                if s_count and int(sl.min()) < 1:
+            if total is not None:
+                if s_count and low < 1:
                     raise ValueError("every strip length is at least 1")
                 if total != v:
                     raise ValueError(f"the strip lengths add up to {total}, not to the {v} "
@@ -585,14 +605,15 @@ def _frame_bytes(spec: _Spec) -> int:
     out = rows * d * 4
     for name, t in (("colors", spec.colors), ("values", spec.values)):
         if t is not None:
-            out += (t.shape[0] if strip else rows) * (4 if name == "colors" else 4)
+            out += (t.shape[0] if strip else rows) * 4       # RGBA u8 or f32
     for name, t in spec.extra.items():
-        out += (rows if name == "radii" else t.numel()) * 4
+        out += (rows if name == "radii" else len(t) if isinstance(t, (list, tuple))
+                else t.numel()) * 4
     return out
 
 
 def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
-    import caliper
+    caliper = _CALIPER or _caliper()
     nbytes = _frame_bytes(spec)
     if nbytes + META_MARGIN > _wire.MAX_FRAME_BYTES:
         raise ValueError(f"this batch needs {nbytes} bytes, more than one frame of "
@@ -685,6 +706,8 @@ def _snapshot(st: SceneState, path: str, spec: _Spec, static: bool) -> Batch:
         if name == "radii":
             arrays["radii"] = rows(t if t.dtype == f32 else t.to(f32))
         elif name in ("strip_lengths", "indices"):
+            if isinstance(t, (list, tuple)):
+                t = torch.tensor(t, dtype=i32)
             arrays[name] = t if t.dtype == i32 else t.to(i32)
     # The stats: value range and per-axis bounds, on the arrays' devices.
     sent = arrays["positions"]
