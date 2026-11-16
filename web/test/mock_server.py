@@ -14,6 +14,10 @@ With --wasm it also serves Caliper's WebAssembly views from DIR (the three
 files caliper-views-loader.js, caliper-views.js and caliper-views.wasm), as
 caliper.serve() does from the package.
 
+With --scene clusters or --scene depth the embedding is a fixed 3-D scene
+instead of the moving clusters (scene() describes both), for the tests and
+screenshots of the 3-D points views.
+
 With --fixed it serves instead the fixed data of the element's view tests
 (web/test/views.spec.ts), sent once per subscription: two 4 x 8 heatmaps, one
 with the identity axes and one pooled from query and key dims, four 2-D
@@ -73,14 +77,43 @@ def load_wire(path: str):
 # ---------------------------------------------------------------------------
 # the simulated run
 # ---------------------------------------------------------------------------
+def scene(name: str) -> tuple[np.ndarray, np.ndarray]:
+    """Fixed 3-D points for the embedding, and their labels. "clusters": eight
+    classes in clusters at different depths, placed by golden-ratio sequences
+    (tests/test_live_views.cpp, cluster_scene, makes the same points). "depth":
+    eight anchors at the corners of [-1, 1]^3 (label 2), one point in front of
+    the centre as the default camera sees it (label 1) and one behind it
+    (label 3)."""
+    if name == "depth":
+        corners = [[1.0 if i & 1 else -1.0, 1.0 if i & 2 else -1.0, 1.0 if i & 4 else -1.0] for i in range(8)]
+        pos = np.array(corners + [[0.45, 0.45, 0.45], [-0.45, -0.45, -0.45]], np.float32)
+        return pos, np.array([2.0] * 8 + [1.0, 3.0], np.float32)
+    n = 3000
+    pos = np.empty((n, 3), np.float32)
+    frac = lambda x: x - math.floor(x)
+    for i in range(n):
+        k, j = i % 8, i // 8
+        a = 2.0 * math.pi * k / 8.0
+        cx, cy, cz = 4.0 * math.cos(a), 2.2 * ((k % 3) - 1), 4.0 * math.sin(a)
+        u = frac((j + 0.37 * k) * 0.6180339887498949)
+        v = frac((j + 0.53 * k) * 0.7548776662466927)
+        w = frac((j + 0.29 * k) * 0.5698402909980532)
+        r, th, ph = 0.95 * u ** (1.0 / 3.0), 2.0 * math.pi * v, math.acos(1.0 - 2.0 * w)
+        pos[i] = (cx + r * math.sin(ph) * math.cos(th), cy + r * math.cos(ph), cz + r * math.sin(ph) * math.sin(th))
+    return pos, (np.arange(n) % 8).astype(np.float32)
+
+
 class Run:
-    def __init__(self, points: int, dims: int, seed: int):
+    def __init__(self, points: int, dims: int, seed: int, scene_name: str | None = None):
         self.rng = np.random.default_rng(seed)
         self.step = 0
         self.loss: list[float] = []
         self.weights = (self.rng.standard_normal((48, 64)) * 0.5).astype(np.float32)
+        self.scene = scene(scene_name) if scene_name else None
+        if self.scene is not None:
+            points, dims = len(self.scene[0]), 3
         self.n, self.dims = points, dims
-        self.labels = (np.arange(points) % 8).astype(np.float32)
+        self.labels = (np.arange(points) % 8).astype(np.float32) if self.scene is None else self.scene[1]
         ang = 2 * np.pi * np.arange(8) / 8
         self.centers = np.stack([np.cos(ang) * 4, np.sin(ang) * 4, np.where(np.arange(8) % 2, 2.0, -2.0)], 1)
         self.offsets = self.rng.standard_normal((points, 3)).astype(np.float32)
@@ -113,6 +146,8 @@ class Run:
                     s = -(d * d) / (2 * width * width) + np.where(k == 0, layer * 0.7, 0)
                     out[layer, h] = s if name == "scores" else np.exp(s) / np.exp(s).sum(1, keepdims=True)
             return out
+        if view == "embedding" and self.scene is not None:
+            return np.stack([self.scene[0]] * 3)
         if view == "embedding":
             p = 1 - math.exp(-t / 150)
             out = np.empty((3, self.n, self.dims), np.float32)
@@ -614,6 +649,8 @@ async def main():
     ap.add_argument("--points", type=int, default=4000)
     ap.add_argument("--dims", type=int, default=3, choices=(2, 3))
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--scene", choices=("clusters", "depth"), default=None,
+                    help="fixed 3-D points for the embedding (see scene())")
     ap.add_argument("--fixed", action="store_true", help="serve the fixed data of the view tests")
     ap.add_argument("--controls", action="store_true", help="3.1: run state, parameters, an action and linked selection")
     ap.add_argument("--read-only", action="store_true", help="refuse every CONTROL")
@@ -622,7 +659,7 @@ async def main():
     ap.add_argument("--step-ms", type=float, default=50.0, help="the time of one training step")
     a = ap.parse_args()
     W = load_wire(a.wire)
-    run = Run(a.points, a.dims, a.seed)
+    run = Run(a.points, a.dims, a.seed, a.scene)
     token = secrets.token_urlsafe(24)
     prod = Producer(run, token, Path(a.dist), "mock", Path(a.wasm) if a.wasm else None, fixed=a.fixed,
                     controls=a.controls, read_only=a.read_only, v30=a.v30)
