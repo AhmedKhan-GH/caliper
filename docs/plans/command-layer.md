@@ -16,7 +16,7 @@ Built on this branch, in the library `caliper_builder_commands` (`src/builder/co
 
 Planned:
 
-- The handlers of the catalog, data, loader, spec, source, panel, layout and applet commands are bound by a later stream. Until a handler is bound, its command answers `command.not_bound`.
+- The handlers of the catalog, data, loader, spec, source, panel, layout and applet commands are bound by the [builder session](builder-session.md), which is built and tested but not yet wired into the app. Until a handler is bound, its command answers `command.not_bound`.
 - The handlers that need the running app (`app.info`, `app.applets`, `app.launch`, `capture.frame`, `panel.render` and the live catalog provider) are bound when the libraries are wired into the app, after sprint 2 merges.
 - The two endpoints of Caliper API described [below](#caliper-api) come with that wiring.
 
@@ -174,7 +174,9 @@ The [Catalog](catalog.md) page gives the entry, the sample and the limits.
 | `data.query` | `sql` (one read-only SELECT), `limit` (1 to 100,000 rows, default 1000), `timeout_ms` (100 to 30,000, default 5000) | `columns`, `rows`, `truncated`, `elapsed_ms` | `data.not_select`, `data.sql_error`, `data.timeout`, `data.unavailable` |
 | `data.import` | `paths` (1 to 256), `run` (default true) | `loaders`: `id`, `path`, `reader`, `outputs`, `ran` for each; `refused`: `path`, `code`, `message` for each path refused | |
 
-`data.import` refuses a path one by one, with the loader codes (`loader.pickle_refused`, `loader.path_refused`, `loader.unknown_reader`, `loader.read_failed`), and does not fail as a whole. A path outside the workspace is accepted only from the `ui` and `builder` origins, which stand for a file the person dropped or picked; from `agent`, `mcp` and `api` it is refused with `loader.path_refused`, so an agent cannot read an arbitrary file of the machine through a loader. The same rule holds for the input path of `loader.create` and `loader.update`. A Python loader is created but never run by an import.
+`data.import` refuses a path one by one, with the loader store's codes (`loader.pickle_refused`, `loader.no_reader`, `loader.reader_mismatch`, `loader.io`) and `loader.path_refused`, and does not fail as a whole. A path outside the workspace is accepted only from the `ui` and `builder` origins, which stand for a file the person dropped or picked, and is then granted; from `agent`, `mcp` and `api` it is refused with `loader.path_refused` unless an earlier grant of the person already covers it, so an agent cannot read an arbitrary file of the machine through a loader. The same rule holds for the input path of `loader.create` and `loader.update`. A Python loader is created but never run by an import.
+
+`loader.describe` gives `last_run.elapsed_ms` as null when the session did not make that run itself, because the store does not record a run's duration.
 
 ### loader
 
@@ -184,10 +186,10 @@ The [Catalog](catalog.md) page gives the entry, the sample and the limits.
 | `loader.describe` | `id` | `id`, `title`, `text` (the TOML recipe), `reader`, `path`, `status`, `last_run`, `outputs` | `loader.not_found` |
 | `loader.create` | `text`, `run` (default false) | `id`, `outputs` | `loader.invalid`, `loader.exists`, `loader.path_refused`, `loader.unknown_reader`, and the codes of `loader.run` when it runs |
 | `loader.update` | `id`, `text`, `run` (default false) | `id`, `outputs` | `loader.not_found`, `loader.invalid`, `loader.id_mismatch`, `loader.path_refused` |
-| `loader.run` | `id` | `id`, `outputs` (`id`, `rows`, `shape` for each), `elapsed_ms` | `loader.not_found`, `loader.read_failed`, `loader.pickle_refused`, `loader.sql_refused`, `loader.python_unavailable` |
-| `loader.delete` | `id`, `keep_outputs` (default false) | `id`, `removed` (catalog ids) | `loader.not_found` |
+| `loader.run` | `id` | `id`, `outputs` (`id`, `rows`, `shape` for each), `elapsed_ms` | `loader.not_found`, `loader.read_failed`, `loader.pickle_refused`, `loader.sql_refused`, `loader.python_not_available`, `loader.python_needs_approval` |
+| `loader.delete` | `id`, `keep_outputs` (default false) | `id`, `removed` (catalog ids) | `loader.not_found`, `loader.unsupported` (for `keep_outputs`, in this phase) |
 
-`loader.run` is destructive because a run replaces the tables its previous run made, and because it may run a Python loader. An app may give a narrower policy that allows native readers without asking; the default follows the flag.
+`loader.run` is destructive because a run replaces the tables its previous run made, and because it may run a Python loader. An app may give a narrower policy that allows native readers without asking; the default follows the flag. Running a Python loader's script, though, always asks every origin except `ui` and `builder`, whatever the flags say; see [Approval](#approval).
 
 ### spec, source, panel and layout
 
@@ -198,23 +200,24 @@ These commands edit the open spec, the one spec the builder shows. There is at m
 | `spec.new` | `id`, `title`, `description` | `id`, `text` | `spec.invalid_id` |
 | `spec.open` | `path` (relative to the workspace, ending in `.spec.toml`) | `id`, `path`, `warnings` | `spec.not_found`, `spec.path_refused`, validator codes |
 | `spec.get` | none | `id`, `path`, `dirty`, `text`, `json` | `spec.no_open_spec` |
-| `spec.set_text` | `text` (at most 256 KiB) | `id`, `warnings` | `spec.no_open_spec`, validator codes |
+| `spec.set_text` | `text` (at most 256 KiB), `dry_run` | `id`, `warnings`, `diff`, `applied` | `spec.no_open_spec`, validator codes |
 | `spec.validate` | `text` (optional; the open spec when absent) | `valid`, `errors`, `warnings` | `spec.no_open_spec` |
-| `source.add` | `id`, one of `catalog`, `sql`, `from`, and `transform` | `id`, `warnings` | `spec.no_open_spec`, `source.exists`, validator codes |
-| `source.patch` | `id`, `patch` | `source`, `warnings` | `source.not_found`, `source.id_immutable`, validator codes |
-| `source.remove` | `id` | `id` | `source.not_found`, `source.in_use` |
-| `panel.create` | `id`, `primitive`, `title`, `bind`, `options`, `place` | `id`, `warnings` | `spec.no_open_spec`, `panel.exists`, `panel.not_found` (the place target), validator codes |
-| `panel.patch` | `id`, `patch` (a JSON merge patch, RFC 7386, of the panel) | `panel`, `warnings` | `panel.not_found`, `panel.id_immutable`, validator codes |
-| `panel.remove` | `id` | `id` | `panel.not_found` |
+| `source.add` | `id`, one of `catalog`, `sql`, `from`, and `transform`; `dry_run` | `id`, `warnings`, `diff`, `applied` | `spec.no_open_spec`, `source.exists`, validator codes |
+| `source.patch` | `id`, `patch`, `dry_run` | `source`, `warnings`, `diff`, `applied` | `source.not_found`, `source.id_immutable`, validator codes |
+| `source.remove` | `id`, `dry_run` | `id`, `warnings`, `diff`, `applied` | `source.not_found`, `source.in_use` |
+| `panel.create` | `id`, `primitive`, `title`, `bind`, `options`, `place`, `dry_run` | `id`, `warnings`, `diff`, `applied` | `spec.no_open_spec`, `panel.exists`, `panel.not_found` (the place target), validator codes |
+| `panel.patch` | `id`, `patch` (a JSON merge patch, RFC 7386, of the panel), `dry_run` | `panel`, `warnings`, `diff`, `applied` | `panel.not_found`, `panel.id_immutable`, validator codes |
+| `panel.remove` | `id`, `dry_run` | `id`, `warnings`, `diff`, `applied` | `panel.not_found` |
 | `panel.render` | `id`, `width`, `height` (64 to 4096; 800 by 500 by default) | `png_base64`, `width`, `height` | `panel.not_found`, `panel.render_failed` |
-| `layout.place` | `panel`, `target`, `where` (`beside`, `above`, `below` or `tabbed`), `ratio` | `layout` | `panel.not_found`, `layout.same_panel` |
-| `layout.set` | `layout` | `layout` | `layout.invalid`, `panel.not_found` |
+| `layout.place` | `panel`, `target`, `where` (`beside`, `above`, `below` or `tabbed`), `ratio`, `dry_run` | `layout`, `warnings`, `diff`, `applied` | `panel.not_found`, `layout.same_panel` |
+| `layout.set` | `layout`, `dry_run` | `layout`, `warnings`, `diff`, `applied` | `layout.invalid`, `panel.not_found` |
 
 - `spec.validate` reports an invalid spec in its result; it fails only when there is nothing to validate.
 - `source.remove` refuses a source that a panel or another source still uses, and names the first user in `where`.
 - `panel.create` without `place` puts the new panel to the right of the whole layout, with half the width.
 - `layout.place` moves a panel that is already in the layout. `beside` puts it to the right of the target. `ratio` is the share of the space that the placed panel gets, from 0.05 to 0.95, 0.5 by default; the handler turns it into the spec's `ratio`, which is the share of the first child.
-- The bindings and options that `panel.create` and `panel.patch` accept are the slots and options of contracts section 6, listed in the table. An option that is not listed can still be set with `spec.set_text`.
+- The bindings and options that `panel.create` and `panel.patch` accept are every slot and option of the [spec format](spec-format.md), with its enumerations and bounds where the schema subset can state them; a test keeps the table in line with the format's fixtures. Extension tables (`x`) are open objects, which closed tool schemas cannot describe, so only `spec.set_text` sets them; the patches keep an item's `x`. `panel.create` needs no `bind`, since a text panel may have only `options.text`.
+- Every command of this table that edits the open spec returns the change as a unified diff of the spec's canonical TOML (`diff`) and whether it was applied (`applied`), and takes `dry_run`, which checks the change and returns its diff and warnings without applying it, so that the change can be shown for approval first. A dry run records no undo step and, like any mutating command without one, clears the redo stack.
 
 The layout in `layout.set` and in the results is a flat list of nodes, because tool schemas cannot be recursive: `{"root": "<id>", "nodes": [{"id": "n1", "split": "horizontal", "ratio": 0.6, "children": ["heat", "n2"]}, ...]}`. `split` is `horizontal`, `vertical` or `tabs`; `ratio` is the share of the first child, or null for tabs. A child is a node id or a panel id; node ids must not be panel ids, and a node is used once. `root` names a node, or the one panel when the layout is a single panel. The handler turns this into the spec's nested `[layout]` table and back.
 
@@ -339,6 +342,11 @@ An `ApprovalPolicy` is a function that is given a descriptor and an invocation a
 
 On `ask`, the registry parks the invocation under a new approval id and answers `command.needs_approval` with that id in `error.approval`. The app shows the pending approvals (`pending_approvals()` lists them with the descriptor's summary and the arguments) and calls `approve(id)` or `deny(id)`. `approve` runs the parked invocation as if the policy had allowed it and returns its result; `deny` completes it with `command.denied`. Both are journaled then. At most 64 invocations wait at once; more are refused with `command.too_many_pending`. The registry sets no time limit of its own, because the person may be away; a caller that cannot wait for ever gives the queue a limit (below), after which the approval is withdrawn with `command.approval_timeout` and journaled like a denial. Pending approvals also end, with `command.shutdown`, when the queue shuts down.
 
+The builder session installs a policy that adds two rules, decided per invocation because a descriptor's flags are fixed per command:
+
+- `loader.run` of a Python loader, and `loader.create` or `loader.update` of one with `run` set, ask every origin except `ui` and `builder`, each time, because running a Python loader runs the user's code. The handler passes the store's permission to run the script (`RunOptions::allow_python`) only for `ui` and `builder`, or for an invocation that the policy asked about and the person approved, so an app policy that allowed everything would still get `loader.python_needs_approval`. A redo never runs a script.
+- `applet.save` from `agent`, `mcp` or `api` asks only when it would overwrite a saved applet; writing a new one destroys nothing.
+
 There is no command and no endpoint that approves or denies. Only the app's own UI calls `approve` and `deny`, so an agent cannot approve its own request, and approval ids need not be secret.
 
 ## Threads and the queue
@@ -354,7 +362,7 @@ There is no command and no endpoint that approves or denies. Only the app's own 
 After sprint 2 merges, Caliper API gains these endpoints, under the same loopback, `Host`, `Origin` and session-token checks as API v0:
 
 - **`GET /v0/commands`** returns the descriptor table, the output of `command_table_to_json()`: `{"version": 0, "commands": [{"name", "summary", "args", "result", "examples", "mutates", "destructive", "frame_thread"}]}`, in the table's order.
-- **`POST /v0/commands/{name}`** takes the `args` object as a JSON body of at most 1 MiB with `Content-Type: application/json`, and returns the result envelope with HTTP 200 whether `ok` is true or false. The server assigns the invocation id. The origin is `api`, or `mcp` when the request carries `X-Caliper-Origin: mcp`. An optional `X-Caliper-Group` header gives the group. A PNG result is base64 in `result.png_base64`, with `result.width` and `result.height`.
+- **`POST /v0/commands/{name}`** takes the `args` object as a JSON body of at most 1 MiB with `Content-Type: application/json`, and returns the result envelope with HTTP 200 whether `ok` is true or false. The server assigns the invocation id. The origin is `api`, or `mcp` or `agent` when the request carries `X-Caliper-Origin: mcp` or `X-Caliper-Origin: agent`; any other value is refused with 400, so a request never claims `ui` or `builder`. An optional `X-Caliper-Group` header gives the group. A PNG result is base64 in `result.png_base64`, with `result.width` and `result.height`.
 - **Approval over the API** follows contracts section 15. A call with the origin `mcp` or `agent` that needs approval is held while the person decides in the app, for up to 120 seconds: the server submits it with `approval_timeout` set to 120 seconds and waits for the future. Approved, the call answers with the command's result; denied, with `command.denied`; after the time limit, with `command.approval_timeout`, and the approval is withdrawn. `caliper-mcp` and `caliper-agent` allow at least 130 seconds for a call. A call with the origin `api` submits with `wait_for_approval = false` and gets `command.needs_approval` with the approval id at once.
 - **`GET /v0/approvals/{id}`** returns `{"approval": "<id>", "state": "pending" | "decided" | "unknown", "result": <envelope or null>}`, from `approval_outcome(id)` and the registry's pending list, so that an `api` client can learn the outcome of a request that needed approval. This endpoint is an elaboration of this page, not of the contracts.
 
