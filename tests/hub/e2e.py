@@ -13,7 +13,7 @@ Python environment with torch, numpy and websockets. It checks, in order:
    snapshots of both weight heatmaps and the loss series from the start.
 4. The native viewer, `caliper_viewer --headless --url <link>&session=<id>
    --exit-after 5 --stats`, attaches to each session and draws every view.
-5. The shorter script exits: its session is listed as ended, and a viewer that
+5. The test tells the second script to end: its session is listed as ended, and a viewer that
    attaches afterwards still gets its last snapshots and its whole loss series.
 6. The hub's resident memory, sampled throughout, stays flat.
 7. Protocol 3.1 controls. Script e2e-a registers the parameter "lr" and the
@@ -72,6 +72,43 @@ def rss_mib(pid: int) -> float:
     return int(out) / 1024 if out else 0.0
 
 
+def wait_hub_file(path: str, timeout: float = 30.0) -> dict | None:
+    """The hub file's content, once the hub has written it whole."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            with open(path) as f:
+                h = json.load(f)
+            if h.get("stream_url") and h.get("token"):
+                return h
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.05)
+    return None
+
+
+def wait_session_state(url: str, sid: str, state: str, timeout: float = 60.0) -> str | None:
+    """Polls the hub's session list until session `sid` has `state`."""
+    end = time.monotonic() + timeout
+    got = None
+    while time.monotonic() < end:
+        got = {s["id"]: s["state"] for s in asyncio.run(viewer.sessions(url))}.get(sid)
+        if got == state:
+            break
+        time.sleep(0.1)
+    return got
+
+
+def stop(proc, stop_file: str, timeout: float = 60.0) -> int | None:
+    """Tells a test script to end (it trains until its --stop-file exists) and
+    waits for it to exit."""
+    open(stop_file, "w").close()
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def native_viewer(exe: str, link: str, data_dir: str, seconds: int = 5) -> dict:
     r = subprocess.run([exe, "--headless", "--url", link, "--exit-after", str(seconds), "--stats",
                         "--data-dir", data_dir], capture_output=True, text=True, timeout=seconds + 30)
@@ -123,33 +160,29 @@ def main() -> int:
     try:
         # 1. the hub
         hub = spawn([caliper, "serve", "--port", "0"], "hub.log")
-        t0 = time.monotonic()
-        while not os.path.exists(hub_file) and time.monotonic() - t0 < 10:
-            time.sleep(0.05)
-        if not check(os.path.exists(hub_file), "caliper serve writes its hub file"):
+        h = wait_hub_file(hub_file)
+        if not check(h is not None, "caliper serve writes its hub file"):
             return 1
-        time.sleep(0.1)
         check(stat.S_IMODE(os.stat(hub_file).st_mode) == 0o600, "the hub file is readable by its owner only")
-        with open(hub_file) as f:
-            h = json.load(f)
         url = f"{h['stream_url']}?token={h['token']}"
         rss.append((time.monotonic(), rss_mib(hub.pid)))
 
-        # 2. two scripts
+        # 2. two scripts, which train until the test tells them to end
+        stop_a, stop_b = os.path.join(work, "stop-a"), os.path.join(work, "stop-b")
         if a.connect:
-            pa = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "48",
-                        "--controls"], "producer-a.log")
-            pb = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "26"],
-                       "producer-b.log")
+            pa = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "600",
+                        "--stop-file", stop_a, "--controls"], "producer-a.log")
+            pb = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "600",
+                        "--stop-file", stop_b], "producer-b.log")
         else:
             pa = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-a",
-                        "--seconds", "48", "--controls"], "producer-a.log")
+                        "--seconds", "600", "--stop-file", stop_a, "--controls"], "producer-a.log")
             pb = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-b",
-                        "--seconds", "26"], "producer-b.log")
+                        "--seconds", "600", "--stop-file", stop_b], "producer-b.log")
         ida, idb = "e2e-a", "e2e-b"
         listed = {}
         t0 = time.monotonic()
-        while time.monotonic() - t0 < 30:
+        while time.monotonic() - t0 < 120:
             got = asyncio.run(viewer.sessions(url))
             if a.connect:                       # the package names its session; find it by pid
                 by_pid = {s.get("pid"): s["id"] for s in got}
@@ -166,8 +199,10 @@ def main() -> int:
               f"both scripts are listed as live sessions: {listed}")
 
         # 3. a Python viewer on each session
+        enough = lambda snaps, vals: (snaps.get("fc1.weight", 0) >= 20 and snaps.get("fc2.weight", 0) >= 20  # noqa: E731
+                                      and vals.get("loss", 0) >= 50)
         for sid in (ida, idb):
-            r = asyncio.run(viewer.watch(url, sid, 3.0))
+            r = asyncio.run(viewer.watch(url, sid, 60.0, until=enough))
             rss.append((time.monotonic(), rss_mib(hub.pid)))
             snaps = r["snapshots"]
             loss = r["series"].get("loss", {})
@@ -191,17 +226,16 @@ def main() -> int:
             if FAILED and FAILED[-1].startswith("it draws"):
                 print(n["stderr"], file=sys.stderr)
 
-        # 5. the shorter script ends
-        try:
-            pb.wait(timeout=40)
-        except subprocess.TimeoutExpired:
-            pass
-        check(pb.returncode == 0, f"script {idb} finished (exit {pb.returncode})")
+        # 5. the second script ends
+        code_b = stop(pb, stop_b)
+        check(code_b == 0, f"script {idb} finished (exit {code_b})")
         with open(os.path.join(work, "producer-b.log")) as f:
             tail = [l for l in f.read().splitlines() if l.startswith("{")]
         b_done = json.loads(tail[-1]) if tail else {}
-        time.sleep(0.5)
-        r = asyncio.run(viewer.watch(url, idb, 1.5))
+        wait_session_state(url, idb, "ended")
+        whole = lambda snaps, vals: (snaps.get("fc1.weight", 0) >= 1 and snaps.get("fc2.weight", 0) >= 1  # noqa: E731
+                                     and vals.get("loss", 0) >= b_done.get("loss_values", 1))
+        r = asyncio.run(viewer.watch(url, idb, 30.0, until=whole))
         rss.append((time.monotonic(), rss_mib(hub.pid)))
         check(r["state"] == "ended", f"its session is listed as ended: {r['state']}")
         check(r["snapshots"].get("fc1.weight", 0) >= 1 and r["snapshots"].get("fc2.weight", 0) >= 1,
@@ -212,11 +246,11 @@ def main() -> int:
         n = native_viewer(caliper_viewer, f"{link}&session={idb}", work, seconds=3)
         check(n["code"] == 0 and n["views"].get("fc1.weight", {}).get("updates", 0) > 0,
               f"the native viewer shows the ended session too: {n['views']} {n['session']}")
-        r = asyncio.run(viewer.watch(url, ida, 1.0))
+        r = asyncio.run(viewer.watch(url, ida, 30.0, until=lambda snaps, vals: snaps.get("fc1.weight", 0) > 0))
         check(r["state"] == "live" and r["snapshots"].get("fc1.weight", 0) > 0, "the other session goes on")
 
-        # 6. the hub's memory over the run
-        while pa.poll() is None and time.monotonic() - rss[0][0] < 44:
+        # 6. the hub's memory over the run: six more samples, a second apart
+        for _ in range(6):
             time.sleep(1.0)
             rss.append((time.monotonic(), rss_mib(hub.pid)))
         settled = [m for t, m in rss if t - rss[0][0] > 8]
@@ -233,7 +267,8 @@ def main() -> int:
         controls(spawn, url, caliper, work, ida, a.connect, a.hub_pause_order)
 
         # 8. stop
-        pa.terminate()
+        if stop(pa, stop_a, timeout=30) is None:
+            pa.terminate()
         hub.send_signal(signal.SIGTERM)
         try:
             code = hub.wait(timeout=10)
@@ -259,7 +294,7 @@ def main() -> int:
 
 def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bool,
              hub_pause_order: bool = False) -> None:
-    r = asyncio.run(viewer.control(url, session, 0.05, seconds=6.0))
+    r = asyncio.run(viewer.control(url, session, 0.05, seconds=60.0))
     check("controls" in r["capabilities"] and r["control"] is False,
           f"the hub announces controls and says this viewer may not control: {r['capabilities']} {r['control']}")
     check(r["controls"] >= 1 and r["lr"] == 0.001,
@@ -270,29 +305,27 @@ def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bo
 
     hub_file2 = os.path.join(work, "hub2.json")
     hub2 = spawn([caliper, "serve", "--port", "0", "--allow-control"], "hub2.log", {"CALIPER_HUB_FILE": hub_file2})
-    t0 = time.monotonic()
-    while not os.path.exists(hub_file2) and time.monotonic() - t0 < 10:
-        time.sleep(0.05)
-    time.sleep(0.1)
-    with open(hub_file2) as f:
-        h2 = json.load(f)
+    h2 = wait_hub_file(hub_file2)
+    if not check(h2 is not None, "a hub started with --allow-control writes its hub file"):
+        return
     url2 = f"{h2['stream_url']}?token={h2['token']}"
+    stop_c = os.path.join(work, "stop-ctl")
     if connect:
-        pc = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "12",
-                    "--controls"], "producer-ctl.log", {"CALIPER_HUB_FILE": hub_file2})
+        pc = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "600",
+                    "--stop-file", stop_c, "--controls"], "producer-ctl.log", {"CALIPER_HUB_FILE": hub_file2})
     else:
         pc = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file2, "--id",
-                    "e2e-ctl", "--seconds", "12", "--controls"], "producer-ctl.log")
+                    "e2e-ctl", "--seconds", "600", "--stop-file", stop_c, "--controls"], "producer-ctl.log")
     sid = "e2e-ctl"
     t0 = time.monotonic()
-    while time.monotonic() - t0 < 30:
+    while time.monotonic() - t0 < 120:
         got = asyncio.run(viewer.sessions(url2))
         if connect:
             sid = {s.get("pid"): s["id"] for s in got}.get(pc.pid, sid)
         if any(s["id"] == sid for s in got):
             break
         time.sleep(0.3)
-    r = asyncio.run(viewer.control(url2, sid, 0.05, seconds=8.0))
+    r = asyncio.run(viewer.control(url2, sid, 0.05, seconds=60.0))
     check(r["control"] is True, f"a hub started with --allow-control says the viewer may control: {r['control']}")
     set_r, run_r = r["replies"][1], r["replies"][2]
     check(len(set_r) == 1 and set_r[0]["status"] == "ok" and set_r[0]["value"] == 0.05,
@@ -303,7 +336,7 @@ def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bo
     if connect:
         # A pause through the hub: the script sends the paused step's data before its
         # run state, and the viewer ends up with exactly that step's loss values.
-        o = asyncio.run(viewer.pause_order(url2, sid))
+        o = asyncio.run(viewer.pause_order(url2, sid, seconds=60.0))
         check(o["step"] is not None and o["later"] == o["step"] and not o["errors"],
               f"a pause through the hub stops the run at step {o['step']}, and the viewer holds "
               f"that step's loss values: {o['later']} ({o['errors']})")
@@ -316,10 +349,7 @@ def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bo
         else:
             print(f"info  through the hub, {o['before']} of {o['step']} loss values arrived before "
                   "the paused state (checked with --hub-pause-order)", flush=True)
-    try:
-        pc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        pass
+    stop(pc, stop_c)
     with open(os.path.join(work, "producer-ctl.log")) as f:
         tail = [l for l in f.read().splitlines() if l.startswith("{")]
     done = json.loads(tail[-1]) if tail else {}
@@ -337,7 +367,7 @@ def bench(spawn, url: str, hub_file: str, work: str) -> None:
     """A 512 x 512 heatmap at 60 Hz through the hub to four viewer processes."""
     prod = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "bench",
                   "--bench", "--rate", "60", "--seconds", "16"], "bench-producer.log")
-    time.sleep(1.5)
+    wait_session_state(url, "bench", "live")
     code = ("import asyncio, json, sys; sys.path.insert(0, %r); import viewer;"
             "r = asyncio.run(viewer.watch(%r, 'bench', 10.0, views=['bench']));"
             "print(json.dumps({'n': r['snapshots'].get('bench', 0), 'lat': r['latency_ms'], 'bytes': r['bytes']}))"

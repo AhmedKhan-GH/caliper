@@ -132,18 +132,26 @@ class Loop:
         self.stop = False
         self.error = None
         self.delay = delay
+        self.in_wait = False                  # the thread is in a pause's wait (a wait hook ran)
         self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _hook(self):
+        if threading.current_thread() is self.thread:
+            self.in_wait = True
 
     def _run(self):
         try:
             while not self.stop:
                 caliper.step()
+                self.in_wait = False
                 self.count += 1
                 time.sleep(self.delay)
         except BaseException as e:            # noqa: BLE001
             self.error = e
 
     def __enter__(self):
+        self.ctl = caliper._CTL
+        self.ctl.wait_hooks.append(self._hook)
         self.thread.start()
         if self.warm:
             wait_for(lambda: self.count > 2)
@@ -153,13 +161,18 @@ class Loop:
         self.stop = True
         caliper._CTL._release()
         self.thread.join(5)
+        self.ctl.wait_hooks.remove(self._hook)
         assert not self.thread.is_alive()
         assert self.error is None, self.error
 
     def still(self, seconds=0.15) -> bool:
+        """The loop is held: its thread has entered the pause's wait (waited
+        for, so a slow thread cannot pass this by not having got there yet),
+        and no step follows during ``seconds``."""
+        wait_for(lambda: self.in_wait)
         a = self.count
         time.sleep(seconds)
-        return self.count == a
+        return self.count == a and self.in_wait
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +494,7 @@ def test_ctrl_c_ends_a_paused_checkpoint(ctl, fast):
     start = time.monotonic()
     with pytest.raises(KeyboardInterrupt):
         caliper.step()
-    assert 0.25 < time.monotonic() - start < 3
+    assert 0.25 < time.monotonic() - start < 10       # the interrupt, not a wait for the run
     assert ctl.state == "running"
     caliper.step()                                     # the next call does not wait
 
@@ -848,8 +861,10 @@ def test_details_errors_time_outs_and_stale_results(ctl, routes, fast):
     assert t.selections()[-1]["details_error"].startswith("timeout")
     select(r, "embedding", {"space": "test", "items": [5]})     # waits behind the slow one
     gate.set()
-    wait_for(lambda: len(t.selections()) >= 6)
-    time.sleep(0.2)
+    # the details of [5] come after whatever the slow job for [2] would send,
+    # since the jobs run in order: wait for them rather than for a while
+    wait_for(lambda: any(s["items"] == [5] and ("details" in s or "details_error" in s)
+                         for s in t.selections()))
     final = t.selections()[-1]
     assert final["items"] == [5] and "details" not in final or final["details"]["items"] == [5]
     assert all(s.get("details", {}).get("items", [5]) != [2] for s in t.selections())

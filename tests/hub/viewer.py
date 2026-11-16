@@ -31,9 +31,11 @@ async def sessions(url: str) -> list:
 
 
 async def watch(url: str, session: str | None, seconds: float, *, max_rate: float | None = None,
-                views: list | None = None) -> dict:
+                views: list | None = None, until=None) -> dict:
     """Attach to `session` (or follow the hub's default when None) and count
-    what arrives for `seconds`. Returns a summary dict."""
+    what arrives for `seconds`, or until ``until(snapshots, values)`` holds
+    (the snapshot count of each view and the series values of each view
+    received so far), with `seconds` as the limit. Returns a summary dict."""
     import websockets
     out = {"session": None, "state": None, "sessions": [], "views": [], "snapshots": {}, "series": {},
            "errors": [], "latency_ms": [], "bytes": 0}
@@ -101,6 +103,8 @@ async def watch(url: str, session: str | None, seconds: float, *, max_rate: floa
             elif isinstance(msg, W.Error):
                 out["errors"].append(f"error {msg.code}: {msg.message}")
             elif isinstance(msg, W.Bye):
+                break
+            if until is not None and subscribed and until(out["snapshots"], {n: len(d) for n, d in series.items()}):
                 break
         if not attached:
             out["errors"].append("never attached")
@@ -197,7 +201,10 @@ async def pause_order(url: str, session: str, seconds: float = 8.0, after: int =
             elif isinstance(msg, W.Controls) and state == "pausing" and msg.run.get("state") == W.RUN_PAUSED:
                 out["step"], out["before"] = msg.run.get("step"), total
                 state = "paused"
-                settle_until = time.monotonic() + 1.0
+            if state == "paused" and settle_until is None and out["step"] is not None and total >= out["step"]:
+                # the paused step's values are all here (waited for, not timed); a
+                # short window then shows whether any value past it follows
+                settle_until = time.monotonic() + 0.5
             elif isinstance(msg, W.Ping):
                 await ws.send(W.encode(W.Pong(msg.nonce)))
             elif isinstance(msg, W.Error):

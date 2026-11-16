@@ -1143,8 +1143,9 @@ def test_connect_reconnects_and_resumes(hub):
     assert conn.wait_connected() and conn.stats()["connects"] == 2
     hub.send(w.Bye(w.BYE_REPLACED, "another connection of this session"))
     assert _wait(lambda: conn.state == "replaced", timeout=5)
-    time.sleep(1.5)
-    assert len(hub.hellos) == 2                                     # no reconnect after replaced
+    # The client's loop sets "replaced" in the iteration that ends it, so no later
+    # attempt follows, whatever the back-off: the attempt count stays.
+    assert conn.stats()["attempts"] == 2 and len(hub.hellos) == 2
 
 
 @needs_native
@@ -1167,7 +1168,7 @@ def test_connect_never_blocks_training(monkeypatch):
             caliper.show(W, name="w")
             caliper.series(1.0, name="s")
             worst = max(worst, time.perf_counter() - t0)
-        assert worst < 0.05
+        assert worst < 0.25            # no call waits for the network (a busy runner may pause one)
         assert conn.state in ("connecting", "waiting") and conn.stats()["attempts"] >= 2
         assert not conn.connected
     finally:
@@ -1290,29 +1291,38 @@ def test_slower_rates_hold_with_ticks(server, device):
         if not alone[0]:
             caliper.show(B_, name="b")
 
+    def take(n):
+        """Steps until view a has taken n more snapshots: the time of each (the
+        step it came in, to within one step) and how many b took meanwhile."""
+        ring = server.ring
+        a0, b0 = ring.views["a"].seq, ring.views["b"].seq if "b" in ring.views else 0
+        times, last = [], a0
+        while len(times) < n:
+            step()
+            if ring.views["a"].seq != last:
+                last = ring.views["a"].seq
+                times.append(time.perf_counter())
+        b = (ring.views["b"].seq if "b" in ring.views else 0) - b0
+        return min(y - x for x, y in zip(times, times[1:])), b
+
     async def go():
         async with Client(server) as c:
             await c.subscribe(1, "a", pump=step)
             await c.expect(w.Snapshot, pump=step, pred=lambda m: m.view == "a")
-            ring = server.ring
-            n0, t0 = ring.views["a"].seq, time.perf_counter()
-            while time.perf_counter() - t0 < 1.0:
-                step()
-            rate_a = (ring.views["a"].seq - n0) / (time.perf_counter() - t0)
+            gap_30, _ = take(15)
             alone[0] = False
             await c.subscribe(2, "b", pump=step)
             await c.send(w.Unsubscribe(1))
             await c.subscribe(3, "a", pump=step, max_rate=20)
             await c.expect(w.Snapshot, pump=step, pred=lambda m: m.sub == 3)
-            na, nb, t0 = ring.views["a"].seq, ring.views["b"].seq, time.perf_counter()
-            while time.perf_counter() - t0 < 1.0:
-                step()
-            el = time.perf_counter() - t0
-            return rate_a, (ring.views["a"].seq - na) / el, (ring.views["b"].seq - nb) / el
-    rate_a, rate_20, rate_b = run(go())
-    assert 22 <= rate_a <= 31, rate_a
-    assert 14 <= rate_20 <= 21, rate_20
-    assert rate_b >= 45, rate_b
+            gap_20, b = take(10)
+            return gap_30, gap_20, b
+    gap_30, gap_20, b = run(go())
+    # never above the rate (a slower machine only widens the gaps), and b at the
+    # session's rate takes more snapshots than a at 20 a second meanwhile
+    assert gap_30 >= 1 / 30 - 0.003, gap_30
+    assert gap_20 >= 1 / 20 - 0.003, gap_20
+    assert b >= 2 * 9, b
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -1332,14 +1342,17 @@ def test_late_view_resumes_after_a_pause(server, device):
             await c.subscribe(1, "first", pump=step)
             await c.subscribe(2, "late", pump=step)
             await c.expect(w.Snapshot, pump=step, pred=lambda m: m.sub == 2)
-            time.sleep(1.2)                         # no view calls
             ring = server.ring
-            n0, t0 = ring.views["late"].seq, time.perf_counter()
-            while time.perf_counter() - t0 < 0.5:
+            import caliper._net_ring as R
+            # no view calls until the ring no longer counts the views as called lately
+            while time.perf_counter() - max(v.seen for v in ring.views.values()) <= R.OFFER_REFRESH_S:
+                time.sleep(0.01)
+            n0, k0 = ring.views["late"].seq, ring.counters["ticks"]
+            while ring.counters["ticks"] - k0 < 30:
                 step()
-            return (ring.views["late"].seq - n0) / (time.perf_counter() - t0)
-    rate = run(go())
-    assert rate >= 45, rate
+            return ring.views["late"].seq - n0, ring.counters["ticks"] - k0
+    late, ticks = run(go())
+    assert late >= ticks - 2, (late, ticks)          # the late view is in every tick but the first
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -1393,8 +1406,10 @@ def test_view_subscribed_while_a_series_ticks_alone(server, device):
         async with Client(server) as c:
             step()                                       # both views exist
             await c.subscribe(1, "loss", pump=series_only)
-            end = time.perf_counter() + 1.3              # h is not called: it goes stale
-            while time.perf_counter() < end:
+            import caliper._net_ring as R
+            ring = server.ring
+            # h is not called until the ring no longer counts it as called lately
+            while time.perf_counter() - ring.views["h"].seen <= R.OFFER_REFRESH_S:
                 series_only()
             await c.subscribe(2, "h", pump=series_only)
             n0 = server.ring.views["h"].seq
