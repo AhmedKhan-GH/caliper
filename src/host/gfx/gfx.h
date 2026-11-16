@@ -317,7 +317,8 @@ public:
     explicit DrawList(const RenderTarget& target) : target_(target) {}
     // Copies size bytes into the list's arena at the next 256-byte boundary and returns that
     // dynamic offset, or kNoOffset (and the list is then refused at submit) for size 0 or a
-    // block larger than 64 KiB, WebGPU's default uniform binding size.
+    // block larger than 64 KiB, WebGPU's default uniform binding size. Each slice is padded
+    // to a multiple of 256 bytes, so a 192-byte block takes 256 and a 2,080-byte one 2,304.
     uint32_t uniform(const void* data, uint32_t size);
     void draw(const DrawRecord& record) { records_.push_back(record); }
     void reserve(size_t draws, size_t arena_bytes);
