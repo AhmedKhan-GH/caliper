@@ -23,8 +23,12 @@ function render({ model, el }: { model: Model; el: HTMLElement }): () => void {
     if (kind) view.setAttribute('kind', String(kind));
     else view.removeAttribute('kind');
     view.setAttribute('height', String(model.get('height') ?? 320));
-    // A selection in one widget highlights the same items in the others (3.1).
+    // A selection in one widget highlights the same items in the others, the
+    // details of a selection made here show under it, and the header has the
+    // run controls (3.1): a notebook's widgets are where a person watches the run.
     view.setAttribute('link', '');
+    view.setAttribute('details', '');
+    view.setAttribute('run-controls', '');
   };
   sync();
   const dv = model.get('data_view') as DataView | null;

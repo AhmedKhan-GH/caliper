@@ -76,4 +76,4 @@ A change is sent as CONTROL. The control then shows the value it asked for, mark
 
 ## The viewer page and the widgets
 
-The viewer page shows a `caliper-controls` panel above its grid when the producer announces controls and the script has a run state, a parameter or an action, and gives every view `link` and `details`. The notebook widget of `caliper.widget()` (`caliper-widget.js`) is a `caliper-view` with `link`. The module `caliper-controls-widget.js` is the anywidget module of a controls panel, with the traits `src` and `height`.
+The viewer page shows a `caliper-controls` panel above its grid when the producer announces controls and the script has a run state, a parameter or an action, and gives every view `link` and `details`. The notebook widget of `caliper.widget()` (`caliper-widget.js`) is a `caliper-view` with `link`, `details` and `run-controls`. The module `caliper-controls-widget.js` is the anywidget module of a controls panel, with the traits `src` and `height`.
