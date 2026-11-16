@@ -11,7 +11,9 @@
 #include "net/wire.h"
 #include "net/ws.h"
 
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -138,6 +140,72 @@ TEST_CASE("net/json: strict reader, canonical writer") {
     CHECK(format_double(123456789012345.0) == "123456789012345.0");
     CHECK(format_double(1.5e300) == "1.5e+300");
     CHECK(format_double(0.30000000000000004) == "0.30000000000000004");
+}
+
+TEST_CASE("net/json: a repeated name keeps its first position and its last value") {
+    Json j;
+    std::string err;
+    const std::string text = "{\"a\":1,\"b\":2,\"a\":3,\"c\":4,\"b\":5,\"a\":6}";
+    REQUIRE(Json::parse(text.data(), text.size(), &j, &err));
+    REQUIRE(j.size() == 3);
+    CHECK(j.members()[0].first == "a");
+    CHECK(j.members()[1].first == "b");
+    CHECK(j.members()[2].first == "c");
+    CHECK(j.find("a")->as_double() == 6.0);
+    CHECK(j.find("b")->as_double() == 5.0);
+    CHECK(j.find("c")->as_double() == 4.0);
+    // Random objects with many repeats agree with Json::set, which keeps the
+    // first position and replaces the value, member by member.
+    std::mt19937 rng(7);
+    for (int round = 0; round < 200; ++round) {
+        const int n = 1 + (int)(rng() % 60), names = 1 + (int)(rng() % 12);
+        std::string doc = "{";
+        Json model = Json::object();
+        for (int i = 0; i < n; ++i) {
+            const std::string key = "k" + std::to_string(rng() % names);
+            if (i) doc += ",";
+            doc += "\"" + key + "\":" + std::to_string(i);
+            model.set(key, Json(i));
+        }
+        doc += "}";
+        Json got;
+        REQUIRE(Json::parse(doc.data(), doc.size(), &got, &err));
+        REQUIRE(got.size() == model.size());
+        for (size_t i = 0; i < model.size(); ++i) {
+            CHECK(got.members()[i].first == model.members()[i].first);
+            CHECK(got.members()[i].second == model.members()[i].second);
+        }
+    }
+}
+
+TEST_CASE("net/json: a frame whose metadata holds 95,000 distinct names decodes in linear time") {
+    // About 1 MiB of metadata, the protocol's limit, in names of five
+    // characters: a quadratic object parse takes billions of compares here.
+    std::string meta = "{\"nonce\":1";
+    char key[16];
+    for (int i = 0; i < 95000; ++i) {
+        std::snprintf(key, sizeof key, ",\"%05x\":0", i);
+        meta += key;
+    }
+    meta += "}";
+    REQUIRE(meta.size() < (size_t(1) << 20));
+    std::vector<uint8_t> raw(24 + meta.size());
+    const std::vector<uint8_t> ping = frame_of(CALIPER_NET_MSG_PING, "{\"nonce\":1}");
+    std::memcpy(raw.data(), ping.data(), 24);
+    const uint32_t fl = (uint32_t)raw.size(), ml = (uint32_t)meta.size();
+    std::memcpy(raw.data() + 12, &fl, 4);
+    std::memcpy(raw.data() + 16, &ml, 4);
+    std::memcpy(raw.data() + 24, meta.data(), meta.size());
+    Frame f;
+    FrameError fe;
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool ok = decode_frame(raw.data(), raw.size(), &f, &fe);
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    MESSAGE("decoding a frame of " << meta.size() << " metadata bytes and 95,001 names took " << secs << " s");
+    REQUIRE(ok);
+    CHECK(f.meta.size() == 95001);
+    CHECK(f.meta.members()[95000].first == "17317");
+    CHECK(secs < 2.0);
 }
 
 TEST_CASE("net/wire: every golden frame decodes as described and encodes back to the same bytes") {

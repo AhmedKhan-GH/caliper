@@ -247,11 +247,11 @@ struct Parser {
             case '{': {
                 if (depth + 1 > max_depth) return fail("nested deeper than " + std::to_string(max_depth));
                 ++p;
-                Json o = Json::object();
+                std::vector<Json::Member> members;   // in order; repeats resolved at the end
                 skip_ws();
                 if (p < end && *p == '}') {
                     ++p;
-                    *out = std::move(o);
+                    *out = Json::object();
                     return true;
                 }
                 for (;;) {
@@ -264,13 +264,13 @@ struct Parser {
                     ++p;
                     Json v;
                     if (!value(&v, depth + 1)) return false;
-                    o.set(key, std::move(v));
+                    members.emplace_back(std::move(key), std::move(v));
                     skip_ws();
                     if (p < end && *p == ',') { ++p; continue; }
                     if (p < end && *p == '}') { ++p; break; }
                     return fail("expected ',' or '}'");
                 }
-                *out = std::move(o);
+                *out = Json::object_of(std::move(members));
                 return true;
             }
             case '[': {
@@ -368,6 +368,28 @@ Json& Json::set(const std::string& key, Json v) {
         }
     o_.emplace_back(key, std::move(v));
     return o_.back().second;
+}
+
+Json Json::object_of(std::vector<Member> members) {
+    // Sort the positions by name, keeping equal names in input order: the
+    // first of each run is where the name stays, the last holds its value.
+    const size_t n = members.size();
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(),
+                     [&](size_t a, size_t b) { return members[a].first < members[b].first; });
+    std::vector<size_t> last(n, n);   // for the first position of a name: where its value is; n elsewhere
+    for (size_t i = 0; i < n;) {
+        size_t j = i;
+        while (j + 1 < n && members[order[j + 1]].first == members[order[i]].first) ++j;
+        last[order[i]] = order[j];
+        i = j + 1;
+    }
+    Json j = object();
+    j.o_.reserve(n);
+    for (size_t i = 0; i < n; ++i)
+        if (last[i] != n) j.o_.emplace_back(std::move(members[i].first), std::move(members[last[i]].second));
+    return j;
 }
 
 void Json::erase(const std::string& key) {
