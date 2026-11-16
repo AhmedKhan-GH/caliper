@@ -31,7 +31,7 @@ struct CommandRequest {
     std::string id;            // the invocation id the server assigned ("api-<n>")
     std::string name;          // the command's name, from the path
     std::string args;          // the body: JSON text whose value is an object, at most 1 MiB
-    std::string origin;        // "api", "mcp" or "agent"
+    std::string origin;        // "api", "mcp", "agent" or "viewer"
     std::string group;         // from X-Caliper-Group; "" for none
     std::string preview;       // from X-Caliper-Preview: a stacked preview's id; "" for none
     // How long a command that needs approval waits for the person's decision

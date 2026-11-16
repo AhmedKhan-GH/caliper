@@ -120,9 +120,10 @@ RequestInvocation request_invocation(CommandRequest request) {
         return r;
     }
     const auto origin = caliper_builder::command_origin_from_name(request.origin);
-    if (!origin ||
-        (*origin != CommandOrigin::api && *origin != CommandOrigin::mcp && *origin != CommandOrigin::agent)) {
-        r.refused = refused(request.id, "command.invalid_invocation", "The origin is api, mcp or agent.", "origin");
+    if (!origin || (*origin != CommandOrigin::api && *origin != CommandOrigin::mcp && *origin != CommandOrigin::agent &&
+                    *origin != CommandOrigin::viewer)) {
+        r.refused =
+            refused(request.id, "command.invalid_invocation", "The origin is api, mcp, agent or viewer.", "origin");
         return r;
     }
     r.invocation.id = std::move(request.id);

@@ -359,6 +359,22 @@ target_link_libraries(caliper_api PUBLIC caliper_net)
 set_target_properties(caliper_api PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
+# The browser viewer of spec applets that GET /v0/spec answers
+# (src/host/api/spec_page.h): the checked-in build of the web package's spec
+# page, python/caliper/_web/spec.html, embedded as bytes, so the C++ build
+# needs no Node. scripts/build_web.py refreshes that copy.
+set(_spec_page_html "${CMAKE_SOURCE_DIR}/python/caliper/_web/spec.html")
+set(_spec_page_cpp "${CMAKE_BINARY_DIR}/generated/caliper_spec_page.cpp")
+add_custom_command(OUTPUT "${_spec_page_cpp}"
+    COMMAND ${CMAKE_COMMAND} -DIN=${_spec_page_html} -DOUT=${_spec_page_cpp}
+            -P "${CMAKE_SOURCE_DIR}/cmake/embed_spec_page.cmake"
+    DEPENDS "${CMAKE_SOURCE_DIR}/cmake/embed_spec_page.cmake" "${_spec_page_html}"
+    COMMENT "Embedding the spec page"
+    VERBATIM)
+add_library(caliper_spec_page STATIC "${_spec_page_cpp}")
+target_include_directories(caliper_spec_page PRIVATE "${CMAKE_SOURCE_DIR}/src/host")
+set_target_properties(caliper_spec_page PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
@@ -636,7 +652,7 @@ target_compile_definitions(caliper PRIVATE
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
 # libs it uses directly (imgui/glfw/implot chrome).
-target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api caliper_sternbild_ui ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api caliper_spec_page caliper_sternbild_ui ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)

@@ -11,7 +11,9 @@
 // as the hub file of `caliper serve` is (owner only, mode 0600, through a
 // temporary file) and removed by stop() when it still holds this run's text.
 // It is one JSON object {"version": 1, "pid", "port", "token", "url",
-// "stream_url"}.
+// "stream_url", "spec_url"}. spec_url is the browser viewer of spec applets
+// with the viewer token (api_server.h, THE SPEC PAGE); a saved spec applet
+// opens at spec_url + "&applet=<id>", and start() prints that line too.
 //
 // The command layer's endpoints are served once set_command_gateway() gives
 // the server a gateway; take() then also hands their requests to it.

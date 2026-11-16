@@ -206,6 +206,8 @@ Routed route(const std::string& method, const std::string& path) {
         r.route = Route::Stream;
     } else if (path == kCommands) {
         r.route = Route::Commands;
+    } else if (path == kSpecPagePath) {
+        r.route = Route::SpecPage;
     } else if (tail_after(path, kCommandHead, &r.name)) {
         r.route = Route::Command;
     } else if (tail_after(path, kApprovalHead, &r.name)) {
@@ -222,6 +224,12 @@ Routed route(const std::string& method, const std::string& path) {
     r.allow = r.route == Route::Launch || r.route == Route::Command ? "POST" : "GET";
     r.method_ok = method == r.allow;
     return r;
+}
+
+bool viewer_command(const std::string& name) {
+    for (const char* n : kViewerCommands)
+        if (name == n) return true;
+    return false;
 }
 
 bool plausible_applet_id(const std::string& id) {
@@ -259,7 +267,7 @@ bool token_ok(const HttpRequest& r, const std::string& token, bool query_ok) {
     return caliper_net::wire::token_equal(q, token);
 }
 
-Verdict check(const HttpRequest& r, const std::string& token, bool command_layer) {
+Verdict check(const HttpRequest& r, const std::string& token, bool command_layer, const std::string& viewer_token) {
     Verdict v;
     if (r.has_origin && !caliper_net::wire::origin_allowed(r.origin)) {
         v.status = 403;
@@ -285,11 +293,21 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
         return v;
     }
     if (!token_ok(r, token, r.method == "GET")) {
-        v.status = 401;
-        v.message = r.method == "GET" ? "the session token is missing or wrong"
-                                      : "the session token is missing or wrong (a POST takes it in "
-                                        "the Authorization header only)";
-        return v;
+        if (viewer_token.empty() || !token_ok(r, viewer_token, r.method == "GET")) {
+            v.status = 401;
+            v.message = r.method == "GET" ? "the session token is missing or wrong"
+                                          : "the session token is missing or wrong (a POST takes it in "
+                                            "the Authorization header only)";
+            return v;
+        }
+        // The viewer token opens the spec page and its read-only commands only.
+        v.viewer = true;
+        if (rt != Route::SpecPage && !(rt == Route::Command && viewer_command(v.routed.name))) {
+            v.status = 403;
+            v.message = "the viewer token opens only the spec page and the commands spec.get, applet.list and "
+                        "panel.data";
+            return v;
+        }
     }
     const std::string length = trim(r.header("content-length"));
     if (rt == Route::Command) {
@@ -330,13 +348,22 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
             return v;
         }
         const std::string origin = r.header("x-caliper-origin");
-        if (header_count(r, "x-caliper-origin") == 0 || origin == "api") {
+        if (v.viewer) {
+            // The viewer token's commands come from the viewer origin, whatever
+            // the request claims beside it.
+            if (header_count(r, "x-caliper-origin") > 0 && origin != "viewer") {
+                v.status = 400;
+                v.message = "with the viewer token, X-Caliper-Origin is viewer";
+                return v;
+            }
+            v.origin = "viewer";
+        } else if (header_count(r, "x-caliper-origin") == 0 || origin == "api") {
             v.origin = "api";
-        } else if (origin == "mcp" || origin == "agent") {
+        } else if (origin == "mcp" || origin == "agent" || origin == "viewer") {
             v.origin = origin;
         } else {
             v.status = 400;
-            v.message = "X-Caliper-Origin is api, mcp or agent";
+            v.message = "X-Caliper-Origin is api, mcp, agent or viewer";
             return v;
         }
         return v;
@@ -476,7 +503,7 @@ struct Server::Impl {
     // without the token or the right Host and Origin.
     size_t body_limit(const HttpRequest& r) {
         if (!caliper_net::wire::host_allowed(r.host, hub->port())) return 0;
-        const Verdict v = check(r, opt.token, current_gateway() != nullptr);
+        const Verdict v = check(r, opt.token, current_gateway() != nullptr, opt.viewer_token);
         return v.routed.route == Route::Command && v.body_ok ? kMaxCommandBody : 0;
     }
 
@@ -487,7 +514,7 @@ struct Server::Impl {
             ++st.requests;
         }
         const std::shared_ptr<CommandGateway> gw = current_gateway();
-        const Verdict v = check(r, opt.token, gw != nullptr);
+        const Verdict v = check(r, opt.token, gw != nullptr, opt.viewer_token);
         if (v.status == 401) {
             answer_error(c, 401, v.message, {{"WWW-Authenticate", "Bearer realm=\"caliper\""}});
             return;
@@ -506,6 +533,20 @@ struct Server::Impl {
         switch (v.routed.route) {
             case Route::Info:
                 answer(c, 200, "application/json", opt.info_json);
+                return;
+            case Route::SpecPage:
+                if (opt.spec_page_html.empty()) {
+                    answer_error(c, 404, "this build has no spec page");
+                    return;
+                }
+                // The page reaches nothing but its own origin, and its address,
+                // which holds a token, is never sent as a referrer.
+                answer(c, 200, "text/html; charset=utf-8", opt.spec_page_html,
+                       {{"Content-Security-Policy",
+                         "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                         "font-src data:; img-src data: blob:; connect-src 'self'; base-uri 'none'; "
+                         "form-action 'none'; frame-ancestors 'none'"},
+                        {"Referrer-Policy", "no-referrer"}});
                 return;
             case Route::Commands:
                 answer(c, 200, "application/json", gw->table_json());
@@ -542,7 +583,8 @@ struct Server::Impl {
                 layer.request.origin = v.origin;
                 layer.request.group = r.header("x-caliper-group");
                 layer.request.preview = r.header("x-caliper-preview");
-                layer.request.approval_wait_ms = v.origin == "api" ? 0 : opt.command_approval_wait_ms;
+                layer.request.approval_wait_ms =
+                    v.origin == "mcp" || v.origin == "agent" ? opt.command_approval_wait_ms : 0;
                 to_layer = true;
                 break;
             }
@@ -731,6 +773,10 @@ bool Server::start(std::string* err) {
         *err = "the session token must be 22 to 128 characters of A-Z, a-z, 0-9, '_' and '-'";
         return false;
     }
+    if (!opt_.viewer_token.empty() && (!caliper_net::valid_token(opt_.viewer_token) || opt_.viewer_token == opt_.token)) {
+        *err = "the viewer token must be a valid token other than the session token";
+        return false;
+    }
     auto m = std::make_unique<Impl>(opt_);
     Impl* p = m.get();
     m->gateway = gateway_;
@@ -786,6 +832,12 @@ std::string Server::base_url() const { return "http://127.0.0.1:" + std::to_stri
 
 std::string Server::stream_url() const {
     return "ws://127.0.0.1:" + std::to_string(port()) + kStreamPath;
+}
+
+std::string Server::spec_url() const {
+    if (opt_.viewer_token.empty()) return {};
+    return "http://127.0.0.1:" + std::to_string(port()) + kSpecPagePath + "?" + CALIPER_NET_TOKEN_PARAM + "=" +
+           opt_.viewer_token;
 }
 
 std::vector<Call> Server::take() {

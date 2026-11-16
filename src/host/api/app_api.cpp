@@ -1,6 +1,8 @@
 // Caliper API v0 for the caliper executable (app_api.h).
 #include "api/app_api.h"
 
+#include "api/spec_page.h"
+
 #include "export_service.h"
 #include "negotiation.h"
 #include "net/json.h"
@@ -37,6 +39,11 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
     caliper_api::Options o;
     o.port = (uint16_t)(cl.api_port >= 0 ? cl.api_port : caliper_api::kDefaultPort);
     o.token = caliper_net::random_token();
+    // The spec page's link carries a token of its own, which opens only the
+    // page and its read-only commands (api_server.h, THE SPEC PAGE).
+    do o.viewer_token = caliper_net::random_token();
+    while (o.viewer_token == o.token);
+    o.spec_page_html = caliper_api::spec_page_html();
     o.info_json = info_json(ctx);
     o.software_version = ctx.caps.version;
     o.allow_control = cl.allow_control;
@@ -66,6 +73,7 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
     j.set("token", server->token());
     j.set("url", server->base_url());
     j.set("stream_url", server->stream_url());
+    if (!caliper_api::spec_page_html().empty()) j.set("spec_url", server->spec_url());
     file_text_ = j.dump() + "\n";
     std::string why;
     if (!caliper_net::write_hub_file(file_, file_text_, &why)) {
@@ -77,6 +85,8 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
         << server->token();
     if (!file_.empty()) out << " (also in " << file_ << ")";
     out << std::endl;
+    if (!caliper_api::spec_page_html().empty())
+        out << "[api] Spec applets in a browser at " << server->spec_url() << "&applet=<id>" << std::endl;
     server_ = std::move(server);
     return true;
 }

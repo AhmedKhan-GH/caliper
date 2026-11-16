@@ -15,6 +15,7 @@
 //   GET  /v0/commands               the command layer's descriptor table
 //   POST /v0/commands/{name}        run a command; the args object is the body
 //   GET  /v0/approvals/{id}         what became of a command that needed approval
+//   GET  /v0/spec                   the browser viewer of spec applets, a page
 //
 // THE COMMAND LAYER. The last three are served only while a CommandGateway
 // (api/command_gateway.h) is set with set_command_gateway(); without one they
@@ -30,6 +31,19 @@
 // is held for the origins mcp and agent while the person decides, up to
 // Options::command_approval_wait_ms, and answers command.needs_approval at
 // once for api, whose caller reads the outcome from GET /v0/approvals/{id}.
+// X-Caliper-Origin may also be viewer, which only lowers what a request may
+// do: the command layer runs reads only from that origin.
+//
+// THE SPEC PAGE. GET /v0/spec answers Options::spec_page_html, the page of
+// the web package that draws a saved spec applet in a browser
+// (web/src/spec/), embedded in the executable; no file is read. The page
+// takes the token and the applet's id from its own address and calls
+// spec.get, applet.list and panel.data. Options::viewer_token is a second
+// token for it: a request that carries the viewer token instead of the
+// session token may only GET the page and POST those three commands
+// (kViewerCommands), always from the origin viewer, so the link printed for
+// the page never opens the rest of the API or the command layer's edits;
+// anything else is refused with 403.
 //
 // THE STREAM. /v3/stream is wire protocol v3 with the app in the hub role: the
 // hub of `caliper serve` (net/hub.h) runs on the API's port, so producers
@@ -90,7 +104,12 @@ constexpr size_t kMaxCommandBody = size_t(1) << 20;
 
 // ---- routing --------------------------------------------------------------------------
 
-enum class Route { None, Info, Applets, Launch, Capture, Stream, Commands, Command, Approval };
+enum class Route { None, Info, Applets, Launch, Capture, Stream, Commands, Command, Approval, SpecPage };
+
+// The spec page's path, and the commands a request with the viewer token may run.
+inline constexpr char kSpecPagePath[] = "/v0/spec";
+inline constexpr const char* kViewerCommands[] = {"spec.get", "applet.list", "panel.data"};
+bool viewer_command(const std::string& name);
 
 struct Routed {
     Route route = Route::None;   // None: 404
@@ -122,23 +141,28 @@ bool token_ok(const caliper_net::HttpRequest& r, const std::string& token, bool 
 // repeated header that the checks read or the command takes (400), Transfer-Encoding (501), no
 // Content-Length (411), one that is not a number (400) or over
 // kMaxCommandBody (413), a Content-Type other than application/json (415) and
-// an X-Caliper-Origin other than api, mcp or agent (400); for every other
-// endpoint: a body (413), the applet id of a launch and the approval id of an
-// approval (400). The command layer's three endpoints are 404 unless
-// command_layer is true. status 0 means it may be served; the body itself is
+// an X-Caliper-Origin other than api, mcp, agent or viewer (400); for every
+// other endpoint: a body (413), the applet id of a launch and the approval id
+// of an approval (400). The command layer's three endpoints are 404 unless
+// command_layer is true. A request with `viewer_token` (not empty) in place
+// of the session token passes the token check as a viewer: it may GET the
+// spec page and POST the kViewerCommands from the origin viewer only, and
+// anything else is 403. status 0 means it may be served; the body itself is
 // checked once it has arrived.
 struct Verdict {
     int status = 0;
     std::string message;   // for the JSON error body
     Routed routed;
-    std::string origin;    // Command: "api", "mcp" or "agent"
+    std::string origin;    // Command: "api", "mcp", "agent" or "viewer"
+    bool viewer = false;   // the request carries the viewer token
     // Command: the request came with the token and a Content-Length within
     // kMaxCommandBody, so its body is read even when a later check (415, the
     // origin's 400) refuses it, and the refusal reaches the client before the
     // connection closes.
     bool body_ok = false;
 };
-Verdict check(const caliper_net::HttpRequest& r, const std::string& token, bool command_layer = false);
+Verdict check(const caliper_net::HttpRequest& r, const std::string& token, bool command_layer = false,
+              const std::string& viewer_token = {});
 
 // What a command's body holds, checked without building it: a JSON object,
 // another JSON value, JSON nested deeper than kMaxJsonDepth, or not JSON (RFC
@@ -169,6 +193,10 @@ struct Options {
     int command_approval_wait_ms = 120000;   // mcp, agent: a command held for approval waits this long
     int command_timeout_ms = 600000;         // a command the frame thread took answers within this (504)
     size_t max_commands = 32;                // command requests held or waiting at once (503)
+    // The viewer token (caliper_net::valid_token, not the session token), or
+    // "" for none; and the spec page that GET /v0/spec answers, "" for a 404.
+    std::string viewer_token;
+    std::string spec_page_html;
     // Encodes tightly packed top-down RGBA8 as a PNG (export_encode_png).
     std::function<bool(const uint8_t*, uint32_t, uint32_t, std::string*)> encode_png;
     // One line per session that starts or ends on the stream; never the token.
@@ -210,6 +238,9 @@ public:
     const std::string& token() const { return opt_.token; }
     std::string base_url() const;      // http://127.0.0.1:<port>/v0
     std::string stream_url() const;    // ws://127.0.0.1:<port>/v3/stream (no token)
+    // http://127.0.0.1:<port>/v0/spec?token=<viewer token>, "" without a
+    // viewer token; a saved spec applet opens with &applet=<id> added.
+    std::string spec_url() const;
 
     // ---- the frame thread ----
     // The calls waiting for the frame thread, oldest first. Cheap when none

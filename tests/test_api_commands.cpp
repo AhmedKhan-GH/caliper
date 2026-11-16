@@ -351,6 +351,76 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     CHECK(app.session->open_spec()->spec.applet.id == "dash");
 }
 
+TEST_CASE("api commands: the viewer token opens the spec page and runs its reads from the viewer origin only") {
+    caliper_api::Options o;
+    o.viewer_token = "api_viewer_token-0123456789abcdef";
+    o.spec_page_html = "<!doctype html><title>Spec</title>";
+    SessionApp app(o);
+    const uint16_t port = app.port();
+    const std::string viewer = "Authorization: Bearer " + o.viewer_token + "\r\n";
+    auto as_viewer = [&](const std::string& name, const json& args, const std::string& extra = {}) {
+        const std::string body = args.dump();
+        return read_response(send_request(port, "POST", "/v0/commands/" + name,
+                                          viewer + extra + "Content-Type: application/json\r\nContent-Length: " +
+                                              std::to_string(body.size()) + "\r\n",
+                                          body));
+    };
+    REQUIRE(command(port, "spec.new", {{"id", "dash"}, {"title", "Dash"}})["ok"] == true);
+    REQUIRE(command(port, "panel.create", {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "Hi"}}}})["ok"] ==
+            true);
+    REQUIRE(command(port, "applet.save", json::object())["ok"] == true);
+    CHECK(app.server->spec_url() == "http://127.0.0.1:" + std::to_string(port) + "/v0/spec?token=" + o.viewer_token);
+
+    // The page, with the viewer token in its address, and with the session token.
+    const Response page = read_response(send_request(port, "GET", "/v0/spec?token=" + o.viewer_token + "&applet=dash", ""));
+    CHECK(page.status == 200);
+    CHECK(page.body == o.spec_page_html);
+    CHECK(page.headers.at("content-type") == "text/html; charset=utf-8");
+    CHECK(page.headers.at("content-security-policy").find("connect-src 'self'") != std::string::npos);
+    CHECK(page.headers.at("referrer-policy") == "no-referrer");
+    CHECK(get(port, "/v0/spec").status == 200);
+    CHECK(read_response(send_request(port, "GET", "/v0/spec", "")).status == 401);
+
+    // The page's three reads, from the viewer origin.
+    const Response got = as_viewer("spec.get", {{"applet", "dash"}});
+    REQUIRE(got.status == 200);
+    CHECK(got.value()["result"]["json"]["panel"][0]["id"] == "note");
+    CHECK(as_viewer("applet.list", json::object()).value()["result"]["applets"].size() == 1);
+    const Response data = as_viewer("panel.data", {{"applet", "dash"}, {"panel", "note"}});
+    REQUIRE(data.status == 200);
+    CHECK(data.value()["result"]["data"]["value"].is_null());
+    CHECK(as_viewer("panel.data", {{"applet", "dash"}, {"panel", "note"}}, "X-Caliper-Origin: viewer\r\n").status == 200);
+    CHECK(as_viewer("panel.data", {{"applet", "dash"}, {"panel", "note"}}, "X-Caliper-Origin: api\r\n").status == 400);
+
+    // Nothing else: other commands, other endpoints and the stream.
+    for (const char* name : {"panel.remove", "spec.set_text", "applet.save", "data.query", "capture.frame",
+                             "history.undo"}) {
+        CAPTURE(name);
+        CHECK(as_viewer(name, json::object()).status == 403);
+    }
+    for (const char* path : {"/v0/info", "/v0/applets", "/v0/commands", "/v0/capture.png", "/v0/approvals/ap-1"}) {
+        CAPTURE(path);
+        CHECK(read_response(send_request(port, "GET", path, viewer)).status == 403);
+    }
+    CHECK(read_response(send_request(port, "POST", "/v0/applets/x/launch", viewer)).status == 403);
+    caliper_net::Client c;
+    std::string why;
+    bool refused = !c.connect("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + o.viewer_token, &why);
+    if (!refused) {
+        for (int i = 0; i < 200 && !refused; ++i)
+            for (auto& e : c.poll(10))
+                if (e.type == caliper_net::Event::Type::Closed) refused = true;
+    }
+    CHECK(refused);
+
+    // With the session token, a request may lower itself to the viewer origin,
+    // and the command layer then runs reads only.
+    CHECK(command(port, "panel.data", {{"applet", "dash"}, {"panel", "note"}}, "viewer")["ok"] == true);
+    CHECK(error_code(command(port, "panel.remove", {{"id", "note"}}, "viewer")) == "command.not_allowed");
+    REQUIRE(app.session->open_spec().has_value());
+    CHECK(app.session->open_spec()->spec.panels.size() == 1);
+}
+
 TEST_CASE("api commands: a destructive command from mcp or agent is held while the person decides") {
     SessionApp app;
     const uint16_t port = app.port();

@@ -771,6 +771,68 @@ TEST_CASE("api: a command request is checked for its headers and its body's leng
     }
 }
 
+TEST_CASE("api: the viewer token passes only the spec page and the page's reads, from the viewer origin") {
+    using caliper_api::check;
+    const std::string vt = "api_viewer_token-0123456789abcdefgh";
+    const auto as_viewer = std::make_pair(std::string("authorization"), "Bearer " + vt);
+    const auto json = std::make_pair(std::string("content-type"), std::string("application/json"));
+    const auto len = std::make_pair(std::string("content-length"), std::string("2"));
+    CHECK(caliper_api::route("GET", "/v0/spec").route == Route::SpecPage);
+    CHECK_FALSE(caliper_api::route("POST", "/v0/spec").method_ok);
+    CHECK(caliper_api::route("GET", "/v0/spec/").route == Route::None);
+    CHECK(caliper_api::viewer_command("panel.data"));
+    CHECK(caliper_api::viewer_command("spec.get"));
+    CHECK(caliper_api::viewer_command("applet.list"));
+    CHECK_FALSE(caliper_api::viewer_command("panel.remove"));
+    CHECK_FALSE(caliper_api::viewer_command("data.query"));
+
+    // The page, with either token in its address; without a viewer token the
+    // viewer's is just a wrong token.
+    CHECK(check(req("GET", "/v0/spec?token=" + vt), kToken, true, vt).status == 0);
+    CHECK(check(req("GET", "/v0/spec?token=" + vt), kToken, true, vt).viewer);
+    CHECK(check(req("GET", "/v0/spec?token=" + kToken), kToken, true, vt).status == 0);
+    CHECK_FALSE(check(req("GET", "/v0/spec?token=" + kToken), kToken, true, vt).viewer);
+    CHECK(check(req("GET", "/v0/spec?token=" + vt), kToken, true).status == 401);
+    CHECK(check(req("GET", "/v0/spec"), kToken, true, vt).status == 401);
+
+    // Its commands come from the viewer origin; the rest is 403.
+    const caliper_api::Verdict v = check(req("POST", "/v0/commands/panel.data", {as_viewer, json, len}), kToken, true, vt);
+    CHECK(v.status == 0);
+    CHECK(v.origin == "viewer");
+    CHECK(check(req("POST", "/v0/commands/panel.data", {as_viewer, json, len, {"x-caliper-origin", "viewer"}}), kToken,
+                true, vt).status == 0);
+    CHECK(check(req("POST", "/v0/commands/panel.data", {as_viewer, json, len, {"x-caliper-origin", "mcp"}}), kToken,
+                true, vt).status == 400);
+    CHECK(check(req("POST", "/v0/commands/panel.data?token=" + vt, {json, len}), kToken, true, vt).status == 401);
+    for (const char* path : {"/v0/commands/panel.remove", "/v0/commands/data.query", "/v0/applets/x/launch"}) {
+        CAPTURE(path);
+        CHECK(check(req("POST", path, {as_viewer, json, len}), kToken, true, vt).status == 403);
+    }
+    for (const char* path : {"/v0/info", "/v0/applets", "/v0/capture.png", "/v0/commands", "/v0/approvals/ap-1"}) {
+        CAPTURE(path);
+        CHECK(check(req("GET", path, {as_viewer}), kToken, true, vt).status == 403);
+    }
+    // The session token may lower a command to the viewer origin.
+    const auto auth = std::make_pair(std::string("authorization"), "Bearer " + kToken);
+    const caliper_api::Verdict lowered =
+        check(req("POST", "/v0/commands/panel.remove", {auth, json, len, {"x-caliper-origin", "viewer"}}), kToken, true, vt);
+    CHECK(lowered.status == 0);
+    CHECK(lowered.origin == "viewer");
+    CHECK_FALSE(lowered.viewer);
+
+    // The server refuses a viewer token that is not a token, or is the session token.
+    for (const std::string bad : {std::string("short"), kToken}) {
+        caliper_api::Options o;
+        o.port = 0;
+        o.token = kToken;
+        o.viewer_token = bad;
+        caliper_api::Server server(o);
+        std::string err;
+        CHECK_FALSE(server.start(&err));
+        CHECK(err.find("viewer token") != std::string::npos);
+    }
+}
+
 TEST_CASE("api: a command's body is a JSON object, checked without building it") {
     using caliper_api::BodyShape;
     using caliper_api::body_shape;
