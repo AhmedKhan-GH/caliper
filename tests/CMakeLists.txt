@@ -118,8 +118,8 @@ set_tests_properties(caliper_tests PROPERTIES ENVIRONMENT
     "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_tests")
 
 # The scene core (src/host/scene): the store, matrices, cameras, fits, compiled draw lists
-# and picks, headless and with no GPU. Until the graphics layer's core is a target
-# (caliper_gfx), a stand-in supplies the DrawList members the scene core calls.
+# and picks, headless and with no GPU, and the fixture draw lists through the graphics
+# layer's validation on its recording backend (caliper_gfx, which caliper_scene links).
 add_executable(caliper_scene_tests
     scene/scene_main.cpp
     scene/test_scene_store.cpp
@@ -128,15 +128,9 @@ add_executable(caliper_scene_tests
     scene/test_scene_compile.cpp
     scene/test_scene_pick.cpp
     scene/test_scene_row.cpp
+    scene/test_scene_layer.cpp
 )
 target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
-if(TARGET caliper_gfx)
-    # The fixture draw lists through the layer's validation on its recording backend.
-    target_sources(caliper_scene_tests PRIVATE scene/test_scene_layer.cpp)
-    target_link_libraries(caliper_scene_tests PRIVATE caliper_gfx)
-else()
-    target_sources(caliper_scene_tests PRIVATE scene/draw_list_standin.cpp)
-endif()
 set_target_properties(caliper_scene_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_scene_tests COMMAND caliper_scene_tests)
 

@@ -369,17 +369,19 @@ endif()
 
 # The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
 # store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
-# graphics layer (src/host/gfx/gfx.h), and picking. Plain C++17 with no GPU and no backend;
-# nothing uses it yet, and caliper_scene_tests (tests/scene) checks it headless.
+# graphics layer (src/host/gfx/gfx.h), picking, and BackendResources, its handles over a backend
+# of the layer. Plain C++17 that never calls a GPU itself; nothing uses it yet, and
+# caliper_scene_tests (tests/scene) checks it headless.
 add_library(caliper_scene STATIC
     src/host/scene/path.cpp
     src/host/scene/scene_tree.cpp
     src/host/scene/camera.cpp
     src/host/scene/compile.cpp
     src/host/scene/pick.cpp
+    src/host/scene/backend_resources.cpp
 )
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
-target_link_libraries(caliper_scene PUBLIC caliper::sdk)
+target_link_libraries(caliper_scene PUBLIC caliper_gfx caliper::sdk)
 set_target_properties(caliper_scene PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
@@ -752,13 +754,6 @@ message(STATUS "  MPS Support: ${USE_MPS}")
 message(STATUS "  Parallel Jobs: ${N}")
 message(STATUS "========================================")
 message(STATUS "")
-
-# The scene core over a backend of the graphics layer (src/host/scene/backend_resources.h), once
-# the layer's core is a target of the build.
-if(TARGET caliper_gfx)
-    target_sources(caliper_scene PRIVATE src/host/scene/backend_resources.cpp)
-    target_link_libraries(caliper_scene PUBLIC caliper_gfx)
-endif()
 
 if(BUILD_TESTS)
     enable_testing()

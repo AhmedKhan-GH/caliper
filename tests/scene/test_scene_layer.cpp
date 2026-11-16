@@ -1,7 +1,6 @@
 // The scene core's draw lists through the graphics layer: every fixture scene compiled over a
 // BackendResources on the recording backend, with its index clamps and edge gathers, its colour
-// pass and its pick pass, must pass the layer's validation and be submitted. Built only where
-// the layer's core (the target caliper_gfx) is part of the build.
+// pass and its pick pass, must pass the layer's validation and be submitted.
 #include "gfx/recording_backend.h"
 #include "gfx/shaders/generated/programs_webgpu.h"
 #include "scene/backend_resources.h"
