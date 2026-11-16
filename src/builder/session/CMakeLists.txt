@@ -50,11 +50,15 @@ caliper_builder_add_tests(session
         tests/test_session.cpp
         tests/test_resolve.cpp
         tests/test_command_server.cpp
-    LIBS caliper_builder_session caliper_builder_session_host)
+        tests/test_acceptance.cpp
+    LIBS caliper_builder_session caliper_builder_session_host caliper_builder_acp caliper_builder_duckdb)
 if(TARGET caliper_builder_session_tests)
+    # The HTTP acceptance test runs the stand-in host as a child process.
+    add_dependencies(caliper_builder_session_tests caliper-builder-host)
     # CALIPER_BUILDER_TEST_PYTHON (the loaders module's cache variable) names an
     # interpreter with numpy; when it is empty, the test that runs a Python
     # loader's script says it is skipped and checks only the approval.
     target_compile_definitions(caliper_builder_session_tests PRIVATE
+        CALIPER_BUILDER_HOST_EXE="$<TARGET_FILE:caliper-builder-host>"
         CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}")
 endif()
