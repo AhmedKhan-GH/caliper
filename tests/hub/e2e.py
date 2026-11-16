@@ -25,9 +25,12 @@ Python environment with torch, numpy and websockets. It checks, in order:
 8. SIGTERM stops the hub with exit code 0, it removes its hub file, and no
    process this script started is left.
 
-With --bench it then measures the relay with a 512 x 512 heatmap at 60 Hz to
-four Python viewers in other processes. It prints one line per check and
-exits with 0 when all of them pass.
+With --connect the two scripts are tests/hub/producer_connect.py instead,
+which stream with the package's own caliper.connect() (the native sender
+must be built: python scripts/build_netio.py), and their sessions are found
+in the session list by pid. With --bench it then measures the relay with a
+512 x 512 heatmap at 60 Hz to four Python viewers in other processes. It
+prints one line per check and exits with 0 when all of them pass.
 """
 from __future__ import annotations
 
@@ -83,6 +86,8 @@ def main() -> int:
     ap.add_argument("--build", default="cmake-build-release", help="the CMake build folder")
     ap.add_argument("--work", help="a folder for the hub file and logs (default: a new temporary one)")
     ap.add_argument("--bench", action="store_true", help="also measure the relay at 60 Hz to four viewers")
+    ap.add_argument("--connect", action="store_true",
+                    help="the scripts stream with caliper.connect() (tests/hub/producer_connect.py)")
     a = ap.parse_args()
     caliper = os.path.join(a.build, "caliper")
     caliper_viewer = os.path.join(a.build, "caliper_viewer")
@@ -122,22 +127,37 @@ def main() -> int:
         rss.append((time.monotonic(), rss_mib(hub.pid)))
 
         # 2. two scripts
-        pa = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-a",
-                    "--seconds", "48", "--controls"], "producer-a.log")
-        pb = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-b",
-                    "--seconds", "26"], "producer-b.log")
+        if a.connect:
+            pa = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "48"],
+                       "producer-a.log")
+            pb = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "26"],
+                       "producer-b.log")
+        else:
+            pa = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-a",
+                        "--seconds", "48", "--controls"], "producer-a.log")
+            pb = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-b",
+                        "--seconds", "26"], "producer-b.log")
+        ida, idb = "e2e-a", "e2e-b"
         listed = {}
         t0 = time.monotonic()
         while time.monotonic() - t0 < 30:
-            listed = {s["id"]: s["state"] for s in asyncio.run(viewer.sessions(url))}
-            if listed.get("e2e-a") == "live" and listed.get("e2e-b") == "live":
+            got = asyncio.run(viewer.sessions(url))
+            if a.connect:                       # the package names its session; find it by pid
+                by_pid = {s.get("pid"): s["id"] for s in got}
+                ida, idb = by_pid.get(pa.pid, ida), by_pid.get(pb.pid, idb)
+            listed = {s["id"]: s["state"] for s in got}
+            # caliper.connect() lists a session before its views exist: they come
+            # with the script's first view calls, so wait for all three
+            nviews = {s["id"]: s.get("views", 0) for s in got}
+            if listed.get(ida) == "live" and listed.get(idb) == "live" and \
+                    (not a.connect or (nviews.get(ida) == 3 and nviews.get(idb) == 3)):
                 break
             time.sleep(0.3)
-        check(listed.get("e2e-a") == "live" and listed.get("e2e-b") == "live",
+        check(listed.get(ida) == "live" and listed.get(idb) == "live",
               f"both scripts are listed as live sessions: {listed}")
 
         # 3. a Python viewer on each session
-        for sid in ("e2e-a", "e2e-b"):
+        for sid in (ida, idb):
             r = asyncio.run(viewer.watch(url, sid, 3.0))
             rss.append((time.monotonic(), rss_mib(hub.pid)))
             snaps = r["snapshots"]
@@ -150,7 +170,7 @@ def main() -> int:
 
         # 4. the native viewer on each session
         link = h["url"]
-        for sid in ("e2e-a", "e2e-b"):
+        for sid in (ida, idb):
             n = native_viewer(caliper_viewer, f"{link}&session={sid}", work)
             rss.append((time.monotonic(), rss_mib(hub.pid)))
             views = n["views"]
@@ -167,12 +187,12 @@ def main() -> int:
             pb.wait(timeout=40)
         except subprocess.TimeoutExpired:
             pass
-        check(pb.returncode == 0, f"script e2e-b finished (exit {pb.returncode})")
+        check(pb.returncode == 0, f"script {idb} finished (exit {pb.returncode})")
         with open(os.path.join(work, "producer-b.log")) as f:
             tail = [l for l in f.read().splitlines() if l.startswith("{")]
         b_done = json.loads(tail[-1]) if tail else {}
         time.sleep(0.5)
-        r = asyncio.run(viewer.watch(url, "e2e-b", 1.5))
+        r = asyncio.run(viewer.watch(url, idb, 1.5))
         rss.append((time.monotonic(), rss_mib(hub.pid)))
         check(r["state"] == "ended", f"its session is listed as ended: {r['state']}")
         check(r["snapshots"].get("fc1.weight", 0) >= 1 and r["snapshots"].get("fc2.weight", 0) >= 1,
@@ -180,10 +200,10 @@ def main() -> int:
         loss = r["series"].get("loss", {})
         check(loss.get("first") == 0 and loss.get("contiguous") and loss.get("values") == b_done.get("loss_values"),
               f"and its whole loss series: {loss.get('values')} of {b_done.get('loss_values')} values")
-        n = native_viewer(caliper_viewer, f"{link}&session=e2e-b", work, seconds=3)
+        n = native_viewer(caliper_viewer, f"{link}&session={idb}", work, seconds=3)
         check(n["code"] == 0 and n["views"].get("fc1.weight", {}).get("updates", 0) > 0,
               f"the native viewer shows the ended session too: {n['views']} {n['session']}")
-        r = asyncio.run(viewer.watch(url, "e2e-a", 1.0))
+        r = asyncio.run(viewer.watch(url, ida, 1.0))
         check(r["state"] == "live" and r["snapshots"].get("fc1.weight", 0) > 0, "the other session goes on")
 
         # 6. the hub's memory over the run
@@ -201,7 +221,8 @@ def main() -> int:
             bench(spawn, url, hub_file, work)
 
         # 7. controls (protocol 3.1): refused by this hub, forwarded by one with --allow-control
-        controls(spawn, url, caliper, work)
+        if not a.connect:                   # the package's scripts expose no controls yet
+            controls(spawn, url, caliper, work)
 
         # 8. stop
         pa.terminate()
@@ -214,7 +235,7 @@ def main() -> int:
         check(not os.path.exists(hub_file), "the hub removes its hub file")
         with open(os.path.join(work, "hub.log")) as f:
             log = f.read()
-        check("session e2e-b ended" in log and "hub stopped" in log, "the hub logged the sessions and its stop")
+        check(f"session {idb} ended" in log and "hub stopped" in log, "the hub logged the sessions and its stop")
     finally:
         for p in procs:
             if p.poll() is None:
