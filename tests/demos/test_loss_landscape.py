@@ -826,10 +826,11 @@ def test_capture_browser(notebook, tmp_path):
     once its module has received every message the server sent on its
     connection and drawn 30 more frames. The path's, the marker's and the
     frame's colours appear exactly, and the area matches the reference under
-    the parity rules. Without a reference the test writes the capture for review
+    the parity rules, leaving out the scale bar's band, which the module
+    publishes. Without a reference the test writes the capture for review
     and skips: CALIPER_DEMO0_WRITE_WEB_REFERENCE=1 writes it as the reference,
     which is committed once a person has reviewed it. CALIPER_SCENE_CAPTURE_DIR
-    keeps the area."""
+    keeps the area and the page's report of it (its geometry and scale bar)."""
     Image = pytest.importorskip("PIL.Image")
     ns = notebook(300)
     land, server = ns["land"], ns["server"]
@@ -913,6 +914,7 @@ def test_capture_browser(notebook, tmp_path):
         keep_dir = os.environ.get("CALIPER_SCENE_CAPTURE_DIR")
         if keep_dir:
             Image.fromarray(area).save(Path(keep_dir) / f"loss-landscape-web-{WEB_ADAPTER}-step299.png")
+            (Path(keep_dir) / f"loss-landscape-web-{WEB_ADAPTER}-step299.json").write_text(json.dumps(shot, indent=1))
         # the flat colours of the path, the marker and the frame, exactly
         flat = area.reshape(-1, 3)
         for colour in ((235, 235, 235), MARKER, (120, 120, 120)):
@@ -925,7 +927,21 @@ def test_capture_browser(notebook, tmp_path):
             Image.fromarray(area).save(out)
             pytest.skip(f"no reference yet: review {out} and commit it as "
                         f"{WEB_REFERENCE.relative_to(REPO)} (CALIPER_DEMO0_WRITE_WEB_REFERENCE=1)")
-        ok, report = parity(area, np.asarray(Image.open(WEB_REFERENCE).convert("RGB")))
+        # The scale bar, as in the app's row: an overlay drawn over the picture
+        # since the reference was taken, its band (which the module publishes in
+        # the canvas's CSS pixels, the canvas filling the capture) left out.
+        assert shot["geometry"] is not None and shot["cssW"] > 0, shot
+        ignore = np.zeros(area.shape[:2], bool)
+        if shot["geometry"].get("scaleBar"):
+            x0, y0, x1, y1 = shot["geometry"]["scaleBar"]
+            ax, ay, aw, ah = shot["geometry"]["area"]
+            # a corner band inside the picture, never a large part of it
+            assert ax <= x0 < x1 <= ax + aw and ay <= y0 < y1 <= ay + ah, shot["geometry"]
+            assert (x1 - x0) * (y1 - y0) < 0.05 * aw * ah, shot["geometry"]
+            k = area.shape[1] / shot["cssW"]
+            ignore[max(0, int(y0 * k) - 1):int(math.ceil(y1 * k)) + 1,
+                   max(0, int(x0 * k) - 1):int(math.ceil(x1 * k)) + 1] = True
+        ok, report = parity(area, np.asarray(Image.open(WEB_REFERENCE).convert("RGB")), ignore)
         assert ok, report
     finally:
         if page.poll() is None:

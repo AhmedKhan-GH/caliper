@@ -222,7 +222,9 @@ void publish() {
     // window there), what it has selected and hovers, whether a plot follows
     // its data, and how many events went out: for tests, as JSON {"view":
     // {"area": [x, y, w, h], "window": [x0, x1, y0, y1], "yDown": bool,
-    // "selected": n, "hover": item, "cols": n, "follow": bool, "log": bool}}.
+    // "selected": n, "hover": item, "cols": n, "follow": bool, "log": bool}},
+    // and for a scene view "scaleBar": [x0, y0, x1, y1], the band the scale
+    // bar drew over its picture in the same CSS pixels, or null without one.
     std::string geo = "{";
     double selected = 0.0;
     if (g.core && g.core->live_views)
@@ -266,6 +268,14 @@ void publish() {
                 geo += b;
                 if (v->dims == 3) geo += v->box_labels;
                 geo += "\"";
+            }
+            if (v->kind == caliper_live_views::kKindScene) {
+                const float* bar = v->geo_bar;
+                if (bar[2] > bar[0] && bar[3] > bar[1])
+                    std::snprintf(b, sizeof b, ",\"scaleBar\":[%.9g,%.9g,%.9g,%.9g]", bar[0], bar[1], bar[2], bar[3]);
+                else
+                    std::snprintf(b, sizeof b, ",\"scaleBar\":null");
+                geo += b;
             }
             geo += "}";
         }

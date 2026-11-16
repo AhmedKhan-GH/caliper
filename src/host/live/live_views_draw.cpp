@@ -1401,12 +1401,14 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (const uint64_t id = sc->imgui_texture())
         dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
-    std::string bar_text;   // where the bar is, for the UI driver's `where`
+    std::string bar_text;   // where the bar is, for the UI driver's `where` and the module's geometry
+    std::fill(v.geo_bar, v.geo_bar + 4, 0.0f);
     if (const caliper_scene::ScaleBar bar = sc->scale_bar(avail.x, avail.y); bar.visible) {
         const ImRect band = draw_scale_bar(dl, S->look, p0, avail, bar);
         char t[96];
         std::snprintf(t, sizeof t, " scale_bar %.2f %.2f %.2f %.2f", band.Min.x, band.Min.y, band.Max.x, band.Max.y);
         bar_text = t;
+        v.geo_bar[0] = band.Min.x; v.geo_bar[1] = band.Min.y; v.geo_bar[2] = band.Max.x; v.geo_bar[3] = band.Max.y;
     }
 
     v.geo_valid = true;

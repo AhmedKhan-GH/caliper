@@ -290,6 +290,7 @@ struct View {
     double geo_window[4] = {};
     bool   geo_ydown = false;
     std::string geo_text;   // more of it in words (a scene's camera), for the UI driver's `where`
+    float  geo_bar[4] = {}; // a scene's scale bar band (x0, y0, x1, y1) in screen units; zero when not drawn
 };
 
 }  // namespace caliper_live_views

@@ -12,7 +12,8 @@
 // standard input, it waits until the scene's module has received at least
 // <messages> messages (what the server sent on its connection), then 30 more of
 // its frames, saves the scene's drawing area to <png> and prints "SHOT <json>"
-// with the element's state. Every wait is on the page's published state or its
+// with the element's state and the module's geometry of the scene (its area and
+// its scale bar's band). Every wait is on the page's published state or its
 // frames. It ends when its standard input closes.
 import path from 'node:path';
 import readline from 'node:readline';
@@ -87,9 +88,14 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     await page.screenshot({ path: png, clip: body });
     const st = await state();
     const w = st?.wasmStats ?? {};
+    // Where the module drew the scene and its scale bar, in the canvas's CSS
+    // pixels (the canvas fills the captured body).
+    let geometry = null;
+    try { geometry = JSON.parse(String(w.geometry ?? '{}')).landscape ?? null; } catch { geometry = null; }
     console.log(`SHOT ${JSON.stringify({
       drawer: st?.drawer, info: st?.info, messages: w.messages, updates: w.updates, frames: w.frames,
-      error: w.error ?? '', gfxErrors: w.gfxErrors ?? '', console: log.slice(0, 20),
+      error: w.error ?? '', gfxErrors: w.gfxErrors ?? '', cssW: w.cssW ?? 0, geometry,
+      console: log.slice(0, 20),
     })}`);
   } catch (e) {
     console.log(`SHOT ${JSON.stringify({ error: String(e), console: log.slice(0, 20) })}`);

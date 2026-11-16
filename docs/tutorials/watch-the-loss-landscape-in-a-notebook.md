@@ -195,5 +195,8 @@ waits until the scene's module has received every message the server sent on
 its connection and has drawn 30 more frames, checks that the path's, the
 marker's and the frame's colours appear exactly, and compares the scene's
 drawing area with `tests/demos/reference/loss_landscape_web_swiftshader_step299.png`
-under the same parity rules. Without the reference it writes the capture and
+under the same parity rules, leaving the scale bar out as the app's row does;
+the module publishes where it drew it. Without the reference it writes the capture and
 skips; `CALIPER_DEMO0_WRITE_WEB_REFERENCE=1` writes it as the reference.
+`CALIPER_SCENE_CAPTURE_DIR` keeps the area and the page's report of where the
+module drew it, with the scale bar's band.
