@@ -733,6 +733,18 @@ std::vector<WidgetAction> WidgetSurface::row_actions() const {
     }
 }
 
+// ---- what the page owns -----------------------------------------------------------------
+
+InlineWidget::InlineWidget(Options o)
+    : session_(std::make_unique<SessionWidgetSession>(*o.session, std::move(o.busy))),
+      agent_(std::move(o.agent)),
+      surface_(std::make_unique<WidgetSurface>(*session_, *agent_, std::move(o.hooks))) {}
+
+InlineWidget::~InlineWidget() {
+    surface_.reset();   // discards an open preview and closes the session first
+    agent_.reset();
+}
+
 // ---- the layout -------------------------------------------------------------------------
 
 WidgetLayoutMetrics WidgetLayoutMetrics::for_text_scale(float s) {

@@ -162,6 +162,8 @@ void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& previe
             }
             if (caliper_builder::Error e = client->start()) return failed(e);
         }
+        // One session at a time: one still open is closed first.
+        if (!client->session_id().empty() && !client->turn_active()) (void)client->close_session();
         acp::SessionInfo info;
         if (caliper_builder::Error e = client->new_session(options_.cwd, {}, &info, meta)) return failed(e);
         {

@@ -311,6 +311,40 @@ private:
     std::unique_ptr<WidgetPreviewSink> runtime_sink_;
 };
 
+// ---- what the page owns -----------------------------------------------------------------
+
+// The inline widget as one object for a page: the session adapter, the agent
+// and the surface. The page makes one when the session is open, calls
+// attach() with its spec runtime once, frame() each frame before the runtime
+// draws, and overlay() from the runtime's overlay when it has one of its own
+// (attach() installs the surface's otherwise).
+//
+// The agent is the page's choice: an AcpWidgetAgent (widget_agent_acp.h) over
+// the packaged caliper-agent, or a ScriptedWidgetAgent for tests and
+// screenshots. A hidden app under test must never be given an agent that
+// reads the system key store.
+class InlineWidget {
+public:
+    struct Options {
+        caliper_builder::Session* session = nullptr;
+        std::function<bool()> busy;              // AppSession::worker_busy()
+        std::unique_ptr<WidgetAgent> agent;
+        WidgetSurface::Hooks hooks;
+    };
+    explicit InlineWidget(Options options);
+    ~InlineWidget();
+
+    WidgetSurface& surface() { return *surface_; }
+    void attach(SpecRuntime& runtime) { surface_->attach(runtime); }
+    void frame(const SpecLook& look, const std::string& focused = {}) { surface_->frame(look, focused); }
+    void overlay(const SpecPanelFrame& frame) { surface_->overlay(frame); }
+
+private:
+    std::unique_ptr<SessionWidgetSession> session_;
+    std::unique_ptr<WidgetAgent> agent_;
+    std::unique_ptr<WidgetSurface> surface_;
+};
+
 // ---- the layout -------------------------------------------------------------------------
 
 struct WidgetRect {
