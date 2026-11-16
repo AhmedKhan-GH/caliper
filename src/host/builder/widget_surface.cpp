@@ -54,8 +54,35 @@ caliper_builder::PanelData SessionWidgetSession::resolve(const std::string& pane
 
 namespace {
 
+// A value as the card shows it: JSON, with whole numbers without a
+// fraction and a space after each comma.
+std::string show_value(const json& v) {
+    if (v.is_number_float()) {
+        const double d = v.get<double>();
+        char buf[32];
+        if (std::isfinite(d) && std::fabs(d) < 1e15 && d == std::floor(d)) std::snprintf(buf, sizeof buf, "%.0f", d);
+        else std::snprintf(buf, sizeof buf, "%.6g", d);
+        return buf;
+    }
+    if (v.is_array()) {
+        std::string s = "[";
+        for (size_t i = 0; i < v.size(); ++i) s += (i ? ", " : "") + show_value(v[i]);
+        return s + "]";
+    }
+    if (v.is_object()) {
+        std::string s = "{";
+        bool first = true;
+        for (auto it = v.begin(); it != v.end(); ++it) {
+            s += (first ? "" : ", ") + json(it.key()).dump() + ": " + show_value(it.value());
+            first = false;
+        }
+        return s + "}";
+    }
+    return v.dump();
+}
+
 std::string compact_value(const json& v, size_t max_value) {
-    std::string s = v.dump();
+    std::string s = show_value(v);
     if (s.size() > max_value && max_value > 3) {
         // Cut on a character boundary of UTF-8.
         size_t cut = max_value - 1;
@@ -701,6 +728,7 @@ WidgetLayoutMetrics WidgetLayoutMetrics::for_text_scale(float s) {
     m.button_pad = r(8);
     m.key_gap = r(6);
     m.mark = r(28);
+    m.live = r(13);
     m.min_input = r(96);
     m.min_content = r(48);
     m.min_width = r(240);
@@ -753,7 +781,9 @@ WidgetLayout layout_widget_surface(const WidgetLayoutInput& in, const WidgetLayo
     const float input_x = L.mark.right();
     float input_w = right - input_x;
     if (!in.status.empty()) {
-        const float sw = std::ceil(measure(in.status, WidgetFont::mono)) + m.gap;
+        // While the agent works the progress has the live diamond before it.
+        const float mark = in.state == WidgetState::running ? m.live : 0.0f;
+        const float sw = std::ceil(measure(in.status, WidgetFont::mono) + mark) + m.gap;
         if (input_w - sw >= m.min_input) {
             L.status = {right - sw + m.gap, L.prompt.y, sw - m.gap, m.row};
             input_w -= sw;
@@ -885,9 +915,13 @@ WidgetLayoutInput widget_layout_input(const WidgetSurface& s, const WidgetRect& 
     in.diff_lines = cardful ? (int)s.diff().size() : 0;
     in.full_diff = cardful && s.showing_full_diff();
     if (in.full_diff) {
+        // The full diff holds the whole reply too, wrapped, so the reply's
+        // one elided line goes.
         int n = 0;
         for (char c : s.full_diff()) n += c == '\n';
+        if (!s.reply().empty()) n += 1 + (int)(s.reply().size() / 90);
         in.full_diff_lines = std::max(1, n);
+        in.reply = false;
     }
     in.card_actions = s.card_actions();
     in.row_actions = s.row_actions();
@@ -1157,6 +1191,17 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, 0);
                 if (ImGui::BeginChild("##widget.diff", d.GetSize(), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
                     ImDrawList* cdl = ImGui::GetWindowDrawList();
+                    if (!reply_.empty()) {
+                        // The agent's reply in full, which the card's one line elides.
+                        ImGui::PushFont(L.ui, L.small_size);
+                        ImGui::PushStyleColor(ImGuiCol_Text, L.secondary);
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + d.GetWidth() - std::round(16.0f * s));
+                        ImGui::TextUnformatted(reply_.c_str(), reply_.c_str() + reply_.size());
+                        ImGui::PopTextWrapPos();
+                        ImGui::PopStyleColor();
+                        ImGui::PopFont();
+                        ImGui::Dummy(v2(1.0f, std::round(4.0f * s)));
+                    }
                     size_t start = 0;
                     int n = 0;
                     const float x = ImGui::GetCursorScreenPos().x;

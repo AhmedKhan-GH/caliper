@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
     auto clock_now = std::chrono::steady_clock::now();
     auto now = [&clock_now] { return clock_now; };
     auto advance = [&clock_now](int ms) { clock_now += milliseconds(ms); };
-    WidgetScript script;
+    WidgetScript script;   // shown as "Scripted": no model runs
     script.start_after = milliseconds(250);
     WidgetScriptTurn turn;
     if (scenario == "declined") {

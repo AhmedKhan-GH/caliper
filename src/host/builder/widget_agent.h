@@ -135,8 +135,10 @@ struct WidgetScriptTurn {
 };
 
 struct WidgetScript {
-    std::string model = "Claude Haiku 5.5";
-    std::string effort = "low";
+    // The name the prompt row shows. A scripted agent runs no model, so it
+    // never borrows a real model's name.
+    std::string model = "Scripted";
+    std::string effort;
     std::chrono::milliseconds start_after{0};   // from start() to started
     std::vector<WidgetScriptTurn> turns;        // one per prompt, in order; past the last, a turn that only replies
     bool available = true;                      // a provider is set up
