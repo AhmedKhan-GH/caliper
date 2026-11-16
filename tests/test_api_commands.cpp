@@ -210,7 +210,13 @@ struct SessionApp {
     explicit SessionApp(caliper_api::Options o = caliper_api::Options())
         : root(caliper_test::unique_temp_path("caliper-api-commands")) {
         fs::create_directories(root);
-        caliper_builder::Session::Open opened = caliper_builder::Session::open((root / "workspace").string());
+        // Review of spec edits is off here, so that an agent's edit answers at
+        // once; the review case below turns it on for one origin.
+        caliper_builder::SessionOptions session_options;
+        session_options.review.agent = false;
+        session_options.review.mcp = false;
+        caliper_builder::Session::Open opened =
+            caliper_builder::Session::open((root / "workspace").string(), session_options);
         REQUIRE_MESSAGE(opened.error.ok(), opened.error.message);
         session = std::move(opened.session);
         o.port = 0;
@@ -385,6 +391,25 @@ TEST_CASE("api commands: a destructive command from mcp or agent is held while t
     REQUIRE(denied.status == 200);
     CHECK(error_code(denied.value()) == "command.denied");
     CHECK(app.session->registry().pending_approvals().empty());
+}
+
+TEST_CASE("api commands: with review on, an agent's spec edit is held with its diff until the person approves") {
+    SessionApp app;
+    const uint16_t port = app.port();
+    REQUIRE(command(port, "spec.new", {{"id", "dash"}, {"title", "Dash"}}, "mcp")["ok"] == true);
+    app.session->set_review(caliper_builder::CommandOrigin::mcp, true);
+
+    const int held = send_command(port, "panel.create",
+                                  {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "Hi"}}}}, "mcp");
+    const std::string id = app.pending_approval("panel.create", "mcp");
+    REQUIRE_FALSE(id.empty());
+    // The open spec is unchanged while the edit waits.
+    CHECK(command(port, "spec.get", json::object(), "api")["result"]["json"].value("panel", json::array()).empty());
+    CHECK(app.session->queue().approve(id).get().ok);
+    const Response approved = read_response(held);
+    REQUIRE(approved.status == 200);
+    CHECK(approved.value()["ok"] == true);
+    CHECK(command(port, "spec.get", json::object(), "api")["result"]["json"]["panel"].size() == 1);
 }
 
 TEST_CASE("api commands: a held command that nobody decides is withdrawn with command.approval_timeout") {
