@@ -37,17 +37,21 @@ person cancelled it, so the next request is valid.
 
 **The context length.** Where the sidecar chose the context length the server
 runs the model with (the Ollama preset's num_ctx, per role), it never lets the
-server cut the front of a request silently: before each model request
-`CaliperHooks.prepare_model_request` estimates the request's tokens (the last
-reply's prompt tokens, as the server counted them, plus a token for every three
-characters added since; the first request of a session at a token for every
-four characters of the instructions, the tools and the messages) and, when it
-would leave less than an eighth of the context (at most 4,096 tokens) for the
-reply, sends nothing: the turn ends with the stop reason `max_tokens`, which
-the chat and the ⌘K prompt show as a limit, and a plain message (and the
-status `context_full`) that says the conversation no longer fits and what the
-person can do. For a
-server whose context length the sidecar does not know, nothing changes.
+server cut the front of a request or of the context silently: before each
+model request `CaliperHooks.prepare_model_request` estimates the request's
+prompt tokens (`estimate_prompt_tokens()`: the last request's count as the
+server gave it plus what was added since, each kind of content at its own
+rate, or for a session's first request the whole of it; never below the
+server's count in the requests it was checked against), and when the context
+would leave less than an eighth of itself (at most 4,096 tokens) for the reply,
+sends nothing: the turn ends with the stop reason `max_tokens`, which the chat
+and the ⌘K prompt show as a limit, and a plain message (and the status
+`context_full`) that says the conversation no longer fits and what the person
+can do. Otherwise the request asks for no more output than the context leaves
+after its prompt. The server's own refusal of a prompt longer than its context
+(Ollama with `truncate: false`) ends the turn in the same way, and a reply that
+stops at the end of the context ends it as `max_tokens`. For a server whose
+context length the sidecar does not know, nothing changes.
 
 A widget session (widget.py) runs the same turn with its own agent (the widget
 system prompt, its scoped tools and `handoff`) and three differences: every
@@ -65,8 +69,10 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import posixpath
 import random
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import Any
@@ -79,7 +85,7 @@ from pydantic_ai.exceptions import (ModelAPIError, ModelAuthenticationError, Mod
                                     ToolFailed, UnexpectedModelBehavior)
 from pydantic_ai.messages import (CompactionPart, FunctionToolResultEvent, ModelMessage, ModelRequest, ModelResponse,
                                   PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta, ThinkingPart,
-                                  ThinkingPartDelta, ToolCallPart, ToolReturnPart)
+                                  SystemPromptPart, ThinkingPartDelta, ToolCallPart, ToolReturnPart)
 
 from .acp import Connection, PeerClosed, RpcError
 from .caliper_api import CaliperApi, ToolOutput
@@ -112,9 +118,17 @@ REFUSAL_CHANGES_STAY = " Changes this turn already made in Caliper stay; you can
 # The context check (see the module docstring): the room a request must leave
 # for the reply, and the characters a token is taken to be.
 CONTEXT_RESERVE_MAX = 4096
-CHARS_PER_TOKEN_ADDED = 3
-CHARS_PER_TOKEN_FIRST = 4
-IMAGE_TOKENS = 1500
+# The characters a token is taken to be, by kind, and the tokens of an image and of the chat template's own text,
+# from Ollama's prompt_eval_count of real requests of qwen3.8:27b (tests/test_context_estimate.py keeps the estimate
+# at or above those counts, and within 30 percent of them): tool schemas are dense JSON, and the messages' text
+# holds numbers, of which each digit can be a token.
+CHARS_PER_TOKEN_INSTRUCTIONS = 3.5
+CHARS_PER_TOKEN_TOOLS = 3.4
+CHARS_PER_TOKEN_TEXT = 1.6
+IMAGE_TOKENS = 350
+TEMPLATE_TOKENS = 200
+# Ollama's refusal of a prompt longer than its context, with truncate: false.
+_CONTEXT_REFUSAL = re.compile(r"request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)")
 
 def widget_limit_text(max_requests: int, edits: list[str], pending: list[str]) -> str:
     """The reply of a widget prompt that reached its limit: the change is not finished, what the preview holds, and
@@ -152,10 +166,9 @@ class SessionState:
     # general role.
     widget: WidgetSpec | None = None
     # The context check: the prompt tokens of the last reply as the server
-    # counted them, and the characters of the request they were for.
-    last_prompt_tokens: int | None = None
-    last_request_chars: int = 0
-    pending_request_chars: int = 0
+    # counted them, with the size of the request they were for.
+    last_prompt: tuple[int, "RequestSize"] | None = None
+    pending_request: "RequestSize | None" = None
     # The model requests a widget prompt may make (WIDGET_MAX_REQUESTS, or --widget-requests).
     widget_max_requests: int = WIDGET_MAX_REQUESTS
 
@@ -184,38 +197,77 @@ class _ContextFull(Exception):
         self.limit = limit
 
 
-def _part_chars(part: Any) -> int:
+@dataclass(frozen=True)
+class RequestSize:
+    """What a request holds, by kind, as a stand-in for its tokens: the characters of the instructions (sent once),
+    of the tool definitions and of the messages' text (prompts, tool results, replies, thoughts and call
+    arguments), and the images."""
+
+    instructions: int = 0
+    tools: int = 0
+    text: int = 0
+    images: int = 0
+
+    def tokens(self) -> float:
+        return (self.instructions / CHARS_PER_TOKEN_INSTRUCTIONS + self.tools / CHARS_PER_TOKEN_TOOLS
+                + self.text / CHARS_PER_TOKEN_TEXT + self.images * IMAGE_TOKENS)
+
+
+def _part_size(part: Any) -> tuple[int, int, int]:
+    """(instruction characters, text characters, images) of one part."""
     if isinstance(part, ToolCallPart):
-        return len(part.tool_name) + len(part.args_as_json_str())
+        return 0, len(part.tool_name) + len(part.args_as_json_str()), 0
     content = getattr(part, "content", None)
+    if isinstance(part, SystemPromptPart):
+        return len(content or ""), 0, 0
     if isinstance(content, str):
-        return len(content)
+        return 0, len(content), 0
     if isinstance(content, list):
-        total = 0
+        text = images = 0
         for item in content:
             if isinstance(item, str):
-                total += len(item)
+                text += len(item)
             elif isinstance(item, BinaryContent):
-                total += IMAGE_TOKENS * CHARS_PER_TOKEN_ADDED
+                images += 1
             else:
-                total += len(str(item))
-        return total
+                text += len(str(item))
+        return 0, text, images
     if content is not None:
         try:
-            return len(json.dumps(content, default=str))
+            return 0, len(json.dumps(content, default=str)), 0
         except (TypeError, ValueError):
-            return len(str(content))
-    return 0
+            return 0, len(str(content)), 0
+    return 0, 0, 0
 
 
-def message_chars(messages: list) -> int:
-    """The characters of a request's messages and their instructions, a stand-in for their tokens."""
-    total = 0
+def request_size(messages: list, tools: list) -> RequestSize:
+    """The size of one model request: its messages, the instructions once (Pydantic AI keeps them on each request of
+    the history, but sends those of the newest), and its tool definitions."""
+    instructions = text = images = 0
     for m in messages:
-        total += len(getattr(m, "instructions", None) or "")
         for part in getattr(m, "parts", []):
-            total += _part_chars(part)
-    return total
+            i, t, n = _part_size(part)
+            instructions += i
+            text += t
+            images += n
+    newest = next((m.instructions for m in reversed(messages) if getattr(m, "instructions", None)), None)
+    instructions += len(newest or "")
+    tool_chars = sum(len(t.name) + len(t.description or "") + len(json.dumps(t.parameters_json_schema)) for t in tools)
+    return RequestSize(instructions, tool_chars, text, images)
+
+
+def estimate_prompt_tokens(size: RequestSize, last: tuple[int, RequestSize] | None = None) -> int:
+    """The prompt tokens of a request, never below what the server will count (checked against Ollama's counts of
+    real ⌘K and side chat requests): from the last request's count as the server gave it and what was added since,
+    or, for the first request of a session or after the history shrank, from the whole request with a fixed
+    overhead for the chat template."""
+    if last is not None:
+        counted, before = last
+        grown = (size.instructions - before.instructions, size.tools - before.tools, size.text - before.text,
+                 size.images - before.images)
+        if all(g >= 0 for g in grown):
+            return math.ceil(counted + RequestSize(*grown).tokens())
+    return math.ceil(TEMPLATE_TOKENS + size.tokens())
 
 
 # ---- the agent ---------------------------------------------------------------------------------
@@ -667,19 +719,21 @@ class TurnRunner:
         s = self.session
         limit_of = getattr(self._provider, "context_length", None)
         limit = limit_of(s.settings.model, self.role) if callable(limit_of) else None
-        chars = message_chars(request_context.messages)
-        s.pending_request_chars = chars
+        size = request_size(request_context.messages, request_context.model_request_parameters.function_tools)
+        s.pending_request = size
         if not limit:
             return
-        if s.last_prompt_tokens is not None and chars >= s.last_request_chars:
-            estimate = s.last_prompt_tokens + (chars - s.last_request_chars) // CHARS_PER_TOKEN_ADDED
-        else:
-            tools = request_context.model_request_parameters.function_tools
-            tool_chars = sum(len(t.name) + len(t.description or "") + len(json.dumps(t.parameters_json_schema))
-                             for t in tools)
-            estimate = (chars + tool_chars) // CHARS_PER_TOKEN_FIRST
-        if estimate + min(CONTEXT_RESERVE_MAX, limit // 8) > limit:
+        estimate = estimate_prompt_tokens(size, s.last_prompt)
+        # The least reply worth asking for; the request asks for no more than the
+        # context leaves after the prompt, so a reply cannot run past its end.
+        room = limit - estimate
+        if room < min(CONTEXT_RESERVE_MAX, limit // 8):
             raise _ContextFull(estimate, limit)
+        settings = dict(request_context.model_settings or {})
+        asked = settings.get("max_tokens")
+        if not isinstance(asked, int) or asked > room:
+            settings["max_tokens"] = room
+            request_context.model_settings = settings
 
     def _say_context_full(self, model_id: str, exc: _ContextFull) -> None:
         limit = exc.limit
@@ -730,10 +784,9 @@ class TurnRunner:
         """Accounts for a finished reply and says whether the turn stops before its tools."""
         counts = usage_counts(response)
         self._add_usage(counts, response.model_name or model_id)
-        if counts["input_tokens"] > 0:
+        if counts["input_tokens"] > 0 and self.session.pending_request is not None:
             # What the server counted for the request this reply answers.
-            self.session.last_prompt_tokens = counts["input_tokens"]
-            self.session.last_request_chars = self.session.pending_request_chars
+            self.session.last_prompt = (counts["input_tokens"], self.session.pending_request)
         details = response.provider_details or {}
         if response.finish_reason == "content_filter":
             self._sink.fail_open_calls("Not run: the model declined the request.")
@@ -795,6 +848,11 @@ class TurnRunner:
             self._sink.status("strict_off", f"{provider.name} refused the strict tool schemas; this session "
                                             "continues without strict mode, and Caliper still checks every input.")
             raise RetryModelRequest()
+        too_long = _CONTEXT_REFUSAL.search(message)
+        if rejected and too_long:
+            # Ollama refused a prompt longer than its context (truncate: false)
+            # rather than cut it: the turn ends as when the check finds it.
+            raise _ContextFull(int(too_long.group(1)), int(too_long.group(2)))
         if rejected and provider.name != "Claude API":
             kind = refusal_kind(message)
             if kind == "tools":

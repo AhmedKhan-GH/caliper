@@ -33,9 +33,12 @@ time and in output tokens:
    for a hybrid model), the key and value heads and their sizes give the bytes
    of context cache one token takes (`kv_bytes_per_token`, kept with the
    quirks), from which the app's settings estimate the memory of the context
-   cache; for a server other than the Ollama preset, which loads the model at
-   its full context, the model's `context_length` is the context length too.
-   A server that is not Ollama answers 404, and nothing is learned.
+   cache. Its `context_length` is the most the model takes, not the context
+   the server runs it with, so it is never taken as the context length. For a
+   server on loopback other than the Ollama preset, after the test calls have
+   loaded the model, Ollama's `GET /api/ps` states the context it runs the
+   model with, and that is the context length; otherwise it stays unknown. A
+   server that is not Ollama answers 404, and nothing is learned.
 
 For the Ollama preset the test calls go to Ollama's own `/api/chat`
 (ollama_native.py) with the context length the agent will use, so the probe
@@ -371,6 +374,26 @@ def _kv_bytes_per_token(info: dict) -> int | None:
     return attention_layers * kv_heads * (key + (value or key)) * 2
 
 
+async def _ollama_context_in_force(base_url: str, model: str, transport: Any) -> int | None:
+    """The context length Ollama runs a loaded model with (`GET /api/ps`), or None: another server answers 404."""
+    parts = urlsplit(base_url.rstrip("/"))
+    root = parts.path[: -len("/v1")] if parts.path.endswith("/v1") else parts.path
+    try:
+        async with httpx2.AsyncClient(transport=transport, timeout=LIST_TIMEOUT_S, trust_env=False) as http:
+            response = await http.get(f"{parts.scheme}://{parts.netloc}{root}/api/ps")
+        if response.status_code != 200 or len(response.content) > (1 << 20):
+            return None
+        loaded = response.json().get("models")
+    except Exception:
+        return None
+    for m in loaded if isinstance(loaded, list) else []:
+        if isinstance(m, dict) and model in (m.get("name"), m.get("model")):
+            value = m.get("context_length")
+            if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= 100_000_000:
+                return value
+    return None
+
+
 async def _ollama_show(base_url: str, model: str, transport: Any, result: ProbeResult) -> int | None:
     """Ollama's model metadata: fills kv_bytes_per_token, and returns the model's context length."""
     parts = urlsplit(base_url.rstrip("/"))
@@ -486,10 +509,11 @@ async def probe_openai_compatible(base_url: str, model: str, key: Secret | None,
         context = _context_from_entry(entry)
         if context is None and preset == "lmstudio":
             context = await _lmstudio_context(base_url, model, transport, result)
-        if native is not None or is_loopback_host(urlsplit(base_url).hostname):
-            shown = await _ollama_show(base_url, model, transport, result)
-            if context is None and native is None and shown is not None:
-                result.context_length = Capability(shown, "server", "Reported by the server's model metadata.")
+        local = native is not None or is_loopback_host(urlsplit(base_url).hostname)
+        if local:
+            # The cache a token takes. The metadata's context length is the most
+            # the model takes, not what the server runs it with, so it is not used.
+            await _ollama_show(base_url, model, transport, result)
         if native is not None:
             result.context_length = Capability(native["num_ctx"], "preset",
                                                "The context length the preset loads the model with.")
@@ -500,6 +524,12 @@ async def probe_openai_compatible(base_url: str, model: str, key: Secret | None,
             await _probe_vision(client, result, colour or random.choice(sorted(COLOURS)))
         else:
             result.vision = Capability(None, "unknown", "The vision probe was not run.")
+        if local and native is None and context is None:
+            # The test calls loaded the model: Ollama's /api/ps states the context it runs it with.
+            in_force = await _ollama_context_in_force(base_url, model, transport)
+            if in_force is not None:
+                result.context_length = Capability(in_force, "server",
+                                                   "The context the server runs the model with (Ollama's /api/ps).")
         return result
     finally:
         await client.close()

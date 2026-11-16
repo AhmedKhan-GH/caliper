@@ -83,7 +83,10 @@ For an OpenAI-compatible server it lists the server's models, makes one streamed
 tool with fixed arguments and one that asks it to name the colour of a small PNG, each with at most 1,024 output
 tokens and 60 seconds, and reads the context length where the server reports it. For a server on this machine it also
 asks Ollama's `POST /api/show` for the model's metadata, which loads nothing, and keeps the bytes of context cache one
-token takes as the quirk `kv_bytes_per_token`; a server that is not Ollama answers 404 and nothing is kept. For the
+token takes as the quirk `kv_bytes_per_token`; a server that is not Ollama answers 404 and nothing is kept. The
+metadata's context length is the most the model takes, not what the server runs it with, so it is not used: after the
+test requests have loaded the model, the probe reads Ollama's `GET /api/ps`, which states the context in force, and
+otherwise leaves the context length unknown. For the
 Ollama preset the two test requests go to Ollama's own chat API with the preset's context length, as the agent's do
 (see [Ollama's own chat API](#ollamas-own-chat-api)), and that context length is the answer, with the source
 `preset`. For Claude it reads the Models API and makes no request that costs tokens. The key comes from the
@@ -144,11 +147,15 @@ Studio and Custom included, stays on the OpenAI-compatible endpoint.
 The defaults are what one request of each role costs: the widget agent's first request, with its ten tools, the
 context bundle and the render, takes about 7,000 tokens before the model's reply, and the general role's, with every
 command of the table as a tool, about 11,000, growing with each tool result. Where the agent chose the context length,
-it never lets the server cut a request: before each model request it estimates the request from the prompt tokens the
-server counted for the last one, and when the request would leave less than an eighth of the context (at most 4,096
-tokens) for the reply, it sends nothing and the turn ends with the stop reason `max_tokens`, which Caliper shows as
-LIMIT, and a message, with the status `context_full`, that the conversation no longer fits the model's context and that
-the person can start again or raise the context length.
+it never lets the server cut a request: each request asks Ollama not to cut a prompt that is too long but to refuse it
+(`truncate: false`) and not to drop the front of the context during a reply (`shift: false`). Before each model request
+the agent estimates the request's prompt tokens from the count the server gave for the last one and what was added
+since, at or above what the server counts; when the request would leave less than an eighth of the context (at most
+4,096 tokens) for the reply, it sends nothing, and otherwise it asks for no more output than the context leaves. A
+request that does not fit, by the estimate or by the server's refusal, ends the turn with the stop reason `max_tokens`,
+which Caliper shows as LIMIT, and a message, with the status `context_full`, that the conversation no longer fits the
+model's context and that the person can start again or raise the context length. A reply that stops at the end of
+the context ends the turn with `max_tokens` too, and none of its tool calls runs.
 For a server whose context length the agent did not choose, nothing is checked.
 
 ## Opening a widget session
@@ -293,9 +300,11 @@ the count of edits.
 through the Ollama preset, with no account or key. The side chat sends `session/new` with one MCP server, `caliper`:
 `caliper-mcp` with `--api-file <the session's own API file>`, whose token has the origin `agent`. The agent starts no
 MCP server; it calls Caliper API itself with that file, so its commands run as the origin `agent` and its edits of the
-open spec wait on the approval cards, which the chat mirrors as rows. A session whose Caliper server names no usable
-`--api-file` (an absolute path) is refused with -32602 and `data.code` `agent.no_session_api_file`, rather than run
-with `api.json`, whose token is the origin `mcp`. Without a Caliper server, a session uses `--api-file`.
+open spec wait on the approval cards, which the chat mirrors as rows. Caliper's server is any server named `caliper`,
+in any form, or whose program is `caliper-mcp`. A session whose Caliper server names no usable `--api-file` (an
+absolute path), such as one in the HTTP form, which has no arguments, is refused with -32602 and `data.code`
+`agent.no_session_api_file`, rather than run with `api.json`, whose token is the origin `mcp`. Without a Caliper
+server, a session uses `--api-file`.
 
 Each call of a Caliper command carries the command in `_meta.caliper.command` of its `tool_call` update, such as
 `{"caliper": {"command": "panel.create"}}`, so that the side chat shows it as that command and folds its approval into
