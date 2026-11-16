@@ -2,6 +2,7 @@
 #include "net/json.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,16 @@ namespace caliper_net {
 namespace {
 
 // ---- locale-independent number text (a host may have set LC_NUMERIC) ----------
+//
+// The writer takes its digits from std::to_chars, which is exact on every
+// platform and depends on neither the locale nor the C runtime's printf.
+// Apple's libc++ has it for double from macOS 13.3, the floor of every build
+// that compiles this file (a lower deployment target fails to compile with
+// that version named). The reader still parses with strtod in the C locale:
+// std::from_chars for double would free it from the C runtime as well, but
+// Apple's libc++ offers it only from macOS 26.0, and the macOS builds target
+// earlier versions. It is the planned replacement once the macOS floor allows
+// it.
 
 #if defined(_WIN32)
 _locale_t c_locale() {
@@ -27,86 +38,30 @@ _locale_t c_locale() {
     return l;
 }
 double strtod_c(const char* s, char** end) { return _strtod_l(s, end, c_locale()); }
-int sci_c(char* buf, size_t n, int prec, double v) { return _snprintf_l(buf, n, "%.*e", c_locale(), prec, v); }
 #else
 locale_t c_locale() {
     static locale_t l = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
     return l;
 }
 double strtod_c(const char* s, char** end) { return strtod_l(s, end, c_locale()); }
-#  if defined(__APPLE__)
-int sci_c(char* buf, size_t n, int prec, double v) { return snprintf_l(buf, n, c_locale(), "%.*e", prec, v); }
-#  else
-int sci_c(char* buf, size_t n, int prec, double v) {
-    const locale_t old = uselocale(c_locale());
-    const int r = std::snprintf(buf, n, "%.*e", prec, v);
-    uselocale(old);
-    return r;
-}
-#  endif
 #endif
 
-// The value of decimal digits `d` (no sign) times 10^(exp10 - (len(d) - 1)).
-double digits_value(const std::string& d, int exp10, bool neg) {
-    std::string s = neg ? "-" : "";
-    s += d.substr(0, 1);
-    if (d.size() > 1) s += "." + d.substr(1);
-    s += "e" + std::to_string(exp10);
-    return strtod_c(s.c_str(), nullptr);
-}
-
-// Adds `delta` (+1 or -1) to the decimal digit string; false on underflow to
-// an empty or zero-led string, or overflow to more digits.
-bool step_digits(std::string& d, int delta) {
-    int i = (int)d.size() - 1;
-    if (delta > 0) {
-        while (i >= 0 && d[(size_t)i] == '9') d[(size_t)i--] = '0';
-        if (i < 0) return false;
-        ++d[(size_t)i];
-    } else {
-        while (i >= 0 && d[(size_t)i] == '0') d[(size_t)i--] = '9';
-        if (i < 0) return false;
-        --d[(size_t)i];
-        if (d[0] == '0') return false;
-    }
-    return true;
-}
-
 // The shortest digits that read back to v (finite, non-zero, positive), and
-// the decimal exponent of the first digit.
+// the decimal exponent of the first digit: std::to_chars's shortest
+// scientific form, the shortest digits that round-trip and, of several, the
+// nearest to v, which is the choice of Python's repr().
 void shortest_digits(double v, std::string* digits, int* exp10) {
     char buf[64];
-    for (int prec = 1; prec <= 17; ++prec) {
-        sci_c(buf, sizeof buf, prec - 1, v);
-        // "d[.ddd]e[+-]XX"
-        const char* e = std::strchr(buf, 'e');
-        std::string d;
-        for (const char* q = buf; q < e; ++q)
-            if (*q >= '0' && *q <= '9') d.push_back(*q);
-        const int x = std::atoi(e + 1);
-        if (digits_value(d, x, false) == v) {
-            *digits = d;
-            *exp10 = x;
-            break;
-        }
-        // The correctly rounded digits miss, but a neighbour of the same
-        // length may still read back (the gap below a power of two is narrower).
-        bool found = false;
-        for (int delta : {+1, -1}) {
-            std::string n = d;
-            if (step_digits(n, delta) && digits_value(n, x, false) == v) {
-                *digits = n;
-                *exp10 = x;
-                found = true;
-                break;
-            }
-        }
-        if (found) break;
-        if (prec == 17) {
-            *digits = d;
-            *exp10 = x;
-        }
-    }
+    const std::to_chars_result r = std::to_chars(buf, buf + sizeof buf, v, std::chars_format::scientific);
+    // "d[.ddd]e[+-]XX"
+    const char* e = std::find(buf, r.ptr, 'e');
+    digits->clear();
+    for (const char* q = buf; q < e; ++q)
+        if (*q >= '0' && *q <= '9') digits->push_back(*q);
+    const char* x = e + 1;
+    if (x < r.ptr && *x == '+') ++x;
+    *exp10 = 0;
+    std::from_chars(x, r.ptr, *exp10);
     while (digits->size() > 1 && digits->back() == '0') digits->pop_back();
 }
 
