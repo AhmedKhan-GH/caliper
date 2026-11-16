@@ -1,9 +1,10 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>3-D points</title>
-<!-- One <caliper-view> of the producer's embedding per renderer named in ?r=
-     (ts, wasm), for test/points3d.spec.ts; the stream comes from this page's
-     own origin and ?token=. -->
+<!-- One <caliper-view> of the producer's view ?view= (default embedding) per
+     renderer named in ?r= (ts, wasm), for test/points3d.spec.ts and
+     test/edges.spec.ts; the stream comes from this page's own origin and
+     ?token=. -->
 <body style="margin:0;background:#181715">
 <script type="module">
   import '/caliper-view.js';
@@ -12,9 +13,9 @@
   const [w, h] = (q.get('size') ?? '560x440').split('x');
   for (const r of (q.get('r') ?? 'ts').split(',')) {
     const el = document.createElement('caliper-view');
-    el.id = r;
+    el.id = q.get('view') ? `${q.get('view')}-${r}` : r;
     el.setAttribute('src', src);
-    el.setAttribute('view', 'embedding');
+    el.setAttribute('view', q.get('view') ?? 'embedding');
     el.setAttribute('renderer', r);
     el.style.cssText = `display:block;width:${w}px;height:${h}px;margin:8px`;
     document.body.append(el);

@@ -21,6 +21,8 @@ export interface Producer {
   proc: ChildProcess;
   events: ProducerEvent[];
   controls: Record<string, unknown>[];
+  /** Every other line of JSON it printed, such as --edges' values. */
+  printed: Record<string, unknown>[];
   stop(): void;
 }
 
@@ -31,6 +33,7 @@ export async function startProducer(args: string[] = [], wasm: string = WASM): P
   const lines = readline.createInterface({ input: proc.stdout! });
   const events: ProducerEvent[] = [];
   const controls: Record<string, unknown>[] = [];
+  const printed: Record<string, unknown>[] = [];
   const url = await new Promise<string>((ok, fail) => {
     proc.once('exit', (code) => fail(new Error(`mock_server.py exited with ${code}`)));
     lines.on('line', (line) => {
@@ -38,9 +41,10 @@ export async function startProducer(args: string[] = [], wasm: string = WASM): P
       else if (line.startsWith('{')) {
         const j = JSON.parse(line) as { event?: ProducerEvent; control?: Record<string, unknown> };
         if (j.event) events.push(j.event);
-        if (j.control) controls.push(j.control);
+        else if (j.control) controls.push(j.control);
+        else printed.push(j);
       }
     });
   });
-  return { url, proc, events, controls, stop: () => proc.kill() };
+  return { url, proc, events, controls, printed, stop: () => proc.kill() };
 }
