@@ -393,8 +393,10 @@ TEST_CASE("builder app: the browser's opener gets only the standard descriptors"
     const std::string out = root + "/fds.txt";
     int p[2];
     REQUIRE(::pipe(p) == 0);
-    const int kept = ::dup2(p[0], 57);   // not close-on-exec, as a careless descriptor is
-    REQUIRE(kept == 57);
+    // Two descriptors without close-on-exec, as a careless one is, at numbers
+    // the child's own (the listing's directory) never take.
+    REQUIRE(::dup2(p[0], 57) == 57);
+    REQUIRE(::dup2(p[1], 58) == 58);
     std::string why;
     REQUIRE_MESSAGE(caliper_host::spawn_detached({"/bin/sh", "-c", "ls /dev/fd > '" + out + "'"}, &why), why);
     std::string listed;
@@ -403,6 +405,7 @@ TEST_CASE("builder app: the browser's opener gets only the standard descriptors"
         listed = std::filesystem::exists(out) ? read_text(out) : std::string();
     }
     ::close(57);
+    ::close(58);
     ::close(p[0]);
     ::close(p[1]);
     INFO("the child's descriptors: " << listed);
@@ -413,9 +416,8 @@ TEST_CASE("builder app: the browser's opener gets only the standard descriptors"
     }
     REQUIRE_FALSE(fds.empty());
     CHECK(std::find(fds.begin(), fds.end(), "57") == fds.end());
+    CHECK(std::find(fds.begin(), fds.end(), "58") == fds.end());
     for (const char* std_fd : {"0", "1", "2"}) CHECK(std::find(fds.begin(), fds.end(), std_fd) != fds.end());
-    // Only the three, and the listing's own directory: none of this process's.
-    CHECK(fds.size() <= 4);
 }
 
 // Home from a dashboard just made and saved: the landing selects that
