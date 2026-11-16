@@ -402,6 +402,9 @@ It holds these parts:
   holds an entity transform, a pinhole camera, and one batch of each primitive type. A batch describes arrays in
   graphics-layer buffers by role (the buffer, byte offset, count, stride and format) and never copies their data.
   Every part has a stamped layer and a static layer: a clear removes the stamped parts, and a static clear removes both.
+  A clear may name its parts (the transform, the camera or one primitive), as a SCENE_CLEAR does. The class table maps
+  ids to labels and colours, and the scene core keeps a 256 x 256 texture of it for the programs: an entry's colour,
+  else colour id mod 16 of the 16-colour palette.
 - **World matrices.** One forward pass over the changed subtrees composes each entity's world matrix in double
   precision. An entity whose world pose is not finite is hidden with its subtree. The children of a camera entity live
   in the camera's pixel space, on its image plane.
@@ -421,8 +424,10 @@ It holds these parts:
   view looks through a camera, that camera's pixel space is drawn flat over the picture last. A separate step records
   the index clamp of meshes and the edge gather of index-pair edges as compute dispatches. Every primitive compiles:
   points, lines as segments, strips and index-pair edges, arrows, boxes with their faces, meshes, images in 2-D or on a
-  camera's image plane with their depth clouds, segmentation, camera frustums and entity axes. Labels are not draws,
-  and the scene core gives their projected anchors instead.
+  camera's image plane with their depth clouds, segmentation, camera frustums and entity axes. The faces of a filled
+  box are drawn at a quarter of the box colour's alpha, so that they stay translucent with an opaque colour. Labels are
+  not draws, and the scene core gives their projected anchors instead. The draw map records each draw's entity,
+  primitive and part, and its blend and depth state, which the CPU reference reads.
 - **Picking.** The pick pass compiles the same draws with their pick entries into a 16 x 16 `RG32Uint` window around
   the pointer, which it reaches by zooming clip space. Decoding a read-back window gives the entity, the primitive and
   the item under the pointer, the world position from the depth, and for an image the pixel.
@@ -432,8 +437,9 @@ groups, the buffer of its constant streams, the buffers it owns for clamped indi
 colormap blocks. `BackendResources` provides them over a backend of the graphics layer, with the backend's table of
 generated programs. The colormap blocks come from the caller, normally through `colormap_source` over a
 `KeyBlockCache` that the view owns ([The colormap by keys](#the-colormap-by-keys)). After each prepare, the owned
-buffers of batches that are gone, and the compute groups that refer to a released buffer, go back to the layer, so a
-scene reset, which gives every entity a new id, leaves nothing behind.
+buffers of batches that are gone, the compute groups that refer to a released buffer, and the image bind groups whose
+image the view released go back to the layer, so a scene reset, which gives every entity a new id, and an image
+replaced at a new size leave nothing behind.
 
 Its tests run in two suites:
 
@@ -460,14 +466,20 @@ Its tests run in two suites:
 The live views' scene view (`src/host/live/live_scene.h`, kind 6 of the view registry) draws a scene of the
 [wire protocol 3.2 draft](../references/wire-protocol-3-2.md) through the scene core and the graphics layer, natively
 and in the WebAssembly views alike. A source hands it the decoded SCENE_UPDATE and SCENE_CLEAR messages in their
-order (`src/host/live/live_views_scene.h`): the parts points, lines as segments or strips and mesh, static items, clears
-of entities and parts, and the reset that opens a scene's state for a new subscription. The view keeps each entity's
-static and stamped batches apart, so a clear that is not static leaves a static batch drawn.
+order (`src/host/live/live_views_scene.h`), and the view applies every part but encoded images: points with class ids
+and labels, lines as segments, strips or index-pair edges with colours per vertex, strip or edge, arrows, boxes with
+rotations, class ids, labels and filled faces, meshes with normals or with UVs and a texture, images in their colour,
+grey, depth and segmentation forms, and cameras; SCENE_TRANSFORMS, SCENE_CLASSES, static items, clears of entities and
+of named parts, and the reset that opens a scene's state for a new subscription. The view keeps each entity's static
+and stamped batches apart, so a clear that is not static leaves a static batch drawn; transforms, cameras and the class
+table keep their layers in the scene store. An encoded (JPEG or PNG) image is answered ERROR `unsupported` by the source
+and noted in the view.
 
 While the display is paused, the source keeps the scene's messages (`src/host/live/scene_queue.h`), only what the
 view would still show: a reset drops everything before it, a clear drops the waiting updates it removes and the
-clears it covers, and an update replaces the waiting one of its entity part and layer. Resets and clears are never
-dropped. A sender that clears ever new paths could still grow the queue, so past 8,192 messages it empties, the source
+clears it covers, an update replaces the waiting one of its entity part and layer, entity transforms replace a waiting
+message of their layer whose every path they set again, and a class table replaces the waiting one of its layer. Resets
+and clears are never dropped. A sender that clears ever new paths could still grow the queue, so past 8,192 messages it empties, the source
 subscribes again on the same subscription, and the queue waits for the sender's new state. A scene view that the core
 refuses for good, because an embed v1.2 view already has its name, ends its subscription instead, and the source drops
 what still arrives for it.
@@ -476,7 +488,14 @@ what still arrives for it.
   owns, one copy that the view counts in its copy counters and its header reports; strip lengths become the scene core's
   break mask, and per-strip colours or values are expanded to their vertices on the way. A batch replaced by one of the
   same or a smaller size is written into the buffers it has, and a larger one gets buffers with a capacity rounded up to
-  a power of two of at least 4 KiB. In-place import from the shared-memory session's slots is not built yet.
+  a power of two of at least 4 KiB. Images and a mesh's texture go into textures the view owns, kept while the size
+  and format stay: colour as `rgba8unorm`, grey as `r8unorm`, and depth and segmentation as `r32uint` bits, a u16 depth
+  scaled to f32 scene units (by `scale`, 0.001 by default) and class ids widened on the way, so that the colormap and
+  the class table decide on the values as they are. The class table's texture is uploaded once each time the table
+  changes, 256 KiB, and counted as a copy too. The view keeps a CPU copy of the positions or centres and class ids of
+  a batch with labels or class ids, from which the label anchors are projected. In-place import from the
+  shared-memory session's slots is not built yet, and on the network route the bytes are on the host already, so the
+  view writes each texture directly instead of filling it from a buffer by a GPU pass.
 - **Colormaps.** A colormapped batch takes the colormap block of its colormap and range from the shared cache of key
   blocks: the view owns a `KeyBlockCache` of `src/host/gfx/colormap_keys.h` and hands the scene core
   `colormap_source` over it, so each range's keys are derived from the CPU reference once and the app's and the
@@ -495,11 +514,21 @@ what still arrives for it.
   scene view's fit frames the bounds again at the angles the camera has, so a view the person turned stays turned,
   while the points view's fit returns to the default three-quarter view. This is the scene design, and
   `caliper_scene_tests` checks that a fit keeps the orbit's angles.
+- **Looking through a camera.** A right click that does not drag opens a menu of the scene's cameras. Looking through
+  one draws the scene from its pose with its intrinsics, letterboxed to the camera's aspect, and its pixel space flat
+  over the picture. The view remembers the camera's path, so while the entity holds no camera it shows its own
+  camera and says so, and a fit returns to the orbit.
+- **Labels.** The labels of points and boxes, and the class labels of items without one, are drawn as text over the
+  picture at the anchors the scene core projects, the nearest 512 first.
 
-`caliper_gfx_tests --test-case="gfx/Metal scene view*"` applies the 3.2 golden frames to scene views and checks their
+`caliper_gfx_tests --test-case="gfx/Metal scene view*"` applies every 3.2 golden frame to scene views and checks their
 state, draws the surface row's scene from protocol messages and compares it with the same CPU rasterisation as the
 surface row under the same parity rules, checks a late attach, clears and static items, and checks that an update of
-one batch reuses its buffers while nothing is drawn when nothing changes. `CALIPER_GFX_CAPTURE_DIR` writes
+one batch reuses its buffers while nothing is drawn when nothing changes. Its primitive rows draw one fixture per
+primitive (`tests/scene/primitive_fixtures.h`) from protocol messages at 256 x 256 and compare each with the CPU
+reference of `tests/scene/draw_reference.h`, as [Testing](testing.md#the-pixel-exact-graphics-suite) describes, and
+`CALIPER_GFX_CAPTURE_DIR` writes their pictures as `scene-<fixture>.png`. `web/test/scenes.spec.ts` runs the same
+fixtures and reference in the browser, through the WebAssembly views' scene self-test. `CALIPER_GFX_CAPTURE_DIR` writes
 `scene-view-row.png` and `scene-view-row-update.png`, and `CALIPER_GFX_SCENE_VIEW_BENCH=1` runs a row that reports
 the view's compile, submit and GPU times for that scene and the cost of applying one mesh update.
 `python/tests/test_scene_app.py` runs the whole path: the app, hidden and attached late to `caliper.serve()`, draws

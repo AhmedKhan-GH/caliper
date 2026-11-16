@@ -17,7 +17,7 @@ This page specifies the part of wire protocol 3.2 that is built: the capability 
 | Codecs | `python/caliper/_wire.py`, `src/host/net/wire.h` and `web/src/protocol/codec.ts`, with the golden frames of `tests/fixtures/wire_v3/v3_2` |
 | Producer | `caliper.scene` in Caliper LIB on `caliper.serve()`, the Python and the native sender ([Caliper LIB](python-api.md#scenes)) |
 | Hub | Forwards the scene messages to the viewers that announced `scenes` and keeps a scene's state for a late viewer ([Through a hub](#through-a-hub)) |
-| Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw the parts `points`, `lines` (segments and strips) and `mesh` with one scene view; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
+| Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw every part with one scene view, all but encoded images, and apply SCENE_TRANSFORMS and SCENE_CLASSES; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
 
 Not built: timelines (a producer of this version sends no stamp, and a receiver reads one and keeps it), split updates, scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
 
@@ -214,9 +214,8 @@ A receiver of this version handles the rest of the 3.2 draft by the rules of [Ve
 | What arrives | What the receiver does |
 |---|---|
 | A piece of a split update (the key `split`) | Ignores the message and answers ERROR `unsupported` |
-| A part or a form that the viewer does not draw yet: the native and browser scene views draw `points`, `lines` of mode `segments` and `strips` and `mesh` | Ignores the message, answers ERROR `unsupported` and says so in the scene view |
-| A section or key the viewer does not draw yet, such as `class_ids`, `labels`, `normals` or `stamp` | Ignores the section or key, says so in the scene view, and draws the rest of the message |
-| SCENE_TRANSFORMS or SCENE_CLASSES at a viewer that does not apply them yet | Ignores the message and says so in the scene view |
+| A part or a form that the viewer does not draw yet: the native and browser scene views draw every part and form but encoded images | Ignores the message, answers ERROR `unsupported` and says so in the scene view |
+| A section the viewer does not use, such as `stamp` | Ignores the section, says so in the scene view, and draws the rest of the message |
 | An unknown part, a bad entity path, a section of the wrong dtype or shape, strip lengths that do not add up, or a batch over a limit | Answers ERROR `bad_request` |
 
 A 3.1 peer announces no `scenes`, so it receives no scene view and no scene message; a 3.1 decoder finds the 3.2 frames well formed, with their types unknown to it.
@@ -236,6 +235,7 @@ Where the draft of 3.2 is silent or ambiguous, this version reads it as follows:
 | An entry of the class table | `id`, `label` and `color` are all required; Caliper LIB fills a colour from the categorical palette when the script gives none |
 | `normals` of a mesh | (V, 3) in every space |
 | An empty class table, an empty batch | Well formed: they empty the table or remove the part |
+| An image's `opacity`, `scale` and `cloud` when absent | The scene view takes the scene model's defaults: opacity 1, or 0.5 for segmentation; scale 1 for f32 depths and 0.001 for u16; a cloud for a depth image under a camera |
 
 ## Golden frames
 
