@@ -323,6 +323,59 @@ TEST_CASE("side chat: the opening context goes once, before a session's first me
     CHECK(chat.last_prompt().size() == 1);
 }
 
+TEST_CASE("side chat: the Shared GPU note while a live run is attached and the agent is marked as local") {
+    CHECK(chat_gpu_note(true, true) == "Shared GPU");
+    CHECK(chat_gpu_note(true, false).empty());
+    CHECK(chat_gpu_note(false, true).empty());
+    CHECK(chat_gpu_note(false, false).empty());
+
+    Fixture f("chat-gpu-note");
+    bool live = false;
+    SideChat::Hooks hooks;
+    hooks.live_attached = [&live] { return live; };
+    SideChat::Options o = f.options();
+    // Not marked: no note, live or not.
+    {
+        SideChat chat(o, hooks);
+        CHECK_FALSE(chat.local_model());
+        live = true;
+        CHECK(chat.gpu_note().empty());
+        live = false;
+    }
+    // Marked: the note while the run is attached, and in the header's input.
+    o.settings.local_model_agents = {"custom"};
+    SideChat chat(o, hooks);
+    CHECK(chat.local_model());
+    CHECK(chat.gpu_note().empty());
+    live = true;
+    CHECK(chat.gpu_note() == "Shared GPU");
+    CHECK(chat_pane_input(chat, {0, 0, 600, 400}).note == "Shared GPU");
+    live = false;
+    CHECK(chat.gpu_note().empty());
+    CHECK(chat_pane_input(chat, {0, 0, 600, 400}).note.empty());
+    // The mark is the chosen agent's: another agent's mark is not this one's.
+    o.settings.local_model_agents = {"opencode"};
+    live = true;
+    {
+        SideChat other(o, hooks);
+        CHECK_FALSE(other.local_model());
+        CHECK(other.gpu_note().empty());
+    }
+    // Without the app's hook there is no live run.
+    o.settings.local_model_agents = {"custom"};
+    SideChat alone(o);
+    CHECK(alone.local_model());
+    CHECK(alone.gpu_note().empty());
+    // No agent chosen: nothing is marked.
+    SideChat::Options none = o;
+    none.settings.custom_command.clear();
+    none.settings.agent.clear();
+    SideChat empty(none, hooks);
+    CHECK(empty.agent() == nullptr);
+    CHECK_FALSE(empty.local_model());
+    CHECK(empty.gpu_note().empty());
+}
+
 TEST_CASE("side chat: a pending command approval of the agent's turn is mirrored in its slot") {
     Fixture f("chat-approvals");
     std::vector<caliper_builder::PendingApproval> pending;

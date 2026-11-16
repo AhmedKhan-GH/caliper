@@ -59,7 +59,7 @@ void check_pane(const ChatPaneLayout& lay, const WidgetRect& pane, const ChatLay
     CHECK(lay.input_row.contains(lay.send));
     check_no_overlap({lay.picker, lay.input, lay.send});
     std::vector<WidgetRect> head = {lay.title};
-    for (const WidgetRect* r : {&lay.agent, &lay.version, &lay.mode, &lay.tag, &lay.faults})
+    for (const WidgetRect* r : {&lay.agent, &lay.note, &lay.version, &lay.mode, &lay.tag, &lay.faults})
         if (!r->empty()) head.push_back(*r);
     for (const WidgetRect& b : lay.header_buttons) head.push_back(b);
     for (const WidgetRect& r : head) CHECK(lay.header.contains(r));
@@ -187,6 +187,37 @@ TEST_CASE("side chat layout: what collapses first as the pane narrows") {
     CHECK(saw_agent_gone);
     CHECK(saw_picker_gone);
     CHECK(saw_keys_gone);
+}
+
+TEST_CASE("side chat layout: the GPU note after the agent's name, given way after the version and before the name") {
+    const ChatLayoutMetrics m = ChatLayoutMetrics::for_text_scale(1.0f);
+    ChatPaneInput in = pane_input({0, 0, 560, 600});
+    in.agent = "opencode";
+    in.version = "1.2.0";
+    in.picker = "opencode";
+    ChatPaneLayout lay = layout_chat_pane(in, m, fake_measure());
+    CHECK(lay.note.empty());   // none to show
+    in.note = "Shared GPU";
+    lay = layout_chat_pane(in, m, fake_measure());
+    check_pane(lay, in.pane, m);
+    REQUIRE_FALSE(lay.note.empty());
+    CHECK(lay.note.x > lay.agent.right());
+    CHECK(lay.version.x > lay.note.right());
+    CHECK(lay.note.h <= lay.header.h);
+    CHECK(lay.note.w >= std::ceil(fake_measure()(in.note, ChatFont::tag)));
+    bool saw_note_kept = false, saw_note_gone = false;
+    for (float w = 560; w >= 200; w -= 4) {
+        in.pane = {0, 0, w, 600};
+        lay = layout_chat_pane(in, m, fake_measure());
+        INFO("width " << w);
+        check_pane(lay, in.pane, m);
+        if (!lay.version.empty()) CHECK_FALSE(lay.note.empty());   // the version goes before the note
+        if (!lay.note.empty()) CHECK_FALSE(lay.agent.empty());     // the note goes before the name
+        if (!lay.note.empty() && lay.version.empty()) saw_note_kept = true;
+        if (lay.note.empty()) saw_note_gone = true;
+    }
+    CHECK(saw_note_kept);
+    CHECK(saw_note_gone);
 }
 
 TEST_CASE("side chat layout: a longer input grows the row up to its maximum, and the draft's chips fold") {

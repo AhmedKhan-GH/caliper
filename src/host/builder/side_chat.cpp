@@ -478,6 +478,21 @@ std::string SideChat::agent_title() const {
     return a ? a->title : std::string();
 }
 
+std::string chat_gpu_note(bool live_attached, bool local_model) {
+    return live_attached && local_model ? "Shared GPU" : std::string();
+}
+
+bool SideChat::local_model() const {
+    const ChatAgent* a = agent();
+    if (!a) return false;
+    const std::vector<std::string>& marked = options_.settings.local_model_agents;
+    return std::find(marked.begin(), marked.end(), a->id) != marked.end();
+}
+
+std::string SideChat::gpu_note() const {
+    return chat_gpu_note(hooks_.live_attached && hooks_.live_attached(), local_model());
+}
+
 bool SideChat::mode_skips_permission() const {
     return mode_ == "bypassPermissions" || mode_ == "yolo" || mode_ == "agent-full-access";
 }
@@ -1222,10 +1237,18 @@ ChatPaneLayout layout_chat_pane(const ChatPaneInput& in, const ChatLayoutMetrics
     const float aw = in.agent.empty() ? 0.0f : std::ceil(measure(in.agent, ChatFont::label));
     const float vw = in.version.empty() ? 0.0f : std::ceil(measure(in.version, ChatFont::mono));
     const float mw = in.mode.empty() ? 0.0f : std::ceil(measure(in.mode, ChatFont::mono));
+    // The GPU note: a framed noun after the agent's name, which gives way
+    // after the version and before the name.
+    const float nw = in.note.empty() ? 0.0f : std::ceil(measure(in.note, ChatFont::tag) + 2.0f * m.button_pad);
     if (aw > 0 && x + aw <= right) {
         out.agent = {x, H.y, aw, H.h};
         x += aw + m.gap;
-        if (vw > 0 && x + vw <= right) {
+        const bool note_fits = nw > 0 && x + nw <= right;
+        if (note_fits) {
+            out.note = {x, by, nw, bh};
+            x += nw + m.gap;
+        }
+        if ((nw == 0 || note_fits) && vw > 0 && x + vw <= right) {
             out.version = {x, H.y, vw, H.h};
             x += vw + 2.0f * m.gap;
             if (mw > 0 && x + mw <= right) out.mode = {x, H.y, mw, H.h};
@@ -1245,6 +1268,7 @@ ChatPaneInput chat_pane_input(const SideChat& chat, const WidgetRect& pane) {
     in.version = chat.agent_info().version;
     in.mode = chat.mode();
     in.tag = chat.tag();
+    in.note = chat.gpu_note();
     in.header_actions = chat.header_actions();
     in.faults = (int)chat.faults().size();
     in.picker = chat.agent() ? chat.agent_title() : std::string("Agent");
@@ -1396,6 +1420,14 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         draw_tag(dl, L, v2(lay.title.x, lay.title.y), lay.title.h, L.text, upper(in.title));
         if (!lay.agent.empty())
             draw_str(dl, L.ui, L.ui_size, v2(lay.agent.x, lay.agent.y + (lay.agent.h - ui_h) * 0.5f), L.secondary, in.agent);
+        if (!lay.note.empty()) {   // the GPU note, framed in bronze as the widget agent's settings show it
+            const ImRect nr = rr(lay.note);
+            dl->AddRect(nr.Min, nr.Max, L.accent, 0.0f, 0, 1.0f);
+            const ImVec2 e = extent(L.ui, L.small_size, in.note);
+            draw_str(dl, L.ui, L.small_size,
+                     v2(std::round(nr.Min.x + (nr.GetWidth() - e.x) * 0.5f), std::round(nr.Min.y + (nr.GetHeight() - e.y) * 0.5f)),
+                     L.accent, in.note);
+        }
         if (!lay.version.empty())
             draw_str(dl, L.mono, L.mono_size, v2(lay.version.x, lay.version.y + (lay.version.h - mono_h) * 0.5f), L.faint,
                  in.version);

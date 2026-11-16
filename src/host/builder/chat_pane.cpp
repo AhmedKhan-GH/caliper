@@ -159,6 +159,7 @@ struct ChatPane::Impl {
             end_agent_file();   // the session's token is revoked with it
             if (hooks.agent_ended) hooks.agent_ended();
         };
+        h.live_attached = hooks.live_attached;
         chat = std::make_unique<SideChat>(std::move(o), std::move(h));
         if (draft) {
             chat->open_handoff(std::move(*draft));
@@ -287,6 +288,8 @@ void ChatPane::focus_input() {
 
 int ChatPane::draft_chips() const { return impl_->chat ? (int)impl_->chat->draft().chips.size() : 0; }
 
+std::string ChatPane::note() const { return impl_->chat ? impl_->chat->gpu_note() : std::string(); }
+
 void ChatPane::shutdown() {
     impl_->chat.reset();
     impl_->end_agent_file();
@@ -325,6 +328,7 @@ std::string ChatPane::state() const { return "none"; }
 bool ChatPane::has_item(const std::string&, const std::string&, const std::string&) const { return false; }
 void ChatPane::focus_input() {}
 int ChatPane::draft_chips() const { return 0; }
+std::string ChatPane::note() const { return {}; }
 void ChatPane::shutdown() {}
 
 #endif
