@@ -623,100 +623,62 @@ void draw_selection_details(const RunControls& rc, const ControlsLook& look) {
     }
 }
 
-// ==== THE SELECTION HOOK =================================================================
+// ---- linked selection ---------------------------------------------------------------------
 namespace {
 
-// The payload positions [p0, p1) that show source index `item` along `ax`
-// (wire protocol v3, "Payload axes"); false when the item is not shown.
-bool payload_cell(const PayloadAxis& ax, uint64_t item, int64_t* cell) {
-    const int64_t step = ax.step > 0 ? ax.step : 1;
-    const int64_t i = (int64_t)item - ax.start;
-    if (i < 0 || i % step != 0) return false;
-    const int64_t k = i / step;   // position among the selected source indices
-    if (k >= ax.count || ax.count <= 0) return false;
-    *cell = ax.size > 0 ? k * ax.size / ax.count : k;
-    return true;
+// The source a view shows now: the resolved data view's, else the offer's first.
+std::string shown_source(Source* src, uint64_t key) {
+    Json resolved, offer;
+    if (!src || !key || !src->data_view_of(key, &resolved, &offer)) return {};
+    if (const Json* s = resolved.find("source"); s && s->is_string()) return s->as_string();
+    if (const Json* srcs = offer.find("sources"); srcs && srcs->is_array() && srcs->size() > 0)
+        if (const Json* n = srcs->at(0).find("name"); n && n->is_string()) return n->as_string();
+    return {};
 }
 
-// Consecutive runs [a, b) of a sorted list of cells.
-std::vector<std::pair<int64_t, int64_t>> runs_of(std::vector<int64_t> cells) {
-    std::sort(cells.begin(), cells.end());
-    cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
-    std::vector<std::pair<int64_t, int64_t>> out;
-    for (int64_t c : cells) {
-        if (!out.empty() && out.back().second == c) out.back().second = c + 1;
-        else out.push_back({c, c + 1});
-    }
-    return out;
+// Which axis of view `v` (as the view layer names it) an item axis is: the
+// steps of a series, the point dim of points, the rows or columns of a
+// heatmap or an image by its payload axes (the cell's two, after the tile of
+// a mosaic). "" when it is none of them yet (no snapshot, another source).
+const char* link_axis_of(const caliper_live_views::View& v, const ItemAxis& a, const std::string& source) {
+    if (a.dim.empty()) return v.kind == CALIPER_LIVE_KIND_SERIES ? "steps" : "";
+    if (!a.source.empty() && !source.empty() && a.source != source) return "";
+    const auto& ax = v.map.axes;
+    if (v.kind == CALIPER_LIVE_KIND_POINTS) return !ax.empty() && ax.back().dim == a.dim ? "points" : "";
+    if (v.kind != CALIPER_LIVE_KIND_HEATMAP && v.kind != CALIPER_LIVE_KIND_IMAGE) return "";
+    const bool mosaic = v.map.tile_cols > 0 && ax.size() == 3;
+    const size_t r = mosaic ? 1 : 0, c = mosaic ? 2 : 1;
+    if (ax.size() > r && ax[r].dim == a.dim) return "rows";
+    if (ax.size() > c && ax[c].dim == a.dim) return "columns";
+    return "";
 }
 
 }  // namespace
 
-void draw_linked_selection(CaliperCore* core, const RunControls& rc, const ControlsLook& look) {
-    if (!core) return;
-    const ImU32 fill = (look.accent & ~IM_COL32_A_MASK) | ((ImU32)56 << IM_COL32_A_SHIFT);
-    const ImU32 edge = (look.accent & ~IM_COL32_A_MASK) | ((ImU32)200 << IM_COL32_A_SHIFT);
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    for (const LinkedSelection& s : rc.selections()) {
-        if (s.items.empty()) continue;
-        for (const ItemAxis& a : rc.item_axes()) {
-            if (a.space != s.space) continue;
-            const caliper_live_views::View* v = caliper_live_views::find(core, a.view.c_str());
-            if (!v || !v->geo_valid) continue;
-            const float ax0 = v->geo_area[0], ay0 = v->geo_area[1];
-            const float aw = v->geo_area[2], ah = v->geo_area[3];
-            const double wx0 = v->geo_window[0], wx1 = v->geo_window[1];
-            const double wy0 = v->geo_window[2], wy1 = v->geo_window[3];
-            if (aw <= 0 || ah <= 0 || wx1 == wx0 || wy1 == wy0) continue;
-            dl->PushClipRect(ImVec2(ax0, ay0), ImVec2(ax0 + aw, ay0 + ah), true);
-            auto sx = [&](double x) { return ax0 + (float)((x - wx0) / (wx1 - wx0)) * aw; };
-            auto sy = [&](double y) {
-                const float t = (float)((y - wy0) / (wy1 - wy0));
-                return v->geo_ydown ? ay0 + t * ah : ay0 + ah - t * ah;
-            };
-            if (v->kind == CALIPER_LIVE_KIND_SERIES && a.dim.empty()) {
-                // A series: the steps, as vertical bands.
-                std::vector<int64_t> steps(s.items.begin(), s.items.end());
-                for (const auto& r : runs_of(std::move(steps))) {
-                    const float xa = sx((double)r.first - 0.5), xb = sx((double)r.second - 0.5);
-                    dl->AddRectFilled(ImVec2(std::min(xa, xb), ay0), ImVec2(std::max(xa, xb), ay0 + ah), fill);
+void RunControls::link_views(CaliperCore* core, const std::function<uint64_t(const std::string&)>& key_of) {
+    if (!core || !core->live_views) return;
+    for (const auto& vp : core->live_views->views) {
+        const caliper_live_views::View& v = *vp;
+        const std::string source = v.kind == CALIPER_LIVE_KIND_SERIES ? std::string() : shown_source(src_, key_of(v.name));
+        // The newest selection of a space that one of the view's axes carries.
+        const LinkedSelection* best = nullptr;
+        const char* axis = "";
+        for (const ItemAxis& a : item_axes_) {
+            if (a.view != v.name) continue;
+            const char* ax = link_axis_of(v, a, source);
+            if (!*ax) continue;
+            for (const LinkedSelection& s : selections_)
+                if (s.space == a.space && (!best || s.seq > best->seq)) {
+                    best = &s;
+                    axis = ax;
                 }
-            } else if ((v->kind == CALIPER_LIVE_KIND_HEATMAP || v->kind == CALIPER_LIVE_KIND_IMAGE) &&
-                       !(v->map.tile_cols > 0)) {
-                // Rows or columns of a heatmap or an image (a pooled cell stands
-                // for several items and shows when any of them is selected).
-                const auto& axes = v->map.axes;
-                // The payload's own extent: a band covers the image, not the
-                // margins its aspect leaves in the area.
-                const double rows = axes.size() > 0 && axes[0].size > 0 ? (double)axes[0].size : wy1;
-                const double cols = axes.size() > 1 && axes[1].size > 0 ? (double)axes[1].size : wx1;
-                for (size_t i = 0; i < axes.size() && i < 2; ++i) {
-                    if (axes[i].dim != a.dim) continue;
-                    std::vector<int64_t> cells;
-                    for (uint64_t item : s.items) {
-                        int64_t cell = 0;
-                        if (payload_cell(axes[i], item, &cell)) cells.push_back(cell);
-                    }
-                    for (const auto& r : runs_of(std::move(cells))) {
-                        ImVec2 p0, p1;
-                        if (i == 0) {   // rows
-                            const float ya = sy((double)r.first), yb = sy((double)r.second);
-                            const float xa = sx(0.0), xb = sx(cols);
-                            p0 = ImVec2(std::min(xa, xb), std::min(ya, yb));
-                            p1 = ImVec2(std::max(xa, xb), std::max(ya, yb));
-                        } else {        // columns
-                            const float xa = sx((double)r.first), xb = sx((double)r.second);
-                            const float ya = sy(0.0), yb = sy(rows);
-                            p0 = ImVec2(std::min(xa, xb), std::min(ya, yb));
-                            p1 = ImVec2(std::max(xa, xb), std::max(ya, yb));
-                        }
-                        dl->AddRectFilled(p0, p1, fill);
-                        dl->AddRect(p0, p1, edge);
-                    }
-                }
-            }
-            dl->PopClipRect();
         }
+        const std::string sig = best ? std::string(axis) + "|" + best->space + "|" + std::to_string(best->seq) : "";
+        auto it = linked_.find(v.name);
+        if (it != linked_.end() ? it->second == sig : sig.empty()) continue;
+        std::vector<int64_t> items;
+        if (best) items.assign(best->items.begin(), best->items.end());
+        if (caliper_live_views::set_link(core, v.name.c_str(), best ? axis : "", std::move(items))) linked_[v.name] = sig;
     }
 }
 

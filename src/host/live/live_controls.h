@@ -98,6 +98,13 @@ public:
     // details or a details error and selects something. Null: none.
     const LinkedSelection* details() const;
     const std::vector<ItemAxis>& item_axes() const { return item_axes_; }
+    // Shows the linked selections in the views: every view of `core` whose
+    // axis carries an item space gets that space's newest selection through
+    // the view layer (caliper_live_views::set_link), which draws it as the
+    // browser does (points over the dimmed rest, outlined rows or columns,
+    // series markers). Only what changed is set again. `key_of` gives the
+    // source's key of a view, for the data view it shows.
+    void link_views(CaliperCore* core, const std::function<uint64_t(const std::string&)>& key_of);
 
     // What changed, as plain lines ("run paused at step 12", "set lr = 0.02",
     // "save: saved at step 14", "selection units: 4 items"), oldest first; a
@@ -143,6 +150,7 @@ private:
     std::vector<ItemAxis> item_axes_;
     std::vector<std::string> log_;
     Counts counts_;
+    std::map<std::string, std::string> linked_;   // view -> what link_views last set
 };
 
 // ---- drawing ----------------------------------------------------------------------------
@@ -161,7 +169,6 @@ struct ControlsLook {
     ImU32 text = IM_COL32(255, 255, 255, 255);
     ImU32 secondary = IM_COL32(190, 190, 190, 255);
     ImU32 faint = IM_COL32(128, 128, 128, 255);
-    ImU32 accent = IM_COL32(110, 170, 255, 255);   // the selection highlight
 };
 
 // The run bar on the current line of a window the host opened, at most
@@ -174,17 +181,6 @@ void draw_run_bar(RunControls& rc, const ControlsLook& look, float width);
 // The selection's details as a table, one row per item with the script's
 // fields, or why there are none.
 void draw_selection_details(const RunControls& rc, const ControlsLook& look);
-
-// ==== THE SELECTION HOOK =================================================================
-// Hands the linked selections to the view layer: every view whose axis indexes
-// an item space shows that space's selection. This is the one place where
-// received selections reach the views. Today it draws the highlight itself, on
-// top of the views, from what the view layer publishes (live_views_state.h:
-// the payload map and geo_area / geo_window of the last frame): bands over the
-// selected rows or columns of a heatmap or an image and over the selected steps
-// of a series. Points and mosaics are not highlighted here: that needs the view
-// layer's own drawing, which replaces this function's body when it lands.
-void draw_linked_selection(CaliperCore* core, const RunControls& rc, const ControlsLook& look);
 
 // ---- testing aid -------------------------------------------------------------------------
 // Where each widget of the bar was drawn in the last frame, in screen units,

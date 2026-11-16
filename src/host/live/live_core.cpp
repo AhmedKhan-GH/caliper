@@ -531,7 +531,14 @@ int poll_attached(CaliperCore* core, CaliperLiveState* L) {
             L->net_problem = std::move(problem);
         }
         L->controls.update(L->source.get(), caliper_live::now_ns());
+        L->controls.link_views(core, [L](const std::string& name) {
+            for (const auto& v : L->views)
+                if (v.name == name) return v.key;
+            return (uint64_t)0;
+        });
     }
+    // Each header's dot: live, or ended once the script has gone.
+    caliper_live_views::set_stream_state(core, L->client_alive ? 1 : 2);
 
     std::vector<SourceView> now;
     if (L->source->sync(&now)) reconcile(core, L, now);
@@ -923,12 +930,8 @@ void caliper_live_frame(CaliperCore* core) {
 
     const float lw = (float)core->canvas_w / core->scale;
     const float lh = (float)core->canvas_h / core->scale;
-    if (L->attached) {
-        draw_status(core, L, lw, lh);
-        if (L->net) caliper_live::draw_linked_selection(core, L->controls, caliper_live::ControlsLook{});
-    } else if (L->picker_enabled) {
-        draw_picker(core, L, lw, lh);
-    }
+    if (L->attached) draw_status(core, L, lw, lh);
+    else if (L->picker_enabled) draw_picker(core, L, lw, lh);
 }
 
 caliper_live::RunControls* caliper_live_controls(CaliperCore* core) {

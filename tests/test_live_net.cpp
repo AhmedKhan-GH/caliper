@@ -1209,7 +1209,6 @@ struct HostFrame {
             ImGui::End();
         }
         a.draw(0.0f, 44.0f, 1000.0f, 436.0f, 1.0f);
-        if (caliper_live::RunControls* rc = a.controls()) caliper_live::draw_linked_selection(a.core(), *rc, look);
         renderer->canvas_render();
     }
 };

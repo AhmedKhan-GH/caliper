@@ -23,6 +23,7 @@
 #include "host/live/live_controls.h"
 #include "host/live/live_shm.h"        // now_ns
 #include "host/live/live_ui_driver.h"
+#include "host/live/live_views_state.h"   // the views' header look
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
 #include "app_paths.h"
@@ -71,7 +72,22 @@ static caliper_live::ControlsLook house_controls_look() {
     l.text = sternbild::col::parchment;
     l.secondary = sternbild::col::secondary;
     l.faint = sternbild::col::faint;
+    return l;
+}
+
+// The live views' headers in the house style: the info string in mono at the
+// small size, the tools in the UI face at the small size, bronze for a
+// pressed tool and the live dot.
+static caliper_live_views::Look house_view_look() {
+    caliper_live_views::Look l;
+    l.mono = sternbild::fonts().mono;
+    l.mono_size = sternbild::font_size::ui_small;
+    l.small_size = sternbild::font_size::ui_small;
+    l.text = sternbild::col::parchment;
+    l.faint = sternbild::col::faint;
+    l.rule = sternbild::col::rule;
     l.accent = sternbild::col::bronze;
+    l.plot = sternbild::col::parchment;
     return l;
 }
 
@@ -613,6 +629,7 @@ private:
             landing_.log("attach failed", script, err);
             return;
         }
+        caliper_live_views::set_look(live_.core(), house_view_look());
         const auto& st = live_.status();
         live_script_ = st.script.empty() ? script : st.script;
         live_pid_ = st.pid ? st.pid : (e ? e->pid : 0);
@@ -633,6 +650,7 @@ private:
             landing_.log("attach failed", shown, err);
             return;
         }
+        caliper_live_views::set_look(live_.core(), house_view_look());
         const auto& st = live_.status();
         live_script_ = !st.script.empty() ? st.script : !st.session.empty() ? st.session : shown;
         live_pid_ = st.pid;
@@ -840,8 +858,6 @@ private:
         }
         live_.draw(area.Min.x, area.Min.y, views_w, area.GetHeight(),
                    ImGui::GetIO().DisplayFramebufferScale.x);
-        // The shared selection over every view of its item space.
-        if (rc) caliper_live::draw_linked_selection(live_.core(), *rc, look);
 
         if (go_back) pending_detach_ = true;
     }
