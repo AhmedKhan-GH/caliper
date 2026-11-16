@@ -637,8 +637,8 @@ first call of a script opens the live session when no route is open.
 |---|---|---|---|
 | `name` | `str` | `"scene"` | The view's name: 1 to 63 bytes, no `##` |
 | `space` | `str` | `"3d"` | `"3d"` or `"2d"`; positions are (N, 3) or (N, 2) |
-| `up` | `str` or `None` | `None` | The axis a 3-D view keeps upright when it opens, `"+x"` to `"-z"`; in 2-D the direction of y on screen, `"-y"` or `"+y"`. `None` is `"+y"` in 3-D and `"-y"` in 2-D |
-| `units` | `str` | `"m"` | A unit note of at most 15 bytes, shown with the view; nothing is converted |
+| `up` | `str` or `None` | `None` | The axis a 3-D view keeps upright when it opens, `"+x"` to `"-z"`; the person can switch a view between Y up and Z up. In 2-D the direction of y on screen, `"-y"` or `"+y"`. `None` is `"+y"` in 3-D and `"-y"` in 2-D |
+| `units` | `str` | `"m"` | A unit note of at most 15 bytes, shown on the view's scale bar, with an SI prefix for m, s and g; nothing is converted. `""` shows the number alone |
 | `rate` | `float` or `None` | `None` | The default rate limit of each batch: `None` is 60 per second, 0 every call |
 
 A second call with the same name returns the same scene and updates `up`,

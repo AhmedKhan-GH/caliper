@@ -201,7 +201,16 @@ first has bounds.
 | Drag | Orbits around the target |
 | Right, middle, alt or ctrl drag | Pans |
 | Wheel | Zooms |
-| F, or a double click | Frames the scene again |
+| F, or a double click | Frames the scene again, at the angles the camera has |
+| `Y up` and `Z up` in the header, or U | Switches the axis the orbit keeps upright, a 3-D scene only |
+| `display` in the header | Shows or hides the scale bar, or resets the view to the scene's `up` |
+
+The switch changes only the camera; the script is told nothing. A third
+segment shows the scene's own axis when it is neither y nor z. The scale bar in
+the picture's bottom-right corner reads a round length in the scene's `units`,
+such as "0.5 m at target": in 3-D it holds at the orbit's target, the centre of
+the picture. The window keeps its mode and its scale bar option when the scene
+goes and comes back.
 
 The header says how many entities hold batches, how many items they hold
 (points, line segments and triangles), the bytes copied by the latest
