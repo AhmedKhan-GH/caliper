@@ -121,10 +121,37 @@ def plain_loss(ns) -> float:
         return F.cross_entropy(logits, ns["eval_y"][:128]).item()
 
 
+def loss_at(ns, flat) -> float:
+    """The landscape batch's loss with the perturbed weights set to ``flat``
+    and the others as the model holds them, by functional_call, computed here
+    rather than by Landscape."""
+    land = ns["land"]
+    params = dict(zip(land.names, land.split(flat)))
+    with torch.no_grad():
+        logits = torch.func.functional_call(ns["model"], params, (ns["eval_x"][:128],))[0]
+        return F.cross_entropy(logits, ns["eval_y"][:128]).item()
+
+
+def far_corner(ns) -> float:
+    """log10 of the loss at vertex GRID - 1 of the surface just computed: the
+    first row (b at -1) and the last column (a at +1), theta + h d1 - h d2,
+    where theta is the weights the surface was computed at and h its
+    half-width. The grid's centre and vertex 0 lie on its diagonal, so they
+    cannot tell a surface from its mirror image; this vertex can."""
+    land = ns["land"]
+    theta, d, h = land.flat(ns["model"]), land.directions, land.half_width
+    return math.log10(loss_at(ns, theta + h * d[0] - h * d[1]))
+
+
+def clip(log_loss: float) -> float:
+    return min(max(log_loss, -4.0), 2.0)
+
+
 class Recorder:
     """Wraps the notebook's show_surface, show_path and land.point to record,
-    at each surface, the step, the separately computed loss and the plane, and
-    the steps at which anything was drawn."""
+    at each surface, the step, the separately computed loss, the loss at the
+    surface's vertex GRID - 1 and the plane, and the steps at which anything
+    was drawn."""
 
     def __init__(self, ns):
         self.ns = ns
@@ -146,7 +173,7 @@ class Recorder:
         def recording_surface():
             entry = {"step": land.step, "loss": plain_loss(ns)}
             surface()
-            entry.update(mode=land.mode, span=land.span, half_width=float(land.half_width),
+            entry.update(far_corner=far_corner(ns), mode=land.mode, span=land.span, half_width=float(land.half_width),
                          centre=land.centre.clone(), directions=land.directions.clone(),
                          share=None if land.share is None else float(land.share),
                          snapshots=len(land.snapshot_steps), path_length=land.path_length)
@@ -328,6 +355,9 @@ def test_path_plane(notebook):
         assert abs(pos[CENTRE, 2] - 0.5 * math.log10(s["loss"])) < 1e-4
         assert pos[CENTRE, 0] == 0.0 and pos[CENTRE, 1] == 0.0               # the plane's origin
         np.testing.assert_array_equal(pos[:GRID, 0], land.offsets.numpy())    # x, y from -1 to 1
+        np.testing.assert_array_equal(pos[::GRID, 1], land.offsets.numpy())   # y down the rows
+        # the orientation: vertex GRID - 1, at (1, -1), is theta + h d1 - h d2
+        assert abs(pos[GRID - 1, 2] - 0.5 * clip(s["far_corner"])) < 1e-4, (pos[GRID - 1, 2], s["far_corner"])
 
     check_path_ends_at_current(v)
 
@@ -466,6 +496,12 @@ def test_controls(notebook):
         d = land.random_directions.double()
         coef = torch.linalg.solve(d @ d.T, d @ (theta.double() - land.anchor.double()))
         np.testing.assert_allclose(pos[0, :2], coef.numpy() / 2.0 - 1.0, rtol=0, atol=1e-4)
+        # the orientation: vertex GRID - 1 is theta + 2 d1 - 2 d2, one span right and one down
+        corner = theta + 2.0 * land.random_directions[0] - 2.0 * land.random_directions[1]
+        want = math.log10(loss_at(ns, corner))
+        assert abs(vals[GRID - 1] - clip(want)) < 1e-4, (vals[GRID - 1], want)
+        assert abs(now["far_corner"] - want) < 1e-6
+        np.testing.assert_allclose(pos[GRID - 1, :2], coef.numpy() / 2.0 + [1.0, -1.0], rtol=0, atol=1e-4)
 
         assert v.control("resume").status == "ok"
         v.wait(lambda: len(v.updates("surface", "mesh")) == 3, what="the next surface")
