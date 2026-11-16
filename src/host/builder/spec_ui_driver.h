@@ -15,8 +15,8 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, comma), such as "cmd+k" (Ctrl+K off macOS) or
-//                        "cmd+shift+z"
+//                        f3, f4, f5, up, down, comma), such as "cmd+k"
+//                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
 //   until <state> [<seconds>]
@@ -107,6 +107,14 @@
 //                        many seconds instead of kPatience frames, such as a
 //                        real agent's turn on a local model; 0 goes back to
 //                        kPatience
+//   save until           wait until "Save changes to <name>?" is open
+//                        (save_prompt.h)
+//   save save|dont-save|cancel
+//                        wait until it is open, then answer it as a click on
+//                        that button does
+//   close                a request to close the window, as its close button
+//                        and ⌘Q make, which asks first when the open spec
+//                        has unsaved changes
 //   quit                 close the app
 // A step whose target is not there yet waits for it, up to kPatience frames
 // (or the seconds of the last `patience`), then the script stops with an
@@ -116,6 +124,7 @@
 // ============================================================================
 #include "builder/app_session.h"
 #include "builder/chat_pane.h"
+#include "builder/save_prompt.h"
 #include "builder/spec_page.h"
 #include "export_service.h"
 
@@ -206,6 +215,10 @@ public:
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
     // The waiting cards the approval strip shows (ApprovalTray::shown_waiting()), for `cards`.
     void set_cards(std::function<int()> cards) { cards_ = std::move(cards); }
+    // "Save changes to <name>?" for the `save` steps, and the window's close
+    // request for `close`; the app sets both.
+    void set_save_prompt(SavePrompt* prompt) { save_prompt_ = prompt; }
+    void set_close(std::function<void()> close) { close_ = std::move(close); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
     void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
@@ -577,6 +590,20 @@ public:
                 return void(error_ = "patience takes a number of seconds from 0 to 86400");
             patience_s_ = seconds;
             next(seconds > 0.0 ? "patience " + s.arg + " s" : "patience " + std::to_string(kPatience) + " frames");
+        } else if (s.verb == "save") {
+            if (!save_prompt_) return void(error_ = "save: the app gave no save prompt");
+            if (!save_prompt_->is_open()) return patience("no Save changes question is open");
+            if (s.arg == "until") {
+                next("Save changes to " + save_prompt_->name() + "? is open");
+            } else if (save_prompt_->answer(s.arg)) {
+                next("answered " + s.arg);
+            } else {
+                error_ = "save takes until, save, dont-save or cancel";
+            }
+        } else if (s.verb == "close") {
+            if (!close_) return void(error_ = "close: the app gave no close request");
+            close_();
+            next("asked to close the window");
         } else if (s.verb == "quit") {
             quit_ = true;
             next("quit");
@@ -659,6 +686,14 @@ private:
                 keys.push_back(ImGuiKey_Backspace);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
+            } else if (p == "f4") {
+                keys.push_back(ImGuiKey_F4);
+            } else if (p == "f5") {
+                keys.push_back(ImGuiKey_F5);
+            } else if (p == "up") {
+                keys.push_back(ImGuiKey_UpArrow);
+            } else if (p == "down") {
+                keys.push_back(ImGuiKey_DownArrow);
             } else if (p == "comma") {
                 keys.push_back(ImGuiKey_Comma);
             } else if (p.size() == 1 && p[0] >= 'a' && p[0] <= 'z') {
@@ -720,6 +755,8 @@ private:
     std::vector<std::string> landing_projects_;
     std::function<void(std::vector<std::string>)> drop_;
     std::function<int()> cards_;
+    SavePrompt* save_prompt_ = nullptr;
+    std::function<void()> close_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
     std::optional<std::chrono::steady_clock::time_point> started_;   // a step's first frame, for a wait in seconds

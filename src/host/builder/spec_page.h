@@ -102,10 +102,21 @@ public:
     // succeeded since the last call.
     bool take_open(const AppSession& session);
 
-    // Sends applet.open for the workspace's spec applet `id` from the ui
-    // origin through the session's queue, without waiting; the page opens
-    // when it succeeds. False when the session is not open.
-    bool request_open(AppSession& session, const std::string& id);
+    // Sends applet.open for the workspace's spec applet `id` through the
+    // session's queue, without waiting, from `origin`: "ui" for the person's
+    // own launch, or the origin of the agent or program that asked ("api",
+    // "mcp", "agent"), whose replacement of unsaved changes then waits on an
+    // approval card as its own command would. The page opens when it
+    // succeeds. False when the session is not open.
+    bool request_open(AppSession& session, const std::string& id, const std::string& origin = "ui");
+    // What an applet.open from `origin` would meet now, by the command
+    // layer's own condition for replacing an open spec (review on for that
+    // origin, and an open spec with unsaved changes): `opens` at once,
+    // `waits` for the person's approval, or `unknown` while the session's
+    // worker runs a command and the open spec cannot be read. It is the state
+    // at the time of the call; the open runs a frame or two later.
+    enum class OpenReview { opens, waits, unknown };
+    static OpenReview open_review(AppSession& session, const std::string& origin);
     // The answer of the last request_open(), once it has come: true, with
     // `error` empty when it succeeded and holding the reason otherwise.
     bool request_answered(std::string* error);
@@ -120,6 +131,9 @@ public:
     bool take_new();
     // The session holds an open spec (spec.new or applet.open ran).
     static bool has_open_spec(AppSession& session);
+    // ... and it has changes that are not saved (a new spec that was never
+    // saved has).
+    static bool has_unsaved_spec(AppSession& session);
     // An import from drop_files() still runs.
     bool importing() const;
 

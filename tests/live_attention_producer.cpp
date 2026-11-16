@@ -7,9 +7,14 @@
 // sooner, so that the entropy falls layer by layer and over the steps.
 //
 //   caliper_attention_producer [--layers 6] [--heads 8] [--tokens 64] [--hz 8]
+//                              [--stream-file <data dir>]
 //
 // It prints `[producer] hub <link>` once its hub listens; the app attaches to
-// that link with --url. SIGTERM or SIGINT stops it. Its views:
+// that link with --url. With --stream-file it also writes the stream file
+// that caliper.serve() writes (python/caliper/_net.py, StreamFile), as
+// <data dir>/streams/<pid>.json with mode 0600, so that the app's session
+// list (F4) lists the stream, and removes it when it stops. SIGTERM or SIGINT
+// stops it. Its views:
 //
 //   attn          heatmap of the source attn [layer, head, query, key], whose
 //                 default data view reduces the heads by their mean on the
@@ -39,6 +44,8 @@
 #include <thread>
 #include <vector>
 
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace wire = caliper_net::wire;
@@ -368,19 +375,61 @@ private:
     std::map<int, std::vector<float>> series_;
 };
 
+// The stream file of caliper.serve() for this stream: <dir>/streams/<pid>.json,
+// mode 0600 in a folder of mode 0700, with the keys the app reads. Its path,
+// or "" when it could not be written.
+std::string write_stream_file(const std::string& dir, uint16_t port, const std::string& url, const Model& m) {
+    const std::string folder = dir + "/streams";
+    ::mkdir(dir.c_str(), 0700);
+    ::mkdir(folder.c_str(), 0700);
+    char host[256] = {0};
+    ::gethostname(host, sizeof host - 1);
+    Json views = Json::array();
+    views.push(Json("attn"));
+    views.push(Json("attn.entropy"));
+    for (int l = 0; l < m.L; ++l) views.push(Json("entropy.l" + std::to_string(l)));
+    const uint64_t now = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+    Json f = obj({{"version", Json(1)},
+                  {"pid", Json((int64_t)getpid())},
+                  {"host", Json(std::string(host))},
+                  {"session", Json("attention-" + std::to_string((long)getpid()))},
+                  {"script", Json("attention_train.py")},
+                  {"start_unix_ms", Json(now)},
+                  {"port", Json((int64_t)port)},
+                  {"stream_url", Json(url)},
+                  {"control", Json(false)},
+                  {"views", views}});
+    const std::string path = folder + "/" + std::to_string((long)getpid()) + ".json";
+    const std::string text = f.dump() + "\n";
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return {};
+    const bool ok = ::write(fd, text.data(), text.size()) == (ssize_t)text.size();
+    ::close(fd);
+    if (!ok) {
+        ::unlink(path.c_str());
+        return {};
+    }
+    return path;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     Model model;
     double hz = 8.0;
+    std::string stream_dir;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string a = argv[i];
         if (a == "--layers") model.L = std::max(1, std::min(32, std::atoi(argv[i + 1])));
         else if (a == "--heads") model.H = std::max(1, std::min(64, std::atoi(argv[i + 1])));
         else if (a == "--tokens") model.T = std::max(2, std::min(256, std::atoi(argv[i + 1])));
         else if (a == "--hz") hz = std::max(0.5, std::min(60.0, std::atof(argv[i + 1])));
+        else if (a == "--stream-file") stream_dir = argv[i + 1];
         else {
-            std::fprintf(stderr, "usage: caliper_attention_producer [--layers N] [--heads N] [--tokens N] [--hz F]\n");
+            std::fprintf(stderr, "usage: caliper_attention_producer [--layers N] [--heads N] [--tokens N] [--hz F] "
+                                 "[--stream-file DIR]\n");
             return 2;
         }
     }
@@ -403,10 +452,12 @@ int main(int argc, char** argv) {
     const std::string url = "ws://127.0.0.1:" + std::to_string(hub.port()) + "/v3/stream?token=" + token;
 
     Producer p(model);
+    std::string stream_file;
     int rc = 0;
     if (!p.connect(url)) {
         rc = 1;
     } else {
+        if (!stream_dir.empty()) stream_file = write_stream_file(stream_dir, hub.port(), url, model);
         std::printf("[producer] hub %s\n", url.c_str());
         std::fflush(stdout);
         const auto period = std::chrono::nanoseconds((int64_t)(1e9 / hz));
@@ -424,6 +475,7 @@ int main(int argc, char** argv) {
             }
         }
     }
+    if (!stream_file.empty()) ::unlink(stream_file.c_str());
     hub.stop();
     hub_thread.join();
     return rc;

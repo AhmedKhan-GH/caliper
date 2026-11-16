@@ -2,10 +2,13 @@
 // renderer (the Caliper app's landing and live page; host-internal C++).
 //
 // Two pieces, both thin over the live core so the protocol lives in one place:
-//   SessionList  the live sessions under <data_root>/live, relisted at most
+//   SessionList  the live sessions under <data_root>/live and the streams of
+//                caliper.serve() under <data_root>/streams, relisted at most
 //                once a second; caliper_live::list_sessions reclaims a dead or
 //                reused pid's session as it reads (so a SIGKILLed script's row
-//                disappears) and marks the rest (live_source.h SessionState).
+//                disappears) and marks the rest (live_source.h SessionState),
+//                and list_streams does the same for a stream's file. A stream's
+//                row carries its stream URL, which attach_url() takes.
 //   Attachment   one attached session drawn through a hosted embed core
 //                (embed_core.h, caliper_core_create_hosted): caliper_core_live_*
 //                claim and apply the newest completed snapshot of every view,
@@ -36,7 +39,8 @@ namespace caliper_live {
 class RunControls;
 
 // The state column of a session row: "running", "starting", "closing",
-// "viewed by <pid>", "protocol v<n>".
+// "viewed by <pid>", "protocol v<n>", and "stream" for a caliper.serve()
+// stream.
 std::string state_text(const SessionEntry& e);
 // Local wall-clock time of a unix-ms stamp, "14:03:27"; "-" for 0.
 std::string clock_time(uint64_t unix_ms);

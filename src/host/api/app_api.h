@@ -120,5 +120,10 @@ private:
 
 // The body of a launch that opened, or found open, applet `id`.
 std::string launched_json(const std::string& id, const std::string& version, bool already_open);
+// The body of a launch whose page is not open yet: `status` PENDING_APPROVAL
+// when its applet.open waits for the person's approval, PENDING when the app
+// cannot tell yet whether it will, and `note` saying so and how to check.
+std::string launch_pending_json(const std::string& id, const std::string& version, const std::string& status,
+                                const std::string& note);
 
 }  // namespace caliper_host

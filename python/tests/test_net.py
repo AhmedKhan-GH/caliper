@@ -202,6 +202,71 @@ def test_context_manager(mode):
     assert s.closed and caliper._server is None
 
 
+def _wait_for(pred, timeout=10.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return pred()
+
+
+def test_serve_writes_its_stream_file_for_the_app(mode, tmp_path, monkeypatch):
+    """serve() writes <app data>/streams/<pid>.json, owner-only, with the stream
+    URL and its token, which the app's session list (F4) reads; the view list
+    follows the views; close() removes it."""
+    data = tmp_path / "data"
+    monkeypatch.setenv("CALIPER_DATA_DIR", str(data))
+    assert _net.app_data_dir() == str(data)
+    path = data / "streams" / f"{os.getpid()}.json"
+    s = caliper.serve()
+    try:
+        assert path.is_file()
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert (data / "streams").stat().st_mode & 0o777 == 0o700
+        info = json.loads(path.read_text())
+        assert info["version"] == 1
+        assert info["pid"] == os.getpid()
+        assert info["host"] == socket.gethostname()
+        assert info["session"] == s.session
+        assert info["script"] == s.identity["script"]
+        assert info["start_unix_ms"] == s.identity["start_unix_ms"]
+        assert info["port"] == s.port
+        # The same token as the printed link, and nothing more: the stream URL on
+        # loopback, and the server's own control setting.
+        assert info["stream_url"] == s.stream_url
+        assert info["stream_url"].startswith(f"ws://127.0.0.1:{s.port}/v3/stream?token=")
+        assert info["control"] is True
+        assert set(info) == {"version", "pid", "host", "session", "script", "start_unix_ms", "port",
+                             "stream_url", "control", "views"}
+        # A new view reaches the file from the pump thread (a series registers
+        # its view at once; a heatmap only once a viewer is attached).
+        caliper.series(1.0, name="loss_s")
+        assert _wait_for(lambda: "loss_s" in json.loads(path.read_text())["views"])
+        assert not list((data / "streams").glob("*.tmp.*"))
+    finally:
+        s.close()
+    assert not path.exists()
+    # A read-only server says so; a second serve() writes the file again.
+    s = caliper.serve(control=False)
+    try:
+        assert json.loads(path.read_text())["control"] is False
+    finally:
+        s.close()
+    assert not path.exists()
+
+
+def test_stream_file_failure_leaves_serve_working(mode, tmp_path, monkeypatch):
+    blocked = tmp_path / "file"
+    blocked.write_text("not a folder")
+    monkeypatch.setenv("CALIPER_DATA_DIR", str(blocked))      # streams/ cannot be made under a file
+    s = caliper.serve()
+    try:
+        assert not s.closed and s.url.startswith("http://127.0.0.1:")
+    finally:
+        s.close()
+
+
 # ---------------------------------------------------------------------------
 # the upgrade and the handshake
 # ---------------------------------------------------------------------------

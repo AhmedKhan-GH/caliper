@@ -112,7 +112,9 @@ public:
         std::function<void(const std::string& label, std::function<void()> fn)> run_job;
         std::function<std::string()> info_json;      // the body of GET /v0/info
         std::function<std::string()> applets_json;   // the body of GET /v0/applets
-        std::function<LaunchOutcome(const std::string& id)> launch;
+        // `origin` is the command origin of whoever asked ("ui", "api",
+        // "mcp", "agent"), which a spec applet's applet.open is sent from.
+        std::function<LaunchOutcome(const std::string& id, const std::string& origin)> launch;
         // "" when the app can read its frame back; otherwise why it cannot,
         // which capture.frame answers as capture.unavailable.
         std::string capture_unavailable;

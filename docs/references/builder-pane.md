@@ -22,14 +22,27 @@ There are three ways to the pane:
   of characters, such as `run-42` for "Run 42".
 - **Files dropped on the window.** Dropping files from the Finder or a file manager imports them into the workspace.
   On the spec page the pane opens in build mode with the new sources selected; on the landing screen the open spec's
-  page opens in build mode first, or a new Untitled dashboard when no spec is open. Other pages keep their windows and
-  say in Activity that a spec must be open.
+  page opens in build mode first, or a new Untitled dashboard when no spec is open. On the live page a new Untitled
+  dashboard opens in build mode, and Sources lists the files' sources beside the attached session's live sources,
+  which stay attached; when the open spec has unsaved changes, the files go into it instead, as on the landing screen,
+  so that nothing unsaved is replaced. An applet's page keeps its windows and says in Activity that a spec must be
+  open.
 - **An open spec.** ⌘B Build in the page bar (Ctrl+B Build elsewhere) turns build mode on and off for the spec the
   page shows. A spec applet found outside the workspace is drawn from its file and has no Build.
 
 A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears at once under
 Projects on the landing screen, which selects it when you go Home from it. A saved dashboard opens in a browser with
 ⌘O Open in browser in the page bar ([Open in browser](#open-in-browser)).
+
+The open spec stays open when you go Home, with its unsaved changes. Before one of your own actions replaces it or
+closes the app while it has unsaved changes, the app asks "Save changes to <name>?", where the name is the spec's
+title: F3 New dashboard (or `new <title>` and Enter on the command line), opening another dashboard from the landing
+screen, and closing the window or quitting with ⌘Q. ⏎ Save (Enter) saves it as ⌘S does and then goes on, Don't Save
+goes on without saving, and esc Cancel (Esc) leaves everything as it was. Opening the open spec's own dashboard from
+the landing screen shows it with its unsaved changes and does not ask. A drop never replaces a spec with unsaved
+changes (the files go into it), so it does not ask either. An agent that replaces the open spec is reviewed on an
+approval card instead, and Caliper API's and `app.launch`'s launches do not ask. After a replacement, ⌘Z still
+brings the previous spec back with its unsaved changes.
 
 ## Where things are
 

@@ -6,8 +6,10 @@
 //
 // Layout (top to bottom):
 //   command bar   masthead (mark + CALIPER), the command line (filters the
-//                 instruments, Enter launches), the live-run area (jobs), and
-//                 the line's actions as key buttons: ⌘K Command, ↑ ↓, esc Clear
+//                 instruments, Enter launches), the live-run area (the
+//                 attached live session with F5 Live page, the way back to
+//                 its page; jobs), and the line's actions as key buttons:
+//                 ⌘K Command, ↑ ↓, esc Clear
 //   dock space    four panes in ImGui docking, first-run layout built with
 //                 DockBuilder and persisted in the app-data imgui.ini:
 //                   Projects     (the person's own work: the open
@@ -20,10 +22,11 @@
 //                                 available"; F3 New dashboard, a new spec in
 //                                 build mode, titled by "new <title>" on the
 //                                 command line; F4 Attach to process opens
-//                                 the live sessions of training scripts
-//                                 here: script, pid, start time, state,
-//                                 views; ↑↓ select, Enter / double-click
-//                                 attach, esc back)
+//                                 the live sessions of training scripts and
+//                                 the streams of caliper.serve() here:
+//                                 script, pid, start time, state, views; ↑↓
+//                                 select, Enter / double-click attach, or
+//                                 show the attached one's page, esc back)
 //                   Instruments  (installed applets, every applet but the
 //                                 workspace's dashboards: name, id, version,
 //                                 tag, status; ↑↓ select, Enter /
@@ -53,7 +56,7 @@
 #include <vector>
 
 namespace caliper_host { class AppletLoader; struct AppletEntry; }
-namespace caliper_live { class SessionList; }
+namespace caliper_live { class SessionList; struct SessionEntry; }
 
 // What the Inspector shows of a spec applet, read from its spec by the app
 // (src/host/builder/spec_page.h): the spec's format version (caliper_spec)
@@ -67,6 +70,15 @@ struct SpecAppletFacts {
 
 class LandingScreen {
 public:
+    // The live session the app is attached to. It stays attached while the
+    // landing shows (only Detach on the live page, or attaching another,
+    // ends it), so the landing shows it and the way back to its page.
+    struct LiveSession {
+        std::string session;   // its session id, as the session list names its row
+        std::string script;
+        bool ended = false;    // the script has exited; its last frames stay
+    };
+
     // Everything the screen reads each frame. The loader is read live so
     // statuses are always fresh; `launch` reproduces a row activation.
     struct Context {
@@ -87,8 +99,15 @@ public:
         std::function<void()> after_bars;
         // Attach to a network stream by its link (wire protocol v3): the ws://
         // link, or the http:// page link that caliper.serve() prints. Null
-        // hides the link field under the session list.
+        // hides the link field under the session list. A stream listed from
+        // its stream file attaches through it too, with the file's link.
         std::function<void(const std::string&)> attach_url;
+        // The attached live session, or null. With it the command bar shows
+        // the live diamond, its script and F5 Live page, which calls
+        // show_live, as F5 does; its row of the session list reads
+        // "attached", and Enter on it calls show_live too.
+        const LiveSession* live = nullptr;
+        std::function<void()> show_live;
         // A spec applet's facts for the Inspector, from its spec file. Null,
         // or false, leaves the rows that need them out.
         std::function<bool(const caliper_host::AppletEntry&, SpecAppletFacts*)> spec_facts;
@@ -147,6 +166,8 @@ private:
     void draw_projects(const Context& ctx);
     void draw_dashboards(const Context& ctx, float height);   // Projects' table of dashboards
     void draw_sessions(const Context& ctx);   // Projects in attach mode (F4)
+    // The session list's row of the attached live session.
+    bool attached(const caliper_live::SessionEntry& e) const;
     void draw_instruments(const Context& ctx);
     void draw_inspector(const Context& ctx);
     void draw_inspector_rows(const caliper_host::AppletEntry& e, const Context& ctx);
@@ -157,6 +178,10 @@ private:
 
     int selected_ = -1;
     std::function<void()> agent_settings_;   // Context::agent_settings, for the command bar
+    bool has_live_ = false;          // Context::live was set this frame ...
+    LiveSession live_;               // ... and is this, for the command bar
+    std::function<void()> show_live_;
+    bool pending_show_live_ = false; // F5 / Live page: the live page after the frame
     std::string command_;            // command-line text (filters instruments)
     unsigned int command_id_ = 0;    // the command line's ImGuiID, for its edit state
     bool focus_command_ = false;     // ⌘K / Ctrl+K: focus the command line

@@ -395,7 +395,7 @@ TEST_CASE("app session: the host serves app.info, app.applets, app.launch, captu
         return std::string(R"({"applets":[{"status":"READY","id":"dev.example.one","version":"1.0.0",)"
                            R"("folder":"/x","reason":""}]})");
     };
-    h.launch = [](const std::string& id) -> LaunchOutcome {
+    h.launch = [](const std::string& id, const std::string&) -> LaunchOutcome {
         if (id == "dev.example.one")
             return {200, R"({"id":"dev.example.one","version":"1.0.0","status":"ACTIVE","already_open":false})", ""};
         if (id == "dev.example.bad") return {409, "dev.example.bad cannot be launched (REFUSED): too new", "app.launch_refused"};
