@@ -26,9 +26,67 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 | `--command-table <path>` | The command table as JSON |
 | `--widget-scopes <path>` | The scope rule below; by default `widget_scopes.json` beside the command table. Without it, widget sessions are refused |
 | `--provider claude\|openai-compatible`, `--base-url <url>`, `--model <id>`, `--effort <level>` | Where model requests go, and the defaults of a session in the general role |
+| `--cache-dir <path>` | The folder of the capability cache that `caliper-agent probe` writes; the agent reads its answer for the model at start |
+| `--model-tools yes\|no`, `--model-vision yes\|no`, `--context-length <tokens>` | What the model can do, when Caliper knows it; each wins over the cache |
 
 The Claude API key reaches the agent in `ANTHROPIC_API_KEY`, and a key for an OpenAI-compatible server in
 `CALIPER_MODEL_API_KEY`, never in its arguments. `-I` keeps the workspace folder off Python's import path.
+
+With `CALIPER_AGENT_OFFLINE=1`, which every test of the repository sets, the agent reaches no model server off
+loopback: it answers `session/new` and `session/prompt` with an error whose `data.code` is `agent.offline` unless it runs
+a scripted model, a stubbed transport or a server on a loopback address.
+
+## Checking a model
+
+`caliper-agent probe` checks what a model can do and prints one JSON object on standard output. Caliper's settings run
+it when the person picks a model:
+
+```sh
+<python> -I -m caliper_agent probe --provider openai-compatible --base-url http://localhost:11434/v1 \
+    --model <id> --cache-dir <settings folder>
+```
+
+For an OpenAI-compatible server it lists the server's models, makes one streamed request that asks the model to call a
+tool with fixed arguments and one that asks it to name the colour of a small PNG, each with at most 1,024 output
+tokens and 60 seconds, and reads the context length where the server reports it. For Claude it reads the Models API
+and makes no request that costs tokens. The key comes from the environment, as for the agent.
+
+| Option | Meaning |
+|---|---|
+| `--cache-dir <path>` | Keep the answer in `model-capabilities.json` in this folder, and answer from it while it is fresh (30 days) |
+| `--refresh` | Probe again even when the cache has a fresh answer |
+| `--list-models` | Only list the server's models, with no test request |
+| `--no-vision-probe` | Leave the image request out |
+| `--set tools=yes\|no\|auto`, `--set vision=yes\|no\|auto`, `--set context_length=<tokens>\|auto` | The person's override, kept in the cache until set to `auto`; no request is made |
+
+| Field | Meaning |
+|---|---|
+| `models` | The server's models, or `null` when it lists none or the answer came from the cache |
+| `capabilities` | `tools`, `vision` and `context_length`, each `{"value", "source", "detail"}`: what the agent will assume, with `source` one of `probe`, `server`, `known`, `override`, `default` and `unknown` |
+| `can_drive_caliper` | `false` when the model cannot call tools |
+| `probe`, `overrides`, `quirks` | The cached probe answers, the person's overrides, and what the server needed (`strict`, `max_tokens_field`) or showed (`reasoning_field`, `streamed_arguments`) |
+| `probed_at`, `from_cache`, `stale` | When the probe ran, and whether this answer came from the cache |
+| `errors`, `warnings` | Why an answer is unknown (such as `probe.unreachable`, `probe.key_rejected`, `probe.timeout`), and notes such as a context length below 8,192 tokens |
+
+The command exits with 0 when it printed its answer and with 2 for bad usage. A base URL must be an http or https
+address without a user name, password, query or fragment.
+
+## What the agent assumes of a model
+
+At start the agent takes, for each capability, an option on its command line, else the person's override in the cache,
+else a fresh probe answer, else its default: tool calling and vision until the server refuses them, and a context
+length of 8,192 tokens for an OpenAI-compatible model (unknown for Claude). A model without tool calling cannot drive
+Caliper, so `session/new` is refused with error -32602, `data.code` `agent.no_tools`, the model and where the answer
+came from, and a message the pane can show. Every other `session/new` answer carries the model's facts, which Caliper
+gives to `build_context_bundle()` as the context length and whether to send a render:
+
+```json
+{"_meta": {"caliper": {"model": {"id": "qwen3.8:27b", "tools": true, "vision": false, "context_length": 32768,
+                                 "sources": {"tools": "probe", "vision": "probe", "context_length": "override"}}}}}
+```
+
+A model without vision gets no image and no `panel.render`. When the context length is known, a request asks for at
+most half of it as output.
 
 ## Opening a widget session
 

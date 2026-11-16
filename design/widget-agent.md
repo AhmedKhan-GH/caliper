@@ -15,9 +15,10 @@ Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`).
 session ([below](#preview-and-apply-on-the-command-layer)); the `_meta` argument of `AcpClient::new_session()` that
 carries the widget session's fields; widget sessions in the sidecar (item 12): the target, the tool scope from one
 rule kept as data, the preview header, the widget system prompt, images and embedded context in prompts, the turn
-budget, the handoff and `session/close` ([How it stays an ACP agent](#how-it-stays-an-acp-agent)); and the context
+budget, the handoff and `session/close` ([How it stays an ACP agent](#how-it-stays-an-acp-agent)); the context
 bundle (item 13), built from the session with its bounds and cuts ([The context bundle](#the-context-bundle)); and the
-inline surface on a panel (item 14, in part), with the agent over `AcpClient`
+capability probe with its cache and the person's overrides (item 16,
+[Capabilities and degradations](#capabilities-and-degradations)). The inline surface on a panel (item 14, in part), with the agent over `AcpClient`, is built too
 ([The inline prompt and the preview](#the-inline-prompt-and-the-preview)). **Planned:** everything else on this page. The [work items](#work-items) give the
 sizes and the order.
 
@@ -485,11 +486,43 @@ can override either answer, and can run the probe again. The context length come
 one, else from the person's setting, else 8,192 tokens are assumed. The Claude preset needs no probe, since every model
 it offers takes tools and images.
 
-The probe is planned. What the sidecar does today is learn the same from the server: a request refused with a 400 that
-names tools marks the model as without tool calling, and one that names images marks it as without vision, after which
-the request is sent again with each image replaced by a line of text. The sidecar's options `--model-tools` and
-`--model-vision` set either answer in advance, which is how the probe's result and the person's override will reach
-it.
+**Built: the probe and its cache** (`caliper_agent/probe.py`, `caliper_agent/capabilities.py`), run by the settings
+through `caliper-agent probe`, which prints one JSON object (Widget agent, `docs/references/widget-agent.md`, has its
+fields). The design above was made concrete as follows:
+
+- **The tool call.** One streamed request offers the tool `record_number` and asks for the number 7; tool calling works
+  when the streamed call assembles to that tool and that number. A 400 that names tools, or a reply in text, means no
+  tool calling. The probe streams, as the sidecar does, so it tests the path the widget agent uses.
+- **The image.** One streamed request sends a 16 by 16 PNG of red, green, blue or yellow, chosen at random so that a
+  guess rarely passes, and vision works when the reply names that colour. A 400 that names images, or a wrong colour,
+  means no vision.
+- **Bounds.** Each test call asks for at most 1,024 output tokens and waits at most 60 seconds; the list of models waits
+  10 seconds. A failure that says nothing about the model (a timeout, a refused connection, a 401, a 5xx) leaves the
+  answer unknown with its reason, and the sidecar then assumes the capability until the server says otherwise.
+- **The context length.** Read from the chosen model's entry in `GET /models` where the server sends `context_length`,
+  `context_window`, `max_context_length` or `max_model_len`, and for the LM Studio preset from its own
+  `GET /api/v0/models/<id>`, whose `max_context_length` its REST API documentation shows. Ollama's OpenAI-compatible
+  list reports none; its native list reports a length that need not be the context the server runs the model with,
+  so the probe does not read it, and the person's setting or 8,192 tokens holds.
+- **Claude.** No test call: the probe reads the Models API (`GET /v1/models` and `GET /v1/models/<id>`) for the list,
+  the context length (`max_input_tokens`) and image input (`capabilities.image_input.supported`), at no cost in tokens;
+  tool calling is known for every Claude model.
+- **Quirks.** A 400 that names `strict` is retried without it, and one that names `max_completion_tokens` is retried
+  with `max_tokens`; both are cached, and the provider then sends tools without `strict` or the other field. Where
+  the server put its reasoning (`reasoning`, `reasoning_content` or `<think>` tags) and whether it streamed a call's
+  arguments whole or in pieces are recorded for the settings; Pydantic AI reads all of them.
+- **The cache** is `model-capabilities.json` in a folder the app gives (`--cache-dir`), one entry per base URL and
+  model, at most 256 entries and 1 MiB, with only the capabilities and the quirks. A probe result is stale after 30
+  days; an override stays until the person clears it. A broken file counts as empty and is replaced; a base URL with a
+  user name, password, query or fragment is refused, and a save that would hold a registered secret is not written.
+- **What the sidecar does with it.** At start it reads the cache for its base URL and model, in this order: an option on
+  its command line (`--model-tools`, `--model-vision`, `--context-length`), the person's override, a fresh probe result,
+  then the defaults. A model without tool calling refuses `session/new` with `agent.no_tools` and a sentence the pane
+  shows; a model without vision gets no image and no `panel.render`; and the answer of `session/new` carries
+  `_meta.caliper.model` with the tool calling, the vision and the context length, with where each came from, so that
+  the app gives the context length to `build_context_bundle()`. A known context length also caps the output a request
+  asks for at half of it. Learning from a refused request at run time, as before, still works.
+- **No ACP config path.** This page gives none, so the probe runs only from the command line.
 
 | Capability | When the model lacks it |
 |---|---|
@@ -656,7 +689,7 @@ and L six to ten; each figure is rough.
 | 13 | Done: the context bundle, built from the session with its bounds and cuts, as ACP content blocks with the tool scope and `session/new`'s `_meta` (`build_context_bundle()`); calling it from the inline surface comes with item 14 | None left |
 | 14 | In part: the inline surface on a panel, the prompt, the preview drawn in place, Accept, Reject and Refine, Ask in chat handed to the page, and the agent over `AcpClient`. Left: the selection, dropped-file and property entry points, connecting the surface in the app's page, and the packaging of `caliper-agent` and a Python runtime | M, 4 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
-| 16 | The capability probe and its cache, with the override | S, 2 days |
+| 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
 | 17 | The presets and one key per provider in the settings, with `KeyStore` knowing the presets' ids | M, 3 days |
 | 18 | The provider conformance suite, its stubs and its reference page | M, 4 days |
 | 19 | The GPU contention note | S, 1 day |

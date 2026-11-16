@@ -104,10 +104,16 @@ small models do this work less reliably than large ones.
 2. In the widget agent's settings, choose the Ollama preset, which uses `http://localhost:11434/v1`, or the LM Studio
    preset, which uses `http://localhost:1234/v1`. Neither needs a key.
 3. Pick the model from the list that the server offers.
-4. Caliper checks the model with two short test requests. If the model cannot call tools, it cannot drive Caliper, and
-   the settings say so. If it cannot look at images, the widget agent works without a picture of the panel. You can
-   override either answer.
+4. Caliper checks the model with two short test requests: one asks it to call a tool, and one asks it to name the
+   colour of a small picture. If the model cannot call tools, it cannot drive Caliper, and the settings say so. If it
+   cannot look at images, the widget agent works without a picture of the panel. You can override either answer, and
+   Caliper checks again after 30 days.
 5. Give the model a context length of at least 8,192 tokens; below that, the settings warn that requests may not fit.
+   Caliper reads the context length from the server where it reports one; Ollama does not, so set it yourself there.
+
+The check already exists in the agent, so you can run it from a terminal before the settings are built:
+`caliper-agent probe --provider openai-compatible --base-url http://localhost:11434/v1 --model <model>` prints what it
+found as JSON. The [Widget agent](../references/widget-agent.md) reference lists its options and fields.
 
 Caliper will publish which models pass the widget agent's test tasks, so you can choose one that works. A server on
 another computer works too, through the Custom preset, but then your data leaves your machine, and Caliper warns you.

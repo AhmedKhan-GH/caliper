@@ -62,11 +62,16 @@ path, so a file such as `json.py` in a workspace would run as code.
 | `--base-url <url>` | The OpenAI-compatible server, such as `http://127.0.0.1:11434/v1` for Ollama |
 | `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server |
 | `--effort <level>` | The effort of new sessions on the Claude API; default `high` |
-| `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when it is known in advance; default `yes` until the server says otherwise ([Providers](#providers)) |
+| `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when the app knows it; default the cached probe, else `yes` until the server says otherwise ([Providers](#providers)) |
+| `--context-length <tokens>` | The model's context length, the person's setting; default the cached probe, else 8,192 for an OpenAI-compatible model and unknown for Claude |
+| `--cache-dir <path>` | The folder of the capability cache, `model-capabilities.json`, which `caliper-agent probe` writes |
 | `--widget-scopes <path>` | The widget agent's scope rule; default `widget_scopes.json` beside the command table, else beside the package or in the repository's `src/builder/commands/`. Without one, widget sessions are refused |
 | `--tools <list>` | Only these commands of the general role, as a comma-separated list of names and groups; widget sessions take their scope from the rule |
 | `--no-compaction` | Turns server-side compaction off |
 | `--usage-log <path>` | Appends the token counts of each request to a file, for the manual check; no content is written |
+
+`caliper-agent probe` is the same program's second command: it checks a model's tool calling, vision and context
+length and prints one JSON object ([What other models can do](#what-other-models-can-do)).
 
 These defaults are the general role's. A widget session on the Claude API defaults to `claude-haiku-5-5` at the effort
 `low`, for the reasons on the [Widget agent](widget-agent.md#the-turn-budget-the-model-and-the-effort) page.
@@ -604,8 +609,14 @@ assumes for the rest of its life:
 - **Lenient servers.** A server that ignores `strict`, sends malformed arguments or never makes parallel calls needs
   nothing more: every input is checked against the full schema, and the calls of a reply run one at a time anyway.
 
-The capability probe that the settings run when a model is chosen, with its cache, is planned on the
-[Widget agent](widget-agent.md#capabilities-and-degradations) page; it will set the same two switches.
+**The capability probe** learns the same in advance, with two short test calls (a tool call with fixed arguments and a
+PNG of one colour to name), the server's list of models and, where it reports one, the context length; for Claude it
+reads the Models API instead and spends no tokens. `caliper-agent probe` runs it, prints one JSON object and keeps the
+answer in the cache that `--cache-dir` names, with the person's overrides (`--set tools=no`, `--set
+context_length=32768`, `auto` to clear one). At start the sidecar reads the cache: a model without tool calling then
+refuses `session/new` with `agent.no_tools`, a model without vision gets no images, and `session/new`'s answer carries
+`_meta.caliper.model` for the app's context bundle. The [Widget agent](widget-agent.md#capabilities-and-degradations)
+page has the details and the decisions.
 
 ### One run on a local model
 
@@ -713,8 +724,16 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   that the renderer cannot take, no key and a malformed key, an app without a command layer, the tool filter, and bad
   requests. After every test, the fixture checks that neither the key nor the session token reached the client or
   stderr.
-- `tests/test_openai_compat.py`: the OpenAI-compatible provider against a fake server: a tool turn, a model without
-  tool calling (and `--model-tools no`), a model without vision, and a lenient server.
+- `tests/test_openai_compat.py`: the OpenAI-compatible provider against the fake server of `tests/fake_openai.py`: a
+  tool turn, a model without tool calling (and `--model-tools no`, which refuses the session), a model without
+  vision, a lenient server, reasoning in the `reasoning` and `reasoning_content` fields and in `<think>` tags, and a
+  call's arguments streamed whole, after its name or in pieces.
+- `tests/test_probe.py`: the probe against the fake server in each capability mode and with each quirk, against the
+  stubbed Claude transport's Models API, and refused offline; the cache's round trip, overrides, expiry, corruption,
+  bounds and refusal of anything that could hold a secret; `caliper-agent probe` with a key, from the cache, with
+  overrides and with bad usage; and the sidecar's use of the cache (a refused session, vision and the context length in
+  the session and the request, options over overrides over a fresh probe, a stale entry ignored).
+- `tests/test_offline.py`: the offline switch (Security notes above).
 - `tests/test_inprocess.py`: the turn in process with Pydantic AI's `TestModel`, which calls tools with arguments made
   from their schemas, and with `FunctionModel`, which checks that a context block goes with the prompt and never into
   the system prompt.
@@ -820,7 +839,8 @@ Built on this branch:
   the shapes shared with the providers (`provider.py`), the Claude provider (`claude.py`) and the OpenAI-compatible
   provider (`openai_compat.py`), the tool derivation with the choice of strict tools (`tools.py`) and the schema check
   (`schema.py`), the Caliper API client (`caliper_api.py`), the key handling and the scrubber (`keyguard.py`), the
-  system prompt (`prompt.py`), the command line (`cli.py`), and for tests the scripted model (`scripted.py`) and the
+  system prompt (`prompt.py`), the command line (`cli.py`), the capability probe and its cache (`probe.py`,
+  `capabilities.py`), the offline switch (`offline.py`), and for tests the scripted model (`scripted.py`) and the
   stubbed Claude transport (`stub_transport.py`).
 - `src/builder/agent/pyproject.toml`: the package `caliper-agent` with its console script, Python 3.12 or later,
   depending on `pydantic-ai-slim[anthropic]` (2.68 up to the next major), `anthropic` 2.x and `openai` 3.x, with
@@ -839,7 +859,7 @@ Waiting for later work:
 - The settings: the presets, the key field for each provider and its remove control, the model and effort pickers
   from the config options, and status lines from `_meta.caliper.status`.
 - On top of the provider layer: passing the chosen provider, base URL and key from the app when it starts the
-  sidecar; the capability probe and its cache; one key per provider in `KeyStore`.
+  sidecar, and running `caliper-agent probe` from the settings; one key per provider in `KeyStore`.
 - Server-side refusal fallbacks, once Pydantic AI keeps the reply's `fallback` block ([Refusals](#refusals)).
 - Spawning the sidecar from the app with the key store, and a packaged Python runtime with a lock file.
 - The Windows Credential Manager store, with one entry per provider.
