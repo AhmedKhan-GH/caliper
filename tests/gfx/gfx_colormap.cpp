@@ -11,8 +11,9 @@
 //
 // Each target is read back through the layer and compared byte for byte with map_f32_to_rgba8
 // through the test table, and each import must report the in-place route with zero bytes
-// copied. CALIPER_GFX_CAPTURE_DIR=<folder> writes colormap-keys-texture.png and
-// colormap-keys-points.png, the first range's inputs as drawn.
+// copied. A last case draws viridis over a ramp and rows of NaN and infinities, which
+// CALIPER_GFX_CAPTURE_DIR=<folder> writes as colormap-keys-texture-ramp.png and
+// colormap-keys-points-ramp.png, scaled up four times.
 //
 // CALIPER_GFX_CMAP_BENCH=1 runs the timing row: the GPU time of the integer-decision pass (the
 // generated colormap_texture, compiled as the layer compiles it) against the float pass of the
@@ -46,6 +47,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -77,11 +79,17 @@ std::vector<uint8_t> read_back(Backend& gfx, Texture t, uint32_t w, uint32_t h) 
     return out;
 }
 
+// A PNG of a readback in CALIPER_GFX_CAPTURE_DIR, scaled up four times with nearest sampling.
 void capture(const char* name, const std::vector<uint8_t>& rgba, int w, int h) {
     const char* dir = std::getenv("CALIPER_GFX_CAPTURE_DIR");
     if (dir == nullptr || *dir == 0) return;
     const std::string path = std::string(dir) + "/" + name;
-    CHECK(stbi_write_png(path.c_str(), w, h, 4, rgba.data(), w * 4) != 0);
+    const int s = 4;
+    std::vector<uint8_t> big(size_t(w) * s * h * s * 4);
+    for (int y = 0; y < h * s; ++y)
+        for (int x = 0; x < w * s; ++x)
+            std::memcpy(&big[(size_t(y) * w * s + x) * 4], &rgba[(size_t(y / s) * w + x / s) * 4], 4);
+    CHECK(stbi_write_png(path.c_str(), w * s, h * s, 4, big.data(), w * s * 4) != 0);
     MESSAGE("capture written: ", path);
 }
 
@@ -108,6 +116,22 @@ std::vector<Case> cases() {
         c.want = colormap_cases::expected(rs[i], c.in, table);
         out.push_back(std::move(c));
     }
+    // Last, a picture for the captures, compared like the others: viridis over (0, 1) on a ramp
+    // from -0.25 to 1.25 along each of 24 rows, then 4 rows of NaN, 2 of +inf and 2 of -inf.
+    Case ramp;
+    ramp.range = {"viridis ramp", 0.0f, 1.0f};
+    REQUIRE(cmap::derive_block(CALIPER_CMAP_VIRIDIS, 0.0f, 1.0f, &ramp.block));
+    ramp.rows = 32;
+    for (uint32_t y = 0; y < ramp.rows; ++y)
+        for (uint32_t x = 0; x < kWidth; ++x) {
+            const float v = y < 24 ? -0.25f + 1.5f * float(x) / float(kWidth - 1)
+                          : y < 28 ? std::numeric_limits<float>::quiet_NaN()
+                          : y < 30 ? std::numeric_limits<float>::infinity() : -std::numeric_limits<float>::infinity();
+            ramp.in.push_back(colormap_cases::as_bits(v));
+        }
+    const uint32_t* viridis = caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS);
+    ramp.want = colormap_cases::expected(ramp.range, ramp.in, std::vector<uint32_t>(viridis, viridis + 256));
+    out.push_back(std::move(ramp));
     return out;
 }
 
@@ -172,8 +196,8 @@ TEST_CASE("gfx/Metal colormap: the texture path's compute form matches map_f32_t
     REQUIRE_MESSAGE(bool(group1), gfx->last_error());
 
     size_t compared = 0;
-    bool captured = false;
-    for (const Case& c : cases()) {
+    const std::vector<Case> all = cases();
+    for (const Case& c : all) {
         Texture out = gfx->create_texture({kWidth, c.rows, Format::RGBA8Unorm, kStorageTex | kCopySrcTex, "colormap"});
         REQUIRE_MESSAGE(bool(out), gfx->last_error());
         // From a layer buffer the values start at element 0; from the producer's buffer at
@@ -213,7 +237,7 @@ TEST_CASE("gfx/Metal colormap: the texture path's compute form matches map_f32_t
                           c.in[first < c.in.size() ? first : 0]);
             compared += c.want.size();
             gfx->release(group0);
-            if (!captured) { capture("colormap-keys-texture.png", got, int(kWidth), int(c.rows)); captured = true; }
+            if (&c == &all.back() && from_import) capture("colormap-keys-texture-ramp.png", got, int(kWidth), int(c.rows));
         }
         const Stats st = gfx->take_stats();
         CHECK(st.imports_in_place == 1);
@@ -225,7 +249,7 @@ TEST_CASE("gfx/Metal colormap: the texture path's compute form matches map_f32_t
         gfx->release(layer_buf);
         gfx->release(out);
     }
-    MESSAGE(compared, " texels compared over ", colormap_cases::ranges().size(), " ranges, from a layer buffer and an imported one");
+    MESSAGE(compared, " texels compared over ", all.size(), " cases, from a layer buffer and an imported one");
 }
 
 TEST_CASE("gfx/Metal colormap: the vertex-stage colormap of a points draw matches map_f32_to_rgba8 byte for byte, "
@@ -284,8 +308,8 @@ TEST_CASE("gfx/Metal colormap: the vertex-stage colormap of a points draw matche
     REQUIRE(gfx->write_buffer(constant, 0, radius, sizeof radius));
 
     size_t compared = 0;
-    bool captured = false;
-    for (const Case& c : cases()) {
+    const std::vector<Case> all = cases();
+    for (const Case& c : all) {
         const uint32_t n = uint32_t(c.in.size()), H = c.rows;
         // Point i on the centre of pixel (i % kWidth, i / kWidth), one pixel wide.
         std::vector<float> centres(size_t(n) * 3);
@@ -345,7 +369,7 @@ TEST_CASE("gfx/Metal colormap: the vertex-stage colormap of a points draw matche
             CHECK_MESSAGE(bad == 0, bad, " of ", c.want.size(), " pixels differ, first input 0x", std::hex,
                           c.in[first < c.in.size() ? first : 0]);
             compared += c.want.size();
-            if (!captured) { capture("colormap-keys-points.png", got, int(kWidth), int(H)); captured = true; }
+            if (&c == &all.back() && from_import) capture("colormap-keys-points-ramp.png", got, int(kWidth), int(H));
         }
         const Stats st = gfx->take_stats();
         CHECK(st.imports_in_place == 1);
@@ -357,7 +381,7 @@ TEST_CASE("gfx/Metal colormap: the vertex-stage colormap of a points draw matche
         gfx->release(layer_vals);
         gfx->release(pos);
     }
-    MESSAGE(compared, " points compared over ", colormap_cases::ranges().size(), " ranges, from a layer buffer and an imported one");
+    MESSAGE(compared, " points compared over ", all.size(), " cases, from a layer buffer and an imported one");
 }
 
 // ---- The timing row --------------------------------------------------------------------------

@@ -102,7 +102,7 @@ int main() {
         const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         uint32_t edges = 0;
         for (uint32_t l = 1; l < 256; ++l) edges += (&c.keys[0][0])[l] != cmap::kSentinel;
-        std::printf("  %-26s (%g, %g): %llu inputs, %llu differ, %u keys below the sentinel, flip %s, %.1f s\n", r.name,
+        std::printf("  %-26s (%.9g, %.9g): %llu inputs, %llu differ, %u keys below the sentinel, flip %s, %.1f s\n", r.name,
                     double(r.vmin), double(r.vmax), (unsigned long long)sum.compared, (unsigned long long)sum.bad,
                     edges, c.flip ? "yes" : "no", s);
         if (sum.any_bad) {
