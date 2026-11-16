@@ -28,6 +28,7 @@ import collections
 import math
 import threading
 import time
+import warnings
 
 from . import _wire
 from ._net_ring import ViewState
@@ -64,10 +65,25 @@ class SceneViewState(ViewState):
                 "scene": self.scene.info()}
 
 
-def finish(b: Batch) -> None:
-    """Read a completed batch out of host memory (network thread)."""
+def finish(b: Batch) -> bool:
+    """Read a completed batch out of host memory (network thread). False for a
+    batch that every receiver would refuse: strip lengths from a device tensor,
+    which the call could not read, that do not add up to the vertices or hold a
+    length below 1. Such a batch is dropped with a warning (once per entity, by
+    the default warning filter)."""
     if b.arrays is not None:
-        return
+        return True
+    if b.refused:
+        return False
+    arrays = {name: t.numpy() for name, t in b.tensors.items()}
+    sl = arrays.get("strip_lengths")
+    if sl is not None and ((sl.size and int(sl.min()) < 1) or
+                           int(sl.sum(dtype="int64")) != arrays["positions"].shape[0]):
+        b.refused = True
+        warnings.warn(f"caliper: scene {b.scene!r}: the strip lengths of the lines at "
+                      f"{b.path or 'the root'!r} do not add up to their vertices, or one is "
+                      "below 1; such a batch is dropped", stacklevel=2)
+        return False
     vrange, bounds, dims = b.stats
     stats = vrange.tolist() if vrange is not None else [0.0, 0.0]
     if bounds is not None:
@@ -77,7 +93,8 @@ def finish(b: Batch) -> None:
     else:
         stats += [math.nan] * 6
     b.params["stats"] = stats
-    b.arrays = {name: t.numpy() for name, t in b.tensors.items()}
+    b.arrays = arrays
+    return True
 
 
 def _key(path: str, part: str):
@@ -201,7 +218,9 @@ class SceneRoute:
                 (done if b.ready() else left).append(b)
             self.pending = left
         for b in done:
-            finish(b)
+            if not finish(b):
+                self.counters["refused"] += 1
+                continue
             st = SCENES.get(b.scene)
             if st is None:
                 continue                              # removed meanwhile
@@ -239,8 +258,8 @@ class SceneRoute:
         late = []
         for key in sorted(items, key=lambda k: _key(*k)):
             b = items[key]
-            if b.arrays is None and b.ready():
-                finish(b)
+            if b.arrays is None and b.ready() and not finish(b):
+                continue                               # refused: no receiver would take it
             if b.arrays is not None:
                 q.state.append(q.update(b, True))
             else:

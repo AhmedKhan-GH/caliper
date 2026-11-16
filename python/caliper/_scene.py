@@ -93,6 +93,7 @@ class Batch:
     event: Any = None
     nbytes: int = 0
     arrays: dict | None = None            # name -> numpy, once finished (network thread)
+    refused: bool = False                 # finished and found invalid: never sent
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
@@ -475,7 +476,7 @@ class Scene:
         else:
             if isinstance(strip_lengths, (list, tuple)) and all(
                     x.__class__ is int for x in strip_lengths):
-                sl = strip_lengths                   # host ints: checked here, a tensor later
+                sl = strip_lengths                   # host ints: checked here
                 s_count = len(sl)
                 total, low = sum(sl), min(sl, default=1)
             else:
@@ -484,7 +485,9 @@ class Scene:
                     raise ValueError(f"strip_lengths must be (S,), got {tuple(sl.shape)}")
                 s_count = sl.shape[0]
                 total = low = None
-                if sl.device.type == "cpu" and s_count:    # host data: the sum is checked here
+                # host data: the sum is checked here; a device tensor's once its copy is done
+                # (_net_scene.finish drops the batch then)
+                if sl.device.type == "cpu" and s_count:
                     total, low = int(sl.sum()), int(sl.min())
             if s_count > _wire.MAX_BATCH_ITEMS:
                 raise ValueError(f"{s_count} strips, more than {_wire.MAX_BATCH_ITEMS} in a batch")
