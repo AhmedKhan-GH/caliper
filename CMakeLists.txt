@@ -875,6 +875,8 @@ if(CALIPER_WITH_BUILDER)
     include(src/host/builder/widget_surface.cmake)
     # The side chat, caliper-chat-shot and their tests.
     include(src/host/builder/side_chat.cmake)
+    # The WYSIWYG builder pane and caliper-builder-shot.
+    include(src/host/builder/builder_pane.cmake)
 endif()
 
 # The builder session in the app (src/host/builder/app_session.h): with the
