@@ -139,6 +139,7 @@ public:
                 Chain chain = chain_of(parts.source);
                 if (chain.error) {
                     out.error = chain.error;
+                    if (sources_) out.generation = panel_generation(spec_, panel_id, *sources_);
                     return out;
                 }
                 if (chain.kind != RootKind::table && chain.kind != RootKind::sql && chain.kind != RootKind::served_table)
