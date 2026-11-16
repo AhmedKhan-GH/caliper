@@ -192,15 +192,25 @@ call `caliper.session()` as well to have both.
 
 ## What you see
 
-Each view gets its own window, tiled on first appearance and titled with the
-view's name. Every window starts with a **Pause** button and a line with the
-view's sequence number, step-to-screen latency, update count and the number of
+Each view gets its own window on a grid that fills the page, in the order
+the views appear. The grid lays itself out again when the page changes size
+or a view is added, and gives every view at least 340 by 240 points when the
+page has room; a window you move, resize or dock keeps its own place. A
+view's header, in its title bar, holds the view's name on the left and on the
+right a short summary of what it shows (`64×32  -0.53 … 0.57` for a heatmap,
+`64 points  2-D  values`, `457 steps  last 0.0263` for a series,
+`32 bins  -0.53 … 0.57  n 2048` for a histogram), the tools `pause`, `log`
+for a series or a histogram and `follow` for a series, and a dot: bronze while
+the stream is live and the view has data, an outline while it waits for its
+first data, grey once the script has gone. With `CALIPER_VIEWS_DEBUG=1` a line
+under each header also shows the view's diagnostics: its size and renderer
+path, sequence number, step-to-screen latency, update count and the number of
 snapshots dropped while paused.
 
 | View | Interaction and hover |
 |---|---|
 | Heatmap, image | Hover shows the row, column and value (RGBA for images). Small tensors are magnified with nearest sampling, so each cell stays a cell. |
-| Points | 3-D: left or right drag orbits, middle drag or shift+drag pans, the wheel zooms, **Fit** or the F key re-fits. 2-D: drag pans, the wheel zooms about the cursor. Hover marks the nearest point and shows its index, position and label. |
+| Points | 3-D: left or right drag orbits, middle drag or shift+drag pans, the wheel zooms, a double click or the F key re-fits. 2-D: drag pans, the wheel zooms about the cursor. Hover marks the nearest point and shows its index, position and label. |
 | Series | A line over the append index; hover shows step and value; the latest value is printed. |
 | Histogram | Bars at bin centres; hover shows the bin range and count. |
 
@@ -220,9 +230,10 @@ moment a viewer was attached; and a heatmap's hover value is read from the
 shared slot, so it can come from a newer snapshot than the pixels under the
 cursor.
 
-**Pause** freezes the display of every live view in that window or viewer.
-Snapshots keep arriving and are dropped, so pausing never slows training.
-**Resume** shows the newest one again.
+`pause` freezes the display of every live view in that window or viewer, and
+reads `paused` in bronze until it is clicked again. Snapshots keep arriving
+and are dropped, so pausing never slows training; the newest one shows again
+when the display resumes.
 
 In attach mode the viewer also has a status window: the script, PID and session
 token, "running" or "SESSION ENDED", frame rate, updates, skipped snapshots,

@@ -55,7 +55,7 @@ The session's live page opens:
 |---|---|
 | Bar | `esc Home`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
 | Run bar | For a stream only, under the bar: the script's run state, Pause or Resume, Step, its parameters and its actions (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
-| Views | One window per view (see [What you see](../tutorials/live-pytorch.md#what-you-see)), tiled into the page on first appearance; move, resize or dock them, and the layout is kept in `imgui.ini` |
+| Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../tutorials/live-pytorch.md#what-you-see)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
 | Status bar | The backend and GPU, then the script's pid, the number of views, and the frame rate and step-to-screen latency over the last second |
 
 The window title reads `Caliper - <script> (pid <pid>)`, with
@@ -234,12 +234,13 @@ never a command to the app or the machine.
 image, a range of steps of a series, points inside the lasso of an embedding.
 When the selected axis indexes an item space, the selection is sent to the
 script with the item ids, and the script shares it with every viewer of the
-session. Every view whose axis indexes the same space then shows it: on the
-live page the selected rows or columns of a heatmap or an image and the
-selected steps of a series get a bronze band, so selecting units in one weight
-matrix marks the same units in the next. A selection is not a control: every
-viewer may select, with or without `--allow-control`. Points and the cells of
-a mosaic are not banded yet; that drawing belongs to the view layer.
+session. Every view whose axis indexes the same space then shows it, as the
+browser views do: the selected points over the dimmed rest with their count,
+the selected rows or columns of a heatmap or an image outlined in bronze (in
+every cell of a mosaic), and markers on the selected steps of a series. So
+selecting units in one weight matrix marks the same units in the next and in
+an embedding of them. A selection is not a control: every viewer may select,
+with or without `--allow-control`.
 
 **Details.** When the script provides details for the space, such as a few
 fields of each selected sample, a Selection pane opens at the right of the
