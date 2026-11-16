@@ -1367,7 +1367,9 @@ def _add_route(s) -> None:
     caliper._extra_routes.append(route)
     caliper._set_routes()
     caliper._series_tap = s.ring.tap
-    caliper._scene.attach_ring(s.ring)          # 3.2 draft: list the scenes made before
+    sc = sys.modules.get("caliper._scene")      # 3.2 draft: list the scenes made before
+    if sc is not None:
+        sc.attach_ring(s.ring)
     _producer = s
 
 

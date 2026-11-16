@@ -73,6 +73,9 @@ def _load_native():
 
 
 def __getattr__(name):
+    if name == "Scene":                          # scenes: imported on first use
+        from ._scene import Scene
+        return Scene
     if name in ("HAVE_VIEWS", "HAVE_LIVE_VIEWS", "VIEW_FLAG_RAW", "VIEW_FLAG_WAIT_GPU",
                 "EMBED_API_VERSION", "HEATMAP_IMAGE_VIA_LIVE_APPLY"):
         return getattr(_load_native(), name)
@@ -727,7 +730,9 @@ def remove(name: str) -> bool:
     core had it."""
     found = False
     _dataview.REGISTRY.remove(name)
-    _scene.forget(name)
+    sc = sys.modules.get(__name__ + "._scene")     # scenes, when a script made one
+    if sc is not None:
+        sc.forget(name)
     _CTL.forget_view(name)
     with LOCK:
         for r in _routes:
@@ -996,12 +1001,10 @@ def controls(*, height: int = 160):
 # scenes (the scenes subset of wire protocol 3.2, draft; caliper._scene)
 # ---------------------------------------------------------------------------
 __all__ += ["scene", "Scene"]
-from . import _scene                                           # noqa: E402
-from ._scene import Scene                                      # noqa: E402
 
 
 def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", rate=None,
-          data_view=None, view_camera=None) -> Scene:
+          data_view=None, view_camera=None) -> "Scene":
     """The scene ``name``, made on the first call: a tree of entities, named
     by entity paths such as "world/cloud", each holding a batch of points,
     lines and a mesh, in one 3-D (``space="3d"``) or 2-D space. ``up`` is the
@@ -1015,6 +1018,8 @@ def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", 
     :func:`serve` (the notebook widget with ``kind="scene"``, the browser page
     and a hub); with only the shared-memory session or the in-process window
     open, a scene call warns once and does nothing there. ``data_view`` and
-    ``view_camera`` are not built yet and raise NotImplementedError."""
+    ``view_camera`` are not built yet and raise NotImplementedError. Scene
+    is imported on first use, so importing caliper stays light."""
+    from . import _scene
     return _scene.scene(name, space=space, up=up, units=units, rate=rate, data_view=data_view,
                         view_camera=view_camera)
