@@ -362,6 +362,26 @@ json pane_bind_json(const std::map<std::string, SlotValue>& bind) {
     return out;
 }
 
+std::string pane_fit_hint(Primitive p, const std::string& source_id, const PaneShape& shape) {
+    const char* takes = "";
+    size_t max_rank = 0;   // the most dimensions it draws, for a hint to slice
+    switch (p) {
+        case Primitive::series: takes = "a table's columns or a tensor of one or two dimensions"; max_rank = 2; break;
+        case Primitive::heatmap: takes = "a tensor of two dimensions"; max_rank = 2; break;
+        case Primitive::image: takes = "a tensor [H, W], [H, W, 3] or [H, W, 4]"; max_rank = 3; break;
+        case Primitive::points: takes = "a tensor [n, 2] or [n, 3], or two numeric columns"; max_rank = 2; break;
+        case Primitive::histogram: takes = "a numeric column or a tensor"; break;
+        case Primitive::table: takes = "a table"; break;
+        case Primitive::text: return {};
+    }
+    const std::string what = std::string("a") + (p == Primitive::image ? "n " : " ") + spec::to_string(p);
+    if (!shape.known) return source_id + "'s data is not known yet, and " + what + " takes " + takes + ".";
+    if (shape.tabular) return source_id + " is a table, and " + what + " takes " + takes + ".";
+    std::string out = source_id + " is " + pane_shape_text(shape) + ", and " + what + " takes " + takes;
+    if (max_rank > 0 && shape.dims.size() > max_rank) out += ": slice or reduce it in Properties";
+    return out + ".";
+}
+
 // ---- ids --------------------------------------------------------------------------------
 
 bool pane_valid_id(const std::string& id) {

@@ -73,8 +73,11 @@ Files that an import refused are listed under Refused, with the file's name and 
 
 Series, Heatmap, Points, Histogram, Table, Image and Text. A click adds a panel of that primitive bound to the selected
 source: a series takes a table's first column as x and its other numeric columns as lines. A primitive that the
-selection does not fit is faint, with the reason in its tooltip, and a click on it changes nothing. A panel always has
-its required slots, so a primitive needs a selection that fits, except Text, which starts with the text "Text".
+selection does not fit is faint, with the reason in its tooltip, and a click on it changes nothing. The reason says what
+the source is and what the primitive takes; for a tensor with more dimensions than the primitive draws, such as a
+four-dimensional attention tensor for a heatmap, it says to slice or reduce it under Transforms in Properties. A panel
+always has its required slots, so a primitive needs a selection that fits, except Text, which starts with the text
+"Text".
 Dragging a primitive onto the canvas places the new panel where it is dropped.
 
 ## The canvas

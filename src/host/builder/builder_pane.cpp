@@ -496,6 +496,7 @@ PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& 
     std::vector<CommandInvocation> cmds;
     json create;
     Primitive p = primitive.value_or(Primitive::series);
+    std::string hint;   // why the source does not fit, when it binds nothing
     if (key.empty()) {
         // No source: only a text panel stands alone, with its text.
         create = {{"primitive", spec::to_string(p)}};
@@ -512,6 +513,7 @@ PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& 
         const auto bind = pane_auto_bind(p, r.id, r.shape, column);
         if (bind) create["bind"] = pane_bind_json(*bind);
         else if (p == Primitive::text) create["options"] = {{"text", "Text"}};
+        else hint = pane_fit_hint(p, r.id, r.shape);
     }
     // The new panel's id, unique also against what the gesture adds.
     const std::string id = pane_panel_id(p, s);
@@ -539,6 +541,8 @@ PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& 
     }
     cmds.push_back(invocation("panel.create", create));
     plan = simulate(cmds);
+    // The validator's words name the slot left empty; the hint says why.
+    if (plan.refusal && !hint.empty()) plan.refusal.message += " " + hint;
     // A place that panel.create cannot name: the panel is made, then the
     // layout is set, flattened against the spec with the new panel.
     if (after_layout && !plan.refusal && plan.after) {

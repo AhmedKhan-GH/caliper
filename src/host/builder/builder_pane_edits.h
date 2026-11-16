@@ -118,6 +118,14 @@ std::optional<std::map<std::string, caliper_builder::spec::SlotValue>> pane_auto
     caliper_builder::spec::Primitive p, const std::string& source_id, const PaneShape& shape,
     const std::string& column = {});
 
+// Why a source does not fit a primitive by these rules, in the source's own
+// terms, for the refusal of a panel that pane_auto_bind() binds nothing for:
+// what the source is, what the primitive takes, and for a tensor with more
+// dimensions than the primitive draws, that Properties slices or reduces it
+// ("attn is f32 4×4×32×32, and a heatmap takes a tensor of two dimensions:
+// slice or reduce it in Properties."). Empty for a text panel.
+std::string pane_fit_hint(caliper_builder::spec::Primitive p, const std::string& source_id, const PaneShape& shape);
+
 // The primitive a dropped source makes when none was chosen: a series for a
 // column, a table with numeric columns after its first, a rank-1 tensor; a
 // table for other tables; a heatmap for a rank-2 tensor, points for
