@@ -142,7 +142,9 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     app_opts.argv = {kApp, "--hidden", "--api", "--api-port", "0"};
     app_opts.env_remove = {"CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_USER_APPLETS_DIR",
                            "CALIPER_APPLET_PATH"};
-    app_opts.env = {{"CALIPER_DATA_DIR", data.string()}, {"CALIPER_HIDDEN", "1"}};
+    // The app passes its environment on to any caliper-agent it starts: the
+    // switch keeps that agent off every model server off loopback.
+    app_opts.env = {{"CALIPER_DATA_DIR", data.string()}, {"CALIPER_HIDDEN", "1"}, {"CALIPER_AGENT_OFFLINE", "1"}};
     Error err;
     std::unique_ptr<Process> app = Process::spawn(app_opts, &err);
     REQUIRE_MESSAGE(app, "the app did not start: " << err.message);

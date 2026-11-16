@@ -306,7 +306,7 @@ if(TARGET caliper)
         add_test(NAME caliper_cli_serve
                  COMMAND caliper_tests "--test-case=cli: caliper serve runs as a process*")
         set_tests_properties(caliper_cli_serve PROPERTIES LABELS cli
-            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_AGENT_OFFLINE=1")
     endif()
 
     # Caliper API as a process (tests/test_api.cpp): `caliper shot --api` on the
@@ -342,8 +342,11 @@ if(TARGET caliper)
                  COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")
         # With caliper_viewer built, the native viewer also attaches through
         # /v3/stream on the API port (headless, no window).
+        # The app passes its environment on to any caliper-agent it starts
+        # (src/host/builder/widget_app.cpp), so the switch is here too, beside
+        # the tree-wide one of caliper_offline_tests().
         set(_api_env "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
-                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets" "CALIPER_AGENT_OFFLINE=1")
         if(TARGET caliper_viewer)
             list(APPEND _api_env "CALIPER_TEST_VIEWER_EXE=$<TARGET_FILE:caliper_viewer>")
         endif()

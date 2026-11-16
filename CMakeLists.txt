@@ -770,6 +770,11 @@ message(STATUS "")
 
 if(BUILD_TESTS)
     enable_testing()
+    # Every test of the tree runs with the sidecar's offline switch, inherited
+    # from ctest's own environment (src/builder/cmake/CaliperOfflineTests.cmake);
+    # the entry builder_offline_switch checks it.
+    include(src/builder/cmake/CaliperOfflineTests.cmake)
+    caliper_offline_tests()
     add_subdirectory(tests)
 
     # caliper_sdk_install: install the SDK component and build the probe and a

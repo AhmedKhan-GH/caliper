@@ -85,8 +85,9 @@ if(BUILD_TESTS)
         target_compile_definitions(caliper_builder_mcp_app_tests PRIVATE
             CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>"
             CALIPER_BUILDER_TEST_APP="${CALIPER_BUILDER_TEST_APP}")
+        # The app it starts passes its environment on to any caliper-agent.
         set_tests_properties(builder_mcp_app PROPERTIES
             SKIP_REGULAR_EXPRESSION "caliper-mcp end-to-end test skipped"
-            TIMEOUT 300)
+            TIMEOUT 300 ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
     endif()
 endif()

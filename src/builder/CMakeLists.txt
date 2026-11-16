@@ -68,6 +68,14 @@ else()
     set(CALIPER_BUILDER_HAVE_DUCKDB OFF)
 endif()
 
+# The sidecar's offline switch for every test of this tree, and the entry
+# that checks it (cmake/CaliperOfflineTests.cmake).
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/CaliperOfflineTests.cmake)
+if(BUILD_TESTS)
+    caliper_offline_tests()
+    caliper_offline_check(builder_offline_switch)
+endif()
+
 # One doctest main shared by every module's test executable. A module adds
 #   caliper_builder_add_tests(<module> SOURCES <files> LIBS <targets>)
 # and gets the ctest test builder_<module>.
