@@ -30,12 +30,27 @@ if(NOT MSVC)
 endif()
 
 # The house fonts beside a binary that draws text, as the caliper executable
-# has them (sternbild_fonts.cpp looks in <exe dir>/assets/fonts).
+# has them (sternbild_fonts.cpp looks in <exe dir>/assets/fonts). Several
+# binaries share one folder, and two copies into one folder at once fail in a
+# parallel build, so each folder is copied into by one step only: a binary
+# beside the caliper executable depends on it, whose own post-build step
+# copies the fonts there; a binary in another folder depends on one copy
+# target for that folder.
 function(caliper_spec_runtime_fonts target)
-    add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:${target}>/assets/fonts"
-        COMMENT "Copying house fonts next to ${target}")
+    get_target_property(_dir ${target} BINARY_DIR)
+    if(_dir STREQUAL CMAKE_BINARY_DIR)
+        add_dependencies(${target} caliper)
+        return()
+    endif()
+    string(MD5 _hash "${_dir}")
+    set(_copy caliper_house_fonts_${_hash})
+    if(NOT TARGET ${_copy})
+        add_custom_target(${_copy}
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/assets/fonts" "${_dir}/assets/fonts"
+            COMMENT "Copying house fonts to ${_dir}")
+    endif()
+    add_dependencies(${target} ${_copy})
 endfunction()
 
 add_executable(caliper-spec-shot spec_shot_main.cpp)
