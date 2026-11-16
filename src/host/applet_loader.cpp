@@ -5,10 +5,19 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <istream>
+#include <iterator>
 #include <map>
+// With the builder, the full validation of a spec applet's spec
+// (check_spec) uses the spec library through applet_spec.h; the build defines
+// CALIPER_HOST_SPEC_RUNTIME for this library only then (CMakeLists.txt).
+#ifdef CALIPER_HOST_SPEC_RUNTIME
+#include "applet_spec.h"
+#endif
 
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
@@ -248,13 +257,40 @@ std::string resolve_applet_folder(const std::string& dir) {
     return dir;
 }
 
+namespace {
+// `d` absolute against the current directory, normalised, without a
+// trailing separator: "dir/" and "dir" are one folder.
+fs::path absolute_folder(const std::string& d) {
+    std::error_code ec;
+    fs::path p = fs::absolute(fs::path(d), ec);
+    if (ec) p = fs::path(d);
+    p = p.lexically_normal();
+    if (p.has_relative_path() && p.filename().empty()) p = p.parent_path();
+    return p;
+}
+// A key under which two spellings of one folder, a link included, compare
+// equal.
+fs::path folder_key(const fs::path& p) {
+    std::error_code ec;
+    fs::path key = fs::weakly_canonical(p, ec);
+    return ec ? p : key;
+}
+} // namespace
+
+std::string workspace_applets_dir(const std::string& workspace_dir) {
+    return workspace_dir.empty() ? std::string()
+                                 : (fs::path(workspace_dir) / "applets").string();
+}
+
 std::vector<std::string> applet_search_dirs(
     const std::vector<std::string>& command_line_dirs, const char* applet_path_env,
-    const std::string& user_dir, const std::string& shipped_dir) {
+    const std::string& user_dir, const std::string& shipped_dir,
+    const std::string& workspace_dir) {
     std::vector<std::string> wanted = command_line_dirs;
     if (applet_path_env)
         for (auto& d : split_applet_path(applet_path_env)) wanted.push_back(d);
     const size_t development = wanted.size();
+    wanted.push_back(workspace_applets_dir(workspace_dir));
     wanted.push_back(user_dir);
     wanted.push_back(shipped_dir);
 
@@ -263,15 +299,9 @@ std::vector<std::string> applet_search_dirs(
     for (size_t i = 0; i < wanted.size(); i++) {
         const std::string& d = wanted[i];
         if (d.empty()) continue;
-        std::error_code ec;
-        fs::path p = fs::absolute(fs::path(d), ec);
-        if (ec) p = fs::path(d);
-        p = p.lexically_normal();
-        // "dir/" and "dir" are one folder; so are two spellings of a link.
-        if (p.has_relative_path() && p.filename().empty()) p = p.parent_path();
+        fs::path p = absolute_folder(d);
         if (i < development) p = fs::path(resolve_applet_folder(p.string()));
-        fs::path key = fs::weakly_canonical(p, ec);
-        if (ec) key = p;
+        const fs::path key = folder_key(p);
         if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
         seen.push_back(key);
         out.push_back(p.string());
@@ -297,8 +327,257 @@ std::string shadowed_reason(const std::string& winner_version,
            " is used instead.";
 }
 
+// ---- spec applets ---------------------------------------------------------
+
+#ifdef CALIPER_HOST_SPEC_RUNTIME
+bool spec_runtime_available() { return true; }
+int64_t spec_format_version() { return spec_runtime_format_version(); }
+#else
+bool spec_runtime_available() { return false; }
+int64_t spec_format_version() { return -1; }
+#endif
+
+std::string no_spec_runtime_reason() {
+    return "Requires the spec runtime, which this build of Caliper does not have.";
+}
+
+std::string spec_version_reason(int64_t spec_version, int64_t host_version) {
+    return "Written in spec format " + std::to_string(spec_version) +
+           "; this host reads spec format " + std::to_string(host_version) +
+           (spec_version > host_version ? " — update Caliper to open it." : ".");
+}
+
+std::string workspace_library_reason() {
+    return "A workspace holds spec applets only; a compiled applet is installed in "
+           "the user applets folder.";
+}
+
+std::string spec_file_problem(const std::string& spec_path,
+                              const std::string& manifest_file) {
+    const fs::path p(spec_path);
+    const std::string name = p.filename().string();
+    std::error_code ec;
+    const fs::file_status st = fs::symlink_status(p, ec);
+    if (ec || !fs::exists(st)) return "spec file " + name + " not found next to " + manifest_file;
+    // A plain file name cannot leave the folder; a link could, so none is
+    // followed, wherever it points.
+    if (fs::is_symlink(st))
+        return "spec file " + name + " is a symbolic link; a spec applet's spec is a "
+               "regular file in its folder";
+    if (!fs::is_regular_file(st)) return "spec file " + name + " is not a regular file";
+    const std::uintmax_t size = fs::file_size(p, ec);
+    if (ec) return "spec file " + name + " could not be read";
+    if (size > kMaxSpecFileBytes) return "spec file " + name + " is larger than 512 KiB";
+    return {};
+}
+
+bool read_spec_version_line(std::istream& in, int64_t& version, std::string& why) {
+    auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r'; };
+    std::string line;
+    std::uintmax_t consumed = 0;
+    bool first = true;
+    while (consumed <= kMaxSpecFileBytes && std::getline(in, line)) {
+        consumed += line.size() + 1;
+        size_t i = 0;
+        if (first && line.compare(0, 3, "\xEF\xBB\xBF") == 0) i = 3;   // a UTF-8 byte order mark
+        first = false;
+        while (i < line.size() && blank(line[i])) i++;
+        if (i == line.size() || line[i] == '#') continue;
+        if (line[i] == '[') break;   // a table header: top-level keys come before it
+        // The key, bare or quoted; "caliper_spec" has no escapes.
+        std::string key;
+        if (line[i] == '"' || line[i] == '\'') {
+            const char q = line[i];
+            const size_t end = line.find(q, i + 1);
+            if (end == std::string::npos) continue;
+            key = line.substr(i + 1, end - i - 1);
+            i = end + 1;
+        } else {
+            const size_t start = i;
+            while (i < line.size() &&
+                   (std::isalnum((unsigned char)line[i]) || line[i] == '_' || line[i] == '-'))
+                i++;
+            key = line.substr(start, i - start);
+        }
+        while (i < line.size() && blank(line[i])) i++;
+        if (key != "caliper_spec" || i == line.size() || line[i] != '=') continue;
+        i++;
+        while (i < line.size() && blank(line[i])) i++;
+        // A TOML decimal integer: a sign, then digits with single underscores
+        // between them.
+        bool negative = false;
+        if (i < line.size() && (line[i] == '+' || line[i] == '-')) negative = line[i++] == '-';
+        int64_t value = 0;
+        int digits = 0;
+        bool ok = i < line.size() && std::isdigit((unsigned char)line[i]);
+        while (ok && i < line.size()) {
+            const char c = line[i];
+            if (std::isdigit((unsigned char)c)) {
+                if (++digits > 18) { ok = false; break; }
+                value = value * 10 + (c - '0');
+                i++;
+            } else if (c == '_' && i + 1 < line.size() &&
+                       std::isdigit((unsigned char)line[i + 1])) {
+                i++;
+            } else {
+                break;
+            }
+        }
+        while (ok && i < line.size() && blank(line[i])) i++;
+        if (!ok || (i < line.size() && line[i] != '#')) {
+            why = "has a caliper_spec that is not a decimal integer";
+            return false;
+        }
+        version = negative ? -value : value;
+        return true;
+    }
+    why = "has no line caliper_spec = <version> before its first table";
+    return false;
+}
+
+std::string format_spec_diagnostic(const std::string& file, const SpecDiagnostic& d,
+                                   bool severity) {
+    std::string s = file;
+    if (d.line > 0) {
+        s += ":" + std::to_string(d.line);
+        if (d.column > 0) s += ":" + std::to_string(d.column);
+    }
+    s += ": ";
+    if (severity) s += d.error ? "error " : "warning ";
+    s += d.code + ": " + d.message;
+    if (d.line <= 0 && !d.path.empty()) s += " (at " + d.path + ")";
+    return s;
+}
+
+namespace {
+// The longest chain of TOML key segments joined by dots, outside strings and
+// comments, in parts. toml++ bounds the nesting of inline arrays and tables
+// but not of dotted keys, whose every part is a nested table that it builds
+// and frees recursively; the spec library makes the same check before it
+// parses a spec (src/builder/spec/toml_form.cpp). A float has one dot, so a
+// longer chain is always a key.
+size_t longest_dotted_key(const std::string& s) {
+    auto bare = [](char c) {
+        return std::isalnum((unsigned char)c) || c == '_' || c == '-';
+    };
+    size_t best = 0, chain = 0;
+    bool after_segment = false;
+    size_t i = 0;
+    while (i < s.size()) {
+        const char c = s[i];
+        if (c == '#') {
+            while (i < s.size() && s[i] != '\n') i++;
+            chain = 0;
+            after_segment = false;
+        } else if (c == '"' || c == '\'') {
+            const std::string triple(3, c);
+            const bool multi = s.compare(i, 3, triple) == 0;
+            i += multi ? 3 : 1;
+            while (i < s.size()) {
+                if (c == '"' && s[i] == '\\') { i += 2; continue; }
+                if (multi ? s.compare(i, 3, triple) == 0 : (s[i] == c || s[i] == '\n')) {
+                    i += multi ? 3 : 1;
+                    break;
+                }
+                i++;
+            }
+            after_segment = true;
+        } else if (c == ' ' || c == '\t') {
+            i++;
+        } else if (c == '.') {
+            chain = after_segment ? chain + 1 : 0;
+            best = std::max(best, chain);
+            after_segment = false;
+            i++;
+        } else if (bare(c)) {
+            while (i < s.size() && bare(s[i])) i++;
+            after_segment = true;
+        } else {
+            chain = 0;
+            after_segment = false;
+            i++;
+        }
+    }
+    return best + 1;
+}
+
+ManifestResult manifest_failure(std::string why) {
+    ManifestResult r;
+    r.error = std::move(why);
+    return r;
+}
+
+// A manifest that may be data from anyone (in a subfolder, or in the
+// workspace's folder): at most kMaxSpecManifestBytes, with no dotted key of
+// more than 32 parts, before toml++ parses it.
+ManifestResult read_bounded_manifest(const fs::path& path) {
+    std::error_code ec;
+    const std::uintmax_t size = fs::file_size(path, ec);
+    if (ec) return manifest_failure("manifest unreadable: " + path.string());
+    if (size > kMaxSpecManifestBytes) return manifest_failure("manifest is larger than 64 KiB");
+    std::ifstream in(path, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (!in.good() && !in.eof()) return manifest_failure("manifest unreadable: " + path.string());
+    if (text.size() > kMaxSpecManifestBytes) return manifest_failure("manifest is larger than 64 KiB");
+    if (longest_dotted_key(text) > 32)
+        return manifest_failure("manifest has a dotted key of more than 32 parts");
+    return parse_manifest_text(text);
+}
+} // namespace
+
 AppletLoader::AppletLoader(HostCaps caps, std::string data_root)
     : caps_(std::move(caps)), data_root_(std::move(data_root)) {}
+
+void AppletLoader::set_workspace(const std::string& workspace_dir) {
+    workspace_dir_ = workspace_dir;
+    workspace_key_ = workspace_dir.empty()
+                         ? std::string()
+                         : folder_key(absolute_folder(workspace_applets_dir(workspace_dir))).string();
+}
+
+bool AppletLoader::is_workspace_folder(const std::string& dir) const {
+    return !workspace_key_.empty() && folder_key(absolute_folder(dir)).string() == workspace_key_;
+}
+
+void AppletLoader::spec_listing_checks(AppletEntry& a) const {
+    const fs::path manifest(a.manifest_path);
+    // applet.spec is a plain file name (the parser checked), so this is a
+    // file directly in the applet's folder.
+    const fs::path spec = manifest.parent_path() / a.manifest.spec;
+    auto failed = [&](std::string why) {
+        a.status = AppletStatus::Failed;
+        a.status_text = std::move(why);
+    };
+    if (std::string why = spec_file_problem(spec.string(), manifest.filename().string());
+        !why.empty())
+        return failed(std::move(why));
+    std::ifstream in(spec, std::ios::binary);
+    int64_t version = 0;
+    std::string why;
+    if (!in) return failed("spec file " + a.manifest.spec + " could not be read");
+    if (!read_spec_version_line(in, version, why))
+        return failed("spec file " + a.manifest.spec + " " + why);
+    a.spec_path = spec.string();
+
+    // Of the checks before dlopen, only min_host applies to a spec applet
+    // (the parser refused the keys of the others). negotiate() gives its
+    // text; the epoch it compares first is the host's own here, since a spec
+    // applet has none.
+    AppletManifest m = a.manifest;
+    m.abi_epoch = caps_.abi_epoch;
+    if (auto n = negotiate(m, caps_); !n.ok) {
+        a.status = AppletStatus::Refused;
+        a.status_text = n.reason;
+    } else if (!spec_runtime_available()) {
+        a.status = AppletStatus::Refused;
+        a.status_text = no_spec_runtime_reason();
+    } else if (version != spec_format_version()) {
+        a.status = AppletStatus::Refused;
+        a.status_text = spec_version_reason(version, spec_format_version());
+    } else {
+        a.status = AppletStatus::Ready;
+    }
+}
 
 int AppletLoader::scan(const std::vector<std::string>& dirs) {
     int added = 0;
@@ -310,57 +589,32 @@ int AppletLoader::scan(const std::string& dir) {
     const int rank = next_rank_++;
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return 0;
+    const bool workspace = is_workspace_folder(dir);
 
     int added = 0;
+    std::vector<fs::path> subfolders;
     for (const auto& e : fs::directory_iterator(dir, ec)) {
-        if (!e.is_regular_file()) continue;
         const std::string fname = e.path().filename().string();
-        if (!is_manifest_name(fname)) continue;
-
-        AppletEntry entry;
-        entry.folder = e.path().parent_path().string();
-        entry.manifest_path = e.path().string();
-        entry.search_rank = rank;
-        auto parsed = parse_manifest_file(e.path().string());
-        if (!parsed.ok) {
-            entry.manifest.name = fname;
-            entry.status = AppletStatus::Failed;
-            entry.status_text = parsed.error;
-            entries_.push_back(std::move(entry));
-            added++;
-            continue;
+        std::error_code fec;
+        if (e.is_regular_file(fec)) {
+            if (is_manifest_name(fname)) added += add_manifest(e.path(), rank, false, workspace);
+        } else if (!fname.empty() && fname[0] != '.' && !e.is_symlink(fec) &&
+                   e.is_directory(fec) && subfolders.size() < kMaxSpecSubfolders) {
+            subfolders.push_back(e.path());
         }
-        entry.manifest = std::move(parsed.manifest);
-        // The id becomes a path under the data root. The parser already
-        // refuses ids outside [a-z0-9.-]; this re-check is the boundary's own
-        // guarantee, independent of where the manifest came from.
-        if (!is_valid_applet_id(entry.manifest.id)) {
-            entry.manifest.name = fname;
-            entry.status = AppletStatus::Failed;
-            entry.status_text = "applet id is not path-safe: " + entry.manifest.id;
-            entries_.push_back(std::move(entry));
-            added++;
-            continue;
+    }
+    // Spec applets are folders: one level down, a manifest of kind "spec".
+    size_t read_below = 0;
+    for (const fs::path& sub : subfolders) {
+        std::error_code sec;
+        for (fs::directory_iterator it(sub, sec), end;
+             !sec && it != end && read_below < kMaxSpecSubfolders; it.increment(sec)) {
+            std::error_code fec;
+            if (!is_manifest_name(it->path().filename().string()) || !it->is_regular_file(fec))
+                continue;
+            read_below++;
+            added += add_manifest(it->path(), rank, true, workspace);
         }
-        entry.data_dir = data_root_ + "/" + entry.manifest.id;
-
-        const std::string stem =
-            fname.substr(0, fname.size() - std::string(kManifestSuffix).size());
-        entry.dylib_path = find_binary(e.path().parent_path(), stem);
-        const uint32_t stored = entry.manifest.data_schema
-                                    ? read_data_schema_stamp(entry.data_dir)
-                                    : 0;
-        if (entry.dylib_path.empty()) {
-            entry.status = AppletStatus::Failed;
-            entry.status_text = "applet binary not found next to " + fname;
-        } else if (auto n = negotiate(entry.manifest, caps_, stored); !n.ok) {
-            entry.status = AppletStatus::Refused;
-            entry.status_text = n.reason;
-        } else {
-            entry.status = AppletStatus::Ready;
-        }
-        entries_.push_back(std::move(entry));
-        added++;
     }
     resolve_duplicates();
     // By name; copies of one applet newest first, then in search order.
@@ -379,6 +633,74 @@ int AppletLoader::scan(const std::string& dir) {
     return added;
 }
 
+int AppletLoader::add_manifest(const fs::path& path, int rank, bool in_subfolder,
+                               bool in_workspace) {
+    const std::string fname = path.filename().string();
+    // A manifest beside its library is read as it always was; one that may
+    // be data from anyone is read with bounds first.
+    const ManifestResult parsed = in_subfolder || in_workspace
+                                      ? read_bounded_manifest(path)
+                                      : parse_manifest_file(path.string());
+    // Compiled applets are flat: outside the workspace a subfolder adds spec
+    // applets only, and anything else in it is not looked at, as before.
+    if (in_subfolder && !in_workspace && parsed.manifest.kind != AppletKind::Spec) return 0;
+
+    AppletEntry entry;
+    entry.folder = path.parent_path().string();
+    entry.manifest_path = path.string();
+    entry.search_rank = rank;
+    if (!parsed.ok) {
+        entry.manifest.name = fname;
+        entry.manifest.kind = parsed.manifest.kind;
+        entry.status = AppletStatus::Failed;
+        entry.status_text = parsed.error;
+        entries_.push_back(std::move(entry));
+        return 1;
+    }
+    entry.manifest = parsed.manifest;
+    // The id becomes a path under the data root. The parser already
+    // refuses ids outside [a-z0-9.-]; this re-check is the boundary's own
+    // guarantee, independent of where the manifest came from.
+    if (!is_valid_applet_id(entry.manifest.id)) {
+        entry.manifest.name = fname;
+        entry.status = AppletStatus::Failed;
+        entry.status_text = "applet id is not path-safe: " + entry.manifest.id;
+        entries_.push_back(std::move(entry));
+        return 1;
+    }
+    if (entry.manifest.kind == AppletKind::Spec) {
+        // No library, no data folder: nothing of it is ever mapped or called.
+        spec_listing_checks(entry);
+        entries_.push_back(std::move(entry));
+        return 1;
+    }
+    if (in_workspace) {
+        entry.status = AppletStatus::Refused;
+        entry.status_text = workspace_library_reason();
+        entries_.push_back(std::move(entry));
+        return 1;
+    }
+    entry.data_dir = data_root_ + "/" + entry.manifest.id;
+
+    const std::string stem =
+        fname.substr(0, fname.size() - std::string(kManifestSuffix).size());
+    entry.dylib_path = find_binary(path.parent_path(), stem);
+    const uint32_t stored = entry.manifest.data_schema
+                                ? read_data_schema_stamp(entry.data_dir)
+                                : 0;
+    if (entry.dylib_path.empty()) {
+        entry.status = AppletStatus::Failed;
+        entry.status_text = "applet binary not found next to " + fname;
+    } else if (auto n = negotiate(entry.manifest, caps_, stored); !n.ok) {
+        entry.status = AppletStatus::Refused;
+        entry.status_text = n.reason;
+    } else {
+        entry.status = AppletStatus::Ready;
+    }
+    entries_.push_back(std::move(entry));
+    return 1;
+}
+
 // Recomputed from scratch after every scan: a Shadowed copy passed every
 // check, so it is a candidate again until the comparison says otherwise.
 void AppletLoader::resolve_duplicates() {
@@ -391,10 +713,14 @@ void AppletLoader::resolve_duplicates() {
     // copies; among equal versions the one found first (then, within one
     // folder, the first library path, so the choice never depends on the
     // order the folder lists its files in).
-    auto better = [](const AppletEntry& a, const AppletEntry& b) {
+    // A spec applet's file is its spec; a compiled applet's, its library.
+    auto location = [](const AppletEntry& a) -> const std::string& {
+        return a.manifest.kind == AppletKind::Spec ? a.spec_path : a.dylib_path;
+    };
+    auto better = [&](const AppletEntry& a, const AppletEntry& b) {
         if (int c = semver_cmp(a.manifest.version, b.manifest.version)) return c > 0;
         if (a.search_rank != b.search_rank) return a.search_rank < b.search_rank;
-        return a.dylib_path < b.dylib_path;
+        return location(a) < location(b);
     };
     std::map<std::string, const AppletEntry*> chosen;
     for (const auto& a : entries_) {
@@ -482,9 +808,37 @@ bool AppletLoader::open_and_check(AppletEntry& a) {
     return true;
 }
 
+bool AppletLoader::check_spec(int idx, std::vector<SpecDiagnostic>* diagnostics) {
+    if (diagnostics) diagnostics->clear();
+    if (idx < 0 || idx >= count()) return false;
+    AppletEntry& a = entries_[idx];
+    if (a.manifest.kind != AppletKind::Spec || a.spec_path.empty() ||
+        (a.status != AppletStatus::Ready && a.status != AppletStatus::Shadowed))
+        return false;
+#ifdef CALIPER_HOST_SPEC_RUNTIME
+    SpecFile file = read_spec_file(a.spec_path);
+    if (diagnostics) *diagnostics = file.diagnostics;
+    if (!file.ok) {
+        a.status = AppletStatus::Failed;
+        a.status_text = file.reason;
+        return false;
+    }
+    return true;
+#else
+    return false;   // never reached: without the runtime a spec applet is Refused
+#endif
+}
+
 bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     if (idx < 0 || idx >= count()) return false;
     AppletEntry& a = entries_[idx];
+    if (a.manifest.kind == AppletKind::Spec) {
+        // Data, not code: nothing is opened or called. The app opens the
+        // page of a valid spec itself; this call only says it did not.
+        if (a.status != AppletStatus::Ready || !check_spec(idx)) return false;
+        a.status_text = kSpecPageUnavailable;
+        return false;
+    }
     if (a.status == AppletStatus::Active) teardown(idx);
     if (a.status != AppletStatus::Ready) return false;
     if (!open_and_check(a)) return false;
@@ -543,6 +897,7 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
 bool AppletLoader::probe(int idx) {
     if (idx < 0 || idx >= count()) return false;
     AppletEntry& a = entries_[idx];
+    if (a.manifest.kind == AppletKind::Spec) return check_spec(idx);
     if (a.status != AppletStatus::Ready && a.status != AppletStatus::Shadowed)
         return false;
     if (!open_and_check(a)) return false;

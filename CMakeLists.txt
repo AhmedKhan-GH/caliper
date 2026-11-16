@@ -817,10 +817,18 @@ endif()
 
 # The builder (src/builder) with the host's toml++, doctest and static DuckDB.
 # It comes after enable_testing(), so that its ctest entries (builder_*) are
-# registered beside the host's. Nothing in the host links it yet and it
-# installs nothing, so the sdk and embed install components do not change.
+# registered beside the host's. The host library links its spec library for
+# spec applets; it installs nothing, so the sdk and embed install components
+# do not change.
 if(CALIPER_WITH_BUILDER)
     add_subdirectory(src/builder)
+    # The spec applet kind in the loader (src/host/applet_spec.h): with the
+    # builder, caliper_host_lib validates a spec applet's spec with the spec
+    # library and lists it Ready; without it the loader lists every spec
+    # applet as refused, and applet_loader.cpp has no builder dependency.
+    target_sources(caliper_host_lib PRIVATE src/host/applet_spec.cpp)
+    target_link_libraries(caliper_host_lib PUBLIC caliper_builder_spec)
+    target_compile_definitions(caliper_host_lib PRIVATE CALIPER_HOST_SPEC_RUNTIME=1)
     # Caliper API's command gateway over the builder session
     # (src/host/api/session_gateway.h), which serves the session's command
     # layer at /v0/commands. caliper_api itself builds without the builder.

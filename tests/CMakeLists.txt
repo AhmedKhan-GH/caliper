@@ -76,6 +76,9 @@ target_sources(caliper_tests PRIVATE test_work_area.cpp)
 # (src/host/host_cli.h); the acceptance check for applets built outside the
 # core runs only when CALIPER_TEST_APPLET_DIR is set.
 target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
+# Spec applets in the loader (src/host/applet_loader.h): the search, the
+# listing checks, the full validation with the spec library, and launch.
+target_sources(caliper_tests PRIVATE test_spec_applet.cpp)
 # The command line's subcommands (src/host/host_cli.h) on temporary folders,
 # with caliper build's own source and the header's out-of-line part, which the
 # executable compiles too.
@@ -106,6 +109,33 @@ if(CALIPER_WITH_BUILDER AND NOT WIN32)
     add_test(NAME caliper_api_commands COMMAND caliper_api_commands_tests)
     set_tests_properties(caliper_api_commands PROPERTIES ENVIRONMENT
         "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_api_commands")
+endif()
+# The manifest parser and the loader compiled as a build without
+# CALIPER_WITH_BUILDER compiles them, without CALIPER_HOST_SPEC_RUNTIME and
+# with no builder library, so that the path that lists every spec applet as
+# refused runs in every build without a second full build.
+add_executable(caliper_loader_nospec_tests test_main.cpp test_spec_applet_nospec.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/applet_manifest.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/applet_loader.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/negotiation.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/crash_guard.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/job_system.cpp)
+target_include_directories(caliper_loader_nospec_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_loader_nospec_tests PRIVATE doctest::doctest caliper::sdk
+    tomlplusplus::tomlplusplus)
+if(UNIX)
+    target_link_libraries(caliper_loader_nospec_tests PRIVATE ${CMAKE_DL_LIBS})
+endif()
+set_target_properties(caliper_loader_nospec_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_test(NAME caliper_loader_nospec COMMAND caliper_loader_nospec_tests)
+# What applet.save writes is what the loader accepts: a builder session saves
+# an applet and the loader lists and validates it (test_spec_applet_session.cpp).
+if(CALIPER_WITH_BUILDER AND NOT WIN32)
+    add_executable(caliper_spec_applet_session_tests test_main.cpp test_spec_applet_session.cpp)
+    target_link_libraries(caliper_spec_applet_session_tests PRIVATE doctest::doctest caliper_host_lib
+        caliper_builder_session caliper_builder_duckdb)
+    set_target_properties(caliper_spec_applet_session_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_spec_applet_session COMMAND caliper_spec_applet_session_tests)
 endif()
 # On Windows the socket cases of the WebSocket layer, the hub and Caliper API
 # are not built or run: every feature built on them is refused there
