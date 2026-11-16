@@ -183,7 +183,8 @@ class SubQueue:
         if self.pieces:
             return self.pieces.popleft(), None
         if self.state:
-            return self.state.popleft(), None
+            msg = self.state.popleft()
+            return (self.whole_or_pieces(msg) if isinstance(msg, _wire.SceneUpdate) else msg), None
         if self.classes is not None:
             k, self.classes = self.classes, None
             return self.table(k, False), None

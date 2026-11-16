@@ -284,6 +284,15 @@ def test_a_batch_over_one_frame_travels_as_a_split_update(server, monkeypatch):
                 whole = su.add(piece)
             assert whole.split is None and whole.params["vmax"] == 1.0
             assert len(su.open) == 0 and su.dropped == 0
+            async with Viewer(server) as late:            # the batch kept for a late viewer splits too
+                await late.subscribe(1, "big")
+                su = w.SplitUpdates()
+                whole = None
+                while whole is None:
+                    piece = await late.update("m", "mesh")
+                    assert piece.split is not None and piece.state
+                    whole = su.add(piece)
+                np.testing.assert_array_equal(_arr(whole, "positions"), pos[:3999].numpy())
             np.testing.assert_array_equal(_arr(whole, "positions"), pos[:3999].numpy())
             np.testing.assert_array_equal(_arr(whole, "values"), pos[:3999, 0].numpy())
 
