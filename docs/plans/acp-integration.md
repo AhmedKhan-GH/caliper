@@ -1,14 +1,17 @@
 # ACP integration
 
-Caliper will run the user's own coding agent (Claude Code, Codex or Gemini CLI) as a child process over the
-[Agent Client Protocol](https://agentclientprotocol.com) (ACP), hand it Caliper's MCP server, and show its messages,
-tool calls and permission requests in an agent pane. The agent uses its own login, and Caliper never handles an API
-key. This page records what the protocol and the three agents offered on 15 November 2026, the design of the pane,
-and what is built on this branch.
+Caliper will run the person's own agent (Claude Code, Codex, Gemini CLI, opencode or any other agent that speaks the
+protocol) as a child process over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), hand it
+Caliper's MCP server, and show its messages, tool calls and permission requests in the side chat. The side chat is one
+of the two roles of Caliper's agents: the general chat pane, for conversations and bigger jobs such as building from
+scratch, loader scripts, project code and explanations. The other role, the widget agent, works inline on one target
+and is designed on the [Widget agent](widget-agent.md) page. The side chat's agent uses its own login and runs on
+whatever model it supports, local models included, and Caliper never handles its key. This page records what the
+protocol and the agents offered on 15 November 2026, the design of the side chat, and what is built on this branch.
 
 **Built on this branch:** the client library `caliper_builder_acp` (a subprocess helper, a JSON-RPC peer and
-`AcpClient`), a stub agent for tests, the headless tool `caliper-acp-harness`, and their tests. **Planned:** the agent
-pane itself, its wiring to the command layer, and everything listed under [what waits](#what-is-built-and-what-waits).
+`AcpClient`), a stub agent for tests, the headless tool `caliper-acp-harness`, and their tests. **Planned:** the side
+chat itself, its wiring to the command layer, and everything listed under [what waits](#what-is-built-and-what-waits).
 The earlier proposal is the "Agent integration" section of the [applet builder](applet-builder.md) page.
 
 ## The protocol on 15 November 2026
@@ -48,7 +51,7 @@ content to a list of changes, removes the client's file-system and terminal meth
 -32022 for a version mismatch. The guide asks implementations to "treat v2 support as additive" and to keep serving
 version 1 peers.
 
-**Decision: Caliper speaks version 1 first.** All three agents answer version 1, and the Claude adapter serves the v2
+**Decision: Caliper speaks version 1 first.** All four agents answer version 1, and the Claude adapter serves the v2
 draft only to a client that asks for it. Version 2 is added beside version 1 once it is stable, chosen per connection,
 as the guide recommends.
 
@@ -57,7 +60,7 @@ as the guide recommends.
 | Method | Direction | What it does | What Caliper does |
 |---|---|---|---|
 | `initialize` | request to the agent | Negotiates the version and exchanges capabilities and `clientInfo` / `agentInfo` | Offers version 1 and declines the optional client capabilities |
-| `authenticate` | request to the agent | Runs an advertised login method of type `agent`; terminal-type methods are run by the client instead | Never sends a key; the pane may call it for an `agent`-type method |
+| `authenticate` | request to the agent | Runs an advertised login method of type `agent`; terminal-type methods are run by the client instead | Never sends a key; the side chat may call it for an `agent`-type method |
 | `logout` | request to the agent | Ends the login, when `auth.logout` is advertised | Not used |
 | `session/new` | request to the agent | Creates a session with an absolute `cwd` and a list of `mcpServers`; may fail with -32000 (auth required) | Sends the workspace and `caliper-mcp` |
 | `session/load` | request to the agent | Replays a saved session as updates, when `loadSession` is advertised | Not used yet |
@@ -139,18 +142,21 @@ since it would remove the bridge process.
 ## The agents on 15 November 2026
 
 The facts below come from each agent's repository, its package manifest and the npm registry, read on 15 November
-2026. Where the documentation is silent, the behaviour was read from the source code, and this page says so.
+2026; for opencode they come from its documentation and the protocol's agent registry. Where the documentation is
+silent, the behaviour was read from the source code, and this page says so.
 
 | Agent | How it speaks ACP | Launch command | Latest release | Stable releases since 15 August | Licence |
 |---|---|---|---|---|---|
 | Claude Code | The adapter [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) on the Claude Agent SDK | `npx -y @agentclientprotocol/claude-agent-acp` | 0.107.0, 13 November 2026 | 47 | Apache-2.0 in its package manifest |
 | Codex | The adapter [codex-acp](https://github.com/agentclientprotocol/codex-acp), which starts the Codex App Server | `npx -y @agentclientprotocol/codex-acp` | 2.6.0, 8 November 2026 | 21 | Apache-2.0 |
 | Gemini CLI | Natively, in [gemini-cli](https://github.com/google-gemini/gemini-cli) | `gemini --acp` | 0.68.0, 10 November 2026 | 13 | Apache-2.0 |
+| opencode | Natively, in [opencode](https://github.com/anomalyco/opencode) | `opencode acp` | 2.3.0 in the agent registry | Not checked | MIT in the agent registry |
 
 The protocol keeps an [agent registry](https://agentclientprotocol.com/get-started/registry.md) as JSON
 (`https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`, 46 agents on 15 November 2026), with each
 agent's version, licence and distribution (an `npx` package with arguments, or per-platform binaries). Its entries for
-the three agents match the launch commands above, pinned to the versions in the table. Its entry for the Claude
+the first three agents match the launch commands above, pinned to the versions in the table, and its entry for opencode
+gives per-platform binaries, for macOS, Linux and Windows, started with the single argument `acp`. Its entry for the Claude
 adapter gives the licence as "proprietary", which disagrees with the adapter's own manifest; which one is meant could
 not be confirmed.
 
@@ -225,26 +231,65 @@ not be confirmed.
 - **Diffs, permissions and modes.** Edits arrive as `diff` content, with `allow_once`, `allow_always` and `reject_once`
   options. The modes are `default`, `autoEdit`, `yolo` and, when enabled, `plan`.
 
+### opencode
+
+Every fact here comes from opencode's [ACP page](https://opencode.ai/docs/cli/acp/), its
+[permissions](https://opencode.ai/docs/permissions/) and [config](https://opencode.ai/docs/config/) pages and its
+[migration guide from V1](https://opencode.ai/docs/migrate-v1/), which are the V2 documentation, read on 15 November
+2026. opencode was not run.
+
+- **Launch.** opencode speaks ACP itself with `opencode acp`, over stdio with protocol version 1. It starts a private
+  opencode server for its own use and opens no network port for ACP. One process serves many sessions, and it exits
+  when the client closes its input. `--print-logs` before `acp` sends its logs to stderr; stdout carries only ACP.
+- **Maturity.** The documentation is that of opencode V2, and its install page says that some older install commands
+  still install opencode 1. Its release pace was not checked.
+- **MCP servers.** It advertises `http: true` and `sse: false`, and does not support MCP over ACP. The stdio and HTTP
+  servers of `session/new` are added to the session's folder for the life of the process, so other sessions in that
+  folder can use them. A server whose name the folder's configuration already uses is replaced by the client's, and
+  opencode's own policy rules (`integration.use`) still apply.
+- **Login.** It offers one login method, `opencode-login`, of type `agent` unless the client declares `auth.terminal`,
+  which Caliper does not. That method collects no credentials; the person signs in once with `opencode auth login` in
+  their own terminal, and a prompt that needs a login fails with ACP's authentication error. A local model through
+  Ollama needs no account.
+- **Declined capabilities.** The client capabilities it reads are `auth.terminal`, `elicitation.form`,
+  `session.compaction` and `_meta["terminal-auth"]`; none concerns files or terminals, so it uses its own tools
+  (documentation reading).
+- **Sessions.** It uses the configuration of the session's folder, which for Caliper is the workspace: its models,
+  agents, commands, skills, instructions, plugins and MCP servers. A session runs one prompt at a time.
+- **Prompts.** It takes text, images, embedded resources and resource links. A text block whose `annotations.audience`
+  is `["assistant"]` only reaches the model as context outside the person's message.
+- **Diffs, permissions and modes.** Permission requests offer `once` (`allow_once`), `always` (`allow_always`) and
+  `reject` (`reject_once`), with `diff` content when opencode can build a preview of a file change. Its config options
+  are `model` (as `provider/model`), `effort` and `mode` (its primary agents). `session/cancel` ends the prompt with
+  `cancelled` and rejects pending permission requests.
+- **Its own tools.** opencode is a coding agent with shell, file and web tools of its own, configured by its
+  `permissions` setting: an ordered list of rules with `action`, `resource` and `effect` (`allow`, `deny` or `ask`),
+  where the last matching rule wins and no match means `ask`. The V2 names are `permissions`, `shell` and `subagent` in
+  place of V1's `permission`, `bash` and `task`, and `write` and `patch` became `edit`; the V1 format is still
+  accepted. In V2, `external_directory` is allowed by default, where V1 asked, so a person who wants to be asked before
+  opencode touches files outside the workspace adds the rule
+  `{ "action": "external_directory", "resource": "*", "effect": "ask" }`. Its page warns that `shell` runs with the
+  user's own file, process and network authority.
+
 ### What the findings mean for Caliper
 
-All three agents answer version 1, accept stdio MCP servers, emit diffs for edits, ask permission in their default
-modes, and log in on their own. None of them needs the client's file-system or terminal methods. The differences that
-matter are the handling of a server name that the user has already configured, Codex's refusal of SSE entries, the
-release pace of the Claude adapter, and the open Codex issue of a prompt that never resolves, which the client's
-stall and cancel handling covers.
+All four agents answer version 1, accept stdio MCP servers, emit diffs for edits, ask permission by default, and log
+in on their own. None of them needs the client's file-system or terminal methods. The differences that matter are the
+handling of a server name that the user has already configured, Codex's refusal of SSE entries, the release pace of
+the Claude adapter, the open Codex issue of a prompt that never resolves, which the client's stall and cancel handling
+covers, and opencode's reading of the workspace's own configuration, which [Risks](#risks) covers.
 
-## The design of the agent pane
+## The design of the side chat
 
-### ACP for both backends
+### One client for both roles
 
-ACP is the session model of the agent pane for both of its backends. The ACP backend runs the user's own agent; the
-BYOK backend runs a Caliper-built ACP agent, a Python sidecar named `caliper-agent` that runs its own loop against the
-Claude API with the user's key. The app drives both with the same `AcpClient`, so messages, tool calls, spec diffs,
-permission requests and cancellation behave the same. The sidecar is described on its own plan page, "BYOK agent".
-`AcpClient` assumes nothing about the agent it runs. The key reaches the sidecar in its environment at spawn
-(`AcpClientOptions::agent_env`), never in its arguments, and no layer logs an environment value. The stub agent and
-the harness are the sidecar's test bed: `caliper-acp-harness --env NAME` copies a variable from the harness's own
-environment, so a key never appears on a command line.
+ACP is the session model of both roles. The side chat runs the person's own agent. The widget agent runs a
+Caliper-built ACP agent, the Python sidecar `caliper-agent`, which [Widget agent sidecar](byok-agent.md) describes.
+The app drives both with the same `AcpClient`, so messages, tool calls, spec diffs, permission requests and
+cancellation behave the same. `AcpClient` assumes nothing about the agent it runs. A key for the sidecar reaches it in
+its environment at spawn (`AcpClientOptions::agent_env`), never in its arguments, and no layer logs an environment
+value. The stub agent and the harness are the sidecar's test bed: `caliper-acp-harness --env NAME` copies a variable
+from the harness's own environment, so a key never appears on a command line.
 
 ### Processes and threads
 
@@ -253,39 +298,39 @@ frame thread ── poll() ──► AcpClient event queue ◄── reader thre
      │                                                writer thread ──► agent stdin
      │ prompt(), cancel(), respond_permission()       stderr thread ◄── agent stderr (bounded log)
      ▼
-agent pane                    agent ── starts ──► caliper-mcp ── Caliper API ──► command layer
+side chat                    agent ── starts ──► caliper-mcp ── Caliper API ──► command layer
 ```
 
-- One `AcpClient` serves one pane session. It starts the agent with an argument vector and no shell, in a process group
+- One `AcpClient` serves one side chat session. It starts the agent with an argument vector and no shell, in a process group
   of its own, so stopping it also stops what it started (an `npx` launcher, for example).
 - Three threads per client do the I/O: a reader that parses lines and answers requests, a writer that drains an
   outgoing queue, and a reader of the agent's stderr. The frame thread never blocks on a pipe. `start()` and
   `new_session()` wait for the agent's answer and run on a worker thread; every other call returns at once.
-- Chat events reach the UI on the frame thread, through the client's own event queue, which the pane polls in each
+- Chat events reach the UI on the frame thread, through the client's own event queue, which the side chat polls in each
   frame at the same point where the app calls the command queue's `drain()`. Everything that changes the workspace
   travels through the command queue: the agent calls `caliper-mcp`, which calls Caliper API, which submits commands
   with the origin `agent`.
 - **Decision:** chat events do not go through the command queue themselves, although the applet builder page proposed
-  that. They change no workspace state, so journaling them as commands would fill the journal with chat. The pane reads
+  that. They change no workspace state, so journaling them as commands would fill the journal with chat. The side chat reads
   them on the same thread and at the same point, which is what the proposal needed.
 
 ### Turns, permission prompts and spec diffs
 
-There are two kinds of approval, and the pane shows both as the same card: a title, a diff when there is one, and one
+There are two kinds of approval, and the side chat shows both as the same card: a title, a diff when there is one, and one
 button per option.
 
 1. **ACP permission requests** come from the agent's own tools, such as a file edit. The card shows the tool call's
-   diff and the agent's options, and the pane answers with `respond_permission()`. An `allow_always` option is offered
+   diff and the agent's options, and the side chat answers with `respond_permission()`. An `allow_always` option is offered
    only when the user's settings allow it.
-2. **Command approvals** come from the command layer (contracts section 7). While a pane session is open, the pane
-   installs the approval policy for the origin `agent`: it asks for every destructive command, and, when the user has
+2. **Command approvals** come from the command layer (contracts section 7). The app installs the approval policy for the
+   origins `agent` and `mcp`, which covers both roles: it asks for every destructive command, and, when the user has
    "review changes" on, for every command that changes the open spec (`spec.set_text`, `source.*`, `panel.*`,
-   `layout.*`, `applet.save`). A command that needs approval gets an approval id; the pane shows a card and calls
+   `layout.*`, `applet.save`). A command that needs approval gets an approval id; the side chat shows a card and calls
    `approve(id)` or `deny(id)`.
 
 A spec change is shown as a diff before it is applied. For a command, the command layer renders the canonical TOML of
 the spec before and after the change, and the card shows the difference with the validator's result. For an agent's
-own edit of a `*.spec.toml` file, the diff arrives in the permission request, and the pane runs the spec validator on
+own edit of a `*.spec.toml` file, the diff arrives in the permission request, and the side chat runs the spec validator on
 the new text before the user answers. After an allowed file edit, the app reloads the spec from disk, because the text
 file is the source of truth.
 
@@ -297,23 +342,52 @@ and undo, so it stays possible but is never preferred.
 became a command. Contracts section 10 declines the capability, and the Claude and Codex adapters write with their own
 tools whatever the client declares.
 
+### Approvals and diffs for every agent
+
+Approvals and diff previews are enforced in the command layer, so they hold for every agent, in either role, whether
+or not the agent asks on its own. Two parts exist:
+
+- **Approval of destructive commands.** The default policy asks for a destructive command from the origins `agent`,
+  `mcp` and `api`; Caliper API holds a call from `agent` or `mcp` for up to 120 seconds while the person decides; no
+  command and no endpoint approves, so an agent cannot approve itself; undo and redo ask about the destructive commands
+  of the steps they touch; and a request can never claim the `ui` or `builder` origin
+  ([Command layer](command-layer.md)).
+- **Diff previews of spec edits.** Every edit of the open spec takes `dry_run` and returns its change as a diff of the
+  canonical TOML without any effect ([Builder session](builder-session.md)).
+
+What remains, so that no agent can skip them:
+
+1. **The held approval in the app.** The app's API server serves the command endpoints and holds approvals as the
+   stand-in host does; this comes with the wiring after sprint 2.
+2. **Review of spec edits in the command layer.** Today only `caliper-agent` shows a diff before each spec edit,
+   because it runs the dry run and asks on its own; an agent that calls `caliper-mcp` is never asked about an edit that
+   is not destructive. When "review changes" is on, the app's policy for the origins `agent` and `mcp` answers `ask`
+   for every edit that takes `dry_run`, and the session runs that dry run when it parks the invocation and attaches the
+   diff to the pending approval, so the card shows the change whatever the agent does.
+3. **The cards.** The side chat shows each pending approval with its diff and the validator's result, as the previous
+   section describes.
+
+What the command layer cannot enforce is an agent's own file and shell tools, which act outside Caliper. The agent's
+own permission settings govern them (Claude Code's and Codex's modes, Gemini CLI's modes, opencode's `permissions`
+rules), and the side chat shows the agent's mode and warns about modes that skip permission, as [Risks](#risks) says.
+
 ### Cancellation
 
 The Stop button calls `cancel()`. The client sends `session/cancel`, answers every open permission request as
 cancelled (each card disappears through a `permission_withdrawn` event), and waits for the turn to end. An agent that
-does not end the turn within 10 seconds gets a synthetic end with `acp.cancel_unanswered`, and the pane offers to stop
+does not end the turn within 10 seconds gets a synthetic end with `acp.cancel_unanswered`, and the side chat offers to stop
 the agent. A cancelled turn that the agent answers with an error is shown as cancelled, as the protocol intends.
 
 ### Crashes and hangs
 
-- **A crash** produces `turn_ended` with `acp.agent_exited` and then `agent_exited` with the exit status. The pane shows
+- **A crash** produces `turn_ended` with `acp.agent_exited` and then `agent_exited` with the exit status. The side chat shows
   the status and the tail of the agent's stderr, and offers to restart, which starts a new process and a new session;
   `session/load` can restore history later for agents that support it.
 - **A hang** is a turn with no message for two minutes, not counting the time a permission card waits for the user. The
-  client reports it once as `stalled`, and the pane offers Stop and Stop the agent. There is no fixed time limit for a
+  client reports it once as `stalled`, and the side chat offers Stop and Stop the agent. There is no fixed time limit for a
   turn, since long turns are normal.
 - **Bad messages** (malformed lines, oversized messages, unknown response ids, wrong nesting) are dropped and reported
-  as `protocol_fault` events, which the pane lists under diagnostics, not in the chat.
+  as `protocol_fault` events, which the side chat lists under diagnostics, not in the chat.
 - **Limits:** 8 MiB per message, nesting depth 128, 64 MiB of unsent output, 1024 calls in flight, 20,000 queued
   events (chunks are dropped first, and the drop is reported) and 64 KiB of stderr.
 - **Shutdown** closes the agent's input, waits up to a second for it to exit, then sends SIGTERM to its process group
@@ -329,7 +403,7 @@ reasons:
 
 - Caliper is not an editor. It has no unsaved buffers to serve, and the files on disk are the truth.
 - Serving terminals would make Caliper run arbitrary commands on the agent's behalf.
-- All three agents fall back to their own file and shell tools, which ask permission in their default modes.
+- All four agents fall back to their own file and shell tools, which ask permission by default.
 - Caliper does not run login flows. The user logs in with the agent's own command, once, in their own terminal.
 
 ### Configuring an agent
@@ -339,15 +413,81 @@ reasons:
 | `claude` | Claude Code | `npx -y @agentclientprotocol/claude-agent-acp` | `claude`, then `/login` |
 | `codex` | Codex | `npx -y @agentclientprotocol/codex-acp` | `codex login` |
 | `gemini` | Gemini CLI | `gemini --acp` | `gemini`, then choose a sign-in method |
+| `opencode` | opencode | `opencode acp` | `opencode auth login`; none for a local model |
 
-The same table is `known_agents()` in `caliper_builder/acp/agents.h`. A custom agent is one command line, split into
+These are the agents that Caliper detects. The first three rows are `known_agents()` in `caliper_builder/acp/agents.h`
+today, and adding `opencode` there is a work item. Any other ACP agent is added by its command in the settings, as a
+custom agent. A custom agent is one command line, split into
 words as a POSIX shell would split them but run without a shell, plus optional variable names to pass. The agent
 command and its variables live in the app's own settings, never in a workspace, because a workspace from elsewhere
 must not be able to choose a program to run. The MCP server handed to the agent is always the `caliper-mcp` that
 ships with the app, given by absolute path, never one named by workspace files.
 
 **Decision:** the presets name the adapters without a version, so the user runs what the agents' makers ship, and the
-pane shows the version from `agentInfo`. A custom command can pin a version.
+side chat shows the version from `agentInfo`. A custom command can pin a version.
+
+### Local models in the side chat
+
+The side chat runs any ACP agent on whatever model that agent supports, local models included, and Caliper adds no
+code for it: `AcpClient` starts the agent's command as it starts any other. Whether the agent's model runs on a hosted
+API or on the person's own machine is the agent's configuration, not Caliper's.
+
+The worked example is opencode on Ollama, with the facts read on 15 November 2026 from opencode's
+[providers](https://opencode.ai/docs/providers/) and [models](https://opencode.ai/docs/models/) pages and from
+Ollama's [opencode](https://docs.ollama.com/integrations/opencode), [context length](https://docs.ollama.com/context-length)
+and [FAQ](https://docs.ollama.com/faq) pages:
+
+1. Install Ollama and pull a model that supports tool calling, for example `ollama pull qwen3:8b`, the model that
+   opencode's providers page uses. Ollama binds 127.0.0.1, port 11434, by default.
+2. Give the model a context of at least 64,000 tokens. Ollama's opencode page says that opencode needs 64k or more.
+   Ollama's context length page gives a default that depends on the video memory (4k below 24 GiB, 32k from 24 to
+   48 GiB and 256k from 48 GiB), while its FAQ still says 4,096; set it with the slider in the Ollama app or with
+   `OLLAMA_CONTEXT_LENGTH=64000 ollama serve`, and check it in the `CONTEXT` column of `ollama ps`.
+3. Install opencode as its [install page](https://opencode.ai/docs/) describes.
+4. Choose the model. opencode probes `http://127.0.0.1:11434`, adds the models whose Ollama metadata includes the
+   `completion` capability without an account, and reads their context, vision and tool-use capabilities from Ollama.
+   Select one with `"model": "ollama/<model>"` in the person's global `~/.config/opencode/opencode.jsonc` rather than in
+   the workspace, for the reason under [Risks](#risks). For an Ollama server elsewhere, opencode takes its
+   OpenAI-compatible URL, with `/v1`, in `providers.ollama.settings.baseURL`.
+5. In Caliper, choose the `opencode` preset, or until it exists add `opencode acp` as a custom agent, and mark the agent
+   as running on a local model, so that the side chat shows a note while a training run is live
+   ([Widget agent](widget-agent.md#gpu-contention) gives the reasons and the advice).
+6. Review opencode's `permissions`, and add the `external_directory` rule above to be asked before it leaves the
+   workspace.
+
+What is verified and what is not:
+
+- **Verified from the documentation:** every command, address, setting and default above, as the pages gave them on
+  15 November 2026.
+- **Where the sources disagree:** Ollama's opencode page configures opencode in the V1 shape (a `provider.ollama` entry
+  with `npm`, `options.baseURL` and `models`, in `opencode.json`) and installs it on Windows with
+  `npm install -g opencode-ai`, while opencode's V2 pages find a local Ollama without configuration and install from
+  the `@opencode/cli` package. V2 still accepts the V1 configuration. Ollama's FAQ and its context length page give
+  different default context lengths.
+- **Not verified:** nothing was run. Whether opencode passes the `env` of a stdio MCP server as Caliper sends it,
+  whether a local model of a given size uses `caliper-mcp`'s 35 tools well (the conformance suite measures the widget
+  agent's tasks, not the side chat's), and the whole path on Windows, where Ollama runs as a native application and the
+  agent registry lists opencode binaries.
+
+### The handoff from the widget agent
+
+When the person chooses Ask in chat in the widget agent's inline prompt, the side chat receives a `session/prompt` in
+its current session, which the app starts first when the side chat is not open. Seen from the side chat, the prompt
+holds:
+
+- the person's request, as a text block;
+- the widget agent's context bundle: the target's spec fragment, its sources' schema and sample, and the selection, as
+  `resource` blocks with embedded text when the agent declared `promptCapabilities.embeddedContext`, and as text
+  blocks otherwise, and the render of the panel as an `image` block only when it declared `promptCapabilities.image`;
+- `annotations.audience: ["assistant"]` on every block of the bundle, which opencode documents as context for the model
+  outside the person's message; the other three agents were not checked, so they may read it as part of the message;
+- the widget conversation so far and the diff of its open preview, as text marked as not applied;
+- the target's ids, so the agent can act on them through `caliper-mcp`.
+
+Nothing of the preview was applied, and the widget agent's preview is dropped when the handoff is sent. The side
+chat's agent makes the change through commands, under the approvals above, and the side chat shows the whole prompt
+as the person's message. `AcpClient::prompt_blocks()` sends such blocks today, and `AgentInfo` holds the agent's
+prompt capabilities from `initialize`.
 
 ## The manual check with a real agent
 
@@ -367,7 +507,8 @@ line.
    that `note.txt` was not created.
 7. Once `caliper-mcp` exists and the app is running, add `--mcp caliper=<path to caliper-mcp>` and the prompt
    "List the tools of the caliper MCP server." Check that a `tool_call` line names a Caliper tool.
-8. Repeat steps 4 to 7 with `--preset codex` and `--preset gemini`.
+8. Repeat steps 4 to 7 with `--preset codex` and `--preset gemini`, and with `--agent "opencode acp"` for opencode,
+   once on a hosted model and once on a local model through Ollama.
 
 Exit codes: 0 when the turn ended with a stop reason, 2 for bad usage, 3 when the agent could not be started,
 initialised or given a session, 4 when the turn failed, 5 when the time limit passed and 130 when interrupted.
@@ -392,13 +533,17 @@ Built on this branch, in `src/builder/acp/` and `src/builder/include/caliper_bui
 
 Waiting for later work:
 
-- The pane itself, its cards and diagnostics, after sprint 2 merges.
-- The approval policy for the origin `agent`, the spec diff cards and the opening prompt, with the commands stream.
-- `session/load`, `session/resume`, modes and config options in the pane, images in prompts, and version 2.
+- The side chat itself, its cards and diagnostics, after sprint 2 merges.
+- The approval policy for the origins `agent` and `mcp`, with the review of spec edits and the dry-run diff attached
+  to each pending approval ([above](#approvals-and-diffs-for-every-agent)), the spec diff cards and the opening prompt.
+- `opencode` in `known_agents()`, the setting that marks an agent as running on a local model, and the warning when a
+  workspace holds an opencode configuration.
+- Receiving a handoff from the widget agent, with the bundle shaped by the agent's prompt capabilities.
+- `session/load`, `session/resume`, modes and config options in the side chat, images in prompts, and version 2.
 - The Windows implementation of `Process`.
 - The environment of a GUI app: an app started from the Finder does not inherit the user's shell `PATH`, so `npx` or
   `gemini` may not be found. One answer is to read the login shell's environment once; Caliper will decide when it
-  builds the pane.
+  builds the side chat.
 - Reading the agent registry at runtime instead of the fixed presets.
 
 ## Decisions
@@ -411,30 +556,44 @@ Waiting for later work:
   answered with -32601.
 - **Always send `env`** for a stdio MCP server, since the v1 schema requires it, and resolve a bare MCP command to an
   absolute path on `PATH`, since the protocol asks for one.
-- **Permission requests left open when a turn ends** are answered as cancelled and withdrawn from the pane.
+- **Permission requests left open when a turn ends** are answered as cancelled and withdrawn from the side chat.
 - **A cancelled turn that ends in an error** counts as cancelled.
-- **Unpinned presets,** with the version shown in the pane.
+- **Unpinned presets,** with the version shown in the side chat.
 - **Default harness policy `deny`,** so a check never changes files unless asked.
 - **One process group per agent;** stdin is closed first, then SIGTERM, then SIGKILL.
 - **A stall report, not a turn time limit.**
 - **`--env NAME` copies a variable** from the harness's environment, so a secret never appears in argv.
+- **Any ACP agent on any model.** The side chat runs whatever agent the person chooses, on whatever model it supports,
+  local models included, with no Caliper code for any of them; opencode on Ollama is the worked example.
+- **Four detected agents and a custom command.** Claude Code, Codex, Gemini CLI and opencode have presets; any other
+  agent is added by its command.
+- **Review of spec edits in the command layer,** with the diff attached to the pending approval, so that no agent can
+  skip it.
+- **A warning, not a refusal, when a workspace configures opencode,** since the configuration may be the person's own.
 
 ## Risks
 
 - **Pace of change.** The Claude adapter published 47 releases in three months. Its behaviour can change between two
   runs of `npx -y`, which also fetches code from npm at each start. Harness transcripts are the regression check.
 - **Edits outside Caliper's control.** An agent in a mode that skips permission (`bypassPermissions`, `yolo`,
-  `agent-full-access`) edits files without asking. The pane must show the current mode and warn about such modes.
+  `agent-full-access`) edits files without asking. The side chat must show the current mode and warn about such modes.
 - **The folder is not a sandbox.** Agents can read and write outside the workspace with their own tools.
 - **Server name clashes.** Codex drops a requested server whose name the user's configuration already uses, so a user
   who has configured a server named `caliper` for Codex would get theirs instead of Caliper's.
 - **Known adapter issues,** listed per agent above, such as a Codex prompt that never resolves.
+- **A workspace configures opencode.** opencode reads the configuration of the session's folder, which is the
+  workspace: models, agents, commands, skills, instructions, plugins and MCP servers. A workspace from elsewhere could
+  therefore choose what the agent runs, which Caliper's own settings forbid for Caliper itself. The person keeps their
+  opencode settings in the global configuration, and the side chat warns when the workspace holds an `opencode.json`,
+  an `opencode.jsonc` or an `.opencode` folder.
+- **Local models vary.** A small local model may misuse tools or lose track of a long session; that is the agent's and
+  the model's matter, and the side chat shows what happens as it does for any agent.
 - **Version 2,** which changes the turn and the diff shape; the client keeps version 1 until v2 is stable.
 
 ## Notes on the contracts
 
 - Contracts section 7 says that `ask` returns `command.needs_approval` with an approval id, but not whether an agent's
-  MCP call waits for the answer. For the pane, the agent's tool call should wait until the user answers in the pane,
+  MCP call waits for the answer. For the side chat, the agent's tool call should wait until the user answers in the side chat,
   with a time limit, rather than fail at once. This is for the commands and MCP streams to settle.
 - Contracts section 10 names "Claude Code through its ACP adapter, Codex, Gemini CLI". Codex also speaks ACP through an
   adapter; only Gemini CLI is native.
