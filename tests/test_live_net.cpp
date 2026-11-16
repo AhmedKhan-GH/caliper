@@ -168,6 +168,53 @@ public:
         send(s);
     }
 
+    // "attn" (add_attention): attention maps of 4 heads, 8 queries by 6 keys.
+    void add_attention() {
+        add_view(6, "attn", CALIPER_NET_KIND_HEATMAP, {{"head", 4}, {"query", 8}, {"key", 6}});
+    }
+    static Json attn_default() {
+        Json dv = Json::object(), index = Json::object();
+        dv.set("source", "src");
+        index.set("head", 0);
+        dv.set("index", index);
+        dv.set("reduce", Json::object());
+        return dv;
+    }
+    // One snapshot of "attn" for the data view `dv`: one head (8 x 6), or with
+    // the heads tiled, a 2 x 2 mosaic of them (16 x 12).
+    void attention(const Json& dv) {
+        const bool mosaic = dv.find("tile") != nullptr;
+        const int H = mosaic ? 16 : 8, W = mosaic ? 12 : 6;
+        wire::Snapshot s = snap("attn", CALIPER_NET_KIND_HEATMAP);
+        std::vector<float> v((size_t)W * H);
+        for (int i = 0; i < W * H; ++i) v[(size_t)i] = (float)i / (float)(W * H - 1);
+        s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {H, W}, v.data(), v.size() * 4);
+        s.data_view = dv;
+        s.axes = Json::array();
+        auto axis = [&](const char* dim, int n, int size) {
+            Json a = Json::object();
+            a.set("dim", dim);
+            a.set("start", 0);
+            a.set("step", 1);
+            a.set("count", n);
+            a.set("size", size);
+            s.axes.push(a);
+        };
+        if (mosaic) {
+            axis("head", 4, 4);
+            Json tile = Json::object();
+            tile.set("dim", "head");
+            tile.set("rows", 2);
+            tile.set("cols", 2);
+            s.tile = tile;
+        }
+        axis("query", 8, 8);
+        axis("key", 6, 6);
+        s.flags = CALIPER_NET_SNAP_AUTO_VMIN | CALIPER_NET_SNAP_AUTO_VMAX;
+        s.stats = {0.0, 1.0};
+        send(s);
+    }
+
     void append(const std::vector<float>& v) {
         const uint64_t start = series.size();
         series.insert(series.end(), v.begin(), v.end());
@@ -375,6 +422,7 @@ private:
             rep.sub = s->sub;
             rep.view = s->view;
             rep.data_view = Json::object();
+            if (s->view == "attn") rep.data_view = attn_default();
             send(rep);
             if (s->view == "loss" && !series.empty()) send_series(0, series);   // the backfill
         } else if (auto* p = std::get_if<wire::Ping>(&m)) {
@@ -1588,4 +1636,87 @@ TEST_CASE("live/controls: the details shown are those of the selection that chan
     const auto log = rc.take_log();
     CHECK(std::find(log.begin(), log.end(), "selection samples: 2 items, with details") != log.end());
     CHECK(std::find(log.begin(), log.end(), "selection step: 1 item, details failed") != log.end());
+}
+
+// The data view picker under a view's header, clicked through ImGui's input
+// queue as the run bar is: a heatmap of attention maps (head x query x key)
+// shows one head; picking another head, then "all" heads, sends VIEW_REQUEST
+// with the data view the menus describe, and the producer's resolved data
+// view and the snapshots of its new shape (a 2 x 2 mosaic of the heads) arrive
+// in the view.
+TEST_CASE("live/app: the data view picker changes the head of an attention map, and the new shape arrives") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.add_attention();
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    auto frames_until = [&](const std::function<bool()>& done, caliper_live::UiDriver* d = nullptr) {
+        for (int i = 0; i < 3000; ++i) {
+            host.frame(a, d);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("attn"); }) == 1; }));
+    p.call([](FakeProducer& f) {
+        f.attention(FakeProducer::attn_default());
+        return 0;
+    });
+    CaliperViewInfo vi{};
+    vi.struct_size = sizeof vi;
+    const bool shown = frames_until([&] { return caliper_core_view_info(a.core(), "attn", &vi) == 1 && vi.height == 8; });
+    INFO("attn: updates " << view_status(a.core(), "attn").updates << ", error " << view_status(a.core(), "attn").error
+                          << ", info " << vi.width << "x" << vi.height);
+    REQUIRE(shown);
+    CHECK(vi.width == 6);
+    // The menus: one per dimension (a heatmap keeps two of three), no source menu.
+    REQUIRE(frames_until([&] { return caliper_live::bar_widgets().count("picker:attn:head") == 1; }));
+    CHECK(caliper_live::bar_widgets().count("picker:attn:query") == 1);
+    CHECK(caliper_live::bar_widgets().count("picker:attn:source") == 0);
+
+    caliper_live::UiDriver pick("click picker:attn:head; wait 3; click picker:attn:head=2; wait 3");
+    REQUIRE(frames_until([&] { return pick.done(); }, &pick));
+    INFO("driver: " << pick.error());
+    REQUIRE(pick.error().empty());
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.view_requests.size(); }) == 1; }));
+    wire::ViewRequest vr = p.call([](FakeProducer& f) { return f.view_requests[0]; });
+    CHECK(vr.view == "attn");
+    CHECK(vr.data_view.find("source")->as_string() == "src");
+    int64_t head = -1;
+    REQUIRE(vr.data_view.find("index")->find("head")->get_i64(&head));
+    CHECK(head == 2);
+    CHECK(vr.data_view.find("tile") == nullptr);
+    caliper_live::Source* src = caliper_live_stream(a.core());
+    const uint64_t key = caliper_live_view_key(a.core(), "attn");
+    Json resolved, offer;
+    REQUIRE(frames_until([&] {
+        return src->data_view_of(key, &resolved, &offer) && resolved.find("index") &&
+               resolved.find("index")->find("head") && resolved.find("index")->find("head")->as_double() == 2.0;
+    }));
+
+    // All heads: the heatmap keeps three dims, so the first becomes the mosaic.
+    caliper_live::UiDriver all("click picker:attn:head; wait 3; click picker:attn:head=all; wait 3");
+    REQUIRE(frames_until([&] { return all.done(); }, &all));
+    REQUIRE(all.error().empty());
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.view_requests.size(); }) == 2; }));
+    vr = p.call([](FakeProducer& f) { return f.view_requests[1]; });
+    REQUIRE(vr.data_view.find("tile") != nullptr);
+    CHECK(vr.data_view.find("tile")->as_string() == "head");
+    CHECK(vr.data_view.find("index")->find("head") == nullptr);
+    p.call([vr](FakeProducer& f) {
+        f.attention(vr.data_view);
+        return 0;
+    });
+    REQUIRE(frames_until([&] { return caliper_core_view_info(a.core(), "attn", &vi) == 1 && vi.height == 16; }));
+    CHECK(vi.width == 12);
+    REQUIRE(frames_until([&] { return src->data_view_of(key, &resolved, &offer) && resolved.find("tile"); }));
+    // The view's payload map now names the mosaic's tile axis.
+    const caliper_live_views::View* v = caliper_live_views::find(a.core(), "attn");
+    REQUIRE(v != nullptr);
+    CHECK(v->map.tile_cols == 2);
+    a.detach();
 }

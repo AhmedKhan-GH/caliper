@@ -182,10 +182,51 @@ void draw_run_bar(RunControls& rc, const ControlsLook& look, float width);
 // fields, or why there are none.
 void draw_selection_details(const RunControls& rc, const ControlsLook& look);
 
+// ---- the data view picker ------------------------------------------------------------------
+// The data view picker of a stream's views, as the browser element's
+// (web/src/views/picker.ts), built from what each view offers in VIEWS: a
+// source menu when there are several sources, and one menu per dimension that
+// chooses "all" (the dimension is kept), a reduction over it (mean, sum, max,
+// min, norm) or an index (a field past 256 positions). A source with no more
+// dimensions than the view's kind must keep (2 for a heatmap or an image, 1
+// for points) gets no dimension menus, and a view with one such source gets
+// no picker. A heatmap that keeps three dimensions shows the first as a
+// mosaic. A pick goes to the producer at once (Source::request_data_view);
+// the menus show it until the resolved data view comes back, at most 2 s,
+// and then show what the producer resolved.
+class DataViewPicker {
+public:
+    // Draws the picker of view `view` (source key `key`, kind `kind`) at the
+    // cursor in rows at most `width` wide, the labels in `faint` and the
+    // menus at the font size `size` (0: the current one). Returns the height
+    // it took, 0 when the view offers nothing to choose.
+    float draw(Source* src, uint64_t key, const std::string& view, uint32_t kind, float width, ImU32 faint,
+               float size, uint64_t now_ns);
+    void reset() { views_.clear(); }
+
+private:
+    struct Choice {
+        int what = 0;              // 0 all, 1 index, 2 reduce
+        int64_t index = 0;
+        std::string op;
+        bool operator==(const Choice& o) const { return what == o.what && index == o.index && op == o.op; }
+    };
+    struct State {
+        std::string source;
+        std::map<std::string, Choice> choices;
+        caliper_net::Json shown;   // the resolved data view the menus last took
+        uint64_t pending_until = 0;
+    };
+    std::map<std::string, State> views_;
+};
+
 // ---- testing aid -------------------------------------------------------------------------
-// Where each widget of the bar was drawn in the last frame, in screen units,
-// by name: "pause", "resume", "step", "param:<name>", "action:<name>",
-// "more". A UI test aims its injected mouse events at these.
+// Where each widget of the bar and of the pickers was drawn in the last
+// frame, in screen units, by name: "pause", "resume", "step",
+// "param:<name>", "action:<name>", "more"; a picker's menus
+// "picker:<view>:source" and "picker:<view>:<dim>", and the entries of an
+// open menu "picker:<view>:<dim>=<entry>" ("all", "mean", "3"). A UI test
+// aims its injected mouse events at these.
 struct WidgetRect {
     float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 };

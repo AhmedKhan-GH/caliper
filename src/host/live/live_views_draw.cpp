@@ -521,6 +521,12 @@ void draw_header(CaliperCore* core, CaliperLiveViewsState* S, View& v, unsigned 
     ImGui::SetCursorScreenPos(cursor);
 }
 
+// The host's row under the header (a data view picker), at the cursor.
+float under_header(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
+    if (core->views_bare || !S->under_header) return 0.0f;
+    return S->under_header(v, ImGui::GetContentRegionAvail().x);
+}
+
 // Under the header with CALIPER_VIEWS_DEBUG=1: the view's diagnostics on one
 // line, cut to the window's width.
 void debug_line(const CaliperCore* core, const std::string& text) {
@@ -707,6 +713,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(320.0f, 260.0f));
     if (!open) { ImGui::End(); return; }
     draw_header(core, S, v, kToolPause);
+    under_header(core, S, v);
     {
         char tel[160], line[220];
         telemetry(tel, sizeof tel, S, v);
@@ -1207,6 +1214,7 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     if (!open) { ImGui::End(); return; }
     const size_t n = v.values.size();
     draw_header(core, S, v, kToolPause | kToolLog | kToolFollow);
+    under_header(core, S, v);
     {
         char tel[160], line[260];
         telemetry(tel, sizeof tel, S, v);
@@ -1330,6 +1338,7 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     if (!open) { ImGui::End(); return; }
     const size_t B = v.values.size();
     draw_header(core, S, v, kToolPause | kToolLog);
+    under_header(core, S, v);
     {
         char tel[160], line[220];
         telemetry(tel, sizeof tel, S, v);
@@ -1616,7 +1625,14 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
         // diagnostics line in debug.
         ImGuiWindow* cw = ImGui::GetCurrentWindow();
         const float head = !core->views_bare && cw->DockIsActive ? ImGui::GetFrameHeight() + st.ItemSpacing.y : 0.0f;
-        const float ay = wp.y + cs.y + head + (debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f) + mt;
+        const float above = head + (debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f);
+        // The host's row (a data view picker) under them, then the image.
+        float extra = 0.0f;
+        if (!core->views_bare && S->under_header) {
+            ImGui::SetCursorScreenPos(ImVec2(wp.x + cs.x, wp.y + cs.y + above));
+            extra = under_header(core, S, v);
+        }
+        const float ay = wp.y + cs.y + above + extra + mt;
         const float aw = wp.x + ws.x - st.WindowPadding.x - ax - mr;
         const float ah = wp.y + ws.y - st.WindowPadding.y - ay - mb;
         const ImVec2 m = ImGui::GetIO().MousePos;

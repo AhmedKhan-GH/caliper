@@ -88,6 +88,7 @@ struct CaliperLiveState {
     caliper_live::NetSource* net = nullptr;  // the source, when it is a network stream (attach_url)
     std::string             net_problem;     // its last problem() (logged when it changes)
     caliper_live::RunControls controls;      // a stream's controls and selections (wire protocol 3.1)
+    caliper_live::DataViewPicker picker;     // a stream's data view pickers, under the views' headers
 
     struct View {
         uint64_t    key = 0;
@@ -154,8 +155,12 @@ void remove_view(CaliperCore* core, View& v) {
 // Back to "not attached": views, source (unmaps; clears the heartbeat and the
 // claims), counters. The picker settings survive.
 void teardown_attached(CaliperCore* core, CaliperLiveState* L) {
-    // A stream's views stop reporting selections (the sink would find no source).
-    if (L->net && core->live_views) caliper_live_views::set_event_sink(core, {});
+    // A stream's views stop reporting selections (the sink would find no
+    // source) and lose their pickers.
+    if (L->net && core->live_views) {
+        caliper_live_views::set_event_sink(core, {});
+        caliper_live_views::set_under_header(core, {});
+    }
     for (auto& v : L->views) remove_view(core, v);   // releases the imports, bridge still bound
     L->views.clear();
     L->source.reset();   // MTLBuffer deallocators unmap once the GPU let go
@@ -484,6 +489,17 @@ int attach_url_impl(CaliperCore* core, const std::string& url) {
                 S->source->send_event(v.key, e.type, e.detail);
                 return;
             }
+    });
+    // Each view's data view picker, under its header, from what it offers.
+    caliper_live_views::set_under_header(core, [core](caliper_live_views::View& v, float width) {
+        CaliperLiveState* S = core->live;
+        if (!S || !S->net || !S->source) return 0.0f;
+        uint64_t key = 0;
+        for (const auto& x : S->views)
+            if (x.name == v.name) key = x.key;
+        const caliper_live_views::Look& look = core->live_views->look;
+        return S->picker.draw(S->source.get(), key, v.name, (uint32_t)v.kind, width, look.faint, look.small_size,
+                              caliper_live::now_ns());
     });
     core->log(1, "live: attached to the stream of session '" + L->session + "'" +
                      (L->pending ? " (waiting for a session)" : ""));

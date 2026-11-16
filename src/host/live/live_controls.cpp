@@ -623,6 +623,219 @@ void draw_selection_details(const RunControls& rc, const ControlsLook& look) {
     }
 }
 
+// ---- the data view picker -------------------------------------------------------------------
+namespace {
+
+constexpr int64_t kMaxIndexEntries = 256;   // past this a dimension's index is a field
+constexpr uint64_t kPickWaitNs = 2000000000ull;
+const char* const kReductions[] = {CALIPER_NET_REDUCE_MEAN, CALIPER_NET_REDUCE_SUM, CALIPER_NET_REDUCE_MAX,
+                                   CALIPER_NET_REDUCE_MIN, CALIPER_NET_REDUCE_NORM};
+
+struct DimOffer {
+    std::string name;
+    int64_t size = 0;
+};
+struct SourceOffer {
+    std::string name;
+    std::vector<DimOffer> dims;
+};
+
+std::vector<SourceOffer> sources_of(const Json& offer) {
+    std::vector<SourceOffer> out;
+    const Json* srcs = offer.find("sources");
+    if (!srcs || !srcs->is_array()) return out;
+    for (const Json& s : srcs->items()) {
+        SourceOffer so;
+        if (const Json* n = s.find("name"); n && n->is_string()) so.name = n->as_string();
+        if (const Json* dims = s.find("dims"); dims && dims->is_array())
+            for (const Json& d : dims->items()) {
+                DimOffer dm;
+                if (const Json* n = d.find("name"); n && n->is_string()) dm.name = n->as_string();
+                if (const Json* z = d.find("size")) z->get_i64(&dm.size);
+                so.dims.push_back(dm);
+            }
+        out.push_back(std::move(so));
+    }
+    return out;
+}
+
+int min_kept(uint32_t kind) {
+    return kind == CALIPER_LIVE_KIND_HEATMAP || kind == CALIPER_LIVE_KIND_IMAGE ? 2
+           : kind == CALIPER_LIVE_KIND_POINTS                                    ? 1
+                                                                                 : 0;
+}
+
+std::string choice_label(int what, int64_t index, const std::string& op) {
+    return what == 1 ? std::to_string(index) : what == 2 ? op : "all";
+}
+
+}  // namespace
+
+float DataViewPicker::draw(Source* src, uint64_t key, const std::string& view, uint32_t kind, float width,
+                           ImU32 faint, float size, uint64_t now_ns) {
+    Json resolved, offer;
+    if (!src || !key || !src->data_view_of(key, &resolved, &offer)) return 0.0f;
+    const std::vector<SourceOffer> sources = sources_of(offer);
+    if (sources.empty()) return 0.0f;
+    State& st = views_[view];
+    // The menus follow what the producer resolved, except while a pick waits.
+    const bool fresh = resolved.is_object() && resolved != st.shown;
+    if (fresh || (st.source.empty() && st.pending_until == 0) || (st.pending_until && now_ns > st.pending_until)) {
+        const Json& dv = resolved.is_object() ? resolved : offer.find("default") ? *offer.find("default") : resolved;
+        const Json* sname = dv.is_object() ? dv.find("source") : nullptr;
+        st.source = sname && sname->is_string() ? sname->as_string() : sources[0].name;
+        st.choices.clear();
+        const Json* index = dv.is_object() ? dv.find("index") : nullptr;
+        const Json* reduce = dv.is_object() ? dv.find("reduce") : nullptr;
+        for (const SourceOffer& so : sources)
+            if (so.name == st.source)
+                for (const DimOffer& d : so.dims) {
+                    Choice c;
+                    int64_t i = 0;
+                    const Json* ix = index && index->is_object() ? index->find(d.name) : nullptr;
+                    const Json* op = reduce && reduce->is_object() ? reduce->find(d.name) : nullptr;
+                    if (ix && ix->is_int() && ix->get_i64(&i)) {
+                        c.what = 1;
+                        c.index = i;
+                    } else if (op && op->is_string()) {
+                        c.what = 2;
+                        c.op = op->as_string();
+                    }
+                    st.choices[d.name] = c;
+                }
+        if (resolved.is_object()) st.shown = resolved;
+        st.pending_until = 0;
+    }
+    const SourceOffer* cur = nullptr;
+    for (const SourceOffer& so : sources)
+        if (so.name == st.source) cur = &so;
+    if (!cur) cur = &sources[0];
+    const bool choosable = (int)cur->dims.size() > min_kept(kind);
+    if (sources.size() < 2 && !choosable) return 0.0f;
+
+    // The data view the menus describe, sent as soon as one changes.
+    auto send = [&]() {
+        Json index = Json::object(), reduce = Json::object();
+        std::vector<std::string> kept;
+        for (const DimOffer& d : cur->dims) {
+            const Choice& c = st.choices[d.name];
+            if (c.what == 1) index.set(d.name, c.index);
+            else if (c.what == 2) reduce.set(d.name, c.op);
+            else kept.push_back(d.name);
+        }
+        Json dv = Json::object();
+        dv.set("source", cur->name);
+        dv.set("index", index);
+        dv.set("reduce", reduce);
+        if (kind == CALIPER_LIVE_KIND_HEATMAP && kept.size() == 3) dv.set("tile", kept[0]);
+        std::string err;
+        if (src->request_data_view(key, dv.dump(), &err)) st.pending_until = now_ns + kPickWaitNs;
+    };
+
+    if (size > 0.0f) ImGui::PushFont(nullptr, size);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 1.0f));
+    ImGui::PushID(("caliper.picker." + view).c_str());
+    const ImGuiStyle& gs = ImGui::GetStyle();
+    const float x0 = ImGui::GetCursorScreenPos().x, y0 = ImGui::GetCursorScreenPos().y;
+    const float right = x0 + width;
+    bool first = true;
+    // Places a control of width `w` on this row, or on the next when it does not fit.
+    auto place = [&](float w) {
+        if (first) {
+            first = false;
+            return;
+        }
+        ImGui::SameLine(0.0f, 10.0f);
+        if (ImGui::GetCursorScreenPos().x + w > right) ImGui::NewLine();
+    };
+    const float combo_w = ImGui::CalcTextSize("norm").x + ImGui::GetFrameHeight() + 2.0f * gs.FramePadding.x + 14.0f;
+    const std::string prefix = "picker:" + view + ":";
+
+    if (sources.size() > 1) {
+        float w = 0.0f;
+        for (const SourceOffer& so : sources) w = std::max(w, ImGui::CalcTextSize(so.name.c_str()).x);
+        w += ImGui::GetFrameHeight() + 2.0f * gs.FramePadding.x + 8.0f;
+        place(w);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::BeginCombo("##source", cur->name.c_str())) {
+            for (const SourceOffer& so : sources) {
+                if (ImGui::Selectable(so.name.c_str(), so.name == cur->name) && so.name != cur->name) {
+                    // Another source: its dims keep the choices of dims of the same name.
+                    std::map<std::string, Choice> next;
+                    for (const DimOffer& d : so.dims) {
+                        auto it = st.choices.find(d.name);
+                        next[d.name] = it != st.choices.end() ? it->second : Choice{};
+                    }
+                    st.source = so.name;
+                    st.choices = std::move(next);
+                    for (const SourceOffer& s2 : sources)
+                        if (s2.name == so.name) cur = &s2;
+                    send();
+                }
+                remember(prefix + "source=" + so.name);
+            }
+            ImGui::EndCombo();
+        }
+        remember(prefix + "source");
+    }
+    if (choosable)
+        for (const DimOffer& d : cur->dims) {
+            Choice& c = st.choices[d.name];
+            const bool field = d.size > kMaxIndexEntries;
+            const float label_w = ImGui::CalcTextSize(d.name.c_str()).x;
+            place(label_w + 4.0f + combo_w + (field && c.what == 1 ? 64.0f : 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, faint);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(d.name.c_str());
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::PushID(d.name.c_str());
+            ImGui::SetNextItemWidth(combo_w);
+            const std::string shown = field && c.what == 1 ? "index" : choice_label(c.what, c.index, c.op);
+            if (ImGui::BeginCombo("##dim", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+                auto entry = [&](const std::string& label, const Choice& pick) {
+                    if (ImGui::Selectable(label.c_str(), c == pick) && !(c == pick)) {
+                        c = pick;
+                        send();
+                    }
+                    remember(prefix + d.name + "=" + label);
+                };
+                entry("all", Choice{});
+                ImGui::SeparatorText("reduce");
+                for (const char* op : kReductions) entry(op, Choice{2, 0, op});
+                ImGui::SeparatorText("index");
+                if (field) {
+                    if (ImGui::Selectable("index", c.what == 1) && c.what != 1) {
+                        c = Choice{1, 0, ""};
+                        send();
+                    }
+                    remember(prefix + d.name + "=index");
+                } else {
+                    for (int64_t i = 0; i < d.size; ++i) entry(std::to_string(i), Choice{1, i, ""});
+                }
+                ImGui::EndCombo();
+            }
+            remember(prefix + d.name);
+            if (field && c.what == 1) {
+                ImGui::SameLine(0.0f, 4.0f);
+                ImGui::SetNextItemWidth(60.0f);
+                int64_t i = c.index;
+                ImGui::InputScalar("##index", ImGuiDataType_S64, &i);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    c.index = std::clamp<int64_t>(i, 0, d.size - 1);
+                    send();
+                }
+            }
+            ImGui::PopID();
+        }
+    ImGui::PopID();
+    ImGui::PopStyleVar();
+    if (size > 0.0f) ImGui::PopFont();
+    const float h = ImGui::GetItemRectMax().y - y0 + gs.ItemSpacing.y;
+    ImGui::SetCursorScreenPos(ImVec2(x0, y0 + h));
+    return h;
+}
+
 // ---- linked selection ---------------------------------------------------------------------
 namespace {
 

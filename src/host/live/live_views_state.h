@@ -256,6 +256,10 @@ struct CaliperLiveViewsState {
     // (area x, y, w, h and the number of views) and its generation.
     float grid_sig[5] = {};
     uint64_t grid_gen = 0;
+    // What a host draws in every view window under the header (a stream's
+    // data view picker, live_controls.h): called with the view and the
+    // width it may take, at the cursor; returns the height it took (0: none).
+    std::function<float(caliper_live_views::View&, float width)> under_header;
 };
 
 namespace caliper_live_views {
@@ -266,6 +270,8 @@ View* find(CaliperCore* core, const char* name);
 void set_event_sink(CaliperCore* core, EventSink sink);
 // The headers' look and the stream state their dots show (see the state).
 void set_look(CaliperCore* core, const Look& look);
+// What a host draws under each view's header (see the state); empty: nothing.
+void set_under_header(CaliperCore* core, std::function<float(View&, float)> fn);
 void set_stream_state(CaliperCore* core, int state);
 // Whether the views show their diagnostics (size, path, seq, latency,
 // updates, drops) under their header: CALIPER_VIEWS_DEBUG=1, or a host that

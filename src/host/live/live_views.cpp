@@ -621,6 +621,10 @@ void set_look(CaliperCore* core, const Look& look) {
     if (core) state(core)->look = look;
 }
 
+void set_under_header(CaliperCore* core, std::function<float(View&, float)> fn) {
+    if (core) state(core)->under_header = std::move(fn);
+}
+
 void set_stream_state(CaliperCore* core, int stream) {
     if (core && core->live_views) core->live_views->stream = stream;
 }
