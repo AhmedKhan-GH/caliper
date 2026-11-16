@@ -12,8 +12,11 @@ on top of them. The person's side is in Agent roles (`docs/explanations/agent-ro
 Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`).
 
 **Built on this branch:** the sidecar, its tests and the key store, which that page lists; stacked previews in the
-session ([below](#preview-and-apply-on-the-command-layer)); and the `_meta` argument of `AcpClient::new_session()` that
-carries the widget session's fields. **Planned:** everything else on this page. The [work items](#work-items) give the
+session ([below](#preview-and-apply-on-the-command-layer)); the `_meta` argument of `AcpClient::new_session()` that
+carries the widget session's fields; and widget sessions in the sidecar (item 12): the target, the tool scope from one
+rule kept as data, the preview header, the widget system prompt, images and embedded context in prompts, the turn
+budget, the handoff and `session/close` ([How it stays an ACP agent](#how-it-stays-an-acp-agent)). **Planned:**
+everything else on this page. The [work items](#work-items) give the
 sizes and the order.
 
 ## The role
@@ -137,16 +140,27 @@ The rule:
 | A property | `spec.get`, `catalog.describe` | `panel.patch` for a property of a panel, `source.patch` for a property of a source |
 
 `panel.render` is in a scope only when the model has vision. A tool outside the scope is never sent to the model, and a
-call to one is answered as a call to an unknown tool, which the loop already does. The sidecar refuses, at
-`session/new`, a scope that names a destructive command or a mutating command without `dry_run`, so a mistake in the
-app cannot widen what the widget agent may do.
+call to one is answered as a call to an unknown tool, which the loop already does; the call path refuses a command
+outside the session's scope as well (`agent.out_of_scope`), whatever the model names.
+
+**Built: the rule as data.** The rule's lists are one file, `src/builder/commands/widget_scopes.json`, beside the
+command table: for each kind of target its reads and its edits, the commands that are never in a scope (`spec.set_text`,
+`spec.new`, `spec.open`, `applet.open`, `layout.set`, `data.import`) and the groups that are never in one (`history`,
+`applet`, `preview`), and `panel.render` as the one command that needs vision. Both the sidecar
+(`caliper_agent/widget.py`, which reads it at start) and the app's context bundle (which embeds it at build time) apply
+the same rule to the command table, so the two agree from one definition, and the rule reads each command's flags and
+arguments schema rather than a list of schemas: a listed read that mutates, or a listed edit that loses its boolean
+`dry_run` or becomes destructive, drops out of the scope. A property's scope depends on its owner, so the file has a
+`panel_property` and a `source_property` entry. The sidecar is stricter than this page first planned: a scope that the
+app sends must be a subset of what the rule gives for the target, or `session/new` is refused with `agent.bad_widget`,
+and without a scope the sidecar uses the rule's whole scope.
 
 When no spec is open, the app runs `spec.new` from the `ui` origin, with the file's name as the title, before it
 begins the preview, since a preview needs an open spec; on Reject it undoes that `spec.new` as well.
 
 ## The turn budget, the model and the effort
 
-- **Two rounds.** In the first round the model reads the bundle and proposes its edits as dry runs. In the second it
+- **Two rounds.** In the first round the model reads the bundle and proposes its edits on the preview. In the second it
   sees their results and, with vision, a render of the preview, and either finishes with one sentence or corrects an
   edit. A prompt makes at most 3 model requests and 8 tool calls, against 50 requests in the unscoped mode, and asks for
   at most 8,000 output tokens. A prompt that reaches a limit ends with the stop reason `max_turn_requests`, and the
@@ -175,7 +189,9 @@ run checks one edit against the open spec, so the dry run of the second edit wou
   open spec, validated as a real edit, and returns its diff against the copy as it was before the edit. Its handler
   reports `no_effect`, so the history and the journal are untouched, and the command layer's review does not ask about
   it. The sidecar sets the header on every call in a widget session; the model never sets it and is never offered the
-  preview commands.
+  preview commands. The sidecar sends every edit without `dry_run`, and its tools do not offer the argument, because
+  an edit that names a preview with `dry_run` only checks the change against the copy and does not stack it; the
+  earlier plan here, a dry run with the header on every edit, would have left the preview empty.
 - **`spec.get`, `spec.validate` and `panel.render` with the preview's id** read the copy, so the model can check its
   work, and the app draws the same copy in the panel's frame for the person with `Session::resolve(panel, preview)`
   and `Session::preview(id)`.
@@ -229,6 +245,15 @@ configured agent first when the side chat is not open. The prompt carries:
 4. **The target's ids**: the panel, its sources and their catalog ids, so the agent can act on them through
    `caliper-mcp`.
 
+**How the widget agent hands over.** When a request does not fit its target or its tools, the model calls the widget
+session's one tool of its own, `handoff`, with a `kind` (`build_from_scratch`, `loader`, `project_code`, `explanation`,
+`another_target` or `outside_scope`) and one sentence for the person; the system prompt tells it to make no edit then.
+The sidecar runs no other call of that reply and sends no further model request, ends the turn with `end_turn`, sends a
+`handoff` status (a thought whose `_meta.caliper.status` is `handoff`, with the kind as `category` and the sentence as
+`reason`), and puts `{"kind", "reason"}` in the `handoff` field of the prompt answer's `_meta.caliper.widget`, which
+the app turns into the card's Ask in chat. The tool is not a command, and its name has no underscore, so it can never
+be taken for one.
+
 The open preview is dropped when the handoff is sent. The side chat's agent makes whatever change is wanted through
 commands, where the command layer's approvals apply to it as to every agent. The side chat shows the handed-over prompt
 as the person's message, so the person sees what was sent. When no side chat agent is configured, the card links to the
@@ -263,13 +288,21 @@ messages, thoughts, tool calls and cancellation as the side chat's agents. The i
 the session model that the chat pane did not:
 
 1. **A context bundle in the prompt.** It travels as ACP prompt content: `resource` blocks with embedded text and one
-   `image` block. The sidecar today declares neither images nor embedded context and reads only text and resource
-   links, so it gains `promptCapabilities.image` and `promptCapabilities.embeddedContext` and turns those blocks into
-   the provider's content.
+   `image` block. The sidecar declares `promptCapabilities.image` and `promptCapabilities.embeddedContext` and turns
+   text, embedded text resources and resource links into text and an image into an image for a model that reads images,
+   or into a line saying that the picture was left out for one that does not. A block whose `annotations.audience`
+   names only the person is not given to the model. A prompt holds at most 4 images of at most 3.75 MB each, PNG, JPEG,
+   GIF or WebP, checked by their bytes.
 2. **A target, a tool scope and a preview for each session.** They travel in `_meta.caliper.widget` of `session/new`,
    for example
    `{"target": {"kind": "panel", "panel": "curves"}, "scope": ["spec.get", "panel.patch"], "preview": "widget-7f3a"}`.
-   The model and the effort stay config options, as today.
+   The model and the effort stay config options, as today; a widget session offers no `review` option. The sidecar
+   checks the field as hostile input (its size and depth, the kind, every id against the spec's id grammar, the
+   property path and the preview id against the command table's pattern) and refuses the session when it cannot be
+   used, rather than falling back to the general role. Its answer echoes the target, the scope and the preview in its
+   own `_meta.caliper.widget`, and its session id starts with `widget-`. Each prompt's answer carries
+   `_meta.caliper.widget` with the preview, the number of edits that changed it in that prompt, the handoff or null, and
+   whether the turn reached its limit.
 
 **Decision: a `_meta` field of `session/new`, not a launch option.** The target and the scope belong to one session,
 and `session/new` is where a session is made. One sidecar process serves up to 16 sessions; a launch option would need
@@ -280,8 +313,10 @@ through unchanged. A session without the field keeps today's unscoped behaviour,
 use and the app does not.
 
 The sidecar also implements `session/close`, behind the `close` session capability, so the app can end a widget
-session when its prompt closes; until it does, the sidecar ends the oldest idle session when a seventeenth is asked
-for. A widget session uses a second fixed system prompt, shorter than the chat prompt: act on one target, propose with
+session when its prompt closes: it cancels a running turn, waits up to 10 seconds for it to end and forgets the
+session, and leaves the preview to the app, which began it and drops or commits it. `session/cancel` likewise leaves
+the preview as it is. A seventeenth session is refused, as before, since the app can now close the ones it is done
+with. A widget session uses a second fixed system prompt, shorter than the chat prompt: act on one target, propose with
 the tools, answer in one sentence, never invent an id or a column, and send anything outside the scope to the chat. For
 Claude, the tools of one kind of target and this prompt are the same at every ⌘K, so the cached prefix carries over
 from one prompt to the next while the cache lasts; the bundle comes after the cache breakpoint.
@@ -514,6 +549,12 @@ For a local server:
   what the card shows or refuses with `history.conflict`, in place of the `preview.stale` planned earlier, which
   refused any change of the open spec.
 - **A `_meta` field of `session/new`** for the target, the scope and the preview, for the reasons given above.
+- **The scope rule as data beside the command table**, read by the sidecar and embedded in the app, so both derive the
+  scope from one definition; an app's scope wider than the rule refuses the session.
+- **Edits with the preview header and without `dry_run`**, since a dry run that names a preview only checks the edit.
+- **A `handoff` tool for "Ask in chat"**, so that the model says in a structured way that a request belongs in the side
+  chat, and the turn ends there.
+- **`session/close` and `session/cancel` leave the preview to the app**, which began it.
 - **Claude Haiku 5.5 at effort `low`** as the Claude default, for speed on small bounded edits.
 - **The preview card replaces per-edit review** in a widget session.
 - **A dropped file with no open spec** previews on an empty spec, and Accept creates the spec from the `ui` origin
@@ -539,7 +580,7 @@ and L six to ten; each figure is rough.
 | 9 | Done: stacked previews in the session, with `preview.begin`, `preview.diff`, `preview.commit` and `preview.discard`, edits and reads that name a preview, and `Session::resolve()` of a preview's panel | None left |
 | 10 | Done: an optional `_meta` argument on `AcpClient::new_session()` | None left |
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
-| 12 | Widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget and `session/close` | M, 5 days |
+| 12 | Done: widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget, the handoff and `session/close` | None left |
 | 13 | The context bundle, built in the app from the session, with its bounds and cuts | M, 3 days |
 | 14 | The inline surface: the four entry points, the inline prompt, the preview drawn in place, Accept, Reject and Refine, and Ask in chat; with the packaging of `caliper-agent` and a Python runtime | L, 8 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |

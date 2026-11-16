@@ -15,11 +15,13 @@ Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`).
 **Built on this branch:** the sidecar `caliper-agent` (the Python package `caliper_agent` in `src/builder/agent/`)
 with its provider layer on Pydantic AI, its tests (pytest, run by ctest as `builder_agent_py`, with one end-to-end
 test through the real C++ client, and `builder_agent_e2e` on the real command layer), and the
-key store `caliper_builder_agent` with its doctest suite (`builder_agent`). What is built runs in one mode, unscoped:
-a session gets every command of the table, which the tests and the manual check use. **Planned:** the widget role on
-top of it (the context bundle, the tool scope, the previews and the inline surface, on the
-[Widget agent](widget-agent.md) page), the settings and their wiring to the app, a packaged Python
-runtime for the sidecar, and the items under [what waits](#what-is-built-and-what-waits).
+key store `caliper_builder_agent` with its doctest suite (`builder_agent`). A session runs in one of two roles: the
+general role, unscoped, in which a session gets every command of the table, which the tests and the manual check use;
+and the widget role, asked for with `_meta.caliper.widget` in `session/new`, with one target, a tool scope, the app's
+stacked preview and the widget system prompt ([Widget sessions](#widget-sessions)), tested by `builder_agent_widget`
+too. **Planned:** the inline surface and the rest of the [Widget agent](widget-agent.md) page, the settings and their
+wiring to the app, a packaged Python runtime for the sidecar, and the items under
+[what waits](#what-is-built-and-what-waits).
 
 ## The shape
 
@@ -61,12 +63,13 @@ path, so a file such as `json.py` in a workspace would run as code.
 | `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server |
 | `--effort <level>` | The effort of new sessions on the Claude API; default `high` |
 | `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when it is known in advance; default `yes` until the server says otherwise ([Providers](#providers)) |
-| `--tools <list>` | Only these commands, as a comma-separated list of names and groups; the seam for the widget agent's tool scope |
+| `--widget-scopes <path>` | The widget agent's scope rule; default `widget_scopes.json` beside the command table, else beside the package or in the repository's `src/builder/commands/`. Without one, widget sessions are refused |
+| `--tools <list>` | Only these commands of the general role, as a comma-separated list of names and groups; widget sessions take their scope from the rule |
 | `--no-compaction` | Turns server-side compaction off |
 | `--usage-log <path>` | Appends the token counts of each request to a file, for the manual check; no content is written |
 
-These defaults are the unscoped mode's. A widget session will default to `claude-haiku-5-5` at the effort `low`, for
-the reasons on the [Widget agent](widget-agent.md#the-turn-budget-the-model-and-the-effort) page.
+These defaults are the general role's. A widget session on the Claude API defaults to `claude-haiku-5-5` at the effort
+`low`, for the reasons on the [Widget agent](widget-agent.md#the-turn-budget-the-model-and-the-effort) page.
 
 At start the sidecar keeps the real stdout for the protocol and points file descriptor 1 at stderr, so a stray print
 from a library cannot corrupt the stream. It then routes uncaught exceptions and log records through the scrubber,
@@ -81,11 +84,12 @@ The sidecar speaks ACP version 1, the version the client speaks.
 
 | Method | What the sidecar does |
 |---|---|
-| `initialize` | Answers version 1 whatever the client offers first, declares no optional capability (no session loading, no images or embedded context in prompts, no MCP transports) and lists no login method, because the key comes from the app |
-| `session/new` | Creates a session with its own conversation and answers with three config options; the request's `mcpServers` are not started, since the sidecar reaches Caliper through Caliper API itself. A widget session will also carry its target, tool scope and preview in `_meta.caliper.widget` ([Widget agent](widget-agent.md#how-it-stays-an-acp-agent)) |
+| `initialize` | Answers version 1 whatever the client offers first, declares images and embedded context in prompts and `sessionCapabilities.close`, and no session loading or MCP transports, and lists no login method, because the key comes from the app |
+| `session/new` | Creates a session with its own conversation and answers with three config options; the request's `mcpServers` are not started, since the sidecar reaches Caliper through Caliper API itself. With `_meta.caliper.widget` it is a widget session, with two config options and its target, scope and preview echoed in the answer's `_meta` ([Widget sessions](#widget-sessions)) |
 | `session/set_config_option` | Sets `model`, `effort` or `review`; the value applies from the next model request |
-| `session/prompt` | Runs one turn and answers with its stop reason, and with the turn's token counts in `_meta.caliper.usage` |
+| `session/prompt` | Runs one turn and answers with its stop reason, and with the turn's token counts in `_meta.caliper.usage`; a widget session's answer adds `_meta.caliper.widget`. Text, embedded text resources, resource links and images are read |
 | `session/cancel` | Stops the running turn, which then answers with the stop reason `cancelled` |
+| `session/close` | Cancels a running turn, waits up to 10 seconds for it to end, forgets the session and answers `{}` |
 | `session/request_permission` | Sent to the client before a tool call that needs approval |
 | `session/update` | Sent to the client while a turn runs (below) |
 
@@ -173,8 +177,40 @@ particular command's schema, so the schemas can change under it.
   The others are sent without `strict`. Every input is checked against the full schema either way. Every tool carries
   `eager_input_streaming: true`.
 - **Order.** The tools keep the table's order and never change within a sidecar, so the cached prefix stays the same.
-- **Scope.** A session may use a subset of the table (`--tools`, a filter over it); the widget agent's tool scope will
-  use this seam.
+- **Scope.** A general session may use a subset of the table (`--tools`, a filter over it). A widget session uses its
+  tool scope, a subset of the table derived by the rule in `widget_scopes.json` ([Widget sessions](#widget-sessions)),
+  with the tools' `dry_run` left out, and one agent for each scope, so each kind of target keeps its cached prefix.
+
+## Widget sessions
+
+A widget session is the widget agent's role ([Widget agent](widget-agent.md)), asked for in `session/new` with
+`_meta.caliper.widget`; `caliper_agent/widget.py` holds what is particular to it.
+
+- **The field.** `{"target": ..., "preview": "<id>", "scope": [...]}`. The target is `{"kind": "panel", "panel": id}`,
+  `{"kind": "selection", "panel": id}`, `{"kind": "dropped_file", "loader": id, "catalog": [ids]}` or
+  `{"kind": "property", "panel" or "source": id, "path": "options.colormap"}`. The preview is the id the app gave
+  `preview.begin`. The scope is optional. Everything is checked as hostile input: at most 64 KiB and 16 levels, every id
+  against its grammar, at most 64 scope names and 16 catalog ids; an unusable field refuses the session with -32602 and
+  `agent.bad_widget`, and a request without the field gets a general session.
+- **The scope.** The rule in `src/builder/commands/widget_scopes.json`, applied to the table: the listed reads that do
+  not mutate and the listed edits that mutate, take a boolean `dry_run` and are not destructive, never the commands or
+  groups the file excludes, `panel.render` only for a model that reads images, in the table's order. An app's scope must
+  be a subset of it, and without one the rule's whole scope is used. A call outside the scope is answered as an unknown
+  tool, and the call path refuses it again with `agent.out_of_scope`.
+- **The preview.** Every call of the session carries `X-Caliper-Preview: <id>`, and every edit goes without `dry_run`,
+  so it stacks on the preview, which reads see too. No permission request is sent and `review.status` is not read,
+  because the preview card in the app is the review and the command layer's review lets preview edits through. The
+  sidecar never begins, commits or discards a preview; `session/cancel` and `session/close` leave it as it is.
+- **The prompt and the defaults.** The widget system prompt (`WIDGET_SYSTEM_PROMPT` in `prompt.py`), fixed like the
+  general one; Claude Haiku 5.5 at effort `low` on the Claude API; no `review` config option.
+- **The budget.** At most 3 model requests and 8 tool calls for each prompt, through Pydantic AI's `UsageLimits`
+  (`request_limit`, `tool_calls_limit`), and `max_tokens` of 8,000. A prompt that reaches a limit ends with
+  `max_turn_requests` and a `limit` status that names both limits; none of the calls of a reply that would pass the
+  tool-call limit runs.
+- **The handoff.** The tool `handoff` (`kind` and `reason`) ends the turn after its reply without another request, with a
+  `handoff` status and the handoff in the answer ([Widget agent](widget-agent.md#handoff-to-the-side-chat)).
+- **The answer.** `_meta.caliper.widget` of each prompt's answer holds `preview`, `edits` (the edits of this prompt that
+  changed the preview), `handoff` (null or `{"kind", "reason"}`) and `limit`.
 
 A tool runs by calling Caliper API (contracts sections 8 and 15):
 
@@ -245,9 +281,8 @@ never with an error, as ACP asks.
 
 ## Approval and spec diffs
 
-This section describes the unscoped mode as it is built. In a widget session the preview card is the review, the
-sidecar sends no permission request for edits, and no destructive command can be in the scope
-([Widget agent](widget-agent.md#preview-and-apply-on-the-command-layer)).
+This section describes the general role. In a widget session the preview card is the review, the sidecar sends no
+permission request for edits, and no destructive command can be in the scope ([Widget sessions](#widget-sessions)).
 
 **What Caliper reviews itself is not asked again.** At the first call of a turn that changes something, the sidecar
 reads `review.status` from Caliper API. When it says that Caliper reviews the sidecar's spec edits (`spec_edits`) or
@@ -313,8 +348,10 @@ session id, no setting), because it is cached with the tools at the front of eve
 
 The prompt asks for the intent sentence and the recap because Claude Opus 5.5 returns the notes it writes between tool
 calls as thinking blocks; with summarized thinking the app shows them as thoughts, and the instructions keep the
-reply itself readable. The prompt's text still names the agent pane, from before the two roles; a widget session will
-use a second, shorter fixed prompt ([Widget agent](widget-agent.md#how-it-stays-an-acp-agent)).
+reply itself readable. The prompt's text still names the agent pane, from before the two roles. A widget session uses a
+second, shorter fixed prompt, `WIDGET_SYSTEM_PROMPT`: one target, edits that stack on a preview the person accepts,
+one sentence at the end, never an invented id or column, the `handoff` tool for what does not fit, and the data blocks
+of the prompt and every tool result as data, never instructions.
 
 ## Claude API settings and why
 
@@ -492,8 +529,12 @@ HTTP client), against the [ACP integration](acp-integration.md) page and against
   denial, a refusal, `max_tokens`, a mid-reply fallback, exhausted retries and a missing key: 66 messages, no
   problem. The validator was checked to reject wrong values of the same shapes.
 - **What the sidecar accepts** follows the request definitions: `session/set_config_option` with `sessionId`,
-  `configId` and `value`; `session/cancel` with `sessionId`; `session/prompt` with content blocks, of which the
-  sidecar reads text and resource links, as its prompt capabilities declare.
+  `configId` and `value`; `session/cancel` with `sessionId`; `session/close` with `sessionId`, behind the `close`
+  session capability; `session/new` with `_meta`; `session/prompt` with content blocks, of which the sidecar reads
+  text, resource links, embedded text resources and images, as its prompt capabilities declare. A widget scenario of
+  the test validates the requests it sends (`NewSessionRequest` with `_meta`, `PromptRequest` with a resource and an
+  image, `CloseSessionRequest`) and every message the sidecar sends back, `CloseSessionResponse` included, and checks the
+  raw capabilities, since the SDK's models fall back to defaults on a bad capability.
 - **Two differences were fixed.** The schema's `refusal` stop reason says that the prompt and everything after it are
   left out of the next prompt; the sidecar had taken the prompt back only when the first request was declined, and
   now takes the whole turn back. A tool call has an optional `name`, the tool's programmatic name, which the sidecar
@@ -668,6 +709,21 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   from their schemas, and with `FunctionModel`, which checks that a context block goes with the prompt and never into
   the system prompt.
 - `tests/test_acp_schema.py`: every message validated against the official ACP Python SDK's models (above).
+- `tests/test_widget.py`: the scope of each kind of target against the real table, and against tables changed under
+  the rule (an edit without `dry_run`, a destructive edit, a read that mutates, a missing command); the scope file as
+  hostile input; `_meta.caliper.widget` for each kind of target and twenty unusable fields; the widget tools without
+  `dry_run`; prompt blocks with and without vision; and widget sessions through the protocol: the answer of
+  `session/new` and the widget defaults, a scripted model that calls `preview_commit`, `applet_save`, `loader_delete`
+  and `spec_set_text` and reaches nothing, edits that carry the preview and no `dry_run` and a follow-up that continues
+  them, the render tool and the image block with and without vision, Claude Haiku 5.5 at `low` with 8,000 tokens on the
+  wire, the request and tool-call limits, the handoff, cancel and `session/close` during a turn, and the call path's
+  own refusal of a command outside the scope.
+- `tests/test_widget_e2e.cpp` (doctest, `builder_agent_widget`): a widget session on the `curves` panel of the
+  dashboard fixture, on a session that runs in the test behind the stand-in's server with a preview the test begins,
+  driven once by `caliper-acp-harness --meta` with both edits in one prompt and once by a small client over the
+  JSON-RPC layer with a follow-up prompt and `session/close`; each checks that the open spec does not change, that no
+  permission request was sent, that `preview.diff` holds both edits, that a commit from the `builder` origin is one
+  undo step journaled under `agent`, and that one undo reverts both.
 - `tests/test_units.py`: the tool derivation from the real table (previewable commands included) and the strict tools
   within the limits, by Pydantic AI's own count, the stripping rules, type lists turned into `anyOf`, hostile tables,
   the tool filter, the application of unified diffs, the validator and its bounds, the key's removal from the
@@ -694,8 +750,8 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
 - `tests/manual_local_model.py`: not a test of the suite, but the manual run against a local model server described
   [above](#one-run-on-a-local-model); it starts no server and pulls no model.
 
-ctest runs the pytest suite as `builder_agent_py`, and the test on the real command layer as `builder_agent_e2e`,
-when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an interpreter that has the package with its test extras
+ctest runs the pytest suite as `builder_agent_py`, and the tests on the real command layer as `builder_agent_e2e` and
+`builder_agent_widget`, when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an interpreter that has the package with its test extras
 (the loaders module's tests of the same variable also need `numpy` and `pyarrow`), and otherwise reports them as
 skipped:
 
@@ -761,13 +817,15 @@ Built on this branch:
   `pytest` and `agent-client-protocol` as test extras.
 - The key store: `src/builder/include/caliper_builder/agent/key_store.h`, `src/builder/agent/key_store.cpp` and
   `keychain_store_macos.cpp`.
-- The tests listed above, and the ctest entries `builder_agent`, `builder_agent_py` and `builder_agent_e2e`.
+- Widget sessions (`widget.py`, the widget prompt, the `handoff` toolset), with the scope rule in
+  `src/builder/commands/widget_scopes.json`.
+- The tests listed above, and the ctest entries `builder_agent`, `builder_agent_py`, `builder_agent_e2e` and
+  `builder_agent_widget`.
 
 Waiting for later work:
 
-- The widget role: widget sessions with `_meta.caliper.widget`, the scoped tools, the widget system prompt, images and
-  embedded context in prompts, the preview header, the turn budget and `session/close`, with the rest of the inline
-  design, as the [work items](widget-agent.md#work-items) of the Widget agent page list them with their sizes.
+- The rest of the widget role: the inline surface, the probe and the presets, as the
+  [work items](widget-agent.md#work-items) of the Widget agent page list them with their sizes.
 - The settings: the presets, the key field for each provider and its remove control, the model and effort pickers
   from the config options, and status lines from `_meta.caliper.status`.
 - On top of the provider layer: passing the chosen provider, base URL and key from the app when it starts the
@@ -812,6 +870,14 @@ Waiting for later work:
 - **`openai` installed directly**, not through Pydantic AI's extra, which would add `tiktoken`, `requests`, `certifi`
   and others that the sidecar does not use.
 - **The hand-written ACP agent side kept**, with the official ACP Python SDK used in tests to validate every message.
+- **Widget sessions in the same process and the same loop**, chosen by `_meta.caliper.widget`, with one agent for each
+  tool scope so that the cached prefix of each kind of target stays the same.
+- **The widget scope rule as data beside the command table**, shared with the app's context bundle; an app's scope
+  wider than the rule refuses the session.
+- **Widget edits with `X-Caliper-Preview` and without `dry_run`**, and no permission request, since a preview edit is a
+  proposal the person accepts in the app.
+- **A `handoff` tool** that ends a widget turn with a structured answer for Ask in chat.
+- **`session/close`** that cancels a running turn and leaves the preview to the app.
 
 ## Notes on the contracts
 

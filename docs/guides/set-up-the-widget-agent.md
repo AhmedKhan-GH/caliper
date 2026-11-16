@@ -10,7 +10,8 @@ again. [Agent roles](../explanations/agent-roles.md) explains how the widget age
     The widget agent's prompt and its settings are not built yet, so the steps that use them describe how they are
     planned to work, and the names of their controls may change. What exists today is the agent itself
     (`caliper-agent`), which works with Claude and with any server that has an OpenAI-compatible API, one on your own
-    machine included, and the store that keeps the key;
+    machine included, which already works on one target at a time with its changes kept as a preview, and the store
+    that keeps the key;
     Widget agent sidecar (`design/byok-agent.md`) describes them, and its manual check shows how to try the agent with
     your key from the terminal.
 

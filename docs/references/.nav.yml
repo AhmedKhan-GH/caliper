@@ -31,6 +31,7 @@ nav:
       - wire-protocol.md
       - browser-elements.md
       - api.md
+      - widget-agent.md
   - Applets and environment:
       - applets.md
       - environment.md
