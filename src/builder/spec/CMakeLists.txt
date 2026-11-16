@@ -20,6 +20,7 @@ endif()
 caliper_builder_add_tests(spec
     SOURCES
         tests/test_codec.cpp
+        tests/test_patch.cpp
         tests/test_validate.cpp
     LIBS caliper_builder_spec)
 if(TARGET caliper_builder_spec_tests)
