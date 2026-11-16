@@ -110,6 +110,15 @@ public:
         std::function<void()> page_command;
     };
     void set_seams(Seams seams);
+    // Whether the app runs hidden (--hidden): the widget agent then never
+    // touches the key store, and runs the sidecar only on a test's script
+    // (builder/widget_app.h).
+    void set_hidden(bool hidden);
+    // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
+    // panel's rectangle in window points, and the inline surface's state
+    // ("idle" before any ⌘K).
+    bool panel_rect(const std::string& panel_id, float rect[4]) const;
+    std::string widget_state() const;
     // The focused panel's id, "" for none; focus_panel("") gives it up.
     const std::string& focused_panel() const;
     void focus_panel(const std::string& panel_id);

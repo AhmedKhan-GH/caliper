@@ -28,6 +28,7 @@
 #include "host/builder/app_hooks.h"
 #include "host/builder/app_providers.h"
 #include "host/builder/spec_page.h"
+#include "host/builder/spec_ui_driver.h"
 #include "app_paths.h"
 
 #include <string>
@@ -268,6 +269,13 @@ public:
             if (hidden_ && *ui) ui_driver_ = std::make_unique<caliper_live::UiDriver>(ui);
             else if (*ui) std::cerr << "[ui] CALIPER_TEST_UI needs --hidden; ignored" << std::endl;
         }
+        // The same for the spec page (builder/spec_ui_driver.h), whose shots
+        // go to CALIPER_TEST_SPEC_UI_SHOTS.
+        if (const char* su = std::getenv("CALIPER_TEST_SPEC_UI")) {
+            const char* dir = std::getenv("CALIPER_TEST_SPEC_UI_SHOTS");
+            if (hidden_ && *su) spec_ui_ = std::make_unique<caliper_host::SpecUiDriver>(su, dir ? dir : ".");
+            else if (*su) std::cerr << "[ui] CALIPER_TEST_SPEC_UI needs --hidden; ignored" << std::endl;
+        }
 
         return true;
     }
@@ -323,6 +331,7 @@ public:
             // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
             // queued into ImGui before the frame reads its input.
             if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
+            if (spec_ui_ && page_ == AppPage::Spec) feed_spec_ui();
 
             renderer_->new_frame();
 
@@ -437,6 +446,7 @@ public:
                 *renderer_,
                 [this](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
                     if (t == caliper_host::AppSession::kCaptureTicket) session_.capture_ready(w, h, std::move(rgba));
+                    else if (t == caliper_host::SpecUiDriver::kShotTicket) { if (spec_ui_) spec_ui_->write_shot(w, h, rgba); }
                     else api_.reply_capture(t, w, h, std::move(rgba));
                 },
                 [this](uint64_t t, int status, const std::string& why) { capture_error(t, status, why); });
@@ -505,6 +515,7 @@ public:
         h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
         h.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
         session_.start(caliper_host::app_session_options(cl), std::move(h));
+        spec_page_.set_hidden(hidden_);
         // panel.render draws on an offscreen canvas that shares this
         // window's font atlas, made on the first call between two frames.
         session_.set_panel_renderer(caliper_host::SpecPage::make_panel_renderer());
@@ -780,6 +791,7 @@ private:
     // session's capture.frame the reason.
     void capture_error(uint64_t t, int status, const std::string& why) {
         if (t == caliper_host::AppSession::kCaptureTicket) session_.capture_failed(why);
+        else if (t == caliper_host::SpecUiDriver::kShotTicket) { if (spec_ui_) spec_ui_->shot_failed(why); }
         else api_.reply_error(t, status, why);
     }
 
@@ -899,6 +911,17 @@ private:
         caliper_live::RunControls* rc = live_.controls();
         if (!rc) return;
         for (const std::string& line : rc->take_log()) std::cerr << "[live] " << line << std::endl;
+    }
+
+    void feed_spec_ui() {
+        spec_ui_->feed(spec_page_, session_);
+        if (spec_ui_->take_shot_request()) captures_.add(caliper_host::SpecUiDriver::kShotTicket);
+        for (const std::string& line : spec_ui_->take_log()) std::cerr << "[ui] " << line << std::endl;
+        if (spec_ui_->quit()) glfwSetWindowShouldClose(window_, GLFW_TRUE);
+        if (spec_ui_->done()) {
+            std::cerr << "[ui] " << (spec_ui_->error().empty() ? "done" : "stopped: " + spec_ui_->error()) << std::endl;
+            spec_ui_.reset();
+        }
     }
 
     void feed_ui_driver() {
@@ -1203,6 +1226,7 @@ private:
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
     std::unique_ptr<caliper_live::UiDriver> ui_driver_;   // CALIPER_TEST_UI with --hidden
+    std::unique_ptr<caliper_host::SpecUiDriver> spec_ui_;   // CALIPER_TEST_SPEC_UI with --hidden
     bool chromeless_ = false;         // CALIPER_CHROMELESS=1: applet page without bars
 };
 

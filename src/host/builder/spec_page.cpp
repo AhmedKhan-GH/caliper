@@ -5,11 +5,14 @@
 
 #if CALIPER_WITH_BUILDER
 #include "builder/panel_renderer.h"
+#include "builder/widget_app.h"
+#include "builder/widget_surface.h"
 #include "applet_spec.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
 #include "ui/applet_page.h"      // begin_page_bar, JobsTray
 #include "ui/landing_screen.h"   // draw_host_status_items
+#include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
 #include "ui/work_area.h"
 
@@ -19,12 +22,14 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <future>
 #include <map>
 #include <optional>
+#include <vector>
 #endif
 
 namespace caliper_host {
@@ -137,12 +142,77 @@ struct SpecPage::Impl {
     Seams seams;
     std::string focused;   // the focused panel's id, "" for none
 
+    // The widget agent's inline surface (widget_surface.h), made at the
+    // first ⌘K on a panel, with the agent the app has (widget_app.h).
+    std::unique_ptr<InlineWidget> widget;
+    bool hidden = false;
+
+    void open_widget(AppSession& app, const std::string& panel) {
+        if (!bound || from_file) return;
+        if (!widget) {
+            InlineWidget::Options o;
+            o.session = bound;
+            o.busy = [&app] { return app.worker_busy(); };
+            o.agent = make_app_widget_agent(app_widget_env(hidden, app.workspace()));
+            widget = std::make_unique<InlineWidget>(std::move(o));
+            widget->attach(*runtime);
+            install_overlay();   // the page's, which calls the widget's
+        }
+        widget->surface().open(WidgetTarget::for_panel(panel));
+    }
+
+    // The page's command input, which ⌘K opens when no panel is focused:
+    // a ruled line in the page bar that finds a panel by its title as you
+    // type and focuses it, and Enter opens that panel's inline prompt.
+    bool command_open = false;
+    bool command_focus = false;
+    std::string command;
+
+    // The first shown panel whose title or id holds every word of `text`.
+    std::string find_panel(const std::string& text) const {
+        auto lower = [](std::string x) {
+            for (char& c : x) c = (char)std::tolower((unsigned char)c);
+            return x;
+        };
+        std::vector<std::string> words;
+        {
+            std::string w;
+            for (char c : lower(text) + " ") {
+                if (std::isspace((unsigned char)c)) {
+                    if (!w.empty()) words.push_back(w);
+                    w.clear();
+                } else {
+                    w += c;
+                }
+            }
+        }
+        if (words.empty()) return {};
+        for (const auto& lp : runtime->layout().panels) {
+            const PreparedPanel* p = runtime->prepared(lp.id);
+            const std::string hay = lower(lp.id) + "\n" + (p ? lower(p->title) : std::string());
+            bool all = true;
+            for (const auto& w : words) all = all && hay.find(w) != std::string::npos;
+            if (all) return lp.id;
+        }
+        return {};
+    }
+
+    bool widget_open() const {
+        if (!widget) return false;
+        const WidgetState st = widget->surface().state();
+        return st != WidgetState::idle && st != WidgetState::applied;
+    }
+
     // The session the page reads: a new one (the workspace opened, or the
     // session closed) gets a new source.
     void bind(AppSession& app) {
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
         if (s == bound) return;
+        if (widget) {
+            widget.reset();   // its session goes, and it detaches from the runtime
+            install_overlay();
+        }
         bound = s;
         source = s ? std::make_unique<PageSource>(*s, app) : nullptr;
         runtime->set_source(source.get());
@@ -177,16 +247,29 @@ struct SpecPage::Impl {
         sources = spec.sources.size();
     }
 
-    bool draw_bars(const char* renderer_name, JobsTray* tray) {
+    // `command_key`: the page bar's ⌘K Command was clicked this frame.
+    bool draw_bars(const char* renderer_name, JobsTray* tray, bool* command_key) {
         bool home = false;
         // The page bar, as the applet page's: Home as a key button holding
-        // its key, then the spec's title where an applet's name goes.
+        // its key, then the spec's title where an applet's name goes, the
+        // page's command input while it is open, and at the right end ⌘K
+        // Command, the same control as the landing screen's command bar.
         if (begin_page_bar()) {
             if (sternbild::key_button("esc", "Home")) home = true;
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
             ImGui::TextUnformatted(has_spec ? title.c_str() : "");
             ImGui::PopStyleColor();
+            if (command_open) draw_command_input();
+#ifdef __APPLE__
+            const char* key = "\xe2\x8c\x98K";   // ⌘K
+#else
+            const char* key = "Ctrl K";
+#endif
+            const float w = ImGui::CalcTextSize(key).x + ImGui::CalcTextSize("Command").x + 32.0f;
+            const float right = ImGui::GetWindowContentRegionMax().x - w - sternbild::metric::pad;
+            if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+            if (sternbild::key_button(key, "Command")) *command_key = true;
             ImGui::EndMainMenuBar();
         }
         // The status bar: the machine, then the page's facts.
@@ -210,6 +293,44 @@ struct SpecPage::Impl {
         return home;
     }
 
+    // The command input: the house's ruled line (the landing's), with the
+    // bronze prompt mark before it. Typing focuses the first panel whose
+    // title holds the words; Enter opens its prompt; Escape closes the line.
+    bool command_entered = false;
+    void draw_command_input() {
+        ImGui::Separator();
+        ImGui::PushFont(sternbild::fonts().mono, sternbild::font_size::mono);
+        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::bronze);
+        ImGui::TextUnformatted("\xe2\x80\xba");   // ›
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        if (command_focus) {
+            ImGui::SetKeyboardFocusHere();
+            command_focus = false;
+        }
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+        ImGui::SetNextItemWidth(240.0f);
+        char buf[256];
+        std::snprintf(buf, sizeof buf, "%s", command.c_str());
+        const bool entered = ImGui::InputTextWithHint("##spec.command", "Panel", buf, sizeof buf,
+                                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(a.x, b.y - 1.0f), b,
+                                                  ImGui::IsItemActive() ? sternbild::col::parchment
+                                                                        : sternbild::col::rule);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        if (command != buf) {
+            command = buf;
+            const std::string found = find_panel(command);
+            if (!found.empty()) focused = found;
+        }
+        if (entered) command_entered = true;
+    }
+
     // The spec over the work area the strips leave this frame.
     void draw_spec() {
         const ImRect area = work_area();
@@ -227,15 +348,30 @@ struct SpecPage::Impl {
         const bool open = ImGui::Begin("##caliper_spec_page", nullptr, flags);
         ImGui::PopStyleVar(3);
         if (open) {
-            runtime->draw(area, house_spec_look());
+            const SpecLook look = house_spec_look();
+            // The page routes ⌘K and Escape (spec_key_action); the surface
+            // takes Enter on its card and polls its agent.
+            if (widget) widget->frame(look, focused, /*keys=*/false);
+            runtime->draw(area, look);
             focus_and_frame();
         }
         ImGui::End();
     }
 
+    // The runtime's overlay, inside each panel's own window after its
+    // content: the bronze frame of the focused panel, which the panel's
+    // content would otherwise cover, then the inline surface.
+    void install_overlay() {
+        runtime->set_overlay([this](const SpecPanelFrame& f) {
+            if (f.id == focused)
+                ImGui::GetWindowDrawList()->AddRect(f.rect.Min, f.rect.Max, sternbild::col::bronze, 0.0f, 0, 1.0f);
+            if (widget) widget->overlay(f);
+        });
+    }
+
     // A click inside a shown panel focuses it, and the focused panel gets a
-    // bronze frame, the palette's colour for focus. A panel that is no longer
-    // shown loses the focus.
+    // bronze frame, the palette's colour for focus, drawn by the overlay
+    // above. A panel that is no longer shown loses the focus.
     void focus_and_frame() {
         const SpecLayout& layout = runtime->layout();
         const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
@@ -248,15 +384,10 @@ struct SpecPage::Impl {
             if (lp.id == focused) still_shown = true;
         }
         if (!still_shown) focused.clear();
-        for (const auto& lp : layout.panels) {
-            if (lp.id != focused) continue;
-            ImGui::GetWindowDrawList()->AddRect(ImVec2(lp.rect.x, lp.rect.y),
-                                                ImVec2(lp.rect.right(), lp.rect.bottom()), sternbild::col::bronze);
-        }
     }
 };
 
-SpecPage::SpecPage() : impl_(std::make_unique<Impl>()) {}
+SpecPage::SpecPage() : impl_(std::make_unique<Impl>()) { impl_->install_overlay(); }
 
 SpecPage::~SpecPage() = default;
 
@@ -317,17 +448,47 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
     im.bind(session);
     im.refresh(session);
     Result r;
-    r.home = im.draw_bars(renderer_name, tray);
+    bool clicked_command = false;
+    r.home = im.draw_bars(renderer_name, tray, &clicked_command);
     im.draw_spec();
     // ⌘K and Escape (spec_key_action). ImGuiMod_Ctrl is the Command key on
-    // macOS, as on the landing screen.
-    const bool command_key = ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K);
+    // macOS, as on the landing screen; the page bar's ⌘K Command is the same
+    // key. An open inline prompt, and then the page's command input, take
+    // Escape first, also while their input has the keyboard; the page's
+    // order follows only when neither is open.
+    const bool command_key = clicked_command || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K);
+    const bool esc_key = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (im.widget_open() && esc_key) {
+        im.widget->surface().escape();
+        escape = false;
+    } else if (im.command_open && esc_key) {
+        im.command_open = false;
+        im.command.clear();
+        escape = false;
+    }
+    if (im.command_entered) {
+        // Enter on the command input: the found panel's inline prompt.
+        im.command_entered = false;
+        im.command_open = false;
+        im.command.clear();
+        if (!im.focused.empty()) {
+            if (im.seams.panel_prompt) im.seams.panel_prompt(im.focused);
+            else im.open_widget(session, im.focused);
+        }
+    }
     switch (spec_key_action(command_key, escape, !im.focused.empty())) {
         case SpecKeyAction::panel_prompt:
+            im.command_open = false;
             if (im.seams.panel_prompt) im.seams.panel_prompt(im.focused);
+            else im.open_widget(session, im.focused);
             break;
         case SpecKeyAction::page_command:
-            if (im.seams.page_command) im.seams.page_command();
+            if (im.seams.page_command) {
+                im.seams.page_command();
+            } else {
+                im.command_open = true;
+                im.command_focus = true;
+            }
             break;
         case SpecKeyAction::unfocus:
             im.focused.clear();
@@ -343,11 +504,31 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
 
 void SpecPage::set_seams(Seams seams) { impl_->seams = std::move(seams); }
 
+void SpecPage::set_hidden(bool hidden) { impl_->hidden = hidden; }
+
+bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
+    for (const auto& lp : impl_->runtime->layout().panels)
+        if (lp.id == panel_id) {
+            rect[0] = lp.rect.x;
+            rect[1] = lp.rect.y;
+            rect[2] = lp.rect.w;
+            rect[3] = lp.rect.h;
+            return true;
+        }
+    return false;
+}
+
+std::string SpecPage::widget_state() const {
+    return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
+}
+
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 
 void SpecPage::focus_panel(const std::string& panel_id) { impl_->focused = panel_id; }
 
 void SpecPage::leave() {
+    // An open prompt closes with the page: its preview is discarded.
+    if (impl_->widget) impl_->widget->surface().close();
     impl_->focused.clear();
     impl_->runtime->clear_spec();
     impl_->journal_read.reset();
@@ -390,6 +571,7 @@ bool SpecPage::facts(const std::string& spec_path, SpecAppletFacts* out) {
 }
 
 void SpecPage::shutdown() {
+    impl_->widget.reset();   // before the runtime it is attached to
     impl_->runtime.reset();
     impl_->source.reset();
     impl_->bound = nullptr;
@@ -417,6 +599,9 @@ bool SpecPage::request_answered(std::string*) { return false; }
 void SpecPage::enter(AppSession&) {}
 SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*, bool) { return {}; }
 void SpecPage::set_seams(Seams) {}
+void SpecPage::set_hidden(bool) {}
+bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
+std::string SpecPage::widget_state() const { return "idle"; }
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string&) {}
 void SpecPage::leave() {}
