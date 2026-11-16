@@ -850,6 +850,15 @@ if(BUILD_TESTS)
             "${CMAKE_SOURCE_DIR}/scripts/check_host_names_no_applet.py"
             --root "${CMAKE_SOURCE_DIR}")
         set_tests_properties(caliper_host_names_no_applet PROPERTIES LABELS "boundary")
+        # caliper_example_dry_run_cleanup: the build-a-dashboard walk-through's dry
+        # runs delete only the temporary folders they made, keep every folder the
+        # caller names on their failure and interrupt paths, and stop what they
+        # started. A stand-in program takes the app's place; it needs POSIX signals.
+        if(NOT WIN32)
+            add_test(NAME caliper_example_dry_run_cleanup COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_SOURCE_DIR}/examples/build_a_dashboard/dry_run/test_cleanup.py")
+            set_tests_properties(caliper_example_dry_run_cleanup PROPERTIES LABELS "examples" TIMEOUT 300)
+        endif()
     else()
         message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
     endif()
