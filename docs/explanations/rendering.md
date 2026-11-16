@@ -429,7 +429,9 @@ The scene core asks a `Resources` object for the handles its records name: pipel
 groups, the buffer of its constant streams, the buffers it owns for clamped indices and gathered edges, and the
 colormap blocks. `BackendResources` provides them over a backend of the graphics layer, with the backend's table of
 generated programs. The colormap blocks come from the caller, normally through `colormap_source` over a
-`KeyBlockCache` that the view owns ([The colormap by keys](#the-colormap-by-keys)).
+`KeyBlockCache` that the view owns ([The colormap by keys](#the-colormap-by-keys)). After each prepare, the owned
+buffers of batches that are gone, and the compute groups that refer to a released buffer, go back to the layer, so a
+scene reset, which gives every entity a new id, leaves nothing behind.
 
 Its tests run in two suites:
 

@@ -83,6 +83,7 @@ public:
         }
         return Buffer{std::get<0>(it->second)};
     }
+    void retain_owned(View<uint64_t> keys) override { retained.assign(keys.begin(), keys.end()); }
     void colormap_block(uint32_t colormap, float vmin, float vmax, shaders::Cmap* out) override {
         std::memset(out, 0, sizeof *out);
         out->vmin = vmin;
@@ -99,6 +100,7 @@ public:
     std::vector<GroupRecord> groups;
     std::vector<std::pair<ProgramId, std::vector<BindEntry>>> compute_groups;
     std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint32_t>> owned;
+    std::vector<uint64_t> retained;   // the keys of the last retain_owned
     int cmap_requests = 0;
 };
 

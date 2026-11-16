@@ -59,6 +59,11 @@ public:
     // A buffer the layer owns, at least `bytes` large, kept under `key`: the same key and size
     // give the same buffer. The scene core keeps clamped indices and gathered edges there.
     virtual caliper_gfx::Buffer owned_buffer(uint64_t key, uint64_t bytes, uint32_t usage) = 0;
+    // The owned buffers still in use, after every batch was prepared: the others go back to the
+    // layer, with the compute groups that refer to a buffer that is gone (an owned one, or a
+    // batch's array the view released). A scene reset gives every entity a new id, so without
+    // this each reset would strand its clamp and gather buffers and their groups.
+    virtual void retain_owned(caliper_gfx::View<uint64_t> keys) = 0;
     // The colormap block of a colormap and range (renderer core, "Exact colormap output"); the
     // keys come from the CPU reference.
     virtual void colormap_block(uint32_t colormap, float vmin, float vmax, caliper_gfx::shaders::Cmap* out) = 0;

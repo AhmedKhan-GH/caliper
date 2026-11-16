@@ -256,6 +256,25 @@ void SceneCompiler::prepare(const SceneTree& tree, Resources& res, Frame& frame)
             }
         }
     }
+    // The owned buffers of batches that are gone (a reset gives every entity a new id) go back to
+    // the layer, and so does what was prepared for them.
+    std::vector<uint64_t> live;
+    for (uint32_t i = 0; i < tree.entity_count(); ++i) {
+        const EntityId e = tree.entity_at(i);
+        if (const Batch* m = tree.batch(e, Primitive::Mesh); m && m->array(Role::Indices))
+            live.push_back(key(e, Primitive::Mesh, 0));
+        if (const Batch* l = tree.batch(e, Primitive::Lines);
+            l && l->line_mode == LineMode::Edges && l->array(Role::Indices)) {
+            live.push_back(key(e, Primitive::Lines, 1));
+            live.push_back(key(e, Primitive::Lines, 2));
+        }
+    }
+    res.retain_owned(caliper_gfx::View<uint64_t>(live));
+    if (prepared_.size() > live.size()) {
+        std::sort(live.begin(), live.end());
+        for (auto it = prepared_.begin(); it != prepared_.end();)
+            it = std::binary_search(live.begin(), live.end(), it->first) ? std::next(it) : prepared_.erase(it);
+    }
 }
 
 void SceneCompiler::discard_prepared() {

@@ -43,6 +43,7 @@ BackendResources::BackendResources(Backend& backend, const ProgramDesc* programs
 
 BackendResources::~BackendResources() {
     for (auto& g : groups_) backend_.release(g.second);
+    for (auto& c : compute_) backend_.release(c.second.group);
     for (auto& p : pipelines_) backend_.release(p.second);
     for (auto& o : owned_) backend_.release(o.second.buffer);
     for (auto& p : program_) backend_.release(p.second);
@@ -182,17 +183,20 @@ BindGroup BackendResources::compute_group(ProgramId id, View<BindEntry> entries)
         put(k, e.offset);
         put(k, e.size);
     }
-    auto it = groups_.find(k);
-    if (it != groups_.end()) return it->second;
+    auto it = compute_.find(k);
+    if (it != compute_.end()) return it->second.group;
     BindGroupDesc d;
     d.program = program(id);
     d.group = 0;
-    for (const BindEntry& e : entries)
+    Compute c;
+    for (const BindEntry& e : entries) {
         if (d.entry_count < kMaxBindingsPerGroup) d.entries[d.entry_count++] = e;
-    const BindGroup g = backend_.create_bind_group(d);
-    if (!g) error_ = backend_.last_error();
-    groups_[k] = g;
-    return g;
+        if (e.buffer && e.buffer != kArena) c.buffers.push_back(e.buffer);
+    }
+    c.group = backend_.create_bind_group(d);
+    if (!c.group) error_ = backend_.last_error();
+    compute_[k] = c;
+    return c.group;
 }
 
 Buffer BackendResources::owned_buffer(uint64_t key, uint64_t bytes, uint32_t usage) {
@@ -211,6 +215,29 @@ Buffer BackendResources::owned_buffer(uint64_t key, uint64_t bytes, uint32_t usa
     if (!b) error_ = backend_.last_error();
     owned_[key] = {b, size, usage};
     return b;
+}
+
+void BackendResources::retain_owned(View<uint64_t> keys) {
+    std::vector<uint64_t> live(keys.begin(), keys.end());
+    std::sort(live.begin(), live.end());
+    for (auto it = owned_.begin(); it != owned_.end();) {
+        if (std::binary_search(live.begin(), live.end(), it->first)) {
+            ++it;
+            continue;
+        }
+        backend_.release(it->second.buffer);   // deferred by the layer until its last use completed
+        it = owned_.erase(it);
+    }
+    for (auto it = compute_.begin(); it != compute_.end();) {
+        const bool gone = std::any_of(it->second.buffers.begin(), it->second.buffers.end(),
+                                      [&](Buffer b) { return !backend_.alive(b); });
+        if (!gone) {
+            ++it;
+            continue;
+        }
+        if (it->second.group) backend_.release(it->second.group);
+        it = compute_.erase(it);
+    }
 }
 
 void BackendResources::colormap_block(uint32_t colormap, float vmin, float vmax, sh::Cmap* out) {
