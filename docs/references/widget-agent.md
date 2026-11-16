@@ -9,9 +9,10 @@ session is opened, which commands it may use, what a prompt may hold, and what e
 
 !!! note "Status"
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
-    on a panel is built and tested as a component in `src/host/builder/` ([The inline surface](#the-inline-surface));
-    it is not yet connected to the app's page, and the entry points on a selection, a dropped file and a property are
-    not built yet.
+    on a panel is built in `src/host/builder/` and works on the app's spec page
+    ([The inline surface](#the-inline-surface)). The entry points on a selection, a dropped file and a property are
+    not built yet, and `caliper-agent` is not yet packaged with a Python runtime, so the app finds it through
+    `CALIPER_AGENT_PYTHON` ([Environment variables](environment.md)).
 
 ## Starting the agent
 
@@ -253,9 +254,16 @@ forgets the session and answers `{}`. A sidecar keeps at most 16 sessions.
 
 ## The inline surface
 
-The inline surface is the app's side of a widget session on a panel (`src/host/builder/widget_surface.h`). ⌘K
-(Ctrl+K on Windows) on the focused panel opens a one-line prompt at the top of that panel, under its title strip; the
-panel's content is drawn below the prompt, so the prompt covers nothing.
+The inline surface is the app's side of a widget session on a panel (`src/host/builder/widget_surface.h`). On the
+spec page, a click on a panel focuses it, and its frame turns bronze. ⌘K (Ctrl+K on Windows), or the page bar's ⌘K
+Command, opens a one-line prompt at the top of the focused panel, under its title strip; the panel's content is drawn
+below the prompt, so the prompt covers nothing. With no panel focused, ⌘K opens the page's command input in the page
+bar instead: typing a panel's title focuses it, and Enter opens its prompt. Escape leaves the prompt's innermost state
+first, then the command input, then the panel's focus, and last goes Home.
+
+The prompt row shows the model and effort the session reports; a click on them lists the models the session offers,
+and the choice goes to the session with `session/set_config_option` and to every later session. While the agent
+works, the row shows its latest step: the command it calls, or the last line of its summarized thinking.
 
 **The session.** The surface opens one widget session for each prompt that it opens:
 

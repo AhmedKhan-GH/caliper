@@ -116,9 +116,16 @@ it. The spec runtime keeps a band of the panel free for it (`SpecRuntime::set_re
 `caliper-widget-shot` drives the surface through a scripted scenario offscreen and writes a PNG at each state. The
 page's side is one object and two calls: own an `InlineWidget` (the session adapter, the agent and the surface), call
 `attach()` on the spec runtime once, then `frame()` each frame before the runtime draws, which reads ⌘K (Ctrl+K on
-Windows) on the focused panel and Escape, and `overlay()` from the runtime's overlay when the page has one of its own. Not built yet: the selection, dropped-file and property entry points in
-the app, the dashed frame of a new panel, the thoughts, the choice of model from the settings (the label shows what
-the session's config options report), and the packaging of `caliper-agent` with a Python runtime.
+Windows) on the focused panel and Escape, and `overlay()` from the runtime's overlay when the page has one of its own. On the app's spec page the page owns the `InlineWidget` and routes ⌘K and
+Escape: a click focuses a panel (its frame turns bronze), ⌘K or the page bar's ⌘K Command opens the focused panel's
+prompt, and with no panel focused the page's command input in the page bar, which finds a panel by its title.
+Escape leaves the prompt first, then the command input, then the focus, then goes Home. The app's agent
+(`widget_app.h`) is `caliper-agent` over `AcpClient` with the system key store's key, found through
+`CALIPER_AGENT_PYTHON` until it is packaged, when Caliper API runs; a hidden app never touches the key store and runs
+the sidecar only on a test's script. The model is chosen from the prompt row's label through
+`session/set_config_option`, and the agent's thoughts show as the progress line. A hidden-only input script,
+`CALIPER_TEST_SPEC_UI`, drives the page for tests and screenshots. Not built yet: the selection, dropped-file and
+property entry points, the dashed frame of a new panel, and the packaging of `caliper-agent` with a Python runtime.
 
 ## The context bundle
 
@@ -736,6 +743,14 @@ For a local server:
 - **One sidecar for every ⌘K**, started at the first and kept; each ⌘K opens a session and closes it with
   `session/close` when its prompt closes.
 - **A scripted agent names itself "Scripted"**, so that no screenshot credits a model that did not run.
+- **⌘K Command means one thing on every page:** it opens the command input of where the focus is. On the landing
+  screen that is the command line; on the spec page it is the focused panel's inline prompt, or with no panel focused
+  the page bar's command input, which finds a panel by its title, so that Enter then opens that panel's prompt.
+- **The focused panel's frame is drawn in the panel's overlay**, above its content, since a frame drawn under the
+  panels' own windows did not show.
+- **The model is chosen in the prompt row**, the one place it is shown, from the models the session offers.
+- **Until `caliper-agent` is packaged**, the app finds it through `CALIPER_AGENT_PYTHON` and its package in this
+  build's source tree, and needs Caliper API; without them the prompt offers only Ask in chat.
 - **Claude on its native API** and other models through an OpenAI-compatible API, so that Claude's features are kept.
 - **Pydantic AI as the provider layer**, after a spike that checked cancellation, retries, Claude's features, stop
   reasons, other models and the footprint.
