@@ -170,6 +170,10 @@ std::vector<WidgetDiffLine> widget_item_lines(const json& item, size_t max_value
         line.after = compact_value(kv.second, max_value);
         out.push_back(std::move(line));
     }
+    // What the item is and its name first, then its keys in order.
+    auto rank = [](const std::string& k) { return k == "primitive" ? 0 : k == "title" ? 1 : 2; };
+    std::stable_sort(out.begin(), out.end(),
+                     [&](const WidgetDiffLine& a, const WidgetDiffLine& b) { return rank(a.key) < rank(b.key); });
     return out;
 }
 

@@ -94,9 +94,11 @@ public:
     // The strip, from the jobs tray's draw (JobsTray::set_next_strip()), so
     // that it lands above the tray on every page.
     void draw_strip();
-    // The spec page's overlay of each shown panel, in the page's window
-    // (SpecPage::set_panel_overlay()): marks the panel a waiting edit changes.
-    void mark_panel(const std::string& panel_id, float x, float y, float w, float h, bool tab);
+    // The spec page's overlay of each shown panel, in the panel's own window
+    // after its content (SpecPage::set_panel_overlay()): the panel's
+    // rectangle and its title strip's height (0 for a tab). Marks the panel
+    // a waiting edit changes.
+    void mark_panel(const std::string& panel_id, float x, float y, float w, float h, float strip);
     // Before the session closes: the cards go, and nothing is read again.
     void close();
 
@@ -257,6 +259,7 @@ struct ApprovalLayoutInput {
     float width = 0;          // the strip's width: the window's
     float window_h = 0;       // the window's height
     float max_height = 0;     // a lower bound than max_share, or 0 (ApprovalStripHeight)
+    float fill_height = 0;    // a strip kept taller than it needs: the cards fill it, or 0
     int waiting = 0;          // the count beside the label when more than one waits
     std::vector<ApprovalCardShape> cards;   // in order, oldest first
 };

@@ -54,7 +54,8 @@ std::vector<WidgetDiffLine> widget_compact_diff(const caliper_builder::spec::Spe
 
 // The keys of one new item, such as the panel of panel.create, as added
 // lines: every key of its canonical JSON but its id, objects flattened to
-// dotted keys (primitive, title, bind.rows, options.x_label).
+// dotted keys, primitive and title first, then the rest in order (bind.rows,
+// options.x_label).
 std::vector<WidgetDiffLine> widget_item_lines(const nlohmann::json& item, size_t max_value = 40);
 
 // Text in a card's faces: its extent, the text cut with an ellipsis to fit

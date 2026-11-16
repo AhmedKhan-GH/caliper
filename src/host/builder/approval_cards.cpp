@@ -519,8 +519,14 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
     const int min_lines = any_multi ? 2 : 1;   // a first line and "+N"
     while (lines > min_lines && 2.0f * m.pad + card_h(lines, warn) > cap) --lines;
     if (warn && 2.0f * m.pad + card_h(lines, warn) > cap) warn = false;
-    const float ch = card_h(lines, warn);
+    float ch = card_h(lines, warn);
     L.height = 2.0f * m.pad + ch;
+    if (in.fill_height > L.height) {
+        // A strip kept taller for a moment: the cards fill it, their buttons
+        // at the bottom.
+        L.height = in.fill_height;
+        ch = L.height - 2.0f * m.pad;
+    }
 
     if (label) {
         L.label = {m.pad, m.pad + m.gap, label_w, m.line};
@@ -910,6 +916,7 @@ void ApprovalTray::draw_strip() {
     const float need = layout_approval_strip(in, m, measure).height;
     const float h = im.height.update(im.now, true, need);
     in.max_height = h;
+    in.fill_height = h;
     const ApprovalStripLayout lay = layout_approval_strip(in, m, measure);
     if (h < 1.0f) return;
 
@@ -968,36 +975,37 @@ void ApprovalTray::draw_strip() {
     ImGui::End();
 }
 
-void ApprovalTray::mark_panel(const std::string& panel_id, float x, float y, float w, float h, bool tab) {
+void ApprovalTray::mark_panel(const std::string& panel_id, float x, float y, float w, float h, float strip) {
     Impl& im = *impl_;
     if (!im.started || im.closed) return;
     const ApprovalCard* c = im.cards.card_for_panel(panel_id);
-    if (!c) return;
+    if (!c || w < 1.0f || h < 1.0f) return;
     const SpecLook L = house_spec_look();
     const float s = L.text_scale;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
     // A REVIEW tag in bronze, with the time left, at the right end of the
-    // panel's title strip (over its info string), and a bronze rule under
-    // the strip, as a preview's; a tab, whose tab carries its title, has the
-    // tag in its top right corner.
-    const float strip = tab ? std::round(L.ui_size + 9.0f * s) : spec_panel_strip_height(L, true, h);
-    if (strip < 1.0f || w < 1.0f) return;
+    // panel's title strip, over its info string, and a bronze rule under the
+    // strip, as a preview's; a tab, whose tab carries its title, has the tag
+    // framed in its top right corner. Drawn in the panel's own window, which
+    // the page's overlay is called in.
+    const bool tab = strip < 1.0f;
+    const float band = tab ? std::min(h, std::round(L.ui_size + 9.0f * s)) : strip;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     const std::string tag = "REVIEW";
     const std::string left = time_text(c->time_left);
     const float tw = sternbild::text_tracked_width(L.ui, L.small_size, tag.c_str(), tracking(L));
     const float lw = left.empty() ? 0.0f : card_text_extent(L.mono, L.mono_size, left).x + std::round(8.0f * s);
     const float pad = std::round(8.0f * s);
     const float box_w = std::min(w, tw + lw + 2.0f * pad);
-    const ImVec2 b0(std::round(x + w - box_w), y), b1(x + w, y + strip);
+    const ImVec2 b0(std::round(x + w - box_w), y), b1(x + w, y + band - (tab ? 0.0f : 1.0f));
     dl->AddRectFilled(b0, b1, L.plate);
     const float small_h = card_text_extent(L.ui, L.small_size, "Ag").y;
     const float mono_h = card_text_extent(L.mono, L.mono_size, "Ag").y;
-    sternbild::text_tracked(dl, L.ui, L.small_size, ImVec2(b0.x + pad, std::round(y + (strip - small_h) * 0.5f)), L.accent,
+    sternbild::text_tracked(dl, L.ui, L.small_size, ImVec2(b0.x + pad, std::round(y + (band - small_h) * 0.5f)), L.accent,
                             tag.c_str(), tracking(L));
     if (!left.empty())
-        card_draw_text(dl, L.mono, L.mono_size, ImVec2(b0.x + pad + tw + std::round(8.0f * s), y + (strip - mono_h) * 0.5f),
+        card_draw_text(dl, L.mono, L.mono_size, ImVec2(b0.x + pad + tw + std::round(8.0f * s), y + (band - mono_h) * 0.5f),
                        L.faint, left);
-    if (!tab) dl->AddRectFilled(ImVec2(x, y + strip - 1.0f), ImVec2(x + w, y + strip), L.accent);
+    if (!tab) dl->AddRectFilled(ImVec2(x, y + band - 1.0f), ImVec2(x + w, y + band), L.accent);
     else dl->AddRect(b0, b1, L.accent, 0.0f, 0, 1.0f);
 }
 
@@ -1011,7 +1019,7 @@ ApprovalTray::~ApprovalTray() = default;
 void ApprovalTray::start(Hooks) {}
 void ApprovalTray::frame(caliper_builder::Session*, bool, double) {}
 void ApprovalTray::draw_strip() {}
-void ApprovalTray::mark_panel(const std::string&, float, float, float, float, bool) {}
+void ApprovalTray::mark_panel(const std::string&, float, float, float, float, float) {}
 void ApprovalTray::close() {}
 
 #endif
