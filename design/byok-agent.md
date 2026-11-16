@@ -656,15 +656,22 @@ agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens
   in each request (`extra_body.options.num_ctx`, which the transport takes). The person's setting replaces it: the
   widget agent's Context length in the app (an override in the cache, read for the widget role only) and
   `--context-length` (both roles).
-- **No silent truncation.** Ollama cuts the oldest messages, the person's own request first, when a request is longer
-  than `num_ctx`. Where the sidecar chose the context length, the turn estimates each request before it is sent, from
-  the prompt tokens the server counted for the last one plus a token for every three characters added since (the
-  first request of a session at four characters a token, tools and instructions included), and when it would leave
-  less than an eighth of the context (at most 4,096 tokens) for the reply, it sends nothing: the turn ends with
-  `max_tokens`, which the side chat and the ⌘K prompt show as LIMIT rather than as a finished turn, a
-  `context_full` status and a message that names the context length and what the person can do. For a
-  server whose context length the sidecar did not choose (LM Studio, Custom, hosted presets), nothing is checked, as
-  before: the sidecar knows only the length it assumes, not the one the server loaded.
+- **No silent truncation.** Ollama 0.40 cuts the front of a prompt longer than `num_ctx`, the person's own request
+  first, unless the request says `truncate: false`, which makes it refuse the request with HTTP 400 ("request (4910
+  tokens) exceeds the available context size (2048 tokens)"). A reply that reaches the end of the context stops there
+  with `done_reason` `length`; it was not shifted in a test with or without `shift: false`, which every request also
+  sends. Where the sidecar chose the context length, the turn estimates each request before it is sent
+  (`estimate_prompt_tokens()`): from the prompt tokens the server counted for the last one, plus what was added since,
+  or, for a session's first request, from the whole request, each kind of content at its own rate (instructions 3.5
+  characters a token, counted once; tool schemas 3.4; the messages' text 1.6, since numbers take a token a digit; 350
+  tokens an image; 200 for the template). A test keeps the estimate at or above Ollama's own counts of recorded ⌘K and
+  side chat requests and within 30 percent of them. When the request would leave less than an eighth of the context
+  (at most 4,096 tokens) for the reply, it sends nothing; otherwise it asks for no more output than the context leaves
+  after the prompt. A request refused as too long, the check's own refusal and a reply cut at the end of the context,
+  tool calls or not, all end the turn with `max_tokens`, which the side chat and the ⌘K prompt show as LIMIT rather
+  than as a finished turn; the first two with a `context_full` status and a message that names the context length and
+  what the person can do. For a server whose context length the sidecar did not choose (LM Studio, Custom, hosted
+  presets), nothing is checked, as before.
 - **The cache note.** For a server on loopback the probe also reads Ollama's `/api/show`, which loads nothing, and
   keeps the context cache one token takes (`kv_bytes_per_token`: attention layers, key and value heads and their
   sizes, at 16 bits). The settings tag Context cache about N GB when the context length times that reaches 4 GB. With

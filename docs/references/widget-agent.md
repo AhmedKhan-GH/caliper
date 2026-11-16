@@ -147,11 +147,15 @@ Studio and Custom included, stays on the OpenAI-compatible endpoint.
 The defaults are what one request of each role costs: the widget agent's first request, with its ten tools, the
 context bundle and the render, takes about 7,000 tokens before the model's reply, and the general role's, with every
 command of the table as a tool, about 11,000, growing with each tool result. Where the agent chose the context length,
-it never lets the server cut a request: before each model request it estimates the request from the prompt tokens the
-server counted for the last one, and when the request would leave less than an eighth of the context (at most 4,096
-tokens) for the reply, it sends nothing and the turn ends with the stop reason `max_tokens`, which Caliper shows as
-LIMIT, and a message, with the status `context_full`, that the conversation no longer fits the model's context and that
-the person can start again or raise the context length.
+it never lets the server cut a request: each request asks Ollama not to cut a prompt that is too long but to refuse it
+(`truncate: false`) and not to drop the front of the context during a reply (`shift: false`). Before each model request
+the agent estimates the request's prompt tokens from the count the server gave for the last one and what was added
+since, at or above what the server counts; when the request would leave less than an eighth of the context (at most
+4,096 tokens) for the reply, it sends nothing, and otherwise it asks for no more output than the context leaves. A
+request that does not fit, by the estimate or by the server's refusal, ends the turn with the stop reason `max_tokens`,
+which Caliper shows as LIMIT, and a message, with the status `context_full`, that the conversation no longer fits the
+model's context and that the person can start again or raise the context length. A reply that stops at the end of
+the context ends the turn with `max_tokens` too, and none of its tool calls runs.
 For a server whose context length the agent did not choose, nothing is checked.
 
 ## Opening a widget session

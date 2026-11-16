@@ -20,15 +20,18 @@ What is translated:
   call id and tool name; the tools; `max_tokens` or `max_completion_tokens` as
   `options.num_predict`; temperature, top_p, seed, stop and the penalties as
   options; `reasoning_effort` as `think`; a JSON schema response format as
-  `format`. Every request gets `options.num_ctx` and `keep_alive`: the
+  `format`. Every request gets `truncate: false` and `shift: false`, so that
+  Ollama refuses a prompt longer than the context instead of cutting its front,
+  and stops a reply at the end of the context instead of dropping the front.
+  Every request gets `options.num_ctx` and `keep_alive`: the
   transport's own, or the `options.num_ctx` of the request's body, where the
   provider puts the context length of the session's role.
 - **The reply.** Ollama streams lines of JSON; each becomes a chunk of the
   chat completions API: `thinking` as `reasoning` (the field Ollama's own
   OpenAI-compatible endpoint uses), text as `content`, each tool call with an
   index and an id (one is made when Ollama sends none), then the finish reason
-  (`tool_calls` after a call, `length` when the output limit was reached, else
-  `stop`) and the usage (`prompt_eval_count`, `eval_count`). A reply without
+  (`length` when the output limit or the end of the context was reached, even
+  after a call, else `tool_calls` after a call, else `stop`) and the usage (`prompt_eval_count`, `eval_count`). A reply without
   streaming becomes one chat completion.
 - **Errors.** Ollama's `{"error": "..."}` keeps its status and becomes the chat
   completions API's error object, so the OpenAI client raises the same
@@ -145,8 +148,12 @@ def native_request(body: dict, *, num_ctx: int, keep_alive: str) -> dict:
     stop = body.get("stop")
     if stop:
         options["stop"] = [stop] if isinstance(stop, str) else list(stop)
+    # truncate: false makes Ollama refuse a prompt longer than num_ctx (HTTP 400, "request (N tokens) exceeds the
+    # available context size") instead of cutting its front; shift: false keeps it from dropping the front of the
+    # context when a reply reaches its end, so the reply stops with done_reason "length" instead.
     out: dict = {"model": body.get("model"), "messages": native_messages(body.get("messages")),
-                 "stream": bool(body.get("stream")), "options": options, "keep_alive": keep_alive}
+                 "stream": bool(body.get("stream")), "options": options, "keep_alive": keep_alive,
+                 "truncate": False, "shift": False}
     tools = [{"type": "function", "function": {k: v for k, v in (t.get("function") or {}).items()
                                                if k in ("name", "description", "parameters")}}
              for t in body.get("tools") or [] if isinstance(t, dict) and t.get("type") == "function"]
@@ -197,9 +204,10 @@ class _Reply:
         return out
 
     def finish(self, done: dict | None) -> str:
-        if self.calls:
-            return "tool_calls"
-        return "length" if (done or {}).get("done_reason") == "length" else "stop"
+        # A reply cut at the output limit or the end of the context is cut, tool calls or not: none of them runs.
+        if (done or {}).get("done_reason") == "length":
+            return "length"
+        return "tool_calls" if self.calls else "stop"
 
     @staticmethod
     def usage(done: dict | None) -> dict:

@@ -186,7 +186,7 @@ def test_the_persons_context_length_replaces_the_presets(ollama_agent):
     request = server.native_requests[0]
     assert request["options"]["num_ctx"] == 20000
     # At most half of the context length is asked for as output.
-    assert request["options"]["num_predict"] == 10000
+    assert request["options"]["num_predict"] <= 10000   # and no more than the first prompt leaves of 20,000
 
     # A general session's first request with the 34 tools does not fit 8,192 tokens: nothing is sent.
     agent, server = ollama_agent([{"text": "never"}], "--context-length", "8192")
@@ -207,6 +207,46 @@ def test_a_refusal_of_tools_and_a_cut_off_reply_keep_their_meaning(ollama_agent)
     sid = agent.start_session()
     response, _ = agent.prompt(sid, "Say hello")
     assert response["result"]["stopReason"] == "max_tokens"
+
+
+def test_the_server_may_neither_cut_the_prompt_nor_shift_the_reply():
+    n = native_request({"model": "m", "messages": [{"role": "user", "content": "hi"}]}, num_ctx=16384, keep_alive="60s")
+    # Ollama 0.40 cuts a prompt longer than num_ctx from its front unless truncate is false, and then refuses it.
+    assert n["truncate"] is False and n["shift"] is False
+
+
+def test_the_reply_asks_for_no_more_than_the_context_leaves(ollama_agent, caliper):
+    # The first reply's prompt took 13,000 of 16,384 tokens: the next request may ask for what is left, not 8,192.
+    agent, server = ollama_agent([{"tool_calls": [_call("call_1", "catalog_list", '{"kind": "table"}')]},
+                                  {"text": "One table."}], "--context-length", "16384", prompt_tokens=[13000])
+    sid = agent.start_session()
+    response, _ = agent.prompt(sid, "What data do I have?")
+    assert response["result"]["stopReason"] == "end_turn"
+    first, second = server.native_requests
+    assert first["options"]["num_predict"] <= 8192   # at most half the context, and what the first prompt leaves
+    assert 13000 + second["options"]["num_predict"] <= 16384
+    assert second["options"]["num_predict"] >= 2048   # the least reply worth asking for
+
+
+def test_a_reply_cut_at_the_end_of_the_context_is_a_limit_even_with_a_tool_call(ollama_agent, caliper):
+    agent, server = ollama_agent([{"tool_calls": [_call("call_1", "catalog_list", '{"kind": "table"}')],
+                                   "finish": "length"}])
+    sid = agent.start_session()
+    response, _ = agent.prompt(sid, "What data do I have?")
+    assert response["result"]["stopReason"] == "max_tokens"
+    assert caliper.commands("catalog.list") == []   # no call of a cut-off reply runs
+
+
+def test_a_prompt_the_server_refuses_as_too_long_ends_the_turn_as_a_limit(ollama_agent):
+    agent, server = ollama_agent([{"text": "never"}], native_error=(
+        400, "request (20512 tokens) exceeds the available context size (16384 tokens), try increasing it"))
+    sid = agent.start_session(meta=widget_meta())
+    response, updates = agent.prompt(sid, "Use a linear y axis")
+    assert response["result"]["stopReason"] == "max_tokens"
+    assert response["result"]["_meta"]["caliper"]["widget"]["limit"] is True
+    assert "no longer fits the model's context of 16,384 tokens" in message_text(updates)
+    [full] = [s for s in statuses(updates) if s["status"] == "context_full"]
+    assert full["estimate"] == 20512
 
 
 def test_lm_studio_stays_on_the_openai_compatible_endpoint(ollama_agent):
