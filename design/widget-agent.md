@@ -102,9 +102,13 @@ a bronze PREVIEW tag and rule, and a compact diff under the row lists the change
 - **A small panel.** The surface lays itself out as plain rectangles in the panel. As the panel shrinks, the reply
   line goes first, then the diff lines past the first, then the model label of the row, then the keys of the buttons;
   below the minimum height (the rows and 48 px of content at text scale 1) the surface takes the whole panel.
-- A change that adds a panel, such as a table of a selection, will draw the new panel in a dashed frame where the
-  layout would place it; this is not built yet.
-- The agent's summarized thinking is kept by the surface but not shown yet.
+- **A change that adds, removes or moves panels**, such as a table of a selection beside the panel, is drawn as the
+  preview of the whole spec in place of the spec, with its layout: the panels it adds stand where the layout puts them,
+  in a dashed bronze frame with PREVIEW in their strip, and the others keep their data. The compact diff names them as
+  "panel selected_rows added" and "layout changed". A change inside the target panel is still drawn in that panel.
+- **An answer without a change**, such as what a dropped file holds, is the card's content: it wraps over up to six
+  lines in a panel and four under a row, elided past them with Text, which shows the whole of it.
+- The agent's summarized thinking shows as the running row's progress line.
 
 **Built.** `src/host/builder/widget_surface.h` holds the surface, `widget_agent.h` the `WidgetAgent` interface with a
 scripted agent for tests and screenshots, and `widget_agent_acp.h` the agent over `AcpClient`, which starts
@@ -125,8 +129,19 @@ Escape leaves the prompt first, then the command input, then the focus, then goe
 `CALIPER_AGENT_PYTHON` until it is packaged, when Caliper API runs; a hidden app never touches the key store and runs
 the sidecar only on a test's script. The model is chosen from the prompt row's label through
 `session/set_config_option`, and the agent's thoughts show as the progress line. A hidden-only input script,
-`CALIPER_TEST_SPEC_UI`, drives the page for tests and screenshots. Not built yet: the selection, dropped-file and
-property entry points, the dashed frame of a new panel, and the packaging of `caliper-agent` with a Python runtime.
+`CALIPER_TEST_SPEC_UI`, drives the page for tests and screenshots.
+
+The other three entry points are built too. **A selection**: the spec runtime holds one selection
+(`SpecSelection`), a range of x on a series panel or a rectangle of a 2-D points panel, made by a shift-drag across
+the plot and drawn in bronze; ⌘K on a panel with a selection opens the prompt for the selection target, whose context
+bundle carries the selected rows (the drawn steps or points inside it, at most 1,000) and the range, and Escape clears
+the selection before the focus. **A dropped file**: after a drop, the row of each source the import made shows ⌘K in
+the builder pane's Sources palette, and the prompt opens under that row for the target of the file's loader and its
+catalog ids; with no spec open, the preview's `spec.new` from the `ui` origin is undone again by a discard. **A
+property**: ⌘K beside the focused panel's title and each of its options in Properties opens the prompt under that
+row for that one property (`options.colormap`), and the edit is previewed in the panel. Each session's scope is the
+scope rule's for its kind of target. Not built yet: the ⌘K of a source's properties, and the packaging of
+`caliper-agent` with a Python runtime.
 
 ## The context bundle
 
@@ -781,6 +796,14 @@ For a local server:
 - **One sidecar for every ⌘K**, started at the first and kept; each ⌘K opens a session and closes it with
   `session/close` when its prompt closes.
 - **A scripted agent names itself "Scripted"**, so that no screenshot credits a model that did not run.
+- **A preview that adds a panel is the whole spec's preview**, drawn in place of the spec with the added panels in a
+  dashed bronze frame, since the surface's card stays in the target panel and the new panel must stand where the
+  layout puts it to be judged.
+- **A selection is plain state of the spec runtime**, one at a time, made by a shift-drag (a plain drag pans the
+  plot), since the spec panels had none; its rows are the drawn steps or points, after the decimation of long series,
+  and the range goes with them so that the agent can query the source for all of them.
+- **The prompt of a dropped file or a property sits under its row** in the builder pane, where the person asked,
+  and not in a panel.
 - **⌘K Command means one thing on every page:** it opens the command input of where the focus is. On the landing
   screen that is the command line; on the spec page it is the focused panel's inline prompt, or with no panel focused
   the page bar's command input, which finds a panel by its title, so that Enter then opens that panel's prompt.
@@ -811,7 +834,7 @@ and L six to ten; each figure is rough.
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | Done: widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget, the handoff and `session/close` | None left |
 | 13 | Done: the context bundle, built from the session with its bounds and cuts, as ACP content blocks with the tool scope and `session/new`'s `_meta` (`build_context_bundle()`); calling it from the inline surface comes with item 14 | None left |
-| 14 | In part: the inline surface on a panel, the prompt, the preview drawn in place, Accept, Reject and Refine, Ask in chat handed to the page, and the agent over `AcpClient`. Left: the selection, dropped-file and property entry points, connecting the surface in the app's page, and the packaging of `caliper-agent` and a Python runtime | M, 4 days |
+| 14 | Done but for packaging: the inline surface on a panel, a selection, a dropped file and a property, the preview drawn in place (a panel or the whole spec), Accept, Reject and Refine, Ask in chat, and the agent over `AcpClient`. Left: the packaging of `caliper-agent` and a Python runtime, and ⌘K on a source's properties | S, 2 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
 | 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
 | 17 | Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` with its checks and warnings, the scrubbing of every documented key shape, and the settings in the app (`agent_settings.h`) with the agent made from them | None left |

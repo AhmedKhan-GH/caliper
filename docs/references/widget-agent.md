@@ -9,10 +9,9 @@ session is opened, which commands it may use, what a prompt may hold, and what e
 
 !!! note "Status"
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
-    on a panel is built in `src/host/builder/` and works on the app's spec page
-    ([The inline surface](#the-inline-surface)). The entry points on a selection, a dropped file and a property are
-    not built yet, and `caliper-agent` is not yet packaged with a Python runtime, so the app finds it through
-    `CALIPER_AGENT_PYTHON` ([Environment variables](environment.md)).
+    on a panel, a selection, a dropped file and a property is built in `src/host/builder/` and works on the app's spec
+    page ([The inline surface](#the-inline-surface)). `caliper-agent` is not yet packaged with a Python runtime, so
+    the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](environment.md)).
 
 ## Starting the agent
 
@@ -267,6 +266,23 @@ Command, opens a one-line prompt at the top of the focused panel, under its titl
 below the prompt, so the prompt covers nothing. With no panel focused, ⌘K opens the page's command input in the page
 bar instead: typing a panel's title focuses it, and Enter opens its prompt. Escape leaves the prompt's innermost state
 first, then the command input, then the panel's focus, and last goes Home.
+
+**The other targets.**
+
+- **A selection.** A shift-drag across a series panel's plot selects a range of x, such as steps, and across a 2-D
+  points panel a rectangle of points; the selection is drawn in bronze, a shift-click clears it, and so does Escape.
+  ⌘K on that panel opens the prompt for the selection: its context bundle carries the selected rows (the drawn steps
+  or points, at most 1,000) and the range. A change that adds a panel, such as a table of the selection, is drawn as
+  the preview of the whole spec: the new panel stands where the layout puts it, in a dashed bronze frame with PREVIEW
+  in its strip.
+- **A dropped file.** After files are dropped on the spec page, each source the import made shows ⌘K at the end of its
+  row in the builder's Sources palette (and ⌘K with that row selected and no panel focused does the same). The prompt
+  opens under the row, for the file's loader and its catalog ids. An answer without a change is shown in the card,
+  over up to four lines, with Text for the whole of a longer one; a proposed panel is previewed as above. With no spec
+  open, the preview's `spec.new` is undone again when the preview is discarded.
+- **A property.** In build mode, ⌘K shows beside the focused panel's title and each of its options in Properties while
+  the row is under the pointer. It opens the prompt under that row for that one property, such as
+  `options.colormap`, and the edit is previewed in the panel.
 
 The prompt row shows the model and effort the session reports; a click on them lists the models the session offers,
 and the choice goes to the session with `session/set_config_option` and to every later session. While the agent
