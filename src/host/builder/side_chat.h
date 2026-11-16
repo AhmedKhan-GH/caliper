@@ -361,6 +361,9 @@ public:
     bool choose_agent(const std::string& id);
     // Sets the custom agent's name and command line and picks it.
     caliper_builder::Error set_custom_agent(const std::string& name, const std::string& line);
+    // Marks the chosen agent as running on a local model, or clears the mark
+    // (the picker's Local model row); the settings change. False with no agent.
+    bool set_local_model(bool on);
     void set_text(std::string text);
     // Enter: sends the text and the draft's blocks. The agent starts first
     // when it is not running, and the message waits for its session.

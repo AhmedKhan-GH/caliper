@@ -15,6 +15,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -63,6 +64,16 @@ bool read_chat_settings(const std::string& path, ChatPaneSettings* out, std::str
     out->chat.custom_name = str("custom_name", out->chat.custom_name);
     out->chat.custom_command = str("custom_command", "");
     out->chat.allow_always = flag("allow_always");
+    // The agents marked as running on a local model: their ids, once each.
+    if (const auto it = j.find("local_model_agents"); it != j.end() && it->is_array()) {
+        std::vector<std::string>& marked = out->chat.local_model_agents;
+        for (const json& v : *it) {
+            if (!v.is_string() || marked.size() >= 64) continue;
+            const std::string& id = v.get_ref<const std::string&>();
+            if (!id.empty() && id.size() <= 64 && std::find(marked.begin(), marked.end(), id) == marked.end())
+                marked.push_back(id);
+        }
+    }
     out->open = flag("open");
     return true;
 }
@@ -73,6 +84,7 @@ bool write_chat_settings(const std::string& path, const ChatPaneSettings& s, std
                     {"custom_name", s.chat.custom_name},
                     {"custom_command", s.chat.custom_command},
                     {"allow_always", s.chat.allow_always},
+                    {"local_model_agents", s.chat.local_model_agents},
                     {"open", s.open}};
     std::error_code ec;
     fs::create_directories(fs::path(path).parent_path(), ec);
@@ -290,6 +302,12 @@ int ChatPane::draft_chips() const { return impl_->chat ? (int)impl_->chat->draft
 
 std::string ChatPane::note() const { return impl_->chat ? impl_->chat->gpu_note() : std::string(); }
 
+bool ChatPane::set_local_model(bool on) { return impl_->chat && impl_->chat->set_local_model(on); }
+
+void ChatPane::open_picker() {
+    if (impl_->chat) impl_->chat->open_picker();
+}
+
 void ChatPane::shutdown() {
     impl_->chat.reset();
     impl_->end_agent_file();
@@ -329,6 +347,8 @@ bool ChatPane::has_item(const std::string&, const std::string&, const std::strin
 void ChatPane::focus_input() {}
 int ChatPane::draft_chips() const { return 0; }
 std::string ChatPane::note() const { return {}; }
+bool ChatPane::set_local_model(bool) { return false; }
+void ChatPane::open_picker() {}
 void ChatPane::shutdown() {}
 
 #endif

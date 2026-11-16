@@ -734,7 +734,12 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   is attached (`caliper_live::Attachment::attached()`, true while the app holds a training script's stream, until it
   detaches) and the chosen base URL is a loopback address, for Ollama, LM Studio or Custom alike. A test in the hidden app
   attaches to the stream of the producer of the live acceptance test with the Ollama preset chosen and sees the note,
-  then detaches and sees it gone. The side chat's setting and note are not built.
+  then detaches and sees it gone.
+- **Built: the side chat's note.** Local model in the side chat's agent picker marks the chosen agent as running on a
+  local model, kept per agent in `side-chat.json` ([ACP integration](acp-integration.md#the-side-chat-as-built)). While
+  the live session is attached and the chosen agent is marked, the chat's header shows the same noun, "Shared GPU"
+  (`chat_gpu_note()`), framed in bronze after the agent's name. A test in the hidden app attaches to the producer's
+  stream, marks the stub agent and sees the note, then detaches and sees it gone.
 - **The advice**, in Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`):
   during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;

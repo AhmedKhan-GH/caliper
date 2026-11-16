@@ -549,8 +549,8 @@ and [FAQ](https://docs.ollama.com/faq) pages:
    the workspace, for the reason under [Risks](#risks). For an Ollama server elsewhere, opencode takes its
    OpenAI-compatible URL, with `/v1`, in `providers.ollama.settings.baseURL`.
 5. In Caliper, choose the `opencode` preset (or add `opencode acp` as a custom agent), and mark the agent
-   as running on a local model, so that the side chat shows a note while a training run is live
-   ([Widget agent](widget-agent.md#gpu-contention) gives the reasons and the advice).
+   as running on a local model with Local model in the agent picker, so that the side chat shows a note while a
+   training run is live ([Widget agent](widget-agent.md#gpu-contention) gives the reasons and the advice).
 6. Review opencode's `permissions`, and add the `external_directory` rule above to be asked before it leaves the
    workspace.
 
@@ -624,7 +624,16 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   methods and the commands of the preset's hint, and Restart; it never asks for a key and runs no login flow.
 - **No agent.** The four agents by name, each marked NOT FOUND, and one action, Custom command.
 - **The input.** One line, more with Shift or Command and Enter, up to six; Enter sends; the agent picker beside it
-  lists the agents by name, NOT FOUND for those not on PATH, and Custom command.
+  lists the agents by name, NOT FOUND for those not on PATH, Custom command, and Local model, a mark for the chosen
+  agent that says its model runs on this machine.
+- **The local model setting.** Local model in the picker marks the chosen agent as running on a local model, or clears
+  the mark; it is the person's word, since Caliper cannot tell where an agent's model runs. While the app's live
+  session is attached and the chosen agent is marked, the header shows the note "Shared GPU" after the agent's name,
+  framed in bronze as in the widget agent's settings (`chat_gpu_note()`); it gives way after the version and before the
+  name as the header narrows. **Decision:** the mark is kept per agent, by its id, so that switching from opencode on
+  Ollama to a hosted agent drops the note; the custom agent's mark stays with the id `custom` when its command changes.
+  **Decision:** the row is in the picker, beside the choice of the agent it marks, since the chat has no settings
+  panel of its own.
 - **The layout.** The right column is 28 % of the window's width with a minimum of 300 points that grows with the text
   scale; with Selection or Properties open above it, the chat takes 55 % of the column's height with a minimum of 220
   points, and the upper part gives way first. In the pane, the mode, then the version, then the agent's name in the
@@ -656,7 +665,8 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   parameter). In build mode the builder pane's right column holds Properties above the chat; the page then draws the
   chat with `ChatPane::draw_in()` in the pane's `chat_rect` instead of claiming a column.
 - **The settings.** `side-chat.json` in the app-data folder: the chosen agent, the custom agent's name and command
-  line, whether "always allow" options are offered, and whether the chat is open. Never a key, and no address.
+  line, whether "always allow" options are offered, the agents marked as running on a local model
+  (`local_model_agents`, a list of ids), and whether the chat is open. Never a key, and no address.
 - **Caliper API.** `caliper-mcp` needs the API. **Decision, the user's:** when the app was started without `--api`, the
   chat starts the API when its agent starts, the one case in which the API starts without `--api`: on 127.0.0.1 at a
   free port, with new tokens and the API file, as `--api` does, and no setting can change the address. Each agent
@@ -751,8 +761,7 @@ Waiting for later work:
     before stays open until it closes.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
   spec file before the person answers.
-- The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when
-  a workspace holds an opencode configuration.
+- The warning when a workspace holds an opencode configuration.
 - The packaging of `caliper-mcp` beside the app's executable; a development build finds it in its build tree.
 - `session/load`, `session/resume`, modes and config options in the side chat, images in prompts, and version 2.
 - The Windows implementation of `Process`.
@@ -808,6 +817,8 @@ Waiting for later work:
 - **`_meta` passed through, not interpreted.** The client bounds it and sends it as given, so the widget session's
   fields can change with the sidecar without a change to the client.
 - **A warning, not a refusal, when a workspace configures opencode,** since the configuration may be the person's own.
+- **A local-model mark per agent, set in the picker,** because the app cannot tell where an agent's model runs; with a
+  live run attached, the marked agent's header shows Shared GPU.
 
 ## Risks
 

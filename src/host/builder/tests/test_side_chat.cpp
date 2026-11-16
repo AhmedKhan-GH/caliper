@@ -376,6 +376,38 @@ TEST_CASE("side chat: the Shared GPU note while a live run is attached and the a
     CHECK(empty.gpu_note().empty());
 }
 
+TEST_CASE("side chat: the Local model setting marks the chosen agent, and the settings change") {
+    Fixture f("chat-local-model");
+    bool live = true;
+    std::vector<ChatSettings> saved;
+    SideChat::Hooks hooks;
+    hooks.live_attached = [&live] { return live; };
+    hooks.settings_changed = [&saved](const ChatSettings& s) { saved.push_back(s); };
+    SideChat::Options o = f.options();
+    o.settings.local_model_agents = {"opencode"};   // another agent's mark stays
+    SideChat chat(o, hooks);
+    REQUIRE(chat.agent() != nullptr);
+    CHECK(chat.gpu_note().empty());
+    REQUIRE(chat.set_local_model(true));
+    CHECK(chat.local_model());
+    CHECK(chat.gpu_note() == "Shared GPU");
+    REQUIRE(saved.size() == 1);
+    CHECK(saved.back().local_model_agents == std::vector<std::string>{"opencode", "custom"});
+    REQUIRE(chat.set_local_model(true));   // marked once
+    CHECK(chat.settings().local_model_agents == std::vector<std::string>{"opencode", "custom"});
+    REQUIRE(chat.set_local_model(false));
+    CHECK_FALSE(chat.local_model());
+    CHECK(chat.gpu_note().empty());
+    CHECK(saved.back().local_model_agents == std::vector<std::string>{"opencode"});
+    // No agent chosen: nothing to mark.
+    SideChat::Options none = o;
+    none.settings.custom_command.clear();
+    none.settings.agent.clear();
+    SideChat empty(none, hooks);
+    CHECK_FALSE(empty.set_local_model(true));
+    CHECK_FALSE(empty.local_model());
+}
+
 TEST_CASE("side chat: a pending command approval of the agent's turn is mirrored in its slot") {
     Fixture f("chat-approvals");
     std::vector<caliper_builder::PendingApproval> pending;

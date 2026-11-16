@@ -108,7 +108,9 @@ instead.
 
 A local model shares your computer with everything else. On a Mac it uses the same GPU and the same memory as a
 training run that streams into Caliper, so both slow down, and the widget agent's settings and its ⌘K prompt show
-Shared GPU while a run is attached. The setup guide gives advice for that case.
+Shared GPU while a run is attached. The side chat's header shows it too when you mark its agent as running on a local
+model with Local model in its agent picker, since Caliper cannot tell where your agent's model runs. The setup guide
+gives advice for that case.
 
 ## Privacy
 

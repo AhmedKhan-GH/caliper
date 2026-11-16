@@ -30,8 +30,9 @@
 //     (Hooks::agent_ended). An API started with --api is left alone.
 //   - The settings. side-chat.json in the app-data folder: the chosen agent's
 //     id, the custom agent's name and command line, whether an agent's
-//     allow_always options are offered, and whether the pane is open. Never a
-//     key: the agent logs in on its own.
+//     allow_always options are offered, the agents marked as running on a
+//     local model (the picker's Local model row), and whether the pane is
+//     open. Never a key: the agent logs in on its own.
 //   - The GPU note. "Shared GPU" in the chat's header while a live run is
 //     attached (Hooks::live_attached) and the chosen agent is marked as
 //     running on a local model (design/widget-agent.md, GPU contention).
@@ -124,6 +125,11 @@ public:
     int draft_chips() const;
     // The header's GPU note ("Shared GPU"), "" for none or before the chat is made.
     std::string note() const;
+    // The picker's Local model row for the chosen agent, as a click on it
+    // does (SideChat::set_local_model()), and the picker opened on the next
+    // draw; false before the chat is made or with no agent.
+    bool set_local_model(bool on);
+    void open_picker();
 
     // Before the session and the UI context go: stops the agent.
     void shutdown();

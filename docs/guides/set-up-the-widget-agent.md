@@ -183,12 +183,16 @@ run take turns on the same GPU and memory:
   high.
 
 On a computer with a separate graphics card, the model's weights take video memory that the run may need, and the
-same advice holds. The side chat runs your own agent, so it shows no such note.
+same advice holds. The side chat runs your own agent, so Caliper cannot tell where its model runs; it shows the same
+note when you mark the agent as running on a local model, as below.
 
 ## Local models in the side chat
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
 ACP integration (`design/acp-integration.md`) sets up opencode with a model served by Ollama as a worked example.
+When your agent runs a model on this machine, choose **Local model** in the chat's agent picker; while a training run
+is attached, the chat's header then shows **Shared GPU**, and the advice above applies
+([Side chat](../references/side-chat.md#local-models)).
 
 ## Remove the key
 
