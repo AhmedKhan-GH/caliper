@@ -1335,6 +1335,88 @@ TEST_CASE("live/app: the session list shows script, pid, start time and views; r
     CHECK(caliper_live::age_text(0).empty());
 }
 
+namespace {
+
+// A stream file as caliper.serve() writes it (python/caliper/_net.py,
+// StreamFile), with the given fields; mode 0600 unless `mode` says otherwise.
+std::string write_stream_file(const std::string& name, int32_t pid, const std::string& host, const std::string& url,
+                              uint64_t start_ms, mode_t mode = 0600, int port = 54321) {
+    const std::string dir = g_root.dir + "/streams";
+    mkdir(dir.c_str(), 0700);
+    const std::string path = dir + "/" + name;
+    const std::string text = "{\"version\": 1, \"pid\": " + std::to_string(pid) + ", \"host\": \"" + host +
+                             "\", \"session\": \"clp-" + std::to_string(pid) +
+                             "-abc123\", \"script\": \"train.py\", \"start_unix_ms\": " + std::to_string(start_ms) +
+                             ", \"port\": " + std::to_string(port) + ", \"stream_url\": \"" + url +
+                             "\", \"control\": true, \"views\": [\"loss\", \"attn\"]}\n";
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    REQUIRE(fd >= 0);
+    REQUIRE(write(fd, text.data(), text.size()) == (ssize_t)text.size());
+    close(fd);
+    chmod(path.c_str(), mode);
+    return path;
+}
+
+std::string host_name() {
+    char h[256] = {0};
+    gethostname(h, sizeof h - 1);
+    return h;
+}
+
+}  // namespace
+
+TEST_CASE("live/app: the session list shows a caliper.serve() stream from its stream file, on this machine and "
+          "for this user only; a killed script's file is reclaimed") {
+    const std::string url = "ws://127.0.0.1:54321/v3/stream?token=abcdefghijklmnopqrstuvwxyz012345";
+    const int32_t me = (int32_t)getpid();
+    const uint64_t now = caliper_live::unix_ms();
+    const std::string mine = write_stream_file(std::to_string(me) + ".json", me, host_name(), url, now);
+
+    caliper_live::SessionList list;
+    REQUIRE(list.refresh(true));
+    CHECK(list.error().empty());
+    const std::string session = "clp-" + std::to_string(me) + "-abc123";
+    const int i = list.find(session);
+    REQUIRE(i >= 0);
+    const caliper_live::SessionEntry& e = list.sessions()[(size_t)i];
+    CHECK(e.script == "train.py");
+    CHECK(e.pid == me);
+    CHECK(e.start_unix_ms == now);
+    CHECK(caliper_live::view_names(e) == "loss, attn");
+    CHECK(caliper_live::state_text(e) == "stream");
+    CHECK(caliper_live::can_attach(e));
+    // The row attaches with the file's stream URL, the token of the printed link.
+    CHECK(e.stream_url == url);
+    CHECK(e.control);
+
+    // Not listed: a file someone else could read, a file of another host, a
+    // stream that is not on loopback, a stream URL whose port is not the
+    // file's. Those files are left alone.
+    const std::string open_mode = write_stream_file("9001.json", me, host_name(), url, now, 0644);
+    const std::string other_host = write_stream_file("9002.json", me, host_name() + ".elsewhere", url, now);
+    const std::string remote = write_stream_file(
+        "9003.json", me, host_name(), "ws://192.0.2.7:54321/v3/stream?token=abcdefghijklmnopqrstuvwxyz012345", now);
+    const std::string wrong_port = write_stream_file("9004.json", me, host_name(), url, now, 0600, 54322);
+    REQUIRE(list.refresh(true));
+    int listed = 0;
+    for (const auto& x : list.sessions()) listed += x.pid == me && !x.stream_url.empty();
+    CHECK(listed == 1);
+    for (const std::string& f : {open_mode, other_host, remote, wrong_port}) CHECK(access(f.c_str(), F_OK) == 0);
+
+    // A killed script's file (its pid has gone) is removed by the listing; so
+    // is one whose pid now belongs to a process started after the file.
+    const std::string killed = write_stream_file(std::to_string(dead_pid()) + ".json", dead_pid(), host_name(), url, now);
+    const std::string reused = write_stream_file("9005.json", me, host_name(), url, 1000);
+    REQUIRE(list.refresh(true));
+    CHECK(access(killed.c_str(), F_OK) != 0);
+    CHECK(access(reused.c_str(), F_OK) != 0);
+    CHECK(list.find(session) >= 0);
+
+    for (const std::string& f : {mine, open_mode, other_host, remote, wrong_port}) unlink(f.c_str());
+    REQUIRE(list.refresh(true));
+    CHECK(list.find(session) < 0);
+}
+
 TEST_CASE("live/app: attach through a hosted core, views live, session ended keeps the last "
           "frames, detach") {
     const int W = 64, H = 48;

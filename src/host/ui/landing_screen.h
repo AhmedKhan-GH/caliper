@@ -15,7 +15,8 @@
 //                                 dashboard, a new spec in build mode, titled
 //                                 by "new <title>" on the command line; F4 Attach
 //                                 to process opens the live sessions of
-//                                 training scripts here: script, pid, start
+//                                 training scripts and the streams of
+//                                 caliper.serve() here: script, pid, start
 //                                 time, state, views; ↑↓ select, Enter /
 //                                 double-click attach, esc back)
 //                   Instruments  (installed applets: name, id, version, tag,
@@ -80,7 +81,8 @@ public:
         std::function<void()> after_bars;
         // Attach to a network stream by its link (wire protocol v3): the ws://
         // link, or the http:// page link that caliper.serve() prints. Null
-        // hides the link field under the session list.
+        // hides the link field under the session list. A stream listed from
+        // its stream file attaches through it too, with the file's link.
         std::function<void(const std::string&)> attach_url;
         // A spec applet's facts for the Inspector, from its spec file. Null,
         // or false, leaves the rows that need them out.

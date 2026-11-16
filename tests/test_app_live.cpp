@@ -11,6 +11,10 @@
 // Home does) the spec opens again with its live panels offline and the app
 // keeps running. POSIX with Metal only; without Metal the case is skipped.
 //
+// The other case drives the hidden app's landing screen through
+// CALIPER_TEST_SPEC_UI beside a producer: F4 listing a stream from its stream
+// file and Enter attaching it.
+//
 // CALIPER_TEST_SHOTS=<folder> saves the two captures there as
 // live-entropy-a.png and live-entropy-b.png, and CALIPER_TEST_WINDOW=<W>x<H>
 // sets the window's size in points: the capture script uses both.
@@ -171,7 +175,153 @@ std::map<std::string, json> live_entries(uint16_t port, const std::string& token
     return out;
 }
 
+// ---- the hidden app driven by CALIPER_TEST_SPEC_UI, beside a producer ----
+
+struct Env {
+    std::string exe, producer, applets;
+    std::string window, shots;   // CALIPER_TEST_WINDOW, CALIPER_TEST_SHOTS ("" when unset)
+    bool ok = false;
+};
+
+Env test_env() {
+    Env e;
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const char* producer = std::getenv("CALIPER_TEST_PRODUCER_EXE");
+    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
+    if (!exe || !*exe || !producer || !*producer || !applets || !*applets) return e;
+    e.exe = exe;
+    e.producer = producer;
+    e.applets = applets;
+    if (const char* w = std::getenv("CALIPER_TEST_WINDOW"); w && *w) e.window = w;
+    if (const char* d = std::getenv("CALIPER_TEST_SHOTS"); d && *d) e.shots = d;
+    e.ok = true;
+    return e;
+}
+
+// A producer: its hub's stream link (with its token) once it listens.
+// `stream_dir`, when not empty, is where it writes its stream file.
+std::string start_producer(Proc& p, const Env& env, const std::string& stream_dir = {}) {
+    std::vector<std::string> args = {"--layers", "4", "--heads", "4", "--tokens", "32", "--hz", "8"};
+    if (!stream_dir.empty()) {
+        args.push_back("--stream-file");
+        args.push_back(stream_dir);
+    }
+    REQUIRE(p.start(env.producer, args, {}));
+    REQUIRE_MESSAGE(p.read_until("[producer] hub ", 20000), p.text);
+    REQUIRE(p.read_until("\n", 2000));
+    const size_t at = p.text.find("[producer] hub ") + std::string("[producer] hub ").size();
+    return p.text.substr(at, p.text.find('\n', at) - at);
+}
+
+// The input script's end: "[ui] done" or "[ui] stopped: ...". False after `ms`.
+bool script_ended(Proc& app, int ms) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
+        if (app.text.find("[ui] done") != std::string::npos || app.text.find("[ui] stopped") != std::string::npos)
+            return true;
+        app.read_some(20);
+    }
+    return false;
+}
+
+// Waits until the app's output holds `needle`, reading as it goes.
+bool app_says(Proc& app, const std::string& needle, int ms = 30000) { return app.read_until(needle, ms); }
+
+// The token of the app's start line ("with the session token <t>").
+std::string start_token(const Proc& app) {
+    const std::string mark = "with the session token ";
+    const size_t at = app.text.find(mark);
+    if (at == std::string::npos) return {};
+    size_t e = at + mark.size();
+    while (e < app.text.size() &&
+           (std::isalnum((unsigned char)app.text[e]) || app.text[e] == '_' || app.text[e] == '-'))
+        ++e;
+    return app.text.substr(at + mark.size(), e - at - mark.size());
+}
+
+// A shot's name for CALIPER_TEST_SHOTS: fix-<what>-<W>x<H>.
+std::string shot_name(const Env& env, const std::string& what) {
+    return "fix-" + what + "-" + (env.window.empty() ? std::string("800x500") : env.window);
+}
+
+// The app's environment: data, workspace's applets and window size, the
+// input script and its shots folder.
+std::vector<std::string> app_env(const Env& env, const TempDir& t, const std::string& script,
+                                 const std::string& shots) {
+    return {"CALIPER_DATA_DIR=" + t.str("data"), "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+            "CALIPER_WINDOW_SIZE=" + (env.window.empty() ? std::string("800x500") : env.window),
+            "CALIPER_TEST_SPEC_UI=" + script, "CALIPER_TEST_SPEC_UI_SHOTS=" + shots};
+}
+
+// Skips the case without Metal; true when it runs.
+bool has_metal(Proc& app) {
+    app.read_until("[renderer] ", 30000);
+    app.read_until("\n", 2000);
+    if (app.text.find("[renderer] metal") != std::string::npos) return true;
+    MESSAGE("caliper --hidden: run skipped: no GPU (no Metal device)");
+    return false;
+}
+
+// Waits until `pred` holds, reading the app's output meanwhile.
+template <typename F>
+bool eventually(Proc& app, F pred, int ms = 20000) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
+        if (pred()) return true;
+        app.read_some(50);
+    }
+    return pred();
+}
+
 }  // namespace
+
+TEST_CASE("app live: F4 lists a caliper.serve() stream from its stream file, and Enter attaches it without its link") {
+    const Env env = test_env();
+    if (!env.ok) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE or CALIPER_TEST_APPLETS is not set: run the "
+                "ctest entry caliper_app_live_f4_stream");
+        return;
+    }
+    TempDir t("f4");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    Proc producer;
+    const std::string link = start_producer(producer, env, t.str("data"));
+    const std::string token = link.substr(link.find("token=") + 6);
+    REQUIRE(token.size() >= 16);
+    const std::string list_shot = shot_name(env, "f4-stream");
+    const std::string live_shot = shot_name(env, "f4-stream-attached");
+
+    // The person's steps: F4 on the landing, Enter on the listed stream.
+    Proc app;
+    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--workspace", t.str("ws")},
+                      app_env(env, t,
+                              "page landing;key f4;wait 10;shot " + list_shot + ";key enter;page live;wait 40;shot " +
+                                  live_shot + ";quit",
+                              shots)));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(script_ended(app, 120000), app.text);
+    CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    CHECK(app.text.find("[ui] page live") != std::string::npos);
+    CHECK(app.text.find("[live] attached: attention_train.py") != std::string::npos);
+    CHECK(fs::exists(fs::path(shots) / (list_shot + ".png")));
+    CHECK(fs::exists(fs::path(shots) / (live_shot + ".png")));
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    // The listing gave no more than the link: the token never shows in what the
+    // app writes (its Activity and stderr name the stream without it).
+    CHECK(app.text.find(token) == std::string::npos);
+    // The producer removes its stream file when it stops.
+    const std::string stream_file = t.str("data/streams/" + std::to_string(producer.pid) + ".json");
+    CHECK(fs::exists(stream_file));
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+    CHECK_FALSE(fs::exists(stream_file));
+}
 
 TEST_CASE("app live: attention entropy per layer, from a live stream, on the spec page while it trains") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");

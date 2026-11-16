@@ -1157,7 +1157,8 @@ private:
         const std::string token = e.session;
         std::cerr << "[autoattach] " << token << std::endl;
         landing_.log("autoattach", token);
-        attach_session(token);
+        if (!e.stream_url.empty()) attach_stream(e.stream_url);   // a caliper.serve() stream
+        else attach_session(token);
     }
 
     // The attachment's transitions as Activity rows (and one stderr line

@@ -136,10 +136,13 @@ http://127.0.0.1:53634/?token=muBx4B8W7oIxM64YErBC62JwGl0KCsN_
 and then a line every 10 seconds with the step, the loss and the entropy of each layer's attention, in nats. A note
 that the WebAssembly views are not built concerns browsers only, and the app does not need them.
 
-In Caliper, on the landing screen, press F4, or click **F4 Attach to process** in the Projects pane. The script is
-not in the list of sessions, because it streams with `caliper.serve()` rather than through a session file; click the
-field under the list, **or a stream link: http://127.0.0.1:&lt;port&gt;/?token=...**, paste the link, and press Enter
-or click **Attach link**. You can also open the app on the stream directly, with the link on the command line:
+In Caliper, on the landing screen, press F4, or click **F4 Attach to process** in the Projects pane. The list shows
+`train.py` with the state `stream`: while its `caliper.serve()` listens, the script writes a stream file into
+Caliper's app-data folder, from which the app lists it. Select it and press Enter, or double-click it. The script and
+the app must use the same app-data folder; if you set `CALIPER_DATA_DIR` for one, set it for both. For a stream the
+list does not show, such as one on another machine, paste its link into the field under the list,
+**or a stream link: http://127.0.0.1:&lt;port&gt;/?token=...**, and press Enter or click **Attach link**. You can also
+open the app on the stream directly, with the link on the command line:
 
 ```sh
 cmake-build-release/caliper --api --url "http://127.0.0.1:53634/?token=muBx4B8W7oIxM64YErBC62JwGl0KCsN_"

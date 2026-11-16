@@ -135,6 +135,9 @@ class _NativeProducer(_Producer):
             self._series_seen = live
             for link in list(self.links):
                 link.views_changed(views)
+            sf = self.stream_file
+            if sf is not None:
+                sf.views(views)
         with ring.lock:
             pend = ring.pending
             ready = [p for p in pend if p.ready()]
@@ -356,6 +359,8 @@ class NativeServer(NetServer):
         connection with BYE and stop the server. Idempotent."""
         if self.closed:
             return
+        if self._stream_file is not None:
+            self._stream_file.remove()          # the app stops listing it before it goes
         from ._net import _unroute
         if threading.current_thread() is not self._thread:
             try:

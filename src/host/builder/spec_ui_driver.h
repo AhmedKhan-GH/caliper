@@ -15,8 +15,8 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, comma), such as "cmd+k" (Ctrl+K off macOS) or
-//                        "cmd+shift+z"
+//                        f3, f4, f5, up, down, comma), such as "cmd+k"
+//                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
 //   until <state>        wait until the inline surface's state is <state>
@@ -500,6 +500,14 @@ private:
                 keys.push_back(ImGuiKey_Backspace);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
+            } else if (p == "f4") {
+                keys.push_back(ImGuiKey_F4);
+            } else if (p == "f5") {
+                keys.push_back(ImGuiKey_F5);
+            } else if (p == "up") {
+                keys.push_back(ImGuiKey_UpArrow);
+            } else if (p == "down") {
+                keys.push_back(ImGuiKey_DownArrow);
             } else if (p == "comma") {
                 keys.push_back(ImGuiKey_Comma);
             } else if (p.size() == 1 && p[0] >= 'a' && p[0] <= 'z') {

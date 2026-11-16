@@ -953,10 +953,19 @@ if(TARGET caliper_builder_session)
             if(TARGET hello_applet)
                 add_dependencies(caliper_app_live_tests hello_applet)
             endif()
-            add_test(NAME caliper_app_live_entropy COMMAND caliper_app_live_tests)
-            set_tests_properties(caliper_app_live_entropy PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
-                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
-                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+            # One entry per case: the acceptance case, and F4 listing a stream
+            # of caliper.serve() from its stream file.
+            foreach(_case IN ITEMS
+                    "entropy|app live: attention entropy per layer*"
+                    "f4_stream|app live: F4 lists a caliper.serve() stream*")
+                string(REPLACE "|" ";" _parts "${_case}")
+                list(GET _parts 0 _name)
+                list(GET _parts 1 _filter)
+                add_test(NAME caliper_app_live_${_name} COMMAND caliper_app_live_tests "--test-case=${_filter}")
+                set_tests_properties(caliper_app_live_${_name} PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
+                    ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                    SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+            endforeach()
         endif()
         if(NOT WIN32)
             add_test(NAME caliper_app_session_hidden

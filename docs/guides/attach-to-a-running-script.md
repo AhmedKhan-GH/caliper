@@ -130,9 +130,24 @@ the script's terminal does not close it and it outlives the script.
 
 A script that streams with `caliper.serve()` sends its views over a WebSocket on
 127.0.0.1 ([wire protocol v3](../references/wire-protocol.md)) instead of shared
-memory, so it has no session file and does not appear in the session lists
-above. Attach to it with the link it prints. Two forms are accepted, with
-`localhost` in place of `127.0.0.1`:
+memory, so it has no session file. While its server listens it writes a
+stream file, `<data_root>/streams/<pid>.json`, with mode 0600 in a folder of
+mode 0700, and removes it when the server closes. The file holds its pid, the
+name of the machine, the session id, the script's name, the start time, the
+port, the stream link with its token, whether viewers may control the script,
+and the names of its views. The Caliper app's session list reads these files
+and lists each stream with the state `stream`, so that F4 and Enter attach it
+without its link; `caliper-viewer`'s list does not. The app lists a file only
+when it belongs to the same user and no one else can read it, was written on
+this machine, names a process that still runs, and holds a link to 127.0.0.1
+at its port; it removes the file of a process that has gone. The token in the
+file is the one in the printed link, and the app attaches with it as it would
+with the pasted link, so listing a stream gives no access that the link did
+not.
+
+A stream of another machine, or one whose script uses another
+`CALIPER_DATA_DIR`, is not listed: attach to it with the link it prints. Two
+forms are accepted, with `localhost` in place of `127.0.0.1`:
 
 - the page link, `http://127.0.0.1:<port>/?token=<token>`;
 - the stream link, `ws://127.0.0.1:<port>/v3/stream?token=<token>`.
@@ -145,8 +160,10 @@ The token in the link is the stream's only secret. The viewer never prints it,
 and messages show the link without its query. Only links to 127.0.0.1 or
 `localhost` are accepted.
 
-**In the Caliper app**, press F4 and paste the link into the field under the
-session list, then press Enter or click `Attach link`. A refusal stays on the
+**In the Caliper app**, press F4: a stream on this machine is listed, so select
+it and press Enter. For a stream that is not listed, paste the link into the
+field under the session list, then press Enter or click `Attach link`. A
+refusal stays on the
 landing, and Activity says why: nothing listens on that port, or the server
 refused the token (HTTP 403). To open the app on the stream directly, give
 the link on the command line:

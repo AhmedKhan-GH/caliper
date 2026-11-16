@@ -928,8 +928,10 @@ void LandingScreen::draw_projects(const Context& ctx) {
 }
 
 // Projects in attach mode (F4): the live sessions of training scripts on this
-// machine, read from their session files (<app data>/live/<pid>.json) and
-// relisted once a second, as a dense table like Instruments: script, pid, start
+// machine, read from their session files (<app data>/live/<pid>.json), and
+// the streams of caliper.serve() from their stream files (<app data>/streams/
+// <pid>.json, state "stream", attached by their stream URL), relisted once a
+// second, as a dense table like Instruments: script, pid, start
 // time, state and the views it shows. The live core's listing rules apply: a
 // killed script's row is reclaimed (its file and shared memory go) at the next
 // listing, and a closing or already-viewed one stays, marked, and cannot be
@@ -1058,7 +1060,7 @@ void LandingScreen::draw_sessions(const Context& ctx) {
         if (rows.empty())
             empty_row(list.error().empty()
                           ? "No live sessions. A script opens one on its first "
-                            "caliper.show(), and it is listed here while it runs."
+                            "caliper.show() or caliper.serve(), and it is listed here while it runs."
                           : list.error().c_str());
         sternbild::end_table();
     }
@@ -1120,7 +1122,12 @@ void LandingScreen::draw_sessions(const Context& ctx) {
         if ((entered || clicked) && !stream_link_.empty()) pending_attach_url_ = stream_link_;
     }
 
-    if (attach && can) pending_attach_ = cur->session;
+    // A caliper.serve() stream's row attaches by its stream URL, as a pasted
+    // link does; the token in it is never shown.
+    if (attach && can) {
+        if (!cur->stream_url.empty() && ctx.attach_url) pending_attach_url_ = cur->stream_url;
+        else if (cur->stream_url.empty()) pending_attach_ = cur->session;
+    }
     if (back) {
         attach_mode_ = false;
         projects_focused_ = false;
