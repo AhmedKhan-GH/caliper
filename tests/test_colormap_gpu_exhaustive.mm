@@ -12,8 +12,8 @@
 // chunk); for each chunk and each range, one dispatch writes a 4,096 x 4,096 rgba8unorm texture,
 // the layer reads it back, and CPU threads compare every texel with the reference's bytes, computed
 // slice by slice from the same buffer. Each dispatch runs in its own autorelease pool, so the
-// Metal objects of a submit and its 64 MB readback are freed at once; peak memory stays near
-// 300 MB (without the pool it grew past 30 GB). CALIPER_TEST_THREADS sets
+// Metal objects of a submit and its 64 MB readback are freed at once; peak resident memory stays
+// under 500 MB (without the pool it grew past 30 GB). CALIPER_TEST_THREADS sets
 // the CPU threads, 6 by default and at most 6. The first differing inputs are printed; the test
 // is never adjusted to pass.
 #include "gfx/colormap_keys.h"
