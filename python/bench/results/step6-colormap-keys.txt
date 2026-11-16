@@ -1,0 +1,110 @@
+# Renderer core, step 6: the colormap by keys, measured in a quiet window (2026-11-16)
+
+Measured at 01:06:59 to 01:07:01 in the orchestrator's quiet window (every heavy slot held for it, no other
+heavy job running), 1-minute load 3.49, on the reference Mac (M-series Max, 18 cores, 64 GB, macOS 27, mains
+power). Build: Release, preset release-notorch, head dab6634a of sprint4-cmap.
+
+This step changes no drawing path: the new header, the generated program colormap_texture and the rows are
+used by nothing but tests, and the one change to an existing function, map_f32_to_rgba8's index 0 for a NaN
+quotient, gives the same output as before for all 2^32 inputs on nine ranges (a scratch comparison of the
+old and new loop compiled with -O3). The graphics suite is 61 of 61 cases before (68fd631d) and 64 of 64 after,
+the existing 61 with the same results; the layer's "every generated program" row counts one more program.
+
+## The CPU (CALIPER_CMAP_BENCH=1 caliper_tests --test-case="colormap keys: timing*")
+
+[cmap-bench] derive_keys(0, 1): median 67.0 us, p95 75.3 us, 7659 evaluations of the reference; load 3.49
+[cmap-bench] derive_keys(-3.5, 7.25): median 75.5 us, p95 80.0 us, 7796 evaluations of the reference; load 3.49
+[cmap-bench] derive_keys(2, -1): median 81.6 us, p95 83.4 us, 7931 evaluations of the reference; load 3.49
+[cmap-bench] derive_keys(0, 3.40282e+38): median 62.8 us, p95 70.4 us, 5854 evaluations of the reference; load 3.49
+[cmap-bench] cache hit: block() median 4.0 ns, fill() with the 2,080-byte copy median 28.4 ns; 18000000 hits, 4 misses; load 3.49
+
+## The GPU (CALIPER_GFX_CMAP_BENCH=1 caliper_gfx_tests --test-case="gfx/Metal colormap: timing*")
+
+Each sample is one command buffer of 16 dispatches of one pass over an f32 heatmap into an rgba8unorm
+texture, GPU time (GPUEndTime - GPUStartTime) / 16; the passes take turns, 40 samples each after 5 warm-up
+rounds. The integer pass is the generated colormap_texture as the layer compiles it (safe math, 8 x 8);
+the float pass is the Metal renderer's cmap_f32 copied into the test and compiled as the renderer compiles it
+(default options, which are fast math, 16 x 16). The other rows edit the MSL text to attribute the
+difference; the two marked "not exact" drop steps of the decision and only time what is left. The fields
+are over (0, 1) with viridis; on both, the float guess is confirmed by its first two comparisons for every
+texel (a CPU count with colormap_keys.h over the 2,048 x 2,048 fields), so the neighbour tries and the
+binary search never run.
+
+1024 x 1024, smooth field: integer decision (layer: safe math, 8 x 8)       median    31.0 us, p95    31.5 us per pass,  3.28x the float pass (+21.6 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: float pass (renderer: default fast math, 16 x 16) median     9.5 us, p95     9.5 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: integer, fast math                               median    17.8 us, p95    17.9 us per pass,  1.89x the float pass (+8.4 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: integer, 16 x 16 workgroup                       median    31.1 us, p95    33.8 us per pass,  3.29x the float pass (+21.7 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: integer, block in device memory                  median    31.0 us, p95    31.0 us per pass,  3.28x the float pass (+21.5 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: integer, keys and table as flat u32 arrays       median    27.5 us, p95    27.5 us per pass,  2.91x the float pass (+18.0 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: integer, flat arrays, fast math, 16 x 16         median    14.7 us, p95    14.8 us per pass,  1.56x the float pass (+5.3 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: not exact: guess and table load only             median    23.6 us, p95    23.6 us per pass,  2.49x the float pass (+14.1 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: not exact: guess and its two comparisons only    median    27.7 us, p95    28.6 us per pass,  2.93x the float pass (+18.2 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: float pass, safe math                            median    22.6 us, p95    22.7 us per pass,  2.40x the float pass (+13.2 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, smooth field: float pass, table in constant memory             median     9.5 us, p95    10.0 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: integer decision (layer: safe math, 8 x 8)       median    26.4 us, p95    34.1 us per pass,  3.17x the float pass (+18.1 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: float pass (renderer: default fast math, 16 x 16) median     8.3 us, p95    10.5 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: integer, fast math                               median    15.4 us, p95    19.6 us per pass,  1.84x the float pass (+7.0 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: integer, 16 x 16 workgroup                       median    26.5 us, p95    34.2 us per pass,  3.18x the float pass (+18.1 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: integer, block in device memory                  median    26.3 us, p95    34.0 us per pass,  3.16x the float pass (+18.0 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: integer, keys and table as flat u32 arrays       median    23.4 us, p95    30.2 us per pass,  2.81x the float pass (+15.1 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: integer, flat arrays, fast math, 16 x 16         median    11.8 us, p95    16.3 us per pass,  1.42x the float pass (+3.5 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: not exact: guess and table load only             median    18.8 us, p95    25.9 us per pass,  2.26x the float pass (+10.5 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: not exact: guess and its two comparisons only    median    22.0 us, p95    30.4 us per pass,  2.64x the float pass (+13.6 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: float pass, safe math                            median    19.3 us, p95    24.9 us per pass,  2.31x the float pass (+10.9 us); 40 samples of 16 dispatches; load 3.49
+1024 x 1024, uniform random values: float pass, table in constant memory             median     8.3 us, p95    10.5 us per pass,  1.00x the float pass (-0.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: integer decision (layer: safe math, 8 x 8)       median    79.2 us, p95    80.8 us per pass,  3.07x the float pass (+53.4 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: float pass (renderer: default fast math, 16 x 16) median    25.8 us, p95    26.0 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: integer, fast math                               median    45.7 us, p95    45.8 us per pass,  1.77x the float pass (+19.9 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: integer, 16 x 16 workgroup                       median    79.2 us, p95    80.1 us per pass,  3.08x the float pass (+53.5 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: integer, block in device memory                  median    78.9 us, p95    80.4 us per pass,  3.06x the float pass (+53.2 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: integer, keys and table as flat u32 arrays       median    69.8 us, p95    76.9 us per pass,  2.71x the float pass (+44.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: integer, flat arrays, fast math, 16 x 16         median    36.3 us, p95    36.4 us per pass,  1.41x the float pass (+10.6 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: not exact: guess and table load only             median    59.7 us, p95    64.9 us per pass,  2.32x the float pass (+33.9 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: not exact: guess and its two comparisons only    median    70.4 us, p95    77.6 us per pass,  2.73x the float pass (+44.7 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: float pass, safe math                            median    57.3 us, p95    60.4 us per pass,  2.22x the float pass (+31.5 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, smooth field: float pass, table in constant memory             median    25.8 us, p95    28.3 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: integer decision (layer: safe math, 8 x 8)       median    79.3 us, p95   143.3 us per pass,  2.75x the float pass (+50.4 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: float pass (renderer: default fast math, 16 x 16) median    28.9 us, p95    38.2 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: integer, fast math                               median    47.3 us, p95    80.6 us per pass,  1.64x the float pass (+18.4 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: integer, 16 x 16 workgroup                       median    79.4 us, p95   132.0 us per pass,  2.75x the float pass (+50.5 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: integer, block in device memory                  median    79.1 us, p95   129.2 us per pass,  2.74x the float pass (+50.2 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: integer, keys and table as flat u32 arrays       median    70.1 us, p95   114.3 us per pass,  2.43x the float pass (+41.2 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: integer, flat arrays, fast math, 16 x 16         median    36.9 us, p95    59.2 us per pass,  1.28x the float pass (+8.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: not exact: guess and table load only             median    59.9 us, p95    98.3 us per pass,  2.07x the float pass (+31.0 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: not exact: guess and its two comparisons only    median    70.7 us, p95   128.1 us per pass,  2.45x the float pass (+41.8 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: float pass, safe math                            median    57.7 us, p95   104.1 us per pass,  2.00x the float pass (+28.8 us); 40 samples of 16 dispatches; load 3.49
+2048 x 2048, uniform random values: float pass, table in constant memory             median    28.9 us, p95    40.3 us per pass,  1.00x the float pass (-0.0 us); 40 samples of 16 dispatches; load 3.49
+
+## What the numbers say
+
+| Heatmap | Float pass | Integer pass (as the layer compiles it) | Difference | Threshold (5 % or 20 µs) |
+|---|---|---|---|---|
+| 1,024², smooth field | 9.5 µs | 31.0 µs | +21.6 µs, 3.3x | exceeded |
+| 1,024², uniform random values | 8.3 µs | 26.4 µs | +18.1 µs, 3.2x | within 20 µs, not within 5 % |
+| 2,048², smooth field | 25.8 µs | 79.2 µs | +53.4 µs, 3.1x | exceeded |
+| 2,048², uniform random values | 28.9 µs | 79.3 µs | +50.4 µs, 2.7x | exceeded |
+
+Where the extra time goes, at 1,024² on the smooth field (2,048² in brackets):
+- Safe math, that is the precise division of the float guess: 13.2 µs (33.5 µs). With fast math the integer
+  pass takes 17.8 µs (45.7 µs); the float pass with safe math takes 22.6 µs (57.3 µs). The decision's
+  exactness does not rest on the guess, and caliper_shader_tests already checks the probe byte-exact with
+  fast math on and off.
+- The keys and the table read as components of uint4 arrays at a dynamic index: 3.5 µs (9.4 µs); flat u32
+  arrays take 27.5 µs (69.8 µs). Reading the table from constant rather than device memory costs nothing on the
+  float pass, and moving the whole block to device memory changes nothing.
+- The two integer comparisons of the guess: 4.1 µs (10.7 µs) over the guess and the table load alone.
+- The neighbour tries and the binary search, which never run on these fields, still cost 3.3 µs (8.8 µs) by
+  their presence in the code.
+- The workgroup shape costs nothing: 16 x 16 takes the same time as 8 x 8.
+
+A cheaper form that keeps the decision exact: fast math, flat key and table arrays and a 16 x 16 workgroup
+take 14.7 µs at 1,024² (1.56x the float pass, +5.3 µs) and 36.3 µs at 2,048² (1.41x, +10.6 µs), within the
+20 µs clause at both sizes but not within 5 %. WGSL gives a uniform array a 16-byte stride, so flat keys need
+the block's keys as a storage buffer (compute only, since a compatibility-mode vertex stage reads no storage)
+or as an r32uint texture (textureLoad, any stage), or an MSL-only layout; and the layer would compile the
+colormap programs with fast math. Moving the rare paths out of line is not measured.
+
+The share of a frame: step 0's baseline measured, for a 1,024² heatmap in the viewer, an update of 13.4 µs and
+a frame of 24.1 µs of GPU time (2,048²: 63.9 µs and 47.5 µs). The kernel-level difference above adds about
+21.6 µs to the first (58 % more GPU time per frame, the colormap from about a quarter of it to about half) and
+53.4 µs to the second (48 % more); against the 16.7 ms of a 60 Hz frame it is 0.13 % and 0.32 %.

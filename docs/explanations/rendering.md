@@ -302,7 +302,7 @@ only where the compiler happens to keep the reference's operations. The keys mak
 - **The keys of a range.** For a range (vmin, vmax), the CPU finds by binary search over keys, for every level k from
   1 to 255, the first key whose reference level is at least k, evaluating `map_f32_to_rgba8` itself 5,900 to 7,900
   times for the ranges measured, in 65 to 83 microseconds on an M-series Max. A view keeps the blocks it uses, so a
-  range is derived once; a block from the cache costs a few nanoseconds. A level that no float reaches gets the
+  range is derived once; finding a block in the cache costs about 4 nanoseconds and copying it out about 30. A level that no float reaches gets the
   sentinel `0xffffffff`. A decreasing range flips every
   key, so that the level only grows with the key. A degenerate range, an infinite end, an infinite span or a NaN end
   maps every value to level 0, so all its keys are the sentinel.
@@ -325,6 +325,14 @@ derives keys links `src/host/tensor_bridge.cpp`, where the reference lives.
 The keys follow whatever the reference computes. Its index for a NaN quotient, which an infinite end or span gives, is
 defined as 0, and fusing its `t * 255 + 0.5` into one multiply-add, which the compiler does on arm64, changes no
 level for any t in [0, 1], so the reference and its keys are the same on every platform.
+
+On Metal the integer decision costs more GPU time than the float formula. Measured on an M-series Max, the
+generated `colormap_texture`, compiled with safe math as the layer compiles every program, takes 31 µs on a
+1,024 x 1,024 heatmap and 79 µs on a 2,048 x 2,048 one, about three times the Metal renderer's float pass (9.5 µs
+and 26 µs). Most of the difference is the precise division of the float guess, which the decision does not need
+to be exact, and the rest the uint4-packed key and table reads and the two comparisons; with fast math, flat
+arrays and a 16 x 16 workgroup the same decision takes 15 µs and 36 µs. `python/bench/results/step6-colormap-keys.txt`
+holds the measurement with its variants.
 
 The renderers' own colormaps do not use the keys yet: the Metal renderer's compute pass `cmap_f32`, the Vulkan
 renderer's `colormap.comp`, the CUDA kernel, the WebGPU renderer's pass with its float thresholds and the TypeScript
