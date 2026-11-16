@@ -221,6 +221,9 @@ table, or a schema changed in it, reaches the agent without a change to `caliper
 | `annotations.destructiveHint` | The command's `destructive` flag, stated for every tool, since MCP's default is true. |
 | `annotations.openWorldHint` | False: every tool acts on the local app only. |
 
+Output schemas and structured content came with revision 2025-06-18, so every revision `caliper-mcp` serves has them
+and every tool states its output schema. A client that asks for an older revision is answered with 2025-11-25.
+
 `app.launch` does not mutate the workspace in the command layer's sense, but it tears down the open applet and
 detaches a live session, so it is not read-only in MCP's sense ("does not modify its environment") and its
 `readOnlyHint` is false. A client may approve read-only tools without asking, and launching an applet should not be one
@@ -463,7 +466,25 @@ The tests are headless and run with the builder project's ctest.
   `--hidden --api --api-port 0` and its own `CALIPER_DATA_DIR`, runs `caliper-mcp` against the API file it writes,
   calls `app_info`, `app_applets` and `capture_frame` (which must give a PNG that is not blank, or the documented
   `capture.unavailable`), calls a command tool and expects `mcp.no_command_layer`, and stops the app with SIGTERM.
-  Without the variable, ctest reports it as skipped.
+  Without the variable, ctest reports it as skipped. To run it, configure the builder project with
+  `-DCALIPER_BUILDER_TEST_APP=<path to a caliper executable>`; the app must be able to start hidden on that machine.
+
+### Results on this branch
+
+The end-to-end test was run on 15 November 2026 with a copy of the `caliper` executable built from `sprint2`, on
+macOS with the Metal renderer. It passed: `app_info` gave the app's version and services, `app_applets` an empty list
+(the copy had no applets beside it), `capture_frame` a PNG of 2560 by 1600 pixels that is not blank, and
+`catalog_list` the tool error `mcp.no_command_layer`. The app ended with exit code 0 after SIGTERM and removed its API
+file, and the token did not appear in the output of `caliper-mcp`.
+
+As an extra check, the CLI of the MCP Inspector (`@modelcontextprotocol/inspector` 2.15.0 from npm, installed in a
+scratch folder and run headless with its browser opening turned off) was pointed at `caliper-mcp` and the same hidden
+app. It connected with the `initialize` handshake of 2025-11-25, listed the tools, called `app_info`,
+`capture_frame` (an image block and the size), `catalog_list` and `app_launch` (each tool error as expected), and
+listed and read resources and templates. Its `--strict` report on the tool schemas found no errors and 71 warnings,
+all for `type` given as a list (such as `["string", "null"]`) in the command table's schemas, which is valid JSON
+Schema but does not map onto a dialect with a single type per value, such as the OpenAPI subset of Gemini's function
+declarations. `caliper-mcp` passes the schemas through unchanged; see [Open questions](#open-questions).
 
 ## Changes to the contracts
 
@@ -509,3 +530,6 @@ The tests are headless and run with the builder project's ctest.
   turn that `caliper-mcp` could map to it.
 - A Windows version of the HTTP client; on Windows the client answers `http.unsupported` for now.
 - Whether to expose the stream to agents, which would need the token in the stream's address.
+- Whether the command table should write nullable values with `anyOf` instead of a list of types, for clients that
+  map tool schemas onto a single-type dialect (the Inspector's portability warnings above). It is a question for the
+  table; `caliper-mcp` does not rewrite schemas, since the command layer checks arguments against them as they are.
