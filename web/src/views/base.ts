@@ -40,8 +40,8 @@ export interface LiveView {
   debug(): Record<string, unknown>;
 }
 
-/** A small toggle button for the header's tool slot. */
-export function toggle(host: ViewHost, label: string, title: string, on: boolean, change: (on: boolean) => void) {
+/** A small toggle button for the header's tool slot (a view's, or the element's for the WebAssembly views). */
+export function toggle(host: Pick<ViewHost, 'tools'>, label: string, title: string, on: boolean, change: (on: boolean) => void) {
   const b = document.createElement('button');
   b.className = 'tool';
   b.textContent = label;

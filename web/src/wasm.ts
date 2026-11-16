@@ -22,6 +22,8 @@ export interface WasmHandle {
   /** The module's counters (the real loader has them; a stub may not). */
   readonly stats?: Record<string, unknown>;
   onSelect?: ((event: WasmSelect | Record<string, unknown>) => void) | null;
+  /** Sets a header toggle of the view: 'follow' or 'log' (the real loader has it; a stub may not). */
+  setToggle?(name: string, on: boolean): boolean;
   onDataView?: ((dataView: DataView) => void) | null;
 }
 
@@ -38,6 +40,8 @@ export interface WasmOptions {
   onSelect(event: WasmSelect | Record<string, unknown>): void;
   /** What the element's header says about the view, as it changes. */
   onInfo?(facts: ViewFacts): void;
+  /** A view changed a header toggle itself (a plot stopped or started following). */
+  onToggle?(name: string, on: boolean): void;
   onDataView(dataView: DataView): void;
 }
 

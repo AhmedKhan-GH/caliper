@@ -13,9 +13,11 @@
 //     onSelect,     // (detail, view) => {}, every selection; {} clears it
 //     onEvent,      // ({ view, type, detail }) => {}, every select, pick and hover
 //     onInfo,       // (facts, view) => {}, what a header says about the view, as it changes
+//     onToggle,     // (name, on, view) => {}, a view changed a header toggle itself ('follow')
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
 //   });
 //   handle.setDataView({ index: { layer: 2 } });   // a VIEW_REQUEST
+//   handle.setToggle('follow', false);             // a header toggle of the view
 //   handle.destroy();
 //
 // A selection, pick or hover goes to the producer as an EVENT on the mount's
@@ -67,7 +69,7 @@ export function preloadCaliperViews(assetBase) {
 }
 
 export async function mountCaliperViews(container, options = {}) {
-  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onDataView } = options;
+  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, onDataView } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -97,6 +99,7 @@ export async function mountCaliperViews(container, options = {}) {
         if (type === 'select' && onSelect) onSelect(detail, v);
       },
       onInfo: (v, facts) => { if (onInfo && (!view || v === view)) onInfo(facts, v); },
+      onToggle: (v, name, on) => { if (onToggle && (!view || v === view)) onToggle(name, on, v); },
       print: () => {},
       printErr: (t) => console.warn('[caliper-views]', t),
     });
@@ -119,6 +122,15 @@ export async function mountCaliperViews(container, options = {}) {
       if (destroyed) return false;
       const p = module.stringToNewUTF8(JSON.stringify(dataView ?? {}));
       const ok = module._caliper_views_set_data_view(p) === 1;
+      module._free(p);
+      return ok;
+    },
+    // Sets a header toggle of the view: 'follow' (series: the axes fit the
+    // data each frame) or 'log' (series and histogram: y on a log scale).
+    setToggle(name, on) {
+      if (destroyed) return false;
+      const p = module.stringToNewUTF8(String(name));
+      const ok = module._caliper_views_set_toggle(p, on ? 1 : 0) === 1;
       module._free(p);
       return ok;
     },

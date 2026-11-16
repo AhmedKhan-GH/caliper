@@ -195,9 +195,10 @@ void publish() {
     }
     put("viewInfo", per.c_str());
     // Where each view drew its data (CSS pixels in the canvas, and the data
-    // window there), what it has selected, and how many events went out: for
-    // tests, as JSON {"view": {"area": [x, y, w, h], "window": [x0, x1, y0, y1],
-    // "yDown": bool, "selected": n}}.
+    // window there), what it has selected and hovers, whether a plot follows
+    // its data, and how many events went out: for tests, as JSON {"view":
+    // {"area": [x, y, w, h], "window": [x0, x1, y0, y1], "yDown": bool,
+    // "selected": n, "hover": item, "cols": n, "follow": bool, "log": bool}}.
     std::string geo = "{";
     double selected = 0.0;
     if (g.core && g.core->live_views)
@@ -208,13 +209,17 @@ void publish() {
                                    ? (double)((v->sel_r1 - v->sel_r0) * (v->sel_c1 - v->sel_c0))
                                    : (double)(v->sel_s1 - v->sel_s0);
             if (v->name == g.cfg.view || g.cfg.view.empty()) selected += sel;
-            char b[512];
+            int cols = 0;
+            for (const auto& tv : g.core->views)
+                if (tv.name == v->name) cols = tv.w;
+            char b[640];
             std::snprintf(b, sizeof b,
                           "%s\"%s\":{\"area\":[%.9g,%.9g,%.9g,%.9g],\"window\":[%.17g,%.17g,%.17g,%.17g],"
-                          "\"yDown\":%s,\"selected\":%.0f}",
+                          "\"yDown\":%s,\"selected\":%.0f,\"hover\":%lld,\"cols\":%d,\"follow\":%s,\"log\":%s}",
                           geo.size() > 1 ? "," : "", v->name.c_str(), v->geo_area[0], v->geo_area[1],
                           v->geo_area[2], v->geo_area[3], v->geo_window[0], v->geo_window[1], v->geo_window[2],
-                          v->geo_window[3], v->geo_ydown ? "true" : "false", sel);
+                          v->geo_window[3], v->geo_ydown ? "true" : "false", sel, (long long)v->hover_item, cols,
+                          v->follow ? "true" : "false", v->log_y ? "true" : "false");
             geo += b;
         }
     geo += "}";
@@ -504,8 +509,19 @@ void send_infos() {
     }
 }
 
-// The view layer's events: to the producer, and to the page.
+// The view layer's events: to the producer, and to the page. A toggle a
+// view changed itself (a plot stopped or started following) goes to the page
+// only, for its header.
 void on_event(const caliper_live_views::LiveEvent& e) {
+    if (std::strcmp(e.type, "toggle") == 0) {
+        EM_ASM({
+            var cb = Module["onToggle"];
+            var d = JSON.parse(UTF8ToString($1));
+            if (cb) cb(UTF8ToString($0), d["name"], d["on"]);
+        }, e.view.c_str(), e.detail.c_str());
+        g.publish_soon = true;
+        return;
+    }
     if (g.net) {
         const uint64_t key = g.net->key_of(e.view);
         if (key && g.net->send_event(key, e.type, e.detail)) ++g.events_sent;
@@ -673,6 +689,19 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_set_data_view(const char* json) {
         return 0;
     }
     return 1;
+}
+
+// A header toggle ("follow" or "log") of the shown view, or of every view
+// when the instance shows them all. 1 when a view took it.
+EMSCRIPTEN_KEEPALIVE int caliper_views_set_toggle(const char* name, int on) {
+    if (!g.core || !g.core->live_views || !name) return 0;
+    int n = 0;
+    for (const auto& v : g.core->live_views->views)
+        if ((g.cfg.view.empty() || v->name == g.cfg.view) &&
+            caliper_live_views::set_toggle(g.core, v->name.c_str(), name, on != 0))
+            ++n;
+    g.publish_soon = true;
+    return n > 0 ? 1 : 0;
 }
 
 // Ends this instance: BYE to the producer, no more frames, every view, GPU

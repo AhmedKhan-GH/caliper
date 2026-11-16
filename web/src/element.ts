@@ -25,6 +25,7 @@ import { adapterInfo, gpuDevice, onDeviceLost } from './render/gpu.js';
 import type { LiveView, ViewHost } from './views/base.js';
 import { HeatmapView } from './views/heatmap.js';
 import { HistogramView } from './views/histogram.js';
+import { toggle } from './views/base.js';
 import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
@@ -103,6 +104,8 @@ export class CaliperView extends HTMLElement {
   private offLost: (() => void) | null = null;
   private wasm: WasmHandle | null = null;
   private wasmReady = false;
+  /** The header toggles of a view the WebAssembly views draw, by name. */
+  private readonly wasmToggles = new Map<string, { set(v: boolean): void }>();
   /** null until the view's kind is known; then which views draw it. */
   private drawer: 'wasm' | 'ts' | null = null;
   private deciding = false;
@@ -173,10 +176,27 @@ export class CaliperView extends HTMLElement {
     };
   }
 
-  /** A WebAssembly view's counters under the names the TypeScript views use. */
+  /** A WebAssembly view's counters and state under the names the TypeScript views use. */
   private wasmDebug(): Record<string, unknown> {
     const s = (this.wasm?.stats ?? {}) as Record<string, unknown>;
-    return { kind: this.kind(), updates: s.updates ?? 0, selected: s.selected ?? 0 };
+    const out: Record<string, unknown> = { kind: this.kind(), updates: s.updates ?? 0, selected: s.selected ?? 0 };
+    let geo: { area: number[]; window: number[]; hover: number; cols: number; follow: boolean; log: boolean } | undefined;
+    try {
+      geo = JSON.parse(String(s.geometry ?? '{}'))[this.names[0]];
+    } catch {
+      geo = undefined;
+    }
+    if (geo) {
+      const [x, y, w, h] = geo.area, [x0, x1, y0, y1] = geo.window;
+      out.area = { x, y, w, h };
+      out.window = { x0, x1, y0, y1 };
+      out.follow = geo.follow;
+      out.logY = geo.log;
+      const k = this.kind();
+      out.hover = geo.hover < 0 ? null
+        : k === 'heatmap' || k === 'image' ? { r: Math.floor(geo.hover / geo.cols), c: geo.hover % geo.cols } : geo.hover;
+    }
+    return out;
   }
 
   /** Resolves once pending drawing is done, including the GPU's work. */
@@ -306,6 +326,7 @@ export class CaliperView extends HTMLElement {
         const text = factsInfo(facts);
         if (text !== null) this.parts.info.textContent = text;
       },
+      onToggle: (name, on) => this.wasmToggles.get(name)?.set(on),
       // The reply to the module's own subscription or data view request.
       onDataView: (dv) => {
         if (this.drawer !== 'wasm') return;
@@ -319,6 +340,7 @@ export class CaliperView extends HTMLElement {
   private useWasm(handle: WasmHandle): void {
     this.wasm = handle;
     this.drawer = 'wasm';
+    this.wasmTools(handle);
     this.parts.overlay.hidden = true;
     this.parts.wasm.hidden = false;
     if (this.wanted) handle.setDataView(this.wanted);
@@ -332,6 +354,21 @@ export class CaliperView extends HTMLElement {
     });
     this.message('Waiting for data');
     this.status();
+  }
+
+  /**
+   * The header toggles of a series or histogram the WebAssembly views draw,
+   * the same buttons with the same names as the TypeScript views': log for
+   * both, and follow for a series, which the view turns off itself when the
+   * user pans or zooms and on again on a double click.
+   */
+  private wasmTools(handle: WasmHandle): void {
+    const kind = this.kind();
+    if (!handle.setToggle || (kind !== 'series' && kind !== 'histogram')) return;
+    const set = (name: string) => (on: boolean) => handle.setToggle?.(name, on);
+    const host = { tools: this.parts.tools };
+    this.wasmToggles.set('log', toggle(host, 'log', kind === 'series' ? 'Log scale for y' : 'Log scale for counts', false, set('log')));
+    if (kind === 'series') this.wasmToggles.set('follow', toggle(host, 'follow', 'Follow the newest values', true, set('follow')));
   }
 
   /** The stream for the header: the element's shared client, without subscriptions until it draws itself. */
@@ -395,6 +432,8 @@ export class CaliperView extends HTMLElement {
       }
       this.wasm = null;
       this.parts.info.textContent = '';
+      this.parts.tools.replaceChildren();
+      this.wasmToggles.clear();
     }
     this.parts.wasm.replaceChildren();
     this.parts.wasm.hidden = true;
