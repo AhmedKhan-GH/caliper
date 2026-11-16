@@ -91,6 +91,18 @@ struct Placer {
                 // With no room for the gaps, the children overlap rather than
                 // leave the area.
                 const float gap = total >= gaps ? m.gap : 0.0f;
+                SpecLayoutSplit split;
+                split.path = path;
+                split.rect = r;
+                split.horizontal = across;
+                split.children = k;
+                split.length = length;
+                split.ratio = n.ratio.value_or(0.5);
+                {
+                    const float first = (across ? r.x : r.y) + shares[0];
+                    split.divider = across ? SpecRect{first, r.y, gap, r.h} : SpecRect{r.x, first, r.w, gap};
+                }
+                out.splits.push_back(std::move(split));
                 float at = across ? r.x : r.y;
                 for (size_t i = 0; i < k; ++i) {
                     const SpecRect cr = across ? SpecRect{at, r.y, shares[i], r.h} : SpecRect{r.x, at, r.w, shares[i]};

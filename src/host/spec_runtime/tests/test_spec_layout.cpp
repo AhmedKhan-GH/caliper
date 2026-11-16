@@ -241,3 +241,28 @@ TEST_CASE("layout: a panel without a title goes by what it draws, never its id")
     CHECK(spec_binding_name(e, "probs") == "probs");                    // a derived source by its id
     CHECK(spec_binding_name(e, "metrics.value") == "value");
 }
+
+TEST_CASE("layout: the splits and their dividers, for the builder's drags") {
+    const spec::Spec s = fixture("dashboard.spec.toml");
+    const SpecLayout l = lay(s, 2560, 1440);
+    REQUIRE(l.splits.size() == 2);
+    // The root: a vertical split of 0.65, whose divider is the rule between
+    // the upper row and the table.
+    const SpecLayoutSplit& root = l.splits[0];
+    CHECK(root.path == "");
+    CHECK_FALSE(root.horizontal);
+    CHECK(root.children == 2);
+    CHECK(root.ratio == doctest::Approx(0.65));
+    CHECK(root.length == 1439.0f);
+    CHECK(same(root.rect, 0, 0, 2560, 1440));
+    CHECK(same(root.divider, 0, 935, 2560, 1));
+    // The upper row: side by side in halves, its divider between the curves
+    // and the attention.
+    const SpecLayoutSplit& row = l.splits[1];
+    CHECK(row.path == "0");
+    CHECK(row.horizontal);
+    CHECK(row.ratio == doctest::Approx(0.5));
+    CHECK(same(row.divider, 1280, 0, 1, 935));
+    CHECK(row.divider.x == l.find("curves")->rect.right());
+    CHECK(row.divider.right() == l.find("attention")->rect.x);
+}

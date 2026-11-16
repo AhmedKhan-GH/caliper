@@ -58,9 +58,24 @@ struct SpecLayoutTabs {
     int active = 0;
 };
 
+// A split node on a shown path, for the builder's divider drags: its path,
+// its rectangle, its axis, the gap between its first two children and the
+// length their shares divide. Only a split of two children takes a ratio, so
+// only those dividers can be dragged.
+struct SpecLayoutSplit {
+    std::string path;
+    SpecRect rect;
+    bool horizontal = true;   // the children side by side
+    size_t children = 2;
+    SpecRect divider;         // between the first and the second child
+    float length = 0.0f;      // the rectangle's length along its axis, less the gaps
+    double ratio = 0.5;       // the spec's ratio, or 0.5
+};
+
 struct SpecLayout {
     std::vector<SpecLayoutPanel> panels;   // the panels shown, in tree order
     std::vector<SpecLayoutTabs> tabs;      // every tabs node on a shown path
+    std::vector<SpecLayoutSplit> splits;   // every split node on a shown path, in tree order
     // The panel shown at `id`, or null.
     const SpecLayoutPanel* find(const std::string& id) const;
 };
