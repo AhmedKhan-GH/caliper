@@ -709,6 +709,8 @@ struct ApprovalTray::Impl {
     bool started = false;
     bool closed = false;
     std::string diff_open;   // the card whose full diff is open
+    std::string pointed;     // the card the side chat points at, until pointed_until
+    double pointed_until = 0.0;
 
     void draw_card(const SpecLook& L, ImDrawList* dl, ImVec2 o, const ApprovalCard& c, const ApprovalCardLayout& cl);
     void draw_diff_popup(const SpecLook& L, const ImRect& card, float strip_top);
@@ -748,6 +750,7 @@ void ApprovalTray::Impl::draw_card(const SpecLook& L, ImDrawList* dl, ImVec2 o, 
     const float s = L.text_scale;
     const ImRect card = rr(cl.card, o);
     dl->AddRectFilled(card.Min, card.Max, L.deep);
+    if (c.id == pointed && now < pointed_until) dl->AddRect(card.Min, card.Max, L.accent, 0.0f, 0, 1.0f);
     const float ui_h = card_text_extent(L.ui, L.ui_size, "Ag").y;
     const float small_h = card_text_extent(L.ui, L.small_size, "Ag").y;
     const float mono_h = card_text_extent(L.mono, L.mono_size, "Ag").y;
@@ -975,6 +978,11 @@ void ApprovalTray::draw_strip() {
     ImGui::End();
 }
 
+void ApprovalTray::point_to(const std::string& approval_id) {
+    impl_->pointed = approval_id;
+    impl_->pointed_until = impl_->now + 2.0;
+}
+
 void ApprovalTray::mark_panel(const std::string& panel_id, const std::string& title, float x, float y, float w,
                               float h, float strip) {
     Impl& im = *impl_;
@@ -1028,6 +1036,7 @@ void ApprovalTray::start(Hooks) {}
 void ApprovalTray::frame(caliper_builder::Session*, bool, double) {}
 void ApprovalTray::draw_strip() {}
 void ApprovalTray::mark_panel(const std::string&, const std::string&, float, float, float, float, float) {}
+void ApprovalTray::point_to(const std::string&) {}
 void ApprovalTray::close() {}
 
 #endif

@@ -100,6 +100,9 @@ public:
     // Marks the panel a waiting edit changes.
     void mark_panel(const std::string& panel_id, const std::string& title, float x, float y, float w, float h,
                     float strip);
+    // Points at an approval's card for a moment with a bronze outline: the
+    // side chat's row of a waiting command (side_chat.h) calls it.
+    void point_to(const std::string& approval_id);
     // Before the session closes: the cards go, and nothing is read again.
     void close();
 
