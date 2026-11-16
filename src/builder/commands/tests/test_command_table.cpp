@@ -32,8 +32,8 @@ const char* const kV0[] = {
     "loader.run",      "loader.delete",   "spec.new",       "spec.open",     "spec.get",         "spec.set_text",
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
     "panel.remove",    "panel.render",    "layout.place",   "layout.set",    "preview.begin",    "preview.diff",
-    "preview.commit",  "preview.discard", "applet.save",    "applet.open",   "applet.list",      "capture.frame",
-    "history.undo",    "history.redo",    "history.list",
+    "preview.commit",  "preview.discard", "applet.save",    "applet.open",   "applet.list",      "review.status",
+    "capture.frame",   "history.undo",    "history.redo",    "history.list",
 };
 
 std::set<std::string> names_where(bool (*pred)(const CommandDescriptor&)) {

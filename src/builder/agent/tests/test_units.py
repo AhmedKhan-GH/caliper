@@ -48,9 +48,9 @@ def _walk_all(schema):
 def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits():
     commands = load_command_table(COMMAND_TABLE)
     tools = derive_tools(commands)
-    # The preview commands are the app's and the sidecar's, never the model's.
-    assert {c.name for c in commands if c.group == "preview"} == {
-        "preview.begin", "preview.diff", "preview.commit", "preview.discard"}
+    # The preview and review commands are the app's and the sidecar's, never the model's.
+    assert {c.name for c in commands if c.group in NOT_FOR_THE_MODEL} == {
+        "preview.begin", "preview.diff", "preview.commit", "preview.discard", "review.status"}
     commands = [c for c in commands if c.group not in NOT_FOR_THE_MODEL]
     assert len(tools) == len(commands) >= 35
     for tool, command in zip(tools, commands):

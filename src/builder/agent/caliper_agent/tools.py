@@ -64,8 +64,8 @@ PREVIEW_ARG = "dry_run"
 # Command groups that are never offered to the model. The preview commands
 # belong to the app and the sidecar: edits reach a stacked preview through the
 # X-Caliper-Preview header, which the sidecar sets, and only the person
-# commits one.
-NOT_FOR_THE_MODEL = frozenset({"preview"})
+# commits one. review.status is the sidecar's own question to the app.
+NOT_FOR_THE_MODEL = frozenset({"preview", "review"})
 
 
 class TableError(Exception):

@@ -11,6 +11,8 @@
 #include <caliper_builder/spec/format.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -161,6 +163,19 @@ struct Session::Impl {
     // person gave. Bounded, oldest first out.
     std::mutex python_mutex;
     std::deque<std::string> python_asked;
+    // Review of spec edits: whether it is on for each origin, the edits parked
+    // for review (by invocation key, with the document and the lines the
+    // shown change removes and adds), oldest first out, and the review the
+    // policy computed last, which the registry keeps with the parked call.
+    struct Reviewed {
+        std::string key;
+        std::uint64_t doc = 0;
+        std::string change;
+    };
+    std::array<std::atomic<bool>, 5> review_on{};
+    std::mutex review_mutex;
+    std::deque<Reviewed> reviewed;
+    std::pair<std::string, json> last_review;
     std::mutex close_mutex;
     bool closed = false;
 
@@ -826,10 +841,26 @@ struct Session::Impl {
             return out;
         };
         if (!doc) return refused(no_open_spec());
+        // An edit the person reviewed runs only as it was shown.
+        const std::optional<Reviewed> shown = dry ? std::nullopt : take_reviewed(ctx.invocation);
+        if (shown && doc->id != shown->doc)
+            return fail("history.conflict",
+                        "Another spec was opened after the person was shown this change, so it was not applied; read "
+                        "the open spec and send the edit again.");
         SpecEdit e = apply_spec_edit(doc->spec, ctx.invocation.name, args, resolver());
+        if (e.error && shown)
+            return fail("history.conflict",
+                        "The open spec changed after the person was shown this change, and it no longer applies: " +
+                            e.error.message + " (" + e.error.code + ")",
+                        e.error.where);
         if (e.error) return refused(CommandOutput::fail(e.error));
         const std::string before_text = spec::to_toml(doc->spec);
         const std::string after_text = spec::to_toml(e.spec);
+        if (shown && change_lines(before_text, after_text) != shown->change)
+            return fail("history.conflict",
+                        "The open spec changed after the person was shown this change, and the change it would make "
+                        "now differs from the one they approved, so it was not applied; read the open spec and send "
+                        "the edit again.");
         const std::string label = spec_label();
         json result = std::move(e.result);
         result["warnings"] = warnings_json(e.warnings);
@@ -839,6 +870,86 @@ struct Session::Impl {
         const std::size_t bytes = 2 * (before_text.size() + after_text.size()) + 512;
         return CommandOutput::ok(std::move(result),
                                  change_spec(std::move(e.spec), !ctx.invocation.merge_key.empty(), bytes));
+    }
+
+    // ---- review of spec edits ---------------------------------------------------
+
+    bool review_for(CommandOrigin o) const { return review_on[static_cast<std::size_t>(o)].load(); }
+
+    // The lines a change removes and adds, in order, without the line numbers
+    // and the context of a unified diff, so that the same change made on a
+    // spec that changed elsewhere compares equal.
+    static std::string change_lines(const std::string& before, const std::string& after) {
+        const std::string diff = unified_line_diff(before, after, "a", "b", 0);
+        std::string out;
+        std::size_t start = 0;
+        int line = 0;
+        while (start < diff.size()) {
+            std::size_t end = diff.find('\n', start);
+            if (end == std::string::npos) end = diff.size();
+            const std::string_view l(diff.data() + start, end - start);
+            if (++line > 2 && l.rfind("@@", 0) != 0) {
+                out.append(l);
+                out += '\n';
+            }
+            start = end + 1;
+        }
+        return out;
+    }
+
+    // The review of an invocation, or null when it needs none: review is off
+    // for its origin, it is not an edit of the open spec, it is a dry run or
+    // names a preview, or it would fail or change nothing. A review is kept
+    // for the handler, which runs the edit only as it was shown.
+    json review_of(const CommandInvocation& inv) {
+        if (!is_spec_edit_command(inv.name) || !review_for(inv.origin) || !inv.preview.empty() ||
+            bool_arg(inv.args, "dry_run", false))
+            return nullptr;
+        Reviewed kept;
+        json review;
+        {
+            std::lock_guard<std::mutex> lock(doc_mutex);
+            if (!doc) return nullptr;
+            SpecEdit e = apply_spec_edit(doc->spec, inv.name, inv.args, resolver());
+            if (e.error || e.spec == doc->spec) return nullptr;
+            const std::string before = spec::to_toml(doc->spec);
+            const std::string after = spec::to_toml(e.spec);
+            const std::string label = spec_label();
+            review = {{"diff", unified_line_diff(before, after, "a/" + label, "b/" + label)},
+                      {"warnings", warnings_json(e.warnings)}};
+            kept = Reviewed{invocation_key(inv), doc->id, change_lines(before, after)};
+        }
+        std::lock_guard<std::mutex> lock(review_mutex);
+        reviewed.push_back(std::move(kept));
+        while (reviewed.size() > 256) reviewed.pop_front();
+        last_review = {invocation_key(inv), review};
+        return review;
+    }
+
+    // What the registry keeps with a parked invocation: the review the policy
+    // just computed for it.
+    json parked_review(const CommandInvocation& inv) {
+        std::lock_guard<std::mutex> lock(review_mutex);
+        if (last_review.first != invocation_key(inv)) return nullptr;
+        json out = std::move(last_review.second);
+        last_review = {};
+        return out;
+    }
+
+    std::optional<Reviewed> take_reviewed(const CommandInvocation& inv) {
+        const std::string key = invocation_key(inv);
+        std::lock_guard<std::mutex> lock(review_mutex);
+        const auto it = std::find_if(reviewed.begin(), reviewed.end(), [&](const Reviewed& r) { return r.key == key; });
+        if (it == reviewed.end()) return std::nullopt;
+        Reviewed out = std::move(*it);
+        reviewed.erase(it);
+        return out;
+    }
+
+    CommandOutput review_status(const CommandContext& ctx) {
+        const CommandOrigin o = ctx.invocation.origin;
+        return CommandOutput::ok(
+            {{"origin", command_origin_name(o)}, {"spec_edits", review_for(o)}, {"destructive", !user_origin(o)}});
     }
 
     // ---- stacked previews (all under doc_mutex) ------------------------------
@@ -1254,6 +1365,7 @@ struct Session::Impl {
         bind("applet.save", &Impl::applet_save);
         bind("applet.open", &Impl::applet_open);
         bind("applet.list", &Impl::applet_list);
+        bind("review.status", &Impl::review_status);
     }
 
     static std::string invocation_key(const CommandInvocation& inv) {
@@ -1311,6 +1423,9 @@ struct Session::Impl {
             }
             return applet_saved(id) ? ApprovalDecision::ask : ApprovalDecision::allow;
         }
+        // With review on for its origin, an edit that changes the open spec
+        // waits for the person, with its diff.
+        if (!review_of(inv).is_null()) return ApprovalDecision::ask;
         return default_approval_policy(d, inv);
     }
 };
@@ -1355,6 +1470,11 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         Impl* raw = &im;
         im.registry->set_approval_policy(
             [raw](const CommandDescriptor& d, const CommandInvocation& inv) { return raw->policy(d, inv); });
+        im.registry->set_approval_review(
+            [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->parked_review(inv); });
+        for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent, CommandOrigin::mcp,
+                                CommandOrigin::api})
+            im.review_on[static_cast<std::size_t>(o)].store(im.options.review.on(o));
         im.bind_all();
         im.queue = std::make_unique<CommandQueue>(*im.registry, im.options.queue);
         out.session = std::move(s);
@@ -1408,6 +1528,18 @@ void Session::set_host(std::shared_ptr<SessionHost> host) {
         return h ? h->capture_frame() : fail("command.not_bound", "capture.frame needs the app.");
     });
     im.registry->bind("panel.render", [raw](const CommandContext& ctx) { return raw->panel_render(ctx); });
+}
+
+void Session::set_review(CommandOrigin origin, bool on) {
+    impl_->review_on[static_cast<std::size_t>(origin)].store(on);
+}
+
+ReviewSettings Session::review() const {
+    ReviewSettings out;
+    for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent, CommandOrigin::mcp,
+                            CommandOrigin::api})
+        out.set(o, impl_->review_for(o));
+    return out;
 }
 
 std::optional<OpenSpec> Session::open_spec() const {

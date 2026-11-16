@@ -806,6 +806,21 @@ const Row kRows[] = {
             "updated_at": {"type": ["string", "null"], "description": "When it was last saved, in UTC ISO 8601."}}}}}})json",
      "{}"},
 
+    // review
+    {"review.status", false, false, false,
+     "Says which of your commands wait for the person's approval in Caliper before they run: destructive commands, "
+     "and edits of the open spec when the person reviews spec changes from your origin (for agents, on by default). "
+     "A call that waits is held until the person decides, for up to 120 seconds, or answered with "
+     "command.needs_approval; a dry run, an edit of a preview and an edit that changes nothing never wait. An agent "
+     "that asks the person itself before a change can leave out what Caliper already asks. It changes nothing.",
+     kNoArgs,
+     R"json({"type": "object", "additionalProperties": false, "required": ["origin", "spec_edits", "destructive"],
+      "properties": {
+        "origin": {"type": "string", "enum": ["ui", "builder", "agent", "mcp", "api"], "description": "Your origin, as Caliper sees it."},
+        "spec_edits": {"type": "boolean", "description": "Whether your edits of the open spec wait for the person's review, with their diff."},
+        "destructive": {"type": "boolean", "description": "Whether your destructive commands, which delete or overwrite saved data or run a Python loader, wait for the person's approval."}}})json",
+     "{}"},
+
     // capture
     {"capture.frame", false, false, true,
      "Returns the frame the app draws, the whole window, as a PNG image, so that you can see the app as the person "

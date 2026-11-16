@@ -9,8 +9,8 @@
 // that holds the whole descriptor table, and a CommandQueue over it. It binds
 // a handler for every command that needs no window: catalog.*, data.*,
 // loader.*, spec.*, source.*, panel.create, panel.patch, panel.remove,
-// layout.*, preview.*, applet.* (the history commands come with the
-// registry).
+// layout.*, preview.*, applet.*, review.status (the history commands come
+// with the registry).
 // app.info, app.applets, app.launch, panel.render and capture.frame stay
 // unbound until set_host() gives a SessionHost, which the app implements.
 //
@@ -49,6 +49,22 @@
 // the edits and bytes of one, and its idle time, after which it is dropped
 // (preview.expired).
 //
+// Review. With review on for an origin (ReviewSettings: agent and mcp by
+// default, settable per origin), an edit of the open spec from that origin
+// that would change it does not run at once: the policy asks, and the parked
+// invocation carries its review, {"diff", "warnings"}, the unified diff of
+// the canonical TOML before and after and the validator's warnings
+// (PendingApproval::review). A dry run, an edit that names a preview, one
+// that would fail validation and one that would change nothing run at once.
+// When the person approves, the edit is made again on the open spec as it is
+// then, and it runs only when the change it makes is the change that was shown
+// (the same lines removed and added, wherever they now are); otherwise, or
+// when another spec was opened meanwhile, it answers history.conflict. Each
+// edit is reviewed on its own; a held call answers before the agent sends its
+// next edit, so each diff is against the spec the earlier approvals left. A
+// stacked review of several edits is a preview. review.status tells a caller
+// which of its commands wait for the person.
+//
 // Paths. A path outside the workspace is accepted by data.import,
 // loader.create and loader.update only from the ui and builder origins, which
 // stand for a file the person dropped or named, and is then granted; from
@@ -56,7 +72,7 @@
 // grant already covers it, so an agent cannot widen what loaders may read.
 //
 // Approval. The session's policy is the default policy of the command layer,
-// with two rules that look at the invocation itself:
+// with the review above and two rules that look at the invocation itself:
 // - Running a Python loader's script (loader.run of a Python loader, or
 //   loader.create or loader.update of one with run set) asks for every origin
 //   but ui and builder, each time. The handler passes RunOptions::allow_python
@@ -115,6 +131,37 @@ public:
 // The names of the commands that SessionHost serves.
 const std::vector<std::string>& session_host_commands();
 
+// Which origins' edits of the open spec wait for the person's review. The
+// side chat, the widget agent and outside agents are reviewed by default; the
+// person's own UI, the builder and programs over Caliper API are not.
+struct ReviewSettings {
+    bool ui = false;
+    bool builder = false;
+    bool agent = true;
+    bool mcp = true;
+    bool api = false;
+
+    bool on(CommandOrigin origin) const {
+        switch (origin) {
+            case CommandOrigin::ui: return ui;
+            case CommandOrigin::builder: return builder;
+            case CommandOrigin::agent: return agent;
+            case CommandOrigin::mcp: return mcp;
+            case CommandOrigin::api: return api;
+        }
+        return true;
+    }
+    void set(CommandOrigin origin, bool value) {
+        switch (origin) {
+            case CommandOrigin::ui: ui = value; break;
+            case CommandOrigin::builder: builder = value; break;
+            case CommandOrigin::agent: agent = value; break;
+            case CommandOrigin::mcp: mcp = value; break;
+            case CommandOrigin::api: api = value; break;
+        }
+    }
+};
+
 // The bounds of stacked previews.
 struct PreviewLimits {
     std::size_t max_previews = 16;                  // open at once (preview.too_many)
@@ -131,6 +178,7 @@ struct SessionOptions {
     CommandQueue::Options queue;
     ResolveLimits resolve;
     PreviewLimits preview;
+    ReviewSettings review;
 };
 
 // The open spec as the app reads it.
@@ -179,6 +227,11 @@ public:
     // Binds app.info, app.applets, app.launch, panel.render and capture.frame
     // to the host, or leaves them unbound (command.not_bound) for null.
     void set_host(std::shared_ptr<SessionHost> host);
+
+    // Turns the review of spec edits on or off for one origin, from the
+    // app's settings; it holds from the next invocation the policy sees.
+    void set_review(CommandOrigin origin, bool on);
+    ReviewSettings review() const;
 
     // The open spec, or nothing.
     std::optional<OpenSpec> open_spec() const;

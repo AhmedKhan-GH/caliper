@@ -220,9 +220,9 @@ TEST_CASE("a stack survives a change of the open spec that it does not touch, an
     Fixture f("preview-conflict");
     ok(*f.s, "preview.begin", {{"id", "p"}});
     ok_in(*f.s, "p", "panel.patch", {{"id", "loss"}, {"patch", {{"title", "Loss"}}}});
-    // The side chat changes something else meanwhile: the stack is applied
+    // Something else changes the open spec meanwhile: the stack is applied
     // again on the new open spec, and the commit keeps both changes.
-    ok(*f.s, "source.add", {{"id", "q"}, {"sql", "SELECT 1 AS one"}}, kAgent);
+    ok(*f.s, "source.add", {{"id", "q"}, {"sql", "SELECT 1 AS one"}}, kUi);
     CHECK(ok(*f.s, "preview.diff", {{"id", "p"}})["diff"].get<std::string>().find("+title = \"Loss\"") !=
           std::string::npos);
     ok(*f.s, "preview.commit", {{"id", "p"}}, kUi);
@@ -234,7 +234,7 @@ TEST_CASE("a stack survives a change of the open spec that it does not touch, an
     // and its commit answer history.conflict, and nothing changes.
     ok(*f.s, "preview.begin", {{"id", "p2"}});
     ok_in(*f.s, "p2", "panel.patch", {{"id", "loss"}, {"patch", {{"title", "Again"}}}});
-    ok(*f.s, "panel.remove", {{"id", "loss"}}, kAgent);
+    ok(*f.s, "panel.remove", {{"id", "loss"}}, kUi);
     const std::string before = f.text();
     const std::size_t steps = f.steps();
     const std::size_t lines = f.journal_lines();

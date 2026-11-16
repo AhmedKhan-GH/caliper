@@ -323,9 +323,14 @@ TEST_CASE("the open spec is edited with dry runs, diffs, warnings and exact undo
     ok(*f.s, "history.redo");
     CHECK(f.s->open_spec()->spec.find_panel("p")->title == std::optional<std::string>("ABC"));
 
-    // A group of an agent's edits undoes as one step.
-    ok(*f.s, "panel.patch", {{"id", "p"}, {"patch", {{"options", {{"x_label", "Step"}}}}}}, kAgent, "turn-1");
-    ok(*f.s, "panel.patch", {{"id", "q"}, {"patch", {{"options", {{"colormap", "magma"}}}}}}, kAgent, "turn-1");
+    // A group of an agent's edits, each reviewed and approved in turn, undoes
+    // as one step.
+    for (const json& args : {json{{"id", "p"}, {"patch", {{"options", {{"x_label", "Step"}}}}}},
+                             json{{"id", "q"}, {"patch", {{"options", {{"colormap", "magma"}}}}}}}) {
+        const auto parked = invoke(*f.s, "panel.patch", args, kAgent, "turn-1");
+        REQUIRE(parked.error.code == "command.needs_approval");
+        REQUIRE(f.s->registry().approve(parked.approval).ok);
+    }
     ok(*f.s, "history.undo", json::object(), kAgent);
     CHECK(f.s->open_spec()->spec.find_panel("p")->options.x_label == std::nullopt);
     CHECK(f.s->open_spec()->spec.find_panel("q")->options.colormap == std::nullopt);

@@ -6,16 +6,21 @@
 //
 //   caliper-builder-host --workspace <dir> --api-dir <dir>
 //                        [--port <n>] [--approve allow|deny|ask]
+//                        [--review none|<origin>,<origin>...]
 //
 // It opens the workspace as a Session, serves GET /v0/commands and
 // POST /v0/commands/{name} on 127.0.0.1 (a free port unless --port says), and
 // writes <api-dir>/api.json as the app writes its API file (mode 0600,
 // removed on exit). The main thread drains the command queue, as the app's
-// frame thread will. A command that needs approval waits; --approve decides
-// what it gets here: allow approves it, deny denies it, and ask (the default)
-// prints one JSON line per pending approval on standard output,
-// {"approval", "name", "origin", "args"}, and reads "allow <id>" or
-// "deny <id>" lines on standard input. SIGTERM or SIGINT stops it cleanly:
+// frame thread will. --review names the origins whose spec edits wait for
+// review, such as agent,mcp as the app has it by default; it is none unless
+// given, so that a test written before review keeps its flow. A command that
+// needs approval waits, and the host prints one JSON line per pending approval
+// on standard output, {"approval", "name", "origin", "group", "args",
+// "review"}, where review is the diff and warnings of a spec edit or null.
+// --approve decides what it gets: allow approves it and deny denies it, and
+// the line then also carries "decided"; ask (the default) reads "allow <id>"
+// or "deny <id>" lines on standard input. SIGTERM or SIGINT stops it cleanly:
 // waiting requests are answered with command.shutdown, the API file is
 // removed, and it exits with 0. It never prints the session token.
 #include <caliper_builder/session/command_server.h>
@@ -41,7 +46,7 @@ namespace {
 void usage() {
     std::fprintf(stderr,
                  "usage: caliper-builder-host --workspace <dir> --api-dir <dir> [--port <n>] "
-                 "[--approve allow|deny|ask]\n");
+                 "[--approve allow|deny|ask] [--review none|<origin>,<origin>...]\n");
 }
 
 }  // namespace
@@ -68,6 +73,7 @@ int main(int argc, char** argv) {
     std::string workspace;
     std::string api_dir;
     std::string approve = "ask";
+    std::string review = "none";
     long port = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -80,6 +86,7 @@ int main(int argc, char** argv) {
         if (a == "--workspace" && value(&workspace)) continue;
         if (a == "--api-dir" && value(&api_dir)) continue;
         if (a == "--approve" && value(&approve)) continue;
+        if (a == "--review" && value(&review)) continue;
         if (a == "--port" && value(&text)) {
             char* end = nullptr;
             port = std::strtol(text.c_str(), &end, 10);
@@ -105,7 +112,25 @@ int main(int argc, char** argv) {
     sigaction(SIGTERM, &sa, nullptr);
     sigaction(SIGINT, &sa, nullptr);
 
-    Session::Open opened = Session::open(workspace);
+    SessionOptions session_options;
+    session_options.review = ReviewSettings{false, false, false, false, false};
+    if (review != "none") {
+        std::size_t start = 0;
+        while (start <= review.size()) {
+            const std::size_t comma = review.find(',', start);
+            const std::string name = review.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            const auto origin = command_origin_from_name(name);
+            if (!origin) {
+                usage();
+                return 2;
+            }
+            session_options.review.set(*origin, true);
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+    }
+
+    Session::Open opened = Session::open(workspace, session_options);
     if (opened.error) {
         std::fprintf(stderr, "caliper-builder-host: the workspace could not be opened: %s (%s)\n",
                      opened.error.message.c_str(), opened.error.code.c_str());
@@ -131,8 +156,8 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr,
                  "caliper-builder-host: the command endpoints listen on http://127.0.0.1:%u/v0; the API file is %s; "
-                 "approvals: %s\n",
-                 static_cast<unsigned>(server.port()), api_file.c_str(), approve.c_str());
+                 "approvals: %s; review: %s\n",
+                 static_cast<unsigned>(server.port()), api_file.c_str(), approve.c_str(), review.c_str());
 
     std::set<std::string> announced;
     std::string input;
@@ -141,18 +166,21 @@ int main(int argc, char** argv) {
         session.queue().drain();
         for (const PendingApproval& p : session.registry().pending_approvals()) {
             if (!announced.insert(p.approval).second) continue;
+            nlohmann::json line{{"approval", p.approval},
+                                {"name", p.invocation.name},
+                                {"origin", command_origin_name(p.invocation.origin)},
+                                {"group", p.invocation.group.empty() ? nlohmann::json() : nlohmann::json(p.invocation.group)},
+                                {"args", p.invocation.args},
+                                {"review", p.review}};
             if (approve == "allow") {
+                line["decided"] = "allow";
                 session.queue().approve(p.approval);
             } else if (approve == "deny") {
+                line["decided"] = "deny";
                 session.queue().deny(p.approval);
-            } else {
-                const nlohmann::json line{{"approval", p.approval},
-                                          {"name", p.invocation.name},
-                                          {"origin", command_origin_name(p.invocation.origin)},
-                                          {"args", p.invocation.args}};
-                std::printf("%s\n", line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
-                std::fflush(stdout);
             }
+            std::printf("%s\n", line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
+            std::fflush(stdout);
         }
         pollfd p{0, POLLIN, 0};
         const int ready = stdin_open ? ::poll(&p, 1, 5) : (::poll(nullptr, 0, 5), 0);
