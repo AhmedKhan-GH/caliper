@@ -96,6 +96,14 @@
                   "description": "The applet's manifest id.",
                   "type": "string"
                 },
+                "kind": {
+                  "description": "library for a compiled applet, spec for a spec applet.",
+                  "enum": [
+                    "library",
+                    "spec"
+                  ],
+                  "type": "string"
+                },
                 "reason": {
                   "description": "Why the applet cannot run; empty for a READY applet.",
                   "type": "string"
@@ -126,7 +134,7 @@
         ],
         "type": "object"
       },
-      "summary": "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. The id is what app.launch takes. It changes nothing."
+      "summary": "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its kind (library or spec), its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. The id is what app.launch takes. It changes nothing."
     },
     {
       "args": {

@@ -255,7 +255,8 @@ const Row kRows[] = {
      "{}"},
     {"app.applets", false, false, true,
      "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its "
-     "folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. "
+     "kind (library or spec), its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and "
+     "the reason when it cannot run. "
      "The id is what app.launch takes. It changes nothing.",
      kNoArgs,
      R"json({"type": "object", "additionalProperties": false, "required": ["applets"],
@@ -263,6 +264,7 @@ const Row kRows[] = {
         "items": {"type": "object", "additionalProperties": false, "required": ["folder", "id", "reason", "status", "version"],
           "properties": {
             "folder": {"type": "string", "description": "The folder the applet was found in."},
+            "kind": {"type": "string", "enum": ["library", "spec"], "description": "library for a compiled applet, spec for a spec applet."},
             "id": {"type": "string", "description": "The applet's manifest id."},
             "reason": {"type": "string", "description": "Why the applet cannot run; empty for a READY applet."},
             "status": {"type": "string", "description": "READY, ACTIVE, REFUSED or SHADOWED, as caliper list prints it."},
