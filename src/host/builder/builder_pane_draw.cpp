@@ -745,10 +745,13 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
             const ImRect b(v2(head.Max.x - std::round(6.0f * s) - w, head.Min.y + std::round(3.0f * s)),
                            v2(head.Max.x - std::round(6.0f * s), head.Min.y + std::round(3.0f * s) + h));
             const PanePlan* plan = nullptr;
-            PanePlan local;
             if (!selected_.empty()) {
-                local = plan_new_panel(selected_, selected_column_, std::nullopt, DropHit{});
-                plan = &local;
+                // Kept with the primitives' plans until the spec or the selection change.
+                const std::string k = "add|" + selected_ + "|" + selected_column_ + "|" + focus_panel_;
+                auto it = primitive_plans_.find(k);
+                if (it == primitive_plans_.end())
+                    it = primitive_plans_.emplace(k, plan_new_panel(selected_, selected_column_, std::nullopt, DropHit{})).first;
+                plan = &it->second;
             }
             const bool ok = plan && !plan->refusal;
             if (key_button_at(L, "##sources.add", b, key, label, ok, false, plan && plan->refusal ? plan->refusal.message : std::string()))
