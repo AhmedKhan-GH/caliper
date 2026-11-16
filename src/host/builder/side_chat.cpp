@@ -10,6 +10,7 @@
 #include <caliper_builder/commands/command.h>
 #include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/session/line_diff.h>
+#include <caliper_builder/spec/format.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -18,6 +19,7 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -36,6 +38,7 @@ constexpr size_t kMaxItemText = 256u << 10;   // one message, thought or prompt 
 constexpr size_t kMaxItems = 4000;            // the conversation's items; the oldest go first
 constexpr size_t kMaxFaults = 200;
 constexpr int kStderrTail = 1;                // stderr lines shown when the agent exited, one elided
+constexpr int kMaxCompactLines = 8;           // a permission card's compact lines before "+N"
 constexpr int kMaxDiffLines = 16;             // a permission card's diff lines before "+N"
 
 // The lines of a text, without their line feeds.
@@ -256,6 +259,86 @@ std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string&
         }
     }
     return {};
+}
+
+// ---- the compact diff of a spec file ------------------------------------------------------
+
+namespace {
+
+// A value as the cards show it: JSON, whole numbers without a fraction, a
+// space after each comma, cut at `max` characters.
+std::string card_value(const json& v, size_t max) {
+    std::string s;
+    if (v.is_number_float()) {
+        const double d = v.get<double>();
+        char buf[32];
+        if (std::isfinite(d) && std::fabs(d) < 1e15 && d == std::floor(d)) std::snprintf(buf, sizeof buf, "%.0f", d);
+        else std::snprintf(buf, sizeof buf, "%.6g", d);
+        s = buf;
+    } else if (v.is_array()) {
+        s = "[";
+        for (size_t i = 0; i < v.size(); ++i) s += (i ? ", " : "") + card_value(v[i], SIZE_MAX);
+        s += "]";
+    } else {
+        s = v.dump();
+    }
+    if (s.size() > max && max > 3) {
+        size_t cut = max - 1;
+        while (cut > 0 && ((unsigned char)s[cut] & 0xC0) == 0x80) --cut;
+        s = s.substr(0, cut) + "\xE2\x80\xA6";
+    }
+    return s;
+}
+
+void flatten_keys(const json& v, const std::string& prefix, std::vector<std::pair<std::string, json>>* out) {
+    if (v.is_object() && !v.empty()) {
+        for (auto it = v.begin(); it != v.end(); ++it)
+            flatten_keys(it.value(), prefix.empty() ? it.key() : prefix + "." + it.key(), out);
+    } else {
+        out->push_back({prefix, v});
+    }
+}
+
+// A new item's keys as added lines, "<id> primitive" and "<id> title" first.
+std::vector<WidgetDiffLine> new_item_lines(const std::string& id, const json& item) {
+    std::vector<std::pair<std::string, json>> keys;
+    flatten_keys(item, "", &keys);
+    std::vector<WidgetDiffLine> out;
+    for (const auto& kv : keys) {
+        if (kv.first == "id" || kv.first.empty() || kv.second.is_null()) continue;
+        if (kv.second.is_object() && kv.second.empty()) continue;
+        out.push_back({WidgetDiffLine::Kind::added, id + " " + kv.first, "", card_value(kv.second, 40)});
+    }
+    auto rank = [&id](const WidgetDiffLine& l) {
+        return l.key == id + " primitive" ? 0 : l.key == id + " title" ? 1 : 2;
+    };
+    std::stable_sort(out.begin(), out.end(), [&](const WidgetDiffLine& a, const WidgetDiffLine& b) { return rank(a) < rank(b); });
+    return out;
+}
+
+}  // namespace
+
+std::vector<WidgetDiffLine> chat_compact_diff(const std::string& path, const std::string& before, const std::string& after) {
+    const std::string suffix = ".spec.toml";
+    if (path.size() < suffix.size() || path.compare(path.size() - suffix.size(), suffix.size(), suffix) != 0) return {};
+    namespace spec = caliper_builder::spec;
+    const spec::ParseResult a = spec::parse_toml(before), b = spec::parse_toml(after);
+    if (!a.ok() || !b.ok()) return {};
+    std::vector<WidgetDiffLine> out;
+    std::set<std::string> added;
+    for (const spec::Panel& q : b.spec.panels)
+        if (!a.spec.find_panel(q.id)) {
+            added.insert("panel " + q.id);
+            for (WidgetDiffLine& l : new_item_lines(q.id, spec::to_json(q))) out.push_back(std::move(l));
+        }
+    for (const spec::Source& q : b.spec.sources)
+        if (!a.spec.find_source(q.id)) {
+            added.insert("source " + q.id);
+            for (WidgetDiffLine& l : new_item_lines(q.id, spec::to_json(q))) out.push_back(std::move(l));
+        }
+    for (WidgetDiffLine& l : widget_compact_diff(a.spec, b.spec, std::string()))
+        if (!added.count(l.key)) out.push_back(std::move(l));
+    return out;
 }
 
 // ---- the handoff --------------------------------------------------------------------------
@@ -736,13 +819,15 @@ void merge_tool(acp::ToolCallInfo* into, const acp::ToolCallInfo& from) {
 }
 
 // The first diff of a call's content as a unified diff, and its file.
-void diff_of(const acp::ToolCallInfo& call, std::string* diff, std::string* path) {
+void diff_of(const acp::ToolCallInfo& call, std::string* diff, std::string* path,
+             std::vector<WidgetDiffLine>* compact = nullptr) {
     for (const acp::ToolCallContent& c : call.content) {
         if (c.type != "diff") continue;
         const std::string name = fs::path(c.path).filename().string();
         *diff = caliper_builder::unified_line_diff(c.has_old_text ? c.old_text : std::string(), c.new_text,
                                                    c.has_old_text ? name : std::string("/dev/null"), name);
         *path = name;
+        if (compact) *compact = chat_compact_diff(name, c.has_old_text ? c.old_text : std::string(), c.new_text);
         return;
     }
 }
@@ -795,7 +880,7 @@ void SideChat::on_event(const acp::AcpEvent& e) {
             p.command = caliper_command_of(p.tool);
             for (const acp::PermissionOption& o : e.options)
                 if (o.kind != "allow_always" || options_.settings.allow_always) p.options.push_back(o);
-            diff_of(p.tool, &p.diff, &p.diff_path);
+            diff_of(p.tool, &p.diff, &p.diff_path, &p.compact);
             break;
         }
         case K::permission_withdrawn:
@@ -1052,10 +1137,15 @@ ChatPaneLayout layout_chat_pane(const ChatPaneInput& in, const ChatLayoutMetrics
     }
     const float aw = in.agent.empty() ? 0.0f : std::ceil(measure(in.agent, ChatFont::label));
     const float vw = in.version.empty() ? 0.0f : std::ceil(measure(in.version, ChatFont::mono));
+    const float mw = in.mode.empty() ? 0.0f : std::ceil(measure(in.mode, ChatFont::mono));
     if (aw > 0 && x + aw <= right) {
         out.agent = {x, H.y, aw, H.h};
         x += aw + m.gap;
-        if (vw > 0 && x + vw <= right) out.version = {x, H.y, vw, H.h};
+        if (vw > 0 && x + vw <= right) {
+            out.version = {x, H.y, vw, H.h};
+            x += vw + 2.0f * m.gap;
+            if (mw > 0 && x + mw <= right) out.mode = {x, H.y, mw, H.h};
+        }
     }
 
     const float top = H.bottom();
@@ -1069,6 +1159,7 @@ ChatPaneInput chat_pane_input(const SideChat& chat, const WidgetRect& pane) {
     in.pane = pane;
     in.agent = chat.agent_title();
     in.version = chat.agent_info().version;
+    in.mode = chat.mode();
     in.tag = chat.tag();
     in.header_actions = chat.header_actions();
     in.faults = (int)chat.faults().size();
@@ -1111,20 +1202,6 @@ void draw_str(ImDrawList* dl, ImFont* f, float size, ImVec2 p, ImU32 c, const st
                 wrap);
 }
 
-// One line of a unified diff: added lines in parchment, removed lines faint
-// and struck through, the rest faint at a lower alpha.
-void draw_unified_line(ImDrawList* dl, const SpecLook& L, ImVec2 p, float line_h, const std::string& line) {
-    const bool added = !line.empty() && line[0] == '+' && line.rfind("+++", 0) != 0;
-    const bool removed = !line.empty() && line[0] == '-' && line.rfind("---", 0) != 0;
-    const ImU32 c = added ? L.text : removed ? L.faint : sternbild::with_alpha(L.faint, 150);
-    const float mono_h = extent(L.mono, L.mono_size, "Ag").y;
-    draw_str(dl, L.mono, L.mono_size, v2(p.x, p.y + (line_h - mono_h) * 0.5f), c, line);
-    if (removed) {
-        const float y = std::round(p.y + line_h * 0.5f);
-        dl->AddRectFilled(v2(p.x + extent(L.mono, L.mono_size, "-").x, y), v2(p.x + extent(L.mono, L.mono_size, line).x, y + 1.0f),
-                          L.faint);
-    }
-}
 
 std::string first_line(const std::string& s) {
     const std::string t = trimmed(s);
@@ -1238,6 +1315,9 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         if (!lay.version.empty())
             draw_str(dl, L.mono, L.mono_size, v2(lay.version.x, lay.version.y + (lay.version.h - mono_h) * 0.5f), L.faint,
                  in.version);
+        if (!lay.mode.empty())   // the agent's mode, in bronze when it skips the agent's permission prompts
+            draw_str(dl, L.mono, L.mono_size, v2(lay.mode.x, lay.mode.y + (lay.mode.h - mono_h) * 0.5f),
+                     mode_skips_permission() ? L.accent : L.faint, in.mode);
         if (!lay.tag.empty()) {
             const bool live = state_ == ChatState::running && !stalled_;
             const bool alarm = state_ == ChatState::exited || state_ == ChatState::failed ||
@@ -1412,14 +1492,25 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         break;
                     }
                     case ChatItem::Kind::permission: {
+                        // The tag and the command or the tool's title; while open, the
+                        // file, the compact diff as the inline surface and the approval
+                        // cards draw it (diff_card.h) or the unified diff on demand and
+                        // for a file that is not a spec, and the agent's options.
                         const bool open = it.answer.empty();
                         const std::string label = !it.command.empty() ? it.command : it.tool.title;
-                        std::vector<std::string> dlines;
-                        if (open && !it.diff.empty())
-                            for (const std::string& l : split_lines(it.diff))
-                                if (l.rfind("---", 0) != 0 && l.rfind("+++", 0) != 0) dlines.push_back(l);
-                        const int shown = std::min((int)dlines.size(), kMaxDiffLines);
-                        const bool folded = (int)dlines.size() > shown;
+                        const bool compact = !it.compact.empty() && !it.expanded;
+                        std::string full;
+                        int full_lines = 0;
+                        if (open && !compact && !it.diff.empty())
+                            for (const std::string& l : split_lines(it.diff)) {
+                                if (l.rfind("---", 0) == 0 || l.rfind("+++", 0) == 0) continue;
+                                if (full_lines < kMaxDiffLines) full += l + "\n";
+                                ++full_lines;
+                            }
+                        const int total = compact ? (int)it.compact.size() : full_lines;
+                        const int cap = compact ? kMaxCompactLines : kMaxDiffLines;
+                        const int shown = std::min(total, cap);
+                        const bool folded = total > shown;
                         const float dline = std::round(18.0f * s);
                         float h = line;
                         if (open) {
@@ -1437,13 +1528,13 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                             const float iw = w - (open ? 2.0f * m.pad : 0.0f);
                             float y = p.y + (open ? m.pad * 0.5f : 0.0f);
                             const float tw = draw_tag(cdl, L, v2(ix, y), line, open ? L.secondary : L.faint, "PERMISSION");
-                            float x = ix + tw + gap;
+                            const float x = ix + tw + gap;
                             if (!it.command.empty())
                                 draw_str(cdl, L.mono, L.mono_size, v2(x, y + (line - mono_h) * 0.5f), open ? L.text : L.secondary,
-                                     fit(L.mono, L.mono_size, label, ix + iw - x));
+                                         fit(L.mono, L.mono_size, label, ix + iw - x));
                             else
                                 draw_str(cdl, L.ui, L.ui_size, v2(x, y + (line - ui_h) * 0.5f), open ? L.text : L.secondary,
-                                     fit(L.ui, L.ui_size, label, ix + iw - x));
+                                         fit(L.ui, L.ui_size, label, ix + iw - x));
                             if (!open) {
                                 const float ax = p.x + w - extent(L.ui, L.small_size, it.answer).x;
                                 draw_str(cdl, L.ui, L.small_size, v2(ax, y + (line - small_h) * 0.5f), L.faint, it.answer);
@@ -1452,19 +1543,22 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                             y += line;
                             if (!it.diff_path.empty()) {
                                 draw_str(cdl, L.mono, L.mono_size, v2(ix, y + (dline - mono_h) * 0.5f), L.faint,
-                                     fit(L.mono, L.mono_size, it.diff_path, iw));
+                                         fit(L.mono, L.mono_size, it.diff_path, iw));
                                 y += dline;
                             }
-                            cdl->PushClipRect(v2(ix, y), v2(ix + iw, y + dline * (float)(shown + 1)), true);
-                            for (int i = 0; i < shown; ++i) draw_unified_line(cdl, L, v2(ix, y + dline * (float)i), dline, dlines[(size_t)i]);
-                            cdl->PopClipRect();
-                            y += dline * (float)shown;
-                            if (folded) {
-                                draw_str(cdl, L.mono, L.mono_size, v2(ix, y + (dline - mono_h) * 0.5f), L.faint,
-                                     "+" + std::to_string(dlines.size() - (size_t)shown));
-                                y += dline;
+                            const float dh = dline * (float)(shown + (folded ? 1 : 0));
+                            if (compact) {
+                                draw_compact_diff(cdl, L, ImRect(v2(ix, y), v2(ix + iw, y + dh)), it.compact, shown, folded);
+                            } else if (shown > 0) {
+                                cdl->PushClipRect(v2(ix, y), v2(ix + iw, y + dh), true);
+                                ImGui::SetCursorScreenPos(v2(ix, y));
+                                draw_unified_diff(L, full, dline);   // diff_card.h
+                                cdl->PopClipRect();
+                                if (folded)
+                                    draw_str(cdl, L.mono, L.mono_size, v2(ix, y + dline * (float)shown + (dline - mono_h) * 0.5f), L.faint,
+                                             "+" + std::to_string(total - shown));
                             }
-                            y += m.gap;
+                            y += dh + m.gap;
                             float bx = ix;
                             bool first_allow = true;
                             for (size_t o = 0; o < it.options.size(); ++o) {
@@ -1479,6 +1573,15 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                                                  false, L))
                                     answer_permission(it.permission, opt.id);
                                 bx += bw + m.gap;
+                            }
+                            // Diff: the full unified diff in place of the compact one.
+                            if (!it.compact.empty()) {
+                                const float dw = std::ceil(2.0f * m.button_pad + extent(L.ui, L.ui_size, "Diff").x + std::round(8.0f * s));
+                                const ImRect db(v2(ix + iw - dw, y), v2(ix + iw, y + m.button));
+                                if (db.Min.x >= bx) {
+                                    if (house_button("##perm.diff", db, "Diff", "", false, false, L)) it.expanded = !it.expanded;
+                                    if (it.expanded) cdl->AddRect(db.Min, db.Max, L.accent, 0.0f, 0, 1.0f);
+                                }
                             }
                         });
                         break;

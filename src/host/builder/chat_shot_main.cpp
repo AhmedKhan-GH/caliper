@@ -6,10 +6,11 @@
 //
 //   caliper-chat-shot --workspace <dir> --agent <stub agent> --out-dir <dir> [options]
 //
-// The workspace gets the dashboard run42-dashboard when it has none: a CSV of
-// 200 steps of step, loss, accuracy and lr and a safetensors file of
-// attention weights, imported and run, and the dashboard saved as a spec
-// applet. The tool opens it (applet.open from the ui origin), so give it a
+// The workspace gets the dashboard run42-dashboard when it has none: the
+// files of --inputs (run42_metrics.parquet with step, loss, accuracy and lr,
+// and attn.safetensors), or else a CSV of 200 steps and a small safetensors
+// file that the tool writes, imported and run, and the dashboard of
+// dashboard.spec.toml saved as a spec applet. The tool opens it (applet.open from the ui origin), so give it a
 // folder of its own. Then it runs what the app runs for the chat: the
 // session's command queue drained on this thread, Caliper API's server on
 // 127.0.0.1 with the session's command gateway and an API file, and the side
@@ -35,6 +36,7 @@
 //                     with on, the edit waits for an approval, which the tool
 //                     gives as the person would, and there is no 3-permission)
 //   --mcp PATH        caliper-mcp (this build's by default)
+//   --inputs DIR      the data files to import, as above
 //
 // It prints one JSON object: the files with their states, the chat's items
 // as {kind, text, command, status}, the open spec's panels, and whether the
@@ -124,11 +126,11 @@ options = { colormap = "magma", range = [0.0, 1.0], x_label = "Key", y_label = "
 id = "rows"
 primitive = "table"
 bind = { rows = "metrics" }
-options = { columns = ["step", "loss", "lr"] }
+options = { columns = ["step", "loss"] }
 
 [layout]
 split = "vertical"
-ratio = 0.62
+ratio = 0.65
 children = [{ split = "horizontal", children = ["curves", "attention"] }, "rows"]
 )";
 
@@ -136,7 +138,8 @@ int usage(const char* why) {
     std::fprintf(stderr, "caliper-chat-shot: %s\n", why);
     std::fprintf(stderr,
                  "usage: caliper-chat-shot --workspace <dir> --agent <stub agent> --out-dir <dir>\n"
-                 "                         [--size WxH] [--prefix NAME] [--frames N] [--review on|off] [--mcp PATH]\n");
+                 "                         [--size WxH] [--prefix NAME] [--frames N] [--review on|off] [--mcp PATH]\n"
+                 "                         [--inputs DIR]\n");
     return 2;
 }
 
@@ -172,7 +175,30 @@ void write_safetensors(const std::string& path) {
 }
 
 // Builds the dashboard in an empty workspace, through the session's commands.
-std::string make_dashboard(caliper_builder::Session& s, const std::string& ws) {
+CommandResult make_files_and_import(caliper_builder::Session& s, const std::string& ws);
+
+std::string make_dashboard(caliper_builder::Session& s, const std::string& ws, const std::string& inputs) {
+    CommandResult r;
+    if (!inputs.empty()) {
+        const std::string a = (fs::path(inputs) / "run42_metrics.parquet").string();
+        const std::string b = (fs::path(inputs) / "attn.safetensors").string();
+        r = invoke(s, "data.import", {{"paths", {a, b}}, {"run", true}});
+    } else {
+        r = make_files_and_import(s, ws);
+    }
+    if (!r.ok) return "data.import: " + r.error.code + ": " + r.error.message;
+    if (!r.result.value("refused", json::array()).empty()) return "data.import refused " + r.result["refused"].dump();
+    r = invoke(s, "spec.new", {{"id", "run42-dashboard"}, {"title", "Run 42"}});
+    if (!r.ok) return "spec.new: " + r.error.code + ": " + r.error.message;
+    r = invoke(s, "spec.set_text", {{"text", kDashboard}});
+    if (!r.ok) return "spec.set_text: " + r.error.code + ": " + r.error.message;
+    r = invoke(s, "applet.save", {{"overwrite", true}});
+    if (!r.ok) return "applet.save: " + r.error.code + ": " + r.error.message;
+    return {};
+}
+
+// Small files of the same shape, for tests: 200 steps as CSV and a 2 x 3 x 8 x 8 tensor.
+CommandResult make_files_and_import(caliper_builder::Session& s, const std::string& ws) {
     const fs::path data = fs::path(ws) / "data";
     fs::create_directories(data);
     {
@@ -189,22 +215,13 @@ std::string make_dashboard(caliper_builder::Session& s, const std::string& ws) {
         }
     }
     write_safetensors((data / "attn.safetensors").string());
-    CommandResult r = invoke(s, "data.import", {{"paths", {"data/run42_metrics.csv", "data/attn.safetensors"}}, {"run", true}});
-    if (!r.ok) return "data.import: " + r.error.code + ": " + r.error.message;
-    if (!r.result.value("refused", json::array()).empty()) return "data.import refused " + r.result["refused"].dump();
-    r = invoke(s, "spec.new", {{"id", "run42-dashboard"}, {"title", "Run 42"}});
-    if (!r.ok) return "spec.new: " + r.error.code + ": " + r.error.message;
-    r = invoke(s, "spec.set_text", {{"text", kDashboard}});
-    if (!r.ok) return "spec.set_text: " + r.error.code + ": " + r.error.message;
-    r = invoke(s, "applet.save", {{"overwrite", true}});
-    if (!r.ok) return "applet.save: " + r.error.code + ": " + r.error.message;
-    return {};
+    return invoke(s, "data.import", {{"paths", {"data/run42_metrics.csv", "data/attn.safetensors"}}, {"run", true}});
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string workspace, agent_exe, out_dir, prefix = "chat", review = "off", mcp_exe = CALIPER_MCP_EXE;
+    std::string workspace, agent_exe, out_dir, inputs, prefix = "chat", review = "off", mcp_exe = CALIPER_MCP_EXE;
     int width = 1440, height = 900, frames = 4;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -217,6 +234,7 @@ int main(int argc, char** argv) {
         else if (a == "--prefix") prefix = v;
         else if (a == "--review") review = v;
         else if (a == "--mcp") mcp_exe = v;
+        else if (a == "--inputs") inputs = fs::absolute(v).string();
         else if (a == "--frames") frames = std::atoi(v);
         else if (a == "--size") {
             if (std::sscanf(v, "%dx%d", &width, &height) != 2) return usage("--size takes WxH, such as 1440x900");
@@ -243,7 +261,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<caliper_builder::Session> session = std::move(opened.session);
     session->registry().set_frame_thread(std::this_thread::get_id());
     if (!fs::exists(fs::path(workspace) / "applets" / "run42-dashboard", ec)) {
-        if (std::string why = make_dashboard(*session, workspace); !why.empty()) return fail(why);
+        if (std::string why = make_dashboard(*session, workspace, inputs); !why.empty()) return fail(why);
     }
     if (CommandResult r = invoke(*session, "applet.open", {{"id", "run42-dashboard"}}); !r.ok)
         return fail("applet.open: " + r.error.code + ": " + r.error.message);
@@ -397,6 +415,8 @@ int main(int argc, char** argv) {
         out["permission"] = {{"command", p->command}, {"diff_path", p->diff_path}, {"diff", p->diff},
                              {"options", json::array()}};
         for (const auto& o : p->options) out["permission"]["options"].push_back(o.kind);
+        out["permission"]["compact"] = json::array();
+        for (const auto& l : p->compact) out["permission"]["compact"].push_back({l.key, l.after});
         chat->answer_permission(p->permission, "allow");
     } else {
         if (!wait_for([&] { return item(ChatItem::Kind::approval, [](const ChatItem& it) { return it.answer.empty(); }); }, 60000))

@@ -36,12 +36,30 @@
 //     measures.
 //   - draw(): the ImGui side on the frame thread, in the house style.
 //
-// What the page owns: one SideChat, made with the workspace, this build's
-// caliper-mcp and the app's API file. Each frame it calls update() (polls
-// the agent; cheap when nothing came), claims the right column's lower part
-// with layout_chat_column(), and calls draw() with that rectangle. The
-// handoff from ⌘K is open_handoff() with chat_handoff_draft(), which puts a
-// draft in the input for the person to send; nothing is sent by itself.
+// What the page does, in the way it owns an InlineWidget:
+//   1. Own one SideChat once the session is open, with Options::env holding
+//      the workspace (AppSession::workspace()), this build's caliper-mcp
+//      (find_caliper_mcp() with the executable's folder) and the API file
+//      (AppApi::file()); Caliper API must be running for the chat, so the
+//      page starts it when the chat first opens. Options::settings come from
+//      the app's settings, and Hooks::settings_changed saves them.
+//      Hooks::pending_approvals gives the registry's pending approvals (the
+//      approval cards' list, which they read when no long command holds the
+//      registry), and Hooks::show_approval points at a card in their strip.
+//   2. Each frame, after AppSession::frame() has drained the queue, call
+//      update(): it polls the agent and is cheap when nothing came.
+//   3. While the page bar's Chat toggle is on, lay out the work area that the
+//      host's strips leave with layout_chat_column() (upper_open while
+//      Selection or Properties has something to show), draw the spec runtime
+//      in its canvas rectangle and call draw() with its chat rectangle,
+//      inside the page's window.
+//   4. Give the inline surface's Hooks::ask_in_chat a function that turns the
+//      Chat toggle on and calls open_handoff(chat_handoff_draft(request,
+//      build_context_bundle(session, request.target.to_builder()), &spec)),
+//      which puts a draft in the input for the person to send; nothing is
+//      sent by itself.
+// The chat reads Enter only while its input has the keyboard; ⌘K and Escape
+// stay the page's.
 //
 // Command approvals. A command the agent sends through caliper-mcp that
 // needs the person's approval is held by the command layer, and the app's
@@ -170,6 +188,13 @@ std::string find_caliper_mcp(const std::string& exe_dir);
 std::string caliper_command_of(const caliper_builder::acp::ToolCallInfo& call,
                                const std::string& server = kChatMcpServerName);
 
+// The compact diff of an edit of a spec file, as the inline surface and the
+// approval cards show a change (diff_card.h): a new panel's or source's keys
+// first, primitive and title leading, then every other changed key. Empty
+// when the file is not a *.spec.toml or a text does not parse as a spec.
+std::vector<WidgetDiffLine> chat_compact_diff(const std::string& path, const std::string& before,
+                                              const std::string& after);
+
 // ---- the handoff from ⌘K ------------------------------------------------------------------
 
 // A draft in the input: the request, which the person can edit, and the
@@ -236,8 +261,11 @@ struct ChatItem {
     std::string answer;    // permission: the option's name, or "withdrawn"; approval: "decided"; "" while open
     std::string diff;      // permission, tool: the unified diff of its diff content
     std::string diff_path; // the diff's file
+    // permission: the compact diff of a spec file's edit (chat_compact_diff()),
+    // empty for any other file, whose card shows the unified diff.
+    std::vector<WidgetDiffLine> compact;
     std::string approval;  // approval: its id
-    bool expanded = false; // thought: shown in full
+    bool expanded = false; // thought: shown in full; permission: the full diff instead of the compact one
 };
 
 class SideChat {
@@ -424,6 +452,7 @@ struct ChatPaneInput {
     std::string title = "Chat";       // the pane's title, drawn as a tag
     std::string agent;                // the agent's name
     std::string version;              // its version, or ""
+    std::string mode;                 // the agent's mode, or ""
     std::string tag;                  // the state's tag, or ""
     std::vector<ChatAction> header_actions;
     int faults = 0;                   // the diagnostics' count; 0 shows none
@@ -438,6 +467,7 @@ struct ChatPaneLayout {
     WidgetRect title;
     WidgetRect agent;                 // empty when collapsed
     WidgetRect version;               // empty when collapsed or none
+    WidgetRect mode;                  // empty when collapsed or none
     WidgetRect tag;                   // empty when none
     WidgetRect faults;                // empty when none
     std::vector<WidgetRect> header_buttons;   // in header_actions order
@@ -454,8 +484,8 @@ struct ChatPaneLayout {
     bool keys = true;                 // the buttons show their keys
 };
 
-// Lays the pane out. What collapses first as it narrows: the agent's version
-// in the header, then the agent's name in the header, then the picker's name
+// Lays the pane out. What collapses first as it narrows: the agent's mode and
+// then its version in the header, then the agent's name in the header, then the picker's name
 // (the ▾ mark stays), then the buttons' keys; in the header the faults chip,
 // then the state's tag, give way to the buttons when they need the room; the
 // draft's chips past what fits fold into "+N". The conversation takes every

@@ -36,6 +36,7 @@ ChatPaneInput pane_input(const WidgetRect& pane) {
     in.pane = pane;
     in.agent = "Stub agent";
     in.version = "1";
+    in.mode = "default";
     in.tag = "RUNNING";
     in.header_actions = {ChatAction::restart};
     in.faults = 2;
@@ -58,7 +59,7 @@ void check_pane(const ChatPaneLayout& lay, const WidgetRect& pane, const ChatLay
     CHECK(lay.input_row.contains(lay.send));
     check_no_overlap({lay.picker, lay.input, lay.send});
     std::vector<WidgetRect> head = {lay.title};
-    for (const WidgetRect* r : {&lay.agent, &lay.version, &lay.tag, &lay.faults})
+    for (const WidgetRect* r : {&lay.agent, &lay.version, &lay.mode, &lay.tag, &lay.faults})
         if (!r->empty()) head.push_back(*r);
     for (const WidgetRect& b : lay.header_buttons) head.push_back(b);
     for (const WidgetRect& r : head) CHECK(lay.header.contains(r));
@@ -165,6 +166,8 @@ TEST_CASE("side chat layout: what collapses first as the pane narrows") {
         lay = layout_chat_pane(in, m, fake_measure());
         INFO("width " << w);
         check_pane(lay, in.pane, m);
+        if (w == 560) CHECK_FALSE(lay.mode.empty());
+        if (!lay.mode.empty()) CHECK_FALSE(lay.version.empty());   // the mode goes before the version
         if (lay.version.empty() && !lay.agent.empty()) saw_version_only_gone = true;
         if (lay.agent.empty()) {
             saw_agent_gone = true;

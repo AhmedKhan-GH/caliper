@@ -489,3 +489,45 @@ TEST_CASE("side chat: the stop words and the tool status words") {
     CHECK(std::string(chat_action_label(ChatAction::custom)) == "Custom command");
     CHECK(std::string(chat_action_key(ChatAction::send)) == "\xE2\x8F\x8E");
 }
+
+TEST_CASE("side chat: the compact diff of a spec file's edit, as the cards show it") {
+    const std::string before = R"(caliper_spec = 0
+[applet]
+id = "d"
+[[source]]
+id = "metrics"
+catalog = "table:run42_metrics"
+[[panel]]
+id = "curves"
+primitive = "series"
+title = "Loss"
+bind = { x = "metrics.step", y = ["metrics.loss"] }
+options = { y_log = true }
+)";
+    std::string after = before;
+    after.replace(after.find("y_log = true"), 12, "y_log = false");
+    after += R"([[panel]]
+id = "lr"
+primitive = "series"
+title = "Learning rate"
+bind = { x = "metrics.step", y = ["metrics.lr"] }
+)";
+    const std::vector<WidgetDiffLine> d = chat_compact_diff("/w/applets/d/d.spec.toml", before, after);
+    REQUIRE(d.size() >= 4);
+    CHECK(d[0].key == "lr primitive");
+    CHECK(d[0].after == "\"series\"");
+    CHECK(d[1].key == "lr title");
+    CHECK(d[1].after == "\"Learning rate\"");
+    bool y_log = false;
+    for (const WidgetDiffLine& l : d)
+        if (l.key.find("y_log") != std::string::npos) {
+            y_log = true;
+            CHECK(l.before == "true");
+            CHECK(l.after == "false");
+        }
+    CHECK(y_log);
+    for (const WidgetDiffLine& l : d) CHECK(l.key != "panel lr");   // the new panel's keys, not one line
+    // Not a spec file, or not a spec: no compact diff, the card shows the unified diff.
+    CHECK(chat_compact_diff("/w/loader.py", before, after).empty());
+    CHECK(chat_compact_diff("/w/x.spec.toml", "title = \"Old\"\n", "title = \"New\"\n").empty());
+}
