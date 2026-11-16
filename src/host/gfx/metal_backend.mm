@@ -12,7 +12,9 @@
 //  - Command buffers are made with unretained references: the core destroys nothing before
 //    the last submit that used it completed, so Metal need not retain each bound object.
 //  - Writes to memory that no unfinished submit uses go straight to it (memcpy into a shared
-//    buffer, replaceRegion on a shared texture); otherwise a blit orders them on the queue.
+//    buffer, replaceRegion on a shared texture); otherwise a blit orders them on the queue. While
+//    such a blit has not completed, later writes to the same resource are queued too: written
+//    directly, they could land before it, and the older bytes would win.
 //  - Programs compile with fast math off, so float results follow IEEE rules as the CPU
 //    references do, unless the program's description sets fast_math (the colormap's compute
 //    form, whose output no float rounding can change).
@@ -432,8 +434,14 @@ protected:
     void on_destroy(uint64_t handle) override {
         const uint32_t slot = handle_slot(handle);
         switch (handle_kind(handle)) {
-            case HandleKind::Buffer: if (slot < buffers_.size()) buffers_[slot] = nil; break;
-            case HandleKind::Texture: if (slot < textures_.size()) textures_[slot] = MTex{}; break;
+            case HandleKind::Buffer:
+                if (slot < buffers_.size()) buffers_[slot] = nil;
+                if (slot < buffer_writes_.size()) buffer_writes_[slot] = nil;   // the blit holds its own reference
+                break;
+            case HandleKind::Texture:
+                if (slot < textures_.size()) textures_[slot] = MTex{};
+                if (slot < texture_writes_.size()) texture_writes_[slot] = nil;
+                break;
             case HandleKind::Sampler: if (slot < samplers_.size()) samplers_[slot] = nil; break;
             case HandleKind::Program: if (slot < libraries_.size()) libraries_[slot] = nil; break;
             case HandleKind::Pipeline: if (slot < pipes_.size()) pipes_[slot] = MPipe{}; break;
@@ -443,9 +451,20 @@ protected:
         }
     }
 
+    // Whether the last queued write of a resource may still be ahead on the queue; forgets it once
+    // it completed.
+    static bool queued_write_pending(std::vector<id<MTLCommandBuffer>>& writes, uint32_t slot) {
+        if (slot >= writes.size() || writes[slot] == nil) return false;
+        if (writes[slot].status >= MTLCommandBufferStatusCompleted) {   // completed, or failed
+            writes[slot] = nil;
+            return false;
+        }
+        return true;
+    }
+
     void on_write_buffer(uint32_t slot, uint64_t offset, const void* data, uint64_t size, bool in_use) override {
         id<MTLBuffer> dst = buffers_[slot];
-        if (!in_use) {
+        if (!in_use && !queued_write_pending(buffer_writes_, slot)) {
             std::memcpy(static_cast<uint8_t*>(dst.contents) + offset, data, (size_t)size);
             return;
         }
@@ -457,12 +476,14 @@ protected:
                         size:(NSUInteger)size];
         [blit endEncoding];
         [cb commit];
+        grow(buffer_writes_, slot);
+        buffer_writes_[slot] = cb;
     }
 
     void on_write_texture(uint32_t slot, const void* data, uint32_t row_pitch, bool in_use) override {
         const MTex& t = textures_[slot];
         const NSUInteger w = t.texture.width, h = t.texture.height;
-        if (t.shared && !in_use) {
+        if (t.shared && !in_use && !queued_write_pending(texture_writes_, slot)) {
             [t.texture replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:data bytesPerRow:row_pitch];
             return;
         }
@@ -475,6 +496,8 @@ protected:
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
         [cb commit];
+        grow(texture_writes_, slot);
+        texture_writes_[slot] = cb;
     }
 
     void* on_mapped(uint32_t slot) override { return buffers_[slot].contents; }
@@ -819,6 +842,8 @@ private:
     std::vector<MPipe> pipes_;
     std::vector<MGroup> groups_;
     std::vector<id<MTLBuffer>> readbacks_;
+    // The command buffer of each resource's last queued write, until it completed.
+    std::vector<id<MTLCommandBuffer>> buffer_writes_, texture_writes_;
 };
 
 }  // namespace
